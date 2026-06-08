@@ -542,9 +542,12 @@ class TtConv1d:
             # layout conversion.  Cast compute dtype (BF8) → storage dtype (BF16) in DRAM if
             # needed; this preserves TILE layout and avoids a separate Untilize+Tilize round-trip.
             if self._compute_dtype != self._storage_dtype and getattr(out, "dtype", None) != self._storage_dtype:
-                dram = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-                kw = {"memory_config": dram} if dram is not None else {}
-                out = ttnn.typecast(out, self._storage_dtype, **kw)
+                # Match input memory layout (squeeze/reshape may leave HEIGHT_SHARDED TILE).
+                try:
+                    mc_kw = {"memory_config": out.memory_config()}
+                except Exception:
+                    mc_kw = {}
+                out = ttnn.typecast(out, self._storage_dtype, **mc_kw)
             return out  # DRAM TILE in storage_dtype (or L1 TILE when sharded path de-sharded)
 
         return ace_step_vae_normalize_activation_output(

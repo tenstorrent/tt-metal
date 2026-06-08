@@ -5,7 +5,7 @@ Latent diffusion runs on TTNN; VAE decode uses the TTNN Oobleck port from ``ign/
 (HF-style ``ckpt_dir/vae/`` with ``config.json``). Long latent sequences are decoded in overlapping
 time tiles so ``ttnn.conv1d`` stays within L1 limits. Pass ``--torch-vae`` for PyTorch ``AutoencoderOobleck``.
 
-By default this matches ``torch_ref/run_prompt_to_wav.py --use-official-acestep`` for **Phase 1**
+By default this matches ``torch_ref/run_prompt_to_wav.py`` for **Phase 1**
 (5 Hz LM / CoT, audio codes, handler ``preprocess_batch``, TTNN Qwen3 caption encoder via
 ``infer_text_embeddings``, and TTNN ``prepare_condition`` replacement with **precomputed LM hints**),
 emitting the same style of **loguru** / model logs as the official CLI. DiT sampling runs on TTNN.
@@ -25,9 +25,6 @@ Pass ``--no-use-trace`` to disable all traces (single CQ, fully eager).
   ``models/tt_transformers`` graph via
   :func:`models.tt_transformers.tt.common.create_tt_model`. Use ``--pytorch-lm`` to fall back
   to host PyTorch HF Qwen 1.7B forward instead.
-
-
-``--use-official-lm`` runs full ``acestep.inference.generate_music`` (PyTorch DiT on host) with no TTNN.
 
 Requires **torchaudio** (for ``AceStepHandler`` / 5 Hz LM preprocessing). After the TTNN device is opened for the Qwen3 caption
 encoder, the same device is attached to the 5 Hz LM handler so the **CFG logit combine**
@@ -126,14 +123,13 @@ def _open_tt_device(ttnn: Any, *, device_id: int, num_command_queues: int = 1) -
     Pass ``num_command_queues=2`` to enable the host->device copy on CQ 1 / ``execute_trace``
     on CQ 0 pattern required by ``_E2EDenoiseTrace.replay`` (``--use-trace``).
     """
-    open_kwargs = dict(
-        device_id=int(device_id),
-        l1_small_size=int(os.environ.get("ACE_STEP_L1_SMALL_SIZE", "98304")),
-        trace_region_size=128 << 20,
+    from models.experimental.ace_step_v1_5.utils.tt_device import open_single_tt_device
+
+    return open_single_tt_device(
+        ttnn,
+        device_id=device_id,
+        num_command_queues=num_command_queues,
     )
-    if int(num_command_queues) > 1:
-        open_kwargs["num_command_queues"] = int(num_command_queues)
-    return ttnn.open_device(**open_kwargs)
 
 
 def _finalize_condition_trace_tensors(
@@ -188,57 +184,15 @@ def _build_t_schedule(*, infer_steps: int, variant: str) -> list[float]:
     return t
 
 
-# Vendored ACE-Step copy bundled with the demo so it runs without an external clone of
-# https://github.com/ace-step/ACE-Step-1.5. ``_resolve_ace_step_repo_root`` prefers this
-# path (after explicit CLI / env overrides) so the demo is repo-independent by default.
-_VENDORED_ACESTEP_ROOT = Path(__file__).resolve().parent.parent / "torch_ref" / "_vendored_acestep"
-
-
-_WELL_KNOWN_REPO_ROOTS = [
-    Path.home() / "proj_sdk" / "ACE-Step-1.5",
-    Path.home() / "ACE-Step-1.5",
-    Path("/opt") / "ACE-Step-1.5",
-]
+# Bundled host-preprocess copy so the demo runs without an external ACE-Step-1.5 clone.
+from models.experimental.ace_step_v1_5.utils.acestep_paths import (
+    resolve_acestep_repo_root as _resolve_acestep_repo_root_impl,
+)
 
 
 def _resolve_ace_step_repo_root(*, ckpt_dir: str | None, ace_step_repo_root: str | None) -> Path | None:
-    """Return a directory containing an ``acestep/`` package.
-
-    Search order:
-
-    1. ``ACE_STEP_REPO_ROOT`` env var (explicit override).
-    3. **Vendored copy** at ``models/experimental/ace_step_v1_5/torch_ref/_vendored_acestep/`` —
-       default; lets the demo run with no external clone of ACE-Step-1.5.
-    4. Walk up from ``ckpt_dir`` (looks for an ``acestep/`` sibling).
-    5. Well-known external paths (``~/proj_sdk/ACE-Step-1.5``, ``~/ACE-Step-1.5``,
-       ``/opt/ACE-Step-1.5``).
-    """
-
-    candidates: list[Path] = []
-    if ace_step_repo_root:
-        candidates.append(Path(ace_step_repo_root).expanduser().resolve())
-    env = os.environ.get("ACE_STEP_REPO_ROOT")
-    if env:
-        candidates.append(Path(env).expanduser().resolve())
-    candidates.append(_VENDORED_ACESTEP_ROOT)
-
-    if ckpt_dir:
-        cur = Path(ckpt_dir).expanduser().resolve()
-        for _ in range(8):
-            candidates.append(cur)
-            if cur.parent == cur:
-                break
-            cur = cur.parent
-    candidates.extend(_WELL_KNOWN_REPO_ROOTS)
-    seen: set[str] = set()
-    for c in candidates:
-        key = str(c)
-        if key in seen:
-            continue
-        seen.add(key)
-        if (c / "acestep" / "__init__.py").is_file():
-            return c
-    return None
+    """Return a directory containing an ``acestep/`` package."""
+    return _resolve_acestep_repo_root_impl(ckpt_dir=ckpt_dir, ace_step_repo_root=ace_step_repo_root)
 
 
 def _normalize_wav_for_save(wav: "torch.Tensor") -> "torch.Tensor":
@@ -827,11 +781,6 @@ def main() -> None:
     )
     ap.add_argument("--out", type=str, default="ttnn_out.wav")
     ap.add_argument(
-        "--use-official-lm",
-        action="store_true",
-        help="Run full official generate_music (LLM+handlers, CPU). Does not use TTNN; writes --out for A/B.",
-    )
-    ap.add_argument(
         "--pytorch-lm",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -897,7 +846,9 @@ def main() -> None:
             "when the 5 Hz LM runs on this pass."
         ),
     )
+    ap.add_argument("--ace-step-dit-handoff", type=str, default=None, help=argparse.SUPPRESS)
     args = ap.parse_args()
+    dit_handoff_mode = args.ace_step_dit_handoff is not None
 
     from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import configure_acestep_logging
 
@@ -949,11 +900,14 @@ def main() -> None:
         ace_step_resolve_vae_tiling,
         ace_step_synchronize_device,
         ace_step_ttnn_to_torch,
+        _ACE_STEP_VISIBLE_DEVICES_SAVED_ATTR,
+        _ensure_full_cluster_env_for_dit,
+        _restore_cluster_visibility,
         open_dit_device,
         open_preprocess_device,
+        ace_step_reexec_for_dit_mesh,
         resolve_ace_step_mesh_sku,
         run_mesh_sequential_cfg_forwards,
-        transition_preprocess_to_dit_device,
     )
 
     mesh_sku = resolve_ace_step_mesh_sku(cli_value=args.mesh_device)
@@ -1147,6 +1101,19 @@ def main() -> None:
     from models.experimental.ace_step_v1_5.demo.demo_session import AceStepDemoSession
 
     demo_session = AceStepDemoSession()
+    if dit_handoff_mode:
+        import pickle
+
+        with open(args.ace_step_dit_handoff, "rb") as f:
+            handoff = pickle.load(f)
+        demo_session.cached_preprocess = handoff["cached_preprocess"]
+        try:
+            os.unlink(args.ace_step_dit_handoff)
+        except OSError:
+            pass
+        print("[ace_step_v1_5] DiT handoff: loaded preprocess cache, opening full mesh", flush=True)
+        use_ttnn_5hz_lm = False
+        args.pytorch_lm = True
     if demo_session.session_perf.session_t0 is None:
         demo_session.session_perf.session_t0 = time.perf_counter()
 
@@ -1163,8 +1130,8 @@ def main() -> None:
         root = _resolve_ace_step_repo_root(ckpt_dir=str(ckpt_dir), ace_step_repo_root=None)
         if root is None:
             raise RuntimeError(
-                "Could not find ACE-Step-1.5 'acestep' package. The vendored copy at "
-                "models/experimental/ace_step_v1_5/torch_ref/_vendored_acestep/acestep/ should normally "
+                "Could not find ACE-Step-1.5 'acestep' package. The bundled copy at "
+                "models/experimental/ace_step_v1_5/host_preprocess/acestep/ should normally "
                 "be used automatically; if it is missing, set "
                 "ACE_STEP_REPO_ROOT to an external checkout."
             )
@@ -1173,94 +1140,6 @@ def main() -> None:
 
         ensure_acestep_repo_on_path(root)
         return root
-
-    # --- Optional: full official path (LLM), no TTNN ---
-    if args.use_official_lm:
-        from models.experimental.ace_step_v1_5.torch_ref.transformers_cache_compat import (
-            apply_transformers_cache_compat,
-        )
-
-        apply_transformers_cache_compat()
-        ref_root = _ensure_acestep_on_path()
-        try:
-            from acestep.handler import AceStepHandler
-            from acestep.inference import GenerationConfig, GenerationParams, generate_music
-
-            from models.experimental.ace_step_v1_5.torch_ref.five_hz_lm import LocalFiveHzLMHandler
-        except ModuleNotFoundError as e:
-            raise RuntimeError(
-                "--use-official-lm requires the upstream ACE-Step ``acestep`` package "
-                "(``acestep.handler.AceStepHandler`` + ``acestep.inference.generate_music``).\n"
-                f"  Missing module: {e.name!r}.\n"
-                "Fix one of:\n"
-                "  1. Keep the vendored copy at "
-                "models/experimental/ace_step_v1_5/torch_ref/_vendored_acestep/ in place "
-                "(it ships with this demo by default).\n"
-                "  2. Set ACE_STEP_REPO_ROOT to an external clone "
-                "of https://github.com/ace-step/ACE-Step-1.5.\n"
-                "  3. Run without --use-official-lm (the default TTNN path doesn't need "
-                "acestep.inference)."
-            ) from e
-
-        # Note: weights are already downloaded by ``_ensure_variant`` earlier in main()
-        # via ``huggingface_hub.snapshot_download``; the ACE-Step handler's own download
-        # paths (``acestep.model_downloader``) are no-ops by the time they run because
-        # every file exists on disk. The historical ``_mdl.MAIN_MODEL_COMPONENTS = [...]``
-        # mutation here was informational only (declaring which sub-components live in
-        # the main repo); it has been removed because the handler's defaults already
-        # cover the same set.
-
-        dit_handler = AceStepHandler()
-        llm_handler = LocalFiveHzLMHandler()
-        device = "cpu"
-
-        status, ok = dit_handler.initialize_service(
-            project_root=str(ref_root),
-            config_path=args.variant,
-            device=device,
-            use_flash_attention=False,
-        )
-        print(status, flush=True)
-        if not ok:
-            raise RuntimeError("AceStepHandler.initialize_service failed")
-        _ensure_variant(args.lm_variant, ckpt_dir)
-        status, ok = llm_handler.initialize(
-            checkpoint_dir=str(ckpt_dir),
-            lm_model_path=args.lm_variant,
-            backend="pt",
-            device=device,
-        )
-        print(status, flush=True)
-        if not ok:
-            raise RuntimeError("5 Hz LM (local HF) initialize failed")
-        params = GenerationParams(
-            task_type="text2music",
-            caption=args.prompt,
-            lyrics="[Instrumental]",
-            instrumental=True,
-            reference_audio=None,
-            duration=float(args.duration_sec),
-            inference_steps=int(infer_steps),
-            thinking=True,
-            use_constrained_decoding=True,
-            use_adg=use_adg,
-            guidance_scale=gs,
-            cfg_interval_start=cfg_interval_start,
-            cfg_interval_end=cfg_interval_end,
-            shift=1.0,
-        )
-        config = GenerationConfig(batch_size=1, use_random_seed=False, seeds=[int(args.seed)], audio_format="wav")
-        out_dir = Path(args.out).resolve().parent
-        out_dir.mkdir(parents=True, exist_ok=True)
-        result = generate_music(dit_handler, llm_handler, params, config, save_dir=str(out_dir))
-        if not result.success:
-            raise RuntimeError(result.error or "generate_music failed")
-        first = Path(result.audios[0]["path"]).resolve()
-        dst = Path(args.out).resolve()
-        if first != dst:
-            dst.write_bytes(first.read_bytes())
-        print(f"Wrote (official LM, not TTNN): {dst}", flush=True)
-        return
 
     condition_tensors_on_device = False
     enc_hs_nc: Any | None = None
@@ -1310,8 +1189,8 @@ def main() -> None:
             "``prepare_condition``).\n"
             f"  Missing module: {e.name!r}.\n"
             "Fix one of:\n"
-            "  1. Keep the vendored copy at "
-            "models/experimental/ace_step_v1_5/torch_ref/_vendored_acestep/ in place "
+            "  1. Keep the bundled copy at "
+            "models/experimental/ace_step_v1_5/host_preprocess/ in place "
             "(it ships with this demo by default).\n"
             "  2. Set ACE_STEP_REPO_ROOT to an external clone "
             "of https://github.com/ace-step/ACE-Step-1.5.\n"
@@ -1329,7 +1208,7 @@ def main() -> None:
     # by the time the handler tries to download anything every file exists on disk.
 
     tt_dev_early = None
-    need_preprocess_ttnn_dev = bool(use_ttnn_5hz_lm) or bool(mesh_ttnn_preprocess)
+    need_preprocess_ttnn_dev = (bool(use_ttnn_5hz_lm) or bool(mesh_ttnn_preprocess)) and not dit_handoff_mode
     if need_preprocess_ttnn_dev:
         # TTNN 5 Hz LM uses ``max_batch_size=1`` (see ``QwenModelTtTransformers``). That
         # applies to the LM only (``lm_cfg_scale=1`` below), not DiT CFG.
@@ -1343,6 +1222,7 @@ def main() -> None:
                 _ttnn_pre_lm,
                 device_id=int(args.device_id),
                 num_command_queues=ace_step_preprocess_num_command_queues(use_trace=bool(args.use_trace)),
+                mesh_sku=mesh_sku,
             )
         else:
             tt_dev_early = _open_tt_device(
@@ -1365,23 +1245,26 @@ def main() -> None:
             config_path=args.variant,
             device=device,
             use_flash_attention=False,
+            preprocess_only=True,
+            use_mlx_dit=False,
         )
         print(status, flush=True)
         if not ok:
             raise RuntimeError("AceStepHandler.initialize_service failed")
-        status, ok = llm_handler.initialize(
-            checkpoint_dir=str(ckpt_dir),
-            lm_model_path=args.lm_variant,
-            backend="pt",
-            device=device,
-            ttnn_causal_device=tt_dev_early,
-            use_ttnn_causal_lm=bool(use_ttnn_5hz_lm),
-            ttnn_lm_prefill_trace=bool(args.use_trace) and bool(use_ttnn_5hz_lm),
-            ttnn_lm_decode_trace=bool(args.use_trace) and bool(use_ttnn_5hz_lm),
-        )
-        print(status, flush=True)
-        if not ok:
-            raise RuntimeError("5 Hz LM (local HF) initialize failed")
+        if not dit_handoff_mode:
+            status, ok = llm_handler.initialize(
+                checkpoint_dir=str(ckpt_dir),
+                lm_model_path=args.lm_variant,
+                backend="pt",
+                device=device,
+                ttnn_causal_device=tt_dev_early,
+                use_ttnn_causal_lm=bool(use_ttnn_5hz_lm),
+                ttnn_lm_prefill_trace=bool(args.use_trace) and bool(use_ttnn_5hz_lm),
+                ttnn_lm_decode_trace=bool(args.use_trace) and bool(use_ttnn_5hz_lm),
+            )
+            print(status, flush=True)
+            if not ok:
+                raise RuntimeError("5 Hz LM (local HF) initialize failed")
     if _init_t0 is not None:
         _init_ms = (time.perf_counter() - _init_t0) * 1000.0
         perf.record_init_once("handler_init", _init_ms)
@@ -1502,13 +1385,22 @@ def main() -> None:
                     ttnn,
                     device_id=int(args.device_id),
                     num_command_queues=ace_step_preprocess_num_command_queues(use_trace=bool(args.use_trace)),
+                    mesh_sku=mesh_sku,
                 )
             else:
-                dev = _open_tt_device(
-                    ttnn,
-                    device_id=int(args.device_id),
-                    num_command_queues=(2 if bool(args.use_trace) else 1),
-                )
+                if split_device:
+                    dev = open_preprocess_device(
+                        ttnn,
+                        device_id=int(args.device_id),
+                        num_command_queues=ace_step_preprocess_num_command_queues(use_trace=bool(args.use_trace)),
+                        mesh_sku=mesh_sku,
+                    )
+                else:
+                    dev = _open_tt_device(
+                        ttnn,
+                        device_id=int(args.device_id),
+                        num_command_queues=(2 if bool(args.use_trace) else 1),
+                    )
             if hasattr(dev, "enable_program_cache"):
                 dev.enable_program_cache()
             dev_opened_for_ttnn_text_encoder = True
@@ -1741,7 +1633,7 @@ def main() -> None:
     # --- TTNN (DiT): device may already be open after TTNN Qwen3 caption embedding (handler path) ---
     _configure_ttnn_runtime()
     import ttnn
-    from models.experimental.ace_step_v1_5.torch_ref._vendored_acestep.acestep.models.common.apg_guidance import (
+    from models.experimental.ace_step_v1_5.host_preprocess.acestep.models.common.apg_guidance import (
         MomentumBuffer,
     )
     from models.experimental.ace_step_v1_5.ttnn_impl.dit_sampling_ttnn import (
@@ -1777,23 +1669,44 @@ def main() -> None:
         dev = demo_session.dit_dev
         dev_opened_for_ttnn_text_encoder = True
     elif split_device and dev_opened_for_ttnn_text_encoder and dev is not None:
-        dev = transition_preprocess_to_dit_device(
+        import sys
+
+        if demo_session.cached_preprocess is None:
+            if condition_tensors_on_device:
+                enc_hs = ace_step_ttnn_to_torch(enc_hs_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
+                ctx_lat = ace_step_ttnn_to_torch(ctx_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
+                null_emb = ace_step_ttnn_to_torch(null_emb_tt, mesh_device=dev, dtype=torch.float32).cpu()
+            demo_session.store_preprocess(
+                prompt=run_prompt,
+                duration_sec=float(args.duration_sec),
+                seed=int(args.seed),
+                frames=int(frames),
+                enc_hs=enc_hs,
+                enc_mask=enc_mask,
+                ctx_lat=ctx_lat,
+                null_emb=null_emb,
+            )
+        ace_step_reexec_for_dit_mesh(
             ttnn,
-            dev,
+            preprocess_dev=dev,
+            cached_preprocess=demo_session.cached_preprocess,
             mesh_sku=mesh_sku,
-            device_id=int(args.device_id),
-            num_command_queues=dit_num_cqs,
+            argv=sys.argv,
         )
-        demo_session.dit_dev = dev
-        demo_session.clear_preprocess_device(ttnn)
-        print(f"[ace_step_v1_5] opened DiT mesh for SKU={mesh_sku}", flush=True)
     elif not dev_opened_for_ttnn_text_encoder:
-        dev = open_dit_device(
-            ttnn,
-            mesh_sku=mesh_sku,
-            device_id=int(args.device_id),
-            num_command_queues=dit_num_cqs,
-        )
+        dit_env_saved = _ensure_full_cluster_env_for_dit(mesh_sku)
+        try:
+            dev = open_dit_device(
+                ttnn,
+                mesh_sku=mesh_sku,
+                device_id=int(args.device_id),
+                num_command_queues=dit_num_cqs,
+            )
+        except Exception:
+            _restore_cluster_visibility(dit_env_saved)
+            raise
+        if dit_env_saved is not None:
+            setattr(dev, _ACE_STEP_VISIBLE_DEVICES_SAVED_ATTR, dit_env_saved)
         dev_opened_for_ttnn_text_encoder = True
         demo_session.dit_dev = dev
         if split_device:

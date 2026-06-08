@@ -863,7 +863,7 @@ def ace_step_apply_qwen_prefill_l1(tt_model: Any, model_args: Any) -> None:
             if norm_mod is not None:
                 _patch_distributed_norm_prefill_l1(norm_mod, l1_mc=l1_mc)
 
-    if hasattr(tt_model, "norm"):
+    if getattr(tt_model, "norm", None) is not None:
         _patch_distributed_norm_prefill_l1(tt_model.norm, l1_mc=l1_mc)
 
 

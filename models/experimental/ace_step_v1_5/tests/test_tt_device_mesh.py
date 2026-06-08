@@ -51,6 +51,17 @@ def test_unknown_mesh_sku_raises():
         resolve_ace_step_mesh_sku(cli_value="NOT_A_SKU")
 
 
+class _FakeMesh:
+    """1-D multi-chip stand-in (e.g. P150 line); not a 2×2 mesh."""
+
+    def __init__(self, num_devices: int) -> None:
+        self._num = int(num_devices)
+        self.shape = (1, self._num) if self._num > 1 else (1, 1)
+
+    def get_num_devices(self) -> int:
+        return self._num
+
+
 class _FakeMesh2d:
     shape = (2, 2)
 
@@ -97,11 +108,12 @@ def test_sequential_cfg_on_multi_device_only():
 
 
 def test_dit_body_trace_safe_30s_with_sequential_cfg():
-    """P300 mesh uses B=1 sequential CFG; trace must stay enabled at 30 s (fused_M=12, not 24)."""
+    """P300 mesh B=1 sequential CFG keeps fused_M=12 at 30 s, but DRAM activations forbid trace."""
     from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_dit_pipe_batch_size
     from models.experimental.ace_step_v1_5.ttnn_impl.math_perf_env import (
         ace_step_dit_body_trace_safe,
         ace_step_dit_fused_m_tiles,
+        ace_step_dit_prefers_dram_activations,
     )
 
     patch_sz = 2
@@ -112,8 +124,12 @@ def test_dit_body_trace_safe_30s_with_sequential_cfg():
     assert pipe_batch == 1
     fused_m = ace_step_dit_fused_m_tiles(batch_size=pipe_batch, seq_len=patch_seq)
     assert fused_m == 12
-    assert ace_step_dit_body_trace_safe(batch_size=pipe_batch, patch_seq_len=patch_seq)
+    assert ace_step_dit_prefers_dram_activations(batch_size=pipe_batch, seq_len=patch_seq)
+    assert not ace_step_dit_body_trace_safe(batch_size=pipe_batch, patch_seq_len=patch_seq)
     assert not ace_step_dit_body_trace_safe(batch_size=2, patch_seq_len=patch_seq)
+    # 15 s clip stays L1 + trace-safe with sequential CFG.
+    patch_seq_15s = (375 + patch_sz - 1) // patch_sz
+    assert ace_step_dit_body_trace_safe(batch_size=pipe_batch, patch_seq_len=patch_seq_15s)
 
 
 def test_host_temb_precompute_on_multi_device_only():
@@ -125,6 +141,36 @@ def test_mesh_split_ttnn_preprocess_on_multi_device():
     assert ace_step_mesh_use_split_ttnn_preprocess("BH_QB")
     assert not ace_step_mesh_use_split_ttnn_preprocess("P150")
     assert not ace_step_mesh_use_split_ttnn_preprocess(None)
+
+
+def test_mesh_host_preprocess_env_disables_split_ttnn(monkeypatch):
+    from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_mesh_use_host_preprocess
+
+    monkeypatch.setenv("ACE_STEP_MESH_HOST_PREPROCESS", "1")
+    assert ace_step_mesh_use_host_preprocess("BH_QB")
+    assert not ace_step_mesh_use_split_ttnn_preprocess("BH_QB")
+
+
+def test_restrict_cluster_visibility_for_preprocess(monkeypatch):
+    from models.experimental.ace_step_v1_5.utils.tt_device import (
+        _restrict_cluster_to_preprocess_chip,
+        _restore_cluster_visibility,
+    )
+
+    monkeypatch.delenv("TT_VISIBLE_DEVICES", raising=False)
+    saved = _restrict_cluster_to_preprocess_chip("BH_QB", 0)
+    assert saved is not None
+    assert os.environ["TT_VISIBLE_DEVICES"] == "0"
+    _restore_cluster_visibility(saved)
+    assert "TT_VISIBLE_DEVICES" not in os.environ
+
+    monkeypatch.setenv("TT_VISIBLE_DEVICES", "0,1,2,3")
+    saved2 = _restrict_cluster_to_preprocess_chip("BH_QB", 0)
+    assert saved2 == {"TT_VISIBLE_DEVICES": "0,1,2,3", "TT_MESH_GRAPH_DESC_PATH": None}
+    _restore_cluster_visibility(saved2)
+    assert os.environ["TT_VISIBLE_DEVICES"] == "0,1,2,3"
+
+    assert _restrict_cluster_to_preprocess_chip("P150", 0) is None
 
 
 def test_mesh_use_adg_defaults():

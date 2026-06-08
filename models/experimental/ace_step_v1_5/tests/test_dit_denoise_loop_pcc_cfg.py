@@ -48,7 +48,7 @@ def _run_torch_denoise_cfg_apg(
     cfg_lo: float,
     cfg_hi: float,
 ) -> torch.Tensor:
-    from models.experimental.ace_step_v1_5.torch_ref._vendored_acestep.acestep.models.common.apg_guidance import (
+    from models.experimental.ace_step_v1_5.host_preprocess.acestep.models.common.apg_guidance import (
         MomentumBuffer,
         apg_forward,
     )
