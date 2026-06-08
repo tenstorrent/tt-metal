@@ -122,6 +122,8 @@ void kernel_main() {
     constexpr uint32_t tokens = get_named_compile_time_arg_val("tokens");
     constexpr uint32_t hidden_size = get_named_compile_time_arg_val("hidden_size");
     constexpr uint32_t experts = get_named_compile_time_arg_val("experts");
+    constexpr uint32_t experts_per_device = get_named_compile_time_arg_val("experts_per_device");
+
     constexpr uint32_t selected_experts_k = get_named_compile_time_arg_val("selected_experts_k");
 
     // Chunk info
@@ -206,7 +208,6 @@ void kernel_main() {
     constexpr uint32_t one_page = 1;
     constexpr uint32_t TILE_HEIGHT = 32;
     constexpr uint32_t TILE_WIDTH = 32;
-    constexpr uint32_t experts_per_device = (experts + num_devices - 1) / num_devices;
     constexpr uint32_t element_size = tilize_output_page_size / (TILE_HEIGHT * TILE_WIDTH);
     constexpr uint32_t tile_width_bytes = TILE_WIDTH * element_size;
 
