@@ -82,11 +82,31 @@ def _dots_ocr_decode_one_layer_tp_schemes():
 
     ``row`` is the production TP contract: hidden dim is sharded across TP
     (1536/4 = 384 on a 1x4 mesh). ``col_parallel`` is an opt-in comparison path
-    with replicated full-hidden input/output and column-parallel QKV/gate-up.
+    that keeps the same hidden-sharded input/output (distributed TP4 RMSNorm)
+    but routes the QKV/gate-up as N-dim column-parallel matmuls (one all-gather
+    of the normed shard per block; o_proj/down emit hidden-sharded output).
     Set ``DOTS_OCR_DECODE_ONE_LAYER_TP_SCHEMES=both`` or a comma-separated list
     to compare schemes.
     """
     env = os.environ.get("DOTS_OCR_DECODE_ONE_LAYER_TP_SCHEMES", "row").strip()
+    if env.lower() == "both":
+        return ["row", "col_parallel"]
+    schemes = [s.strip() for s in env.split(",") if s.strip()]
+    return schemes or ["row"]
+
+
+def _dots_ocr_decode_full_decoder_tp_schemes():
+    """Decoder-stack TP scheme(s) for the full 28-layer L1-boundary test.
+
+    Mirrors :func:`_dots_ocr_decode_one_layer_tp_schemes` but for the full
+    decoder stack. ``row`` (default) is the production TP contract (hidden dim
+    sharded across TP, 1536/4 = 384 on a 1x4 mesh). ``col_parallel`` keeps the
+    same hidden-sharded input/output (distributed TP4 RMSNorm) but routes
+    QKV/gate-up as N-dim column-parallel matmuls. Set
+    ``DOTS_OCR_DECODE_FULL_DECODER_TP_SCHEMES=both`` or a comma-separated list
+    to compare schemes.
+    """
+    env = os.environ.get("DOTS_OCR_DECODE_FULL_DECODER_TP_SCHEMES", "row").strip()
     if env.lower() == "both":
         return ["row", "col_parallel"]
     schemes = [s.strip() for s in env.split(",") if s.strip()]
@@ -414,25 +434,45 @@ def test_dots_ocr_decode_one_layer_l1_boundaries(mesh_device, tp_decode_scheme):
     # Keep a reference to the HF layer + rotary embedding for the PCC check.
     # ``from_torch`` only reads weights, so we can safely re-use the same
     # in-memory layer after building the TTNN version.
+    # hf_layer = hf_model.model.layers[0]
+    # hf_rotary_emb = hf_model.model.rotary_emb
+    # layer = TTNNDotsOCRDecoderLayer.from_torch(hf_layer, tp_decode_scheme=tp_decode_scheme)
+    # layer._unique_name = "model.layers.0"
+    # layer.override_children_module_names()
+
+    # set_device(layer, mesh_device, register_forward_hook=False, dump_visualization=False)
+    # layer.preprocess_weights()
+    # layer.move_weights_to_device()
+
+    # paged_cache = _create_paged_kv_cache(model_config, mesh_device, batch_size=1)
     hf_layer = hf_model.model.layers[0]
     hf_rotary_emb = hf_model.model.rotary_emb
+    # Profile a specific decoder depth's dtype config (BFP4 for layers 0..6,
+    # BFP8 for layers >=7). layer_idx drives _use_bfp8_decoder_weights AND the
+    # paged-cache slot, so size the cache to the real depth.
+    target_layer_idx = int(os.environ.get("DOTS_OCR_DECODE_ONE_LAYER_IDX", "8"))
+    hf_layer.self_attn.layer_idx = target_layer_idx
     layer = TTNNDotsOCRDecoderLayer.from_torch(hf_layer, tp_decode_scheme=tp_decode_scheme)
-    layer._unique_name = "model.layers.0"
+    layer._unique_name = f"model.layers.{target_layer_idx}"
     layer.override_children_module_names()
 
     set_device(layer, mesh_device, register_forward_hook=False, dump_visualization=False)
     layer.preprocess_weights()
     layer.move_weights_to_device()
 
+    model_config.num_hidden_layers = max(target_layer_idx + 1, 28)
     paged_cache = _create_paged_kv_cache(model_config, mesh_device, batch_size=1)
+
     hidden_states_torch = torch.randn(1, 1, model_config.hidden_size, dtype=torch.bfloat16)
     num_devices = int(mesh_device.get_num_devices()) if hasattr(mesh_device, "get_num_devices") else 1
     is_tp_mesh = num_devices > 1 and hasattr(mesh_device, "shape") and list(mesh_device.shape)[-1] > 1
-    uses_tp_shard = is_tp_mesh and tp_decode_scheme == "row"
+    # Both ``row`` and ``col_parallel`` now keep the decode hidden/residual
+    # TP-sharded end to end (distributed TP4 RMSNorm + N-dim matmuls), so both
+    # shard the stack input along hidden on a TP mesh and concat (dim=-1) the
+    # sharded output back for PCC.
+    uses_tp_shard = is_tp_mesh and tp_decode_scheme in ("row", "col_parallel")
     if uses_tp_shard:
         input_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
-    elif is_tp_mesh and tp_decode_scheme == "col_parallel":
-        input_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     else:
         input_mapper = None
     hidden_state_kwargs = {"mesh_mapper": input_mapper} if input_mapper is not None else {}
@@ -1092,13 +1132,22 @@ def test_dots_ocr_vision_one_layer(mesh_device, num_vision_blocks):
     [_resolve_mesh_device_shape()],
     indirect=True,
 )
-def test_dots_ocr_decode_full_decoder_l1_boundaries(mesh_device):
+@pytest.mark.parametrize("tp_decode_scheme", _dots_ocr_decode_full_decoder_tp_schemes())
+def test_dots_ocr_decode_full_decoder_l1_boundaries(mesh_device, tp_decode_scheme):
     """Exercise all decoder layers in decode mode and require L1 attn/MLP boundaries.
 
     Also runs the same input through all 28 HF reference layers and compares
     the final output via PCC. This is the regression gate for accumulated
     multi-layer numerical drift (e.g. pushing BFP4 onto too many layers) that
     the single-layer PCC test cannot detect.
+
+    On a TP mesh (e.g. ``MESH_DEVICE=P150x4`` -> ``(1, 4)``) the decoder TP
+    scheme is exercised like ``test_dots_ocr_decode_one_layer_l1_boundaries``:
+    both ``row`` and ``col_parallel`` shard the hidden dim across TP (sharded
+    input/output, distributed TP4 RMSNorm); they differ only in whether the
+    matmuls are K-dim (``row``) or N-dim column-parallel (``col_parallel``).
+    Select schemes with ``DOTS_OCR_DECODE_FULL_DECODER_TP_SCHEMES`` (default
+    ``row``).
     """
     from tests.ttnn.utils_for_testing import assert_with_pcc
     from transformers import AutoConfig, AutoModelForCausalLM
@@ -1139,7 +1188,7 @@ def test_dots_ocr_decode_full_decoder_l1_boundaries(mesh_device):
 
     decoder_layers = []
     for layer_idx, hf_layer in enumerate(hf_model.model.layers):
-        layer = TTNNDotsOCRDecoderLayer.from_torch(hf_layer)
+        layer = TTNNDotsOCRDecoderLayer.from_torch(hf_layer, tp_decode_scheme=tp_decode_scheme)
         layer._unique_name = f"model.layers.{layer_idx}"
         layer.override_children_module_names()
         decoder_layers.append(layer)
@@ -1152,13 +1201,30 @@ def test_dots_ocr_decode_full_decoder_l1_boundaries(mesh_device):
     decoder_stack.move_weights_to_device()
 
     paged_cache = _create_paged_kv_cache(model_config, mesh_device, batch_size=1)
+    num_devices = int(mesh_device.get_num_devices()) if hasattr(mesh_device, "get_num_devices") else 1
+    is_tp_mesh = num_devices > 1 and hasattr(mesh_device, "shape") and list(mesh_device.shape)[-1] > 1
+    # Both ``row`` and ``col_parallel`` now keep the decode hidden/residual
+    # TP-sharded end to end (distributed TP4 RMSNorm + N-dim matmuls), so both
+    # shard the stack input along hidden on a TP mesh and concat (dim=-1) the
+    # sharded output back for PCC.
+    uses_tp_shard = is_tp_mesh and tp_decode_scheme in ("row", "col_parallel")
+    if uses_tp_shard:
+        input_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
+    else:
+        input_mapper = None
+    hidden_state_kwargs = {"mesh_mapper": input_mapper} if input_mapper is not None else {}
     hidden_states = ttnn.from_torch(
         hidden_states_torch,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
+        **hidden_state_kwargs,
     )
+    if uses_tp_shard:
+        assert int(hidden_states.shape[-1]) == model_config.hidden_size // int(mesh_device.shape[-1])
+    elif is_tp_mesh:
+        assert int(hidden_states.shape[-1]) == model_config.hidden_size
     cache_position = ttnn.from_torch(
         torch.zeros(1, dtype=torch.int32),
         dtype=ttnn.int32,
@@ -1195,6 +1261,10 @@ def test_dots_ocr_decode_full_decoder_l1_boundaries(mesh_device):
     ttnn.synchronize_device(mesh_device)
 
     _assert_l1_resident(output, "decoder stack output")
+    if uses_tp_shard:
+        assert int(output.shape[-1]) == model_config.hidden_size // int(mesh_device.shape[-1])
+    elif is_tp_mesh:
+        assert int(output.shape[-1]) == model_config.hidden_size
     assert all(boundaries == {"attn": True, "mlp": True} for boundaries in seen_boundaries.values())
 
     # ------------------------------------------------------------------
@@ -1203,12 +1273,19 @@ def test_dots_ocr_decode_full_decoder_l1_boundaries(mesh_device):
     # ``torch_output`` was computed at the top of the test, before any
     # TTNN setup, so the HF reference is unaffected by ``from_torch`` /
     # ``preprocess_weights`` in-place mutations on the HF layers.
-    num_devices = int(mesh_device.get_num_devices()) if hasattr(mesh_device, "get_num_devices") else 1
-    if num_devices > 1:
-        # Multi-device mesh (T3K DP (8,1) or TP (1,8)): DP-with-batch=1 and
-        # TP-after-all-reduce both produce identical data on every device.
-        # ``ConcatMeshToTensor(dim=0)`` stacks per-device slices along batch;
-        # take the first as the canonical output.
+    if uses_tp_shard:
+        # Both ``row`` and ``col_parallel`` TP keep the hidden dim sharded across
+        # TP all the way to the stack output; concat the per-device shards back
+        # into full hidden.
+        ttnn_output_torch = ttnn.to_torch(
+            output,
+            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1),
+        )
+    elif num_devices > 1:
+        # Multi-device mesh (T3K DP (8,1) or TP (1,8)/``col_parallel``):
+        # DP-with-batch=1 and TP-after-all-reduce both produce identical data on
+        # every device. ``ConcatMeshToTensor(dim=0)`` stacks per-device slices
+        # along batch; take the first as the canonical output.
         ttnn_output_torch = ttnn.to_torch(
             output,
             mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),

@@ -274,11 +274,18 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
             new_layer.self_attn = TTNNDotsOCRAttention.from_torch(torch_layer.self_attn)
             new_layer.mlp = TTNNDotsOCRMLP.from_torch(torch_layer.mlp)
         elif tp_decode_scheme == "col_parallel":
-            # Optional comparison path for TP decode: replicated full-hidden in,
-            # column-parallel QKV/gate-up, replicated full-hidden out. Prefill
-            # still uses the row-parallel MLP/hidden-sharded contract.
+            # Fully TP4-distributed (SP+TP) decode: the hidden/residual stays
+            # TP-sharded (e.g. 384 on a 1x4 mesh) end to end, RMSNorm runs
+            # distributed (TP4) on that shard, and the decoder layer all-gathers
+            # the normed shard to full hidden only to feed the N-dim/column-
+            # parallel QKV and gate/up. The column-parallel o_proj emits an
+            # N-sharded (= hidden-sharded) output with no collective, and the
+            # row-parallel down does reduce_scatter only, so each block costs
+            # ~1 all-gather + (MLP) 1 reduce_scatter and the residual add stays
+            # on the sharded hidden. Prefill still uses the row-parallel
+            # MLP/hidden-sharded contract.
             new_layer.self_attn = TTNNDotsOCRAttention.from_torch(torch_layer.self_attn, qkv_n_parallel=True)
-            new_layer.mlp = TTNNDotsOCRMLPColParallelFusedGateUp.from_torch(torch_layer.mlp, replicated_output=True)
+            new_layer.mlp = TTNNDotsOCRMLPColParallelFusedGateUp.from_torch(torch_layer.mlp, replicated_output=False)
             new_layer.mlp_prefill = TTNNDotsOCRMLP.from_torch(torch_layer.mlp)
         else:
             raise ValueError(f"Unsupported dots.ocr decoder TP decode scheme: {tp_decode_scheme}")
@@ -313,22 +320,27 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
         **kwargs,
     ):
         hs = _take_local_dp_batch(hidden_states, self.device)
-        input_is_decode = len(hs.shape) >= 2 and int(hs.shape[-2]) == 1
-        if getattr(self, "tp_decode_scheme", "row") == "col_parallel" and input_is_decode:
-            hs = _gather_tp_hidden_if_needed(hs, self.device, int(self.input_layernorm.torch_layer.weight.shape[0]))
+        is_col_parallel = getattr(self, "tp_decode_scheme", "row") == "col_parallel"
 
         if hs.layout != ttnn.TILE_LAYOUT:
             hs = ttnn.to_layout(hs, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if hs.dtype != ttnn.bfloat16:
             hs = ttnn.typecast(hs, ttnn.bfloat16)
 
-        # Attention block
+        hidden_dim = int(self.input_layernorm.torch_layer.weight.shape[0])
+
+        # Attention block. The residual stays in the TP-sharded hidden layout
+        # (e.g. 384 on a 1x4 mesh); input_layernorm runs distributed (TP4) on
+        # that shard. For col_parallel decode the normed shard is all-gathered
+        # to full hidden so the column-parallel QKV contracts over full hidden.
         residual = hs
         hs = self.input_layernorm(hs)
 
         seq_len = hs.shape[-2]
         is_decode = seq_len == 1
         decode_l1_mc = ttnn.L1_MEMORY_CONFIG if is_decode else None
+        if is_col_parallel and is_decode:
+            hs = _gather_tp_hidden_if_needed(hs, self.device, hidden_dim)
         attn_out, _ = self.self_attn(
             hidden_states=hs,
             position_embeddings=None,
@@ -377,9 +389,15 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
         )
         ttnn.deallocate(attn_out)
 
-        # MLP block
+        # MLP block. Same SP+TP contract as the attention block: distributed
+        # (TP4) RMSNorm on the sharded residual, then (col_parallel decode)
+        # all-gather to full hidden for the column-parallel gate/up. The
+        # row-parallel down does reduce_scatter only, so mlp_out comes back
+        # hidden-sharded and the residual add stays on the sharded hidden.
         residual = hs
         hs = self.post_attention_layernorm(hs)
+        if is_col_parallel and is_decode:
+            hs = _gather_tp_hidden_if_needed(hs, self.device, hidden_dim)
         mlp = self.mlp if is_decode else getattr(self, "mlp_prefill", self.mlp)
         mlp_out = mlp(hs)
 
