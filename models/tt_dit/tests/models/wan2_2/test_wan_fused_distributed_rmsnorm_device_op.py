@@ -1297,6 +1297,9 @@ def test_wan_fused_distributed_rmsnorm_perf_tp8_ring_native(
         pytest.param(32, 512, 4, False, id="N32_H512_4heads_bcast"),
         pytest.param(32, 512, 4, True, id="N32_H512_4heads_perhead"),
         pytest.param(64, 1024, 8, True, id="N64_H1024_8heads_perhead"),
+        # Repro of the tp2_a_selfattn compute shape (feat 1024, 16 heads, head_dim
+        # 64, 64 rows) in isolation at TP=1 (no AG/ring) — isolates compute vs AG.
+        pytest.param(64, 1024, 16, True, id="N64_H1024_16heads_perhead"),
     ],
 )
 def test_wan_fused_distributed_rmsnorm_tp1_rope(
