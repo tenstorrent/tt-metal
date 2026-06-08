@@ -948,12 +948,13 @@ class LTXPipeline:
         # On-device Gemma encode; coresident-excluded with the DiT/VAE, so loading it auto-evicts
         # them and _prepare_transformer(0) evicts the encoder back. Only load on a cache miss —
         # a cached prompt skips the encoder entirely.
-        if not os.path.exists(self._device_embed_cache_path([prompt, neg])):
+        cached = os.path.exists(self._device_embed_cache_path([prompt, neg]))
+        if not cached:
             self.gemma_encoder_pair.ensure_loaded()
         enc = self.encode_prompts([prompt, neg])
         v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
         neg_v, neg_a = enc[1][0].float(), enc[1][1].float()
-        logger.info(f"Encoding (device): {time.time() - t0:.1f}s")
+        logger.info(f"Encoding ({'cache' if cached else 'device'}): {time.time() - t0:.1f}s")
 
         self._prepare_transformer(0)
 

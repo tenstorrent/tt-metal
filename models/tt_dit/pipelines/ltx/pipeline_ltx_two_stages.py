@@ -223,10 +223,11 @@ class LTXTwoStagesPipeline(LTXPipeline):
         # reference's shared ``ctx_p``). On-device Gemma encode is coresident-excluded
         # with the DiT/VAE, so it auto-evicts them; load only on a cache miss.
         t0 = time.time()
-        if not os.path.exists(self._device_embed_cache_path([prompt, neg])):
+        cached = os.path.exists(self._device_embed_cache_path([prompt, neg]))
+        if not cached:
             self.gemma_encoder_pair.ensure_loaded()
         enc = self.encode_prompts([prompt, neg])
-        logger.info(f"Encoding (device): {time.time() - t0:.1f}s")
+        logger.info(f"Encoding ({'cache' if cached else 'device'}): {time.time() - t0:.1f}s")
         v_p, a_p = enc[0][0].float(), enc[0][1].float()
         v_n, a_n = enc[1][0].float(), enc[1][1].float()
 
