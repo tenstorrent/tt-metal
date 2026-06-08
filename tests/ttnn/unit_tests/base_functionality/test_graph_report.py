@@ -1831,6 +1831,141 @@ class TestReportVersion:
         assert report["version"] == ttnn.graph.REPORT_VERSION
 
 
+class TestBufferChunksSchemaAndAggregation:
+    """Schema, version, and per-(op, device, addr, bank, core) aggregation tests
+    for the ``buffer_chunks`` table that replaced the legacy ``buffer_pages``."""
+
+    @staticmethod
+    def _open_db(tmp_path):
+        db_path = tmp_path / "schema.db"
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        graph_report.create_database_schema(cursor)
+        graph_report.save_database_schema_version(cursor)
+        conn.commit()
+        return conn, cursor
+
+    def test_schema_version_is_3_1(self):
+        """The current importer writes schema version ``3.1``."""
+        assert graph_report.DATABASE_SCHEMA_VERSION == "3.1"
+
+    def test_schema_creates_buffer_chunks_not_buffer_pages(self, tmp_path):
+        """``create_database_schema`` produces ``buffer_chunks`` and not ``buffer_pages``."""
+        conn, cursor = self._open_db(tmp_path)
+        try:
+            tables = {
+                row[0]
+                for row in cursor.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            assert "buffer_chunks" in tables
+            assert "buffer_pages" not in tables
+        finally:
+            conn.close()
+
+    def test_buffer_chunks_has_expected_columns(self, tmp_path):
+        """``buffer_chunks`` columns match what ttnn-visualizer's ``BufferChunk`` reads."""
+        conn, cursor = self._open_db(tmp_path)
+        try:
+            cols = [row[1] for row in cursor.execute("PRAGMA table_info(buffer_chunks)").fetchall()]
+            assert cols == [
+                "operation_id",
+                "device_id",
+                "address",
+                "bank_id",
+                "core_x",
+                "core_y",
+                "chunk_address",
+                "chunk_size",
+                "page_size",
+                "num_pages",
+                "buffer_type",
+            ]
+        finally:
+            conn.close()
+
+    def test_schema_version_persisted_to_report_metadata(self, tmp_path):
+        """``save_database_schema_version`` writes ``3.1`` into ``report_metadata``."""
+        conn, cursor = self._open_db(tmp_path)
+        try:
+            row = cursor.execute(
+                "SELECT value FROM report_metadata WHERE key = 'schema_version'"
+            ).fetchone()
+            assert row is not None
+            assert row[0] == "3.1"
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _page(device_id, address, core_x, core_y, bank_id, page_index, page_address, page_size=2048, buffer_type=1):
+        """Build a page tuple in the order produced by ``_parse_page``:
+        ``(device_id, address, core_y, core_x, bank_id, page_index, page_address,
+        page_size, buffer_type)``."""
+        return (device_id, address, core_y, core_x, bank_id, page_index, page_address, page_size, buffer_type)
+
+    def test_aggregate_empty_pages(self):
+        """Empty input yields zero chunk rows."""
+        assert graph_report._aggregate_pages_to_chunks(op_id=1, pages=[]) == []
+
+    def test_aggregate_single_core_collapses_contiguous_pages(self):
+        """A single core's contiguous pages collapse to one chunk with correct math."""
+        pages = [
+            self._page(device_id=1, address=1000, core_x=0, core_y=0, bank_id=64, page_index=i, page_address=i * 2048)
+            for i in range(10)
+        ]
+        rows = graph_report._aggregate_pages_to_chunks(op_id=7, pages=pages)
+        assert len(rows) == 1
+        op, dev, addr, bank, cx, cy, chunk_addr, chunk_size, page_size, num_pages, btype = rows[0]
+        assert (op, dev, addr, bank, cx, cy) == (7, 1, 1000, 64, 0, 0)
+        assert (chunk_addr, chunk_size, page_size, num_pages, btype) == (0, 10 * 2048, 2048, 10, 1)
+
+    def test_aggregate_preserves_per_core_asymmetry(self):
+        """Different cores hosting different page counts produce independent rows."""
+        pages = []
+        # Three cores with 10/10/3 pages — last core has a partial trailing shard.
+        for core_x, n_pages in [(0, 10), (1, 10), (2, 3)]:
+            for i in range(n_pages):
+                pages.append(
+                    self._page(
+                        device_id=1,
+                        address=1000,
+                        core_x=core_x,
+                        core_y=0,
+                        bank_id=64 + core_x,
+                        page_index=i,
+                        page_address=i * 2048,
+                    )
+                )
+
+        rows = graph_report._aggregate_pages_to_chunks(op_id=42, pages=pages)
+        by_core = {(r[4], r[5]): r for r in rows}
+        assert set(by_core.keys()) == {(0, 0), (1, 0), (2, 0)}
+
+        for (cx, _cy), expected_num in [((0, 0), 10), ((1, 0), 10), ((2, 0), 3)]:
+            row = by_core[(cx, 0)]
+            chunk_addr, chunk_size, page_size, num_pages = row[6], row[7], row[8], row[9]
+            assert num_pages == expected_num
+            assert chunk_addr == 0
+            assert chunk_size == expected_num * 2048
+            assert page_size == 2048
+
+    def test_aggregate_separates_groups_by_address_and_buffer_type(self):
+        """Distinct addresses (or buffer types) on the same core produce distinct rows."""
+        pages = [
+            # Two pages of L1 buffer at addr=1000 on core (0,0)/bank 64
+            self._page(1, 1000, 0, 0, 64, 0, 0, page_size=2048, buffer_type=1),
+            self._page(1, 1000, 0, 0, 64, 1, 2048, page_size=2048, buffer_type=1),
+            # One page of DRAM buffer at addr=5000 on same core (different bank)
+            self._page(1, 5000, 0, 0, 70, 0, 0, page_size=4096, buffer_type=0),
+        ]
+        rows = graph_report._aggregate_pages_to_chunks(op_id=1, pages=pages)
+        assert len(rows) == 2
+        by_addr = {r[2]: r for r in rows}
+        assert by_addr[1000][9] == 2 and by_addr[1000][10] == 1  # num_pages=2, buffer_type=1
+        assert by_addr[5000][9] == 1 and by_addr[5000][10] == 0  # num_pages=1, buffer_type=0
+
+
 class TestResNet50Patterns:
     """
     Tests for patterns observed in the ResNet50 reference database:
