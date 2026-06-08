@@ -1428,20 +1428,20 @@ inline hash_t hash_object(const T& object) noexcept {
 
 template <typename... Types>
 inline hash_t hash_objects(hash_t seed, const Types&... args) noexcept {
-    // Fold each element into the running seed through a strong 64-bit bijective mixer.
+    // Fold each element into the running seed with the splitmix64 finalizer (David Stafford's
+    // "variant 13"), a strong 64-bit mixer.
     //
-    // The previous combiner was the classic 32-bit boost::hash_combine
+    // The previous combiner was the classic boost::hash_combine
     // (`seed ^= h + 0x9e3779b9 + (seed << 6) + (seed >> 2)`). Its avalanche is poor for the
-    // small, structured integers that dominate our keys (tensor shapes, dtypes), so distinct
-    // sequences collided in 64 bits -- e.g. shapes [3, 17, 1, 1] and [1, 152, 1, 1] hashed
-    // identically, producing wrong program-cache hits (issue #45821).
+    // small, structured integers that dominate our cache keys (tensor shapes, dtypes), so
+    // distinct sequences collided in 64 bits -- e.g. shapes [3, 17, 1, 1] and [1, 152, 1, 1]
+    // hashed identically, causing wrong program-cache hits (issue #45821).
     //
-    // We replace it with the splitmix64 finalizer (David Stafford's "variant 13" of the
-    // MurmurHash3 final mix); it is the same mixer boost (>=1.81) and abseil use internally,
-    // implemented here with only <cstdint> arithmetic so tt_stl pulls in no extra dependency.
-    // 0x9e3779b97f4a7c15 is the 64-bit golden-ratio increment (the 64-bit analog of the old
-    // 0x9e3779b9), which keeps the fold order-dependent and gives a non-trivial result for a
-    // zero seed / zero element.
+    // The multiply-xorshift finalizer is the state of the art for 64-bit hash mixing (boost
+    // >=1.81 and abseil use mixers of the same family, with different constants); we inline it
+    // with only <cstdint> arithmetic so tt_stl pulls in no extra dependency. 0x9e3779b97f4a7c15
+    // is the 64-bit golden-ratio increment (the 64-bit analog of the old 0x9e3779b9), which
+    // keeps the fold order-dependent and gives a non-trivial result for an all-zero input.
     ([&seed](const auto& arg) {
         hash_t x = seed + 0x9e3779b97f4a7c15ULL + hash_object(arg);
         x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
