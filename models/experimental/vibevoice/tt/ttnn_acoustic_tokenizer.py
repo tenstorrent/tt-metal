@@ -34,7 +34,6 @@ from models.experimental.vibevoice.tt.ttnn_semantic_tokenizer import (
     SemanticTokenizerWeights,
     _parse_depths,
     _get_conv_weights,
-    _HIFI4,
     TTConv1d,
     TTBlock1DDevice,
     TTSemanticTokenizer,
@@ -200,123 +199,63 @@ def preprocess_acoustic_tokenizer_weights(
 
 
 class TTConvTranspose1d:
-    """SConvTranspose1d (causal, trim_right_ratio=1) on device via ttnn.conv_transpose2d.
+    """SConvTranspose1d (causal, trim_right_ratio=1) via polyphase conv2d.
 
-    Applies standard ConvTranspose1d (no padding), then trims kernel_size - stride
-    samples from the right. Input/output: [B, 1, T, C] NHWC.
+    A stride-S transposed conv with kernel K = 2*S is decomposed into S regular
+    causal conv1d's of kernel size 2 (one per output phase), whose outputs are
+    interleaved.  This avoids ttnn.conv_transpose2d (which mis-streams at small
+    non-tile-aligned widths and is sharding-fragile) and reuses TTConv1d's working
+    streaming cache.
+
+    With W = ConvTranspose1d weight [in, out, K]:
+        output[t*S + s] = x[t] * W[:, :, s] + x[t-1] * W[:, :, s+S]
+    which is exactly the causal, right-trimmed SConvTranspose1d output (length T*S).
+    Each phase is therefore a kernel-2 causal conv (taps x[t-1], x[t]); no extra trim.
     """
 
-    def __init__(self, ctw: ConvTransposeWeightsHost, device):
+    def __init__(self, ctw: ConvTransposeWeightsHost, device, compute_dtype=ttnn.bfloat16):
         self.device = device
         self.stride = ctw.stride
-        self.trim_right = ctw.trim_right
 
         in_ch, out_ch, K = ctw.weight.shape
+        S = self.stride
+        assert K == 2 * S, f"polyphase assumes kernel == 2*stride (got K={K}, stride={S})"
         self.in_ch = in_ch
         self.out_ch = out_ch
         self.K = K
 
-        # Store raw host tensors in float32 so the kernel mirror/transpose in
-        # prepare_conv_transpose2d_weights is done at full precision before
-        # quantising to bfloat16 for the actual conv op.
-        self._raw_weight = ctw.weight.to(torch.float32).unsqueeze(2).contiguous()  # [in, out, 1, K]
-        self._raw_bias = ctw.bias.to(torch.float32).view(1, 1, 1, -1).contiguous() if ctw.bias is not None else None
-        self.weight = None  # set on first call
-        self.bias = None
-        self._prepared_for_T = None
+        # One kernel-2 causal conv per phase; bias added in every phase (each output
+        # position is produced by exactly one phase, so bias lands once per position).
+        W = ctw.weight  # [in, out, K]
+        self._phases = []
+        for s in range(S):
+            k_tm1 = W[:, :, s + S].transpose(0, 1).contiguous()  # [out, in] coeff of x[t-1]
+            k_t = W[:, :, s].transpose(0, 1).contiguous()  # [out, in] coeff of x[t]
+            phase_w = torch.stack([k_tm1, k_t], dim=2).contiguous()  # [out, in, 2]
+            cw = ConvWeightsHost(weight=phase_w, bias=ctw.bias, stride=1, groups=1, causal_pad=1)
+            self._phases.append(TTConv1d(cw, device, compute_dtype=compute_dtype))
 
-    def _prepare(self, B: int, T: int) -> None:
-        """Preprocess weights/bias for conv_transpose2d using the prepare APIs."""
-        w_tt = ttnn.as_tensor(
-            self._raw_weight,
-            device=self.device,
-            dtype=ttnn.float32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        _cfg = ttnn.Conv2dConfig(weights_dtype=ttnn.bfloat16)
-        self.weight = ttnn.prepare_conv_transpose2d_weights(
-            weight_tensor=w_tt,
-            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            input_layout=ttnn.ROW_MAJOR_LAYOUT,
-            weights_format="OIHW",
-            in_channels=self.in_ch,
-            out_channels=self.out_ch,
-            batch_size=B,
-            input_height=1,
-            input_width=T,
-            kernel_size=(1, self.K),
-            stride=(1, self.stride),
-            padding=(0, 0),
-            dilation=(1, 1),
-            has_bias=self._raw_bias is not None,
-            groups=1,
-            device=self.device,
-            input_dtype=ttnn.bfloat16,
-            conv_config=_cfg,
-            compute_config=_HIFI4,
-        )
-        if self._raw_bias is not None:
-            # prepare_conv_transpose2d_bias requires a HOST tensor
-            b_tt = ttnn.from_torch(self._raw_bias, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
-            self.bias = ttnn.prepare_conv_transpose2d_bias(
-                bias_tensor=b_tt,
-                input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                input_layout=ttnn.ROW_MAJOR_LAYOUT,
-                in_channels=self.in_ch,
-                out_channels=self.out_ch,
-                batch_size=B,
-                input_height=1,
-                input_width=T,
-                kernel_size=(1, self.K),
-                stride=(1, self.stride),
-                padding=(0, 0),
-                dilation=(1, 1),
-                groups=1,
-                device=self.device,
-                input_dtype=ttnn.bfloat16,
-                conv_config=_cfg,
-                compute_config=_HIFI4,
-            )
-        self._prepared_for_T = T
+    def reset_cache(self) -> None:
+        for p in self._phases:
+            p.reset_cache()
 
-    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """x: [B, 1, T, in_ch] → [B, 1, T*stride, out_ch]"""
+    def __call__(self, x: ttnn.Tensor, use_cache: bool = False, is_final_chunk: bool = False) -> ttnn.Tensor:
+        """x: [B, 1, T, in_ch] -> [B, 1, T*stride, out_ch]."""
         B, _, T, _ = x.shape
-        T_full = (T - 1) * self.stride + self.K
-        T_out = T_full - self.trim_right  # = T * stride
+        S = self.stride
 
-        if self._prepared_for_T != T:
-            self._prepare(B, T)
+        phase_outs = [p(x, use_cache=use_cache, is_final_chunk=is_final_chunk) for p in self._phases]
+        if S == 1:
+            return phase_outs[0]
 
-        x_out, [self.weight, self.bias] = ttnn.conv_transpose2d(
-            input_tensor=x,
-            weight_tensor=self.weight,
-            bias_tensor=self.bias,
-            device=self.device,
-            in_channels=self.in_ch,
-            out_channels=self.out_ch,
-            batch_size=B,
-            input_height=1,
-            input_width=T,
-            kernel_size=(1, self.K),
-            stride=(1, self.stride),
-            padding=(0, 0),
-            return_output_dim=False,
-            return_weights_and_bias=True,
-            dtype=ttnn.bfloat16,
-            compute_config=_HIFI4,
-        )
-        # x_out: [1, 1, B*T_full, out_ch] — reshape and trim right
-        x_out = ttnn.reshape(x_out, [B, 1, T_full, self.out_ch])
-        if self.trim_right > 0:
-            x_out = ttnn.slice(
-                x_out,
-                [0, 0, 0, 0],
-                [B, 1, T_out, self.out_ch],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        return x_out
+        # Interleave phases: concat along channel -> [B,1,T,S*out_ch], reshape to
+        # [B,1,T*S,out_ch] so position t*S+s carries phase s (row-major flat order).
+        cat = ttnn.concat(phase_outs, dim=3)
+        if cat.layout != ttnn.ROW_MAJOR_LAYOUT:
+            cat = ttnn.to_layout(cat, ttnn.ROW_MAJOR_LAYOUT)
+        out = ttnn.reshape(cat, [B, 1, T * S, self.out_ch])
+        # Downstream ops (e.g. ttnn.rms_norm in the next block) require TILE layout.
+        return ttnn.to_layout(out, ttnn.TILE_LAYOUT)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -344,26 +283,36 @@ class TTAcousticTokenizer:
         self._dec_upsample_convs = [TTConvTranspose1d(ctw, device) for ctw in dec.upsample_convs]
         self._dec_head_conv = TTConv1d(dec.head_conv, device)
 
-    def encode(self, audio: ttnn.Tensor) -> ttnn.Tensor:
-        """audio: [B, 1, 1, T] → [B, 1, T_enc, vae_dim]"""
-        return self._encoder_tt.forward(audio)
+    def reset_decode_cache(self) -> None:
+        """Clear all decoder streaming caches (call before a new speech segment)."""
+        self._dec_input_conv.reset_cache()
+        for stage in self._dec_stage_blocks:
+            for blk in stage:
+                blk.reset_cache()
+        for up_conv in self._dec_upsample_convs:
+            up_conv.reset_cache()
+        self._dec_head_conv.reset_cache()
 
-    def decode(self, latents: ttnn.Tensor) -> ttnn.Tensor:
+    def encode(self, audio: ttnn.Tensor, use_cache: bool = False, is_final_chunk: bool = False) -> ttnn.Tensor:
+        """audio: [B, 1, 1, T] → [B, 1, T_enc, vae_dim]"""
+        return self._encoder_tt.forward(audio, use_cache=use_cache, is_final_chunk=is_final_chunk)
+
+    def decode(self, latents: ttnn.Tensor, use_cache: bool = False, is_final_chunk: bool = False) -> ttnn.Tensor:
         """latents: [B, 1, T_enc, vae_dim] → [B, 1, 1, T_audio] (all ops on device)"""
         B = latents.shape[0]
 
         x = latents if latents.dtype == ttnn.bfloat16 else ttnn.typecast(latents, ttnn.bfloat16)
 
-        x = self._dec_input_conv(x)
+        x = self._dec_input_conv(x, use_cache=use_cache, is_final_chunk=is_final_chunk)
         for blk in self._dec_stage_blocks[0]:
-            x = blk(x)
+            x = blk(x, use_cache=use_cache, is_final_chunk=is_final_chunk)
 
         for up_conv, blocks in zip(self._dec_upsample_convs, self._dec_stage_blocks[1:]):
-            x = up_conv(x)
+            x = up_conv(x, use_cache=use_cache, is_final_chunk=is_final_chunk)
             for blk in blocks:
-                x = blk(x)
+                x = blk(x, use_cache=use_cache, is_final_chunk=is_final_chunk)
 
-        x = self._dec_head_conv(x)  # [B, 1, T_audio, 1]
+        x = self._dec_head_conv(x, use_cache=use_cache, is_final_chunk=is_final_chunk)  # [B, 1, T_audio, 1]
         T_audio = x.shape[2]
         return ttnn.reshape(x, [B, 1, 1, T_audio])
 

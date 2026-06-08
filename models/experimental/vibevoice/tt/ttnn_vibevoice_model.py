@@ -158,6 +158,7 @@ class TTVibeVoiceModel:
         cfg_scale: float,
         num_diffusion_steps: int,
         max_new_tokens: Optional[int],
+        ref_inference=None,
     ) -> TTVibeVoiceGenerator:
         return TTVibeVoiceGenerator(
             lm_tt=self._lm,
@@ -179,6 +180,7 @@ class TTVibeVoiceModel:
             speech_scaling_factor=self._speech_scaling_factor,
             speech_bias_factor=self._speech_bias_factor,
             acoustic_fix_std=self._config.acoustic_tokenizer.fix_std,
+            ref_inference=ref_inference,
         )
 
     def generate(
@@ -194,12 +196,20 @@ class TTVibeVoiceModel:
         prefill_speech_embeds: Optional[torch.Tensor] = None,
         max_new_tokens: Optional[int] = None,
         rng: Optional[torch.Generator] = None,
+        ref_inference=None,
     ) -> TTVibeVoiceOutput:
-        """Run VibeVoice TTS generation (processor batch fields + tokenizer)."""
+        """Run VibeVoice TTS generation (processor batch fields + tokenizer).
+
+        Pass ``ref_inference`` (loaded VibeVoiceForConditionalGenerationInference) to
+        drive the AR loop with CPU fp32 reference LM hidden states + ref diffusion/fusion
+        for parity with HuggingFace generate().
+        """
         if tokenizer is None:
             raise ValueError("tokenizer is required (VibeVoiceProcessor.tokenizer)")
 
-        generator = self._make_generator(tokenizer, cfg_scale, num_diffusion_steps, max_new_tokens)
+        generator = self._make_generator(
+            tokenizer, cfg_scale, num_diffusion_steps, max_new_tokens, ref_inference=ref_inference
+        )
         return generator.generate(
             input_ids=input_ids,
             attention_mask=attention_mask,
