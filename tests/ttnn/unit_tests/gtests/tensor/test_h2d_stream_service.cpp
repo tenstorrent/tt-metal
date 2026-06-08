@@ -399,6 +399,9 @@ ttsl::SmallVector<MeshMapperConfig::Placement> replicate_all(
 }
 
 TEST_F(H2DStreamServiceTest, Replicated_Sweep) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        GTEST_SKIP() << "H2DStreamService kernels are only available on UBB Galaxy systems";
+    }
     // scratch_cb_pages and fifo_pages are multiples of one tensor page (per_row_size * sizeof(uint32_t)).
     struct Row {
         uint32_t per_row_size;
@@ -433,6 +436,9 @@ TEST_F(H2DStreamServiceTest, Replicated_Sweep) {
 }
 
 TEST_F(H2DStreamServiceTest, Sharded_Sweep) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        GTEST_SKIP() << "H2DStreamService kernels are only available on UBB Galaxy systems";
+    }
     const auto mesh_shape = this->mesh_device_->shape();
     if (mesh_shape.dims() != 2) {
         GTEST_SKIP() << "This test requires a 2D mesh; got " << mesh_shape;
@@ -509,6 +515,9 @@ TEST_F(H2DStreamServiceTest, Sharded_Sweep) {
 }
 
 TEST_F(H2DStreamServiceTest, Replicated_WorkerSync_Sweep) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        GTEST_SKIP() << "H2DStreamService kernels are only available on UBB Galaxy systems";
+    }
     struct Row {
         uint32_t per_row_size;
         uint32_t N;  // tensor pages per device; must satisfy N % num_workers == 0
@@ -571,6 +580,9 @@ TEST_F(H2DStreamServiceTest, Replicated_WorkerSync_Sweep) {
 }
 
 TEST_F(H2DStreamServiceTest, Sharded_WorkerSync_Sweep) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        GTEST_SKIP() << "H2DStreamService kernels are only available on UBB Galaxy systems";
+    }
     const auto mesh_shape = this->mesh_device_->shape();
     if (mesh_shape.dims() != 2) {
         GTEST_SKIP() << "This test requires a 2D mesh; got " << mesh_shape;
@@ -698,6 +710,9 @@ void ring_sdpa_reshuffle(
 }  // namespace
 
 TEST_F(H2DStreamServiceTest, Preprocessor_RingSDPAReshuffle) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        GTEST_SKIP() << "H2DStreamService kernels are only available on UBB Galaxy systems";
+    }
     const auto mesh_shape = this->mesh_device_->shape();
     if (mesh_shape.dims() != 2) {
         GTEST_SKIP() << "Preprocessor reshuffle test requires a 2D mesh; got " << mesh_shape;

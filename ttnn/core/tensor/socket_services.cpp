@@ -13,6 +13,7 @@
 #include <unordered_set>
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/reflection.hpp>
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>

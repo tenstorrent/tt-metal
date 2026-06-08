@@ -362,5 +362,4 @@ private:
     uint32_t socket_page_size_ = 0;
     uint32_t num_socket_pages_ = 0;
 };
-
 }  // namespace tt::tt_metal

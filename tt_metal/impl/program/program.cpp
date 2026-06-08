@@ -469,7 +469,7 @@ std::shared_ptr<Kernel> detail::ProgramImpl::get_kernel(KernelHandle kernel_id) 
 // Metal 2.0 Name Registry Methods
 // ============================================================================
 
-void ProgramImpl::register_kernel_spec_name(const KernelSpecName& name, KernelHandle handle) {
+void ProgramImpl::register_kernel_spec_name(const std::string& name, KernelHandle handle) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
@@ -511,7 +511,7 @@ void ProgramImpl::set_dfb_alias(uint32_t primary_id, uint32_t secondary_id) {
     dataflow_buffers_[secondary_id]->alias_primary_id = primary_id;
 }
 
-void ProgramImpl::register_dfb_spec_name(const DFBSpecName& name, uint32_t dfb_id) {
+void ProgramImpl::register_dfb_spec_name(const std::string& name, uint32_t dfb_id) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
@@ -519,7 +519,7 @@ void ProgramImpl::register_dfb_spec_name(const DFBSpecName& name, uint32_t dfb_i
     TT_FATAL(inserted, "Duplicate DFB spec name: {}", name);
 }
 
-void ProgramImpl::register_semaphore_spec_name(const SemaphoreSpecName& name, uint32_t sem_id) {
+void ProgramImpl::register_semaphore_spec_name(const std::string& name, uint32_t sem_id) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
@@ -527,28 +527,28 @@ void ProgramImpl::register_semaphore_spec_name(const SemaphoreSpecName& name, ui
     TT_FATAL(inserted, "Duplicate semaphore spec name: {}", name);
 }
 
-KernelHandle ProgramImpl::get_kernel_handle(const KernelSpecName& name) const {
+KernelHandle ProgramImpl::get_kernel_handle(const std::string& name) const {
     TT_FATAL(metal2_registry_, "Metal 2.0 registry not initialized (program was not created from ProgramSpec)");
     auto it = metal2_registry_->kernel_handles.find(name);
     TT_FATAL(it != metal2_registry_->kernel_handles.end(), "Unknown kernel spec name: {}", name);
     return it->second;
 }
 
-uint32_t ProgramImpl::get_dfb_handle(const DFBSpecName& name) const {
+uint32_t ProgramImpl::get_dfb_handle(const std::string& name) const {
     TT_FATAL(metal2_registry_, "Metal 2.0 registry not initialized (program was not created from ProgramSpec)");
     auto it = metal2_registry_->dfb_handles.find(name);
     TT_FATAL(it != metal2_registry_->dfb_handles.end(), "Unknown DFB spec name: {}", name);
     return it->second;
 }
 
-uint32_t ProgramImpl::get_semaphore_handle(const SemaphoreSpecName& name) const {
+uint32_t ProgramImpl::get_semaphore_handle(const std::string& name) const {
     TT_FATAL(metal2_registry_, "Metal 2.0 registry not initialized (program was not created from ProgramSpec)");
     auto it = metal2_registry_->semaphore_handles.find(name);
     TT_FATAL(it != metal2_registry_->semaphore_handles.end(), "Unknown semaphore spec name: {}", name);
     return it->second;
 }
 
-void ProgramImpl::register_kernel_rta_schema(const KernelSpecName& name, const KernelRTASchema& schema) {
+void ProgramImpl::register_kernel_rta_schema(const std::string& name, const KernelRTASchema& schema) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
@@ -556,7 +556,7 @@ void ProgramImpl::register_kernel_rta_schema(const KernelSpecName& name, const K
     TT_FATAL(inserted, "Duplicate kernel RTA schema for: {}", name);
 }
 
-const ProgramImpl::KernelRTASchema* ProgramImpl::get_kernel_rta_schema(const KernelSpecName& name) const {
+const ProgramImpl::KernelRTASchema* ProgramImpl::get_kernel_rta_schema(const std::string& name) const {
     if (!metal2_registry_) {
         return nullptr;
     }
@@ -567,8 +567,8 @@ const ProgramImpl::KernelRTASchema* ProgramImpl::get_kernel_rta_schema(const Ker
     return &it->second;
 }
 
-std::vector<KernelSpecName> ProgramImpl::get_registered_kernel_names() const {
-    std::vector<KernelSpecName> names;
+std::vector<std::string> ProgramImpl::get_registered_kernel_names() const {
+    std::vector<std::string> names;
     if (metal2_registry_) {
         names.reserve(metal2_registry_->kernel_handles.size());
         for (const auto& [name, handle] : metal2_registry_->kernel_handles) {

@@ -142,7 +142,7 @@ TRANSPOSE_DEST_FORMATS = input_output_formats(
     formats_dest_acc_sync_transpose_dims=generate_qsr_transpose_dest_combinations(
         TRANSPOSE_DEST_FORMATS
     ),
-    implied_math_format=[ImpliedMathFormat.No],
+    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
 )
 def test_transpose_dest_quasar(
     formats_dest_acc_sync_transpose_dims,

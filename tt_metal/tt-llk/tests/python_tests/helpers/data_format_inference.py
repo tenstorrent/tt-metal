@@ -139,12 +139,12 @@ def infer_unpack_out(
     if input_format.is_mx_format():
         return DataFormat.Float16_b
 
-    # Sub-byte BFP formats can only exist in L1.
-    # The Wormhole HW unpacker only supports BFP4_b → BFP8_b conversion
-    # (not BFP4_b → Float16_b). The unpacker expands 4-bit mantissas to 8-bit
-    # in the BFP8_b register format, preserving the shared exponent structure.
+    # Sub-byte BFP formats can only exist in L1. For UNPACR configuration,
+    # BFP2/BFP4/BFP8 inputs keep matching InDataFormat/OutDataFormat values;
+    # the unpacker internally normalizes the datum into the BF16 source-register
+    # representation before math consumes it.
     if input_format in [DataFormat.Bfp4_b, DataFormat.Bfp2_b]:
-        return DataFormat.Bfp8_b
+        return input_format
 
     if (
         input_format == DataFormat.Float32
@@ -286,6 +286,14 @@ def infer_pack_in(
     return output_format if is_fp32_dest_acc_en == DestAccumulation.Yes else unpack_out
 
 
+def infer_downstream_unpack_out(unpack_out: DataFormat) -> DataFormat:
+    # Keep BFP2/BFP4 only in the UNPACR config fields; downstream test
+    # inference historically models the unpacked payload as BFP8_b.
+    if unpack_out in [DataFormat.Bfp4_b, DataFormat.Bfp2_b]:
+        return DataFormat.Bfp8_b
+    return unpack_out
+
+
 def infer_math_format(a: DataFormat, b: DataFormat = None) -> DataFormat:
     # Design rationale:
     # - The only constraint enforced here is that both inputs belong to the same exponent "family"
@@ -357,8 +365,12 @@ def infer_data_formats(
         unpacking_to_srcs,
     )
 
+    downstream_unpack_out_A = infer_downstream_unpack_out(unpack_out_A)
+    downstream_unpack_out_B = infer_downstream_unpack_out(unpack_out_B)
+    downstream_unpack_out_S = infer_downstream_unpack_out(unpack_out_S)
+
     # The data format used for mathematical computations, desired format in dest register (typically matches unpack_out if both regs have same format)
-    math = infer_math_format(unpack_out_A, unpack_out_B)
+    math = infer_math_format(downstream_unpack_out_A, downstream_unpack_out_B)
 
     # FP8 is a compressed L1 format; hardware unpacks it to Float16 (float16_a) in
     # source registers. The ALU and packer must see Float16, not Lf8/Fp8_e4m3.
@@ -385,7 +397,7 @@ def infer_data_formats(
     pack_in_S = infer_pack_in(
         input_format,
         output_format,
-        unpack_out_S,
+        downstream_unpack_out_S,
         is_fp32_dest_acc_en,
         unpacking_to_dest,
         chip_arch,
