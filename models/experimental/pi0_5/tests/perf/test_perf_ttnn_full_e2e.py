@@ -57,16 +57,36 @@ def _build_inputs(cfg, device, num_cameras: int = NUM_CAMERAS):
     lang_tokens = torch.randint(0, 256000, (1, LANG_SEQ_LEN), dtype=torch.int32)
     lang_masks = torch.ones(1, LANG_SEQ_LEN, dtype=torch.bool)
 
-    images_ttnn = [
-        ttnn.from_torch(
-            im,
+    # PI0_SIGLIP_USE_FOLD=1 — match the production / trace-test image upload path
+    # (see test_perf_ttnn_full_e2e_trace.py:61 and [[pi05-siglip-fold-win]]).
+    # Pre-stack ALL cameras on host into one (N, H, W, 3) NHWC tensor, then
+    # pre-reshape to (N, H, W/patch, C*patch) so the device-side permute /
+    # untilize / reshape / concat (~0.89 ms) all disappear from prefix_setup.
+    _use_fold = os.environ.get("PI0_SIGLIP_USE_FOLD", "").lower() in ("1", "true", "yes", "on")
+    if _use_fold:
+        _PATCH = 14
+        stacked_host = torch.cat([im.permute(0, 2, 3, 1).contiguous() for im in images], dim=0)
+        N_, H_, W_, C_ = stacked_host.shape
+        stacked_host = stacked_host.reshape(N_, H_, W_ // _PATCH, C_ * _PATCH).contiguous()
+        stacked_ttnn = ttnn.from_torch(
+            stacked_host,
             dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        for im in images
-    ]
+        images_ttnn = [stacked_ttnn]
+    else:
+        images_ttnn = [
+            ttnn.from_torch(
+                im,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            for im in images
+        ]
     lang_tokens_ttnn = ttnn.from_torch(
         lang_tokens.to(torch.uint32),
         dtype=ttnn.uint32,
