@@ -19,13 +19,15 @@ Profile warmed prefill and decode separately. Use `tt-perf-report` as a conversa
 
 Tune precision and fidelity one group at a time so regressions can be assigned. A common starting point is BF16 activations and norms, BFP8 attention/MLP weights, BFP8 KV cache if PCC allows it, and selective BFP4 trials for MLP/expert weights. After that follow tt-perf-report, read the kernels, explore and be methodically creative until you are satisfied we've got everything out of the hardware that we can without rewriting the ttnn ops themselves!
 
+When tuning a full model against top-1/top-5/top-100 criteria there may be more opportunities for optimization than there were when optimizing a single decoder. If accuracy is higher than the bar, revisit selective precision experiments to try to find a more optimal configuration. In particular, one set of selective optimizations is only available when tuning the full model on real weights: per-layer differences. Many models are more sensitive to precision in the early and late layers than in the middle layers; it may be for example that weights that cannot be BFP4 through all layers _can_ be BFP4 for e.g. 90% of the layers, still a huge performance saving! Weight precision is such a huge lever especially for decode performance - this is a common case and must be investigated and reported on.
+
 Before you finish, take another look over a current tt-perf-report output. Is everything optimized that can be optimized, or were some things left deferred? If so, now is the time to take a breath and then systematically address them. After all, there *is* no "deferred". We are the optimization pass. If we defer something, it will forever be left unfinished. Now is the time to reach for our goal of a decoder that comes as close to full hardware performance as we can within the bounds of ttnn's capabilities! If there are specific ttnn op limitations preventing performance optimizations call these out in your report, we want to continue to improve it.
 
 Sometimes you will encounter a ttnn limitation or a bug. If, for example, you try an optimization and find that L1 buffers overlap (insufficient L1 space) do not take this as an excuse to give up on that optimization entirely. Instead, dive in to the code of the op and its shapes and configs and understand how you can reduce the L1 requirements in this part of the model. Or perhaps your specific shapes is not supported by the op and you need another one. Or the op does not support padding -> change the model contract so the tensors are manually padded in torch before conversion - all these things are in scope. If the failure crosses several ops, kernels, layouts, or planner/runtime boundaries and you are not making progress, use `$autofix`; it will run `$autodebug` if needed, then verify or refute each proposed bug before keeping any fix. Solve problems. Be curious. Be tenacious. Be creative. Be brilliant!
 
 ## Evidence To Leave
 
-Final optimized evidence should show:
+Final optimized evidence checklist - these items MUST be completed:
 
 - Functional checks still pass against the optimized path.
 - Prefill and decode PCC remain at the functional acceptance bar, with any material delta explained.
@@ -46,6 +48,7 @@ Final optimized evidence should show:
 -[ ] DRAM-sharded decode matmuls.
 -[ ] Fused matmul-CCL ops used where possible (or profiled and discarded with evidence).
 -[ ] For MoE models: optimized the routed active-expert path with `ttnn.sparse_matmul` where the model/hardware fits, following the GPT-OSS experts pattern for sparse gate/up/down projections, routing-score weighting, expert reduction, and no dense all-expert runtime path.
+-[ ] Reduced precision/fidelity experiments have been carried out and documented, including comprehensive selective BFP4 weight trials as described above. A global all-weight or all-layer BFP4 failure does not satisfy this item! For full-model tuning, per-layer selective BFP4 within the accuracy margin must have been investigated and documented. The most performant configuration that meets the functional acceptance bar has been selected.
 
 If this checklist is not completed, take this as a sign that you should go back and perform those optimization steps to improve on-device performance. For this stage that is what we are most interested in optimizing; op/host gap will be reduced by tracing.
 

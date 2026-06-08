@@ -71,6 +71,20 @@ Compare full-model behavior against the HuggingFace reference with real weights.
 - sequence lengths tested and any measured capacity limits;
 - watcher, fallback, or runtime-integrity checks appropriate to the environment.
 
+For instruction/chat models, prefer a teacher-forcing reference generated from a normal chat-template prompt over raw book text. In tt-metal autoports, use the DeepSeek AIME24 prompt set rendered by the HF tokenizer chat template as the main readiness reference, for example:
+
+```bash
+python -m models.common.readiness_check.generate \
+  --hf-model <hf-model-id> \
+  --prompt-source aime24 \
+  --chat-template \
+  --gen-len 32 \
+  --top-k 100 \
+  --output <model_dir>/readiness_aime24_chat.refpt
+```
+
+Raw Tale-of-Two-Cities/book references can still be useful as extra stress coverage, but they should not be the main quality gate for an instruct model unless the model lacks a usable chat template.
+
 When full-model accuracy is poor, debug the new wrapper first: embeddings, final norm, LM head/tied weights, positions, masks, cache indexing, prompt lengths, page tables, and sampling all commonly fail outside the decoder itself. If the failure spans several of these boundaries and the causal chain is unclear, use `$autofix`; it will run `$autodebug` if needed, then verify or refute each proposed bug before keeping any fix. Escalate back into decoder precision or fidelity only when evidence points there.
 
 ## Performance

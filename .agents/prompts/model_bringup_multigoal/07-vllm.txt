@@ -13,5 +13,6 @@ Goal completion requirements:
 - Runtime fallback and process cleanup are audited; leftover vLLM/EngineCore processes are not left holding devices.
 - models/autoports/<model>/doc/vllm_integration/README.md and work_log.md summarize commands, serving status, qualitative verdict, benchmark metrics, limitations, and exact artifacts.
 - model serves through the shared vLLM path with evidence.
+- Prefill TTFT and decode t/s/u reported for batch 1 inference reported at the top of README.md
 
 Do not mark this goal blocked just because PCC, trace replay, watcher, profiler, CCL, cache, MoE or other validation currently fails. Those failures are expected bringup work. Before marking blocked, isolate the failure to the smallest reproducible component, compare against the optimized single-chip baseline, try a concrete fix/refutation loop, and for subtle PCC, mesh/CCL, cache, or routed-expert bugs use $autofix or document why those skills could not be used. A blocked result requires evidence that continued debugging by the agent is no longer meaningful, not merely that a requirement is still failing.
