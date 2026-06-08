@@ -86,7 +86,6 @@ class MoonViT(LightweightModule):
 
         vt = _vision_tower(model_args)
         ref_blocks = vt.encoder.blocks
-        num_layers = len(ref_blocks)
 
         # Patch embed (Conv2d projection + learned 2D interp posemb).
         ref_patch_embed = model_args.reference_patch_embed()
