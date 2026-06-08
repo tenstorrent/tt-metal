@@ -20,10 +20,14 @@ using VariableMatmulConfig = ttml::metal::ops::variable_matmul::device::Variable
 // on (N, transpose flags, grid), so a single cached program services any (M, K) pair
 // within a transpose variant.
 //
-// EP-only op: every call must provide an offsets_tensor and an OffsetsRole. The dataflow
-// kernels read offsets_tensor[offsets_start_index..start_index+2] at runtime and derive
-// the per-call M/K ranges (and, for InputAndOutputRow, the output write-at-offset row).
-// One cached program serves all expert slices.
+// Always reads offsets on-device: every call must provide an offsets_tensor and an
+// OffsetsRole. The dataflow kernels read offsets_tensor[offsets_start_index..start_index+2]
+// at runtime and derive the per-call M/K ranges (and, for InputAndOutputRow, the output
+// write-at-offset row). One cached program serves all expert slices.
+//
+// On-device offsets are what makes the op viable under EP-sharded MoE — when the per-expert
+// dispatch counts live on the device, a host scalar would require an all-gather of offsets
+// across the EP dim. This is the motivation; the contract works the same on a single device.
 //
 // Roles:
 //   - InputAndOutputRow: read in0 row-range [offsets[start], offsets[start+1]) and write

@@ -144,7 +144,7 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
             out_M_tiles);
     }
 
-    // EP path is mandatory: every call must provide an offsets_tensor and a non-None role.
+    // offsets_tensor + role are required on every call — the op always reads offsets on-device.
     TT_FATAL(
         tensor_args.offsets_tensor.has_value(),
         "variable_matmul: offsets_tensor is required (use InputAndOutputRow or InputAndWeightK).");

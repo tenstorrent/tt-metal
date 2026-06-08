@@ -56,7 +56,7 @@ void kernel_main() {
     uint32_t M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 1);
     const uint32_t padded_M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 2);
     uint32_t M_blocks_per_core = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 3);
-    // Row and K offsets are EP-only: 0 on host-scalar path, derived from offsets[start] below.
+    // Row and K offsets are initialized to 0 here and overwritten below from offsets[start..start+2].
     uint32_t out_row_offset_tiles = 0U;
     uint32_t in1_k_offset_tiles = 0U;
     uint32_t parent_K_tiles_stride_in1 = 0U;
@@ -66,7 +66,7 @@ void kernel_main() {
     // OFFSET_IN0_K / OFFSET_IN1_K overrides K_tiles from on-device offsets[start..start+2].
     uint32_t K_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 5);
 
-    // EP path: read offsets from a 1-D UINT32 ROW_MAJOR device tensor. Each flag is independent.
+    // Read offsets from a 1-D UINT32 ROW_MAJOR device tensor. Each flag is independent.
     //   OFFSET_M_AXIS:   re-derives per-core M_start / M_end / M_blocks_per_core locally
     //                    (matches dm_in0_sender's compute so both kernels agree).
     //   OFFSET_OUT_ROW:  when this kernel is the writer (transpose_core_grid), sets

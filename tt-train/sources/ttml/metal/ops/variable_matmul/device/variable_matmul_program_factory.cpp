@@ -249,9 +249,9 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     // OFFSET_* are the only kernel defines variable_matmul uses today.
     std::map<std::string, std::string> defines;
 
-    // EP is mandatory: the dataflow kernels always read offsets_tensor[start..start+2] and
-    // use the values to override the RT-derived offsets. For InputAndOutputRow the compute
-    // kernel also needs M values; dm_in0_sender publishes them via cb_ctrl.
+    // Dataflow kernels always read offsets_tensor[start..start+2] and use the values to
+    // override the RT-derived offsets. For InputAndOutputRow the compute kernel also needs
+    // M values; dm_in0_sender publishes them via cb_ctrl.
     // Orthogonal offset flags derived from the role — kernel branches key off these.
     const auto role = operation_attributes.offsets_role;
     const bool offset_m_axis = role == OffsetsRole::InputAndOutputRow;
@@ -763,7 +763,7 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
     // every role, so RT-arg updates must match — otherwise the kernel's `offsets_start_index`
     // arg keeps the value from the first build and subsequent cache-hit invocations read
     // offsets[0] instead of offsets[e].
-    // EP is mandatory — offsets_tensor is always set.
+    // offsets_tensor is always set.
     constexpr bool in0_needs_offsets = true;
     constexpr bool in1_needs_offsets = true;
     const uint32_t offsets_addr = tensor_args.offsets_tensor.value().buffer()->address();
