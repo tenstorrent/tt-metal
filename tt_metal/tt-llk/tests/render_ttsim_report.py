@@ -596,7 +596,7 @@ def render(
     </div>
     <div class="passrate">
       <div class="passrate-num">{pass_pct:.1f}%</div>
-      <div class="passrate-label">{passed} of {ran} ran tests passing</div>
+      <div class="passrate-label">{passed} of {ran} tests passed</div>
     </div>
   </div>
   <div class="hero-inner">
