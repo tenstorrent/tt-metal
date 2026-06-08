@@ -15,15 +15,34 @@ Every LTX fusion opportunity maps onto the existing op — no new kernel capabil
 - **per-head RoPE** `(1,H,N,head_dim)` → auto-detected (`rope_cos.shape[1]==num_heads_per_device`).
 - whole-row norm + per-head rope → `per_head_norm=False` + per-head rope (independent flags).
 
-## What fuses today (measured, TP=4 galaxy LINE, 4 links)
-| config | pattern | feat | hd | rows | speedup |
-|---|---|---:|---:|---:|---:|
-| a_selfattn_qk | qk + per-head rope | 512 | 64 | 32 | **1.72×** |
-| a2v_audioK | qk + per-head rope | 512 | 64 | 256 | **1.43×** |
-| v_textcross_q | qk (no rope) | 1024 | 128 | 4864 | **1.48×** |
-| v_block / a_block | block + adaLN (weight+bias) | 1024/512 | — | — | runs ✓ |
+## Baseline (composite + unfused op) vs fused — TP=4 galaxy LINE, 4 links
+Baseline = composite RMSNorm (`use_device_op=False`) + the unfused trailing op
+(`ttnn.addcmul` for block norms / standalone `rotary_embedding_llama` for RoPE).
+Fused = the single device op. All 14 TP=4 configs fuse.
 
-i.e. block norms, audio QK (self + cross), A→V audio-K, and no-rope video QK all fuse.
+| config | pattern | feat | hd | rows | baseline µs | fused µs | speedup |
+|---|---|---:|---:|---:|---:|---:|---:|
+| v_block_s1 | block+adaLN | 1024 | — | 1216 | 143 | 106 | **1.36×** |
+| v_block_s2 | block+adaLN | 1024 | — | 4864 | 454 | 193 | **2.35×** |
+| a_block | block+adaLN | 512 | — | 32 | 35 | 25 | **1.40×** |
+| v_selfattn_qk_s1 | qk+per-head rope | 1024 | 128 | 1216 | 149 | 175 | 0.85× |
+| v_selfattn_qk_s2 | qk+per-head rope | 1024 | 128 | 4864 | 476 | 543 | 0.88× |
+| a_selfattn_qk | qk+per-head rope | 512 | 64 | 32 | 53 | 31 | **1.73×** |
+| a2v_videoQ_s1 | qk+per-head rope | 512 | 64 | 1216 | 111 | 117 | 0.96× |
+| a2v_videoQ_s2 | qk+per-head rope | 512 | 64 | 4864 | 323 | 292 | **1.11×** |
+| a2v_audioK | qk+per-head rope | 512 | 64 | 256 | 80 | 56 | **1.44×** |
+| v_textcross_q_s1 | qk (no rope) | 1024 | 128 | 1216 | 93 | 94 | 0.99× |
+| v_textcross_q_s2 | qk (no rope) | 1024 | 128 | 4864 | 273 | 183 | **1.50×** |
+| v_textcross_k | qk (no rope) | 1024 | 128 | 1024 | 86 | 79 | **1.09×** |
+| a_textcross_q | qk (no rope) | 512 | 64 | 32 | 34 | 23 | **1.49×** |
+| a_textcross_k | qk (no rope) | 512 | 64 | 1024 | 75 | 67 | **1.13×** |
+
+Takeaways: block-norm adaLN fusion is the biggest win (1.36–2.35×); no-rope QK and
+small/audio QK+rope win (1.1–1.7×); **video self-attn QK+per-head-rope (feat 1024)
+LOSES (0.85–0.88×)** because the per-head-RoPE chunk≥2 deadlock forces chunk=1, killing
+read/compute overlap — fixing that deadlock (open bug #1 below) is the lever that turns
+these into wins. (TP=2 not tabulated: its per-head-rope configs OOM (feat 2048) or hit
+the TP=2 hang, bug #2.)
 
 ## Two host-side L1/chunk-sizing bugs — FIXED (chunk clamp)
 
