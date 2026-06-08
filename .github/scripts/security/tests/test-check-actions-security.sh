@@ -2715,6 +2715,102 @@ jobs:
       - run: pip install git+https://github.com/myorg/myrepo.git@abc123
 EOF
 
+# --- Check 78: hardcoded PEM private key ---
+
+assert_detects "check 78 flags RSA private key marker" "78" "private key" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: |
+          echo "-----BEGIN RSA PRIVATE KEY-----
+          MIIEowIBAAKCAQEA2a2rwplBQLzMBCeXbCq1fICZmMlHKpxoqBfRtjG0=
+          -----END RSA PRIVATE KEY-----" > /tmp/key
+EOF
+
+assert_detects "check 78 flags OpenSSH private key marker" "78" "private key" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: |
+          echo "-----BEGIN OPENSSH PRIVATE KEY-----
+          b3BlbnNzaC1rZXktdjEAAAAA...
+          -----END OPENSSH PRIVATE KEY-----" > /tmp/key
+EOF
+
+assert_clean "check 78 accepts deploy key via secrets env var" "78" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: echo "$DEPLOY_KEY" > /tmp/key && chmod 600 /tmp/key
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+EOF
+
+# --- Check 79: archive extraction to filesystem root ---
+
+assert_detects "check 79 flags tar -C /" "79" "zip-slip" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: tar -xzf /tmp/artifact.tar.gz -C /
+EOF
+
+assert_detects "check 79 flags tar -C /usr/local/" "79" "zip-slip" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: tar -xzf toolchain.tar.gz -C /usr/local/
+EOF
+
+assert_detects "check 79 flags unzip -d /" "79" "zip-slip" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: unzip package.zip -d /
+EOF
+
+assert_clean "check 79 accepts tar to workspace subdirectory" "79" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: tar -xzf artifact.tar.gz -C /tmp/workspace/output/
+EOF
+
 printf '\n'
 printf '%s\n' "Results: ${passed} passed, ${failed} failed"
 

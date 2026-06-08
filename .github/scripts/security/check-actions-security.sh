@@ -31,7 +31,7 @@ FORMAT_RESULTS_FILE=""
 ISSUES_FOUND=0
 CHECKS_TO_RUN=()
 CURRENT_CHECK=""
-MAX_CHECK_NUM=77
+MAX_CHECK_NUM=79
 
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -3924,6 +3924,81 @@ check_77() {
     if [[ -n "${hits}" ]]; then
         log_issue "MEDIUM" "${file}" \
             "Installs package from an HTTP (non-HTTPS) VCS source - insecure transport allows MITM supply-chain attacks; use git+https:// instead" \
+            "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+check_78_description="hardcoded private key (SSH RSA/EC/OpenSSH BEGIN PRIVATE KEY marker)"
+check_78_severity="HIGH"
+
+example_check_78() {
+    cat <<'EOF'
+    steps:
+      - run: |
+          echo "-----BEGIN RSA PRIVATE KEY-----
+          MIIEowIBAAKCAQEA...
+          -----END RSA PRIVATE KEY-----" > /tmp/key
+EOF
+}
+
+check_78() {
+    local file="$1"
+    local hits
+    # Match PEM private key begin markers (RSA, EC, OpenSSH, generic PRIVATE KEY)
+    # Note: -- required because pattern starts with '-' (grep would treat it as an option)
+    hits=$(grep -nE -- \
+        '-----BEGIN (RSA |EC |DSA |OPENSSH |)PRIVATE KEY-----' \
+        "${file}" 2>/dev/null || true)
+    if [[ -n "${hits}" ]]; then
+        log_issue "HIGH" "${file}" \
+            "Contains a PEM private key marker (-----BEGIN ... PRIVATE KEY-----) - private keys must never be embedded in workflow files; use secrets context (\${{ secrets.MY_KEY }}) and write to a temp file at runtime" \
+            "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+check_79_description="archive extraction to filesystem root or system directories (zip-slip / path traversal)"
+check_79_severity="HIGH"
+
+example_check_79() {
+    cat <<'EOF'
+    steps:
+      - run: tar -xzf artifact.tar.gz -C /
+      - run: unzip package.zip -d /usr/local
+EOF
+}
+
+check_79() {
+    local file="$1"
+    local hits
+    # tar -C / (bare root — matches end-of-line or followed by space)
+    hits=$(grep -nE \
+        'tar[[:space:]].*-C[[:space:]]+/([[:space:]]|$)' \
+        "${file}" 2>/dev/null || true)
+    if [[ -z "${hits}" ]]; then
+        # tar -C /system-path/
+        hits=$(grep -nE \
+            'tar[[:space:]].*-C[[:space:]]+(\/etc\/|\/usr\/|\/bin\/|\/sbin\/|\/lib\/|\/opt\/|\/var\/|\/root\/|\/home\/)' \
+            "${file}" 2>/dev/null || true)
+    fi
+    if [[ -z "${hits}" ]]; then
+        # unzip -d / (bare root)
+        hits=$(grep -nE \
+            'unzip[[:space:]].*-d[[:space:]]+/([[:space:]]|$)' \
+            "${file}" 2>/dev/null || true)
+    fi
+    if [[ -z "${hits}" ]]; then
+        # unzip -d /system-path
+        hits=$(grep -nE \
+            'unzip[[:space:]].*-d[[:space:]]+(\/etc|\/usr|\/bin|\/sbin|\/lib|\/opt|\/var|\/root)' \
+            "${file}" 2>/dev/null || true)
+    fi
+    if [[ -n "${hits}" ]]; then
+        log_issue "HIGH" "${file}" \
+            "Archive extracted to filesystem root or system directory - malicious archives can use path traversal (zip-slip) to overwrite system files; extract to a dedicated workspace subdirectory instead" \
             "$(_extract_lines "${hits}")"
         return 1
     fi
