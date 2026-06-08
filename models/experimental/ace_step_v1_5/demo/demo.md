@@ -117,12 +117,12 @@ There is **no multi-pass CLI** (`--warmup`, `--repeat`, etc. were removed). To r
 |--------|-------|
 | `dit_pipeline_init` | Build `AceStepV15TTNNPipeline` |
 | `dit_mask_prep` | Encoder SDPA masks |
-| `dit_denoise_loop` | Euler × `--infer_steps`; dominant cost |
+| `dit_denoise_loop` | TTNN × `--infer_steps`; dominant cost |
 | `vae_init` | TTNN VAE first init in this run |
 | `vae_decode` | Tiled latent → waveform |
 | `(other/overhead)` | temb upload, trace capture, sync, staging |
 
-At ≥30 s on mesh, trace is forced off: latents + Euler run on **host CPU** while DiT **forwards** stay on TTNN.
+At ≥30 s on mesh, trace is forced off: latents + TTNN run on **host CPU** while DiT **forwards** stay on TTNN.
 
 ---
 
@@ -150,7 +150,7 @@ Rollup for the single process: `handler_init` + `demo_total` wall time.
 | `handler_init` | ~30 s | Every new process (includes tokenizer load) |
 | First `dit_pipeline_init` + compile | varies | Program cache fills on first denoise |
 | **`demo_total` (turbo 15 s)** | ~few s denoise + VAE | After init |
-| **`demo_total` (turbo 60 s)** | longer LM + DiT + VAE | Trace off; host Euler |
+| **`demo_total` (turbo 60 s)** | longer LM + DiT + VAE | Trace off; host TTNN |
 
 Second invocation in a **new process** repeats `handler_init` unless you use `serve_prompt_to_wav.py` or disk/RAM weight cache (see README).
 
@@ -215,7 +215,7 @@ Loads weights once at startup; each POST reuses in-memory caches. Different entr
 
 ## Comparison with other model demos
 
-Most `models/demos/*` scripts are single-shot. ACE-Step adds **four subsystems** (LM → condition → DiT → VAE), **split 1×1 / 2×2 devices** on BH_QB with **process re-exec handoff**, and custom `ace_step_perf_log.py`. Internal DiT **warmup** (two eager Euler steps before trace capture) is not a CLI flag — it happens inside the denoise loop when trace is enabled.
+Most `models/demos/*` scripts are single-shot. ACE-Step adds **four subsystems** (LM → condition → DiT → VAE), **split 1×1 / 2×2 devices** on BH_QB with **process re-exec handoff**, and custom `ace_step_perf_log.py`. Internal DiT **warmup** (two eager TTNN steps before trace capture) is not a CLI flag — it happens inside the denoise loop when trace is enabled.
 
 ---
 

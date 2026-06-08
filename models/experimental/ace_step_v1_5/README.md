@@ -2,7 +2,7 @@
 
 ## Platforms
 
-Blackhole (BH_QB — 2×2 mesh)
+Blackhole (BH_QB)
 
 ## About ACE-Step
 
@@ -38,11 +38,11 @@ End-to-end prompt-to-WAV (`demo/run_prompt_to_wav.py`) has been tested on **Blac
 
 Default demo pairing: **`acestep-v15-turbo`** + **`acestep-5Hz-lm-1.7B`**. Turbo runs use **`acestep-v15-turbo`** with any of the three LM sizes. SFT uses the same CFG/step defaults as base (`infer_steps=50`, `guidance_scale=7`).
 
-**BH_QB benchmark data** (prompt *Guitar*, branch `ign/ACE_demo_modified`): full timing + audio-quality notes for **15s / 30s / 60s** × **base / turbo / sft** × **LM 0.6B / 1.7B / 4B** are in [`perf/BENCHMARK_RESULTS.md`](perf/BENCHMARK_RESULTS.md) (exported from [`perf/Testing_ACE.xlsx`](perf/Testing_ACE.xlsx)).
+**BH_QB benchmark data** (prompt *Guitar*, branch `ign/ACE_demo_modified`): full timing + audio-quality notes for **15s / 30s / 60s** × **base / turbo / sft** × **LM 0.6B / 1.7B / 4B** are in [`perf/BENCHMARK_RESULTS.md`](perf/BENCHMARK_RESULTS.md)
 
 **Why base / SFT can sound noisier than turbo at 60s+**
 
-Turbo is **CFG-distilled** for **8 steps @ `guidance_scale=1`**: a short, stable TTNN path with no classifier-free guidance loop. Base and SFT use the **full sampler** (**50 steps**, **CFG=7**, ADG/APG on host between steps), so small TTNN numeric differences (LoFi matmul, `bfloat8_b` / `bfloat4_b` weights, host↔device Euler updates) **accumulate over many more denoise steps**. At **≥30s** on mesh, the stack also switches to **long-clip mode**: DiT trace off, DRAM activations, eager multi-tile VAE decode, and wider overlap-add — each adds boundary/rounding error that turbo’s shorter path mostly avoids. That does **not** mean base/sft are broken on hardware; it means **turbo is the recommended default for long clips on BH_QB today**. For cleaner base/sft output at >30s try `--clarity`, `--lm_variant acestep-5Hz-lm-4B`, `ACE_STEP_MAX_AUDIO_CODES=350`, and `--torch-vae` if hiss persists; see [Quality presets](#quality-presets-examples) below.
+Turbo is **CFG-distilled** for **8 steps @ `guidance_scale=1`**: a short, stable TTNN path with no classifier-free guidance loop. Base and SFT use the **full sampler** (**50 steps**, **CFG=7**, ADG/APG on host between steps), so small TTNN numeric differences (LoFi matmul, `bfloat8_b` / `bfloat4_b` weights, host↔device TTNN updates) **accumulate over many more denoise steps**. At **≥30s** on mesh, the stack also switches to **long-clip mode**: DiT trace off, DRAM activations, eager multi-tile VAE decode, and wider overlap-add — each adds boundary/rounding error that turbo’s shorter path mostly avoids. That does **not** mean base/sft are broken on hardware; it means **turbo is the recommended default for long clips on BH_QB today**. For cleaner base/sft output at >30s try `--clarity`, `--lm_variant acestep-5Hz-lm-4B`, `ACE_STEP_MAX_AUDIO_CODES=350`, and `--torch-vae` if hiss persists; see [Quality presets](#quality-presets-examples) below.
 
 ### Qwen3 embedding (TTNN)
 
@@ -98,7 +98,7 @@ python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
   --prompt "guitar, saxophone and prominent drums with clear kick and snare" \
   --infer_steps 8 \
   --guidance_scale 1 \
-  --seed 0 \
+  --no-use-cot-caption \
   --out /tmp/turbo_15s.wav
 ```
 
@@ -134,17 +134,12 @@ If a prior run left the device busy: `kill <pid>` then `tt-smi -r 0` if needed.
 
 **Base / SFT — higher quality, slower:** `--variant acestep-v15-base` or `acestep-v15-sft` with `--infer_steps 50` and `--guidance_scale 7`; add `--clarity` on long mesh clips (see [Quality presets](#quality-presets-examples)).
 
-#### Caption / text conditioning (default: LM CoT rewrite)
-
-By default the 5 Hz LM **rewrites** your `--prompt` into a richer chain-of-thought caption during Phase A. That caption (with instrument merge when needed) conditions the DiT — matching upstream ACE-Step behavior and the BH_QB benchmarks.
-
-Use **`--no-use-cot-caption`** when you need the **exact** `--prompt` text in DiT (multi-instrument lists, precise genre tags, etc.).
 
 ### 4. TTNN vs host PyTorch (BH_QB default path)
 
 On **BH_QB**, the default is **split TTNN preprocess** (Phase A on a 1×1 chip → re-exec → Phase B on 2×2 mesh). PyTorch on CPU/GPU handles orchestration, tokenization, and opt-in fallbacks.
 
-The denoise loop runs DiT forwards on TTNN; on BH_QB the per-step CFG (APG/ADG) and Euler update run on host PyTorch between TTNN steps.
+The denoise loop runs DiT forwards on TTNN; on BH_QB the per-step CFG (APG/ADG) and TTNN update run on host PyTorch between TTNN steps.
 
 | Stage | Default backend (BH_QB) | Notes |
 |-------|-------------------------|-------|
@@ -156,7 +151,7 @@ The denoise loop runs DiT forwards on TTNN; on BH_QB the per-step CFG (APG/ADG) 
 | Condition encoder | **TTNN** | 1×1 preprocess for **<30 s** (<750 latent frames); **deferred to 2×2 DiT mesh** at **≥30 s** (avoids 1×1 readback drift) |
 | DiT denoise forward | **TTNN** | Opt-in HF DiT: `ACE_STEP_PYTORCH_DIT=1` |
 | Latent noise init | **On mesh** (short) / **Host CPU** (long) | With default `--use-trace`, latents stay on device for **≤15 s**; trace is forced off at **≥30 s** → host latent init |
-| Euler / APG / ADG between steps | **Host CPU** | Always on multi-device mesh (short and long clips); DiT forwards stay TTNN |
+| TTNN / APG / ADG between steps | **Host CPU** | Always on multi-device mesh (short and long clips); DiT forwards stay TTNN |
 | VAE decode | **TTNN** | Opt-in: `--torch-vae` |
 | WAV write | **Host** | Peak normalize + file I/O |
 
@@ -176,7 +171,7 @@ Automatic behavior (no extra flags):
 
 - **DiT trace off** — `--use-trace` is forced off at ≥30 s (long-clip quality mode).
 - **Condition encode on DiT mesh** — avoids 1×1 readback drift at ≥750 latent frames.
-- **Host latent sampler** — latent init on CPU when trace is off (forced at ≥30 s on mesh); Euler/APG/ADG always on CPU on multi-device mesh.
+- **Host latent sampler** — latent init on CPU when trace is off (forced at ≥30 s on mesh); TTNN/APG/ADG always on CPU on multi-device mesh.
 - **Wider VAE overlap** — fewer tile-boundary artifacts on decode.
 - **Audio codes** — demo sets `ACE_STEP_MAX_AUDIO_CODES` from `--duration_sec`; streams >200 codes use the HF PyTorch detokenizer (see table above).
 
@@ -221,14 +216,10 @@ python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
   --duration_sec 60 \
   --infer_steps 50 \
   --guidance_scale 7 \
+  --no-use-cot-caption \
   --clarity \
   --prompt "guitar, saxophone and prominent drums with clear kick and snare" \
   --out /tmp/base_60s.wav
-
-# Isolate VAE hiss vs DiT noise — add --torch-vae to any run above
-
-# Softer ambient mix (less ADG smear on long base/sft clips)
-# ... --no-use-adg --guidance_scale 5
 ```
 
 ### Demo CLI reference (`demo/run_prompt_to_wav.py`)
@@ -291,8 +282,8 @@ With trace on, the device opens with **`num_command_queues=2`** and a **128 MiB*
 | DiT cross-attention SDPA mask | **In DiT trace** | ``_E2EDenoiseTrace.mask_buf`` when built from ``enc_mask`` |
 | DiT denoise body (`_E2EDenoiseTrace`) | **Yes** | ``patch_embed`` + DiT core + ``output_head`` on CQ0 |
 | DiT pre-step row cast + CFG dup | **No (eager)** | Per-step before body trace replay |
-| DiT CFG / ADG / APG + Euler | **No (eager)** | After ``release_trace_only`` each step (allocator + ADG ``sigma`` on host) |
-| DiT warmup (first 2 Euler steps) | **No (eager)** | Prime program cache before first capture |
+| DiT CFG / ADG / APG + TTNN | **No (eager)** | After ``release_trace_only`` each step (allocator + ADG ``sigma`` on host) |
+| DiT warmup (first 2 TTNN steps) | **No (eager)** | Prime program cache before first capture |
 | VAE `decode_tiled` | **No (eager)** | All tiles eager; traced decode was not bit-accurate → noise (``decode_chunk_traced`` kept for tests only) |
 
 #### Stages that stay eager or host-only (by design)
@@ -340,9 +331,8 @@ Pearson PCC vs PyTorch/HF reference; thresholds are the test assert floors.
 | Audio-code detokenizer | ``audio_detokenizer_30s_150codes`` | ``[1,750,64]`` @ 25 Hz | **0.986632** | **0.986632** | 0.97 | 1×1 |
 | VAE ``decode_tiled`` | ``vae_decode_tiled_15s`` | 375 latent frames → 720k audio samples | **0.994937** | **0.994761** | 0.98 | 1×1 |
 | VAE ``decode_tiled`` | ``vae_decode_tiled_30s`` | 750 latent frames (overlap=14) | **0.995019** | **0.994956** | 0.98 | 1×1 |
-| DiT denoise loop (no CFG) | ``dit_denoise_loop_15s_no_cfg`` | 375 frames, 20 Euler steps | *run test* | _mesh-only_ | 0.92 | BH_QB mesh |
-| DiT denoise loop (no CFG) | ``dit_denoise_loop_30s_no_cfg`` | 750 frames, 5 Euler steps† | **0.995483** | _mesh-only_ | 0.90 | BH_QB mesh |
+| DiT denoise loop (no CFG) | ``dit_denoise_loop_15s_no_cfg`` | 375 frames, 20 TTNN steps | *run test* | _mesh-only_ | 0.92 | BH_QB mesh |
+| DiT denoise loop (no CFG) | ``dit_denoise_loop_30s_no_cfg`` | 750 frames, 5 TTNN steps† | **0.995483** | _mesh-only_ | 0.90 | BH_QB mesh |
 | DiT denoise + CFG + APG | ``dit_denoise_loop_30s_cfg_apg`` | 750 frames, 5 steps, gs=7 | **0.992419** | _mesh-only_ | 0.85 | BH_QB mesh |
 
- ``test_dit_denoise_loop_pcc.py`` defaults to 20 steps; the 30 s value above used
-``ACE_STEP_DIT_DENOISE_PCC_STEPS=5``. ``test_dit_denoise_loop_pcc_cfg.py`` also defaults to 5 steps.
+``test_dit_denoise_loop_pcc.py`` defaults to 20 steps; the 30 s row above used ``ACE_STEP_DIT_DENOISE_PCC_STEPS=5``. ``test_dit_denoise_loop_pcc_cfg.py`` also defaults to 5 steps.
