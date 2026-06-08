@@ -516,7 +516,7 @@ protected:
         const uint32_t num_pages = get_num_pages();
 
         // Setup target worker cores
-        const CoreRange worker_range(default_worker_start, default_worker_start);
+        const CoreRange worker_range = this->worker_range(this->worker_start(), /*multi_core=*/false);
 
         const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
 
@@ -546,7 +546,7 @@ protected:
         const uint32_t num_pages = get_num_pages();
 
         // Setup target worker cores
-        const CoreCoord first_worker = default_worker_start;
+        const CoreCoord first_worker = this->worker_start();
         const CoreCoord last_worker = first_worker;  // {first_worker.x + 1, first_worker.y + 1};
         const CoreRange worker_range = {first_worker, last_worker};
 
@@ -575,7 +575,7 @@ protected:
         const uint32_t num_iterations = get_num_iterations();
         const uint32_t dram_data_size_words = get_dram_data_size_words();
 
-        const CoreCoord first_worker = default_worker_start;
+        const CoreCoord first_worker = this->worker_start();
         const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
         const CoreRange worker_range = {first_worker, last_worker};
 
@@ -1225,7 +1225,8 @@ public:
     // writes the data to the host completion queue.
     // Note: Since we're writing into completion queue, we skip distributed::Finish
     void run_host_test() {
-        const uint32_t max_data_size = DEVICE_DATA_SIZE;
+        // Scale down data size on the Quasar simulator to avoid exceeding the 64 MB DRAM window.
+        const uint32_t max_data_size = Common::is_quasar_sim() ? (DEVICE_DATA_SIZE / 25) : DEVICE_DATA_SIZE;
         const uint32_t max_data_size_words = max_data_size / sizeof(uint32_t);
         const uint32_t dram_data_size_words = this->get_dram_data_size_words();
         const uint32_t num_iterations = this->get_num_iterations();
@@ -1236,7 +1237,7 @@ public:
         }
 
         // Setup target worker cores
-        const CoreCoord first_worker = default_worker_start;
+        const CoreCoord first_worker = this->worker_start();
         const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
         const CoreRange worker_range = {first_worker, last_worker};
 
@@ -1283,7 +1284,7 @@ public:
         const uint32_t dram_data_size_words = get_dram_data_size_words();
 
         // Setup target worker cores
-        const CoreCoord first_worker = default_worker_start;
+        const CoreCoord first_worker = this->worker_start();
         const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
         const CoreRange worker_range = {first_worker, last_worker};
 
@@ -1379,7 +1380,7 @@ protected:
                 uint32_t words = (page_size_words > length_words - i) ? length_words - i : page_size_words;
 
                 DeviceDataUpdater::update_read(
-                    default_worker_start, device_data, bank_core, dram_bank_id, bank_offset, words);
+                    this->worker_start(), device_data, bank_core, dram_bank_id, bank_offset, words);
 
                 page_idx++;
             }
@@ -1447,7 +1448,7 @@ public:
         const uint32_t dram_data_size_words = Common::DRAM_DATA_SIZE_WORDS;
 
         // Setup target worker cores
-        const CoreCoord first_worker = default_worker_start;
+        const CoreCoord first_worker = this->worker_start();
         const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
         const CoreRange worker_range = {first_worker, last_worker};
 
@@ -1470,7 +1471,7 @@ public:
         const uint32_t dram_data_size_words = get_dram_data_size_words();
 
         // Setup target worker cores
-        const CoreCoord first_worker = default_worker_start;
+        const CoreCoord first_worker = this->worker_start();
         const CoreCoord last_worker = first_worker;
         const CoreRange worker_range = {first_worker, last_worker};
 
@@ -1559,7 +1560,7 @@ public:
         helper.add_paged_dram_read(worker_range, 3, 128, page_size, length / page_size, 160);
 
         // Section 5: Inline packed writes
-        const CoreCoord first_worker_2x2 = default_worker_start;
+        const CoreCoord first_worker_2x2 = this->worker_start();
         const CoreCoord last_worker_2x2 = {first_worker_2x2.x + 1, first_worker_2x2.y + 1};
         const CoreRange worker_range_2x2 = {first_worker_2x2, last_worker_2x2};
         // Pick worker cores once for all commands
@@ -1645,7 +1646,8 @@ protected:
             device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, dest_dram_physical_core);
         const CoreCoord dest_dram_logical = device_->logical_core_from_dram_channel(dest_dram_channel);
 
-        uint32_t remaining_bytes = DEVICE_DATA_SIZE_LARGE;
+        // On Quasar, scale down from 20 MB to DEVICE_DATA_SIZE (768 KB) so the simulator finishes.
+        uint32_t remaining_bytes = Common::is_quasar_sim() ? DEVICE_DATA_SIZE : DEVICE_DATA_SIZE_LARGE;
         const uint32_t MAX_SUB_CMD_SIZE = tt::align(DEVICE_DATA_SIZE, l1_alignment);
 
         while (remaining_bytes >= MIN_READ_SIZE) {
@@ -1712,7 +1714,7 @@ public:
     void run_linear_packed_read_test() {
         const uint32_t num_iterations = 1;
 
-        const CoreCoord first_worker = default_worker_start;
+        const CoreCoord first_worker = this->worker_start();
         const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
         const CoreRange worker_range = {first_worker, last_worker};
 
@@ -1799,7 +1801,7 @@ public:
 
                 uint32_t words = (page_size_words > length_words - i) ? length_words - i : page_size_words;
                 DeviceDataUpdater::update_read(
-                    default_worker_start, device_data, bank_core, dram_bank_id, bank_offset, words);
+                    this->worker_start(), device_data, bank_core, dram_bank_id, bank_offset, words);
 
                 page_idx++;
             }
@@ -1881,7 +1883,7 @@ public:
         const uint32_t dram_data_size_words = get_dram_data_size_words();
 
         // Setup target worker cores
-        const CoreCoord first_worker = default_worker_start;
+        const CoreCoord first_worker = this->worker_start();
         const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
         const CoreRange worker_range = {first_worker, last_worker};
 
@@ -2133,7 +2135,7 @@ public:
         std::vector<HostMemDeviceCommand> commands_per_iteration;
 
         // Source: L1 on MMIO device worker core (pre-populated with data)
-        const CoreCoord first_worker = default_worker_start;
+        const CoreCoord first_worker = this->worker_start();
         const CoreCoord first_virt_worker =
             mmio_device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
         const uint32_t src_noc_xy =
@@ -2413,7 +2415,7 @@ protected:
                     }
 
                     if (worker_cores.empty()) {
-                        worker_cores.push_back(default_worker_start);
+                        worker_cores.push_back(this->worker_start());
                     }
                     const uint32_t num_sub_cmds = static_cast<uint32_t>(worker_cores.size());
                     const uint32_t sub_cmds_bytes =
@@ -2478,7 +2480,7 @@ public:
         const uint32_t dram_data_size_words = get_dram_data_size_words();
 
         // Setup target worker cores
-        const CoreCoord first_worker = default_worker_start;
+        const CoreCoord first_worker = this->worker_start();
         const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
         const CoreRange worker_range = {first_worker, last_worker};
 
@@ -2599,6 +2601,14 @@ public:
             this->device_->compute_with_storage_grid_size().x * this->device_->compute_with_storage_grid_size().y;
 
         this->init_params(this->GetParam());
+
+        // On Quasar, the SD issue queue is fixed at kSdQuasarIssueBase. If the exec_buf base
+        // address (derived from the allocator) would overlap the issue queue, skip rather than
+        // overrun the CQ region and produce spurious command data.
+        if (Common::is_quasar_sim() && this->DRAM_EXEC_BUF_DEFAULT_BASE_ADDR >= Common::kSdQuasarIssueBase) {
+            GTEST_SKIP() << "SD exec_buf base " << this->DRAM_EXEC_BUF_DEFAULT_BASE_ADDR
+                         << " reaches the Quasar-sim SD issue queue at " << Common::kSdQuasarIssueBase;
+        }
     }
 
     void TearDown() override {
@@ -2644,23 +2654,29 @@ public:
         const uint32_t scratch_db_size = memmap.scratch_db_size();
 
         // Hugepage addressing
-        // Use the same hugepage region that the FD runtime uses for the issue queue
-        // (safe since SD mode never runs the FD runtime concurrently).
-        // Assumption: SD always runs on device 0 / cq_id 0 (see SetUp's CreateDevice(0)).
-        // For that configuration, get_absolute_cq_offset(channel, cq_id, cq_size) = 0, so
-        // dev_hugepage_base == get_host_command_queue_addr(UNRESERVED) lands in the same
-        // PCIe region the FD runtime would use.  If SD is ever extended to non-zero channel/
-        // cq_id, switch to get_absolute_cq_offset(...) + cq_start (mirroring topology.cpp).
-        const uint32_t dev_hugepage_base = memmap.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-
-        const ChipId mmio_id =
-            tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_->id());
-        const uint16_t channel =
-            tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_->id());
-        char* hugepage_bar_base =
-            static_cast<char*>(tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_id, channel));
-        hugepage_bar_base += (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
-        void* const host_hugepage_base = hugepage_bar_base + dev_hugepage_base;
+        // WH/BH stage commands in the PCIe hugepage (same region the FD runtime uses for the issue
+        // queue; safe since SD mode never runs the FD runtime concurrently). Quasar has no PCIe
+        // hugepage — commands are staged in DRAM bank 0 at Common::kSdQuasarIssueBase instead.
+        uint32_t dev_hugepage_base = 0;
+        void* host_hugepage_base = nullptr;
+        if (this->device_->arch() != tt::ARCH::QUASAR) {
+            dev_hugepage_base = memmap.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
+            const ChipId mmio_id =
+                tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_->id());
+            const uint16_t channel =
+                tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_->id());
+            char* hugepage_bar_base = static_cast<char*>(
+                tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_id, channel));
+            hugepage_bar_base += (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
+            host_hugepage_base = hugepage_bar_base + dev_hugepage_base;
+        } else {
+            TT_FATAL(
+                Common::kSdQuasarIssueBase >= this->dram_base_,
+                "SD DRAM command buffer ({:#x}) overlaps allocator region (base {:#x})",
+                Common::kSdQuasarIssueBase,
+                this->dram_base_);
+            dev_hugepage_base = Common::kSdQuasarIssueBase;
+        }
 
         // Physical cores
         const CoreCoord phys_prefetch = this->device_->worker_core_from_logical_core(Common::sd_prefetch_core);
@@ -2687,23 +2703,36 @@ public:
         const uint32_t prefetch_q_dev_fence = prefetch_q_base + prefetch_q_size;
 
         uint32_t* host_mem_ptr = static_cast<uint32_t*>(host_hugepage_base);
+        uint32_t dram_write_offset = 0;
 
         const uint32_t host_align = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
 
-        // write_prefetcher_cmd: streaming-store cmd to hugepage + write one FetchQ entry via TLB.
+        // write_prefetcher_cmd: streaming-store cmd to hugepage (WH/BH) or DRAM bank 0 (Quasar),
+        // then write one FetchQ entry via TLB.
         // cmd_size_bytes must be a multiple of 64 (host alignment) and cmd_size_entry is the
         // pre-computed FetchQ value (may have MSB stall flag set for exec_buf).
         auto write_prefetcher_cmd = [&](const uint32_t* src, uint32_t cmd_size_bytes, uint32_t cmd_size_entry) {
-            const uint64_t host_offset =
-                static_cast<uint64_t>(reinterpret_cast<char*>(host_mem_ptr) - static_cast<char*>(host_hugepage_base));
-            TT_FATAL(
-                host_offset + cmd_size_bytes <= this->sd_hugepage_issue_buffer_size(),
-                "SD prefetch: command stream exceeds sd_hugepage_issue_buffer_size()");
-            tt::tt_metal::memcpy_to_device<true>(host_mem_ptr, src, cmd_size_bytes);
-            host_mem_ptr += cmd_size_bytes / sizeof(uint32_t);
-
+            if (Common::is_quasar_sim()) {
+                // DRAM path: write commands to DRAM bank 0 at kSdQuasarIssueBase. Wrap to base on overflow.
+                if (dram_write_offset + cmd_size_bytes > Common::kSdQuasarIssueSize) {
+                    dram_write_offset = 0;
+                }
+                tt::tt_metal::detail::WriteToDeviceDRAMChannel(
+                    this->device_,
+                    0,
+                    Common::kSdQuasarIssueBase + dram_write_offset,
+                    std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(src), cmd_size_bytes));
+                dram_write_offset += cmd_size_bytes;
+            } else {
+                const uint64_t host_offset = static_cast<uint64_t>(
+                    reinterpret_cast<char*>(host_mem_ptr) - static_cast<char*>(host_hugepage_base));
+                TT_FATAL(
+                    host_offset + cmd_size_bytes <= this->sd_hugepage_issue_buffer_size(),
+                    "SD prefetch: command stream exceeds sd_hugepage_issue_buffer_size()");
+                tt::tt_metal::memcpy_to_device<true>(host_mem_ptr, src, cmd_size_bytes);
+                host_mem_ptr += cmd_size_bytes / sizeof(uint32_t);
+            }
             prefetch_q_tlb->write32(prefetch_q_dev_ptr, cmd_size_entry);
-            // this->prefetch_q_windows[cq_id]->write32(this->prefetch_q_dev_ptrs[cq_id], entry_val);
             prefetch_q_dev_ptr += entry_size;
             if (prefetch_q_dev_ptr >= prefetch_q_dev_fence) {
                 prefetch_q_dev_ptr = prefetch_q_base;
@@ -2737,6 +2766,24 @@ public:
         // Terminate: dispatch_wait + dispatch_terminate + prefetch_terminate (shared by both paths).
         write_cmd(CommandBuilder::build_dispatch_terminate(/*include_dispatch_s*/ false));
         write_cmd(CommandBuilder::build_prefetch_terminate());
+
+        if (Common::is_quasar_sim()) {
+            // Flush all DRAM command writes so the kernel sees them when it starts.
+            cluster.dram_barrier(this->device_->id());
+            // Pre-fill the completion DRAM with the dirty pattern so page padding matches
+            // HOST_DATA_DIRTY_PATTERN validation in DeviceData::validate().
+            static constexpr uint32_t kChunkBytes = 64 * 1024;
+            std::vector<uint32_t> chunk(kChunkBytes / sizeof(uint32_t), this->HOST_DATA_DIRTY_PATTERN);
+            for (uint32_t offset = 0; offset < Common::kSdQuasarIssueSize; offset += kChunkBytes) {
+                const uint32_t chunk_bytes = std::min(kChunkBytes, Common::kSdQuasarIssueSize - offset);
+                tt::tt_metal::detail::WriteToDeviceDRAMChannel(
+                    this->device_,
+                    0,
+                    Common::kSdQuasarCompletionBase + offset,
+                    std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(chunk.data()), chunk_bytes));
+            }
+            cluster.dram_barrier(this->device_->id());
+        }
 
         // Semaphores
         tt_metal::Program program = tt_metal::CreateProgram();
@@ -2835,6 +2882,9 @@ public:
         tt_metal::detail::LaunchProgram(this->device_, program);
         // Ensure host CPU sees any PCIe-written completion queue data before validating.
         tt_driver_atomics::mfence();
+        // On Quasar the completion queue lives in DRAM; read it back into the host staging buffer
+        // before validate() (which reads from get_completion_queue_buffer()).
+        this->refresh_completion_data();
         EXPECT_TRUE(device_data.validate(this->device_)) << "SD prefetch test failed validation";
     }
 
@@ -2842,6 +2892,11 @@ public:
     // prefetch_terminate so LaunchProgram can return. The unified test bodies must not
     // re-append them, so this hook becomes a no-op in SD.
     void append_terminate_commands(std::vector<HostMemDeviceCommand>& /*cmds*/) override {}
+
+    // Called after LaunchProgram and before device_data.validate(). On Quasar the completion queue
+    // lives in DRAM bank 0 and must be read back into the host staging buffer before validation.
+    // Default no-op (WH/BH completion queue is in PCIe-mapped host memory — already visible).
+    virtual void refresh_completion_data() {}
 
 private:
     // Orchestrates exec_buf execution: builds DRAM payload, writes to DRAM, then issues the
@@ -2871,7 +2926,15 @@ public:
     // Completion-buffer hooks: in SD mode the dispatch kernel writes to the hugepage region
     // we set up ourselves (dev_hugepage_base + sd_hugepage_issue_buffer_size()), not to a
     // runtime-managed FDMeshCommandQueue completion queue.
+    //
+    // WH/BH: points into the host-mapped hugepage at dev_hugepage_base + issue_buffer_size.
+    // Quasar: points into a host-side staging buffer; refresh_completion_data() fills it from DRAM
+    //         at Common::kSdQuasarCompletionBase before validate() is called.
     void* get_completion_queue_buffer() override {
+        if (this->device_->arch() == tt::ARCH::QUASAR) {
+            quasar_completion_buf_.resize(Common::kSdQuasarIssueSize);
+            return quasar_completion_buf_.data();
+        }
         const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
         const uint32_t dev_hugepage_base = memmap.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         const ChipId mmio_id =
@@ -2884,6 +2947,46 @@ public:
         return hugepage_bar_base + dev_hugepage_base + this->sd_hugepage_issue_buffer_size();
     }
     uint32_t get_completion_queue_buffer_size() override { return this->sd_completion_queue_size(); }
+
+    void refresh_completion_data() override {
+        if (this->device_->arch() == tt::ARCH::QUASAR) {
+            // Read the dispatch kernel's DRAM completion writes into the host staging buffer so
+            // device_data.validate() sees the correct data.
+            const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
+            const CoreCoord phys_disp =
+                this->device_->worker_core_from_logical_core(Common::dispatch_core(this->device_));
+            const tt_cxy_pair dispatch_cxy(this->device_->id(), phys_disp);
+            const uint32_t completion_q_wr_l1 =
+                memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
+
+            uint32_t wr_ptr_and_toggle = 0;
+            tt_metal::MetalContext::instance().get_cluster().read_core(
+                &wr_ptr_and_toggle, sizeof(wr_ptr_and_toggle), dispatch_cxy, completion_q_wr_l1);
+
+            // The write pointer is stored in 16-byte units; strip the toggle bit.
+            constexpr uint32_t toggle_mask = ~(1u << 31);
+            const uint32_t wr_ptr_16B = wr_ptr_and_toggle & toggle_mask;
+            const uint32_t completion_base_16B = Common::kSdQuasarCompletionBase >> 4;
+            if (wr_ptr_16B <= completion_base_16B) {
+                return;
+            }
+            const uint32_t bytes_written = (wr_ptr_16B - completion_base_16B) * 16;
+            TT_FATAL(
+                bytes_written <= Common::kSdQuasarIssueSize,
+                "Quasar SD completion readback exceeds queue size ({} > {})",
+                bytes_written,
+                Common::kSdQuasarIssueSize);
+
+            tt::tt_metal::detail::ReadFromDeviceDRAMChannel(
+                this->device_,
+                0,
+                Common::kSdQuasarCompletionBase,
+                std::span<uint8_t>(quasar_completion_buf_.data(), bytes_written));
+        }
+    }
+
+private:
+    std::vector<uint8_t> quasar_completion_buf_;
 };
 
 class SDPrefetchLinearPackedReadTestFixture : public SDPrefetchTestBase<PrefetcherLinearPackedReadTestFixture> {};
@@ -2963,7 +3066,7 @@ TEST_P(PrefetchRelayLinearHTestFixture, RelayLinearHTest) {
     const uint32_t dram_data_size_words = get_dram_data_size_words();
 
     // Setup dummy worker cores (not actually used for writes, but needed for DeviceData init)
-    const CoreCoord first_worker = default_worker_start;
+    const CoreCoord first_worker = this->worker_start();
     const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
     const CoreRange worker_range = {first_worker, last_worker};
 
@@ -3014,7 +3117,7 @@ TEST_P(PrefetcherLinearPackedHTestFixture, RelayLinearPackedHTest) {
     const uint32_t dram_data_size_words = get_dram_data_size_words();
 
     // Setup worker cores
-    const CoreCoord first_worker = default_worker_start;
+    const CoreCoord first_worker = this->worker_start();
     const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
     const CoreRange worker_range = {first_worker, last_worker};
 
@@ -3096,8 +3199,8 @@ TEST_P(PrefetcherThroughputTestFixture, HostToDRAMPagedWriteThroughput) {
     TT_FATAL(page_size_bytes % sizeof(uint32_t) == 0U, "page_size_bytes must be a multiple of 4");
 
     // Dummy worker range (not the destination of this test) for DeviceData init.
-    constexpr CoreCoord first_worker = default_worker_start;
-    constexpr CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
+    const CoreCoord first_worker = this->worker_start();
+    const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
     const CoreRange worker_range = {first_worker, last_worker};
 
     const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
