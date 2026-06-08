@@ -100,6 +100,16 @@ $ctx"
   summary=$(cd "$TT_METAL_DIR" && \
             claude --model "$MODEL" -p <<<"$prompt" 2>>"$AGENT_ERR")
   rc=$?
+  # rc=127 means the claude binary vanished mid-call — almost always its
+  # self-updater swapping claude.exe while we ran. Wait out the swap and
+  # retry once before giving up on this run.
+  if [[ $rc -eq 127 ]]; then
+    log "  claude not found (rc=127) — likely a binary swap; retrying in 20s"
+    sleep 20
+    summary=$(cd "$TT_METAL_DIR" && \
+              claude --model "$MODEL" -p <<<"$prompt" 2>>"$AGENT_ERR")
+    rc=$?
+  fi
   set -e
 
   if [[ $rc -ne 0 || -z "$summary" ]]; then
