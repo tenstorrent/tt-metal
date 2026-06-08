@@ -136,7 +136,46 @@ void H2DSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_devic
 
 void H2DSocket::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device, uint32_t pcie_alignment) {
     if (h2d_mode_ != H2DMode::HOST_PUSH) {
-        // DEVICE_PULL: data FIFO lives in pinned host memory; no device-side L1 allocation needed.
+        // DEVICE_PULL: the host FIFO lives in pinned host memory (allocated in init_host_data_buffer).
+        // However, the device-side h2d_receiver kernel uses receiver_socket.read_ptr as the L1
+        // destination address for its NOC reads from host pinned memory.  With aligned_data_buf_start_
+        // left at 0, read_ptr/fifo_addr are both written as 0 into the socket metadata, causing the
+        // kernel to DMA data into L1 address 0 (kernel-reserved region) and forward stale/corrupted
+        // data downstream.  Allocate a proper L1 scratch buffer here so aligned_data_buf_start_ holds
+        // a valid address.
+        const uint64_t alloc_size = fifo_size_ + pcie_alignment;
+        auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
+        auto* recv_device = mesh_device->get_device(recv_core_.device_coord);
+        if (svc.claimed_cores(recv_device->id()).contains(recv_core_.core_coord)) {
+            DeviceAddr raw_addr = svc.allocate_l1(recv_device, recv_core_.core_coord, alloc_size);
+            svc_data_l1_addr_ = raw_addr;
+            auto shard_params = ShardSpecBuffer(
+                CoreRangeSet(recv_core_.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+            DeviceLocalBufferConfig data_buffer_specs = {
+                .page_size = static_cast<uint32_t>(alloc_size),
+                .buffer_type = buffer_type_,
+                .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+                .bottom_up = std::nullopt,
+                .sub_device_id = std::nullopt,
+            };
+            MeshBufferConfig data_mesh_buffer_specs = ReplicatedBufferConfig{.size = alloc_size};
+            data_buffer_ = MeshBuffer::create(
+                data_mesh_buffer_specs, data_buffer_specs, mesh_device.get(), std::make_optional<DeviceAddr>(raw_addr));
+            aligned_data_buf_start_ = tt::align(raw_addr, pcie_alignment);
+        } else {
+            auto shard_params = ShardSpecBuffer(
+                CoreRangeSet(recv_core_.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+            DeviceLocalBufferConfig data_buffer_specs = {
+                .page_size = static_cast<uint32_t>(alloc_size),
+                .buffer_type = buffer_type_,
+                .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+                .bottom_up = std::nullopt,
+                .sub_device_id = std::nullopt,
+            };
+            MeshBufferConfig data_mesh_buffer_specs = ReplicatedBufferConfig{.size = alloc_size};
+            data_buffer_ = MeshBuffer::create(data_mesh_buffer_specs, data_buffer_specs, mesh_device.get());
+            aligned_data_buf_start_ = tt::align(data_buffer_->address(), pcie_alignment);
+        }
         write_ptr_ = 0;
         return;
     }
