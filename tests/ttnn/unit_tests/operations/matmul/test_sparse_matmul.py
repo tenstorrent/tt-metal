@@ -715,3 +715,133 @@ def test_sparse_matmul_volume_must_match_batch_length(device):
             output_tile=ttnn.Tile([tile_h, tile_w]),
             program_config=pc,
         )
+
+
+def test_sparse_matmul_inputA_wrong_layout(device):
+    """Input tensor A must be TILE layout, ROW_MAJOR must be rejected."""
+    _, in1, sparsity, nnz, pc, dims = _make_sparse_inputs(device)
+    m, k, _, _, tile_h, tile_w = dims
+
+    in0_row_major = ttnn.from_torch(
+        torch.randn((1, 4, m, k), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    with pytest.raises(RuntimeError, match="Input tensor A must be TILE layout"):
+        ttnn.sparse_matmul(
+            in0_row_major,
+            in1,
+            sparsity=sparsity,
+            nnz=nnz,
+            is_input_a_sparse=False,
+            is_input_b_sparse=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=ttnn.Tile([tile_h, tile_w]),
+            program_config=pc,
+        )
+
+
+def test_sparse_matmul_inputB_wrong_layout(device):
+    """Input tensor B must be TILE layout, ROW_MAJOR must be rejected."""
+    in0, _, sparsity, nnz, pc, dims = _make_sparse_inputs(device)
+    _, k, n, num_experts, tile_h, tile_w = dims
+
+    in1_row_major = ttnn.from_torch(
+        torch.randn((1, num_experts, k, n), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    with pytest.raises(RuntimeError, match="Input tensor B must be TILE layout"):
+        ttnn.sparse_matmul(
+            in0,
+            in1_row_major,
+            sparsity=sparsity,
+            nnz=nnz,
+            is_input_a_sparse=False,
+            is_input_b_sparse=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=ttnn.Tile([tile_h, tile_w]),
+            program_config=pc,
+        )
+
+
+def test_sparse_matmul_inputA_wrong_dtype(device):
+    """Input tensor A must be floating point, integer types must be rejected."""
+    _, in1, sparsity, nnz, pc, dims = _make_sparse_inputs(device)
+    m, k, _, _, tile_h, tile_w = dims
+
+    in0_int = ttnn.from_torch(
+        torch.ones((1, 4, m, k), dtype=torch.int32),
+        dtype=ttnn.uint32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    with pytest.raises(RuntimeError, match="Input tensor A must be a floating point type"):
+        ttnn.sparse_matmul(
+            in0_int,
+            in1,
+            sparsity=sparsity,
+            nnz=nnz,
+            is_input_a_sparse=False,
+            is_input_b_sparse=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=ttnn.Tile([tile_h, tile_w]),
+            program_config=pc,
+        )
+
+
+def test_sparse_matmul_inputB_wrong_dtype(device):
+    """Input tensor B must be floating point, integer types must be rejected."""
+    in0, _, sparsity, nnz, pc, dims = _make_sparse_inputs(device)
+    _, k, n, num_experts, tile_h, tile_w = dims
+
+    in1_int = ttnn.from_torch(
+        torch.ones((1, num_experts, k, n), dtype=torch.int32),
+        dtype=ttnn.uint32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    with pytest.raises(RuntimeError, match="Input tensor B must be a floating point type"):
+        ttnn.sparse_matmul(
+            in0,
+            in1_int,
+            sparsity=sparsity,
+            nnz=nnz,
+            is_input_a_sparse=False,
+            is_input_b_sparse=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=ttnn.Tile([tile_h, tile_w]),
+            program_config=pc,
+        )
+
+
+def test_sparse_matmul_sparsity_wrong_layout(device):
+    """Sparsity tensor must be ROW_MAJOR, TILE layout must be rejected."""
+    in0, in1, _, nnz, pc, dims = _make_sparse_inputs(device)
+    _, _, _, _, tile_h, tile_w = dims
+
+    sparsity_tile = ttnn.from_torch(
+        torch.ones((1, 4, 32, 32), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    with pytest.raises(RuntimeError, match="Sparsity tensor must be ROW_MAJOR layout"):
+        ttnn.sparse_matmul(
+            in0,
+            in1,
+            sparsity=sparsity_tile,
+            nnz=nnz,
+            is_input_a_sparse=False,
+            is_input_b_sparse=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=ttnn.Tile([tile_h, tile_w]),
+            program_config=pc,
+        )

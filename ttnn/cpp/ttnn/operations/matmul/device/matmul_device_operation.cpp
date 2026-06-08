@@ -21,6 +21,32 @@ namespace {
 using tt::constants::TILE_HEIGHT;
 using tt::constants::TILE_WIDTH;
 
+std::string_view matmul_program_config_name(const operations::matmul::MatmulProgramConfig& config) {
+    return std::visit(
+        [](const auto& cfg) -> std::string_view {
+            using T = std::decay_t<decltype(cfg)>;
+            if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreProgramConfig>) {
+                return "MatmulMultiCoreProgramConfig";
+            } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
+                return "MatmulMultiCoreReuseProgramConfig";
+            } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
+                return "MatmulMultiCoreReuseMultiCastProgramConfig";
+            } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                return "MatmulMultiCoreReuseMultiCast1DProgramConfig";
+            } else if constexpr (std::is_same_v<
+                                     T,
+                                     operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
+                return "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig";
+            } else if constexpr (
+                std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
+                return "MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig";
+            } else {
+                return "UnknownMatmulProgramConfig";
+            }
+        },
+        config);
+}
+
 void check_tensor_in_grid(const Tensor& tensor, const CoreCoord& grid_size) {
     // Validate tensor is within grid if sharded and not in DRAM
     if (tensor.memory_config().is_sharded() && tensor.memory_config().buffer_type() != BufferType::DRAM) {
@@ -138,6 +164,7 @@ void validate_matmul_block_and_subblock_configuration(
                 std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig> ||
                 std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig> ||
                 std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                TT_FATAL(program_config.in0_block_w != 0, "in0_block_w is 0, which is not valid");
                 const uint32_t Kt = a_shape_padded[-1] / in0_tile.get_width();
                 TT_FATAL(
                     Kt % program_config.in0_block_w == 0,
@@ -439,11 +466,11 @@ void validate_matmul_fused_operations(
     TT_FATAL(
         !optional_bias.has_value() || config_supports_fused_ops,
         "Bias is not supported for this matmul program config: {}",
-        typeid(chosen_program_config).name());
+        matmul_program_config_name(chosen_program_config));
     TT_FATAL(
         !fused_activation.has_value() || config_supports_fused_ops,
         "Fused activation is not supported for this matmul program config: {}",
-        typeid(chosen_program_config).name());
+        matmul_program_config_name(chosen_program_config));
 }
 
 bool get_broadcast_batch(
@@ -972,7 +999,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
                 chosen_program_config),
             "Untilize out is not supported for this program config: {}",
-            typeid(chosen_program_config).name());
+            matmul_program_config_name(chosen_program_config));
     }
 
     using namespace tt;

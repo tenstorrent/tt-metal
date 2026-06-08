@@ -84,8 +84,13 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
         input_tensor_a.device() == input_tensor_b.device() && input_tensor_a.device() == sparsity.device(),
         "All sparse matmul inputs must be on the same device");
     TT_FATAL(
-        input_tensor_a.layout() == ttnn::Layout::TILE && input_tensor_b.layout() == ttnn::Layout::TILE,
-        "Input tensors A and B must be TILE layout");
+        input_tensor_a.layout() == ttnn::Layout::TILE,
+        "Input tensor A must be TILE layout, got {}",
+        input_tensor_a.layout());
+    TT_FATAL(
+        input_tensor_b.layout() == ttnn::Layout::TILE,
+        "Input tensor B must be TILE layout, got {}",
+        input_tensor_b.layout());
     TT_FATAL(
         is_floating_point(input_tensor_a.dtype()),
         "Input tensor A must be a floating point type, got {}",

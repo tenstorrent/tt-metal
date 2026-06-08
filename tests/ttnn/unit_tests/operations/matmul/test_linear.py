@@ -269,7 +269,6 @@ def test_linear_fused_activation_numerical_stability(device, activation):
     in1_t = ttnn.from_torch(in1, layout=ttnn.TILE_LAYOUT, device=device)
 
     out = ttnn.linear(in0_t, in1_t, bias=None, activation=activation)
-    ttnn.synchronize_device(device)
     out_torch = ttnn.to_torch(out).to(torch.float32)
 
     assert not torch.isnan(out_torch).any(), f"{activation.op_type} produced NaN"
