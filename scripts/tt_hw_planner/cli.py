@@ -7946,6 +7946,24 @@ def _quiet_framework_logging() -> None:
 
 def cmd_up(args) -> int:
     _quiet_framework_logging()
+    # Pre-flight: ttnn must import before ANY on-device PCC test can run —
+    # otherwise every test dies at pytest collection and 0 components graduate
+    # (the classic "stale _ttnn.so after a pull / arch change" trap). Runs once
+    # per invocation (sentinel survives the worktree re-exec); a no-op on a
+    # healthy box. On failure it prints what's missing, auto-rebuilds, and only
+    # then falls back to the LLM env-fix agent.
+    if not os.environ.get("_TT_TTNN_PREFLIGHT_DONE"):
+        os.environ["_TT_TTNN_PREFLIGHT_DONE"] = "1"
+        try:
+            from ._cli_helpers.ttnn_preflight import ensure_ttnn_ready
+
+            if not ensure_ttnn_ready(
+                agent_bin=getattr(args, "auto_agent_bin", None) or "claude",
+                agent_model=getattr(args, "auto_model", None) or "sonnet",
+            ):
+                return 1
+        except Exception:
+            pass  # never let the pre-flight itself block a healthy run
     # Resolve local-weights handling BEFORE any subprocess is spawned.
     # Sets HF_HOME / HF_HUB_OFFLINE in os.environ when the user passed
     # --local-dir or --offline-hf; prints an info line when cached

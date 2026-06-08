@@ -118,6 +118,21 @@ def cmd_emit_e2e(args) -> int:
         _quiet_framework_logging()
     except Exception:
         pass
+    # Pre-flight: ttnn must import or the e2e PCC tests die at collection.
+    # No-op on a healthy box; on failure prints what's missing, auto-rebuilds,
+    # then falls back to the LLM env-fix agent. Runs once per invocation.
+    if not os.environ.get("_TT_TTNN_PREFLIGHT_DONE"):
+        os.environ["_TT_TTNN_PREFLIGHT_DONE"] = "1"
+        try:
+            from .._cli_helpers.ttnn_preflight import ensure_ttnn_ready
+
+            if not ensure_ttnn_ready(
+                agent_bin=getattr(args, "agent_bin", None) or "claude",
+                agent_model=getattr(args, "model", None) or "sonnet",
+            ):
+                return 1
+        except Exception:
+            pass
     model_id = args.model_id
     demo_dir = _resolve_demo_dir(args)
     pcc = float(getattr(args, "pcc_target", 0.9) or 0.9)
