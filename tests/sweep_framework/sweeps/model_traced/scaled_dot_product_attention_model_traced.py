@@ -401,12 +401,27 @@ def run(
     torch_k_golden = torch_k_for_golden.to(torch.float32)
     torch_v_golden = torch_v_for_golden.to(torch.float32)
 
+    # Reconstruct an explicit attn_mask when the master passed one (non-causal
+    # configs). Generate it once and use the SAME tensor for golden + device so
+    # PCC matches; dropping it is an attn_mask extra_key diff + wrong golden.
+    attn_mask_info = extract_named_tensor_kwargs(kwargs, "attn_mask")
+    torch_attn_mask = None
+    if attn_mask_info is not None and attn_mask_info.get("shape"):
+        torch_attn_mask = (torch.rand(tuple(attn_mask_info["shape"])) * 2 - 1).to(torch.float32)
+
     # Trace-validation mode: every chip receives the FULL per-chip Q/K/V via
     # replicate_with_topology and runs SDPA on them. The gathered output is the
     # per-chip SDPA tiled along the shard axis — handled by
-    # reconcile_golden_to_actual below.
+    # reconcile_golden_to_actual below. With an explicit attn_mask, is_causal
+    # must be False (torch rejects both).
+    _golden_causal = bool(is_causal) and torch_attn_mask is None
     torch_output_golden = torch.nn.functional.scaled_dot_product_attention(
-        torch_q_golden, torch_k_golden, torch_v_golden, attn_mask=None, dropout_p=0.0, is_causal=bool(is_causal)
+        torch_q_golden,
+        torch_k_golden,
+        torch_v_golden,
+        attn_mask=torch_attn_mask,
+        dropout_p=0.0,
+        is_causal=_golden_causal,
     )
 
     # Check for attention_sink named tensor kwarg (pre-allocated tensor)
@@ -442,6 +457,27 @@ def run(
                 memory_config=as_mem_cfg,
             )
         op_kwargs["attention_sink"] = preallocated_attention_sink
+
+    # Build the ttnn attn_mask on device when the master passed one.
+    if torch_attn_mask is not None:
+        am_dtype = attn_mask_info.get("dtype") or dtype_q
+        if isinstance(am_dtype, dict):
+            am_dtype = parse_dict_value("attn_mask_dtype", am_dtype) or dtype_q
+        am_layout = attn_mask_info.get("layout") or layout_q
+        if isinstance(am_layout, dict):
+            am_layout = parse_dict_value("attn_mask_layout", am_layout) or layout_q
+        am_mem = attn_mask_info.get("memory_config") or ttnn.DRAM_MEMORY_CONFIG
+        if isinstance(am_mem, dict):
+            am_mem = parse_dict_value("attn_mask_memory_config", am_mem) or ttnn.DRAM_MEMORY_CONFIG
+        am_placement = attn_mask_info.get("tensor_placement")
+        if is_mesh_device and am_placement:
+            op_kwargs["attn_mask"] = create_tensor_on_mesh(
+                torch_attn_mask, device, am_dtype, am_layout, am_mem, am_placement
+            )
+        else:
+            op_kwargs["attn_mask"] = ttnn.from_torch(
+                torch_attn_mask, dtype=am_dtype, layout=am_layout, device=device, memory_config=am_mem
+            )
 
     # TTNN execution
     # GQA K/V used to take a replicate_with_topology path. With V2's global
