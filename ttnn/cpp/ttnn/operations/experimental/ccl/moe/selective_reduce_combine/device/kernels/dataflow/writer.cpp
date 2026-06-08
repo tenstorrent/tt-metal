@@ -113,6 +113,7 @@ void kernel_main() {
     constexpr uint32_t packet_header_cb_id = get_named_compile_time_arg_val("packet_header_cb_id");
     constexpr uint32_t num_token_parallel_cores = get_named_compile_time_arg_val("num_token_parallel_cores");
     constexpr uint32_t num_data_parallel_cores = get_named_compile_time_arg_val("num_data_parallel_cores");
+    constexpr uint32_t num_workers_per_link = get_named_compile_time_arg_val("num_workers_per_link");
     constexpr bool use_init_semaphore = get_named_compile_time_arg_val("use_init_semaphore") == 1;
     constexpr uint32_t noc_x_start = get_named_compile_time_arg_val("noc_x_start");
     constexpr uint32_t noc_y_start = get_named_compile_time_arg_val("noc_y_start");
@@ -326,7 +327,7 @@ void kernel_main() {
         auto termination_sync_semaphore_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_args.termination_sync_address);
 
-        noc_semaphore_wait(termination_sync_semaphore_ptr, num_data_parallel_cores - 1);
+        noc_semaphore_wait(termination_sync_semaphore_ptr, num_workers_per_link - 1);
         noc_semaphore_set(termination_sync_semaphore_ptr, 0);
 
         const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore_addr, /*noc=*/1);

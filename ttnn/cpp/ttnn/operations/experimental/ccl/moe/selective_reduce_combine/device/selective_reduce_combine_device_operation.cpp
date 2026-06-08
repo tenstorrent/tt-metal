@@ -7,6 +7,7 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "selective_reduce_combine_device_operation.hpp"
+#include "selective_reduce_combine_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/hal.hpp>
@@ -17,7 +18,23 @@ namespace ttnn::experimental::prim {
 
 void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.dense_input_tensor;
     const auto& token_activations_tensor = tensor_args.dense_activations_tensor;
+
+    const auto num_links = operation_attributes.num_links;
+    TT_FATAL(num_links > 0, "num_links must be > 0, got {}", num_links);
+
+    const auto worker_layout = detail::compute_worker_layout(
+        input_tensor,
+        operation_attributes.hidden_size,
+        operation_attributes.num_token_parallel_cores,
+        operation_attributes.num_data_parallel_cores);
+    const auto num_worker_cores = worker_layout.num_worker_cores;
+    TT_FATAL(
+        num_worker_cores % num_links == 0,
+        "num_worker_cores ({}) must be divisible by num_links ({})",
+        num_worker_cores,
+        num_links);
 
     const auto num_devices = token_activations_tensor.device()->get_view().num_devices();
 
