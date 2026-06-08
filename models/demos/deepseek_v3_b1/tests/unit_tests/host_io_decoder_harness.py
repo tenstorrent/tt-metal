@@ -92,7 +92,7 @@ from models.demos.deepseek_v3_b1.demo.weight_provider import CacheWeightProvider
 from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import StageMetadata
-from models.demos.deepseek_v3_b1.model import InputField, TokenType, parse_output_page
+from models.demos.deepseek_v3_b1.model import Field, TokenType, parse_output_page
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions as D
 from models.demos.deepseek_v3_b1.tests.unit_tests.debug_trace_io import load_reference_kv, load_reference_trace
 from models.demos.deepseek_v3_b1.utils import float_to_uint32
@@ -356,15 +356,15 @@ def _to_hidden_state_input(
     hidden_int32 = hidden_state.contiguous().view(torch.int32)  # (HIDDEN_SIZE / 2,) int32
 
     metadata_words = torch.zeros(DeepseekMetadata.aligned_size_bytes() // 4, dtype=torch.int32)
-    metadata_words[InputField.TOKEN_ID] = token_id
-    metadata_words[InputField.PREFILL_TOKEN_ID] = prefill_token_id
-    metadata_words[InputField.TOKEN_TYPE] = token_type
-    metadata_words[InputField.USER_ID] = user_id
-    metadata_words[InputField.POSITION_ID] = position_id
-    metadata_words[InputField.TOKEN0_POSITION_ID] = position_id
-    metadata_words[InputField.TEMPERATURE] = float_to_uint32(temperature)
-    metadata_words[InputField.TOP_K] = top_k
-    metadata_words[InputField.PROBABILITY_MASS_THRESHOLD] = float_to_uint32(probability_mass_threshold)
+    metadata_words[Field.TOKEN_ID] = token_id
+    metadata_words[Field.PREFILL_TOKEN_ID] = prefill_token_id
+    metadata_words[Field.TOKEN_TYPE] = token_type
+    metadata_words[Field.USER_ID] = user_id
+    metadata_words[Field.POSITION_ID] = position_id
+    metadata_words[Field.TOKEN0_POSITION_ID] = position_id
+    metadata_words[Field.TEMPERATURE] = float_to_uint32(temperature)
+    metadata_words[Field.TOP_K] = top_k
+    metadata_words[Field.PROBABILITY_MASS_THRESHOLD] = float_to_uint32(probability_mass_threshold)
 
     combined = torch.cat([hidden_int32, metadata_words]).reshape(1, -1)
     return ttnn.from_torch(combined, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -420,7 +420,7 @@ def _extract_metadata_from_d2h(output_tensor: ttnn.Tensor):
 
     Returns:
         metadata_flat: torch.Tensor of shape ``(64,)`` int32 — raw idx reads
-            (e.g. ``metadata_flat[InputField.POSITION_ID]`` for the input-side
+            (e.g. ``metadata_flat[Field.POSITION_ID]`` for the input-side
             position_id field, which ``parse_output_page`` does not expose).
         parsed: ``DecodeResult`` — convenience accessors for ``slot_id`` and
             the ``token_0_*`` output fields.
@@ -564,8 +564,8 @@ def _run_prompt_sweep(
 
             if config.validate_metadata_roundtrip:
                 metadata_flat, parsed = _extract_metadata_from_d2h(output_tensor)
-                actual_position_id = int(metadata_flat[InputField.POSITION_ID].item())
-                actual_token_id = int(metadata_flat[InputField.TOKEN_ID].item())
+                actual_position_id = int(metadata_flat[Field.POSITION_ID].item())
+                actual_token_id = int(metadata_flat[Field.TOKEN_ID].item())
                 assert parsed.slot_id == slot_id, (
                     f"prompt={prompt_name!r} slot={slot_id} global_pos={global_pos}: "
                     f"slot_id round-trip mismatch (got {parsed.slot_id})"
