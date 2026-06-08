@@ -2544,11 +2544,8 @@ public:
                     break;
                 }
                 case CQ_PREFETCH_CMD_RELAY_INLINE: {
-                    // On single-core arches (Quasar) collapse mcast to unicast to stay within grid.
-                    const CoreCoord last_worker = (device_->arch() == tt::ARCH::QUASAR)
-                                                      ? worker_core
-                                                      : CoreCoord{worker_core.x + 1, worker_core.y + 1};
-                    CoreRange multi_worker_range = {worker_core, last_worker};
+                    // worker_range() collapses mcast to unicast on single-core arches (Quasar) to stay within grid.
+                    const CoreRange multi_worker_range = this->worker_range(worker_core, /*multi_core=*/true);
                     auto result = gen_random_inline_cmd(device_data, multi_worker_range, noc_xy, remaining_bytes);
                     if (result.has_value()) {
                         HostMemDeviceCommand& cmd = *result;
@@ -2851,27 +2848,31 @@ public:
             entry_size,
             phys_prefetch,
             phys_disp);
-        // On Quasar prefetch and dispatch share core {0,0}; the experimental API auto-assigns DM
-        // cores, so prefetch must be created before dispatch to land on DM0 (dispatch then gets DM1),
-        // mirroring the merged SD dispatcher test. is_legacy_kernel ports the WH/BH kernel unchanged.
-        tt_metal::KernelHandle prefetch_kernel;
-        if (this->device_->arch() == tt::ARCH::QUASAR) {
-            prefetch_kernel = tt::tt_metal::experimental::quasar::CreateKernel(
+        // On Quasar the experimental API auto-assigns DM cores in creation order, so prefetch must be
+        // created before dispatch to land on DM0 (dispatch then gets DM1). is_legacy_kernel ports the
+        // WH/BH kernel unchanged.
+        auto create_fd_kernel = [&](const std::string& kernel_path,
+                                    const CoreCoord& core,
+                                    const std::map<std::string, std::string>& defines) -> tt_metal::KernelHandle {
+            if (this->device_->arch() == tt::ARCH::QUASAR) {
+                return tt::tt_metal::experimental::quasar::CreateKernel(
+                    program,
+                    kernel_path,
+                    core,
+                    tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                        .num_threads_per_cluster = 1, .defines = defines, .is_legacy_kernel = true});
+            }
+            return tt_metal::CreateKernel(
                 program,
-                "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
-                Common::sd_prefetch_core,
-                tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                    .num_threads_per_cluster = 1, .defines = prefetch_defines, .is_legacy_kernel = true});
-        } else {
-            prefetch_kernel = tt_metal::CreateKernel(
-                program,
-                "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
-                {Common::sd_prefetch_core},
+                kernel_path,
+                {core},
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt_metal::NOC::NOC_0,
-                    .defines = prefetch_defines});
-        }
+                    .defines = defines});
+        };
+        const tt_metal::KernelHandle prefetch_kernel = create_fd_kernel(
+            "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp", Common::sd_prefetch_core, prefetch_defines);
         tt_metal::SetRuntimeArgs(program, prefetch_kernel, Common::sd_prefetch_core, {0u, 0u, 0u});
 
         const uint32_t dev_completion_base = dev_hugepage_base + this->sd_hugepage_issue_buffer_size();
@@ -2887,25 +2888,9 @@ public:
             memmap.dispatch_buffer_base(),
             dev_completion_base,
             this->sd_completion_queue_size());
-        tt_metal::KernelHandle dispatch_kernel;
-        if (this->device_->arch() == tt::ARCH::QUASAR) {
-            // prefetch already occupies DM0 on this shared core, so dispatch auto-assigns to DM1.
-            dispatch_kernel = tt::tt_metal::experimental::quasar::CreateKernel(
-                program,
-                "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
-                Common::dispatch_core(this->device_),
-                tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                    .num_threads_per_cluster = 1, .defines = dispatch_defines, .is_legacy_kernel = true});
-        } else {
-            dispatch_kernel = tt_metal::CreateKernel(
-                program,
-                "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
-                {Common::dispatch_core(this->device_)},
-                tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt_metal::NOC::NOC_0,
-                    .defines = dispatch_defines});
-        }
+        // prefetch already occupies DM0 on this shared core, so dispatch auto-assigns to DM1.
+        const tt_metal::KernelHandle dispatch_kernel = create_fd_kernel(
+            "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp", Common::dispatch_core(this->device_), dispatch_defines);
         tt_metal::SetRuntimeArgs(program, dispatch_kernel, Common::dispatch_core(this->device_), {0u, 0u, 0u});
 
         // Initialize the dispatcher's completion queue write/read pointers in L1, mirroring
