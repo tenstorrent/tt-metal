@@ -10,6 +10,20 @@ namespace ttnn::operations::generic::program {
 
 using namespace tt::tt_metal;
 
+namespace {
+
+// Build a placeholder descriptor for a mesh coordinate that no mesh_program covers.
+// A MeshWorkload requires every program it contains to report identical per-core-type
+// config sizes; An empty ProgramDescriptor{} finalizes to all-zero offsets; All
+//  covered programs must already share identical config sizes for the workload to
+// be valid.
+tt::tt_metal::ProgramDescriptor make_config_size_matching_placeholder(
+    const tt::tt_metal::ProgramDescriptor& reference) {
+    return reference;
+}
+
+}  // namespace
+
 tt::tt_metal::ProgramDescriptor GenericMeshDescriptorFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
@@ -25,7 +39,9 @@ tt::tt_metal::ProgramDescriptor GenericMeshDescriptorFactory::create_descriptor(
                 return desc;
             }
         }
-        return tt::tt_metal::ProgramDescriptor{};  // empty descriptor
+        // No mesh_program covers this coordinate. Return a placeholder whose config-size footprint
+        // matches the covered programs so the MeshWorkload's identical-config-size invariant holds.
+        return make_config_size_matching_placeholder(mesh_programs.front().second);
     }
 
     TT_FATAL(
