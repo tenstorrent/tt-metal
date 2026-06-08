@@ -142,6 +142,39 @@ def invalidate_vector(test_vector) -> tuple:
     return False, None
 
 
+def _tp_index_tensor_placement(explicit, num_devices, mesh_shape):
+    """Placement for a tensor-parallel slice's per-device starts/ends index tensor.
+
+    Prefer the explicitly traced placement. Otherwise mirror how the model
+    distributes it: tensor dim-0 sharded along the mesh axis whose size equals
+    ``num_devices``, replicated on the other axis (e.g. num_devices=8 on an 8x4
+    mesh -> Shard(0)+Replicate over [8, 4]). The previous hardcoded [1, 2]
+    Replicate+Shard(0) default only matched a 2-wide mesh and mismatched the
+    master trace on 8x4 / 4x8 galaxy meshes."""
+    if isinstance(explicit, dict):
+        return explicit
+    try:
+        rows, cols = int(mesh_shape[0]), int(mesh_shape[1])
+    except Exception:
+        rows, cols = 1, 2
+    if num_devices == rows and rows > 1:
+        plac = "['PlacementShard(0)', 'PlacementReplicate']"
+    elif num_devices == cols and cols > 1:
+        plac = "['PlacementReplicate', 'PlacementShard(0)']"
+    else:
+        # Legacy fallback (no mesh axis matches num_devices).
+        return {
+            "distribution_shape": "[1, 2]",
+            "mesh_device_shape": "[1, 2]",
+            "placement": "['PlacementReplicate', 'PlacementShard(0)']",
+        }
+    return {
+        "distribution_shape": f"[{rows}, {cols}]",
+        "mesh_device_shape": f"[{rows}, {cols}]",
+        "placement": plac,
+    }
+
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -298,15 +331,14 @@ def run(
         pos_args_raw = extract_positional_args(kwargs)
         if isinstance(slice_start, list):
             _start_torch = _torch_s.tensor(slice_start, dtype=_torch_s.int32)
-            _start_placement = (
-                pos_args_raw.get(1, {}).get("tensor_placement") if isinstance(pos_args_raw.get(1), dict) else None
-            )
+            _start_placement = kwargs.get("starts_tensor_placement")
+            if not isinstance(_start_placement, dict):
+                _start_placement = (
+                    pos_args_raw.get(1, {}).get("tensor_placement") if isinstance(pos_args_raw.get(1), dict) else None
+                )
             if is_mesh_device:
-                _sp = _start_placement or {
-                    "distribution_shape": "[1, 2]",
-                    "mesh_device_shape": "[1, 2]",
-                    "placement": "['PlacementReplicate', 'PlacementShard(0)']",
-                }
+                _mesh = get_mesh_shape() or (device.shape if hasattr(device, "shape") else (1, 2))
+                _sp = _tp_index_tensor_placement(_start_placement, op_kwargs.get("num_devices"), _mesh)
                 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import replicate_with_topology
 
                 slice_start = replicate_with_topology(
@@ -327,15 +359,14 @@ def run(
                 )
         if isinstance(slice_end, list):
             _end_torch = _torch_s.tensor(slice_end, dtype=_torch_s.int32)
-            _end_placement = (
-                pos_args_raw.get(2, {}).get("tensor_placement") if isinstance(pos_args_raw.get(2), dict) else None
-            )
+            _end_placement = kwargs.get("ends_tensor_placement")
+            if not isinstance(_end_placement, dict):
+                _end_placement = (
+                    pos_args_raw.get(2, {}).get("tensor_placement") if isinstance(pos_args_raw.get(2), dict) else None
+                )
             if is_mesh_device:
-                _ep = _end_placement or {
-                    "distribution_shape": "[1, 2]",
-                    "mesh_device_shape": "[1, 2]",
-                    "placement": "['PlacementReplicate', 'PlacementShard(0)']",
-                }
+                _mesh = get_mesh_shape() or (device.shape if hasattr(device, "shape") else (1, 2))
+                _ep = _tp_index_tensor_placement(_end_placement, op_kwargs.get("num_devices"), _mesh)
                 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import replicate_with_topology
 
                 slice_end = replicate_with_topology(
