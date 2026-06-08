@@ -297,7 +297,10 @@ uint32_t pick_num_workers_tp_gt_1(uint32_t num_tile_rows) {
 // Sizing derivation used in both spec computation (to size the stats scratch
 // tensor in `compute_output_specs`) and the program factory (to lay out
 // kernels + CBs). Single source of truth so the two cannot drift.
-WanFusedDistributedRmsnormSizing compute_sizing(const WanFusedDistributedRmsnormParams& args, const Tensor& input) {
+WanFusedDistributedRmsnormSizing compute_sizing(
+    const WanFusedDistributedRmsnormParams& args,
+    const Tensor& input,
+    const WanFusedDistributedRmsnormInputs& tensor_args) {
     WanFusedDistributedRmsnormSizing s;
     const auto& padded = input.padded_shape();
     const uint32_t W = padded[-1];
@@ -325,6 +328,35 @@ WanFusedDistributedRmsnormSizing compute_sizing(const WanFusedDistributedRmsnorm
     const uint32_t chunk_h_cap = std::max(1u, 128u / num_tile_cols_for_chunk_cap);
     s.chunk_size_rows =
         std::min<uint32_t>(std::min<uint32_t>(std::max(1u, rows_per_worker), kMaxChunkSizeRows), chunk_h_cap);
+
+    // Clamp to a single resident row for per-head RoPE and for the streaming-low-L1
+    // fallback — MUST match the program factory so the stats buffer's window/pages
+    // agree. Non-clamped shapes keep the original (unrounded) chunk: the program
+    // uses its own num_links-rounded chunk for compute, and the AG tolerates that
+    // pre-existing window/chunk difference (only the CLAMPED cases need to match,
+    // and there both sides are trivially 1). Detect per-head RoPE / streaming from
+    // the same inputs the program factory uses.
+    const uint32_t num_tile_cols = std::max(1u, W / TILE_WIDTH);
+    const bool fuse_rope = tensor_args.transformation_mat.has_value() && tensor_args.rope_cos.has_value() &&
+                           tensor_args.rope_sin.has_value();
+    const bool per_head_rope =
+        fuse_rope && (tensor_args.rope_cos->logical_shape()[1] == args.num_heads_per_device);
+    bool streaming = false;
+    if (s.use_mux && !per_head_rope) {
+        const auto [c_fid, c_apx, c_fp32, c_pl1, c_dfs] =
+            get_compute_kernel_config_args(input.device()->arch(), args.compute_kernel_config);
+        const uint32_t block_size = get_dest_reg_count(args.compute_kernel_config);
+        const uint32_t in_b = tt::tile_size(datatype_to_dataformat_converter(input.dtype()));
+        const uint32_t out_b = tt::tile_size(datatype_to_dataformat_converter(args.dtype.value_or(input.dtype())));
+        const uint32_t interm_b =
+            c_fp32 ? tt::tile_size(tt::DataFormat::Float32) : tt::tile_size(tt::DataFormat::Float16_b);
+        streaming = decide_streaming_low_l1(
+            num_tile_cols, block_size, s.chunk_size_rows, in_b, interm_b, out_b, tensor_args.weight.has_value(),
+            args.per_head_norm);
+    }
+    if (per_head_rope || streaming) {
+        s.chunk_size_rows = 1u;
+    }
     s.window_size = s.chunk_size_rows;
     // Pages are addressed across the whole chip (not per-worker) so the
     // buffer shape doesn't depend on num_workers. Each chunk a worker
@@ -518,12 +550,10 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // L1 budget cap (matches compute_sizing): chunk * num_tile_cols ≤ 128
     // keeps input_cb under ~512 KB per worker.
     const uint32_t chunk_h_cap = std::max(1u, 128u / std::max(1u, num_tile_cols));
-    const uint32_t chunk_size_rows =
+    uint32_t chunk_size_rows =
         std::min<uint32_t>(std::min<uint32_t>(std::max(1u, num_tile_rows_per_worker), kMaxChunkSizeRows), chunk_h_cap);
-    // Phase 9 packed-page AG: every chunk this chip processes maps to a
-    // distinct DRAM page. Page index = my_device_index * num_chunks_per_device
-    // + chunk_idx_on_device. Independent of num_workers per design.
-    const uint32_t num_chunks_per_device = use_mux ? tt::div_up(num_tile_rows, chunk_size_rows) : 0u;
+    // num_chunks_per_device is computed below, AFTER the per-head-RoPE /
+    // streaming chunk clamp, so the packed-page AG count matches the final chunk.
 
     // ------------------------------------------------------------------------
     // Compute kernel config + dtype/format setup
@@ -563,10 +593,21 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         output_tile_size,
         has_weight,
         args.per_head_norm);
+    // Clamp to a single resident row for (a) per-head RoPE — its cos/sin CBs are
+    // chunk*num_tile_cols fp32 tiles (overflow L1 at feat>=1024) and the compute
+    // deadlocks at chunk>=2 with many rows; and (b) the streaming-low-L1 path,
+    // which only supports one resident row. compute_sizing applies the SAME clamp
+    // so the caller's stats buffer (window/pages) matches. feat-2048 per-head RoPE
+    // still can't fit even one row -> clean compile-time CB-alloc OOM (needs
+    // cos/sin streaming, a separate change), NOT a hang.
+    if (per_head_rope || streaming_low_l1) {
+        chunk_size_rows = 1u;
+    }
+    // Phase 9 packed-page AG: every chunk this chip processes maps to a distinct
+    // DRAM page. Page index = my_device_index * num_chunks_per_device + chunk_idx.
+    const uint32_t num_chunks_per_device = use_mux ? tt::div_up(num_tile_rows, chunk_size_rows) : 0u;
     // The streamed compute path handles only the whole-row reduce with one row
-    // resident at a time. These invariants hold for every shape that actually
-    // triggers streaming (wide shards have chunk_size_rows==1 via chunk_h_cap,
-    // and num_tile_cols is a multiple of head_dim_tiles which divides block_size).
+    // resident at a time (chunk_size_rows==1, enforced by the clamp above).
     TT_FATAL(
         !streaming_low_l1 || chunk_size_rows == 1,
         "wan_fused_distributed_rmsnorm streaming low-L1 path requires chunk_size_rows==1 (got {})",

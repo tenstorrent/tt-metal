@@ -125,6 +125,9 @@ struct WanFusedDistributedRmsnormSizing {
     uint32_t page_size_bytes = 0;        // TILE_HEIGHT * window_size * sizeof(float)
 };
 
-WanFusedDistributedRmsnormSizing compute_sizing(const WanFusedDistributedRmsnormParams& args, const Tensor& input);
+WanFusedDistributedRmsnormSizing compute_sizing(
+    const WanFusedDistributedRmsnormParams& args,
+    const Tensor& input,
+    const WanFusedDistributedRmsnormInputs& tensor_args);
 
 }  // namespace ttnn::experimental::prim
