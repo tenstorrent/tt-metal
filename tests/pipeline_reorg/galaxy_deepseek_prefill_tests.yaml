@@ -124,7 +124,7 @@
   test_group: module
   skus:
     bh_galaxy:
-      timeout: 30
+      timeout: 20
   owner_id: U08RL15T4N8
   team: models
 
