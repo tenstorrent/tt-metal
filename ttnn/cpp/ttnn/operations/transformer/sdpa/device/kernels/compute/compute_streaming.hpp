@@ -314,14 +314,18 @@ void blocked_matmul_and_pack(
 }
 
 /**
- * kt_inplace_v batched softmax@V: for each DST-sized batch of output columns, matmul the full
- * active_Sk (inner_dim tiles) against those columns into DST, then pack the batch in one shot.
+ * Matmul + pack of the already-softmaxed scores against latent V, specialized for in-place latent-V
+ * (V read straight from K^T: V[sk][vd] == K^T[vd][sk]). Output column vd comes from its own matmul
+ * chain over K^T row vd (in1 base vd*KT_stride, inner stride 1). Unlike blocked_matmul_and_pack —
+ * which walks one contiguous in1 subblock from a single base — the columns here sit at strided in1
+ * bases (different K^T rows), so they are independent chains and can't be folded into one matmul.
  *
- * In-place latent-V reads output column vd from K^T row vd (in1 base vd*KT_stride, inner stride 1),
- * so each output column is an independent matmul chain. Doing one column at a time pays a full
- * tile_regs_acquire/commit/wait/release handshake plus a pack-configure per column, leaving the FPU
- * idle ~2/3 of the time; batching every column that fits in DST under one handshake and one pack
- * raises the FPU duty cycle. Numerically identical — same per-column matmul, just reordered.
+ * To keep the FPU busy it batches: every output column that fits in DST shares one
+ * tile_regs_acquire/commit/wait/release handshake and one pack, instead of paying that handshake +
+ * a pack-configure per column (which left the FPU idle ~2/3 of the time for the 1-wide path).
+ *
+ * noinline on Wormhole, mirroring blocked_matmul_and_pack: keeps sdpa_inner_loop_step's frame off
+ * the TR0 stack so the ring cases stay within budget; WH-only to avoid the call overhead elsewhere.
  */
 template <uint32_t vDHt, uint32_t dst_size, uint32_t subblock_h>
 #if defined(ARCH_WORMHOLE)
@@ -1166,45 +1170,9 @@ static void sdpa_inner_loop_step(
             // the V-matmul unpack; only needed when q_num_subblocks==1 (Phase 1's hold_wr_ptr
             // didn't sync them).
 
-            if constexpr (kt_inplace_v) {
-                // Full-Sk single pass: softmax the whole row, then one matmul chain per output
-                // column over all active_Sk tiles (DST-accumulated, packed once per DST group). Vs
-                // split-drain this drops the L1-acc and the per-kt_sub packs/barriers. active_Sk ==
-                // kt_num_full_subblocks * actual_sbw exactly, so one pass covers the full row.
-                for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
-                    sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
-                        cb_qkt_im,
-                        cur.max,
-                        cur.sum,
-                        KT_stride,
-                        q_num_subblocks - 1,
-                        kt_sub * actual_sbw,
-                        qkt_subblock_h,
-                        actual_sbw);
-                }
-                if constexpr (q_num_subblocks == 1) {
-                    PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
-                    UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
-                    UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
-                }
-                cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
-                {
-                    MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
-                    sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
-                        out_cb, out_cb);
-                    mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
-                    inplace_v_matmul_pack_batched<vDHt, dst_size, qktv_h>(
-                        cb_qkt_im,
-                        cb_v_in,
-                        out_cb,
-                        qktv_in0_index_offset,
-                        /*inner_dim=*/kt_num_full_subblocks * matmul_inner,
-                        KT_stride);
-                    sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
-                }
-            } else {
-                // Split-drain: interleave each column-subblock's sub_exp with its partial V matmul;
-                // partial products accumulate across kt_sub via L1.
+            if constexpr (!kt_inplace_v) {
+                // Split-drain (common, materialized-V path): interleave each column-subblock's
+                // sub_exp with its partial V matmul; partial products accumulate across kt_sub via L1.
                 for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
                     sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
                         cb_qkt_im,
@@ -1262,6 +1230,42 @@ static void sdpa_inner_loop_step(
                     if (kt_sub > 0) {
                         PACK((llk_pack_reconfig_l1_acc(0)));
                     }
+                }
+            } else {
+                // In-place latent-V full-Sk single pass: softmax the whole row, then one matmul chain
+                // per output column over all active_Sk tiles (DST-accumulated, packed once per DST
+                // group). Vs split-drain this drops the L1-acc and the per-kt_sub packs/barriers.
+                // active_Sk == kt_num_full_subblocks * actual_sbw exactly, so one pass covers the row.
+                for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
+                    sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
+                        cb_qkt_im,
+                        cur.max,
+                        cur.sum,
+                        KT_stride,
+                        q_num_subblocks - 1,
+                        kt_sub * actual_sbw,
+                        qkt_subblock_h,
+                        actual_sbw);
+                }
+                if constexpr (q_num_subblocks == 1) {
+                    PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+                    UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+                    UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+                }
+                cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
+                {
+                    MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+                    sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
+                        out_cb, out_cb);
+                    mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
+                    inplace_v_matmul_pack_batched<vDHt, dst_size, qktv_h>(
+                        cb_qkt_im,
+                        cb_v_in,
+                        out_cb,
+                        qktv_in0_index_offset,
+                        /*inner_dim=*/kt_num_full_subblocks * matmul_inner,
+                        KT_stride);
+                    sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
                 }
             }
             qktv_in0_index_offset += qktv_h * KT_stride;
