@@ -495,7 +495,7 @@ protected:
     }
 
     // Hooks that differ between FD and SD execution. Overridden in SDPrefetchTestBase /
-    // SDPrefetchHostTextFixture so the test bodies can be written once.
+    // SDPrefetchHostTestFixture so the test bodies can be written once.
     virtual void append_terminate_commands(std::vector<HostMemDeviceCommand>& cmds) {
         cmds.push_back(CommandBuilder::build_dispatch_terminate());
         cmds.push_back(CommandBuilder::build_prefetch_terminate());
@@ -1160,7 +1160,7 @@ public:
     }
 };
 
-class PrefetcherHostTextFixture : virtual public BasePrefetcherTestFixture {
+class PrefetcherHostTestFixture : virtual public BasePrefetcherTestFixture {
 protected:
     void pad_host_data(Common::DeviceData& device_data) {
         Common::one_core_data_t& host_data = device_data.get_data()[device_data.get_host_core()][0];
@@ -1310,7 +1310,7 @@ public:
         SmokeTestHelper helper(device_, device_data, commands_per_iteration, info);
 
         auto add_host_write_func = [this](Common::DeviceData& device_data) {
-            PrefetcherHostTextFixture::pad_host_data(device_data);
+            PrefetcherHostTestFixture::pad_host_data(device_data);
         };
 
         for (uint32_t multiplier = 1; multiplier < 3; multiplier++) {
@@ -2921,7 +2921,7 @@ class SDPrefetchDRAMToL1TestFixture : public SDPrefetchTestBase<BasePrefetcherTe
 class SDPrefetchPackedReadTestFixture : public SDPrefetchTestBase<PrefetcherPackedReadTestFixture> {};
 class SDPrefetchRandomTestFixture : public SDPrefetchTestBase<RandomTestFixture> {};
 
-class SDPrefetchHostTextFixture : public SDPrefetchTestBase<PrefetcherHostTextFixture> {
+class SDPrefetchHostTestFixture : public SDPrefetchTestBase<PrefetcherHostTestFixture> {
 public:
     // Completion-buffer hooks: in SD mode the dispatch kernel writes to the hugepage region
     // we set up ourselves (dev_hugepage_base + sd_hugepage_issue_buffer_size()), not to a
@@ -3009,8 +3009,8 @@ TEST_P(BasePrefetcherTestFixture, DRAMToL1PagedRead) {
 // In this test, the prefetcher reads from L1 and relays it to dispatcher. Dispatcher then
 // writes the data to the host completion queue.
 // Note: Since we're writing into completion queue, we skip distributed::Finish
-TEST_P(PrefetcherHostTextFixture, HostTest) {
-    log_info(tt::LogTest, "PrefetcherHostTextFixture - HostTest (Fast Dispatch) - Test Start");
+TEST_P(PrefetcherHostTestFixture, HostTest) {
+    log_info(tt::LogTest, "PrefetcherHostTestFixture - HostTest (Fast Dispatch) - Test Start");
     run_host_test();
 }
 
@@ -3180,8 +3180,8 @@ TEST_P(PrefetcherPackedReadTestFixture, SmokeTest) {
 // Smoke test for writes to Host from dispatcher
 // This needed to be separate since it executes differently than others
 // (we skip distributed::Finish)
-TEST_P(PrefetcherHostTextFixture, HostSmokeTest) {
-    log_info(tt::LogTest, "PrefetcherHostTextFixture - HostSmokeTest (Fast Dispatch) - Test Start");
+TEST_P(PrefetcherHostTestFixture, HostSmokeTest) {
+    log_info(tt::LogTest, "PrefetcherHostTestFixture - HostSmokeTest (Fast Dispatch) - Test Start");
     run_host_smoke_test();
 }
 
@@ -3391,13 +3391,13 @@ TEST_P(SDPrefetchPagedReadWriteTestFixture, PagedReadWriteTest) {
     run_paged_read_write_test();
 }
 
-TEST_P(SDPrefetchHostTextFixture, HostTest) {
-    log_info(tt::LogTest, "SDPrefetchHostTextFixture - HostTest (Slow Dispatch) - Test Start");
+TEST_P(SDPrefetchHostTestFixture, HostTest) {
+    log_info(tt::LogTest, "SDPrefetchHostTestFixture - HostTest (Slow Dispatch) - Test Start");
     run_host_test();
 }
 
-TEST_P(SDPrefetchHostTextFixture, HostSmokeTest) {
-    log_info(tt::LogTest, "SDPrefetchHostTextFixture - HostSmokeTest (Slow Dispatch) - Test Start");
+TEST_P(SDPrefetchHostTestFixture, HostSmokeTest) {
+    log_info(tt::LogTest, "SDPrefetchHostTestFixture - HostSmokeTest (Slow Dispatch) - Test Start");
     run_host_smoke_test();
 }
 
@@ -3486,10 +3486,10 @@ INSTANTIATE_TEST_SUITE_P(
                "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
     });
 
-// PrefetcherHostTextFixture test with exec buff enabled / disabled
+// PrefetcherHostTestFixture test with exec buff enabled / disabled
 INSTANTIATE_TEST_SUITE_P(
     PrefetcherTests,
-    PrefetcherHostTextFixture,
+    PrefetcherHostTestFixture,
     ::testing::Values(
         // With exec buf disabled
         PagedReadParams{
@@ -3701,7 +3701,7 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     SlowDispatch,
-    SDPrefetchHostTextFixture,
+    SDPrefetchHostTestFixture,
     ::testing::Values(
         PagedReadParams{
             DRAM_PAGE_SIZE_DEFAULT,
