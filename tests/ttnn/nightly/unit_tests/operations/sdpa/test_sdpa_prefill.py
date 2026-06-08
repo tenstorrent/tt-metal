@@ -1940,4 +1940,5 @@ def test_sdpa_with_attention_sink_gpt_oss_prefill_forward_progress(device, dtype
     tt_back = ttnn.to_torch(tt_back)[:, :, :s, :]
 
     assert tt_back.shape == (b, nh, s, d)
+    # This GPT-OSS-scale case guards forward progress; smaller parametrized cases above check numerical accuracy.
     assert torch.isfinite(tt_back).all()

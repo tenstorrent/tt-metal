@@ -5,7 +5,7 @@
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_interleaved_cb_ids.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
-#include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-logger/tt-logger.hpp>
