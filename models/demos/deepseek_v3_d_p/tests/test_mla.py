@@ -760,10 +760,9 @@ def _run_chunked_prefill(
 # multi-user isolation (CPU), GPU-trace ground truth + functional perf (prefill>0).
 _CHUNKED_SCENARIOS = (
     [(f"rot-{rid}", (2, 2), dict(iters_isl=lst)) for rid, lst in zip(ROTATED_VALID_IDS, ROTATED_VALID_LISTS)]
-    + [
-        (f"rot8x4-{rid}", (8, 4), dict(iters_isl=lst))
-        for rid, lst in [("iter1rotpartial", [2560, 2560, 5120]), ("padded_partial", [2592, 5120, 5120])]
-    ]
+    # One sp=8 case covering all rotation edges at once: iter1 is rotated + PARTIAL + mid-chip
+    # straddle (boff=32); iter2 is rotated + multi-slab (slab 1) + mid-chip.
+    + [("rot8x4-maxedge", (8, 4), dict(iters_isl=[2592, 2560, 5120]))]
     + [
         ("production-50k+5k", (8, 4), dict(iters_isl=[5120] * 11)),
         ("multiuser-U2", (2, 2), dict(iters_isl=[5120] * 4, num_users=2)),
