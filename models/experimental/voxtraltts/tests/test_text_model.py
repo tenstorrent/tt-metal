@@ -133,7 +133,7 @@ def test_text_model_prefill_pcc(device, reset_seeds):
 
     ref_last_logits = _reference_last_logits(state_dict, args, tokens)
 
-    passing, pcc_value = comp_pcc(ref_last_logits, tt_last_logits, pcc=0.98)
+    passing, pcc_value = comp_pcc(ref_last_logits, tt_last_logits, pcc=0.99)
     print(f"test_text_model_prefill_pcc PCC={float(pcc_value):.6f}")
     assert passing, f"Text model prefill logits mismatch vs reference: {pcc_value}"
 
@@ -178,7 +178,7 @@ def test_text_model_decode_reference_pcc(device, reset_seeds):
     ref_tokens = torch.cat([prompt_tokens, decode_input_token.view(1, 1)], dim=1)
     ref_last_logits = _reference_last_logits(state_dict, args, ref_tokens)
 
-    passing, pcc_value = comp_pcc(ref_last_logits, tt_last_logits, pcc=0.98)
+    passing, pcc_value = comp_pcc(ref_last_logits, tt_last_logits, pcc=0.99)
     print(f"test_text_model_decode_reference_pcc PCC={float(pcc_value):.6f}")
     assert passing, f"Text model decode logits mismatch vs reference: {pcc_value}"
 
@@ -228,7 +228,7 @@ def test_text_model_decode_multistep_reference_pcc(device, reset_seeds, decode_s
         ref_tokens = torch.cat([prompt_tokens, decode_tokens[:, : step + 1]], dim=1)
         ref_last_logits = _reference_last_logits(state_dict, args, ref_tokens)
 
-        passing, pcc_value = comp_pcc(ref_last_logits, tt_last_logits, pcc=0.98)
+        passing, pcc_value = comp_pcc(ref_last_logits, tt_last_logits, pcc=0.99)
         print(
             f"test_text_model_decode_multistep_reference_pcc[{decode_steps}_steps] "
             f"step={step} PCC={float(pcc_value):.6f}"
