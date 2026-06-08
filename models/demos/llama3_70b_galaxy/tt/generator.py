@@ -1168,6 +1168,7 @@ class Generator(WarmupForwardMixin):
             tt_tok, tt_log_probs = self.sample_decode_on_device(
                 tt_tok,
                 sampling_params=sampling_params,
+                reset_inputs=reset_inputs,
                 reset_batch=reset_batch,
                 prompt_tokens=prompt_tokens,
                 output_tokens=output_tokens,
@@ -1363,6 +1364,7 @@ class Generator(WarmupForwardMixin):
         self,
         tt_logits,
         sampling_params,
+        reset_inputs=False,
         reset_batch=False,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
@@ -1370,12 +1372,23 @@ class Generator(WarmupForwardMixin):
         enable_trace=False,
     ):
         tt_out_tok = self.trace_inputs_decode[True][0] if enable_trace and self.trace_inputs_decode[True] else None
-        sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
         sampling_module = self.model.sampling
-        sampling_module.reset_sampling_params(sampling_params)
-        if reset_batch:
-            sampling_module.reset_prompt_tokens(prompt_tokens)
-            sampling_module.reset_output_state(output_tokens)
+        # Only re-upload sampling params when inputs are being reset (new batch /
+        # mode switch / page-table change). The k/p/temp + penalty *coefficient*
+        # buffers persist on device between decode steps and are read in place by
+        # the sampling trace, so re-applying identical params every step is pure
+        # host->device overhead on the hot decode loop. Seed advancement and slot
+        # remap below still run every step. (Penalty accumulation state is reset
+        # via reset_prompt_tokens/reset_output_state, gated on reset_batch.)
+        # `decode_forward` passes its richer `reset_inputs` (covers mode switch /
+        # page-table change); an external caller (e.g. vLLM deferred path) that
+        # only knows the portable `reset_batch` flag still triggers the upload.
+        if reset_inputs or reset_batch:
+            sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
+            sampling_module.reset_sampling_params(sampling_params)
+            if reset_batch:
+                sampling_module.reset_prompt_tokens(prompt_tokens)
+                sampling_module.reset_output_state(output_tokens)
         if slot_remap is not None:
             sm_bs = sampling_module.seed_manager.max_batch_size
             # Galaxy decode currently uses a single sampling module/rank, so slot_remap is local [0:sm_bs].
