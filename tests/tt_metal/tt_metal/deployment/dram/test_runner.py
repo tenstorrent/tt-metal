@@ -1,9 +1,10 @@
-from typing import Optional, AsyncIterator, Iterator
+from typing import Optional, AsyncIterator, Iterator, Optional, TextIO
 from dataclasses import dataclass, asdict
 from argparse import ArgumentParser
 from asyncio import StreamReader
 from dateutil import parser
 from enum import Enum, auto
+from sys import stdout
 import fileinput
 import asyncio
 import pprint
@@ -166,14 +167,17 @@ def parse_bankerror(l: str) -> Optional[Event]:
         "write_err": int(m.group(6)),
         "read_err": int(m.group(7)),
     }
-    print(f"\tBANKERROR '{extra}'")
+    # print(f"\tBANKERROR '{extra}'")
 
     return Event(EventType.BANKERROR, extra)
 
 
-def parse_line(l: str) -> Optional[Event]:
+def parse_line(l: str, outf: Optional[TextIO]) -> Optional[Event]:
     if print_logs:
         print(f"l: {l}")
+
+    if outf:
+        print(f"l: {l}", file=outf)
 
     parsers = [
         parse_teststart,
@@ -187,24 +191,23 @@ def parse_line(l: str) -> Optional[Event]:
         if r := p(l):
             return r
 
-    # print(f"l: {l}")
     return None
 
 
-async def parse_logs_stream(inf: asyncio.StreamReader) -> AsyncIterator[Event]:
+async def parse_logs_stream(inf: asyncio.StreamReader, outf: Optional[TextIO]) -> AsyncIterator[Event]:
     while True:
         l = await inf.readline()
         if l == b"":
             break
 
-        r = parse_line(l.decode("utf-8").strip())
+        r = parse_line(l.decode("utf-8").strip(), outf)
         if r is not None:
             yield r
 
 
-async def parse_logs(inf: asyncio.StreamReader) -> list[Event]:
+async def parse_logs(inf: asyncio.StreamReader, outf: Optional[TextIO]) -> list[Event]:
     evs = []
-    async for e in parse_logs_stream(inf):
+    async for e in parse_logs_stream(inf, outf):
         evs.append(e)
 
     return evs
@@ -242,7 +245,7 @@ def parse_evs(evs: list[Event], bdfs: dict[str, str]) -> Iterator[TestRun]:
             ensure_chip(e.extra)
             b = TestedBank(e.extra["checked_bytes"], e.extra["write_err"], e.extra["read_err"])
             chips[e.extra["dev_id"]].banks[e.extra["bank"]] = b
-            print(chips)
+            # print(chips)
 
     yield from runs
 
@@ -269,16 +272,16 @@ def shortname(n: str) -> str:
     return n if "_" not in n else n.split("_")[1]
 
 
-def print_summary(runs: list[TestRun]):
+def print_summary(runs: list[TestRun], outf: TextIO = stdout):
     headers = ["test name", "status"]
     rows = []
     for r in runs:
         rows.append([shortname(r.name), r.status])
 
-    print(table("Test summary", headers, rows))
+    print(table("Test summary", headers, rows), file=outf)
 
 
-def print_test_summary(r: TestRun, bdfs: dict[str, str]):
+def print_test_summary(r: TestRun, bdfs: dict[str, str], outf: TextIO = stdout):
     passes = [[True for i in range(8)] for i in range(32)]
     for e in r.errors:
         passes[int(e["dev_id"])][int(e["bank"])] = False
@@ -296,17 +299,17 @@ def print_test_summary(r: TestRun, bdfs: dict[str, str]):
             row.append("PASS" if passes[d][i] else "FAIL")
         rows.append(row)
 
-    print(table(f"{shortname(r.name)} summary", header, rows))
+    print(table(f"{shortname(r.name)} summary", header, rows), file=outf)
 
 
-def print_test_summaries(runs: list[TestRun], bdfs: dict[str, str]):
+def print_test_summaries(runs: list[TestRun], bdfs: dict[str, str], outf: TextIO = stdout):
     for r in runs:
-        print_test_summary(r, bdfs)
+        print_test_summary(r, bdfs, outf)
 
 
-def print_results(runs: list[TestRun], bdfs: dict[str, str]):
-    print_test_summaries(runs, bdfs)
-    print_summary(runs)
+def print_results(runs: list[TestRun], bdfs: dict[str, str], outf: TextIO = stdout):
+    print_test_summaries(runs, bdfs, outf)
+    print_summary(runs, outf)
 
 
 async def file_to_streamreader(path: str, chunk_size: int = 8192) -> StreamReader:
@@ -327,9 +330,9 @@ async def file_to_streamreader(path: str, chunk_size: int = 8192) -> StreamReade
     return reader
 
 
-async def parse_file(file: str) -> list[Event]:
+async def parse_file(file: str, outf: Optional[TextIO]) -> list[Event]:
     sr = await file_to_streamreader(file)
-    return await parse_logs(sr)
+    return await parse_logs(sr, outf)
 
 
 async def main():
@@ -339,14 +342,20 @@ async def main():
     parser.add_argument("-v", action="store_true", help="Verbose output")
     parser.add_argument("-i", type=str, help="Input file to parse instead of running the tests")
     parser.add_argument("-o", type=str, help="Output path for the json file")
+    parser.add_argument("-l", type=str, help="File path to output logs to")
     opts = parser.parse_args()
+
+    logpath = opts.l if opts.l else None
+    logf = open(logpath, "w") if logpath else None
 
     if opts.q:
         global print_logs
         print_logs = False
 
-    outfile = opts.o if opts.o else "out.json"
-    print(f"Writing results to '{outfile}'")
+    logfile = opts.o if opts.o else "out.json"
+    print(f"Writing results to '{logfile}'")
+    if logf:
+        print(f"Writing logs to '{logpath}'")
 
     if opts.i:
         evs = await parse_file(opts.i)
@@ -360,7 +369,7 @@ async def main():
 
         proc = await asyncio.create_subprocess_exec(program, *args, stdout=asyncio.subprocess.PIPE, env=env)
 
-        p, evs = await asyncio.gather(proc.wait(), parse_logs(proc.stdout))
+        p, evs = await asyncio.gather(proc.wait(), parse_logs(proc.stdout, logf))
 
     # pprint.pp(evs)
     bdfs = {}
@@ -371,7 +380,13 @@ async def main():
 
     if not opts.n:
         print_results(runs, bdfs)
-    runs_to_jsonf(outfile, runs, sort_keys=True, indent=4)
+
+    if logf:
+        print_results(runs, bdfs, logf)
+
+    runs_to_jsonf(logfile, runs, sort_keys=True, indent=4)
+
+    logf.close()
 
 
 if __name__ == "__main__":
