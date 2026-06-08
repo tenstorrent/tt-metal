@@ -526,6 +526,13 @@ def run(
     # Traced subdevice_id arrives as a dict (deserializer doesn't recognize its
     # serialized form); coerce to a real ttnn.SubDeviceId so the op call binds.
     subdevice_id = _coerce_subdevice_id(subdevice_id)
+    # Integer index the model ran on. When >= 1 the model used a multi-sub-device
+    # (e.g. prefetcher+worker) layout; we reproduce that index below so the traced
+    # subdevice_id matches instead of being clamped to the default sub-device.
+    _traced_sd_index = None
+    if subdevice_id is not None:
+        _sd_m = re.search(r"(\d+)", str(subdevice_id))
+        _traced_sd_index = int(_sd_m.group(1)) if _sd_m else None
 
     # Some traced overloads name the gathered tensor `input_tensor` instead of
     # `input`, so the loader emits the input_tensor_* kwarg family rather than
@@ -776,10 +783,46 @@ def run(
 
             # Setup SubDevice and semaphores (match test_minimal_all_gather_async.py pattern)
             compute_grid_size = device.compute_with_storage_grid_size()
-            ccl_sub_device_crs = ttnn.CoreRangeSet(
+            full_grid_crs = ttnn.CoreRangeSet(
                 {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
             )
+            # By default the gather runs on the single default sub-device (index 0).
+            # When the model ran on a higher worker-sub-device index (its
+            # prefetcher+worker layout), reproduce that index so the traced
+            # subdevice_id matches: load (index+1) sub-devices with the worker —
+            # carrying the gather + semaphores — at the traced index and tiny
+            # single-core placeholders below it. Best-effort: any failure falls back
+            # to the default single sub-device.
+            _ccl_sub_device_manager = None
             worker_sub_device_id = ttnn.SubDeviceId(0)
+            ccl_sub_device_crs = full_grid_crs
+            if _traced_sd_index and _traced_sd_index >= 1:
+                try:
+                    gx, gy = compute_grid_size.x, compute_grid_size.y
+                    n = _traced_sd_index
+                    if gx > n:  # need n placeholder cores in row 0, worker takes the rest
+                        placeholder_subs = [
+                            ttnn.SubDevice(
+                                [ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(i, 0), ttnn.CoreCoord(i, 0))})]
+                            )
+                            for i in range(n)
+                        ]
+                        worker_ranges = {ttnn.CoreRange(ttnn.CoreCoord(n, 0), ttnn.CoreCoord(gx - 1, 0))}
+                        if gy > 1:
+                            worker_ranges.add(ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(gx - 1, gy - 1)))
+                        worker_crs = ttnn.CoreRangeSet(worker_ranges)
+                        _ccl_sub_device_manager = device.create_sub_device_manager(
+                            placeholder_subs + [ttnn.SubDevice([worker_crs])], 0
+                        )
+                        device.load_sub_device_manager(_ccl_sub_device_manager)
+                        worker_sub_device_id = ttnn.SubDeviceId(n)
+                        ccl_sub_device_crs = worker_crs
+                except Exception:
+                    # Fall back to the default single sub-device; subdevice_id will
+                    # then differ from the trace, but the gather still runs correctly.
+                    _ccl_sub_device_manager = None
+                    worker_sub_device_id = ttnn.SubDeviceId(0)
+                    ccl_sub_device_crs = full_grid_crs
             sub_device_stall_group = [worker_sub_device_id]
 
             device.set_sub_device_stall_group(sub_device_stall_group)
