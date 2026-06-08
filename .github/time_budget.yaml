@@ -137,9 +137,9 @@ runtime:
     bh_quietbox: 5
     bh_loudbox: 5
   unit:
-    wh_n150_civ2: 217
+    wh_n150_civ2: 222
     wh_n300_civ2: 74
-    bh_p150b_civ2: 205
+    bh_p150b_civ2: 210
     bh_p150b_civ2_viommu: 5
     bh_p100a_civ2_viommu: 74
     bh_quietbox: 20
@@ -183,7 +183,7 @@ models:
     bh_loudbox: 160
     bh_llmbox: 50
     bh_deskbox: 13
-    bh_quietbox_2: 235
+    bh_quietbox_2: 251
     bh_galaxy: 78
   unit:
     wh_llmbox: 175
@@ -203,9 +203,10 @@ models:
     wh_galaxy: 280
     wh_galaxy_perf: 150
   device_perf:
-    wh_n150: 10
-    bh_p150: 10
-    bh_p300: 10
+    wh_n150: 20
+    bh_p150: 20
+    bh_p300: 20
+    bh_quietbox_2: 80
 
   demo:
     wh_llmbox_perf: 200

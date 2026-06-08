@@ -75,6 +75,59 @@ struct RingAccumulatorState {
     AccumulatorHalf prev, cur;
 };
 
+// Ring-streaming lightweight-mask context. Field NAMES match LightweightMaskContext so sdpa_ring_v2's
+// generic `lw_mask.<field>` reads work for either type, BUT the 9 compile-time-constant fields are
+// template params (static constexpr → zero per-instance storage), leaving only the 3 per-ring-iter
+// runtime fields on the stack. Shrinks the live lw_mask object ~48 B → ~12 B on kernel_main's frame.
+// Only the ring_joint_sdpa producer uses it; exp_ring keeps the plain LightweightMaskContext —
+// sdpa_ring_v2's MaskCtx template param is deduced per caller.
+template <
+    uint32_t NeginfTileIdx,
+    uint32_t CausalDiagTileIdx,
+    uint32_t LocalNPaddedTiles,
+    uint32_t JointNPaddedTiles,
+    uint32_t GlobalNPartialCol,
+    uint32_t JointLPartialCol,
+    uint32_t GlobalNPartialTileIdx,
+    uint32_t JointLPartialTileIdx,
+    uint32_t StraddleMaskChunkId>
+struct RingStreamingMaskCtx {
+    // Per-ring-iter runtime fields (the only ones needing stack storage):
+    bool is_causal = false;
+    uint32_t global_n_padded_tiles = 0;
+    uint32_t straddle_num_padded_tiles = 0;
+    // Compile-time-constant fields (no per-instance storage):
+    static constexpr uint32_t neginf_tile_idx = NeginfTileIdx;
+    static constexpr uint32_t causal_diag_tile_idx = CausalDiagTileIdx;
+    static constexpr uint32_t local_n_padded_tiles = LocalNPaddedTiles;
+    static constexpr uint32_t joint_n_padded_tiles = JointNPaddedTiles;
+    static constexpr uint32_t global_n_partial_col = GlobalNPartialCol;
+    static constexpr uint32_t joint_l_partial_col = JointLPartialCol;
+    static constexpr uint32_t global_n_partial_tile_idx = GlobalNPartialTileIdx;
+    static constexpr uint32_t joint_l_partial_tile_idx = JointLPartialTileIdx;
+    static constexpr uint32_t straddle_mask_chunk_id = StraddleMaskChunkId;
+
+    // Materialize a full LightweightMaskContext. Only used on the if-constexpr-discarded v1
+    // (sdpa_ring) path so it type-checks; DCE'd on the streaming v2 path (which deduces this type
+    // directly and keeps the compact frame).
+    operator LightweightMaskContext() const {
+        LightweightMaskContext m;
+        m.is_causal = is_causal;
+        m.neginf_tile_idx = neginf_tile_idx;
+        m.causal_diag_tile_idx = causal_diag_tile_idx;
+        m.global_n_padded_tiles = global_n_padded_tiles;
+        m.local_n_padded_tiles = local_n_padded_tiles;
+        m.joint_n_padded_tiles = joint_n_padded_tiles;
+        m.global_n_partial_col = global_n_partial_col;
+        m.joint_l_partial_col = joint_l_partial_col;
+        m.global_n_partial_tile_idx = global_n_partial_tile_idx;
+        m.joint_l_partial_tile_idx = joint_l_partial_tile_idx;
+        m.straddle_num_padded_tiles = straddle_num_padded_tiles;
+        m.straddle_mask_chunk_id = straddle_mask_chunk_id;
+        return m;
+    }
+};
+
 // Sentinel for "no CB" — beyond the valid 0-31 range.
 constexpr uint32_t INVALID_CB = 32;
 // BH benefits from blocked pack at width 4; WH keeps the threshold at 8 because
@@ -214,8 +267,14 @@ ALWI void pack_contiguous_rows(
 /**
  * Blocked subblock matmul with absolute offset packing.
  * Always uses pack_tile<true> at row-major positions in out_cb.
+ *
+ * noinline on Wormhole: keeps sdpa_inner_loop_step's frame off the TR0 stack to stay within budget
+ * for the ring cases (it would otherwise overflow). WH-only to avoid the call overhead elsewhere.
  */
 template <bool transpose, uint32_t in1_stride, uint32_t out_num_cols>
+#if defined(ARCH_WORMHOLE)
+__attribute__((noinline))
+#endif
 void blocked_matmul_and_pack(
     uint32_t in0_cb,
     uint32_t in1_cb,
@@ -297,7 +356,7 @@ void reduce_c_row_group(
         cb_wait_front(in0_cb, cumulative_input_tiles);
     }
 
-    reduce_block_max_row_init_runtime(reduce_cols, respect_trigger);
+    reduce_block_max_row_init_runtime(out_cb, reduce_cols, respect_trigger);
     for (uint32_t i = 0; i < group_size; i++) {
         const uint32_t input_tile_start = (row_start + i) * row_stride;
         reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i, respect_trigger);
@@ -364,7 +423,7 @@ void sub_exp_block_bcast_cols(
     tile_regs_commit();
 
     tile_regs_wait();
-    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+    PACK((llk_pack_relu_config(ReluConfig::zero())));
     {
         MaybeDeviceZoneScopedN(profiling_enabled, "EXP");
         uint32_t dst_index = 0;
@@ -414,7 +473,7 @@ void sub_exp_block_bcast_cols(
     tile_regs_release();
 
     // Restore packer ReLU config after all exp operations complete
-    PACK((llk_pack_relu_config(ReluType::NO_RELU)));
+    PACK((llk_pack_relu_config(ReluConfig::none())));
     PACK((llk_pack_reconfig_l1_acc(0)));
 }
 
@@ -1645,7 +1704,8 @@ template <
     bool straddle_mask_enabled = false,
     bool kv_pad_rotation_enabled = false,
     uint32_t v_cb_physical_width_t = vDHt,
-    bool v_shares_k_buffer = false>
+    bool v_shares_k_buffer = false,
+    typename MaskCtx = LightweightMaskContext>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
     const uint32_t global_q_end,
@@ -1664,7 +1724,7 @@ void sdpa_ring_v2(
     RingAccumulatorState& acc_state,
     const bool is_last_ring_iter = false,
     const uint32_t q_per_core = 1,
-    const LightweightMaskContext& lw_mask = {},
+    const MaskCtx& lw_mask = {},
     const bool skip_first_half_q = false,
     const bool use_zigzag_balancing = false,
     const ChunkedContext& chunked = {},
