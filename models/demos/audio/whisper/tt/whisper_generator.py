@@ -58,6 +58,12 @@ STARTOFPREV_TOKEN_ID = 50362  # <|startofprev|> token for prompt conditioning
 STARTOFTRANSCRIPT_TOKEN_ID = 50258  # <|startoftranscript|> token
 MAX_PROMPT_TOKENS = 224  # Maximum number of tokens allowed in prompt
 
+# Upper bound on tokens held while waiting for a multi-byte UTF-8 character to complete during
+# streaming incremental detokenization. A single UTF-8 char is at most 4 bytes, so a legitimate
+# split spans only a few tokens; beyond this the trailing U+FFFD can never complete and we stop
+# holding to avoid an unbounded stall (see WhisperGenerator._stream_incremental_text).
+STREAM_MAX_HOLD_TOKENS = 8
+
 
 class EncoderTraceState:
     """Holds captured encoder traces keyed by ``trace_key`` (``batch_size_per_device``) for ``run_encoder_traced_or_eager``.
@@ -643,12 +649,16 @@ class WhisperGenerator:
         U+FFFD. Instead, hold unresolved trailing tokens in ``cache`` (mutated in place) and
         emit text only once the decoded bytes form complete characters. Returns the newly
         completed incremental text ("" while a multi-byte character is still incomplete).
+
+        A genuinely undecodable byte (e.g. a lone continuation byte) would otherwise be held
+        forever; cap the hold at STREAM_MAX_HOLD_TOKENS and flush the U+FFFD as-is so the stream
+        never stalls. The final result is decoded from the full ID sequence and is unaffected.
         """
         cache.append(int(token_id))
         text = self.processor.batch_decode([cache], skip_special_tokens=True)[0]
-        if text.endswith("�"):
+        if text.endswith("�") and len(cache) <= STREAM_MAX_HOLD_TOKENS:
             return ""  # incomplete multi-byte tail — keep the tokens and wait for the next one
-        cache.clear()  # all bytes form complete characters — flush
+        cache.clear()  # bytes form complete characters (or a never-completing tail we stop holding)
         return text
 
     def generate(
