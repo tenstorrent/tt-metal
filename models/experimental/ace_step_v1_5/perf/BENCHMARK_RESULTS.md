@@ -32,31 +32,31 @@ Varient : acestep-v15-turbo | lm-varient : acestep-5Hz-lm-0.6B
 
 | Metric | Value | Description | OUTPUT AUDIO GOOD/BAD |
 | --- | --- | --- | --- |
-| Wall Time | 83.39 s | End-to-end time from start to finish | GOOD |
-| LM Total Time | 8.13 s | LLM planning (generation + parsing) |  |
-| DiT Total Time | 1.03 s | Diffusion (all steps combined) |  |
-| VAE Decode Time | 10.10 s | Decode latents to audio waveform |  |
-| Tokens/sec | 40.9 tok/s | LLM token generation throughput (238 new tokens) |  |
+| Wall Time | 111.68 s | End-to-end time from start to finish | GOOD |
+| LM Total Time | 5.71 s | LLM planning (generation + parsing) |  |
+| DiT Total Time | 0.70 s | Diffusion (all steps combined) |  |
+| VAE Decode Time | 2.109 s | Decode latents to audio waveform |  |
+| Tokens/sec | 41.7 tok/s | LLM token generation throughput (238 new tokens) |  |
 
 Varient : acestep-v15-turbo | lm-varient : acestep-5Hz-lm-1.75B
 
 | Metric | Value | Description | OUTPUT AUDIO GOOD/BAD |
 | --- | --- | --- | --- |
-| Wall Time | 112.21 s | End-to-end time from start to finish | GOOD |
-| LM Total Time | 8.45 s | LLM planning (generation + parsing) |  |
-| DiT Total Time | 1.04 s | Diffusion (all steps combined) |  |
-| VAE Decode Time | 2.08 s | Decode latents to audio waveform |  |
-| Tokens/sec | 29.6 tok/s | LLM token generation throughput (250 new tokens) |  |
+| Wall Time | 116.04 s | End-to-end time from start to finish | GOOD |
+| LM Total Time | 8.37 s | LLM planning (generation + parsing) |  |
+| DiT Total Time | 0.70 s | Diffusion (all steps combined) |  |
+| VAE Decode Time | 2.09 s | Decode latents to audio waveform |  |
+| Tokens/sec | 29.9 tok/s | LLM token generation throughput (250 new tokens) |  |
 
 Varient : acestep-v15-turbo | lm-varient : acestep-5Hz-lm-4B
 
 | Metric | Value | Description | OUTPUT AUDIO GOOD/BAD |
 | --- | --- | --- | --- |
-| Wall Time | 118.77 s | End-to-end time from start to finish | GOOD |
-| LM Total Time | 23.80 s | LLM planning (generation + parsing) |  |
-| DiT Total Time | 1.48 s | Diffusion (all steps combined) |  |
-| VAE Decode Time | 2.13 s | Decode latents to audio waveform |  |
-| Tokens/sec | 10.6 tok/s | LLM token generation throughput (253 new tokens) |  |
+| Wall Time | 146.37 s | End-to-end time from start to finish | GOOD |
+| LM Total Time | 11.99 s | LLM planning (generation + parsing) |  |
+| DiT Total Time | 0.70 s | Diffusion (all steps combined) |  |
+| VAE Decode Time | 2.11 s | Decode latents to audio waveform |  |
+| Tokens/sec | 21.46 tok/s | LLM token generation throughput (253 new tokens) |  |
 
 Varient : acestep-v15-base | lm-varient : acestep-5Hz-lm-0.6B
 

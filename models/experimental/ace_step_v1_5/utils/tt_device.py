@@ -679,6 +679,7 @@ def ace_step_reexec_for_dit_mesh(
     cached_preprocess: Any = None,
     deferred_condition_payload: Any = None,
     frames: int | None = None,
+    preprocess_perf: dict | None = None,
 ) -> None:
     """Re-exec demo in a fresh process so DiT opens the full mesh after single-chip preprocess."""
     import pickle
@@ -692,16 +693,16 @@ def ace_step_reexec_for_dit_mesh(
 
     fd, handoff_path = tempfile.mkstemp(prefix="ace_step_dit_handoff_", suffix=".pkl")
     os.close(fd)
+    handoff_payload: dict = {
+        "cached_preprocess": cached_preprocess,
+        "deferred_condition_payload": deferred_condition_payload,
+        "frames": frames,
+        "mesh_sku": mesh_sku,
+    }
+    if preprocess_perf is not None:
+        handoff_payload["preprocess_perf"] = preprocess_perf
     with open(handoff_path, "wb") as f:
-        pickle.dump(
-            {
-                "cached_preprocess": cached_preprocess,
-                "deferred_condition_payload": deferred_condition_payload,
-                "frames": frames,
-                "mesh_sku": mesh_sku,
-            },
-            f,
-        )
+        pickle.dump(handoff_payload, f)
 
     os.environ.pop(_TT_VISIBLE_DEVICES_ENV, None)
     dit_mgd = _dit_mesh_graph_descriptor_path(mesh_sku)
@@ -712,6 +713,18 @@ def ace_step_reexec_for_dit_mesh(
         f"[ace_step_v1_5] DiT: re-exec for full mesh ({mesh_sku}), handoff={handoff_path}",
         flush=True,
     )
+    if preprocess_perf is not None:
+        _hp = preprocess_perf.get("params") or {}
+        _ht = preprocess_perf.get("timings_ms") or []
+        _pa_s = float(preprocess_perf.get("phase_a_wall_ms") or 0.0) / 1000.0
+        print(
+            f"[ace_step_v1_5][perf] handoff pickle includes Phase-A stats: "
+            f"phase_a_wall_s={_pa_s:.2f} "
+            f"lm_gen_time_s={_hp.get('lm_gen_time_s', 'n/a')} "
+            f"tokens={_hp.get('lm_num_tokens', 'n/a')} "
+            f"modules={len(_ht)}",
+            flush=True,
+        )
 
     new_argv = [sys.executable]
     skip_next = False
