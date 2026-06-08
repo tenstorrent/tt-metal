@@ -14,6 +14,12 @@ permissions:
   contents: read
   issues: write
 
+# Serialize runs so a scheduled run and a manual dispatch cannot race while
+# creating/editing/closing the single tracking issue.
+concurrency:
+  group: deprecation-reaper
+  cancel-in-progress: false
+
 jobs:
   reap:
     runs-on: ubuntu-latest

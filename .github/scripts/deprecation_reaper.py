@@ -169,7 +169,8 @@ def main():
         manifest = json.load(f)
 
     now = dt.datetime.now(dt.timezone.utc)
-    print(f"deprecation-reaper: {len(manifest.get('deprecations', []))} tracked entr(ies), now={now.isoformat()}")
+    count = len(manifest.get("deprecations", []))
+    print(f"deprecation-reaper: checking {count} tracked deprecation(s) at {now.isoformat()}")
     overdue = find_overdue(manifest, now)
     existing = find_tracking_issue()
 
