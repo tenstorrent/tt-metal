@@ -286,6 +286,23 @@ bool process_cmd(
     uint32_t* l1_cache,
     PrefetchExecBufState& exec_buf_state);
 
+#ifdef ARCH_QUASAR
+// Same-core copy: word-by-word L1->L1 memcpy through the L1 uncached alias, used when prefetcher and dispatcher are on
+// the same core.
+FORCE_INLINE void local_copy_words(uintptr_t dst_addr, uintptr_t src_addr, uint32_t num_bytes, uint32_t dst_end) {
+    ASSERT((num_bytes & 0x3u) == 0);
+    ASSERT((src_addr & 0x3u) == 0);
+    ASSERT((dst_addr & 0x3u) == 0);
+    ASSERT(dst_addr + num_bytes <= dst_end);
+    volatile uint32_t tt_l1_ptr* dst_ptr = uncached_l1_ptr<uint32_t>(dst_addr);
+    volatile uint32_t tt_l1_ptr* src_ptr = uncached_l1_ptr<uint32_t>(src_addr);
+    const uint32_t words = num_bytes >> 2;
+    for (uint32_t i = 0; i < words; ++i) {
+        dst_ptr[i] = src_ptr[i];
+    }
+}
+#endif
+
 template <uint32_t downstream_cb_base_addr, uint32_t downstream_cmd_buf>
 FORCE_INLINE void write_downstream(
     uintptr_t& data_ptr,
@@ -302,20 +319,7 @@ FORCE_INLINE void write_downstream(
                 get_noc_addr_helper(downstream_noc_encoding, local_downstream_data_ptr),
                 remaining);
 #elif defined(ARCH_QUASAR)
-            // Same-core dispatch: word-by-word uncached memcpy into the dispatcher's CB.
-            ASSERT((remaining & 0x3u) == 0);
-            ASSERT((data_ptr & 0x3u) == 0);
-            ASSERT((local_downstream_data_ptr & 0x3u) == 0);
-            ASSERT(local_downstream_data_ptr + remaining <= downstream_end);
-            {
-                auto* dst_ptr =
-                    reinterpret_cast<volatile uint32_t tt_l1_ptr*>(l1_uncached_addr(local_downstream_data_ptr));
-                auto* src_ptr = reinterpret_cast<const volatile uint32_t tt_l1_ptr*>(l1_uncached_addr(data_ptr));
-                const uint32_t words = remaining >> 2;
-                for (uint32_t i = 0; i < words; ++i) {
-                    dst_ptr[i] = src_ptr[i];
-                }
-            }
+            local_copy_words(local_downstream_data_ptr, data_ptr, remaining, downstream_end);
 #else
             cq_noc_async_write_with_state_any_len<true, true, CQNocWait::CQ_NOC_WAIT, downstream_cmd_buf>(
                 static_cast<uint32_t>(data_ptr),
@@ -334,19 +338,7 @@ FORCE_INLINE void write_downstream(
         get_noc_addr_helper(downstream_noc_encoding, local_downstream_data_ptr),
         length);
 #elif defined(ARCH_QUASAR)
-    // Same-core dispatch: word-by-word uncached memcpy into the dispatcher's CB.
-    ASSERT((length & 0x3u) == 0);
-    ASSERT((data_ptr & 0x3u) == 0);
-    ASSERT((local_downstream_data_ptr & 0x3u) == 0);
-    ASSERT(local_downstream_data_ptr + length <= downstream_end);
-    {
-        auto* dst_ptr = reinterpret_cast<volatile uint32_t tt_l1_ptr*>(l1_uncached_addr(local_downstream_data_ptr));
-        auto* src_ptr = reinterpret_cast<const volatile uint32_t tt_l1_ptr*>(l1_uncached_addr(data_ptr));
-        const uint32_t words = length >> 2;
-        for (uint32_t i = 0; i < words; ++i) {
-            dst_ptr[i] = src_ptr[i];
-        }
-    }
+    local_copy_words(local_downstream_data_ptr, data_ptr, length, downstream_end);
 #else
     cq_noc_async_write_with_state_any_len<true, true, CQNocWait::CQ_NOC_WAIT, downstream_cmd_buf>(
         static_cast<uint32_t>(data_ptr),
@@ -497,17 +489,15 @@ FORCE_INLINE uint32_t read_from_pcie(
     // prefetch_q_dev_ptrs (which are cached offsets) match. Write through the uncached L1 alias
     // so the value lands in L1 SRAM directly (otherwise it sits in DM0's L1 D$ and the host's
     // NOC poll reads stale). l1_uncached_addr/l1_cached_addr are identity on WH/BH.
-    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(prefetch_q_rd_ptr_addr)) =
-        l1_cached_addr(reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr));
-    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(prefetch_q_pcie_rd_ptr_addr)) = pcie_read_ptr;
+    *uncached_l1_ptr<uint32_t>(prefetch_q_rd_ptr_addr) = l1_cached_addr(reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr));
+    *uncached_l1_ptr<uint32_t>(prefetch_q_pcie_rd_ptr_addr) = pcie_read_ptr;
 
     ++prefetch_q_rd_ptr;
 
     // Wrap prefetch_q. prefetch_q_rd_ptr lives in the uncached alias on Quasar, so compare and
     // reset via l1_uncached_addr (identity on WH/BH, so no change there).
     if (reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr) == l1_uncached_addr(prefetch_q_end)) {
-        prefetch_q_rd_ptr =
-            reinterpret_cast<volatile tt_l1_ptr prefetch_q_entry_type*>(l1_uncached_addr(prefetch_q_base));
+        prefetch_q_rd_ptr = uncached_l1_ptr<prefetch_q_entry_type>(prefetch_q_base);
     }
     return pending_read_size;
 }
@@ -565,7 +555,9 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
     // `fence` remains the committed boundary used for cmd_ready checks.
     static uintptr_t issue_fence = cmddat_q_base;
     // On Quasar prefetch_q_rd_ptr lives in the uncached L1 alias so every deref bypasses the DM core's
-    // L1 D$/L2. l1_uncached_addr is identity on non-Quasar, so this is unchanged on WH/BH.
+    // L1 D$/L2. l1_uncached_addr is identity on non-Quasar, so this is unchanged on WH/BH. The bare
+    // reinterpret_cast (rather than uncached_l1_ptr) keeps this a constant initializer; the kernel
+    // environment disallows dynamic initialization of static storage.
     static volatile tt_l1_ptr prefetch_q_entry_type* prefetch_q_rd_ptr =
         reinterpret_cast<volatile tt_l1_ptr prefetch_q_entry_type*>(l1_uncached_addr(prefetch_q_base));
     static constexpr uint32_t prefetch_q_msb_mask = 1u << (sizeof(prefetch_q_entry_type) * CHAR_BIT - 1U);
@@ -867,18 +859,7 @@ static uint32_t process_relay_inline_noflush_cmd(uintptr_t cmd_ptr, uint32_t& di
     if (cmddat_wrap_enable && length > remaining) {
         // wrap cmddat
 #if defined(ARCH_QUASAR)
-        ASSERT((remaining & 0x3u) == 0);
-        ASSERT((data_ptr & 0x3u) == 0);
-        ASSERT((dispatch_data_ptr & 0x3u) == 0);
-        ASSERT(dispatch_data_ptr + remaining <= downstream_cb_end);
-        {
-            auto* dst_ptr = reinterpret_cast<volatile uint32_t tt_l1_ptr*>(l1_uncached_addr(dispatch_data_ptr));
-            auto* src_ptr = reinterpret_cast<const volatile uint32_t tt_l1_ptr*>(l1_uncached_addr(data_ptr));
-            const uint32_t words = remaining >> 2;
-            for (uint32_t i = 0; i < words; ++i) {
-                dst_ptr[i] = src_ptr[i];
-            }
-        }
+        local_copy_words(dispatch_data_ptr, data_ptr, remaining, downstream_cb_end);
 #else
         noc_async_write(
             static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
@@ -888,18 +869,7 @@ static uint32_t process_relay_inline_noflush_cmd(uintptr_t cmd_ptr, uint32_t& di
         data_ptr = cmddat_q_base;
     }
 #if defined(ARCH_QUASAR)
-    ASSERT((length & 0x3u) == 0);
-    ASSERT((data_ptr & 0x3u) == 0);
-    ASSERT((dispatch_data_ptr & 0x3u) == 0);
-    ASSERT(dispatch_data_ptr + length <= downstream_cb_end);
-    {
-        auto* dst_ptr = reinterpret_cast<volatile uint32_t tt_l1_ptr*>(l1_uncached_addr(dispatch_data_ptr));
-        auto* src_ptr = reinterpret_cast<const volatile uint32_t tt_l1_ptr*>(l1_uncached_addr(data_ptr));
-        const uint32_t words = length >> 2;
-        for (uint32_t i = 0; i < words; ++i) {
-            dst_ptr[i] = src_ptr[i];
-        }
-    }
+    local_copy_words(dispatch_data_ptr, data_ptr, length, downstream_cb_end);
 #else
     noc_async_write(static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), length);
 #endif
@@ -923,9 +893,7 @@ static uint32_t write_pages_to_dispatcher(
         DispatchRelayInlineState::cb_writer.acquire_pages(npages);
     }
 
-#if defined(FABRIC_RELAY) || !defined(ARCH_QUASAR)
-    uint64_t noc_addr;
-#endif
+    [[maybe_unused]] uint64_t noc_addr;
     if (downstream_data_ptr == downstream_cb_end) {
         downstream_data_ptr = downstream_cb_base;
     } else if (downstream_data_ptr + amt_to_write > downstream_cb_end) {  // wrap
@@ -936,18 +904,7 @@ static uint32_t write_pages_to_dispatcher(
 #if defined(FABRIC_RELAY)
         noc_async_write(scratch_write_addr, noc_addr, last_chunk_size);
 #elif defined(ARCH_QUASAR)
-        ASSERT((last_chunk_size & 0x3u) == 0);
-        ASSERT((scratch_write_addr & 0x3u) == 0);
-        ASSERT((downstream_data_ptr & 0x3u) == 0);
-        ASSERT(downstream_data_ptr + last_chunk_size <= downstream_cb_end);
-        {
-            auto* dst_ptr = reinterpret_cast<volatile uint32_t tt_l1_ptr*>(l1_uncached_addr(downstream_data_ptr));
-            auto* src_ptr = reinterpret_cast<const volatile uint32_t tt_l1_ptr*>(l1_uncached_addr(scratch_write_addr));
-            const uint32_t words = last_chunk_size >> 2;
-            for (uint32_t i = 0; i < words; ++i) {
-                dst_ptr[i] = src_ptr[i];
-            }
-        }
+        local_copy_words(downstream_data_ptr, scratch_write_addr, last_chunk_size, downstream_cb_end);
 #else
         cq_noc_async_write_with_state_any_len<true, true>(scratch_write_addr, noc_addr, last_chunk_size);
 #endif
@@ -962,18 +919,7 @@ static uint32_t write_pages_to_dispatcher(
 #if defined(FABRIC_RELAY)
     noc_async_write(scratch_write_addr, noc_addr, amt_to_write);
 #elif defined(ARCH_QUASAR)
-    ASSERT((amt_to_write & 0x3u) == 0);
-    ASSERT((scratch_write_addr & 0x3u) == 0);
-    ASSERT((downstream_data_ptr & 0x3u) == 0);
-    ASSERT(downstream_data_ptr + amt_to_write <= downstream_cb_end);
-    {
-        auto* dst_ptr = reinterpret_cast<volatile uint32_t tt_l1_ptr*>(l1_uncached_addr(downstream_data_ptr));
-        auto* src_ptr = reinterpret_cast<const volatile uint32_t tt_l1_ptr*>(l1_uncached_addr(scratch_write_addr));
-        const uint32_t words = amt_to_write >> 2;
-        for (uint32_t i = 0; i < words; ++i) {
-            dst_ptr[i] = src_ptr[i];
-        }
-    }
+    local_copy_words(downstream_data_ptr, scratch_write_addr, amt_to_write, downstream_cb_end);
 #else
     cq_noc_async_write_with_state_any_len<true, true>(scratch_write_addr, noc_addr, amt_to_write);
 #endif
@@ -1466,8 +1412,8 @@ uint32_t process_stall(uintptr_t cmd_ptr) {
     count++;
 
     WAYPOINT("PSW");
-    volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-        l1_uncached_addr(get_semaphore<fd_core_type>(my_downstream_sync_sem_id)));
+    volatile tt_l1_ptr uint32_t* sem_addr =
+        uncached_l1_ptr<uint32_t>(get_semaphore<fd_core_type>(my_downstream_sync_sem_id));
     uint32_t heartbeat = 0;
     do {
         invalidate_l1_cache();
@@ -1671,18 +1617,7 @@ static uint32_t process_exec_buf_relay_inline_noflush_cmd(
         noc_async_write(
             static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
 #elif defined(ARCH_QUASAR)
-        ASSERT((remaining & 0x3u) == 0);
-        ASSERT((data_ptr & 0x3u) == 0);
-        ASSERT((dispatch_data_ptr & 0x3u) == 0);
-        ASSERT(dispatch_data_ptr + remaining <= downstream_cb_end);
-        {
-            auto* dst_ptr = reinterpret_cast<volatile uint32_t tt_l1_ptr*>(l1_uncached_addr(dispatch_data_ptr));
-            auto* src_ptr = reinterpret_cast<const volatile uint32_t tt_l1_ptr*>(l1_uncached_addr(data_ptr));
-            const uint32_t words = remaining >> 2;
-            for (uint32_t i = 0; i < words; ++i) {
-                dst_ptr[i] = src_ptr[i];
-            }
-        }
+        local_copy_words(dispatch_data_ptr, data_ptr, remaining, downstream_cb_end);
 #else
         cq_noc_async_write_with_state_any_len<true, true>(
             static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
@@ -1704,18 +1639,7 @@ static uint32_t process_exec_buf_relay_inline_noflush_cmd(
 #if defined(FABRIC_RELAY)
     noc_async_write(static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), length);
 #elif defined(ARCH_QUASAR)
-    ASSERT((length & 0x3u) == 0);
-    ASSERT((data_ptr & 0x3u) == 0);
-    ASSERT((dispatch_data_ptr & 0x3u) == 0);
-    ASSERT(dispatch_data_ptr + length <= downstream_cb_end);
-    {
-        auto* dst_ptr = reinterpret_cast<volatile uint32_t tt_l1_ptr*>(l1_uncached_addr(dispatch_data_ptr));
-        auto* src_ptr = reinterpret_cast<const volatile uint32_t tt_l1_ptr*>(l1_uncached_addr(data_ptr));
-        const uint32_t words = length >> 2;
-        for (uint32_t i = 0; i < words; ++i) {
-            dst_ptr[i] = src_ptr[i];
-        }
-    }
+    local_copy_words(dispatch_data_ptr, data_ptr, length, downstream_cb_end);
 #else
     cq_noc_async_write_with_state_any_len<true, true>(
         static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), length);
