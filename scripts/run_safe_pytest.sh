@@ -20,13 +20,12 @@
 #               on hang with full triage + watcher log dump.
 #   --run-all   Run all tests instead of stopping on first failure (-x).
 #               Useful for eval scoring where you need full pass/fail counts.
-#   --precompile  Before the real run, transparently warm the JIT cache hardware-free
-#               and in parallel (no device, no env vars, no second command), so kernels
+#   --precompile  Before the real run, transparently warm the JIT cache on the real
+#               device and in parallel (no env vars, no second command), so kernels
 #               compile up-front in parallel instead of inline & serial. ALWAYS falls
 #               back to a normal cold run if anything goes wrong — it can only make a
-#               run slower, never broken or wrong. Prints a one-line diagnostic saying
-#               whether the warm cache was hit, and if not, exactly why. Hardware only.
-#               Tune parallelism with --precompile-workers N (default: nproc).
+#               run slower, never broken or wrong. Prints a one-line diagnostic. Hardware
+#               only. Tune parallelism with --precompile-workers N (default: nproc).
 #
 # Modes:
 #   default  - Dispatch timeout only. Lean, no debug overhead.
@@ -79,7 +78,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --precompile)
-            # Opt-in: transparently warm the JIT cache (hardware-free, parallel) before the
+            # Opt-in: transparently warm the JIT cache (real-device, parallel) before the
             # real run, so kernels compile up-front in parallel instead of inline & serial.
             # Everything is internal — no env vars, no second command. Always falls back to a
             # normal cold run if anything goes wrong (see precompile_warm). Hardware only.
@@ -109,141 +108,48 @@ shift
 EXTRA_ARGS=("$@")
 
 # Precompile uses WHATEVER cache the user already has (TT_METAL_CACHE if set, else tt-metal's
-# default) — both the warm-collect and the real run inherit the same value, so they share it and a
-# pre-warmed cache is transparently reused. We never override it. The cluster descriptor (HW-stable)
-# is cached in /tmp; the build_key is recomputed each run (it depends on source, not just HW).
-PRECOMPILE_DESC="/tmp/tt_precompile_cluster_desc.yaml"
-# Build fingerprint: the real device's build-determining values that a hardware-free (slow-dispatch)
-# build resolves differently (num_l1_banks, dispatch core type/axis, resolved 2-erisc). Captured fresh
-# each run (source-dependent, like build_key) and replayed in the mock via TT_METAL_JIT_BUILD_FINGERPRINT.
-PRECOMPILE_FINGERPRINT="/tmp/tt_precompile_build_fingerprint.txt"
+# default) — both the warm-collect and the real run inherit the same value (incl. ccache state), so
+# they share it and a pre-warmed cache is transparently reused. We never override it.
 PRECOMPILE_PLUGIN_DIR="$REPO_DIR"
 
 # ============================================================================
-# Precompile (opt-in --precompile): warm the JIT cache hardware-free & parallel,
-# then let the normal run below hit it. A definitive build_key PRE-FLIGHT decides
-# whether warming can help BEFORE doing any work; every failure path degrades to
-# a normal cold run — it can make a run slower, never broken or wrong.
+# Precompile (opt-in --precompile): warm the JIT cache on the REAL device, then
+# let the normal run below hit it. We open the same device the tests use, so the
+# build_key matches by construction — no mock / fingerprint / pre-flight needed.
+# Every failure path degrades to a normal cold run — slower at worst, never wrong.
 # ============================================================================
-_precompile_descriptor() {
-    # Cluster descriptor from UMD topology (HW-stable -> cache it per container). 0 ok / 1 fail.
-    [[ -f "$PRECOMPILE_DESC" ]] && return 0
-    timeout 120 python3 - "$PRECOMPILE_DESC" >"/tmp/precompile_desc_$$.log" 2>&1 <<'PY'
-import sys, tt_umd
-tt_umd.TopologyDiscovery.create_cluster_descriptor().serialize_to_file(sys.argv[1])
-PY
-}
-
-_precompile_realkey() {
-    # Brief REAL device open -> prints "RKEY <2erisc> <build_key>" AND writes the build fingerprint
-    # (num_l1_banks, dispatch core type/axis, resolved 2-erisc) to $PRECOMPILE_FINGERPRINT. build_key
-    # depends on source, so this is recomputed every run (not cached). MUST open the device the same
-    # way the tests do (open_mesh_device) — the build_key differs between single-device and mesh paths.
-    timeout 180 env PRECOMPILE_FP="$PRECOMPILE_FINGERPRINT" PYTHONPATH="$REPO_DIR" \
-        python3 - >"/tmp/precompile_real_$$.log" 2>&1 <<'PY'
-import os, ttnn
-md = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
-try:
-    f = 1 if ttnn.cluster.get_enable_2_erisc_mode() else 0
-    k = ttnn.cluster.get_build_key()
-    ttnn.cluster.capture_jit_build_fingerprint(os.environ["PRECOMPILE_FP"])
-finally:
-    ttnn.close_mesh_device(md)
-print(f"RKEY {f} {k}")
-PY
-    grep '^RKEY ' "/tmp/precompile_real_$$.log" 2>/dev/null | tail -1
-}
-
-_precompile_mockkey() {
-    # $1=2erisc. Hardware-free mock open replaying the captured build fingerprint -> "MKEY <key>".
-    timeout 120 env \
-        TT_METAL_FORCE_2_ERISC_MODE="$1" TT_METAL_JIT_BUILD_FINGERPRINT="$PRECOMPILE_FINGERPRINT" \
-        TT_METAL_SLOW_DISPATCH_MODE=1 \
-        TT_METAL_MOCK_CLUSTER_DESC_PATH="$PRECOMPILE_DESC" PYTHONPATH="$REPO_DIR" \
-        python3 - >"/tmp/precompile_mock_$$.log" 2>&1 <<'PY'
-import ttnn
-md = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
-try:
-    print("MKEY", ttnn.cluster.get_build_key())
-finally:
-    ttnn.close_mesh_device(md)
-PY
-    grep '^MKEY ' "/tmp/precompile_mock_$$.log" 2>/dev/null | tail -1
-}
 
 precompile_warm() {
     [[ "$SIM_MODE" == false ]] && touch "$DIRTY_FLAG"
-    echo "PRECOMPILE: ===== warming JIT cache (hardware-free) =====" >&2
-
-    # 1. cluster descriptor (HW-stable, cached per container)
-    if ! _precompile_descriptor; then
-        echo "PRECOMPILE: ✗ cluster-descriptor capture failed/timed out -> COLD (real run UNAFFECTED). See /tmp/precompile_desc_$$.log" >&2
-        return 0
-    fi
-
-    # 2. real device fingerprint: resolved 2-erisc + the build_key your run will use, and the build
-    #    fingerprint file (num_l1_banks, dispatch core type/axis) written to $PRECOMPILE_FINGERPRINT
-    local probe force2 realkey
-    probe="$(_precompile_realkey | sed -n 's/^RKEY //p' | tail -1)"
-    if [[ -z "$probe" ]]; then
-        echo "PRECOMPILE: ✗ couldn't read your device's build_key -> COLD. Either the device is unhealthy, or" >&2
-        echo "PRECOMPILE:   the build predates the get_build_key/capture_jit_build_fingerprint bindings (re-run ./build_metal.sh)." >&2
-        echo "PRECOMPILE:   See /tmp/precompile_real_$$.log" >&2
-        return 0
-    fi
-    read -r force2 realkey <<< "$probe"
-
-    # 3. mock build_key (hardware-free), replaying the captured build fingerprint
-    local mockkey
-    mockkey="$(_precompile_mockkey "$force2" | sed -n 's/^MKEY //p' | tail -1)"
-    if [[ -z "$mockkey" ]]; then
-        echo "PRECOMPILE: ✗ couldn't compute the hardware-free build_key -> COLD. See /tmp/precompile_mock_$$.log" >&2
-        return 0
-    fi
-
-    # 4. PRE-FLIGHT: will a warm pass actually be reused by your run?
-    if [[ "$mockkey" != "$realkey" ]]; then
-        echo "PRECOMPILE: ✗ build_key MISMATCH — your device uses ${realkey}, the hardware-free fingerprint produces ${mockkey}." >&2
-        echo "PRECOMPILE:   => a warm pass would NOT be reused by your run, so it is SKIPPED (no wasted work); running COLD." >&2
-        echo "PRECOMPILE:   Results stay CORRECT — you just don't get the speedup. Cause (mock fingerprint != real device):" >&2
-        echo "PRECOMPILE:     • stale descriptor from another machine/docker -> rm -f $PRECOMPILE_DESC ; re-run" >&2
-        echo "PRECOMPILE:     • a multi-device / Blackhole config the (1,1) hardware-free fingerprint didn't reproduce" >&2
-        echo "PRECOMPILE:       (harvesting / dispatch_core / 2-erisc / num_l1_banks / arch)." >&2
-        return 0
-    fi
-    echo "PRECOMPILE: ✓ fingerprint matches your device (build_key ${realkey}) — the warm cache WILL be reused." >&2
-
-    # 5. hardware-free meta-collect over the SAME selection -> warms the shared cache.
-    #    SINGLE-PROCESS by design: the heavy kernel COMPILE is parallelized by the plugin's in-process
-    #    C++ thread pool via ttnn.graph.up_front_compile(device, UP_FRONT_COLLECT_WORKERS=N, ...). xdist
-    #    (-n) would only parallelize the cheap COLLECT body-run across processes — and, measured, an
-    #    xdist multi-process prewarm LOSES ~half the cache (concurrent writers to the shared on-disk
-    #    cache + per-worker dedup): full conv2d warm hit 47.6% via xdist vs 99.8% single-process, same
-    #    fix/build. So we always run one process with N compile-threads. A non-zero collect is surfaced
-    #    (below), not swallowed by `|| true`.
-    local nflag=() collect_workers="$PRECOMPILE_WORKERS"
-    echo "PRECOMPILE: warming (single proc x ${PRECOMPILE_WORKERS} compile-threads) over: ${TEST_PATH} ${EXTRA_ARGS[*]}" >&2
+    echo "PRECOMPILE: ===== warmup (collect + precompile, real device) =====" >&2
+    # Real-device collect over the SAME selection -> warms the shared cache. We open the same device the
+    # real run uses, so the build_key matches by construction (no mock / fingerprint / pre-flight needed).
+    # SINGLE-PROCESS by design: the heavy kernel COMPILE is parallelized by the plugin's in-process C++
+    # thread pool via ttnn.graph.up_front_compile(device, UP_FRONT_COLLECT_WORKERS=N). xdist (-n) would
+    # only parallelize the cheap COLLECT body-run and, measured, LOSES ~half the cache (concurrent writers
+    # + per-worker dedup: full conv2d 47.6% xdist vs 99.8% single-process). FAST collect (default) keeps
+    # real torch tensors with cheap host stand-ins + a SHAPE-ONLY ttnn.from_torch (skips the weight-prep
+    # tilize/convert) — works on model tests where META collect collapses on weight prep. REAL_ALLOC gives
+    # real buffer addresses so address-baked kernels (pool/move/conv) warm too. ccache state is INHERITED
+    # (untouched) so it matches the real run below — a mismatch would silently miss the whole warm cache.
     local clog="/tmp/precompile_collect_$$.log" t0 t1 cstatus
+    echo "PRECOMPILE: warming (single proc x ${PRECOMPILE_WORKERS} compile-threads) over: ${TEST_PATH} ${EXTRA_ARGS[*]}" >&2
     t0=$(date +%s)
-    TT_METAL_FORCE_2_ERISC_MODE="$force2" TT_METAL_JIT_BUILD_FINGERPRINT="$PRECOMPILE_FINGERPRINT" \
-    TT_METAL_SLOW_DISPATCH_MODE=1 \
-    TT_METAL_MOCK_CLUSTER_DESC_PATH="$PRECOMPILE_DESC" \
-    UP_FRONT_COLLECT=1 UP_FRONT_META_COLLECT=1 UP_FRONT_COLLECT_WORKERS="$collect_workers" \
+    UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS="$PRECOMPILE_WORKERS" \
     LOGURU_LEVEL=ERROR PYTHONPATH="$PRECOMPILE_PLUGIN_DIR" \
-        pytest "${TEST_PATH}" "${EXTRA_ARGS[@]}" -p up_front_collect_plugin "${nflag[@]}" \
-        > "$clog" 2>&1
+        pytest "${TEST_PATH}" "${EXTRA_ARGS[@]}" -p up_front_collect_plugin > "$clog" 2>&1
     cstatus=$?
     t1=$(date +%s)
     # Don't pretend it warmed if the collect failed. A non-zero exit (pytest usage/collection error,
-    # plugin failure, etc.) means we warmed nothing -> say so plainly; the real run still runs COLD and
-    # CORRECT, just without the speedup. (pytest exit 5 = "no tests collected" counts as a failure here.)
+    # plugin failure, OOM, etc.) means we warmed nothing -> say so plainly; the real run still runs COLD
+    # and CORRECT, just without the speedup. (pytest exit 5 = "no tests collected" counts as a failure.)
     if [[ $cstatus -ne 0 ]]; then
-        echo "PRECOMPILE: ✗ warm collect FAILED (pytest exit $cstatus) after $((t1-t0))s -> warmed NOTHING; running COLD." >&2
+        echo "PRECOMPILE: ✗ warmup FAILED (pytest exit $cstatus) after $((t1-t0))s -> warmed NOTHING; running COLD." >&2
         grep -iE "error|unrecognized|no tests ran|no tests collected" "$clog" 2>/dev/null | head -3 | sed 's/^/PRECOMPILE:   /' >&2
         echo "PRECOMPILE:   (full collect log: $clog)" >&2
         return 0
     fi
-    echo "PRECOMPILE: ✓ warm pass complete in $((t1-t0))s (build_key ${realkey}) — the real run below reuses it. Log: $clog" >&2
+    echo "PRECOMPILE: ✓ warmup complete in $((t1-t0))s — the real run below reuses it. Log: $clog" >&2
 }
 
 # --- Total-run timer ---
