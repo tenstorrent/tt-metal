@@ -26,7 +26,7 @@
 
 inline void dprint_tensix_dest_reg(int tile_id = 0)
 {
-    tensix_sync();
+    ckernel::tensix_sync();
 
     DataFormat data_format = static_cast<DataFormat>(READ_HW_CFG_0_REG_FIELD(ALU_FORMAT_SPEC_REG2_Dstacc));
     if (READ_HW_CFG_0_REG_FIELD(ALU_ACC_CTRL_Fp32_enabled))
