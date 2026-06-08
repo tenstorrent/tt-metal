@@ -44,14 +44,14 @@ struct ProgramArtifacts {
     // Only meaningful under the MinimizeCacheHitCost strategy: that path runs
     // the factory exactly once (on cache miss), so the tensors are allocated
     // once.  The default MaximizeCacheReuse path re-runs the factory on every
-    // dispatch and would re-allocate them, so non-empty mesh_tensors are
+    // dispatch and would re-allocate them, so a non-empty op_owned_tensors is
     // rejected there (see dispatch_option2_spec_hash).
     //
     // GlobalSemaphores are intentionally NOT offered here: a semaphore is a
     // cross-program / cross-device coordination resource, which makes no sense
     // on a single Program.  Ops that need op-owned semaphores belong on the
     // multi-program workload concept (MeshWorkloadArtifacts).
-    std::vector<tt::tt_metal::MeshTensor> mesh_tensors;
+    std::vector<tt::tt_metal::MeshTensor> op_owned_tensors;
 
     tt::tt_metal::experimental::ProgramSpec spec;
     tt::tt_metal::experimental::ProgramRunArgs run_args;
@@ -60,35 +60,41 @@ struct ProgramArtifacts {
 /**
  * Declarative description of a mesh-scoped workload.
  *
- * A MeshWorkloadArtifacts pairs the per-coord ProgramArtifacts that make up
- * the workload with the workload-scoped resources the ProgramSpecs reference.
+ * A MeshWorkloadArtifacts pairs the per-coord programs that make up the
+ * workload with the workload-scoped resources the ProgramSpecs reference.
  * The framework realises it into a MeshWorkload on cache miss and keeps the
- * artifacts alive for the cached workload's lifetime so that:
+ * resources alive for the cached workload's lifetime so that:
  *   - GlobalSemaphores keep their device-side allocations valid, and
  *   - MeshTensors keep their device-side allocations valid.
  *     (Note: MeshTensor is an RAII mesh device memory object with unique
  *      ownership semantics.)
  *
  * Layout choices:
- *   - `programs` is range-keyed rather than coord-keyed so that ops with a
- *     single program replicated across the whole mesh emit just one entry.
+ *   - `program_precursors` is range-keyed rather than coord-keyed so that ops
+ *     with a single program replicated across the whole mesh emit just one
+ *     entry.
  *   - Resources are flat vectors (not named slots) so factories with N
- *     semaphores or N buffers can grow without changing the schema.
+ *     semaphores or N tensors can grow without changing the schema.
  */
 struct MeshWorkloadArtifacts {
-    // Workload-scoped resources, allocated by the factory during workload
-    // build and kept alive for the lifetime of the cached MeshWorkload.
-    std::vector<tt::tt_metal::GlobalSemaphore> semaphores;
-    std::vector<tt::tt_metal::MeshTensor> mesh_tensors;
+    // Workload-scoped op-owned resources, allocated by the factory during
+    // workload build and kept alive for the lifetime of the cached MeshWorkload.
+    // These live at the workload level, NOT on the per-coord programs: a
+    // workload's resources are shared across its programs, and the per-coord
+    // unit is deliberately resource-free (storing spec + run_args directly
+    // rather than a ProgramArtifacts, which would carry its own op_owned_tensors
+    // and shadow these).
+    std::vector<tt::tt_metal::GlobalSemaphore> global_semaphores;
+    std::vector<tt::tt_metal::MeshTensor> op_owned_tensors;
 
-    // Per-coord program descriptors.  Each entry covers a contiguous
-    // MeshCoordinateRange and is materialised into one Program added to the
-    // resulting MeshWorkload.
-    struct PerCoordProgramArtifacts {
+    // Per-coord programs.  Each entry covers a contiguous MeshCoordinateRange
+    // and is materialised into one Program added to the resulting MeshWorkload.
+    struct PerCoordProgram {
         tt::tt_metal::distributed::MeshCoordinateRange range;
-        ProgramArtifacts artifacts;
+        tt::tt_metal::experimental::ProgramSpec spec;
+        tt::tt_metal::experimental::ProgramRunArgs run_args;
     };
-    std::vector<PerCoordProgramArtifacts> program_precursors;
+    std::vector<PerCoordProgram> program_precursors;
 };
 
 }  // namespace ttnn::device_operation
