@@ -17,7 +17,7 @@
 - **Metal 2.0** is the new **host API** — what the program factory uses to declare kernels, buffers, semaphores, and bindings. It also introduces **DFB** (Dataflow Buffer) at the spec layer, replacing the legacy **CB** (CircularBuffer); the two are essentially synonyms on Gen1, but DFB's semantics diverge meaningfully on Gen2.
 - **Device 2.0** is a *separate, earlier* overhaul of the **kernel-side** data-movement APIs (safer, more object-oriented wrappers — `experimental::Noc`, kernel-side `CircularBuffer` wrappers, etc.). [Step 0.1 Check 2](#step-01--porting-prerequisites) gates on Device 2.0 migration as a bundled prereq to Metal 2.0 — but Device 2.0 is *not* part of Metal 2.0 itself.
 - **`ProgramDescriptor` API** is a TTNN-side framework that ops must migrate to before a Metal 2.0 port becomes possible. [Step 0.1 Check 1](#step-01--porting-prerequisites) gates on it.
-- **Common acronyms you'll see throughout:** `CB` = CircularBuffer; `DFB` = DataflowBuffer (see above); `RTA` = runtime args; `CTA` = compile-time args; `TA` = TensorAccessor; `LLK` = Low-Level Kernel (the framework-provided kernel-side primitives); `NoC` = Network-on-Chip (the on-die fabric).
+- **Common acronyms you'll see throughout:** `CB` = CircularBuffer; `DFB` = DataflowBuffer (see above); `RTA` = runtime args; `CTA` = compile-time args; `CRTA` = common runtime args (values broadcast to all nodes); `TA` = TensorAccessor; `LLK` = Low-Level Kernel (the framework-provided kernel-side primitives); `NoC` = Network-on-Chip (the on-die fabric).
 
 For the conceptual map of how Metal 2.0 abstractions fit together — `ProgramSpec`, `KernelSpec`, `TensorParameter` / `TensorBinding`, `DataflowBufferSpec`, the spec/run-params split — see [`metal2_migration_guide.md`](metal2_migration_guide.md).
 
@@ -156,11 +156,13 @@ If the op uses something *not listed* in Appendix A and you are uncertain of its
 
 Run this step regardless of Step 0.1 and Step 0.2 outcomes. **Findings here are informational only — none of these signals gates the port.** They quantify scope and surface ops that need extra attention so the human readers (porter, ops lead, runtime team) can plan accordingly. Each check produces a single concise report entry; if the signal doesn't fire, write "none."
 
-**Check A: Variadic kernels.**
+**Check A: Variadic kernels (RTA varargs only — informational).**
 
-Recognition: a kernel reads `num_runtime_varargs > 0` from its `KernelDescriptor`, OR pulls arguments in a counted loop (`for (int i = 0; i < N; ++i) { get_arg_val<uint32_t>(i); ... }`) where `N` is itself runtime-known. Typical in ops with a runtime-variable input count (concat, stack, multi-input reductions).
+Recognition: a kernel reads `num_runtime_varargs > 0` from its `KernelDescriptor`, OR pulls arguments in a counted loop (`for (int i = 0; i < N; ++i) { get_arg_val<uint32_t>(i); ... }`) where `N` is itself runtime-known. Typical in ops with a runtime-variable input count.
 
-Report: name the kernel and the recognition site (`file:line`). Note that the Metal 2.0 port will need to either preserve variadic positional-CTA semantics or refactor to front-loaded typed arguments with a CTA-known fixed cap — this is a design call the porter will surface to the user during the port itself.
+This check captures **RTA varargs**, which Metal 2.0 supports via the kernel-side vararg mechanism — informational only, does not gate the port. **CTA varargs** (kernels that loop over `get_compile_time_arg_val(i)` with a runtime-varying `i`, or ops whose `tensor_args_t` carries a variable-count container like `std::vector<Tensor>`) are a separate concern and **do** gate the port — they're caught by the [CTA varargs Appendix A entry](#variable-count-compile-time-arguments-cta-varargs--unsupported), not here.
+
+Report: name the kernel and the recognition site (`file:line`). Note that the Metal 2.0 port will choose between named RTAs (the recommended endpoint — one named RTA per legacy positional argument) and Metal 2.0's RTA vararg mechanism (only when the kernel genuinely loop-retrieves with a runtime-varying index, per the recipe's [kernel-side whitelist rule 4](port_op_to_metal2_recipe.md#kernel-side-whitelist)).
 
 **Check B: Custom `compute_program_hash`.**
 
@@ -399,9 +401,9 @@ For each non-GREEN row, follow up with an H3 detail section. Omit detail section
 
 Informational findings from Step 0.3. None of these gates the port — they shape planning.
 
-### Variadic kernels
+### Variadic kernels (RTA varargs only)
 
-<Affected kernels with file:line, or "none". For each, note that the port will choose between preserving positional-CTA semantics and refactoring to front-loaded typed args.>
+<Affected kernels with file:line, or "none". For each, note whether the port will adopt named RTAs (one per legacy positional argument — recommended) or retain Metal 2.0's RTA vararg mechanism (only when the kernel genuinely loop-retrieves with a runtime-varying index). Compile-time variadic kernels (CTA varargs) are gated by Appendix A's CTA-varargs entry, not reported here.>
 
 ### Custom `compute_program_hash`
 
