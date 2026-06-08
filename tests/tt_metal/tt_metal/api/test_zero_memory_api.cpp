@@ -51,12 +51,12 @@ using namespace tt::tt_metal;
 
 namespace {
 
-constexpr const char* SCRATCH_DFB = "scratch";
-constexpr const char* OUT_TENSOR = "out";
+const experimental::DFBSpecName SCRATCH_DFB{"scratch"};
+const experimental::TensorParamName OUT_TENSOR{"out"};
 
-constexpr const char* L1_PRODUCER = "l1_producer";
-constexpr const char* DRAM_CONSUMER = "dram_consumer";
-constexpr const char* L1_BATCHED_PRODUCER = "l1_batched_producer";
+const experimental::KernelSpecName L1_PRODUCER{"l1_producer"};
+const experimental::KernelSpecName DRAM_CONSUMER{"dram_consumer"};
+const experimental::KernelSpecName L1_BATCHED_PRODUCER{"l1_batched_producer"};
 
 constexpr uint32_t kStatusOk = 0xCAFEBABEu;
 
@@ -163,16 +163,16 @@ TEST_F(MeshDeviceSingleCardFixture, ZeroMemoryApi) {
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = L1_PRODUCER,
+            .kernel = L1_PRODUCER,
             .runtime_arg_values = {{.node = node, .args = {{"total_bytes", scratch_bytes}, {"flag_addr", flag_addr}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = DRAM_CONSUMER,
+            .kernel = DRAM_CONSUMER,
             .runtime_arg_values =
                 {{.node = node, .args = {{"page_start", 0u}, {"page_end", num_pages}, {"page_size", page_size_bytes}}}},
         },
     };
-    params.tensor_args = {{.tensor_parameter_name = OUT_TENSOR, .tensor = tensor}};
+    params.tensor_args = {{OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{tensor}}};
     experimental::SetProgramRunArgs(program, params);
 
     distributed::MeshWorkload workload;
@@ -273,16 +273,16 @@ TEST_F(MeshDeviceSingleCardFixture, ZeroMemoryApiBatchedL1) {
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = L1_BATCHED_PRODUCER,
+            .kernel = L1_BATCHED_PRODUCER,
             .runtime_arg_values = {{.node = node, .args = {{"total_bytes", scratch_bytes}, {"flag_addr", flag_addr}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = DRAM_CONSUMER,
+            .kernel = DRAM_CONSUMER,
             .runtime_arg_values =
                 {{.node = node, .args = {{"page_start", 0u}, {"page_end", num_pages}, {"page_size", page_size_bytes}}}},
         },
     };
-    params.tensor_args = {{.tensor_parameter_name = OUT_TENSOR, .tensor = tensor}};
+    params.tensor_args = {{OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{tensor}}};
     experimental::SetProgramRunArgs(program, params);
 
     distributed::MeshWorkload workload;

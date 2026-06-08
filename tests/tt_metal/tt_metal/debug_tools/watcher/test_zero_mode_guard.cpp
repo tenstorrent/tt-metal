@@ -41,9 +41,9 @@ using namespace tt::tt_metal;
 
 namespace {
 
-constexpr const char* SCRATCH_DFB = "scratch";
-constexpr const char* PRODUCER = "zero_mode_producer";
-constexpr const char* CONSUMER = "zero_mode_consumer";
+const experimental::DFBSpecName SCRATCH_DFB{"scratch"};
+const experimental::KernelSpecName PRODUCER{"zero_mode_producer"};
+const experimental::KernelSpecName CONSUMER{"zero_mode_consumer"};
 constexpr uint32_t kScratchBytes = 8 * 1024;
 constexpr uint32_t kZeroBytes = 2 * 1024;
 
@@ -105,7 +105,7 @@ void set_args(Program& program, uint32_t should_trip) {
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = PRODUCER,
+            .kernel = PRODUCER,
             .runtime_arg_values = {{.node = node, .args = {{"should_trip", should_trip}, {"zero_bytes", kZeroBytes}}}},
         },
     };
