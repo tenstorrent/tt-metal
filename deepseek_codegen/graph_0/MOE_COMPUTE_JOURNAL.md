@@ -31,10 +31,42 @@ should give e2e ~0.998 not 0.778 → the added tensor ≠ the dumped tensor → 
 `routed = ttnn.typecast(routed, BFLOAT16)` before return in run_routed_experts. moe_block device time
 ~2.91s (vs sparse 2.10s — optimize next).
 RESIDUAL: routed is still ~1.276× the sparse routed (combine_out scale; PCC-invariant so it also passes
-the PR's PCC-threshold combine check, and is only ~31% of the e2e signal so e2e still 0.9956). Likely
-bf4 weight-prep or a moe_compute matmul scale; worth a torch-ref check before the main.py 2-layer port
-(per-layer errors compound). Diagnostic env flags (opt-in, off by default): MOE_DUMP_ROUTED,
+the PR's PCC-threshold combine check, and is only ~31% of the e2e signal so e2e still 0.9956). A (2026-06-08)
+LOCALIZED via weight_norm_check.py: prepped-bf4 vs source weight norms = 1.008 (w0w1) / 1.004 (w2) ≈
+1.0, so the weights are NOT rescaled by prepare/quantize. With scores/dtype/layout/topology/weights all
+ruled out, the ~1.276× (≈4/π) is INTRINSIC to moe_compute's compute (matmul/activation) and is
+PCC-invariant (so the op's own PCC-threshold combine tests miss it) → a moe_compute op-level scale to
+ESCALATE to the op owners; not fixable in the integration without a magic-constant correction. e2e
+still 0.9956 PASS. Watch for compounding in the main.py 2-layer port; if it drops below floor, revisit
+(torch-ref to pin the exact factor + a justified correction, or an op fix). Diagnostic env flags
+(opt-in, off by default): MOE_DUMP_ROUTED,
 MOE_NO_TAIL_SCORE, MOE_ZERO_ROUTED, MOE_WEIGHT_DTYPE + compare_routed.py / reconcile.py.
+
+**B (2026-06-08): flipped moe_test default to the moe_compute path** (opt OUT to sparse with
+MOE_USE_SPARSE=1). Default run (no env): PCC 0.995591 PASS, moe_block = 1.137s wall-clock vs the sparse
+baseline 2.10s — already ~1.85x faster in dispatch-bound wall-clock (the earlier 2.91s was inflated by
+MOE_DEBUG_SYNC's per-op syncs). Next: trace for true DEVICE time + full-model e2e extrapolation.
+
+**C (2026-06-08): device-time measurement BLOCKED by tooling; precise number NOT yet obtained.**
+- metal-trace (execute_trace): added an MOE_TRACE=1 harness + DeviceGetter.trace_region_size +
+  keep-block-inputs gating, but capturing/replaying the FULL block HANGS — the router
+  (reduce_scatter/all_gather) + all_to_all_dispatch_metadata + the manual all_reduce(axis1) tail don't
+  trace-replay cleanly together (moe_compute ALONE is traceable per PR #45764). Device recovered each
+  time via timeout-kill.
+- Tracy device profiler (TT_METAL_DEVICE_PROFILER=1; build has ENABLE_TRACY=ON): forces a recompile of
+  EVERY kernel with PROFILE_KERNEL=1; the moe pipeline's instrumented-kernel compile did NOT finish in
+  3 runs (~90 min total; kernel cache grew to 2.4 GB) — pathologically slow for this pipeline.
+- After these experiments the device entered a FW-init-failure state on open ("Device 0: Timeout
+  waiting for physical cores 2-2,3-2; failed to initialize FW! Try resetting the board") → needs a
+  RESET (the non-`tt-smi -r` kind that worked on 2026-06-08).
+- Best speed signal: moe_block WALL-CLOCK 1.137s (moe) vs 2.10s (sparse) ≈ 1.85x — but DISPATCH-BOUND,
+  NOT device time, so NOT a valid basis for a device extrapolation (real decode uses trace, removing
+  dispatch).
+- TO GET THE DEVICE NUMBER (next session, after device reset): (a) let the profiler instrumented
+  compile run to completion (one-time, possibly >2h cold) then a fast profiled run → per-op device us;
+  OR (b) fix metal-trace CCL replay incrementally (trace moe_compute-only first, then add CCL ops) →
+  execute_trace steady-state device time. Then extrapolate × ~58 MoE layers (+ 3 dense + attention +
+  embed/lm-head) for the ~61-layer full-model decode.
 
 ## LATEST (2026-06-06) — PR #45764 combine-fix STAGED; device wedged pending reboot
 
