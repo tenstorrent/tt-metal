@@ -228,6 +228,10 @@ def test_kimi_kv_cache_table(
     """
     config, weights = request.getfixturevalue("random_weights")
 
+    assert config.num_attention_heads == 64, f"Not Kimi config: {config.num_attention_heads} heads"
+
+    logger.info(f"model={variant.name} num_heads={config.num_attention_heads} hidden={config.hidden_size}")
+
     fabric_config = device_params.get("fabric_config", ttnn.FabricConfig.FABRIC_1D)
     topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
 
