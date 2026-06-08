@@ -296,9 +296,10 @@ run_fabric_discovery_local() {
 # container shares the host's hostname. Emits the raw generate_rank_bindings.py
 # stdout (FABRIC_VISIBLE_DEVICES: lines).
 #
-# NOTE: this is only valid for single-host slice discovery. Multi-host slice
-# discovery (8x4x4z) still runs natively (resolve_quad_split_rank_table): its
-# cross-host mpirun cannot span per-rank containers.
+# NOTE: 8x4x4z uses its own helper (resolve_quad_split_rank_table) but follows
+# the same in-image pattern: its discovery is also a single-host (--np 1) mpirun
+# (the per-host slice map is replicated across the identical ring hosts), so it
+# likewise stays local and runs inside one container.
 run_slice_discovery_local() {
     local slice_config="$1"
     local hosts_csv="$2"
@@ -401,8 +402,11 @@ resolve_slice_z_visible_devices() {
 # (mesh_id, host_rank) -> mpi_rank order:
 #   Z_RANK_MESH_ID, Z_RANK_HOST_RANK, Z_RANK_PIN_HOSTS, Z_VISIBLE_DEVICES.
 #
-# Like resolve_slice_z_visible_devices, the slice discovery always runs natively
-# on the launch host (even in docker mode); only the test launch is containerized.
+# Like resolve_slice_z_visible_devices, the slice discovery runs natively when
+# --image is "none" and otherwise INSIDE the provided docker image. The 8x4x4z
+# discovery in generate_rank_bindings.py is a single-host (--np 1) mpirun whose
+# slice -> device map is replicated across the identical ring hosts, so it stays
+# local and runs entirely in one container (no native build required).
 resolve_quad_split_rank_table() {
     local hosts_csv="$1"
     local expected_ranks="$2"
@@ -416,14 +420,35 @@ resolve_quad_split_rank_table() {
 
     echo "Resolving quad split rank table via 2x4 slice discovery (--slice-config 8x4x4z, hosts ${hosts_csv})..."
     local rank_lines=()
-    mapfile -t rank_lines < <(
-        cd "$tt_home" && \
-        LD_LIBRARY_PATH="${tt_home}/build/lib:${LD_LIBRARY_PATH:-}" \
-        TT_METAL_HOME="$tt_home" \
-        python3 "$gen_rb" --slice-config 8x4x4z --hosts "$hosts_csv" --mpi-if "$MPI_IF" \
-            --print-rank-table --work-dir "$tt_home" \
-            | grep '^FABRIC_RANK:' | sed 's/^FABRIC_RANK://'
-    )
+    if [[ "$DOCKER_IMAGE" == "none" ]]; then
+        mapfile -t rank_lines < <(
+            cd "$tt_home" && \
+            LD_LIBRARY_PATH="${tt_home}/build/lib:${LD_LIBRARY_PATH:-}" \
+            TT_METAL_HOME="$tt_home" \
+            python3 "$gen_rb" --slice-config 8x4x4z --hosts "$hosts_csv" --mpi-if "$MPI_IF" \
+                --print-rank-table --work-dir "$tt_home" \
+                | grep '^FABRIC_RANK:' | sed 's/^FABRIC_RANK://'
+        )
+    else
+        # Run the discovery inside the image, but override the image's (possibly
+        # stale) generate_rank_bindings.py with the host's pulled copy so the
+        # single-local-rank discovery logic is used. Discovery is mpirun --np 1
+        # with no --host, so it stays local in this one container (no ssh).
+        mapfile -t rank_lines < <(
+            docker run --rm --net=host --privileged \
+                -v /tmp:/tmp \
+                -v /dev/hugepages-1G:/dev/hugepages-1G \
+                -v "$HOME:$HOME" \
+                -v "$gen_rb":/generate_rank_bindings.py:ro \
+                --user "$(id -u):$(id -g)" \
+                -v /etc/passwd:/etc/passwd:ro \
+                -v /etc/group:/etc/group:ro \
+                --entrypoint="" \
+                "$DOCKER_IMAGE" \
+                bash -c 'cd "$TT_METAL_HOME" && python3 /generate_rank_bindings.py --slice-config 8x4x4z --hosts '"$hosts_csv"' --mpi-if '"$MPI_IF"' --print-rank-table --work-dir "$TT_METAL_HOME"' \
+                | grep '^FABRIC_RANK:' | sed 's/^FABRIC_RANK://'
+        )
+    fi
 
     if [[ "${#rank_lines[@]}" -ne "$expected_ranks" ]]; then
         echo "Error: expected ${expected_ranks} FABRIC_RANK entries for 8x4x4z, got ${#rank_lines[@]}" >&2

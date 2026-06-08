@@ -1,8 +1,0 @@
-hosts {
-  hall: "bg"
-  aisle: "ale22"
-  rack: 13
-  shelf_u: 8
-  node_type: "BH_GALAXY_REV_C"
-  host: "bg-ale22-r13u08-22"
-}
