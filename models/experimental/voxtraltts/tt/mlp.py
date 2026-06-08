@@ -23,12 +23,16 @@ class VoxtralTTMLP:
         exact_silu: bool = False,
         compute_kernel_config=None,
         activation_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        ff1_3_program_config=None,
+        ff2_program_config=None,
     ) -> None:
         self.device = device
         self.output_dtype = output_dtype
         self.exact_silu = exact_silu
         self.compute_kernel_config = compute_kernel_config
         self.activation_memory_config = activation_memory_config
+        self.ff1_3_program_config = ff1_3_program_config
+        self.ff2_program_config = ff2_program_config
 
         def get_weight(key: str) -> torch.Tensor:
             if key in state_dict:
@@ -65,19 +69,34 @@ class VoxtralTTMLP:
 
     def __call__(self, x: ttnn.Tensor, *, activation_memory_config=None) -> ttnn.Tensor:
         act_mem = activation_memory_config or self.activation_memory_config
-        _lin_kw = {"dtype": self.output_dtype, "memory_config": act_mem}
+
+        # w1/w3: use width-sharded output when a 1D-mcast program config is provided so
+        # per-core work increases (fewer cores, better arithmetic intensity for M=1 tile).
+        has_ff1_3_prg = self.ff1_3_program_config is not None
+        ff1_3_out_mem = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if has_ff1_3_prg else act_mem
+
+        _ff1_3_kw = {"dtype": self.output_dtype, "memory_config": ff1_3_out_mem}
         if self.compute_kernel_config is not None:
-            _lin_kw["compute_kernel_config"] = self.compute_kernel_config
-        w1_out = ttnn.linear(x, self.w1, **_lin_kw)
-        w3_out = ttnn.linear(x, self.w3, **_lin_kw)
+            _ff1_3_kw["compute_kernel_config"] = self.compute_kernel_config
+        if has_ff1_3_prg:
+            _ff1_3_kw["program_config"] = self.ff1_3_program_config
+
+        _ff2_kw = {"dtype": self.output_dtype, "memory_config": act_mem}
+        if self.compute_kernel_config is not None:
+            _ff2_kw["compute_kernel_config"] = self.compute_kernel_config
+        if self.ff2_program_config is not None:
+            _ff2_kw["program_config"] = self.ff2_program_config
+
+        w1_out = ttnn.linear(x, self.w1, **_ff1_3_kw)
+        w3_out = ttnn.linear(x, self.w3, **_ff1_3_kw)
 
         if self.exact_silu:
-            w1_act = ttnn.silu(w1_out, memory_config=act_mem)
+            w1_act = ttnn.silu(w1_out, memory_config=ff1_3_out_mem)
             ttnn.deallocate(w1_out)
             w2_in = ttnn.mul(
                 w1_act,
                 w3_out,
-                memory_config=act_mem,
+                memory_config=ff1_3_out_mem,
                 dtype=self.output_dtype,
             )
             ttnn.deallocate(w1_act)
@@ -86,12 +105,18 @@ class VoxtralTTMLP:
                 w1_out,
                 w3_out,
                 input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-                memory_config=act_mem,
+                memory_config=ff1_3_out_mem,
                 dtype=self.output_dtype,
             )
             ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
 
-        out = ttnn.linear(w2_in, self.w2, **_lin_kw)
+        # De-shard to L1-interleaved before w2: mcast_in0 requires interleaved in0.
+        if has_ff1_3_prg:
+            w2_in_l1 = ttnn.to_memory_config(w2_in, act_mem)
+            ttnn.deallocate(w2_in)
+            w2_in = w2_in_l1
+
+        out = ttnn.linear(w2_in, self.w2, **_ff2_kw)
         ttnn.deallocate(w2_in)
         return out
