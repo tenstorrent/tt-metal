@@ -90,17 +90,14 @@ void kernel_main() {
             // Phase 1: unlock backing DRAM for worker writes this iteration. The
             // workers' transfer_done global semaphore starts at 0 (= locked) so they
             // block until the service core releases the backing tensor memory region;
-            // hence the very first thing this loop does each iteration is unlock it.
+            // the very first thing this loop does each iteration is unlock it.
             noc_semaphore_inc_multicast(worker_mcast_addr, /*incr=*/1, /*num_dests=*/num_workers);
             noc_async_atomic_barrier();
         }
 
-        // Phase 2: wait for all producers to ack. With worker-sync, each worker core
-        // is a producer that writes its backing slice and bumps write_ack. In the
-        // host-only test path (worker_sync_enabled == 0, num_workers == 1) there are
-        // no device producers, so the host itself plays the producer: it writes the
-        // backing tensor and calls notify_backing_ready() to bump write_ack once,
-        // which is what releases this gate so the sender streams the host's data.
+        // Phase 2: wait for all producers to ack before sending.
+        // In tests (host-only path), notify_backing_ready() is called so the host plays the producer,
+        // writing the backing tensor and bumping write_ack just as a worker would.
         while (true) {
             invalidate_l1_cache();
             const uint32_t cur = *write_ack_ptr;

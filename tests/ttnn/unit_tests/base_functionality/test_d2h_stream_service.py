@@ -116,31 +116,9 @@ def test_d2h_stream_service_replicated_sweep(
     _run_io_loop(service, iter_mapper, global_spec, shape_list, input_path, mesh_device)
 
 
-@pytest.mark.parametrize(
-    "N, scratch_cb_pages, fifo_pages",
-    [
-        (1, 1, 1),
-        (16, 4, 16),
-        (7, 4, 8),  # prime page count -> pages_per_chunk fallback
-    ],
-)
-def test_d2h_stream_service_sharded_sweep(mesh_device, N, scratch_cb_pages, fifo_pages):
-    """Mesh-sharded tensors over the D2H Tensor read path (mirrors the C++ Sharded_Sweep).
-
-    Requires a 2D mesh. Each device's shard reads back independently. The bytes path
-    is skipped here: under sharded placements it goes through the auto-derived
-    composer, which has known limitations; the Tensor path is composer-free per device.
-    """
-    mesh_shape = mesh_device.shape
-    if mesh_shape.dims() != 2:
-        pytest.skip(f"sharded sweep requires a 2D mesh; got {mesh_shape}")
+def _sharded_sweep_patterns(mesh_shape, N, per_row):
+    """Return (label, placements, shape_list) for each sharded placement pattern supported by mesh_shape."""
     num_rows, num_cols = mesh_shape[0], mesh_shape[1]
-    per_row = 640
-    # Per-device row width is `per_row` elements in every pattern (the sharded dim is
-    # split across the mesh axis), so socket/FIFO sizing is per-device.
-    per_row_bytes = per_row * _DTYPE_SIZE
-
-    # (label, placements, global shape) sized so the sharded dim divides the mesh axis.
     patterns = []
     if num_rows >= 2:
         patterns.append(
@@ -166,21 +144,57 @@ def test_d2h_stream_service_sharded_sweep(mesh_device, N, scratch_cb_pages, fifo
                 [1, 1, num_rows * N, num_cols * per_row],
             )
         )
-    assert patterns, f"no shardable mesh axis on {mesh_shape}"
+    return patterns
 
-    for label, placements, shape_list in patterns:
-        global_spec = _make_global_spec(ttnn.Shape(shape_list))
-        mapper_config = ttnn.MeshMapperConfig(placements=placements)
-        # Two mappers: service_mapper is consumed by the ctor; iter_mapper drives the loop.
-        iter_mapper = ttnn.create_mesh_mapper(mesh_device, mapper_config)
-        service_mapper = ttnn.create_mesh_mapper(mesh_device, mapper_config)
 
-        service = ttnn.D2HStreamService(
-            mesh_device=mesh_device,
-            global_spec=global_spec,
-            fifo_size_bytes=fifo_pages * per_row_bytes,
-            scratch_cb_size_bytes=scratch_cb_pages * per_row_bytes,
-            mapper=service_mapper,
-        )
+@pytest.mark.parametrize(
+    "pattern",
+    ["shard_rows_replicate_cols", "replicate_rows_shard_cols", "full_shard_2d"],
+)
+@pytest.mark.parametrize(
+    "N, scratch_cb_pages, fifo_pages",
+    [
+        (1, 1, 1),
+        (16, 4, 16),
+        (7, 4, 8),  # prime page count -> pages_per_chunk fallback
+    ],
+)
+def test_d2h_stream_service_sharded_sweep(mesh_device, pattern, N, scratch_cb_pages, fifo_pages):
+    """Mesh-sharded tensors over the D2H Tensor read path (mirrors the C++ Sharded_Sweep).
 
-        _run_io_loop(service, iter_mapper, global_spec, shape_list, "tensor", mesh_device)
+    Requires a 2D mesh. Each device's shard reads back independently. The bytes path
+    is skipped here: under sharded placements it goes through the auto-derived
+    composer, which has known limitations; the Tensor path is composer-free per device.
+    """
+    mesh_shape = mesh_device.shape
+    if mesh_shape.dims() != 2:
+        pytest.skip(f"sharded sweep requires a 2D mesh; got {mesh_shape}")
+    if mesh_shape[0] < 2 and mesh_shape[1] < 2:
+        pytest.skip(f"no shardable mesh axis on {mesh_shape}")
+
+    per_row = 640
+    # Per-device row width is `per_row` elements in every pattern (the sharded dim is
+    # split across the mesh axis), so socket/FIFO sizing is per-device.
+    per_row_bytes = per_row * _DTYPE_SIZE
+
+    patterns = _sharded_sweep_patterns(mesh_shape, N, per_row)
+    pattern_map = {label: (placements, shape_list) for label, placements, shape_list in patterns}
+    if pattern not in pattern_map:
+        pytest.skip(f"pattern {pattern!r} not supported on mesh shape {mesh_shape}")
+
+    placements, shape_list = pattern_map[pattern]
+    global_spec = _make_global_spec(ttnn.Shape(shape_list))
+    mapper_config = ttnn.MeshMapperConfig(placements=placements)
+    # Two mappers: service_mapper is consumed by the ctor; iter_mapper drives the loop.
+    iter_mapper = ttnn.create_mesh_mapper(mesh_device, mapper_config)
+    service_mapper = ttnn.create_mesh_mapper(mesh_device, mapper_config)
+
+    service = ttnn.D2HStreamService(
+        mesh_device=mesh_device,
+        global_spec=global_spec,
+        fifo_size_bytes=fifo_pages * per_row_bytes,
+        scratch_cb_size_bytes=scratch_cb_pages * per_row_bytes,
+        mapper=service_mapper,
+    )
+
+    _run_io_loop(service, iter_mapper, global_spec, shape_list, "tensor", mesh_device)

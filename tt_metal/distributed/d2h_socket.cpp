@@ -645,6 +645,11 @@ std::unique_ptr<D2HSocket> D2HSocket::connect_from_descriptor(const HDSocketDesc
     socket->read_ptr_ = socket->connector_state_->read_ptr;
     socket->bytes_sent_ = socket->bytes_sent_ptr_[0];
 
+    // A previous connector can advance bytes_acked/read_ptr in SHM and then exit between that update
+    // and notify_sender (PCIe write to the device's config buffer), leaving
+    // the device's bytes_acked behind. Without this, the device kernel may
+    // stall thinking the FIFO is full while the new connector waits for fresh
+    // data. For a fresh socket this writes 0 over 0 — a no-op.
     socket->notify_sender();
 
     return socket;

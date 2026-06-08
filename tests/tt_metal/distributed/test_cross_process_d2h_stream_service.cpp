@@ -279,6 +279,115 @@ void run_owner(
     g_cross_rank_world->barrier();
 }
 
+TensorSpec make_global_spec(const CrossProcessCase& cs) {
+    const auto tensor_layout = TensorLayout(
+        DataType::UINT32,
+        PageConfig(Layout::ROW_MAJOR),
+        MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
+    return TensorSpec(cs.global_shape, tensor_layout);
+}
+
+void verify_sharded_readback(
+    const CrossProcessCase& cs,
+    const ::tt::tt_metal::distributed::MeshShape& mesh_shape,
+    const std::vector<uint32_t>& src,
+    const Tensor& read_host) {
+    const TensorSpec global_spec = make_global_spec(cs);
+    auto verify_mapper =
+        ttnn::distributed::create_mesh_mapper(mesh_shape, MeshMapperConfig{.placements = cs.placements});
+    auto expected_host =
+        ttnn::distributed::distribute_tensor(Tensor::from_vector<uint32_t>(src, global_spec), *verify_mapper);
+    const auto& exp_dhb = expected_host.host_storage().host_tensor().buffer();
+    const auto& act_dhb = read_host.host_storage().host_tensor().buffer();
+    for (const auto& coord : expected_host.tensor_topology().mesh_coords()) {
+        auto exp_shard = exp_dhb.get_shard(coord);
+        auto act_shard = act_dhb.get_shard(coord);
+        ASSERT_TRUE(exp_shard.has_value()) << "expected shard missing at coord " << coord;
+        ASSERT_TRUE(act_shard.has_value()) << "actual shard missing at coord " << coord;
+        const auto* exp_ptr = reinterpret_cast<const uint32_t*>(exp_shard->view_bytes().data());
+        const auto* act_ptr = reinterpret_cast<const uint32_t*>(act_shard->view_bytes().data());
+        std::vector<uint32_t> expected(exp_ptr, exp_ptr + exp_shard->view_bytes().size() / sizeof(uint32_t));
+        std::vector<uint32_t> actual(act_ptr, act_ptr + act_shard->view_bytes().size() / sizeof(uint32_t));
+        EXPECT_EQ(actual, expected) << "shard mismatch at coord " << coord;
+    }
+}
+
+// Rank-0 (owner) body for sharded placements. Uses the Tensor read path for the
+// initial discard: the bytes path goes through the auto-derived composer, which
+// is unavailable on the connector and malformed for partial-shard mappers.
+void run_owner_sharded(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    const CrossProcessCase& cs,
+    const std::string& service_id) {
+    const TensorSpec global_spec = make_global_spec(cs);
+
+    tt::tt_metal::D2HStreamService::Config cfg{
+        .global_spec = global_spec,
+        .mapper = ttnn::distributed::create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = cs.placements}),
+        .fifo_size_bytes = cs.fifo_size_bytes,
+        .scratch_cb_size_bytes = cs.scratch_cb_size_bytes,
+    };
+
+    tt::tt_metal::D2HStreamService service(mesh_device, std::move(cfg));
+    service.export_descriptor(service_id);
+
+    g_cross_rank_world->barrier();
+    auto drain_mapper =
+        ttnn::distributed::create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = cs.placements});
+    auto drain_host = ttnn::distributed::distribute_tensor(
+        Tensor::from_vector<uint32_t>(std::vector<uint32_t>(cs.global_shape.volume(), 0), global_spec), *drain_mapper);
+    service.read_from_tensor(drain_host);
+    service.barrier();
+    g_cross_rank_world->barrier();
+
+    auto mapper = ttnn::distributed::create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = cs.placements});
+    const size_t volume = cs.global_shape.volume();
+
+    for (uint32_t iter = 0; iter < cs.num_iterations; ++iter) {
+        auto data = make_iter_data(iter, volume);
+        auto host_src = ttnn::distributed::distribute_tensor(Tensor::from_vector<uint32_t>(data, global_spec), *mapper);
+        auto& backing = const_cast<Tensor&>(service.get_backing_tensor());
+        copy_to_device(host_src, backing);
+        Finish(mesh_device->mesh_command_queue());
+        service.notify_backing_ready();
+        g_cross_rank_world->barrier();
+        g_cross_rank_world->barrier();
+    }
+    g_cross_rank_world->barrier();
+}
+
+// Rank-1 (connector) body for sharded placements. Reads into a distributed host
+// tensor and verifies each local shard independently.
+void run_connector_sharded(
+    const CrossProcessCase& cs,
+    const ::tt::tt_metal::distributed::MeshShape& mesh_shape,
+    const std::string& service_id) {
+    auto service = tt::tt_metal::D2HStreamService::connect(service_id, /*timeout_ms=*/30000);
+    const TensorSpec global_spec = make_global_spec(cs);
+    const size_t volume = cs.global_shape.volume();
+
+    g_cross_rank_world->barrier();
+    auto drain_mapper =
+        ttnn::distributed::create_mesh_mapper(mesh_shape, MeshMapperConfig{.placements = cs.placements});
+    auto drain_host = ttnn::distributed::distribute_tensor(
+        Tensor::from_vector<uint32_t>(std::vector<uint32_t>(volume, 0), global_spec), *drain_mapper);
+    service->read_from_tensor(drain_host);
+    service->barrier();
+    g_cross_rank_world->barrier();
+
+    auto read_mapper = ttnn::distributed::create_mesh_mapper(mesh_shape, MeshMapperConfig{.placements = cs.placements});
+    for (uint32_t iter = 0; iter < cs.num_iterations; ++iter) {
+        g_cross_rank_world->barrier();
+        auto read_host = ttnn::distributed::distribute_tensor(
+            Tensor::from_vector<uint32_t>(std::vector<uint32_t>(volume, 0), global_spec), *read_mapper);
+        service->read_from_tensor(read_host);
+        service->barrier();
+        verify_sharded_readback(cs, mesh_shape, make_iter_data(iter, volume), read_host);
+        g_cross_rank_world->barrier();
+    }
+    g_cross_rank_world->barrier();
+}
+
 // Rank-1 (connector) body. Holds no MeshDevice — only PCIe reads through
 // each connected D2HSocket.
 void run_connector(const CrossProcessCase& cs, const std::string& service_id) {
@@ -494,15 +603,8 @@ TEST_F(CrossProcessD2HStreamServiceFixture, ReplicatedMetadata) {
 }
 
 // Cross-process sweep at fully-replicated placements: sizes × chunking. The
-// bytes read path on the connector goes through `read_from_tensor(span)`,
-// which has two pre-existing limitations under sharded placements: (a) the
-// auto-derived composer config is malformed for partial-shard mappers on
-// multi-dim meshes, and (b) the post-compose `to_vector<uint8_t>` rejects
-// non-UINT8 tensors. Both are out of scope for this test; the single-process
-// `Sharded_Sweep` covers sharded placements via the Tensor read path. Here we
-// instead broaden the replicated sweep with multiple size tiers and chunking
-// budgets, exercising the descriptor / connector path under varied per-device
-// allocations on whatever mesh shape the cluster reports.
+// bytes read path on the connector goes through `read_from_tensor(span)`, which
+// is exercised here because per-shard size == global size under replication.
 TEST_F(CrossProcessD2HStreamServiceFixture, Sweep) {
     constexpr uint32_t kNumIterations = 10;  // per case
 
@@ -559,6 +661,85 @@ TEST_F(CrossProcessD2HStreamServiceFixture, Sweep) {
                 run_connector(cs, service_id);
             }
         }
+    }
+}
+
+// Cross-process sharded sweep: mirrors the in-process Sharded_Sweep and the
+// Python sharded sweep. Uses the Tensor read path on both ranks because the
+// bytes path goes through the auto-derived composer, which is unavailable on
+// the connector and malformed for partial-shard mappers on multi-dim meshes.
+TEST_F(CrossProcessD2HStreamServiceFixture, Sharded_Sweep) {
+    if (mesh_shape_.dims() != 2) {
+        GTEST_SKIP() << "Sharded_Sweep requires a 2D mesh; got " << mesh_shape_;
+    }
+    if (mesh_shape_[0] < 2 && mesh_shape_[1] < 2) {
+        GTEST_SKIP() << "no shardable mesh axis on " << mesh_shape_;
+    }
+
+    constexpr uint32_t kNumIterations = 10;
+    const uint32_t num_rows = mesh_shape_[0];
+    const uint32_t num_cols = mesh_shape_[1];
+    const uint32_t per_row = 640;
+    const uint32_t per_row_bytes = per_row * sizeof(uint32_t);
+
+    struct Row {
+        uint32_t N;
+        uint32_t scratch_cb_pages;
+        uint32_t fifo_pages;
+        const char* label;
+    };
+    const Row rows[] = {
+        {1, 1, 1, "N1_cb1_fifo1"},
+        {16, 4, 16, "N16_cb4_fifo16"},
+        {7, 4, 8, "N7_cb4_fifo8_prime_pages"},
+    };
+
+    int case_counter = 0;
+    const auto run_pattern = [&](const char* label,
+                                 const ttsl::SmallVector<MeshMapperConfig::Placement>& placements,
+                                 auto make_global_shape) {
+        for (const auto& row : rows) {
+            SCOPED_TRACE(::testing::Message() << "rank=" << rank_ << " pattern=" << label << " row=" << row.label);
+
+            const ttnn::Shape global_shape = make_global_shape(row.N);
+
+            const std::string service_id = "xproc_d2h_sharded_" + std::to_string(case_counter++);
+            std::cout << "[xproc-d2h-sharded] rank=" << rank_ << " case=" << service_id << " pattern=" << label
+                      << " row=" << row.label << " shape=" << global_shape << std::endl;
+
+            CrossProcessCase cs{
+                .global_shape = global_shape,
+                .placements = placements,
+                .scratch_cb_size_bytes = row.scratch_cb_pages * per_row_bytes,
+                .fifo_size_bytes = row.fifo_pages * per_row_bytes,
+                .metadata_size_bytes = 0,
+                .num_iterations = kNumIterations,
+            };
+
+            if (rank_ == 0) {
+                run_owner_sharded(mesh_device_, cs, service_id);
+            } else {
+                run_connector_sharded(cs, mesh_shape_, service_id);
+            }
+        }
+    };
+
+    if (num_rows >= 2) {
+        run_pattern(
+            "ShardRowsReplicateCols", {MeshMapperConfig::Shard{3}, MeshMapperConfig::Replicate{}}, [&](uint32_t N) {
+                return ttnn::Shape({1, 1, N, num_rows * per_row});
+            });
+    }
+    if (num_cols >= 2) {
+        run_pattern(
+            "ReplicateRowsShardCols", {MeshMapperConfig::Replicate{}, MeshMapperConfig::Shard{3}}, [&](uint32_t N) {
+                return ttnn::Shape({1, 1, N, num_cols * per_row});
+            });
+    }
+    if (num_rows >= 2 && num_cols >= 2) {
+        run_pattern("FullShard2D", {MeshMapperConfig::Shard{2}, MeshMapperConfig::Shard{3}}, [&](uint32_t N) {
+            return ttnn::Shape({1, 1, num_rows * N, num_cols * per_row});
+        });
     }
 }
 
