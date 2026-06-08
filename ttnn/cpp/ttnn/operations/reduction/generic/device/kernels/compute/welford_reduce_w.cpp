@@ -144,18 +144,7 @@ void kernel_main() {
                 cb_in_obj.wait_front(onetile);
                 tile_regs_acquire();
                 reconfig_data_format_srca(cb_in);
-                if constexpr (welford_fp32_input) {
-                    // Full init_bcast each iter: programs UNPACK hw_configure for cb_in
-                    // (Default mode), resetting any UnpackToDest mode left by either the previous
-                    // wt's cb_scaled transpose or the previous NCHt's cb_var final transpose.
-                    // On FP32 input, the _init_short variants are not sufficient because they
-                    // skip llk_unpack_hw_configure, which is the only call that reprograms the
-                    // unpack-to-DEST mode bit; reconfig_data_format_srca reprograms only
-                    // SrcA's src/dst data format and tile geometry, not the unpack-to-DEST bit.
-                    init_bcast<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR>(cb_in, cb_scalar, cb_scaled);
-                } else {
-                    mul_tiles_bcast_scalar_init_short(cb_in, cb_scalar);
-                }
+                mul_tiles_bcast_scalar_init_short(cb_in, cb_scalar);
                 mul_tiles_bcast_scalar(cb_in, cb_scalar, 0, 0, input_dst);
                 tile_regs_commit();
                 cb_in_obj.pop_front(1);
@@ -170,15 +159,7 @@ void kernel_main() {
                 cb_scaled_obj.wait_front(onetile);
                 tile_regs_acquire();
                 reconfig_data_format_srca(cb_scaled);
-                if constexpr (welford_fp32_input) {
-                    // Full transpose_wh_init each iter: programs UNPACK hw_configure for
-                    // cb_scaled (UnpackToDestFp32 mode), preserving the FPU mul output's
-                    // mantissa bits past TF32. The next wt iter's init_bcast resets UNPACK
-                    // back to cb_in's Default mode before the FPU mul reads SrcA again.
-                    transpose_wh_init(cb_scaled, cb_var);
-                } else {
-                    transpose_wh_init_short(cb_scaled);
-                }
+                transpose_wh_init_short(cb_scaled);
                 transpose_wh_tile(cb_scaled, 0, input_dst);
                 cb_scaled_obj.pop_front(onetile);
             } else {
@@ -234,13 +215,7 @@ void kernel_main() {
 
         cb_var_obj.wait_front(onetile);
         reconfig_data_format_srca(cb_var);
-        if constexpr (welford_fp32_input) {
-            // cb_var is UnpackToDestFp32 for FP32 input; needs full hw_configure to activate
-            // the unpack-to-DEST mode.
-            transpose_wh_init(cb_var, cb_out);
-        } else {
-            transpose_wh_init_short(cb_var);
-        }
+        transpose_wh_init_short(cb_var);
         tile_regs_acquire();
         transpose_wh_tile(cb_var, 0, var_dst);
         if constexpr (is_std) {

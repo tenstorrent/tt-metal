@@ -1341,7 +1341,7 @@ volatile tt_l1_ptr std::atomic<uint32_t>& get_lock_atomic() {
     return get_device_print_buffer()->aux.lock;
 #else
     // Atomics require the cached L1 alias.
-    return GET_MAILBOX_ADDRESS_DEV_CACHED(dprint_buf.shared_data)->aux.lock;
+    return GET_MAILBOX_ADDRESS_DEV_CACHED(dprint_buf)->aux.lock;
 #endif
 }
 #endif

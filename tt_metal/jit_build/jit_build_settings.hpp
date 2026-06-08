@@ -88,11 +88,11 @@ public:
     // section of the dispatch buffer.
     // Returned by const-ref rather than via a process_* callback because the concrete storage
     // is already an ordered vector — the callback indirection would just force a copy.
-    virtual const std::vector<std::string>& get_named_runtime_args() const {
+    virtual const std::vector<std::string>& get_runtime_arg_names() const {
         static const std::vector<std::string> k_empty;
         return k_empty;
     }
-    virtual const std::vector<std::string>& get_named_common_runtime_args() const {
+    virtual const std::vector<std::string>& get_common_runtime_arg_names() const {
         static const std::vector<std::string> k_empty;
         return k_empty;
     }

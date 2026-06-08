@@ -126,7 +126,10 @@ void RunTest(tt::tt_metal::distributed::MeshDevice* mesh_device) {
 
 namespace tt::tt_metal {
 
-TEST_F(UnitMeshCQSingleCardSharedFixture, TestSimpleL1Read) {
+// DISABLED: timing assertion flaky on N300-viommu runners — tolerance relaxed to 0.5% in
+// PR #45624 (2026-05-29) but still failing (0.545%). Pending codeowner fix; see
+// https://github.com/tenstorrent/tt-metal/actions/runs/26685226265/job/78652589121
+TEST_F(UnitMeshCQSingleCardSharedFixture, DISABLED_TestSimpleL1Read) {
     for (auto& mesh_device : devices_) {
         RunTest(mesh_device.get());
     }

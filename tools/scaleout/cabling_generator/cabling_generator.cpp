@@ -853,16 +853,13 @@ CablingGenerator::CablingGenerator(
         initialize_cluster(cluster_descriptor, deployment_descriptor);
         populate_deployment_hosts(deployment_descriptor, node_templates_, deployment_hosts_);
         // Ensure deployment_hosts_ is ordered by DFS-assigned host_id, not deployment file order.
+        // (rebuild_deployment_hosts_in_dfs_order keeps the current order when node names don't
+        // match hostnames, e.g. test fixtures.)
         std::unordered_map<std::string, Host> all_hosts;
         for (const auto& host : deployment_hosts_) {
             all_hosts[host.hostname] = host;
         }
-        const auto saved_hosts = deployment_hosts_;
         rebuild_deployment_hosts_in_dfs_order(all_hosts);
-        // Fall back to original order when node names don't match hostnames (e.g. test fixtures).
-        if (deployment_hosts_.size() != saved_hosts.size()) {
-            deployment_hosts_ = saved_hosts;
-        }
     }
 }
 
@@ -970,13 +967,18 @@ static void merge_resolved_graph_instances(
             const Node& source_node = it->second;
 
             if (target.nodes.contains(name)) {
-                // Same hostname -> same host; host_id was collapsed in merge() so they match
+                // Same name at the same level -> same host. merge() calls remap_level() before
+                // this function, which synchronises source host_ids to match target host_ids for
+                // shared nodes. A mismatch here means remap_level() has a bug: throw so the
+                // caller gets a clear diagnostic rather than silently producing a merged graph
+                // with internal_connections referencing a host_id that has no corresponding node.
                 if (target.nodes[name].host_id != source_node.host_id) {
                     throw std::runtime_error(fmt::format(
-                        "Node '{}' has conflicting host_id: {} vs {} from {} (same hostname must map to same host)",
+                        "Node '{}' has conflicting host_id: {} (source) vs {} (target) from {} - "
+                        "remap_level() should have equalised these before merge",
                         name,
-                        target.nodes[name].host_id.get(),
                         source_node.host_id.get(),
+                        target.nodes[name].host_id.get(),
                         get_source_description(new_source_file)));
                 }
                 // Validate inter_board_connections match or are torus-compatible
@@ -1126,27 +1128,20 @@ void CablingGenerator::merge(
     validate_and_merge_node_templates(node_templates_, other.node_templates_, existing_sources, new_file_path);
 
     // Assign temp host_ids to nodes in other, then remap their internal_connections to match.
-    // Shared nodes (same hostname in both) collapse to the existing host_id; new nodes get a fresh one.
+    // Shared nodes (same name at the same level) collapse to the existing host_id; new nodes get a fresh one.
+    // We walk target and source trees in parallel (level-by-level) to avoid name collisions across subgraphs
+    // (e.g., superpod1/node1 vs superpod2/node1 are different nodes but share the name "node1").
     std::unordered_map<HostId, HostId> temp_remap;
     {
-        std::unordered_map<std::string, HostId> target_name_to_id;
-        auto collect_target_ids = [&](auto& self, const ResolvedGraphInstance& graph) -> void {
-            for (const auto& [name, node] : graph.nodes) {
-                target_name_to_id[name] = node.host_id;
-            }
-            for (const auto& [name, subgraph] : graph.subgraphs) {
-                self(self, *subgraph);
-            }
-        };
-        collect_target_ids(collect_target_ids, *root_instance_);
-
         HostId next_id = HostId(host_id_to_node_.size());
-        auto collect_temp_ids = [&](auto& self, ResolvedGraphInstance& graph) -> void {
-            for (auto& [name, node] : graph.nodes) {
+        auto remap_level = [&](auto& self, const ResolvedGraphInstance& target_graph,
+                               ResolvedGraphInstance& source_graph) -> void {
+            // At this level, build name->host_id map only for THIS level's target nodes
+            for (auto& [name, node] : source_graph.nodes) {
                 HostId mapped;
-                auto it = target_name_to_id.find(name);
-                if (it != target_name_to_id.end()) {
-                    mapped = it->second;  // shared node: collapse to existing host_id
+                auto it = target_graph.nodes.find(name);
+                if (it != target_graph.nodes.end()) {
+                    mapped = it->second.host_id;  // shared node: collapse to existing host_id
                 } else {
                     mapped = next_id;
                     next_id = HostId(*next_id + 1);
@@ -1154,11 +1149,28 @@ void CablingGenerator::merge(
                 temp_remap[node.host_id] = mapped;
                 node.host_id = mapped;
             }
-            for (auto& [name, subgraph] : graph.subgraphs) {
-                self(self, *subgraph);
+            // Recurse into matching subgraphs
+            for (auto& [name, source_subgraph] : source_graph.subgraphs) {
+                auto it = target_graph.subgraphs.find(name);
+                if (it != target_graph.subgraphs.end()) {
+                    self(self, *it->second, *source_subgraph);
+                } else {
+                    // Source subgraph has no corresponding target subgraph - assign fresh IDs
+                    auto assign_fresh = [&](auto& self2, ResolvedGraphInstance& graph) -> void {
+                        for (auto& [n, node] : graph.nodes) {
+                            temp_remap[node.host_id] = next_id;
+                            node.host_id = next_id;
+                            next_id = HostId(*next_id + 1);
+                        }
+                        for (auto& [n, sub] : graph.subgraphs) {
+                            self2(self2, *sub);
+                        }
+                    };
+                    assign_fresh(assign_fresh, *source_subgraph);
+                }
             }
         };
-        collect_temp_ids(collect_temp_ids, *other.root_instance_);
+        remap_level(remap_level, *root_instance_, *other.root_instance_);
     }
     if (!temp_remap.empty()) {
         auto remap_other_connections = [&](auto& self, ResolvedGraphInstance& graph) -> void {
@@ -1980,6 +1992,11 @@ void CablingGenerator::rebuild_deployment_hosts_in_dfs_order(
     if (!root_instance_) {
         return;
     }
+    // DFS matching keys hosts by node name, which only lines up when node names equal hostnames
+    // (real deployments). Save the current list so we can fall back when the names don't match
+    // (e.g. test fixtures where nodes are "node1" but hosts are "host0"), otherwise hosts would be
+    // silently dropped and deployment_hosts_ left incomplete.
+    std::vector<Host> previous = std::move(deployment_hosts_);
     deployment_hosts_.clear();
     auto collect = [&](auto& self, const ResolvedGraphInstance& graph) -> void {
         for (const auto& [name, is_node] : graph.children_order) {
@@ -1996,6 +2013,10 @@ void CablingGenerator::rebuild_deployment_hosts_in_dfs_order(
         }
     };
     collect(collect, *root_instance_);
+    // If DFS name-matching didn't place every host, keep the prior host_id-ordered list.
+    if (deployment_hosts_.size() != all_hosts.size()) {
+        deployment_hosts_ = std::move(previous);
+    }
 }
 
 void CablingGenerator::get_all_connections_of_type(

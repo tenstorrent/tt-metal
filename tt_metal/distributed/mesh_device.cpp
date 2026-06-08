@@ -48,6 +48,7 @@
 #include <experimental/fabric/fabric_types.hpp>
 #include "distributed/fd_mesh_command_queue.hpp"
 #include "distributed/realtime_profiler_manager.hpp"
+#include "impl/buffers/dram_core_prefetcher_manager.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
 #include "tracy/Tracy.hpp"
@@ -55,6 +56,7 @@
 #include <env_lib.hpp>
 
 #include "allocator/l1_banking_allocator.hpp"
+#include "impl/device/mock_allocator.hpp"
 #include "debug/inspector/inspector.hpp"
 #include "sub_device/sub_device_manager.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
@@ -924,9 +926,24 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         realtime_profiler_.reset();
     }
 
-    // DRISC L1 arena is torn down here so any GCB-owned allocation handles have
-    // already been released (GCBs are user-owned and the user's invariant is to
-    // destroy them before close).
+    // Drain any in-flight DRAM-core prefetcher kernel and release its state before the
+    // rest of the mesh tears down. If the caller forgot to call StopDramCorePrefetcher
+    // we still wait for the kernel's natural num_layers exit so the GCB / receivers it
+    // touches remain valid until it returns.
+    if (dram_core_prefetcher_) {
+        if (dram_core_prefetcher_->is_active()) {
+            log_warning(
+                tt::LogMetal,
+                "DRAM-core prefetcher was active at MeshDevice close; auto-stopping. Call "
+                "tt::tt_metal::experimental::StopDramCorePrefetcher before close to avoid this.");
+            dram_core_prefetcher_->stop();
+        }
+        dram_core_prefetcher_.reset();
+    }
+
+    // DRISC L1 arena is torn down after the prefetcher manager so any GCB-owned
+    // allocation handles have already been released (GCBs are user-owned and the
+    // user's invariant is to destroy them before close).
     drisc_l1_arena_.reset();
 
     if (is_initialized()) {
@@ -936,6 +953,15 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         is_internal_state_initialized = false;
         if (distributed_context_) {
             distributed_context_.reset();
+        }
+
+        // Release cached pinned-memory entries while MetalContext is still alive
+        // (needs the cluster to map chip -> MMIO IDs). Must run before
+        // destroy_instance below, and only on the first close_impl call.
+        // Skip for mock devices — they never create pinned DMA regions.
+        if (MetalContext::instance(this->get_context_id()).get_cluster().get_target_device_type() !=
+            tt::TargetDevice::Mock) {
+            experimental::PinnedMemoryCache::instance().release_for_device(*pimpl_wrapper);
         }
     }
 
@@ -1359,9 +1385,13 @@ bool MeshDeviceImpl::initialize_impl(
     cq_shared_state->sub_device_cq_owner.resize(1);
 
     const auto& allocator = reference_device()->allocator_impl();
+    const auto& alloc_config = allocator->get_config();
+    auto is_mock = MetalContext::instance(context_id_).get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+    auto mesh_allocator =
+        is_mock ? experimental::make_mock_allocator(alloc_config) : std::make_unique<L1BankingAllocator>(alloc_config);
     // SubDeviceManagerTracker needs a MeshDevice pointer.
-    sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
-        pimpl_wrapper, std::make_unique<L1BankingAllocator>(allocator->get_config()), sub_devices);
+    sub_device_manager_tracker_ =
+        std::make_unique<SubDeviceManagerTracker>(pimpl_wrapper, std::move(mesh_allocator), sub_devices);
     // Issue #19729: Store the maximum number of active ethernet cores across opened physical devices in the Mesh
     // as the number of virtual ethernet cores seen by the MeshDevice
     num_virtual_eth_cores_ =
@@ -1420,6 +1450,14 @@ D2HSocket* MeshDeviceImpl::get_realtime_profiler_socket() const {
         "initializing the MeshDevice");
     return *drisc_l1_arena_;
 }
+
+DramCorePrefetcherManager& MeshDeviceImpl::dram_core_prefetcher(MeshDevice* mesh_device) {
+    if (!dram_core_prefetcher_) {
+        dram_core_prefetcher_ = std::make_unique<DramCorePrefetcherManager>(mesh_device);
+    }
+    return *dram_core_prefetcher_;
+}
+
 
 CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(uint32_t bank_id) const {
     const auto& soc_desc = MetalContext::instance(context_id_).get_cluster().get_soc_desc(reference_device()->id());
@@ -1583,7 +1621,6 @@ MeshDevice::MeshDevice(MetalEnv& /*metal_env*/) {}
 
 MeshDevice::~MeshDevice() {
     Inspector::mesh_device_destroyed(this->pimpl_.get());
-    experimental::PinnedMemoryCache::instance().release_for_device(*this);
     pimpl_->close_impl(this);
 }
 
