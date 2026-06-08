@@ -283,6 +283,14 @@ jobs:
           l2_nightly_skus_str=$(IFS=,; echo "${l2_nightly_skus[*]}")
           echo "l2-nightly-skus=$l2_nightly_skus_str" >> $GITHUB_OUTPUT
 
+  resolve-docker-pull-refs:
+    needs: [check-harbor, build-artifact]
+    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      basic-ttnn-runtime-docker-image: ${{ needs.build-artifact.outputs.basic-ttnn-runtime-docker-image }}
+
   tt-metal-l2-tests:
     needs: [build-artifact, generate-arch-matrix]
     if: |
