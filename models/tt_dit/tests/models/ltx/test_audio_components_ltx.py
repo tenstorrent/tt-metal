@@ -32,7 +32,7 @@ from models.tt_dit.utils.test import line_params, ring_params
 
 
 # ---------------------------------------------------------------------------
-# Mesh / device params (mirrors test_pipeline_ltx_fast_av.py)
+# Mesh / device params (mirrors test_pipeline_ltx_distilled.py)
 # ---------------------------------------------------------------------------
 def _with_audio_dev_l1(base: dict) -> dict:
     return {**base, "l1_small_size": 32768}
