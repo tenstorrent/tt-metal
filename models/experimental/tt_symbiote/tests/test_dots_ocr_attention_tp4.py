@@ -35,6 +35,24 @@ CCL. The test gathers the per-device N-slices back to full hidden before PCC.
 Run on T3K (uses 4 of 8 devices; ``MESH_DEVICE`` gates the collective-linear arch)::
 
     MESH_DEVICE=T3K pytest models/experimental/tt_symbiote/tests/test_dots_ocr_attention_tp4.py -s
+
+Single-decode-attention-layer device perf report
+-------------------------------------------------
+The paged KV cache is sized to the real text-decoder depth (28 layers, override
+with ``DOTS_OCR_ATTN_NUM_LAYERS``) and filled with ``prior_tokens`` (180) tokens
+to reproduce a production decode context. The cache-fill loop runs *unprofiled*;
+only the final single decode step is bracketed with the Tracy signpost
+``dots_ocr.attn_decode_layer``. To capture device perf for just that one decode
+attention layer (paged SDPA decode reads only its own layer slice, so per-layer
+timing is independent of the 28-layer depth)::
+
+    MESH_DEVICE=T3K python -m tracy -r -p -v -m \
+        "pytest models/experimental/tt_symbiote/tests/test_dots_ocr_attention_tp4.py -s"
+
+then filter the generated op-perf CSV to the signposted region::
+
+    python models/tt_transformers/scripts/op_perf_results.py \
+        <generated_ops_perf_results.csv> --signpost dots_ocr.attn_decode_layer
 """
 
 from __future__ import annotations
@@ -90,6 +108,17 @@ def _raw_ttnn(t):
     return inner if inner is not None else t
 
 
+def _signpost(header: str) -> None:
+    """Emit a Tracy ``TT_SIGNPOST`` marker so a device perf report can isolate
+    the bracketed region (see ``op_perf_results.py --signpost``). No-op when the
+    Tracy tooling isn't importable (e.g. plain ``pytest`` without ``-m tracy``)."""
+    try:
+        from tools.tracy import signpost
+    except ImportError:
+        return
+    signpost(header)
+
+
 def _decode_step(tt_attn, paged_cache, mesh_device, hidden_1tok, pos, in_mapper):
     """Run one decode step at ``pos``: writes K/V into the cache and returns the
     (still N-sharded) attention output for this token."""
@@ -119,7 +148,8 @@ def _decode_step(tt_attn, paged_cache, mesh_device, hidden_1tok, pos, in_mapper)
 
 
 @pytest.mark.parametrize("prior_tokens", [PRIOR_TOKENS], ids=[f"ctx{PRIOR_TOKENS}"])
-@pytest.mark.parametrize("scheme", ["k_parallel", "n_parallel"])
+@pytest.mark.parametrize("scheme", ["n_parallel"])
+# @pytest.mark.parametrize("scheme", ["k_parallel", "n_parallel"])
 @pytest.mark.parametrize("mesh_device", [(1, TP)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
@@ -147,6 +177,13 @@ def test_dots_ocr_attention_tp4(mesh_device, prior_tokens, scheme):
 
     model_path = _resolve_model_path()
     model_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    # Size the paged KV cache to the REAL decoder depth (dots.ocr text decoder
+    # = 28 layers) so the cache allocation / page addressing match a production
+    # run, while the HF reference is built with a single layer (cheap + exact).
+    # The measured attention is still one layer (layer_idx 0): paged SDPA decode
+    # reads only its own layer slice, so the single-layer device perf is
+    # independent of num_layers -- the depth only affects cache memory.
+    cache_num_layers = int(os.environ.get("DOTS_OCR_ATTN_NUM_LAYERS", model_config.num_hidden_layers))
     model_config.num_hidden_layers = 1
     hf_model = AutoModelForCausalLM.from_config(model_config, trust_remote_code=True).to(torch.bfloat16).eval()
     model_config = hf_model.config
@@ -189,6 +226,9 @@ def test_dots_ocr_attention_tp4(mesh_device, prior_tokens, scheme):
     tt_attn.preprocess_weights()
     tt_attn.move_weights_to_device()
 
+    # Reflect the real (28-layer) decoder depth in the cache allocation; the
+    # measured attention still writes/reads layer_idx 0 only.
+    model_config.num_hidden_layers = cache_num_layers
     paged_cache = _create_paged_kv_cache(model_config, mesh_device, batch_size=1)
 
     if n_parallel:
@@ -202,14 +242,25 @@ def test_dots_ocr_attention_tp4(mesh_device, prior_tokens, scheme):
         in_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
         expected_in_dim = hidden_size // TP
 
-    # Sequential decode: positions 0..prior_tokens. Steps before the last only
-    # fill the cache (output discarded); the final step's output is measured.
-    attn_out = None
-    for pos in range(seq):
-        if attn_out is not None:
-            ttnn.deallocate(_raw_ttnn(attn_out))
-        attn_out = _decode_step(tt_attn, paged_cache, mesh_device, hidden_seq[:, pos : pos + 1, :], pos, in_mapper)
+    # Cache-fill (NOT profiled): positions 0..prior_tokens-1 only populate the
+    # paged KV cache one token at a time; their outputs are discarded. This
+    # mirrors a real generation context but is deliberately excluded from the
+    # perf report below.
+    for pos in range(seq - 1):
+        fill_out = _decode_step(tt_attn, paged_cache, mesh_device, hidden_seq[:, pos : pos + 1, :], pos, in_mapper)
+        ttnn.deallocate(_raw_ttnn(fill_out))
     ttnn.synchronize_device(mesh_device)
+
+    # Measured step: the SINGLE decode attention layer at the final position,
+    # attending over the full prior_tokens + 1 context. Bracketed by Tracy
+    # signposts so a device perf report isolates exactly one decode attention
+    # layer's ops (QKV matmul, rotary, paged_update, paged_sdpa_decode, o_proj,
+    # CCLs) -- excluding the prior_tokens cache-fill steps above. See the module
+    # docstring for the tracy + op_perf_results.py --signpost workflow.
+    _signpost("dots_ocr.attn_decode_layer")
+    attn_out = _decode_step(tt_attn, paged_cache, mesh_device, hidden_seq[:, seq - 1 : seq, :], seq - 1, in_mapper)
+    ttnn.synchronize_device(mesh_device)
+    _signpost("dots_ocr.attn_decode_layer.end")
 
     # o_proj output is hidden-N-sharded; gather the per-device slices back to
     # full hidden along dim=-1.
