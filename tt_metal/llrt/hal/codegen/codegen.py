@@ -113,7 +113,7 @@ class CodeGen:
 
     def parse(self):
         while line := self.getline():
-            line = re.sub("alignas\(\d+\)", "", line)
+            line = re.sub(r"\balignas\([^)]*\)\s*", "", line)
             if line.startswith("static_assert"):
                 continue
             if re.match(r"(?:static )?constexpr ", line):
@@ -153,7 +153,7 @@ class CodeGen:
             line = self.getline()
             if not line:
                 self.parse_error("<end of file>", "incomplete struct definition")
-            line = re.sub("alignas\(\d+\) ", "", line)
+            line = re.sub(r"\balignas\([^)]*\)\s*", "", line)
             if re.fullmatch(r"}(?: *__attribute__\(\(\w+\)\))*;", line):
                 level -= 1
                 continue
