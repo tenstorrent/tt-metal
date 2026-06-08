@@ -2439,6 +2439,79 @@ jobs:
       - run: pip install requests numpy
 EOF
 
+# Check 73: docker run with dangerous flags
+assert_detects "check 73 flags docker run --privileged" "73" "dangerous flag" << 'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: docker run --privileged ubuntu bash -c "id"
+EOF
+
+assert_detects "check 73 flags docker run --network host" "73" "dangerous flag" << 'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: docker run --network host ubuntu curl http://169.254.169.254/
+EOF
+
+assert_detects "check 73 flags docker run --cap-add SYS_ADMIN" "73" "dangerous flag" << 'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: docker run --cap-add SYS_ADMIN ubuntu id
+EOF
+
+assert_detects "check 73 flags docker run --cap-add=ALL" "73" "dangerous flag" << 'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: docker run --cap-add=ALL ubuntu id
+EOF
+
+assert_clean "check 73 accepts docker run without dangerous flags" "73" << 'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: docker run ubuntu bash -c "make test"
+EOF
+
+assert_clean "check 73 accepts docker run with benign --cap-add" "73" << 'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: docker run --cap-add=NET_BIND_SERVICE ubuntu id
+EOF
+
 printf '\n'
 printf '%s\n' "Results: ${passed} passed, ${failed} failed"
 

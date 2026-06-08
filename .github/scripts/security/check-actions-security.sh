@@ -31,7 +31,7 @@ FORMAT_RESULTS_FILE=""
 ISSUES_FOUND=0
 CHECKS_TO_RUN=()
 CURRENT_CHECK=""
-MAX_CHECK_NUM=72
+MAX_CHECK_NUM=73
 
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -3746,6 +3746,44 @@ check_72() {
     if [[ -n "${hits}" ]]; then
         log_issue "MEDIUM" "${file}" \
             "Installs packages from an HTTP (non-HTTPS) registry - insecure transport allows MITM supply-chain attacks; use https:// URLs only" \
+            "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+# Check 73: docker run with dangerous flags (--privileged, --network host, --cap-add SYS_ADMIN)
+check_73_description="docker run with dangerous flags (--privileged / --network host / --cap-add SYS_ADMIN)"
+check_73_severity="HIGH"
+
+example_check_73() {
+    cat <<'EOF'
+    steps:
+      - run: docker run --privileged ubuntu bash -c "id"
+      - run: docker run --network host ubuntu curl http://169.254.169.254/
+      - run: docker run --cap-add=SYS_ADMIN ubuntu id
+EOF
+}
+
+check_73() {
+    local file="$1"
+    local hits
+    hits=$(grep -nE \
+        'docker[[:space:]]+(run|exec)[[:space:]].*(--(privileged|network[[:space:]]+host)|--cap-add[=[:space:]]*(SYS_ADMIN|ALL)[^a-zA-Z])' \
+        "${file}" 2>/dev/null || true)
+    # Two-pass: catch --cap-add=ALL or --cap-add SYS_ADMIN on separate token boundaries
+    if [[ -z "${hits}" ]]; then
+        hits=$(grep -nE 'docker[[:space:]]+(run|exec)[[:space:]].*--privileged' "${file}" 2>/dev/null || true)
+    fi
+    if [[ -z "${hits}" ]]; then
+        hits=$(grep -nE 'docker[[:space:]]+(run|exec)[[:space:]].*--network[[:space:]]+host' "${file}" 2>/dev/null || true)
+    fi
+    if [[ -z "${hits}" ]]; then
+        hits=$(grep -nE 'docker[[:space:]]+(run|exec)[[:space:]].*--cap-add[=[:space:]]*(SYS_ADMIN|ALL)' "${file}" 2>/dev/null || true)
+    fi
+    if [[ -n "${hits}" ]]; then
+        log_issue "HIGH" "${file}" \
+            "docker run with dangerous flag (--privileged, --network host, or --cap-add SYS_ADMIN/ALL) - can escape container isolation or expose cloud metadata endpoint" \
             "$(_extract_lines "${hits}")"
         return 1
     fi
