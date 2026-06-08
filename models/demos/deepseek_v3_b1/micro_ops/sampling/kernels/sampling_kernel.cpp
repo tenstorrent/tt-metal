@@ -8,6 +8,9 @@
 #include "../../../unified_kernels/sampling.hpp"
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 #endif
 
 struct Core {
@@ -211,13 +214,19 @@ void kernel_main() {
                     constexpr uint32_t mcast_start_y = get_named_compile_time_arg_val("sampling_loop_mcast_start_y");
                     constexpr uint32_t mcast_end_x = get_named_compile_time_arg_val("sampling_loop_mcast_end_x");
                     constexpr uint32_t mcast_end_y = get_named_compile_time_arg_val("sampling_loop_mcast_end_y");
-                    const uint64_t mcast_noc_addr =
-                        get_safe_multicast_noc_addr(mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, 0);
-                    const uint64_t mcast_sem_addr = mcast_noc_addr | local_ready_sem_addr;
 
-                    noc_semaphore_set(local_ready_sem_ptr, 1);
-                    noc_semaphore_set_multicast(local_ready_sem_addr, mcast_sem_addr, num_dests);
-                    noc_async_write_barrier();
+                    // mcast_pipe: flag-only loop-barrier broadcast (R2). The final core raises the
+                    // local-ready flag to the rect of non-final cores via send_signal (set local +
+                    // set_multicast + fence). data_ready = the local_ready flag semaphore; consumed
+                    // is unused on this pure-control path.
+                    Noc pipe_noc;
+                    dataflow_kernel_lib::Pipe<> loop_pipe(
+                        pipe_noc,
+                        dataflow_kernel_lib::McastRect{
+                            mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, num_dests},
+                        Semaphore<>(get_named_compile_time_arg_val("sampling_local_ready_semaphore_id")),
+                        Semaphore<>(get_named_compile_time_arg_val("sampling_local_ready_semaphore_id")));
+                    loop_pipe.send_signal(1);
                     noc_semaphore_set(local_ready_sem_ptr, 0);
                 }
             } else {

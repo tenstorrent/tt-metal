@@ -11,6 +11,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 void kernel_main() {
     constexpr uint32_t reduce_receiver_semaphore_id = get_compile_time_arg_val(0);
@@ -42,6 +43,19 @@ void kernel_main() {
     Noc noc;
     Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
     Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
+
+    // mcast_pipe: receiver side of the per-group welford reduce mcast. The mcast sender broadcasts the
+    // combined global mean/var + a VALID flag; this core acks (consumed) then waits the flag. As with
+    // the non-welford gn_v2 receiver the GN naming is flipped vs matmul: reduce_sender_sem is the S->R
+    // data-ready FLAG (cleared+waited here), reduce_receiver_sem is the R->S consumed COUNTER (up'd
+    // here). Degenerate 1x1 rect -> points back at the sender.
+    dataflow_kernel_lib::Pipe<> reduce_pipe(
+        noc,
+        dataflow_kernel_lib::McastRect::single_core(mcast_sender_noc_x, mcast_sender_noc_y),
+        /*num_active_cores=*/1,  // unused on the receive path (receivers never multicast)
+        reduce_sender_sem,       // data ready (S->R level flag)
+        reduce_receiver_sem);    // consumed (R->S counter)
+
     CircularBuffer cb_ex_partial(cb_ex_partial_id);
     CircularBuffer cb_ex_global(cb_ex_global_id);
     CircularBuffer cb_in0(cb_in0_id);
@@ -102,12 +116,8 @@ void kernel_main() {
             p_global_means[0] = local_result.mean;
             p_global_vars[0] = local_result.variance;
 
-            // Signal to sender that our partial data is ready
-            reduce_receiver_sem.up(noc, mcast_sender_noc_x, mcast_sender_noc_y, 1);
-
-            // Wait for sender to signal that it has sent the global data
-            reduce_sender_sem.wait(VALID);
-            reduce_sender_sem.set(INVALID);
+            // mcast_pipe: ack sender (consumed) + wait global-result VALID flag + clear for next round.
+            reduce_pipe.receive();
 
             local_means_ptr += local_stride_per_group;
             local_vars_ptr += local_stride_per_group;
