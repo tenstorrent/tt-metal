@@ -23,7 +23,6 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.matmul_sweep import generate_tile_dims
-from helpers.pack import pack_int8
 from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
     input_output_formats,
@@ -44,7 +43,6 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_FACES,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.unpack import unpack_int8
 from helpers.utils import passed_test
 
 kt_dims = [1, 2, 4]
@@ -84,17 +82,6 @@ MATMUL_FORMAT = input_output_formats(
         DataFormat.MxInt2,
     ],
 ) + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
-
-
-def _int8_operands_after_l1_pack(tilized, dimensions):
-    """Round-trip tilized Int8 through sign-magnitude pack/unpack (same as L1 write)."""
-    packed = pack_int8(tilized)
-    unpacked = torch.tensor(unpack_int8(list(packed)), dtype=torch.int8)
-    return untilize_block(
-        unpacked,
-        dimensions=dimensions,
-        stimuli_format=DataFormat.Int8,
-    )
 
 _ARCH = get_chip_architecture()
 
@@ -181,10 +168,7 @@ def test_matmul(
 
     src_A_golden = src_A
     src_B_golden = src_B
-    if format.input_format == DataFormat.Int8:
-        src_A_golden = _int8_operands_after_l1_pack(tilized_A, input_A_dimensions)
-        src_B_golden = _int8_operands_after_l1_pack(tilized_B, input_B_dimensions)
-    elif format.input_format.is_mx_format():
+    if format.input_format.is_mx_format():
         tilized_A_golden = quantize_mx_tensor_chunked(
             tilized_A.flatten().to(torch.bfloat16), format.input_format
         ).reshape(tilized_A.shape)
