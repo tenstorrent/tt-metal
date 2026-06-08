@@ -11,8 +11,18 @@ import ttnn
 from ttnn.operations.activations import get_golden_function_for_activation
 
 SlidingWindowParallelConfig = ttnn._ttnn.operations.sliding_window.ParallelConfig
-Conv2dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
-PaddingMode = ttnn._ttnn.operations.conv.PaddingMode
+
+
+# TODO(nuked-op conv2d): conv2d C++ op removed for eval. Conv2dConfig / PaddingMode
+# bindings no longer exist. Placeholder names keep `import ttnn` working; restore the
+# real bindings (ttnn._ttnn.operations.conv.Conv2dConfig / PaddingMode) on recreate.
+class Conv2dConfig:  # noqa: N801 - placeholder mirroring the nuked binding name
+    pass
+
+
+class PaddingMode:  # noqa: N801 - placeholder mirroring the nuked binding name
+    pass
+
 
 # TODO: Remove Conv2dSliceConfig and update all relevant models & tests
 Conv2dSliceConfig = ttnn._ttnn.operations.sliding_window.Op2DSliceConfig
@@ -249,9 +259,11 @@ def _golden_function(
     return output_tensor
 
 
-ttnn.attach_golden_function(
-    ttnn.conv2d,
-    golden_function=_golden_function,
-)
+# TODO(nuked-op conv2d): ttnn.conv2d binding removed for eval; re-attach the golden
+# function once the conv2d op is recreated.
+# ttnn.attach_golden_function(
+#     ttnn.conv2d,
+#     golden_function=_golden_function,
+# )
 
 __all__ = []

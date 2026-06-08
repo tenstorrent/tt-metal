@@ -519,7 +519,10 @@ from ttnn._ttnn.operations.experimental import MinimalMatmulConfig
 # Expose disaggregation in experimental namespace
 experimental.disaggregation = disaggregation
 
-Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
+# TODO(nuked-op conv2d): conv2d/conv1d C++ bindings removed for eval. Alias the
+# placeholder Conv2dConfig from the Python wrapper so `import ttnn` succeeds; restore
+# `ttnn._ttnn.operations.conv.Conv2dConfig` once the conv ops are recreated.
+Conv1dConfig = Conv2dConfig
 
 from ttnn.operations.transformer import SDPAProgramConfig
 

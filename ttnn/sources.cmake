@@ -87,10 +87,7 @@ set(TTNN_SRC_PYBIND
     core/distributed/distributed_nanobind.cpp
     core/graph/graph_nanobind.cpp
     cpp/ttnn/operations/bernoulli/bernoulli_nanobind.cpp
-    cpp/ttnn/operations/conv/conv1d/conv1d_nanobind.cpp
-    cpp/ttnn/operations/conv/conv2d/conv2d_nanobind.cpp
     cpp/ttnn/operations/conv/conv_nanobind.cpp
-    cpp/ttnn/operations/conv/conv_transpose2d/conv_transpose2d_nanobind.cpp
     cpp/ttnn/operations/creation/creation_nanobind.cpp
     cpp/ttnn/operations/data_movement/data_movement_nanobind.cpp
     cpp/ttnn/operations/data_movement/concat/concat_nanobind.cpp

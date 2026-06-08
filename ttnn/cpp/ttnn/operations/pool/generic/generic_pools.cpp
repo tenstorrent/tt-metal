@@ -9,7 +9,8 @@
 #include <cmath>
 #include <optional>
 #include <tt-metalium/buffer_types.hpp>
-#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
+// TODO(nuked-op conv2d): conv2d_utils.hpp removed for eval; using passthrough stub.
+#include "ttnn/operations/conv/conv2d_utils_stub.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
