@@ -16,13 +16,6 @@ from typing import Sequence
 import torch
 from loguru import logger
 
-# (C, T_pad, K, stride) shapes allowed to use ttnn.conv1d's depthwise kernel
-# instead of the MAC shifted-accumulate. Empty: conv1d diverges from MAC by
-# ~0.9 dB PSNR on the vocoder anti-alias filters (high-frequency amplitude
-# compression), so MAC is the numerical baseline. The conv1d path below stays
-# for a future halo-aware depthwise kernel that matches MAC.
-_CONV1D_SAFE_SHAPES: set = set()
-
 import ttnn
 
 from ..layers.module import Module, Parameter
@@ -194,83 +187,13 @@ def _t_neighbor_pad(
 def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
     """Valid depthwise filter (same K taps on every channel):
     ``y[b, t, c] = sum_{j<K} taps[j] * x[b, t*stride + j, c]`` on an
-    already-padded ``(B, T_pad, C)`` ROW_MAJOR input.
+    already-padded ``(B, T_pad, C)`` ROW_MAJOR FLOAT32 input. Returns
+    ``(B, T_out, C)`` with ``T_out = (T_pad - K) / stride + 1``.
 
-    A single ``ttnn.conv1d`` (groups=C) is ~12x faster than the K-tap shifted
-    multiply-accumulate, but its HEIGHT_SHARDED reader buffers the sequence in
-    L1 and OOMs once T·C is large. So per shape we try conv1d once; on any
-    failure we cache a MAC fallback for that shape. The prepared conv weight is
-    cached per channel count and reused (preparing it per call is what makes
-    conv1d look slow). `cache` is an opaque per-instance dict the caller owns.
+    ``cache`` is accepted for API compatibility but unused.
     """
-    B, T_pad, C = int(x_BTC.shape[0]), int(x_BTC.shape[1]), int(x_BTC.shape[2])
-    K = len(taps)
-    T_out = (T_pad - K) // stride + 1
-    shape_key = (C, T_pad, stride)
-
-    if (C, T_pad, K, stride) not in _CONV1D_SAFE_SHAPES:
-        cache[shape_key] = "mac"
-
-    if cache.get(shape_key) != "mac":
-        try:
-            wprep = cache.get(("w", C))
-            weight = wprep
-            if weight is None:
-                wt = torch.tensor(taps, dtype=torch.float32).reshape(1, 1, K).expand(C, 1, K).contiguous()
-                weight = ttnn.from_torch(wt, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype)
-            if "cc" not in cache:
-                cache["cc"] = ttnn.init_device_compute_kernel_config(
-                    mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
-                )
-            conv_config = ttnn.Conv1dConfig(weights_dtype=dtype, shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
-            out, _, (weight, _bias) = ttnn.conv1d(
-                input_tensor=ttnn.reshape(x_BTC, (B, T_pad, 1, C)),
-                weight_tensor=weight,
-                device=mesh_device,
-                in_channels=C,
-                out_channels=C,
-                batch_size=B,
-                input_length=T_pad,
-                kernel_size=K,
-                stride=stride,
-                padding=0,
-                dilation=1,
-                groups=C,
-                dtype=dtype,
-                conv_config=conv_config,
-                compute_config=cache["cc"],
-                return_output_dim=True,
-                return_weights_and_bias=True,
-            )
-            cache[("w", C)] = weight
-            cache[shape_key] = "conv1d"
-            # conv1d emits HEIGHT_SHARDED TILE; the MAC path and all downstream ops
-            # (T-halo neighbor_pad, convs) expect interleaved ROW_MAJOR — match it.
-            out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
-            out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
-            return ttnn.reshape(out, (B, T_out, C))
-        except Exception:
-            # conv1d doesn't fit this shape's L1 (or is otherwise unsupported);
-            # the MAC loop below is the always-correct fallback.
-            cache[shape_key] = "mac"
-
-    y = None
-    for j in range(K):
-        w = float(taps[j])
-        if stride == 1:
-            slice_j = ttnn.slice(x_BTC, [0, j, 0], [B, j + T_out, C])
-        else:
-            slice_j = ttnn.slice(x_BTC, [0, j, 0], [B, j + (T_out - 1) * stride + 1, C], [1, stride, 1])
-        scaled = ttnn.multiply(slice_j, w)
-        ttnn.deallocate(slice_j)
-        if y is None:
-            y = scaled
-        else:
-            y_new = ttnn.add(y, scaled)
-            ttnn.deallocate(y)
-            ttnn.deallocate(scaled)
-            y = y_new
-    return y
+    del mesh_device, cache
+    return ttnn.experimental.conv1d_depthwise(x_BTC, taps=taps, stride=stride, dtype=dtype)
 
 
 def _all_gather_t(ccl_manager, x: "ttnn.Tensor", parallel_config) -> "ttnn.Tensor":
