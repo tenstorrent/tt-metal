@@ -40,9 +40,6 @@ target_precompile_headers(
         <unordered_map>
         <variant>
         <vector>
-        # TTNN-specific headers that are included frequently
-        <ttnn/device_operation.hpp>
-        <ttnn/operation.hpp>
 )
 
 target_link_libraries(
