@@ -51,6 +51,15 @@ TP = 4
 PCC_THRESHOLD = 0.95
 
 
+def _signpost(header: str) -> None:
+    """Emit a Tracy marker so perf reports can isolate one MLP scheme."""
+    try:
+        from tools.tracy import signpost
+    except ImportError:
+        return
+    signpost(header)
+
+
 class _TorchTextSwiGLU(nn.Module):
     """gate/up/down SwiGLU matching the attributes TTNNDotsOCRMLP.from_torch reads."""
 
@@ -105,7 +114,7 @@ def _raw_ttnn(t):
 #                   TP=4 stack (-14.8% decode MLP wall-time); output is hidden-sharded.
 @pytest.mark.parametrize("seq_len", [1], ids=["decoder"])
 # @pytest.mark.parametrize("seq_len", [1, 2816], ids=["decode", "prefill"])
-@pytest.mark.parametrize("scheme", ["col_fused_shardout"])
+@pytest.mark.parametrize("scheme", ["row", "col_fused_shardout"])
 # @pytest.mark.parametrize("scheme", ["col_fused", "col_fused_shardout"])
 # @pytest.mark.parametrize("scheme", ["col", "col_fused"])
 # @pytest.mark.parametrize("scheme", ["row", "col", "col_fused", "col_fused_shardout"])
@@ -152,8 +161,10 @@ def test_dots_ocr_text_mlp_tp4(mesh_device, seq_len, scheme):
         memory_config=ttnn.L1_MEMORY_CONFIG,
         mesh_mapper=in_mapper,
     )
+    _signpost(f"dots_ocr.text_mlp_decode.{scheme}")
     out_tt = tt_mlp(x_tt)
     ttnn.synchronize_device(mesh_device)
+    _signpost(f"dots_ocr.text_mlp_decode.{scheme}.end")
 
     if scheme in ("row", "col_fused_shardout"):
         # Output is hidden-N-sharded; gather the per-device slices back to full hidden.

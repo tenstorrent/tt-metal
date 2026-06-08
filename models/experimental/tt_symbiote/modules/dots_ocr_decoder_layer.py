@@ -6,10 +6,11 @@ import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNLayerStack, TTNNModule
 from models.experimental.tt_symbiote.core.run_config import trace_enabled
 from models.experimental.tt_symbiote.modules.dots_ocr_attention import TTNNDotsOCRAttention
-from models.experimental.tt_symbiote.modules.dots_ocr_mlp import TTNNDotsOCRMLP
+from models.experimental.tt_symbiote.modules.dots_ocr_mlp import TTNNDotsOCRMLP, TTNNDotsOCRMLPColParallelFusedGateUp
 from models.experimental.tt_symbiote.modules.linear import (
     _decode_rmsnorm_program_config,
     _decode_width_sharded_input_memory_config,
+    _ccl_num_links,
     _tp_requires_ccl,
 )
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
@@ -36,6 +37,21 @@ def _take_local_dp_batch(hidden_states, device):
         hidden_states,
         [0, 0, 0],
         [1, int(hidden_states.shape[-2]), int(hidden_states.shape[-1])],
+    )
+
+
+def _match_residual_width(tensor, residual, device):
+    if int(tensor.shape[-1]) == int(residual.shape[-1]):
+        return tensor
+    if not _tp_requires_ccl(device):
+        return tensor
+    return ttnn.all_gather(
+        tensor,
+        dim=len(tensor.shape) - 1,
+        num_links=_ccl_num_links(device),
+        cluster_axis=1,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        topology=ttnn.Topology.Linear,
     )
 
 
@@ -175,9 +191,16 @@ class TTNNDotsOCRLocalShardRMSNorm(TTNNDistributedRMSNorm):
 
     def forward(self, inp):
         original_shape = inp.shape
+        hidden_size = int(self.torch_layer.weight.shape[0])
+        if _tp_requires_ccl(self.device) and int(original_shape[-1]) != hidden_size:
+            out = super().forward(inp)
+            if out.memory_config().buffer_type != ttnn.BufferType.L1:
+                out = ttnn.to_memory_config(out, ttnn.L1_MEMORY_CONFIG)
+            return out
+
         # Sharded LN fast path: decode-shape (M=1) and single-device or pure DP
-        # (no TP CCL). Anything else (prefill, TP) uses the parent's
-        # interleaved RMSNorm path so this change can't affect those.
+        # (no TP CCL). TP decode uses the parent distributed path above when
+        # the activation is already the local hidden shard (e.g. 384 on 1x4).
         is_decode = len(original_shape) >= 2 and int(original_shape[-2]) == 1
         if is_decode and not _tp_requires_ccl(self.device):
             return self._forward_decode_sharded(inp, original_shape)
@@ -198,7 +221,7 @@ class TTNNDotsOCRLocalShardRMSNorm(TTNNDistributedRMSNorm):
         tt_out = ttnn.rms_norm(
             inp,
             epsilon=eps,
-            weight=self.weight_distributed,
+            weight=self.tt_weight_sharded if int(inp.shape[-1]) == hidden_size else self.weight_distributed,
             compute_kernel_config=self.compute_kernel_config,
         )
         if len(original_shape) == 3 and len(tt_out.shape) == 4:
@@ -216,16 +239,25 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
         self.mlp = None
 
     @classmethod
-    def from_torch(cls, torch_layer):
+    def from_torch(cls, torch_layer, tp_decode_scheme: str = "row"):
         new_layer = cls()
         new_layer._fallback_torch_layer = torch_layer
         new_layer.attention_type = getattr(torch_layer, "attention_type", "full_attention")
+        new_layer.tp_decode_scheme = tp_decode_scheme
         new_layer.input_layernorm = TTNNDotsOCRLocalShardRMSNorm.from_torch(torch_layer.input_layernorm)
         new_layer.post_attention_layernorm = TTNNDotsOCRLocalShardRMSNorm.from_torch(
             torch_layer.post_attention_layernorm
         )
-        new_layer.self_attn = TTNNDotsOCRAttention.from_torch(torch_layer.self_attn)
-        new_layer.mlp = TTNNDotsOCRMLP.from_torch(torch_layer.mlp)
+        if tp_decode_scheme == "row":
+            new_layer.self_attn = TTNNDotsOCRAttention.from_torch(torch_layer.self_attn)
+            new_layer.mlp = TTNNDotsOCRMLP.from_torch(torch_layer.mlp)
+        elif tp_decode_scheme == "col_parallel":
+            # Optional comparison path for TP decode: replicated full-hidden in,
+            # column-parallel QKV/gate-up, replicated full-hidden out.
+            new_layer.self_attn = TTNNDotsOCRAttention.from_torch(torch_layer.self_attn, qkv_n_parallel=True)
+            new_layer.mlp = TTNNDotsOCRMLPColParallelFusedGateUp.from_torch(torch_layer.mlp, replicated_output=True)
+        else:
+            raise ValueError(f"Unsupported dots.ocr decoder TP decode scheme: {tp_decode_scheme}")
         if _use_bfp8_decoder_weights(getattr(new_layer.self_attn, "layer_idx", None)):
             new_layer.mlp.fused_gate_up_proj.set_weight_dtype(ttnn.bfloat8_b)
         return new_layer
@@ -307,6 +339,7 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
             ttnn.deallocate(residual_il)
             return (hs,)
 
+        attn_out = _match_residual_width(attn_out, residual, self.device)
         hs = (
             ttnn.add(residual, attn_out, memory_config=decode_l1_mc)
             if decode_l1_mc is not None

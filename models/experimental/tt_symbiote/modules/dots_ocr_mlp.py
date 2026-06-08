@@ -281,6 +281,7 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
             return ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
 
         matmul_mc = ttnn.DRAM_MEMORY_CONFIG if needs_ccl else (output_memory_config or ttnn.DRAM_MEMORY_CONFIG)
+        output_mc = output_memory_config or ttnn.DRAM_MEMORY_CONFIG
 
         # Prefill down_proj (K=8960, N=1536): ttnn.matmul's auto-heuristic picks a degenerate
         # config for this huge-K / small-N shape (~16 ms, ~5% compute, ~0.2% BW). minimal_matmul
@@ -320,7 +321,7 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
                 dim=3,
                 num_links=_ccl_num_links(self.device),
                 cluster_axis=1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=output_mc,
                 topology=ttnn.Topology.Linear,
             )
             if self.tt_bias is not None:
@@ -433,6 +434,8 @@ class TTNNDotsOCRMLP(TTNNModule):
         output = self.down_proj(gate_up_mul, output_memory_config=down_output_mc)
         ttnn.deallocate(gate_up_mul)
 
+        if is_decode and output.memory_config().buffer_type != ttnn.BufferType.L1:
+            output = ttnn.to_memory_config(output, ttnn.L1_MEMORY_CONFIG)
         return output
 
 
@@ -746,4 +749,8 @@ class TTNNDotsOCRMLPColParallelFusedGateUp(TTNNModule):
 
         # Down (K-sharded in): all-reduce -> replicated, or reduce_scatter-only ->
         # hidden-sharded, depending on ``replicated_output``.
-        return self.down_proj(gate_up_mul)
+        output = self.down_proj(gate_up_mul)
+        ttnn.deallocate(gate_up_mul)
+        if int(hidden_states.shape[1]) == 1 and output.memory_config().buffer_type != ttnn.BufferType.L1:
+            output = ttnn.to_memory_config(output, ttnn.L1_MEMORY_CONFIG)
+        return output

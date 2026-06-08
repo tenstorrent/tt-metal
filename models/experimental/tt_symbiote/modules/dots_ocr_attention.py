@@ -759,6 +759,8 @@ class TTNNDotsOCRAttention(TTNNModule):
 
         attn_output = self.o_proj(attn_output)
         attn_output = ttnn.squeeze(attn_output, 1)
+        if attn_output.memory_config().buffer_type != ttnn.BufferType.L1:
+            attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
         return attn_output, None
 
     def forward(

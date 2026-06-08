@@ -77,6 +77,22 @@ def _dots_ocr_device_params():
     return dp
 
 
+def _dots_ocr_decode_one_layer_tp_schemes():
+    """Decoder-layer TP scheme(s) for the L1-boundary unit test.
+
+    ``row`` is the production TP contract: hidden dim is sharded across TP
+    (1536/4 = 384 on a 1x4 mesh). ``col_parallel`` is an opt-in comparison path
+    with replicated full-hidden input/output and column-parallel QKV/gate-up.
+    Set ``DOTS_OCR_DECODE_ONE_LAYER_TP_SCHEMES=both`` or a comma-separated list
+    to compare schemes.
+    """
+    env = os.environ.get("DOTS_OCR_DECODE_ONE_LAYER_TP_SCHEMES", "row").strip()
+    if env.lower() == "both":
+        return ["row", "col_parallel"]
+    schemes = [s.strip() for s in env.split(",") if s.strip()]
+    return schemes or ["row"]
+
+
 DOTS_OCR_MODEL_ID = "rednote-hilab/dots.ocr"
 
 
@@ -375,7 +391,8 @@ def test_dots_ocr_vision(mesh_device, image_link):
     [_resolve_mesh_device_shape()],
     indirect=True,
 )
-def test_dots_ocr_decode_one_layer_l1_boundaries(mesh_device):
+@pytest.mark.parametrize("tp_decode_scheme", _dots_ocr_decode_one_layer_tp_schemes())
+def test_dots_ocr_decode_one_layer_l1_boundaries(mesh_device, tp_decode_scheme):
     """Exercise one decoder layer in decode mode and require L1 attn/MLP boundaries.
 
     Also runs the same input through the HF reference layer and compares the
@@ -397,7 +414,7 @@ def test_dots_ocr_decode_one_layer_l1_boundaries(mesh_device):
     # in-memory layer after building the TTNN version.
     hf_layer = hf_model.model.layers[0]
     hf_rotary_emb = hf_model.model.rotary_emb
-    layer = TTNNDotsOCRDecoderLayer.from_torch(hf_layer)
+    layer = TTNNDotsOCRDecoderLayer.from_torch(hf_layer, tp_decode_scheme=tp_decode_scheme)
     layer._unique_name = "model.layers.0"
     layer.override_children_module_names()
 
@@ -407,13 +424,28 @@ def test_dots_ocr_decode_one_layer_l1_boundaries(mesh_device):
 
     paged_cache = _create_paged_kv_cache(model_config, mesh_device, batch_size=1)
     hidden_states_torch = torch.randn(1, 1, model_config.hidden_size, dtype=torch.bfloat16)
+    num_devices = int(mesh_device.get_num_devices()) if hasattr(mesh_device, "get_num_devices") else 1
+    is_tp_mesh = num_devices > 1 and hasattr(mesh_device, "shape") and list(mesh_device.shape)[-1] > 1
+    uses_tp_shard = is_tp_mesh and tp_decode_scheme == "row"
+    if uses_tp_shard:
+        input_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
+    elif is_tp_mesh and tp_decode_scheme == "col_parallel":
+        input_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    else:
+        input_mapper = None
+    hidden_state_kwargs = {"mesh_mapper": input_mapper} if input_mapper is not None else {}
     hidden_states = ttnn.from_torch(
         hidden_states_torch,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
+        **hidden_state_kwargs,
     )
+    if uses_tp_shard:
+        assert int(hidden_states.shape[-1]) == model_config.hidden_size // int(mesh_device.shape[-1])
+    elif is_tp_mesh:
+        assert int(hidden_states.shape[-1]) == model_config.hidden_size
     cache_position = ttnn.from_torch(
         torch.zeros(1, dtype=torch.int32),
         dtype=ttnn.int32,
@@ -448,6 +480,10 @@ def test_dots_ocr_decode_one_layer_l1_boundaries(mesh_device):
     ttnn.synchronize_device(mesh_device)
 
     _assert_l1_resident(output, "decoder layer output")
+    if uses_tp_shard:
+        assert int(output.shape[-1]) == model_config.hidden_size // int(mesh_device.shape[-1])
+    elif is_tp_mesh:
+        assert int(output.shape[-1]) == model_config.hidden_size
     assert seen_boundaries == {"attn": True, "mlp": True}
 
     # ------------------------------------------------------------------
@@ -465,14 +501,15 @@ def test_dots_ocr_decode_one_layer_l1_boundaries(mesh_device):
         position_embeddings=(cos, sin),
     )[0]
 
-    num_devices = int(mesh_device.get_num_devices()) if hasattr(mesh_device, "get_num_devices") else 1
-    if num_devices > 1:
-        # Multi-device mesh (e.g. T3K DP (8,1) or TP (1,8)): both DP-with-
-        # batch=1 and TP-after-all-reduce produce the same data on every
-        # device. ``ConcatMeshToTensor(dim=0)`` stacks the per-device slices
-        # along batch, after which we take the first slice as the canonical
-        # output. Without an explicit composer ``ttnn.to_torch`` errors with
-        # "Can't convert a tensor distributed on MeshShape([...]) ...".
+    if uses_tp_shard:
+        ttnn_output_torch = ttnn.to_torch(
+            output,
+            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1),
+        )
+    elif num_devices > 1:
+        # Pure-DP meshes replicate the single-token decode stream on each device.
+        # ``ConcatMeshToTensor(dim=0)`` stacks replicas along batch, after which
+        # we take the first slice as the canonical output.
         ttnn_output_torch = ttnn.to_torch(
             output,
             mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),

@@ -148,8 +148,7 @@ def _decode_step(tt_attn, paged_cache, mesh_device, hidden_1tok, pos, in_mapper)
 
 
 @pytest.mark.parametrize("prior_tokens", [PRIOR_TOKENS], ids=[f"ctx{PRIOR_TOKENS}"])
-@pytest.mark.parametrize("scheme", ["n_parallel"])
-# @pytest.mark.parametrize("scheme", ["k_parallel", "n_parallel"])
+@pytest.mark.parametrize("scheme", ["k_parallel", "n_parallel"])
 @pytest.mark.parametrize("mesh_device", [(1, TP)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
@@ -257,10 +256,10 @@ def test_dots_ocr_attention_tp4(mesh_device, prior_tokens, scheme):
     # layer's ops (QKV matmul, rotary, paged_update, paged_sdpa_decode, o_proj,
     # CCLs) -- excluding the prior_tokens cache-fill steps above. See the module
     # docstring for the tracy + op_perf_results.py --signpost workflow.
-    _signpost("dots_ocr.attn_decode_layer")
+    _signpost(f"dots_ocr.attn_decode_layer.{scheme}")
     attn_out = _decode_step(tt_attn, paged_cache, mesh_device, hidden_seq[:, seq - 1 : seq, :], seq - 1, in_mapper)
     ttnn.synchronize_device(mesh_device)
-    _signpost("dots_ocr.attn_decode_layer.end")
+    _signpost(f"dots_ocr.attn_decode_layer.{scheme}.end")
 
     # o_proj output is hidden-N-sharded; gather the per-device slices back to
     # full hidden along dim=-1.
