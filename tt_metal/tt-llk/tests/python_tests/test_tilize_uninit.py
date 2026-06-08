@@ -48,6 +48,6 @@ def test_tilize_uninit_restores_z_dim(test_name, num_faces, regenerate_cpp):
 
     assert z_dims[0] == num_faces, (
         f"_llk_unpack_tilize_uninit_ left tile-descriptor z_dim={z_dims[0]}, "
-        f"expected num_faces={num_faces} (tt-llk#1161). A value of 4 indicates "
+        f"expected num_faces={num_faces}. A value of 4 indicates "
         f"the pre-fix hardcoded restore regressed."
     )

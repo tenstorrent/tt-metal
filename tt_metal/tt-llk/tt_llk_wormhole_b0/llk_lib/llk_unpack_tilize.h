@@ -420,12 +420,11 @@ inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, co
     TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
     TT_SETADCXX(p_setadc::UNP_B, face_r_dim * FACE_C_DIM - 1, 0x0);
 
-    // Restore Z and Y dim to the default operand state set by _llk_unpack_init_:
+    // Restore Z dim to the default operand state set by _llk_unpack_init_:
     // THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1 - word 1 of the same-named register
-    // y-dim sits in lower 16 bits and is 1 by default (never touched by tilize init)
     // z-dim sits in upper 16 bits and is set to unpA_num_faces by _llk_unpack_init_
+    // (y-dim sits in the lower 16 bits and is left untouched by tilize, so we don't restore it)
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, 0xffff0000>(num_faces);
-    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, 0x0000ffff>(1);
 
     unpack_config_u config   = {0};
     config.f.out_data_format = unpack_dst_format;
