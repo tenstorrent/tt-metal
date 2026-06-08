@@ -20,6 +20,8 @@ import torch.nn as nn
 
 import ttnn
 
+from .tt_matmul_memory import maybe_reshard_to_caller, style_linear_plan
+
 
 @dataclass(frozen=True)
 class TTInstanceNorm1dParams:
@@ -150,14 +152,18 @@ class TTAdaIN1d:
 
         y = tt_instance_norm_1d_nlc(x_nlc=x_nlc, params=p.instancenorm, memory_config=memory_config)
 
+        b = int(style_bs.shape[0])
+        style_out_mc, style_reshard = style_linear_plan(b, int(p.fc_weight.shape[-1]), 2 * c)
         h = ttnn.linear(
             style_bs,
             p.fc_weight,
             bias=p.fc_bias,
             transpose_b=True,
-            memory_config=memory_config,
+            memory_config=style_out_mc if style_out_mc is not None else memory_config,
             compute_kernel_config=compute_kernel_config,
         )
+        if style_reshard:
+            h = maybe_reshard_to_caller(h, memory_config)
         while len(h.shape) > 2:
             h = ttnn.squeeze(h, 0)
         b = int(h.shape[0])

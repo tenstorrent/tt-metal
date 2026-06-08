@@ -17,6 +17,7 @@ import ttnn
 from .tt_custom_albert import TTCustomAlbert, TTCustomAlbertParams, preprocess_tt_custom_albert
 from .tt_decoder import TTDecoder, preprocess_tt_decoder
 from .tt_lstm import tt_bilstm_nlc
+from .tt_matmul_memory import en_matmul_plan, maybe_reshard_to_caller
 from .tt_prosody_predictor import TTProsodyPredictor, TTProsodyPredictorParams, preprocess_tt_prosody_predictor
 from .tt_text_encoder import TTTextEncoder, TTTextEncoderParams, preprocess_tt_text_encoder
 
@@ -135,6 +136,33 @@ def _build_alignment(pred_dur: torch.LongTensor) -> torch.Tensor:
     aln = torch.zeros(T_tokens, T_aligned)
     aln[indices, torch.arange(T_aligned)] = 1.0
     return aln.unsqueeze(0)  # [1, T_tokens, T_aligned]
+
+
+def _en_matmul_nlc(
+    alignment_TaT: ttnn.Tensor,
+    d_nlc: ttnn.Tensor,
+    *,
+    memory_config: ttnn.MemoryConfig,
+    compute_kernel_config,
+) -> ttnn.Tensor:
+    """``en_nlc = alignment^T @ d`` with swept L1-width-sharded output when feasible."""
+    en_pc, en_out_mc, en_reshard = en_matmul_plan(alignment_TaT, d_nlc)
+    en_matmul_mc = en_out_mc if en_out_mc is not None else memory_config
+    en_nlc = ttnn.matmul(
+        alignment_TaT,
+        d_nlc,
+        program_config=en_pc,
+        memory_config=en_matmul_mc,
+        compute_kernel_config=compute_kernel_config,
+    )
+    if en_reshard:
+        return maybe_reshard_to_caller(en_nlc, memory_config)
+    if en_matmul_mc.buffer_type != memory_config.buffer_type:
+        out = ttnn.to_memory_config(en_nlc, memory_config)
+        if out is not en_nlc:
+            ttnn.deallocate(en_nlc)
+        return out
+    return en_nlc
 
 
 def _to_fp32_if_needed(x: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -> tuple[ttnn.Tensor, bool]:
@@ -449,7 +477,12 @@ class TTKModel:
         d_mat, owns_d = _to_fp32_if_needed(d_nlc, mc)
         if owns_d:
             ttnn.deallocate(d_nlc)
-        en_nlc = ttnn.matmul(aln_Ta_T, d_mat, memory_config=mc, compute_kernel_config=ck)
+        en_nlc = _en_matmul_nlc(
+            aln_Ta_T,
+            d_mat,
+            memory_config=mc,
+            compute_kernel_config=ck,
+        )
         ttnn.deallocate(d_mat)
         ttnn.deallocate(aln_Ta_T)
 
@@ -617,7 +650,12 @@ class TTKModel:
         d_mat, owns_d = _to_fp32_if_needed(d_nlc, mc)
         if owns_d:
             ttnn.deallocate(d_nlc)
-        en_nlc = ttnn.matmul(aln_Ta_T, d_mat, memory_config=mc, compute_kernel_config=ck)
+        en_nlc = _en_matmul_nlc(
+            aln_Ta_T,
+            d_mat,
+            memory_config=mc,
+            compute_kernel_config=ck,
+        )
         ttnn.deallocate(d_mat)
         ttnn.deallocate(aln_Ta_T)
 
