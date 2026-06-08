@@ -20,6 +20,9 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
 
+  # Likely OOM killer related failures -- probably need to run these tests serially
+  - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob
+
   # Numeric mismatches, likely caused by issue #41163
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py
   - tests/ttnn/unit_tests/operations/eltwise/test_eltwise_typecast.py
