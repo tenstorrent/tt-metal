@@ -243,8 +243,9 @@ def render(
     else:
         wall_time_str_full = wall_time_str
 
-    pass_pct = pct(passed, total)
-    fail_pct = pct(failed + errored, total)
+    ran = passed + failed + errored
+    pass_pct = pct(passed, ran)
+    fail_pct = pct(failed + errored, ran)
     skip_pct = pct(skipped, total)
 
     # Donut: build CSS conic-gradient
@@ -595,14 +596,13 @@ def render(
     </div>
     <div class="passrate">
       <div class="passrate-num">{pass_pct:.1f}%</div>
-      <div class="passrate-label">{passed} of {total} passing</div>
+      <div class="passrate-label">{passed} of {ran} ran tests passing</div>
     </div>
   </div>
   <div class="hero-inner">
     <div class="heroprogress" style="grid-column: 1 / -1;">
       <span class="ok"   style="width:{pass_pct:.2f}%"></span>
       <span class="bad"  style="width:{fail_pct:.2f}%"></span>
-      <span class="warn" style="width:{skip_pct:.2f}%"></span>
     </div>
   </div>
   <div class="hero-inner" style="height: 24px;"></div>
