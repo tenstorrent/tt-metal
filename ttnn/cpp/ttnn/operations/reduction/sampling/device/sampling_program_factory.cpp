@@ -48,13 +48,9 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
     tt::DataFormat input_indices_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(input_indices_tensor.dtype());
     tt::DataFormat index_cb_data_format = use_32bit_index ? tt::DataFormat::Int32 : tt::DataFormat::UInt16;
+    // On the 32-bit path (e.g. Quasar), validation already requires k to be INT32 (UInt32 DFB
+    // metadata is unsupported there), so the dtype-derived format is correct as-is.
     tt::DataFormat k_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(k.dtype());
-    // Architectures on the 32-bit path (e.g. Quasar) reject UInt32 DFB metadata; k values are
-    // non-negative and fit in signed 32-bit, so stage k as Int32 there. WH/BH keep the
-    // dtype-derived format unchanged.
-    if (use_32bit_index && k_cb_data_format == tt::DataFormat::UInt32) {
-        k_cb_data_format = tt::DataFormat::Int32;
-    }
     tt::DataFormat p_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(p.dtype());
     tt::DataFormat temp_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(temp.dtype());
 
