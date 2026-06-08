@@ -106,7 +106,8 @@ void test_d2h_socket(
     std::size_t socket_fifo_size,
     std::size_t page_size,
     std::size_t data_size,
-    const MeshCoreCoord& sender_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)}) {
+    const MeshCoreCoord& sender_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)},
+    uint32_t pages_per_read = 1) {
     auto output_socket = D2HSocket(mesh_device, sender_core, socket_fifo_size);
     output_socket.set_page_size(page_size);
 
@@ -139,7 +140,7 @@ void test_d2h_socket(
                 static_cast<uint32_t>(data_size),
             }});
 
-    uint32_t num_reads = data_size / page_size;
+    uint32_t num_pages = data_size / page_size;
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
     std::vector<uint32_t> dst_vec(data_size / sizeof(uint32_t));
     std::iota(src_vec.begin(), src_vec.end(), 0);
@@ -152,8 +153,9 @@ void test_d2h_socket(
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
 
     uint32_t page_size_words = page_size / sizeof(uint32_t);
-    for (uint32_t i = 0; i < num_reads; i++) {
-        output_socket.read(dst_vec.data() + (i * page_size_words), 1);
+    for (uint32_t page = 0; page < num_pages; page += pages_per_read) {
+        uint32_t pages = std::min<uint32_t>(pages_per_read, num_pages - page);
+        output_socket.read(dst_vec.data() + (page * page_size_words), pages);
     }
     output_socket.barrier();
     EXPECT_EQ(src_vec, dst_vec);
@@ -370,6 +372,8 @@ TEST_F(HDSocketFixture, D2HSocket) {
         // Uneven wrap with multiple pages on host allocated.
         // On most hosts, page size is 4K, so this should lead to 5 pages being allocated on the host.
         test_d2h_socket(mesh_device_, 16512, 1088, 156672, MeshCoreCoord(sender_coord, CoreCoord(0, 1)));
+        // Multi-page read whose span straddles the FIFO wrap boundary, exercising the head/tail split.
+        test_d2h_socket(mesh_device_, 4096, 1088, 79424, MeshCoreCoord(sender_coord, CoreCoord(0, 1)), 2);
     }
 }
 
