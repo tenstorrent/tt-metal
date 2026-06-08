@@ -187,7 +187,7 @@ pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and long"
 
 The above examples are run in `ModelOptimizations.performance` mode. You can override this by setting the `optimizations` or the `decoder_config_file` argument in the demo. To use instead the accuracy mode you can call the above tests with `-k "accuracy and ..."` instead of performance.
 
-NOTE: for models that are not listed in [`get_supported_trace_region_size` function](demo/trace_region_config.py#L79), the default trace region size will be used as set in the [`demo/simple_text_demo.py` script](demo/simple_text_demo.py#L704). The default trace region size may not be sufficient for such a model and there will be a helpful error message that informs the required trace region size, which can be overridden by setting the `trace_region_size` argument in the demo.
+NOTE: trace region sizes are declared in [`models/model_trace_region_sizes.yaml`](../model_trace_region_sizes.yaml) and resolved at device-open time via [`get_supported_trace_region_size`](demo/trace_region_config.py) (which delegates to [`resolve_trace_region_size`](../demos/utils/trace_region_sizes.py)). Models without a YAML entry fall back to `DEFAULT_TRACE_REGION_SIZE` in [`simple_text_demo.py`](demo/simple_text_demo.py). If the default is insufficient, a helpful error message reports the required size — add a `(model, SKU)` entry to the YAML or override `trace_region_size` in the demo.
 
 ## Details
 

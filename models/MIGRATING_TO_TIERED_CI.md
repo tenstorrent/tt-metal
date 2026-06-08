@@ -540,6 +540,19 @@ populate it after the first CI run. The resolver skips TODO entries
 by default so the test doesn't fail on missing numbers, but the
 entry is on the books so it's not forgotten.
 
+### Trace region sizes
+
+Trace buffer sizes live in [`models/model_trace_region_sizes.yaml`](./model_trace_region_sizes.yaml).
+Add a `(model, SKU)` block with `trace_region_size: <bytes>` whenever a
+demo or test needs tracing and the default (`DEFAULT_TRACE_REGION_SIZE`
+in [`demos/utils/trace_region_sizes.py`](./demos/utils/trace_region_sizes.py))
+is insufficient.
+
+- **Model keys** — same short kebab-case + `aliases` convention as `model_targets.yaml`.
+- **SKU keys** — canonical names (`wh_n150`, `wh_llmbox_perf`, `bh_p150`, …); legacy labels like `T3K` / `P150x4` resolve via `normalize_sku`.
+- **`tt_transformers`** — `get_supported_trace_region_size` in [`demo/trace_region_config.py`](./tt_transformers/demo/trace_region_config.py) loads from the YAML automatically when `HF_MODEL` is set.
+- **Other demos** — call `resolve_trace_region_size(HF_MODEL, get_current_device_sku_name())` from [`demos/utils/trace_region_sizes.py`](./demos/utils/trace_region_sizes.py).
+
 ---
 
 ## Verifying before merge

@@ -134,6 +134,16 @@ Captures device timing for a single layer of each target model, used to track pe
 
 > **TODO:** Add pipeline links once merged to main.
 
+## Trace Region Sizes
+
+Trace buffer sizes (in bytes) for model demos and tests are centralized in [`model_trace_region_sizes.yaml`](./model_trace_region_sizes.yaml), keyed by `(model, SKU)` — the same model keys and canonical SKU names used in [`model_targets.yaml`](./model_targets.yaml) and [`models_e2e_tests.yaml`](../tests/pipeline_reorg/models_e2e_tests.yaml).
+
+When adding or tuning a model for CI:
+
+1. Add or update the `(model, SKU)` entry in `model_trace_region_sizes.yaml` with `trace_region_size: <bytes>`.
+2. Use short kebab-case model keys and `aliases` for HuggingFace repo names (mirror `model_targets.yaml` conventions).
+3. `tt_transformers` demos resolve sizes automatically via `get_supported_trace_region_size` in the root `conftest.py` `mesh_device` fixture; other demos can call `resolve_trace_region_size` from [`demos/utils/trace_region_sizes.py`](./demos/utils/trace_region_sizes.py) directly.
+
 ## Other Pipelines
 
 > **TODO:** Expand descriptions for the pipelines below.

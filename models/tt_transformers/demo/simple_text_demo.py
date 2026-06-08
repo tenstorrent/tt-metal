@@ -20,6 +20,7 @@ from models.common.sampling import SamplingParams
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_accuracy, verify_perf
 from models.demos.utils.model_targets import resolve_accuracy_targets, resolve_perf_targets
+from models.demos.utils.trace_region_sizes import DEFAULT_TRACE_REGION_SIZE
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
@@ -330,13 +331,6 @@ def prepare_generator_args(
 # mode (str): Mode to run the demo in (full, prefill, decode), full will run both prefill and decode
 # optimization (ModelOptimizations): Optimization level to use for the model (performance or accuracy)
 # MESH_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
-_trace_region_size = (
-    100000000
-    if (is_blackhole() and os.environ.get("HF_MODEL", "").endswith(("Qwen2.5-72B-Instruct", "Qwen2.5-32B-Instruct")))
-    else 50000000
-)
-
-
 @pytest.mark.parametrize(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, data_parallel, token_accuracy, stress_test, enable_trace, num_layers, mode",
     [
@@ -814,7 +808,7 @@ _trace_region_size = (
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": True, "trace_region_size": _trace_region_size, "num_command_queues": 1}],
+    [{"fabric_config": True, "trace_region_size": DEFAULT_TRACE_REGION_SIZE, "num_command_queues": 1}],
     indirect=True,
 )
 @pytest.mark.parametrize(
