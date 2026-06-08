@@ -20,13 +20,18 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
-
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
 
-# Load traced configurations from real model tests (V2 format)
+# Load traced configurations from real model tests (V2 format).
+# Resolve the transformer namespace explicitly: the bare name resolves to
+# ttnn.experimental.split_query_key_value_and_split_heads first (the loader
+# checks the experimental namespace before transformer), which has only the 2
+# experimental configs and leaves the 21 transformer (4x8/4x4) configs this
+# module actually exercises orphaned. The experimental variant is handled by
+# split_query_key_value_and_split_heads_experimental_model_traced.py.
 loader = MasterConfigLoader()
-model_traced_params = loader.get_suite_parameters("split_query_key_value_and_split_heads")
+model_traced_params = loader.get_suite_parameters("transformer::split_query_key_value_and_split_heads")
 
 # Parameters provided to the test vector generator are defined here.
 parameters = {
