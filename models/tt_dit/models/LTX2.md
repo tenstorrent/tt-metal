@@ -66,15 +66,15 @@ export LTX_CHECKPOINT="$HOME/.cache/ltx-checkpoints/ltx-2.3-22b-distilled-1.1.sa
 export GEMMA_PATH="google/gemma-3-12b-it-qat-q4_0-unquantized"
 
 # Audio-Video Fast (distilled 2-stage) — Blackhole Loud Box 2x4 (sp1/tp0)
-RUN_WARMUP=1 NO_PROMPT=1 pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled_av.py \
+RUN_WARMUP=1 NO_PROMPT=1 pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py \
   -k "bh_2x4sp1tp0" -s --timeout 3600
 
 # Audio-Video Fast (distilled 2-stage) — Blackhole Galaxy 4x8 (ring)
-RUN_WARMUP=1 NO_PROMPT=1 pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled_av.py \
+RUN_WARMUP=1 NO_PROMPT=1 pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py \
   -k "bh_4x8sp1tp0_ring" -s --timeout 3600
 
 # Interactive prompt (omit NO_PROMPT)
-pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled_av.py -k "bh_2x4sp1tp0" -s --timeout 3600
+pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py -k "bh_2x4sp1tp0" -s --timeout 3600
 ```
 
 Override generation settings with environment variables: `PROMPT`, `NUM_FRAMES`, `HEIGHT`, `WIDTH`, `NUM_STEPS`, `SEED`, `OUTPUT_PATH`.
@@ -88,6 +88,14 @@ Override generation settings with environment variables: `PROMPT`, `NUM_FRAMES`,
 The DiT uses sequence parallel (ring attention) and tensor parallel sharding. Text encoding runs fully on-device — Gemma-3-12B tensor-parallel across the mesh's wide axis (TP=4 on 2×4, TP=8 on 4×8), with embeddings disk-cached so repeated prompts skip the encoder. The video VAE decoder is spatially mesh-sharded (height across `tp_axis`, width across `sp_axis`, with halo exchange on the sharded conv boundaries — see `vae_ltx.py`), and the audio VAE + vocoder also run on device with weights loaded straight from the checkpoint safetensors.
 
 ## Model Variants
+
+`LTXPipeline` (`pipeline_ltx.py`) is the shared base — device machinery (loaders, `call_av`,
+encode/decode) only; the concrete variants below implement `generate` / `warmup_buffers`.
+
+### LTXOneStagePipeline (Pro, one-stage)
+- Single full-guidance (CFG + STG + modality) denoise on the base 22B checkpoint
+- Mirrors the reference `ti2vid_one_stage.TI2VidOneStagePipeline`
+- Entry: `models/tt_dit/pipelines/ltx/pipeline_ltx_one_stage.py`
 
 ### LTXDistilledPipeline (Distilled)
 - Two-stage: half-resolution denoise → spatial upsample → full-resolution refine
