@@ -80,7 +80,6 @@ class TorchDispatchModule(torch.nn.Module):
             self.metadata_len,
         )
 
-
     def forward(
         self,
         x: torch.Tensor,
