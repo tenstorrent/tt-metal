@@ -212,7 +212,7 @@ fi # wh-galaxy
 if run_group "bh-galaxy"; then
 
 # BH Galaxy 8x4 2x2 Hosts
-TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_6u_cluster_desc.yaml --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_8x4_2x2_hosts_mesh_graph_descriptor.textproto --mpi-args "--allow-run-as-root --oversubscribe"  ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.TestControlPlaneInitNoMGD
+TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_6u_cluster_desc.yaml --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_8x4_2x2_hosts_mesh_graph_descriptor.textproto --mpi-args "--allow-run-as-root --oversubscribe"  ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.TestGalaxyCornerPinnings
 
 # BH Galaxy per-host-sliced MGDs (noMGD control plane + auto rank-binding mapper).
 # Each MGD slices N physical BH galaxies across an MGD host grid; tt-run new mode
