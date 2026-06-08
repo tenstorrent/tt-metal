@@ -107,7 +107,7 @@ on:
         required: false
         type: string
         default: ""
-        description: "Non-harbor docker image for jobs running on ubuntu-latest (cannot pull from harbor)"
+        description: "Non-harbor docker image for CIV1 P100 and ubuntu-latest jobs (cannot pull from harbor)"
 
 # This is a fallback timeout for tests that are not marked with pytest.mark.timeout(xxx)
 env:
@@ -117,7 +117,7 @@ jobs:
   ttnn-conv-tests:
     if: ${{ inputs.run_conv_tests }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ (inputs.runner-label == 'P100a' && inputs.non-harbor-docker-image) || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
@@ -135,7 +135,7 @@ jobs:
     name: ttnn nightly conv tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        (inputs.runner-label == 'P100a' && fromJSON('["P100", "in-service"]'))
         || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
@@ -166,7 +166,7 @@ jobs:
   ttnn-matmul-tests:
     if: ${{ inputs.run_matmul_tests }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ (inputs.runner-label == 'P100a' && inputs.non-harbor-docker-image) || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
@@ -183,7 +183,7 @@ jobs:
     name: ttnn nightly matmul tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        (inputs.runner-label == 'P100a' && fromJSON('["P100", "in-service"]'))
         || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
@@ -257,7 +257,7 @@ jobs:
   ttnn-fused-tests:
     if: ${{ inputs.run_fused_tests }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ (inputs.runner-label == 'P100a' && inputs.non-harbor-docker-image) || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
@@ -274,7 +274,7 @@ jobs:
     name: ttnn nightly fused tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        (inputs.runner-label == 'P100a' && fromJSON('["P100", "in-service"]'))
         || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
@@ -305,7 +305,7 @@ jobs:
   ttnn-reduction-tests:
     if: ${{ inputs.run_reduction_tests }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ (inputs.runner-label == 'P100a' && inputs.non-harbor-docker-image) || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
@@ -322,7 +322,7 @@ jobs:
     name: ttnn nightly reduction tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        (inputs.runner-label == 'P100a' && fromJSON('["P100", "in-service"]'))
         || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
@@ -353,7 +353,7 @@ jobs:
   ttnn-experimental-tests:
     if: ${{ inputs.run_experimental_tests }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ (inputs.runner-label == 'P100a' && inputs.non-harbor-docker-image) || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
@@ -370,7 +370,7 @@ jobs:
     name: ttnn nightly experimental tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        (inputs.runner-label == 'P100a' && fromJSON('["P100", "in-service"]'))
         || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
@@ -402,7 +402,7 @@ jobs:
   ttnn-pool-tests:
     if: ${{ inputs.run_pool_tests }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ (inputs.runner-label == 'P100a' && inputs.non-harbor-docker-image) || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
@@ -419,7 +419,7 @@ jobs:
     name: ttnn nightly pool tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        (inputs.runner-label == 'P100a' && fromJSON('["P100", "in-service"]'))
         || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
@@ -516,7 +516,7 @@ jobs:
   ttnn-train-nightly-tests:
     if: ${{ inputs.run_train_tests }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ (inputs.runner-label == 'P100a' && inputs.non-harbor-docker-image) || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
@@ -535,7 +535,7 @@ jobs:
     name: tt-train nightly tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        (inputs.runner-label == 'P100a' && fromJSON('["P100", "in-service"]'))
         || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
@@ -565,7 +565,7 @@ jobs:
   ttnn-sdpa-nightly-tests:
     if: ${{ inputs.run_sdpa_tests }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ (inputs.runner-label == 'P100a' && inputs.non-harbor-docker-image) || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
@@ -583,7 +583,7 @@ jobs:
     name: tt-sdpa-nightly tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        (inputs.runner-label == 'P100a' && fromJSON('["P100", "in-service"]'))
         || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
@@ -617,7 +617,7 @@ jobs:
   ttnn-sdpa-stress-tests:
     if: ${{ inputs.run_sdpa_stress_tests }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ (inputs.runner-label == 'P100a' && inputs.non-harbor-docker-image) || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
@@ -635,7 +635,7 @@ jobs:
     name: tt-sdpa-stress tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        (inputs.runner-label == 'P100a' && fromJSON('["P100", "in-service"]'))
         || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
@@ -673,7 +673,7 @@ jobs:
       matrix:
         group: [1, 2, 3, 4]
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ (inputs.runner-label == 'P100a' && inputs.non-harbor-docker-image) || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
@@ -691,7 +691,7 @@ jobs:
     name: ttnn nightly eltwise tests group ${{ matrix.group }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        (inputs.runner-label == 'P100a' && fromJSON('["P100", "in-service"]'))
         || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
@@ -722,7 +722,7 @@ jobs:
   ttnn-transformers-tests:
     if: ${{ inputs.run_transformers_tests }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ (inputs.runner-label == 'P100a' && inputs.non-harbor-docker-image) || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
@@ -740,7 +740,7 @@ jobs:
     name: ttnn nightly transformers tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        (inputs.runner-label == 'P100a' && fromJSON('["P100", "in-service"]'))
         || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
@@ -770,7 +770,7 @@ jobs:
   ttnn-moreh-tests:
     if: ${{ inputs.run_moreh_tests }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ (inputs.runner-label == 'P100a' && inputs.non-harbor-docker-image) || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
@@ -788,7 +788,7 @@ jobs:
     name: ttnn nightly moreh tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        (inputs.runner-label == 'P100a' && fromJSON('["P100", "in-service"]'))
         || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
@@ -818,7 +818,7 @@ jobs:
   ttnn-data_movement-tests:
     if: ${{ inputs.run_data_movement_tests }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ (inputs.runner-label == 'P100a' && inputs.non-harbor-docker-image) || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
@@ -836,7 +836,7 @@ jobs:
     name: ttnn nightly data_movement tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        (inputs.runner-label == 'P100a' && fromJSON('["P100", "in-service"]'))
         || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
@@ -876,7 +876,7 @@ jobs:
   ttnn-misc-tests:
     if: ${{ inputs.run_misc_tests }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ (inputs.runner-label == 'P100a' && inputs.non-harbor-docker-image) || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
@@ -894,7 +894,7 @@ jobs:
     name: ttnn nightly misc (rand and ssm) tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        (inputs.runner-label == 'P100a' && fromJSON('["P100", "in-service"]'))
         || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
