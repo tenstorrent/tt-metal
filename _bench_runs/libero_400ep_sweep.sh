@@ -89,7 +89,11 @@ for suite in libero_spatial libero_object libero_goal libero_10; do
   for idx in $(seq 0 9); do
     log="$LOG_DIR/${suite}_t${idx}.log"
     if [[ -f "$log" ]]; then
-      s=$(grep -oE "task[[:space:]]+${idx}:[[:space:]]+[0-9]+/10" "$log" | head -1 | grep -oE "^[0-9]+" | head -1)
+      # Extract the "N/10" fragment from "task  N:  S/10" and strip the trailing "/10".
+      # Earlier version used `grep -oE "^[0-9]+"` which never matched because the
+      # captured fragment starts with "task", not a digit — silently gave s=0.
+      sf=$(grep -oE "task[[:space:]]+${idx}:[[:space:]]+[0-9]+/10" "$log" | head -1 | grep -oE "[0-9]+/10" | head -1)
+      s=${sf%/10}
       s=${s:-0}
       attempted=$(grep -c "ep [0-9]\+: success" "$log" 2>/dev/null || echo 0)
       printf "    task %d:  %d/10   (%d eps recorded)\n" "$idx" "$s" "$attempted"
