@@ -1,4 +1,4 @@
-from typing import Optional, AsyncIterator, Iterator, Optional, TextIO
+from typing import Optional, AsyncIterator, Iterator, TextIO
 from dataclasses import dataclass, asdict
 from argparse import ArgumentParser
 from asyncio import StreamReader
