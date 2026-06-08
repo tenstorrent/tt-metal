@@ -910,10 +910,19 @@ static void populate_bank_mapping(
         MAX_NUM_BANKS);
 
     // noc_xy encoding: (y << 6) | x (matching Blackhole firmware encoding).
-    // Populate per-NOC preferred coords separately. On Wormhole the NOC-0 and
-    // NOC-1 preferred workers for a given DRAM view differ (e.g. channel 0
-    // NOC0=[2,2], NOC1=[1,1]). On Blackhole they happen to match, so this is
-    // a no-op change there.
+    // Per-NOC preferred coords: get_preferred_worker_core_for_dram_view's noc arg
+    // selects the view's worker_endpoint[noc] subchannel. On Wormhole the two
+    // subchannels coincide (worker_endpoint=[n,n]); on Blackhole they are distinct
+    // NOC ports of the same physical bank.
+    //
+    // The kernel-side extern is declared [NUM_NOCS][NUM_DRAM_BANKS] where the JIT
+    // define NUM_DRAM_BANKS == num_dram_channels_out, so the kernel's [noc][bank]
+    // row stride is the actual bank count — NOT this array's static MAX_NUM_BANKS
+    // dimension. Lay the table out flat with that same actual-count stride (matching
+    // silicon's [noc*num_banks + bank] vector) so noc=1 rows align. A 2D [noc][bank]
+    // write would stride by MAX_NUM_BANKS and the kernel's noc=1 reads would land on
+    // uninitialized zeros → coord (0,0) → wrong (DRAM) backing.
+    uint16_t* dram_tbl = &dram_bank_to_noc_xy[0][0];
     std::memset(dram_bank_to_noc_xy, 0, sizeof(dram_bank_to_noc_xy));
     std::memset(bank_to_dram_offset, 0, sizeof(bank_to_dram_offset));
     for (uint32_t ch = 0; ch < num_dram_channels_out && ch < MAX_NUM_BANKS; ch++) {
@@ -921,8 +930,8 @@ static void populate_bank_mapping(
         auto dc1 = metal_soc.get_preferred_worker_core_for_dram_view(ch, 1 /* NOC 1 */);
         uint16_t noc_xy0 = (static_cast<uint16_t>(dc0.y) << NOC_NODE_ID_BITS) | static_cast<uint16_t>(dc0.x);
         uint16_t noc_xy1 = (static_cast<uint16_t>(dc1.y) << NOC_NODE_ID_BITS) | static_cast<uint16_t>(dc1.x);
-        dram_bank_to_noc_xy[0][ch] = noc_xy0;
-        dram_bank_to_noc_xy[1][ch] = noc_xy1;
+        dram_tbl[0 * num_dram_channels_out + ch] = noc_xy0;
+        dram_tbl[1 * num_dram_channels_out + ch] = noc_xy1;
         bank_to_dram_offset[ch] = static_cast<int32_t>(metal_soc.get_address_offset(ch));
 
         log_debug(
@@ -944,6 +953,10 @@ static void populate_bank_mapping(
     // to.  Without this, every page maps to bank 0 (a single core) while the
     // host scatters across all worker cores — interleaved-L1 → sharded paths
     // read all zeros.
+    // Flat actual-count stride, same rationale as dram_bank_to_noc_xy above: the
+    // kernel reads l1_bank_to_noc_xy[noc][bank] with stride NUM_L1_BANKS (== the JIT
+    // define == num_l1_banks_out), not MAX_NUM_BANKS.
+    uint16_t* l1_tbl = &l1_bank_to_noc_xy[0][0];
     std::memset(l1_bank_to_noc_xy, 0, sizeof(l1_bank_to_noc_xy));
     std::memset(bank_to_l1_offset, 0, sizeof(bank_to_l1_offset));
     if (device) {
@@ -959,8 +972,8 @@ static void populate_bank_mapping(
             auto virt = device->virtual_core_from_logical_core(logical, CoreType::WORKER);
             uint16_t noc_xy = (static_cast<uint16_t>(virt.y) << NOC_NODE_ID_BITS) |
                               static_cast<uint16_t>(virt.x);
-            l1_bank_to_noc_xy[0][b] = noc_xy;  // NOC 0
-            l1_bank_to_noc_xy[1][b] = noc_xy;  // NOC 1 (same target in emule)
+            l1_tbl[0 * num_l1_banks_out + b] = noc_xy;  // NOC 0
+            l1_tbl[1 * num_l1_banks_out + b] = noc_xy;  // NOC 1 (same target in emule)
             // Intentionally leave bank_to_l1_offset[b] = 0.  emule's per-core
             // L1 mmap starts at byte 0 with no firmware-reserved prefix, so
             // silicon's `allocator->get_bank_offset(L1, b)` isn't applicable.
