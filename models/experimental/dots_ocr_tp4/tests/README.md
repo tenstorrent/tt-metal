@@ -1,3 +1,85 @@
+# dots.ocr — end-to-end & TP-scheme tests (`tt_symbiote`)
+
+All tests need a **`(1, 4)` mesh (4 devices)**
+and are verified on Blackhole QB2 — set `MESH_DEVICE=P150x4`.
+
+> The per-module PCC unit tests for the `dots_ocr_tp4` building blocks are documented
+> separately [below](#dotsocr-tp4--per-module-unit-tests).
+
+| # | Test | Scope | Checks against | Scheme options |
+|---|---|---|---|---|
+| 1a | `test_dots_ocr_decode_one_layer_l1_boundaries` | One decoder layer, decode (1 tok) | HF reference layer (PCC) | `row` (default) / `col_parallel` |
+| 1b | `test_dots_ocr_decode_full_decoder_l1_boundaries` | Full 28-layer decoder, decode (1 tok) | HF reference stack (PCC) | `row` (default) / `col_parallel` |
+| 1c | `test_dots_ocr_vision` | Full vision + text pipeline on a demo image | Generated text output | `row` (default) / `col_parallel` |
+| 2 | `test_dots_ocr_attention_tp4` | Decode attention, TP=4 | HF reference (PCC) | `k_parallel` / `n_parallel` |
+| 3 | `test_dots_ocr_mlp_tp4` | Decode MLP, TP=4 | Torch reference (PCC) | `row` / `col_fused_shardout` / `col_fused` / `col` |
+
+## 1. `test_dots_ocr.py`
+
+### 1a. Single decoder layer (decode, PCC)
+
+Runs one decoder layer in decode mode for one token and PCC-checks it against the HF
+reference layer.
+
+```bash
+# row parallel (default)
+MESH_DEVICE=P150x4 pytest -s \
+    models/experimental/tt_symbiote/tests/test_dots_ocr.py::test_dots_ocr_decode_one_layer_l1_boundaries
+
+# col parallel (use 'both' to run row + col)
+MESH_DEVICE=P150x4 DOTS_OCR_DECODE_ONE_LAYER_TP_SCHEMES=col_parallel pytest -s \
+    models/experimental/tt_symbiote/tests/test_dots_ocr.py::test_dots_ocr_decode_one_layer_l1_boundaries
+```
+
+### 1b. Full 28-layer decoder (decode, PCC)
+
+Same as 1a but across all 28 decoder layers; PCC-checks the final stack output for one
+token. Catches error that accumulates layer-to-layer.
+
+```bash
+# row parallel (default)
+MESH_DEVICE=P150x4 pytest -s \
+    models/experimental/tt_symbiote/tests/test_dots_ocr.py::test_dots_ocr_decode_full_decoder_l1_boundaries
+
+# col parallel (use 'both' to run row + col)
+MESH_DEVICE=P150x4 DOTS_OCR_DECODE_FULL_DECODER_TP_SCHEMES=col_parallel pytest -s \
+    models/experimental/tt_symbiote/tests/test_dots_ocr.py::test_dots_ocr_decode_full_decoder_l1_boundaries
+```
+
+### 1c. Full vision + text pipeline (end-to-end)
+
+Runs the full vision + text pipeline on a demo image and prints the generated text.
+
+```bash
+# col parallel
+MESH_DEVICE=P150x4 TT_SYMBIOTE_RUN_MODE=TRACED DOTS_OCR_TP_DECODE_SCHEME=col_parallel pytest -s \
+    models/experimental/tt_symbiote/tests/test_dots_ocr.py::test_dots_ocr_vision
+```
+
+
+## 2. `test_dots_ocr_attention_tp4.py`
+
+Unit test for the decode attention at TP=4; PCC-checks the final decode token against the
+HF reference. Runs both `k_parallel` and `n_parallel`
+QKV schemes.
+
+```bash
+MESH_DEVICE=P150x4 pytest -s \
+    models/experimental/tt_symbiote/tests/test_dots_ocr_attention_tp4.py
+```
+
+## 3. `test_dots_ocr_mlp_tp4.py`
+
+Unit test for the MLP at TP=4 (prefill and decode), PCC-checked against a torch reference.
+Covers the `row`, `col_fused_shardout`, `col_fused`, and `col` variants.
+
+```bash
+MESH_DEVICE=P150x4 pytest -s \
+    models/experimental/tt_symbiote/tests/test_dots_ocr_mlp_tp4.py
+```
+
+---
+
 # dots.ocr TP4 — per-module unit tests
 
 Module-level PCC unit tests for the dots.ocr **TP4** (4-chip tensor-parallel) building

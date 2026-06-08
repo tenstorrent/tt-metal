@@ -26,6 +26,8 @@ from models.experimental.tt_symbiote.core.module import TTNNModule, TTNNLayerSta
 from models.experimental.tt_symbiote.modules.linear import (
     _ccl_num_links,
     _linear_mesh_num_devices,
+    _tp_mesh_mapper,
+    _tp_requires_ccl,
 )
 from ttnn.operations.transformer import SDPAProgramConfig
 
@@ -2594,8 +2596,8 @@ class TTNNDotsPatchMerger(TTNNModule):
         # BLOCK_SHARDED over the 8x8 grid ([M/8, N/8] = [384, 768] shards); fc2
         # consumes the fc1 output shard with no reshard. Requires the production
         # 8x8 grid with M (= folded S/4) divisible by the shard grid.
-        fc1_bs_pc = _vision_merger_fc1_bs_program_config(self.device)
-        fc2_bs_pc = _vision_merger_fc2_bs_program_config(self.device)
+        fc1_bs_pc = _vision_merger_fc1_bs_program_config(self.device, new_r)
+        fc2_bs_pc = _vision_merger_fc2_bs_program_config(self.device, new_r)
         bs_mem = _vision_block_sharded_mem(self.device, new_r, int(self.mlp_size))
         # The block-sharded fast path is tuned for the Wormhole 8x8 compute grid
         # with the production M (= folded S/4 = 3072). On other grids -- e.g. the
