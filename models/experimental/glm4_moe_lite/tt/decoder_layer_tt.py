@@ -17,6 +17,7 @@ from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
 from models.experimental.glm4_moe_lite.tt.linear_helpers import prefill_linear_ws_out, prefill_per_head_linear
 from models.experimental.glm4_moe_lite.tt.mlp_decode import dense_mlp_forward, moe_mlp_forward
 from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig
+from models.experimental.glm4_moe_lite.fused_ops.q_split_heads import q_split_heads
 
 _SIGNPOST_ENABLED = os.environ.get("GLM4_MOE_LITE_SIGNPOST", "").strip() == "1"
 if _SIGNPOST_ENABLED:
@@ -634,7 +635,12 @@ def run_decoder_layer_prefill_update_cache_tt(
 
     fuse_shared_gate_up = os.environ.get("GLM4_MOE_LITE_FUSE_SHARED_GATE_UP", "1").strip() != "0"
 
-    def _mlp_linear(a: ttnn.Tensor, b: ttnn.Tensor, memory_config: ttnn.MemoryConfig | None = None) -> ttnn.Tensor:
+    def _mlp_linear(
+        a: ttnn.Tensor,
+        b: ttnn.Tensor,
+        memory_config: ttnn.MemoryConfig | None = None,
+        skip_gather: bool = False,
+    ) -> ttnn.Tensor:
         m_total = 1
         for i in range(len(a.shape) - 1):
             m_total *= int(a.shape[i])
@@ -643,7 +649,12 @@ def run_decoder_layer_prefill_update_cache_tt(
             b_batch *= int(b.shape[i])
         if b_batch == 1 and m_total > ttnn.TILE_SIZE:
             return prefill_linear_ws_out(
-                a, b, device=device, compute_kernel_config=mlp_compute_kernel_config, memory_config=memory_config
+                a,
+                b,
+                device=device,
+                compute_kernel_config=mlp_compute_kernel_config,
+                memory_config=memory_config,
+                return_sharded=skip_gather,
             )
         if b_batch > 1 and m_total > ttnn.TILE_SIZE:
             return prefill_per_head_linear(a, b, device=device, compute_kernel_config=mlp_compute_kernel_config)
@@ -734,10 +745,15 @@ def run_decoder_layer_prefill_update_cache_tt(
         q = _mlp_linear(q_a, w.w_q_b)  # [1,1,T,H*qk_head_dim]
     ttnn.deallocate(q_a, force=False)
 
-    # Reshape Q from flat token dim to [B, S_pad, H, qk_head_dim], then permute
-    # to [B, H, S_pad, qk_head_dim] for attention.
-    q = ttnn.reshape(q, (batch, seq_len, num_heads, int(hparams.qk_head_dim)))
-    q = ttnn.permute(q, (0, 2, 1, 3))  # [B,H,S_pad,qk_head_dim]
+    q = q_split_heads(
+        q,
+        num_heads=num_heads,
+        head_dim=int(hparams.qk_head_dim),
+        total_seq=total_seq,
+        batch=batch,
+        seq_len=seq_len,
+        device=device,
+    )  # [B,H,S_pad,qk_head_dim]
     q_nope = ttnn.slice(q, [0, 0, 0, 0], [batch, num_heads, seq_len, int(hparams.qk_nope_head_dim)])
     q_rope = ttnn.slice(
         q, [0, 0, 0, int(hparams.qk_nope_head_dim)], [batch, num_heads, seq_len, int(hparams.qk_head_dim)]
@@ -984,10 +1000,14 @@ def run_decoder_layer_prefill_update_cache_tt(
         _gate_w = _ensure_interleaved(w.w_mlp_gate)
         _up_w = _ensure_interleaved(w.w_mlp_up)
         _down_w = _ensure_interleaved(w.w_mlp_down)
-        gate = _mlp_linear(x, _gate_w)
-        up = _mlp_linear(x, _up_w)
+        gate = _mlp_linear(x, _gate_w, skip_gather=True)
+        up = _mlp_linear(x, _up_w, skip_gather=True)
         ttnn.deallocate(x, force=False)
 
+        # gate and up are WIDTH_SHARDED L1; ttnn.mul with fused silu works on
+        # same-shard-spec inputs, avoiding two DRAM gathers.  x_ff stays in
+        # WIDTH_SHARDED L1; _prefill_linear_ws_out's _to_l1_if_needed gathers
+        # it L1→L1 (not DRAM→L1) before the down matmul.
         x_ff = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
         ttnn.deallocate(gate, force=False)
         ttnn.deallocate(up, force=False)
@@ -1052,8 +1072,8 @@ def run_decoder_layer_prefill_update_cache_tt(
         else:
             _gate_w = _ensure_interleaved(w.w_mlp_gate)
             _up_w = _ensure_interleaved(w.w_mlp_up)
-            gate_shared = _mlp_linear(x, _gate_w)
-            up_shared = _mlp_linear(x, _up_w)
+            gate_shared = _mlp_linear(x, _gate_w, skip_gather=True)
+            up_shared = _mlp_linear(x, _up_w, skip_gather=True)
         x_ff_shared = ttnn.mul(gate_shared, up_shared, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
         ttnn.deallocate(gate_shared, force=False)
         ttnn.deallocate(up_shared, force=False)
