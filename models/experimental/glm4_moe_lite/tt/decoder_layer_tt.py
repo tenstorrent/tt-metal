@@ -692,7 +692,7 @@ def run_decoder_layer_prefill_update_cache_tt(
             num_links=ccl_num_links,
             topology=ccl_topology,
             cluster_axis=tp_axis,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(out, force=False)
         return out_reduced
@@ -1000,7 +1000,7 @@ def run_decoder_layer_prefill_update_cache_tt(
                 num_links=ccl_num_links,
                 topology=ccl_topology,
                 cluster_axis=tp_axis,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             ttnn.deallocate(mlp_out, force=False)
             mlp_out = mlp_out_reduced
@@ -1065,7 +1065,7 @@ def run_decoder_layer_prefill_update_cache_tt(
                 num_links=ccl_num_links,
                 topology=ccl_topology,
                 cluster_axis=tp_axis,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             ttnn.deallocate(shared_out, force=False)
             shared_out = shared_out_reduced
