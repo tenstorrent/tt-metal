@@ -16,7 +16,7 @@ Pipeline:
     tokens (host) ─► embed_text_fn (device) ─► text_embedded (device, row-sharded)
                                                           │
                                                           ▼
-                                            splice_vision_on_device
+                                            splice_vision_via_host
                                                           │
                                                           ▼
                                        forward_from_embeddings_fn (device) ─► logits
@@ -76,7 +76,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3.tt.moonvit.model import MoonViT
-from models.demos.deepseek_v3.tt.moonvit.prefill_splice import splice_vision_on_device
+from models.demos.deepseek_v3.tt.moonvit.prefill_splice import splice_vision_via_host
 
 # Type aliases for clarity at call sites.
 EmbedTextFn = Callable[[ttnn.Tensor], ttnn.Tensor]
@@ -210,7 +210,7 @@ class MultimodalPrefillDriver:
         else:
             tokens_for_splice = tokens
 
-        fused = splice_vision_on_device(
+        fused = splice_vision_via_host(
             mesh_device=self.mesh_device,
             text_embedded_tt=text_embedded,
             tokens=tokens_for_splice,

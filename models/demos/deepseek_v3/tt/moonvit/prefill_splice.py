@@ -94,7 +94,7 @@ def splice_vision_into_text_embeddings(
     return text_embedded.masked_scatter(expanded_mask, vision_cast)
 
 
-def splice_vision_on_device(
+def splice_vision_via_host(
     mesh_device,
     text_embedded_tt: ttnn.Tensor,
     tokens: torch.Tensor,
@@ -104,7 +104,12 @@ def splice_vision_on_device(
     mesh_composer: Optional["ttnn.MeshComposer"] = None,
     mesh_mapper: Optional["ttnn.MeshMapper"] = None,
 ) -> ttnn.Tensor:
-    """Device → host → splice → device.
+    """Splice vision tokens into device-resident text embeddings via a host roundtrip.
+
+    Device → host → splice (on host, reusing ``splice_vision_into_text_embeddings``)
+    → device. This is NOT an on-device scatter — the splice itself runs on host;
+    a true on-device splice is deferred (see module docstring). The function only
+    handles the gather/push so callers holding device tensors don't have to.
 
     Args:
         mesh_device: the ttnn mesh device (or single device) owning ``text_embedded_tt``.

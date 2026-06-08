@@ -42,7 +42,7 @@ from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.deepseek_v3.tt.moonvit.model import MoonViT
 from models.demos.deepseek_v3.tt.moonvit.prefill_splice import (
     splice_vision_into_text_embeddings,
-    splice_vision_on_device,
+    splice_vision_via_host,
 )
 
 
@@ -131,7 +131,7 @@ def test_vision_tower_into_splice(mesh_device, model_args, grid_hws, prefix_toke
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
     )
-    fused_tt = splice_vision_on_device(
+    fused_tt = splice_vision_via_host(
         mesh_device=mesh_device,
         text_embedded_tt=text_tt,
         tokens=tokens,
