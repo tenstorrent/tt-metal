@@ -58,10 +58,11 @@ KWARG_ALIASES = {
     "ttnn.linear": {"input_tensor_b": 1},
     "ttnn.experimental.paged_fill_cache": {"page_table": 2},
     "ttnn.experimental.paged_update_cache": {"input_tensor": 0, "input_tensor_b": 1},
-    # Model traces sometimes record the gather input as the kwarg ``input_tensor``;
-    # the sweep calls all_gather_async positionally so the tracer captures it as
-    # ``arg0``. Canonicalize both to the positional form before comparing.
-    "ttnn.experimental.all_gather_async": {"input_tensor": 0},
+    # Model traces sometimes record the gather input as the kwarg ``input_tensor``
+    # and the gather dim as the kwarg ``dim``; the sweep calls all_gather_async
+    # positionally so the tracer captures them as ``arg0``/``arg1``. Canonicalize
+    # both to the positional form before comparing.
+    "ttnn.experimental.all_gather_async": {"input_tensor": 0, "dim": 1},
 }
 
 

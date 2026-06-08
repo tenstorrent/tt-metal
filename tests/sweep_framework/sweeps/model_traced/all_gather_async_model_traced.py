@@ -823,6 +823,16 @@ def run(
                     and persistent_output_buffer_was_provided
                 )
 
+                # Some variants (DeepSeek/llama "optimal CCL") pass the output
+                # buffer under the kwarg ``persistent_output_tensor`` instead of
+                # ``persistent_output_buffer``; reconstruct it the same way.
+                pot_shape_kw = kwargs.get("persistent_output_tensor_shape", _ABSENT)
+                pot_dtype_kw = kwargs.get("persistent_output_tensor_dtype", _ABSENT)
+                pot_layout_kw = kwargs.get("persistent_output_tensor_layout", _ABSENT)
+                pot_mem_config_kw = kwargs.get("persistent_output_tensor_memory_config", _ABSENT)
+                pot_placement_kw = kwargs.get("persistent_output_tensor_tensor_placement", _ABSENT)
+                pot_tensor_was_traced = pot_shape_kw not in (_ABSENT, None)
+
             for i in range(num_iters):
                 # Initialize before the try: if signal.signal() itself raises
                 # (e.g. not running in the main thread), the cleanup/except paths
@@ -860,6 +870,11 @@ def run(
                         if _was_traced(use_broadcast) and use_broadcast is not None:
                             op_kwargs["use_broadcast"] = bool(use_broadcast)
 
+                        # Pass the "optimal CCL for llama" flag when the model did.
+                        _uocl = kwargs.get("use_optimal_ccl_for_llama", _ABSENT)
+                        if _was_traced(_uocl) and _uocl is not None:
+                            op_kwargs["use_optimal_ccl_for_llama"] = bool(_uocl)
+
                         if pob_tensor_was_traced:
                             pob_tensor = _build_persistent_output_buffer(
                                 per_device_shape=_parse_shape_str(pob_shape_kw),
@@ -874,6 +889,18 @@ def run(
                         elif pob_explicit_none:
                             # Master had `persistent_output_buffer=None` explicitly.
                             op_kwargs["persistent_output_buffer"] = None
+
+                        # Output buffer passed under the alternate kwarg name.
+                        if pot_tensor_was_traced:
+                            op_kwargs["persistent_output_tensor"] = _build_persistent_output_buffer(
+                                per_device_shape=_parse_shape_str(pot_shape_kw),
+                                dtype_str=pot_dtype_kw,
+                                layout_str=pot_layout_kw,
+                                mem_config_dict=pot_mem_config_kw,
+                                tensor_placement=pot_placement_kw if isinstance(pot_placement_kw, dict) else None,
+                                device=device,
+                                mesh_shape=mesh_shape,
+                            )
 
                         if subdevice_id is not None or "subdevice_id" not in absent_keys:
                             # The model may have used a multi-sub-device layout
