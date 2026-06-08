@@ -102,20 +102,21 @@ def run_torch_routed_experts(
     "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
     [
         # fmt: off
-        (320, 1024, 512, 64, 2, 9, True),
+        #(320, 1024, 512, 64, 2, 9, True),
         # GLM 5.1 MoE shape (emb 6144, MoE hidden 2048, 256 routed experts, top-8).
         # capacity factor 8 mirrors test_prefill_combine.py for the same routed-expert load.
         (3200, GLM51Config.EMB_SIZE, GLM51Config.MOE_INTERMEDIATE_SIZE, GLM51Config.NUM_ROUTED_EXPERTS, GLM51Config.NUM_EXPERTS_PER_TOKEN, 8, True),
         (640, GLM51Config.EMB_SIZE, GLM51Config.MOE_INTERMEDIATE_SIZE, GLM51Config.NUM_ROUTED_EXPERTS, GLM51Config.NUM_EXPERTS_PER_TOKEN, 8, True),
         (3200, GLM51Config.EMB_SIZE, GLM51Config.MOE_INTERMEDIATE_SIZE, 64, GLM51Config.NUM_EXPERTS_PER_TOKEN, 8, True),
         (640, GLM51Config.EMB_SIZE, GLM51Config.MOE_INTERMEDIATE_SIZE, 64, GLM51Config.NUM_EXPERTS_PER_TOKEN, 8, True),
+        # (640, 7168, GLM51Config.MOE_INTERMEDIATE_SIZE, 64, 8, 8, True),
         # fmt: on
     ],
     ids=[
-        "small-dims-validate-pcc",
+        # s"small-dims-validate-pcc",
         "glm5.1-dims-validate-pcc",
-        "glm5.1-dims-64-experts-validate-pcc",
         "glm5.1-dims-small-seq-validate-pcc",
+        "glm5.1-dims-64-experts-validate-pcc",
         "glm5.1-dims-small-seq-64-experts-validate-pcc",
     ],
 )

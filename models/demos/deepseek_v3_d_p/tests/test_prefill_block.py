@@ -62,6 +62,10 @@ DSV3_THRESHOLDS = PrefillBlockThresholds()
 KIMI_THRESHOLDS = PrefillBlockThresholds(moe_gate_host=0.950)
 
 
+# Determinism: every iteration must be bit-identical to the iter-0 baseline (strict).
+DETERMINISM_PCC_THRESHOLD = 1.0
+
+
 def run_model(
     variant,
     config,
@@ -80,8 +84,10 @@ def run_model(
     is_ci_env,
     is_ci_v2_env,
     thresholds: PrefillBlockThresholds,
+    determinism_check: bool = False,
+    num_iterations: int = 1,
 ):
-    if (is_ci_env or is_ci_v2_env) and pcc_validation == False:
+    if (is_ci_env or is_ci_v2_env) and pcc_validation == False and not determinism_check:
         pytest.skip("Skip non-PCC test in CI to save time")
     # Kimi's parametrize has no `balanced` entry today (only non_balanced).
     # Applying this skip would zero out Kimi's CI coverage for this test.
@@ -277,6 +283,50 @@ def run_model(
         num_kvpe_cache_layers=1,
     )
 
+    # --- Determinism check (isolated from the pcc path below) ---
+    # Run num_iterations forwards on identical input; every iteration's output must be
+    # bit-identical (PCC == 1.0) to the iter-0 baseline.
+    if determinism_check:
+        if pcc_validation:
+            pytest.skip("determinism_check and pcc_validation are mutually exclusive — pick one")
+        if num_iterations < 2:
+            pytest.skip("determinism_check requires num_iterations >= 2 (iter 0 is the baseline)")
+        threshold = DETERMINISM_PCC_THRESHOLD
+        logger.info(f"Determinism check (threshold={threshold}, baseline=iter0)")
+        profiler.start("tt_forward")
+        baseline = None
+        det_failures = []
+        for i in range(num_iterations):
+            tt_output, _ = block(tt_input, rope_tensors, tt_kvpe_cache, return_kv_cache=False)
+            ttnn.synchronize_device(mesh_device)
+            out_host = ttnn.to_torch(
+                tt_output,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 3), mesh_shape=mesh_device.shape),
+            ).to(torch.bfloat16)
+            if i == 0:
+                baseline = out_host.clone()
+                logger.info("Determinism: captured iter0 baseline")
+                continue
+            try:
+                _, pcc = comp_pcc(baseline.float(), out_host.float())
+            except Exception as e:
+                logger.error(f"output PCC comparison failed: {e}")
+                pcc = -1.0
+            status = "PASS" if pcc >= threshold else ("FAIL" if pcc >= 0 else "ERROR")
+            logger.info(f"iter {i} output  PCC = {pcc:.6f}  {status}")
+            if pcc < threshold:
+                det_failures.append((i, pcc))
+        profiler.end("tt_forward")
+        profiler.end("total_test_time")
+        if det_failures:
+            msg = "; ".join(f"iter {it}: {pcc:.6f}" for it, pcc in det_failures)
+            pytest.fail(f"Determinism PCC below {threshold}: {msg}")
+        logger.success(
+            f"TtPrefillBlock determinism test passed across {num_iterations} iteration(s) "
+            f"(layer_type={layer_type}, gate_fallback_mode={gate_fallback_mode})"
+        )
+        return
+
     profiler.start("tt_forward")
     logger.info("Running TtPrefillBlock forward...")
     tt_output, tt_kvpe = block(tt_input, rope_tensors, tt_kvpe_cache, return_kv_cache=pcc_validation)
@@ -391,10 +441,40 @@ def run_model(
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="mesh-8x4",
         ),
+        pytest.param(
+            (2, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            },
+            1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-mesh-2x4",
+        ),
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="fabric2d-mesh-8x4",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
+@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
+@pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
 @pytest.mark.timeout(600)
 def test_ds_prefill_block(
     variant,
@@ -413,6 +493,8 @@ def test_ds_prefill_block(
     tokenizer,
     is_ci_env,
     is_ci_v2_env,
+    determinism_check,
+    num_iterations,
 ):
     run_model(
         variant,
@@ -431,6 +513,7 @@ def test_ds_prefill_block(
         tokenizer,
         is_ci_env,
         is_ci_v2_env,
+        determinism_check=determinism_check,
         thresholds=DSV3_THRESHOLDS,
     )
 
@@ -471,6 +554,8 @@ def test_ds_prefill_block(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
+@pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(900)
 def test_kimi_prefill_block(
@@ -490,6 +575,8 @@ def test_kimi_prefill_block(
     tokenizer,
     is_ci_env,
     is_ci_v2_env,
+    determinism_check,
+    num_iterations,
 ):
     run_model(
         variant,
@@ -508,5 +595,7 @@ def test_kimi_prefill_block(
         tokenizer,
         is_ci_env,
         is_ci_v2_env,
+        determinism_check=determinism_check,
+        num_iterations=num_iterations,
         thresholds=KIMI_THRESHOLDS,
     )

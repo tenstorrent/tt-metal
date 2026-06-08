@@ -128,6 +128,16 @@
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
+- name: runtime_noc_debugging
+  cmd: ./build/test/tt_metal/unit_tests_noc_debugging
+  skus:
+    wh_n150_civ2:
+      timeout: 5
+    bh_p150b_civ2:
+      timeout: 5
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
 # --- Ethernet Tests ---
 - name: runtime_eth
   cmd: ./build/test/tt_metal/unit_tests_eth

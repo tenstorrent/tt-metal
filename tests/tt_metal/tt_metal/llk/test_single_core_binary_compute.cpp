@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/reflection.hpp>
-#include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <cstddef>
@@ -115,12 +114,15 @@ struct BinaryStimulus {
 static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& test_config, bool is_quasar) {
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     BinaryStimulus s;
+    // Use fixed seeds so test results are deterministic and reproducible.
+    // Using wall-clock seeds caused intermittent tolerance failures depending on
+    // which random inputs were drawn (see https://github.com/tenstorrent/tt-metal/issues/46284).
     s.packed_input0 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -1.0f, 1.0f, byte_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
+        -1.0f, 1.0f, byte_size / sizeof(bfloat16), 0);
     s.packed_input1 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -1.0f, 1.0f, byte_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
+        -1.0f, 1.0f, byte_size / sizeof(bfloat16), 1);
     s.packed_input2 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -1.0f, 1.0f, byte_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
+        -1.0f, 1.0f, byte_size / sizeof(bfloat16), 2);
 
     auto input0 = unpack_vector<bfloat16, uint32_t>(s.packed_input0);
     auto input1 = unpack_vector<bfloat16, uint32_t>(s.packed_input1);
