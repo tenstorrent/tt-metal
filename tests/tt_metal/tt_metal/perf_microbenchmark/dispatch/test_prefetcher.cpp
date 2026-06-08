@@ -2501,8 +2501,12 @@ public:
         while (remaining_bytes > 0) {
             // Assumes terminate is the last command...
             uint32_t cmd = payload_generator_->get_rand<uint32_t>(0, CQ_PREFETCH_CMD_TERMINATE - 1);
-            const uint32_t limit_x = (worker_range.end_coord.x - first_worker.x - 1);
-            const uint32_t limit_y = (worker_range.end_coord.y - first_worker.y - 1);
+            // Underflow-safe: on a collapsed single-core range (Quasar) end_coord == first_worker, so the
+            // span is 0 and the limit stays 0. WH/BH is unchanged (end_coord.x == first_worker.x + 1 -> 0).
+            const uint32_t limit_x =
+                worker_range.end_coord.x > first_worker.x ? worker_range.end_coord.x - first_worker.x - 1 : 0;
+            const uint32_t limit_y =
+                worker_range.end_coord.y > first_worker.y ? worker_range.end_coord.y - first_worker.y - 1 : 0;
             uint32_t x = payload_generator_->get_rand<uint32_t>(0, limit_x);
             uint32_t y = payload_generator_->get_rand<uint32_t>(0, limit_y);
 
@@ -2539,7 +2543,10 @@ public:
                     break;
                 }
                 case CQ_PREFETCH_CMD_RELAY_INLINE: {
-                    const CoreCoord last_worker = {worker_core.x + 1, worker_core.y + 1};
+                    // On single-core arches (Quasar) collapse mcast to unicast to stay within grid.
+                    const CoreCoord last_worker = (device_->arch() == tt::ARCH::QUASAR)
+                                                      ? worker_core
+                                                      : CoreCoord{worker_core.x + 1, worker_core.y + 1};
                     CoreRange multi_worker_range = {worker_core, last_worker};
                     auto result = gen_random_inline_cmd(device_data, multi_worker_range, noc_xy, remaining_bytes);
                     if (result.has_value()) {
