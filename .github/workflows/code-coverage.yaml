@@ -303,8 +303,7 @@ jobs:
           EOF
 
       - name: Publish to tt-metal-code-coverage
-        # TODO: restore `github.ref == 'refs/heads/main'` gate after testing
-        if: always()
+        if: github.ref == 'refs/heads/main'
         run: |
           git clone --depth 1 --branch gh-pages \
             "https://x-access-token:${{ secrets.CLANGSA_RESULTS_PAT }}@github.com/tenstorrent/tt-metal-code-coverage.git" \
