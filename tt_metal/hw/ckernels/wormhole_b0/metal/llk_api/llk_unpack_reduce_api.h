@@ -10,6 +10,19 @@
  * LLK UNPACK REDUCE
  *************************************************************************/
 
+/**
+ * @brief Initialize the unpacker for a reduce-with-scaler operation.
+ *
+ * Derives the SrcB (scaler) data formats from the operand's circular buffer, sets haloize
+ * (transpose) mode according to the reduce dimension and the transpose flag, programs the datum
+ * count, and programs the reduce MOP.
+ *
+ * @tparam type: Reduction pooling op, values = <SUM/AVG/MAX>
+ * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose.
+ * @ref llk_unpack_reduce is the matching execute call.
+ * @ref llk_math_reduce_init is the matching init on the math thread (single-operand unpack pairing).
+ */
 template <PoolType type, ReduceDim dim>
 inline void llk_unpack_reduce_init(const std::uint32_t within_face_16x16_transpose = 0) {
     constexpr std::uint32_t unpA_operand_id = 0;
@@ -25,6 +38,18 @@ inline void llk_unpack_reduce_init(const std::uint32_t within_face_16x16_transpo
     _llk_unpack_reduce_init_<type, dim>(unpB_src_format, unpB_dst_format, within_face_16x16_transpose);
 }
 
+/**
+ * @brief Unpack a tile for a reduce-with-scaler operation.
+ *
+ * Resolves the tile's L1 address from the operand's circular buffer and tile index, then runs the
+ * reduce MOP.
+ *
+ * @tparam type: Reduction pooling op, values = <SUM/AVG/MAX>
+ * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @param operand: Circular-buffer index of the operand to unpack.
+ * @param tile_index: Index of the tile within the circular buffer.
+ * @note Call @ref llk_unpack_reduce_init with matching template args before this function.
+ */
 template <PoolType type, ReduceDim dim>
 inline void llk_unpack_reduce(const std::uint32_t operand, const std::uint32_t tile_index) {
     std::uint32_t operand_id = get_operand_id(operand);

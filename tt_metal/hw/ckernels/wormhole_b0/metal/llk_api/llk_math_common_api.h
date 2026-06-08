@@ -19,6 +19,16 @@
 /*************************************************************************
  * LLK MATH COMMON
  *************************************************************************/
+/**
+ * @brief Configure the math (FPU) thread's ALU control registers for the source operands' data formats.
+ *
+ * Derives the source A/B data formats from the operands' circular buffers, enables INT8 math when
+ * needed, and sets FP32 dest accumulation mode.
+ *
+ * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
+ * @param srca_operand: Circular-buffer index of source A.
+ * @param srcb_operand: Circular-buffer index of source B.
+ */
 template <bool is_fp32_dest_acc_en>
 inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::uint32_t srcb_operand) {
     std::uint32_t srca_operand_id = get_operand_id(srca_operand);
@@ -27,38 +37,84 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
         unpack_dst_format[srca_operand_id], unpack_dst_format[srcb_operand_id]);
 }
 
+/**
+ * @brief Enable or disable FP32 accumulation in the destination register for both FPU and SFPU.
+ *
+ * @param enable: True to enable FP32 dest accumulation, false to disable.
+ */
 inline void llk_math_set_fp32_dest_acc(bool enable) { _llk_math_set_fp32_dest_acc_(enable); }
 
+/**
+ * @brief No-op on Wormhole; provided for API parity with architectures that support a remap stage.
+ */
 inline void llk_math_reconfig_remap(const bool /*remap_enable*/) {}
 
+/**
+ * @brief Block the math thread until the destination register is available for writing.
+ */
 inline void llk_math_wait_for_dest_available() {
     WAYPOINT("MWDW");
     _llk_math_wait_for_dest_available_<DST_SYNC_MODE>();
     WAYPOINT("MWDD");
 }
 
+/**
+ * @brief Signal completion of a destination section, flipping DEST banks in half-sync mode.
+ *
+ * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled.
+ */
 template <bool is_fp32_dest_acc_en>
 inline void llk_math_dest_section_done() {
     _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
 }
 
+/**
+ * @brief Initialize the math/pack synchronization semaphore and reset the destination section base.
+ *
+ * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled.
+ */
 template <bool is_fp32_dest_acc_en>
 inline void llk_math_pack_sync_init() {
     _llk_math_pack_sync_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
 }
 
+/**
+ * @brief Reconfigure the math thread for a new source A data format taken from the operand's circular buffer.
+ *
+ * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled (required when
+ * to_from_int8 is set).
+ * @tparam to_from_int8: Set when the reconfiguration switches to or from an Int8/Int32 format.
+ * @param srca_new_operand: Circular-buffer index of the new source A operand.
+ */
 template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void llk_math_reconfig_data_format_srca(const std::uint32_t srca_new_operand) {
     std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
     _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, to_from_int8>(unpack_dst_format[new_srca_operand_id]);
 }
 
+/**
+ * @brief Reconfigure the math thread for a new source B data format taken from the operand's circular buffer.
+ *
+ * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled (required when
+ * to_from_int8 is set).
+ * @tparam to_from_int8: Set when the reconfiguration switches to or from an Int8/Int32 format.
+ * @param srcb_new_operand: Circular-buffer index of the new source B operand.
+ */
 template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void llk_math_reconfig_data_format_srcb(const std::uint32_t srcb_new_operand) {
     std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
     _llk_math_reconfig_data_format_srcb_<is_fp32_dest_acc_en, to_from_int8>(unpack_dst_format[new_srcb_operand_id]);
 }
 
+/**
+ * @brief Reconfigure the math thread for new source A and source B data formats from their circular buffers.
+ *
+ * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled (required when
+ * to_from_int8 is set).
+ * @tparam to_from_int8: Set when the reconfiguration switches to or from an Int8/Int32 format.
+ * @param srca_new_operand: Circular-buffer index of the new source A operand.
+ * @param srcb_new_operand: Circular-buffer index of the new source B operand.
+ */
 template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void llk_math_reconfig_data_format(const std::uint32_t srca_new_operand, const std::uint32_t srcb_new_operand) {
     std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
@@ -68,6 +124,19 @@ inline void llk_math_reconfig_data_format(const std::uint32_t srca_new_operand, 
         unpack_dst_format[new_srca_operand_id], unpack_dst_format[new_srcb_operand_id]);
 }
 
+/**
+ * @brief Conditionally reconfigure source A and/or source B math formats when switching operands.
+ *
+ * Reprograms only the source(s) whose data format differs between the old and new operands.
+ *
+ * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled (required when
+ * to_from_int8 is set).
+ * @tparam to_from_int8: Set when the reconfiguration switches to or from an Int8/Int32 format.
+ * @param srca_old_operand: Currently configured source A operand (circular-buffer index).
+ * @param srca_new_operand: New source A operand (circular-buffer index).
+ * @param srcb_old_operand: Currently configured source B operand (circular-buffer index).
+ * @param srcb_new_operand: New source B operand (circular-buffer index).
+ */
 template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void llk_math_reconfig_data_format(
     const std::uint32_t srca_old_operand,
@@ -89,6 +158,17 @@ inline void llk_math_reconfig_data_format(
     }
 }
 
+/**
+ * @brief Conditionally reconfigure the source A math format when switching operands.
+ *
+ * Reprograms only when the new operand's data format differs from the old one.
+ *
+ * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled (required when
+ * to_from_int8 is set).
+ * @tparam to_from_int8: Set when the reconfiguration switches to or from an Int8/Int32 format.
+ * @param srca_old_operand: Currently configured source A operand (circular-buffer index).
+ * @param srca_new_operand: New source A operand (circular-buffer index).
+ */
 template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void llk_math_reconfig_data_format_srca(
     const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
@@ -100,6 +180,17 @@ inline void llk_math_reconfig_data_format_srca(
     }
 }
 
+/**
+ * @brief Conditionally reconfigure the source B math format when switching operands.
+ *
+ * Reprograms only when the new operand's data format differs from the old one.
+ *
+ * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled (required when
+ * to_from_int8 is set).
+ * @tparam to_from_int8: Set when the reconfiguration switches to or from an Int8/Int32 format.
+ * @param srcb_old_operand: Currently configured source B operand (circular-buffer index).
+ * @param srcb_new_operand: New source B operand (circular-buffer index).
+ */
 template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void llk_math_reconfig_data_format_srcb(
     const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {

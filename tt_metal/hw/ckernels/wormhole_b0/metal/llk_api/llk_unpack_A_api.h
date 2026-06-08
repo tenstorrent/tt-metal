@@ -10,6 +10,22 @@
  * LLK UNPACK A
  *************************************************************************/
 
+/**
+ * @brief Initialize the unpacker for a single-operand (A) unpack.
+ *
+ * Derives face_r_dim, num_faces, and the data formats from the operand's circular buffer, then
+ * programs the within-face transpose register, datum count, and MOP for the requested mode.
+ *
+ * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
+ * @tparam acc_to_dest: Accumulate the operand into the dest register rather than overwriting it.
+ * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
+ * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
+ * @param transpose_of_faces: Nonzero to reorder (transpose) faces during the unpack.
+ * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose (haloize mode).
+ * @param operand: Circular-buffer index of the operand to unpack.
+ * @note Call @ref llk_unpack_A_uninit after unpacking to restore the modified datum-count state.
+ * @ref llk_unpack_A is the matching execute call.
+ */
 template <
     BroadcastType BType = BroadcastType::NONE,
     bool acc_to_dest = false,
@@ -40,6 +56,22 @@ inline void llk_unpack_A_init(
         operand_unpack_dst_format);
 }
 
+/**
+ * @brief Unpack a single tile (operand A) from L1 into the SrcA/SrcB or dest register.
+ *
+ * Resolves the tile's L1 address from the operand's circular buffer and the given tile index,
+ * then runs the configured MOP.
+ *
+ * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
+ * @tparam acc_to_dest: Accumulate the operand into the dest register rather than overwriting it.
+ * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
+ * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
+ * @param operand: Circular-buffer index of the operand to unpack.
+ * @param tile_index: Index of the tile within the circular buffer.
+ * @note Call @ref llk_unpack_A_init with matching template args before this function, and
+ *       @ref llk_unpack_A_uninit after it to restore modified state.
+ * @ref llk_math_eltwise_unary_datacopy on the math thread consumes the tile unpacked here.
+ */
 template <
     BroadcastType BType = BroadcastType::NONE,
     bool acc_to_dest = false,
@@ -67,6 +99,22 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
     WAYPOINT("UPAD");
 }
 
+/**
+ * @brief Unpack a contiguous block of tiles (operand A) from L1.
+ *
+ * Resolves the starting tile's L1 address from the operand's circular buffer, then unpacks
+ * @p ntiles consecutive tiles by repeating the single-tile unpack.
+ *
+ * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
+ * @tparam acc_to_dest: Accumulate the operand into the dest register rather than overwriting it.
+ * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
+ * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
+ * @param operand: Circular-buffer index of the operand to unpack.
+ * @param start_tile_index: Index of the first tile within the circular buffer.
+ * @param ntiles: Number of consecutive tiles to unpack.
+ * @note Call @ref llk_unpack_A_init with matching template args before this function, and
+ *       @ref llk_unpack_A_uninit after it to restore modified state.
+ */
 template <
     BroadcastType BType = BroadcastType::NONE,
     bool acc_to_dest = false,
@@ -90,6 +138,16 @@ inline void llk_unpack_A_block(
     }
 }
 
+/**
+ * @brief Restore unpacker datum-count state after single-operand (A) unpacking.
+ *
+ * Resets the X-dimension address counter back to a full face worth of datums, using the
+ * operand's face_r_dim taken from its circular buffer.
+ *
+ * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
+ * @param operand: Circular-buffer index of the operand that was unpacked.
+ * @note Call @ref llk_unpack_A_init with matching template args before this function.
+ */
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_A_uninit(const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);

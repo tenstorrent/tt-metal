@@ -10,6 +10,23 @@
  * LLK UNPACK AB MATMUL
  *************************************************************************/
 
+/**
+ * @brief Initialize the unpacker for a matmul (A x B) operation.
+ *
+ * Derives face dimensions, face counts, and partial-face flags from each operand's circular buffer,
+ * then programs the per-unpacker datum counts and the matmul MOP. Operand A feeds SrcB and operand B
+ * feeds SrcA.
+ *
+ * @param operandA: Circular-buffer index of the In0 operand (feeds SrcB, supports partial face).
+ * @param operandB: Circular-buffer index of the In1 operand (feeds SrcA).
+ * @param transpose: Nonzero to enable within-face (16x16) transpose for SrcA.
+ * @param ct_dim: Number of column tiles in the output block.
+ * @param rt_dim: Number of row tiles in the output block.
+ * @param kt_dim: Number of tiles along the contraction (K) dimension.
+ * @note Call @ref llk_unpack_AB_matmul to execute, and the matching uninit after to restore the
+ *       modified datum-count state.
+ * @ref llk_math_matmul_init is the matching init on the math thread (consumes SrcA/SrcB).
+ */
 __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -54,6 +71,22 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         partial_face_b);
 }
 
+/**
+ * @brief Unpack the operand tiles for a matmul (A x B) into SrcA and SrcB.
+ *
+ * Resolves each operand's L1 base address and tile size from its circular buffer, then unpacks
+ * operand A into SrcB and operand B into SrcA across the output block.
+ *
+ * @param operandA: Circular-buffer index of the In0 operand (feeds SrcB, supports partial face).
+ * @param operandB: Circular-buffer index of the In1 operand (feeds SrcA).
+ * @param tile_index_a: Starting tile index into operand A.
+ * @param tile_index_b: Starting tile index into operand B.
+ * @param ct_dim: Number of column tiles in the output block.
+ * @param rt_dim: Number of row tiles in the output block.
+ * @param kt_dim: Number of tiles along the contraction (K) dimension.
+ * @note Call @ref llk_unpack_AB_matmul_init before this function.
+ * @ref llk_math_matmul on the math thread consumes the SrcA/SrcB tiles unpacked here.
+ */
 inline void llk_unpack_AB_matmul(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
