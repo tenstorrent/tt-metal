@@ -187,18 +187,18 @@ void kernel_main() {
             // Local write.
             // For local writes use posted writes (to skip waiting for ack) on different virtual channel
             // (to avoid interfering with Fabric writes on same noc)
-            noc.async_write<Noc::TxnIdMode::DISABLED, Noc::ResponseMode::POSTED>(
+            noc.async_write<NocOptions::POSTED | NocOptions::CUSTOM_VC>(
                 CoreLocalMem<uint32_t>(l1_read_addr),
                 output_tensor_accessor,
                 output_page_size,
                 {},
                 {.page_id = page_id, .offset_bytes = output_page_byte_offset},
-                NOC_UNICAST_WRITE_VC + 1);
+                {.vc = NOC_UNICAST_WRITE_VC + 1});
 
             l1_read_addr += output_page_size;
         }
 
-        noc.async_writes_flushed<Noc::ResponseMode::POSTED>();  // wait for local writes
+        noc.async_writes_flushed<NocOptions::POSTED>();  // wait for local writes
         if constexpr (enable_fabric) {
             fabric.flush();  // wait for Fabric writes
         }

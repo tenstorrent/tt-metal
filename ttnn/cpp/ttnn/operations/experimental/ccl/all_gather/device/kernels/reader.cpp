@@ -208,14 +208,13 @@ void kernel_main() {
         // fill CB page
         for (uint32_t i = 0; i < inputs_per_cb_page && valid_input_page_id(); ++i) {
             auto page_id = next_input_page_id();
-            noc.async_read<Noc::TxnIdMode::ENABLED>(
+            noc.async_read<NocOptions::TXN_ID>(
                 input_tensor_accessor,
                 CoreLocalMem<uint32_t>(l1_write_addr),
                 input_page_size,
                 {.page_id = page_id},
                 {},
-                NOC_UNICAST_WRITE_VC,
-                curr_trid);
+                {.trid = curr_trid});
             l1_write_addr += input_page_size;
 
             // uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<true>(page_id);  // true for
@@ -229,7 +228,7 @@ void kernel_main() {
         curr_trid = (curr_trid == max_trid) ? 1 : curr_trid + 1;
         if (txns_in_flight) {
             // push_back() will unblock the writer to send Fabric data in opposite dir
-            noc.async_read_barrier<Noc::BarrierMode::TXN_ID>(wait_trid);
+            noc.async_read_barrier<NocOptions::TXN_ID>({.trid = wait_trid});
             cb.push_back(1);
             wait_trid = (wait_trid == max_trid) ? 1 : (wait_trid + 1);
 
@@ -258,7 +257,7 @@ void kernel_main() {
     // Drain in-flight reads
     while (wait_trid != curr_trid) {
         // push_back() will unblock the writer to send Fabric data in opposite dir
-        noc.async_read_barrier<Noc::BarrierMode::TXN_ID>(wait_trid);
+        noc.async_read_barrier<NocOptions::TXN_ID>({.trid = wait_trid});
         cb.push_back(1);
         wait_trid = (wait_trid == max_trid) ? 1 : (wait_trid + 1);
 
