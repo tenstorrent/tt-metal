@@ -20,8 +20,8 @@ All tensor format conventions:
 """
 
 import torch
-import ttnn
 
+import ttnn
 
 # Default memory configs (Stage 1: all DRAM, no sharding)
 
@@ -31,6 +31,7 @@ DEFAULT_LAYOUT = ttnn.TILE_LAYOUT
 
 
 # Tensor conversion helpers
+
 
 def to_device(
     tensor: torch.Tensor,
@@ -79,6 +80,7 @@ def to_host(
 
 
 # Weight preprocessing helpers
+
 
 def preprocess_linear_weight(
     weight: torch.Tensor,
@@ -170,11 +172,14 @@ def preprocess_conv1d_weight(
         TTNN tensor in ROW_MAJOR_LAYOUT on host.
     """
     return ttnn.from_torch(
-        weight.float(), dtype=DEFAULT_DTYPE, layout=ttnn.ROW_MAJOR_LAYOUT,
+        weight.float(),
+        dtype=DEFAULT_DTYPE,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
 
 # Conv output postprocessing
+
 
 def postprocess_conv_output(
     output_tensor: ttnn.Tensor,

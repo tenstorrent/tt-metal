@@ -1,5 +1,4 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
-
 # SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -22,8 +21,7 @@ def transcode_audio(input_stream, output_stream, output_format, sample_rate):
     if codec == "f32le":
         codec = "pcm_f32le"
 
-    with av.open(input_stream, "r") as inp, \
-         av.open(output_stream, "w", format=output_format) as out:
+    with av.open(input_stream, "r") as inp, av.open(output_stream, "w", format=output_format) as out:
         ostream = out.add_stream(codec, rate=sample_rate)
         try:
             ostream.layout = "mono"

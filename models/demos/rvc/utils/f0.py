@@ -1,5 +1,4 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
-
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -22,6 +21,4 @@ class F0Method(str, Enum):
             return cls(value)
         except ValueError as e:
             supported = ", ".join(m.value for m in cls)
-            raise ValueError(
-                f"Unsupported f0 method: {value!r}. Supported: {supported}"
-            ) from e
+            raise ValueError(f"Unsupported f0 method: {value!r}. Supported: {supported}") from e

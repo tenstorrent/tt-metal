@@ -32,9 +32,10 @@ import os
 
 import pytest
 import torch
-import ttnn
 from safetensors.torch import load_file
 
+import ttnn
+from models.demos.rvc.demo import MAX_CHUNK_FRAMES, OVERLAP, TARGET_LEN
 from models.demos.rvc.tests.pcc_utils import compute_pcc
 from models.demos.rvc.torch_impl.reference import (
     build_torch_generator,
@@ -47,7 +48,6 @@ from models.demos.rvc.tt.runtime import (
     UPSAMPLE_RATES,
     TTNNGeneratorNSF,
 )
-from models.demos.rvc.demo import MAX_CHUNK_FRAMES, OVERLAP, TARGET_LEN
 
 CHECKPOINT_PATH = os.path.join(
     os.path.dirname(__file__),
@@ -242,7 +242,7 @@ def test_generator_batched_matches_individual_b1_calls(checkpoint, B):
     def pcc(a, b):
         a, b = a.flatten().double(), b.flatten().double()
         a, b = a - a.mean(), b - b.mean()
-        denom = (torch.sqrt(torch.sum(a * a) * torch.sum(b * b)) + 1e-12)
+        denom = torch.sqrt(torch.sum(a * a) * torch.sum(b * b)) + 1e-12
         return float(torch.sum(a * b) / denom)
 
     # Fresh device for B=1 refs and again for the batched call so state
@@ -276,13 +276,10 @@ def test_generator_batched_matches_individual_b1_calls(checkpoint, B):
     for i in range(B):
         for j in range(i + 1, B):
             d = (out[i] - out[j]).abs().max().item()
-            assert d > 1e-3, (
-                f"B={B} rows {i} and {j} are identical (max_diff={d:.2e}) — "
-                f"per-row routing broken"
-            )
+            assert d > 1e-3, f"B={B} rows {i} and {j} are identical (max_diff={d:.2e}) — " f"per-row routing broken"
 
     # (b) each row matches its own B=1 reference within bf16 noise
-    pccs_self = [pcc(refs[i], out[i:i+1]) for i in range(B)]
+    pccs_self = [pcc(refs[i], out[i : i + 1]) for i in range(B)]
     for i, p in enumerate(pccs_self):
         assert p > 0.995, (
             f"B={B} row {i} does not match its B=1 reference (PCC={p:.4f}). "
@@ -296,7 +293,7 @@ def test_generator_batched_matches_individual_b1_calls(checkpoint, B):
         for j in range(B):
             if i == j:
                 continue
-            p_wrong = pcc(refs[j], out[i:i+1])
+            p_wrong = pcc(refs[j], out[i : i + 1])
             assert pccs_self[i] > p_wrong, (
                 f"B={B} row {i} matches ref{j} (PCC={p_wrong:.4f}) "
                 f"better than its own ref{i} (PCC={pccs_self[i]:.4f}) — "

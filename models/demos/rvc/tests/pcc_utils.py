@@ -8,8 +8,9 @@ Provides consistent comparison infrastructure between torch reference
 and TTNN device outputs.
 """
 
+from typing import Tuple
+
 import torch
-from typing import Tuple, Optional
 
 
 def compute_pcc(

@@ -13,23 +13,21 @@ Tests that persistent TTNN modules can:
 """
 
 import os
+
 import pytest
 import torch
-import ttnn
-
 from safetensors.torch import load_file
 
-from models.demos.rvc.tests.pcc_utils import compute_pcc, assert_pcc
-from models.demos.rvc.tt.runtime import TTNNFlowDecoder, TTNNGeneratorNSF
+from models.demos.rvc.tests.pcc_utils import assert_pcc, compute_pcc
 from models.demos.rvc.torch_impl.reference import (
-    load_flow_torch_modules, torch_flow_forward,
-    build_torch_generator, torch_generator_forward,
+    build_torch_generator,
+    load_flow_torch_modules,
+    torch_flow_forward,
+    torch_generator_forward,
 )
+from models.demos.rvc.tt.runtime import TTNNFlowDecoder, TTNNGeneratorNSF
 
-
-CHECKPOINT_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "data", "assets", "pretrained_v2", "f0G48k.safetensors"
-)
+CHECKPOINT_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "assets", "pretrained_v2", "f0G48k.safetensors")
 
 
 @pytest.fixture(scope="module")

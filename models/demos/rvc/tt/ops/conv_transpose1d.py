@@ -19,9 +19,11 @@ Output size formula:
 
 from __future__ import annotations
 
-import torch
-import ttnn
 from typing import Optional, Tuple
+
+import torch
+
+import ttnn
 
 
 class TTNNConvTranspose1d:
@@ -134,11 +136,13 @@ class TTNNConvTranspose1d:
             # L_out = (L_in - 1)*stride - 2*padding + dilation*(kernel-1) + output_padding + 1
             # This class hardcodes dilation=1 (HiFi-GAN ConvTranspose1d).
             dilation = 1
-            out_w = ((input_length - 1) * self.stride
-                     - 2 * self.padding
-                     + dilation * (self.kernel_size - 1)
-                     + self.output_padding
-                     + 1)
+            out_w = (
+                (input_length - 1) * self.stride
+                - 2 * self.padding
+                + dilation * (self.kernel_size - 1)
+                + self.output_padding
+                + 1
+            )
 
         return output_tensor, out_w
 

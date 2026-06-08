@@ -32,15 +32,13 @@ Usage
     python -m models.demos.rvc.benchmark --max_secs 10.0 --warmup 1 --runs 3
 """
 
-import sys
 import os
+import sys
 
 _BENCH_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.abspath(os.path.join(_BENCH_DIR, "..", "..", "..", ".."))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
-
-import ttnn  # noqa: E402
 
 import argparse  # noqa: E402
 import math  # noqa: E402
@@ -57,24 +55,24 @@ import torch.nn.functional as F  # noqa: E402
 from safetensors.torch import load_file  # noqa: E402
 from scipy import signal  # noqa: E402
 
+import ttnn  # noqa: E402
+
 # Reuse demo.py's exact loaders and constants so the benchmark exercises the
 # identical inference graph.
-from models.demos.rvc.demo import (
-    # Chunking constants — demo.py is the single source of truth shared
-    # with the production-shape tests; eliminates drift between files.
+from models.demos.rvc.demo import (  # Chunking constants — demo.py is the single source of truth shared; with the production-shape tests; eliminates drift between files.
     MAX_CHUNK_FRAMES,
     OVERLAP,
-    TARGET_LEN,
     SR_HUBERT,
     SR_TARGET,
+    TARGET_LEN,
     UPP,
-    bh,
     ah,
-    load_hubert,
-    load_text_encoder,
-    load_source_module,
+    bh,
     extract_f0_dio,
     extract_f0_rmvpe,
+    load_hubert,
+    load_source_module,
+    load_text_encoder,
 )
 from models.demos.rvc.tests.pcc_utils import compute_pcc
 from models.demos.rvc.torch_impl.reference import (
@@ -123,6 +121,7 @@ def _worker_init(checkpoint_path: str, f0_method: str):
     _W_F0_METHOD = f0_method
     if f0_method == "rmvpe":
         from models.demos.rvc.torch_impl.rmvpe import RMVPEPitchAlgorithm
+
         _W_RMVPE = RMVPEPitchAlgorithm(sample_rate=SR_HUBERT, hop_size=160)
     torch.set_num_threads(1)  # avoid oversubscribe across worker procs
 
@@ -176,6 +175,7 @@ class BenchmarkSession:
         self.rmvpe = None
         if f0_method == "rmvpe":
             from models.demos.rvc.torch_impl.rmvpe import RMVPEPitchAlgorithm
+
             self.rmvpe = RMVPEPitchAlgorithm(sample_rate=SR_HUBERT, hop_size=160)
         print(f"    torch modules ready in {time.time() - t0:.2f}s")
 
@@ -210,8 +210,10 @@ class BenchmarkSession:
         kw = dict(device_id=device_id, l1_small_size=self.l1_small_size)
         if trace_shapes:
             kw["trace_region_size"] = 16_000_000
-        print(f"  Opening TTNN device id={device_id} (l1_small_size={self.l1_small_size}"
-              f"{', trace_region_size=' + str(kw['trace_region_size']) if trace_shapes else ''})...")
+        print(
+            f"  Opening TTNN device id={device_id} (l1_small_size={self.l1_small_size}"
+            f"{', trace_region_size=' + str(kw['trace_region_size']) if trace_shapes else ''})..."
+        )
         self.device = ttnn.open_device(**kw)
 
         print("  Loading TTNN modules (TTNNFlowDecoder + TTNNGeneratorNSF)...")
@@ -239,8 +241,9 @@ class BenchmarkSession:
             print(f"  Capturing Flow traces for shapes {trace_shapes}...")
             t0 = time.time()
             self.flow.warm_up_traces(trace_shapes)
-            print(f"    Flow traces ready in {time.time() - t0:.2f}s "
-                  f"({len(self.flow._flow_traces)} per-flow traces)")
+            print(
+                f"    Flow traces ready in {time.time() - t0:.2f}s " f"({len(self.flow._flow_traces)} per-flow traces)"
+            )
 
         print("  Loading torch reference modules (for correctness check)...")
         self.flow_torch = load_flow_torch_modules(self.sd)
@@ -257,9 +260,13 @@ class BenchmarkSession:
             self.device = None
 
 
-def run_inference(session: BenchmarkSession, audio: torch.Tensor,
-                  speaker_id: int = 0, f0_up_key: int = 0,
-                  capture_torch_reference: bool = True) -> dict:
+def run_inference(
+    session: BenchmarkSession,
+    audio: torch.Tensor,
+    speaker_id: int = 0,
+    f0_up_key: int = 0,
+    capture_torch_reference: bool = True,
+) -> dict:
     """One end-to-end inference. Mirrors demo.py's body exactly.
 
     Returns dict of timings, chunk info, output, and (optional) torch ref.
@@ -313,7 +320,7 @@ def run_inference(session: BenchmarkSession, audio: torch.Tensor,
             ext_len = ext_end - ext_start
 
             z_p_chunk = z_p[:, :, ext_start:ext_end]
-            har_chunk = har_source[:, :, ext_start * UPP:ext_end * UPP]
+            har_chunk = har_source[:, :, ext_start * UPP : ext_end * UPP]
 
             if ext_len < TARGET_LEN:
                 pad_len = TARGET_LEN - ext_len
@@ -339,27 +346,29 @@ def run_inference(session: BenchmarkSession, audio: torch.Tensor,
             t_gen_total += t_gen
 
             # Same trim logic as demo.py.
-            audio_chunk = audio_chunk[:, :, :ext_len * UPP]
+            audio_chunk = audio_chunk[:, :, : ext_len * UPP]
             z_chunk = z_chunk[:, :, :ext_len]
             lt = (nom_start - ext_start) * UPP
             rt = (ext_end - nom_end) * UPP
-            nominal_audio = audio_chunk[:, :, lt:audio_chunk.shape[2] - rt if rt > 0 else audio_chunk.shape[2]]
+            nominal_audio = audio_chunk[:, :, lt : audio_chunk.shape[2] - rt if rt > 0 else audio_chunk.shape[2]]
             lz = nom_start - ext_start
             rz = ext_end - nom_end
-            nominal_z = z_chunk[:, :, lz:z_chunk.shape[2] - rz if rz > 0 else z_chunk.shape[2]]
+            nominal_z = z_chunk[:, :, lz : z_chunk.shape[2] - rz if rz > 0 else z_chunk.shape[2]]
 
             audio_segments.append(nominal_audio)
             ttnn_z_chunks.append(nominal_z)
-            chunk_log.append({
-                "chunk_idx": c,
-                "nominal_T": nom_end - nom_start,
-                "ext_T": ext_len,
-                "padded_to": TARGET_LEN,
-                "flow_s": t_flow,
-                "gen_s": t_gen,
-                "total_s": time.time() - chunk_t0,
-                "backend": "TTNN",
-            })
+            chunk_log.append(
+                {
+                    "chunk_idx": c,
+                    "nominal_T": nom_end - nom_start,
+                    "ext_T": ext_len,
+                    "padded_to": TARGET_LEN,
+                    "flow_s": t_flow,
+                    "gen_s": t_gen,
+                    "total_s": time.time() - chunk_t0,
+                    "backend": "TTNN",
+                }
+            )
 
         audio_out = torch.cat(audio_segments, dim=2)
         z_out = torch.cat(ttnn_z_chunks, dim=2)
@@ -382,7 +391,7 @@ def run_inference(session: BenchmarkSession, audio: torch.Tensor,
                 ext_len = ext_end - ext_start
 
                 z_p_c = z_p[:, :, ext_start:ext_end]
-                har_c = har_source[:, :, ext_start * UPP:ext_end * UPP]
+                har_c = har_source[:, :, ext_start * UPP : ext_end * UPP]
                 if ext_len < TARGET_LEN:
                     pad_len = TARGET_LEN - ext_len
                     z_p_c = F.pad(z_p_c, (0, pad_len))
@@ -391,14 +400,14 @@ def run_inference(session: BenchmarkSession, audio: torch.Tensor,
                 z_ref = torch_flow_forward(z_p_c, g, session.flow_torch)
                 a_ref = torch_generator_forward(z_ref, har_c, g, session.gen_torch)
 
-                a_ref = a_ref[:, :, :ext_len * UPP]
+                a_ref = a_ref[:, :, : ext_len * UPP]
                 z_ref = z_ref[:, :, :ext_len]
                 lt = (nom_start - ext_start) * UPP
                 rt = (ext_end - nom_end) * UPP
-                nom_a = a_ref[:, :, lt:a_ref.shape[2] - rt if rt > 0 else a_ref.shape[2]]
+                nom_a = a_ref[:, :, lt : a_ref.shape[2] - rt if rt > 0 else a_ref.shape[2]]
                 lz = nom_start - ext_start
                 rz = ext_end - nom_end
-                nom_z = z_ref[:, :, lz:z_ref.shape[2] - rz if rz > 0 else z_ref.shape[2]]
+                nom_z = z_ref[:, :, lz : z_ref.shape[2] - rz if rz > 0 else z_ref.shape[2]]
                 ref_audio_segs.append(nom_a)
                 ref_z_segs.append(nom_z)
 
@@ -416,9 +425,7 @@ def run_inference(session: BenchmarkSession, audio: torch.Tensor,
     if not torch.isfinite(audio_out).all():
         raise AssertionError("output contains NaN or Inf")
     if audio_out.abs().max() > 1.0:
-        raise AssertionError(
-            f"output exceeds [-1, 1]: max abs = {audio_out.abs().max().item():.4f}"
-        )
+        raise AssertionError(f"output exceeds [-1, 1]: max abs = {audio_out.abs().max().item():.4f}")
 
     return {
         "audio_out": audio_out,
@@ -443,7 +450,7 @@ def _run_chunked_ttnn_batched(session, z_p_batch, har_batch, g_batch, num_frames
         ext_end = min(num_frames, nom_end + OVERLAP)
         ext_len = ext_end - ext_start
         z_p_chunk = z_p_batch[:, :, ext_start:ext_end]
-        har_chunk = har_batch[:, :, ext_start * UPP:ext_end * UPP]
+        har_chunk = har_batch[:, :, ext_start * UPP : ext_end * UPP]
         if ext_len < TARGET_LEN:
             pad_len = TARGET_LEN - ext_len
             z_p_chunk = F.pad(z_p_chunk, (0, pad_len))
@@ -460,17 +467,21 @@ def _run_chunked_ttnn_batched(session, z_p_batch, har_batch, g_batch, num_frames
                 f"chunk {c} at B={batch} (T={nom_end - nom_start}, "
                 f"ext={ext_len}): TTNN raised {type(e).__name__}: {str(e)[:200]}"
             ) from e
-        audio_chunk = audio_chunk[:, :, :ext_len * UPP]
+        audio_chunk = audio_chunk[:, :, : ext_len * UPP]
         lt = (nom_start - ext_start) * UPP
         rt = (ext_end - nom_end) * UPP
-        nominal_audio = audio_chunk[:, :, lt:audio_chunk.shape[2] - rt if rt > 0 else audio_chunk.shape[2]]
+        nominal_audio = audio_chunk[:, :, lt : audio_chunk.shape[2] - rt if rt > 0 else audio_chunk.shape[2]]
         audio_segments.append(nominal_audio)
     return torch.cat(audio_segments, dim=2), t_flow_total, t_gen_total, n_chunks
 
 
-def run_inference_batched(session: BenchmarkSession, audio: torch.Tensor,
-                          batch: int, speaker_ids: Optional[List[int]] = None,
-                          f0_up_key: int = 0) -> dict:
+def run_inference_batched(
+    session: BenchmarkSession,
+    audio: torch.Tensor,
+    batch: int,
+    speaker_ids: Optional[List[int]] = None,
+    f0_up_key: int = 0,
+) -> dict:
     """Batched inference for B>=1. Default speaker_ids are distinct per row
     so cond_linear paths don't collapse to rank-1."""
     if batch < 1:
@@ -530,7 +541,8 @@ def run_inference_batched(session: BenchmarkSession, audio: torch.Tensor,
         g_batch = torch.cat(gs, dim=0)
 
         audio_out, t_flow_total, t_gen_total, n_chunks = _run_chunked_ttnn_batched(
-            session, z_p_batch, har_batch, g_batch, num_frames, batch)
+            session, z_p_batch, har_batch, g_batch, num_frames, batch
+        )
         timings["flow"] = t_flow_total
         timings["generator"] = t_gen_total
         timings["ttnn_total"] = t_flow_total + t_gen_total
@@ -552,9 +564,13 @@ def run_inference_batched(session: BenchmarkSession, audio: torch.Tensor,
     }
 
 
-def run_inference_batched_overlapped(session: BenchmarkSession, audio: torch.Tensor,
-                                      batch: int, speaker_ids: Optional[List[int]] = None,
-                                      f0_up_key: int = 0) -> dict:
+def run_inference_batched_overlapped(
+    session: BenchmarkSession,
+    audio: torch.Tensor,
+    batch: int,
+    speaker_ids: Optional[List[int]] = None,
+    f0_up_key: int = 0,
+) -> dict:
     """B>=2 batched inference with CPU/TTNN pipeline overlap. Splits batch
     into two micro-batches; mb2 preprocess runs in worker procs while main
     thread runs TTNN on mb1. Closes Stage 3 cross-stage pipeline gap for
@@ -583,25 +599,33 @@ def run_inference_batched_overlapped(session: BenchmarkSession, audio: torch.Ten
         mb1_res = [f.result() for f in mb1_futures]
         t_mb1_pre = time.time() - t_mb1_pre0
 
-        zs_p_1 = [r[0] for r in mb1_res]; hars_1 = [r[1] for r in mb1_res]; gs_1 = [r[2] for r in mb1_res]
+        zs_p_1 = [r[0] for r in mb1_res]
+        hars_1 = [r[1] for r in mb1_res]
+        gs_1 = [r[2] for r in mb1_res]
         num_frames = mb1_res[0][3]
-        z_p_1 = torch.cat(zs_p_1, dim=0); har_1 = torch.cat(hars_1, dim=0); g_1 = torch.cat(gs_1, dim=0)
+        z_p_1 = torch.cat(zs_p_1, dim=0)
+        har_1 = torch.cat(hars_1, dim=0)
+        g_1 = torch.cat(gs_1, dim=0)
 
         t_mb1_ttnn0 = time.time()
         audio_1, t_flow_1, t_gen_1, n_chunks = _run_chunked_ttnn_batched(
-            session, z_p_1, har_1, g_1, num_frames, len(mb1_ids))
+            session, z_p_1, har_1, g_1, num_frames, len(mb1_ids)
+        )
         t_mb1_ttnn = time.time() - t_mb1_ttnn0
 
         t_mb2_pre0 = time.time()
         mb2_res = [f.result() for f in mb2_futures]
         t_mb2_pre_observed = time.time() - t_mb2_pre0
 
-        zs_p_2 = [r[0] for r in mb2_res]; hars_2 = [r[1] for r in mb2_res]; gs_2 = [r[2] for r in mb2_res]
-        z_p_2 = torch.cat(zs_p_2, dim=0); har_2 = torch.cat(hars_2, dim=0); g_2 = torch.cat(gs_2, dim=0)
+        zs_p_2 = [r[0] for r in mb2_res]
+        hars_2 = [r[1] for r in mb2_res]
+        gs_2 = [r[2] for r in mb2_res]
+        z_p_2 = torch.cat(zs_p_2, dim=0)
+        har_2 = torch.cat(hars_2, dim=0)
+        g_2 = torch.cat(gs_2, dim=0)
 
         t_mb2_ttnn0 = time.time()
-        audio_2, t_flow_2, t_gen_2, _ = _run_chunked_ttnn_batched(
-            session, z_p_2, har_2, g_2, num_frames, len(mb2_ids))
+        audio_2, t_flow_2, t_gen_2, _ = _run_chunked_ttnn_batched(session, z_p_2, har_2, g_2, num_frames, len(mb2_ids))
         t_mb2_ttnn = time.time() - t_mb2_ttnn0
 
         audio_out = torch.cat([audio_1, audio_2], dim=0)
@@ -648,7 +672,9 @@ def _report(label: str, result: dict, audio_secs: float):
     print(f"  [{label}]")
     print(f"    chunks={result['n_chunks']}  frames={result['num_frames']}  output={output_secs:.3f}s")
     print(f"    audio_PCC={result['audio_pcc']:.6f}  flow_PCC={result['flow_pcc']:.6f}")
-    print(f"    preprocessing={_fmt(t['preprocessing'])}  (hubert={_fmt(t['hubert'])}  f0={_fmt(t['f0'])}  enc={_fmt(t['text_encoder'])}  src={_fmt(t['source'])})")
+    print(
+        f"    preprocessing={_fmt(t['preprocessing'])}  (hubert={_fmt(t['hubert'])}  f0={_fmt(t['f0'])}  enc={_fmt(t['text_encoder'])}  src={_fmt(t['source'])})"
+    )
     print(f"    flow={_fmt(t['flow'])}  generator={_fmt(t['generator'])}  ttnn_total={_fmt(t['ttnn_total'])}")
     print(f"    torch_ref={_fmt(t.get('torch_ref', 0.0))}")
     print(f"    RTF(TTNN_only)={rtf_ttnn:.4f}   RTF(full_pipeline)={rtf_total:.4f}")
@@ -658,31 +684,37 @@ def _report(label: str, result: dict, audio_secs: float):
 
 def main():
     parser = argparse.ArgumentParser(description="RVC TTNN benchmark (real demo path)")
-    parser.add_argument("--max_secs", type=float, default=3.0,
-                        help="Truncate input audio to this many seconds")
-    parser.add_argument("--warmup", type=int, default=1,
-                        help="Number of cold-start runs before steady-state timing")
-    parser.add_argument("--runs", type=int, default=3,
-                        help="Number of warm steady-state runs to time")
-    parser.add_argument("--f0_method", type=str, default="rmvpe",
-                        choices=["rmvpe", "dio"])
+    parser.add_argument("--max_secs", type=float, default=3.0, help="Truncate input audio to this many seconds")
+    parser.add_argument("--warmup", type=int, default=1, help="Number of cold-start runs before steady-state timing")
+    parser.add_argument("--runs", type=int, default=3, help="Number of warm steady-state runs to time")
+    parser.add_argument("--f0_method", type=str, default="rmvpe", choices=["rmvpe", "dio"])
     parser.add_argument("--device_id", type=int, default=0)
-    parser.add_argument("--batch", type=int, default=1,
-                        help="Number of concurrent voice conversions per "
-                             "batched TTNN call. B=1 runs the single-stream "
-                             "path with torch-reference PCC check; B>1 runs "
-                             "the batched path (per-row correctness covered "
-                             "by tests/test_production_shapes.py::"
-                             "test_generator_batched_matches_individual_b1_calls).")
-    parser.add_argument("--overlap", action="store_true",
-                        help="Use pipeline-overlapped batched path: split B into "
-                             "two micro-batches so CPU preprocess of mb2 overlaps "
-                             "with TTNN compute of mb1 (requires --batch >= 2).")
-    parser.add_argument("--trace", action="store_true",
-                        help="Capture and use trace+execute_trace for Flow's "
-                             "per-flow device compute. Pre-allocates persistent "
-                             "L1 buffers and replays the captured op sequence, "
-                             "amortizing host dispatch (~3x on Flow forward).")
+    parser.add_argument(
+        "--batch",
+        type=int,
+        default=1,
+        help="Number of concurrent voice conversions per "
+        "batched TTNN call. B=1 runs the single-stream "
+        "path with torch-reference PCC check; B>1 runs "
+        "the batched path (per-row correctness covered "
+        "by tests/test_production_shapes.py::"
+        "test_generator_batched_matches_individual_b1_calls).",
+    )
+    parser.add_argument(
+        "--overlap",
+        action="store_true",
+        help="Use pipeline-overlapped batched path: split B into "
+        "two micro-batches so CPU preprocess of mb2 overlaps "
+        "with TTNN compute of mb1 (requires --batch >= 2).",
+    )
+    parser.add_argument(
+        "--trace",
+        action="store_true",
+        help="Capture and use trace+execute_trace for Flow's "
+        "per-flow device compute. Pre-allocates persistent "
+        "L1 buffers and replays the captured op sequence, "
+        "amortizing host dispatch (~3x on Flow forward).",
+    )
     args = parser.parse_args()
     if args.batch < 1:
         parser.error("--batch must be >= 1")
@@ -709,7 +741,9 @@ def main():
     print(f"  MAX_CHUNK_FRAMES={MAX_CHUNK_FRAMES}  OVERLAP={OVERLAP}  TARGET_LEN={TARGET_LEN}")
     print(f"  warmup runs:   {args.warmup}")
     print(f"  timed runs:    {args.runs}")
-    print(f"  batch (B):     {args.batch}{'  (batched: per-row correctness tested via test_production_shapes)' if args.batch > 1 else ''}")
+    print(
+        f"  batch (B):     {args.batch}{'  (batched: per-row correctness tested via test_production_shapes)' if args.batch > 1 else ''}"
+    )
 
     # Audio prep (same as demo.py).
     audio_raw = load_audio(SR_HUBERT)
@@ -781,21 +815,31 @@ def main():
             warm_pre_mean = statistics.mean(r["timings"]["preprocessing"] for r in warm_results)
 
             print("\n" + "=" * 72)
-            print(f"HEADLINE — audio={audio_secs:.2f}s  output={output_secs:.2f}s  chunks={warm_results[0]['n_chunks']}")
+            print(
+                f"HEADLINE — audio={audio_secs:.2f}s  output={output_secs:.2f}s  chunks={warm_results[0]['n_chunks']}"
+            )
             print("=" * 72)
-            print(f"  First-run RTF (TTNN only):       {first_ttnn / output_secs:.4f}    ({_fmt(first_ttnn)} TTNN, JIT cache state-dependent)")
-            print(f"  Warm steady RTF (TTNN only):     {warm_ttnn_mean / output_secs:.4f}    ({_fmt(warm_ttnn_mean)} TTNN, mean of {args.runs})")
+            print(
+                f"  First-run RTF (TTNN only):       {first_ttnn / output_secs:.4f}    ({_fmt(first_ttnn)} TTNN, JIT cache state-dependent)"
+            )
+            print(
+                f"  Warm steady RTF (TTNN only):     {warm_ttnn_mean / output_secs:.4f}    ({_fmt(warm_ttnn_mean)} TTNN, mean of {args.runs})"
+            )
             print(f"  First-run RTF (full pipeline):   {(first_ttnn + first_pre) / output_secs:.4f}")
             print(f"  Warm steady RTF (full pipeline): {(warm_ttnn_mean + warm_pre_mean) / output_secs:.4f}")
             print(f"  Bounty target:                   RTF < 0.5")
             print(f"  Audio PCC (warm, mean):          {statistics.mean(warm_pcc):.6f}")
-            print(f"  Chunk backends used:             {sorted({c['backend'] for r in warm_results for c in r['chunk_log']})}")
+            print(
+                f"  Chunk backends used:             {sorted({c['backend'] for r in warm_results for c in r['chunk_log']})}"
+            )
             print(f"  Note: 'First-run' is NOT a cold-JIT run unless cache is wiped — see /root/.cache/ttnn")
             print("=" * 72)
         else:
             bench_fn = run_inference_batched_overlapped if args.overlap else run_inference_batched
             path_label = "overlapped" if args.overlap else "sequential"
-            print(f"\n--- First-run batched timings (n={args.warmup}, B={args.batch}, path={path_label}, JIT cache may be pre-warmed) ---")
+            print(
+                f"\n--- First-run batched timings (n={args.warmup}, B={args.batch}, path={path_label}, JIT cache may be pre-warmed) ---"
+            )
             for i in range(args.warmup):
                 t0 = time.time()
                 _ = bench_fn(session, audio, batch=args.batch)
@@ -810,9 +854,11 @@ def main():
                 warm_results.append(res)
                 n_workers = res["timings"]["preprocessing_workers"]
                 mode = res["timings"]["preprocessing_mode"]
-                print(f"  warm_{i}: ttnn={_fmt(res['timings']['ttnn_total'])}  "
-                      f"preprocess({mode} x{n_workers} for B={args.batch})={_fmt(res['timings']['preprocessing'])}  "
-                      f"wall={_fmt(res['wall'])}")
+                print(
+                    f"  warm_{i}: ttnn={_fmt(res['timings']['ttnn_total'])}  "
+                    f"preprocess({mode} x{n_workers} for B={args.batch})={_fmt(res['timings']['preprocessing'])}  "
+                    f"wall={_fmt(res['wall'])}"
+                )
 
             output_secs = warm_results[0]["audio_out"].shape[2] / SR_TARGET
             warm_ttnn_per_sample = statistics.mean(r["timings"]["ttnn_per_sample"] for r in warm_results)
@@ -821,18 +867,27 @@ def main():
             # For overlapped path, sequential sums overcount (CPU and TTNN run
             # in parallel) — use wall-time directly. For sequential path, wall
             # equals preproc + ttnn so both numbers agree.
-            full_rtf = warm_wall_per_sample / output_secs if args.overlap else \
-                       (warm_ttnn_per_sample + warm_pre_per_sample) / output_secs
+            full_rtf = (
+                warm_wall_per_sample / output_secs
+                if args.overlap
+                else (warm_ttnn_per_sample + warm_pre_per_sample) / output_secs
+            )
 
             print("\n" + "=" * 72)
-            print(f"HEADLINE — B={args.batch} concurrent  per-sample audio={output_secs:.2f}s  chunks={warm_results[0]['n_chunks']}  path={path_label}")
+            print(
+                f"HEADLINE — B={args.batch} concurrent  per-sample audio={output_secs:.2f}s  chunks={warm_results[0]['n_chunks']}  path={path_label}"
+            )
             print("=" * 72)
             print(f"  Per-sample TTNN:                       {_fmt(warm_ttnn_per_sample)}")
-            print(f"  Per-sample preprocess ({warm_results[0]['timings']['preprocessing_mode']}):  {_fmt(warm_pre_per_sample)}  (using {warm_results[0]['timings']['preprocessing_workers']} workers)")
+            print(
+                f"  Per-sample preprocess ({warm_results[0]['timings']['preprocessing_mode']}):  {_fmt(warm_pre_per_sample)}  (using {warm_results[0]['timings']['preprocessing_workers']} workers)"
+            )
             print(f"  Per-sample wall (overlap-corrected):   {_fmt(warm_wall_per_sample)}")
             print(f"  Per-sample RTF (TTNN only):            {warm_ttnn_per_sample / output_secs:.4f}")
             print(f"  Per-sample RTF (full pipeline):        {full_rtf:.4f}")
-            print(f"  Bounty stretched goal RTF < 0.2:       {'MET' if full_rtf < 0.2 else f'not met (need {0.2:.2f})'}")
+            print(
+                f"  Bounty stretched goal RTF < 0.2:       {'MET' if full_rtf < 0.2 else f'not met (need {0.2:.2f})'}"
+            )
             print(f"  Bounty stretched goal 5+ concurrent:   {'MET' if args.batch >= 5 else 'partial'}")
             print(f"  Note: per-row output correctness covered by test_generator_batched_matches_individual_b1_calls")
             print("=" * 72)
