@@ -28,6 +28,85 @@ def extract_acoustic_state_dict(full_state_dict: dict[str, torch.Tensor]) -> dic
     return {k[len(prefix) :]: v for k, v in full_state_dict.items() if k.startswith(prefix)}
 
 
+def _build_acoustic_1d_mcast_configs(dim: int, hidden_dim: int, n_heads: int, n_kv_heads: int, head_dim: int):
+    """1D mcast program configs for acoustic FM transformer decode, single device.
+
+    CFG doubles the batch to 2 for every euler step, so the effective M is 2 tiles
+    (bsz=2 × seq_tiles=1). All configs use per_core_M=2, mcast_in0=True on an
+    8×6=48-core grid.
+
+    Returns (ff1_3_config, ff2_config, wqkv_config, wo_config, proj_config) where
+    proj_config is reused for the w_time_proj and w_llm_proj dim→dim linears.
+    """
+    TILE = ttnn.TILE_SIZE  # 32
+
+    def _largest_divisor(n: int, max_d: int = 8) -> int:
+        for d in range(max_d, 0, -1):
+            if n % d == 0:
+                return d
+        return 1
+
+    def _best_subblock_w(per_core_n: int) -> int:
+        for w in (4, 3, 2, 1):
+            if per_core_n % w == 0:
+                return w
+        return 1
+
+    def _cfg(
+        gx: int, gy: int, kt: int, nc: int, nt: int, pm: int = 2
+    ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+        per_core_n = (nt + nc - 1) // nc
+        in0_bw = _largest_divisor(kt // nc)
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+            in0_block_w=in0_bw,
+            out_subblock_h=1,
+            out_subblock_w=_best_subblock_w(per_core_n),
+            per_core_M=pm,
+            per_core_N=per_core_n,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
+    def _cfg_ff2_wo(
+        gx: int, gy: int, kt: int, nc: int, nt: int, pm: int = 2
+    ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+        # For the contracting matmuls (w2, wo) the K is large; in0_block_w is capped at 4.
+        per_core_n = (nt + nc - 1) // nc
+        in0_bw = _largest_divisor(kt, max_d=4)
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+            in0_block_w=in0_bw,
+            out_subblock_h=1,
+            out_subblock_w=_best_subblock_w(per_core_n),
+            per_core_M=pm,
+            per_core_N=per_core_n,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
+    # Sweep winner grid for single-device acoustic decode (matches Voxtral text model).
+    gx, gy = 8, 6
+    nc = gx * gy  # 48
+
+    kt_dim = dim // TILE  # 96  (K=3072)
+    kt_hid = hidden_dim // TILE  # 288 (K=9216)
+    nt_dim = dim // TILE  # 96  (N=3072)
+    nt_hid = hidden_dim // TILE  # 288 (N=9216)
+    nt_wqkv = (n_heads + 2 * n_kv_heads) * head_dim // TILE  # 192 (N=6144)
+    kt_wo = n_heads * head_dim // TILE  # 128 (K=4096)
+
+    ff1_3_config = _cfg(gx, gy, kt_dim, nc, nt_hid)  # w1/w3: K=3072→N=9216
+    ff2_config = _cfg_ff2_wo(gx, gy, kt_hid, nc, nt_dim)  # w2:   K=9216→N=3072
+    wqkv_config = _cfg(gx, gy, kt_dim, nc, nt_wqkv)  # wqkv: K=3072→N=6144
+    wo_config = _cfg_ff2_wo(gx, gy, kt_wo, nc, nt_dim)  # wo:   K=4096→N=3072
+    proj_config = _cfg_ff2_wo(gx, gy, kt_dim, nc, nt_dim)  # proj: K=3072→N=3072
+
+    return ff1_3_config, ff2_config, wqkv_config, wo_config, proj_config
+
+
 def _linear_weight_ttnn(w_out_in: torch.Tensor, device, dtype) -> ttnn.Tensor:
     return ttnn.from_torch(
         w_out_in.transpose(-2, -1).contiguous(),
@@ -151,6 +230,25 @@ class VoxtralTTAcousticModel:
         self._compute_kernel_config = COMPUTE_KERNEL_CONFIG_VOXTRAL_ACOUSTIC
         self._semantic_compute_kernel_config = COMPUTE_KERNEL_CONFIG_VOXTRAL_SEMANTIC
 
+        # Build 1D-mcast program configs for acoustic FM decode (M=3 tokens → 1 tile).
+        # Infer hidden_dim from the w1 weight shape (dim→hidden_dim after transpose).
+        _w1_key = f"layers.0.feed_forward.w1"
+        _w1_key_w = f"{_w1_key}.weight"
+        _w1_raw = sd.get(_w1_key_w, sd.get(_w1_key))
+        _hidden_dim = int(_w1_raw.shape[0]) if _w1_raw is not None else 9216
+        _ff1_3_cfg, _ff2_cfg, _wqkv_cfg, _wo_cfg, _proj_cfg = _build_acoustic_1d_mcast_configs(
+            dim=dim,
+            hidden_dim=_hidden_dim,
+            n_heads=n_heads,
+            n_kv_heads=n_kv_heads,
+            head_dim=head_dim,
+        )
+        self._ff1_3_prg_config = _ff1_3_cfg
+        self._ff2_prg_config = _ff2_cfg
+        self._wqkv_prg_config = _wqkv_cfg
+        self._wo_prg_config = _wo_cfg
+        self._proj_prg_config = _proj_cfg
+
         def _rms(layer_num: int, key: str) -> VoxtralAcousticRMSNorm:
             return VoxtralAcousticRMSNorm(
                 device=mesh_device,
@@ -193,6 +291,8 @@ class VoxtralTTAcousticModel:
                 output_dtype=dtype,
                 compute_kernel_config=self._compute_kernel_config,
                 activation_memory_config=self._matmul_act_mem_config,
+                wqkv_program_config=self._wqkv_prg_config,
+                wo_program_config=self._wo_prg_config,
             )
             for i in range(n_layers)
         ]
@@ -208,6 +308,8 @@ class VoxtralTTAcousticModel:
                 exact_silu=True,
                 compute_kernel_config=self._compute_kernel_config,
                 activation_memory_config=self._matmul_act_mem_config,
+                ff1_3_program_config=self._ff1_3_prg_config,
+                ff2_program_config=self._ff2_prg_config,
             )
             for i in range(n_layers)
         ]
@@ -280,6 +382,7 @@ class VoxtralTTAcousticModel:
             dtype=self.dtype,
             memory_config=lin_mem,
             compute_kernel_config=self._compute_kernel_config,
+            program_config=self._proj_prg_config,
         )
         ttnn.deallocate(t_emb_tt)
         s2 = ttnn.linear(
@@ -288,6 +391,7 @@ class VoxtralTTAcousticModel:
             dtype=self.dtype,
             memory_config=lin_mem,
             compute_kernel_config=self._compute_kernel_config,
+            program_config=self._proj_prg_config,
         )
         if not borrow_llm:
             ttnn.deallocate(llm_hidden_tt)
@@ -326,16 +430,9 @@ class VoxtralTTAcousticModel:
             return x_sliced
 
         def _residual_add_rank3(h4: ttnn.Tensor, r4: ttnn.Tensor) -> ttnn.Tensor:
-            h4_shape = tuple(h4.shape)
-            r4_shape = tuple(r4.shape)
-            h3_local = ttnn.reshape(h4, (h4_shape[0], h4_shape[2], h4_shape[3]))
-            r3 = ttnn.reshape(r4, (r4_shape[0], r4_shape[2], r4_shape[3]))
-            out3 = ttnn.add(h3_local, r3, memory_config=self._fm_dram_mem_config, dtype=self.dtype)
-            out4 = ttnn.reshape(out3, (h4_shape[0], 1, h4_shape[2], h4_shape[3]))
-            ttnn.deallocate(h3_local)
-            ttnn.deallocate(r3)
-            ttnn.deallocate(out3)
-            return out4
+            # Direct 4D add — avoids reshape to 3D which produced ROW_MAJOR in L1 and
+            # triggered TilizeWithValPadding before every subsequent TILE_LAYOUT op.
+            return ttnn.add(h4, r4, memory_config=self._matmul_act_mem_config, dtype=self.dtype)
 
         residual_mc = self._matmul_act_mem_config
         for i in range(self.n_layers):
@@ -379,7 +476,7 @@ class VoxtralTTAcousticModel:
         """Masked fp32 semantic logits on device ``[B, 1, vocab]``."""
         llm_fp32 = llm_hidden_tt
         if llm_fp32.dtype != ttnn.float32:
-            llm_fp32 = ttnn.typecast(llm_fp32, ttnn.float32, memory_config=self._semantic_dram_mem_config)
+            llm_fp32 = ttnn.typecast(llm_fp32, ttnn.float32, memory_config=self._matmul_act_mem_config)
         sem_tt = ttnn.linear(
             llm_fp32,
             self.w_semantic,
@@ -393,7 +490,7 @@ class VoxtralTTAcousticModel:
             sem_tt,
             self._sem_mask_tt,
             dtype=ttnn.float32,
-            memory_config=self._semantic_dram_mem_config,
+            memory_config=self._matmul_act_mem_config,
         )
         ttnn.deallocate(sem_tt)
         sem_shape = tuple(masked.shape)
@@ -640,7 +737,7 @@ class VoxtralTTAcousticModel:
         for t_val, dt_val in zip(self._euler_t_vals, self._euler_dt_vals):
             te = self._time_embedding_tt(t_val, bsz)
             x_in = self._sampled_tt_for_velocity(sampled_tt)
-            x_batched = ttnn.concat([x_in, x_in], dim=0, memory_config=self._fm_dram_mem_config)
+            x_batched = ttnn.concat([x_in, x_in], dim=0, memory_config=self._matmul_act_mem_config)
             if x_in is not sampled_tt and x_in.is_allocated():
                 ttnn.deallocate(x_in)
             te_batched = ttnn.concat([te, te], dim=0, memory_config=self._matmul_act_mem_config)

@@ -50,6 +50,8 @@ class VoxtralTTAttention:
         compute_kernel_config=None,
         sdpa_compute_kernel_config=None,
         activation_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        wqkv_program_config=None,
+        wo_program_config=None,
         *,
         is_causal: bool = False,
         use_qk_norm: bool = False,
@@ -66,6 +68,8 @@ class VoxtralTTAttention:
         self.compute_kernel_config = compute_kernel_config
         self.sdpa_compute_kernel_config = sdpa_compute_kernel_config or compute_kernel_config
         self.activation_memory_config = activation_memory_config
+        self.wqkv_program_config = wqkv_program_config
+        self.wo_program_config = wo_program_config
         self.is_causal = is_causal
         self.use_qk_norm = use_qk_norm
         self._qk_norm_mode = qk_norm_mode
@@ -148,7 +152,11 @@ class VoxtralTTAttention:
         }
         if self.compute_kernel_config is not None:
             _lin_kw["compute_kernel_config"] = self.compute_kernel_config
-        xqkv = ttnn.linear(hidden_states, self.wqkv, **_lin_kw)
+
+        _wqkv_kw = dict(_lin_kw)
+        if self.wqkv_program_config is not None:
+            _wqkv_kw["program_config"] = self.wqkv_program_config
+        xqkv = ttnn.linear(hidden_states, self.wqkv, **_wqkv_kw)
 
         if self.use_qk_norm and self.q_norm is not None and self.k_norm is not None:
             b, one, s, _ = tuple(xqkv.shape)
@@ -275,6 +283,8 @@ class VoxtralTTAttention:
         if self.sdpa_compute_kernel_config is not None:
             _sdpa_kw["compute_kernel_config"] = self.sdpa_compute_kernel_config
         attn_out = ttnn.transformer.scaled_dot_product_attention(q, k_rep, v_rep, **_sdpa_kw)
+        # SDPA defaults to DRAM output; move to L1 so nlp_concat_heads reads from L1.
+        attn_out = ttnn.to_memory_config(attn_out, act_mem)
         if mask_owned and mask_tt is not None:
             ttnn.deallocate(mask_tt)
         ttnn.deallocate(q)
@@ -286,6 +296,9 @@ class VoxtralTTAttention:
             memory_config=act_mem,
         )
 
-        out = ttnn.linear(attn_out, self.wo, **_lin_kw)
+        _wo_kw = dict(_lin_kw)
+        if self.wo_program_config is not None:
+            _wo_kw["program_config"] = self.wo_program_config
+        out = ttnn.linear(attn_out, self.wo, **_wo_kw)
         ttnn.deallocate(attn_out)
         return out
