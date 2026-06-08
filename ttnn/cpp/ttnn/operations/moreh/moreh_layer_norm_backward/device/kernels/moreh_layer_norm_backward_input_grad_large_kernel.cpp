@@ -5,6 +5,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
 ALWI bool need_to_do_mask_h(uint32_t w_idx, uint32_t origin_num_h_tiles, uint32_t origin_num_w_tiles) {
     return ((w_idx / origin_num_w_tiles) + 1) % origin_num_h_tiles == 0;
@@ -334,23 +335,28 @@ void kernel_main() {
         // rstd / n -> cb_tmp3
         constexpr auto cb_recip_nrstd = cb_tmp3;
         CircularBuffer cb_recip_nrstd_obj(cb_recip_nrstd);
-        tile_regs_acquire();
-        cb_recip_nrstd_obj.reserve_back(onetile);
-
-        if (is_lastdim_layernorm) {
-            mul_bcast_cols_init_short_with_dt(cb_n_recip_n, cb_rstd);
-            mul_tiles_bcast_cols(cb_n_recip_n, cb_rstd, 1, 0, dst0);
-        } else {
-            mul_tiles_bcast_scalar_init_short_with_dt(cb_n_recip_n, cb_rstd);
-            mul_tiles_bcast_scalar(cb_n_recip_n, cb_rstd, 1, 0, dst0);
-        }
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_recip_nrstd);
-
-        cb_recip_nrstd_obj.push_back(onetile);
-        tile_regs_release();
+        // rstd / n: cb_n_recip_n[1] * cb_rstd. cb_n_recip_n CallerManaged + Scalar + TileOffset::Set{1} (held);
+        // cb_rstd CallerManaged + Scalar (held); cb_recip_nrstd Streaming. is_lastdim -> Col else Scalar bcast.
+        // *_init_short_with_dt -> Reconfig::Input, pack_tile_with_dt -> PackTileReconfig::Output.
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu<
+                cb_n_recip_n,
+                cb_rstd,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                is_lastdim_layernorm ? compute_kernel_lib::BroadcastDim::Col : compute_kernel_lib::BroadcastDim::Scalar,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::TileOffset::Set,
+                compute_kernel_lib::TileOffset::Unset>{1u, 0u},
+            compute_kernel_lib::PackTile<
+                cb_recip_nrstd,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
         // Compute cb_dx
         // ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * (rstd / n)
