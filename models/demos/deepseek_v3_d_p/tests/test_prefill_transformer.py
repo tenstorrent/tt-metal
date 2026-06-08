@@ -833,6 +833,9 @@ def run_model(
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="mesh-8x4",
         ),
+        # FABRIC_2D variants — shared list defined in conftest.py (also used by
+        # test_prefill_block_loop.py). Covers (4,2) BH LoudBox, (2,4) asymmetric, (8,4) BH Galaxy.
+        *FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS,
     ],
     indirect=["mesh_device", "device_params"],
 )
