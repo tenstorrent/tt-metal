@@ -86,9 +86,9 @@ void kernel_main() {
             noc.async_read(src, cb_id_src_obj, src_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
             noc.async_read_barrier();
             if constexpr (batch_stat_is_fp32) {
-                fill_tile_with_first_element<float>(cb_id_src);
+                fill_tile_with_first_element<float>(cb_id_src_obj.get_write_ptr());
             } else {
-                fill_tile_with_first_element_bfloat16(cb_id_src);
+                fill_tile_with_first_element_bfloat16(cb_id_src_obj.get_write_ptr());
             }
             cb_id_src_obj.push_back(onetile);
 
@@ -98,9 +98,9 @@ void kernel_main() {
                 batch_var, cb_id_batch_var_obj, batch_var_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
             noc.async_read_barrier();
             if constexpr (batch_stat_is_fp32) {
-                fill_tile_with_first_element<float>(cb_id_batch_var);
+                fill_tile_with_first_element<float>(cb_id_batch_var_obj.get_write_ptr());
             } else {
-                fill_tile_with_first_element_bfloat16(cb_id_batch_var);
+                fill_tile_with_first_element_bfloat16(cb_id_batch_var_obj.get_write_ptr());
             }
             cb_id_batch_var_obj.push_back(onetile);
 
@@ -110,9 +110,9 @@ void kernel_main() {
                     weight, cb_id_weight_obj, weight_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
                 noc.async_read_barrier();
                 if constexpr (param_is_fp32) {
-                    fill_tile_with_first_element<float>(cb_id_weight);
+                    fill_tile_with_first_element<float>(cb_id_weight_obj.get_write_ptr());
                 } else {
-                    fill_tile_with_first_element_bfloat16(cb_id_weight);
+                    fill_tile_with_first_element_bfloat16(cb_id_weight_obj.get_write_ptr());
                 }
                 cb_id_weight_obj.push_back(onetile);
             }
@@ -122,9 +122,9 @@ void kernel_main() {
                 noc.async_read(bias, cb_id_bias_obj, bias_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
                 noc.async_read_barrier();
                 if constexpr (param_is_fp32) {
-                    fill_tile_with_first_element<float>(cb_id_bias);
+                    fill_tile_with_first_element<float>(cb_id_bias_obj.get_write_ptr());
                 } else {
-                    fill_tile_with_first_element_bfloat16(cb_id_bias);
+                    fill_tile_with_first_element_bfloat16(cb_id_bias_obj.get_write_ptr());
                 }
                 cb_id_bias_obj.push_back(onetile);
             }

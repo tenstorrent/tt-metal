@@ -105,9 +105,9 @@ void kernel_main() {
 #endif
                         noc.async_read_barrier();
 #if SRC_SCALAR_A
-                        FILL_TILE_WITH_FIRST_ELEMENT(predicate_cb);
+                        FILL_TILE_WITH_FIRST_ELEMENT(cb_pred.get_write_ptr());
 #else
-                        FILL_TILE_WITH_FIRST_COLUMN(predicate_cb);
+                        FILL_TILE_WITH_FIRST_COLUMN(cb_pred.get_write_ptr());
 #endif
                         cb_pred.push_back(onetile);
 #endif
@@ -123,9 +123,9 @@ void kernel_main() {
 #endif
                         noc.async_read_barrier();
 #if SRC_SCALAR_CB1
-                        FILL_TILE_WITH_FIRST_ELEMENT_B(tensor_cb);
+                        FILL_TILE_WITH_FIRST_ELEMENT_B(cb_tensor.get_write_ptr());
 #else
-                        FILL_TILE_WITH_FIRST_COLUMN_B(tensor_cb);
+                        FILL_TILE_WITH_FIRST_COLUMN_B(cb_tensor.get_write_ptr());
 #endif
                         cb_tensor.push_back(onetile);
 #endif
@@ -138,7 +138,7 @@ void kernel_main() {
                                 s0, cb_pred, src0_tile_bytes, {.page_id = tile_offset + tw}, {.offset_bytes = 0});
                             noc.async_read_barrier();
 #if SRC_ROW_BCAST_A
-                            FILL_TILE_WITH_FIRST_ROW(predicate_cb);
+                            FILL_TILE_WITH_FIRST_ROW(cb_pred.get_write_ptr());
 #endif
                             cb_pred.push_back(onetile);
 #endif
@@ -153,7 +153,7 @@ void kernel_main() {
                                 {.offset_bytes = 0});
                             noc.async_read_barrier();
 #if SRC_ROW_BCAST_CB1
-                            FILL_TILE_WITH_FIRST_ROW_B(tensor_cb);
+                            FILL_TILE_WITH_FIRST_ROW_B(cb_tensor.get_write_ptr());
 #endif
                             cb_tensor.push_back(onetile);
 #endif

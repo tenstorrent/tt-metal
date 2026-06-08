@@ -113,7 +113,7 @@ void kernel_main() {
                         noc.async_read_barrier();
 #endif
 #if !BCAST_LLK
-                        FILL_TILE_WITH_FIRST_COLUMN(cb_id_src);
+                        FILL_TILE_WITH_FIRST_COLUMN(cb_src.get_write_ptr());
 #endif
                         cb_src.push_back(onetile);
 #endif
@@ -125,7 +125,7 @@ void kernel_main() {
                         noc.async_read_barrier();
 #endif
 #if !BCAST_LLK
-                        FILL_TILE_WITH_FIRST_COLUMN_B(cb_id_src_b);
+                        FILL_TILE_WITH_FIRST_COLUMN_B(cb_src_b.get_write_ptr());
 #endif
                         cb_src_b.push_back(onetile);
 #endif

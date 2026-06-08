@@ -92,9 +92,9 @@ void kernel_main() {
                         {.offset_bytes = 0});
                     noc.async_read_barrier();
                     if constexpr (old_stat_is_fp32) {
-                        fill_tile_with_first_element<float>(cb_id_old_running_mean);
+                        fill_tile_with_first_element<float>(cb_id_old_running_mean_obj.get_write_ptr());
                     } else {
-                        fill_tile_with_first_element_bfloat16(cb_id_old_running_mean);
+                        fill_tile_with_first_element_bfloat16(cb_id_old_running_mean_obj.get_write_ptr());
                     }
                     cb_id_old_running_mean_obj.push_back(onetile);
 
@@ -121,9 +121,9 @@ void kernel_main() {
                         {.offset_bytes = 0});
                     noc.async_read_barrier();
                     if constexpr (old_stat_is_fp32) {
-                        fill_tile_with_first_element<float>(cb_id_old_running_var);
+                        fill_tile_with_first_element<float>(cb_id_old_running_var_obj.get_write_ptr());
                     } else {
-                        fill_tile_with_first_element_bfloat16(cb_id_old_running_var);
+                        fill_tile_with_first_element_bfloat16(cb_id_old_running_var_obj.get_write_ptr());
                     }
                     cb_id_old_running_var_obj.push_back(onetile);
 

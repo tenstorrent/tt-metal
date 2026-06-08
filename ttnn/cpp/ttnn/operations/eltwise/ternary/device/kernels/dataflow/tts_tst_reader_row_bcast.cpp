@@ -122,10 +122,10 @@ void kernel_main() {
                             noc.async_read_barrier();
 #endif
 #if SRC_BCAST_A && !BCAST_LLK  // no sharding support for row bcast yet
-                            FILL_TILE_WITH_FIRST_ROW(cb_id_src);
+                            FILL_TILE_WITH_FIRST_ROW(cb_src.get_write_ptr());
 #endif
 #if SRC_BCAST_B && !BCAST_LLK  // no sharding support for row bcast yet
-                            FILL_TILE_WITH_FIRST_ROW_B(cb_id_src_b);
+                            FILL_TILE_WITH_FIRST_ROW_B(cb_src_b.get_write_ptr());
 #endif
 #if !SRC_SHARDED_A
                             cb_src.push_back(onetile);

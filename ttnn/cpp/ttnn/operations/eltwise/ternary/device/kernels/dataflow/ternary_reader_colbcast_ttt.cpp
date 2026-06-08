@@ -150,7 +150,7 @@ void kernel_main() {
                             s0, cb_pred, src0_tile_bytes, {.page_id = tile_offset + th}, {.offset_bytes = 0});
                         noc.async_read_barrier();
 #endif
-                        FILL_TILE_WITH_FIRST_COLUMN(predicate_cb);
+                        FILL_TILE_WITH_FIRST_COLUMN(cb_pred.get_write_ptr());
                         cb_pred.push_back(onetile);
 #endif
 #if SRC_BCAST_B
@@ -160,7 +160,7 @@ void kernel_main() {
                             s1, cb_true, src1_tile_bytes, {.page_id = true_tile_offset + th}, {.offset_bytes = 0});
                         noc.async_read_barrier();
 #endif
-                        FILL_TILE_WITH_FIRST_COLUMN_B(true_cb);
+                        FILL_TILE_WITH_FIRST_COLUMN_B(cb_true.get_write_ptr());
                         cb_true.push_back(onetile);
 #endif
 
@@ -172,7 +172,7 @@ void kernel_main() {
                             s2, cb_false, src2_tile_bytes, {.page_id = false_tile_offset + th}, {.offset_bytes = 0});
                         noc.async_read_barrier();
 #endif
-                        FILL_TILE_WITH_FIRST_COLUMN_C(false_cb);
+                        FILL_TILE_WITH_FIRST_COLUMN_C(cb_false.get_write_ptr());
                         cb_false.push_back(onetile);
 #endif
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;

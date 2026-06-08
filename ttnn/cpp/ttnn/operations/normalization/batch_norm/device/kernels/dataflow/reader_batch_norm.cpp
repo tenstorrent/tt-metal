@@ -48,9 +48,9 @@ void kernel_main() {
     if constexpr (fill_eps_fp32) {
         float eps_f = 0;
         std::memcpy(&eps_f, &eps, sizeof(float));  // Alternative for std::bit_cast
-        fill_with_val<k_tile_face_elems, float>(cb_id_eps, eps_f);
+        fill_with_val<k_tile_face_elems, float>(cb_id_eps_obj.get_write_ptr(), eps_f);
     } else {
-        fill_with_val_bfloat16(cb_id_eps, eps);
+        fill_with_val_bfloat16(cb_id_eps_obj.get_write_ptr(), eps);
     }
     cb_id_eps_obj.push_back(onetile);
 

@@ -60,9 +60,9 @@ void kernel_main() {
     if constexpr (fill_momentum_fp32) {
         float momentum_f = 0;
         std::memcpy(&momentum_f, &momentum, sizeof(float));  // Alternative for std::bit_cast
-        fill_with_val<k_tile_face_elems, float>(cb_id_momentum, momentum_f);
+        fill_with_val<k_tile_face_elems, float>(cb_id_momentum_obj.get_write_ptr(), momentum_f);
     } else {
-        fill_with_val_bfloat16(cb_id_momentum, momentum);
+        fill_with_val_bfloat16(cb_id_momentum_obj.get_write_ptr(), momentum);
     }
     cb_id_momentum_obj.push_back(onetile);
 
