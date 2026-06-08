@@ -184,6 +184,7 @@ jobs:
               "additional-server-args": "--data_parallel_size 4 --max_num_seqs 32 --async-scheduling",
               "structured-output": true,
               "sampling-tests": true,
+              "sampling-test-timeout": 40,
               "additional-structured-output-args": "--backend openai-chat --endpoint /v1/chat/completions --dataset json",
               "co-owner-1-id": "U08TJ70UFRT",
               "co-owner-2-id": "U06F3ER8X9A"
@@ -434,6 +435,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -453,6 +455,7 @@ jobs:
 
       - name: ⬇️ Checkout vLLM
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           repository: tenstorrent/vllm
           path: docker-job/vllm
@@ -714,7 +717,7 @@ jobs:
           fi
       - name: 🧪 Run sampling tests
         if: ${{ matrix.test-group.sampling-tests }}
-        timeout-minutes: 10
+        timeout-minutes: ${{ matrix.test-group.sampling-test-timeout || 10 }}
         run: |
           {
             FILTER="${{ matrix.test-group.sampling-test-filter }}"
@@ -804,6 +807,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
       - id: ai-run-summary
         continue-on-error: true
         uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main

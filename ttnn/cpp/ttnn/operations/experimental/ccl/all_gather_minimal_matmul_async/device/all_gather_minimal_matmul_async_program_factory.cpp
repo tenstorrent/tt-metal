@@ -336,60 +336,21 @@ all_gather_minimal_matmul_async_factory_helper(
     uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
     uint32_t in2_block_num_tiles = N_block_tiles;
 
-    // Adaptive CB depth: maximize in0_cb depth (it hides chain mcast pipeline build-up,
-    // ~100us at depth 2), then opportunistically bump in1_cb.
+    // CB sizing: fixed depth-2 for in0/in1, single-buffered out/interm/in2.
     //
-    // Budget = (lowest L1 address occupied by allocator buffers) - (allocator base) -
-    // a small safety margin for non-CB allocations the allocator does not yet account
-    // for at program-factory time (semaphores allocated below, runtime-args staging).
-    // Pattern lifted from ttnn::operations::data_movement::common::get_max_l1_space.
-    // Falls back to `l1_size_per_core` when no L1 buffers are placed yet (typical for
-    // AGMM where input tensors are in DRAM and the op's own buffers haven't been
-    // allocated). On WH 4x8 this yields ~1300 KB — the same value the earlier
-    // hardcoded constant gave — without needing arch- or sweep-specific tuning.
-    auto lowest_occupied_l1 = device->lowest_occupied_compute_l1_address();
-    const uint32_t l1_top =
-        lowest_occupied_l1.has_value() ? static_cast<uint32_t>(lowest_occupied_l1.value()) : device->l1_size_per_core();
-    const uint32_t l1_unreserved = l1_top - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    constexpr uint32_t L1_NON_CB_MARGIN_BYTES = 64 * 1024;
-    const uint32_t L1_BUDGET_BYTES =
-        l1_unreserved > L1_NON_CB_MARGIN_BYTES ? l1_unreserved - L1_NON_CB_MARGIN_BYTES : 0u;
-    // Warn if L1 is under pressure (existing tensors take up enough room that our
-    // CB budget falls noticeably below the sweep-validated working point of ~1300 KB
-    // on WH 4x8). Smaller budget forces shallower CBs and degrades perf. Trigger at
-    // 1100 KB to allow ~200 KB of normal headroom variation without false alarms.
-    constexpr uint32_t L1_BUDGET_WARN_THRESHOLD_BYTES = 1100 * 1024;
-    if (L1_BUDGET_BYTES < L1_BUDGET_WARN_THRESHOLD_BYTES) {
-        log_warning(
-            tt::LogOp,
-            "AGMM L1 budget is unexpectedly small ({} KB); CB depths will be capped and perf may "
-            "regress. lowest_occupied_l1={} alloc_base={} l1_size={}. Check L1 allocator pressure "
-            "(persistent tensors in L1, large sharded buffers).",
-            L1_BUDGET_BYTES / 1024,
-            l1_top,
-            device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
-            device->l1_size_per_core());
-    }
-    const uint32_t base_fixed_bytes = out_block_num_tiles * out_tile_size                      // out (single)
-                                      + out_block_num_tiles * intermediate_tile_size           // intermediate (single)
-                                      + (use_bias ? in2_block_num_tiles * in2_tile_size : 0);  // bias (single)
-    const uint32_t in0_block_bytes = in0_block_num_tiles * in0_tile_size;
-    const uint32_t in1_block_bytes = in1_block_num_tiles * in1_tile_size;
-    // Start with in1 depth-2 (safe). Maximize in0_cb depth.
-    uint32_t in0_depth = 2;
-    const uint32_t fixed_with_in1_depth2 = base_fixed_bytes + in1_block_bytes * 2;
-    if (fixed_with_in1_depth2 + 2 * in0_block_bytes <= L1_BUDGET_BYTES) {
-        in0_depth = std::min(8u, (L1_BUDGET_BYTES - fixed_with_in1_depth2) / std::max(1u, in0_block_bytes));
-        in0_depth = std::max(2u, in0_depth);
-    }
-    // Opportunistically bump in1 to depth 3 if there's room left.
-    uint32_t in1_depth = 2;
-    if (fixed_with_in1_depth2 + in0_depth * in0_block_bytes + in1_block_bytes <= L1_BUDGET_BYTES) {
-        in1_depth = 3;
-    }
-    uint32_t in0_cb_num_tiles = in0_block_num_tiles * in0_depth;
-    uint32_t in1_cb_num_tiles = in1_block_num_tiles * in1_depth;
-    uint32_t out_cb_num_tiles = out_block_num_tiles;
+    // This reverts the OOM-causing part of #44982 — the adaptive L1-budget sizing that grew
+    // in0_cb depth up to 8x to fill L1 for perf. That budget is estimated from
+    // lowest_occupied_compute_l1_address() (which falls back to the full l1_size_per_core when
+    // no L1 buffers are placed yet) minus a fixed 64 KB margin; on systems where that estimate
+    // is too optimistic, the depth-8 in0_cb exceeds available L1 and OOMs. Fixed depth-2 is
+    // sized purely from the matmul blocking and is safe on all systems.
+    //
+    // The PR's single-buffered output is KEPT (not reverted to 2x): it is what lets large-N
+    // shapes such as chunks=3 QKV fit in L1; re-doubling it OOMs those here.
+    const uint32_t double_buffer_factor = 2;
+    uint32_t in0_cb_num_tiles = in0_block_num_tiles * double_buffer_factor;
+    uint32_t in1_cb_num_tiles = in1_block_num_tiles * double_buffer_factor;
+    uint32_t out_cb_num_tiles = out_block_num_tiles;     // single-buffered
     uint32_t interm_cb_num_tiles = out_block_num_tiles;  // not double buffered
     uint32_t in2_cb_num_tiles = in2_block_num_tiles;     // not double buffered
 

@@ -165,6 +165,7 @@ jobs:
       llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           fetch-depth: 1
           sparse-checkout: .github
@@ -191,6 +192,7 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-metalium
       upload-coverage: false
+      enable-kernel-ccache: true
   ttnn-smoke-tests:
     needs: [asan-build, find-changed-files]
     if: ${{
@@ -212,6 +214,7 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-nn
       upload-coverage: false
+      enable-kernel-ccache: true
 
   build-docs:
     if: >-
@@ -245,6 +248,7 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-metalium
       build-type: 'ASan'
+      enable-kernel-ccache: true
 
   ttnn-examples:
     needs: [ asan-build, find-changed-files ]
@@ -265,6 +269,7 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-nn
       build-type: 'ASan'
+      enable-kernel-ccache: true
 
   # A quick check that parses the models charts in README.md and models/README.md
   # and ensures that models attributes are in sync.
@@ -275,6 +280,7 @@ jobs:
     steps:
     - name: Checkout repo
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      timeout-minutes: 20
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
@@ -300,6 +306,7 @@ jobs:
       contents: write # to allow auto-closing conversations
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      timeout-minutes: 20
       with:
         ref: ${{ github.event.pull_request.head.sha }}
         fetch-depth: 1

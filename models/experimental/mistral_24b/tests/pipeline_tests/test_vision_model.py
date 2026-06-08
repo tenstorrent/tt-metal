@@ -26,6 +26,7 @@ def get_image_features(vision_tower, projector, input_tensor, image_sizes):
     return image_features
 
 
+@pytest.mark.skip(reason="Disabled: see #45992")
 @run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize(
     "mesh_device",

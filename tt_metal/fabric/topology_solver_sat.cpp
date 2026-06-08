@@ -535,6 +535,73 @@ inline void topology_sat_add_at_most_one_sequential(TopologySatSolver& solver, c
     solver.add(0);
 }
 
+// ── Host-Usage Budget (minimize distinct same-rank global groups used) ────────
+//
+// Adds a hard "at most k_hosts distinct same-rank global groups (host partitions) are used" constraint.
+// For every host group p that has at least one assignment literal, introduce an indicator h_p and add
+// (¬x_{t,g} v h_p) for each assign literal whose global g belongs to group p — so using any global in p
+// forces h_p true. Bounding the number of true h_p to k_hosts is encoded as "at least (P - k_hosts) of the
+// h_p are false" via the existing at-least-k machinery over the negated indicator literals.
+//
+// Returns true if the budget was encoded (or is non-binding); false only if the at-least-k encoding reports
+// the bound is trivially impossible (caller then tries a larger budget).
+bool topology_sat_encode_host_group_budget(
+    TopologySatSolver& solver,
+    const TopologySatConstraintView& constraint_data,
+    const TopologySatHardEncoding& enc,
+    size_t k_hosts) {
+    const auto& global_to_host = constraint_data.global_to_same_rank_group;
+    const size_t num_groups = constraint_data.same_rank_groups.size();
+    if (global_to_host.empty() || num_groups == 0) {
+        return true;
+    }
+
+    // Collect assignment literals per host group (group labels are dense ids in [0, num_groups)).
+    std::vector<std::vector<int>> host_assign_lits(num_groups);
+    const size_t nt = enc.assign_lit.size();
+    for (size_t t = 0; t < nt; ++t) {
+        const auto& globs = enc.allowed_global_idx[t];
+        const auto& lits = enc.assign_lit[t];
+        for (size_t k = 0; k < globs.size(); ++k) {
+            const size_t g = globs[k];
+            if (g >= global_to_host.size()) {
+                continue;
+            }
+            const int label = global_to_host[g];
+            if (label < 0 || static_cast<size_t>(label) >= num_groups) {
+                continue;
+            }
+            host_assign_lits[static_cast<size_t>(label)].push_back(lits[k]);
+        }
+    }
+
+    // One "host used" indicator per non-empty group, with backward implication (used global => host used).
+    std::vector<int> neg_host_lits;
+    neg_host_lits.reserve(num_groups);
+    for (size_t p = 0; p < num_groups; ++p) {
+        if (host_assign_lits[p].empty()) {
+            continue;
+        }
+        const int h = solver.declare_one_more_variable();
+        for (int a : host_assign_lits[p]) {
+            solver.add(-a);
+            solver.add(h);
+            solver.add(0);
+        }
+        neg_host_lits.push_back(-h);
+    }
+
+    const size_t num_present = neg_host_lits.size();
+    if (num_present == 0 || k_hosts >= num_present) {
+        return true;  // budget is not binding
+    }
+
+    static constexpr size_t kHostBudgetCombClauses = 500000;
+    std::string reason;
+    return topology_sat_add_at_least_k_literals(
+        solver, neg_host_lits, num_present - k_hosts, kHostBudgetCombClauses, &reason);
+}
+
 // ── Hard Constraint Encoding Sub-functions ────────────────────────────────────
 //
 // The following functions collectively implement topology_sat_encode_hard_constraints,
@@ -1330,6 +1397,47 @@ bool topology_sat_search(
         }
         return finalize_success(solver, enc);
     };
+
+    // Opt-in objective: minimize the number of distinct same-rank global groups (host partitions) the mapping
+    // touches. Walk a host-usage budget upward from the capacity-based lower bound (ceil(n_target / max group
+    // capacity)) and return the first budget that is satisfiable — that is the minimum number of hosts. This is a
+    // complete (not greedy) search, so it finds the true minimum host count when one exists. It is best-effort:
+    // if no budget below the total group count is satisfiable we fall through to the normal unconstrained solve,
+    // so enabling the objective can never turn a solvable instance UNSAT.
+    if (constraint_data.minimize_same_rank_groups_used) {
+        size_t num_host_groups = 0;
+        size_t max_group_capacity = 0;
+        for (const auto& grp : constraint_data.same_rank_groups) {
+            if (!grp.empty()) {
+                ++num_host_groups;
+                max_group_capacity = std::max(max_group_capacity, grp.size());
+            }
+        }
+        if (num_host_groups >= 2 && max_group_capacity > 0) {
+            const size_t k_min = (graph_data.n_target + max_group_capacity - 1) / max_group_capacity;
+            for (size_t k = std::max<size_t>(k_min, 1); k < num_host_groups; ++k) {
+                TopologySatSolver solver;
+                TopologySatHardEncoding enc;
+                if (!topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc, validation_mode)) {
+                    break;  // hard constraints alone are UNSAT; defer to the normal path for error messaging
+                }
+                if (!topology_sat_encode_host_group_budget(solver, constraint_data, enc, k)) {
+                    continue;  // this budget is trivially unencodable; try a larger one
+                }
+                if (solver.solve() == TopologySatSolver::kSat && finalize_success(solver, enc)) {
+                    if (!quiet_mode) {
+                        log_info(
+                            tt::LogFabric,
+                            "Topology SAT: minimized host-group usage to {} group(s) (capacity lower bound {})",
+                            k,
+                            k_min);
+                    }
+                    return true;
+                }
+            }
+            // No binding budget was satisfiable; fall through to the unconstrained solve below.
+        }
+    }
 
     bool has_preferred = false;
     for (size_t t = 0; t < graph_data.n_target && !has_preferred; ++t) {
