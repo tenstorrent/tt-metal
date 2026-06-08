@@ -26,11 +26,12 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
     const auto& temp = tensor_args.temp;
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
 
-    // Quasar lacks UInt16/UInt32 tile (DFB) metadata support, so the index/k/output dtypes must be
-    // INT32 there (the program factory drives the kernels in INT32 mode on Quasar). WH/BH continue
-    // to accept both UINT32 and INT32. Reject UINT32 explicitly on Quasar instead of silently
-    // miscomputing.
-    const bool is_quasar = input_values_tensor.device()->arch() == tt::ARCH::QUASAR;
+    // WH/BH support both UINT32 and INT32 for the index/k/output dtypes. Every other architecture
+    // (e.g. Quasar, which lacks UInt16/UInt32 tile (DFB) metadata support) runs the kernels in the
+    // 32-bit (INT32) path, so UINT32 is not representable and must be rejected instead of silently
+    // miscomputing. Gated on !(WH || BH) so new architectures default to the safe 32-bit path.
+    const auto arch = input_values_tensor.device()->arch();
+    const bool use_32bit_index = !(arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE);
 
     TT_FATAL(
         input_values_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -47,8 +48,9 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
         input_indices_tensor.dtype() == DataType::UINT32 || input_indices_tensor.dtype() == DataType::INT32,
         "Only UINT32 & INT32 dtypes are supported for input indices!");
     TT_FATAL(
-        !is_quasar || input_indices_tensor.dtype() == DataType::INT32,
-        "On Quasar, only INT32 is supported for input indices (UINT32 tile format is unavailable)!");
+        !use_32bit_index || input_indices_tensor.dtype() == DataType::INT32,
+        "Only INT32 is supported for input indices on this architecture (UINT32 is only available on "
+        "Wormhole/Blackhole)!");
 
     TT_FATAL(input_indices_tensor.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR is supported for input indices!");
 
@@ -93,8 +95,9 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
                 preallocated_output_tensor.value().dtype() == DataType::INT32,
             "Only UINT32 & INT32 dtypes are supported for outputs!");
         TT_FATAL(
-            !is_quasar || preallocated_output_tensor.value().dtype() == DataType::INT32,
-            "On Quasar, only INT32 is supported for outputs (UINT32 tile format is unavailable)!");
+            !use_32bit_index || preallocated_output_tensor.value().dtype() == DataType::INT32,
+            "Only INT32 is supported for outputs on this architecture (UINT32 is only available on "
+            "Wormhole/Blackhole)!");
 
         TT_FATAL(
             preallocated_output_tensor.value().memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -122,8 +125,9 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
         k.dtype() == DataType::UINT32 || k.dtype() == DataType::INT32,
         "Only UINT32 & INT32 dtypes are supported for k!");
     TT_FATAL(
-        !is_quasar || k.dtype() == DataType::INT32,
-        "On Quasar, only INT32 is supported for k (UINT32 tile format is unavailable)!");
+        !use_32bit_index || k.dtype() == DataType::INT32,
+        "Only INT32 is supported for k on this architecture (UINT32 is only available on "
+        "Wormhole/Blackhole)!");
     TT_FATAL(p.dtype() == DataType::BFLOAT16, "Only BFLOAT16 dtypes are supported for p!");
     TT_FATAL(temp.dtype() == DataType::BFLOAT16, "Only BFLOAT16 dtypes are supported for temp!");
     TT_FATAL(k.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for k!");
@@ -144,10 +148,12 @@ TensorSpec SamplingDeviceOperation::compute_output_specs(
     auto input_shape = input_values_tensor.logical_shape();
     ttnn::Shape output_shape({1, 1, 1, input_shape[2]});
 
-    // Quasar cannot represent a UInt32 tile, so the default (non-preallocated) output must be INT32
-    // there; WH/BH keep the historical UINT32 default.
-    const bool is_quasar = input_values_tensor.device()->arch() == tt::ARCH::QUASAR;
-    const DataType output_dtype = is_quasar ? DataType::INT32 : DataType::UINT32;
+    // WH/BH keep the historical UINT32 default; every other architecture (e.g. Quasar) runs the
+    // 32-bit path and cannot represent a UInt32 tile, so the default (non-preallocated) output must
+    // be INT32 there. Gated on !(WH || BH) so new architectures default to the safe INT32 path.
+    const auto arch = input_values_tensor.device()->arch();
+    const bool use_32bit_index = !(arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE);
+    const DataType output_dtype = use_32bit_index ? DataType::INT32 : DataType::UINT32;
 
     return TensorSpec(
         output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), input_values_tensor.memory_config()));

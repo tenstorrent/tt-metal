@@ -35,12 +35,13 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
     auto* device = &input_values_tensor.mutable_device();
 
     // The bitonic top-k LLK carries sort indices through the dest register, and the index
-    // load/store width is tied to fp32_dest_acc_en (INT32 when enabled, LO16 otherwise). Quasar
-    // additionally does not support UInt16/UInt32 tile (DFB) metadata. So on Quasar we use 32-bit
-    // (Int32) index intermediates with fp32 dest accumulation enabled; on WH/BH we keep the
-    // cheaper 16-bit (UInt16) path with fp32 dest accumulation disabled (unchanged behavior)
-    // so that WH/BH does not suffer any restrictions on the dest register
-    const bool use_32bit_index = (device->arch() == tt::ARCH::QUASAR);
+    // load/store width is tied to fp32_dest_acc_en (INT32 when enabled, LO16 otherwise). WH/BH
+    // support the cheaper 16-bit (UInt16) path with fp32 dest accumulation disabled (unchanged
+    // behaviour) so that WH/BH does not suffer any restrictions on the dest register. Every other
+    // architecture (e.g. Quasar, which additionally lacks UInt16/UInt32 tile (DFB) metadata
+    // support) uses 32-bit (Int32) index intermediates with fp32 dest accumulation enabled. This
+    // is gated on !(WH || BH) so new architectures default to the safe 32-bit path.
+    const bool use_32bit_index = !(device->arch() == tt::ARCH::WORMHOLE_B0 || device->arch() == tt::ARCH::BLACKHOLE);
 
     tt::DataFormat input_values_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(input_values_tensor.dtype());
@@ -48,8 +49,9 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
         tt::tt_metal::datatype_to_dataformat_converter(input_indices_tensor.dtype());
     tt::DataFormat index_cb_data_format = use_32bit_index ? tt::DataFormat::Int32 : tt::DataFormat::UInt16;
     tt::DataFormat k_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(k.dtype());
-    // Quasar rejects UInt32 DFB metadata; k values are non-negative and fit in signed 32-bit, so
-    // stage k as Int32 there. WH/BH keep the dtype-derived format unchanged.
+    // Architectures on the 32-bit path (e.g. Quasar) reject UInt32 DFB metadata; k values are
+    // non-negative and fit in signed 32-bit, so stage k as Int32 there. WH/BH keep the
+    // dtype-derived format unchanged.
     if (use_32bit_index && k_cb_data_format == tt::DataFormat::UInt32) {
         k_cb_data_format = tt::DataFormat::Int32;
     }

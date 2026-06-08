@@ -17,9 +17,7 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 from models.common.utility_functions import is_watcher_enabled
 
 
-def check_determinism(
-    input_values_tensor, input_indices_tensor, k, p, seed, sub_core_grids, device, k_dtype=ttnn.uint32
-):
+def check_determinism(input_values_tensor, input_indices_tensor, k, p, seed, sub_core_grids, device, k_dtype):
     """
     Check that the sampling operation is deterministic for the same seed.
     """
@@ -53,7 +51,7 @@ def check_determinism(
     assert torch.allclose(output_1, output_2), "Output is not deterministic for the same seed"
 
 
-def check_randomness(input_values_tensor, input_indices_tensor, k, p, sub_core_grids, device, k_dtype=ttnn.uint32):
+def check_randomness(input_values_tensor, input_indices_tensor, k, p, sub_core_grids, device, k_dtype):
     """
     Check that the sampling operation is random without setting the seed.
     """
@@ -106,7 +104,7 @@ def validate_statistics(input_values, output, k, p):
 
 
 def run_edge_cases(
-    input_values, input_values_tensor, input_indices_tensor, k, p, seed, device, sub_core_grids, k_dtype=ttnn.uint32
+    input_values, input_values_tensor, input_indices_tensor, k, p, seed, device, sub_core_grids, k_dtype
 ):
     """
     Test edge cases for the sampling operation.
@@ -133,7 +131,7 @@ def run_edge_cases(
     ), f"Output for users does not match top-1 value"
 
 
-def validate_sampling(input_values, input_indices, k, p, seed, device, sub_core_grids=None, k_dtype=ttnn.uint32):
+def validate_sampling(input_values, input_indices, k, p, seed, device, sub_core_grids=None, *, k_dtype):
     # Convert input tensors to ttnn tensors
     input_values_tensor = ttnn.from_torch(input_values, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     input_indices_tensor = ttnn.from_torch(input_indices, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -171,7 +169,7 @@ def validate_sampling(input_values, input_indices, k, p, seed, device, sub_core_
     )
 
 
-def run_sampling(shape, k, p, seed, device, sub_core_grids=None, k_dtype=ttnn.uint32):
+def run_sampling(shape, k, p, seed, device, sub_core_grids=None, *, k_dtype):
     # Generate random input values and indices
     input_values = torch.randn(shape)
     input_indices = torch.arange(0, shape[-1], dtype=torch.int32).expand(shape)
