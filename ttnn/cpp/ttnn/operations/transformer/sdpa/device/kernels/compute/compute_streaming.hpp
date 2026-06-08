@@ -323,18 +323,17 @@ void blocked_matmul_and_pack(
  * idle ~2/3 of the time; batching every column that fits in DST under one handshake and one pack
  * raises the FPU duty cycle. Numerically identical — same per-column matmul, just reordered.
  */
-template <uint32_t vDHt, uint32_t dst_size>
+template <uint32_t vDHt, uint32_t dst_size, uint32_t subblock_h>
 #if defined(ARCH_WORMHOLE)
 __attribute__((noinline))
 #endif
 void inplace_v_matmul_pack_batched(
-    uint32_t in0_cb,
-    uint32_t in1_cb,
-    uint32_t out_cb,
-    uint32_t in0_index_start,
-    uint32_t inner_dim,
-    uint32_t KT_stride,
-    uint32_t subblock_h) {
+    uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t in0_index_start, uint32_t inner_dim, uint32_t KT_stride) {
+    // Each output column is written column-major into DST (column c at c*subblock_h), but the
+    // pack below reads DST row-major; the two orderings only coincide when subblock_h==1, which
+    // kt_inplace_v guarantees via Sq_chunk_t==1. Enforce it so this can't silently corrupt if
+    // reused with multi-tile Q.
+    static_assert(subblock_h == 1, "inplace_v_matmul_pack_batched requires single-tile Q (subblock_h==1)");
     // subblock_h DST tiles per output column; batch as many columns as DST holds.
     const uint32_t cols_per_batch = dst_size / subblock_h;
     for (uint32_t vs0 = 0; vs0 < vDHt; vs0 += cols_per_batch) {
@@ -1194,14 +1193,13 @@ static void sdpa_inner_loop_step(
                     sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
                         out_cb, out_cb);
                     mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
-                    inplace_v_matmul_pack_batched<vDHt, dst_size>(
+                    inplace_v_matmul_pack_batched<vDHt, dst_size, qktv_h>(
                         cb_qkt_im,
                         cb_v_in,
                         out_cb,
                         qktv_in0_index_offset,
                         /*inner_dim=*/kt_num_full_subblocks * matmul_inner,
-                        KT_stride,
-                        qktv_h);
+                        KT_stride);
                     sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
                 }
             } else {
