@@ -61,7 +61,9 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          sparse-checkout: .github/actions/download-artifact-with-retry
+          sparse-checkout: |
+            .github/actions/download-artifact-with-retry
+            .github/scripts/ccache_log_filter.sh
           sparse-checkout-cone-mode: false
 
       - uses: ./.github/actions/download-artifact-with-retry
@@ -255,6 +257,23 @@ jobs:
         with:
           path: /work/test-reports/
           prefix: "test_reports_"
+
+      - name: Publish ccache summary
+        if: ${{ !cancelled() && inputs.enable-kernel-ccache == true }}
+        run: |
+          echo '## CCache Summary (kernel)' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ccache -s >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+          # Surface remote storage stats and errors from the ccache log.
+          # Uses a filter script to avoid overflowing the 1024k step summary limit.
+          if [ -f /tmp/ccache.log ]; then
+            echo '## CCache Remote Storage (kernel)' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            "$GITHUB_WORKSPACE/.github/scripts/ccache_log_filter.sh" /tmp/ccache.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Check for slow tests
         uses: tenstorrent/tt-metal/.github/actions/detect-slow-tests@main
