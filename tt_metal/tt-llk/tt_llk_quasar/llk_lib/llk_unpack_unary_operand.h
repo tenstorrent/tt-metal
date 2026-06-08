@@ -143,9 +143,9 @@ inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_i
 template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
 inline void _llk_unpack_unary_operand_transpose_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles)
 {
-    // TODO: Add a runtime assert to check that num_faces == NUM_FACES, as the current transpose implementation only supports regular tile dimensions with 4
-    // faces
     static_assert((UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B), "UNP_SEL can only be p_unpacr::UNP_A or p_unpacr::UNP_B for unpack transpose");
+
+    // LLK_ASSERT(tensor_shape.total_num_faces() == NUM_FACES, "Transpose is only supported for regular tile dimensions with 4 faces");
 
     const std::uint32_t MOP_OUTER_LOOP = num_tiles;
     const std::uint32_t MOP_INNER_LOOP = 1;
@@ -263,7 +263,7 @@ inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t
  * @note @ref _llk_unpack_unary_operand_ is the matching execute call on this thread.
  */
 template <std::uint32_t UNP_SEL, bool TRANSPOSE_EN, bool IS_32b_DEST_EN, EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, TensorShape& tensor_shape, const std::uint32_t num_tiles = NUM_TILES)
+inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, TensorShape& tensor_shape, const std::uint32_t num_tiles)
 {
     static_assert(!(TRANSPOSE_EN && reuse_dest != EltwiseBinaryReuseDestType::NONE), "Transpose is not supported with reuse_dest");
 
