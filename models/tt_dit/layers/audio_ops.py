@@ -1010,20 +1010,31 @@ class SnakeBeta(Module):
                 if self.alpha_logscale:
                     t = torch.exp(t)
                 t = t.reshape(1, 1, -1)
-                if t.shape[-1] < self._aligned_channels:
-                    t = torch.nn.functional.pad(t, (0, self._aligned_channels - t.shape[-1]))
+                real = t.shape[-1]
+                if real < self._aligned_channels:
+                    t = torch.nn.functional.pad(t, (0, self._aligned_channels - real))
+                if name == "beta":
+                    # Fold ε in for real channels and use 1 on the channel-pad slots so
+                    # ``ttnn.snake_beta``'s in-op divide stays finite on every tile.
+                    t = t.clone()
+                    t[..., :real] = t[..., :real] + self.eps
+                    if real < self._aligned_channels:
+                        t[..., real:] = 1.0
                 state[name] = t.contiguous()
 
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
         # α, β are per-channel; slice to the activation's C-shard when channel-TP.
+        # ``ttnn.snake_beta`` is a fused eltwise op (input + sin²(α·x)/β) that
+        # requires TILE layout and a non-zero β; ε is pre-folded into β and pad
+        # slots are set to 1 in _prepare_torch_state so no divide-by-zero.
         if self._ab_shard is None:
             self._ab_shard = (
                 partition_channel(self.alpha.data, self.parallel_config, dim=2),
                 partition_channel(self.beta.data, self.parallel_config, dim=2),
             )
         a, b = self._ab_shard
-        ax = ttnn.multiply(x_BTC, a)
-        s = ttnn.sin(ax)
-        s2 = ttnn.multiply(s, s)
-        inv = ttnn.reciprocal(ttnn.add(b, self.eps))
-        return ttnn.add(x_BTC, ttnn.multiply(s2, inv))
+        if x_BTC.layout != ttnn.TILE_LAYOUT:
+            x_tile = ttnn.to_layout(x_BTC, ttnn.TILE_LAYOUT)
+        else:
+            x_tile = x_BTC
+        return ttnn.snake_beta(x_tile, a, b)
