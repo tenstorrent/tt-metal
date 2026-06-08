@@ -744,7 +744,7 @@ void InitDeviceProfiler(IDevice* device) {
     std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
     control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_DEFAULT] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
 
-    if (MetalContext::instance().rtoptions().get_experimental_noc_debug_dump_enabled()) {
+    if (MetalContext::instance().rtoptions().get_profiler_non_dropping_enabled()) {
         // Split into two buffers. Assign the active DRAM buffer address to all control buffer indices.
         control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_BR_ER_0] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
         control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_NC_0] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
@@ -1150,12 +1150,15 @@ void ReadMeshDeviceProfilerResults(
         if (auto& profiler_state_manager = MetalContext::instance(context_id).profiler_state_manager()) {
             profiler_state_manager->signal_debug_dump_read();
         }
-        if (auto& noc_debug_state = MetalContext::instance(context_id).noc_debug_state()) {
-            noc_debug_state->process_accumulated_events_all_chips();
-            noc_debug_state->finish_cores();
-            // Only print when called by the user (state == normal) to avoid duplicate printing
-            if (state != ProfilerReadState::LAST_FD_READ) {
-                noc_debug_state->print_aggregated_errors();
+        // NoC event aggregation/printing only applies to NoC debug dump, not plain continuous profiling.
+        if (MetalContext::instance(context_id).rtoptions().get_experimental_noc_debug_dump_enabled()) {
+            if (auto& noc_debug_state = MetalContext::instance(context_id).noc_debug_state()) {
+                noc_debug_state->process_accumulated_events_all_chips();
+                noc_debug_state->finish_cores();
+                // Only print when called by the user (state == normal) to avoid duplicate printing
+                if (state != ProfilerReadState::LAST_FD_READ) {
+                    noc_debug_state->print_aggregated_errors();
+                }
             }
         }
         return;

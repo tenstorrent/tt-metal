@@ -2438,7 +2438,7 @@ void DeviceProfiler::readResults(
 
     TT_ASSERT(doAllDispatchCoresComeAfterNonDispatchCores(device, virtual_cores, context_id));
 
-    bool force_slow_dispatch = MetalContext::instance(context_id).rtoptions().get_experimental_noc_debug_dump_enabled();
+    bool force_slow_dispatch = MetalContext::instance(context_id).rtoptions().get_profiler_non_dropping_enabled();
 
     constexpr uint8_t default_dram_buffer_index = 0;
 
@@ -2973,7 +2973,9 @@ bool getDeviceProfilerState(ContextId context_id) {
 }
 
 bool getDeviceDebugDumpEnabled(ContextId context_id) {
-    return MetalContext::instance(context_id).rtoptions().get_experimental_noc_debug_dump_enabled();
+    // True whenever a background thread owns draining the profiler buffers (NoC debug dump or continuous profiling).
+    // Manual profiler reads are no-ops in this mode since the thread drives reading.
+    return MetalContext::instance(context_id).rtoptions().get_profiler_non_dropping_enabled();
 }
 
 }  // namespace tt::tt_metal

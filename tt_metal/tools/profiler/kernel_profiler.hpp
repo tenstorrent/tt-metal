@@ -91,8 +91,10 @@ constexpr uint32_t myRiscID = 0;
 constexpr uint32_t myRiscID = PROCESSOR_INDEX;
 #endif
 
-#if defined(DEVICE_DEBUG_DUMP)
-// Each risc has their own DRAM profiler address index
+#if defined(DEVICE_DEBUG_DUMP) || defined(DEVICE_CONTINUOUS_DUMP)
+// Non-dropping mode: each risc has their own DRAM profiler address index and the host ping-pong drains the
+// double DRAM buffer. Enabled by NoC debug dump (DEVICE_DEBUG_DUMP) or plain continuous profiling
+// (DEVICE_CONTINUOUS_DUMP).
 constexpr bool NON_DROPPING = true;
 constexpr uint32_t DRAM_PROFILER_ADDRESS = DRAM_PROFILER_ADDRESS_BR_ER_0 + myRiscID;
 #else

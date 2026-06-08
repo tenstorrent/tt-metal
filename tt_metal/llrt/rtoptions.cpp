@@ -141,6 +141,7 @@ enum class EnvVarID {
     TT_METAL_OPERATION_TIMEOUT_SECONDS,            // Operation timeout duration
     TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE,  // Terminal command to execute on dispatch timeout.
     TT_METAL_NOC_DEBUG_DUMP,                       // Enable experimental NOC debug dump to detect missing barriers
+    TT_METAL_CONTINUOUS_PROFILER,                  // Enable continuous (non-dropping) profiling via background drain
     TT_METAL_DISPATCH_PROGRESS_UPDATE_MS,          // Dispatch kernel progress update period in milliseconds
     TT_METAL_DISPATCH_TELEMETRY_DISABLE,           // Dispatch telemetry
 
@@ -996,6 +997,18 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 this->set_experimental_noc_debug_dump_enabled(true);
             }
 #endif
+            break;
+        }
+
+        // TT_METAL_CONTINUOUS_PROFILER
+        // Enable continuous profiling. The profiler runs in non-dropping mode: each RISC owns a double DRAM buffer
+        // and a host background thread continuously drains the full half (ping-pong) so no profiler data is dropped
+        // during long runs. Unlike TT_METAL_NOC_DEBUG_DUMP, this does NOT enable NoC event / missing-barrier capture.
+        // Default: false. Usage: export TT_METAL_CONTINUOUS_PROFILER=1
+        case EnvVarID::TT_METAL_CONTINUOUS_PROFILER: {
+            if (is_env_enabled(value)) {
+                this->set_continuous_profiler_dump_enabled(true);
+            }
             break;
         }
 
@@ -2063,6 +2076,17 @@ void RunTimeOptions::set_experimental_noc_debug_dump_enabled(bool enabled) {
         profiler_enabled = false;
         profiler_noc_events_enabled = false;
         experimental_noc_debug_dump_enabled = false;
+    }
+}
+
+void RunTimeOptions::set_continuous_profiler_dump_enabled(bool enabled) {
+    // Continuous profiling reuses the device profiler's non-dropping drain machinery but, unlike NoC debug dump,
+    // does not turn on NoC event capture.
+    if (enabled) {
+        profiler_enabled = true;
+        continuous_profiler_dump_enabled = true;
+    } else {
+        continuous_profiler_dump_enabled = false;
     }
 }
 

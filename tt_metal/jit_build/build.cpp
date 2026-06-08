@@ -195,6 +195,11 @@ void JitBuildEnv::init(
     if (rtoptions.get_experimental_noc_debug_dump_enabled()) {
         this->defines_ += "-DDEVICE_DEBUG_DUMP=1 ";
     }
+    if (rtoptions.get_continuous_profiler_dump_enabled()) {
+        // Drives non-dropping / double-buffered profiler behavior without the NoC scoped-lock recording that
+        // DEVICE_DEBUG_DUMP additionally enables.
+        this->defines_ += "-DDEVICE_CONTINUOUS_DUMP=1 ";
+    }
     if (rtoptions.get_profiler_perf_counter_mode() != 0) {
         // force profiler on if perf counters are being captured
         TT_ASSERT(rtoptions.get_profiler_enabled());

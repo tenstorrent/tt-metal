@@ -253,12 +253,13 @@ void MetalContext::initialize(
     watcher_server_ = std::make_unique<WatcherServer>(*this->env_);
     noc_debug_state_ = std::make_unique<NOCDebugState>();
 
-    if (rtoptions().get_experimental_noc_debug_dump_enabled()) {
+    if (rtoptions().get_profiler_non_dropping_enabled()) {
         TT_FATAL(
             !rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint),
-            "Both DPRINT and NOC debug dump cannot be enabled at the same time.");
+            "Both DPRINT and continuous/NOC-debug profiling cannot be enabled at the same time.");
         TT_FATAL(
-            !rtoptions().get_watcher_enabled(), "Both Watcher and NOC debug dump cannot be enabled at the same time.");
+            !rtoptions().get_watcher_enabled(),
+            "Both Watcher and continuous/NOC-debug profiling cannot be enabled at the same time.");
     }
 
     if (rtoptions().get_profiler_enabled()) {

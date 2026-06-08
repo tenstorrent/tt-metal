@@ -65,7 +65,7 @@ void ProfilerInitializer::init(
         }
         detail::ProfilerSync(ProfilerSyncState::INIT);
 
-        if (profiler_state_manager_ && rtoptions_.get_experimental_noc_debug_dump_enabled()) {
+        if (profiler_state_manager_ && rtoptions_.get_profiler_non_dropping_enabled()) {
             tt::tt_metal::LaunchIntervalBasedProfilerReadThread(
                 std::vector<IDevice*>(devices_.begin(), devices_.end()));
         }

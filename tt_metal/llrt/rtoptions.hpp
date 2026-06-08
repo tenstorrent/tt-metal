@@ -206,6 +206,7 @@ class RunTimeOptions {
     bool profiler_disable_push_to_tracy = false;
     std::optional<uint32_t> profiler_program_support_count = std::nullopt;
     bool experimental_noc_debug_dump_enabled = false;
+    bool continuous_profiler_dump_enabled = false;
 
     bool checkpoint_enabled = false;
 
@@ -610,6 +611,14 @@ public:
     bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }
     void set_experimental_noc_debug_dump_enabled(bool enabled);
     bool get_experimental_noc_debug_dump_enabled() const { return experimental_noc_debug_dump_enabled; }
+    void set_continuous_profiler_dump_enabled(bool enabled);
+    bool get_continuous_profiler_dump_enabled() const { return continuous_profiler_dump_enabled; }
+    // True when the profiler runs in continuous, non-dropping mode (double-buffered DRAM ping-pong drained by a
+    // background thread). Requested either directly via TT_METAL_CONTINUOUS_PROFILER or implied by the NoC debug
+    // dump mode, which builds on the same drain machinery.
+    bool get_profiler_non_dropping_enabled() const {
+        return continuous_profiler_dump_enabled || experimental_noc_debug_dump_enabled;
+    }
 
     void set_checkpoint_enabled(bool v) { checkpoint_enabled = v; }
     bool get_checkpoint_enabled() const { return checkpoint_enabled; }
