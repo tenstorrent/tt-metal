@@ -10,8 +10,6 @@
 #if !defined(ENV_LLK_INFRA)
 #include "api/compute/compute_kernel_api.h"
 #include "dprint.h"
-#else
-using namespace ckernel;
 #endif
 #include "tensix_types.h"
 
@@ -20,7 +18,7 @@ using namespace ckernel;
 //   For config section "Registers for THREAD", use banks THREAD_0_CFG, THREAD_1_CFG, THREAD_2_CFG
 //   For other config sections (ALU,PACK0), use banks HW_CFG_0, HW_CFG_1
 #define READ_CFG_REG_FIELD(bank, reg_field_name) \
-    (dbg_read_cfgreg(bank, reg_field_name##_ADDR32) & reg_field_name##_MASK) >> reg_field_name##_SHAMT
+    (ckernel::dbg_read_cfgreg(bank, reg_field_name##_ADDR32) & reg_field_name##_MASK) >> reg_field_name##_SHAMT
 
 // Helper macros
 #define READ_HW_CFG_0_REG_FIELD(reg_field_name) READ_CFG_REG_FIELD(ckernel::dbg_cfgreg::HW_CFG_0, reg_field_name)

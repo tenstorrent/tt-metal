@@ -52,11 +52,11 @@ inline void dprint_tensix_dest_reg(int tile_id = 0)
     // Element pointer type matches the format's element width.
     // Informed by tt_llk_blackhole/common/inc/ckernel_debug.h:dbg_copy_dest_tile.
     {
-        set_dest_fmt<MathThreadId>(fmt_to_dest_type(data_format));
-        set_dest_enable_swizzling<MathThreadId>(true);
+        ckernel::set_dest_fmt<ckernel::MathThreadId>(ckernel::fmt_to_dest_type(data_format));
+        ckernel::set_dest_enable_swizzling<ckernel::MathThreadId>(true);
         const bool is_signed = (data_format != DataFormat::UInt8) && (data_format != DataFormat::UInt16) && (data_format != DataFormat::UInt32);
-        set_dest_int8_int16_signed<MathThreadId>(is_signed);
-        tensix_sync();
+        ckernel::set_dest_int8_int16_signed<ckernel::MathThreadId>(is_signed);
+        ckernel::tensix_sync();
     }
 
     constexpr uint32_t ELT_PER_ROW = 16;
