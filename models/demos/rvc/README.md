@@ -56,7 +56,12 @@ python -m models.demos.rvc.demo                                  # default 5s, R
 python -m models.demos.rvc.demo --f0_method dio                  # DIO pitch
 python -m models.demos.rvc.demo --speaker_id 50 --key -6         # different target + pitch shift
 python -m models.demos.rvc.demo --index_path data/speaker.index --index_rate 0.5
+python -m models.demos.rvc.demo --protect 0.33 --rms_mix_rate 0.25   # artifact prevention (on by default)
 ```
+
+Artifact-prevention flags:
+- `--protect` (default 0.33): consonant protection. On unvoiced frames (pitchf==0), blends pre-retrieval features back so consonants are not smeared by speaker conversion. Set to 0.5 to disable.
+- `--rms_mix_rate` (default 0.25): volume envelope. Blends source-audio RMS into the converted output. 1.0 keeps converted dynamics; 0.0 fully transfers source dynamics.
 
 Output: `data/output/ttnn_output.wav` (TTNN) and `data/output/torch_reference.wav`; timing and PCC printed to stdout.
 
