@@ -425,6 +425,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         Kc_tiles,
         Nc_tiles,
         K_blocks,
+        inA_K_tiles_per_core,  // needed to translate global K-tile -> sender-major full_in0 slot (M_tiles>1)
     };
     log_debug(
         tt::LogOp,
