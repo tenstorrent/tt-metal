@@ -20,6 +20,7 @@ import ttnn
 from models.experimental.dots_ocr_tp4.tt.attention import DotsOCRAttentionTP4
 from models.experimental.dots_ocr_tp4.tt.mlp import DotsOCRMLPTP4
 from models.experimental.dots_ocr_tp4.tt.rmsnorm import DotsOCRRMSNormTP4
+from models.experimental.tt_symbiote.core.module import TTNNModule
 
 
 def _gate_up_dtype_for_layer(layer_idx) -> "ttnn.DataType":
@@ -31,8 +32,9 @@ def _gate_up_dtype_for_layer(layer_idx) -> "ttnn.DataType":
     return ttnn.bfloat4_b
 
 
-class DotsOCRDecoderBlockTP4:
+class DotsOCRDecoderBlockTP4(TTNNModule):
     def __init__(self, mesh_device, config, layer_idx=0, weight_dtype=ttnn.bfloat16):
+        super().__init__()
         self.mesh_device = mesh_device
         self.config = config
         self.layer_idx = layer_idx
@@ -61,18 +63,32 @@ class DotsOCRDecoderBlockTP4:
             weight_dtype=weight_dtype,
             gate_up_weight_dtype=_gate_up_dtype_for_layer(layer_idx),
         )
+        b.to_device(mesh_device)
+        b._preprocessed_weight = True
+        b._weights_on_device = True
         return b
 
+    def to_device(self, device):
+        super().to_device(device)
+        for child in (self.input_layernorm, self.self_attn, self.post_attention_layernorm, self.mlp):
+            if child is not None:
+                child.to_device(device)
+        return self
+
     def forward(self, x: ttnn.Tensor, past_key_value=None, cache_position=None) -> ttnn.Tensor:
+        # Decode (seq==1) keeps the residual stream L1-resident; prefill stays DRAM.
+        is_decode = int(x.shape[-2]) == 1
+        add_mc = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
+
         residual = x
         h = self.input_layernorm.forward(x)
         h = self.self_attn.forward(h, past_key_value=past_key_value, cache_position=cache_position)
-        x = ttnn.add(residual, h)
+        x = ttnn.add(residual, h, memory_config=add_mc)
         ttnn.deallocate(h)
 
         residual = x
         h = self.post_attention_layernorm.forward(x)
         h = self.mlp.forward(h)
-        x = ttnn.add(residual, h)
+        x = ttnn.add(residual, h, memory_config=add_mc)
         ttnn.deallocate(h)
         return x

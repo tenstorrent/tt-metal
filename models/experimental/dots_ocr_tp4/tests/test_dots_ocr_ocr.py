@@ -115,7 +115,14 @@ def test_dots_ocr_tp4_ocr(mesh_device, max_new_tokens):
         image_inputs, video_inputs = process_vision_info(messages)
     except ImportError:
         image_inputs, video_inputs = [image], None
-    inputs = processor(text=[text_prompt], images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt")
+    inputs = processor(
+        text=[text_prompt],
+        images=image_inputs,
+        videos=video_inputs,
+        padding=True,
+        return_tensors="pt",
+        max_length=2800,
+    )
 
     grid = inputs["image_grid_thw"]
     if grid.tolist() != [VISION_GRID_THW]:
@@ -134,13 +141,30 @@ def test_dots_ocr_tp4_ocr(mesh_device, max_new_tokens):
     ).eval()
     model = DotsOCRModelTP4.from_hf(mesh_device, hf_model)
 
-    generated_ids = model.generate(
-        input_ids,
-        pixel_values=pixel_values,
-        image_grid_thw=grid,
-        max_new_tokens=max_new_tokens,
-        stop_on_eos=True,
-    )
+    use_trace = os.environ.get("DOTS_OCR_TP4_TRACE", "").lower() in {"1", "true", "yes", "on"}
+    if use_trace:
+        # Prime JIT + capture the prefill/decode/vision traces. Actual capture/
+        # replay requires TT_SYMBIOTE_RUN_MODE=TRACED.
+        model.warmup(input_ids, pixel_values=pixel_values, image_grid_thw=grid)
+    # Run >1 to see warm (kernels cached) vs cold (run 1) vision+prefill timing.
+    runs = int(os.environ.get("DOTS_OCR_TP4_OCR_RUNS", "1"))
+    for run_i in range(runs):
+        generated_ids = model.generate(
+            input_ids,
+            pixel_values=pixel_values,
+            image_grid_thw=grid,
+            max_new_tokens=max_new_tokens,
+            stop_on_eos=True,
+            use_trace=use_trace,
+        )
+        t = model.last_timings
+        tag = "cold" if run_i == 0 else "warm"
+        print(
+            f"[dots_ocr_tp4 OCR run{run_i} {tag}] device time (traced={t['traced']}) -- vision+prefill: "
+            f"{t['vision_prefill_s'] * 1000:.1f} ms (vision {t['vision_s'] * 1000:.1f} ms, "
+            f"prefill {t['prefill_s'] * 1000:.1f} ms)  |  decode: {t['decode_s'] * 1000:.1f} ms "
+            f"for {t['decode_tokens']} tok ({t['decode_ms_per_token']:.1f} ms/tok, {t['decode_tok_per_s']:.1f} tok/s)"
+        )
 
     text = tokenizer.decode(generated_ids, skip_special_tokens=True)
 
@@ -150,15 +174,6 @@ def test_dots_ocr_tp4_ocr(mesh_device, max_new_tokens):
         f"generated={len(generated_ids)} tokens"
     )
     print(f"OCR OUTPUT:\n{text}")
-    print("=" * 70)
-
-    t = model.last_timings
-    print(
-        f"[dots_ocr_tp4 OCR] device time -- vision+prefill: {t['vision_prefill_s'] * 1000:.1f} ms "
-        f"(vision {t['vision_s'] * 1000:.1f} ms, prefill {t['prefill_s'] * 1000:.1f} ms)  |  "
-        f"decode: {t['decode_s'] * 1000:.1f} ms for {t['decode_tokens']} tok "
-        f"({t['decode_ms_per_token']:.1f} ms/tok, {t['decode_tok_per_s']:.1f} tok/s)"
-    )
     print("=" * 70)
 
     assert len(text.strip()) > 0, "OCR output should not be empty"
