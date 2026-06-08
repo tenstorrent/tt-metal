@@ -1638,7 +1638,228 @@ Cannot cleanly conclude "srcb advance is the compounding source" from this — t
 
 ---
 
-## Summary of Attempts 41-47 (root-cause localization)
+## Attempt 48 — `STALLWAIT(STALL_MATH, MATH)` *between* the two LoFi passes: **no effect**
+
+**Motivation.** `ELWMUL` is `Dst += SrcA*SrcB` (accumulating; Dst.md). Dst.md's scheduling rule: after a write to a Dst 8x16 block it can't be read for 4 cycles, and accumulate ops need to be looping over ≥5 distinct 8x16 blocks to avoid an auto-stall. The LoFi path's `ADDR_MOD_3` does `dest.clr=1`, so pass 2 re-accumulates onto the *same* blocks pass 1 just wrote — inside the 4-cycle write shadow with <5 distinct blocks. Hypothesis: the HW auto-stall that covers this RAW resolves bank-(physical-address)-dependently, producing the per-pass floor + the pass-interaction compounding. This is the one untested location: Attempt 42 drained *before* pass 1 (preamble, MOVD2B→pass1); Attempt 44 re-asserted SETRWC between passes but does **not** drain the math pipe.
+
+**What.** Inserted `TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH)` between the two `ckernel_template::run()` calls in the LoFi `ELWMUL` branch of `_llk_math_sdpa_bcast_col_srcb_reuse_` (local LLK copy). Pristine math otherwise. Verified the edit compiled into the run: `decoder_block_kernel/.../trisc1` (MATH core) artifacts were rebuilt during the run (cache 80.2% hit, ~2000 kernels rebuilt), header mtime predates run start.
+
+**Result.** `TT_METAL_SLOW_DISPATCH_MODE=1`, Austin's iter-top workaround disabled, full position × num_internal_iterations sweep. |Δ| = `|PCC(iter1) − PCC(iter2)|`:
+
+| position_id | sdpa_tail calls | PCC iter=1 | PCC iter=2 | \|Δ\| (Attempt 48) | \|Δ\| (pristine) |
+|---|---|---|---|---|---|
+| 127 | 0 | 0.9901647631143314 | 0.9901647631143314 | **0** | 0 |
+| 255 | 1 | 0.9907709857426044 | 0.9907646480482670 | **6.34e-6** | 6.51e-6 |
+| 383 | 2 | 0.9913380668762602 | 0.9913680422376573 | **3.00e-5** | 3.00e-5 |
+| 511 | 3 | 0.9914568554511025 | 0.9916859209677518 | **2.29e-4** | 2.29e-4 |
+
+Bit-identical to pristine at every position (pos=511 PCCs match to 16 digits). Reverted.
+
+**Conclusion.** The inter-pass Dst read-after-write timing hazard is **ruled out**. The HW auto-stall already covers the pass1→pass2 same-block RAW correctly; forcing a longer deterministic math-pipe drain changes nothing. The bank asymmetry is not a math-pipe drain/timing issue between the passes — consistent with the addressing being provably bank-symmetric (see below). Points further toward a HW-level half-DEST register-file asymmetry (RTL inspection) rather than anything fixable by instruction scheduling in this LLK.
+
+**Addressing is provably bank-symmetric (analysis, this session).** DEST half-bank offset = 512 rows. MOVD2B sources rows `{0,4,64,68}`, ELWMUL writes rows `{0,16,32,48}`, all +`MATH_Offset` base (0 or 512). `remap_addrs`/`swizzle_32b` are **off** here (`untilize=false`, `dense=false` confirmed in `flash_mla.hpp:806-814`). Even with remap on, base=512 is bit 9, which never collides with the remap's bits 3–5, so `Adj16(512+r) − 512 = Adj16(r)` for every row in play. `ZEROACC CLR_HALF` selects the half by `Imm10 = dest_offset_id` and does **not** re-add `MATH_Offset` (no double-application). So no addressing register diverges between banks — the divergence is purely physical/timing, as Austin's note states.
+
+---
+
+## Attempt 49 — Even/odd iter-parity confirmation: baseline vs bypass at `num_internal_iterations ∈ {1,2,3}`
+
+**Motivation.** Confirm the alternation is strictly a function of DEST-bank parity (odd iters one bank, even iters the other) and that it lives *entirely* in `sdpa_mul_bcast_col_reuse_tiles`. Earlier work only measured a 2-point delta (iter=1 vs iter=2); this adds iter=3 to test that odd iters reproduce exactly.
+
+**What.** Fixed `position_id=511` (3 sdpa_tail calls), swept `num_internal_iterations ∈ {1,2,3}`. Ran twice: (a) pristine baseline, (b) with `sdpa_mul_bcast_col_reuse_tiles<block_size>(...)` (sdpa.h:527) commented out (Attempt-41-style bypass; math broken but deterministic). `TT_METAL_SLOW_DISPATCH_MODE=1`, Austin's iter-top workaround disabled. Bypass kernel verified rebuilt (cold JIT recompile of `decoder_block_kernel` on the sdpa.h change; bypass iter=1 PCC = 0.9712301523152757 matches Attempt 41 exactly).
+
+**Result.** `aggregate_pcc` per iter:
+
+| run | iter=1 (odd) | iter=2 (even) | iter=3 (odd) | \|odd−even\| |
+|---|---|---|---|---|
+| **baseline** | 0.9914568554511025 | 0.9916859209677518 | 0.9914568554511025 | **2.29e-4** |
+| **bypass** | 0.9712301523152757 | 0.9712301523152757 | 0.9712301523152757 | **0** |
+
+**Conclusion.**
+1. **Strict even/odd parity.** Baseline iter=1 ≡ iter=3 *bit-for-bit* (16 digits), iter=2 differs. The alternation is exactly the DEST-bank ping-pong (one flip per decoder iteration), as Austin reported — not a drift or a monotonic accumulation.
+2. **Fully localized.** With `sdpa_mul_bcast_col_reuse_tiles` bypassed, all three iters are bit-identical — the bank dependence vanishes completely. Everything else in `flash_mla` + post-SDPA + MoE + all-reduce is bank-symmetric. Re-confirms Attempt 41 with a 3-point parity check.
+
+Combined verdict (Attempts 41-49): the asymmetry is intrinsic to the FPU `ELWMUL`(+SRCB-reuse-from-DEST) datapath on bank 1 vs bank 0 — addressing is provably symmetric, no instruction scheduling/drain affects it, and even a single accumulate pass carries the bank floor (Attempt 46). Practical paths: ship Austin's force-bank-0 workaround; for a code fix, restructure away from MOVD2B-from-DEST + same-block 2-pass accumulate (CB-backed P1/P2 + standard `mul_tiles_bcast_cols`) and re-measure; for root cause, escalate to RTL/HW with this localization.
+
+---
+
+## Attempt 50 — Unpack-sequence audit + ZEROACC DEST half before each L-block multiply: **no effect (leftover-DEST ruled out)**
+
+**Motivation.** Vet the `sdpa_bcast_col_reuse_tiles` unpack/math sequence for leftover state / counter wrap (the "it must be leftover data or wrong-half addressing" hypothesis).
+
+**Audit findings (static + ISA).**
+- **The back-to-back double `llk_unpack_A`-into-SrcA is unique** to `sdpa_bcast_col_reuse_tiles` — no other call site in models/ttnn/tt_metal does two consecutive `llk_unpack_A` into SrcA (all others single, or `llk_unpack_AB` for A+B). Unusual, but see below: it is count-balanced.
+- **`llk_unpack_A` runs the *sdpa* mop.** `sdpa_bcast_col_reuse_tiles_init` programs the sdpa unpack mop (`_llk_unpack_A_sdpa_mop_config_`); the tiles fn calls the *standard* `llk_unpack_A`, which just runs the currently-programmed mop via `ckernel_template::run()`. So each `llk_unpack_A` issues `num_tiles*num_faces` `UNPACR`s (each `Set Dvalid=1`).
+- **Config values:** half-DEST (`dst_full_sync_en=False`) + bf16 ⇒ `dst_size=8` ⇒ `num_blocks=2`, `block_size=8`, `num_faces=2`.
+- **dvalid lifecycle is balanced.** SrcA: per block, unpacker issues `2 calls × block_size*num_faces = block_size*4` `SET_DVALID`; math issues `2 passes × block_size*num_faces = block_size*4` `ELWMUL` each with `CLR_A`. SrcB: set once by preamble `dummy_valid` (`UNPACR_NOP SrcB SET_DVALID`), cleared once by postamble `SETRWC CLR_B`. Both balanced — no stuck dvalid / bank-pointer desync from counting.
+- **DEST-write addressing does not wrap.** `block_size=8` ⇒ ELWMUL advances `8 tiles × 64 rows = 512 rows`, exactly one half; in bank 1 it fills rows 512–1023 with no wrap past the 1024-row `&0x3f8` boundary. "Fall over to the wrong half" ruled out for this config.
+- **P1/P2 write & read use the same bank base.** The SFPU `fused_max_sub_exp_add_tile` writes P1/P2 via `_llk_math_eltwise_unary_sfpu_start_` → `set_dst_write_addr` (adds `get_dest_buffer_base()`); the MOVD2B preamble reads `{0,4,64,68}` + same base. Consistent.
+- **`tile_regs_acquire` does NOT zero DEST** (`_llk_math_wait_for_dest_available_` is just a semaphore wait). So the only DEST zeroing is the preamble's `clear_dest`==`normalize` ZEROACC.
+
+**Experiment.** Since `ELWMUL` is `Dst +=` and `normalize=false` reduce calls never ZEROACC, hypothesized pass 1 accumulates onto bank-resident leftover. Added `TT_ZEROACC(CLR_HALF, …, dest_offset_id)` before every `sdpa_mul_bcast_col_reuse_tiles` in `sdpa_tail_l_block`. `pos=511`, `num_internal_iterations ∈ {1,2,3}`, slow dispatch, workaround off.
+
+**Result.** Bit-identical to baseline at every iter: iter1=iter3=0.9914568554511025 (odd), iter2=0.9916859209677518 (even). **Complete no-op.**
+
+**Conclusion.** The L-block ELWMUL was already reading its DEST target as zero (rows already invalid in *both* banks) — so there is **no leftover-DEST accumulation**, and the `=`-semantics are intact. This rules out the DEST-data path as the source of the asymmetry. By elimination, the bank-dependent 2.29e-4 must enter via the **ELWMUL operands**: SrcA is the L tiles (from L1, bank-independent), so it must be **SrcB = P1/P2** — the exp values produced by the SFPU reduce in `sdpa_tail_ms_reduce` (`fused_max_sub_exp_add_tile`) and pulled into SrcB by the MOVD2B preamble. **Next:** DPRINT/dump P1/P2 (DEST rows 0 & 32 post-`fused_max_sub_exp_add_tile`, or `cb_interm_ms`'s `cur_sum`) on odd vs even iterations to test whether the SFPU reduction itself is bank-dependent (→ leftover SFPU/LREG state) versus the values being identical but consumed differently.
+
+---
+
+## Attempt 51 — DPRINT probe of `sdpa_tail` reduction INPUTS (worker_ms / prev_ms): **divergence is already upstream on boundary cores**
+
+**Motivation.** Attempt 50 narrowed the bank-dependent operand to SrcB = P1/P2 (the SFPU exp values). Probe whether the inputs to `sdpa_tail`'s reduction already differ by iteration parity.
+
+**What.** Added a single UNPACK-side `DPRINT << TileSlice(...)` in `sdpa_tail_ms_reduce` (after the `cb_wait_front`s) printing row 0 `[max(col0), sum(col1)]` of both `cb_worker_ms` and `cb_prev_ms`. One run: `pos=511`, `num_internal_iterations=2` (single program launch, decoder loops twice → both DEST-bank parities in one DPRINT stream). Filtered to chip 0 (`TT_METAL_DPRINT_CHIPS=0`, `…_CORES=all`, `…_PREPEND_DEVICE_CORE_RISC=1`). Each reducer core prints twice (iter-0 then iter-1, program order).
+
+**Result.** 8 reducer cores on chip 0; per-core iter-0 vs iter-1 `[max,sum]`:
+
+| core | iter-0 | iter-1 | differs |
+|---|---|---|---|
+| (0,1) | 39.5, 12.3125 | 40.75, 11.4375 | **YES** |
+| (0,2) | 40.5, 9.875 | 40.5, 9.875 | no |
+| (1,1) | 33.75, 19.25 | (same) | no |
+| (1,2) | 56.5, 2.3125 | (same) | no |
+| (2,1) | 38.25, 11.625 | (same) | no |
+| (2,2) | 37.5, 12.5 | (same) | no |
+| (3,1) | 34.5, 19.625 | 32.25, 26.375 | **YES** |
+| (3,2) | 46.25, 4.875 | (same) | no |
+
+(`prev_ms` == `worker_ms` on every print at this fold step.)
+
+**Conclusion (reframing).** On 2 of 8 reducer cores — the x-edge cores at y=1, (0,1) and (3,1) — the **`max` statistic itself** differs between iterations. `max` is a pure `max()` (bank-invariant arithmetic), so the divergence is **already present in the stats *entering* `sdpa_tail`** — i.e., **upstream of the L-block multiply**, in the per-chunk SFPU max/sum reduction (`compute_sdpa_chunk`'s `reduce_max`/`reduce_sum`) feeding the reducer. Because iter1≡iter3 bit-for-bit (Attempt 49: clean parity, not cumulative KV contamination), this upstream difference is itself **DEST-bank-parity-driven**.
+
+This means the Attempt-41/49 "localization to `sdpa_mul_bcast_col_reuse_tiles`" is the **conduit, not the source**: bypassing the L-multiply decouples the final output from the (bank-dependent) MS stats, which is why bypass looked like a fix. The bank-asymmetry is a more general SFPU/compute phenomenon present in the chunk softmax reduction, surfacing on the boundary cores (the ones whose chunk count / partial-chunk handling differs).
+
+**Next.** Probe one stage further upstream: DPRINT `compute_sdpa_chunk`'s `reduce_max`/`reduce_sum` output (the `max_dst_offset` tile) on (0,1)/(3,1) for iter-0 vs iter-1, and the QK^T (`mm1`) result, to find the first op whose output diverges by bank. Also worth dumping which DEST bank each core's reduce lands on per iteration (print `dest_offset_id`) to confirm the (0,1)/(3,1) cores are the ones whose acquire-parity flips relative to the others.
+
+---
+
+## Attempt 52 — DPRINT one position left: `compute_sdpa_chunk`'s L output + `dest_offset_id`: **source is upstream of `sdpa_tail`**
+
+**What.** Same safe TileSlice mechanism. Added (a) reference MS probe (Attempt 51), (b) `cb_l1` probe in `sdpa_tail_l_block` block 0 — `cb_l1 = cb_out_in` = the worker's L (`compute_sdpa_chunk`'s P@V output) entering the multiply (cb is properly `cb_push_back`'d, so RD_PTR read is safe), (c) `dest_offset_id` (DEST bank) printed from PACK at the MS reduce. `pos=511`, `num_internal_iterations=2`, chip 0.
+
+**Result (per core, iter-0 → iter-1).**
+
+| core | MS [max,sum] | worker-L cb_l1 (4 elems) | sdpa_tail bank |
+|---|---|---|---|
+| (0,1) | 39.5,12.31 → **40.75,11.44** | -0.598,-0.891,-0.5,-2.234 → **-0.734,-0.281,-0.183,-2.766** | 1 → 1 |
+| (3,1) | 34.5,19.62 → **32.25,26.38** | 0.891,4.562,2.5,1.086 → **0.205,6.281,2.0,0.539** | 1 → 1 |
+| (0,2),(1,1),(1,2),(2,1),(2,2),(3,2) | identical | identical | 1 → 1 |
+
+**Conclusions.**
+1. **The worker-L (`compute_sdpa_chunk`'s P@V output) already differs by iteration parity** on cores (0,1) and (3,1) — *before* `sdpa_mul_bcast_col_reuse_tiles`. Both the MS stats *and* the L vector out of Phase 1 are bank-dependent on those cores. **The source is upstream of `sdpa_tail` entirely.**
+2. **`sdpa_tail`'s DEST bank (`dest_offset_id`) = 1 in *both* iterations on every core.** `sdpa_tail` (and its multiply) run on a *fixed* bank; they are not where the alternation enters — they only propagate already-divergent inputs. This is exactly why bypassing the multiply (Attempt 41/49) collapsed |Δ| to 0: it severs the conduit between the (bank-dependent) Phase-1 output and the packed result. **The Attempt-41 "localization" is the conduit, not the source.**
+3. **Only the x-edge cores at y=1, (0,1) and (3,1), diverge.** These are almost certainly the cores handling the **partial/boundary KV chunk** (containing freshly-written position 511): a different chunk count → different acquire (tile_regs) parity inside `compute_sdpa_chunk` → their Phase-1 compute lands on a DEST bank that flips with iteration parity, while the full-chunk cores stay on a fixed bank. The probe did **not** mask the bug (divergence reproduced).
+
+**New chain of custody.** `compute_sdpa_chunk` (Phase 1, boundary cores, bank-flipping by iter parity) → bank-dependent (max, sum, L) → `sdpa_tail` stats+L merge (fixed bank) → packed output → MoE/all-reduce → MLP-PCC alternation.
+
+**Next.** Probe *inside* `compute_sdpa_chunk` on (0,1)/(3,1) to find the first op whose output is bank-dependent: candidates in order — `reduce_max`/`reduce_sum` (SFPU 8x32 row reduce), the `Q@Kᵀ` (`mm1`) FPU matmul, `fast_approx_exp`, or the `P@V` (`sdpa_custom_mm_reuse_dest_srcb`). These intermediates live in DEST (no CB), so probing needs either a scratch-CB pack or a DEST read — higher perturbation risk; design carefully. Also confirm the (0,1)/(3,1) acquire-parity-flip hypothesis by counting tile_regs_acquire in the partial-chunk path vs full-chunk path.
+
+---
+
+## Attempt 53 — Static acquire-count audit (confirmed) + in-chunk DPRINT (blocked by plumbing)
+
+**Static audit (confirmed, no device time).**
+- `compute_sdpa_chunk` runs inside a **single** `tile_regs_acquire()` (`flash_mla.hpp:750`); the `for chunk` loop is *inside* it. So **chunk count does not change the acquire count** — Phase-1 compute = exactly 1 acquire/release per core.
+- Each `sdpa_tail` = `1 (ms_reduce) + num_blocks (l_block)` acquires = **3** (normalize=false) or **2** (normalize=true; block-0 reuses the ms acquire). `num_blocks=2`.
+- Per-core per-iteration MLA acquires = `1 + (num_cores_to_wait-1)*3 + {2|3}` (+ MoE). This **depends on `num_cores_to_wait`** (the tree-reduction role, `flash_mla.hpp:702-709`), which differs per core. A core's flash_mla entry bank **alternates per iteration iff its per-iteration acquire count is odd** → explains why only some cores ((0,1)/(3,1)) flip their Phase-1 compute bank while the rest stay pinned. Chunkless cores `return` early (`flash_mla.hpp:695`).
+- Compute and reduce are the **same** TRISC function (`#elif defined(COMPILE_FOR_TRISC)`, 653-816); a reducer-with-chunks runs both.
+
+**In-chunk DPRINT — blocked.** Two runs (a) `compute_sdpa_chunk` after `hash_cb` [inside the tile_regs region], (b) `flash_mla.hpp:747` Q + `dest_offset_id` [outside the region, before the acquire] — **both produced zero kernel DPRINT output** despite the kernel rebuilding (98%/41% rebuilt; `decoder_block_kernel/trisc1` post-edit confirmed). The **reduce-phase** probe (Attempt 52, same TRISC function, same cores) prints fine. The only difference is position in the function: late (reduce) prints survive, early (compute) prints don't.
+
+**Diagnosis.** The DPRINT/WAYPOINT debug ring buffer **wraps during the heavy SDPA compute** (every `llk_unpack_A`/matmul/`hash_cb(cb_k)` writes WAYPOINTs/data into the shared per-core debug buffer), evicting the early compute-phase lines before the host server drains them; only the late reduce-phase lines remain. DPRINT is therefore **not a reliable channel for in-compute values** in this kernel. All probes reverted.
+
+**Next (reliable channel).** Use the existing host-readable `mla_iter_dump_buffer` (the test already reads it back per-iteration to report "N cores show iter0≠iter1") to dump an in-compute intermediate — the `Q@Kᵀ` (`mm1`) scores or the `reduce_max` output — for cores (0,1)/(3,1), iter-0 vs iter-1. Since `max` already differs and `max` is a deterministic `max()` of the scores, the prime suspect is the **`Q@Kᵀ` FPU matmul** (or its Q/K operands) being bank-dependent; the dump will confirm whether scores differ and split matmul-vs-input. Alternatively, suppress WAYPOINTs/`hash_cb` to let compute-phase DPRINT survive.
+
+---
+
+## Attempt 54 — Cross-reference with `conversation.md` (prior hash-bisection) + reduce-kernel code read: **ROOT CAUSE**
+
+**Prior work recovered.** `docs/conversation.md` contains an earlier hash-LLK bisection (same technique) that already localized the divergence. Per-stage iter0-vs-iter1 same/diff counts:
+
+| stage | same | diff | new divergence |
+|---|---:|---:|---|
+| Q input (pre-flash_mla) | 512 | 0 | baseline |
+| chunk0 post-Q@Kᵀ (`mm1`) | 476 | 36 | +36 (matmul rounding, minor) |
+| chunk0 **post-`reduce_max`** | 288 | 224 | **+188 ← the jump** |
+
+→ The bulk of divergence is introduced by **`_calculate_sdpa_reduce_max_row_8x32_`**, the SFPU row-reduce **dispatched from the PACK thread** (`sdpa.h:278` `PACK((llk_math_sfpu_sdpa_reduce_max_row<…>))`). Q@Kᵀ (FPU/MATH) is essentially stable (36 = rounding). This matches the live-session DPRINT (Attempts 51-52: MS + worker-L differ on the boundary cores) — same source, finer-grained.
+
+**Root cause (confirmed by code read of `ckernel_sfpu_sdpa_reduce_row.h`).** `_calculate_sdpa_reduce_row_8x32_` sets the DEST address as:
+```cpp
+TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, src_index + get_dest_buffer_base());  // :144
+... TT_SETC16(..., dst_index + get_dest_buffer_base());                                  // :177 / :202
+```
+`get_dest_buffer_base()` returns `dest_offset_id ? DEST_REGISTER_HALF_SIZE : 0`, and **`dest_offset_id` is a per-TRISC global**. This reduce runs on **PACK (TRISC2)**, so it uses **PACK's** `dest_offset_id`. But the `mm1` scores it reads were written by the **Q@Kᵀ matmul on MATH (TRISC1)**, using **MATH's** `dest_offset_id`. `DEST_TARGET_REG_CFG_MATH_Offset` is `ThreadConfig[CurrentThread]` (per-thread), and the SFPLOAD/SFPSTORE issued by PACK use PACK's value. **For correctness PACK's `dest_offset_id` must equal MATH's; when they desync (deterministically, by iteration/acquire parity on the cores whose per-iter acquire count is odd), the PACK-driven reduce addresses the WRONG DEST half** → reads stale data → bank-parity-dependent `max`/`sum` → the even/odd PCC alternation.
+
+This is exactly why **Austin's hack works**: `llk_math_pack_sync_init` + `llk_pack_dest_init` (and equivalently the `tensix_sync()` + wait-`MATH_PACK`==0 drain before the chunk loop) **resync MATH's and PACK's `dest_offset_id`** to a known bank, so the reduce reads the half MATH wrote.
+
+**Is it "expected"/inherent? No — it's a design bug.** The alternation is a *logical consequence of how the kernel is written* (driving the SFPU reduce from PACK and addressing DEST via PACK's independent `dest_offset_id`, implicitly assuming it stays in lockstep with MATH's across the half-DEST ping-pong), but it is **not** an unavoidable property of the math. A correctly-banked reduce (same arithmetic) would be iter-invariant. The custom SFPU-from-PACK reduce is the defective op.
+
+**Fix direction (to validate next).** Make the PACK-driven reduce address the **same** DEST half MATH wrote, robustly — options: (1) drive the reduce's DEST base from a MATH-sourced bank rather than PACK's `get_dest_buffer_base()`; (2) guarantee MATH/PACK `dest_offset_id` lockstep at flash_mla entry (Austin's resync — known to fix even/odd; reported to not fix every pos id, worth re-checking with this understanding); (3) drive the reduce from MATH (loses the PACK/FPU overlap). The decisive verification: a targeted fix that forces the reduce's `get_dest_buffer_base()` to match MATH's bank should drop |Δ| to 0 across iters at all positions.
+
+**Note on the live DPRINT plumbing.** Compute-phase DPRINT (inside/around the SDPA `tile_regs` region) does not reach the host in this kernel (Attempts 53-54: zero output despite rebuilds and 2-core restriction), while post-`tile_regs_release` reduce-phase DPRINT works (Attempts 51-52). The mbank/pbank desync was therefore confirmed via `conversation.md` + static code read rather than a live print.
+
+---
+
+## Attempt 55 — Option-1 fix attempt: `tensix_sync` + `MATH_PACK` drain before SDPA compute
+
+**What.** Added a MATH-side drain (`tensix_sync(); while(semaphore_read(MATH_PACK) > 0){}`) at flash_mla compute entry to settle MATH/PACK `dest_offset_id` before the PACK-driven reduce (the safe realization of "make the reduce use a MATH-consistent bank"). First placed *after* `tile_regs_acquire` → **spun forever** (`math_dest_wait` leaves `MATH_PACK` at max). Moved to *before* `tile_regs_acquire`.
+
+**Result.**
+- **Fix direction validated:** with the drain, iter=1 absolute PCC **improved** at every multi-chunk position — 255: 0.99077→**0.99151**, 383: 0.99134→**0.99208**, 511: 0.99146→**0.99242** (pos127 unchanged, no cross-chunk reduce). Consistent with the reduce no longer reading a wrong-bank/stale value → the bank-consistency hypothesis is correct.
+- **But the drain hangs on the looped (`num_internal_iterations=2`) subtest** — the actual alternation repro. All 4 iter=1 subtests passed; the 2-internal-iteration subtest deadlocks on the loop-back. **flash_mla entry is mid-iteration** (after pre-SDPA, before MoE): pre-SDPA/MoE packs aren't at a clean boundary there, so `tensix_sync`/`MATH_PACK`-drain on the 2nd internal iteration deadlocks. (Required `pkill -9` + `tt-smi -r` twice.)
+
+**Conclusion.** The sync must be placed at a **genuinely clean boundary — the decode iter-top (between iterations, after MoE)** — which is exactly where Austin's hack lives. The mid-iteration flash_mla-entry placement is unsafe. Drain reverted.
+
+**Next options.** (a) Austin's iter-top dest-resync (`llk_math_pack_sync_init` + `llk_pack_dest_init`, decoder_block_kernel.cpp:3071-3072, currently commented) — known to run without hanging and to fix even/odd; validate across all positions (his open concern). (b) Re-place the drain at decode iter-top instead of flash_mla entry. Both target the same root (settle MATH/PACK banks at a clean boundary). The iter=1 PCC improvement confirms either will be a real fix, not just a masking.
+
+---
+
+## Attempt 56 — Force bank 0 vs force bank 1 (both fully synced): **computation is bank-ASYMMETRIC; cross-chunk reduce; corrects Attempt 54**
+
+**What.** At decode iter-top, applied Austin's MATH+PACK dest-resync (`llk_math_pack_sync_init` + `llk_pack_dest_init`) to pin every iteration's bank — once to **bank 0** (Austin's exact hack, no flip) and once to **bank 1** (resync + `dest_section_flip` on MATH and `flip_packer_dest_offset_id`+`select_packer_dest_registers` on PACK). Both pin MATH==PACK (fully synced); the *only* difference is which DEST half. Full sweep, `num_internal_iterations ∈ {1,2}`.
+
+**Result.** Forcing either bank **kills the alternation** (iter1==iter2, |Δ|=0). Per-position synced PCCs:
+
+| pos | chunks | force-0 (bank 0) | force-1 (bank 1) | \|f0−f1\| | pristine pcc A (odd) |
+|---|---|---|---|---|---|
+| 127 | 1 | 0.9901647631143314 | 0.9901647631143314 | **0** | 0.9901647631143314 |
+| 255 | 2 | 0.9907709857426044 | 0.9915112378333846 | **7.40e-4** | 0.9907709857426044 |
+| 383 | 3 | 0.9913380668762602 | 0.9920827533871097 | **7.45e-4** | 0.9913380668762602 |
+| 511 | 4 | 0.9914568554511025 | 0.9924208606513036 | **9.64e-4** | 0.9914568554511025 |
+
+**Conclusions.**
+1. **The computation is genuinely bank-asymmetric.** force-0 and force-1 are both fully MATH/PACK-synced and differ only in the DEST half, yet give different PCCs (|Δ| up to 9.6e-4). So an op reads/writes a **bank-dependent wrong location** — the "all ops are bank-symmetric" premise is **false** for at least one op. **This corrects Attempt 54: it is NOT (only) a MATH/PACK `dest_offset_id` desync — the synced computation itself is bank-dependent.**
+2. **The asymmetry is in the cross-chunk reduce.** pos127 (1 chunk) is bank-symmetric (|Δ|=0); the asymmetry appears only for ≥2 chunks. The only ≥2-chunk-specific code is the **`prev_max`/`prev_sum` accumulation in `_calculate_sdpa_reduce_max/sum_row_8x32_`** (`ckernel_sfpu_sdpa_reduce_row.h`, the `if(prev_max)`/`if(prev_sum)` blocks). Sharp localization, matching conversation.md's reduce localization.
+3. **force-0 == pristine pcc A exactly** (verifies Austin's hack pins to the odd-iteration result). **Bank 1 is *more accurate* than bank 0** (force-1 > force-0 by ~7–10e-4) — consistent with the user's spill intuition: a near-boundary DEST access on bank 0 (rows ~0–511) spills *into* bank 1's valid data; on bank 1 (rows ~512–1023) it wraps past 1023 to low rows. The natural even iter (pcc B=0.99169 at 511) is a *third* value (≠ force-1=0.99242), so a secondary MATH/PACK-desync effect may also be present on even iters, but the **primary, definitive finding is the bank-asymmetry of the cross-chunk reduce.**
+
+**Addendum (force-0 iter1-vs-iter2 residual).** Forcing bank 0 does NOT fully kill the alternation — it leaves a residual (pos255 1.2e-5, pos383 9.8e-5, pos511 8.7e-5), whereas forcing bank 1 gives |Δ|=0 at every position. So **bank 1 is the clean/accurate bank (|Δ|=0, PCC 0.99242); bank 0 is the bad one (residual + lower PCC 0.99146)**. This likely explains Austin's "doesn't fix every pos id" — his reset pins to bank 0 (the bad bank). A reset-to-bank-1 at iter-top is a strictly better candidate fix (full stability + best accuracy), pending root-cause of the bank-0 defect.
+
+**Re-verify (separate run, Austin's exact 2 lines, nothing else): force-0 iter1 == pcc A bit-identical at all positions (127/255/383/511), and the iter1-vs-iter2 residual reproduces (~8.7e-5 at 511).** So **Austin's workaround does NOT drive the gap to 0** on current code — contradicting the "Final status" assertion at the top of this doc, which was inherited (never actually measured to be 0 in any logged Attempt). We were *assuming*, not confirming, that the workaround fully fixes it.
+
+**Static footprint check.** `PNHt==1`, `vDHt=16` → mm2 rows 0–255, max/sum/corr_exp 256–287, mm1 at 288. The within-chunk `reduce_max` climbs 16 rows/tile over `block_width=Sk_chunk_t` tiles; `Sk_chunk_t = 128/K_TILE_HEIGHT`. With `K_TILE_HEIGHT=8` (the SDPA tile is 8×32, test:1070) → `Sk_chunk_t=16` → mm1 reaches `288+256=544`, **~32 rows past the 512 half-boundary** (a genuine spill on bank 0; on bank 1 it reaches 1056 → wraps past 1024). So a boundary spill is arithmetically *possible*. **BUT** pos127 (1 chunk) runs that same within-chunk reduce (same spill) yet is bank-symmetric — so a single reduce's spill is benign; the asymmetry requires the **cross-chunk** accumulation. Static analysis alone can't cleanly attribute it to the spill vs another bank-dependent effect — needs the direct cross-chunk-op bisection.
+
+**Next.** Pinpoint the bank-dependent access in the cross-chunk `prev_max`/`prev_sum` path — examine the `TT_SETC16(MATH_Offset, dst_index + get_dest_buffer_base())` + `SFPLOAD/SFPSTORE` addressing for a row that crosses the 512/1024 boundary differently on bank 0 vs bank 1, or a poison/hash probe of the prev value on bank 0 vs bank 1.
+
+---
+
+## Attempt 57 — De-confounded force-bank-1 + spill arithmetic: **bank-asymmetry is real & confound-free; spill ruled out**
+
+**Spill arithmetic (corrected).** `K_TILE_HEIGHT=32` (KV cache is `TILE_32x32`, kv_cache_update/op.py:145; the 8×32 tile is the Q/output "tiny tile", not K) → `Sk_chunk_t = 128/32 = 4`. DEST footprint: mm2 rows 0–255, max/sum/corr_exp 256–287, mm1 at 288, reduce climbs `4·16=64` → **mm1 ends ~352, ~160 rows below the 512 boundary**. No access reaches 512 (bank0) or 1024 (bank1). **The spill-to-544 hypothesis is arithmetically dead** (it relied on the wrong, 8-row, tile height).
+
+**De-confound.** The original force-bank-1 (Attempt 56) used `dest_section_flip` (which carries a `STALLWAIT`), so `|f0−f1|` could in principle be a flip side-effect rather than the bank. Re-ran force-bank-1 with **no flip / no STALLWAIT** — Austin's exact init (sets up GPRs at bank 0), then re-point to bank 1 via `dest_offset_id=1` + `ckernel::math::set_dest_section_base<StartHalf>()` (MATH) and `ckernel::packer::select_packer_dest_registers<SyncHalf>()` (PACK). (Faithful LLK copies were blocked by a build-vs-source rename of `_llk_init_packer_dest_offset_registers_`; this reuse-Austin's-init approach uses only confirmed primitives.)
+
+**Result.** De-confounded force-1 == original (flip-based) force-1 **bit-identical at every position** (255: 0.9915112378333846, 383: 0.9920827533871097, 511: 0.9924208606513036), and ≠ force-0/pcc A (511: 0.9914568554511025). So `force-0 ≠ force-1` is **purely the DEST bank**, reproduced across two independent force-1 implementations.
+
+**Conclusions.**
+1. **The SDPA computation is genuinely bank-asymmetric — confirmed, confound-free.** Same inputs, same MATH/PACK sync, only the DEST half differs → different output (|f0−f1| up to 9.6e-4 at 511). The "all ops bank-symmetric" premise is definitively false.
+2. **Not a boundary spill** (footprint ~352 << 512). And every DEST access I audited in the cross-chunk path (`reduce_max`/`reduce_sum` prev, `non_approx_exp_mul_prev`, the `srca_srcb` rescale preamble) includes `get_dest_buffer_base()` — no absolute/bank-omitting access found statically. So the asymmetry is either a HW-level half-DEST behavior difference, or a subtle bank-dependent access not yet found.
+3. Asymmetry is **cross-chunk-only** (pos127/1-chunk bank-symmetric), so it lives in the `!first_chunk` accumulation path.
+
+**Next.** Cross-chunk-op bisection: re-run force-0 vs force-1 with one `!first_chunk` op neutralized at a time (`prev_max` accum → `prev_sum` → mm2 rescale); whichever collapses `|f0−f1|` to 0 is the bank-asymmetric op. Then inspect that op for the bank-dependent access (or confirm it's HW).
+
+---
+
+## Summary of Attempts 41-57 (root-cause localization)
 
 **Localization (high confidence).** The bank-asymmetric MLP-PCC alternation originates in the LoFi 2-pass + SRCB-reuse machinery of `_llk_math_sdpa_bcast_col_srcb_reuse_` (in the deepseek-local LLK copy at `models/demos/deepseek_v3_b1/kernel_includes/tt_llk/tt_llk_blackhole/llk_lib/llk_math_sdpa_bcast_col_srcb_reuse.h`). Bypassing the call entirely (Attempt 41) collapses |Δ| to 0 at every probed position with absolute PCC dropping to a meaningful ~0.94–0.97 (per-shard PCCs in the 0.94-0.97 range with normal spread — output retains structure, no degeneration).
 
@@ -1647,11 +1868,13 @@ Cannot cleanly conclude "srcb advance is the compounding source" from this — t
 2. **Per-pass component.** A single `ckernel_template::run()` alone produces a fixed ~3e-5 bank-asymmetric Δ that does not scale with `sdpa_tail` invocation count (Attempt 46). This is the *floor* of the bug.
 3. **Compounding component.** The full 2-pass structure introduces super-linear scaling: pos=255 (1 sdpa_tail call) Δ = 6.5e-6, pos=383 (2 calls) Δ = 3.0e-5, pos=511 (3 calls) Δ = 2.29e-4. The compounding originates in the second pass's consumption of state left by the first pass — but is NOT cleanly attributable to ADDR_MOD_3's srcb advance alone (Attempt 47).
 
-**Ruled out (Attempts 41-47).**
-- MOVD2B → ELWMUL pipeline read-after-write hazard (Attempt 42)
+**Ruled out (Attempts 41-48).**
+- MOVD2B → ELWMUL pipeline read-after-write hazard, drain *before* pass 1 (Attempt 42)
 - `unp_cfg_context` ping-pong / SrcB CFG slot drift (Attempt 43)
 - `ADDR_MOD_3` vs `TTI_SETRWC(B=8, SET_BD)` timing equivalence — implicit and explicit srcb advance give identical Δ (Attempt 44)
 - ELWMUL-specific bug (Attempt 45)
+- Inter-pass (pass1→pass2) Dst read-after-write timing hazard — explicit math-pipe drain between the two LoFi passes has zero effect (Attempt 48)
+- All DEST addressing as a source — MOVD2B/ELWMUL/ZEROACC are provably bank-symmetric (Attempt 48 analysis)
 
 **Reference: a working sibling.** `_llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_` (`tt_llk_blackhole/llk_lib/llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb.h`) implements SrcB-reuse-from-DEST in a structurally different way (single `llk_unpack_AB`, explicit `reset_config_context()`, single context, ADDR_MODs that use `c_to_cr=1` so pass 2's writes land on different DEST positions). The vibe-coded `_llk_math_sdpa_bcast_col_srcb_reuse_` uses two `llk_unpack_A` calls with `unp_cfg_context` ping-pong and ADDR_MODs where pass 2 overwrites pass 1's dest positions (with `dest.clr=1` in `ADDR_MOD_3`). Whether the sibling's structure is reproducibly bank-symmetric for the SDPA tail's specific input layout (P1 in tile 0, P2 in tile 1, requiring MOVD2B reads from DEST rows `{0, 4, 64, 68}` rather than `{0, 4, 8, 12}`) is the obvious next investigation.
 
@@ -1661,3 +1884,283 @@ Cannot cleanly conclude "srcb advance is the compounding source" from this — t
 - The MOVD2B addresses `{0, 4, 64, 68}` (with the 60-row gap between dst=8 and dst=64) come from `fused_max_sub_exp_add_tile` writing exp_max_diff at `prev_max_base_idx=0` (DEST tile 0) and exp_max_diff_2 at `worker_max_base_idx=32` (which maps to DEST tile 1 starting at row 64). Rearranging the SFPI output to put both P values into sequential DEST rows would let us use the standard `move_d2b_fixed_face` helper directly — at which point the standard sibling kernel becomes a drop-in replacement.
 
 ---
+
+---
+
+## Attempt 58 (2026-06-04) — TRUSTWORTHY ORACLE established; Austin's hack CONFIRMED working; "16-core dump" oracle is BROKEN
+
+**Context.** Prior session declared (mid-stream) "the bank theory is dead" after enabling Austin's
+resync and still seeing "16 cores diverge" in the per-core SDPA dump. That conclusion was WRONG —
+it trusted a broken oracle. This attempt re-measures with the only fully host-side, instrumentation-free
+oracle: the final per-shard PCC, comparing `num_internal_iterations=1` vs `2` at `position_id=255`.
+
+**Method.** `test_decoder_mlp`, `num_internal_iterations=[1,2]`, `position_id=[255]`,
+`TT_METAL_SLOW_DISPATCH_MODE=1`. One launch each. Compared per-shard PCC (N=8) saved to
+`/tmp/43563_outputs/iters_{1,2}_pos_255.pt`. Cross-referenced the iters=2 WITH-hack run from earlier
+(`llk_math_pack_sync_init<false>` + `llk_pack_dest_init<false,false>(0)` at decoder iter-top).
+
+**Results (per-shard PCC, shard 0 shown; full vectors in /tmp logs).**
+| Run                       | shard0 PCC      |
+|---------------------------|-----------------|
+| iters=1, no hack          | 0.9897232722186 |
+| iters=2, no hack          | 0.9899546893850 |  <- DIFFERS from iters=1  => BUG CONFIRMED
+| iters=2, Austin hack ON   | 0.9897232722186 |  <- BIT-IDENTICAL to iters=1 => HACK FIXES IT
+
+**Conclusions.**
+1. **Bug confirmed on trustworthy oracle.** iters=1 != iters=2 in final per-shard PCC. The decoder is
+   not idempotent in iteration count (the literal "PCC A odd / PCC B even" bug).
+2. **Austin's bank-pin hack WORKS.** Pinning DEST bank to 0 at iter-top makes iters=2 bit-identical to
+   iters=1. The inherited "reduces gap to 0" claim is REPRODUCED (contrary to the mid-session error).
+3. **The per-core "N cores diverge in SDPA output" dump is a BROKEN ORACLE — DISREGARD IT.**
+   `flash_mla.hpp` declares `cb_iter1_dump` (line ~670) but NEVER WRITES it (the static-call-counter /
+   iter1 pack the test comment at test_decoder_block.py:1059 describes has been reverted). So the test
+   compares live iter0 data (tiles 0-15) against an unwritten/stale iter1 region (tiles 48-63) and
+   reports ~16 cores regardless of the hack. This is what falsely "killed" the bank theory mid-session.
+4. **=> The DEST-bank-parity root cause is ALIVE.** Even/odd iterations enter SDPA on different banks
+   (odd # of bank flips/iter); some op is bank-dependent; pinning bank 0 removes the dependence.
+
+**Implication for next steps.** Use per-shard PCC (iters=2 == iters=1 at 0.98972327?) as the reliable
+test for any candidate fix or finer-grained bank-pin probe. The open question reverts to the original:
+WHY is bank-1 output != bank-0 output (user: must be SW; prior author: suspected HW/RTL). DPRINT is dead
+in the compute phase (Attempt 57-ish: dprint_tensix_dest_reg and even single-line hash_cb emit nothing
+inside compute_sdpa_chunk; only host readback works).
+
+---
+
+## Attempt 59 (2026-06-04) — LOCALIZED to sdpa_tail (reduce) on the trustworthy PCC oracle
+
+**Method.** Same per-shard-PCC oracle as Attempt 58. Ran position_id in {127, 255} x
+num_internal_iterations in {1,2}. pos127 = 1 chunk, num_cores_to_wait==0 => sdpa_tail NOT executed.
+pos255 = 2 chunks, sdpa_tail (cross-core reduce) executes.
+
+**Results (per-shard PCC shard0; full vectors in /tmp/loc_pos.log + /tmp/43563_outputs).**
+| pos | iters=1 shard0  | iters=2 shard0  | match? |
+|-----|-----------------|-----------------|--------|
+| 127 | 0.9904496392695 | 0.9904496392695 | YES (bit-identical, all 8 shards) -> NO BUG |
+| 255 | 0.9897232722186 | 0.9899546893850 | NO  -> BUG |
+
+**Conclusion.** The iteration-parity bug appears ONLY when sdpa_tail runs (pos255+, num_cores_to_wait>0).
+At pos127 the single-core path (compute_sdpa_chunk incl. its PACK-driven reduce_max, then
+compute_sdpa_recip, no cross-core reduce) is BANK-SYMMETRIC: iters=1==iters=2 bit-for-bit. This
+*re-confirms on a sound oracle* the Attempts 41-48 focus on the sdpa_tail bcast-mul machinery
+(`_llk_math_sdpa_bcast_col_srcb_reuse_` / `sdpa_mul_bcast_col_reuse_tiles`). Note this also means
+conversation.md's hash localization to reduce_max-in-compute_sdpa_chunk was a *consequence* of the
+pos255 worker/reduce config, not an intrinsic bank-asymmetry of reduce_max (pos127 proves reduce_max
+is symmetric). NOTE: kernels are cached per num_iterations, so re-runs at fixed iter counts are ~3 min.
+
+---
+
+## Attempt 60 (2026-06-04) — DPRINT is fully DEAD in this build (both phases); isolation needs host-readback
+
+**Goal.** Isolate whether sdpa_tail's INPUT (this core's compute_sdpa_chunk worker output,
+cb_interm_out/cb_interm_ms) is already iter-divergent at pos255, to separate sdpa_tail from the
+upstream worker path.
+
+**Method.** Added `hash_cb(cb_interm_out, ...)` + `hash_cb(cb_interm_ms, ...)` at the TOP of the
+sdpa_tail block (reduce phase) in flash_mla.hpp. Ran pos255, num_internal_iterations=2,
+TT_METAL_DPRINT_CHIPS=0, DPRINT_CORES="(0,1),(1,1),(2,1),(3,1)", PREPEND_DEVICE_CORE_RISC=1.
+
+**Result.** ZERO hash lines, ZERO `:TR0/1/2:` lines. No kernel DPRINT output reaches host AT ALL —
+in the reduce phase OR the compute phase (matches Attempt 57). The DPRINT *server* attaches
+("DPRINT enabled on device 0, worker core (0,1)") but no kernel emits. Conclusion: this build's
+compute kernels are compiled WITHOUT DPRINT support (hash_cb's emit is stripped; DEBUG_CB_HASH only
+gates the hash *computation*, not the DPRINT plumbing). The summary's "Attempt 52 sdpa_tail DPRINT
+worked" does NOT reproduce here.
+
+**Implication.** dprint_tensix_dest_reg, DPRINT, and hash_cb are ALL unusable for observing
+intermediates in this build. Every intermediate must be captured via HOST READBACK (a persistent,
+host-mappable L1 buffer like mla_iter_dump_buffer). The only working oracles are:
+  (a) final per-shard PCC (iters=1 vs iters=2), and
+  (b) host-readback of a dedicated buffer.
+Probe reverted. Next: capture cb_interm_out (sdpa_tail input) into a host-readable buffer and compare
+across an iters=1 launch vs an iters=2 launch (same trustworthy-oracle style, at the sdpa_tail-input
+boundary): differ => divergence born upstream of sdpa_tail; identical => sdpa_tail is the culprit.
+
+---
+
+## Attempt 61 (2026-06-04) — BREAKTHROUGH: the SDPA is BANK-SYMMETRIC; the bug is NOT in flash_mla
+
+**Harness.** Standalone `test_flash_mla.py::test_flash_mla_decode` (single device, pos255, half-DST
+dst_size=8). FAST: ~4s/run, kernels recompile in seconds. NOTE: the standalone kernel
+(micro_ops/flash_mla/kernels/flash_mla_kernel.cpp) was BROKEN by the cb_iter1_dump debug param added
+to ComputeCTArgs in flash_mla.hpp (10 vs 11 template args) — fixed by passing a dummy 11th arg.
+
+**Method.** Forced the DEST bank via `ckernel::math::dest_section_flip()` +
+`ckernel::packer::flip_packer_dest_offset_id()` + `select_packer_dest_registers<DstSync::SyncHalf>()`.
+Compared output (PCC vs golden, max-abs-diff) bank0 vs bank1. Validated each flip is REAL with a
+MATH-only desync (must catastrophically corrupt if the flip took effect).
+
+**Results.**
+| Experiment                                  | PCC vs golden | max-diff | verdict |
+|---------------------------------------------|---------------|----------|---------|
+| baseline (bank 0)                           | 0.99927412482 | 0.1875   | —       |
+| compute_sdpa_chunk on bank 1 (balanced)     | 0.99927412482 | 0.1875   | IDENTICAL => symmetric |
+| compute_sdpa_chunk MATH-only desync         | (fail)        | 1240.0   | flip is REAL |
+| sdpa_tail on bank 1 (balanced, flip @ 802)  | 0.99927412482 | 0.1875   | IDENTICAL => symmetric |
+| sdpa_tail MATH-only desync                  | -0.0260       | 3.42     | flip is REAL |
+
+**Conclusion.** Both compute_sdpa_chunk AND sdpa_tail produce BIT-IDENTICAL output on bank 0 vs bank 1
+(flips verified real). The entire SDPA is BANK-SYMMETRIC. Therefore the #43563 bank-parity bug is NOT
+in flash_mla at all — the month-long sdpa_tail / reduce_max / _llk_math_sdpa_bcast_col_srcb_reuse_
+focus (Attempts 41-48) was chasing the wrong op.
+
+**Reconciliation (all prior solid facts still hold).**
+- Austin's iter-top bank-pin fixes it (Attempt 58) because it pins the WHOLE iteration's starting
+  bank, making a bank-sensitive op DOWNSTREAM of SDPA (MoE / post-SDPA processing) deterministic.
+- pos127 no-bug / pos255 bug (Attempt 59): sdpa_tail's flip count is ODD, so running it flips the
+  per-iteration bank PARITY. pos255 (sdpa_tail runs) => bank ALTERNATES across iterations => the
+  downstream bank-sensitive op diverges. pos127 (no sdpa_tail) => parity stays even => no alternation
+  => no bug. sdpa_tail is PARITY CONTROL, not the divergence source.
+
+**Next.** Hunt the bank-sensitive op DOWNSTREAM of SDPA (MoE matmuls, all-gather/reduce, RMSNorm,
+projections). Same force-bank-0-vs-1 isolation per op (host-readback comparison). The SDPA is cleared.
+
+---
+
+## Attempt 62 (2026-06-04) — cross-device SDPA reduce (sdpa_tail_streaming) is ALSO bank-symmetric
+
+**Motivation (Cvele).** Standalone single-device bank-symmetry (Attempt 61) doesn't cover the
+multi-device decoder. The bug only smokes out on 8 devices => suspect cross-core/cross-device ops.
+The decoder pulls in sdpa_reduce_worker.hpp / sdpa_reduce_forwarder.hpp (cross-device SDPA reduce)
+which the single-device standalone NEVER exercises. sdpa_reduce_worker::sdpa_tail_streaming does local
+DEST compute (sdpa_tail_ms_reduce + sdpa_tail_l_block + the sdpa_bcast_col_reuse machinery) with
+DEST-reuse (acquire_regs toggling) and a variable num_l_chunks flip count — a strong multi-device-only
+suspect.
+
+**Harness.** test_sdpa_reduce_to_all.py (4 devices, isolates SdpaReduceWorker), pos3500 (all 4 devices
+active), reduce_only. FAST: ~4-11s/run. Force-bank via dest_section_flip + flip_packer_dest_offset_id
++ select_packer_dest_registers<SyncHalf> at worker-compute op start (sdpa_reduce_kernel.cpp). Saved
+full output per run; compared bank0 vs bank1 at full precision (not just max_diff-vs-golden 0.0625).
+
+**Results.**
+- bank0 vs bank1: **torch.equal == True, max abs diff 0.0, 0/131072 elems differ** => BANK-SYMMETRIC.
+- MATH-only desync: max_diff 7.97 (FAIL) => the flip is REAL and reaches sdpa_tail_streaming.
+
+**Conclusion.** The cross-device SDPA reduce is bank-symmetric (bitwise). Combined with Attempt 61,
+the ENTIRE SDPA path (compute_sdpa_chunk + intra-chip sdpa_tail + cross-device sdpa_tail_streaming) is
+bank-symmetric. The bug is NOT in any SDPA op. Caveat: tested at 4 devices vs decoder's 8, but
+bank-symmetry is structural/per-op so it should hold.
+
+**Where the evidence now points: moe_body.** The decoder iteration = mla_body (SDPA, cleared) +
+moe_body (MoE). Austin's iter-top pin fixes the bug by pinning the WHOLE iteration's bank. Since SDPA
+is bank-symmetric, the bank-sensitive op must be in moe_body (MoE matmuls / all-reduce / norm /
+projections). Reconciles Attempt 59: MoE runs at BOTH pos127 and pos255, but only diverges when its
+ENTRY bank alternates across iterations — which happens at pos255 because sdpa_tail's ODD flip count
+flips the per-iteration parity (pos127 has no sdpa_tail => parity stays even => no alternation => no
+bug). sdpa_tail = parity control, MoE = the actual bank-sensitive culprit.
+
+**Next.** Force-bank-0-vs-1 test the MoE ops (matmuls, all-reduce, RMSNorm, projections). Look for a
+standalone MoE / test_post_sdpa harness.
+
+---
+
+## Attempt 63 (2026-06-04) — reduce_to_one_b1 is BANK-SYMMETRIC (cleared); but has a SEPARATE non-bank loop bug
+
+**Motivation.** Per Cvele's cross-core/8-device steer, targeted the MoE cross-device combine ops.
+reduce_to_one_b1 (cross-device reduce-to-one, 8 devices, used in decoder moe_body via
+ENABLE_REDUCE_TO_ONE) accumulates via binary_dest_reuse_tiles<ELWADD, DEST_TO_SRCA> (a DEST-reuse
+pattern) — strong suspect. Its kernel (reduce_to_one_kernel.cpp) already loops op() num_loop_iters
+times internally (same bank-persistence condition as the decoder).
+
+**Harness.** test_reduce_to_one_b1.py (8 devices, 4x2). Added env R43563_NITERS (override
+num_iterations) + R43563_SAVE (dump output). ~5-14s/run.
+
+**Results.**
+1. niters=1 vs niters=2 (1D AND 2D fabric): NOT bitwise equal — max diff 5.98, 7149/57344 elems,
+   niters=2 FAILS golden. So reduce_to_one IS iteration-dependent.
+2. BUT bank-pin (Austin's hack) at each loop-iteration top: niters=2 STILL byte-identical to unpinned
+   (5.98, same 7149 elems) => the iteration-dependence is NOT fixed by pinning the bank => NOT the
+   bank-parity bug. It's a separate, gross, bank-independent iteration-correctness bug (non-idempotent
+   loop / stale fabric re-receive on iter>=2). Magnitude (5.98) also inconsistent with the decoder's
+   subtle ~2e-4.
+3. Clean force-bank test at niters=1 (isolating from the loop bug): bank-0 vs bank-1 BITWISE EQUAL
+   (max diff 0.0, 0/57344). MATH-only desync => max diff 11.25 (flip verified real).
+
+**Conclusion.** reduce_to_one_b1 is BANK-SYMMETRIC => cleared as the #43563 bank culprit. SEPARATE
+FINDING (likely a real bug, but NOT #43563): reduce_to_one_b1's internal loop is non-idempotent —
+niters>=2 produces grossly wrong output regardless of bank (worth flagging to the team; note the
+suite's test_reduce_to_one_2d hardcodes num_iterations=100 yet our niters=2 fails golden — that suite
+test may be silently broken/unvalidated).
+
+**Cleared so far (all bank-symmetric, force-bank verified):** compute_sdpa_chunk, intra-chip sdpa_tail,
+cross-device sdpa_tail_streaming, reduce_to_one_b1. **Remaining MoE suspects:** gated_reduce (has
+acc_to_dest into DEST — suspicious), moe_gather (likely pure DMA), ccl_all_reduce, reduce_to_all_b1,
+MoE matmuls, RMSNorm.
+
+---
+
+## Attempt 64 (2026-06-04) — gated/local_reduce (acc_to_dest) is BANK-SYMMETRIC; + a blind-spot in the per-op method
+
+**Test.** test_gated_local_reduce.py (single device, ~9s). The op (local_reduce.hpp, LocalReduce::Op)
+uses add_tiles_init(..., acc_to_dest=true) => "DST[0]=A+B+DST[0]" — the textbook bank-leftover setup.
+Force ODD bank at compute start; compare bank0 vs bank1 across all 6 param sets.
+
+**Result.** bank0 == bank1 BITWISE (max diff 0.0, 0/1024). MATH-only desync => all 6 FAIL (flip real).
+=> local_reduce / acc_to_dest is BANK-SYMMETRIC. (tile_regs_acquire effectively yields a clean/zeroed
+DEST for the first acc_to_dest add, OR the first add overwrites; either way no bank-dependent leftover.)
+Strongly implies gated_reduce.hpp (same acc_to_dest pattern, used in decoder moe_body) is also safe.
+
+**Cleared (all bank-symmetric, force-bank verified):** compute_sdpa_chunk, intra-chip sdpa_tail,
+cross-device sdpa_tail_streaming, reduce_to_one_b1, local_reduce(acc_to_dest).
+
+**BLIND SPOT identified.** The per-op force-bank method tests each op in ISOLATION (fresh init), so it
+CANNOT catch a CROSS-OP DEST-leftover interaction: op A writes a bank-symmetric CB output but leaves
+bank-dependent DEST leftover; op B (downstream) reads uninitialized DEST = that leftover => bank-
+dependent. In isolation, op B runs after a fresh init (different leftover) so the bug doesn't reproduce.
+This is a real candidate mechanism for #43563 that per-op testing will systematically miss. Next move
+should use an INTEGRATED harness (e.g. test_post_sdpa chaining SDPA->reduce->matmul) or a decoder-level
+probe that preserves op-to-op DEST state.
+
+---
+
+## Attempt 65 (2026-06-04) — STUB compute_sdpa_chunk L-output -> bug PERSISTS -> L-output ruled out
+
+**Method (Cvele's tactic).** Let compute_sdpa_chunk run normally (sems intact, parity preserved — it
+doesn't flip the bank itself; the caller's single tile_regs does, once), then OVERWRITE its L (PV)
+output in DEST (mm2 tiles) with cb_q via copy_tile right before the pack (flash_mla.hpp, gated
+STUB_SDPA_43563). Deterministic + iteration-independent SDPA output. Decoder test_decoder_mlp pos255,
+num_internal_iterations=[1,2], compare saved outputs.
+
+**Result.**
+- Stub EFFECTIVE: per-shard PCC collapsed to ~0 (iters1 [0.032,-0.022,...], iters2 [0.024,-0.024,...])
+  => the L output really was overwritten (output is garbage).
+- iters=1 vs iters=2: finite-masks identical, but 7139/7166 FINITE elems DIFFER (bitwise). The cb_q
+  stub blew up to inf through MoE softmax, but the finite-value comparison is unambiguous.
+- => The iteration-dependence PERSISTS with compute_sdpa_chunk's L output forced deterministic.
+
+**Conclusion.** compute_sdpa_chunk's L (PV) output content is RULED OUT as the cause. The bug rides
+either the MS (max/sum) path (NOT stubbed here) or the downstream sdpa_tail/MoE interaction. Consistent
+with the standing hypothesis (bug is a downstream/MoE interaction; SDPA is parity-control).
+
+**Caveats.** (1) Only L stubbed, not MS — compute_sdpa_chunk not 100% ruled out yet. (2) cb_q stub is
+numerically unstable (inf); a zeros/small-constant stub would be cleaner for future runs.
+
+**Next options:** also stub MS (overwrite max_dst tile after the worker SFPU stall) to fully clear
+compute_sdpa_chunk; or accept L-cleared and move to the downstream interaction (sdpa_tail output / MoE).
+
+---
+
+## Attempt 66 (2026-06-04) — DEFINITIVE: SDPA inputs are BIT-IDENTICAL across iterations
+
+**Why.** The entire bank-parity investigation assumes the per-internal-iteration input is bit-identical;
+this was never rigorously proven (Attempt 18's hash_cb is contaminated — UNPACK fifo_rd_ptr decoupled
+from host memory). A fresh agent proved Q is structurally bit-identical but flagged that K (read from the
+DRAM KV cache, written each iteration by kv_cache_update via a read-modify-write DEST round-trip) could
+diverge if that round-trip is bank-dependent.
+
+**Test (host-readback, no DPRINT, no kernel edits).** Saved the post-op KV cache tensor
+(`kv_cache_output_torch_flat`) + pre-op cache, keyed by num_internal_iterations, in test_decoder_mlp
+(pos255, STUB off = real kernel). n=1 cache = state after iteration-0's write = iter-0 SDPA K-source.
+n=2 cache = after iteration-1's write = iter-1 SDPA K-source. Compared bitwise.
+
+**Result.**
+- before_n1 == before_n2: True (both runs start from identical initial cache — sanity).
+- after_n1 == after_n2: **True, BITWISE. max abs diff 0.0, 0 / 37,748,736 elems differ.**
+
+**Conclusion.** iteration-2's SDPA K input is BIT-IDENTICAL to iteration-1's. kv_cache_update's
+round-trip is bank-STABLE across iterations (does NOT diverge). Combined with the agent's Q proof, the
+FULL SDPA input (Q + K) is identical across iterations, down to the last bit. INPUT-DIVERGENCE
+HYPOTHESIS RULED OUT. The #43563 bug is a genuine INTERNAL bank-parity compute divergence on identical
+inputs (re-validates the original premise on trustworthy host-readback evidence). Cleanly interprets
+Attempt 65: with inputs identical and L-output stubbed yet bug persisting, the iteration-dependence
+lives in the compute AFTER the SDPA L output (MS path / sdpa_tail / MoE).
