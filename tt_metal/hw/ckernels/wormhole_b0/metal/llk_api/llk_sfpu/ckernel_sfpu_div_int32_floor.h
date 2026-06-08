@@ -31,7 +31,7 @@ sfpi_inline void calculate_div_int32_body(
     // Convert inputs to positive values to avoid conversion problems; the
     // original inputs are two's complement integers.  Note that
     // sfpi::abs(-2**31) will return -2**31, which will give -0.0 when
-    // converted to float via sfpi::int32_to_float.
+    // converted to float via sfpi::convert
     sfpi::vMag b = sfpi::abs(b_u);
 
     // Convert to floats, but check for the edge case mentioned above.
@@ -67,15 +67,14 @@ sfpi_inline void calculate_div_int32_body(
 
     // Continue Halley's Method
     e = e * e + e;
-    a = sfpi::abs(a);
 
     // Final step of Halley's Method
     inv_b_f = e * inv_b_f + inv_b_f;
-    sfpi::vFloat a_f = sfpi::int32_to_float(a, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat a_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(a), sfpi::RoundMode::NearestEven);
 
     // Apply scale
     inv_b_f = inv_b_f * scale;
-    v_if(a_f < 0.0f) { a_f = 2147483648.0f; }
+    v_if(a_f < 0.0f) { a_f = 0x1.0p31f; }
     v_endif;
 
     // Initial approximation of quotient: q = a * 1/b.
