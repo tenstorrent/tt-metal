@@ -26,6 +26,47 @@ from models.experimental.dots_ocr_tp4.tt.common import (
 from models.experimental.tt_symbiote.core.module import TTNNModule
 
 
+def _mlp_prefill_pc(mesh_device, m: int, k: int, n: int, fp32_dest: bool):
+    """Hardware-swept program configs for the prefill MLP matmuls on the Blackhole
+    11x10 grid (both run full-grid vs the adaptive helper's ~64-80 cores):
+
+      * gate_up (K=1536, N=4480): in0_block_w=8, per_core_N=13 -> ~202 us (~15%
+        faster than the helper). [in0_block_w=12 was 190 us but its larger in0 CB
+        clashes with L1 in the full pipeline.]
+      * down    (K=2240, N=1536): in0_block_w=7, per_core_N=5  -> ~76 us  (~17%
+        faster). [in0_block_w=14 was 73 us but risks the same L1 clash.]
+
+    Both use ``per_core_M = ceil(M_tiles/10) = 9`` for the 2816 (88 tiles) and the
+    OCR 2848 (89 tiles) prefill, and the chosen in0_block_w keeps per-core CBs <=
+    the proven helper so they always fit. Falls back to the adaptive helper off
+    these shapes / grid."""
+    grid = mesh_device.compute_with_storage_grid_size()
+    mt = (m + 31) // 32
+    if int(grid.x) >= 11 and int(grid.y) >= 10 and 81 <= mt <= 90:
+        per_core_m = (mt + 9) // 10  # == 9 across the 2816..2848 prefill range
+        tuned = None
+        if k == 1536 and n == 4480:
+            tuned = (8, 13)  # (in0_block_w, per_core_N)
+        elif k == 2240 and n == 1536:
+            tuned = (7, 5)
+        if tuned is not None:
+            in0_bw, per_core_n = tuned
+            return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+                in0_block_w=in0_bw,
+                out_subblock_h=3,  # per_core_m(9) % 3 == 0; 3*1 <= dst budget
+                out_subblock_w=1,
+                out_block_h=per_core_m,
+                out_block_w=per_core_n,
+                per_core_M=per_core_m,
+                per_core_N=per_core_n,
+                transpose_mcast=False,
+                fused_activation=None,
+                fuse_batch=True,
+            )
+    return prefill_matmul_2d_config(mesh_device, m, k, n, fp32_dest=fp32_dest)
+
+
 class DotsOCRMLPTP4(TTNNModule):
     def __init__(self, mesh_device, config, weight_dtype=ttnn.bfloat16):
         super().__init__()
@@ -115,7 +156,7 @@ class DotsOCRMLPTP4(TTNNModule):
         m = matmul_m_dim(x)
         K = int(x.shape[-1])
         gate_up_n = int(self.gate_up_w.shape[-1])  # 2 * I/nd
-        gate_up_pc = prefill_matmul_2d_config(self.mesh_device, m, K, gate_up_n, fp32_dest=True)
+        gate_up_pc = _mlp_prefill_pc(self.mesh_device, m, K, gate_up_n, fp32_dest=True)
 
         # Single fused gate+up matmul, then split: per chip the output is
         # [gate_shard | up_shard], so chunk(2, dim=-1) recovers them. in0 stays
@@ -143,7 +184,7 @@ class DotsOCRMLPTP4(TTNNModule):
 
         I_shard = int(act.shape[-1])
         H = int(self.down_w.shape[-1])
-        down_pc = prefill_matmul_2d_config(self.mesh_device, m, I_shard, H, fp32_dest=False)
+        down_pc = _mlp_prefill_pc(self.mesh_device, m, I_shard, H, fp32_dest=False)
         out = ttnn.linear(
             act,
             self.down_w,

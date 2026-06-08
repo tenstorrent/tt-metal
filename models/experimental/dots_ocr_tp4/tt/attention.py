@@ -173,6 +173,18 @@ class DotsOCRAttentionTP4(TTNNModule):
                 k_chunk_size=0,
                 exp_approx_mode=False,
             )
+            # Prefill SDPA config: hardware-swept on BH P150x4 for the per-chip
+            # q[1,3,S,128]/kv[1,1,S,128] causal shape -> grid 8x10, q_chunk=128,
+            # k_chunk=256 (~210 us, faster than the auto-config). exp_approx left
+            # off to preserve PCC (it was speed-neutral, ~0.3%). Needs a >=8x10
+            # grid; otherwise leave the auto-config (None).
+            if int(grid.x) >= 8 and int(grid.y) >= 10:
+                self.sdpa_program_config = ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(8, 10),
+                    q_chunk_size=128,
+                    k_chunk_size=256,
+                    exp_approx_mode=False,
+                )
         except Exception:
             self._sdpa_decode_program_config = None
 
