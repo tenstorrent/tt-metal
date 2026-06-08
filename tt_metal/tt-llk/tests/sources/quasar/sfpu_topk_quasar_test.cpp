@@ -28,8 +28,9 @@ enum class Stage : int
     Indices = 1
 };
 
-constexpr int NUM_STAGES          = 2;
-constexpr int NUM_TILES_PER_STAGE = 2;
+constexpr int NUM_STAGES                  = 2;
+constexpr int NUM_TILES_PER_STAGE         = 2;
+constexpr std::uint32_t TOPK_INDEX_FORMAT = ckernel::to_underlying(DataFormat::Int16);
 
 // ============================================================================
 // UNPACK TRISC
@@ -50,11 +51,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int NUM_TOPK_PIPELINE_EXECUTIONS = params.FULL_RT_DIM;
     const int NUM_VALUE_TILES_PER_ROW      = params.FULL_CT_DIM / NUM_STAGES;
 
-    // Workaround: Use the values format for the indices stage too. Indices 0..127 are
-    // exactly representable in Float16_b, so we sidestep the UINT16/LO16 round-trip path
-    // (mode 0b0110) which has a dest-cell layout mismatch on Quasar.
-    const std::uint32_t unpack_src_data_types[NUM_STAGES] = {formats.unpack_A_src, formats.unpack_A_src};
-    const std::uint32_t unpack_dst_data_types[NUM_STAGES] = {formats.unpack_A_dst, formats.unpack_A_dst};
+    const std::uint32_t unpack_src_data_types[NUM_STAGES] = {formats.unpack_A_src, TOPK_INDEX_FORMAT};
+    const std::uint32_t unpack_dst_data_types[NUM_STAGES] = {formats.unpack_A_dst, TOPK_INDEX_FORMAT};
 
     // Dvalid setup: UNPACK -> FPU -> SFPU -> PACK
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
@@ -77,15 +75,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const std::uint32_t unpack_src_format = unpack_src_data_types[stage_index];
                     const std::uint32_t unpack_dst_format = unpack_dst_data_types[stage_index];
 
-                    const int tile_row_offset   = current_tile_row * params.FULL_CT_DIM;
-                    const int tile_pair_offset  = current_tile_pair_idx * (distance * NUM_TILES_PER_STAGE);
-                    const int stage_offset      = stage_index * NUM_VALUE_TILES_PER_ROW;
-                    const int first_tile_index  = tile_row_offset + stage_offset + tile_pair_offset;
-                    const int second_tile_index = first_tile_index + distance;
-
-                    // Configure buffer descriptor for this stage's format
+                    const int tile_row_offset  = current_tile_row * params.FULL_CT_DIM;
+                    const int tile_pair_offset = current_tile_pair_idx * (distance * NUM_TILES_PER_STAGE);
+                    const int stage_offset     = stage_index * NUM_VALUE_TILES_PER_ROW;
+                    // The L1 base is stable; the value/index stages only select
+                    // different data formats. Tile offsets are passed to execute.
                     buffer_descriptor_u bd_val = {0};
-                    bd_val.f.l1_addr_16B       = L1_ADDRESS(params.buffer_A[first_tile_index]);
+                    bd_val.f.l1_addr_16B       = L1_ADDRESS(params.buffer_A[0]);
                     bd_val.f.format            = static_cast<std::uint8_t>(unpack_src_format);
                     bd_val.f.x_dim             = FACE_C_DIM;
                     bd_val.f.y_dim             = FACE_R_DIM;
@@ -98,8 +94,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
                     _llk_unpack_configure_unary_<p_unpacr::UNP_A>(td_val);
 
-                    // Init and unpack first tile.
-                    // Transpose only in iteration 0.
                     if (first_iteration)
                     {
                         _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, true /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, 1);
@@ -108,22 +102,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, 1);
                     }
-                    _llk_unpack_unary_operand_<p_unpacr::UNP_A>(0);
 
-                    // Reconfigure L1 address for second tile and unpack.
-                    bd_val.f.l1_addr_16B = L1_ADDRESS(params.buffer_A[second_tile_index]);
-                    td_val.buf_desc      = bd_val;
-                    _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
-
-                    if (first_iteration)
-                    {
-                        _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, true /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, 1);
-                    }
-                    else
-                    {
-                        _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, 1);
-                    }
-                    _llk_unpack_unary_operand_<p_unpacr::UNP_A>(0);
+                    const int first_tile_index  = tile_row_offset + stage_offset + tile_pair_offset;
+                    const int second_tile_index = first_tile_index + distance;
+                    _llk_unpack_unary_operand_<p_unpacr::UNP_A>(first_tile_index);
+                    _llk_unpack_unary_operand_<p_unpacr::UNP_A>(second_tile_index);
 
                 } // Stage loop.
             } // Pipeline loop.
@@ -172,11 +155,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Semaphore sync for MATH <-> PACK back-pressure across iterations
     _llk_math_pack_sync_init_<dest_sync>();
 
-    // Configure math hardware for the value format
-    {
-        DataFormat src_format = static_cast<DataFormat>(formats.math);
-        _llk_math_srcAB_hw_configure_<false /*IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en, false /*is_int_fpu_en*/>(src_format, src_format);
-    }
+    const std::uint32_t math_data_types[NUM_STAGES] = {formats.math, TOPK_INDEX_FORMAT};
 
     // Initialize topk SFPU
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::topk_local_sort>();
@@ -201,9 +180,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                 for (Stage stage : {Stage::Values, Stage::Indices})
                 {
-                    const int stage_index = static_cast<int>(stage);
+                    const int stage_index        = static_cast<int>(stage);
+                    const DataFormat math_format = static_cast<DataFormat>(math_data_types[stage_index]);
 
-                    // Initialize datacopy for this stage
+                    _configure_alu_formats_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(math_format, math_format, false /*en_int32_dest_format*/);
                     _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(num_rows, 1);
 
                     const int first_tile_in_pair_idx  = stage_index * NUM_TILES_PER_STAGE;
@@ -212,6 +192,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_math_eltwise_unary_datacopy_(num_rows, first_tile_in_pair_idx);
                     _llk_math_eltwise_unary_datacopy_(num_rows, second_tile_in_pair_idx);
                 }
+
+                // The index datacopy above intentionally leaves ALU_FORMAT_SPEC_REG set
+                // to Int16. Restore the value format before the SFPU network; the TopK
+                // value SFPLOAD/SFPSTORE paths also use explicit FP16B as a guard.
+                const DataFormat value_math_format = static_cast<DataFormat>(formats.math);
+                _configure_alu_formats_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(
+                    value_math_format, value_math_format, false /*en_int32_dest_format*/);
 
                 // SFPU operations
                 if (first_iter)
@@ -267,16 +254,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const std::uint32_t buf_desc_id = 8;
 
-    // No dvalid for diagnostic — pure semaphore sync.
     // Initialize packer dest base to bank 0 so the first pack doesn't read from
     // whatever bank a previous kernel binary left the packer pointing at on the
     // shared simulator session.
     _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
 
-    // Workaround: Use the values format for the indices stage too (matches unpack side).
-    // See unpack TRISC for rationale.
-    const std::uint32_t pack_src_data_types[NUM_STAGES] = {formats.pack_src, formats.pack_src};
-    const std::uint32_t pack_dst_data_types[NUM_STAGES] = {formats.pack_dst, formats.pack_dst};
+    const std::uint32_t pack_src_data_types[NUM_STAGES] = {formats.pack_src, TOPK_INDEX_FORMAT};
+    const std::uint32_t pack_dst_data_types[NUM_STAGES] = {formats.pack_dst, TOPK_INDEX_FORMAT};
 
     for (int current_tile_row = 0; current_tile_row < NUM_TOPK_PIPELINE_EXECUTIONS; ++current_tile_row)
     {

@@ -64,6 +64,7 @@ inline void llk_math_eltwise_unary_sfpu_topk_init()
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false>
 inline void llk_math_eltwise_unary_sfpu_topk_local_sort(std::uint32_t dst_index, int idir, int i_end_phase, int i_start_phase, int i_end_step, int i_start_step)
 {
+    static_assert(!STABLE_SORT, "Stable TopK is not supported by the Quasar bitonic TopK path");
     _llk_math_eltwise_sfpu_start_(dst_index);
     ckernel::sfpu::calculate_bitonic_topk_phases_steps<APPROXIMATE, is_fp32_dest_acc_en, STABLE_SORT>(
         idir, i_end_phase, i_start_phase, i_end_step, i_start_step);
@@ -73,6 +74,7 @@ inline void llk_math_eltwise_unary_sfpu_topk_local_sort(std::uint32_t dst_index,
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en, bool top_min = false, bool STABLE_SORT = false>
 inline void llk_math_eltwise_unary_sfpu_topk_merge(std::uint32_t dst_index, int m_iter, int k)
 {
+    static_assert(!STABLE_SORT, "Stable TopK is not supported by the Quasar bitonic TopK path");
     _llk_math_eltwise_sfpu_start_(dst_index);
     ckernel::sfpu::calculate_bitonic_topk_merge<APPROXIMATE, is_fp32_dest_acc_en, top_min, STABLE_SORT>(m_iter, k);
     _llk_math_eltwise_sfpu_done_();
@@ -81,6 +83,7 @@ inline void llk_math_eltwise_unary_sfpu_topk_merge(std::uint32_t dst_index, int 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false>
 inline void llk_math_eltwise_unary_sfpu_topk_rebuild(std::uint32_t dst_index, int idir, int m_iter, int k, int logk, int skip_second)
 {
+    static_assert(!STABLE_SORT, "Stable TopK is not supported by the Quasar bitonic TopK path");
     _llk_math_eltwise_sfpu_start_(dst_index);
     ckernel::sfpu::calculate_bitonic_topk_rebuild<APPROXIMATE, is_fp32_dest_acc_en, STABLE_SORT>(idir, m_iter, k, logk, skip_second);
     _llk_math_eltwise_sfpu_done_();

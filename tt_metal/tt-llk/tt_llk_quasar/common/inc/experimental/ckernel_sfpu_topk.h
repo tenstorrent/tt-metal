@@ -9,13 +9,11 @@
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 
-// Replay-buffer usage on Quasar follows a record-then-replay pattern, distinct
-// from the BH reference which records and executes in one pass via
-// `load_replay_buf<X, Y, true>` (BH `Exec=1`, i.e. `execute_while_loading=true`).
-// Quasar errata TEN-4690 forbids `TTI_REPLAY` with `execute_while_loading=true`,
-// so every `load_replay_buf<X, Y, ...>` call in this file passes
-// `exec_while_loading=false` (record only) and is followed by an explicit
-// `TTI_REPLAY(X, Y, ...)` to execute the recorded body.
+// Quasar TopK keeps the SFPSWAP bodies inline. TEN-4690 forbids record-and-execute
+// replay (`execute_while_loading=true`), and replaying recorded SFPSWAP sequences
+// loses the scheduling behavior this bitonic network depends on. Load/store replay
+// would be safe, but keeping each compare block inline makes the correctness contract
+// explicit and avoids mixing replayed and non-replayed SFPU state transitions.
 
 // NOTE: The STABLE_SORT=true template specializations below (the doubled-SFPSWAP
 // `bitonic_topk_ph*_st*_to_1<true>` overloads, etc.) have NOT been validated on
@@ -88,30 +86,29 @@ inline void _init_topk()
     // swaps LREG[VC] <-> LREG[VD], it also swaps LREG[4 + (VC&3)] <-> LREG[4 + (VD&3)]
     // in lockstep — letting topk track input indices alongside the values being sorted.
     ckernel::math::_sfpu_load_config32_(0xF, 0x0, 0x4);
+    TTI_SFPNOP(0, 0, 0);
+    TTI_SFPNOP(0, 0, 0);
 }
 
 // Load 8 lanes (one value LREG pair + one index LREG pair) from Dest at runtime offsets.
 // Values land in LREG0,1; indices (offset by dst_indices_offset = 128) land in LREG4,5.
-// Index format mode is INT32 when dest_acc=fp32, FP16B otherwise (workaround for
-// UINT16/LO16 dest-cell layout mismatch on Quasar — indices 0..127 are exactly
-// representable in Float16_b so we use the upper-half FP16B path).
+// TopK indices are non-negative Int16 values in the Quasar test harness. Use the
+// matching SFPU Int16 memory mode instead of transporting index bits through FP16B.
+// Values are Float16_b in this Quasar path, so use explicit FP16B rather than
+// sfpmem::DEFAULT to avoid depending on the ALU format left by the index stage.
 template <bool is_fp32_dest_acc_en>
 inline void bitonic_topk_load8(std::uint32_t offset, std::uint32_t dist)
 {
     constexpr std::uint32_t dst_indices_offset = 128;
-    // Workaround: Use FP16B (bfloat16) mode for indices instead of UINT16 (LO16, mode 0b0110).
-    // Indices 0..127 are exactly representable in Float16_b. The UINT16/LO16 path has a
-    // dest-cell layout mismatch on Quasar (unpacker writes upper half via Float16_b A2D
-    // datacopy, but SFPU LO16 reads the lower half). FP16B reads/writes the upper half,
-    // which matches what the unpacker deposits.
-    constexpr std::uint32_t instr_mod_index = is_fp32_dest_acc_en ? p_sfpu::sfpmem::INT32 : p_sfpu::sfpmem::FP16B;
+    constexpr std::uint32_t instr_mod_value    = is_fp32_dest_acc_en ? p_sfpu::sfpmem::FP32 : p_sfpu::sfpmem::FP16B;
+    constexpr std::uint32_t instr_mod_index    = is_fp32_dest_acc_en ? p_sfpu::sfpmem::INT32 : p_sfpu::sfpmem::INT16;
 
     std::uint32_t face_offset = offset >> 4;
     std::uint32_t ld_offset   = (offset & 0xF) + face_offset * 32;
 
     // Values
-    TT_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0, ld_offset);
-    TT_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, 0, ld_offset + dist);
+    TT_SFPLOAD(p_sfpu::LREG0, instr_mod_value, ADDR_MOD_7, 0, ld_offset);
+    TT_SFPLOAD(p_sfpu::LREG1, instr_mod_value, ADDR_MOD_7, 0, ld_offset + dist);
 
     // Indices (paired with LREG0,1; shifted by dst_indices_offset).
     TT_SFPLOAD(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, 0, dst_indices_offset + ld_offset);
@@ -123,15 +120,15 @@ template <bool is_fp32_dest_acc_en>
 inline void bitonic_topk_store8(std::uint32_t offset, std::uint32_t dist)
 {
     constexpr std::uint32_t dst_indices_offset = 128;
-    // FP16B index mode (see bitonic_topk_load8 for rationale).
-    constexpr std::uint32_t instr_mod_index = is_fp32_dest_acc_en ? p_sfpu::sfpmem::INT32 : p_sfpu::sfpmem::FP16B;
+    constexpr std::uint32_t instr_mod_value    = is_fp32_dest_acc_en ? p_sfpu::sfpmem::FP32 : p_sfpu::sfpmem::FP16B;
+    constexpr std::uint32_t instr_mod_index    = is_fp32_dest_acc_en ? p_sfpu::sfpmem::INT32 : p_sfpu::sfpmem::INT16;
 
     std::uint32_t face_offset = offset >> 4;
     std::uint32_t ld_offset   = (offset & 0xF) + face_offset * 32;
 
     // Values
-    TT_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, 0, ld_offset);
-    TT_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0, ld_offset + dist);
+    TT_SFPSTORE(p_sfpu::LREG0, instr_mod_value, ADDR_MOD_7, 0, ld_offset);
+    TT_SFPSTORE(p_sfpu::LREG1, instr_mod_value, ADDR_MOD_7, 0, ld_offset + dist);
 
     // Indices
     TT_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, 0, dst_indices_offset + ld_offset);
@@ -145,22 +142,22 @@ template <bool is_fp32_dest_acc_en>
 inline void bitonic_topk_load16(std::uint32_t dist0, std::uint32_t dist1)
 {
     constexpr std::uint32_t dst_indices_offset = 128;
-    // FP16B index mode (see bitonic_topk_load8 for rationale).
-    constexpr std::uint32_t instr_mod_index = is_fp32_dest_acc_en ? p_sfpu::sfpmem::INT32 : p_sfpu::sfpmem::FP16B;
+    constexpr std::uint32_t instr_mod_value    = is_fp32_dest_acc_en ? p_sfpu::sfpmem::FP32 : p_sfpu::sfpmem::FP16B;
+    constexpr std::uint32_t instr_mod_index    = is_fp32_dest_acc_en ? p_sfpu::sfpmem::INT32 : p_sfpu::sfpmem::INT16;
 
     // Values
-    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0, 0);
+    TTI_SFPLOAD(p_sfpu::LREG0, instr_mod_value, ADDR_MOD_7, 0, 0);
     if ((dist0 == 4) && (dist1 == 8))
     {
-        TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, 0, 4);
-        TTI_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_7, 0, 8);
-        TTI_SFPLOAD(p_sfpu::LREG3, 0, ADDR_MOD_7, 0, 12);
+        TTI_SFPLOAD(p_sfpu::LREG1, instr_mod_value, ADDR_MOD_7, 0, 4);
+        TTI_SFPLOAD(p_sfpu::LREG2, instr_mod_value, ADDR_MOD_7, 0, 8);
+        TTI_SFPLOAD(p_sfpu::LREG3, instr_mod_value, ADDR_MOD_7, 0, 12);
     }
     else
     {
-        TT_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, 0, dist0);
-        TT_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_7, 0, dist1);
-        TT_SFPLOAD(p_sfpu::LREG3, 0, ADDR_MOD_7, 0, dist1 + dist0);
+        TT_SFPLOAD(p_sfpu::LREG1, instr_mod_value, ADDR_MOD_7, 0, dist0);
+        TT_SFPLOAD(p_sfpu::LREG2, instr_mod_value, ADDR_MOD_7, 0, dist1);
+        TT_SFPLOAD(p_sfpu::LREG3, instr_mod_value, ADDR_MOD_7, 0, dist1 + dist0);
     }
 
     // Indices (paired with LREG0..3; shifted by dst_indices_offset).
@@ -187,22 +184,22 @@ template <bool is_fp32_dest_acc_en, bool alt_addr_mod = false>
 inline void bitonic_topk_store16(std::uint32_t dist0, std::uint32_t dist1)
 {
     constexpr std::uint32_t dst_indices_offset = 128;
-    // FP16B index mode (see bitonic_topk_load8 for rationale).
-    constexpr std::uint32_t instr_mod_index = is_fp32_dest_acc_en ? p_sfpu::sfpmem::INT32 : p_sfpu::sfpmem::FP16B;
+    constexpr std::uint32_t instr_mod_value    = is_fp32_dest_acc_en ? p_sfpu::sfpmem::FP32 : p_sfpu::sfpmem::FP16B;
+    constexpr std::uint32_t instr_mod_index    = is_fp32_dest_acc_en ? p_sfpu::sfpmem::INT32 : p_sfpu::sfpmem::INT16;
 
     // Values
-    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, 0, 0);
+    TTI_SFPSTORE(p_sfpu::LREG0, instr_mod_value, ADDR_MOD_7, 0, 0);
     if ((dist0 == 4) && (dist1 == 8))
     {
-        TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0, 4);
-        TTI_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_7, 0, 8);
-        TTI_SFPSTORE(p_sfpu::LREG3, 0, ADDR_MOD_7, 0, 12);
+        TTI_SFPSTORE(p_sfpu::LREG1, instr_mod_value, ADDR_MOD_7, 0, 4);
+        TTI_SFPSTORE(p_sfpu::LREG2, instr_mod_value, ADDR_MOD_7, 0, 8);
+        TTI_SFPSTORE(p_sfpu::LREG3, instr_mod_value, ADDR_MOD_7, 0, 12);
     }
     else
     {
-        TT_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0, dist0);
-        TT_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_7, 0, dist1);
-        TT_SFPSTORE(p_sfpu::LREG3, 0, ADDR_MOD_7, 0, dist1 + dist0);
+        TT_SFPSTORE(p_sfpu::LREG1, instr_mod_value, ADDR_MOD_7, 0, dist0);
+        TT_SFPSTORE(p_sfpu::LREG2, instr_mod_value, ADDR_MOD_7, 0, dist1);
+        TT_SFPSTORE(p_sfpu::LREG3, instr_mod_value, ADDR_MOD_7, 0, dist1 + dist0);
     }
 
     // Indices — last store optionally swaps to ADDR_MOD_6 for the auto-advance.
@@ -397,53 +394,6 @@ inline void bitonic_topk_step_N<false>(bool dir)
     }
 }
 
-// Record the phase-3 step-4-to-1 body into the replay buffer at slot
-// [replay_start, replay_start+replay_count). Call this ONCE before the loop
-// that invokes `bitonic_topk_ph3_st4_to_1<STABLE_SORT, replay_start>(dir)`.
-// `replay_count` = STABLE_SORT ? 9 : 5.
-template <bool STABLE_SORT, int replay_start>
-inline void load_bitonic_topk_ph3_st4_to_1_replay()
-{
-    constexpr int replay_count = STABLE_SORT ? 9 : 5;
-    if constexpr (STABLE_SORT)
-    {
-        load_replay_buf<replay_start, replay_count, false>(
-            []
-            {
-                // Step 4 — 4 interleaved SFPSWAPs on disjoint pairs (0,2)/(1,3).
-                TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
-                TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-                TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
-                TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-
-                // Step 3 — 4 interleaved SFPSWAPs on disjoint pairs (2,3)/(0,1).
-                // 1-cycle stall vs Step 4's tail because they share LREG3.
-                TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-                TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-                TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-                TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-
-                TTI_SFPTRANSP;
-            });
-    }
-    else
-    {
-        load_replay_buf<replay_start, replay_count, false>(
-            []
-            {
-                // Step 4
-                TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
-                TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-
-                // Step 3
-                TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-                TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-
-                TTI_SFPTRANSP;
-            });
-    }
-}
-
 // Phase 3 step-4-to-1: the building block for the largest-stride bitonic compare layer.
 // Performs two passes of "step 4 then step 3" SFPSWAPs followed by an SFPTRANSP. The
 // double execution implements the full step-4-to-1 sweep.
@@ -453,34 +403,68 @@ inline void load_bitonic_topk_ph3_st4_to_1_replay()
 // Both 0x104 (set) and 0x004 (clear) keep bit [2] (ENABLE_DEST_INDEX) so the index pairing
 // invariant established by _init_topk() is preserved across calls.
 //
-// `replay_start` is a template int because TTI_REPLAY's start operand has a "i" inline-asm
-// constraint (compile-time immediate). Phase 5 callers pass 16; phase 6 callers pass 8.
-// `replay_count` = STABLE_SORT ? 9 : 5.
-//
-// Caller MUST call `load_bitonic_topk_ph3_st4_to_1_replay<STABLE_SORT, replay_start>()`
-// once before invoking this in a loop.
+// The replay_start template parameter is kept for call-site parity with the BH
+// implementation, but Quasar executes this body inline.
 template <bool STABLE_SORT, int replay_start>
 inline void bitonic_topk_ph3_st4_to_1(bool dir)
 {
-    constexpr int replay_count = STABLE_SORT ? 9 : 5;
+    (void)replay_start;
+
     if (dir == static_cast<bool>(SortDir::ArgMin))
     {
         TTI_SFPCONFIG(0x104, 0xF, 1); // Reverse the max/min behaviour of SWAP
         // SFPCONFIG is a 2-cycle op; per Quasar errata TEN-4581 ("any 2-cycle op
-        // followed by SFPSWAP") at least 1 SFPNOP must separate it from the next
-        // SFPSWAP. The recorded replay body starts with SFPSWAPs, so insert the NOP
-        // before TTI_REPLAY (which is itself the SFPSWAP issue point).
+        // followed by SFPSWAP") at least 1 SFPNOP must separate it from the next SFPSWAP.
+        TTI_SFPNOP(0, 0, 0);
         TTI_SFPNOP(0, 0, 0);
     }
-    // Both executions of the buffered body. Caller pre-recorded the slot via
-    // load_bitonic_topk_ph3_st4_to_1_replay<STABLE_SORT, replay_start>().
-    TTI_REPLAY(replay_start, replay_count, 0, 0, 0, 0);
-    TTI_REPLAY(replay_start, replay_count, 0, 0, 0, 0);
+
+    if constexpr (STABLE_SORT)
+    {
+        // First execution.
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPTRANSP;
+
+        // Second execution.
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPTRANSP;
+    }
+    else
+    {
+        // First execution.
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPTRANSP;
+
+        // Second execution.
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPTRANSP;
+    }
 
     if (dir == static_cast<bool>(SortDir::ArgMin))
     {
         TTI_SFPCONFIG(0x004, 0xF, 1); // Restore the max/min behaviour of SWAP
         // See above — SFPCONFIG → next SFPU op needs an SFPNOP per TEN-4581.
+        TTI_SFPNOP(0, 0, 0);
         TTI_SFPNOP(0, 0, 0);
     }
 }
@@ -488,98 +472,57 @@ inline void bitonic_topk_ph3_st4_to_1(bool dir)
 // Top-level local-sort orchestrator. For each (face, col) sub-region of the dest tile,
 // walks phases [i_start_phase, i_end_phase]; phases 0..3 each emit 4 groups of
 // [load16, swap-body, store16] sequences; phase 4+ falls back to inline step-N..5
-// loops followed by phase-3 replay for steps 4..1.
+// loops followed by the phase-3 helper for steps 4..1.
 //
-// Replay-buffer slot allocation:
-//   [0,  8)  = bitonic_topk_load16<is_fp32>(4, 8) body  (4 value loads + 4 index loads)
-//   [8, 16)  = bitonic_topk_store16<is_fp32, alt_addr_mod=true>(4, 8) body
-//   [16, 16+replay_count) = per-phase swap body (re-recorded at start of each new phase)
-// Maximum slot used is 29 (stable phase 2). Quasar's replay buffer is 32 deep.
-//
-// All recordings happen up front: the [0, 16) static slots at function entry, and the
-// [16, …) phase-body slot at the top of each phase-loop iteration. Inner loops then
-// only emit TTI_REPLAY, matching the canonical Quasar load/replay split (TEN-4690
-// forbids `execute_while_loading=true`, so record-then-replay is the only option).
+// The BH implementation uses replay slots for load/store and phase bodies. Quasar keeps
+// the network inline because replayed SFPSWAP sequences do not preserve the ordering
+// this bitonic network requires.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false>
 inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, const int i_start_phase, const int i_end_step, const int i_start_step)
 {
-    // Replay setup: record the static slots (load16 at [0, 8), store16 at [8, 16))
-    // once at function entry. These bodies don't depend on dir/ph/face/col so a
-    // single recording is reused across the entire function.
-    load_replay_buf<0, 8, false>([] { bitonic_topk_load16<is_fp32_dest_acc_en>(4, 8); });
-    load_replay_buf<8, 8, false>([] { bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, 8); });
-
-    // Loop nest: ph is the OUTER loop so the per-phase recording at slot 16+ happens
-    // ONCE per phase instead of 4× (once per face × col). The (face, col) sweep is
-    // nested inside and pure-replay.
-    for (int ph = i_start_phase; ph < (i_end_phase + 1); ph++)
+    // Preserve the Blackhole algorithm ordering: fully process every requested
+    // phase for one (face, col) sub-region before advancing to the next sub-region.
+    set_dst_write_addr(0);
+    std::uint32_t dst_addr_offset = 0;
+    for (int face = 0; face < 2; face++)
     {
-        // Record the per-phase body into slot 16+ once for this phase.
-        switch (ph)
+        for (int col = 0; col < 2; col++)
         {
-            case 0:
-                load_replay_buf<16, STABLE_SORT ? 6 : 4, false>([] { bitonic_topk_ph0_st1_to_1<STABLE_SORT>(); });
-                break;
-            case 1:
-                load_replay_buf<16, STABLE_SORT ? 10 : 6, false>([] { bitonic_topk_ph1_st2_to_1<STABLE_SORT>(); });
-                break;
-            case 2:
-                load_replay_buf<16, STABLE_SORT ? 14 : 9, false>([] { bitonic_topk_ph2_st3_to_1<STABLE_SORT>(); });
-                break;
-            case 3:
-            default:
-                // case 3 uses the ph3 helper directly; default's Part 2 (steps 4..1) also uses it.
-                load_bitonic_topk_ph3_st4_to_1_replay<STABLE_SORT, 16>();
-                break;
-        }
-
-        // Reset dest pointer to 0 (caller's initial state). The (face, col) sweep below
-        // walks dest offsets 0, 2, 16, 18 — same as a fresh function entry. Required
-        // for every phase except the first because the previous phase's sweep left
-        // dest at 16.
-        set_dst_write_addr(0);
-
-        std::uint32_t dst_addr_offset = 0;
-        for (int face = 0; face < 2; face++)
-        {
-            for (int col = 0; col < 2; col++)
+            bool dir = idir;
+            for (int ph = i_start_phase; ph < (i_end_phase + 1); ph++)
             {
-                bool dir = idir;
                 TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, p_setrwc::SET_D);
                 switch (ph)
                 {
                     case 0:
                     {
-                        constexpr int replay_count = STABLE_SORT ? 6 : 4;
                         for (int d = 0; d < 4; d++)
                         {
-                            TTI_REPLAY(0, 8, 0, 0, 0, 0);
-                            TTI_REPLAY(16, replay_count, 0, 0, 0, 0);
-                            TTI_REPLAY(8, 8, 0, 0, 0, 0);
+                            bitonic_topk_load16<is_fp32_dest_acc_en>(4, 8);
+                            bitonic_topk_ph0_st1_to_1<STABLE_SORT>();
+                            bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, 8);
                         }
                         break;
                     }
 
                     case 1:
                     {
-                        constexpr int replay_count = STABLE_SORT ? 10 : 6;
                         for (int d = 0; d < 4; d++)
                         {
-                            TTI_REPLAY(0, 8, 0, 0, 0, 0);
-                            TTI_REPLAY(16, replay_count, 0, 0, 0, 0);
-                            TTI_REPLAY(8, 8, 0, 0, 0, 0);
+                            bitonic_topk_load16<is_fp32_dest_acc_en>(4, 8);
+                            bitonic_topk_ph1_st2_to_1<STABLE_SORT>();
+                            bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, 8);
                         }
                         break;
                     }
 
                     case 2:
                     {
-                        constexpr int replay_count = STABLE_SORT ? 14 : 9;
                         for (int d = 0; d < 4; d++)
                         {
-                            TTI_REPLAY(0, 8, 0, 0, 0, 0);
-                            TTI_REPLAY(16, replay_count, 0, 0, 0, 0);
-                            TTI_REPLAY(8, 8, 0, 0, 0, 0);
+                            bitonic_topk_load16<is_fp32_dest_acc_en>(4, 8);
+                            bitonic_topk_ph2_st3_to_1<STABLE_SORT>();
+                            bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, 8);
                         }
                         break;
                     }
@@ -588,9 +531,9 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                     {
                         for (int d = 0; d < 4; d++)
                         {
-                            TTI_REPLAY(0, 8, 0, 0, 0, 0);
+                            bitonic_topk_load16<is_fp32_dest_acc_en>(4, 8);
                             bitonic_topk_ph3_st4_to_1<STABLE_SORT, 16>(dir);
-                            TTI_REPLAY(8, 8, 0, 0, 0, 0);
+                            bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, 8);
                             dir = !dir;
                         }
                         break;
@@ -598,7 +541,7 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
 
                     default:
                     {
-                        // Phases 4..N: steps `num_steps`..5 are emitted inline (no replay);
+                        // Phases 4..N: steps `num_steps`..5 are emitted inline;
                         // steps 4..1 fall back to the same phase-4 helper as case 3.
                         std::uint32_t num_steps               = ph + 1;
                         std::uint32_t start_step              = (i_start_phase == i_end_phase) ? i_start_step : num_steps;
@@ -646,27 +589,28 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                             }
                         }
 
-                        // Steps 4..1 (replay - same as case 3, ph3 helper slot pre-loaded above)
+                        // Steps 4..1.
                         dir = idir;
                         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, p_setrwc::SET_D);
                         datums_compared = 0;
                         while (datums_compared < total_datums_to_compare)
                         {
-                            TTI_REPLAY(0, 8, 0, 0, 0, 0);
+                            bitonic_topk_load16<is_fp32_dest_acc_en>(4, 8);
                             bitonic_topk_ph3_st4_to_1<STABLE_SORT, 16>(dir);
-                            TTI_REPLAY(8, 8, 0, 0, 0, 0);
+                            bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, 8);
                             datums_compared += 16;
                             dir = (datums_compared == sorted_seq_length) ? !dir : dir;
                         }
                         break;
                     }
                 }
-                dst_addr_offset += 2;
-                set_dst_write_addr(dst_addr_offset);
             }
-            dst_addr_offset = 16;
+
+            dst_addr_offset += 2;
             set_dst_write_addr(dst_addr_offset);
         }
+        dst_addr_offset = 16;
+        set_dst_write_addr(dst_addr_offset);
     }
 }
 
@@ -692,8 +636,7 @@ inline void calculate_bitonic_topk_phases_steps(const int idir, const int i_end_
 // the index conditional swap, breaking ties stably (1-cycle stall on the duplicate is
 // intentional and matches the Blackhole reference).
 //
-// Merge does NOT touch the replay buffer; the inner body is short enough that recording
-// would not pay off, and avoiding replay here means rebuild is free to own the slot range.
+// Merge is short enough to stay inline.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool top_min, bool STABLE_SORT = false>
 inline void _bitonic_topk_merge(const int m_iter, const int k)
 {
@@ -759,23 +702,8 @@ inline void calculate_bitonic_topk_merge(const int m_iter, const int k)
 }
 
 // Rebuild: re-runs phase (logK-1) on a merged tile pair to reextract sorted runs.
-// A switch on `(logk - 1)` selects one of cases 0/1/2/3/default; each emits a different
-// load/swap-sequence/store pattern. For non-stable sort, most cases are wrapped in a
-// replay buffer with INCRWC counter advances embedded in the lambda body.
-//
-// Replay-slot allocation:
-//   case 1 m_iter>=2 (non-stable) : slots [0, 22) — load8 + ph1_st2_to_1 + store8 + 8 INCRWC
-//   case 1 m_iter<2  (non-stable) : slots [0, 26) — load16 + ph1_st2_to_1 + store16 + 4 INCRWC
-//   case 2          (non-stable)  : slots [0, 29) — load16 + ph2_st3_to_1 + store16 + 4 INCRWC
-//   case 3          (non-stable)  : slots [0,  8) load16, [8, 13) ph3 helper, [13, 25) store16 + 4 INCRWC
-//   default Part 2  (non-stable)  : slots [0,  8) load16, [8, 13) ph3 helper, [17, 25) store16
-//
-// All recordings happen at the top of each (face, col) iteration, before the inner
-// `while (datums_compared < total_datums_to_compare)` loop. The loop is pure
-// TTI_REPLAY (and a call to the pre-loaded `bitonic_topk_ph3_st4_to_1` helper for
-// the case-3 and default branches). This matches the canonical Quasar load/replay
-// split — TEN-4690 forbids `execute_while_loading=true`, so record-then-replay is
-// the only option.
+// A switch on `(logk - 1)` selects one of cases 0/1/2/3/default; each emits a
+// load/swap-sequence/store pattern inline for the same replay-safety reason as local sort.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false>
 inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k, const int logk, const int skip_second)
 {
@@ -789,87 +717,12 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
     std::uint32_t ld_dist         = 0;
     const int ph                  = logk - 1;
 
-    // Per-call replay-buffer recordings (depend on ph; non-stable cases only). The
-    // (face, col) sweep below is then pure execute.
-    switch (ph)
+    if (ph == 1 && m_iter < 2)
     {
-        case 0:
-        case 1:
-            if (m_iter < 2)
-            {
-                ld_dist = (ld_offset < 16) ? 4 * ld_offset : 2 * ld_offset;
-            }
-            if constexpr (!STABLE_SORT)
-            {
-                if (m_iter >= 2)
-                {
-                    load_replay_buf<0, 22, false>(
-                        [ld_offset]
-                        {
-                            bitonic_topk_load8<is_fp32_dest_acc_en>(0, ld_offset);
-                            bitonic_topk_ph1_st2_to_1<STABLE_SORT>();
-                            bitonic_topk_store8<is_fp32_dest_acc_en>(0, ld_offset);
-                            bitonic_topk_inc_x8_dest(64, false);
-                        });
-                }
-                else if (ph == 1)
-                {
-                    load_replay_buf<0, 26, false>(
-                        [ld_offset, ld_dist]
-                        {
-                            bitonic_topk_load16<is_fp32_dest_acc_en>(ld_offset, ld_dist);
-                            bitonic_topk_ph1_st2_to_1<STABLE_SORT>();
-                            bitonic_topk_store16<is_fp32_dest_acc_en, true>(ld_offset, ld_dist);
-                            TTI_INCRWC(0, 0, 0, 8);
-                            TTI_INCRWC(0, 0, 0, 8);
-                            TTI_INCRWC(0, 0, 0, 8);
-                            TTI_INCRWC(0, 0, 0, 8);
-                        });
-                }
-            }
-            break;
-        case 2:
-            if constexpr (!STABLE_SORT)
-            {
-                load_replay_buf<0, 29, false>(
-                    [ld_offset]
-                    {
-                        bitonic_topk_load16<is_fp32_dest_acc_en>(4, ld_offset);
-                        bitonic_topk_ph2_st3_to_1<STABLE_SORT>();
-                        bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, ld_offset);
-                        TTI_INCRWC(0, 0, 0, 8);
-                        TTI_INCRWC(0, 0, 0, 8);
-                        TTI_INCRWC(0, 0, 0, 8);
-                        TTI_INCRWC(0, 0, 0, 8);
-                    });
-            }
-            break;
-        case 3:
-            load_bitonic_topk_ph3_st4_to_1_replay<STABLE_SORT, 8>();
-            if constexpr (!STABLE_SORT)
-            {
-                // Three slots: [0, 8) load16, [8, 13) ph3 body (above), [13, 25) store16+4×INCRWC.
-                load_replay_buf<0, 8, false>([] { bitonic_topk_load16<is_fp32_dest_acc_en>(4, 8); });
-                load_replay_buf<13, 12, false>(
-                    []
-                    {
-                        bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, 8);
-                        TTI_INCRWC(0, 0, 0, 8);
-                        TTI_INCRWC(0, 0, 0, 8);
-                        TTI_INCRWC(0, 0, 0, 8);
-                        TTI_INCRWC(0, 0, 0, 8);
-                    });
-            }
-            break;
-        default:
-            // ph >= 4: Part 2's replay slots (Part 1 is fully inline, no replay).
-            load_replay_buf<0, 8, false>([] { bitonic_topk_load16<is_fp32_dest_acc_en>(4, 8); });
-            load_bitonic_topk_ph3_st4_to_1_replay<STABLE_SORT, 8>();
-            load_replay_buf<17, 8, false>([] { bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, 8); });
-            break;
+        ld_dist = (ld_offset < 16) ? 4 * ld_offset : 2 * ld_offset;
     }
 
-    // (face, col) sweep — pure execute.
+    // (face, col) sweep.
     std::uint32_t dst_addr_offset = 0;
     for (int face = 0; face < 2; face++)
     {
@@ -887,104 +740,57 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                 case 1:
                     if (m_iter >= 2)
                     {
-                        if constexpr (STABLE_SORT)
+                        while (datums_compared < total_datums_to_compare)
                         {
-                            while (datums_compared < total_datums_to_compare)
-                            {
-                                bitonic_topk_load8<is_fp32_dest_acc_en>(0, ld_offset);
-                                bitonic_topk_ph1_st2_to_1<STABLE_SORT>();
-                                bitonic_topk_store8<is_fp32_dest_acc_en>(0, ld_offset);
-                                bitonic_topk_inc_x8_dest(64, false);
-                                datums_compared += 16;
-                            }
-                        }
-                        else
-                        {
-                            while (datums_compared < total_datums_to_compare)
-                            {
-                                TTI_REPLAY(0, 22, 0, 0, 0, 0);
-                                datums_compared += 16;
-                            }
+                            bitonic_topk_load8<is_fp32_dest_acc_en>(0, ld_offset);
+                            bitonic_topk_ph1_st2_to_1<STABLE_SORT>();
+                            bitonic_topk_store8<is_fp32_dest_acc_en>(0, ld_offset);
+                            bitonic_topk_inc_x8_dest(64, false);
+                            datums_compared += 16;
                         }
                     }
                     else
                     {
-                        if constexpr (STABLE_SORT)
+                        while (datums_compared < total_datums_to_compare)
                         {
-                            while (datums_compared < total_datums_to_compare)
-                            {
-                                bitonic_topk_load16<is_fp32_dest_acc_en>(ld_offset, ld_dist);
-                                bitonic_topk_ph1_st2_to_1<STABLE_SORT>();
-                                bitonic_topk_store16<is_fp32_dest_acc_en, true>(ld_offset, ld_dist);
-                                TTI_INCRWC(0, 0, 0, 8);
-                                TTI_INCRWC(0, 0, 0, 8);
-                                TTI_INCRWC(0, 0, 0, 8);
-                                TTI_INCRWC(0, 0, 0, 8);
-                                datums_compared += 16;
-                            }
-                        }
-                        else
-                        {
-                            while (datums_compared < total_datums_to_compare)
-                            {
-                                TTI_REPLAY(0, 26, 0, 0, 0, 0);
-                                datums_compared += 16;
-                            }
+                            bitonic_topk_load16<is_fp32_dest_acc_en>(ld_offset, ld_dist);
+                            bitonic_topk_ph1_st2_to_1<STABLE_SORT>();
+                            bitonic_topk_store16<is_fp32_dest_acc_en, true>(ld_offset, ld_dist);
+                            TTI_INCRWC(0, 0, 0, 8);
+                            TTI_INCRWC(0, 0, 0, 8);
+                            TTI_INCRWC(0, 0, 0, 8);
+                            TTI_INCRWC(0, 0, 0, 8);
+                            datums_compared += 16;
                         }
                     }
                     break;
 
                 case 2:
-                    if constexpr (STABLE_SORT)
+                    while (datums_compared < total_datums_to_compare)
                     {
-                        while (datums_compared < total_datums_to_compare)
-                        {
-                            bitonic_topk_load16<is_fp32_dest_acc_en>(4, ld_offset);
-                            bitonic_topk_ph2_st3_to_1<STABLE_SORT>();
-                            bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, ld_offset);
-                            TTI_INCRWC(0, 0, 0, 8);
-                            TTI_INCRWC(0, 0, 0, 8);
-                            TTI_INCRWC(0, 0, 0, 8);
-                            TTI_INCRWC(0, 0, 0, 8);
-                            datums_compared += 16;
-                        }
-                    }
-                    else
-                    {
-                        while (datums_compared < total_datums_to_compare)
-                        {
-                            TTI_REPLAY(0, 29, 0, 0, 0, 0);
-                            datums_compared += 16;
-                        }
+                        bitonic_topk_load16<is_fp32_dest_acc_en>(4, ld_offset);
+                        bitonic_topk_ph2_st3_to_1<STABLE_SORT>();
+                        bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, ld_offset);
+                        TTI_INCRWC(0, 0, 0, 8);
+                        TTI_INCRWC(0, 0, 0, 8);
+                        TTI_INCRWC(0, 0, 0, 8);
+                        TTI_INCRWC(0, 0, 0, 8);
+                        datums_compared += 16;
                     }
                     break;
 
                 case 3:
-                    if constexpr (STABLE_SORT)
+                    while (datums_compared < total_datums_to_compare)
                     {
-                        while (datums_compared < total_datums_to_compare)
-                        {
-                            bitonic_topk_load16<is_fp32_dest_acc_en>(4, 8);
-                            bitonic_topk_ph3_st4_to_1<STABLE_SORT, 8>(dir);
-                            bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, 8);
-                            TTI_INCRWC(0, 0, 0, 8);
-                            TTI_INCRWC(0, 0, 0, 8);
-                            TTI_INCRWC(0, 0, 0, 8);
-                            TTI_INCRWC(0, 0, 0, 8);
-                            datums_compared += 16;
-                            dir = !dir;
-                        }
-                    }
-                    else
-                    {
-                        while (datums_compared < total_datums_to_compare)
-                        {
-                            TTI_REPLAY(0, 8, 0, 0, 0, 0);
-                            bitonic_topk_ph3_st4_to_1<STABLE_SORT, 8>(dir);
-                            TTI_REPLAY(13, 12, 0, 0, 0, 0);
-                            datums_compared += 16;
-                            dir = !dir;
-                        }
+                        bitonic_topk_load16<is_fp32_dest_acc_en>(4, 8);
+                        bitonic_topk_ph3_st4_to_1<STABLE_SORT, 8>(dir);
+                        bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, 8);
+                        TTI_INCRWC(0, 0, 0, 8);
+                        TTI_INCRWC(0, 0, 0, 8);
+                        TTI_INCRWC(0, 0, 0, 8);
+                        TTI_INCRWC(0, 0, 0, 8);
+                        datums_compared += 16;
+                        dir = !dir;
                     }
                     break;
 
@@ -992,7 +798,7 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                 {
                     // ph >= 4: two-part sort.
                     // Part 1: steps `num_steps`..5 emitted inline.
-                    // Part 2: steps 4..1 via replay (slots pre-loaded above).
+                    // Part 2: steps 4..1.
                     std::uint32_t num_steps            = ph + 1;
                     std::uint32_t start_step           = num_steps;
                     std::uint32_t end_step             = 4;
@@ -1037,15 +843,15 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                         }
                     }
 
-                    // Part 2: steps 4..1 via replay (slots already loaded outside the (face, col) sweep).
+                    // Part 2: steps 4..1.
                     dir             = idir;
                     datums_compared = 0;
                     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, p_setrwc::SET_D);
                     while (datums_compared < total_datums_default)
                     {
-                        TTI_REPLAY(0, 8, 0, 0, 0, 0);
+                        bitonic_topk_load16<is_fp32_dest_acc_en>(4, 8);
                         bitonic_topk_ph3_st4_to_1<STABLE_SORT, 8>(dir);
-                        TTI_REPLAY(17, 8, 0, 0, 0, 0);
+                        bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, 8);
                         datums_compared += 16;
                         dir = (datums_compared == sorted_seq_length) ? !dir : dir;
                     }

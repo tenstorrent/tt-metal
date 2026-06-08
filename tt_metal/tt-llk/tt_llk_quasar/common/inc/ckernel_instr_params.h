@@ -336,15 +336,31 @@ struct p_sfpu
 
     struct sfpmem
     {
-        constexpr static std::uint32_t DEFAULT =
-            0b0000; // format is determined by combination of SrcB exponent width of ALU_FORMAT_SPEC_REG and also ACC_CTRL_SFPU_Fp32
-        constexpr static std::uint32_t FP16A  = 0b0001; // stored data will be interpreted as fp16 (fp16_a) format
-        constexpr static std::uint32_t FP16B  = 0b0010; // stored data will be interpreted as bfloat (fp16_b) format
-        constexpr static std::uint32_t FP32   = 0b0011; // stored data will be interpreted as fp32 format
-        constexpr static std::uint32_t INT32  = 0b0100; // stored data will be interpreted as int32 (sign + magnitude) format
-        constexpr static std::uint32_t UINT8  = 0b0101; // stored data will be interpreted as unsigned int8 format
-        constexpr static std::uint32_t UINT16 = 0b0110; // stored data will be interpreted as unsigned int16 format
-                                                        // TODO - Luka: add the other formats
+        // SFPLOAD/SFPSTORE InstrMod format-select field.
+        //
+        // Sources:
+        // - Tensix SFPU ISA, SFPLOAD/SFPSTORE "InstrMod: Format Select":
+        //   https://tenstorrent.atlassian.net/wiki/spaces/TA/pages/1170505767/Tensix+SFPU+Instruction+Set+Architecture#SFPLOAD
+        // - Quasar/Trinity SFPU MAS: Load/Store format converters implement the ISA conversion functions:
+        //   https://tenstorrent.atlassian.net/wiki/spaces/TA/pages/1256423592/Quasar+Trinity+SFPU+Micro-Architecture+Spec#Load-EXU
+        constexpr static std::uint32_t DEFAULT = 0b0000; // ISA IMPLIED/default; format comes from implied-format state or override CSRs.
+        constexpr static std::uint32_t FP16A   = 0b0001; // ISA FP16_A; RF16 -> FP32 LREG.
+        constexpr static std::uint32_t FP16B   = 0b0010; // ISA FP16_B/BF16; RF16 -> FP32 LREG.
+        constexpr static std::uint32_t FP32    = 0b0011; // ISA FP32/MOD_FP32; RF32 -> FP32 LREG.
+        constexpr static std::uint32_t SMAG32  = 0b0100; // ISA SMAG32/MOD_SMAG32; 32-bit sign-magnitude integer.
+        constexpr static std::uint32_t INT32   = SMAG32; // Legacy LLK name for SMAG32.
+        constexpr static std::uint32_t SMAG8   = 0b0101; // ISA SMAG8; 8-bit sign-magnitude -> SMAG32 LREG.
+        constexpr static std::uint32_t INT8    = SMAG8;  // Legacy LLK name for SMAG8.
+        constexpr static std::uint32_t UINT8   = SMAG8;  // Legacy LLK alias; valid for uint8 when sign bit is zero.
+        constexpr static std::uint32_t UINT16  = 0b0110; // ISA UINT16; RF16 zero-extends to UINT32 LREG.
+        constexpr static std::uint32_t HI16    = 0b0111; // ISA HI16; raw 16 bits to high half, zero low half.
+        constexpr static std::uint32_t SMAG16  = 0b1000; // ISA SMAG16; 16-bit sign-magnitude -> SMAG32 LREG.
+        constexpr static std::uint32_t INT16   = SMAG16; // Legacy LLK name for SMAG16.
+        constexpr static std::uint32_t LO16    = 0b1001; // ISA LO16; raw 16 bits to low half, zero high half.
+        // ISA 0xA is STACK_MODE and 0xB is UINT8. This header does not expose them today; do not repoint
+        // the legacy UINT8 alias above without auditing existing Quasar integer kernels.
+        constexpr static std::uint32_t LO16_ONLY = 0b1110; // ISA LO16_ONLY; update/store only LREG[15:0].
+        constexpr static std::uint32_t HI16_ONLY = 0b1111; // ISA HI16_ONLY; update/store only LREG[31:16].
     };
 
     struct mad_mode

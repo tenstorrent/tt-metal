@@ -32,7 +32,6 @@ from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
     TILE_DIMENSIONS,
     TilizeGolden,
-    TopKGolden,
     TransposeGolden,
     UntilizeGolden,
     get_golden_generator,
@@ -48,9 +47,107 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     TOPK,
 )
+from helpers.unpack import unpack_res_tiles
 from helpers.utils import passed_test
+from ttexalens.tt_exalens_lib import read_from_device, write_to_device
 
 NUM_STAGES = 2  # Values and Indices stage
+TOPK_INDEX_FORMAT = DataFormat.Int16
+
+
+def is_index_tile(tile_index: int, value_tiles_per_row: int) -> bool:
+    tile_col = tile_index % (value_tiles_per_row * NUM_STAGES)
+    return tile_col >= value_tiles_per_row
+
+
+class TopKStimuliConfig(StimuliConfig):
+    def __init__(
+        self,
+        *args,
+        input_value_tiles_per_row: int,
+        result_value_tiles_per_row: int,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.input_value_tiles_per_row = input_value_tiles_per_row
+        self.result_value_tiles_per_row = result_value_tiles_per_row
+
+    def _write_mixed_topk_input_A(self, location: str):
+        for tile_index in range(self.tile_count_A):
+            tile_format = (
+                TOPK_INDEX_FORMAT
+                if is_index_tile(tile_index, self.input_value_tiles_per_row)
+                else self.stimuli_A_format
+            )
+            pack_function = StimuliConfig.get_packer(tile_format)
+            if not pack_function:
+                raise ValueError(f"Unsupported TopK tile format: {tile_format.name}")
+
+            start_idx = ELEMENTS_PER_TILE * tile_index
+            tile_data = self.buffer_A[start_idx : start_idx + ELEMENTS_PER_TILE].to(
+                format_dict[tile_format]
+            )
+            packed_data = pack_function(tile_data)
+            write_to_device(
+                location,
+                self.buf_a_addr + tile_index * self.tile_size_A_bytes,
+                packed_data,
+            )
+
+    def _write_backward_compatible(self, location: str = "0,0"):
+        self._write_mixed_topk_input_A(location)
+
+        pack_function_B = StimuliConfig.get_packer(self.stimuli_B_format)
+        if not pack_function_B:
+            raise ValueError(
+                f"Unsupported data format for operand B: {self.stimuli_B_format.name}"
+            )
+
+        StimuliConfig.write_matrix(
+            self.buffer_B,
+            self.tile_count_B,
+            pack_function_B,
+            self.buf_b_addr,
+            self.tile_size_B_bytes,
+            self.num_faces,
+            self.face_r_dim,
+            location,
+            self.write_full_tiles,
+            use_srcs=self.use_srcs,
+            twos_complement=self.twos_complement,
+        )
+
+    def collect_results(self, location="0,0"):
+        read_bytes_cnt = self.buf_res_tile_size * self.tile_count_res
+        read_data = read_from_device(
+            location, self.buf_res_addr, num_bytes=read_bytes_cnt
+        )
+
+        unpacked_data = []
+        for tile_index in range(self.tile_count_res):
+            tile_format = (
+                TOPK_INDEX_FORMAT
+                if is_index_tile(tile_index, self.result_value_tiles_per_row)
+                else self.stimuli_res_format
+            )
+            start_idx = tile_index * self.buf_res_tile_size
+            end_idx = start_idx + self.buf_res_tile_size
+            tile_data = read_data[start_idx:end_idx]
+            unpacked_tile = unpack_res_tiles(
+                tile_data,
+                tile_format,
+                tile_count=1,
+                sfpu=self.sfpu,
+                num_faces=self.num_faces,
+                face_r_dim=self.face_r_dim,
+                tile_stride_bytes=self.buf_res_tile_size,
+                use_srcs=self.use_srcs,
+                dest_acc=self._dest_acc_32b,
+                twos_complement=self.twos_complement,
+            )
+            unpacked_data.extend(unpacked_tile.to(torch.float32).tolist())
+
+        return torch.tensor(unpacked_data, dtype=torch.float32)
 
 
 def transform_result_tensor_to_right_form(
@@ -99,6 +196,7 @@ def transform_result_tensor_to_right_form(
 
 def prepare_input_tensor_for_topk(src_A, formats, input_dimensions=[32, 128]):
     num_rows_tensor, num_cols_tensor = input_dimensions
+    values_per_row = num_cols_tensor // NUM_STAGES
     num_tiles_in_input = (num_rows_tensor * num_cols_tensor) // ELEMENTS_PER_TILE
 
     if num_tiles_in_input < NUM_STAGES * 2:
@@ -106,27 +204,100 @@ def prepare_input_tensor_for_topk(src_A, formats, input_dimensions=[32, 128]):
             f"Expected at least 2 tiles for values and 2 tiles for indices (total 4 tiles), but got {num_tiles_in_input} tiles."
         )
 
-    # Clone to avoid modifying the original tensor.
-    src_A = src_A.clone()
+    src_A = src_A.to(torch.float32).clone().view(num_rows_tensor, num_cols_tensor)
 
-    # Workaround for Quasar UINT16/LO16 dest-cell layout mismatch: encode indices as
-    # Float16_b (bfloat16) values instead of raw uint16 bit patterns. Indices 0..127
-    # are exactly representable in Float16_b (mantissa+implicit-leading-1 covers 0..256
-    # exactly with appropriate exponents), so the round-trip through dest is lossless.
-    # The kernel uses FP16B mode (upper 16 bits of LREG) for index SFPLOAD/SFPSTORE,
-    # which matches what the unpacker deposits via Float16_b A2D datacopy.
     for row in range(num_rows_tensor):
-        indices_start_idx = row * num_cols_tensor + num_cols_tensor // NUM_STAGES
-        indices_end_idx = indices_start_idx + num_cols_tensor // NUM_STAGES
-
-        bf16_indices = torch.arange(
-            0, num_cols_tensor // NUM_STAGES, dtype=torch.float32
-        ).to(src_A.dtype)
-
-        src_A[indices_start_idx:indices_end_idx] = bf16_indices
+        src_A[row, values_per_row:] = torch.arange(values_per_row, dtype=torch.float32)
 
     src_tilizer = get_golden_generator(TilizeGolden)
-    src_A = src_tilizer(src_A, input_dimensions, formats.input_format)
+    value_tiles = (
+        src_tilizer(
+            src_A[:, :values_per_row].flatten(),
+            [num_rows_tensor, values_per_row],
+            formats.input_format,
+        )
+        .to(torch.float32)
+        .view(-1, ELEMENTS_PER_TILE)
+    )
+    index_tiles = (
+        src_tilizer(
+            src_A[:, values_per_row:].flatten(),
+            [num_rows_tensor, values_per_row],
+            TOPK_INDEX_FORMAT,
+        )
+        .to(torch.float32)
+        .view(-1, ELEMENTS_PER_TILE)
+    )
+
+    value_tiles_per_row = values_per_row // TILE_DIMENSIONS[1]
+    tile_rows = num_rows_tensor // TILE_DIMENSIONS[0]
+    mixed_tiles = []
+    for tile_row in range(tile_rows):
+        row_start = tile_row * value_tiles_per_row
+        row_end = row_start + value_tiles_per_row
+        mixed_tiles.extend(value_tiles[row_start:row_end])
+        mixed_tiles.extend(index_tiles[row_start:row_end])
+
+    return torch.cat(mixed_tiles)
+
+
+def generate_topk_golden_with_numeric_indices(
+    src_A,
+    formats,
+    K=32,
+    sort_direction=TopKSortDirection.Descending,
+    input_dimensions=[32, 128],
+):
+    num_rows_tensor, num_cols_tensor = input_dimensions
+    result_num_cols = NUM_STAGES * K
+
+    operand = src_A.to(format_dict[formats.input_format])
+    result = torch.zeros(num_rows_tensor * result_num_cols, dtype=torch.float32)
+
+    for row in range(num_rows_tensor):
+        values_start_idx = row * num_cols_tensor
+        values_end_idx = values_start_idx + num_cols_tensor // NUM_STAGES
+        values = operand[values_start_idx:values_end_idx]
+
+        topk_positions = torch.argsort(
+            values,
+            descending=(sort_direction == TopKSortDirection.Descending),
+            stable=True,
+        )[:K]
+        topk_values = values[topk_positions]
+
+        result_values_start_idx = row * result_num_cols
+        result_indices_start_idx = (
+            result_values_start_idx + result_num_cols // NUM_STAGES
+        )
+
+        result[result_values_start_idx : result_values_start_idx + K] = topk_values.to(
+            torch.float32
+        )
+        result[result_indices_start_idx : result_indices_start_idx + K] = (
+            topk_positions.to(torch.float32)
+        )
+
+    result_tilizer = get_golden_generator(TilizeGolden)
+    result = result_tilizer(
+        result,
+        dimensions=[num_rows_tensor, result_num_cols],
+        data_format=formats.output_format,
+    )
+
+    return result.to(torch.float32)
+
+
+def make_unique_value_input(src_A, input_dimensions=[32, 128]):
+    src_A = src_A.to(torch.float32).clone()
+    num_rows_tensor, num_cols_tensor = input_dimensions
+    values_per_row = num_cols_tensor // NUM_STAGES
+
+    unique_values = torch.arange(values_per_row, dtype=torch.float32)
+    for row in range(num_rows_tensor):
+        values_start_idx = row * num_cols_tensor
+        values_end_idx = values_start_idx + values_per_row
+        src_A[values_start_idx:values_end_idx] = unique_values
 
     return src_A
 
@@ -156,13 +327,13 @@ def validate_topk_indices(
     untilizer = get_golden_generator(UntilizeGolden)
     res_tensor_untilized = untilizer(
         res_tensor, formats.output_format, [num_rows_tensor, num_cols_tensor]
-    )
+    ).to(torch.float32)
     golden_tensor_untilized = untilizer(
         golden_tensor, formats.output_format, [num_rows_tensor, num_cols_tensor]
-    )
+    ).to(torch.float32)
     original_input_tensor_untilized = untilizer(
         original_input_tensor, formats.input_format, input_dimensions
-    )
+    ).to(torch.float32)
 
     values_offset = 0
     indices_offset = num_cols_tensor // 2  # Indices stored in second half of row.
@@ -180,19 +351,13 @@ def validate_topk_indices(
             result_value = res_tensor_untilized[result_and_golden_value_idx].item()
             golden_value = golden_tensor_untilized[result_and_golden_value_idx].item()
 
-            # Result indices are stored as Float16_b (bfloat16) values (workaround — see
-            # prepare_input_tensor_for_topk). Decode back to int via rounding.
             result_index = int(
                 round(float(res_tensor_untilized[result_and_golden_index_idx].item()))
             )
-            # Golden indices come from TopKGolden which uses the original uint16-bit-pattern
-            # encoding (shared with Blackhole). Decode from bit pattern to uint16.
-            golden_index = (
-                golden_tensor_untilized[
-                    result_and_golden_index_idx : result_and_golden_index_idx + 1
-                ]
-                .view(torch.uint16)
-                .item()
+            golden_index = int(
+                round(
+                    float(golden_tensor_untilized[result_and_golden_index_idx].item())
+                )
             )
 
             original_input_value_idx = row_idx * input_dimensions[1] + result_index
@@ -265,6 +430,92 @@ def get_value_tiles_from_topk_tensor(
     return torch.cat(tiles)
 
 
+def run_topk_quasar_case(
+    formats: InputOutputFormat,
+    input_dimensions: list,
+    K: int,
+    sort_direction: TopKSortDirection,
+    stable_sort: bool,
+    unique_values: bool = False,
+):
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+
+    if unique_values:
+        src_A = make_unique_value_input(src_A, input_dimensions)
+
+    golden_tensor = generate_topk_golden_with_numeric_indices(
+        src_A,
+        formats,
+        K,
+        sort_direction,
+        input_dimensions=input_dimensions,
+    )
+
+    src_A = prepare_input_tensor_for_topk(src_A, formats, input_dimensions)
+
+    input_value_tiles_per_row = input_dimensions[1] // TILE_DIMENSIONS[1] // NUM_STAGES
+    result_value_tiles_per_row = K // TILE_DIMENSIONS[1]
+
+    configuration = TestConfig(
+        test_name="sources/quasar/sfpu_topk_quasar_test.cpp",
+        formats=formats,
+        templates=[
+            DEST_SYNC(),
+            TOPK(
+                topk_k=K,
+                topk_matrix_width=input_dimensions[1],
+                topk_sort_direction=sort_direction,
+                topk_stable_sort=stable_sort,
+            ),
+        ],
+        runtimes=[
+            INPUT_DIMENSIONS(input_dimensions[0] // 32, input_dimensions[1] // 32),
+            TILE_COUNT(tile_cnt_A),
+        ],
+        variant_stimuli=TopKStimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+            input_value_tiles_per_row=input_value_tiles_per_row,
+            result_value_tiles_per_row=result_value_tiles_per_row,
+        ),
+        dest_acc=DestAccumulation.No,
+        unpack_to_dest=False,
+    )
+
+    res_from_L1 = configuration.run().result
+    res_tensor = torch.tensor(res_from_L1, dtype=torch.float32)
+
+    res_tensor = transform_result_tensor_to_right_form(
+        res_tensor, formats, K, input_dimensions
+    )
+
+    assert len(res_tensor) == len(
+        golden_tensor
+    ), "Result tensor and golden tensor are not of the same length"
+
+    assert validate_topk_indices(
+        res_tensor, golden_tensor, src_A, formats, input_dimensions, K, stable_sort
+    )
+
+    res_values = get_value_tiles_from_topk_tensor(res_tensor, K, input_dimensions)
+    golden_values = get_value_tiles_from_topk_tensor(golden_tensor, K, input_dimensions)
+
+    assert passed_test(
+        golden_values, res_values, formats.output_format, print_errors=True
+    )
+
+
 @pytest.mark.quasar
 @parametrize(
     formats=input_output_formats(
@@ -276,10 +527,6 @@ def get_value_tiles_from_topk_tensor(
         [32, 128],
         [64, 128],
         [256, 128],
-        # [32, 1024] is included in the parametrize matrix (matches Blackhole) but
-        # `pytest.skip`d inside the test body — see the skip predicate below for the
-        # rationale. Keeping the entry visible in the matrix surfaces the skip in CI
-        # reports and makes re-enabling it a single-line change once tt-llk#1344 lands.
         [32, 1024],
     ],
     K=[32],
@@ -299,82 +546,26 @@ def test_topk_quasar(
         )  # TODO: Check tenstorrent/tt-metal#33492 and remove this once fixed.
 
     if input_dimensions == [32, 1024]:
-        # For 32x1024 input we have observed mid-row discrepancies in the topk
-        # values between hardware and golden (index→value lookup mismatch, not
-        # leading zeros). Same gating Blackhole applies via tt-llk issue #1344.
         pytest.skip(
-            "Skipping test for 32x1024 input due to observed mid-row discrepancies."
+            "Skipping 32x1024 TopK on Quasar due to observed index/value mismatches in the multi-iteration path."
         )
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-        sfpu=False,
-    )
-
-    golden_generator = get_golden_generator(TopKGolden)
-    golden_tensor = golden_generator(
-        src_A,
-        formats.input_format,
+    run_topk_quasar_case(
+        formats,
+        input_dimensions,
         K,
         sort_direction,
-        input_dimensions=input_dimensions,
+        stable_sort,
     )
 
-    src_A = prepare_input_tensor_for_topk(src_A, formats, input_dimensions)
 
-    configuration = TestConfig(
-        test_name="sources/quasar/sfpu_topk_quasar_test.cpp",
-        formats=formats,
-        templates=[
-            DEST_SYNC(),
-            TOPK(
-                topk_k=K,
-                topk_matrix_width=input_dimensions[1],
-                topk_sort_direction=sort_direction,
-                topk_stable_sort=stable_sort,
-            ),
-        ],
-        runtimes=[
-            INPUT_DIMENSIONS(input_dimensions[0] // 32, input_dimensions[1] // 32),
-            TILE_COUNT(tile_cnt_A),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
-        dest_acc=DestAccumulation.No,
-        unpack_to_dest=False,
-    )
-
-    res_from_L1 = configuration.run().result
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
-
-    res_tensor = transform_result_tensor_to_right_form(
-        res_tensor, formats, K, input_dimensions
-    )
-
-    assert len(res_tensor) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    assert validate_topk_indices(
-        res_tensor, golden_tensor, src_A, formats, input_dimensions, K, stable_sort
-    )
-
-    # Get value tiles from result and golden tensors
-    res_values = get_value_tiles_from_topk_tensor(res_tensor, K, input_dimensions)
-    golden_values = get_value_tiles_from_topk_tensor(golden_tensor, K, input_dimensions)
-
-    # Validate topk values
-    assert passed_test(
-        golden_values, res_values, formats.output_format, print_errors=True
+@pytest.mark.quasar
+def test_topk_quasar_unique_indices():
+    run_topk_quasar_case(
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        [32, 128],
+        32,
+        TopKSortDirection.Descending,
+        False,
+        unique_values=True,
     )
