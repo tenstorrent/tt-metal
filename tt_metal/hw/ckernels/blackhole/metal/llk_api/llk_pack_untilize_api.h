@@ -12,17 +12,16 @@
  *************************************************************************/
 
 /**
- * Configure the packer hardware for an untilize output operand.
+ * @brief One-time hardware configuration of the packer for an untilize output operand.
  *
- * Face geometry (face_r_dim, num_faces), tile column dimension, partial-face flag
- * and tile size are all derived from the output CB metadata associated with the
- * operand id. Callers no longer thread face geometry through the API, since per-CB
- * face geometry is recorded in the CB descriptor at program creation time. The relu
- * configuration is taken from the supplied pack params.
+ * Face geometry (face_r_dim, num_faces), tile column dimension, partial-face flag and tile size are
+ * all derived from the output CB metadata associated with the operand id, so callers no longer
+ * thread face geometry through the API. The relu configuration is taken from the supplied pack
+ * params.
  *
- * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
- * @tparam pack_mode           Packer program mode (e.g. Default, Untilize).
- * @param  pack_params         Pack parameters carrying the output operand and relu config.
+ * @tparam is_fp32_dest_acc_en: Whether the dest register accumulates in FP32.
+ * @tparam pack_mode: Packing layout, values = <Default/Untilize>
+ * @param pack_params: Pack parameters carrying the output operand and relu config.
  */
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void llk_pack_untilize_hw_configure(const llk_pack_params_t* pack_params) {
@@ -116,19 +115,21 @@ llk_pack_untilize_hw_configure_disaggregated(
 }
 
 /**
- * Initialize the packer for an untilize operation on the given output operand.
+ * @brief Initialize the packer for an untilize pack op on the given output operand.
  *
- * Face geometry (face_r_dim, num_faces) is derived from the output CB metadata. In
- * debug builds, validates that the packers are configured correctly for the resolved
- * face row dimension before programming the untilize init sequence.
+ * Face geometry (face_r_dim, num_faces) is derived from the output CB metadata. In debug builds,
+ * validates that the packers are configured correctly for the resolved face row dimension before
+ * programming the untilize init sequence.
  *
- * @tparam block_ct_dim   Width of a single block in tiles.
- * @tparam full_ct_dim    Width of the full input in tiles (defaults to block_ct_dim).
- * @tparam diagonal       Diagonal packing flag (unused on Blackhole; must be false).
- * @tparam narrow_row     Whether the input rows are narrow.
- * @tparam row_num_datums Number of datums per row.
- * @tparam dense          Pack two 2-face tiles into a single 4-face region.
- * @param  output         Output circular buffer / operand index.
+ * @tparam block_ct_dim: Number of input tiles per block.
+ * @tparam full_ct_dim: Total number of input tiles across all blocks (defaults to block_ct_dim).
+ * @tparam diagonal: Diagonal packing flag (unused on Blackhole; must be false).
+ * @tparam narrow_row: True when packing fewer than TILE_C_DIM datums per row.
+ * @tparam row_num_datums: Number of datums per output row when narrow_row is set.
+ * @tparam dense: Pack two 2-face tiles into a single 4-face region.
+ * @param output: Output circular buffer / operand index.
+ * @note Call @ref llk_pack_untilize to execute and @ref llk_pack_untilize_uninit afterwards to
+ *       restore the modified packer state.
  */
 template <
     std::uint32_t block_ct_dim = 8,
@@ -185,10 +186,13 @@ llk_pack_untilize_init(std::uint32_t output, const std::uint32_t face_r_dim, con
 }
 
 /**
- * Tear down the packer untilize configuration so a subsequent operation can
- * reprogram the packer. The source format is read from the output CB metadata.
+ * @brief Restore the packer Z stride after an untilize pack op.
  *
- * @param output Output circular buffer / operand index.
+ * Tears down the packer untilize configuration so a subsequent operation can reprogram the packer.
+ * The source format is read from the output CB metadata.
+ *
+ * @param output: Output circular buffer / operand index.
+ * @note Call @ref llk_pack_untilize_init before this function.
  */
 inline void llk_pack_untilize_uninit(std::uint32_t output) {
     const std::uint32_t output_id = get_output_id(output);
@@ -196,23 +200,24 @@ inline void llk_pack_untilize_uninit(std::uint32_t output) {
 }
 
 /**
- * Pack an untilized block of tiles from the destination register into the output CB.
+ * @brief Untilize-pack a block of tiles from the destination register into the output CB.
  *
- * Iterates over block_rt_dim tile rows, computing the packer write address from the
- * output CB fifo state for each row. Face geometry (face_r_dim, num_faces) is derived
- * from the output CB metadata.
+ * Iterates over block_rt_dim tile rows, computing the packer write address from the output CB fifo
+ * state for each row. Face geometry (face_r_dim, num_faces) is derived from the output CB metadata.
  *
- * @tparam block_ct_dim       Width of a single block in tiles.
- * @tparam full_ct_dim        Width of the full input in tiles (defaults to block_ct_dim).
- * @tparam diagonal           Diagonal packing flag (unused on Blackhole; must be false).
- * @tparam narrow_row         Whether the input rows are narrow.
- * @tparam row_num_datums     Number of datums per row (unused on Blackhole).
- * @tparam tile_dst_ct_offset Compile-time column offset of the tile in the destination register.
- * @tparam dense              Pack two 2-face tiles into a single 4-face region.
- * @param  block_rt_dim       Height of the block in tiles (number of rows to pack).
- * @param  output             Output circular buffer / operand index.
- * @param  block_c_index      Block column index (used when full_ct_dim > block_ct_dim).
- * @param  tile_dst_rt_offset Runtime row offset of the tile in the destination register.
+ * @tparam block_ct_dim: Number of input tiles per block.
+ * @tparam full_ct_dim: Total number of input tiles across all blocks (defaults to block_ct_dim).
+ * @tparam diagonal: Diagonal packing flag (unused on Blackhole; must be false).
+ * @tparam narrow_row: True when packing fewer than TILE_C_DIM datums per row.
+ * @tparam row_num_datums: Number of datums per row (unused on Blackhole).
+ * @tparam tile_dst_ct_offset: Compile-time column-tile offset into the destination register.
+ * @tparam dense: Pack two 2-face tiles into a single 4-face region.
+ * @param block_rt_dim: Height of the block in tiles (number of rows to pack).
+ * @param output: Output circular buffer / operand index.
+ * @param block_c_index: Block column index (used when full_ct_dim > block_ct_dim).
+ * @param tile_dst_rt_offset: Runtime row offset of the tile in the destination register.
+ * @note Call @ref llk_pack_untilize_init before this function and @ref llk_pack_untilize_uninit
+ *       after the untilize sequence completes.
  */
 template <
     std::uint32_t block_ct_dim = 8,
