@@ -25,27 +25,33 @@ Every LTX fusion opportunity maps onto the existing op — no new kernel capabil
 
 i.e. block norms, audio QK (self + cross), A→V audio-K, and no-rope video QK all fuse.
 
-## Blocked by two host-side L1/chunk-sizing bugs (NOT kernel-capability gaps)
+## Two host-side L1/chunk-sizing bugs — FIXED (chunk clamp)
 
-**Bug A — per-head RoPE overflows L1 at feat ≥ 1024.** The per-head cos/sin CBs are
-`chunk × num_tile_cols`-sized (fp32), but `decide_streaming_low_l1()` estimates resident
-L1 with a flat "~192 KB of small CBs" and never counts them. With `chunk_h_cap =
-128/num_tile_cols` (=4 at feat 1024) the resident path allocates ~1.86 MB > 1.5 MB.
-Blocks: **video self-attn QK** (feat 1024, head_dim 128) at both stages, and the
-**A↔V video-Q/K at TP=2** (feat 1024). Fix: include per-head cos/sin (chunk-scaled) in
-the L1 estimate, and/or cap chunk for per-head rope.
+Both were tuned for Wan's 40-tile-col / broadcast-RoPE shapes; LTX's wider features
+(64 cols) and per-head RoPE exposed them. Fixed by clamping `chunk_size_rows=1` for
+per-head RoPE (resident — NOT streaming) and for the streaming-low-L1 fallback, applied
+identically in `compute_sizing` (buffer) and the program factory; `create_stats_buffer`
+forwards weight/RoPE + uses `fp32_dest_acc=true` so the buffer's window/pages match.
+Crucially the clamp is applied ONLY to those two cases — every other shape keeps the
+exact original chunk, so **Wan is byte-identically unaffected** (PCC 0.999991, perf
+unchanged). All 14 TP=4 LTX configs fuse (see table above; block 106/191/25, self-attn
+176/541/31, A↔V 110/290/56, text-cross 94/183/79/23/67 µs).
 
-**Bug B — streaming path asserts `chunk_size_rows==1` for wide features.** At feat 2048
-(TP=2 video, 64 tile-cols), `chunk_h_cap = 128/64 = 2`, but the streaming-low-L1 path
-requires `chunk_size_rows==1` → `TT_FATAL`. Blocks **all TP=2 video configs** (block /
-self-attn / text-cross, regardless of RoPE). Fix: clamp `chunk_size_rows=1` when
-`streaming_low_l1` is selected.
+- **Bug A** (per-head RoPE OOM at feat ≥ 1024): chunk-1 resident keeps cos/sin to one row
+  → feat 1024 fits, and chunk-1 also dodges the per-head-RoPE chunk≥2 deadlock.
+- **Bug B** (streaming `chunk_size_rows==1` FATAL at feat 2048): clamp to 1 when streaming.
 
-Both stem from the op being tuned for Wan's 40-tile-col / broadcast-RoPE shapes; LTX's
-wider features (64 cols) and per-head RoPE expose the gaps.
+## Known software bugs still open (NOT machine flakiness — hangs during kernel exec)
+1. **Per-head RoPE deadlocks at chunk ≥ 2 + many rows** (worked around by forcing chunk-1;
+   the underlying compute deadlock remains).
+2. **`tp2_a_selfattn_qk` hangs even at chunk-1** — feat 1024 per-head RoPE on the TP=2
+   (ring_size=2), 2-tile-row, single-worker legacy-writer path. A distinct per-head-RoPE
+   execution hang specific to that path; needs `run_safe_pytest.sh --dev` + tt-triage.
+3. **feat-2048 per-head RoPE** (TP=2 video self-attn / A↔V video) exceeds L1 even at
+   chunk-1 → clean compile-time OOM; needs cos/sin streaming (a kernel change).
+4. The **composite baseline** (`use_device_op=False` norm + standalone
+   `rotary_embedding_llama`) hangs at large rows (video stage-2) — a bug in that path,
+   which is why the LTX unfused-baseline column isn't cleanly measurable yet.
 
-## Note on the benchmark
-The *baseline* (composite norm + standalone `rotary_embedding_llama`) at large row counts
-(video stage-2, rows 4864) can be slow / flaky on this galaxy; the bench catches per-config
-failures and keeps sweeping. The fused op's correctness (incl. per-head rope) is covered by
+The fused op's correctness (incl. per-head rope) is covered by
 `test_wan_fused_distributed_rmsnorm_device_op.py::test_wan_fused_distributed_rmsnorm_tp1_rope`.
