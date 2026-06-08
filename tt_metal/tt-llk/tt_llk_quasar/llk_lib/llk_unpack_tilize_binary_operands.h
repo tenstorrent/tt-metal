@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,6 @@
 #include "llk_defs.h"
 #include "llk_unpack_common.h"
 #include "tensor_shape.h"
-using namespace ckernel;
 
 /**
  * @brief Configures MOP for binary unpack where one or two operands are tilized
@@ -85,13 +84,20 @@ inline void _llk_unpack_tilize_binary_operands_init_(
     unpk_cfg.f.stride_val_source = 0;
     unpk_cfg.f.stride_offset_0   = full_ct_dim * tensor_shape.num_faces_c_dim; // how much to stride to go to next row within the same tile
 
-    if constexpr (TILIZE_UNP_SEL == TilizeUnpackerSel::UnpA || TILIZE_UNP_SEL == TilizeUnpackerSel::UnpAB)
+    if constexpr (TILIZE_UNP_SEL == TilizeUnpackerSel::UnpA)
     {
         cfg[THCON_UNPACKER0_REG1_UNPACK_TILIZE_SRC_Z_STRIDE_ADDR32] = unpk_cfg.val[0];
         cfg[THCON_UNPACKER0_REG2_UNPACK_STRIDE_OFFSET_0_ADDR32]     = unpk_cfg.val[2];
     }
-    if constexpr (TILIZE_UNP_SEL == TilizeUnpackerSel::UnpB || TILIZE_UNP_SEL == TilizeUnpackerSel::UnpAB)
+    else if constexpr (TILIZE_UNP_SEL == TilizeUnpackerSel::UnpB)
     {
+        cfg[THCON_UNPACKER1_REG1_UNPACK_TILIZE_SRC_Z_STRIDE_ADDR32] = unpk_cfg.val[0];
+        cfg[THCON_UNPACKER1_REG2_UNPACK_STRIDE_OFFSET_0_ADDR32]     = unpk_cfg.val[2];
+    }
+    else // UnpAB
+    {
+        cfg[THCON_UNPACKER0_REG1_UNPACK_TILIZE_SRC_Z_STRIDE_ADDR32] = unpk_cfg.val[0];
+        cfg[THCON_UNPACKER0_REG2_UNPACK_STRIDE_OFFSET_0_ADDR32]     = unpk_cfg.val[2];
         cfg[THCON_UNPACKER1_REG1_UNPACK_TILIZE_SRC_Z_STRIDE_ADDR32] = unpk_cfg.val[0];
         cfg[THCON_UNPACKER1_REG2_UNPACK_STRIDE_OFFSET_0_ADDR32]     = unpk_cfg.val[2];
     }

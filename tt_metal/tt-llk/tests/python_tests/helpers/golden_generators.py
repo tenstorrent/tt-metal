@@ -2375,9 +2375,7 @@ class EltwiseBinaryGolden(FidelityMasking):
             MathOperation.Elwmul: self._mul,
         }
 
-    def _quantize_input(
-        self, operand, input_fmt, output_fmt
-    ):
+    def _quantize_input(self, operand, input_fmt, output_fmt):
         """Quantize a single operand to match what hardware sees after unpack."""
         if input_fmt is None:
             return to_tensor(operand, output_fmt)
