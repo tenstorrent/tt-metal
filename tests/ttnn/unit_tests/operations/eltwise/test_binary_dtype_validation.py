@@ -103,6 +103,7 @@ def test_binary_dtype_validation_high_value_rejections(device, op, dtype):
         pytest.param(ttnn.bias_gelu, ttnn.uint16, id="exp_dependent_bias_gelu_uint16"),
         # float_only (POWER, XLOGY, ATAN2, HYPOT, QUANT)
         pytest.param(ttnn.pow, ttnn.int32, id="float_only_pow_int32"),
+        pytest.param(ttnn.pow, ttnn.uint32, id="float_only_pow_uint32"),
         pytest.param(ttnn.xlogy, ttnn.uint32, id="float_only_xlogy_uint32"),
         pytest.param(ttnn.atan2, ttnn.int32, id="float_only_atan2_int32"),
         pytest.param(ttnn.hypot, ttnn.uint16, id="float_only_hypot_uint16"),
@@ -147,6 +148,10 @@ def test_binary_unsupported_input_dtype_rejected(device, op, dtype):
         # arithmetic_fpu: float + int
         pytest.param(ttnn.add, ttnn.bfloat16, ttnn.int32, id="add_bfloat16_int32"),
         pytest.param(ttnn.add, ttnn.float32, ttnn.bfloat16, id="add_float32_bfloat16"),
+        pytest.param(ttnn.mul, ttnn.float32, ttnn.bfloat16, id="mul_float32_bfloat16"),
+        pytest.param(ttnn.mul, ttnn.bfloat16, ttnn.float32, id="mul_bfloat16_float32"),
+        pytest.param(ttnn.pow, ttnn.float32, ttnn.bfloat16, id="pow_float32_bfloat16"),
+        pytest.param(ttnn.pow, ttnn.bfloat16, ttnn.float32, id="pow_bfloat16_float32"),
         # float_and_int32
         pytest.param(ttnn.div, ttnn.int32, ttnn.float32, id="div_int32_float32"),
         # maximum_minimum

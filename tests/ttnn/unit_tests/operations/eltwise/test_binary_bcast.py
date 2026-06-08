@@ -2452,8 +2452,8 @@ def test_yolov8_add_small(device):
 
     tt_a = ttnn.from_torch(tor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
     tt_b = ttnn.from_torch(tor_b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
-    #  print("with typecast")
-    #  tt_a = ttnn.typecast(tt_a, dtype=ttnn.float32)
+    # binary_ng requires matching operand dtypes; align to float32 like torch.add(bf16, f32).
+    tt_a = ttnn.typecast(tt_a, dtype=ttnn.float32)
     print("add")
     result = ttnn.add(tt_a, tt_b)
 
@@ -2488,6 +2488,12 @@ def test_binary_mixed_add(dtype_pt_a, dtype_tt_a, dtype_pt_b, dtype_tt_b, device
     b_pt, b_tt = rand_gen(b_shape, device, dtype=dtype_pt_b, tt_dtype=dtype_tt_b, memory_config=mem)
 
     golden_fn = ttnn.get_golden_function(ttnn.add)
+
+    if a_tt.dtype != b_tt.dtype:
+        if a_tt.dtype == ttnn.bfloat16:
+            a_tt = ttnn.typecast(a_tt, dtype=ttnn.float32)
+        else:
+            b_tt = ttnn.typecast(b_tt, dtype=ttnn.float32)
 
     out_tt = ttnn.add(a_tt, b_tt)
     out_pt = golden_fn(a_pt, b_pt)

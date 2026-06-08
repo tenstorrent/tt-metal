@@ -262,6 +262,7 @@ def vit_embeddings(
     patch_embeddings = vit_patch_embeddings(config, pixel_values, parameters=parameters.patch_embeddings)
     embedding_output = ttnn.concat([cls_token, patch_embeddings], -2, memory_config=l1_memory_config)
     embedding_output = ttnn.to_layout(embedding_output, layout=ttnn.TILE_LAYOUT)
+    embedding_output = ttnn.typecast(embedding_output, ttnn.bfloat8_b)
     embedding_output = ttnn.add(
         embedding_output, position_embeddings, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b
     )

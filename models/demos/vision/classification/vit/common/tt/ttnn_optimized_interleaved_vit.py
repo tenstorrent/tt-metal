@@ -68,6 +68,7 @@ def vit_embeddings(
     # embedding_output = ttnn.pad(embedding_output, padding=((0, 0), (0, 27), (0, 0)), value=0)
     # print("out", embedding_output.shape)
     embedding_output = ttnn.to_layout(embedding_output, layout=ttnn.TILE_LAYOUT)
+    embedding_output = ttnn.typecast(embedding_output, ttnn.bfloat8_b)
 
     embedding_output = ttnn.add(
         embedding_output, position_embeddings, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b

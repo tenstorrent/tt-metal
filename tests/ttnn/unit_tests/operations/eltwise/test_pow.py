@@ -175,6 +175,11 @@ def test_binary_pow(device, dtype_a, dtype_b):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype_a, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn_dtype_b, layout=ttnn.TILE_LAYOUT, device=device)
+    if dtype_a != dtype_b:
+        with pytest.raises(RuntimeError, match=r"Mixed dtype is not supported for binary operation"):
+            ttnn.pow(x_tt, y_tt)
+        return
+
     z_tt_pow = ttnn.pow(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_pow)
     # output - bfloat16
