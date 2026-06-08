@@ -533,6 +533,8 @@ class MetadataConstrainedLogitsProcessor(LogitsProcessor):
         # Precompute audio code token IDs (tokens matching <|audio_code_\d+|>)
         # These should be blocked during caption generation
         self.audio_code_token_ids: Set[int] = set()
+        self.code_value_to_token_id: dict[int, int] = {}
+        self.audio_code_history: list[int] = []
         self._precompute_audio_code_tokens()
 
         # Precompute audio code mask for efficient blocking (O(1) instead of O(n))
@@ -571,6 +573,7 @@ class MetadataConstrainedLogitsProcessor(LogitsProcessor):
                     # Only add tokens with valid code values (0-63999)
                     if 0 <= code_value <= MAX_AUDIO_CODE:
                         self.audio_code_token_ids.add(token_id)
+                        self.code_value_to_token_id[code_value] = token_id
                     else:
                         invalid_tokens_count += 1
                         if self.debug:
@@ -618,6 +621,21 @@ class MetadataConstrainedLogitsProcessor(LogitsProcessor):
             pass
 
         return None
+
+    def _apply_code_diversity_penalty(self, scores: torch.Tensor) -> torch.Tensor:
+        """Block exact audio-code block loops only (heavy penalties collapse timbre)."""
+        hist = self.audio_code_history
+        if len(hist) < 8 or not self.code_value_to_token_id:
+            return scores
+        for block in (16, 12, 8):
+            if len(hist) >= 2 * block and hist[-block:] == hist[-2 * block : -block]:
+                loop_code = hist[-block]
+                tok = self.code_value_to_token_id.get(int(loop_code))
+                if tok is not None:
+                    out = scores.clone()
+                    out[:, tok] = float("-inf")
+                    return out
+        return scores
 
     def _build_audio_code_mask(self):
         """
@@ -1292,6 +1310,7 @@ class MetadataConstrainedLogitsProcessor(LogitsProcessor):
         self.accumulated_value = ""  # Legacy, kept for compatibility
         self.accumulated_token_ids = []  # Reset token ID sequence
         self.codes_count = 0  # Reset codes counter
+        self.audio_code_history = []
         self.user_field_token_queue = []  # Reset user field token queue
         self.current_user_field = None  # Reset current user field
         self.caption_after_newline = False  # Reset caption newline tracking
@@ -1629,6 +1648,7 @@ class MetadataConstrainedLogitsProcessor(LogitsProcessor):
                 # Skip metadata generation, go directly to codes generation
                 self.state = FSMState.CODES_GENERATION
                 self.codes_count = 0
+                self.audio_code_history = []
                 if self.debug:
                     logger.debug("Codes phase: detected </think> in input, skipping to CODES_GENERATION")
 
@@ -1656,6 +1676,7 @@ class MetadataConstrainedLogitsProcessor(LogitsProcessor):
                     scores[:, self.eos_token_id] = eos_scores
                     if self.debug:
                         logger.debug(f"Codes generation: {self.codes_count}/{self.target_codes}, forcing EOS")
+            scores = self._apply_code_diversity_penalty(scores)
             return self._apply_temperature_scaling(scores)
 
         batch_size = scores.shape[0]
@@ -2227,8 +2248,12 @@ class MetadataConstrainedLogitsProcessor(LogitsProcessor):
             return
 
         if self.state == FSMState.CODES_GENERATION:
-            # Count generated codes for duration constraint
-            self.codes_count += 1
+            # Count only audio-code tokens (not EOS / stray tokens) for duration forcing.
+            if generated_token_id in self.audio_code_token_ids:
+                self.codes_count += 1
+                code_val = self._extract_code_from_token(generated_token_id)
+                if code_val is not None:
+                    self.audio_code_history.append(int(code_val))
             if self.debug and self.target_codes is not None:
                 logger.debug(f"Codes count: {self.codes_count}/{self.target_codes}")
             return

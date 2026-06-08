@@ -290,6 +290,7 @@ class LocalFiveHzLMHandler:
         target_duration: Optional[float],
         generation_phase: str,
         fallback_max: Optional[int] = None,
+        prompt_tokens: int = 0,
     ) -> int:
         """
         Compute max_new_tokens based on target duration and generation phase.
@@ -346,9 +347,17 @@ class LocalFiveHzLMHandler:
                     duration_cap,
                 )
 
-        # Cap at model's max length
+        # Cap at model context — reserve space for the prompt (Phase 2 CoT+prompt can be long).
+        if getattr(self, "_ttnn_lm_active", False):
+            max_ctx = int(getattr(self, "_ttnn_causal_max_seq_len", 16384))
+        else:
+            max_ctx = int(getattr(self, "max_model_len", 4096))
+        avail = max_ctx - int(prompt_tokens) - 64
+        if avail < 1:
+            avail = 1
+        max_new_tokens = min(max_new_tokens, avail)
         if hasattr(self, "max_model_len"):
-            max_new_tokens = min(max_new_tokens, self.max_model_len - 64)
+            max_new_tokens = min(max_new_tokens, int(self.max_model_len) - 64)
 
         return max_new_tokens
 
@@ -609,6 +618,7 @@ class LocalFiveHzLMHandler:
                 self.llm_backend = "pt"
                 self.llm_initialized = True
                 self._ttnn_lm_active = True
+                self.max_model_len = int(getattr(self, "_ttnn_causal_max_seq_len", 16384))
                 if prefill_trace and decode_trace:
                     trace_note = " trace+2cq prefill+decode on"
                 elif prefill_trace:
@@ -651,8 +661,26 @@ class LocalFiveHzLMHandler:
     # on-device call (via ``models.common.modules.sampling.{penalties_1d,sampling_1d}``)
     # when ``_ttnn_logits_device`` is attached, or pure host PyTorch otherwise.
 
-    def _check_eos_token(self, tokens: torch.Tensor, eos_token_id: int, pad_token_id: Optional[int]) -> bool:
-        """Check if any token in the batch is EOS or pad token"""
+    def _check_eos_token(
+        self,
+        tokens: torch.Tensor,
+        eos_token_id: int,
+        pad_token_id: Optional[int],
+        *,
+        constrained_processor: Optional[MetadataConstrainedLogitsProcessor] = None,
+    ) -> bool:
+        """Check if generation should stop on EOS/pad.
+
+        During Phase 2 codes generation with a duration target, ignore EOS until
+        ``codes_count >= target_codes`` (early EOS yields ~50-code / 10s clips).
+        """
+        from .five_hz_constrained_logits_processor import FSMState
+
+        if constrained_processor is not None and constrained_processor.state == FSMState.CODES_GENERATION:
+            tc = constrained_processor.target_codes
+            if tc is not None and int(constrained_processor.codes_count) < int(tc):
+                return False
+
         if self._ttnn_logits_device is not None:
             from models.experimental.ace_step_v1_5.ttnn_impl.lm_constrained_logits_ttnn import (
                 tokens_any_eos_or_pad_int32_ttnn,
@@ -1326,12 +1354,14 @@ class LocalFiveHzLMHandler:
 
         with self._load_model_context():
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            prompt_len = int(inputs["input_ids"].shape[1])
 
             # Calculate max_new_tokens based on target_duration and generation phase
             max_new_tokens = self._compute_max_new_tokens(
                 target_duration=target_duration,
                 generation_phase=generation_phase,
                 fallback_max=getattr(self.llm.config, "max_new_tokens", 4096),
+                prompt_tokens=prompt_len,
             )
 
             # Build logits processor list (only for CFG and repetition penalty)
@@ -1362,9 +1392,15 @@ class LocalFiveHzLMHandler:
                 self.llm_tokenizer.padding_side = original_padding_side
                 batch_inputs_tokenized = {k: v.to(self.device) for k, v in batch_inputs_tokenized.items()}
 
-                # Extract batch inputs
                 batch_input_ids = batch_inputs_tokenized["input_ids"]
                 batch_attention_mask = batch_inputs_tokenized.get("attention_mask", None)
+                prompt_len = int(batch_input_ids.shape[1])
+                max_new_tokens = self._compute_max_new_tokens(
+                    target_duration=target_duration,
+                    generation_phase=generation_phase,
+                    fallback_max=getattr(self.llm.config, "max_new_tokens", 4096),
+                    prompt_tokens=prompt_len,
+                )
 
                 # Use custom CFG generation loop with constrained decoding
                 outputs = self._generate_with_cfg_custom(
@@ -1746,6 +1782,12 @@ class LocalFiveHzLMHandler:
                 logger.info("Phase 1: Using user-provided metadata (skipping generation)")
             metadata = {k: v for k, v in user_metadata.items() if v is not None}
 
+        # Caller-requested duration wins over CoT metadata so phase-2 code generation
+        # and the embedded CoT YAML stay aligned (avoids ~20 s / 100-code clips when
+        # CoT guessed a shorter duration than --duration_sec).
+        if target_duration is not None and float(target_duration) > 0:
+            metadata["duration"] = int(round(float(target_duration)))
+
         # When the caller did not supply an explicit target_duration, use the
         # duration that Phase 1 (CoT) produced so that Phase 2 code generation
         # is properly constrained.  Without this, a null API duration lets
@@ -1800,12 +1842,42 @@ class LocalFiveHzLMHandler:
             logger.info("Phase 2: Generating audio codes...")
         phase2_start = time.time()
 
+        td: float | None = None
+        tc: int | None = None
+        if target_duration is not None and float(target_duration) > 0:
+            td = float(target_duration)
+            tc = int(td * 5)
+            if self.constrained_processor is not None:
+                self.constrained_processor.set_target_duration(td)
+
+        codes_repetition_penalty = float(repetition_penalty)
+        codes_temperature = float(temperature)
+        codes_top_p = float(top_p) if top_p is not None else 0.9
+
+        forced_dur = float(target_duration) if target_duration is not None and float(target_duration) > 0 else 0.0
+        if forced_dur > 0:
+            metadata["duration"] = int(round(forced_dur))
+            if self.constrained_processor is not None:
+                self.constrained_processor.set_target_duration(forced_dur)
+            print(
+                f"[ace_step_v1_5] Phase 2: forcing {forced_dur:g}s -> {int(forced_dur * 5)} audio codes "
+                f"(5 Hz; do not stop before target)",
+                flush=True,
+            )
+
         # Format metadata as CoT using YAML (matching training format)
         cot_text = self._format_metadata_as_cot(metadata)
 
         # Build formatted prompt with CoT for codes generation phase
         formatted_prompt_with_cot = self.build_formatted_prompt_with_cot(caption, lyrics, cot_text)
         logger.info(f"generate_with_stop_condition: formatted_prompt_with_cot={formatted_prompt_with_cot}")
+
+        if td is not None and tc is not None:
+            print(
+                f"[ace_step_v1_5] Phase 2 audio codes: target_duration={td:g}s "
+                f"(expect {tc} codes @ 5 Hz) repetition_penalty={codes_repetition_penalty:g}",
+                flush=True,
+            )
 
         progress(0.5, f"Phase 2: Generating audio codes for {actual_batch_size} items...")
         if is_batch:
@@ -1817,12 +1889,12 @@ class LocalFiveHzLMHandler:
                 if self.llm_backend == "vllm":
                     codes_outputs = self._run_vllm(
                         formatted_prompts=formatted_prompts,
-                        temperature=temperature,
+                        temperature=codes_temperature,
                         cfg_scale=cfg_scale,
                         negative_prompt=negative_prompt,
                         top_k=top_k,
-                        top_p=top_p,
-                        repetition_penalty=repetition_penalty,
+                        top_p=codes_top_p,
+                        repetition_penalty=codes_repetition_penalty,
                         use_constrained_decoding=use_constrained_decoding,
                         constrained_decoding_debug=constrained_decoding_debug,
                         target_duration=target_duration,
@@ -1835,12 +1907,12 @@ class LocalFiveHzLMHandler:
                 elif self.llm_backend == "mlx":
                     codes_outputs = self._run_mlx(
                         formatted_prompts=formatted_prompts,
-                        temperature=temperature,
+                        temperature=codes_temperature,
                         cfg_scale=cfg_scale,
                         negative_prompt=negative_prompt,
                         top_k=top_k,
-                        top_p=top_p,
-                        repetition_penalty=repetition_penalty,
+                        top_p=codes_top_p,
+                        repetition_penalty=codes_repetition_penalty,
                         use_constrained_decoding=use_constrained_decoding,
                         constrained_decoding_debug=constrained_decoding_debug,
                         target_duration=target_duration,
@@ -1853,12 +1925,12 @@ class LocalFiveHzLMHandler:
                 else:  # pt backend
                     codes_outputs = self._run_pt(
                         formatted_prompts=formatted_prompts,
-                        temperature=temperature,
+                        temperature=codes_temperature,
                         cfg_scale=cfg_scale,
                         negative_prompt=negative_prompt,
                         top_k=top_k,
-                        top_p=top_p,
-                        repetition_penalty=repetition_penalty,
+                        top_p=codes_top_p,
+                        repetition_penalty=codes_repetition_penalty,
                         use_constrained_decoding=use_constrained_decoding,
                         constrained_decoding_debug=constrained_decoding_debug,
                         target_duration=target_duration,
@@ -1922,12 +1994,12 @@ class LocalFiveHzLMHandler:
             codes_output_text, status = self.generate_from_formatted_prompt(
                 formatted_prompt=formatted_prompt_with_cot,
                 cfg={
-                    "temperature": temperature,
+                    "temperature": codes_temperature,
                     "cfg_scale": cfg_scale,
                     "negative_prompt": negative_prompt,
                     "top_k": top_k,
-                    "top_p": top_p,
-                    "repetition_penalty": repetition_penalty,
+                    "top_p": codes_top_p,
+                    "repetition_penalty": codes_repetition_penalty,
                     "target_duration": target_duration,
                     "user_metadata": None,  # No user metadata injection in Phase 2
                     "skip_caption": True,  # Skip caption since CoT is already included
@@ -2909,7 +2981,12 @@ class LocalFiveHzLMHandler:
                 self._update_constrained_processor_state(constrained_processor, next_tokens)
 
                 # Check for EOS token
-                should_stop = self._check_eos_token(next_tokens, eos_token_id, pad_token_id)
+                should_stop = self._check_eos_token(
+                    next_tokens,
+                    eos_token_id,
+                    pad_token_id,
+                    constrained_processor=constrained_processor,
+                )
 
                 # Append token to sequence (TTNN concat when logits device is attached)
                 next_tokens_unsqueezed = next_tokens.unsqueeze(1)
@@ -3117,6 +3194,13 @@ class LocalFiveHzLMHandler:
 
                 # Per-sequence EOS tracking (Fix 4: stop when ALL sequences are done)
                 is_eos = self._eos_pad_row_mask_ttnn_or_torch(next_tokens, eos_token_id, pad_token_id)
+                if (
+                    constrained_processor is not None
+                    and constrained_processor.state == FSMState.CODES_GENERATION
+                    and constrained_processor.target_codes is not None
+                    and int(constrained_processor.codes_count) < int(constrained_processor.target_codes)
+                ):
+                    is_eos = torch.zeros_like(is_eos)
                 seq_finished = seq_finished | is_eos
 
                 # Apply the same sampled tokens to both conditional and unconditional sequences
