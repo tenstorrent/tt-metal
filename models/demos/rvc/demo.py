@@ -151,8 +151,28 @@ def load_feature_index(index_path):
 _torch_fallback_cache = {}
 
 
+def change_rms(src_audio_np: np.ndarray, src_sr: int,
+               tgt_audio_np: np.ndarray, tgt_sr: int, rate: float) -> np.ndarray:
+    """Blend the source-audio RMS envelope into the converted output to
+    preserve dynamics. rate=1.0 keeps converted RMS; rate=0.0 fully transfers
+    source RMS. Mirrors upstream RVC's vc_infer change_rms()."""
+    import librosa
+    rms1 = librosa.feature.rms(y=src_audio_np, frame_length=src_sr // 2 * 2,
+                                hop_length=src_sr // 2)
+    rms2 = librosa.feature.rms(y=tgt_audio_np, frame_length=tgt_sr // 2 * 2,
+                                hop_length=tgt_sr // 2)
+    rms1 = torch.from_numpy(rms1).float().unsqueeze(0)
+    rms2 = torch.from_numpy(rms2).float().unsqueeze(0)
+    rms1 = F.interpolate(rms1, size=tgt_audio_np.shape[0], mode="linear").squeeze()
+    rms2 = F.interpolate(rms2, size=tgt_audio_np.shape[0], mode="linear").squeeze()
+    rms2 = torch.maximum(rms2, torch.tensor(1e-6))
+    scale = (rms1.pow(1 - rate) * rms2.pow(rate - 1)).numpy()
+    return tgt_audio_np * scale
+
+
 def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
              f0_method="rmvpe", index_path=None, index_rate=0.0,
+             protect=0.33, rms_mix_rate=0.25,
              allow_torch_fallback=False):
     """Run full hybrid inference pipeline.
 
@@ -224,6 +244,8 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
         t_f0 = time.time() - t_f0_start
         print(f"  F0 ({f0_method}): pitch {pitch.shape}, {t_f0:.3f}s")
 
+        feats0 = feats.clone() if protect < 0.5 else None
+
         t_retrieval_start = time.time()
         index, big_npy = load_feature_index(index_path)
         if index is not None and index_rate > 0:
@@ -239,6 +261,17 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
             print(f"  Retrieval: index_rate={index_rate}, {time.time()-t_retrieval_start:.3f}s")
         else:
             print(f"  Retrieval: disabled (no index or rate=0)")
+
+        # Consonant protection: on unvoiced frames (pitchf==0 → consonants /
+        # silence), blend pre-retrieval features back so consonants aren't
+        # smeared by speaker conversion. protect=0.5 disables.
+        if feats0 is not None:
+            pitchff = pitchf.clone()
+            pitchff[pitchf > 0] = 1.0
+            pitchff[pitchf < 1] = protect
+            pitchff = pitchff.unsqueeze(-1)
+            feats = feats * pitchff + feats0 * (1 - pitchff)
+            print(f"  Consonant protection: protect={protect}")
 
         sid = torch.tensor([speaker_id])
         g = emb_g(sid).unsqueeze(-1)
@@ -402,11 +435,16 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
     os.makedirs(output_dir, exist_ok=True)
 
     audio_np_out = audio_out[0, 0].numpy()
+    audio_np_ref = audio_ref[0, 0].numpy()
+    if rms_mix_rate < 1.0:
+        # Blend source-audio RMS envelope into both outputs to preserve dynamics.
+        audio_np_out = change_rms(audio_np, SR_HUBERT, audio_np_out, SR_TARGET, rms_mix_rate)
+        audio_np_ref = change_rms(audio_np, SR_HUBERT, audio_np_ref, SR_TARGET, rms_mix_rate)
+        print(f"  Volume envelope: rms_mix_rate={rms_mix_rate}")
     audio_np_out = audio_np_out / max(np.abs(audio_np_out).max(), 1e-6) * 0.95
     ttnn_path = os.path.join(output_dir, "ttnn_output.wav")
     sf.write(ttnn_path, audio_np_out, SR_TARGET)
 
-    audio_np_ref = audio_ref[0, 0].numpy()
     audio_np_ref = audio_np_ref / max(np.abs(audio_np_ref).max(), 1e-6) * 0.95
     ref_path = os.path.join(output_dir, "torch_reference.wav")
     sf.write(ref_path, audio_np_ref, SR_TARGET)
@@ -465,6 +503,12 @@ if __name__ == "__main__":
                         help="Path to FAISS .index file for feature retrieval")
     parser.add_argument("--index_rate", type=float, default=0.0,
                         help="Feature retrieval blending rate (0=disabled, 1=full retrieval)")
+    parser.add_argument("--protect", type=float, default=0.33,
+                        help="Consonant protection blend for unvoiced frames "
+                             "(lower=more original features kept; 0.5 disables)")
+    parser.add_argument("--rms_mix_rate", type=float, default=0.25,
+                        help="Volume envelope blend rate (1=keep converted dynamics, "
+                             "0=transfer source dynamics)")
     parser.add_argument("--allow-torch-fallback", action="store_true",
                         help="Catch TTNN OOM/L1 errors on a per-chunk basis and run torch "
                              "for that chunk. Off by default — silent fallback hides device "
@@ -476,4 +520,5 @@ if __name__ == "__main__":
              device_id=args.device_id, max_secs=args.max_secs,
              f0_method=args.f0_method, index_path=args.index_path,
              index_rate=args.index_rate,
+             protect=args.protect, rms_mix_rate=args.rms_mix_rate,
              allow_torch_fallback=args.allow_torch_fallback)
