@@ -213,14 +213,64 @@ All codegen lives in `tt_metal/jit_build/genfiles.cpp`, next to the existing
 (build with `-Wno-attributes` or register it); it exists purely as a reliable parse anchor.
 Exactly one per TU — zero falls back to a hand-written `kernel_main()`, two is a JIT error.
 
-**Signature parser** — `parse_kernel_main_signature(source) -> {name, template_params,
-fn_params}`. The marker sits between the optional `template <…>` clause and the return type,
-so the parser scans backward for the template clause and forward for `ret-type name
-( params )` up to the matching `{`, splitting each list on top-level commas. Ship a
-**tokenizer** for Phase 1 (no new dependency; the `uint32_t`-only surface keeps it
-tractable), kept behind this one function so a real-parser implementation can replace it in
-Phase 2 — see §5 for the GCC-driven options (`clang -ast-dump=json`/libclang as a separate
-parse, or a GCC plugin in the existing compile) once richer types break the tokenizer.
+**Signature parser** — `parse_kernel_main_signature(source) -> {name, template_param_names,
+fn_param_names}`. The thing that makes a tokenizer adequate: in Phase 1 binding is by name
+and every type is `uint32_t`, so the parser only needs **names, their order, and which list
+each is in** — it is a name extractor, not a type parser. (That is also why Phase 2's richer
+types force a real parser; see §5.)
+
+The procedure runs over the raw, un-preprocessed kernel source. Traced on the §2 example:
+
+```cpp
+#define TT_KERNEL [[tt::kernel_main]]      // (from an included header)
+template <uint32_t block_h, uint32_t block_w, uint32_t untilize>
+TT_KERNEL void my_kernel(uint32_t src_addr, uint32_t dst_addr,
+                         uint32_t num_tiles, uint32_t scaler, uint32_t sem_addr)
+{ ... }
+```
+
+1. **Strip noise.** Lex the text, dropping line/block comments and string/char literals, and
+   skipping preprocessor lines (`#…`, honoring `\` continuations). This stops a `TT_KERNEL`
+   inside a comment, a string, or the `#define TT_KERNEL …` line from false-matching.
+2. **Find the anchor.** Locate the lone `TT_KERNEL` token used as a *declaration prefix*
+   (followed by `void <ident> (`). Count them: **0** → emit no shim, fall back to a
+   hand-written `kernel_main()`; **2+** → hard error.
+3. **Template head — look left.** Find the nearest `template` keyword preceding the anchor,
+   forward-match its `< … >` with an angle-bracket depth counter, and require the closing `>`
+   to sit immediately before the anchor (only whitespace between). If present, capture the
+   bracketed text → the template-parameter list (CTAs): `block_h, block_w, untilize`. Absent
+   → no CTAs.
+4. **Function head — look right.** After the anchor, expect `void`; the **function name** is
+   the identifier immediately before `(` → `my_kernel`. Match the `( … )` with a paren-depth
+   counter and capture the parameter list. Stop at the matching `)` — the body is never read.
+5. **Split each list on top-level commas** — commas *not* nested inside `<> () [] {}` (one
+   combined depth counter). For v1 there is no nesting, but the depth-aware split is what
+   later tolerates e.g. `std::array<T, N> x`. Yields one text entry per parameter.
+6. **Extract each name.** Per entry: verify the type tokens are `uint32_t`, then take the
+   **trailing identifier** as the parameter name. Template list → `[block_h, block_w,
+   untilize]`; function list → `[src_addr, dst_addr, num_tiles, scaler, sem_addr]`.
+7. **Reject anything off-surface**, with an error naming the file + offending parameter:
+   non-`uint32_t` types, `typename`/`class` template params, default args (`=`), parameter
+   packs/variadics (`...`), unnamed params, pointer/reference/bracketed types, trailing
+   return types. Those authors keep using `kernel_main()` until Phase 2's real parser lands.
+
+**Output:** `{ name: "my_kernel", template_param_names: [...], fn_param_names: [...] }`. This
+drives codegen directly: `write_kernel_main_shim()` emits one `get_arg(args::<name>)` per
+name (template names in the `<…>`, function names in the `(…)`), and each name is
+independently cross-checked against the generated `args::` constants at compile time (a name
+with no `args::` entry → compile error).
+
+Two correctness notes:
+
+- **Why backward-then-forward, not a single regex:** the marker sits *between* the template
+  head and the return type, so the template clause is to its left and the function head to
+  its right. Angle/paren depth-matching (not regex) is required because `< >` and `( )` can
+  nest once we move past the `uint32_t`-only surface.
+- **What we deliberately do *not* do:** no macro expansion, no include resolution, no
+  semantic analysis — only lexical tokens around the marker. That is safe precisely because
+  types are fixed at `uint32_t`; the moment types become arbitrary (Phase 2), "trailing
+  identifier = name, rest = type" and pure comma-splitting stop being reliable, which is the
+  handoff to `clang -ast-dump=json`/libclang or a GCC plugin (§5).
 
 **Shim emitter** — `write_kernel_main_shim()` emits `kernel_main()` calling
 `my_kernel<get_arg(args::ct)…>(get_arg(args::rt)…)`, one `get_arg(args::<name>)` per param
