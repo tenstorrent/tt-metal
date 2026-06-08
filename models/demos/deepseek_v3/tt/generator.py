@@ -1097,20 +1097,6 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
             tt_logits, enable_trace=enable_trace, user_slots=user_slots, skip_precompile=True
         )
 
-    def sample_prefill_on_device(self, tt_logits, user_slots, enable_trace=False):
-        """Public on-device prefill-sampling entry point.
-
-        Deepseek samples prefill per user (``user_slots``), unlike the
-        tt_transformers base which accumulates deferred prefill tasks across a
-        batched prefill — so the signature differs by architecture. The shared
-        guarantee is "given prefill logits + the target slot(s), return sampled
-        token ids on device". State is set up by the caller via
-        :meth:`_validate_and_initialize_sampling` as for decode.
-        """
-        return self._sample_tokens_device(
-            tt_logits, user_slots=user_slots, enable_trace=enable_trace, skip_precompile=True
-        )
-
     def _tokens_from_device(self, tt_out_tok, mesh_device, batch_size_per_row: int) -> torch.Tensor:
         composed = ttnn.to_torch(
             tt_out_tok,
