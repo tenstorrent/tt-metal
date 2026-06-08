@@ -9,13 +9,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 
-// ALWI is used by ckernel_sfpu_piecewise_rational.h (pulled in via ckernel_sfpu_erf.h).
-// In the full metal compute path it comes from compute_kernel_api.h; in the LLK test
-// harness that header is absent.  Template functions in headers are implicitly inline,
-// so a no-op fallback is sufficient for correctness.
-#ifndef ALWI
-#define ALWI
-#endif
+#define ALWI inline __attribute__((always_inline))
 
 #include "ckernel_sfpu_exp.h"  // For _sfpu_round_to_nearest_int32_
 #include "sfpu/ckernel_sfpu_polyval.h"
@@ -144,16 +138,15 @@ constexpr float GELU_CDF_CORE_C9 = 8.1812159812e-05f;
 constexpr float GELU_CDF_CORE_C11 = -3.8082057209e-06f;
 constexpr float GELU_CDF_CORE_C13 = 7.9821413868e-08f;
 
-// Degree-4 correction polynomial for the exp-based region (-13.1875, -3.125)
+// Degree-4 correction polynomial for the exp-based region (-5.54259443, -3.125)
 // P(x) ≈ GELU(x) · exp(x²/2), so result = exp(-x²/2) · P(x)
-// Fitted to the TRUE erfc-based function via minimax (Chebyshev) approximation.
-// Replaces the reciprocal + 3-term Mills ratio, saving ~8 ops + LUT init.
-// Validated: Max ULP = 1 across all 266 BF16 values in the region.
-constexpr float GELU_EXP_CORR_C0 = -2.9069766448e-01f;
-constexpr float GELU_EXP_CORR_C1 = 3.9288617802e-02f;
-constexpr float GELU_EXP_CORR_C2 = 5.8260409601e-03f;
-constexpr float GELU_EXP_CORR_C3 = 3.9454728181e-04f;
-constexpr float GELU_EXP_CORR_C4 = 1.0058581740e-05f;
+// Minimax-fitted over (-5.54259443, -3.125) with BF16-ULP weighting → MaxULP = 0
+// across all 105 BF16 values in the region.
+constexpr float GELU_EXP_CORR_C0 = -2.0556385815e-01f;
+constexpr float GELU_EXP_CORR_C1 = 1.0819991678e-01f;
+constexpr float GELU_EXP_CORR_C2 = 2.6440162212e-02f;
+constexpr float GELU_EXP_CORR_C3 = 3.1125405803e-03f;
+constexpr float GELU_EXP_CORR_C4 = 1.4404904505e-04f;
 
 // Forward GELU Evaluation with CDF Polynomial Approximation
 // GELU(x) = x * Phi(x) where Phi is approximated piecewise
@@ -341,7 +334,7 @@ inline void calculate_gelu() {
                 sfpi::vFloat pos_one = sfpi::vConst1;
                 sfpi::vec_min_max(neg_one, erf_val);
                 sfpi::vec_min_max(erf_val, pos_one);
-                result = x * 0.5f * (1.0f + erf_val);
+                result = x * (0.5f + 0.5f * erf_val);
                 // Stuck-erff guard: when rational rounds erf to -1.0 inside computation zone,
                 // glibc/torch overestimates erfc → first stuck level = x * 2^-25.
                 constexpr float HALF_ULP_AT_1 = 2.9802322387695313e-08f;  // 2^-25
