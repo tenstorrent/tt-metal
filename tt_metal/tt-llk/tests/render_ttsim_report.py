@@ -255,11 +255,10 @@ def render(
         for color, n in [
             ("var(--ok)", passed),
             ("var(--bad)", failed + errored),
-            ("var(--warn)", skipped),
         ]:
             if n == 0:
                 continue
-            end = cur + pct(n, total)
+            end = cur + pct(n, ran)
             parts.append(f"{color} {cur:.2f}% {end:.2f}%")
             cur = end
         if not parts:
