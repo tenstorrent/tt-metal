@@ -49,6 +49,7 @@ sys.path.insert(0, str(THIS_DIR))
 import ttnn  # noqa: E402
 import utils  # noqa: E402
 import main as M  # noqa: E402
+import moe_compute_block  # noqa: E402
 
 MESH = (4, 8)
 MOE_IO = THIS_DIR / "moe_io"
@@ -97,6 +98,7 @@ def run_moe_block(
     var_70,
     var_76,
     ce_cache__main,
+    moe_state=None,
 ):
     """The MoE block of layer 1, copied verbatim from main.py._main (the code
     between the `moe_start` and `moe_end` tracy signposts). Inputs are the
@@ -315,444 +317,465 @@ def run_moe_block(
     )
     ttnn.deallocate(_dgg_indices_i32, False)
     # === END E_router_fuse ===
-    ttnn_reshape_140 = ttnn.reshape(
-        ttnn_typecast_86,
-        [32, 8, 1],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn_eq_0 = ttnn.eq(
-        ttnn_reshape_140,
-        ce_cache__main["main_const_eval_35"],
-        dtype=ttnn.DataType.BFLOAT16,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_reshape_140, False)
-    ttnn_typecast_92 = ttnn.typecast(
-        ttnn_eq_0,
-        ttnn.DataType.FLOAT32,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    # E45: matmul_29 in BF16 — input A (weights) is now BF16, input B (eq mask) skips typecast
-    ttnn_matmul_29 = ttnn.matmul(
-        ttnn_multiply_58,
-        ttnn_eq_0,
-        transpose_a=False,
-        transpose_b=False,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        dtype=ttnn.DataType.BFLOAT16,
-        program_config=None,
-        activation=None,
-        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True
-        ),
-    )
-    ttnn.deallocate(ttnn_eq_0, False)
-    ttnn.deallocate(ttnn_multiply_58, False)
-    ttnn_reshape_141 = ttnn.reshape(
-        ttnn_matmul_29,
-        [1, 32, 256],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn_concat_22 = ttnn.concat(
-        [ttnn_reshape_141, ttnn_reshape_141, ttnn_reshape_141, ttnn_reshape_141],
-        1,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_reshape_141, False)
-    ttnn_all_gather_24 = ttnn.all_gather(
-        input_tensor=ttnn_concat_22,
-        dim=1,
-        cluster_axis=0,
-        subdevice_id=None,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
-        topology=ttnn.Topology.Ring,
-    )
-    ttnn.deallocate(ttnn_concat_22, False)
-    ttnn_reshape_142 = ttnn.reshape(
-        ttnn_all_gather_24,
-        [1, 1, 512, 256],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_all_gather_24, False)
-    ttnn_reshape_143 = ttnn.reshape(
-        ttnn_typecast_78,
-        [32, 1, 1, 896],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_typecast_78, False)
-    ttnn_reshape_144 = ttnn.reshape(
-        ttnn_typecast_86,
-        [32, 1, 1, 8],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_typecast_86, False)
-    ttnn_all_gather_25 = ttnn.all_gather(
-        input_tensor=ttnn_reshape_143,
-        dim=0,
-        cluster_axis=0,
-        subdevice_id=None,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
-        topology=ttnn.Topology.Ring,
-    )
-    ttnn.deallocate(ttnn_reshape_143, False)
-    ttnn_all_gather_26 = ttnn.all_gather(
-        input_tensor=ttnn_all_gather_25,
-        dim=3,
-        cluster_axis=1,
-        subdevice_id=None,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
-        topology=ttnn.Topology.Ring,
-    )
-    ttnn.deallocate(ttnn_all_gather_25, False)
-    ttnn_all_gather_27 = ttnn.all_gather(
-        input_tensor=ttnn_reshape_144,
-        dim=0,
-        cluster_axis=0,
-        subdevice_id=None,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
-        topology=ttnn.Topology.Ring,
-    )
-    ttnn.deallocate(ttnn_reshape_144, False)
-    ttnn_to_layout_255 = ttnn.to_layout(ttnn_all_gather_26, ttnn.Layout.ROW_MAJOR, None, memory_config=None)
-    ttnn.deallocate(ttnn_all_gather_26, False)
-    ttnn_typecast_93 = ttnn.typecast(
-        ttnn_all_gather_27,
-        ttnn.DataType.UINT16,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_all_gather_27, False)
-    # E40 site 1: on-device to_layout(ROW_MAJOR) replaces from_device→to_layout→to_device round-trip
-    ttnn_to_device_65 = ttnn.to_layout(
-        ttnn_typecast_93,
-        ttnn.Layout.ROW_MAJOR,
-        None,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_typecast_93, False)
-    v_92, v_93 = ttnn.all_to_all_dispatch(
-        input_tensor=ttnn_to_layout_255,
-        expert_indices_tensor=ttnn_to_device_65,
-        expert_mapping_tensor=var_76,
-        cluster_axis=0,
-        memory_config=None,
-    )
-    ttnn.deallocate(ttnn_to_device_65, False)
-    ttnn.deallocate(ttnn_to_layout_255, False)
-    ttnn_to_layout_257 = ttnn.to_layout(v_93, ttnn.Layout.TILE, None, memory_config=None)
-    ttnn.deallocate(v_93, False)
-    ttnn_typecast_94 = ttnn.typecast(
-        ttnn_to_layout_257,
-        ttnn.DataType.INT32,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_to_layout_257, False)
-    ttnn_to_layout_258 = ttnn.to_layout(v_92, ttnn.Layout.TILE, None, memory_config=None)
-    ttnn.deallocate(v_92, False)
-    ttnn_reshape_145 = ttnn.reshape(
-        ttnn_typecast_94,
-        [1, 1, 512, 8],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_typecast_94, False)
-    # E45: typecast_95 (FP32→BF16) eliminated — reshape_142 is already BF16 after matmul_29 fold
-    ttnn_to_layout_259 = ttnn.to_layout(ttnn_reshape_142, ttnn.Layout.ROW_MAJOR, None, memory_config=None)
-    ttnn.deallocate(ttnn_reshape_142, False)
-    ttnn_typecast_96 = ttnn.typecast(
-        ttnn_reshape_145,
-        ttnn.DataType.UINT16,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_reshape_145, False)
-    # E40 site 2: on-device to_layout(ROW_MAJOR) replaces from_device→to_layout→to_device round-trip
-    ttnn_to_device_66 = ttnn.to_layout(
-        ttnn_typecast_96,
-        ttnn.Layout.ROW_MAJOR,
-        None,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_typecast_96, False)
-    v_94, v_95 = ttnn.moe_expert_token_remap(
-        topk_tensor=ttnn_to_layout_259,
-        expert_mapping_tensor=var_76,
-        expert_metadata_tensor=ttnn_to_device_66,
-        reduction_size=32,
-        memory_config=None,
-    )
-    ttnn.deallocate(v_94, False)
-    ttnn.deallocate(ttnn_to_layout_259, False)
-    ttnn_to_layout_261 = ttnn.to_layout(v_95, ttnn.Layout.TILE, None, memory_config=None)
-    ttnn_typecast_97 = ttnn.typecast(
-        ttnn_to_layout_261,
-        ttnn.DataType.FLOAT32,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_to_layout_261, False)
-    ttnn_reshape_146 = ttnn.reshape(
-        ttnn_to_layout_258,
-        [16, 1, 32, 7168],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_to_layout_258, False)
-    ttnn_reshape_147 = ttnn.reshape(
-        ttnn_typecast_97,
-        [16, 1, 1, 8],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_typecast_97, False)
-    ttnn_typecast_98 = ttnn.typecast(
-        ttnn_reshape_147,
-        ttnn.DataType.BFLOAT16,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_reshape_147, False)
-    ttnn_to_layout_262 = ttnn.to_layout(ttnn_typecast_98, ttnn.Layout.ROW_MAJOR, None, memory_config=None)
-    ttnn.deallocate(ttnn_typecast_98, False)
-    ttnn_sparse_matmul_gate_up = ttnn.sparse_matmul(
-        input_tensor_a=ttnn_reshape_146,
-        input_tensor_b=ce_cache__main["main_const_eval_gate_up"],
-        sparsity=ttnn_to_layout_262,
-        program_config=ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
-            in0_block_w=4,
-            out_subblock_h=1,
-            out_subblock_w=1,
-            out_block_h=1,
-            out_block_w=1,
-            per_core_M=1,
-            per_core_N=2,
-            fuse_batch=False,
-            fused_activation=None,
-            mcast_in0=True,
-            gather_in0=False,
-            hop_cores=ttnn.CoreRangeSet([]),
-            num_global_cb_receivers=0,
-            untilize_out=False,
-        ),
-        is_input_a_sparse=False,
-        is_input_b_sparse=True,
-        memory_config=None,
-        dtype=None,
-    )
-    ttnn.deallocate(ttnn_to_layout_262, False)
-    ttnn.deallocate(ttnn_reshape_146, False)
-    ttnn_reshape_gate_up = ttnn.reshape(
-        ttnn_sparse_matmul_gate_up,
-        [16, 8, 32, 4096],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_sparse_matmul_gate_up, False)
-    ttnn_reshape_148 = ttnn.slice(
-        ttnn_reshape_gate_up,
-        [0, 0, 0, 0],
-        [16, 8, 32, 2048],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn_reshape_149 = ttnn.slice(
-        ttnn_reshape_gate_up,
-        [0, 0, 0, 2048],
-        [16, 8, 32, 4096],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_reshape_gate_up, False)
-    ttnn_multiply_59 = ttnn.multiply(
-        ttnn_reshape_148,
-        ttnn_reshape_149,
-        dtype=ttnn.DataType.BFLOAT16,
-        input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_reshape_149, False)
-    ttnn.deallocate(ttnn_reshape_148, False)
-    # E40 site 3: on-device typecast replaces from_device→typecast→to_device round-trip
-    ttnn_to_device_67 = ttnn.typecast(
-        v_95,
-        ttnn.DataType.BFLOAT16,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(v_95, False)
-    ttnn_sparse_matmul_2 = ttnn.sparse_matmul(
-        input_tensor_a=ttnn_multiply_59,
-        input_tensor_b=ce_cache__main["main_const_eval_39"],
-        sparsity=ttnn_to_device_67,
-        program_config=ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(8, 7),
-            in0_block_w=4,
-            out_subblock_h=1,
-            out_subblock_w=1,
-            out_block_h=1,
-            out_block_w=1,
-            per_core_M=1,
-            per_core_N=4,
-            fuse_batch=False,
-            fused_activation=None,
-            mcast_in0=True,
-            gather_in0=False,
-            hop_cores=ttnn.CoreRangeSet([]),
-            num_global_cb_receivers=0,
-            untilize_out=False,
-        ),
-        is_input_a_sparse=True,
-        is_input_b_sparse=False,
-        memory_config=None,
-        dtype=None,
-    )
-    ttnn.deallocate(ttnn_to_device_67, False)
-    ttnn.deallocate(ttnn_multiply_59, False)
-    ttnn_permute_44 = ttnn.permute(
-        ttnn_sparse_matmul_2,
-        [1, 0, 2, 3],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        pad_value=0.0,
-    )
-    ttnn.deallocate(ttnn_sparse_matmul_2, False)
-    ttnn_reshape_150 = ttnn.reshape(
-        ttnn_permute_44,
-        [8, 1, 512, 7168],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_permute_44, False)
-    ttnn_to_layout_263 = ttnn.to_layout(ttnn_reshape_150, ttnn.Layout.ROW_MAJOR, None, memory_config=None)
-    ttnn.deallocate(ttnn_reshape_150, False)
-    ttnn_all_to_all_combine_0 = ttnn.all_to_all_combine(
-        input_tensor=ttnn_to_layout_263,
-        expert_metadata_tensor=ttnn_to_device_66,
-        expert_mapping_tensor=var_76,
-        cluster_axis=0,
-        output_shard_dim=2,
-        memory_config=None,
-    )
-    ttnn.deallocate(ttnn_to_layout_263, False)
-    ttnn.deallocate(ttnn_to_device_66, False)
-    ttnn_post_combine_tilized = ttnn.experimental.deepseek_moe_post_combine_tilize(
-        ttnn_all_to_all_combine_0,
-        output_memory_config=ttnn.MemoryConfig(
-            buffer_type=ttnn.BufferType.L1,
-            nd_shard_spec=ttnn.NdShardSpec(
-                shard_shape=ttnn.Shape([32, 3584]),
-                grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))]),
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    # OPT-IN: moe_compute routed-expert path when moe_state is provided (MOE_USE_COMPUTE=1).
+    # Default (moe_state is None) = the working sparse_matmul path below (PCC=1.0). The
+    # moe_compute path currently HANGS on this 4x8 BH mesh at the combine — see MOE_COMPUTE_JOURNAL.md.
+    if moe_state is not None:
+        ttnn_typecast_101 = moe_compute_block.run_routed_experts(
+            ttnn_typecast_78, ttnn_typecast_86, ttnn_multiply_58, moe_state
+        )
+    else:
+        ttnn_reshape_140 = ttnn.reshape(
+            ttnn_typecast_86,
+            [32, 8, 1],
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn_eq_0 = ttnn.eq(
+            ttnn_reshape_140,
+            ce_cache__main["main_const_eval_35"],
+            dtype=ttnn.DataType.BFLOAT16,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_reshape_140, False)
+        ttnn_typecast_92 = ttnn.typecast(
+            ttnn_eq_0,
+            ttnn.DataType.FLOAT32,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        # E45: matmul_29 in BF16 — input A (weights) is now BF16, input B (eq mask) skips typecast
+        ttnn_matmul_29 = ttnn.matmul(
+            ttnn_multiply_58,
+            ttnn_eq_0,
+            transpose_a=False,
+            transpose_b=False,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+            dtype=ttnn.DataType.BFLOAT16,
+            program_config=None,
+            activation=None,
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True
             ),
-        ),
-    )
-    ttnn.deallocate(ttnn_all_to_all_combine_0, False)
-    ttnn_to_layout_264 = ttnn.to_memory_config(
-        ttnn_post_combine_tilized,
-        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_post_combine_tilized, False)
-    # E49: fuse the post-MoE reduce_scatter_10 + all_gather_28 (both cluster_axis=1, dim=3)
-    # into one ttnn.experimental.all_reduce_async using the rotating semaphore pool.
-    _ar0_slot = _ccl_next_slot()
-    ttnn_all_reduce_0 = ttnn.experimental.all_reduce_async(
-        ttnn_to_layout_264,
-        cluster_axis=1,
-        mesh_device=utils.DeviceGetter.get_device((4, 8)),
-        barrier_semaphores=ce_cache__main["main_const_eval_all_reduce_pool_barrier"][_ar0_slot],
-        rs_global_semaphores=ce_cache__main["main_const_eval_all_reduce_pool_rs"][_ar0_slot],
-        ag_global_semaphores=ce_cache__main["main_const_eval_all_reduce_pool_ag"][_ar0_slot],
-        math_op=ttnn.ReduceType.Sum,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_to_layout_264, False)
-    ttnn_to_layout_265 = ttnn.to_layout(ttnn_all_reduce_0, ttnn.Layout.ROW_MAJOR, None, memory_config=None)
-    ttnn.deallocate(ttnn_all_reduce_0, False)
-    ttnn_mesh_partition_3 = ttnn.mesh_partition(
-        input_tensor=ttnn_to_layout_265,
-        dim=2,
-        cluster_axis=0,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_to_layout_265, False)
-    ttnn_mesh_partition_4 = ttnn.mesh_partition(
-        input_tensor=ttnn_mesh_partition_3,
-        dim=3,
-        cluster_axis=1,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_mesh_partition_3, False)
-    ttnn_to_layout_266 = ttnn.to_layout(ttnn_mesh_partition_4, ttnn.Layout.TILE, None, memory_config=None)
-    ttnn.deallocate(ttnn_mesh_partition_4, False)
-    ttnn_typecast_100 = ttnn.typecast(
-        ttnn_to_layout_266,
-        ttnn.DataType.FLOAT32,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_to_layout_266, False)
-    ttnn_reshape_151 = ttnn.reshape(
-        ttnn_matmul_29,
-        [32, 256, 1],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_matmul_29, False)
-    # E45: matmul_30 still wants FP32 inputs — cast the BF16 matmul_29 result back to FP32
-    ttnn_reshape_151_fp32 = ttnn.typecast(
-        ttnn_reshape_151,
-        ttnn.DataType.FLOAT32,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_reshape_151, False)
-    ttnn_matmul_30 = ttnn.matmul(
-        ttnn_typecast_92,
-        ttnn_reshape_151_fp32,
-        transpose_a=False,
-        transpose_b=False,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        dtype=ttnn.DataType.FLOAT32,
-        program_config=None,
-        activation=None,
-        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
-        ),
-    )
-    ttnn.deallocate(ttnn_reshape_151_fp32, False)
-    ttnn.deallocate(ttnn_typecast_92, False)
-    ttnn_reshape_152 = ttnn.reshape(
-        ttnn_matmul_30,
-        [32, 8],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_matmul_30, False)
-    ttnn_permute_45 = ttnn.permute(
-        ttnn_reshape_152,
-        [1, 0],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        pad_value=0.0,
-    )
-    ttnn.deallocate(ttnn_reshape_152, False)
-    ttnn_reshape_153 = ttnn.reshape(
-        ttnn_permute_45,
-        [8, 1, 32, 1],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_permute_45, False)
-    ttnn_multiply_60 = ttnn.multiply(
-        ttnn_typecast_100,
-        ttnn_reshape_153,
-        dtype=ttnn.DataType.FLOAT32,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_reshape_153, False)
-    ttnn.deallocate(ttnn_typecast_100, False)
-    ttnn_sum_18 = ttnn.sum(
-        ttnn_multiply_60,
-        [0],
-        False,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
-        ),
-    )
-    ttnn.deallocate(ttnn_multiply_60, False)
-    ttnn_typecast_101 = ttnn.typecast(
-        ttnn_sum_18,
-        ttnn.DataType.BFLOAT16,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_sum_18, False)
+        )
+        ttnn.deallocate(ttnn_eq_0, False)
+        ttnn.deallocate(ttnn_multiply_58, False)
+        ttnn_reshape_141 = ttnn.reshape(
+            ttnn_matmul_29,
+            [1, 32, 256],
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn_concat_22 = ttnn.concat(
+            [ttnn_reshape_141, ttnn_reshape_141, ttnn_reshape_141, ttnn_reshape_141],
+            1,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_reshape_141, False)
+        ttnn_all_gather_24 = ttnn.all_gather(
+            input_tensor=ttnn_concat_22,
+            dim=1,
+            cluster_axis=0,
+            subdevice_id=None,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+            num_links=None,
+            topology=ttnn.Topology.Ring,
+        )
+        ttnn.deallocate(ttnn_concat_22, False)
+        ttnn_reshape_142 = ttnn.reshape(
+            ttnn_all_gather_24,
+            [1, 1, 512, 256],
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_all_gather_24, False)
+        ttnn_reshape_143 = ttnn.reshape(
+            ttnn_typecast_78,
+            [32, 1, 1, 896],
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_typecast_78, False)
+        ttnn_reshape_144 = ttnn.reshape(
+            ttnn_typecast_86,
+            [32, 1, 1, 8],
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_typecast_86, False)
+        ttnn_all_gather_25 = ttnn.all_gather(
+            input_tensor=ttnn_reshape_143,
+            dim=0,
+            cluster_axis=0,
+            subdevice_id=None,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+            num_links=None,
+            topology=ttnn.Topology.Ring,
+        )
+        ttnn.deallocate(ttnn_reshape_143, False)
+        ttnn_all_gather_26 = ttnn.all_gather(
+            input_tensor=ttnn_all_gather_25,
+            dim=3,
+            cluster_axis=1,
+            subdevice_id=None,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+            num_links=None,
+            topology=ttnn.Topology.Ring,
+        )
+        ttnn.deallocate(ttnn_all_gather_25, False)
+        ttnn_all_gather_27 = ttnn.all_gather(
+            input_tensor=ttnn_reshape_144,
+            dim=0,
+            cluster_axis=0,
+            subdevice_id=None,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+            num_links=None,
+            topology=ttnn.Topology.Ring,
+        )
+        ttnn.deallocate(ttnn_reshape_144, False)
+        ttnn_to_layout_255 = ttnn.to_layout(ttnn_all_gather_26, ttnn.Layout.ROW_MAJOR, None, memory_config=None)
+        ttnn.deallocate(ttnn_all_gather_26, False)
+        ttnn_typecast_93 = ttnn.typecast(
+            ttnn_all_gather_27,
+            ttnn.DataType.UINT16,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_all_gather_27, False)
+        # E40 site 1: on-device to_layout(ROW_MAJOR) replaces from_device→to_layout→to_device round-trip
+        ttnn_to_device_65 = ttnn.to_layout(
+            ttnn_typecast_93,
+            ttnn.Layout.ROW_MAJOR,
+            None,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_typecast_93, False)
+        v_92, v_93 = ttnn.all_to_all_dispatch(
+            input_tensor=ttnn_to_layout_255,
+            expert_indices_tensor=ttnn_to_device_65,
+            expert_mapping_tensor=var_76,
+            cluster_axis=0,
+            memory_config=None,
+        )
+        ttnn.deallocate(ttnn_to_device_65, False)
+        ttnn.deallocate(ttnn_to_layout_255, False)
+        ttnn_to_layout_257 = ttnn.to_layout(v_93, ttnn.Layout.TILE, None, memory_config=None)
+        ttnn.deallocate(v_93, False)
+        ttnn_typecast_94 = ttnn.typecast(
+            ttnn_to_layout_257,
+            ttnn.DataType.INT32,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_to_layout_257, False)
+        ttnn_to_layout_258 = ttnn.to_layout(v_92, ttnn.Layout.TILE, None, memory_config=None)
+        ttnn.deallocate(v_92, False)
+        ttnn_reshape_145 = ttnn.reshape(
+            ttnn_typecast_94,
+            [1, 1, 512, 8],
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_typecast_94, False)
+        # E45: typecast_95 (FP32→BF16) eliminated — reshape_142 is already BF16 after matmul_29 fold
+        ttnn_to_layout_259 = ttnn.to_layout(ttnn_reshape_142, ttnn.Layout.ROW_MAJOR, None, memory_config=None)
+        ttnn.deallocate(ttnn_reshape_142, False)
+        ttnn_typecast_96 = ttnn.typecast(
+            ttnn_reshape_145,
+            ttnn.DataType.UINT16,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_reshape_145, False)
+        # E40 site 2: on-device to_layout(ROW_MAJOR) replaces from_device→to_layout→to_device round-trip
+        ttnn_to_device_66 = ttnn.to_layout(
+            ttnn_typecast_96,
+            ttnn.Layout.ROW_MAJOR,
+            None,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_typecast_96, False)
+        v_94, v_95 = ttnn.moe_expert_token_remap(
+            topk_tensor=ttnn_to_layout_259,
+            expert_mapping_tensor=var_76,
+            expert_metadata_tensor=ttnn_to_device_66,
+            reduction_size=32,
+            memory_config=None,
+        )
+        ttnn.deallocate(v_94, False)
+        ttnn.deallocate(ttnn_to_layout_259, False)
+        ttnn_to_layout_261 = ttnn.to_layout(v_95, ttnn.Layout.TILE, None, memory_config=None)
+        ttnn_typecast_97 = ttnn.typecast(
+            ttnn_to_layout_261,
+            ttnn.DataType.FLOAT32,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_to_layout_261, False)
+        ttnn_reshape_146 = ttnn.reshape(
+            ttnn_to_layout_258,
+            [16, 1, 32, 7168],
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_to_layout_258, False)
+        ttnn_reshape_147 = ttnn.reshape(
+            ttnn_typecast_97,
+            [16, 1, 1, 8],
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_typecast_97, False)
+        ttnn_typecast_98 = ttnn.typecast(
+            ttnn_reshape_147,
+            ttnn.DataType.BFLOAT16,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_reshape_147, False)
+        ttnn_to_layout_262 = ttnn.to_layout(ttnn_typecast_98, ttnn.Layout.ROW_MAJOR, None, memory_config=None)
+        ttnn.deallocate(ttnn_typecast_98, False)
+        ttnn_sparse_matmul_gate_up = ttnn.sparse_matmul(
+            input_tensor_a=ttnn_reshape_146,
+            input_tensor_b=ce_cache__main["main_const_eval_gate_up"],
+            sparsity=ttnn_to_layout_262,
+            program_config=ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+                in0_block_w=4,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                out_block_h=1,
+                out_block_w=1,
+                per_core_M=1,
+                per_core_N=2,
+                fuse_batch=False,
+                fused_activation=None,
+                mcast_in0=True,
+                gather_in0=False,
+                hop_cores=ttnn.CoreRangeSet([]),
+                num_global_cb_receivers=0,
+                untilize_out=False,
+            ),
+            is_input_a_sparse=False,
+            is_input_b_sparse=True,
+            memory_config=None,
+            dtype=None,
+        )
+        ttnn.deallocate(ttnn_to_layout_262, False)
+        ttnn.deallocate(ttnn_reshape_146, False)
+        ttnn_reshape_gate_up = ttnn.reshape(
+            ttnn_sparse_matmul_gate_up,
+            [16, 8, 32, 4096],
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_sparse_matmul_gate_up, False)
+        ttnn_reshape_148 = ttnn.slice(
+            ttnn_reshape_gate_up,
+            [0, 0, 0, 0],
+            [16, 8, 32, 2048],
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn_reshape_149 = ttnn.slice(
+            ttnn_reshape_gate_up,
+            [0, 0, 0, 2048],
+            [16, 8, 32, 4096],
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_reshape_gate_up, False)
+        ttnn_multiply_59 = ttnn.multiply(
+            ttnn_reshape_148,
+            ttnn_reshape_149,
+            dtype=ttnn.DataType.BFLOAT16,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_reshape_149, False)
+        ttnn.deallocate(ttnn_reshape_148, False)
+        # E40 site 3: on-device typecast replaces from_device→typecast→to_device round-trip
+        ttnn_to_device_67 = ttnn.typecast(
+            v_95,
+            ttnn.DataType.BFLOAT16,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(v_95, False)
+        ttnn_sparse_matmul_2 = ttnn.sparse_matmul(
+            input_tensor_a=ttnn_multiply_59,
+            input_tensor_b=ce_cache__main["main_const_eval_39"],
+            sparsity=ttnn_to_device_67,
+            program_config=ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(8, 7),
+                in0_block_w=4,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                out_block_h=1,
+                out_block_w=1,
+                per_core_M=1,
+                per_core_N=4,
+                fuse_batch=False,
+                fused_activation=None,
+                mcast_in0=True,
+                gather_in0=False,
+                hop_cores=ttnn.CoreRangeSet([]),
+                num_global_cb_receivers=0,
+                untilize_out=False,
+            ),
+            is_input_a_sparse=True,
+            is_input_b_sparse=False,
+            memory_config=None,
+            dtype=None,
+        )
+        ttnn.deallocate(ttnn_to_device_67, False)
+        ttnn.deallocate(ttnn_multiply_59, False)
+        ttnn_permute_44 = ttnn.permute(
+            ttnn_sparse_matmul_2,
+            [1, 0, 2, 3],
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+            pad_value=0.0,
+        )
+        ttnn.deallocate(ttnn_sparse_matmul_2, False)
+        ttnn_reshape_150 = ttnn.reshape(
+            ttnn_permute_44,
+            [8, 1, 512, 7168],
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_permute_44, False)
+        ttnn_to_layout_263 = ttnn.to_layout(ttnn_reshape_150, ttnn.Layout.ROW_MAJOR, None, memory_config=None)
+        ttnn.deallocate(ttnn_reshape_150, False)
+        ttnn_all_to_all_combine_0 = ttnn.all_to_all_combine(
+            input_tensor=ttnn_to_layout_263,
+            expert_metadata_tensor=ttnn_to_device_66,
+            expert_mapping_tensor=var_76,
+            cluster_axis=0,
+            output_shard_dim=2,
+            memory_config=None,
+        )
+        ttnn.deallocate(ttnn_to_layout_263, False)
+        ttnn.deallocate(ttnn_to_device_66, False)
+        ttnn_post_combine_tilized = ttnn.experimental.deepseek_moe_post_combine_tilize(
+            ttnn_all_to_all_combine_0,
+            output_memory_config=ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                nd_shard_spec=ttnn.NdShardSpec(
+                    shard_shape=ttnn.Shape([32, 3584]),
+                    grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))]),
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+        )
+        ttnn.deallocate(ttnn_all_to_all_combine_0, False)
+        ttnn_to_layout_264 = ttnn.to_memory_config(
+            ttnn_post_combine_tilized,
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_post_combine_tilized, False)
+        # E49: fuse the post-MoE reduce_scatter_10 + all_gather_28 (both cluster_axis=1, dim=3)
+        # into one ttnn.experimental.all_reduce_async using the rotating semaphore pool.
+        _ar0_slot = _ccl_next_slot()
+        ttnn_all_reduce_0 = ttnn.experimental.all_reduce_async(
+            ttnn_to_layout_264,
+            cluster_axis=1,
+            mesh_device=utils.DeviceGetter.get_device((4, 8)),
+            barrier_semaphores=ce_cache__main["main_const_eval_all_reduce_pool_barrier"][_ar0_slot],
+            rs_global_semaphores=ce_cache__main["main_const_eval_all_reduce_pool_rs"][_ar0_slot],
+            ag_global_semaphores=ce_cache__main["main_const_eval_all_reduce_pool_ag"][_ar0_slot],
+            math_op=ttnn.ReduceType.Sum,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_to_layout_264, False)
+        ttnn_to_layout_265 = ttnn.to_layout(ttnn_all_reduce_0, ttnn.Layout.ROW_MAJOR, None, memory_config=None)
+        ttnn.deallocate(ttnn_all_reduce_0, False)
+        ttnn_mesh_partition_3 = ttnn.mesh_partition(
+            input_tensor=ttnn_to_layout_265,
+            dim=2,
+            cluster_axis=0,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_to_layout_265, False)
+        ttnn_mesh_partition_4 = ttnn.mesh_partition(
+            input_tensor=ttnn_mesh_partition_3,
+            dim=3,
+            cluster_axis=1,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_mesh_partition_3, False)
+        ttnn_to_layout_266 = ttnn.to_layout(ttnn_mesh_partition_4, ttnn.Layout.TILE, None, memory_config=None)
+        ttnn.deallocate(ttnn_mesh_partition_4, False)
+        ttnn_typecast_100 = ttnn.typecast(
+            ttnn_to_layout_266,
+            ttnn.DataType.FLOAT32,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_to_layout_266, False)
+        ttnn_reshape_151 = ttnn.reshape(
+            ttnn_matmul_29,
+            [32, 256, 1],
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_matmul_29, False)
+        # E45: matmul_30 still wants FP32 inputs — cast the BF16 matmul_29 result back to FP32
+        ttnn_reshape_151_fp32 = ttnn.typecast(
+            ttnn_reshape_151,
+            ttnn.DataType.FLOAT32,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_reshape_151, False)
+        ttnn_matmul_30 = ttnn.matmul(
+            ttnn_typecast_92,
+            ttnn_reshape_151_fp32,
+            transpose_a=False,
+            transpose_b=False,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+            dtype=ttnn.DataType.FLOAT32,
+            program_config=None,
+            activation=None,
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+            ),
+        )
+        ttnn.deallocate(ttnn_reshape_151_fp32, False)
+        ttnn.deallocate(ttnn_typecast_92, False)
+        ttnn_reshape_152 = ttnn.reshape(
+            ttnn_matmul_30,
+            [32, 8],
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_matmul_30, False)
+        ttnn_permute_45 = ttnn.permute(
+            ttnn_reshape_152,
+            [1, 0],
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+            pad_value=0.0,
+        )
+        ttnn.deallocate(ttnn_reshape_152, False)
+        ttnn_reshape_153 = ttnn.reshape(
+            ttnn_permute_45,
+            [8, 1, 32, 1],
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_permute_45, False)
+        ttnn_multiply_60 = ttnn.multiply(
+            ttnn_typecast_100,
+            ttnn_reshape_153,
+            dtype=ttnn.DataType.FLOAT32,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_reshape_153, False)
+        ttnn.deallocate(ttnn_typecast_100, False)
+        ttnn_sum_18 = ttnn.sum(
+            ttnn_multiply_60,
+            [0],
+            False,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+            ),
+        )
+        ttnn.deallocate(ttnn_multiply_60, False)
+        ttnn_typecast_101 = ttnn.typecast(
+            ttnn_sum_18,
+            ttnn.DataType.BFLOAT16,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        )
+        ttnn.deallocate(ttnn_sum_18, False)
+    if os.environ.get("MOE_DUMP_ROUTED"):
+        # DIAGNOSTIC: dump the routed output (ttnn_typecast_101) for sparse-vs-moe_compute compare.
+        # The sparse path's routed output is golden (sparse → e2e PCC=1.0), so routed_sparse.pt is
+        # the reference for routed_moe.pt. Compares per-device-0 shard.
+        _tag = "moe" if moe_state is not None else "sparse"
+        _dev = ttnn_typecast_101.device()
+        _r = ttnn.to_torch(ttnn_typecast_101, mesh_composer=ttnn.ConcatMeshToTensor(_dev, dim=0)).float()
+        torch.save(_r, str(THIS_DIR / "moe_io" / f"routed_{_tag}.pt"))
+        print(
+            f"[moe_dbg] dumped routed_{_tag} (full mesh): shape={tuple(_r.shape)} "
+            f"norm={_r.norm():.4f} mean={_r.mean():.6f} absmax={_r.abs().max():.4f}",
+            flush=True,
+        )
     ttnn_matmul_31 = ttnn.matmul(
         ttnn_reshape_120,
         ce_cache__main["main_const_eval_19"],
@@ -1007,6 +1030,19 @@ def main() -> int:
     var_76 = ce["main_const_eval_37"]
     timings["ce_cache_load"] = time.perf_counter() - t
 
+    # 1b) OPT-IN moe_compute state (MOE_USE_COMPUTE=1): bf4 weight prep [disk-cached],
+    #     canonical expert_mapping, semaphores, buffers. Built outside the moe_block timing.
+    #     moe_state stays None for the default sparse_matmul path.
+    moe_state = None
+    if os.environ.get("MOE_USE_COMPUTE") == "1":
+        t = time.perf_counter()
+        moe_state = moe_compute_block.MoEComputeState(
+            M.ce_cache__main, var_76, device, rebuild_weights="--rebuild-moe-weights" in sys.argv
+        )
+        timings["moe_setup"] = time.perf_counter() - t
+    else:
+        timings["moe_setup"] = 0.0
+
     # 2) Captured live-in activations.
     t = time.perf_counter()
     ttnn_add_22 = _load_to_device(MOE_IO / "in_ttnn_add_22.tensorbin", device)
@@ -1027,6 +1063,7 @@ def main() -> int:
         var_70,
         var_76,
         M.ce_cache__main,
+        moe_state,
     )
     ttnn.synchronize_device(device)
     timings["moe_block"] = time.perf_counter() - t
@@ -1042,6 +1079,8 @@ def main() -> int:
         gold = _load_to_device(MOE_IO / f"out_{name}.tensorbin", device)
         a = _to_torch(got, device)
         b = _to_torch(gold, device)
+        if os.environ.get("MOE_DUMP_ROUTED"):
+            torch.save(a, str(MOE_IO / f"{name}_{'moe' if moe_state is not None else 'sparse'}.pt"))
         if a.shape != b.shape:
             print(f"  {name}: SHAPE MISMATCH got {tuple(a.shape)} vs golden {tuple(b.shape)}")
             all_pass = False
@@ -1055,7 +1094,7 @@ def main() -> int:
     print(("\nPASS: MoE block matches e2e golden." if all_pass else "\nFAIL: MoE block diverged from e2e golden."))
 
     print("\n=== timings (s) ===")
-    for k in ("device_open", "ce_cache_load", "input_load", "moe_block"):
+    for k in ("device_open", "ce_cache_load", "moe_setup", "input_load", "moe_block"):
         print(f"  {k:14s}: {timings[k]:8.3f}")
     print(
         f"  {'TOTAL_measured':14s}: {sum(timings.values()):8.3f}  "
