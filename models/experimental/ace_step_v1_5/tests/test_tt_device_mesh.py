@@ -153,6 +153,7 @@ def test_mesh_host_preprocess_env_disables_split_ttnn(monkeypatch):
 
 def test_restrict_cluster_visibility_for_preprocess(monkeypatch):
     from models.experimental.ace_step_v1_5.utils.tt_device import (
+        _ensure_full_cluster_env_for_dit,
         _restrict_cluster_to_preprocess_chip,
         _restore_cluster_visibility,
     )
@@ -171,6 +172,16 @@ def test_restrict_cluster_visibility_for_preprocess(monkeypatch):
     assert os.environ["TT_VISIBLE_DEVICES"] == "0,1,2,3"
 
     assert _restrict_cluster_to_preprocess_chip("P150", 0) is None
+
+    monkeypatch.delenv("TT_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("TT_METAL_FORCE_REINIT", raising=False)
+    dit_saved = _ensure_full_cluster_env_for_dit("BH_QB")
+    assert dit_saved is not None
+    assert "TT_VISIBLE_DEVICES" not in os.environ
+    assert os.environ.get("TT_METAL_FORCE_REINIT") == "1"
+    assert os.environ.get("TT_MESH_GRAPH_DESC_PATH", "").endswith("p300_x2_mesh_graph_descriptor.textproto")
+    _restore_cluster_visibility(dit_saved)
+    assert "TT_METAL_FORCE_REINIT" not in os.environ
 
 
 def test_mesh_use_adg_defaults():
@@ -321,6 +332,24 @@ def test_mesh_use_pytorch_condition_opt_in(monkeypatch):
     monkeypatch.setenv("ACE_STEP_PYTORCH_CONDITION", "1")
     assert ace_step_mesh_use_pytorch_condition(mesh_sku="BH_QB", duration_sec=60.0, latent_frames=1500)
     assert ace_step_mesh_use_pytorch_condition(mesh_sku="P150", duration_sec=15.0, latent_frames=375)
+
+
+def test_merge_user_instruments_into_caption():
+    from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import (
+        instrument_mentioned_in_caption,
+        instruments_missing_from_caption,
+        merge_user_instruments_into_caption,
+        split_prompt_instruments,
+    )
+
+    user = "guitar, saxaphone and drums"
+    assert split_prompt_instruments(user) == ["guitar", "saxaphone", "drums"]
+    cot = "A jazz piece with electric guitar and saxophone."
+    assert instruments_missing_from_caption(user, cot) == ["drums"]
+    merged, missing = merge_user_instruments_into_caption(user, cot)
+    assert missing == ["drums"]
+    assert instrument_mentioned_in_caption("drums", merged)
+    assert "drums" in merged.lower()
 
 
 def test_mesh_audio_cover_strength_defaults(monkeypatch):

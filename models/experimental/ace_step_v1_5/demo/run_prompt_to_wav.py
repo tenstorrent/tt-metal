@@ -846,6 +846,15 @@ def main() -> None:
             "when the 5 Hz LM runs on this pass."
         ),
     )
+    ap.add_argument(
+        "--no-use-cot-caption",
+        action="store_true",
+        help=(
+            "Use the exact --prompt for DiT text conditioning (skip LM caption rewrite in CoT Phase 1). "
+            "Default: LM generates a richer caption (recommended for most prompts). "
+            "Use this flag for multi-instrument lists like 'guitar, saxophone and drums'."
+        ),
+    )
     ap.add_argument("--ace-step-dit-handoff", type=str, default=None, help=argparse.SUPPRESS)
     args = ap.parse_args()
     dit_handoff_mode = args.ace_step_dit_handoff is not None
@@ -1101,19 +1110,36 @@ def main() -> None:
     from models.experimental.ace_step_v1_5.demo.demo_session import AceStepDemoSession
 
     demo_session = AceStepDemoSession()
+    _handoff_deferred_payload = None
+    _handoff_frames: int | None = None
+    _dit_handoff_env_saved: dict[str, str | None] | None = None
     if dit_handoff_mode:
         import pickle
 
         with open(args.ace_step_dit_handoff, "rb") as f:
             handoff = pickle.load(f)
-        demo_session.cached_preprocess = handoff["cached_preprocess"]
+        demo_session.cached_preprocess = handoff.get("cached_preprocess")
+        _handoff_deferred_payload = handoff.get("deferred_condition_payload")
+        if handoff.get("frames") is not None:
+            _handoff_frames = int(handoff["frames"])
         try:
             os.unlink(args.ace_step_dit_handoff)
         except OSError:
             pass
-        print("[ace_step_v1_5] DiT handoff: loaded preprocess cache, opening full mesh", flush=True)
+        if _handoff_deferred_payload is not None:
+            print(
+                "[ace_step_v1_5] DiT handoff: deferred condition payload loaded "
+                "(Phase A LM/preprocess done; opening full mesh for condition+DiT)",
+                flush=True,
+            )
+        else:
+            print("[ace_step_v1_5] DiT handoff: loaded preprocess cache, opening full mesh", flush=True)
         use_ttnn_5hz_lm = False
         args.pytorch_lm = True
+        if split_device:
+            _dit_handoff_env_saved = _ensure_full_cluster_env_for_dit(mesh_sku)
+        else:
+            _dit_handoff_env_saved = None
     if demo_session.session_perf.session_t0 is None:
         demo_session.session_perf.session_t0 = time.perf_counter()
 
@@ -1152,7 +1178,7 @@ def main() -> None:
     enc_hs_tt_one = None
     ctx_tt_one = None
     null_emb_tt = None
-    payload_for_mesh_condition = None
+    payload_for_mesh_condition = _handoff_deferred_payload
     defer_condition_to_dit_mesh = (
         bool(mesh_ttnn_preprocess)
         and split_device
@@ -1277,6 +1303,12 @@ def main() -> None:
         duration_sec=float(args.duration_sec),
         seed=int(args.seed),
     )
+    handoff_deferred = (
+        dit_handoff_mode
+        and payload_for_mesh_condition is not None
+        and demo_session.cached_preprocess is None
+        and _handoff_frames is not None
+    )
     if reuse_preprocess:
         cached = demo_session.cached_preprocess
         assert cached is not None
@@ -1312,6 +1344,35 @@ def main() -> None:
             "[ace_step_v1_5] reusing cached preprocess tensors (skip 5 Hz LM + condition encode on this pass)",
             flush=True,
         )
+    elif handoff_deferred:
+        frames = int(_handoff_frames)
+        perf.set_params(frames=frames)
+        _configure_vae_quality(
+            frames=int(frames),
+            mesh_sku=mesh_sku,
+            duration_sec=float(args.duration_sec),
+            clarity=bool(effective_clarity),
+        )
+        _log_mesh_decode_quality_health(
+            duration_sec=float(args.duration_sec),
+            frames=int(frames),
+            mesh_sku=mesh_sku,
+            clarity=bool(effective_clarity),
+            use_trace=bool(args.use_trace),
+            vae_overlap_cli=int(vae_overlap_latents),
+            vae_chunk_cli=int(vae_chunk_latents),
+            condition_backend="pytorch" if use_pytorch_condition else "ttnn",
+            dit_backend="pytorch" if use_pytorch_dit else "ttnn",
+        )
+        condition_tensors_on_device = False
+        enc_hs_tt_one = None
+        ctx_tt_one = None
+        null_emb_tt = None
+        dev_opened_for_ttnn_text_encoder = False
+        print(
+            "[ace_step_v1_5] DiT handoff: skip LM/preprocess; condition encode on full mesh next",
+            flush=True,
+        )
     else:
         params = GenerationParams(
             task_type="text2music",
@@ -1333,6 +1394,7 @@ def main() -> None:
             cfg_interval_end=cfg_interval_end,
             shift=1.0,
             thinking=True,
+            use_cot_caption=not bool(args.no_use_cot_caption),
             use_constrained_decoding=True,
             timesteps=None,
             audio_cover_strength=float(_mesh_audio_cover_strength),
@@ -1668,33 +1730,56 @@ def main() -> None:
     if demo_session.dit_dev is not None:
         dev = demo_session.dit_dev
         dev_opened_for_ttnn_text_encoder = True
-    elif split_device and dev_opened_for_ttnn_text_encoder and dev is not None:
-        import sys
-
-        if demo_session.cached_preprocess is None:
-            if condition_tensors_on_device:
-                enc_hs = ace_step_ttnn_to_torch(enc_hs_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
-                ctx_lat = ace_step_ttnn_to_torch(ctx_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
-                null_emb = ace_step_ttnn_to_torch(null_emb_tt, mesh_device=dev, dtype=torch.float32).cpu()
-            demo_session.store_preprocess(
-                prompt=run_prompt,
-                duration_sec=float(args.duration_sec),
-                seed=int(args.seed),
-                frames=int(frames),
-                enc_hs=enc_hs,
-                enc_mask=enc_mask,
-                ctx_lat=ctx_lat,
-                null_emb=null_emb,
-            )
-        ace_step_reexec_for_dit_mesh(
-            ttnn,
-            preprocess_dev=dev,
-            cached_preprocess=demo_session.cached_preprocess,
-            mesh_sku=mesh_sku,
-            argv=sys.argv,
+    else:
+        _preprocess_dev_for_handoff = dev if dev is not None else demo_session.preprocess_dev
+        _should_reexec_dit_mesh = (
+            split_device
+            and not dit_handoff_mode
+            and _preprocess_dev_for_handoff is not None
+            and (payload_for_mesh_condition is not None or not condition_tensors_on_device)
         )
-    elif not dev_opened_for_ttnn_text_encoder:
-        dit_env_saved = _ensure_full_cluster_env_for_dit(mesh_sku)
+        if _should_reexec_dit_mesh:
+            import sys
+
+            if payload_for_mesh_condition is not None:
+                ace_step_reexec_for_dit_mesh(
+                    ttnn,
+                    preprocess_dev=_preprocess_dev_for_handoff,
+                    mesh_sku=mesh_sku,
+                    argv=sys.argv,
+                    deferred_condition_payload=payload_for_mesh_condition,
+                    frames=int(frames),
+                )
+            else:
+                if demo_session.cached_preprocess is None:
+                    if not condition_tensors_on_device:
+                        raise RuntimeError(
+                            "Internal error: split preprocess finished without condition tensors or deferred payload"
+                        )
+                    enc_hs = ace_step_ttnn_to_torch(enc_hs_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
+                    ctx_lat = ace_step_ttnn_to_torch(ctx_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
+                    null_emb = ace_step_ttnn_to_torch(null_emb_tt, mesh_device=dev, dtype=torch.float32).cpu()
+                    demo_session.store_preprocess(
+                        prompt=run_prompt,
+                        duration_sec=float(args.duration_sec),
+                        seed=int(args.seed),
+                        frames=int(frames),
+                        enc_hs=enc_hs,
+                        enc_mask=enc_mask,
+                        ctx_lat=ctx_lat,
+                        null_emb=null_emb,
+                    )
+                ace_step_reexec_for_dit_mesh(
+                    ttnn,
+                    preprocess_dev=_preprocess_dev_for_handoff,
+                    mesh_sku=mesh_sku,
+                    argv=sys.argv,
+                    cached_preprocess=demo_session.cached_preprocess,
+                )
+    if dev is None and demo_session.dit_dev is None:
+        dit_env_saved = _dit_handoff_env_saved if dit_handoff_mode else None
+        if dit_env_saved is None:
+            dit_env_saved = _ensure_full_cluster_env_for_dit(mesh_sku)
         try:
             dev = open_dit_device(
                 ttnn,
@@ -1761,7 +1846,7 @@ def main() -> None:
                 build_non_cover_condition_payload,
             )
 
-            nc_payload = build_non_cover_condition_payload(payload_for_mesh_condition or payload)
+            nc_payload = build_non_cover_condition_payload(payload_for_mesh_condition)
             if nc_payload is not None:
                 with perf.timed("condition_encoder_non_cover", device=dev):
                     enc_hs_tt_nc, enc_mask_nc_np, ctx_tt_nc, _ = condition_encode_payload_tt(
