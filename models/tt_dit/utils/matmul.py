@@ -212,6 +212,7 @@ grid_12_9_configs = {
     # flux2 dual-grid sweep rank-1 — 12×9 grid (2026-05-27, flux2_dual_grid_mm_sweep.md)
     (1024, 128, 768): (8, 2, 8, (2, 1)),  # dual-grid sweep 12x9, 9.7 μs, 7.0% FLOP util
     (512, 15360, 768): (2, 16, 4, (2, 2)),  # dual-grid sweep 12x9, 120.2 μs, 33.7% FLOP util
+    (128, 15360, 768): (2, 16, 4, (2, 2)),  # M_tiles=4 same as (512,…); unswept estimate
     (1024, 6144, 768): (3, 8, 5, (3, 1)),  # dual-grid sweep 12x9, 81.1 μs, 39.9% FLOP util
     (512, 6144, 768): (2, 8, 8, (2, 2)),  # dual-grid sweep 12x9, 55.9 μs, 29.0% FLOP util
     (1024, 6144, 4608): (8, 8, 6, (4, 1)),  # dual-grid sweep 12x9, 275.1 μs, 70.6% FLOP util
@@ -235,7 +236,27 @@ grid_12_9_configs = {
     # Same K/N as (1024, 6144, 4608); reuse that blocking. Unverified estimate.
     (2048, 6144, 4608): (8, 8, 6, (4, 1)),
     # (4096, 6144,  768): (11, 4,  4, (1, 4)),  # 642.2 μs,  13.6% util  to_out spatial
-    # (128,  6144,  768): ( 2, 12, 4, (2, 2)),  # 97.0 μs,    2.8% util  to_out prompt
+    # (128,  6144,  768): ( 2, 12, 4, (2, 2)),  # 97.0 μs,    2.8% util  to_out prompt (slower than heuristic)
+    (128, 6144, 768): (1, 8, 4, (1, 4)),  # heuristic result — faster than swept above  [UNSWEPT ESTIMATE]
+    # flux2 4096-res estimates — 12×9 AGMM grid.
+    # AGMM overhead empirically varies with K and M_block (not fixed):
+    #   K=4608, M_b=16 → overhead ≈ 848 KB (848,384 B); max CBs = 353 tiles
+    #   K=6144, M_b=16 → overhead ≈ 1069 KB (1,094,144 B); max CBs = 233 tiles  ← tightest
+    # M_block=16 for M=16384 (ceil(512/12)=43 → capped); subblocks from 2048-res swept entries.
+    # K_block and N_block chosen to keep CBs ≤ 224 tiles (safe margin below 233 tile limit).
+    (16384, 6144, 4608): (16, 2, 8, (1, 2)),  # 224 tiles — ff1 spatial   (N_b=10→264 ✗, N_b=8→224✓) [UNSWEPT ESTIMATE]
+    # Prompt-only shapes (M=128 → AGMM path, same 12x9 grid as spatial).
+    # Default 1x8x8 (152 tiles) crashes at 4096-res; use K_b=4 to halve in1 tiles.
+    (128, 6144, 2304): (1, 4, 8, (1, 4)),  #  80 tiles — ff1/ff2 prompt                    [UNSWEPT ESTIMATE]
+    (16384, 6144, 2304): (16, 2, 8, (4, 1)),  # 224 tiles — ff2/to_out    (K_b=3→272 ✗)      [UNSWEPT ESTIMATE]
+    (16384, 6144, 768): (16, 4, 4, (1, 4)),  # 224 tiles — to_out        (K_b=4 fits too)    [UNSWEPT ESTIMATE]
+    # x_c_merged at 4096-res: M=16384+128=16512 → M_tiles=516; 516%16≠0, use M_block=12 (516%12=0)
+    # ff2 (K=4608, overhead ≈ 848 KB for K_per_dev=18): max CBs = 354 tiles; K_b=4 → 224 t ✓
+    (16384, 4608, 768): (16, 4, 4, (1, 4)),  # 224 tiles — ff2 spatial                       [UNSWEPT ESTIMATE]
+    # x_c_merged at 4096-res: M=16384+128=16512 → M_tiles=516; 516%16≠0, use M_block=12 (516%12=0)
+    (16512, 6144, 4608): (12, 2, 10, (1, 2)),  # 208 tiles  [UNSWEPT ESTIMATE]
+    (16512, 6144, 2304): (12, 2, 8, (4, 1)),  # 176 tiles  (K_b=3→216 reduced to K_b=2)       [UNSWEPT ESTIMATE]
+    (16512, 4608, 768): (12, 4, 4, (1, 4)),  # 176 tiles — ff2 merged    [UNSWEPT ESTIMATE]
 }
 
 
