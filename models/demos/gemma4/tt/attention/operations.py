@@ -170,6 +170,40 @@ def apply_rope_decode_peruser(tensor, cos_b, sin_b):
     return ttnn.add(ttnn.mul(tensor, cos_b), ttnn.mul(_rotate_half(tensor), sin_b))
 
 
+def prefill_sdpa_program_config(head_dim, seq_len):
+    """Tuned SDPAProgramConfig for the non-chunked prefill path (seq <= 32768).
+
+    The op defaults to small auto-picked q/k chunks; explicit larger chunks cut
+    the per-chunk launch + softmax-reduction overhead that dominates the
+    flash-attention inner loop at these sequence lengths. head_dim=512 (global)
+    layers need the smaller (8,4) grid + 128 chunks to fit L1 (q=k=256 overflows
+    there); head_dim<=256 (sliding) layers run the full (8,8) grid with larger
+    chunks. Chunks are clamped to divide seq_len (buckets are powers of two, as
+    are the chunk sizes, so min() stays a divisor). Sizes overridable for sweeps
+    via GEMMA4_PREFILL_SDPA_QCHUNK / _KCHUNK.
+    """
+    if head_dim >= 512:
+        grid = ttnn.CoreCoord(8, 4)
+        dq, dk = 128, 128
+    else:
+        # head_dim<=256: q=k=512 (~3.5 MB) and even q=k=256 (~1.58 MB) overflow
+        # L1 (max 1.57 MB); q=256/k=128 keeps the static CBs in budget while
+        # still giving wider Q parallelism than the default.
+        grid = ttnn.CoreCoord(8, 8)
+        dq, dk = 256, 128
+    q_chunk = int(os.environ.get("GEMMA4_PREFILL_SDPA_QCHUNK", dq))
+    k_chunk = int(os.environ.get("GEMMA4_PREFILL_SDPA_KCHUNK", dk))
+    # Chunk sizes must be a multiple of 32 and not exceed the (padded) seq_len.
+    q_chunk = max(32, min(q_chunk, seq_len))
+    k_chunk = max(32, min(k_chunk, seq_len))
+    return ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=grid,
+        q_chunk_size=q_chunk,
+        k_chunk_size=k_chunk,
+        exp_approx_mode=False,
+    )
+
+
 def chunked_prefill_sdpa(tt_q, k_cache, v_cache, page_table, user_id, head_dim, scale=1.0):
     """Chunked causal prefill SDPA over a paged KV cache.
 

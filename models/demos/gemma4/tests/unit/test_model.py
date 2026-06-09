@@ -721,6 +721,135 @@ def test_single_decode_perf(mesh_device, reset_seeds, request):
 
 
 @parametrize_mesh_with_fabric()
+def test_single_prefill_perf(mesh_device, reset_seeds, request):
+    """Traced single prefill with tracy signposts, for clean device-time profiling.
+
+    TTFT at higher ISL is dominated by the prefill *body* (the per-layer matmuls
+    + SDPA + CCL over the whole sequence), not host dispatch — tracing prefill
+    barely moves TTFT because async dispatch already hides host overhead behind
+    that compute. This test exposes WHERE the device time goes so it can be
+    optimized:
+
+      1. compiles one prefill forward (untraced, lm_head on the last tile),
+      2. captures a metal trace of the forward with the lm_head deferred (the
+         trace returns post-norm hidden states, matching the Generator's traced
+         prefill path — see Gemma4Model._prefill_trace_mode),
+      3. warm-replays, then replays once inside ``tracy.signpost("start"/"stop")``.
+
+    Filtering the resulting CSV to the signposted region (or to METAL TRACE
+    REPLAY rows) gives the steady-state device-op breakdown of the prefill body.
+    Set the sequence length with ``GEMMA4_PREFILL_PERF_SEQ_LEN`` (default 4096).
+
+        HF_MODEL=google/gemma-4-31B-it \\
+          TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 \\
+          GEMMA4_PREFILL_PERF_SEQ_LEN=4096 \\
+          python -m tracy -p -r -v -m pytest \\
+          "models/demos/gemma4/tests/unit/test_model.py::test_single_prefill_perf"
+    """
+    import os
+
+    try:
+        from tracy import signpost
+    except ModuleNotFoundError:
+
+        def signpost(*_a, **_k):
+            pass
+
+    from models.demos.gemma4.tt.common import create_tt_model
+    from models.tt_transformers.tt.common import PagedAttentionConfig
+
+    model_path = os.getenv("HF_MODEL") or os.getenv(
+        "GEMMA4_MODEL_PATH", "/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it"
+    )
+
+    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
+    hf_config_check = TestFactory.create_hf_config()
+    is_moe = getattr(hf_config_check, "enable_moe_block", False)
+    if is_moe and tp < 8:
+        pytest.skip(f"MoE model too large for TP={tp} (expert weights replicated)")
+    if hf_config_check.hidden_size > 4096 and tp < 2:
+        pytest.skip(f"Model too large for single device (hidden={hf_config_check.hidden_size})")
+
+    seq_len = int(os.getenv("GEMMA4_PREFILL_PERF_SEQ_LEN", "4096"))
+    page_block_size = 64
+    max_seq_len = max(8192, 1 << (seq_len - 1).bit_length())
+    paged_attention_config = PagedAttentionConfig(
+        block_size=page_block_size,
+        max_num_blocks=max_seq_len // page_block_size,
+    )
+
+    logger.info(f"Creating TT model (TP={tp}) for single-prefill profiling, seq_len={seq_len}...")
+    model_args, model, tt_kv_cache, _ = create_tt_model(
+        mesh_device=mesh_device,
+        max_batch_size=1,
+        max_seq_len=max_seq_len,
+        model_path=model_path,
+        create_kv_cache=True,
+        paged_attention_config=paged_attention_config,
+    )
+
+    is_mesh = hasattr(mesh_device, "shape")
+    replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
+
+    page_table = torch.arange(paged_attention_config.max_num_blocks, dtype=torch.int32).reshape(
+        1, paged_attention_config.max_num_blocks
+    )
+    page_table_tt = ttnn.from_torch(
+        page_table, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=replicate
+    )
+
+    tokens = (torch.arange(seq_len, dtype=torch.int32) % model_args.vocab_size).reshape(1, seq_len)
+    tokens_tt = ttnn.from_torch(
+        tokens, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=replicate
+    )
+    # Host stashes for PLI models (no-op for 31B/12B, which have no per-layer inputs).
+    model._prefill_input_ids_torch = tokens.long()
+    model._prefill_embeds_torch = None
+
+    def _embed():
+        emb = model.embed_tokens(tokens_tt)
+        if len(emb.shape) == 3:
+            emb = ttnn.unsqueeze_to_4D(emb)
+        return ttnn.to_layout(emb, ttnn.TILE_LAYOUT)
+
+    get_last_token = ((seq_len - 1) // 32) * 32
+
+    # ── Warmup prefill (kernel compile — excluded from the profile) ──
+    logger.info("Single-prefill warmup (compiling kernels)...")
+    warm = model.ttnn_prefill_forward(
+        x=_embed(), page_table=page_table_tt, kv_cache=tt_kv_cache, get_last_token=get_last_token, user_id=0
+    )
+    ttnn.synchronize_device(mesh_device)
+    warm.deallocate(True)
+
+    # ── Capture trace of the prefill body (lm_head deferred outside the trace) ──
+    logger.info("Capturing prefill trace (post-norm hidden states)...")
+    model._prefill_trace_mode = True
+    x = _embed()
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    trace_out = model.ttnn_prefill_forward(x=x, page_table=page_table_tt, kv_cache=tt_kv_cache, user_id=0)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    model._prefill_trace_mode = False
+    ttnn.synchronize_device(mesh_device)
+
+    try:
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+
+        logger.info("Profiling single traced prefill (signposted)...")
+        signpost("start")
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        signpost("stop")
+    finally:
+        ttnn.release_trace(mesh_device, trace_id)
+
+    out = ttnn.to_torch(ttnn.get_device_tensors(trace_out)[0]).float()
+    assert torch.isfinite(out).all(), "traced prefill produced non-finite hidden states"
+    logger.info(f"Traced single prefill complete (TP={tp}, seq_len={seq_len}); hidden shape {tuple(out.shape)}")
+
+
+@parametrize_mesh_with_fabric()
 def test_single_decode(mesh_device, reset_seeds, request):
     """Run exactly one decode step with the full model, for profiling.
 

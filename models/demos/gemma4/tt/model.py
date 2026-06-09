@@ -622,6 +622,17 @@ class Gemma4Model:
         # Final norm
         hidden_states = self.norm.forward(hidden_states)
 
+        # Traced prefill returns post-norm hidden states and runs the lm_head
+        # OUTSIDE the trace, on just the last-token tile (see
+        # process_logits_after_prefill_trace). The lm_head over the full padded
+        # sequence (262k vocab) dwarfs the entire model body — ~40x the body at
+        # 4k tokens — so baking it into the trace makes traced prefill far
+        # SLOWER than non-traced. The last-token slice can't be baked into the
+        # trace (the index varies per prompt), so the whole lm_head is deferred
+        # to host-side post-processing on a 32-row slice of these hidden states.
+        if not is_decode and getattr(self, "_prefill_trace_mode", False):
+            return hidden_states
+
         # Slice to the last token tile before lm_head when caller only wants
         # next-token logits (prefill). Keeps the 262k-vocab matmul output at
         # 32 rows instead of seq_len rows — without this, prefill at seq_len
@@ -634,25 +645,34 @@ class Gemma4Model:
                 (1, 1, get_last_token + 32, hidden_states.shape[-1]),
             )
 
-        # LM head (column-parallel on vocab dim when TP > 1)
+        return self._apply_lm_head(hidden_states, is_decode=is_decode)
+
+    def _apply_lm_head(self, hidden_states, is_decode=False):
+        """Project post-norm hidden states to vocab logits, softcap, all-gather.
+
+        Factored out of ``__call__`` so traced prefill can defer it (the trace
+        returns post-norm hidden states and this runs on a 32-row last-token
+        slice outside the trace; see ``process_logits_after_prefill_trace``).
+
+        - lm_head is column-parallel on the vocab dim when TP > 1.
+        - Softcapping (``tanh(logits/cap)*cap``) is element-wise and works on the
+          sharded vocab. ttnn.mul/ttnn.tanh are not in-place, so the results are
+          captured — dropping them silently no-ops the cap and tanks PCC vs HF.
+        - The sharded vocab is all-gathered back to full width, except in decode
+          on-device sampling (the sampling module consumes sharded logits).
+        """
         if self.lm_head_weight is not None:
             logits = ttnn.linear(hidden_states, self.lm_head_weight)
             hidden_states.deallocate(True)
         else:
             logits = hidden_states
 
-        # Softcapping: tanh(logits / cap) * cap — element-wise, works on sharded vocab.
-        # ttnn.mul/ttnn.tanh return new tensors (not in-place), so capture the
-        # results — dropping them silently no-ops the cap and lets logits go
-        # well past ±30, which tanks PCC against the HF reference (which caps).
         if self.final_logit_softcapping and self.final_logit_softcapping > 0:
             cap = self.final_logit_softcapping
             logits = ttnn.mul(logits, 1.0 / cap)
             logits = ttnn.tanh(logits)
             logits = ttnn.mul(logits, cap)
 
-        # All-gather sharded vocab dim back to full vocab.
-        # Skip when on-device sampling is active (decode) — sampling handles distributed top-k.
         if self.mesh_config is not None and self.mesh_config.tp > 1 and self.lm_head_weight is not None:
             if self.sampling is not None and is_decode:
                 pass  # Sampling module handles TP-sharded logits directly
@@ -981,15 +1001,25 @@ class Gemma4Model:
             torch_output = ttnn.to_torch(tt_out)
         return torch_output[..., last_token_idx, : self.vocab_size]
 
-    def process_logits_after_prefill_trace(self, logits, last_token_idx):
-        """Slice the 32-token tile containing ``last_token_idx`` from a
-        traced prefill's logit tensor (the trace returns full-tile output)."""
+    def process_logits_after_prefill_trace(self, hidden_states, last_token_idx):
+        """Apply the deferred lm_head for a traced prefill.
+
+        The prefill trace returns post-norm hidden states ``[1,1,seq,hidden]``
+        (lm_head is skipped inside the trace — see ``__call__``'s
+        ``_prefill_trace_mode`` branch). Slice the 32-row tile containing
+        ``last_token_idx`` and run lm_head + softcap on just those rows, so the
+        262k-vocab matmul stays at 32 rows instead of the full padded sequence
+        (which would dominate TTFT and defeat the point of tracing). Returns
+        ``[1,1,32,vocab]`` logits — the same shape the old full-seq path sliced
+        to, so downstream (sampling / ``process_output_prefill``) is unchanged.
+        """
         get_last_token = (last_token_idx // 32) * 32
-        return ttnn.slice(
-            logits,
+        h = ttnn.slice(
+            hidden_states,
             (0, 0, get_last_token, 0),
-            (1, 1, get_last_token + 32, logits.shape[-1]),
+            (1, 1, get_last_token + 32, hidden_states.shape[-1]),
         )
+        return self._apply_lm_head(h, is_decode=False)
 
     def switch_mode(self, mode):
         """Generator compatibility — no prefetcher to reinitialize."""

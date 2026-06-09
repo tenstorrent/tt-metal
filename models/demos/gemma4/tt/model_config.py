@@ -199,8 +199,19 @@ class Gemma4ModelArgs:
         self._max_seq_len = value
 
     def get_warmup_prefill_supported_seq_lens(self):
-        """Sequence lengths to compile during prefill warmup."""
-        return [32, 128, 512]
+        """Sequence lengths to compile (and, for trace buckets, pre-capture)
+        during prefill warmup.
+
+        Includes every trace-prefill bucket so warmup pre-captures each one;
+        otherwise the first real prompt of a bucket pays the one-time
+        trace-capture cost (compile + capture passes) inside its TTFT instead of
+        a cheap replay. The small base lengths give compile coverage when tracing
+        is disabled (bounded sliding / per-layer-input models, where
+        ``trace_prefill_supported_seq_lens`` is empty).
+        """
+        trace_lens = list(getattr(self, "trace_prefill_supported_seq_lens", []) or [])
+        seq_lens = sorted({32, 128, 512, *trace_lens})
+        return [s for s in seq_lens if s <= self.max_seq_len]
 
     @staticmethod
     def resolve_model_cache_path(model_path):

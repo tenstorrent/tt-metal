@@ -20,6 +20,7 @@ from .operations import (
     chunked_prefill_sdpa_sliding,
     concat_heads,
     effective_block_size,
+    prefill_sdpa_program_config,
     split_qkv_heads_prefill,
 )
 from .weights import AttentionWeights
@@ -155,6 +156,7 @@ def prefill_forward(
             is_causal=True,
             scale=1.0,
             sliding_window_size=sliding_window,
+            program_config=prefill_sdpa_program_config(config.head_dim, seq_len),
         )
     tt_q.deallocate(True)
     # Keep K/V alive for source layers; shared layers don't own them
