@@ -35,6 +35,7 @@ from ..test_factory import (
     compare_tensors,
     get_pcc_threshold,
     parametrize_mesh_with_fabric,
+    skip_if_config_only_checkpoint,
 )
 
 # Trace ISL buckets × SUPPORTED_PREFILL_BATCH_SIZES, minus:
@@ -50,6 +51,7 @@ _DEFAULT_PCC = 0.99
 @pytest.fixture(scope="module")
 def hf_causal_lm():
     """Load HF reference once per module — 31B reload dominates runtime."""
+    skip_if_config_only_checkpoint()
     model_path = _get_model_path()
     model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, trust_remote_code=True)
     model.eval()
