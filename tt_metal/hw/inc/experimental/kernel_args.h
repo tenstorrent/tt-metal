@@ -41,6 +41,9 @@
 #include "api/compute/common.h"
 #endif
 
+// TT_KERNEL: marks the named-arg entry point; the JIT generates kernel_main() from its signature.
+#define TT_KERNEL FORCE_INLINE
+
 namespace experimental {
 
 // byte_offset is measured from the start of the *named* section of the dispatch buffer.
