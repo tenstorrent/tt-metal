@@ -7,17 +7,25 @@
 
 using namespace tt;
 
+// Metal 2.0 writer — the descriptor-era writer, ported to the spec binding namespaces and otherwise
+// unchanged. Two buffers, as before: an fp32 intermediate (dfb::rand_tiles) produced by the compute
+// kernel, and an output-dtype scratch (dfb::rand_out) the writer narrows into. fp32 output is written
+// straight from the intermediate; bf16 output is produced by truncating each fp32 element to its high
+// 16 bits (= bf16), which keeps every value strictly < `to`. The fp32-vs-bf16 path is selected by an
+// OUTPUT_DTYPE_* define set host-side; only those two dtypes are supported.
+//
+// The only changes from the descriptor era: the CB ids come from the DFB binding tokens (dfb::), the
+// output address comes from the TensorAccessor binding (ta::), and start_id/num_tiles come from the
+// named-arg namespace (args::) instead of positional compile-time / runtime slots.
 void kernel_main() {
-    constexpr uint32_t intermed_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t dst_cb_id = get_compile_time_arg_val(1);
-    constexpr auto dst_args = TensorAccessorArgs<2>();
+    constexpr uint32_t intermed_cb_id = dfb::rand_tiles;
+    constexpr uint32_t dst_cb_id = dfb::rand_out;
 
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t start_id = get_arg_val<uint32_t>(1);
-    uint32_t num_tiles = get_arg_val<uint32_t>(2);
-    uint32_t end_id = start_id + num_tiles;
+    const uint32_t start_id = get_arg(args::start_id);
+    const uint32_t num_tiles = get_arg(args::num_tiles);
+    const uint32_t end_id = start_id + num_tiles;
 
-    const auto output_addrg = TensorAccessor(dst_args, dst_addr);
+    TensorAccessor out(ta::output);
 
     cb_reserve_back(dst_cb_id, 1);
     uint32_t dst_cb_write_ptr = get_write_ptr(dst_cb_id);
@@ -29,7 +37,7 @@ void kernel_main() {
         auto intermed_cb_addr = reinterpret_cast<float*>(intermed_cb_read_ptr);
 
 #ifdef OUTPUT_DTYPE_FLOAT32
-        noc_async_write_page(i, output_addrg, intermed_cb_read_ptr);
+        noc_async_write_page(i, out, intermed_cb_read_ptr);
         noc_async_write_barrier();
         cb_pop_front(intermed_cb_id, 1);
 #endif
@@ -48,7 +56,7 @@ void kernel_main() {
         }
         cb_pop_front(intermed_cb_id, 1);
 
-        noc_async_write_page(i, output_addrg, dst_cb_write_ptr);
+        noc_async_write_page(i, out, dst_cb_write_ptr);
         noc_async_write_barrier();
 #endif
     }

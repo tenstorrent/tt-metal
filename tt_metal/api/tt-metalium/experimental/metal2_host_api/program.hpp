@@ -48,6 +48,24 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params);
 // is in the tensor args (i.e. which specific MeshTensors are operated on by the Program).
 void UpdateTensorArgs(Program& program, std::span<const ProgramRunArgs::TensorArgument> tensor_args);
 
+// Partial in-place update of a cached Program: re-applies ONLY the named RTAs (per node) and named
+// CRTAs passed here, writing them straight into the dispatch buffers SetProgramRunArgs already laid
+// out. Everything else is left as-is. PRE-CONDITION: SetProgramRunArgs ran once on this Program.
+//
+// Why this exists (it is not a convenience wrapper around SetProgramRunArgs):
+// The only other way to refresh args on a cached Program is SetProgramRunArgs, which is
+// all-or-nothing — it re-serializes the COMPLETE arg set for every node the program runs on. An op
+// that legitimately caches across calls but varies a few hash-excluded scalars per dispatch (an RNG
+// seed, a sampling [from,to), an optimizer lr/step) would then rebuild and rewrite every per-core
+// work-split arg on every cache hit, none of which changed. On a multi-core op that re-serialization
+// dominates the steady-state cost: measured on rand (WH B0, 512x512 bf16, 500 warm trials), the full
+// SetProgramRunArgs re-apply is ~132us/dispatch versus ~40us for the descriptor op it replaces — a
+// 3.3x regression against main on the cache-hit path, i.e. every dispatch after the first. Writing
+// only the handful of changed scalars in place brings it back to ~39us, at parity with descriptor.
+// Without a partial-update primitive, any multi-core op with per-dispatch dynamic scalars regresses
+// against descriptor the moment its program is cached.
+void ApplyDynamicArgs(Program& program, const ProgramRunArgs& dynamic_args);
+
 // Power-user API for updating the mutable parameters of a Program in-place.
 // ProgramRunArgsView is a non-owning view into the Program's command buffers,
 // enabling in-place modification of mutable Program parameters.

@@ -95,6 +95,11 @@ concept ProgramSpecFactoryConcept = requires { &T::create_program_spec; } && !Pr
 template <typename T>
 concept HasDirectDescriptor = requires { &T::create_descriptor; } && !requires { typename T::program_factory_t; };
 
+// Detect operations that put create_program_spec directly on the operation struct (Metal 2.0,
+// no program_factory_t wrapper). The single-program analog of HasDirectDescriptor.
+template <typename T>
+concept HasDirectProgramSpec = requires { &T::create_program_spec; } && !requires { typename T::program_factory_t; };
+
 template <typename device_operation_t>
 concept HasComputeOutputSpecs = requires(
     device_operation_t op,
@@ -160,7 +165,7 @@ concept DeviceOperationConcept =
                           tensor_return_value_t>);
         };
     } && HasComputeOutputSpecs<device_operation_t> &&
-    (HasDirectDescriptor<device_operation_t> ||
+    (HasDirectDescriptor<device_operation_t> || HasDirectProgramSpec<device_operation_t> ||
      (HasProgramFactoryType<device_operation_t> && AllFactoriesValid<typename device_operation_t::program_factory_t>));
 
 template <typename device_operation_t>

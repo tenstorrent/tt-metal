@@ -25,13 +25,11 @@ namespace tt::tt_metal::experimental {
 using KernelRTASchema = detail::ProgramImpl::KernelRTASchema;
 
 // Helpers for vararg-value access (now living on AdvancedKernelRunArgs).
-const std::vector<AdvancedKernelRunArgs::NodeVarargs>& kernel_runtime_varargs(
-    const ProgramRunArgs::KernelRunArgs& kp) {
+const std::vector<AdvancedKernelRunArgs::NodeVarargs>& kernel_runtime_varargs(const ProgramRunArgs::KernelRunArgs& kp) {
     return kp.advanced_options.runtime_varargs;
 }
 
-const AdvancedKernelRunArgs::CommonVarargs& kernel_common_runtime_varargs(
-    const ProgramRunArgs::KernelRunArgs& kp) {
+const AdvancedKernelRunArgs::CommonVarargs& kernel_common_runtime_varargs(const ProgramRunArgs::KernelRunArgs& kp) {
     return kp.advanced_options.common_runtime_varargs;
 }
 
@@ -76,7 +74,8 @@ void ValidateTensorArgs(const Program& program, std::span<const ProgramRunArgs::
             // are set: dynamic is strictly more permissive.)
             TT_FATAL(
                 runtime_spec.tensor_layout() == expected_spec->tensor_layout(),
-                "TensorArgument for binding '{}' supplied a MeshTensor whose tensor_layout does not match the binding's "
+                "TensorArgument for binding '{}' supplied a MeshTensor whose tensor_layout does not match the "
+                "binding's "
                 "declared layout. dynamic_tensor_shape loosens the match only along logical_shape; dtype, "
                 "page_config, memory_config, and alignment must still match exactly.",
                 tensor_params.tensor_parameter_name);
@@ -95,7 +94,8 @@ void ValidateTensorArgs(const Program& program, std::span<const ProgramRunArgs::
             // (tensor_shape_in_pages is derived from padded_shape, which is fixed across binds).
             TT_FATAL(
                 runtime_spec.tensor_layout() == expected_spec->tensor_layout(),
-                "TensorArgument for binding '{}' supplied a MeshTensor whose tensor_layout does not match the binding's "
+                "TensorArgument for binding '{}' supplied a MeshTensor whose tensor_layout does not match the "
+                "binding's "
                 "declared layout. match_padded_shape_only loosens the match only along logical_shape (within the "
                 "constraint that padded_shape is preserved); dtype, page_config, memory_config, and alignment must "
                 "still match exactly.",
@@ -668,6 +668,62 @@ void UpdateTensorArgs(Program& program, std::span<const ProgramRunArgs::TensorAr
 
     // Process DFB runtime parameters to update borrowed-memory DFB backing L1 Buffer*s.
     AttachBorrowedDFBBuffers(program_impl, tensor_args);
+}
+
+void ApplyDynamicArgs(Program& program, const ProgramRunArgs& dynamic_args) {
+    log_debug(tt::LogMetal, "Applying dynamic ProgramRunArgs (partial fast-path)");
+
+    detail::ProgramImpl& program_impl = program.impl();
+
+    // Index of `name` within `names`, or names.size() if absent. Templated on the container so it
+    // works regardless of whether the schema stores names as a vector or a Group alias.
+    const auto index_of = [](const auto& names, const std::string& name) -> std::size_t {
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            if (names[i] == name) {
+                return i;
+            }
+        }
+        return names.size();
+    };
+
+    for (const auto& kernel_params : dynamic_args.kernel_run_args) {
+        std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_params.kernel_spec_name);
+        const KernelRTASchema* schema = program_impl.get_kernel_rta_schema(kernel_params.kernel_spec_name);
+        TT_FATAL(
+            schema != nullptr,
+            "ApplyDynamicArgs: kernel '{}' has no RTA schema registered.",
+            kernel_params.kernel_spec_name);
+
+        // Named RTAs (per node). Named args occupy the front of the RTA buffer in schema order, so
+        // the schema index is the slot index. Pre-condition: SetProgramRunArgs sized this buffer on
+        // the cache miss; this only patches existing slots in place (no resize).
+        for (const auto& node_params : kernel_params.runtime_arg_values) {
+            RuntimeArgsData& rta = kernel->runtime_args_data(node_params.node);
+            for (const auto& [name, value] : node_params.args) {
+                const std::size_t idx = index_of(schema->runtime_arg_names, name);
+                TT_FATAL(
+                    idx < schema->runtime_arg_names.size(),
+                    "ApplyDynamicArgs: '{}' is not a named RTA of kernel '{}'.",
+                    name,
+                    kernel_params.kernel_spec_name);
+                rta.data()[idx] = value;
+            }
+        }
+
+        // Named CRTAs (broadcast). The named-CRTA section is at the front of the CRTA buffer.
+        if (!kernel_params.common_runtime_arg_values.empty()) {
+            RuntimeArgsData& crta = kernel->common_runtime_args_data();
+            for (const auto& [name, value] : kernel_params.common_runtime_arg_values) {
+                const std::size_t idx = index_of(schema->common_runtime_arg_names, name);
+                TT_FATAL(
+                    idx < schema->common_runtime_arg_names.size(),
+                    "ApplyDynamicArgs: '{}' is not a named CRTA of kernel '{}'.",
+                    name,
+                    kernel_params.kernel_spec_name);
+                crta.data()[idx] = value;
+            }
+        }
+    }
 }
 
 ProgramRunArgsView& GetProgramRunArgsView(Program& program) {
