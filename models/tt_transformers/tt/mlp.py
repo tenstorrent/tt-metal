@@ -65,6 +65,12 @@ class MLP(LightweightModule):
             )
 
         # TODO Clean up this code. With sharding, we load the normal weights and then shard them
+        # The prefetcher backend selects the on-disk weight layout (worker -> width-sharded,
+        # DRAM-core -> receiver-contiguous ND_SHARDED). The weight cache is keyed only by name +
+        # dtype + tile-layout, NOT memory layout, so reusing one weight_cache_path across backends
+        # would silently load a tensor in the wrong layout. Discriminate the cache key by backend.
+        prefetcher_cache_suffix = prefetcher.weight_cache_suffix() if prefetcher is not None else ""
+
         # Note: unsqueeze(0).unsqueeze(0) makes weights 4D [1, 1, H, W] to match attention weights
         # This is required for the dram_prefetcher to correctly interpret all weights
         def as_sharded_tensor(name, type, dims, mem_config, cache_key):
@@ -82,7 +88,7 @@ class MLP(LightweightModule):
                 mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=args.cluster_shape),
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG if args.is_galaxy else mem_config,
-                cache_file_name=cache_name(cache_key),
+                cache_file_name=cache_name(cache_key + prefetcher_cache_suffix),
             )
             return result
 
@@ -164,13 +170,9 @@ class MLP(LightweightModule):
         # Decode consumes the weights via the prefetcher GCB; prefill's direct matmuls read the same
         # weight from DRAM. The matmul's TensorAccessor reads recv-contig (ND_SHARDED) in1 directly,
         # so no separate width-sharded prefill copy is needed (worker/no-prefetcher use the same).
-        w1_w = self.w1
-        w2_w = self.w2
-        w3_w = self.w3
-
         w1_out = ttnn.linear(
             x,
-            w1_w,
+            self.w1,
             dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
@@ -183,7 +185,7 @@ class MLP(LightweightModule):
         )
         w3_out = ttnn.linear(
             x,
-            w3_w,
+            self.w3,
             dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
@@ -301,14 +303,14 @@ class MLP(LightweightModule):
         if seq_len > 128 and mode != Mode.DECODE:
             w2_out = ttnn.experimental.minimal_matmul(
                 w2_in,
-                w2_w,
+                self.w2,
                 compute_kernel_config=li_ff2_compute_kernel_cfg,
                 config=pc_2,
             )
         else:
             w2_out = ttnn.linear(
                 w2_in,
-                w2_w,
+                self.w2,
                 compute_kernel_config=li_ff2_compute_kernel_cfg,
                 dtype=self.args.ccl_dtype if TG else activation_dtype or ttnn.bfloat16,
                 program_config=pc_2,

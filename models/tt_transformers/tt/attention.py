@@ -150,6 +150,12 @@ class Attention(LightweightModule):
         else:
             cache_name = lambda name: weight_cache_path / (f"{layer_name}.{name}")
 
+        # The prefetcher backend selects the on-disk weight layout (worker -> width-sharded,
+        # DRAM-core -> receiver-contiguous ND_SHARDED). The weight cache is keyed only by name +
+        # dtype + tile-layout, NOT memory layout, so reusing one weight_cache_path across backends
+        # would silently load a tensor in the wrong layout. Discriminate the cache key by backend.
+        prefetcher_cache_suffix = self.prefetcher.weight_cache_suffix() if self.prefetcher is not None else ""
+
         # Select rotary embedding implementation for decode
         if self.use_hf_rope and self.use_qk_fused:
             raise NotImplementedError("Fused QK is not implemented for HF-style rope")
@@ -269,23 +275,20 @@ class Attention(LightweightModule):
 
         qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
 
-        def _make_wqkv(mem_config, cache_key):
-            return ttnn.as_tensor(
-                qkv_cat,
-                dtype=self.wqkv_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG if self.TG else mem_config,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device, dims=(3, 2) if self.TG else (2, 3), mesh_shape=configuration.cluster_shape
-                ),
-                cache_file_name=cache_name(cache_key),
-            )
-
         # One copy: recv-contig (ND_SHARDED) for the DRAM-core backend, else width-sharded. Both
         # prefill (direct matmul) and decode (via GCB) read it — the matmul's TensorAccessor reads
         # ND_SHARDED in1 directly, so no separate width-sharded prefill copy is needed.
-        self.wqkv = _make_wqkv(wqkv_mem_config, "wqkv_sharded_2d")
+        self.wqkv = ttnn.as_tensor(
+            qkv_cat,
+            dtype=self.wqkv_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG if self.TG else wqkv_mem_config,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, dims=(3, 2) if self.TG else (2, 3), mesh_shape=configuration.cluster_shape
+            ),
+            cache_file_name=cache_name("wqkv_sharded_2d" + prefetcher_cache_suffix),
+        )
 
         def norm_reshard(x, norm, mode, norm_config):
             """Hack until RMSNorm supports height-sharded output config"""
@@ -366,7 +369,7 @@ class Attention(LightweightModule):
                 device=self.mesh_device,
                 memory_config=wo_ring_mem_config,
                 mesh_mapper=get_wo_mesh_mapper(),
-                cache_file_name=(cache_name("wo_sharded_ring")),
+                cache_file_name=(cache_name("wo_sharded_ring" + prefetcher_cache_suffix)),
             )
 
         def get_wo_memory_config():

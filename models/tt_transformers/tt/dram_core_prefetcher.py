@@ -22,32 +22,10 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import is_blackhole
 from models.tt_transformers.tt.common import Mode
-
-
-def _ring_pos_coord(ring_pos: int, ring_cols: int) -> ttnn.CoreCoord:
-    """Map a ring position to its receiver-rectangle ``(col, row)`` in row-major order."""
-    return ttnn.CoreCoord(ring_pos % ring_cols, ring_pos // ring_cols)
-
-
-def _bank_receivers_strided(
-    bank_idx: int, recv_per_bank: int, num_dram_banks: int, ring_cols: int
-) -> ttnn.CoreRangeSet:
-    """Receiver-contiguous (strided) receivers for bank ``bank_idx``.
-
-    Bank ``b`` feeds ring positions ``[b, b + num_dram_banks, b + 2*num_dram_banks, ...]``.
-    Pairs with the round-robin ``NdShardSpec`` weight layout (shard ``s`` lands on bank
-    ``s % num_dram_banks`` slab ``s // num_dram_banks``) so that ring position ``r`` receives
-    shard ``r`` without any host permutation. Mirrors ``_bank_receivers_strided`` in
-    ``tests/.../test_prefetcher_BH_dram_core_large.py``. With ``ring_cols == num_dram_banks``
-    this is simply column ``b`` of the rectangle.
-    """
-    cores = []
-    for s in range(recv_per_bank):
-        ring_pos = bank_idx + s * num_dram_banks
-        cores.append(ttnn.CoreRange(_ring_pos_coord(ring_pos, ring_cols), _ring_pos_coord(ring_pos, ring_cols)))
-    return ttnn.CoreRangeSet(cores)
+from models.tt_transformers.tt.recv_contig_layout import bank_receivers_strided as _bank_receivers_strided
+from models.tt_transformers.tt.recv_contig_layout import recv_contig_mem_config
+from models.tt_transformers.tt.recv_contig_layout import ring_pos_coord as _ring_pos_coord
 
 
 def is_dram_core_prefetcher_supported(
@@ -64,12 +42,11 @@ def is_dram_core_prefetcher_supported(
     fits worker L1.
     """
     # Import here to avoid circular import (this module is imported from prefetcher.py).
-    from models.tt_transformers.tt.prefetcher import BYTES_PER_TILE_BFP8, VERIFIED_MODEL_CONFIGS
+    from models.tt_transformers.tt.prefetcher import BYTES_PER_TILE_BFP8, resolve_verified_model_cfg
 
-    verified = next((m for m in VERIFIED_MODEL_CONFIGS if m in model_name), None)
-    if not is_blackhole() or verified is None:
+    cfg = resolve_verified_model_cfg(model_name)
+    if cfg is None:
         return False
-    cfg = VERIFIED_MODEL_CONFIGS[verified]
     dim, hidden_dim, n_heads, n_kv_heads = cfg["dim"], cfg["hidden_dim"], cfg["n_heads"], cfg["n_kv_heads"]
     if n_kv_heads % num_devices != 0:
         return False
@@ -338,6 +315,10 @@ class DramCorePrefetcher(LightweightModule):
         if self._started and not self._stopped:
             ttnn.experimental.stop_dram_core_prefetcher(self.mesh_device)
             self._stopped = True
+            # run() narrowed the stall group to the worker sub-device every forward; restore the
+            # default so any op submitted on this mesh after teardown doesn't stall waiting on a
+            # sub-device whose prefetcher producer is gone.
+            self.mesh_device.reset_sub_device_stall_group()
 
     def __del__(self):
         # Best-effort cleanup. MeshDevice close has its own graceful fallback if we miss it.
@@ -355,20 +336,9 @@ class DramCorePrefetcher(LightweightModule):
 
         Matches ``Prefetcher.to_core_range_set``.
         """
-        assert cores, "No cores provided"
+        from models.tt_transformers.tt.prefetcher import to_core_range_set
 
-        def to_ranges(c):
-            if isinstance(c, ttnn.CoreRangeSet):
-                return c.ranges()
-            if isinstance(c, ttnn.CoreRange):
-                return [c]
-            if isinstance(c, ttnn.CoreCoord):
-                return [ttnn.CoreRange(c, c)]
-            raise ValueError(f"Unsupported core type: {type(c)}")
-
-        if return_list:
-            return [ttnn.CoreRangeSet(to_ranges(c)) for c in cores]
-        return ttnn.CoreRangeSet([r for c in cores for r in to_ranges(c)])
+        return to_core_range_set(cores, return_list=return_list)
 
     def receiver_cores(
         self, sender_active: Optional[bool] = None, receiver_active: Optional[bool] = None
@@ -395,6 +365,15 @@ class DramCorePrefetcher(LightweightModule):
         """
         return [ttnn.CoreCoord(b, 0) for b in range(self.num_senders)]
 
+    def weight_cache_suffix(self) -> str:
+        """Cache-key discriminator for the on-disk weight layout this backend produces.
+
+        Receiver-contiguous (ND_SHARDED) weights are not interchangeable with the worker-core
+        backend's width-sharded weights, but the weight cache is keyed only by name/dtype/layout.
+        Model code appends this so the two backends never reuse each other's cache files.
+        """
+        return "_recv_contig"
+
     def weight_mem_config(
         self, k: int, n: int, default: ttnn.MemoryConfig, is_galaxy: bool = False
     ) -> ttnn.MemoryConfig:
@@ -418,20 +397,7 @@ class DramCorePrefetcher(LightweightModule):
         slice the gather_in0 matmul's ring core r consumes. Callers allocate prefetched weights
         with this config when the DRAM-core backend is active (mlp.py / attention.py).
         """
-        assert n % self.ring_size == 0, f"N={n} must divide ring_size={self.ring_size} for receiver-contiguous layout"
-        n_per_recv = n // self.ring_size
-        dram_core_range_set = ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.num_senders - 1, 0))}
-        )
-        return ttnn.MemoryConfig(
-            ttnn.BufferType.DRAM,
-            ttnn.NdShardSpec(
-                ttnn.Shape([k, n_per_recv]),
-                dram_core_range_set,
-                ttnn.ShardOrientation.ROW_MAJOR,
-                ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
-            ),
-        )
+        return recv_contig_mem_config(k, n, self.ring_size, self.num_senders)
 
     def dynamic_worker_core_grid(self, num_cores: int) -> ttnn.CoreRangeSet:
         """Allocate ``num_cores`` worker cores as a SOLID rectangle below the receiver rectangle.

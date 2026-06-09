@@ -15,7 +15,8 @@ L1 budget check in ``is_dram_core_prefetcher_supported`` rules out ring sizes th
 fit. For 3B on Blackhole the only supported rings are ring=32 (1-card) and ring=16 (2-card).
 
 Requires HF weights for ``meta-llama/Llama-3.2-3B`` (or a compatible variant). Skips if
-``HF_MODEL`` doesn't point to a 3B model. Decode-only — the prefetcher path is decode.
+``HF_MODEL`` doesn't point to a 3B model. Runs both decode (weights via the GCB) and prefill
+(weights read directly from DRAM by the matmul) so the recv-contig in1 read is gated on PCC.
 
 Run via ``scripts/run_safe_pytest.sh``.
 """
@@ -62,12 +63,18 @@ pytestmark = [
     ],
     indirect=True,
 )
+@pytest.mark.parametrize(
+    "mode, seq_len",
+    # Decode consumes the recv-contig weights via the GCB; prefill reads the same ND_SHARDED
+    # weight directly from DRAM through the matmul's TensorAccessor. Cover both so the
+    # prefill direct-read path (no GCB) is gated on PCC, not just the decode GCB path.
+    [(Mode.DECODE, 32), (Mode.PREFILL, 128)],
+    ids=["decode", "prefill"],
+)
 @pytest.mark.parametrize("batch_size", (1,))
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-def test_mlp_inference_dram_core_prefetcher(batch_size, mesh_device, reset_seeds, ensure_gc):
+def test_mlp_inference_dram_core_prefetcher(batch_size, mode, seq_len, mesh_device, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat8_b
-    mode = Mode.DECODE
-    seq_len = 32
 
     # FF1/FF3/FF2 are the prefetched MLP weights. Let DramCorePrefetcher auto-pick
     # the ring size from is_dram_core_prefetcher_supported's divisibility + L1 budget.
@@ -108,8 +115,10 @@ def test_mlp_inference_dram_core_prefetcher(batch_size, mesh_device, reset_seeds
         prefetcher=prefetcher,
     )
 
-    prefetcher.prefetch()
-    prefetcher.run()
+    # Prefetching is decode-only; in prefill the matmul reads the weight directly from DRAM.
+    if mode == Mode.DECODE:
+        prefetcher.prefetch()
+        prefetcher.run()
 
     torch_input = torch.randn(
         1, 1, seq_len, model_args.dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
