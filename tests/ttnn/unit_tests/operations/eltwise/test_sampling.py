@@ -22,7 +22,7 @@ def check_determinism(input_values_tensor, input_indices_tensor, k, p, seed, sub
     Check that the sampling operation is deterministic for the same seed.
     """
     # Run the operation twice with the same seed
-    k_tensor = ttnn.from_torch(torch.tensor(k), device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    k_tensor = ttnn.from_torch(torch.tensor(k), device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
     p_tensor = ttnn.from_torch(torch.tensor(p), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     temp = ttnn.from_torch(torch.ones(32), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     output_tensor_1 = ttnn.sampling(
@@ -56,7 +56,7 @@ def check_randomness(input_values_tensor, input_indices_tensor, k, p, sub_core_g
     Check that the sampling operation is random without setting the seed.
     """
     # Run the operation twice with the same seed
-    k_tensor = ttnn.from_torch(torch.tensor(k), device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    k_tensor = ttnn.from_torch(torch.tensor(k), device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
     p_tensor = ttnn.from_torch(torch.tensor(p), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     temp = ttnn.from_torch(torch.ones(32), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     output_tensor_1 = ttnn.sampling(
@@ -109,7 +109,7 @@ def run_edge_cases(input_values, input_values_tensor, input_indices_tensor, k, p
     """
     num_users = len(k)
     k_tensor = ttnn.from_torch(
-        torch.tensor([32] * num_users), device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+        torch.tensor([32] * num_users), device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
     )
     p_tensor = ttnn.from_torch(torch.tensor(p) * 0.0, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     temp = ttnn.from_torch(torch.ones(32), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -135,7 +135,7 @@ def validate_sampling(input_values, input_indices, k, p, seed, device, sub_core_
     input_indices_tensor = ttnn.from_torch(input_indices, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     temp = ttnn.from_torch(torch.ones(32), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-    k_tensor = ttnn.from_torch(torch.tensor(k), device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    k_tensor = ttnn.from_torch(torch.tensor(k), device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
     p_tensor = ttnn.from_torch(torch.tensor(p), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     # Call the sampling operation
     with device.cache_entries_counter.measure():
@@ -232,3 +232,47 @@ def test_sampling_subcores_callback(shape, k, p, seed, device, sub_core_grids):
 
     logger.info(f"cache_entries_counter.total={device.cache_entries_counter.total}")
     assert device.cache_entries_counter.total > 0
+
+
+# Smoke test for low-core configurations (e.g., the Quasar 2-core simulator). The
+# kernel processes one tile-tall input regardless; the host runs only `num_users`
+# kernel instances. Validates the op functions correctly when num_users < tile_height.
+@pytest.mark.parametrize(
+    "shape",
+    [
+        [1, 1, 2, 32 * 2],  # 2 users ?~@~T fits on a 2-core simulator
+    ],
+)
+@pytest.mark.parametrize("k", [[10, 20]])  # per-user k (length matches num_users)
+@pytest.mark.parametrize("p", [[0.0, 0.5]])  # per-user p (length matches num_users)
+@pytest.mark.parametrize("seed", [2024])
+def test_sampling_2_users(shape, k, p, seed, device):
+    torch.manual_seed(seed)
+    num_users = shape[2]
+    # The op's k/p/temp inputs are always shape [32] (one slot per potential user). We
+    # populate the first `num_users` entries; the remaining slots are unused by the
+    # kernel since only `num_users` cores run.
+    k_padded = list(k) + [1] * (32 - num_users)
+    p_padded = list(p) + [0.0] * (32 - num_users)
+
+    # Direct runner ?~@~T skips validate_statistics/run_edge_cases which assume 32-user
+    # output shapes. Just confirms the op runs to completion and produces an output
+    # of the expected shape.
+    input_values = torch.randn(shape)
+    input_indices = torch.arange(0, shape[-1], dtype=torch.int32).expand(shape)
+    input_values_tensor = ttnn.from_torch(input_values, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    input_indices_tensor = ttnn.from_torch(input_indices, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    k_tensor = ttnn.from_torch(torch.tensor(k_padded), device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    p_tensor = ttnn.from_torch(torch.tensor(p_padded), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    temp = ttnn.from_torch(torch.ones(32), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    output_tensor = ttnn.sampling(
+        input_values_tensor,
+        input_indices_tensor,
+        k=k_tensor,
+        p=p_tensor,
+        temp=temp,
+        seed=seed,
+    )
+    output = ttnn.to_torch(output_tensor)
+    assert output.shape[-1] == num_users, f"Expected output last dim = {num_users}, got {output.shape}"

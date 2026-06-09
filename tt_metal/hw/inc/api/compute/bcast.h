@@ -169,13 +169,16 @@ void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_oc
  * Shorthand template instantiation of sub_tiles_bcast.
  */
 ALWI void sub_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+    WAYPOINT("SBC0");
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWSUB,
           BroadcastType::COL,
           DST_ACCUM_MODE,
           MathFidelity::LoFi,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true /* clear_fp32_dst_acc */)));
+    WAYPOINT("SBC1");
     UNPACK((llk_unpack_AB<BroadcastType::COL>(icb0, icb1, itile0, itile1)));
+    WAYPOINT("SBC2");
 }
 
 /**

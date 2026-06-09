@@ -166,25 +166,25 @@ inline void compute_single_stage_noc_addrs(
  * @param offset Global offset for page ID
  * @param block Block object that defines the number of tiles to read
  */
-template <typename T, typename Block>
+template <typename T, typename Block, typename CB>
 inline void read_block_to_cb(
-    Noc& noc,
-    CircularBuffer& cb,
-    const T& addr,
-    const uint32_t tile_bytes,
-    const uint32_t offset,
-    const Block& block) {
+    Noc& noc, CB& cb, const T& addr, const uint32_t tile_bytes, const uint32_t offset, const Block& block) {
     // Need to reserve/push on intervals that nicely
     // divide the CB size. The CB and block size has been
     // configured to ensure this in the program setup
+    WAYPOINT("RB0");
     cb.reserve_back(block.full_block_size());
+    WAYPOINT("RB1");
     uint32_t idx = 0;
     for (auto r : block.local()) {
         noc.async_read(addr, cb, tile_bytes, {.page_id = offset + r}, {.offset_bytes = idx * tile_bytes});
         idx++;
     }
+    WAYPOINT("RB2");
     noc.async_read_barrier();
+    WAYPOINT("RB3");
     cb.push_back(block.full_block_size());
+    WAYPOINT("RB4");
 }
 
 /**
@@ -195,10 +195,10 @@ inline void read_block_to_cb(
  * contiguously with `rm_row_stride_bytes` stride (= full block width including padding tiles).
  * A full block slot (`block.full_block_size()`) is reserved/pushed for synchronization.
  */
-template <typename T, typename Block, uint32_t TILE_W, uint32_t TILE_H>
+template <typename T, typename Block, uint32_t TILE_W, uint32_t TILE_H, typename CB>
 inline void read_row_major_block_to_cb(
     Noc& noc,
-    CircularBuffer& cb_in_rm,
+    CB& cb_in_rm,
     const T& src_a,
     const uint32_t curr_tile_row,
     const uint32_t num_valid_rows,
@@ -226,10 +226,10 @@ inline void read_row_major_block_to_cb(
 /**
  * @brief Write one column block of row-major output data from a CB to DRAM.
  */
-template <typename T, typename Block, uint32_t TILE_W, uint32_t TILE_H>
+template <typename T, typename Block, uint32_t TILE_W, uint32_t TILE_H, typename CB>
 inline void write_row_major_block_from_cb(
     Noc& noc,
-    CircularBuffer& cb_out_rm,
+    CB& cb_out_rm,
     const T& dst_a,
     const uint32_t abs_row_base,
     const uint32_t num_valid_rows,
@@ -247,7 +247,7 @@ inline void write_row_major_block_from_cb(
 
     for (uint32_t r = 0; r < num_valid_rows; r++) {
         noc.async_write(
-            use<CircularBuffer::AddrSelector::READ_PTR>(cb_out_rm),
+            cb_out_rm,
             dst_a,
             valid_bytes,
             {.offset_bytes = r * block_row_stride_bytes},
@@ -264,10 +264,10 @@ inline void write_row_major_block_from_cb(
  * into cb_in_rm. Only `num_valid_rows` rows are read per block; padding rows are zero-filled
  * by the tilize step in the compute kernel. Handles the case where H is not tile-aligned.
  */
-template <typename T, uint32_t TILE_W, uint32_t TILE_H>
+template <typename T, uint32_t TILE_W, uint32_t TILE_H, typename CB>
 inline void push_row_major_blocks_to_cb(
     Noc& noc,
-    CircularBuffer& cb_in_rm,
+    CB& cb_in_rm,
     const T& src_a,
     const uint32_t Wt,
     const uint32_t block_size,

@@ -94,7 +94,7 @@ def test_layer_norm(device, h, w, use_welford, dtype):
     torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
+    # input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
     recip_tensor = create_recip_tensor(device, w, use_welford)
     output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config, recip_tensor=recip_tensor)

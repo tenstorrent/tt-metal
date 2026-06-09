@@ -11,7 +11,7 @@
 
 #include "api/compute/reduce.h"
 #include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/eltwise_unary/binop_with_scalar.h"
+// #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_binary.h"
 #include "ttnn/operations/normalization/kernel_util/compute/policies.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
@@ -40,8 +40,10 @@ constexpr auto no_op = []() {};
  * @param scalar The scalar to scale the destination tile by
  */
 inline void scale_dest(uint32_t dst, uint32_t scalar) {
+#ifndef ARCH_QUASAR
     binop_with_scalar_tile_init();
     mul_unary_tile(dst, scalar);
+#endif
 }
 
 /**

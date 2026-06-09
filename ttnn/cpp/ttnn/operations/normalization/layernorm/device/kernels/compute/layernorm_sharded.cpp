@@ -12,34 +12,33 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/dataflow/circular_buffer.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
-    constexpr uint32_t is_top_row = get_compile_time_arg_val(0);
-    constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
-    constexpr uint32_t do_beta = get_compile_time_arg_val(2);
-    constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(3);
-    constexpr uint32_t block_w = get_compile_time_arg_val(5);
-    constexpr uint32_t block_h_const = get_compile_time_arg_val(4);
-    volatile uint32_t block_h_volatile = get_compile_time_arg_val(4);
-    constexpr uint32_t subblock_w_const = get_compile_time_arg_val(6);
-    volatile uint32_t subblock_w_volatile = get_compile_time_arg_val(6);
-    constexpr uint32_t num_subblocks_w = get_compile_time_arg_val(7);
-    const bool is_allgather_worker = get_compile_time_arg_val(8) == 1;
-    constexpr uint32_t num_tiles_per_block = get_compile_time_arg_val(9);
-    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(10) == 1;
-    constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(11) == 1;
+    constexpr uint32_t is_top_row = get_arg(args::unused0);
+    constexpr uint32_t do_gamma = get_arg(args::do_gamma);
+    constexpr uint32_t do_beta = get_arg(args::do_beta);
+    constexpr uint32_t num_blocks_first_stage = get_arg(args::num_blocks_first_stage);
+    constexpr uint32_t block_w = get_arg(args::block_wt);
+    constexpr uint32_t block_h_const = get_arg(args::block_ht);
+    volatile uint32_t block_h_volatile = get_arg(args::block_ht);
+    constexpr uint32_t subblock_w_const = get_arg(args::subblock_wt);
+    volatile uint32_t subblock_w_volatile = get_arg(args::subblock_wt);
+    constexpr uint32_t num_subblocks_w = get_arg(args::num_subblocks_w);
+    const bool is_allgather_worker = get_arg(args::is_all_to_all_worker) == 1;
+    constexpr uint32_t num_tiles_per_block = get_arg(args::block_ht_block_wt);
+    constexpr bool FLOAT32_DTYPE = get_arg(args::fp32_dest_acc_en) == 1;
+    constexpr bool FLOAT32_REDUCTION = get_arg(args::float32_reduction) == 1;
     constexpr bool FP32_DEST_ACC = compute_kernel_lib::get_fp32_dest_acc_enabled();
-    constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(12) == 1;
-    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(13);
+    constexpr bool LEGACY_RSQRT = get_arg(args::legacy_rsqrt) == 1;
+    constexpr uint32_t num_blocks_second_stage = get_arg(args::num_blocks_second_stage);
 
-    const uint32_t num_reduce_tiles_per_block_h =
-        get_arg_val<uint32_t>(0);  // This value is the same for all cores, except ones that have padding tiles in it.
-                                   // In that case, skip reduce for padding tiles.
-    const uint32_t num_tiles_per_allgather_worker = is_allgather_worker ? get_arg_val<uint32_t>(1) : 0;
-    const bool use_two_stage_reduce = is_allgather_worker ? get_arg_val<uint32_t>(2) == 1 : false;
-    const bool is_second_stage_reader = is_allgather_worker ? get_arg_val<uint32_t>(3) == 1 : false;
+    const uint32_t num_reduce_tiles_per_block_h = get_arg(args::num_reduce_tiles_per_block_h);
+    const uint32_t num_tiles_per_allgather_worker = is_allgather_worker ? get_vararg(0) : 0;
+    const bool use_two_stage_reduce = is_allgather_worker ? get_vararg(1) == 1 : false;
+    const bool is_second_stage_reader = is_allgather_worker ? get_vararg(2) == 1 : false;
 
     uint32_t num_blocks_reduce;
     if (is_second_stage_reader) {
@@ -58,48 +57,55 @@ void kernel_main() {
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t scaler0 = 0;
 
-    constexpr uint32_t cb_in0 = get_named_compile_time_arg_val("cb_in0");
-    constexpr uint32_t cb_in1 = get_named_compile_time_arg_val("cb_in1");
-    constexpr uint32_t cb_scaler = get_named_compile_time_arg_val("cb_scaler");
-    constexpr uint32_t cb_eps = get_named_compile_time_arg_val("cb_eps");
-    constexpr uint32_t cb_scaler_global = get_named_compile_time_arg_val("cb_scaler_global");
-    constexpr uint32_t cb_gamma = get_named_compile_time_arg_val("cb_gamma");
-    constexpr uint32_t cb_beta = get_named_compile_time_arg_val("cb_beta");
-    constexpr uint32_t cb_x = get_named_compile_time_arg_val("cb_x");  // x minus mean
+    constexpr uint32_t cb_in0 = dfb::cb_in0;
+    constexpr uint32_t cb_scaler = dfb::cb_scaler;
+    constexpr uint32_t cb_eps = dfb::cb_eps;
+    constexpr uint32_t cb_scaler_global = dfb::cb_scaler_global;
+    constexpr uint32_t cb_x = dfb::cb_x;
 #if defined RMSNORM and not defined FUSE_PRE_ADD
-    constexpr uint32_t cb_xmm = cb_in0;  // x minus mean
+    constexpr uint32_t cb_xmm = cb_in0;
 #else
-    constexpr uint32_t cb_xmm = get_named_compile_time_arg_val("cb_xmm");  // x minus mean
+    constexpr uint32_t cb_xmm = dfb::cb_xmm;
 #endif
-    constexpr uint32_t cb_ex_partial = get_named_compile_time_arg_val("cb_ex_partial");  // E[x] partial reduce
-    constexpr uint32_t cb_ex = get_named_compile_time_arg_val("cb_ex");                  // E[x] global reduce
-    constexpr uint32_t cb_ex_external = get_named_compile_time_arg_val("cb_ex_external");
-    constexpr uint32_t cb_ex_partial2 =
-        get_named_compile_time_arg_val("cb_ex_partial2");                  // E[(x-E[x])^2] partial reduce
-    constexpr uint32_t cb_ex2 = get_named_compile_time_arg_val("cb_ex2");  // E[(x-E[x])^2] global reduce
-    constexpr uint32_t cb_ex_external2 = get_named_compile_time_arg_val("cb_ex_external2");
-    constexpr uint32_t cb_ex_global = get_named_compile_time_arg_val("cb_ex_global");  // E[x] global reduce
-    constexpr uint32_t cb_xmm2 = cb_x;                    // xmm^2
-    constexpr uint32_t cb_ex2pe = get_named_compile_time_arg_val("cb_ex2pe");  // E[(x-E[x])^2]+eps
-    constexpr uint32_t cb_fusion = get_named_compile_time_arg_val("cb_xmm");   // stream gamma/beta (alias of cb_xmm)
-    constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t cb_ex_partial = dfb::cb_ex_partial;
+    constexpr uint32_t cb_ex = dfb::cb_ex;
+    constexpr uint32_t cb_ex_external = dfb::cb_ex_external;
+    constexpr uint32_t cb_ex_partial2 = dfb::cb_ex_partial2;
+    constexpr uint32_t cb_ex2 = dfb::cb_ex2;
+    constexpr uint32_t cb_ex_external2 = dfb::cb_ex_external2;
+    constexpr uint32_t cb_ex_global = dfb::cb_ex_global;
+    constexpr uint32_t cb_xmm2 = cb_x;
+    constexpr uint32_t cb_ex2pe = dfb::cb_ex2pe;
+    // cb_fusion aliases cb_xmm — used for streaming gamma/beta. When neither is fused,
+    // it isn't referenced.
+    constexpr uint32_t cb_fusion = dfb::cb_xmm;
+    constexpr uint32_t cb_out = dfb::cb_out;
+#ifdef FUSE_PRE_ADD
+    constexpr uint32_t cb_in1 = dfb::cb_inb;
+#endif
+#ifdef FUSE_GAMMA
+    constexpr uint32_t cb_gamma = dfb::cb_gamma;
+    DataflowBuffer cb_gamma_obj(cb_gamma);
+#endif
+#ifdef FUSE_BETA
+    constexpr uint32_t cb_beta = dfb::cb_beta;
+    DataflowBuffer cb_beta_obj(cb_beta);
+#endif
 
-    CircularBuffer cb_scaler_obj(cb_scaler);
-    CircularBuffer cb_scaler_global_obj(cb_scaler_global);
-    CircularBuffer cb_gamma_obj(cb_gamma);
-    CircularBuffer cb_beta_obj(cb_beta);
-    CircularBuffer cb_xmm_obj(cb_xmm);
-    CircularBuffer cb_ex_partial_obj(cb_ex_partial);
-    CircularBuffer cb_ex_obj(cb_ex);
-    CircularBuffer cb_ex_external_obj(cb_ex_external);
-    CircularBuffer cb_ex_partial2_obj(cb_ex_partial2);
-    CircularBuffer cb_ex2_obj(cb_ex2);
-    CircularBuffer cb_ex_external2_obj(cb_ex_external2);
-    CircularBuffer cb_ex_global_obj(cb_ex_global);
-    CircularBuffer cb_xmm2_obj(cb_xmm2);
-    CircularBuffer cb_ex2pe_obj(cb_ex2pe);
-    CircularBuffer cb_fusion_obj(cb_fusion);
-    CircularBuffer cb_out_obj(cb_out);
+    DataflowBuffer cb_scaler_obj(cb_scaler);
+    DataflowBuffer cb_scaler_global_obj(cb_scaler_global);
+    DataflowBuffer cb_xmm_obj(cb_xmm);
+    DataflowBuffer cb_ex_partial_obj(cb_ex_partial);
+    DataflowBuffer cb_ex_obj(cb_ex);
+    DataflowBuffer cb_ex_external_obj(cb_ex_external);
+    DataflowBuffer cb_ex_partial2_obj(cb_ex_partial2);
+    DataflowBuffer cb_ex2_obj(cb_ex2);
+    DataflowBuffer cb_ex_external2_obj(cb_ex_external2);
+    DataflowBuffer cb_ex_global_obj(cb_ex_global);
+    DataflowBuffer cb_xmm2_obj(cb_xmm2);
+    DataflowBuffer cb_ex2pe_obj(cb_ex2pe);
+    DataflowBuffer cb_fusion_obj(cb_fusion);
+    DataflowBuffer cb_out_obj(cb_out);
 
     binary_op_init_common(cb_in0, cb_in0, cb_x);
 
@@ -120,11 +126,11 @@ void kernel_main() {
 #else
     constexpr uint32_t cb_in = cb_in0;
 #endif
-    CircularBuffer cb_in_obj(cb_in);
+    DataflowBuffer cb_in_obj(cb_in);
     constexpr uint32_t cb_im = do_gamma ? cb_x : (do_beta ? cb_fusion : cb_out);
-    CircularBuffer cb_im_obj(cb_im);
+    DataflowBuffer cb_im_obj(cb_im);
     constexpr uint32_t cb_outgamma = do_beta ? cb_fusion : cb_out;
-    CircularBuffer cb_outgamma_obj(cb_outgamma);
+    DataflowBuffer cb_outgamma_obj(cb_outgamma);
 
 // pre-add x + y
 #ifdef FUSE_PRE_ADD
@@ -285,12 +291,12 @@ void kernel_main() {
         compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h, 1),
         compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
     reconfig_data_format(cb_xmm2, cb_scaler);
-    cb_pop_front(cb_xmm2, num_tiles_per_block);
+    cb_xmm2_obj.pop_front(num_tiles_per_block);
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr (is_allgather_worker) {
         reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW, FP32_DEST_ACC>(cb_ex_external2, cb_scaler_global, cb_ex2);
-        cb_reserve_back(cb_ex2, num_tiles_per_allgather_worker);
+        cb_ex2_obj.reserve_back(num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
             cb_scaler_global_obj.wait_front(1);
@@ -334,9 +340,9 @@ void kernel_main() {
         }
     }
 
-    if constexpr (do_gamma == 0 && do_beta == 0) {
-        pack_reconfig_data_format(cb_out);
-    }
+#if !defined(FUSE_GAMMA) && !defined(FUSE_BETA)
+    pack_reconfig_data_format(cb_out);
+#endif
 // (x - Ex) * 1/[sqrt(Var + eps)]
 #if defined RMSNORM and not defined FUSE_PRE_ADD
     if constexpr (FLOAT32_DTYPE) {
@@ -389,11 +395,12 @@ void kernel_main() {
     cb_xmm_obj.pop_front(num_tiles_per_block);
     cb_im_obj.wait_front(num_tiles_per_block);
 
-    if constexpr (do_gamma) {
+#ifdef FUSE_GAMMA
+    {
         reconfig_data_format(cb_im, cb_gamma);
-        if constexpr (do_beta == 0) {
-            pack_reconfig_data_format(cb_out);
-        }
+#ifndef FUSE_BETA
+        pack_reconfig_data_format(cb_out);
+#endif
         mul_bcast_rows_init_short(cb_im, cb_gamma);
         cb_gamma_obj.wait_front(block_w);
         index_h_offset = 0;
@@ -406,9 +413,6 @@ void kernel_main() {
                     index = w + index_subblock_w_offset;
                     mul_tiles_bcast_rows(cb_im, cb_gamma, index + index_h_offset, index, w);
 #ifdef SFPU_OP_INIT_ACTIVATION
-                    // Activation must be applied last. If do_beta != 0 then
-                    // activation will be applied after the beta addition.
-                    // Otherwise, we can apply the activation here.
                     if constexpr (!do_beta) {
                         SFPU_OP_INIT_ACTIVATION
                         SFPU_OP_FUNC_ACTIVATION
@@ -429,8 +433,10 @@ void kernel_main() {
         cb_im_obj.pop_front(num_tiles_per_block);
         cb_outgamma_obj.wait_front(num_tiles_per_block);
     }
+#endif
 
-    if constexpr (do_beta) {
+#ifdef FUSE_BETA
+    {
         reconfig_data_format(cb_fusion, cb_beta);
         pack_reconfig_data_format(cb_out);
         add_bcast_rows_init_short(cb_fusion, cb_beta);
@@ -463,4 +469,5 @@ void kernel_main() {
         cb_fusion_obj.pop_front(num_tiles_per_block);
         cb_out_obj.wait_front(num_tiles_per_block);
     }
+#endif
 }

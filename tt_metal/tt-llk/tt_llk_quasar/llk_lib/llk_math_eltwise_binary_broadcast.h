@@ -91,35 +91,56 @@ inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TensorShape& te
 template <BroadcastType BROADCAST_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_eltwise_binary_broadcast_addrmod_()
 {
+    WAYPOINT("MBA0");
     static_assert((BROADCAST_TYPE != BroadcastType::NONE), "Broadcast type cannot be NONE for this operation");
+
+    // Quasar: addr_mod_t::set() below writes TENSIX_CFG directly from the MATH RISC-V core
+    // (volatile MMIO stores), unlike Wormhole where .set() emits SETC16 *instructions* that the
+    // backend auto-orders behind in-flight math. If a preceding op (e.g. a row reduce, whose
+    // Quasar reduce_uninit is a no-op on the MATH thread) is still draining in the math backend,
+    // the config-bus store races that backend over the config path and deadlocks (observed:
+    // MATH wedged at the ADDR_MOD_1 .set(), waypoint MBA3). Gate the config writes behind math
+    // completion, recovering the ordering WH gets implicitly.
+    WAYPOINT("MBAS");
+    TTI_STALLWAIT(p_stall::STALL_CFG, 0, p_stall::MATH, p_stall::WAIT_SFPU);
+    WAYPOINT("MBAT");
 
     constexpr std::uint8_t num_srb_rows_inc = (BROADCAST_TYPE == BroadcastType::COL) ? ELTWISE_MATH_ROWS : 0;
     constexpr bool math_fidelity_enable     = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
 
     // For ELWADD/SUB/MUL, can increment source and dest registers
+    WAYPOINT("MBA1");
     addr_mod_t {
         .srca     = {.incr = ELTWISE_MATH_ROWS},
         .srcb     = {.incr = num_srb_rows_inc},
         .dest     = {.incr = ELTWISE_MATH_ROWS},
         .fidelity = {.incr = 0, .clr = math_fidelity_enable}}
         .set(ADDR_MOD_0);
+    WAYPOINT("MBA2");
 
     // Reset Src counters, inc dest
+    WAYPOINT("MBA3");
     addr_mod_t {.srca = {.clr = 1}, .srcb = {.clr = 1}, .dest = {.incr = ELTWISE_MATH_ROWS}, .fidelity = {.incr = 0, .clr = math_fidelity_enable}}.set(
         ADDR_MOD_1);
+    WAYPOINT("MBA4");
 
     if constexpr (BROADCAST_TYPE == BroadcastType::COL)
     {
         // Clear srcB counter for new face, but keep counters for dest & SrcA
+        WAYPOINT("MBA5");
         addr_mod_t {
             .srca = {.incr = ELTWISE_MATH_ROWS}, .srcb = {.clr = 1}, .dest = {.incr = ELTWISE_MATH_ROWS}, .fidelity = {.incr = 0, .clr = math_fidelity_enable}}
             .set(ADDR_MOD_2);
+        WAYPOINT("MBA6");
     }
 
     if constexpr (math_fidelity_enable)
     {
+        WAYPOINT("MBA7");
         addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}, .fidelity = {.incr = 1, .clr = 0}}.set(ADDR_MOD_3);
+        WAYPOINT("MBA8");
     }
+    WAYPOINT("MBA9");
 }
 
 /**
@@ -163,11 +184,15 @@ inline void _llk_math_eltwise_binary_broadcast_addrmod_()
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, BroadcastType BROADCAST_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_eltwise_binary_broadcast_init_(const TensorShape& tensor_shape)
 {
+    WAYPOINT("MBI0");
     _llk_math_eltwise_binary_broadcast_addrmod_<BROADCAST_TYPE, MATH_FIDELITY_TYPE>();
+    WAYPOINT("MBI1");
     _llk_math_eltwise_binary_broadcast_mop_config_<ELTWISE_BINARY_TYPE, BROADCAST_TYPE, MATH_FIDELITY_TYPE>(tensor_shape);
+    WAYPOINT("MBI2");
 
     // Reset all counters
     _reset_counters_<p_setrwc::SET_ABD_F>();
+    WAYPOINT("MBI3");
 }
 
 /**
@@ -182,11 +207,17 @@ inline void _llk_math_eltwise_binary_broadcast_init_(const TensorShape& tensor_s
  */
 inline void _llk_math_eltwise_binary_broadcast_(const std::uint32_t tile_idx)
 {
+    WAYPOINT("MBC0");
     _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
+    WAYPOINT("MBC1");
 
     // Run MOP
+    WAYPOINT("MBC2");
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+    WAYPOINT("MBC3");
 
     // Reset all counters
+    WAYPOINT("MBC4");
     _reset_counters_<p_setrwc::SET_ABD_F>();
+    WAYPOINT("MBC5");
 }
