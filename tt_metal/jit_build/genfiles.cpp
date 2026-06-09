@@ -33,6 +33,7 @@
 #include "build.hpp"
 #include "hlk_desc.hpp"
 #include "jit_build/jit_build_utils.hpp"
+#include "jit_build/kernel_signature_parser.hpp"
 #include "jit_build_options.hpp"
 #include "jit_build_settings.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -283,6 +284,26 @@ void jit_build_genfiles_kernel_include(
     const JitBuildEnv& env, const JitBuildSettings& settings, const KernelSource& kernel_src) {
     // Note: assumes dirs (and descriptors) already created
     log_trace(tt::LogBuildKernels, "Generating defines for BRISC/NCRISC/ERISC user kernel");
+
+    // Phase 1 (kernel-args-as-parameters): before JIT compile, scan the kernel source for a
+    // TT_KERNEL marker and parse the entry signature. Today this only logs the parsed template
+    // (CTA) and function (RTA/CRTA) parameter names; a later step turns it into a generated
+    // kernel_main() shim. Kernels without a TT_KERNEL marker parse to nullopt and are unaffected.
+    if (auto sig = parse_kernel_main_signature(kernel_src.get_content())) {
+        const std::string source_desc =
+            kernel_src.source_type_ == KernelSource::FILE_PATH ? kernel_src.path_.string() : std::string("<inline>");
+        log_info(
+            tt::LogBuildKernels,
+            "TT_KERNEL entry parsed\n"
+            "  source          : {}\n"
+            "  function name   : {}\n"
+            "  CTAs (template) : [{}]\n"
+            "  runtime (fn)    : [{}]",
+            source_desc,
+            sig->name,
+            fmt::join(sig->template_param_names, ", "),
+            fmt::join(sig->fn_param_names, ", "));
+    }
 
     string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
 
