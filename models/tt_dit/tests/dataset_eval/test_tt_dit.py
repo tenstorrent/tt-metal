@@ -18,6 +18,7 @@ import ttnn
 # from .fid_score import calculate_fid_score
 from models.demos.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
 from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.tt_dit.pipelines.events import profiler_event_callback
 
 from .clip_encoder import CLIPEncoder
 
@@ -208,10 +209,7 @@ def test_tt_dit_accuracy(
             generated_images = pipeline.run_single_prompt(
                 prompt=prompt,
                 num_inference_steps=num_inference_steps,
-                seed=0,
-                traced=True,
-                profiler=benchmark_profiler,
-                profiler_iteration=i,
+                on_event=profiler_event_callback(benchmark_profiler, i),
                 **model_metadata.get("extra_args", {}),
             )
 

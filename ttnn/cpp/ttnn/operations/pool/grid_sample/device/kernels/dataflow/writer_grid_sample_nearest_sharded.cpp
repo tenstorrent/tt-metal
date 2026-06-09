@@ -161,7 +161,6 @@ void kernel_main() {
     uint32_t input_addr = 0;
     uint32_t global_grid_stick_start = 0;
     uint32_t grid_addr = 0;
-    uint32_t num_pages = 0;
     uint32_t start_page_id = 0;
     if constexpr (is_sharded) {
         // Runtime arguments - same as sharded reader
@@ -170,7 +169,6 @@ void kernel_main() {
     } else {
         input_addr = get_arg_val<uint32_t>(0);
         grid_addr = get_arg_val<uint32_t>(1);
-        num_pages = get_arg_val<uint32_t>(2);
         start_page_id = get_arg_val<uint32_t>(3);
         global_grid_stick_start = start_page_id;
     }

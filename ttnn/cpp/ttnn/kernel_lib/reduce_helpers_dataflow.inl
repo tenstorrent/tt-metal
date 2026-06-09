@@ -7,8 +7,8 @@
 
 #include <cmath>
 #include "llk_defs.h"
-#include "api/dataflow/circular_buffer.h"
-#include "ttnn/cpp/ttnn/kernel_lib/cb_helpers_dataflow.hpp"
+#include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/dfb_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
 
@@ -218,12 +218,11 @@ FORCE_INLINE void fill_tile_col0_partial(
 // Prepare CB tile for reduce using a caller-provided float scaler
 // =============================================================================
 
-template <uint32_t cb_id, PoolType pool_type, ReduceDim reduce_dim, bool compute_uses_reduce_tile>
+template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim, bool compute_uses_reduce_tile>
 FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_dim_elements_in_tile) {
-    ASSERT(cb_id < NUM_CIRCULAR_BUFFERS);
-    constexpr DataFormat data_format = get_dataformat(cb_id);
-    constexpr uint32_t tile_r_dim = get_tile_r_dim<cb_id>();
-    constexpr uint32_t tile_c_dim = get_tile_c_dim<cb_id>();
+    constexpr DataFormat data_format = get_dataformat(dfb_id);
+    constexpr uint32_t tile_r_dim = get_tile_r_dim<dfb_id>();
+    constexpr uint32_t tile_c_dim = get_tile_c_dim<dfb_id>();
     static_assert(tile_r_dim % tt::constants::FACE_HEIGHT == 0, "tile height must be a multiple of FACE_HEIGHT");
     static_assert(tile_c_dim % tt::constants::FACE_WIDTH == 0, "tile width must be a multiple of FACE_WIDTH");
     constexpr uint32_t face_rows = tile_r_dim / tt::constants::FACE_HEIGHT;
@@ -247,12 +246,12 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_di
     // Unused for REDUCE_SCALAR (which always fills the full tile).
     constexpr uint32_t full_dim = (reduce_dim == ReduceDim::REDUCE_COL) ? tile_r_dim : tile_c_dim;
 
-    CircularBuffer cb(cb_id);
+    DataflowBuffer dfb(dfb_id);
 
-    cb.reserve_back(1);
-    uint32_t write_addr = cb.get_write_ptr();
+    dfb.reserve_back(1);
+    uint32_t write_addr = dfb.get_write_ptr();
 
-    zero_tile<cb_id>(write_addr);
+    zero_tile<dfb_id>(write_addr);
 
     if constexpr (use_matmul) {
         uint32_t scaler = float_to_col0_scaler_bits<data_format>(scaler_f);
@@ -280,15 +279,34 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_di
         }
     }
 
-    cb.push_back(1);
+    // Quasar DM cores have a write-back L1 D-cache (4KB, per-core) + L2 cache
+    // (128KB, shared between DM cores). RISC stores flow Core -> L1 D$ -> L2 -> TL1
+    // (Tensix L1, the SRAM that other RISCs read). The volatile fills above land
+    // in DM-private caches; without an explicit flush, TRISC-side unpack reads
+    // stale TL1 contents (zeros) even though the DM observes its own writes via
+    // L1 D$ hits. This is consistent with the runtime evidence:
+    //   DM:    PRS:after_fill @0xbb780 : 0x3f803f80 ...
+    //   UNPACK U:scaler sh@0xbb780     : 0x0 0x0 ...
+    // For NoC-written input tiles the NoC engine writes directly to TL1 and
+    // bypasses DM caches, which is why those are visible to TRISC.
+    // flush_l2_cache_range probes L1 D$ for dirty data and writes through to TL1,
+    // so TRISC sees the freshly-filled scaler tile once we signal push_back.
+    // On non-Quasar (or non-DM) builds this is a no-op.
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    {
+        constexpr uint32_t tile_size_bytes = get_tile_size(cb_id);
+        flush_l2_cache_range(write_addr, tile_size_bytes);
+    }
+#endif
+    dfb.push_back(1);
 }
 
 // =============================================================================
-// Format-aware calculate_and_prepare_reduce_scaler (cb_id-deduced format and tile shape)
+// Format-aware calculate_and_prepare_reduce_scaler (dfb_id-deduced format and tile shape)
 // =============================================================================
 
 template <
-    uint32_t cb_id,
+    uint32_t dfb_id,
     PoolType pool_type,
     ReduceDim reduce_dim,
     uint32_t reduce_factor,
@@ -317,9 +335,9 @@ FORCE_INLINE void calculate_and_prepare_reduce_scaler(uint32_t valid_reduce_dim_
     }
 
     // -------------------------------------------------------------------------
-    // 2. Fill the CB with the computed scaler
+    // 2. Fill the DFB with the computed scaler
     // -------------------------------------------------------------------------
-    prepare_reduce_scaler<cb_id, pool_type, reduce_dim, compute_uses_reduce_tile>(scaler_f, valid_reduce_dim_elements_in_tile);
+    prepare_reduce_scaler<dfb_id, pool_type, reduce_dim, compute_uses_reduce_tile>(scaler_f, valid_reduce_dim_elements_in_tile);
 }
 
 }  // namespace dataflow_kernel_lib

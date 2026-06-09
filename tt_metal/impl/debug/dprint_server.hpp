@@ -22,7 +22,8 @@ class DispatchCoreConfig;
 class DPrintServer {
 public:
     // Constructor/destructor, reads dprint options from RTOptions.
-    DPrintServer(MetalContext* context, MetalEnv& env, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config);
+    DPrintServer(
+        MetalContext* context, MetalEnv& env, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config);
     ~DPrintServer();
 
     // Sets whether the print server is muted. Calling this function while a kernel is running may
@@ -53,7 +54,7 @@ public:
     // return true and the print server will be terminated.
     bool hang_detected();
 
-    class Impl;  // Abstract base; defined in dprint_server.cpp.
+    class Impl;  // Defined in dprint_server.cpp.
 
 private:
     std::unique_ptr<Impl> impl_;  // Pointer to implementation

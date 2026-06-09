@@ -168,6 +168,28 @@ def test_pad_with_program_cache(device, n, c, h, w, padding, torch_padding, valu
     assert device.cache_entries_counter.total == expected_cache_entries
 
 
+def test_pad_program_cache_hit_updates_pad_value_buffer(device):
+    """Regression for #44565: pad must update its pad-value buffer on cache hits.
+
+    A minimal pad-only reproducer did not trigger the stale pad-value buffer bug; it
+    only reproduced through prepare_conv3d_weights, which exercises pad after
+    from_torch, to_device, and permute.
+    """
+    torch.manual_seed(42)
+    weights = torch.randn(32, 12, 3, 3, 3, dtype=torch.float32)
+
+    outputs = []
+    for _ in range(5):
+        tt_weight = ttnn.from_torch(weights, dtype=ttnn.DataType.BFLOAT16, pad_value=0)
+        prepared_weight = ttnn.experimental.prepare_conv3d_weights(
+            weight_tensor=tt_weight, groups=1, C_in_block=32, alignment=32, device=device
+        )
+        outputs.append(ttnn.to_torch(prepared_weight).to(torch.float32))
+
+    max_diff = max((output - outputs[0]).abs().max().item() for output in outputs[1:])
+    assert max_diff < 1e-3, f"pad output is non-deterministic across cache hits: max diff = {max_diff}"
+
+
 def run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient, dtype, buffer_type):
     torch.manual_seed(0)
 

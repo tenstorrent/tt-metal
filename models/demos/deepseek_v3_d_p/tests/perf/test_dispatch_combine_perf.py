@@ -212,7 +212,7 @@ def _perf_param(
     if dtype_filter:
         k_filter += f" and {dtype_filter}"
     return (
-        f"pytest models/demos/deepseek_v3_d_p/tests/pcc/{worker_file}::{worker_test} " f"-k '{k_filter}'",
+        f"pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/{worker_file}::{worker_test} " f"-k '{k_filter}'",
         expected_ns,
         f"deepseek_v3_{op}",
         model_name,
@@ -236,20 +236,20 @@ _DISPATCH_PERF_PARAMS = [
         "test_ttnn_dispatch",
         "linear",
         2,
-        4_108_262,
+        4_068_188,
         "",
         dtype_filter="bf16_out",
     ),
     _perf_param(
-        "dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "ring", 2, 3_683_084, "", dtype_filter="bf16_out"
+        "dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "ring", 2, 2_652_427, "", dtype_filter="bf16_out"
     ),
 ]
 _COMBINE_PERF_PARAMS = [
     _perf_param(
-        "combine", "test_prefill_combine.py", "test_ttnn_combine", "linear", 2, 4_121_973, "CombineDeviceOperation"
+        "combine", "test_prefill_combine.py", "test_ttnn_combine", "linear", 2, 3_538_087, "CombineDeviceOperation"
     ),
     _perf_param(
-        "combine", "test_prefill_combine.py", "test_ttnn_combine", "ring", 2, 2_769_700, "CombineDeviceOperation"
+        "combine", "test_prefill_combine.py", "test_ttnn_combine", "ring", 2, 2_290_921, "CombineDeviceOperation"
     ),
 ]
 
@@ -279,10 +279,10 @@ _COMBINE_PERF_PARAMS_FULL = [
         "combine", "test_prefill_combine.py", "test_ttnn_combine", topo, nlinks, expected, "CombineDeviceOperation"
     )
     for topo, nlinks, expected in [
-        ("linear", 1, 5_767_986),
-        ("linear", 2, 4_136_638),
-        ("ring", 1, 4_968_952),
-        ("ring", 2, 2_769_700),
+        ("linear", 1, 4_893_014),
+        ("linear", 2, 3_552_410),
+        ("ring", 1, 2_837_530),
+        ("ring", 2, 2_298_073),
     ]
 ] + [
     _perf_param(

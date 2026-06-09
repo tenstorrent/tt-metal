@@ -27,7 +27,7 @@ inline void write_tiles_in_block(
             if (block_row_id >= num_rows_unpadded) {
                 break;
             }
-            uint64_t dst_noc_addr = get_noc_addr(block_row_id, s, block_row_offset);
+            uint64_t dst_noc_addr = s.get_noc_addr(block_row_id, block_row_offset);
             noc_async_write(l1_read_addr, dst_noc_addr, block_row_size_unpadded);
             l1_read_addr += block_row_size;
             block_row_id++;

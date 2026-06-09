@@ -42,7 +42,7 @@ void kernel_main() {
     cb16.reserve_back(num_output_tiles);
     cb17.reserve_back(num_output_tiles);
 
-    acquire_dst();
+    tile_regs_acquire();
 
     /*
     Algorithm implementation:
@@ -129,18 +129,21 @@ void kernel_main() {
 
     // #if defined(TRISC_MATH)
     //     volatile uint32_t* dst32 = reinterpret_cast<volatile uint32_t*>(0xFFBD8000U);
-    //     DPRINT << "DEST[row][col] raw INT32 (hex):" << ENDL();
+    //     DPRINT("DEST[row][col] raw INT32 (hex):\n");
     //     for (int row = 0; row < 4*64; row++) {
     //         for (int col = 0; col < 16; col++) {
     //             uint32_t val = dst32[row * 16 + col];
     //             float f;
     //             std::memcpy(&f, &val, sizeof(f));
-    //             DPRINT << f << " ";
-    //             // DPRINT << HEX() << val << " ";
+    //             DPRINT("{} ", f);
+    //             // DPRINT("{:#X} ", val);
     //         }
-    //         DPRINT << ENDL();
+    //         DPRINT("\n");
     //     }
     // #endif
+
+    tile_regs_commit();
+    tile_regs_wait();
 
     // step 6
     PACK(TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0));
@@ -148,7 +151,7 @@ void kernel_main() {
     ckernel::pack_reconfig_data_format(cb_out0, cb_out1);
     ckernel::pack_tile(index_offset_tiles, cb_out1);
 
-    release_dst();
+    tile_regs_release();
 
     cb0.pop_front(num_input_tiles);
     cb1.pop_front(num_input_tiles);

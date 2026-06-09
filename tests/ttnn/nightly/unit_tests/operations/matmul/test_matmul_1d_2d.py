@@ -5,7 +5,7 @@
 import pytest
 from loguru import logger
 import ttnn
-from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
+from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor
 import torch
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 

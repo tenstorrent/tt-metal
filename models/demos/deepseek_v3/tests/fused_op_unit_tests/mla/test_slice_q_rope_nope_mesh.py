@@ -33,7 +33,7 @@ from tests.ttnn.utils_for_testing import assert_equal
     "device_params",
     [
         {
-            "trace_region_size": 6052000,
+            "trace_region_size": 0,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": get_fabric_config(),
         }

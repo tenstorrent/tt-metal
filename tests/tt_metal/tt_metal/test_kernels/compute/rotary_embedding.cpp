@@ -10,9 +10,6 @@
 #include "api/compute/tilize.h"
 #include "api/compute/untilize.h"
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
-
 ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles, uint32_t in1_idx) {
     // Multiply input by cos
     cb_wait_front(in0_cb, num_tiles);
@@ -20,20 +17,24 @@ ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
     cb_reserve_back(out_cb, num_tiles);
 
 #ifdef DECODE_MODE
-    ACQ();
+    tile_regs_acquire();
     mul_bcast_rows_init_short(in0_cb, in1_cb);
     mul_tiles_bcast_rows(in0_cb, in1_cb, 0, in1_idx, 0);
+    tile_regs_commit();
+    tile_regs_wait();
     pack_tile(0, out_cb);
-    REL();
+    tile_regs_release();
     cb_push_back(out_cb, num_tiles);
     cb_pop_front(in0_cb, num_tiles);
 // We don't pop in1 in decode which is sin/cos since we don't stream
 #else
-    ACQ();
+    tile_regs_acquire();
     mul_tiles_init(in0_cb, in1_cb);
     mul_tiles(in0_cb, in1_cb, 0, 0, 0);
+    tile_regs_commit();
+    tile_regs_wait();
     pack_tile(0, out_cb);
-    REL();
+    tile_regs_release();
     cb_push_back(out_cb, num_tiles);
     cb_pop_front(in0_cb, num_tiles);
     cb_pop_front(in1_cb, num_tiles);
@@ -110,11 +111,13 @@ void kernel_main() {
                 // Multiply half of the rotated input by scalar (-1)
                 cb_wait_front(rotated_in_cb, onetile);
                 cb_reserve_back(rotated_in_interm_cb, onetile);
-                ACQ();
+                tile_regs_acquire();
                 mul_tiles_bcast_scalar_init_short(rotated_in_cb, scalar_cb);
                 mul_tiles_bcast_scalar(rotated_in_cb, scalar_cb, 0, 0, 0);
+                tile_regs_commit();
+                tile_regs_wait();
                 pack_tile(0, rotated_in_interm_cb);
-                REL();
+                tile_regs_release();
                 cb_push_back(rotated_in_interm_cb, onetile);
                 cb_pop_front(rotated_in_cb, onetile);
                 // Multiply rotated input by sin
@@ -132,11 +135,13 @@ void kernel_main() {
             cb_wait_front(sin_interm_cb, onetile);
             cb_reserve_back(out_cb, onetile);
 
-            ACQ();
+            tile_regs_acquire();
             add_tiles_init(cos_interm_cb, sin_interm_cb);
             add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);
+            tile_regs_commit();
+            tile_regs_wait();
             pack_tile(0, out_cb);
-            REL();
+            tile_regs_release();
             cb_push_back(out_cb, onetile);
             cb_pop_front(cos_interm_cb, onetile);
             cb_pop_front(sin_interm_cb, onetile);

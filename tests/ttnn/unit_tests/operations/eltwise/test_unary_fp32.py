@@ -163,6 +163,21 @@ def test_acos_fp32(device):
     run_unary_fp32_test_with_ulp(device, ttnn.acos, torch.acos, max_ulp=100, pcc_check=True)
 
 
+def test_sinh_fp32_all_bfloat16_bitpatterns(device):
+    # Full-tensor torch.sinh overflows at +/-89.0 even though the rounded fp32 result is finite.
+    # Use a float64 golden rounded back to fp32 to test the kernel against the representable result.
+    run_unary_fp32_test_with_ulp(device, ttnn.sinh, lambda x: torch.sinh(x.double()).float(), max_ulp=3)
+
+
+def test_cosh_fp32_all_bfloat16_bitpatterns(device):
+    run_unary_fp32_test_with_ulp(
+        device,
+        ttnn.cosh,
+        lambda x: torch.cosh(x.double()).float(),
+        max_ulp=1,
+    )
+
+
 def run_unary_test(device, h, w, ttnn_function, ulp=1, allow_nonfinite=False, pcc_check=False, pcc=0.9999):
     """Run a single-input fp32 unary op on a random tensor in [0, 1) and assert vs the torch golden.
 
@@ -226,13 +241,13 @@ def test_log(device, h, w):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_sinh(device, h, w):
-    run_unary_test(device, h, w, ttnn.sinh, pcc_check=True)
+    run_unary_test(device, h, w, ttnn.sinh, ulp=3)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_cosh(device, h, w):
-    run_unary_test(device, h, w, ttnn.cosh, pcc_check=True, pcc=0.999)
+    run_unary_test(device, h, w, ttnn.cosh, ulp=1)
 
 
 @pytest.mark.parametrize("h", [64])

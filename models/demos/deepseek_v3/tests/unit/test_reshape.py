@@ -31,7 +31,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 10000, "fabric_config": get_fabric_config()}], indirect=True
+    "device_params", [{"trace_region_size": 0, "fabric_config": get_fabric_config()}], indirect=True
 )
 def test_reshape(mesh_device, in_shape, out_shape, layout, mem_config, dtype, enable_trace):
     torch_input = random_torch_tensor(dtype, in_shape)

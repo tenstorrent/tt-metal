@@ -37,7 +37,7 @@ void kernel_main() {
             cb_wait_front(output_cb, block_size);
             uint32_t output_read_ptr = get_read_ptr(output_cb);
             for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                noc_async_write_tile(tile_id, output_accessor, output_read_ptr);
+                noc_async_write_page(tile_id, output_accessor, output_read_ptr);
                 output_read_ptr += tile_bytes;
                 tile_id++;
                 tile_idx_in_head++;

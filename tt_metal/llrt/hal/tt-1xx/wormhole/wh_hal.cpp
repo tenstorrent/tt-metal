@@ -357,6 +357,7 @@ void Hal::initialize_wh(
     this->noc_node_id_ = NOC_NODE_ID;
     this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
     this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;
+    this->noc_max_burst_size_bytes_ = NOC_MAX_BURST_SIZE;
     this->noc_encoding_reg_ = COORDINATE_VIRTUALIZATION_ENABLED ? NOC_CFG(NOC_ID_LOGICAL) : NOC_NODE_ID;
     this->noc_coord_reg_offset_ = NOC_COORD_REG_OFFSET;
     this->noc_overlay_start_addr_ = NOC_OVERLAY_START_ADDR;
@@ -414,9 +415,10 @@ void Hal::initialize_wh(
         }
     };
 
+    constexpr size_t kWormholePinnedMemoryBudgetBytes =
+        (2ULL * 1024ULL * 1024ULL * 1024ULL) - (512ULL * 1024ULL * 1024ULL);
     this->max_pinned_memory_count_ = 12;
-    this->total_pinned_memory_size_ =
-        4ULL * 1024ULL * 1024ULL * 1024ULL - static_cast<uint64_t>(tt::tt_metal::DispatchSettings::MAX_HUGEPAGE_SIZE);
+    this->total_pinned_memory_size_ = kWormholePinnedMemoryBudgetBytes;
 }
 
 }  // namespace tt::tt_metal
