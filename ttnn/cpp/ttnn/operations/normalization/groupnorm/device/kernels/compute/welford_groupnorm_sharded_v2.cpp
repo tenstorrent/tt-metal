@@ -288,37 +288,23 @@ void kernel_main() {
         // Start Variance Calc
         // Wait for final welford values in cb_ex_global_id
         cb_ex_global.wait_front(2 * num_groups);
-        // PARTIAL migration: per-group (Var + eps) -> 1/sqrt(...) — same pattern as
-        // welford_groupnorm.cpp. compute_kernel_lib::TileOffset::Set(1 + (g << 1)) expresses the strided read.
-        // Reconfig: add_tiles_init + explicit reconfig_data_format_srcb(cb_eps_id) -> Input.
-        // No pack_reconfig -> None. rsqrt_tile_init<true> -> Legacy::On.
-        // cb_ex_global InputLifecycle::HeldBulk + Scalar + compute_kernel_lib::TileOffset::Set. cb_eps
-        // InputLifecycle::CallerManaged + Scalar. cb_ex2pe OutputLifecycle::Bulk + Scalar per call (replaces upfront
-        // reserve + push at end).
+        cb_ex2pe.reserve_back(num_groups);
+        // (Var + eps)
+        reconfig_data_format_srcb(cb_eps_id);
+        add_tiles_init(cb_ex_global_id, cb_eps_id);
         for (uint32_t g = 0; g < num_groups; ++g) {
-            compute_kernel_lib::eltwise_chain(
-                1,
-                compute_kernel_lib::BinaryFpu<
-                    cb_ex_global_id,
-                    cb_eps_id,
-                    compute_kernel_lib::BinaryFpuOp::Add,
-                    compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::InputLifecycle::HeldBulk,
-                    compute_kernel_lib::InputLifecycle::CallerManaged,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::TileOffset::Set>{1u + (g << 1), 0u},
-                compute_kernel_lib::Rsqrt<
-                    compute_kernel_lib::Approx::Exact,
-                    compute_kernel_lib::Legacy::On,
-                    compute_kernel_lib::Dst::D0>{},
-                compute_kernel_lib::PackTile<
-                    cb_ex2pe_id,
-                    compute_kernel_lib::OutputLifecycle::Bulk,
-                    compute_kernel_lib::PackTileReconfig::None>{});
+            tile_regs_acquire();
+            add_tiles(cb_ex_global_id, cb_eps_id, 1 + (g << 1), 0, dst0);
+
+            // 1/[sqrt(Var + eps)]
+            rsqrt_tile_init<true>();
+            rsqrt_tile<true>(dst0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(dst0, cb_ex2pe_id);
+            tile_regs_release();
         }
+        cb_ex2pe.push_back(num_groups);
         // End Variance Calc
 
         cb_ex2pe.wait_front(num_groups);
