@@ -95,6 +95,7 @@ We’ll use a config file for flexibility:
     "enable_logging": true,
     "report_name": "ttnn_visualizer_tutorial",
     "enable_graph_report": false,
+    "enable_graph_python_stack_traces": true,
     "enable_detailed_buffer_report": true,
     "enable_detailed_tensor_report": false,
     "enable_comparison_mode": false
@@ -106,6 +107,7 @@ Each configuration option has a specific purpose:
 * **enable_fast_runtime_mode** - Must be disabled to enable logging.
 * **enable_logging** - Synchronizes main thread after every operation and logs the operation.
 * **report_name** (*optional*) - Name of the report used by TT-NN Visualizer. If not provided, no data will be dumped to disk.
+* **enable_graph_python_stack_traces** (*optional*) - When true, outermost Python `begin_graph_capture` records Python call stacks. `ttnn.graph.full_graph_capture` always records Python stacks regardless of this flag.
 * **enable_detailed_buffer_report** (if *report_name* is set) - Enable to visualize the detailed buffer report after every operation.
 * **enable_graph_report** (if *report_name* is set) - Enable to visualize the graph after every operation.
 * **enable_detailed_tensor_report** (if *report_name* is set) - Enable to visualize the values of input and output tensors of every operation.
@@ -136,7 +138,7 @@ At the start of execution, you should see logs similar to the following sample o
 2025-08-01 09:20:51.664 | DEBUG    | ttnn:<module>:73 - Loading ttnn configuration from /root/tt-metal/vis.setup
 2025-08-01 09:20:51.665 | DEBUG    | ttnn:<module>:83 - Initial ttnn.CONFIG:
 Config{cache_path=/root/.cache/ttnn,model_cache_path=/root/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false, \
-   enable_fast_runtime_mode=false,throw_exception_on_fallback=false,enable_logging=true,enable_graph_report=false,enable_detailed_buffer_report=true, \
+   enable_fast_runtime_mode=false,throw_exception_on_fallback=false,enable_logging=true,enable_graph_report=false,enable_graph_python_stack_traces=true,enable_detailed_buffer_report=true, \
    enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false, \
    comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=ttnn_visualizer_tutorial,4042956046390500517}
 2025-08-01 09:20:51.754 | info     |   SiliconDriver | Opened PCI device 4; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:197)

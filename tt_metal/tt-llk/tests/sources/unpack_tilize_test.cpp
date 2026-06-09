@@ -74,8 +74,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 // copy srca to dest
     const bool is_8bit_format = _llk_math_skip_bh_tilize_workaround_wrapper_(formats.unpack_A_src);
     const bool TILIZE         = true;
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, TILIZE, is_int_fpu_en>(
-        num_faces, formats.math, is_8bit_format /* skip_bh_tilize_workaround */);
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<
+        DataCopyType::A2D,
+        is_fp32_dest_acc_en,
+        BroadcastType::NONE,
+        is_int_fpu_en,
+        llk_test_pack_mode_v<false, TILIZE>>(num_faces, formats.math, is_8bit_format /* skip_bh_tilize_workaround */);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
     const std::uint32_t tiles_in_block = params.NUM_TILES_IN_BLOCK;
@@ -110,13 +114,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     const std::uint32_t num_faces = params.num_faces;
-    const bool UNTILIZE           = false;
+    static constexpr bool UNTILIZE = false;
 
-    const bool TILIZE         = true;
+    static constexpr bool TILIZE = true;
     const bool is_8bit_format = _llk_pack_skip_bh_tilize_workaround_wrapper_(formats.unpack_A_src);
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, UNTILIZE, false /* tilize */>(
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>(
         formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */, FACE_R_DIM, TILE_C_DIM, num_faces);
-    _llk_pack_init_with_src_wrapper_<UNTILIZE, false /* zero_output */, TILIZE>(
+    _llk_pack_init_with_src_wrapper_<llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>, false /* zero_output */>(
         formats.pack_src,
         formats.pack_dst,
         FACE_R_DIM,
@@ -126,7 +130,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         false /* narrow_tile */,
         1 /* num_tiles */,
         is_8bit_format /* skip_bh_tilize_workaround */);
-    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, UNTILIZE>();
+    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
 
     const std::uint32_t tiles_in_block = params.NUM_TILES_IN_BLOCK;
     const std::uint32_t num_blocks     = params.NUM_BLOCKS;
@@ -140,7 +144,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             LLK_ASSERT(
                 (tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                 "Block tile index exceeds maximum destination tiles");
-            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, UNTILIZE>(tile, L1_ADDRESS(params.buffer_Res[res_tile_idx]));
+            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>>(tile, L1_ADDRESS(params.buffer_Res[res_tile_idx]));
         }
         _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     }

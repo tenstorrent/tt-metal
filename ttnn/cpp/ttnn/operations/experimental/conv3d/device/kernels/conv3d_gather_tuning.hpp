@@ -11,9 +11,9 @@
 //
 // Two cooperating gates select whether gather_rows_to_shard runs the trid ring:
 //
-//   1. Host per-shape classifier (program_factory): if the shape is compute-bound,
-//      `gather_trids` is set to 0 and all ring code is constexpr-elided in the
-//      kernel.  See conv3d_program_factory.cpp.
+//   1. Host per-shape classifier (program_factory): if the shape is compute-bound
+//      or uses a scratch-backed reader mode, `gather_trids` is set to 0 and all
+//      ring code is constexpr-elided in the kernel.  See conv3d_program_factory.cpp.
 //
 //   2. Kernel per-call fast-path (reader_vol2col): even when the host enables the
 //      ring, an individual gather call with too few reads to fill at least two ring

@@ -25,7 +25,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator_v2 import generate_stimuli_v2
+from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
@@ -104,6 +104,9 @@ DATACOPY_FORMATS = input_output_formats(
         DataFormat.Float16_b,
         DataFormat.Float16,
         DataFormat.MxFp4,
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
     ]
 )
 ALL_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
@@ -136,7 +139,7 @@ def test_eltwise_unary_datacopy_quasar(
     ):
         pytest.skip("MX formats require implied_math_format=Yes on Quasar")
 
-    src_A, tile_cnt_A, src_B, _ = generate_stimuli_v2(
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -204,5 +207,7 @@ def test_eltwise_unary_datacopy_quasar(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
     ), "Assert against golden failed"

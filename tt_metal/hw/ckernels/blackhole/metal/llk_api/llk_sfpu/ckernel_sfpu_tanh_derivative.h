@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
-#include "sfpu/ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
 
 using namespace sfpi;
@@ -207,7 +207,7 @@ inline void calculate_tanh_derivative_sech2() {
 
         // Explicit RNE rounding for BF16 output — SFPSTORE truncates toward zero by default.
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven);
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
         }
 
         sfpi::dst_reg[0] = result;

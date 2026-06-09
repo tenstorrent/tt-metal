@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/reflection.hpp>
+#include <tt-metalium/float8.hpp>
 #include "tensor/xtensor/partition.hpp"
 
 #include <type_traits>
@@ -300,6 +301,7 @@ EXPLICIT_INSTANTIATIONS_FOR_TYPE(int32_t)
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(uint8_t)
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(uint16_t)
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(uint32_t)
+EXPLICIT_INSTANTIATIONS_FOR_TYPE(float8_e4m3)
 // NOLINTEND(bugprone-macro-parentheses)
 
 #undef EXPLICIT_INSTANTIATIONS_FOR_TYPE

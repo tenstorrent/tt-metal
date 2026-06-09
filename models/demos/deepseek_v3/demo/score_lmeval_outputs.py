@@ -18,6 +18,8 @@ TASK_ALIASES = {
 
 GPQA_CHOICE_RE = re.compile(r"\(([A-D])\)")
 GPQA_BOXED_RE = re.compile(r"\\boxed(?:\s*\{)?\s*\(?([A-D])\)?\s*(?:\})?", re.IGNORECASE)
+AIME_BOXED_RE = re.compile(r"\\boxed\s*(?:\{([^{}]*)\}|([^\s$]+))")
+AIME_INT_RE = re.compile(r"-?\d+")
 
 
 def resolve_task_name(task_name: str, task_names: Collection[str]) -> str | None:
@@ -33,10 +35,41 @@ def resolve_task_name(task_name: str, task_names: Collection[str]) -> str | None
     return None
 
 
-def score_aime24(doc: dict, pred: str) -> dict[str, float]:
-    from lm_eval.tasks.aime import utils as aime_utils
+def normalize_aime_integer(value: object) -> int | None:
+    match = AIME_INT_RE.search(str(value).strip().replace(",", ""))
+    if match is None:
+        return None
+    return int(match.group(0))
 
-    return aime_utils.process_results(doc, [pred])
+
+def extract_aime_boxed_integer(pred: str) -> int | None:
+    matches = list(AIME_BOXED_RE.finditer(pred or ""))
+    for match in reversed(matches):
+        content = (match.group(1) or match.group(2) or "").strip().replace(",", "")
+        value = normalize_aime_integer(content)
+        if value is not None:
+            return value
+    # Some solutions use nested formatting such as \boxed{\textbf{321}},
+    # which the simple non-recursive boxed regex above intentionally avoids.
+    # For scoring AIME answers, the first integer shortly after the last
+    # \boxed marker is the signal we need.
+    boxed_markers = list(re.finditer(r"\\boxed", pred or ""))
+    for marker in reversed(boxed_markers):
+        value = normalize_aime_integer((pred or "")[marker.end() : marker.end() + 128])
+        if value is not None:
+            return value
+    return None
+
+
+def score_aime24(doc: dict, pred: str) -> dict[str, float]:
+    target = normalize_aime_integer(doc["answer"])
+    extracted = extract_aime_boxed_integer(pred)
+    correct = extracted is not None and target is not None and extracted == target
+    return {
+        "exact_match": 1.0 if correct else 0.0,
+        "no_boxed": 1.0 if extracted is None else 0.0,
+        "boxed_wrong": 1.0 if extracted is not None and not correct else 0.0,
+    }
 
 
 def extract_gpqa_choice(pred: str) -> str | None:
@@ -96,11 +129,10 @@ def load_generations_by_index(output_path: Path) -> dict[int, str]:
 
 
 def main() -> None:
-    from lm_eval.tasks import TaskManager
-
     parser = argparse.ArgumentParser(description="Score DeepSeek demo outputs with lm-eval task logic")
     parser.add_argument("--prompts-file", required=True, help="Prompt JSON used for demo.py")
     parser.add_argument("--output-file", required=True, help="demo.py output JSON or checkpoint JSONL")
+    parser.add_argument("--summary-json", help="Optional path for writing machine-readable score summary")
     args = parser.parse_args()
 
     prompts_path = Path(args.prompts_file)
@@ -115,8 +147,8 @@ def main() -> None:
     if not generations:
         raise SystemExit(f"No generations found in {output_path}")
 
-    task_manager = TaskManager()
-    task_index = task_manager.task_index.keys()
+    task_manager = None
+    task_index = None
     loaded_tasks = {}
     metrics = defaultdict(lambda: defaultdict(list))
     scored = 0
@@ -132,6 +164,11 @@ def main() -> None:
         if scorer is not None:
             result = scorer(doc, pred)
         else:
+            if task_manager is None:
+                from lm_eval.tasks import TaskManager
+
+                task_manager = TaskManager()
+                task_index = task_manager.task_index.keys()
             resolved = resolve_task_name(task_name, task_index)
             if resolved is None:
                 suggestions = difflib.get_close_matches(task_name, list(task_index), n=5)
@@ -152,11 +189,45 @@ def main() -> None:
     if scored < len(prompts):
         print(f"Skipped {len(prompts) - scored} prompts with no generation record")
 
+    summary = {
+        "output_file": str(output_path),
+        "prompts_file": str(prompts_path),
+        "scored": scored,
+        "total_prompts": len(prompts),
+        "tasks": {},
+    }
     for task_name, task_metrics in metrics.items():
         print(f"\nTask: {task_name}")
+        task_summary = {}
         for metric_name, values in task_metrics.items():
             mean = sum(values) / len(values) if values else 0.0
             print(f"  {metric_name}: {mean:.4f} ({len(values)} samples)")
+            task_summary[metric_name] = {
+                "mean": mean,
+                "sum": sum(values),
+                "samples": len(values),
+            }
+        if "exact_match" in task_metrics:
+            correct = int(sum(task_metrics["exact_match"]))
+            total = len(task_metrics["exact_match"])
+            print(f"  correct: {correct}/{total}")
+            task_summary["correct"] = {"count": correct, "total": total}
+        if "no_boxed" in task_metrics:
+            no_boxed = int(sum(task_metrics["no_boxed"]))
+            total = len(task_metrics["no_boxed"])
+            print(f"  no_boxed: {no_boxed}/{total}")
+            task_summary["no_boxed_count"] = {"count": no_boxed, "total": total}
+        if "boxed_wrong" in task_metrics:
+            boxed_wrong = int(sum(task_metrics["boxed_wrong"]))
+            total = len(task_metrics["boxed_wrong"])
+            print(f"  boxed_wrong: {boxed_wrong}/{total}")
+            task_summary["boxed_wrong_count"] = {"count": boxed_wrong, "total": total}
+        summary["tasks"][task_name] = task_summary
+
+    if args.summary_json:
+        summary_path = Path(args.summary_json)
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":

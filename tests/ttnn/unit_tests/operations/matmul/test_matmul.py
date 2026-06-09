@@ -16,7 +16,7 @@ from models.common.utility_functions import (
     skip_for_blackhole,
     skip_for_slow_dispatch,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics, assert_equal
 from ttnn.operations.activations import get_golden_function_for_activation
 
 
@@ -304,7 +304,7 @@ def test_matmul_reuse_config_sharded_fd_column(
 @pytest.mark.parametrize("m", [256])
 @pytest.mark.parametrize("k", [256])
 @pytest.mark.parametrize("n", [256])
-@pytest.mark.parametrize("tile_h", [16, 32])
+@pytest.mark.parametrize("tile_h", [4, 8, 16, 32])
 @pytest.mark.parametrize("tile_w", [16, 32])
 @pytest.mark.parametrize("in0_sharded", [True, False])
 @pytest.mark.parametrize("in1_sharded", [True, False])
@@ -3697,3 +3697,274 @@ def test_from_torch_col_tilize_batched(weight_dtype, shape):
 
     assert result_col.shape == result_manual.shape
     assert_with_pcc(result_manual, result_col, pcc=0.98)
+
+
+# Tests for the contract that callers of MatmulDeviceOperation's static API
+# (compute_output_specs / create_output_tensors / the program-factory helpers) must populate
+# allowed_worker_cores on program_config variants that support the field. ttnn::prim::matmul()
+# normalizes its attributes before launch, but direct callers (e.g. ttnn.experimental.all_gather_matmul_async)
+# must invoke normalize_program_config themselves before reaching these entry points.
+#
+# Originally tracked the "bad optional access" crash from #44529. After the fix, the same code
+# path now produces a clear TT_FATAL when the contract is violated.
+def _make_matmul_inputs(device, grid_size, with_allowed_worker_cores, output_memory_layout, config_kind):
+    num_cores = grid_size[0] * grid_size[1]
+    if config_kind == "mcast_1d":
+        # 1D mcast: width-sharded output, single row of cores, N is split across all cores.
+        m, k, n = 32, 8192, 1024
+        in0_block_w = k // num_cores // 32
+        per_core_M = m // 32
+        per_core_N = n // num_cores // 32
+    else:
+        # 2D reuse: block-sharded output. compute_output_specs derives num_blocks_y from
+        # M/per_core_M and num_blocks_x from N/per_core_N, and the shard layout must fit
+        # the allowed_worker_cores grid in COL_MAJOR orientation
+        # (num_blocks_y <= grid.x, num_blocks_x <= grid.y).
+        m, k, n = 32 * grid_size[0], 8192, 32 * grid_size[1]
+        in0_block_w = k // num_cores // 32
+        per_core_M = m // 32 // grid_size[0]
+        per_core_N = n // 32 // grid_size[1]
+    out_subblock_h, out_subblock_w, _ = find_max_subblock(per_core_M, per_core_N)
+
+    in0 = torch.randn(1, 1, m, k).bfloat16().float()
+    in1 = torch.randn(1, 1, k, n).bfloat16().float()
+    in0_t = ttnn.from_torch(
+        in0, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    in1_t = ttnn.from_torch(
+        in1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    allowed = (
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))])
+        if with_allowed_worker_cores
+        else None
+    )
+
+    if config_kind == "mcast_1d":
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=grid_size,
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+            allowed_worker_cores=allowed,
+        )
+    else:
+        program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=grid_size,
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            allowed_worker_cores=allowed,
+        )
+
+    out_mem_config = ttnn.MemoryConfig(memory_layout=output_memory_layout, buffer_type=ttnn.BufferType.L1)
+    parameters = ttnn.MatmulParams()
+    parameters.program_config = program_config
+    parameters.output_mem_config = out_mem_config
+    parameters.output_dtype = ttnn.bfloat16
+    attributes = ttnn.create_matmul_attributes(in0_t, in1_t, parameters, [])
+
+    tensor_args = ttnn.MatmulInputs()
+    tensor_args.input_tensors = [in0_t, in1_t]
+    return attributes, tensor_args
+
+
+@pytest.mark.parametrize(
+    "config_kind, output_memory_layout, grid_size",
+    [
+        ("mcast_1d", ttnn.TensorMemoryLayout.WIDTH_SHARDED, (8, 1)),
+        ("reuse_2d", ttnn.TensorMemoryLayout.BLOCK_SHARDED, (4, 2)),
+    ],
+    ids=["mcast_1d_width_sharded", "reuse_2d_block_sharded"],
+)
+@pytest.mark.parametrize("with_allowed_worker_cores", [True, False], ids=["with_awc", "without_awc"])
+def test_matmul_compute_output_specs_with_allowed_worker_cores(
+    device, config_kind, output_memory_layout, grid_size, with_allowed_worker_cores
+):
+    # Today missing allowed_worker_cores triggers a warning and auto-populates from
+    # compute_with_storage_grid_size. This is temporary while CCL callers are migrated; it will
+    # become a hard error in a future release (see #44529).
+    attributes, tensor_args = _make_matmul_inputs(
+        device,
+        grid_size,
+        with_allowed_worker_cores=with_allowed_worker_cores,
+        output_memory_layout=output_memory_layout,
+        config_kind=config_kind,
+    )
+    output_specs = ttnn.MatmulDeviceOperation.compute_output_specs(attributes, tensor_args)
+    assert len(output_specs) >= 1
+
+
+# ND shards spread over this many DRAM cores. Kept below any real device's DRAM
+# bank count so round-robin patterns with more shards genuinely wrap.
+_ND_IN1_NUM_DRAM_SHARD_CORES = 4
+
+
+@pytest.mark.parametrize(
+    "m, k, n, grid_size",
+    [
+        (512, 512, 512, (4, 4)),
+        (256, 1024, 768, (4, 2)),
+    ],
+)
+@pytest.mark.parametrize(
+    # (K-splits, N-splits): 8 shards over 4 cores. Either wrapping the N dim
+    # round-robin or a 2D K-by-N split keeps the layout genuinely ND_SHARDED.
+    "k_splits, n_splits",
+    [(1, 8), (2, 4)],
+)
+def test_matmul_2d_nd_sharded_in1(device, m, k, n, grid_size, k_splits, n_splits):
+    """2D-multicast matmul with an ND_SHARDED (NdShardSpec) DRAM in1.
+
+    ND_SHARDED in1 is not handled by the WIDTH/HEIGHT-sharded in1 reader, so the
+    matmul program factory falls through to the generic TensorAccessor path, which
+    addresses the NdShardSpec layout from the accessor args. This exercises the
+    in1-sharded memory-layout validation in MatmulDeviceOperation, which accepts
+    ND_SHARDED only when in1 lives in DRAM.
+
+    A weight is ND_SHARDED (rather than canonicalized to WIDTH/HEIGHT) when its
+    shards don't map one-contiguous-slab-per-core: either more shards than grid
+    cores (round-robin wrap, as in the receiver-contiguous DRAM prefetcher where
+    ring_size > num_banks) or a genuine 2D K-by-N split. Runs the identical matmul
+    with in1 interleaved vs. ND-sharded in DRAM and checks the ND output matches
+    both torch and the interleaved output.
+    """
+    grid_x, grid_y = grid_size
+    if device.dram_grid_size().x < _ND_IN1_NUM_DRAM_SHARD_CORES:
+        pytest.skip("needs at least _ND_IN1_NUM_DRAM_SHARD_CORES DRAM banks")
+    if k % (grid_x * 32) or m % (grid_y * 32) or n % (grid_x * 32):
+        pytest.skip("dims must be tile-aligned to the 2D-mcast grid")
+    if (k // 32) % k_splits or (n // 32) % n_splits:
+        pytest.skip("K/N (in tiles) must be divisible by the shard split")
+
+    in0 = torch.randn([1, 1, m, k]).bfloat16()
+    in1 = torch.randn([1, 1, k, n]).bfloat16()
+    pt_out = (in0.float() @ in1.float())[0, 0]
+
+    in0_t = ttnn.from_torch(
+        in0, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    # in1, interleaved in DRAM (reference path).
+    in1_interleaved = ttnn.from_torch(
+        in1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    # in1, ND-sharded across a fixed set of DRAM cores. With 8 shards over 4 cores
+    # this can't reduce to a one-slab-per-core width/height shard, so it stays ND.
+    dram_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_ND_IN1_NUM_DRAM_SHARD_CORES - 1, 0))}
+    )
+    nd_shard_spec = ttnn.NdShardSpec(ttnn.Shape([k // k_splits, n // n_splits]), dram_grid)  # default ROUND_ROBIN_1D
+    in1_nd = ttnn.from_torch(
+        in1,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(ttnn.BufferType.DRAM, nd_shard_spec),
+    )
+    assert in1_nd.memory_config().memory_layout == ttnn.TensorMemoryLayout.ND_SHARDED
+
+    per_core_M = m // grid_y // 32
+    per_core_N = n // grid_x // 32
+    out_subblock_h, out_subblock_w, _ = find_max_subblock(per_core_M, per_core_N)
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=k // grid_x // 32,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=False,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+    def run(in1_t):
+        out_t = ttnn.matmul(
+            in0_t,
+            in1_t,
+            program_config=program_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=compute_kernel_config,
+        )
+        return ttnn.to_torch(out_t)[0, 0]
+
+    out_interleaved = run(in1_interleaved)
+    out_nd = run(in1_nd)
+
+    assert_numeric_metrics(
+        pt_out,
+        out_nd,
+        atol=0.004 * k,
+        rtol=0.227 * k,
+        frobenius_threshold=0.001 * k,
+        pcc_threshold=0.999,
+        check_ulp=False,
+    )
+    # Same weight, same matmul program; only in1's DRAM layout differs, so the ND
+    # read must reproduce the interleaved read bit-for-bit.
+    assert_equal(out_interleaved, out_nd)
+
+
+def test_matmul_activation_rejected_on_multicore_reuse_program_config(device):
+    """Fused activation is not supported for MatmulMultiCoreReuseProgramConfig — validate-time check."""
+    torch.manual_seed(0)
+    m, k, n = 64, 64, 64
+    in0 = ttnn.from_torch(torch.randn(1, 1, m, k, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    in1 = ttnn.from_torch(torch.randn(1, 1, k, n, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+
+    program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=(1, 1),
+        in0_block_w=k // 32,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=m // 32,
+        per_core_N=n // 32,
+    )
+
+    with pytest.raises(RuntimeError, match="Fused activation is not supported for this matmul program config:"):
+        ttnn.matmul(
+            in0,
+            in1,
+            program_config=program_config,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+        )
+
+
+def test_matmul_kt_not_divisible_by_in0_block_w_rejected(device):
+    """Kt (K / tile_width) must be divisible by in0_block_w — error message must include both values."""
+    torch.manual_seed(0)
+    m, k, n = 64, 128, 64
+    in0 = ttnn.from_torch(torch.randn(1, 1, m, k, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    in1 = ttnn.from_torch(torch.randn(1, 1, k, n, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(1, 1),
+        in0_block_w=3,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=m // 32,
+        per_core_N=n // 32,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+    with pytest.raises(RuntimeError, match=r"Kt \(4\) must be divisible by in0_block_w \(3\)"):
+        ttnn.matmul(in0, in1, program_config=program_config)

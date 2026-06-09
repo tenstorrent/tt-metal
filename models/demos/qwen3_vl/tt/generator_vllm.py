@@ -207,11 +207,6 @@ class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         for i in range(batch_size):
             tokens[i][prompt_lens[i] :] = pad_token_id
 
-        # Check if we have image inputs
-        has_images = (
-            "pixel_values" in kwargs and len(kwargs["pixel_values"]) > 0 and kwargs["pixel_values"][0] is not None
-        )
-
         # Get pad embedding once (reused for all users)
         pad_embedding_tt = get_pad_embedding(self.reference_model, pad_token_id, self.model_args)
 
@@ -230,6 +225,14 @@ class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             user_attention_mask[:user_prompt_len] = 1
 
             # Process vision for this user if they have images
+
+            # Check if we have image inputs
+            has_images = (
+                "pixel_values" in kwargs
+                and len(kwargs["pixel_values"]) > user_id
+                and kwargs["pixel_values"][user_id] is not None
+            )
+
             if has_images and kwargs["pixel_values"][user_id] is not None:
                 # Get this user's pixel_values and image_grid_thw
                 user_pixel_values = kwargs["pixel_values"][user_id]

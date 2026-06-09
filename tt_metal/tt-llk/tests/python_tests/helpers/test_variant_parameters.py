@@ -30,9 +30,11 @@ from .llk_params import (
     StableSort,
     StochasticRounding,
     Tilize,
+    TilizeUnpackerSel,
     TopKSortDirection,
     Transpose,
     UnpackerEngine,
+    VectorMode,
 )
 from .matmul_sweep import validate_tile_dimensions
 
@@ -121,6 +123,22 @@ class REUSE_DEST_TYPE(TemplateParameter):
 class EN_DEST_REUSE(TemplateParameter):
     def convert_to_cpp(self) -> str:
         return "#define EN_DEST_REUSE"
+
+
+@dataclass
+class SFPU_INT_OP(TemplateParameter):
+    """Emit a #define to select the integer SFPU operation in a shared C++ test source.
+
+    Supported values: "MUL", "GT", "LT", "LE", "GE".  When omitted the C++ source
+    falls through to its default (add_int) path.
+    """
+
+    op: str = ""
+
+    def convert_to_cpp(self) -> str:
+        if self.op:
+            return f"#define SFPU_INT_OP_{self.op.upper()}"
+        return ""
 
 
 def _generate_operation_constants(mathop: MathOperation) -> list[str]:
@@ -273,6 +291,22 @@ class UNPACKER_ENGINE_SEL(TemplateParameter):
 
 
 @dataclass
+class TILIZE_UNPACKER_SEL(TemplateParameter):
+    tilize_unp_sel: TilizeUnpackerSel = TilizeUnpackerSel.UnpA
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr TilizeUnpackerSel TILIZE_UNP_SEL = TilizeUnpackerSel::{self.tilize_unp_sel.value};"
+
+
+@dataclass
+class VECTOR_MODE(TemplateParameter):
+    vector_mode: VectorMode = VectorMode.RC
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr auto VECTOR_MODE = {self.vector_mode.cpp_enum_value};"
+
+
+@dataclass
 class PERF_RUN_TYPE(TemplateParameter):
     perf_run_type: PerfRunType
 
@@ -332,6 +366,16 @@ class TO_FROM_INT8(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr bool TO_FROM_INT8 = {str(self.to_from_int8).lower()};"
+
+
+@dataclass
+class IS_MAX_OP(TemplateParameter):
+    """Compile-time flag: true for element-wise max, false for min."""
+
+    is_max_op: bool = True
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool IS_MAX_OP = {str(self.is_max_op).lower()};"
 
 
 # === RUNTIME PARAMETER IMPLEMENTATIONS ===

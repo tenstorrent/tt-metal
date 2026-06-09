@@ -83,7 +83,9 @@ struct ActivationApplyHelper {
             relu_max_tile_pack(tile_index, max);
         } else if constexpr (ACT == KernelActivation::SIGMOID) {
             // Enhanced: PARAM0 is vector mode, PARAM1 is fast_approximate
-            constexpr int vec_mode = (PARAM0 == 1) ? VectorMode::R : (PARAM0 == 2) ? VectorMode::C : VectorMode::RC;
+            constexpr VectorMode vec_mode = (PARAM0 == 1)   ? VectorMode::R
+                                            : (PARAM0 == 2) ? VectorMode::C
+                                                            : VectorMode::RC;
             sigmoid_tile_pack<vec_mode, PARAM1 != 0>(tile_index);
         } else if constexpr (ACT == KernelActivation::HARDSIGMOID) {
             hardsigmoid_tile_pack(tile_index);
