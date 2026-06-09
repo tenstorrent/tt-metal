@@ -127,7 +127,7 @@ inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_rows_
 
     _llk_math_eltwise_unary_datacopy_addrmod_<DATA_COPY_TYPE>(num_rows_per_move_instrn);
     _llk_math_eltwise_unary_datacopy_mop_config_<DATA_COPY_TYPE, IS_32b_DEST_EN>(
-        std::max(static_cast<std::uint32_t>(MAX_FACE_R_DIM), num_rows_per_matrix), num_matrices, num_rows_per_move_instrn);
+        std::max(FACE_R_DIM, num_rows_per_matrix), num_matrices, num_rows_per_move_instrn);
 
     // Reset all counters
     _reset_counters_<p_setrwc::SET_ABD_F>();
@@ -144,8 +144,8 @@ inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_rows_
 inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t num_rows_per_tile, const std::uint32_t tile_idx)
 {
     // For face_r_dim => 8, dest is dense with tiles. For face_r_dim < 8, dest is sparse with tiles and tiles are placed every 8 rows.
-    // We must offset tiles by 16 in all cases other than 32x16/16x32 (=32) and 32x32 (=64) tiles.
-    _set_dst_write_addr_by_rows_(std::max(static_cast<std::uint32_t>(MAX_FACE_R_DIM), num_rows_per_tile), tile_idx);
+    // If num_rows_per_tile is less than that of face_r_dim = 8, replace it to ensure face_r_dim = 8 sparse layout.
+    _set_dst_write_addr_by_rows_(std::max(FACE_R_DIM, num_rows_per_tile), tile_idx);
 
     // Run MOP
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
