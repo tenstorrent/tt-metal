@@ -6,7 +6,7 @@ add_library(
     ALIAS ttnn_op_experimental_deepseek_prefill_per_token_cast_back
 )
 
-target_precompile_headers(ttnn_op_experimental_deepseek_prefill_per_token_cast_back REUSE_FROM TTNN::PCH)
+target_precompile_headers(ttnn_op_experimental_deepseek_prefill_per_token_cast_back REUSE_FROM TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_prefill_per_token_cast_back)
 
 set_target_properties(
