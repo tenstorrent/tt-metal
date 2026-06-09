@@ -311,10 +311,17 @@ all_gather_minimal_matmul_async_factory_helper(
     uint32_t padded_N_tiles = tt::round_up(N_tiles, in1_parallel_axis_cores);
     uint32_t padded_K_tiles = tt::round_up(K_tiles, K_block_tiles);
 
+    // K is sharded equally across devices (validated upstream: K_tiles % ring_size == 0).
+    // Within a device, K_per_device tiles are processed in K_blocks_per_device blocks (div_up).
+    // The last block per device may be a "tail" block of K_block_tail_tiles < K_block_tiles
+    // when K_block_tiles does not divide K_tiles_per_device; otherwise tail == K_block_tiles.
+    uint32_t K_tiles_per_device = K_tiles / ring_size;
+    uint32_t K_blocks_per_device = tt::div_up(K_tiles_per_device, K_block_tiles);
+    uint32_t K_block_tail_tiles = K_tiles_per_device - (K_blocks_per_device - 1) * K_block_tiles;
+    uint32_t K_blocks = K_blocks_per_device * ring_size;
+
     uint32_t M_tiles_per_core = padded_M_tiles / in0_parallel_axis_cores;
     uint32_t N_tiles_per_core = padded_N_tiles / in1_parallel_axis_cores;
-
-    uint32_t K_blocks = padded_K_tiles / K_block_tiles;
 
     uint32_t M_blocks_per_core = tt::div_up(M_tiles_per_core, M_block_tiles);
     uint32_t N_blocks_per_core = tt::div_up(N_tiles_per_core, N_block_tiles);
@@ -329,11 +336,21 @@ all_gather_minimal_matmul_async_factory_helper(
     uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
     uint32_t in2_block_num_tiles = N_block_tiles;
 
+    // CB sizing: fixed depth-2 for in0/in1, single-buffered out/interm/in2.
+    //
+    // This reverts the OOM-causing part of #44982 — the adaptive L1-budget sizing that grew
+    // in0_cb depth up to 8x to fill L1 for perf. That budget is estimated from
+    // lowest_occupied_compute_l1_address() (which falls back to the full l1_size_per_core when
+    // no L1 buffers are placed yet) minus a fixed 64 KB margin; on systems where that estimate
+    // is too optimistic, the depth-8 in0_cb exceeds available L1 and OOMs. Fixed depth-2 is
+    // sized purely from the matmul blocking and is safe on all systems.
+    //
+    // The PR's single-buffered output is KEPT (not reverted to 2x): it is what lets large-N
+    // shapes such as chunks=3 QKV fit in L1; re-doubling it OOMs those here.
     const uint32_t double_buffer_factor = 2;
     uint32_t in0_cb_num_tiles = in0_block_num_tiles * double_buffer_factor;
     uint32_t in1_cb_num_tiles = in1_block_num_tiles * double_buffer_factor;
-    // TODO: consider not double buffering the output
-    uint32_t out_cb_num_tiles = out_block_num_tiles * double_buffer_factor;
+    uint32_t out_cb_num_tiles = out_block_num_tiles;     // single-buffered
     uint32_t interm_cb_num_tiles = out_block_num_tiles;  // not double buffered
     uint32_t in2_cb_num_tiles = in2_block_num_tiles;     // not double buffered
 
@@ -483,6 +500,9 @@ all_gather_minimal_matmul_async_factory_helper(
     log_debug(tt::LogOp, "padded_N_tiles: {}", padded_N_tiles);
     log_debug(tt::LogOp, "M_block_tiles: {}", M_block_tiles);
     log_debug(tt::LogOp, "K_block_tiles: {}", K_block_tiles);
+    log_debug(tt::LogOp, "K_tiles_per_device: {}", K_tiles_per_device);
+    log_debug(tt::LogOp, "K_blocks_per_device: {}", K_blocks_per_device);
+    log_debug(tt::LogOp, "K_block_tail_tiles: {}", K_block_tail_tiles);
     log_debug(tt::LogOp, "N_block_tiles: {}", N_block_tiles);
     log_debug(tt::LogOp, "subblock_h: {}", subblock_h);
     log_debug(tt::LogOp, "subblock_w: {}", subblock_w);
@@ -519,6 +539,14 @@ all_gather_minimal_matmul_async_factory_helper(
     in0_defines["IS_IN0"] = "1";
     in0_fabric_defines = in0_defines;
     in0_fabric_defines["USE_MUX"] = "1";
+
+    // Linear uni-ring routing: Dev 0's forward unicast routes N-1 hops to Dev N-1
+    // (rather than 1 hop to Dev 1). fabric_set_unicast_route<false>(hdr, distance)
+    // sends the packet to the device `distance` hops away, with no intermediate
+    // deliveries.
+    if (topology == ttnn::ccl::Topology::Linear && ring_index == 0) {
+        unicast_forward_args[1] = ring_size - 1;  // distance_in_hops = N-1
+    }
 
     uint32_t in0_addr = ag_output_tensor.buffer()->address();
     uint32_t in1_addr = weight_tensor.buffer()->address();
@@ -562,6 +590,8 @@ all_gather_minimal_matmul_async_factory_helper(
         static_cast<uint32_t>(topology),
         N_chunks,           // N_chunks
         N_tiles_per_chunk,  // N_tiles_per_chunk
+        K_tiles_per_device,
+        K_block_tail_tiles,
     };
     append_accessors(
         in0_sender_compile_time_args,
@@ -608,6 +638,8 @@ all_gather_minimal_matmul_async_factory_helper(
         static_cast<uint32_t>(topology),
         N_chunks,           // N_chunks
         N_tiles_per_chunk,  // N_tiles_per_chunk
+        K_tiles_per_device,
+        K_block_tail_tiles,
     };
     append_accessors(
         in0_receiver_no_fabric_compile_time_args,
@@ -655,6 +687,8 @@ all_gather_minimal_matmul_async_factory_helper(
         static_cast<uint32_t>(topology),
         N_chunks,           // N_chunks
         N_tiles_per_chunk,  // N_tiles_per_chunk
+        K_tiles_per_device,
+        K_block_tail_tiles,
     };
     fabric_mux_connection_ct_args(
         num_workers_per_link,
@@ -704,8 +738,11 @@ all_gather_minimal_matmul_async_factory_helper(
         true,  // is_injector_core
         ring_size,
         ring_index,
-        N_chunks,           // N_chunks
-        N_tiles_per_chunk,  // N_tiles_per_chunk
+        N_chunks,                         // N_chunks
+        N_tiles_per_chunk,                // N_tiles_per_chunk
+        static_cast<uint32_t>(topology),  // topology
+        K_tiles_per_device,
+        K_block_tail_tiles,
     };
     append_accessors(
         in1_sender_compile_time_args,
@@ -743,8 +780,11 @@ all_gather_minimal_matmul_async_factory_helper(
         false,  // is_injector_core
         ring_size,
         ring_index,
-        N_chunks,           // N_chunks
-        N_tiles_per_chunk,  // N_tiles_per_chunk
+        N_chunks,                         // N_chunks
+        N_tiles_per_chunk,                // N_tiles_per_chunk
+        static_cast<uint32_t>(topology),  // topology
+        K_tiles_per_device,
+        K_block_tail_tiles,
     };
     append_accessors(
         in1_receiver_compile_time_args,
@@ -774,6 +814,9 @@ all_gather_minimal_matmul_async_factory_helper(
         subblock_w};
 
     auto compute_defines = defines;
+    if (topology == ttnn::ccl::Topology::Linear) {
+        compute_defines["IS_LINEAR"] = "1";
+    }
     std::map<std::string, std::string> compute_activation_defines;
     if (fused_activation.has_value()) {
         compute_activation_defines = ttnn::operations::unary::utils::get_defines(
@@ -795,8 +838,7 @@ all_gather_minimal_matmul_async_factory_helper(
             .compile_args = compute_compile_time_args,
             .defines = compute_defines});
 
-    // mux kernel
-    auto mux_kernel_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::KernelHandle mux_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
         mux_core_range_set,

@@ -10,7 +10,9 @@
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "tt-metalium/hal_types.hpp"
+#include "tt-metalium/experimental/global_circular_buffer.hpp"
 #include "tt-metalium/work_split.hpp"
+#include "tt_stl/reflection.hpp"
 #include "tt_stl/unreachable.hpp"
 
 namespace ttnn::prim {
@@ -116,9 +118,12 @@ void validate_matmul_tile_constraints(
 }
 
 void validate_matmul_block_and_subblock_configuration(
-    const MatmulParams& attributes, const operations::matmul::MatmulProgramConfig& chosen_program_config) {
+    const MatmulParams& attributes,
+    const ttnn::Shape& a_shape_padded,
+    const tt::tt_metal::Tile& in0_tile,
+    const operations::matmul::MatmulProgramConfig& chosen_program_config) {
     std::visit(
-        [&attributes](const auto& program_config) {
+        [&attributes, &a_shape_padded, &in0_tile](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (
                 std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreProgramConfig> ||
@@ -134,6 +139,13 @@ void validate_matmul_block_and_subblock_configuration(
                 std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig> ||
                 std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig> ||
                 std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                TT_FATAL(program_config.in0_block_w != 0, "in0_block_w is 0, which is not valid");
+                const uint32_t Kt = a_shape_padded[-1] / in0_tile.get_width();
+                TT_FATAL(
+                    Kt % program_config.in0_block_w == 0,
+                    "Kt ({}) must be divisible by in0_block_w ({})",
+                    Kt,
+                    program_config.in0_block_w);
                 TT_FATAL(program_config.out_subblock_h != 0, "out_subblock_h is 0, which is not valid");
                 TT_FATAL(program_config.out_subblock_w != 0, "out_subblock_w is 0, which is not valid");
                 if constexpr (
@@ -407,6 +419,35 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
         chosen_program_config);
 }
 
+void validate_matmul_fused_operations(
+    const std::optional<const Tensor>& optional_bias,
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& fused_activation,
+    const operations::matmul::MatmulProgramConfig& chosen_program_config) {
+    // Determine which fused operations the chosen program config supports.
+    bool config_supports_fused_ops = false;
+    std::visit(
+        [&config_supports_fused_ops](const auto& program_config) {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            // MatmulMultiCoreProgramConfig and MatmulMultiCoreReuseProgramConfig have no
+            // bias / fused_activation kernel paths. Other configs support both; gather_in0
+            // on 1D multicast rejects bias separately in its dedicated check below.
+            config_supports_fused_ops =
+                !std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreProgramConfig> &&
+                !std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig>;
+        },
+        chosen_program_config);
+
+    // Reject bias or activation if the selected config does not support them.
+    TT_FATAL(
+        !optional_bias.has_value() || config_supports_fused_ops,
+        "Bias is not supported for this matmul program config: {}",
+        ttsl::get_active_type_name_in_variant(chosen_program_config));
+    TT_FATAL(
+        !fused_activation.has_value() || config_supports_fused_ops,
+        "Fused activation is not supported for this matmul program config: {}",
+        ttsl::get_active_type_name_in_variant(chosen_program_config));
+}
+
 bool get_broadcast_batch(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -466,6 +507,112 @@ void warn_if_allowed_worker_cores_missing(
             }
         },
         program_config.value());
+}
+
+// Cross-validate a DRAM-sender global_cb's geometry against the matmul + weight shape.
+// These catch silent-hang configs where the matmul reads more in1 pages than the prefetcher
+// pushes (e.g. activation K padded past weight K). Gated by the caller on the DRAM-sender path
+// because the worker-sender variant predates this work and uses different sizing/ordering
+// conventions (no bank IDs; gcb_size = N * max_tile_size).
+void validate_dram_sender_global_cb_gather_in0_geometry(
+    const tt::tt_metal::experimental::GlobalCircularBuffer& gcb,
+    const Tensor& input_tensor_a,
+    const ttnn::Shape& b_shape_padded,
+    const tt::tt_metal::Tile& in1_tile,
+    const operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config) {
+    const uint32_t ring_size = input_tensor_a.shard_spec().value().grid.num_cores();
+    const uint32_t weight_K_tiles = b_shape_padded[-2] / in1_tile.get_height();
+    const uint32_t weight_N_tiles = b_shape_padded[-1] / in1_tile.get_width();
+    const uint32_t num_senders = gcb.sender_cores().num_cores();
+    const uint32_t num_recv = gcb.receiver_cores().num_cores();
+    const uint32_t recv_per_bank = static_cast<uint32_t>(program_config.num_global_cb_receivers);
+
+    TT_FATAL(
+        num_senders > 0 && num_recv == num_senders * recv_per_bank,
+        "global_cb receiver count ({}) must equal num_senders ({}) * "
+        "num_global_cb_receivers ({})",
+        num_recv,
+        num_senders,
+        recv_per_bank);
+    TT_FATAL(
+        num_recv == ring_size,
+        "global_cb receiver count ({}) must equal in0 (activation) ring_size "
+        "({} = num_cores of in0.shard_spec.grid). Receivers and matmul workers "
+        "must be the same set of cores.",
+        num_recv,
+        ring_size);
+
+    // Semantic check: bank b must push to exactly the receivers at ring
+    // positions [b*recv_per_bank, (b+1)*recv_per_bank). If satisfied, the
+    // bank-to-receivers union also equals the activation grid as a set, so
+    // we don't need a separate set-equality assertion (CoreRangeSet::operator==
+    // compares ranges literally, which is brittle when one side is merged
+    // into rectangles and the other is a flat list of single-core ranges).
+    const auto& act_grid = input_tensor_a.shard_spec().value().grid;
+    const auto ring_walk = tt::tt_metal::corerange_to_cores(act_grid, std::nullopt, /*row_wise=*/true);
+    const auto& mapping = gcb.sender_receiver_core_mapping();
+    TT_FATAL(
+        mapping.size() * recv_per_bank == ring_walk.size(),
+        "global_cb sender_receiver mapping ({} senders * {} receivers each) "
+        "doesn't cover the matmul ring ({} cores)",
+        mapping.size(),
+        recv_per_bank,
+        ring_walk.size());
+    for (size_t bank_idx = 0; bank_idx < mapping.size(); ++bank_idx) {
+        const auto bank_recvs =
+            tt::tt_metal::corerange_to_cores(mapping[bank_idx].second, std::nullopt, /*row_wise=*/true);
+        TT_FATAL(
+            bank_recvs.size() == recv_per_bank,
+            "Sender at bank index {} owns {} receivers; expected "
+            "num_global_cb_receivers={}",
+            bank_idx,
+            bank_recvs.size(),
+            recv_per_bank);
+        for (size_t k = 0; k < recv_per_bank; ++k) {
+            const size_t ring_pos = bank_idx * recv_per_bank + k;
+            TT_FATAL(
+                bank_recvs[k] == ring_walk[ring_pos],
+                "global_cb bank {}'s receiver at index {} is core {} but the "
+                "matmul ring walk expects core {} at ring position {}. The "
+                "bank-to-receivers mapping must place bank b's receivers at "
+                "ring positions [b*num_global_cb_receivers, (b+1)*num_global_cb_receivers).",
+                bank_idx,
+                k,
+                bank_recvs[k],
+                ring_walk[ring_pos],
+                ring_pos);
+        }
+    }
+    TT_FATAL(
+        weight_K_tiles % ring_size == 0,
+        "Weight K must be divisible by ring_size in tiles for gather_in0 + global_cb. "
+        "Got weight_K_tiles={}, ring_size={} (remainder={}). The activation grid would "
+        "pad K past the weight K, and the matmul would wait forever for in1 pages the "
+        "prefetcher never pushes.",
+        weight_K_tiles,
+        ring_size,
+        weight_K_tiles % ring_size);
+    TT_FATAL(
+        weight_N_tiles % num_senders == 0,
+        "Weight N ({} tiles) must be divisible by num_senders ({}) so it shards "
+        "evenly across the DRAM banks the global_cb senders cover",
+        weight_N_tiles,
+        num_senders);
+    const uint32_t per_bank_N_tiles = weight_N_tiles / num_senders;
+    TT_FATAL(
+        per_bank_N_tiles % recv_per_bank == 0,
+        "Weight per-bank N ({} tiles) must be divisible by num_global_cb_receivers ({})",
+        per_bank_N_tiles,
+        recv_per_bank);
+    const uint32_t per_recv_N_tiles = per_bank_N_tiles / recv_per_bank;
+    TT_FATAL(
+        per_recv_N_tiles == program_config.per_core_N,
+        "Matmul per_core_N ({}) must equal weight per-receiver N ({} = per_bank_N_tiles {} "
+        "/ num_global_cb_receivers {})",
+        program_config.per_core_N,
+        per_recv_N_tiles,
+        per_bank_N_tiles,
+        recv_per_bank);
 }
 
 }  // namespace
@@ -650,9 +797,9 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         chosen_program_config, input_tensor_a.device()->compute_with_storage_grid_size());
 
     validate_matmul_tile_constraints(input_tensor_a, input_tensor_b, in0_tile, in1_tile, chosen_program_config);
-    validate_matmul_block_and_subblock_configuration(attributes, chosen_program_config);
-
     validate_matmul_compute_grid_and_per_core_dims(input_tensor_a, chosen_program_config);
+    validate_matmul_block_and_subblock_configuration(attributes, a_shape_padded, in0_tile, chosen_program_config);
+    validate_matmul_fused_operations(optional_bias, attributes.user_fused_activation, chosen_program_config);
     validate_matmul_sharded_operand_grids_within_program_compute_grid(
         input_tensor_a, input_tensor_b, chosen_program_config);
     validate_matmul_work_distribution_and_gather_ring_topology(
@@ -827,7 +974,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
                 chosen_program_config),
             "Untilize out is not supported for this program config: {}",
-            typeid(chosen_program_config).name());
+            ttsl::get_active_type_name_in_variant(chosen_program_config));
     }
 
     using namespace tt;
@@ -918,6 +1065,16 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                         TT_FATAL(
                             program_config.num_global_cb_receivers == 1,
                             "Num global CB receivers must be 1 when global CB is not provided.");
+                    }
+
+                    // Cross-validate the DRAM-sender global_cb's geometry against the matmul +
+                    // weight shape (silent-hang guards). Gated on the DRAM-sender path; see the
+                    // helper for why.
+                    if (attributes.global_cb.has_value() && input_tensor_a.is_sharded() &&
+                        tt::tt_metal::experimental::sender_core_type(attributes.global_cb.value()) ==
+                            tt::tt_metal::experimental::SenderCoreType::Dram) {
+                        validate_dram_sender_global_cb_gather_in0_geometry(
+                            attributes.global_cb.value(), input_tensor_a, b_shape_padded, in1_tile, program_config);
                     }
 
                     TT_FATAL(!optional_bias.has_value(), "Bias is not supported when using gather_in0.");
@@ -1268,10 +1425,17 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                 if (input_tensor_b.memory_config().is_sharded()) {
                     TT_FATAL(!program_config.transpose_mcast, "Transpose MCAST not supported when input B is sharded");
                     auto tensor_b_memory_layout = input_tensor_b.memory_config().memory_layout();
+                    // ND_SHARDED in1 in DRAM is read via the generic TensorAccessor path: the program
+                    // factory's in1_is_sharded only covers WIDTH/HEIGHT, so ND falls through to the
+                    // interleaved-style reader, which addresses the NdShardSpec layout from the accessor
+                    // args. The width/height-specific validation below is gated on those layouts, so ND
+                    // DRAM in1 skips it (no shard_spec() access).
+                    const bool in1_is_nd_dram = tensor_b_memory_layout == TensorMemoryLayout::ND_SHARDED &&
+                                                input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
                     TT_FATAL(
                         tensor_b_memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-                            tensor_b_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
-                        "Input B memory layout must be WIDTH_SHARDED or HEIGHT_SHARDED, got: {}",
+                            tensor_b_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || in1_is_nd_dram,
+                        "Input B memory layout must be WIDTH_SHARDED, HEIGHT_SHARDED, or DRAM ND_SHARDED, got: {}",
                         tensor_b_memory_layout);
                     if (tensor_b_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
                         // Height-sharded in1 is only supported for DRAM batched matmuls
@@ -1510,14 +1674,6 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
                     "Output memory layout must be INTERLEAVED, got: {}",
                     attributes.output_mem_config.memory_layout());
-            }
-            if constexpr (
-                std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig> ||
-                std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig> ||
-                std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                TT_FATAL(
-                    (a_shape_padded[-1] / in0_tile.get_width()) % program_config.in0_block_w == 0,
-                    "Kt must be divisible by in0_block_w");
             }
         },
         chosen_program_config);

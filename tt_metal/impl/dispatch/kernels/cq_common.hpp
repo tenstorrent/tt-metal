@@ -7,6 +7,7 @@
 #include "core_config.h"
 #include "internal/risc_attribs.h"
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "cq_helpers.hpp"
 #include "telemetry.hpp"
 
@@ -77,6 +78,21 @@ uint32_t wrap_gt(uint32_t a, uint32_t b) {
     // to 2^31 away
     int32_t diff = a - b;
     return diff > 0;
+}
+
+// On Quasar, accesses to L1 semaphores must bypass the L1 D$ via the uncached alias so that
+// updates from other RISCs/cores are visible. No-op on BH/WH.
+constexpr FORCE_INLINE uintptr_t l1_uncached_addr(uintptr_t addr) {
+#ifdef ARCH_QUASAR
+    return addr + MEM_L1_UNCACHED_BASE;
+#else
+    return addr;
+#endif
+}
+
+template <typename T>
+FORCE_INLINE volatile T tt_l1_ptr* uncached_l1_ptr(uintptr_t addr) {
+    return reinterpret_cast<volatile T tt_l1_ptr*>(l1_uncached_addr(addr));
 }
 
 constexpr bool use_fabric(uint64_t fabric_router_xy) { return fabric_router_xy != 0; }
@@ -268,7 +284,7 @@ FORCE_INLINE void cq_noc_inline_dw_write_init_state(
 template <uint32_t sem_id>
 FORCE_INLINE void cb_wait_all_pages(uint32_t n) {
     volatile tt_l1_ptr uint32_t* sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<fd_core_type>(sem_id)));
 
     // Downstream component sets the MSB as a terminate bit
     // Mask that off to avoid a race between the sem count and terminate
@@ -293,7 +309,7 @@ class CBWriter {
 public:
     FORCE_INLINE void acquire_pages(uint32_t n) {
         volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<fd_core_type>(my_sem_id)));
 
         // Ensure last sem_inc has landed
         noc_async_atomic_barrier();
@@ -314,7 +330,7 @@ public:
     // unless it calls release_all_pages to return partially-consumed blocks.
     FORCE_INLINE void wait_all_pages(uint32_t n) {
         volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<fd_core_type>(my_sem_id)));
 
         // Downstream component sets the MSB as a terminate bit
         // Mask that off to avoid a race between the sem count and terminate
@@ -369,8 +385,12 @@ public:
             }
         }
 #endif
+#ifdef ARCH_QUASAR
+        Semaphore<fd_core_type>(downstream_sem_id).up(n);
+#else
         noc_semaphore_inc(
             get_noc_addr_helper(downstream_noc_xy, get_semaphore<fd_core_type>(downstream_sem_id)), n, noc_idx);
+#endif
     }
 
     uint32_t additional_count{0};
@@ -403,7 +423,7 @@ class CBReader {
 public:
     FORCE_INLINE void wait_all_pages() {
         volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<fd_core_type>(my_sem_id)));
 
         uint32_t to_wait_for = upstream_count_;
 
@@ -447,7 +467,7 @@ protected:
     FORCE_INLINE uint32_t acquire_pages() {
         static_assert(is_telemetry_block_guard<T>::value, "T must be a telemetry block guard");
         volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<fd_core_type>(my_sem_id)));
 
         if (local_count_ == upstream_count_) {
             WAYPOINT("UAPW");

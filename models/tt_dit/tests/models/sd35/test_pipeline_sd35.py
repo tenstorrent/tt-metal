@@ -11,7 +11,12 @@ from loguru import logger
 import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
-from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import StableDiffusion3Pipeline
+from ....parallel.config import DiTParallelConfig
+from ....pipelines.events import profiler_event_callback
+from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import (
+    StableDiffusion3Pipeline,
+    StableDiffusion3PipelineConfig,
+)
 
 
 @pytest.mark.parametrize(
@@ -40,7 +45,7 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 25000000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": 32768, "trace_region_size": 50000000}],
     indirect=True,
 )
 @pytest.mark.parametrize("traced", [True, False], ids=["yes_traced", "no_traced"])
@@ -70,21 +75,17 @@ def test_sd35_pipeline(
     if is_ci_env and traced:
         pytest.skip("Skipping traced test in CI environment. Use Performance test for detailed timing analysis.")
 
-    # Create pipeline
-    pipeline = StableDiffusion3Pipeline.create_pipeline(
-        mesh_device=mesh_device,
-        batch_size=1,
-        image_w=image_w,
-        image_h=image_h,
-        guidance_scale=guidance_scale,
-        prompt_sequence_length=333,
-        spatial_sequence_length=4096,
-        max_t5_sequence_length=256,
-        cfg_config=cfg,
-        sp_config=sp,
-        tp_config=tp,
-        num_links=num_links,
-        checkpoint_name=model_location_generator(model_version, model_subdir="StableDiffusion_35_Large"),
+    pipeline = StableDiffusion3Pipeline(
+        device=mesh_device,
+        config=StableDiffusion3PipelineConfig.default(
+            mesh_shape=mesh_device.shape,
+            dit_parallel_config=DiTParallelConfig.from_tuples(cfg=cfg, sp=sp, tp=tp),
+            topology=topology,
+            num_links=num_links,
+            width=image_w,
+            height=image_h,
+            checkpoint_name=model_location_generator(model_version, model_subdir="StableDiffusion_35_Large"),
+        ),
     )
 
     # Define test prompt
@@ -101,21 +102,23 @@ def test_sd35_pipeline(
         benchmark_profiler = BenchmarkProfiler()
         with benchmark_profiler("run", iteration=0):
             images = pipeline(
-                prompt_1=[prompt],
-                prompt_2=[prompt],
-                prompt_3=[prompt],
-                negative_prompt_1=[negative_prompt],
-                negative_prompt_2=[negative_prompt],
-                negative_prompt_3=[negative_prompt],
+                prompts=[prompt],
+                negative_prompts=[negative_prompt],
                 num_inference_steps=num_inference_steps,
-                seed=0,
+                guidance_scale=guidance_scale,
                 traced=traced,
-                profiler=benchmark_profiler,
-                profiler_iteration=0,
+                vae_traced=False,
+                encoder_traced=False,
+                on_event=profiler_event_callback(benchmark_profiler, 0),
             )
 
         # Save image
-        output_filename = f"sd35_new_{image_w}_{image_h}.png"
+
+        output_filename = f"sd35_new_{image_w}_{image_h}"
+        if traced:
+            output_filename += "_traced"
+        output_filename += ".png"
+
         images[0].save(output_filename)
         logger.info(f"Image saved as {output_filename}")
 
@@ -140,18 +143,19 @@ def test_sd35_pipeline(
             negative_prompt = ""
 
             images = pipeline(
-                prompt_1=[prompt],
-                prompt_2=[prompt],
-                prompt_3=[prompt],
-                negative_prompt_1=[negative_prompt],
-                negative_prompt_2=[negative_prompt],
-                negative_prompt_3=[negative_prompt],
+                prompts=[prompt],
+                negative_prompts=[negative_prompt],
                 num_inference_steps=num_inference_steps,
-                seed=0,
                 traced=traced,
+                vae_traced=False,
+                encoder_traced=False,
             )
 
-            output_filename = f"sd35_new_{image_w}_{image_h}_{i}.png"
+            output_filename = f"sd35_new_{image_w}_{image_h}_{i:02}"
+            if traced:
+                output_filename += "_traced"
+            output_filename += ".png"
+
             images[0].save(output_filename)
             logger.info(f"Image saved as {output_filename}")
 

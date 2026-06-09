@@ -224,6 +224,30 @@ AllGatherAsyncDeviceOperation::tensor_return_value_t AllGatherAsyncDeviceOperati
     return create_device_tensor(output_spec, tensor_args.input_tensor.device());
 }
 
+AllGatherAsyncDeviceOperation::topology_return_value_t AllGatherAsyncDeviceOperation::compute_output_topologies(
+    const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
+    // After all_gather, the gathered axis is fully replicated across all devices on that axis.
+    // Replace the placement on `cluster_axis` with Replicate, leaving other mesh axes untouched.
+    // When cluster_axis is not provided, the op acts across the entire (1D) mesh, so all
+    // placements are set to Replicate.
+    const auto& input_topology = tensor_args.input_tensor.tensor_topology();
+    auto output_placements = input_topology.placements();
+
+    if (args.cluster_axis.has_value()) {
+        const auto axis = args.cluster_axis.value();
+        if (axis < output_placements.size()) {
+            output_placements[axis] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
+        }
+    } else {
+        for (auto& placement : output_placements) {
+            placement = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
+        }
+    }
+
+    return {tt::tt_metal::TensorTopology(
+        input_topology.distribution_shape(), std::move(output_placements), input_topology.mesh_coords())};
+}
+
 ttsl::hash::hash_t AllGatherAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "AllGatherAsyncDeviceOperation::compute_program_hash is called");

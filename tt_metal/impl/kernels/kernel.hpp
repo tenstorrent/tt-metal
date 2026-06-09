@@ -97,8 +97,8 @@ using SemaphoreLocalAccessorHandleMap = std::unordered_map<std::string, uint16_t
 
 // Metal 2.0: per-kernel resolved TensorBinding.
 // Carries the offsets the kernel-side codegen needs to emit a token, plus the program-level
-// TensorParameter name so SetProgramRunParameters can fill the binding's base-address slot
-// (and any runtime accessor fields) from the corresponding TensorArg at enqueue time.
+// TensorParameter name so SetProgramRunArgs can fill the binding's base-address slot
+// (and any runtime accessor fields) from the corresponding TensorArgument at enqueue time.
 struct TensorBindingHandle {
     std::string accessor_name;          // user-facing identifier (kernel symbol in `ta::`)
     std::string tensor_parameter_name;  // refers back to the program-level TensorParameter
@@ -178,9 +178,9 @@ public:
                                             uint32_t addr_crta_offset,
                                             uint32_t num_runtime_field_crta_words)>) const override;
     const std::vector<TensorBindingHandle>& tensor_binding_handles() const { return tensor_binding_handles_; }
-    const std::vector<std::string>& get_named_runtime_args() const override { return named_runtime_args_; }
-    const std::vector<std::string>& get_named_common_runtime_args() const override {
-        return named_common_runtime_args_;
+    const std::vector<std::string>& get_runtime_arg_names() const override { return runtime_arg_names_; }
+    const std::vector<std::string>& get_common_runtime_arg_names() const override {
+        return common_runtime_arg_names_;
     }
     KernelCrtaLayout get_crta_layout() const override { return crta_layout_; }
     bool is_metal2_kernel() const override { return is_metal2_kernel_; }
@@ -245,8 +245,8 @@ protected:
         bool is_metal2_kernel = false,
         const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
         const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
-        const std::vector<std::string>& named_runtime_args = {},
-        const std::vector<std::string>& named_common_runtime_args = {},
+        const std::vector<std::string>& runtime_arg_names = {},
+        const std::vector<std::string>& common_runtime_arg_names = {},
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
         const KernelCrtaLayout& crta_layout = {});
 
@@ -260,13 +260,13 @@ protected:
     std::vector<uint32_t> compile_time_args_;
     std::unordered_map<std::string, uint32_t> named_compile_time_args_;
     // Metal 2.0-only members below. is_metal2_kernel_ leads the group; the others are
-    // populated only when is_metal2_kernel_ is true. Order of named_runtime_args_ /
-    // named_common_runtime_args_ determines byte-offset layout in the dispatch buffer.
+    // populated only when is_metal2_kernel_ is true. Order of runtime_arg_names_ /
+    // common_runtime_arg_names_ determines byte-offset layout in the dispatch buffer.
     const bool is_metal2_kernel_;
     const DataflowBufferLocalAccessorHandleMap dataflow_buffer_local_accessor_handles_;
     const SemaphoreLocalAccessorHandleMap semaphore_local_accessor_handles_;
-    const std::vector<std::string> named_runtime_args_;
-    const std::vector<std::string> named_common_runtime_args_;
+    const std::vector<std::string> runtime_arg_names_;
+    const std::vector<std::string> common_runtime_arg_names_;
     const std::vector<TensorBindingHandle> tensor_binding_handles_;
     const KernelCrtaLayout crta_layout_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
@@ -314,8 +314,8 @@ public:
         bool is_metal2_kernel = false,
         const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
         const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
-        const std::vector<std::string>& named_runtime_args = {},
-        const std::vector<std::string>& named_common_runtime_args = {},
+        const std::vector<std::string>& runtime_arg_names = {},
+        const std::vector<std::string>& common_runtime_arg_names = {},
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
         const KernelCrtaLayout& crta_layout = {}) :
         Kernel(
@@ -329,8 +329,8 @@ public:
             is_metal2_kernel,
             dataflow_buffer_local_accessor_handles,
             semaphore_local_accessor_handles,
-            named_runtime_args,
-            named_common_runtime_args,
+            runtime_arg_names,
+            common_runtime_arg_names,
             tensor_binding_handles,
             crta_layout),
         config_(config) {
@@ -451,8 +451,8 @@ public:
         bool is_metal2_kernel = false,
         const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
         const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
-        const std::vector<std::string>& named_runtime_args = {},
-        const std::vector<std::string>& named_common_runtime_args = {},
+        const std::vector<std::string>& runtime_arg_names = {},
+        const std::vector<std::string>& common_runtime_arg_names = {},
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
         const KernelCrtaLayout& crta_layout = {}) :
         Kernel(
@@ -466,8 +466,8 @@ public:
             is_metal2_kernel,
             dataflow_buffer_local_accessor_handles,
             semaphore_local_accessor_handles,
-            named_runtime_args,
-            named_common_runtime_args,
+            runtime_arg_names,
+            common_runtime_arg_names,
             tensor_binding_handles,
             crta_layout),
         config_(config) {
@@ -537,8 +537,8 @@ public:
         bool is_metal2_kernel = false,
         const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
         const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
-        const std::vector<std::string>& named_runtime_args = {},
-        const std::vector<std::string>& named_common_runtime_args = {},
+        const std::vector<std::string>& runtime_arg_names = {},
+        const std::vector<std::string>& common_runtime_arg_names = {},
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
         const KernelCrtaLayout& crta_layout = {}) :
         Kernel(
@@ -552,8 +552,8 @@ public:
             is_metal2_kernel,
             dataflow_buffer_local_accessor_handles,
             semaphore_local_accessor_handles,
-            named_runtime_args,
-            named_common_runtime_args,
+            runtime_arg_names,
+            common_runtime_arg_names,
             tensor_binding_handles,
             crta_layout),
         config_(config),
@@ -609,8 +609,8 @@ public:
         bool is_metal2_kernel = false,
         const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
         const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
-        const std::vector<std::string>& named_runtime_args = {},
-        const std::vector<std::string>& named_common_runtime_args = {},
+        const std::vector<std::string>& runtime_arg_names = {},
+        const std::vector<std::string>& common_runtime_arg_names = {},
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
         const KernelCrtaLayout& crta_layout = {}) :
         Kernel(
@@ -624,8 +624,8 @@ public:
             is_metal2_kernel,
             dataflow_buffer_local_accessor_handles,
             semaphore_local_accessor_handles,
-            named_runtime_args,
-            named_common_runtime_args,
+            runtime_arg_names,
+            common_runtime_arg_names,
             tensor_binding_handles,
             crta_layout),
         config_(config),

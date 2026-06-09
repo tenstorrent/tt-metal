@@ -73,6 +73,7 @@ struct MeshTraceBuffer;
 class MeshCommandQueueBase;
 class MeshDevice;
 class RealtimeProfilerManager;
+class DramCorePrefetcherManager;
 
 namespace multihost {
 class DistributedContext;
@@ -166,6 +167,11 @@ private:
     // if the MeshDevice closes before their owning GCBs are destroyed (mirrors
     // the MeshBuffer / weak_ptr<MeshDevice> pattern).
     std::shared_ptr<::tt::tt_metal::DriscL1Arena> drisc_l1_arena_;
+
+    // Owns the DRAM-core (DRISC) prefetcher subsystem. Lazily constructed on first call
+    // to experimental::StartDramCorePrefetcher; torn down in close_impl() before the
+    // rest of the mesh shutdown so any in-flight kernel completes against live resources.
+    std::unique_ptr<DramCorePrefetcherManager> dram_core_prefetcher_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
     // Recursively quiesce all submeshes.
@@ -304,6 +310,11 @@ public:
     // pages_sent allocations. Constructed eagerly in initialize_impl() when the
     // HAL exposes programmable DRAM cores; TT_FATAL otherwise.
     ::tt::tt_metal::DriscL1Arena& drisc_l1_arena();
+
+    // Lazily-constructed DRAM-core (DRISC) prefetcher subsystem. The first call materializes
+    // the manager bound to this mesh device; subsequent calls return the same instance.
+    // experimental::StartDramCorePrefetcher / StopDramCorePrefetcher delegate here.
+    DramCorePrefetcherManager& dram_core_prefetcher(MeshDevice* mesh_device);
 
     // Returns the logical DRAM core for `bank_id` whose physical NoC coord isn't already
     // claimed by the SOC descriptor as a worker_endpoint or eth_endpoint — i.e. one

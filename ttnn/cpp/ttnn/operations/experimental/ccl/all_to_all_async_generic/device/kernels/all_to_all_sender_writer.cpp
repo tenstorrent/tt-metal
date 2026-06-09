@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
@@ -33,6 +35,7 @@ inline tt::tt_fabric::WorkerToFabricEdmSender& select_connection(
 }
 
 void write_data(
+    const Noc& noc_obj,
     uint64_t dest_addrs[4],
     uint16_t payload_sizes[4],
     uint32_t parts_count,
@@ -45,13 +48,15 @@ void write_data(
     bool local = device_offset == 0;
     if (local) {
         if (last) {
+            // Device 2.0 migration: legacy primitive retained: semaphore inc targets a precomposed NoC address rather
+            // than a semaphore id, so Semaphore<> does not apply.
             noc_semaphore_inc(output_semaphore_noc_addr_in_pkt, 1);
         }
         for (uint32_t part = 0; part < parts_count; ++part) {
             noc_async_write(l1_read_addr, dest_addrs[part], payload_sizes[part]);
             l1_read_addr += payload_sizes[part];
         }
-        noc_async_write_barrier();
+        noc_obj.async_write_barrier();
     } else {
         if (last) {
             // TODO: reduce number of packages when atomic fused with scatter will be introduced
@@ -72,7 +77,7 @@ void write_data(
                         select_connection(fabric_connection, device_offset), l1_read_addr, payload_sizes[0], pkt_hdr);
                     l1_read_addr += payload_sizes[0];
                 }
-                noc_async_writes_flushed();
+                noc_obj.async_writes_flushed();
             }
 
             pkt_hdr->to_noc_fused_unicast_write_atomic_inc(
@@ -95,7 +100,7 @@ void write_data(
                 select_connection(fabric_connection, device_offset), l1_read_addr, scatter_payload, pkt_hdr);
         }
     }
-    noc_async_writes_flushed();
+    noc_obj.async_writes_flushed();
 }
 
 void kernel_main() {
@@ -137,19 +142,23 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* global_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
 
+    Noc noc_obj;
+    CircularBuffer cb_packet_header(reserved_packet_header_cb_id);
+    CircularBuffer cb0(cb0_id);
+
     // packet header cb
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_addr_forward = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_addr_backward = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_addr_sema_forward = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_addr_sema_backward = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
+    cb_packet_header.reserve_back(1);
+    auto packet_header_buffer_addr_forward = cb_packet_header.get_write_ptr();
+    cb_packet_header.push_back(1);
+    cb_packet_header.reserve_back(1);
+    auto packet_header_buffer_addr_backward = cb_packet_header.get_write_ptr();
+    cb_packet_header.push_back(1);
+    cb_packet_header.reserve_back(1);
+    auto packet_header_buffer_addr_sema_forward = cb_packet_header.get_write_ptr();
+    cb_packet_header.push_back(1);
+    cb_packet_header.reserve_back(1);
+    auto packet_header_buffer_addr_sema_backward = cb_packet_header.get_write_ptr();
+    cb_packet_header.push_back(1);
 
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward =
@@ -222,10 +231,15 @@ void kernel_main() {
         uint32_t local_init_semaphore_addr_ptr = reinterpret_cast<uint32_t>(global_init_semaphore_addr_ptr);
 
         if (mcast_size > 1) {
+            // Device 2.0 migration: legacy primitives retained, global_init_semaphore_addr is a GlobalSemaphore address
+            // (init_barrier_semaphore in the program factory). GlobalSemaphore exposes only address() — no id().
+            // Semaphore<>::wait cannot wrap it. Additionally, set_multicast_loopback_src writes the destination
+            // semaphore at a different L1 offset than the local source semaphore, which Semaphore<>::set_multicast
+            // does not support (it reuses the sender's L1 offset).
             noc_semaphore_wait(global_init_semaphore_addr_ptr, num_devices - 1);
             noc_semaphore_set_multicast_loopback_src(
                 local_init_semaphore_addr_ptr, local_set_semaphore_noc_addr, mcast_size, false);
-            noc_async_write_barrier();
+            noc_obj.async_write_barrier();
         }
     }
 
@@ -267,8 +281,8 @@ void kernel_main() {
         uint32_t block_idx = get_arg_val<uint32_t>(device_offsets_idx++);
         uint32_t block_end_id = get_arg_val<uint32_t>(device_offsets_idx++);
 
-        cb_wait_front(cb0_id, 1);
-        size_t l1_read_addr = get_read_ptr(cb0_id);
+        cb0.wait_front(1);
+        size_t l1_read_addr = cb0.get_read_ptr();
         uint32_t current_package_payload = 0;
         uint32_t current_tile = 0;
         uint64_t dst_addrs[4] = {0};
@@ -278,6 +292,7 @@ void kernel_main() {
             // If package is full, flush and start new package
             if (current_tile == 4 || current_package_payload + payload_size > 2 * output_page_size) {
                 write_data(
+                    noc_obj,
                     dst_addrs,
                     payload_sizes,
                     current_tile,
@@ -287,9 +302,9 @@ void kernel_main() {
                     output_semaphore_noc_addr_in_pkt,
                     device_offset,
                     false);
-                cb_pop_front(cb0_id, 1);
-                cb_wait_front(cb0_id, 1);
-                l1_read_addr = get_read_ptr(cb0_id);
+                cb0.pop_front(1);
+                cb0.wait_front(1);
+                l1_read_addr = cb0.get_read_ptr();
                 current_package_payload = 0;
                 current_tile = 0;
             }
@@ -303,6 +318,7 @@ void kernel_main() {
         // Flush remaining tiles in the last package
         if (current_tile > 0) {
             write_data(
+                noc_obj,
                 dst_addrs,
                 payload_sizes,
                 current_tile,
@@ -313,12 +329,13 @@ void kernel_main() {
                 device_offset,
                 true);
         }
-        cb_pop_front(cb0_id, 1);
+        cb0.pop_front(1);
     }
 
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
     fabric_connection.close();
     if (core_id == 0 && link_id == 0) {
+        // Device 2.0 migration: legacy primitives retained, global_semaphore_addr is a GlobalSemaphore address.
         noc_semaphore_wait(global_semaphore_addr_ptr, semaphore_expected_value);
         noc_semaphore_set(global_semaphore_addr_ptr, 0);
     }

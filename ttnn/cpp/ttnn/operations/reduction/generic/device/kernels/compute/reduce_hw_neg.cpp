@@ -46,7 +46,7 @@ void kernel_main() {
             // reducing in W means out[h][0] = sum(w=0..W-1, in[h][w])
             // in this case we just sequentially add to accumulator all the W-tiles in a row
             for (uint32_t wt = 0; wt < Wt; ++wt) {
-                acquire_dst();
+                tile_regs_acquire();
                 cb_input_obj.wait_front(onetile);
                 copy_tile_init(cb_input);
                 copy_tile(cb_input, 0, reduce_dst_idx);
@@ -54,11 +54,13 @@ void kernel_main() {
                 negative_tile(reduce_dst_idx);
                 cb_input_obj.pop_front(onetile);
                 cb_ineg_obj.reserve_back(onetile);
+                tile_regs_commit();
+                tile_regs_wait();
                 pack_tile(reduce_dst_idx, cb_ineg);
                 cb_ineg_obj.push_back(onetile);
-                release_dst();
+                tile_regs_release();
 
-                acquire_dst();
+                tile_regs_acquire();
                 if (wt > 0 || ht > 0) {
                     cb_acc_obj.wait_front(onetile);
                     copy_tile_init(cb_acc);
@@ -74,13 +76,15 @@ void kernel_main() {
                     cb_acc_obj.pop_front(onetile);
                 }
                 cb_acc_obj.reserve_back(onetile);
+                tile_regs_commit();
+                tile_regs_wait();
                 pack_tile(reduce_dst_idx, cb_acc);
                 cb_acc_obj.push_back(onetile);
-                release_dst();
+                tile_regs_release();
             }  // wt
         }  // ht
 
-        acquire_dst();
+        tile_regs_acquire();
         cb_acc_obj.wait_front(onetile);
         copy_tile_init(cb_acc);
         copy_tile(cb_acc, 0, reduce_dst_idx);
@@ -95,8 +99,10 @@ void kernel_main() {
 #endif
         cb_acc_obj.pop_front(onetile);
         cb_output_obj.reserve_back(onetile);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(reduce_dst_idx, cb_output);
         cb_output_obj.push_back(onetile);
-        release_dst();
+        tile_regs_release();
     }  // nc
 }

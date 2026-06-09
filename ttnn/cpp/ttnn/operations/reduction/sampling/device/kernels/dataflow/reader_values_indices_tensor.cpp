@@ -54,7 +54,6 @@ void kernel_main() {
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t tile_bytes_input_values = get_tile_size(input_values_cb_index);
 
     const auto s0 = TensorAccessor(s0_args, values_addr);
 
@@ -63,6 +62,7 @@ void kernel_main() {
     Noc noc;
     CircularBuffer input_values_cb(input_values_cb_index);
     CircularBuffer input_indices_cb(input_indices_cb_index);
+    const uint32_t tile_bytes_input_values = input_values_cb.get_tile_size();
 
     uint32_t tile_id_input_values = 0;
     uint32_t tile_id_input_indices = 0;

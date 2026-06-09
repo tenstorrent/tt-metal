@@ -10,6 +10,7 @@ from helpers.golden_generators import (
     DataCopyGolden,
     TransposeGolden,
     get_golden_generator,
+    quantize_mx_tensor_chunked,
 )
 from helpers.llk_params import (
     DataCopyType,
@@ -133,6 +134,9 @@ TRANSPOSE_DEST_FORMATS = input_output_formats(
         DataFormat.Int32,
         DataFormat.Int8,
         DataFormat.UInt8,
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
     ],
 )
 
@@ -142,7 +146,7 @@ TRANSPOSE_DEST_FORMATS = input_output_formats(
     formats_dest_acc_sync_transpose_dims=generate_qsr_transpose_dest_combinations(
         TRANSPOSE_DEST_FORMATS
     ),
-    implied_math_format=[ImpliedMathFormat.No],
+    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
 )
 def test_transpose_dest_quasar(
     formats_dest_acc_sync_transpose_dims,
@@ -172,23 +176,43 @@ def test_transpose_dest_quasar(
         src_A = torch.randint(lo, hi, (n,), dtype=torch.int32).reshape_as(src_A)
         src_B = torch.randint(lo, hi, (n,), dtype=torch.int32).reshape_as(src_B)
 
-    if formats.input_format == DataFormat.Float32:
+    if (
+        formats.input_format == DataFormat.Float32
+        and not formats.output_format.is_mx_format()
+    ):
+        # The *10000 scaling stresses Int32/Float32 output paths with large
+        # values, but MxInt8 cannot represent that dynamic range losslessly
+        # (block-exp at ~14, per-element step ~256). Keep small-range stimuli
+        # for MX outputs so quantization stays within tolerance.
         n = src_A.numel()
         src_A = (torch.randn(n, dtype=torch.float32) * 10000.0).reshape_as(src_A)
         src_B = (torch.randn(n, dtype=torch.float32) * 10000.0).reshape_as(src_B)
 
+    # For MX output formats, defer the MX quantization until after the transpose.
+    # HW transposes inside Dest at math precision (bf16), then pack re-derives
+    # block exponents from the post-transpose layout. Quantizing inside
+    # DataCopyGolden locks in pre-transpose block exponents that don't follow
+    # elements through the 16x16 face transpose, producing wrong shared scales.
+    # This matters most for MX-input cases, where the input-dequant roundtrip
+    # increases per-block variance and amplifies the order-dependence.
+    is_mx_output = formats.output_format.is_mx_format()
+    intermediate_format = (
+        DataFormat.Float16_b if is_mx_output else formats.output_format
+    )
+
     generate_datacopy_golden = get_golden_generator(DataCopyGolden)
     datacopy_tensor = generate_datacopy_golden(
         src_A,
-        formats.output_format,
+        intermediate_format,
         num_faces=num_faces,
         input_dimensions=input_dimensions,
+        input_format=formats.input_format,
     )
 
     t_matrix = get_golden_generator(TransposeGolden)
     golden_tensor = t_matrix.transpose_within_faces_multi_tile(
         datacopy_tensor,
-        formats.output_format,
+        intermediate_format,
         num_tiles=tile_cnt_A,
         untilize=False,
         input_dimensions=input_dimensions,
@@ -196,10 +220,15 @@ def test_transpose_dest_quasar(
     if math_transpose_faces == Transpose.Yes:
         golden_tensor = t_matrix.transpose_faces_multi_tile(
             golden_tensor,
-            formats.output_format,
+            intermediate_format,
             num_tiles=tile_cnt_A,
             tilize=False,
             input_dimensions=input_dimensions,
+        )
+
+    if is_mx_output:
+        golden_tensor = quantize_mx_tensor_chunked(
+            golden_tensor.to(torch.bfloat16), formats.output_format
         )
 
     unpack_to_dest = (
@@ -249,5 +278,7 @@ def test_transpose_dest_quasar(
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
     ), "Assert against golden failed"

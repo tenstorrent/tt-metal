@@ -57,6 +57,7 @@ class DataFormat(Enum):
     Bfp8 = DataFormatInfo("Bfp8", 1)  # WH/BH specific
     Bfp8_b = DataFormatInfo("Bfp8_b", 1)  # WH/BH specific
     Bfp4_b = DataFormatInfo("Bfp4_b", 1)  # WH/BH specific
+    Bfp2_b = DataFormatInfo("Bfp2_b", 1)  # WH/BH specific
     Float32 = DataFormatInfo("Float32", 4)
     Int32 = DataFormatInfo("Int32", 4)
     Tf32 = DataFormatInfo("Tf32", 3)
@@ -70,6 +71,13 @@ class DataFormat(Enum):
     MxFp4 = DataFormatInfo(
         "MxFp4", Fraction(1, 2)
     )  # QSR specific - 4 bits (0.5 bytes) per element
+    MxInt8 = DataFormatInfo("MxInt8", 1)  # QSR specific - signed S1.6 with block exp
+    MxInt4 = DataFormatInfo(
+        "MxInt4", Fraction(1, 2)
+    )  # QSR specific - signed S1.2 with block exp, 2 elements per byte
+    MxInt2 = DataFormatInfo(
+        "MxInt2", Fraction(1, 4)
+    )  # QSR specific - signed S1.0 with block exp, 4 elements per byte
     Fp8_e4m3 = DataFormatInfo("Fp8_e4m3", 1)
 
     @property
@@ -110,6 +118,7 @@ class DataFormat(Enum):
             DataFormat.Float16_b,
             DataFormat.Bfp8_b,
             DataFormat.Bfp4_b,
+            DataFormat.Bfp2_b,
             DataFormat.Tf32,
             DataFormat.Float32,
         }
@@ -122,6 +131,9 @@ class DataFormat(Enum):
         elif self in {DataFormat.Bfp4_b}:
             num_exponents = num_datums // 16
             return (num_datums // 2) + num_exponents
+        elif self in {DataFormat.Bfp2_b}:
+            num_exponents = num_datums // 16
+            return (num_datums // 4) + num_exponents
         elif self.is_mx_format():
             # MX formats: 1 scale (E8M0, 8 bits) per 32 elements
             num_scales = num_datums // MX_FORMAT_BLOCK_SIZE
@@ -137,6 +149,25 @@ class DataFormat(Enum):
 
     def is_mx_format(self) -> bool:
         """Checks if the data format is an MX (Microscaling) format."""
+        return self in {
+            DataFormat.MxFp8R,
+            DataFormat.MxFp8P,
+            DataFormat.MxFp4,
+            DataFormat.MxInt8,
+            DataFormat.MxInt4,
+            DataFormat.MxInt2,
+        }
+
+    def is_mx_int_format(self) -> bool:
+        """Checks if the data format is an MX integer format."""
+        return self in {
+            DataFormat.MxInt8,
+            DataFormat.MxInt4,
+            DataFormat.MxInt2,
+        }
+
+    def is_mx_fp_format(self) -> bool:
+        """Checks if the data format is an MX floating-point format."""
         return self in {
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
@@ -226,6 +257,19 @@ MX_FORMAT_MIN_MAGNITUDE = {
     DataFormat.MxFp8R: 2.44e-4,
     DataFormat.MxFp8P: 0.0625,
     DataFormat.MxFp4: 1.0,
+}
+
+# Max representable element magnitude for MxInt formats (signed 2's-complement
+# with implicit power-of-2 scale per OCP spec; no normal/subnormal split).
+# MxInt8 (S1.6, scale 2^-6): symmetric ±127/64; MxInt4 (S1.2, scale 2^-2):
+# symmetric ±7/4; MxInt2 (S1.0, scale 2^0): symmetric ±1 (only -1/0/+1
+# representable; the -2 encoding 0b10 is left unused for symmetry).
+# (ws-tensix metadata says 15/8 for MxInt4, but its decode formula at
+# storage.py:419-434 actually yields 7/4 = raw_7 × 2^-2.)
+MX_INT_MAX = {
+    DataFormat.MxInt8: 127.0 / 64.0,
+    DataFormat.MxInt4: 7.0 / 4.0,
+    DataFormat.MxInt2: 1.0,
 }
 
 # ============================================================================
@@ -496,6 +540,7 @@ WORMHOLE_DATA_FORMAT_ENUM_VALUES = {
     DataFormat.Float16_b: 5,
     DataFormat.Bfp8_b: 6,
     DataFormat.Bfp4_b: 7,
+    DataFormat.Bfp2_b: 15,
     DataFormat.Int32: 8,
     DataFormat.UInt16: 9,
     DataFormat.Int8: 14,
@@ -511,6 +556,7 @@ BLACKHOLE_DATA_FORMAT_ENUM_VALUES = {
     DataFormat.Float16_b: 5,
     DataFormat.Bfp8_b: 6,
     DataFormat.Bfp4_b: 7,
+    DataFormat.Bfp2_b: 15,
     DataFormat.Int32: 8,
     DataFormat.UInt16: 9,
     DataFormat.Int8: 14,
@@ -527,6 +573,9 @@ QUASAR_DATA_FORMAT_ENUM_VALUES = {
     DataFormat.MxFp8R: 18,
     DataFormat.MxFp8P: 20,
     DataFormat.MxFp4: 22,
+    DataFormat.MxInt8: 2,
+    DataFormat.MxInt4: 3,
+    DataFormat.MxInt2: 11,
     DataFormat.Int32: 8,
     DataFormat.Int8: 14,
     DataFormat.UInt8: 17,
@@ -642,6 +691,11 @@ def is_dest_acc_needed(format: InputOutputFormat) -> bool:
     """
     return (
         format.input_format
-        in [DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Float16_b]
+        in [
+            DataFormat.Bfp8_b,
+            DataFormat.Bfp4_b,
+            DataFormat.Bfp2_b,
+            DataFormat.Float16_b,
+        ]
         and format.output_format == DataFormat.Float16
     )

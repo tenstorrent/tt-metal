@@ -314,6 +314,8 @@ _OP_DOMAIN_REGISTRY: Dict[
 def for_op(
     op: MathOperation,
     data_format: DataFormat = DataFormat.Float16_b,
+    distribution_a: Optional[Union[DistributionKind, Callable]] = None,
+    distribution_b: Optional[Union[DistributionKind, Callable]] = None,
 ) -> OperandSpecs:
     """Return OperandSpecs with safe input domains for *op* and *data_format*.
 
@@ -322,12 +324,28 @@ def for_op(
         data_format: Input data format; controls the numeric range and
             precision used to choose safe per-op input domains (e.g. tighter
             ranges for narrower MX/BFP formats).
+        distribution_a: Optional override for spec_A. When None (default),
+            spec_A uses the per-op default from the registry — typically
+            UNIFORM, but some ops use LOG_UNIFORM, GAUSSIAN, or interval
+            uniforms. When set, only the distribution is overridden; all
+            other fields on the returned spec stay unchanged, so the safe
+            per-op domain is preserved. Some fields may become unused for
+            the new distribution, but they are kept as-is. The caller may
+            pass either a DistributionKind or a callable accepted by
+            StimuliSpec.distribution.
+        distribution_b: Same as distribution_a, applied to spec_B. To
+            apply the same override to both operands, pass it explicitly
+            on both arguments.
 
     Returns:
         OperandSpecs with per-operand domain specs.
 
     Raises:
         KeyError: If *op* is not in the registry.
+        TypeError: If any distribution argument is neither a DistributionKind
+            member nor a callable.
+        ValueError: If overriding to LOG_UNIFORM or LOG_UNIFORM_LINSPACE
+            while the spec's domain includes non-positive values.
     """
     entry = _OP_DOMAIN_REGISTRY.get(op)
     if entry is None:
@@ -338,8 +356,68 @@ def for_op(
             f"Currently registered ({len(registered)}): {registered}"
         )
     if callable(entry):
-        return copy.deepcopy(entry(data_format))
-    return copy.deepcopy(entry)
+        result = copy.deepcopy(entry(data_format))
+    else:
+        result = copy.deepcopy(entry)
+
+    if distribution_a is not None:
+        _validate_distribution_override(distribution_a, result.spec_A)
+        result.spec_A.distribution = distribution_a
+    if distribution_b is not None:
+        if result.spec_B is None:
+            raise ValueError(
+                f"distribution_b={distribution_b!r} was given but "
+                f"MathOperation.{op.name} has no spec_B (single-operand op). "
+                f"Drop distribution_b, or override distribution_a instead."
+            )
+        _validate_distribution_override(distribution_b, result.spec_B)
+        result.spec_B.distribution = distribution_b
+
+    return result
+
+
+def _validate_distribution_override(
+    distribution: Union[DistributionKind, Callable],
+    spec: StimuliSpec,
+) -> None:
+    """Catch the obvious incompatibilities between *distribution* and *spec*'s
+    existing fields early, instead of letting them fail deep inside
+    generate_face / generate_stimuli.
+
+    Currently checked:
+      - distribution must be a DistributionKind member or a callable
+      - LOG_UNIFORM / LOG_UNIFORM_LINSPACE requires strictly positive bounds
+        across spec.low/spec.high or every interval in spec.intervals
+      - GAUSSIAN_LINSPACE does not support spec.intervals at all
+    """
+    if not (callable(distribution) or isinstance(distribution, DistributionKind)):
+        raise TypeError(
+            f"distribution must be DistributionKind or callable, got "
+            f"{type(distribution).__name__!r}: {distribution!r}"
+        )
+
+    if distribution == DistributionKind.GAUSSIAN_LINSPACE and spec.intervals:
+        raise ValueError(
+            f"Cannot override to GAUSSIAN_LINSPACE: spec carries intervals "
+            f"{spec.intervals!r}, which gaussian_linspace does not support."
+        )
+
+    if distribution in (
+        DistributionKind.LOG_UNIFORM,
+        DistributionKind.LOG_UNIFORM_LINSPACE,
+    ):
+        if spec.intervals:
+            for lo, hi in spec.intervals:
+                if lo <= 0 or hi <= 0:
+                    raise ValueError(
+                        f"Cannot override to {distribution.name}: "
+                        f"spec intervals include non-positive bounds {spec.intervals!r}"
+                    )
+        elif spec.low <= 0 or spec.high <= 0:
+            raise ValueError(
+                f"Cannot override to {distribution.name}: spec range "
+                f"[{spec.low}, {spec.high}] includes non-positive values"
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

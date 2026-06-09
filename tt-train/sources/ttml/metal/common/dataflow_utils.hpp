@@ -23,12 +23,26 @@ inline constexpr uint32_t round_up(uint32_t a, uint32_t b) {
     return ((a + b - 1U) / b) * b;
 }
 
+// Resolve a semaphore id to its volatile L1 pointer. Wraps the boilerplate
+// reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(...)) used at
+// every cross-RISC / cross-core sync site.
+inline volatile tt_l1_ptr uint32_t* get_sem_ptr(uint32_t sem_id) {
+    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id));
+}
+
 // IEEE 754 bit representations for compile-time template parameters
 constexpr uint32_t FP32_ONE_BITS = 0x3F800000;    // 1.0f
 constexpr uint32_t FP32_ZERO_BITS = 0x00000000;   // 0.0f
 constexpr uint16_t BF16_ONE_BITS = 0x3F80;        // 1.0 in bfloat16
 constexpr uint16_t BF16_ZERO_BITS = 0x0000;       // 0.0 in bfloat16
 constexpr uint32_t BF16_ONE_PACKED = 0x3f803f80;  // BF16(1.0) packed twice into u32
+
+// Large-negative bit patterns used by SDPA pre-transformed masks (mask values directly add to
+// pre-softmax scores so a "masked" entry must dominate any plausible Q@K^T magnitude).
+// We reuse the existing 1e9F magnitude from `custom_inf` (see sdpa_fw_program_factory.cpp) so
+// post-softmax behavior is identical to the runtime apply_mask_on_reg path.
+constexpr uint32_t FP32_NEG_LARGE_BITS = 0xCE6E6B28;  // bit_cast<u32>(-1e9F)
+constexpr uint16_t BF16_NEG_LARGE_BITS = 0xCE6E;      // upper 16 bits of -1e9F (bfloat16)
 
 inline uint32_t get_tilized_idx(uint32_t h, uint32_t w) {
     using namespace tt::constants;
@@ -251,6 +265,25 @@ inline void generate_causal_mask_tile(uint32_t cb_id) {
     cb_push_back(cb_id, onetile);
 }
 
+// F10: generate a *pre-transformed* causal mask tile so the compute kernel can stamp it
+// directly onto QK^T scores via the packer's L1-accumulate path (no DST→SRC conversion,
+// score stays at full FP32 in L1). Result: mask[row, col] = 0.0 (kept) if col <= row, else
+// -1e9 (effectively -inf for softmax). Used in the diagonal chunk for CAUSAL/BALANCED.
+inline void generate_pretransformed_causal_mask_tile(uint32_t cb_id) {
+    const DataFormat data_format = get_dataformat(cb_id);
+
+    cb_reserve_back(cb_id, onetile);
+
+    switch (data_format) {
+        case DataFormat::Float32: fill_causal_mask_tile<uint32_t, FP32_ZERO_BITS, FP32_NEG_LARGE_BITS>(cb_id); break;
+        default:  // BFloat16
+            fill_causal_mask_tile<uint16_t, BF16_ZERO_BITS, BF16_NEG_LARGE_BITS>(cb_id);
+            break;
+    }
+
+    cb_push_back(cb_id, onetile);
+}
+
 // ----- Type conversion helper functions -----
 // These functions provide bitwise conversions between float, uint32_t, and bfloat16.
 // We use them instead of std::bit_cast because the kernel code is compiled with C++17,
@@ -360,6 +393,45 @@ inline void read_tiles_by_row(
     if constexpr (UseBarrier) {
         noc_async_read_barrier();
         cb_push_back(cb_idx, num_tiles_to_push);
+    }
+}
+
+/**
+ * F10 helper: read a `rows x cols` block of tiles from a row-major source (DRAM) and lay them
+ * out *column-major* in the destination circular buffer. Each source tile at logical position
+ * (r, c) — DRAM tile id `start_idx + r * cols + c` — is written to CB position `c * rows + r`.
+ *
+ * Used for K in `matmul_block`: that LLK walks ct_dim B tiles contiguously per K-step, so the
+ * K block must be stored with feat (the contraction dim) on the outer axis and seq (the output
+ * width axis) on the inner axis. The standard row-major reader would interleave them the wrong
+ * way (seq outer, feat inner) and matmul_block's MOP would read garbage.
+ *
+ * Mirrors TTNN's `read_chunk_with_padding(..., transpose=true)` in
+ * `ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp`.
+ */
+template <bool UseBarrier = true, typename AddrGen>
+inline void read_tile_block_transposed(
+    const uint32_t cb_idx,
+    const AddrGen& addr_gen,
+    const uint32_t start_idx,
+    const uint32_t rows,
+    const uint32_t cols,
+    const uint32_t tile_bytes) {
+    const uint32_t total = rows * cols;
+    cb_reserve_back(cb_idx, total);
+    const uint32_t base_l1_addr = get_write_ptr(cb_idx);
+    uint32_t src_tile_id = start_idx;
+    for (uint32_t r = 0; r < rows; ++r) {
+        uint32_t l1_addr = base_l1_addr + r * tile_bytes;
+        for (uint32_t c = 0; c < cols; ++c) {
+            noc_async_read_page(src_tile_id, addr_gen, l1_addr);
+            src_tile_id += 1;
+            l1_addr += rows * tile_bytes;
+        }
+    }
+    if constexpr (UseBarrier) {
+        noc_async_read_barrier();
+        cb_push_back(cb_idx, total);
     }
 }
 

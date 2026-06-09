@@ -91,7 +91,7 @@ void kernel_main() {
         CoreLocalMem<uint32_t> dst_mem(data_location);
         // Use TensorAccessor directly to avoid address truncation
         // Template parameter preserves one-packet fast path for page-sized transfers
-        noc.async_read<Noc::TxnIdMode::DISABLED, original_page_size_bytes>(
+        noc.async_read<NocOptions::DEFAULT, original_page_size_bytes>(
             s, dst_mem, original_page_size_bytes, {.page_id = i, .offset_bytes = 0}, {.offset_bytes = 0});
         cur_page_size = original_page_size_bytes;
         noc.async_read_barrier();
@@ -126,10 +126,7 @@ void kernel_main() {
             CoreLocalMem<uint32_t> src_mem(data_location);
             // Use TensorAccessor directly to avoid address truncation
             // Template parameter preserves one-packet fast path for writes up to max_write_size
-            noc.async_write<
-                Noc::TxnIdMode::DISABLED,
-                Noc::ResponseMode::NON_POSTED,
-                max_write_size>(
+            noc.async_write<NocOptions::DEFAULT, max_write_size>(
                 src_mem,
                 d,
                 to_write,
