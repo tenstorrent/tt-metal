@@ -8,24 +8,38 @@
 # the MGD and ControlPlane::init_control_plane() trips
 # `Fabric node ID not yet assigned for ASIC id ...`.
 #
-# Layout: two [1, 4] line meshes, one per rank, covering all 4 T3K boards.
-#   - Rank 0 owns mesh_id 0 -- boards 0+1 (TT_VISIBLE_DEVICES="0,1"). TTML side.
-#   - Rank 1 owns mesh_id 1 -- boards 2+3 (TT_VISIBLE_DEVICES="2,3"). TTT side.
+# Declared layout: two [1, 2] meshes, one per rank, each covering one full
+# N300 board. Matches the canonical N300 MGD
+# (tt_metal/fabric/mesh_graph_descriptors/n300_mesh_graph_descriptor.textproto)
+# so UMD's topology discovery sees all chips it would naturally find on the
+# board.
+#
+# Used layout: the application opens a [1, 1] sub-mesh on each side (only
+# chip 0 of the board, the PCIe-reachable one). The second chip on each
+# board sits idle but is still required to be declared here so UMD's eth
+# walk doesn't trip on it. We deliberately under-use T3K because the
+# tt-transformers multi-device weight-update path (Attention.update for
+# num_devices_per_group > 1, MLP.update's replicated -> 2D-sharded mesh
+# projection) is not yet implemented; a 1x1 sub-mesh keeps every
+# Transformer.update_weights dispatch on the single-device fast path.
+#
+#   - Rank 0 owns mesh_id 0 -- board 0 (TT_VISIBLE_DEVICES="0"). TTML side.
+#   - Rank 1 owns mesh_id 1 -- board 1 (TT_VISIBLE_DEVICES="1"). TTT  side.
 #   - The FABRIC graph wires the two halves together so
 #     ttnn.experimental.send_async/recv_async (used by WeightBridge) can route
-#     over the eth links between them (boundary: 2 chip pairs * 2 channels each
-#     = 4 channels).
+#     over the eth links between the two boards.
 #
-# Pairs with device_config.mesh_shape=[1, 4] and enable_ddp=true on the ttml
-# rank, and ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 4)) on the ttt
-# rank. Both submeshes must be the same shape: WeightBridge pairs sender
-# (row, col) -> receiver (row, col) and asserts the manifest's sender shape
-# equals the receiver's mesh shape.
+# Pairs with device_config.mesh_shape=[1, 1] + device_ids=[0] on the ttml
+# rank, and ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 1),
+# offset=ttnn.MeshCoordinate(0, 0)) on the ttt rank. Both submeshes must be
+# the same shape: WeightBridge pairs sender (row, col) -> receiver (row,
+# col) and asserts the manifest's sender shape equals the receiver's mesh
+# shape.
 
 mesh_descriptors {
   name: "M0"
   arch: WORMHOLE_B0
-  device_topology { dims: [ 1, 4 ] }
+  device_topology { dims: [ 1, 2 ] }
   host_topology   { dims: [ 1, 1 ] }
   channels {
     count: 2
@@ -42,7 +56,7 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-    channels { count: 4 }
+    channels { count: 2 }
   }
 }
 
