@@ -61,36 +61,38 @@ constexpr bool output_bulk(BinaryOutputPolicy p) { return p == BinaryOutputPolic
 template <BinaryInputPolicy input_policy>
 ALWI void assert_binary_input_cb_size(uint32_t cb, uint32_t chunk_size, uint32_t total_tiles) {
     if constexpr (waits_per_tile(input_policy)) {
-        ASSERT(get_cb_num_pages(cb) >= 1);
+        ASSERT(get_dfb_num_pages(cb) >= 1);
     } else if constexpr (waits_per_chunk(input_policy)) {
-        ASSERT(get_cb_num_pages(cb) >= chunk_size);
+        ASSERT(get_dfb_num_pages(cb) >= chunk_size);
     } else if constexpr (waits_upfront(input_policy)) {
-        ASSERT(get_cb_num_pages(cb) >= total_tiles);
+        ASSERT(get_dfb_num_pages(cb) >= total_tiles);
     }
 }
 
 template <BinaryOutputPolicy output_policy>
 ALWI void assert_binary_output_cb_size(uint32_t cb, uint32_t chunk_size, uint32_t total_tiles) {
     if constexpr (output_per_tile(output_policy)) {
-        ASSERT(get_cb_num_pages(cb) >= 1);
+        ASSERT(get_dfb_num_pages(cb) >= 1);
     } else if constexpr (output_per_chunk(output_policy)) {
-        ASSERT(get_cb_num_pages(cb) >= chunk_size);
+        ASSERT(get_dfb_num_pages(cb) >= chunk_size);
     } else {  // Bulk
-        ASSERT(get_cb_num_pages(cb) >= total_tiles);
+        ASSERT(get_dfb_num_pages(cb) >= total_tiles);
     }
 }
 
 template <BinaryOpType op_type>
-constexpr EltwiseBinaryType map_to_eltwise_type() {
-    return op_type == BinaryOpType::ADD ? ELWADD : op_type == BinaryOpType::SUB ? ELWSUB : ELWMUL;
+constexpr ckernel::EltwiseBinaryType map_to_eltwise_type() {
+    return op_type == BinaryOpType::ADD   ? ckernel::EltwiseBinaryType::ELWADD
+           : op_type == BinaryOpType::SUB ? ckernel::EltwiseBinaryType::ELWSUB
+                                          : ckernel::EltwiseBinaryType::ELWMUL;
 }
 
 template <BroadcastDim bcast_dim>
-constexpr BroadcastType map_to_broadcast_type() {
-    return bcast_dim == BroadcastDim::NONE  ? BroadcastType::NONE
-           : bcast_dim == BroadcastDim::ROW ? BroadcastType::ROW
-           : bcast_dim == BroadcastDim::COL ? BroadcastType::COL
-                                            : BroadcastType::SCALAR;
+constexpr ckernel::BroadcastType map_to_broadcast_type() {
+    return bcast_dim == BroadcastDim::NONE  ? ckernel::BroadcastType::NONE
+           : bcast_dim == BroadcastDim::ROW ? ckernel::BroadcastType::ROW
+           : bcast_dim == BroadcastDim::COL ? ckernel::BroadcastType::COL
+                                            : ckernel::BroadcastType::SCALAR;
 }
 
 template <BroadcastDim bcast_dim>
@@ -126,8 +128,8 @@ constexpr bool uses_fpu_mul() {
 
 template <BinaryOpType op_type, BroadcastDim bcast_dim>
 ALWI void binary_init(uint32_t icb_a, uint32_t icb_b) {
-    constexpr EltwiseBinaryType elt_type = map_to_eltwise_type<op_type>();
-    constexpr BroadcastType bcast_type = map_to_broadcast_type<bcast_dim>();
+    constexpr ckernel::EltwiseBinaryType elt_type = map_to_eltwise_type<op_type>();
+    constexpr ckernel::BroadcastType bcast_type = map_to_broadcast_type<bcast_dim>();
 
     // MUL/SQUARE use configured MATH_FIDELITY; ADD/SUB always use LoFi (matches eltwise_binary.h)
     if constexpr (uses_fpu_mul<op_type>()) {
@@ -140,16 +142,16 @@ ALWI void binary_init(uint32_t icb_a, uint32_t icb_b) {
 
 template <BinaryOpType op_type, BroadcastDim bcast_dim>
 ALWI void binary_exec(uint32_t icb_a, uint32_t icb_b, uint32_t itile_a, uint32_t itile_b, uint32_t idst) {
-    constexpr EltwiseBinaryType elt_type = map_to_eltwise_type<op_type>();
-    constexpr BroadcastType bcast_type = map_to_broadcast_type<bcast_dim>();
+    constexpr ckernel::EltwiseBinaryType elt_type = map_to_eltwise_type<op_type>();
+    constexpr ckernel::BroadcastType bcast_type = map_to_broadcast_type<bcast_dim>();
 
     UNPACK((llk_unpack_AB<bcast_type>(icb_a, icb_b, itile_a, itile_b)));
     if constexpr (uses_fpu_mul<op_type>()) {
         MATH((llk_math_eltwise_binary<elt_type, bcast_type, DST_ACCUM_MODE, MATH_FIDELITY,
-                                      EltwiseBinaryReuseDestType::NONE>(icb_a, icb_b, idst, true)));
+                                      ckernel::EltwiseBinaryReuseDestType::NONE>(icb_a, icb_b, idst, true)));
     } else {
         MATH((llk_math_eltwise_binary<elt_type, bcast_type, DST_ACCUM_MODE, MathFidelity::LoFi,
-                                      EltwiseBinaryReuseDestType::NONE>(icb_a, icb_b, idst, true)));
+                                      ckernel::EltwiseBinaryReuseDestType::NONE>(icb_a, icb_b, idst, true)));
     }
 }
 
@@ -198,11 +200,11 @@ ALWI void binary_op(
     if constexpr (!is_square) {
         ASSERT(icb_b != ocb);
     }
-    UNPACK(ASSERT(is_valid_cb_tile_page_size(icb_a, (DataFormat)unpack_src_format[icb_a])));
+    UNPACK(ASSERT(is_valid_dfb_tile_page_size(icb_a, (DataFormat)unpack_src_format[icb_a])));
     if constexpr (!is_square) {
-        UNPACK(ASSERT(is_valid_cb_tile_page_size(icb_b, (DataFormat)unpack_src_format[icb_b])));
+        UNPACK(ASSERT(is_valid_dfb_tile_page_size(icb_b, (DataFormat)unpack_src_format[icb_b])));
     }
-    PACK(ASSERT(is_valid_cb_tile_page_size(ocb, (DataFormat)pack_dst_format[ocb])));
+    PACK(ASSERT(is_valid_dfb_tile_page_size(ocb, (DataFormat)pack_dst_format[ocb])));
     if constexpr (is_accumulator_enabled<AccumT>()) {
         ASSERT(accum.cb_accumulator < NUM_CIRCULAR_BUFFERS);
     }
@@ -587,11 +589,11 @@ ALWI void binary_op_in_place(
         ASSERT(icb_b < NUM_CIRCULAR_BUFFERS);
         ASSERT(cb_a != icb_b);
     }
-    UNPACK(ASSERT(is_valid_cb_tile_page_size(cb_a, (DataFormat)unpack_src_format[cb_a])));
+    UNPACK(ASSERT(is_valid_dfb_tile_page_size(cb_a, (DataFormat)unpack_src_format[cb_a])));
     if constexpr (!is_square) {
-        UNPACK(ASSERT(is_valid_cb_tile_page_size(icb_b, (DataFormat)unpack_src_format[icb_b])));
+        UNPACK(ASSERT(is_valid_dfb_tile_page_size(icb_b, (DataFormat)unpack_src_format[icb_b])));
     }
-    PACK(ASSERT(is_valid_cb_tile_page_size(cb_a, (DataFormat)pack_dst_format[cb_a])));
+    PACK(ASSERT(is_valid_dfb_tile_page_size(cb_a, (DataFormat)pack_dst_format[cb_a])));
     ASSERT(shape.rows > 0);
     ASSERT(shape.cols > 0);
 
@@ -600,7 +602,7 @@ ALWI void binary_op_in_place(
     const uint32_t b_tile_count = get_b_tile_count<bcast_dim>(Ht, Wt);
 
     // CB size validation — in-place requires all A tiles present
-    UNPACK(ASSERT(get_cb_num_pages(cb_a) >= Ht * Wt));
+    UNPACK(ASSERT(get_dfb_num_pages(cb_a) >= Ht * Wt));
     if constexpr (!is_square) {
         UNPACK((assert_binary_input_cb_size<input_b_policy>(icb_b, 1, b_tile_count)));
     }
