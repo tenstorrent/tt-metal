@@ -84,9 +84,9 @@ def test_pipeline_two_stages(
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
-    num_frames = int(os.environ.get("NUM_FRAMES", "121"))
-    height = int(os.environ.get("HEIGHT", "512"))
-    width = int(os.environ.get("WIDTH", "768"))
+    num_frames = int(os.environ.get("NUM_FRAMES", "145"))
+    height = int(os.environ.get("HEIGHT", "1088"))
+    width = int(os.environ.get("WIDTH", "1920"))
     num_inference_steps = int(os.environ.get("NUM_INFERENCE_STEPS", "30"))
 
     run_warmup = os.environ.get("RUN_WARMUP", "0") in ("1", "true", "True")
