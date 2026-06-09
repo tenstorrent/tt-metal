@@ -102,6 +102,10 @@ Use decode t/s/u as the default performance metric. If only latency is available
 
 Plot every evaluated full-model config as a point. Fit or draw the non-dominated Pareto frontier through the evaluated points. Mark the selected config in red. Draw a vertical dotted line whose x-intercept is the minimum allowed accuracy level for that chart. Label or annotate enough points that the selected tradeoff and rejected candidates are clear without reading the raw JSON. Show these prominently in the README.md.
 
+## Compute Fidelity
+
+Once the datatype frontier has been selected, select appropriate compute fidelities for the operations with reduced-precision datatypes. This is a separate decision from datatype selection and should be made after the datatype frontier has been selected. Use the `tt-perf-report` output from individual decoder runs and your own good judgement to guide this decision. BFP4 weights are usually ok with LoFi, BFP8 weights are usually ok with HiFi2, HiFi4 is usually reserved for accuracy-sensitive operations with BF16 weights, fp32 dest accumulation is also an option. You can find examples elsewhere in the repo.
+
 ## Final Selection
 
 Select the fastest config that satisfies the acceptance bar. If two configs are within measurement noise, prefer the simpler and safer one.
