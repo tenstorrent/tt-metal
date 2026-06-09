@@ -25,7 +25,10 @@ from __future__ import annotations
 import torch
 
 import ttnn
-from models.demos.qwen3_6_galaxy_v2.tt.vision_attention_tp import build_vision_rope_tensors
+from models.demos.qwen3_6_galaxy_v2.tt.vision_attention_tp import (
+    build_vision_rope_tensors,
+    build_vision_seq_parallel_tensors,
+)
 from models.demos.qwen3_6_galaxy_v2.tt.vision_block_tp import Qwen36VisionBlockTP
 from models.demos.qwen3_6_galaxy_v2.tt.vision_model_args import Qwen36VisionModelArgs
 from models.demos.qwen3_6_galaxy_v2.tt.vision_patch_merger import Qwen36VisionPatchMergerTP
@@ -129,6 +132,8 @@ class Qwen36VisionEncoder:
         self,
         pixel_values: torch.Tensor,
         grid_thw: torch.Tensor,
+        *,
+        seq_parallel: bool = True,
     ) -> torch.Tensor:
         """End-to-end vision encoder forward.
 
@@ -137,6 +142,11 @@ class Qwen36VisionEncoder:
                           = `[N, 1536]` for qwen3.6 (HF processor output, flat
                           across all images/frames in the request).
             grid_thw: `[num_images, 3]` (T, H, W) per image.
+            seq_parallel: when True (default), shard the patch sequence across
+                the col axis so all 32 chips are active and attention uses the
+                cu_seqlens block-diagonal mask (exact for multi-image + video).
+                When False, the legacy replicated layout (cols redundant; global
+                attention — only correct for a single image).
 
         Returns:
             torch.Tensor `[N // spatial_merge_unit, out_hidden_size=5120]`
@@ -148,10 +158,48 @@ class Qwen36VisionEncoder:
         x = self._pos_embed_cpu(x, grid_thw)  # [N, 1152]
         seq_len = x.shape[0]
         H = self.vc.hidden_size
-
-        # --- Vision 2D RoPE tables ---
         head_dim = self.vc.hidden_size // self.vc.num_heads
-        cos_tt, sin_tt = build_vision_rope_tensors(
+        merge_unit = self.vc.spatial_merge_size**2
+
+        if not seq_parallel:
+            # --- Legacy replicated layout (single-image only; global attention) ---
+            cos_tt, sin_tt = build_vision_rope_tensors(
+                seq_len=seq_len,
+                grid_thw=grid_thw,
+                head_dim=head_dim,
+                padded_head_dim=self.padded_head_dim,
+                spatial_merge_size=self.vc.spatial_merge_size,
+                mesh_device=self.mesh_device,
+            )
+            from models.demos.qwen3_vl.reference.functional import qwen3_vision_transformer_preprocess
+
+            _cu_seqlens, (cos_hf_cpu, sin_hf_cpu) = qwen3_vision_transformer_preprocess(
+                seq_len=seq_len,
+                grid_thw=grid_thw,
+                head_dim=head_dim,
+                spatial_merge_size=self.vc.spatial_merge_size,
+            )
+            x_tt = ttnn.from_torch(
+                x.view(1, 1, seq_len, H),
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            for block in self.blocks:
+                x_tt = block.forward(x_tt, cos_tt, sin_tt, cos_hf_cpu=cos_hf_cpu, sin_hf_cpu=sin_hf_cpu)
+            x_tt = self.merger.forward(x_tt)
+            x_torch = ttnn.to_torch(x_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
+            if x_torch.dim() == 4:
+                x_torch = x_torch[0, 0]
+            else:
+                x_torch = x_torch[0]
+            return x_torch[: seq_len // merge_unit, : self.vc.out_hidden_size]
+
+        # --- Sequence-parallel layout (all 32 chips; exact multi-image/video) ---
+        cols = self.mesh_device.shape[1]
+        cos_tt, sin_tt, mask_tt, S_pad = build_vision_seq_parallel_tensors(
             seq_len=seq_len,
             grid_thw=grid_thw,
             head_dim=head_dim,
@@ -159,38 +207,35 @@ class Qwen36VisionEncoder:
             spatial_merge_size=self.vc.spatial_merge_size,
             mesh_device=self.mesh_device,
         )
-        # CPU cos/sin for the optional CPU-RoPE precision path (env QWEN36_VISION_CPU_ROPE=1).
-        from models.demos.qwen3_vl.reference.functional import qwen3_vision_transformer_preprocess
 
-        _cu_seqlens, (cos_hf_cpu, sin_hf_cpu) = qwen3_vision_transformer_preprocess(
-            seq_len=seq_len,
-            grid_thw=grid_thw,
-            head_dim=head_dim,
-            spatial_merge_size=self.vc.spatial_merge_size,
-        )
-
-        # --- Upload x to mesh (replicated across all 32 chips) ---
+        # Pad the patch sequence to S_pad and shard dim=2 (seq) across cols, replicate rows.
+        x_pad = torch.zeros(S_pad, H, dtype=x.dtype)
+        x_pad[:seq_len] = x
         x_tt = ttnn.from_torch(
-            x.view(1, 1, seq_len, H),
+            x_pad.view(1, 1, S_pad, H),
             device=self.mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, dims=(None, 2), mesh_shape=tuple(self.mesh_device.shape)
+            ),
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
         )
 
-        # --- 27 vision blocks ---
-        for layer_num, block in enumerate(self.blocks):
-            x_tt = block.forward(x_tt, cos_tt, sin_tt, cos_hf_cpu=cos_hf_cpu, sin_hf_cpu=sin_hf_cpu)
+        for block in self.blocks:
+            x_tt = block.forward(x_tt, cos_tt, sin_tt, attn_mask=mask_tt, seq_parallel=True)
 
-        # --- PatchMerger ---
-        x_tt = self.merger.forward(x_tt)  # [B, 1, seq_len // 4, 5120] replicated
+        # PatchMerger runs per-col on its sequence shard (S_pad/cols is a multiple
+        # of 32, so divisible by merge_unit=4 — no merge group straddles a col).
+        x_tt = self.merger.forward(x_tt)  # per-col [1, 1, (S_pad/cols)//4, 5120]
 
-        # --- Pull chip 0's view back to torch ---
-        x_torch = ttnn.to_torch(x_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
-        # shape varies: [num_devices, 1, S/4, 5120] or [num_devices, S/4, 5120]; we slice chip 0
-        if x_torch.dim() == 4:
-            x_torch = x_torch[0, 0]
+        # Gather the col shards back: ConcatMeshToTensor(dim=0) -> [32, 1, (S_pad/cols)//4, 5120]
+        # row-major (chip = row*cols + col). Row 0 (chips 0..cols-1) holds the cols'
+        # contiguous merged shards in order.
+        x_full = ttnn.to_torch(x_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
+        if x_full.dim() == 4:
+            x_full = x_full[:cols, 0]  # [cols, (S_pad/cols)//4, 5120]
         else:
-            x_torch = x_torch[0]
-        return x_torch[: seq_len // (self.vc.spatial_merge_size**2), : self.vc.out_hidden_size]
+            x_full = x_full[:cols]
+        x_full = x_full.reshape(S_pad // merge_unit, self.vc.out_hidden_size)
+        return x_full[: seq_len // merge_unit, : self.vc.out_hidden_size]
