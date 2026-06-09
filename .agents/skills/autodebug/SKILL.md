@@ -3,7 +3,7 @@ name: autodebug
 description: "Run a fresh-context AutoDebug investigation and then act on the generated AUTODEBUG.md report."
 ---
 
-# AutoDebug
+# Operating Constraints
 
 Use the repo-local AutoDebug runner instead of doing the overall investigation
 in your current context.
