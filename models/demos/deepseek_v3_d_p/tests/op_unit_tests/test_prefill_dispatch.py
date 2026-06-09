@@ -16,7 +16,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_wormhole_b0
-from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
@@ -97,44 +97,44 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
     [
         # pytest.param(128, 7 * 1024, 16, 4, 4, True, id="pcc"),
         # pytest.param(3200, 7168, 64, 2, 8, False, id="perf_no_pcc"),
-        # GLM 5.1 MoE shape (256 routed experts, top-8, emb 6144); seq 3200 ≈ 25k tokens / 8-chip SP group.
+        # MiniMax M2.7 MoE shape (256 routed experts, top-8, emb 3072); seq 3200 ≈ 25k tokens / 8-chip SP group.
         # dispatch_buffer_capacity_factor mirrors perf_no_pcc (8): same host-buffer budget, and the random
         # dispatch load stays within buffer capacity on every mesh in ALL_MESH_CONFIGS.
         pytest.param(
             3200,
-            GLM51Config.EMB_SIZE,
-            GLM51Config.NUM_ROUTED_EXPERTS,
-            GLM51Config.NUM_EXPERTS_PER_TOKEN,
+            MiniMaxM27Config.EMB_SIZE,
+            MiniMaxM27Config.NUM_ROUTED_EXPERTS,
+            MiniMaxM27Config.NUM_EXPERTS_PER_TOKEN,
             8,
             True,
-            id="pcc_glm5.1_25k",
+            id="pcc_minimax_m2.7_25k",
         ),
         pytest.param(
             3200,
-            GLM51Config.EMB_SIZE,
+            MiniMaxM27Config.EMB_SIZE,
             64,
-            GLM51Config.NUM_EXPERTS_PER_TOKEN,
+            MiniMaxM27Config.NUM_EXPERTS_PER_TOKEN,
             8,
             True,
-            id="pcc_glm5.1_25k_smaller_experts",
+            id="pcc_minimax_m2.7_25k_smaller_experts",
         ),
         pytest.param(
             640,
-            GLM51Config.EMB_SIZE,
+            MiniMaxM27Config.EMB_SIZE,
             64,
-            GLM51Config.NUM_EXPERTS_PER_TOKEN,
+            MiniMaxM27Config.NUM_EXPERTS_PER_TOKEN,
             8,
             True,
-            id="pcc_glm5.1_5k_smaller_experts",
+            id="pcc_minimax_m2.7_5k_smaller_experts",
         ),
         pytest.param(
             640,
-            GLM51Config.EMB_SIZE,
-            GLM51Config.NUM_ROUTED_EXPERTS,
-            GLM51Config.NUM_EXPERTS_PER_TOKEN,
+            MiniMaxM27Config.EMB_SIZE,
+            MiniMaxM27Config.NUM_ROUTED_EXPERTS,
+            MiniMaxM27Config.NUM_EXPERTS_PER_TOKEN,
             8,
             True,
-            id="pcc_glm5.1_5k",
+            id="pcc_minimax_m2.7_5k",
         ),
     ],
 )
