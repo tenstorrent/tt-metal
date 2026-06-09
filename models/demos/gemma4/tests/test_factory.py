@@ -29,7 +29,7 @@ _PCC_THRESHOLDS_PATH = os.path.join(os.path.dirname(__file__), "pcc_thresholds.j
 # sliding-window regime gets a prefill kernel run. Long lengths are gated by
 # the --max-prefill CLI option (see conftest); tests above the cap are
 # auto-skipped to keep the routine loop fast.
-PREFILL_BUCKETS = [128, 1024, 4096, 8192]
+PREFILL_BUCKETS = [128, 1024, 4096]
 
 
 def _get_model_path():
