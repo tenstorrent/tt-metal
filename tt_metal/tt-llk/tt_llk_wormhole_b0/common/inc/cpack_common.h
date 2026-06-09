@@ -670,6 +670,12 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
 
     // Set packer strides
     set_packer_strides(pack_src_format);
+
+    // Program the packer X (datum) counter for the standard tiled (PackMode::Default) layout.
+    // This is one of the two packer states (along with set_packer_l1_offset above) that used to be
+    // owned by _llk_pack_init_; ownership now lives solely in configure_pack and this reconfig path.
+    const std::uint32_t face_dim = face_r_dim * FACE_C_DIM;
+    TT_SETADCXX(p_setadc::PAC, face_dim - 1, 0x0);
 }
 
 template <bool is_fp32_dest_acc_en, PackMode pack_mode>
