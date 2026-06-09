@@ -466,3 +466,136 @@ def test_parent_expert_cross_attn_with_d2d_migrated_kv():
     finally:
         ttnn.close_mesh_device(parent)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
+
+def test_parent_mesh_euler_step_with_p2p_wrap_back():
+    """One full Euler-style denoise step entirely on the parent mesh:
+       suffix.embed_actions → suffix.embed_adarms_cond → expert.forward_real_
+       block_chain → P2P wrap-back (chip 5 → chip 0) → suffix.project_output →
+       Euler update (x_t = x_t + dt * v_t). All ops parent-mesh; zero host
+       bounces inside the step. Validates the Task 3 wrap-back primitive
+       end-to-end against the full denoise toolchain.
+
+    No prefix KV cache (self-attention only) — the cross-attention smoke
+    above already validates the migrate→consume contract. This test is
+    specifically about the suffix↔expert composition + the wrap-back P2P.
+    """
+    from models.experimental.pi0_5.tt.option_c.suffix_slice import (
+        Pi0_5OptionCSuffixSliceParent,
+    )
+
+    cfg = PaliGemmaConfig()
+    weights = _load_real_weights()
+
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    parent = ttnn.open_mesh_device(GALAXY_SHAPE)
+    try:
+        expert_slice = Pi0_5OptionCExpertSliceParent(
+            config=cfg,
+            weights=weights,
+            parent_mesh=parent,
+            denoise_offset=DENOISE_SUBMESH_OFFSET,
+            denoise_shape=DENOISE_SUBMESH_SHAPE,
+            expert_layer_range=(0, cfg.expert_config.depth),
+            layers_per_chip=EXPERT_LAYERS_PER_DENOISE_CHIP,
+        )
+        suffix_slice = Pi0_5OptionCSuffixSliceParent(
+            config=cfg,
+            weights=weights,
+            parent_mesh=parent,
+            action_dim=32,
+            action_horizon=50,
+        )
+
+        # x_t on parent mesh, replicated (all chips hold the same noisy actions).
+        # Shape: [B=1, M=64 (50 padded), action_dim=32].
+        B, M, A = 1, 64, 32
+        x_t_torch = torch.randn(B, M, A, dtype=torch.bfloat16) * 0.1
+        x_t = ttnn.from_torch(
+            x_t_torch.contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=parent,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(parent),
+        )
+
+        # --- One Euler step ---
+        t_val = 1.0  # initial timestep
+        dt = -0.1
+
+        print("\n[suffix] embed_adarms_cond + embed_actions on parent mesh...")
+        adarms_cond = suffix_slice.embed_adarms_cond(t_val, batch_size=B)
+        suffix_h_3d = suffix_slice.embed_actions(x_t)
+        # forward_real_block_chain expects 4D activations [B, 1, M, W] (so
+        # nlp_create_qkv_heads' shape constraints hold). Reshape from
+        # suffix's 3D [B, M, W] output.
+        suffix_h = ttnn.reshape(suffix_h_3d, (B, 1, M, cfg.expert_config.width))
+        # Same for adarms_cond — the block-level modulation Dense expects a
+        # broadcast-friendly shape [B, 1, 1, W] for the per-token modulation.
+        if len(adarms_cond.shape) == 2:
+            adarms_cond_4d = ttnn.reshape(adarms_cond, (B, 1, 1, cfg.expert_config.width))
+            ttnn.deallocate(adarms_cond)
+            adarms_cond = adarms_cond_4d
+        print(f"  adarms_cond shape={list(adarms_cond.shape)}  suffix_h shape={list(suffix_h.shape)}")
+
+        print("\n[expert] forward_real_block_chain (18 layers + 5 P2P advances)...")
+        velocity_hidden = expert_slice.forward_real_block_chain(
+            suffix_h, adarms_cond, attention_mask=None, prefix_kv_cache=None
+        )
+        ttnn.deallocate(suffix_h)
+        if suffix_h_3d is not suffix_h:
+            try:
+                ttnn.deallocate(suffix_h_3d)
+            except RuntimeError:
+                pass
+
+        last_coord = expert_slice.denoise_coord_for_layer(expert_slice.num_layers - 1)
+        first_coord = expert_slice.denoise_coord_for_layer(0)
+        print(f"\n[wrap_back] P2P {last_coord} → {first_coord} (single-hop fabric)...")
+        velocity_at_first = expert_slice.wrap_back_to_chip0(velocity_hidden)
+
+        # Verify the wrap-back delivered the live data to chip 0.
+        lin_first = first_coord[0] * GALAXY_SHAPE[1] + first_coord[1]
+        shards_after_wrap = ttnn.get_device_tensors(velocity_at_first)
+        vel_at_chip0 = ttnn.to_torch(shards_after_wrap[lin_first])
+        vel_chip0_nonzero = (vel_at_chip0.abs() > 1e-6).sum().item()
+        print(
+            f"  velocity @ chip 0 (post-wrap) shape={list(vel_at_chip0.shape)} "
+            f"non_zero={vel_chip0_nonzero}/{vel_at_chip0.numel()}"
+        )
+        assert vel_chip0_nonzero > 0, "Wrap-back P2P did not deliver live shard to chip 0"
+
+        print("\n[suffix] project_output (W → action_dim)...")
+        v_t_4d = suffix_slice.project_output(velocity_at_first)
+        ttnn.deallocate(velocity_at_first)
+        # Reshape v_t back to 3D [B, M, A] to match x_t's shape.
+        v_t = ttnn.reshape(v_t_4d, (B, M, A))
+
+        print("\n[euler] x_t_new = x_t + dt * v_t...")
+        dx = ttnn.multiply(v_t, dt)
+        ttnn.deallocate(v_t)
+        x_t_new = ttnn.add(x_t, dx)
+        ttnn.deallocate(dx)
+        ttnn.deallocate(x_t)
+        ttnn.synchronize_device(parent)
+
+        shards = ttnn.get_device_tensors(x_t_new)
+        x_t_chip0 = ttnn.to_torch(shards[lin_first])
+        non_zero = (x_t_chip0.abs() > 1e-6).sum().item()
+        nan_count = torch.isnan(x_t_chip0).sum().item()
+        finite_count = torch.isfinite(x_t_chip0).sum().item()
+        total = x_t_chip0.numel()
+        print(
+            f"\n[x_t_new @ chip 0] shape={list(x_t_chip0.shape)} "
+            f"non_zero={non_zero}/{total} nan={nan_count} finite={finite_count}/{total}"
+        )
+        print(f"  first 5 values: {x_t_chip0.flatten()[:5].tolist()}")
+        assert nan_count == 0, "x_t_new contains NaN — Euler step or wrap-back broke"
+        assert non_zero > 0, "x_t_new is all zeros"
+        print("\n[PASS] one full Euler step on parent mesh (suffix + expert + P2P wrap-back + update)")
+        ttnn.deallocate(x_t_new)
+        ttnn.deallocate(adarms_cond)
+    finally:
+        ttnn.close_mesh_device(parent)
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)

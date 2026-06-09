@@ -146,3 +146,145 @@ class Pi0_5OptionCSuffixSlice:
             memory_config=ttnn.L1_MEMORY_CONFIG,
             core_grid=self._small_core_grid,
         )
+
+
+# ---------------------------------------------------------------------------- #
+# Parent-mesh suffix slice (D2D denoise).                                       #
+#                                                                              #
+# Mirrors Pi0_5OptionCSuffixSlice but with weights replicated across the FULL  #
+# galaxy parent mesh (32 chips) instead of just the 6-chip denoise submesh.    #
+# This lets the parent-mesh expert slice and the suffix consume parent-mesh    #
+# tensors without an intermediate cross-submesh transport.                     #
+#                                                                              #
+# Suffix weights are ~2 MB total; replicating to 32 chips costs ~64 MB across  #
+# the mesh (~2 MB/chip), which is trivial against the 175 MB L1 cap. Only the  #
+# chip-0-coord output is "live" — other chips compute their own copies, which  #
+# we ignore (the expert chain consumes only chip 0's live shard).              #
+# ---------------------------------------------------------------------------- #
+
+
+class Pi0_5OptionCSuffixSliceParent:
+    """Replicated suffix MLP on the galaxy parent mesh — D2D denoise variant.
+
+    Replaces `Pi0_5OptionCSuffixSlice` for the parent-mesh denoise path. All
+    weights and biases are replicated across the entire parent mesh so that
+    embed_actions / embed_adarms_cond / project_output produce parent-mesh
+    tensors directly (live at chip 0's denoise-submesh parent coord), feeding
+    the parent-mesh expert chain without an inter-submesh hop.
+
+    Args identical to Pi0_5OptionCSuffixSlice except `submesh` is replaced
+    with `parent_mesh` — the full galaxy parent.
+    """
+
+    def __init__(
+        self,
+        config: PaliGemmaConfig,
+        weights: Dict[str, Dict[str, torch.Tensor]],
+        parent_mesh,
+        action_dim: int = 32,
+        action_horizon: int = 50,
+    ) -> None:
+        self.config = config
+        self.parent_mesh = parent_mesh
+        self.W = config.expert_config.width
+        self.action_dim = action_dim
+        self.action_horizon = action_horizon
+
+        suffix = weights["pi0_projections"]
+
+        def upload_w(name: str, dtype=ttnn.bfloat8_b) -> "ttnn.Tensor":
+            t = suffix[f"{name}.weight"].T.contiguous()
+            return ttnn.from_torch(
+                t,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=parent_mesh,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(parent_mesh),
+            )
+
+        def upload_b(name: str) -> "ttnn.Tensor":
+            key = f"{name}.bias"
+            if key not in suffix:
+                return None
+            t = suffix[key]
+            # Tile-pad 1D bias to [1, dim] for the kernel; bf16 (PCC-critical).
+            t2d = t.reshape(1, -1).contiguous()
+            return ttnn.from_torch(
+                t2d,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=parent_mesh,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(parent_mesh),
+            )
+
+        self.action_in_w = upload_w("action_in_proj")
+        self.action_in_b = upload_b("action_in_proj")
+        self.action_out_w = upload_w("action_out_proj")
+        self.action_out_b = upload_b("action_out_proj")
+        self.time_mlp_in_w = upload_w("time_mlp_in")
+        self.time_mlp_in_b = upload_b("time_mlp_in")
+        self.time_mlp_out_w = upload_w("time_mlp_out")
+        self.time_mlp_out_b = upload_b("time_mlp_out")
+
+        gsz = parent_mesh.compute_with_storage_grid_size()
+        self._small_core_grid = ttnn.CoreGrid(y=1, x=min(gsz.x, 8))
+
+    def embed_adarms_cond(self, timestep_value: float, batch_size: int = 1) -> "ttnn.Tensor":
+        """Build adarms_cond [B, W] for a scalar timestep value.
+
+        Sincos host-side (same as the non-parent slice — on-device sincos
+        has program-config issues with tiny matmuls). Two MLP+silu stages
+        on device, replicated across the parent mesh.
+        """
+        t_host = torch.tensor([timestep_value] * batch_size, dtype=torch.float32)
+        sincos_host = torch_sincos(t_host, self.W, min_period=4e-3, max_period=4.0)
+        sincos = ttnn.from_torch(
+            sincos_host.contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.parent_mesh,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.parent_mesh),
+        )
+        x = ttnn.linear(
+            sincos,
+            self.time_mlp_in_w,
+            bias=self.time_mlp_in_b,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=self._small_core_grid,
+        )
+        ttnn.deallocate(sincos)
+        x = ttnn.silu(x)
+        x2 = ttnn.linear(
+            x,
+            self.time_mlp_out_w,
+            bias=self.time_mlp_out_b,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=self._small_core_grid,
+        )
+        ttnn.deallocate(x)
+        out = ttnn.silu(x2)
+        ttnn.deallocate(x2)
+        return out
+
+    def embed_actions(self, noisy_actions: "ttnn.Tensor") -> "ttnn.Tensor":
+        """[B, S, action_dim] → [B, S, W]. Input must be a parent-mesh tensor."""
+        return ttnn.linear(
+            noisy_actions,
+            self.action_in_w,
+            bias=self.action_in_b,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=self._small_core_grid,
+        )
+
+    def project_output(self, expert_hidden: "ttnn.Tensor") -> "ttnn.Tensor":
+        """[B, S, W] → [B, S, action_dim] — velocity prediction."""
+        return ttnn.linear(
+            expert_hidden,
+            self.action_out_w,
+            bias=self.action_out_b,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=self._small_core_grid,
+        )

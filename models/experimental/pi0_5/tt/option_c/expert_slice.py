@@ -1499,3 +1499,25 @@ class Pi0_5OptionCExpertSliceParent:
                     ttnn.deallocate(h)
                 h = h_advanced
         return h
+
+    def wrap_back_to_chip0(self, h: "ttnn.Tensor") -> "ttnn.Tensor":
+        """P2P the live shard from the LAST denoise chip back to the FIRST.
+
+        Used at the end of each Euler step to bring velocity_hidden from
+        chip 5 (where forward_real_block_chain left it) back to chip 0
+        (where the suffix output projection runs). Same column → single-hop
+        fabric (no multihop needed).
+
+        Replaces the host-bouncing wrap-back at stage_denoise.py:276 when
+        running on the parent-mesh denoise path.
+        """
+        from .transport import send_shard_via_p2p
+
+        last = self.denoise_coord_for_layer(self.num_layers - 1)
+        first = self.denoise_coord_for_layer(0)
+        if last == first:
+            return h  # No-op when the chain fits on one chip.
+        h_new = send_shard_via_p2p(h, last, first)
+        if h_new is not h:
+            ttnn.deallocate(h)
+        return h_new
