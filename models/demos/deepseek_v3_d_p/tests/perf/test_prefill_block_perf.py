@@ -89,14 +89,23 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py"
             "glx_8x4_layer0_dense_real_weights_fabric2d",
         ),
         (
-            f"pytest {_TEST_PATH} -k 'fabric2d-mesh-8x4 and layer3 and gate_device and no_ref and isl_25k'",
-            86_581_430,  # Recalibrated 2026-06-05 on bh-glx-d07u02 — post-main-rebase speedup from #45189 (unified_routed_expert_ffn).
-            "deepseek_v3_prefill_block",
-            "deepseek_v3_prefill_block_8x4_layer3_moe_fabric2d",
+            f"pytest {_TEST_PATH} -k 'fabric2d-mesh-8x4 and layer3 and gate_device and no_ref and isl_5k'",
+            22_294_000,  # TODO: Write it when it is calibrated the last time
+            "deepseek_v3_prefill_block_8x4_layer3_moe_fabric2d_5k",
             1,
             1,
             0.03,
-            "glx_8x4_layer3_moe_real_weights_fabric2d",
+            "glx_8x4_layer3_moe_real_weights_fabric2d_5k",
+        ),
+        (
+            f"pytest {_TEST_PATH} -k 'fabric2d-mesh-8x4 and layer3 and gate_device and no_ref and isl_25k'",
+            86_581_430,  # Recalibrated 2026-06-05 on bh-glx-d07u02 — post-main-rebase speedup from #45189 (unified_routed_expert_ffn).
+            "deepseek_v3_prefill_block",
+            "deepseek_v3_prefill_block_8x4_layer3_moe_fabric2d_25k",
+            1,
+            1,
+            0.03,
+            "glx_8x4_layer3_moe_real_weights_fabric2d_25k",
         ),
         (
             f"pytest {_TEST_PATH} -k 'fabric2d-mesh-2x4 and layer3 and gate_device and no_ref and isl_6k4'",
@@ -115,7 +124,8 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py"
         "block_8x4_layer3_moe_25k",
         "block_2x4_layer3_moe",
         "block_8x4_layer0_dense_fabric2d",
-        "block_8x4_layer3_moe_fabric2d",
+        "block_8x4_layer3_moe_fabric2d_5k",
+        "block_8x4_layer3_moe_fabric2d_25k",
         "block_2x4_layer3_moe_fabric2d",
     ],
 )

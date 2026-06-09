@@ -59,15 +59,12 @@ class PrefillBlockThresholds:
     kvpe_pe: float = 0.999
 
 
-# Relaxed thresholds for 5k (5120-token) prefill
 SEQ_LEN_5K = 5 * 1024
-PCC_THRESHOLD_DENSE_5K = 0.989
-PCC_THRESHOLD_MOE_GATE_HOST_5K = 0.989
-PCC_THRESHOLD_MOE_GATE_DEVICE_5K = 0.988
-
 
 DSV3_THRESHOLDS = PrefillBlockThresholds()
 KIMI_THRESHOLDS = PrefillBlockThresholds(moe_gate_host=0.950)
+# Relaxed thresholds for 5k (5120-token) prefill.
+DSV3_THRESHOLDS_5K = PrefillBlockThresholds(dense=0.989, moe_gate_host=0.989, moe_gate_device=0.988)
 
 # Determinism: every iteration must be bit-identical to the iter-0 baseline (strict).
 DETERMINISM_PCC_THRESHOLD = 1.0
@@ -365,14 +362,13 @@ def run_model(
             tt_output_host = reverse_reorder_tensor_chunks(tt_output_host, chunk_order, seq_dim=-2)
         tt_output_host = tt_output_host.squeeze(0)
 
-        is_5k = isl_total == SEQ_LEN_5K
         if layer_type == "dense":
-            pcc_threshold = PCC_THRESHOLD_DENSE_5K if is_5k else thresholds.dense
+            pcc_threshold = thresholds.dense
         else:
             if gate_fallback_mode == GateComputeMode.DEVICE:
-                pcc_threshold = PCC_THRESHOLD_MOE_GATE_DEVICE_5K if is_5k else thresholds.moe_gate_device
+                pcc_threshold = thresholds.moe_gate_device
             else:
-                pcc_threshold = PCC_THRESHOLD_MOE_GATE_HOST_5K if is_5k else thresholds.moe_gate_host
+                pcc_threshold = thresholds.moe_gate_host
 
         _, pcc = comp_pcc(torch_output.float(), tt_output_host.float())
         profiler.end("pcc_validation")
@@ -509,6 +505,8 @@ def test_ds_prefill_block(
     determinism_check,
     num_iterations,
 ):
+    # Relaxed thresholds for 5k (5120-token) prefill.
+    thresholds = DSV3_THRESHOLDS_5K if isl_total == SEQ_LEN_5K else DSV3_THRESHOLDS
     run_model(
         variant,
         config_only,
@@ -528,7 +526,7 @@ def test_ds_prefill_block(
         is_ci_v2_env,
         determinism_check=determinism_check,
         num_iterations=num_iterations,
-        thresholds=DSV3_THRESHOLDS,
+        thresholds=thresholds,
     )
 
 
