@@ -160,6 +160,24 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
     const auto& off = tensor_args.offsets_tensor.value();
     TT_FATAL(off.dtype() == ttnn::DataType::UINT32, "variable_matmul: offsets_tensor must be UINT32.");
     TT_FATAL(off.layout() == ttnn::Layout::ROW_MAJOR, "variable_matmul: offsets_tensor must be ROW_MAJOR.");
+    // The kernels read offsets[start..start+2] (a {start, end} pair). Bound the start index so
+    // the pair stays within the tensor — an out-of-range index would otherwise silently read
+    // adjacent L1 garbage rather than failing here.
+    const uint32_t offsets_volume = off.logical_shape().volume();
+    TT_FATAL(
+        operation_attributes.offsets_start_index + 2U <= offsets_volume,
+        "variable_matmul: offsets_start_index ({}) + 2 exceeds offsets_tensor volume ({}).",
+        operation_attributes.offsets_start_index,
+        offsets_volume);
+    // The dataflow kernels read exactly ONE page of the offsets tensor and index within it, so
+    // the {start, end} pair must fall inside page 0. Enforce the documented limitation here.
+    const uint32_t offsets_page_bytes = off.buffer()->page_size();
+    TT_FATAL(
+        (operation_attributes.offsets_start_index + 2U) * sizeof(uint32_t) <= offsets_page_bytes,
+        "variable_matmul: offsets_start_index ({}) + 2 spills past offsets_tensor page 0 ({} bytes); "
+        "the on-device offset read only covers page 0.",
+        operation_attributes.offsets_start_index,
+        offsets_page_bytes);
 }
 
 VariableMatmulDeviceOperation::spec_return_value_t VariableMatmulDeviceOperation::compute_output_specs(

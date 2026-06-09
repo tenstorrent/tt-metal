@@ -143,10 +143,16 @@ void kernel_main() {
     }
     const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
 
+    // Empty expert (K_tiles==0): K_num_blocks is 0 so the K-loop is skipped and in0_shape is
+    // never read; clamp its K extent to 1 only to satisfy TensorShape2D's d>0 assert.
+    const uint32_t K_tiles_shape = K_tiles > 0U ? K_tiles : 1U;
+    const uint32_t padded_K_tiles_shape = padded_K_tiles > 0U ? padded_K_tiles : K_block_tiles;
+
     // Storage layout: without transpose_a the input is stored as [M, K]; with it, as [K, M].
     // shape carries the MATMUL-coord effective sizes — used for bounds checks.
-    const TensorShape2D in0_shape = transpose_a ? TensorShape2D(K_tiles, M_tiles, padded_K_tiles, padded_M_tiles)
-                                                : TensorShape2D(M_tiles, K_tiles, padded_M_tiles, padded_K_tiles);
+    const TensorShape2D in0_shape = transpose_a
+                                        ? TensorShape2D(K_tiles_shape, M_tiles, padded_K_tiles_shape, padded_M_tiles)
+                                        : TensorShape2D(M_tiles, K_tiles_shape, padded_M_tiles, padded_K_tiles_shape);
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
 
     const uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;

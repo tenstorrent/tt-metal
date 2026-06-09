@@ -125,9 +125,15 @@ void kernel_main() {
     }
     const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
 
+    // Empty expert (K_tiles==0): K_num_blocks is 0 so the K-loop is skipped and in1_shape is
+    // never read; clamp its K extent to 1 only to satisfy TensorShape2D's d>0 assert.
+    const uint32_t K_tiles_shape = K_tiles > 0U ? K_tiles : 1U;
+    const uint32_t padded_K_tiles_shape = padded_K_tiles > 0U ? padded_K_tiles : K_block_tiles;
+
     // Storage layout: without transpose_b the weight is stored as [K, N]; with it, as [N, K].
-    const TensorShape2D in1_shape = transpose_b ? TensorShape2D(N_tiles, K_tiles, padded_N_tiles, padded_K_tiles)
-                                                : TensorShape2D(K_tiles, N_tiles, padded_K_tiles, padded_N_tiles);
+    const TensorShape2D in1_shape = transpose_b
+                                        ? TensorShape2D(N_tiles, K_tiles_shape, padded_N_tiles, padded_K_tiles_shape)
+                                        : TensorShape2D(K_tiles_shape, N_tiles, padded_K_tiles_shape, padded_N_tiles);
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
 
     const uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
