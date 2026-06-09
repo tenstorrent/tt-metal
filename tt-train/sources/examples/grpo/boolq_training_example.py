@@ -3,10 +3,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import argparse
 import csv
 import os
+import random
 from datetime import datetime, timezone
 
+import numpy as np
+import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer
 from ttml.common.config import DeviceConfig, TrainingConfig, get_model_config, load_config
@@ -14,6 +18,20 @@ from ttml.common.utils import get_tt_metal_runtime_root
 from ttml.trainers import GRPOTrainer, TrainerCallback, get_grpo_config
 from utils.llama_completer import LlamaCompletionCtx
 from utils.llama_completer import LlamaGRPOCompleter
+
+
+# Fixed seed so generation (token sampling uses np.random) and any other RNG
+# are reproducible across runs, which is required for a controlled A/B
+# comparison of the advantage paths (host vs GRPO_LEGACY_ADVANTAGES). Token
+# sampling is otherwise unseeded, so two launches would diverge from the first
+# generated token regardless of code changes.
+SEED = 42
+
+
+def seed_everything(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
 
 
 class GRPOMonitor(TrainerCallback):
@@ -55,7 +73,26 @@ def boolq_reward(completions, answer, **kwargs):
     return rewards
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="GRPO BoolQ training example (Llama-3.2-1B-Instruct).")
+    parser.add_argument(
+        "--config",
+        default="tt-train/configs/training_configs/grpo_boolq_llama_1dev.yaml",
+        help=(
+            "Training config path, relative to TT_METAL_RUNTIME_ROOT or absolute. "
+            "Its device_config section (enable_ddp, mesh_shape) selects single-device vs DDP."
+        ),
+    )
+    # Accept (and ignore) extra flags passed by launch scripts (e.g. --model,
+    # --wandb*) so they don't crash argument parsing.
+    args, _ = parser.parse_known_args()
+    return args
+
+
 if __name__ == "__main__":
+    args = parse_args()
+    seed_everything(SEED)
+
     model_id = "meta-llama/Llama-3.2-1B-Instruct"
     tokenizer = AutoTokenizer.from_pretrained(model_id)
 
@@ -74,13 +111,15 @@ if __name__ == "__main__":
     dataset = load_dataset("google/boolq", split="train").shuffle(seed=42).map(format_boolq)
 
     tt_metal_root = get_tt_metal_runtime_root()
-    config_path = os.path.join(
-        tt_metal_root,
-        "tt-train/configs/training_configs/grpo_boolq_llama_1dev.yaml",
-    )
+    config_path = args.config if os.path.isabs(args.config) else os.path.join(tt_metal_root, args.config)
     raw = load_config(config_path)
     training_config = TrainingConfig(raw)
     device_config = DeviceConfig(raw)
+    print(
+        f"Loaded config {config_path} | "
+        f"enable_ddp={device_config.enable_ddp} mesh_shape={device_config.mesh_shape} "
+        f"(total_devices={device_config.total_devices()})"
+    )
     assert training_config.model_config, "training_config.model_config must be set"
     transformer_config = get_model_config(training_config.model_config)
     optimizer_dict = raw["training_config"]["optimizer"]

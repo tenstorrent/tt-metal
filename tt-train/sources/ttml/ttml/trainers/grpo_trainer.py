@@ -150,23 +150,76 @@ def dispatch_reward(
     return reward_func(**call_kwargs)
 
 
+def compute_advantages_host(rewards_np: np.ndarray, group_size: int) -> np.ndarray:
+    """Compute group-relative advantages on the host, kept in host order.
+
+    ``rewards_np`` has shape ``[B]`` with ``B = num_groups * group_size`` and
+    contiguous groups of length ``group_size`` (all completions of prompt 0,
+    then prompt 1, ...). Returns an array of the same shape and order where
+    each element has had its group (per-prompt) mean subtracted.
+
+    Doing the group reduction on the host means the advantages never need to be
+    co-located by group on a device, so groups are free to straddle devices.
+    The advantages are deliberately returned in host order (NOT regrouped per
+    device) so that each micro-batch slice can later be sharded along axis 0 in
+    the exact same group-agnostic, host-order way that
+    :meth:`GRPOCompleter.compute_nlog_probs` shards its token tensors. That
+    alignment is what keeps every completion paired with its own advantage on
+    every device; see :func:`upload_micro_advantages`.
+    """
+    B = rewards_np.shape[0]
+    assert B % group_size == 0, "rewards length must be divisible by group_size"
+    grouped = rewards_np.reshape(-1, group_size).astype(np.float32)
+    advantages = grouped - grouped.mean(axis=1, keepdims=True)
+    return advantages.reshape(B)
+
+
+def upload_micro_advantages(adv_np: np.ndarray, mapper: Any, num_devices: int) -> Any:
+    """Upload one micro-batch's advantages, sharded to match ``compute_nlog_probs``.
+
+    ``adv_np`` is the host-order advantage slice for a single micro-batch (shape
+    ``[mb]``, where ``mb`` is the micro-batch size). It is sharded along axis 0
+    across the mesh, so device ``d`` receives host rows
+    ``[d * mb_local : (d + 1) * mb_local]`` — the SAME contiguous,
+    group-agnostic split that :meth:`GRPOCompleter.compute_nlog_probs` applies
+    to its ``[mb, T]`` token tensors for the very same micro-batch. Because both
+    tensors are sharded the same way over the same host-order list, device-local
+    row ``r`` of the advantages corresponds to device-local row ``r`` of the
+    log-probs, i.e. the same completion.
+
+    Returns a ``ttnn.Tensor`` of global shape ``[mb, 1]`` (per device
+    ``[mb_local, 1]``), ready to broadcast-multiply the per-completion loss.
+    """
+    mb = adv_np.shape[0]
+    assert mb % num_devices == 0, "micro_batch_size must be divisible by num_devices"
+    mb_local = mb // num_devices
+    adv_4d = adv_np.reshape(mb, 1, 1, 1).astype(np.float32)
+    adv_ttml = ttml.autograd.Tensor.from_numpy(adv_4d, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
+    adv_rm = ttnn.to_layout(adv_ttml.get_value(), ttnn.Layout.ROW_MAJOR)
+    return ttnn.reshape(adv_rm, [mb_local, 1])
+
+
 def compute_advantages_ttnn(
     rewards_np: np.ndarray,
     group_size: int,
     mapper: Any,
     num_devices: int,
 ) -> Any:
-    """Compute group-relative advantages on device. Returns a ``ttnn.Tensor``.
+    """LEGACY: compute group-relative advantages on device. Returns a ``ttnn.Tensor``.
+
+    Retained only for A/B comparison against :func:`compute_advantages_host` /
+    :func:`upload_micro_advantages`; gated behind ``GRPO_LEGACY_ADVANTAGES=1``.
+    This path shards advantages by GROUP (axis 0 = prompt id) once for the whole
+    generation batch, which only lines up with the host-order, per-micro-batch
+    sharding of ``compute_nlog_probs`` when ``micro_batch_size == B``. For
+    smaller micro-batches it pairs completions with the wrong advantage; see the
+    bug discussion in the trainer history.
 
     Uploads ``rewards_np`` (shape ``[B]`` with ``B = num_groups * group_size``
     and contiguous groups of length ``group_size``) to the device, subtracts
     the per-group mean, and returns a ``ttnn.Tensor`` of global shape
-    ``[B, 1]`` (sharded along axis 0 across the mesh by ``mapper``).
-
-    Each device must hold whole groups, which requires
-    ``num_groups % num_devices == 0``. Group means are then a purely local
-    reduction along the last axis of a ``[num_groups, 1, 1, group_size]``
-    tensor, so no cross-device communication is needed.
+    ``[B, 1]`` (sharded along axis 0 across the mesh by ``mapper``). Each device
+    must hold whole groups, which requires ``num_groups % num_devices == 0``.
     """
     B = rewards_np.shape[0]
     assert B % group_size == 0, "rewards length must be divisible by group_size"
@@ -361,6 +414,38 @@ class GRPOTrainer:
         dp_mapper: Any = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0) if ddp_enabled else None
         dp_composer: Any = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0) if ddp_enabled else None
 
+        # Validate the batch/micro-batch/device divisibility relationships up
+        # front so misconfigurations fail with a clear message instead of a
+        # cryptic shard assert deep in ``compute_nlog_probs`` (or a silently
+        # ragged final micro-batch).
+        gen_batch = grpo_cfg.batch_size * grpo_cfg.num_generations
+        if grpo_cfg.micro_batch_size <= 0:
+            raise ValueError(f"micro_batch_size must be positive, got {grpo_cfg.micro_batch_size}")
+        if gen_batch % grpo_cfg.micro_batch_size != 0:
+            raise ValueError(
+                f"batch_size * num_generations ({grpo_cfg.batch_size} * {grpo_cfg.num_generations} = "
+                f"{gen_batch}) must be divisible by micro_batch_size ({grpo_cfg.micro_batch_size})"
+            )
+        if grpo_cfg.micro_batch_size % num_devices != 0:
+            raise ValueError(
+                f"micro_batch_size ({grpo_cfg.micro_batch_size}) must be divisible by the number of "
+                f"devices ({num_devices}) so each micro-batch shards evenly along axis 0"
+            )
+
+        # A/B switch: ``GRPO_LEGACY_ADVANTAGES=1`` restores the old group-sharded
+        # on-device advantage path (correct only when micro_batch_size == B). The
+        # default host-order, per-micro-batch path is correct for any valid
+        # micro_batch_size. Kept temporarily so the two can be compared directly.
+        legacy_advantages = os.environ.get("GRPO_LEGACY_ADVANTAGES", "0") == "1"
+        if legacy_advantages:
+            print("Using legacy group-sharded advantage path")
+            logging.warning(
+                "GRPO_LEGACY_ADVANTAGES=1: using the legacy group-sharded advantage path "
+                "(only correct when micro_batch_size == batch_size * num_generations)."
+            )
+        else:
+            print("Using HOST SIDE advantage path")
+
         dataset = self.dataset.select(range(min(grpo_cfg.prompts_to_train, len(self.dataset))))
         prompts = [tokenizer.encode(row["prompt"]) for row in dataset]
         extra_columns = {k: list(dataset[k]) for k in dataset.column_names if k != "prompt"}
@@ -390,12 +475,17 @@ class GRPOTrainer:
             rewards = dispatch_reward(self.reward_func, completions_strs, prompts_strs, dataset_columns_dict)
             rewards_np = np.array(rewards, dtype=np.float32)
 
-            advantages_tt = compute_advantages_ttnn(
-                rewards_np,
-                grpo_cfg.num_generations,
-                dp_mapper,
-                num_devices,
-            )
+            advantages_tt = None
+            advantages_np = None
+            if legacy_advantages:
+                advantages_tt = compute_advantages_ttnn(
+                    rewards_np,
+                    grpo_cfg.num_generations,
+                    dp_mapper,
+                    num_devices,
+                )
+            else:
+                advantages_np = compute_advantages_host(rewards_np, grpo_cfg.num_generations)
             accum_rewards.append(rewards_np)
             accum_completion_lens.extend(len(c) for c in completions_batch)
 
@@ -415,10 +505,18 @@ class GRPOTrainer:
                     iter_micro_batch(prompts_batch, completions_batch, grpo_cfg.micro_batch_size),
                 ):
                     B = len(c)
-                    start_local = (i * grpo_cfg.micro_batch_size) // num_devices
-                    end_local = start_local + B // num_devices
-
-                    adv_slice_val = ttnn.slice(advantages_tt, [start_local, 0], [end_local, 1])
+                    if legacy_advantages:
+                        start_local = (i * grpo_cfg.micro_batch_size) // num_devices
+                        end_local = start_local + B // num_devices
+                        adv_slice_val = ttnn.slice(advantages_tt, [start_local, 0], [end_local, 1])
+                    else:
+                        # The advantages and the micro-batch token tensors are
+                        # both sharded along axis 0 over the identical host-order
+                        # slice [start : start + B], so each device pairs a
+                        # completion's log-probs with that completion's advantage.
+                        start = i * grpo_cfg.micro_batch_size
+                        adv_micro_np = advantages_np[start : start + B]
+                        adv_slice_val = upload_micro_advantages(adv_micro_np, dp_mapper, num_devices)
                     adv_ttml = ttml.autograd.create_tensor(adv_slice_val, requires_grad=False)
 
                     nlog_old, mask_old = probs_old_list[i]
@@ -506,7 +604,8 @@ class GRPOTrainer:
 
             for nlog_old, mask_old in probs_old_list:
                 _deallocate_tensors([nlog_old, mask_old])
-            _deallocate_tensors(advantages_tt)
+            if legacy_advantages:
+                _deallocate_tensors(advantages_tt)
 
         for cb in self.callbacks:
             cb.on_train_end(self)
