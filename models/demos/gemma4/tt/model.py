@@ -76,18 +76,24 @@ def create_rope_caches(mesh_device, hf_config, max_seq_len):
         )
         caches_4d[layer_type] = (cos_4d, sin_4d)
 
-        # 2D for decode embedding lookup: [max_seq_len, head_dim]
+        # 2D for decode embedding lookup: [max_seq_len, head_dim].
+        # ROW_MAJOR is the layout ttnn.embedding needs for its weight; storing
+        # these TILE forced an Untilize of the whole [max_seq_len, head_dim]
+        # cache on *every* per-layer RoPE lookup (240 Untilize ops / decode,
+        # ~25 us each). ROW_MAJOR storage drops that conversion entirely — the
+        # embedding op gathers the position rows and tilizes only the small
+        # [1, 32, head_dim] result.
         cos_2d = ttnn.from_torch(
             cos.squeeze(0),
             device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
             mesh_mapper=replicate,
         )
         sin_2d = ttnn.from_torch(
             sin.squeeze(0),
             device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
             mesh_mapper=replicate,
         )
