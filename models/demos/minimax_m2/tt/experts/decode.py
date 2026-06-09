@@ -88,7 +88,7 @@ def decode_forward(
     gate = ttnn.reshape(gate, (batch_size, config.num_experts, 1, weights.intermediate_size_per_device))
     gate = ttnn.transpose(gate, 1, 2)
     gate = ttnn.reshape(gate, (batch_size, config.num_experts, weights.intermediate_size_per_device))
-    gate = ttnn.add(gate, weights.gate_proj_bias, output_tensor=gate)
+    # MiniMax-M2: no gate bias.
 
     # Up projection
     up = ttnn.sparse_matmul(
@@ -115,7 +115,7 @@ def decode_forward(
     up = ttnn.reshape(up, (batch_size, config.num_experts, 1, weights.intermediate_size_per_device))
     up = ttnn.transpose(up, 1, 2)
     up = ttnn.reshape(up, (batch_size, config.num_experts, weights.intermediate_size_per_device))
-    up = ttnn.add(up, weights.up_proj_bias, output_tensor=up)
+    # MiniMax-M2: no up bias.
 
     # Apply SwiGLU activation (consumes gate and up internally)
     down_input = apply_swiglu(gate, up, config)
@@ -150,7 +150,7 @@ def decode_forward(
     # Note: permute/reshape operations return views - do not deallocate originals
     next_states = ttnn.permute(down, (0, 2, 1, 3))
     next_states = ttnn.reshape(next_states, (batch_size, config.num_experts, config.hidden_size))
-    next_states = ttnn.add(next_states, weights.down_proj_bias, output_tensor=next_states)
+    # MiniMax-M2: no down bias.
     routing_weights = ttnn.permute(routing_weights, (1, 0))
     routing_weights = ttnn.reshape(routing_weights, (batch_size, config.num_experts, 1))
 

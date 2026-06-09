@@ -103,17 +103,12 @@ def _process_prefill_chunk(
     # Note: transpose/reshape operations return views - do not deallocate originals
     gate = ttnn.transpose(gate, 1, 3)
     gate = ttnn.reshape(gate, (batch_size, config.num_experts, seq_len, weights.intermediate_size_per_device))
-    bias_transposed = ttnn.transpose(weights.gate_proj_bias, 1, 0)
-    gate = ttnn.add(gate, bias_transposed, output_tensor=gate)
+    # MiniMax-M2: no gate bias.
 
-    # # Do partial swiglu before up projection to save memory (fused gate projection + swiglu gate activation)
-    # Part 1
-    gate = ttnn.clamp(gate, min=None, max=config.swiglu_limit, output_tensor=gate)
-    gate_alpha = ttnn.mul(gate, config.alpha)
-    gate_sigmoid = ttnn.sigmoid(gate_alpha)
-    gate_alpha.deallocate(True)
+    # Partial SwiGLU before the up projection to free memory early (MiniMax-M2 uses
+    # plain SiLU: silu(gate) = gate * sigmoid(gate); no clamp, no alpha, no (up+1)).
+    gate_sigmoid = ttnn.sigmoid(gate)
     glu = ttnn.mul(gate, gate_sigmoid, output_tensor=gate)
-
     gate_sigmoid.deallocate(True)
 
     # Up projection
@@ -136,19 +131,11 @@ def _process_prefill_chunk(
     # Note: transpose/reshape operations return views - do not deallocate originals
     up = ttnn.transpose(up, 1, 3)
     up = ttnn.reshape(up, (batch_size, config.num_experts, seq_len, weights.intermediate_size_per_device))
-    bias_transposed = ttnn.transpose(weights.up_proj_bias, 1, 0)
-    up = ttnn.add(up, bias_transposed, output_tensor=up)
+    # MiniMax-M2: no up bias.
 
-    # Apply SwiGLU (consumes gate and up internally)
-
-    # partial swiglu part 2
-    up = ttnn.clamp(up, min=-config.swiglu_limit, max=config.swiglu_limit, output_tensor=up)
-    up = ttnn.add(up, 1, output_tensor=up)
+    # SwiGLU part 2: down_input = silu(gate) * up  (MiniMax-M2: no clamp / no (up+1)).
     down_input = ttnn.mul(up, glu, output_tensor=up)
     glu.deallocate(True)
-
-    # Disabled regular swiglu to save memory by deallocating gate early.
-    # down_input = apply_swiglu(gate, up, config)
 
     # Note: reshape returns a view - do not deallocate original
     down_input = ttnn.reshape(down_input, (1, config.num_experts, seq_len, weights.intermediate_size_per_device))
@@ -195,12 +182,10 @@ def _process_prefill_chunk(
         )
         down_input_split.deallocate(True)
 
-        # Apply bias and routing weights
+        # Apply routing weights (MiniMax-M2: no down bias).
         split_seq_len = seq_len if seq_len < split_size else split_size
         # Note: reshape returns a view - do not deallocate original
         next_states = ttnn.reshape(down, (batch_size, config.num_experts, split_seq_len, config.hidden_size))
-        bias_transposed = ttnn.transpose(weights.down_proj_bias, 1, 0)
-        next_states = ttnn.add(next_states, bias_transposed, output_tensor=next_states)
         next_states = apply_routing_weights(next_states, routing_weights_list[i])
 
         # Reduce across experts

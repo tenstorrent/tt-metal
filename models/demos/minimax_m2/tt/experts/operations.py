@@ -10,29 +10,22 @@ from .config import ExpertConfig
 
 def apply_swiglu(gate, up, config: ExpertConfig):
     """
-    Apply SwiGLU activation: gate * sigmoid(alpha * gate) * (up + 1)
+    Apply MiniMax-M2 SwiGLU activation: silu(gate) * up = gate * sigmoid(gate) * up.
+
+    No clamp, no alpha, no (up + 1) — those are gpt-oss-specific.
 
     Args:
         gate: Gate projection output
         up: Up projection output
-        config: Expert configuration with alpha and limits
+        config: Expert configuration
 
     Returns:
         Activated tensor
     """
-    # Clamp gate and up
-    gate = ttnn.clamp(gate, min=None, max=config.swiglu_limit, output_tensor=gate)
-    up = ttnn.clamp(up, min=-config.swiglu_limit, max=config.swiglu_limit, output_tensor=up)
-
-    # SwiGLU: gate * sigmoid(alpha * gate) * (up + 1)
-    gate_alpha = ttnn.mul(gate, config.alpha)
-    gate_sigmoid = ttnn.sigmoid(gate_alpha)
-    gate_alpha.deallocate(True)
-
+    gate_sigmoid = ttnn.sigmoid(gate)
     glu = ttnn.mul(gate, gate_sigmoid, output_tensor=gate)
     gate_sigmoid.deallocate(True)
 
-    up = ttnn.add(up, 1, output_tensor=up)
     result = ttnn.mul(up, glu, output_tensor=up)
     ttnn.deallocate(glu)
 

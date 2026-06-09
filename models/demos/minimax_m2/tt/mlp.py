@@ -139,7 +139,6 @@ class MLP:
                 num_experts=hf_config.num_local_experts,
                 hidden_size=hf_config.hidden_size,
                 num_experts_per_tok=hf_config.num_experts_per_tok,
-                swiglu_limit=hf_config.swiglu_limit,
             )
 
             # Use GPT-OSS specific program config

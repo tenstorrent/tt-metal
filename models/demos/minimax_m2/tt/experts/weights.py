@@ -16,14 +16,15 @@ from .config import ExpertConfig
 
 @dataclass(frozen=True)  # ✅ Make immutable to prevent accidental modification
 class ExpertWeights:
-    """Container for expert weight tensors - immutable after creation"""
+    """Container for expert weight tensors - immutable after creation.
 
-    gate_proj: ttnn.Tensor
-    up_proj: ttnn.Tensor
-    down_proj: ttnn.Tensor
-    gate_proj_bias: ttnn.Tensor
-    up_proj_bias: ttnn.Tensor
-    down_proj_bias: ttnn.Tensor
+    MiniMax-M2 experts (MiniMaxM2MLP) are separate w1 (gate), w3 (up), w2 (down)
+    Linears with NO bias and plain SiLU SwiGLU.
+    """
+
+    gate_proj: ttnn.Tensor  # w1, [1, num_experts, hidden, intermediate]
+    up_proj: ttnn.Tensor  # w3, [1, num_experts, hidden, intermediate]
+    down_proj: ttnn.Tensor  # w2, [1, num_experts, intermediate, hidden]
     intermediate_size_per_device: int
 
 
@@ -53,24 +54,16 @@ def load_expert_weights(
     intermediate_size_per_device = mesh_config.shard_size(config.intermediate_size, mode=Mode.DECODE)
 
     if state_dict:
-        # Extract gate and up projections from fused weight
-        gate_proj = state_dict["gate_up_proj"][..., ::2].reshape(
-            1, config.num_experts, config.hidden_size, config.intermediate_size
-        )
-        up_proj = state_dict["gate_up_proj"][..., 1::2].reshape(
-            1, config.num_experts, config.hidden_size, config.intermediate_size
-        )
-        gate_proj_bias = state_dict["gate_up_proj_bias"][..., ::2].reshape(
-            1, config.num_experts, config.intermediate_size
-        )
-        up_proj_bias = state_dict["gate_up_proj_bias"][..., 1::2].reshape(
-            1, config.num_experts, config.intermediate_size
-        )
+        # MiniMax-M2 experts are a ModuleList of MiniMaxM2MLP; per-expert keys are
+        # "{e}.w1.weight" (gate), "{e}.w3.weight" (up), "{e}.w2.weight" (down).
+        # nn.Linear weight is [out, in]; transpose to [in, out] for x @ W, then stack
+        # into [1, num_experts, in, out].
+        E, H, I = config.num_experts, config.hidden_size, config.intermediate_size
+        gate_proj = torch.stack([state_dict[f"{e}.w1.weight"].t() for e in range(E)], dim=0).reshape(1, E, H, I)
+        up_proj = torch.stack([state_dict[f"{e}.w3.weight"].t() for e in range(E)], dim=0).reshape(1, E, H, I)
     else:
         gate_proj = None
         up_proj = None
-        gate_proj_bias = None
-        up_proj_bias = None
     # Get mesh mappers
     col_mesh_mapper = mesh_config.column_parallel(mesh_device)
     row_mesh_mapper = mesh_config.row_parallel(mesh_device)
@@ -96,41 +89,13 @@ def load_expert_weights(
         cache_file_name=get_cache_file_name(tensor_cache_path, "up_proj"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    bias_dtype = ttnn.bfloat16
-    # Load gate bias
-    gate_proj_bias_tt = ttnn.as_tensor(
-        gate_proj_bias,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=bias_dtype,
-        mesh_mapper=col_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_proj_bias"),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    # Load up bias
-    up_proj_bias_tt = ttnn.as_tensor(
-        up_proj_bias,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=bias_dtype,
-        mesh_mapper=col_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"up_proj_bias"),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    # Load down projection
+    # Load down projection (w2): [out=hidden, in=intermediate] -> transpose to
+    # [intermediate, hidden], stack -> [1, num_experts, intermediate, hidden].
     if state_dict:
-        down_proj = state_dict["down_proj"].reshape(1, config.num_experts, config.intermediate_size, config.hidden_size)
-        down_proj_bias = state_dict["down_proj_bias"].reshape(1, config.num_experts, config.hidden_size)
-        # Handle row-parallel bias (must not be replicated across TP devices)
-        if mesh_config.decode.tp > 1:
-            down_proj_bias = torch.cat(
-                [down_proj_bias] + [torch.zeros_like(down_proj_bias)] * (mesh_config.decode.tp - 1), dim=-1
-            )
+        E, H, I = config.num_experts, config.hidden_size, config.intermediate_size
+        down_proj = torch.stack([state_dict[f"{e}.w2.weight"].t() for e in range(E)], dim=0).reshape(1, E, I, H)
     else:
         down_proj = None
-        down_proj_bias = None
 
     down_proj_tt = ttnn.as_tensor(
         down_proj,
@@ -142,22 +107,9 @@ def load_expert_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    down_proj_bias_tt = ttnn.as_tensor(
-        down_proj_bias,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=bias_dtype,
-        mesh_mapper=col_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj_bias"),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
     return ExpertWeights(
         gate_proj=gate_proj_tt,
         up_proj=up_proj_tt,
         down_proj=down_proj_tt,
-        gate_proj_bias=gate_proj_bias_tt,
-        up_proj_bias=up_proj_bias_tt,
-        down_proj_bias=down_proj_bias_tt,
         intermediate_size_per_device=intermediate_size_per_device,
     )
