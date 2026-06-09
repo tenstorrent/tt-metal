@@ -438,6 +438,7 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
             decode_cur_pos_tt=kwargs.get("decode_cur_pos_tt"),
             decode_cos_sin=kwargs.get("decode_cos_sin"),
         )
+        print("Attention output shape", attn_out.shape)
 
         # Prefill block-sharded region (ops 14-16): the o_proj returns its
         # output BLOCK_SHARDED on the 8x8 grid, so do the attention residual-add
@@ -540,12 +541,7 @@ class TTNNDotsOCRLayerStack(TTNNLayerStack):
 
     def forward(self, hidden_states, **kwargs):
         seq_len = hidden_states.shape[-2]
-        if (
-            seq_len == 1
-            and getattr(self, "_shared_decode_cur_pos", None) is not None
-            and self.layers
-            and "decode_cos_sin" not in kwargs
-        ):
+        if seq_len == 1 and getattr(self, "_shared_decode_cur_pos", None) is not None and self.layers:
             attn0 = getattr(self.layers[0], "self_attn", None)
             rotary_setup = getattr(attn0, "_rotary_setup", None) if attn0 is not None else None
             cache_position = kwargs.get("cache_position")
@@ -553,7 +549,8 @@ class TTNNDotsOCRLayerStack(TTNNLayerStack):
                 cur_pos_tt = self._materialize_shared_cur_pos(cache_position)
                 if cur_pos_tt is not None:
                     kwargs["decode_cur_pos_tt"] = cur_pos_tt
-                    kwargs["decode_cos_sin"] = rotary_setup.get_cos_sin_for_decode(cur_pos_tt)
+                    if kwargs.get("decode_cos_sin") is None:
+                        kwargs["decode_cos_sin"] = rotary_setup.get_cos_sin_for_decode(cur_pos_tt)
 
         for layer in self.layers:
             layer_output = layer.forward(hidden_states, **kwargs)

@@ -33,6 +33,29 @@ except ImportError:
     Cache = object
 
 
+def _permute_qk_hf_to_meta(weight: torch.Tensor, n_heads: int, head_dim: int) -> torch.Tensor:
+    """Reorder the per-head ``head_dim`` rows of a Q/K projection weight from the
+    HuggingFace half_half RoPE convention to the Meta/interleaved convention.
+
+    HF rotates pairs ``(j, j + head_dim/2)``; Meta rotates adjacent pairs
+    ``(2j, 2j+1)``. ``rotary_embedding_llama`` only implements the interleaved
+    form (its 32x32 tile-local trans_mat cannot express the ``(j, j+64)``
+    pairing). Permuting the projection rows so output element ``2j`` is the old
+    ``j`` and ``2j+1`` is the old ``j + head_dim/2`` makes interleaved RoPE
+    numerically identical to the original half_half RoPE. V is never permuted
+    (it has no rotary).
+
+    ``weight`` is ``[n_heads * head_dim, hidden]`` (output-feature rows).
+    """
+    hidden = weight.shape[-1]
+    return weight.view(n_heads, 2, head_dim // 2, hidden).transpose(1, 2).reshape(n_heads * head_dim, hidden)
+
+
+def _permute_qk_bias_hf_to_meta(bias: torch.Tensor, n_heads: int, head_dim: int) -> torch.Tensor:
+    """``_permute_qk_hf_to_meta`` for a 1-D Q/K bias ``[n_heads * head_dim]``."""
+    return bias.view(n_heads, 2, head_dim // 2).transpose(1, 2).reshape(n_heads * head_dim)
+
+
 class _TTNNDotsOCRQKVPrefillLinear(TTNNLinearLLamaIColShardedWAllReduced):
     """QKV-shaped linear for the prefill path only.
 
@@ -321,8 +344,16 @@ class TTNNDotsOCRAttention(TTNNModule):
         head_dim = new_attn.head_dim
         hidden_dim = new_attn.hidden_size
 
-        q_w_grouped = hf_attn.q_proj.weight.data.view(num_kv_heads, num_q_per_kv, head_dim, hidden_dim)
-        k_w_grouped = hf_attn.k_proj.weight.data.view(num_kv_heads, 1, head_dim, hidden_dim)
+        # Permute Q/K projection rows half_half -> Meta/interleaved so the model
+        # can use ``rotary_embedding_llama`` (interleaved-only) in both prefill
+        # and decode. V is left untouched. These permuted weights feed BOTH the
+        # KV-group-interleaved decode weight and the conventional prefill weight
+        # below, keeping the shared paged KV cache in one consistent convention.
+        q_w_meta = _permute_qk_hf_to_meta(hf_attn.q_proj.weight.data, num_q_heads, head_dim)
+        k_w_meta = _permute_qk_hf_to_meta(hf_attn.k_proj.weight.data, num_kv_heads, head_dim)
+
+        q_w_grouped = q_w_meta.view(num_kv_heads, num_q_per_kv, head_dim, hidden_dim)
+        k_w_grouped = k_w_meta.view(num_kv_heads, 1, head_dim, hidden_dim)
         v_w_grouped = hf_attn.v_proj.weight.data.view(num_kv_heads, 1, head_dim, hidden_dim)
         fused_weight = torch.cat([q_w_grouped, k_w_grouped, v_w_grouped], dim=1).reshape(-1, hidden_dim)
 
@@ -333,6 +364,12 @@ class TTNNDotsOCRAttention(TTNNModule):
         q_bias = hf_attn.q_proj.bias.data.clone() if hf_attn.q_proj.bias is not None else None
         k_bias = hf_attn.k_proj.bias.data.clone() if hf_attn.k_proj.bias is not None else None
         v_bias = hf_attn.v_proj.bias.data.clone() if hf_attn.v_proj.bias is not None else None
+        # Match the weight permute: Q/K bias rows also go half_half -> interleaved
+        # (V untouched). Used by both the grouped and conventional fused biases.
+        if q_bias is not None:
+            q_bias = _permute_qk_bias_hf_to_meta(q_bias, num_q_heads, head_dim)
+        if k_bias is not None:
+            k_bias = _permute_qk_bias_hf_to_meta(k_bias, num_kv_heads, head_dim)
         new_attn._q_bias_torch = q_bias
         new_attn._k_bias_torch = k_bias
         new_attn._v_bias_torch = v_bias
@@ -370,9 +407,7 @@ class TTNNDotsOCRAttention(TTNNModule):
         # used to do every prefill (Tracy: ~25 ms / layer at S=2816).
         # Memory cost: +1 QKV weight per layer (~3 MB BFP8 on dots.ocr,
         # in_features=1536 / out_features=2048).
-        fused_weight_conv = torch.cat(
-            [hf_attn.q_proj.weight.data, hf_attn.k_proj.weight.data, hf_attn.v_proj.weight.data], dim=0
-        )
+        fused_weight_conv = torch.cat([q_w_meta, k_w_meta, hf_attn.v_proj.weight.data], dim=0)
         fused_linear_conv = torch.nn.Linear(new_attn.hidden_size, q_size + 2 * kv_size, bias=has_any_bias)
         fused_linear_conv.weight.data = fused_weight_conv
         if has_any_bias:
@@ -409,8 +444,8 @@ class TTNNDotsOCRAttention(TTNNModule):
             )
             self.sdpa.decode_program_config = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
-                q_chunk_size=0,
-                k_chunk_size=0,
+                q_chunk_size=1,
+                k_chunk_size=128,
                 exp_approx_mode=True,
             )
             self.sdpa.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -469,7 +504,10 @@ class TTNNDotsOCRAttention(TTNNModule):
                 max_seq_len=131072,
                 rope_theta=rope_theta,
                 partial_rotary_factor=1.0,
-                rope_convention="half_half",
+                # Interleaved (Meta) convention: required by rotary_embedding_llama,
+                # which both prefill and decode now use. The qkv Q/K weight rows are
+                # permuted half_half -> interleaved at load to match (V untouched).
+                rope_convention="interleaved",
             )
         self._rotary_setup = TTNNDotsOCRAttention._shared_rotary_setups[setup_key]
 
@@ -539,17 +577,23 @@ class TTNNDotsOCRAttention(TTNNModule):
         seq_len = query_states.shape[2]
         cos, sin = self._rotary_setup.get_cos_sin_for_prefill(seq_len)
 
-        # ``ttnn.experimental.rotary_embedding`` preserves input dtype, so
-        # Q/K stay BFP8 through the rotary instead of round-tripping
-        # through BF16 (saves 2 typecasts per layer in text-decoder
-        # prefill, ~0.7 ms/layer at this seq_len).
-        query_states = ttnn.experimental.rotary_embedding(query_states, cos, sin)
-        key_states = ttnn.experimental.rotary_embedding(key_states, cos, sin)
-
-        if query_states.shape[2] != seq_len:
-            query_states = query_states[:, :, :seq_len, :]
-        if key_states.shape[2] != seq_len:
-            key_states = key_states[:, :, :seq_len, :]
+        # Interleaved (Meta) RoPE via rotary_embedding_llama. The op preserves
+        # the input's logical shape, so the post-rotary seq-trim the half_half
+        # ``rotary_embedding`` needed (it rounded seq up to a tile) is gone.
+        # The op requires bfloat16 inputs (it asserts dtype == bf16), so cast
+        # Q/K up from BFP8 first — 2 typecasts/layer that the old half_half
+        # path avoided, the cost of staying numerically consistent with decode.
+        if query_states.dtype != ttnn.bfloat16:
+            query_states = ttnn.typecast(query_states, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if key_states.dtype != ttnn.bfloat16:
+            key_states = ttnn.typecast(key_states, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+        trans_mat_prefill = self._rotary_setup.trans_mat_prefill
+        query_states = ttnn.experimental.rotary_embedding_llama(
+            query_states, cos, sin, trans_mat_prefill, is_decode_mode=False
+        )
+        key_states = ttnn.experimental.rotary_embedding_llama(
+            key_states, cos, sin, trans_mat_prefill, is_decode_mode=False
+        )
 
         use_paged = isinstance(past_key_values, TTNNPagedAttentionKVCache)
         if past_key_values is not None and use_paged:
@@ -662,7 +706,7 @@ class TTNNDotsOCRAttention(TTNNModule):
             )
         else:
             nlp_heads_mc = ttnn.DRAM_MEMORY_CONFIG
-
+        print("QKV states shape", qkv_states.shape)
         query_states, key_states, value_states = ttnn.experimental.nlp_create_qkv_heads(
             qkv_states,
             num_heads=self.num_attention_heads,
@@ -670,48 +714,71 @@ class TTNNDotsOCRAttention(TTNNModule):
             transpose_k_heads=False,
             memory_config=nlp_heads_mc,
         )
+        # print("Q shape", q.shape) # [1, 12, 1, 128]
+        # print("K shape", k.shape) # [1, 2, 1, 128]
+        # print("V shape", v.shape) # [1, 2, 1, 128]
+
+        # query_states, key_states, value_states = ttnn.experimental.nlp_create_qkv_heads_decode(
+        #     qkv_states,
+        #     num_heads=self.num_attention_heads,
+        #     num_kv_heads=self.num_key_value_heads,
+        #     memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1),
+        # )
+        print("Query states shape", query_states.shape)  # [1, 1, 12, 128]
+        print("Key states shape", key_states.shape)  # [1, 1, 2, 128]
+        print("Value states shape", value_states.shape)  # [1, 1, 2, 128]
         ttnn.deallocate(qkv_states)
 
-        # V skips rotary, so the Sharded factory's HEIGHT_SHARDED layout
-        # would persist into the downstream ``permute(2,0,1,3)`` kernel
-        # which has no sharded TensorAccessor path. Reshard back to L1
-        # interleaved while Q/K continue sharded through rotary (rotary
-        # supports HEIGHT_SHARDED input and reshards to its requested
-        # output mem config in the same kernel).
+        # ``permute(2,0,1,3)`` has no sharded TensorAccessor path, and the decode
+        # rope/SDPA layouts we build below are interleaved-sourced, so reshard
+        # Q/K/V from the create-heads HEIGHT_SHARDED output to L1 interleaved.
+        if is_decode and query_states.is_sharded():
+            query_states = ttnn.sharded_to_interleaved(query_states, ttnn.L1_MEMORY_CONFIG)
+        if is_decode and key_states.is_sharded():
+            key_states = ttnn.sharded_to_interleaved(key_states, ttnn.L1_MEMORY_CONFIG)
         if is_decode and value_states.is_sharded():
             value_states = ttnn.sharded_to_interleaved(value_states, ttnn.L1_MEMORY_CONFIG)
 
-        # ``typecast(bfloat16)`` on Q/K was conditional on dtype != bfloat16.
-        # qkv_proj emits bfloat16 and ``nlp_create_qkv_heads`` preserves dtype,
-        # so the condition is always false in this config. Dropping the dead
-        # branches removes two ops from the per-token graph.
+        # Permute [B, H, S=1, D] -> [S=1, B, H, D] for the decode kernels. Doing
+        # this BEFORE rope keeps it a clean reshape-like permute: seq is still
+        # logically 1 (rope hasn't tile-inflated it), so there is no padded seq
+        # dim to trim afterwards — this is what eliminates the old post-rope slice.
+        query_states = ttnn.permute(query_states, (2, 0, 1, 3))  # [1, 1, num_q_heads, head_dim]
+        kv_key = ttnn.permute(key_states, (2, 0, 1, 3))  # [1, 1, num_kv_heads, head_dim]
+        kv_value = ttnn.permute(value_states, (2, 0, 1, 3))  # [1, 1, num_kv_heads, head_dim]
 
+        # Decode RoPE via rotary_embedding_llama (interleaved/Meta convention,
+        # matching the permuted qkv weights). It preserves the input's
+        # [1, batch, n_heads, head_dim] logical shape, so Q/K come out seq=1 with
+        # no trim. Requires HEIGHT_SHARDED Q/K + sharded cos/sin + sharded
+        # trans_mat, all keyed to the batch core grid.
         if decode_cos_sin is not None:
             cos, sin = decode_cos_sin
         else:
             cos, sin = self._rotary_setup.get_cos_sin_for_decode(cur_pos_tt)
-        # K stays in L1 (reshaped/sharded before paged_update_on_device which accepts any
-        # memory layout). Q must end up DRAM for paged_sdpa_decode (`Q_memcfg.buffer_type()
-        # == DRAM` asserted in sdpa_decode_device_operation.cpp:89). Since rotary_embedding
-        # defaults its output memory_config to the input's, we explicitly request DRAM
-        # for Q because nlp_create_qkv_heads now produces L1 in decode.
-        query_states = ttnn.experimental.rotary_embedding(query_states, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        key_states = ttnn.experimental.rotary_embedding(key_states, cos, sin, memory_config=ttnn.L1_MEMORY_CONFIG)
+        cos, sin = self._rotary_setup.shard_decode_cos_sin(cos, sin, batch_size)
+        trans_mat = self._rotary_setup.get_trans_mat_decode_sharded(batch_size)
 
-        if query_states.shape[2] != seq_length:
-            query_states = query_states[:, :, :seq_length, :]
-        if key_states.shape[2] != seq_length:
-            key_states = ttnn.slice(
-                key_states,
-                [0, 0, 0, 0],
-                [int(key_states.shape[0]), int(key_states.shape[1]), int(seq_length), int(key_states.shape[3])],
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
-
-        # Permute [B, H, S, D] -> [S, B, H, D] for paged attention kernels
-        query_states = ttnn.permute(query_states, (2, 0, 1, 3))
-        kv_key = ttnn.permute(key_states, (2, 0, 1, 3))
-        kv_value = ttnn.permute(value_states, (2, 0, 1, 3))
+        rope_sharded_mc = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, self.head_dim),
+            core_grid=ttnn.num_cores_to_corerangeset(batch_size, self.device.compute_with_storage_grid_size(), True),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        query_states = ttnn.interleaved_to_sharded(query_states, rope_sharded_mc)
+        kv_key = ttnn.interleaved_to_sharded(kv_key, rope_sharded_mc)
+        print("Pre Rotated Query states shape", query_states.shape)
+        print("Pre Rotated Key states shape", kv_key.shape)
+        query_states = ttnn.experimental.rotary_embedding_llama(query_states, cos, sin, trans_mat, is_decode_mode=True)
+        kv_key = ttnn.experimental.rotary_embedding_llama(kv_key, cos, sin, trans_mat, is_decode_mode=True)
+        print("Post Rotated Query states shape", query_states.shape)
+        print("Post Rotated Key states shape", kv_key.shape)
+        # Q -> DRAM for paged_sdpa_decode (asserts Q buffer == DRAM, see
+        # sdpa_decode_device_operation.cpp:89). K -> L1 interleaved to be
+        # resharded into ``shard_cfg`` for paged_update_on_device below.
+        query_states = ttnn.sharded_to_interleaved(query_states, ttnn.DRAM_MEMORY_CONFIG)
+        kv_key = ttnn.sharded_to_interleaved(kv_key, ttnn.L1_MEMORY_CONFIG)
 
         # ``typecast(bfloat16)`` on kv_value was conditional on dtype != bfloat16
         # and never triggers in this config (nlp_create_qkv_heads -> permute
@@ -725,13 +792,18 @@ class TTNNDotsOCRAttention(TTNNModule):
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         )
+        # kv_key = ttnn.to_memory_config(key_states, shard_cfg)
         kv_key = ttnn.to_memory_config(kv_key, shard_cfg)
+        # kv_value = ttnn.to_memory_config(value_states, shard_cfg)
         kv_value = ttnn.to_memory_config(kv_value, shard_cfg)
 
+        print("BKV key shape", kv_key.shape)
+        print("KV value shape", kv_value.shape)
         past_key_values.paged_update_on_device(kv_key, kv_value, layer_idx=self.layer_idx, current_pos=cur_pos_tt)
         ttnn.deallocate(kv_key)
         ttnn.deallocate(kv_value)
 
+        print("Pre Query states shape", query_states.shape)
         attn_output = past_key_values.paged_sdpa_decode(
             query_states,
             self.layer_idx,

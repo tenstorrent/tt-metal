@@ -221,6 +221,9 @@ class TTNNPagedAttentionKVCache(Cache):
         k_cache = self._tt_key_cache[layer_idx]
         v_cache = self._tt_value_cache[layer_idx]
         page_table = self._tt_page_table
+        print("K cache shape", k_cache.shape)
+        print("V cache shape", v_cache.shape)
+        print("Page table shape", page_table.shape)
 
         ttnn.experimental.paged_update_cache(
             k_cache,

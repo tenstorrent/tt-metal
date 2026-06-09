@@ -480,6 +480,7 @@ class BailingRotarySetup:
             self.trans_mat_decode = None
             self.trans_mat_prefill = None
             self._trans_mat_decode_torch = None
+        self._decode_cos_sin_cache = {}
 
     def get_cos_sin_for_prefill(
         self,
@@ -613,6 +614,53 @@ class BailingRotarySetup:
         sin = ttnn.transpose(sin, 1, 2)
 
         return cos, sin
+
+    def shard_decode_cos_sin(
+        self,
+        cos: ttnn.Tensor,
+        sin: ttnn.Tensor,
+        batch_size: int,
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Reshard interleaved decode cos/sin into the HEIGHT_SHARDED layout
+        ``rotary_embedding_llama`` (is_decode_mode=True) requires.
+
+        Input cos/sin are ``[1, batch, 1, head_dim]`` (from
+        ``get_cos_sin_for_decode``) or ``[1, 1, 1, head_dim]`` (from the
+        precomputed ``get_cos_sin_for_decode_position``); batch lives in dim 1.
+        Each batch element's tile is sharded onto its own core with shard shape
+        ``(TILE_SIZE, head_dim)`` over a ``batch`` core grid, matching the decode
+        op's assertions that ``cos.shard_spec.shape[0] == TILE_HEIGHT`` and that
+        batch is dim 1. Only valid under the interleaved convention.
+        """
+        if self.rope_convention != "interleaved":
+            raise ValueError("shard_decode_cos_sin requires rope_convention='interleaved'")
+
+        batch_grid = ttnn.num_cores_to_corerangeset(batch_size, self.device.compute_with_storage_grid_size(), True)
+        mem_config = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, self.head_dim),
+            core_grid=batch_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        cos = ttnn.interleaved_to_sharded(cos, mem_config)
+        sin = ttnn.interleaved_to_sharded(sin, mem_config)
+        return cos, sin
+
+    def get_cos_sin_for_decode_position(self, position: int) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Get cached decode cos/sin for a scalar position. Returns [1, 1, 1, head_dim]."""
+        position = int(position)
+        if position < 0 or position >= self.max_seq_len:
+            raise ValueError(
+                f"Requested decode position {position} is outside [0, {self.max_seq_len}). "
+                f"Reinitialize BailingRotarySetup with larger max_seq_len."
+            )
+        if position not in self._decode_cos_sin_cache:
+            self._decode_cos_sin_cache[position] = (
+                self.cos_cache[:, :, position : position + 1, :],
+                self.sin_cache[:, :, position : position + 1, :],
+            )
+        return self._decode_cos_sin_cache[position]
 
     def get_trans_mat(self, is_decode: bool = False) -> ttnn.Tensor:
         """Get the RoPE transformation matrix (decode or prefill)."""

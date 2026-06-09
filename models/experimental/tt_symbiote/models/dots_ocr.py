@@ -486,25 +486,32 @@ class TTNNDotsOCRPrefillGraph(TTNNModule):
             text_e = _all_gather_hidden_to_full(text_e, self.device, self._hidden_size)
 
         h = self._p_stack.forward(text_e, past_key_value=past_key_value, cache_position=cache_position)
+        if cache_position is not None and len(cache_position.shape) > 0:
+            real_seq_len = int(cache_position.shape[0])
+        else:
+            real_seq_len = int(h.shape[-2])
         if self._gather_hidden_for_full_body:
             # TP4 path: return the post-body hidden; final norm + lm_head + argmax
             # run EAGER outside this captured trace. The in-trace full-vocab
             # all_gather + argmax corrupts its output buffer when sharing a trace
             # with the heavy TP4 body (proven: eager works, traced does not).
-            # Slice the real last token now (trace-safe) so the eager tail only
-            # processes [B, 1, H], and its tile-broadcast RMSNorm gamma is valid.
+            # Slice the real last token from cache_position, not h.shape[-2]:
+            # TTNN ops may materialize tile/bucket padding in the sequence dim,
+            # and running the head on that padded tail changes the first token.
             sl = int(h.shape[-2])
+            last_idx = max(0, min(real_seq_len, sl) - 1)
             if sl > 1:
                 b = int(h.shape[0])
                 hd = int(h.shape[-1])
-                h = ttnn.slice(h, [0, sl - 1, 0], [b, sl, hd])
+                h = ttnn.slice(h, [0, last_idx, 0], [b, last_idx + 1, hd])
             return h
         h = self._p_norm.forward(h)
         sl = int(h.shape[-2])
         if sl > 1:
             b = int(h.shape[0])
             hd = int(h.shape[-1])
-            h = ttnn.slice(h, [0, sl - 1, 0], [b, sl, hd])
+            last_idx = max(0, min(real_seq_len, sl) - 1)
+            h = ttnn.slice(h, [0, last_idx, 0], [b, last_idx + 1, hd])
         logits = self._p_lm.forward(h)
         return _argmax_token_on_device(logits)
 
@@ -551,13 +558,18 @@ class TTNNDotsOCRDecodeGraph(TTNNModule):
             hidden_states = _all_gather_hidden_to_full(hidden_states, self.device, self._hidden_size)
         return hidden_states
 
-    def forward(self, decode_input, cache_position, past_key_value):
+    def forward(self, decode_input, cache_position, past_key_value, decode_cos_sin=None):
         dev = self.device
         if _deep_sync_profile_enabled():
             with _profile_graph_stage(dev, "decode.graph.embedding"):
                 hidden_states = self._embed_and_gather(decode_input)
             with _profile_graph_stage(dev, "decode.graph.layer_stack"):
-                h = self._d_stack.forward(hidden_states, past_key_value=past_key_value, cache_position=cache_position)
+                h = self._d_stack.forward(
+                    hidden_states,
+                    past_key_value=past_key_value,
+                    cache_position=cache_position,
+                    decode_cos_sin=decode_cos_sin,
+                )
             if self._gather_hidden_for_full_body:
                 # TP4 path: norm + lm_head + argmax run eager outside the trace.
                 return h
@@ -570,7 +582,12 @@ class TTNNDotsOCRDecodeGraph(TTNNModule):
 
         # Default: one straight-line forward when deep graph profiling is off.
         hidden_states = self._embed_and_gather(decode_input)
-        h = self._d_stack.forward(hidden_states, past_key_value=past_key_value, cache_position=cache_position)
+        h = self._d_stack.forward(
+            hidden_states,
+            past_key_value=past_key_value,
+            cache_position=cache_position,
+            decode_cos_sin=decode_cos_sin,
+        )
         if self._gather_hidden_for_full_body:
             # TP4 path: norm + lm_head + argmax run eager outside the trace
             # (see TTNNDotsOCRPrefillGraph for why).
@@ -787,6 +804,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
 
         # Decode-loop buffer (allocated on first decode call, reused thereafter)
         self._decode_cache_position: Optional[ttnn.Tensor] = None
+        self._decode_rotary_setup = None
         self._decode_token_buffer: Optional[ttnn.Tensor] = None
         self._decode_token_buffer_has_next: bool = False
         self._decode_token_host: Optional[torch.Tensor] = None
@@ -880,13 +898,17 @@ class TTNNDotsOCRPipeline(TTNNModule):
             # prefill (3 Q-heads / 1 KV-head per chip, no QKV gather). In
             # ``tp4_prefill`` mode only prefill uses this stack; decode stays on
             # the existing symbiote stack and consumes the adapter-filled cache.
-            from models.experimental.dots_ocr_tp4.tt.common import DotsOCRConfig, tp4_lossy_matmul_dtype
+            from models.experimental.dots_ocr_tp4.tt.common import (
+                DotsOCRConfig,
+                tp4_lossy_matmul_dtype,
+                tp4_qkv_matmul_dtype,
+            )
             from models.experimental.dots_ocr_tp4.tt.model import DotsOCRPrefillModelTP4
             from models.experimental.dots_ocr_tp4.tt.rmsnorm import DotsOCRRMSNormTP4
 
             print(
-                f"[dots_ocr] tp4 body lossy-matmul weight dtype (gate/up early + down + o_proj): "
-                f"{tp4_lossy_matmul_dtype()} "
+                f"[dots_ocr] tp4 body qkv weight dtype: {tp4_qkv_matmul_dtype()}; "
+                f"lossy-matmul weight dtype (gate/up early + down + o_proj): {tp4_lossy_matmul_dtype()} "
                 f"(DOTS_OCR_TP4_HI_PRECISION={os.environ.get('DOTS_OCR_TP4_HI_PRECISION', '<unset>')!r})"
             )
 
@@ -1280,7 +1302,9 @@ class TTNNDotsOCRPipeline(TTNNModule):
             else:
                 token_id_tt = self.graph_prefill(hidden_states, tt_cache_position, past_key_value=self.paged_cache)
 
-        # TP4 prefill body: the graph returned the post-body hidden; run the head eager.
+        # TP4 prefill body: the graph returned the post-body hidden; run the
+        # final norm + LM head eager. A decode-tail correction path was tried
+        # here, but it is unsafe with traced decode capture.
         if self._external_prefill_head:
             token_id_tt = self._eager_head(token_id_tt)
 
@@ -1450,8 +1474,14 @@ class TTNNDotsOCRPipeline(TTNNModule):
                 with _profile_stage(self.device, "decode.dp_repack_hidden"):
                     decode_input = self._dp_repack_batch_sharded_hidden(decode_input)
 
+        decode_cos_sin = self._get_decode_cos_sin(self._decode_seq_counter)
         with _profile_stage(self.device, "decode.graph_decode_sync"):
-            token_id_tt = self.graph_decode(decode_input, self._decode_cache_position, past_key_value=self.paged_cache)
+            token_id_tt = self.graph_decode(
+                decode_input,
+                self._decode_cache_position,
+                past_key_value=self.paged_cache,
+                decode_cos_sin=decode_cos_sin,
+            )
             # TP4 decode body: graph returned the post-body hidden; run the head eager
             # (norm + lm_head + argmax). Token stays on device, so the on-device
             # feedback copy below is unchanged.
@@ -1503,6 +1533,28 @@ class TTNNDotsOCRPipeline(TTNNModule):
         if self._mesh_dp_dual_stream():
             return flat_ids
         return flat_ids[0]
+
+    def _get_decode_rotary_setup(self):
+        if self._decode_rotary_setup is None:
+            stack = getattr(self.graph_decode, "_d_stack", None)
+            layers = getattr(stack, "layers", None) or []
+            attn0 = getattr(layers[0], "self_attn", None) if layers else None
+            self._decode_rotary_setup = getattr(attn0, "_rotary_setup", None) if attn0 is not None else None
+        return self._decode_rotary_setup
+
+    def _precompute_decode_cos_sin(self, start_position: int, num_positions: int) -> None:
+        rotary_setup = self._get_decode_rotary_setup()
+        if rotary_setup is None or num_positions <= 0:
+            return
+        end_position = min(int(start_position) + int(num_positions), rotary_setup.max_seq_len)
+        for position in range(int(start_position), end_position):
+            rotary_setup.get_cos_sin_for_decode_position(position)
+
+    def _get_decode_cos_sin(self, position: int):
+        rotary_setup = self._get_decode_rotary_setup()
+        if rotary_setup is None:
+            return None
+        return rotary_setup.get_cos_sin_for_decode_position(position)
 
     # ------------------------------------------------------------------
     # Generate
@@ -1582,6 +1634,10 @@ class TTNNDotsOCRPipeline(TTNNModule):
         stop_on_eos: bool,
     ) -> Union[List[int], List[List[int]]]:
         """Autoregressive decode loop (``max_new_tokens > 1``; prefill already ran)."""
+        self._precompute_decode_cos_sin(
+            start_position=self.paged_cache.get_seq_length(layer_idx=0),
+            num_positions=max_new_tokens - 1,
+        )
         if self._mesh_dp_dual_stream():
             if not isinstance(first_out, list):
                 raise RuntimeError("prefill must return a list of first tokens in DP dual-stream mode")

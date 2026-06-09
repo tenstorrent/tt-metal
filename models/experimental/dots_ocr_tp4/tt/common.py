@@ -19,12 +19,11 @@ import ttnn
 def tp4_lossy_matmul_dtype() -> "ttnn.DataType":
     """Weight dtype for the matmuls that use BFP4 in the production recipe.
 
-    Default is the production ``bfloat4_b`` (fastest). Opt-in
-    ``DOTS_OCR_TP4_HI_PRECISION`` raises them to recover accuracy on low-confidence
-    tokens (e.g. page running-headers that drift flips out of the greedy decode)
-    at a matmul-bandwidth / speed cost. Affects gate/up (early layers), down, and
-    o_proj; qkv is already BFP8. Values:
-        unset / "0"        -> bfloat4_b (production, fastest)
+    Full ``tp4`` keeps the production ``bfloat4_b`` default. The hybrid
+    ``tp4_prefill`` path defaults to ``bfloat8_b`` because its first-token OCR
+    logits are sensitive enough that BFP4 can drop the heading/page-number token.
+    ``DOTS_OCR_TP4_HI_PRECISION`` still overrides both paths:
+        unset / "0"        -> tp4: bfloat4_b, tp4_prefill: bfloat8_b
         "1" / "bf8"        -> bfloat8_b
         "bf16"             -> bfloat16  (max accuracy diagnostic, slowest)
     """
@@ -33,7 +32,22 @@ def tp4_lossy_matmul_dtype() -> "ttnn.DataType":
         return ttnn.bfloat16
     if v in {"1", "true", "yes", "on", "bf8", "bfloat8", "bfloat8_b"}:
         return ttnn.bfloat8_b
+    if os.environ.get("DOTS_OCR_TEXT_BODY", "").strip().lower() == "tp4_prefill":
+        return ttnn.bfloat8_b
     return ttnn.bfloat4_b
+
+
+def tp4_qkv_matmul_dtype() -> "ttnn.DataType":
+    """QKV weight dtype for TP4 attention.
+
+    QKV defaults to BFP8 for speed. ``DOTS_OCR_TP4_HI_PRECISION=bf16`` promotes
+    it too; this is separate from ``tp4_lossy_matmul_dtype`` because the
+    production QKV recipe is BFP8, not BFP4.
+    """
+    v = os.environ.get("DOTS_OCR_TP4_HI_PRECISION", "0").strip().lower()
+    if v in {"bf16", "bfloat16"}:
+        return ttnn.bfloat16
+    return ttnn.bfloat8_b
 
 
 @dataclass
