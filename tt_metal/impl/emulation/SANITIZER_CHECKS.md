@@ -45,7 +45,7 @@ Paths are prefixed with the repo: **`[metal]`** = `tt-metal/`, **`[emule]`** =
 | CB Reservation Overflow | kernel | `[emule] include/jit_hw/api/cb_api.h` | `cb_reserve_back(n)` with `n` > the CB's total pages |
 | NoC-read-pending on pop | kernel | `[emule] api/cb_api.h` (pop) + `api/dataflow/dataflow_api.h` (read counter) | `cb_pop_front` while a `noc_async_read` is unbarriered |
 | NOC Transfer Alignment | kernel | `[emule] include/jit_hw/api/dataflow/dataflow_api.h` | a NoC endpoint isn't aligned to its own memory-type alignment |
-| Dirty CB Detected | runner | `[metal] emulated_program_runner.cpp` (counter in `[emule] tt_emule/cb_sync_state.hpp`) | a consumed CB left non-empty at exit (push > pop) |
+| Dirty CB Detected | runner | `[metal] emulated_program_runner.cpp` (counters in `[emule] api/cb_api.h`) | a kernel left a `cb_reserve_back` un-pushed or a `cb_wait_front` un-popped |
 | Object Intent Violation | runner | `[metal] emulated_program_runner.cpp` | a kernel changed a buffer it never resolved a pointer into |
 | Fabric Access Violation | runner | `[metal] emulated_program_runner.cpp` (`__emule_resolve_noc_addr`) | a NoC access targets an unallocated core coordinate |
 
@@ -214,27 +214,35 @@ their low bits differ.
 
 ## Runner / post-launch checks
 
-> These run after all kernel threads join (in
-> `[metal] tt_metal/impl/emulation/emulated_program_runner.cpp`) and catch
-> program-level invariants that no single per-access check can see.
+> These live in the runner
+> (`[metal] tt_metal/impl/emulation/emulated_program_runner.cpp`) and catch
+> program-structure invariants that no single per-access check can see. Most run
+> after all kernel threads join; **Dirty CB** runs at each kernel's exit (it reads
+> per-kernel thread-locals that are cleared on teardown).
 
 ### 11. Dirty CB Detected
-**Lives in:** the post-join sweeps (`sweep_per_kernel_dirty_cbs` /
-`sweep_program_dirty_cbs`, abort in `abort_if_dirty_cb`) in
-`[metal] emulated_program_runner.cpp`. The `occupied` + `total_popped` counters
-live on `CBSyncState` in `[emule] include/tt_emule/cb_sync_state.hpp` (incremented
-in `cb_sync_pop`; reset in `[emule] include/tt_emule/device.hpp`).
-**What it catches:** a circular buffer left non-empty by a **real producer/consumer
-imbalance** — a consumer that popped fewer pages than were pushed, which can
-back-pressure a later (cache-hit) reuse of the program.
-**How it works:** `CBSyncState` tracks `occupied` (pushes − pops) plus a cumulative
-`total_popped` counter. After join, both sweeps abort only when
-`occupied > 0 && total_popped > 0`. The `total_popped > 0` guard is the key: a CB
-with **no consumer at all** (a globally-allocated/sharded output CB, or a
-producer-only single-kernel program that DMAs its result out) ends non-empty *by
-design*, so it must not be flagged.
-*Diagnostic:* `Dirty CB Detected: Core (x, y) CB <id> … pages remain after program exit; the consumer popped <M> (pushed > popped)`.
-*Exercised by:* `test_cb_leak.cpp` (a real under-drain + a producer-only control).
+**Lives in:** `sweep_per_kernel_dirty_cbs` (abort in `abort_if_dirty_cb`) in
+`[metal] emulated_program_runner.cpp`. Reads the per-kernel thread-local page
+counters `__emule_cb_reserved_pages[]` / `__emule_cb_waited_pages[]` (maintained by
+`cb_reserve_back`/`cb_push_back` and `cb_wait_front`/`cb_pop_front` in
+`[emule] include/jit_hw/api/cb_api.h`).
+**What it catches:** a kernel that leaves a CB **un-flushed** — a `cb_reserve_back`
+that was never committed with a matching `cb_push_back`, or a `cb_wait_front` that
+was never released with a matching `cb_pop_front`. The producer claimed write space
+(or the consumer claimed read access) it never handed off, so the CB's write/read
+pointers desync from their committed state.
+**How it works:** `__emule_cb_reserved_pages[cb]` is bumped by `cb_reserve_back` and
+shrunk by `cb_push_back`; `__emule_cb_waited_pages[cb]` is set by `cb_wait_front` and
+shrunk by `cb_pop_front`. Either holding a non-zero **net unmatched** count when the
+kernel exits means an un-flushed reserve/wait. This is a per-kernel property (reserve
+pairs with push inside the producer, wait with pop inside the consumer), so it is
+checked at **each kernel's exit** (right after its variants run, before the
+thread-locals are cleared) — not post-join. Note this is **not** about leftover
+occupancy: a producer that reserves+pushes but is never consumed ends with pages
+occupied yet fully flushed (`reserved==0, waited==0`) and is correctly **not** flagged
+(globally-allocated/sharded output CBs, producer-only programs that DMA their result out).
+*Diagnostic:* `Dirty CB Detected: Core (x, y) CB <id> was not flushed! Kernel (processor P) exited with <N> page(s) reserved … without … cb_push_back, and <M> page(s) waited … without … cb_pop_front`.
+*Exercised by:* `test_cb_leak.cpp` (reserve-without-push, wait-without-pop, and a balanced no-violation control).
 
 ### 12. Object Intent Violation
 **Lives in:** `[metal] tt_metal/impl/emulation/emulated_program_runner.cpp` (the
@@ -288,6 +296,6 @@ instead of dereferencing a null/garbage backing pointer.
 | CB Reservation Overflow | `[emule] api/cb_api.h` | `cb_reserve_back(n)` with `n > num_pages` (always on) |
 | NoC pending on pop | `[emule] api/cb_api.h` + `dataflow_api.h` | `cb_pop_front` while `__emule_pending_noc_reads > 0` |
 | NOC Transfer Alignment | `[emule] api/dataflow/dataflow_api.h` | each endpoint vs its own absolute alignment (16 / 32 / 64 B) |
-| Dirty CB | `[metal] emulated_program_runner.cpp` (+ `[emule] cb_sync_state.hpp`) | `occupied > 0 && total_popped > 0` after join |
+| Dirty CB | `[metal] emulated_program_runner.cpp` (+ `[emule] api/cb_api.h`) | `reserved_pages > 0 \|\| waited_pages > 0` at kernel exit |
 | Object Intent | `[metal] emulated_program_runner.cpp` | post-launch `memcmp` of buffers never resolved into |
 | Fabric Access | `[metal] emulated_program_runner.cpp` | NOC X/Y not in the core map |

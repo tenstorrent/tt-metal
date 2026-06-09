@@ -2177,67 +2177,45 @@ inline void clear_sanitizer_thread_locals() {
 }
 
 inline void abort_if_dirty_cb(
-    uint32_t cb_id,
-    const tt_emule::CBSyncState& cb,
-    uint32_t occupied,
-    uint32_t popped,
-    uint32_t lx,
-    uint32_t ly,
-    uint32_t processor_id_or_zero,
-    bool per_kernel) {
-    if (per_kernel) {
-        fprintf(
-            stderr,
-            "[ASAN ERROR] Dirty CB Detected: Core (%u, %u) CB %u was not flushed! "
-            "Kernel (processor %u) left %u/%u pages on the CB after the consumer popped %u "
-            "(pushed > popped) — would back-pressure the next program launch on silicon.\n",
-            lx,
-            ly,
-            cb_id,
-            processor_id_or_zero,
-            occupied,
-            cb.num_pages,
-            popped);
-    } else {
-        fprintf(
-            stderr,
-            "[ASAN ERROR] Dirty CB Detected: Core (%u, %u) CB %u was not flushed! "
-            "%u/%u pages remain after program exit; the consumer popped %u (pushed > popped) — "
-            "would back-pressure the next program launch on silicon.\n",
-            lx,
-            ly,
-            cb_id,
-            occupied,
-            cb.num_pages,
-            popped);
-    }
+    uint32_t cb_id, uint32_t unpushed, uint32_t unpopped, uint32_t lx, uint32_t ly, uint32_t processor_id) {
+    fprintf(
+        stderr,
+        "[ASAN ERROR] Dirty CB Detected: Core (%u, %u) CB %u was not flushed! "
+        "Kernel (processor %u) exited with %u page(s) reserved via cb_reserve_back but never "
+        "committed with cb_push_back, and %u page(s) waited via cb_wait_front but never released "
+        "with cb_pop_front. Every reserve must be matched by a push and every wait by a pop "
+        "before the kernel exits, or the CB's read/write pointers desync on silicon.\n",
+        lx,
+        ly,
+        cb_id,
+        processor_id,
+        unpushed,
+        unpopped);
     std::abort();
 }
 
+// A CB is "flushed" when every cb_reserve_back was committed by a matching
+// cb_push_back and every cb_wait_front was released by a matching cb_pop_front.
+// The per-kernel thread-local counters hold the net unmatched amount at kernel
+// exit: __emule_cb_reserved_pages[cb] is bumped by reserve_back and shrunk by
+// push_back; __emule_cb_waited_pages[cb] is set by wait_front and shrunk by
+// pop_front. Either being > 0 means the kernel reserved/waited without the
+// matching push/pop — an un-flushed CB. This is a per-kernel property (reserve
+// pairs with push within the producer, wait with pop within the consumer), so it
+// is checked at each kernel's exit, before the thread-locals are cleared.
 inline void sweep_per_kernel_dirty_cbs(
-    const EmuleOobTensorState& oob,
-    bool single_kernel_on_core,
-    tt_emule::CBSyncState* cb_array,
-    uint32_t processor_id,
-    uint32_t lx,
-    uint32_t ly) {
-    if (!oob.asan_enabled || !single_kernel_on_core || cb_array == nullptr) {
+    const EmuleOobTensorState& oob, tt_emule::CBSyncState* cb_array, uint32_t processor_id, uint32_t lx, uint32_t ly) {
+    if (!oob.asan_enabled || cb_array == nullptr) {
         return;
     }
     for (uint32_t cb_id = 0; cb_id < EMULE_NUM_CBS; ++cb_id) {
-        auto& cb = cb_array[cb_id];
-        if (cb.num_pages == 0) {
+        if (cb_array[cb_id].num_pages == 0) {
             continue;
         }
-        uint32_t occupied = cb.occupied.load(std::memory_order_acquire);
-        uint32_t popped = cb.total_popped.load(std::memory_order_acquire);
-        // A non-empty CB at exit is only a real leak if a consumer actually
-        // drained it but under-popped (popped > 0). popped == 0 means the CB had
-        // no consumer at all — a globally-allocated/sharded output CB, or a
-        // producer-only single-kernel program that DMAs its result out — where
-        // leftover pages are by design, not a back-pressure hazard.
-        if (occupied > 0 && popped > 0) {
-            abort_if_dirty_cb(cb_id, cb, occupied, popped, lx, ly, processor_id, /*per_kernel=*/true);
+        uint32_t unpushed = __emule_cb_reserved_pages[cb_id];
+        uint32_t unpopped = __emule_cb_waited_pages[cb_id];
+        if (unpushed > 0 || unpopped > 0) {
+            abort_if_dirty_cb(cb_id, unpushed, unpopped, lx, ly, processor_id);
         }
     }
 }
@@ -2281,41 +2259,6 @@ inline OobStateOwner build_oob_tensor_state(IDevice* device, int device_id) {
         owner.state.l1_padding_ranges_count = static_cast<uint32_t>(owner.padding_ranges.size());
     }
     return owner;
-}
-
-inline void sweep_program_dirty_cbs(
-    const EmuleOobTensorState& oob, const std::vector<CoreSetup>& core_setups) {
-    if (!oob.asan_enabled) {
-        return;
-    }
-    for (const auto& cs : core_setups) {
-        tt_emule::CBSyncState* cb_array = cs.core->cb_sync_array();
-        if (cb_array == nullptr) {
-            continue;
-        }
-        for (uint32_t cb_id = 0; cb_id < EMULE_NUM_CBS; ++cb_id) {
-            auto& cb = cb_array[cb_id];
-            if (cb.num_pages == 0) {
-                continue;
-            }
-            uint32_t occupied = cb.occupied.load(std::memory_order_acquire);
-            uint32_t popped = cb.total_popped.load(std::memory_order_acquire);
-            // Only a real leak if a consumer existed (popped > 0) but under-drained;
-            // popped == 0 => no consumer (sharded/global output or producer-only
-            // single-kernel program), leftover is by design. See per-kernel sweep.
-            if (occupied > 0 && popped > 0) {
-                abort_if_dirty_cb(
-                    cb_id,
-                    cb,
-                    occupied,
-                    popped,
-                    static_cast<uint32_t>(cs.logical_core.x),
-                    static_cast<uint32_t>(cs.logical_core.y),
-                    /*processor_id_or_zero=*/0,
-                    /*per_kernel=*/false);
-            }
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2590,8 +2533,7 @@ static void launch_cores(
                                     }
                                     ki.variants[t]();
                                 }
-                                sweep_per_kernel_dirty_cbs(
-                                    oob_state, single_kernel_on_core, cb_array, ki.processor_id, lx, ly);
+                                sweep_per_kernel_dirty_cbs(oob_state, cb_array, ki.processor_id, lx, ly);
                             } catch (...) {
                                 kep = std::current_exception();
                             }
@@ -2745,7 +2687,6 @@ void execute_program_emulated(IDevice* device, Program& program) {
 
     OobStateOwner oob = build_oob_tensor_state(device, device_id);
     launch_cores(core_setups, dram_data, core_map_ptr, oob.state);
-    sweep_program_dirty_cbs(oob.state, core_setups);
 
     log_debug(tt::LogMetal, "execute_program_emulated: device {} done", device_id);
 }
