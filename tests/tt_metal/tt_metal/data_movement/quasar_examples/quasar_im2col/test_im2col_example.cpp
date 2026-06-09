@@ -28,7 +28,7 @@ bool run_im2col_test(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const std::string& kernel_path,
     uint32_t num_of_addresses) {
-    constexpr const char* DM_KERNEL = "addrgen";
+    const experimental::KernelSpecName DM_KERNEL{"addrgen"};
     const experimental::NodeCoord node{0, 0};
 
     experimental::KernelSpec dm_kernel_spec{
@@ -55,9 +55,7 @@ bool run_im2col_test(
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::ProgramRunArgs params;
-    params.kernel_run_args = {{
-        .kernel_spec_name = DM_KERNEL,
-    }};
+    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{.kernel = DM_KERNEL}};
     experimental::SetProgramRunArgs(program, params);
 
     distributed::MeshWorkload workload;

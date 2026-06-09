@@ -135,6 +135,14 @@ void MetalEnvImpl::initialize_base_objects() {
     cluster_ = std::make_unique<Cluster>(*this->rtoptions_);
     this->verify_fw_capabilities();
 
+    if (platform_arch == tt::ARCH::QUASAR && this->rtoptions_->get_fast_dispatch() &&
+        this->cluster_->get_target_device_type() == tt::TargetDevice::Simulator) {
+        log_info(
+            tt::LogMetal,
+            "Enabling DRAM-backed command queues for Quasar simulator because host hugepages are not available");
+        this->rtoptions_->set_dram_backed_cq(true);
+    }
+
     // Get is_base_routing_fw_enabled from the already-constructed Cluster instead of running
     // a throwaway TopologyDiscovery via get_cluster_type_from_cluster_desc().
     const bool is_base_routing_fw_enabled = cluster_->is_base_routing_fw_enabled();

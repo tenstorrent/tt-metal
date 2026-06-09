@@ -10,7 +10,6 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, extract_mesh_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
@@ -67,6 +66,7 @@ class TtPrefillBlock(LightweightModule):
         cache_path: Path,
         mesh_device: ttnn.MeshDevice,
         config: PretrainedConfig,
+        model_cfg: type,
         seq_len: int = 1024,
         dispatch_buffer_capacity_factor: int = 2,
         num_links: int = 2,
@@ -88,9 +88,10 @@ class TtPrefillBlock(LightweightModule):
             cache_path: Cache directory
             mesh_device: Mesh device reference
             config: Model config
+            model_cfg: Variant static-constants class (DeepSeekV3Config | KimiK26Config)
             ... other args for sub-components
         """
-        is_moe = layer_idx >= DeepSeekV3Config.NUM_DENSE_LAYERS
+        is_moe = layer_idx >= model_cfg.NUM_DENSE_LAYERS
         emb_dim = config.hidden_size
 
         logger.info(f"Building TTNN cache for TtPrefillBlock layer {layer_idx} ({'MoE' if is_moe else 'dense'})")
@@ -133,8 +134,8 @@ class TtPrefillBlock(LightweightModule):
             seq_len_per_chip = seq_len // sp_factor
             experts_per_chip, _, _, _ = compute_constants(
                 seq_len_per_chip,
-                DeepSeekV3Config.NUM_ROUTED_EXPERTS,
-                DeepSeekV3Config.NUM_EXPERTS_PER_TOKEN,
+                model_cfg.NUM_ROUTED_EXPERTS,
+                model_cfg.NUM_EXPERTS_PER_TOKEN,
                 mesh_device.get_num_devices(),
                 mesh_config.dispatch_group_size,
                 dispatch_buffer_capacity_factor,
@@ -146,7 +147,7 @@ class TtPrefillBlock(LightweightModule):
                 shared_expert_weights=state_dict.get("shared_expert_weights"),
                 experts_per_chip=experts_per_chip,
                 emb_dim=emb_dim,
-                hidden_dim=DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,
+                hidden_dim=model_cfg.MOE_INTERMEDIATE_SIZE,
                 mesh_device=mesh_device,
                 routed_expert_weights_dtype=routed_expert_weights_dtype,
                 shared_expert_weights_dtype=shared_expert_weights_dtype,
@@ -168,6 +169,7 @@ class TtPrefillBlock(LightweightModule):
         self,
         mesh_device: ttnn.MeshDevice,
         config: PretrainedConfig,
+        model_cfg: type,
         state_dict: dict,
         layer_idx: int,
         seq_len: int,
@@ -188,7 +190,7 @@ class TtPrefillBlock(LightweightModule):
         self.mesh_device = mesh_device
         self.num_links = num_links
         self.topology = topology
-        self.is_moe = layer_idx >= DeepSeekV3Config.NUM_DENSE_LAYERS
+        self.is_moe = layer_idx >= model_cfg.NUM_DENSE_LAYERS
 
         emb_dim = config.hidden_size
 
@@ -199,6 +201,7 @@ class TtPrefillBlock(LightweightModule):
             mesh_device=mesh_device,
             emb_dim=emb_dim,
             torch_weight=state_dict.get("attn_norm_weight"),  # None if cache exists
+            epsilon=config.rms_norm_eps,
             cluster_axis=tp_axis,
             num_links=num_links,
             topology=topology,
@@ -224,6 +227,7 @@ class TtPrefillBlock(LightweightModule):
             mesh_device=mesh_device,
             emb_dim=emb_dim,
             torch_weight=state_dict.get("ffn_norm_weight"),  # None if cache exists
+            epsilon=config.rms_norm_eps,
             cluster_axis=tp_axis,
             num_links=num_links,
             topology=topology,
@@ -235,6 +239,7 @@ class TtPrefillBlock(LightweightModule):
         if self.is_moe:
             self.ffn = self._build_moe(
                 mesh_device=mesh_device,
+                model_cfg=model_cfg,
                 state_dict=state_dict,
                 seq_len=seq_len,
                 sp_axis=sp_axis,
@@ -263,6 +268,7 @@ class TtPrefillBlock(LightweightModule):
     @staticmethod
     def _build_moe(
         mesh_device,
+        model_cfg,
         state_dict,
         seq_len,
         sp_axis,
@@ -289,8 +295,8 @@ class TtPrefillBlock(LightweightModule):
             max_dispatched_tokens_per_expert,
         ) = compute_constants(
             seq_len_per_chip,
-            DeepSeekV3Config.NUM_ROUTED_EXPERTS,
-            DeepSeekV3Config.NUM_EXPERTS_PER_TOKEN,
+            model_cfg.NUM_ROUTED_EXPERTS,
+            model_cfg.NUM_EXPERTS_PER_TOKEN,
             mesh_device.get_num_devices(),
             mesh_config.dispatch_group_size,
             dispatch_buffer_capacity_factor,
@@ -301,14 +307,14 @@ class TtPrefillBlock(LightweightModule):
             dispatch_group_size=mesh_config.dispatch_group_size,
             num_dispatch_groups=mesh_config.num_dispatch_groups,
             experts_per_chip=experts_per_chip,
-            num_routed_experts=DeepSeekV3Config.NUM_ROUTED_EXPERTS,
-            num_experts_per_tok=DeepSeekV3Config.NUM_EXPERTS_PER_TOKEN,
+            num_routed_experts=model_cfg.NUM_ROUTED_EXPERTS,
+            num_experts_per_tok=model_cfg.NUM_EXPERTS_PER_TOKEN,
             metadata_len=metadata_len,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
             max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
             seq_len_per_chip=seq_len_per_chip,
             emb_dim=emb_dim,
-            hidden_dim=DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,
+            hidden_dim=model_cfg.MOE_INTERMEDIATE_SIZE,
             num_links=num_links,
             topology=topology,
             routed_expert_weights=state_dict.get("routed_expert_weights"),  # None if cache exists
@@ -319,8 +325,12 @@ class TtPrefillBlock(LightweightModule):
             shared_expert_weights_dtype=shared_expert_weights_dtype,
             gate_weights=state_dict.get("gate_weights"),  # None if cache exists
             gate_fallback_mode=gate_fallback_mode,
+            n_expert_groups=model_cfg.NUM_EXPERT_GROUPS,
+            n_limited_groups=model_cfg.NUM_LIMITED_GROUPS,
+            route_scale=model_cfg.ROUTE_SCALE,
             weight_cache_path=weight_cache_path,
             layer_idx=layer_idx,
+            overlap_shared_expert_with_dispatch=True,
         )
 
     def forward(

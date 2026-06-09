@@ -148,6 +148,14 @@ class DataFormat(Enum):
             DataFormat.MxFp4,
         }
 
+    def is_mx_fp_format(self) -> bool:
+        """Checks if the data format is an MX floating-point format."""
+        return self in {
+            DataFormat.MxFp8R,
+            DataFormat.MxFp8P,
+            DataFormat.MxFp4,
+        }
+
     def supports_l1_accumulation(self) -> bool:
         """Checks if the data format supports L1 accumulation"""
         return self in {

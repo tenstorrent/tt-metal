@@ -12,6 +12,8 @@
 #include <string>
 #include <vector>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <optional>
 #include "program/program_impl.hpp"
 
 namespace tt {
@@ -60,6 +62,24 @@ void RecordProgramRun(uint64_t program_id);
 // Record the mapping from a program's runtime_id to its kernel source paths.
 // Should be called at dispatch time when runtime_id is guaranteed to be set.
 void RecordKernelSourceMap(tt_metal::detail::ProgramImpl& program);
+
+struct ProgramSubDeviceInfo {
+    uint8_t sub_device_id = 0;
+    uint64_t sub_device_manager_id = 0;
+    // Tensix worker cores in this sub-device when recorded at dispatch; 0 means unset (use full device grid).
+    uint32_t num_available_worker_cores = 0;
+};
+
+// Record which sub-device a program executes on. Should be called at dispatch time when runtime_id is set.
+void RecordProgramSubDevice(
+    tt::ChipId device_id,
+    uint64_t sub_device_manager_id,
+    uint64_t runtime_id,
+    tt::tt_metal::SubDeviceId sub_device_id,
+    uint32_t num_available_worker_cores = 0);
+
+// Look up the sub-device a program was dispatched on, keyed by physical device and runtime_id.
+std::optional<ProgramSubDeviceInfo> GetProgramSubDevice(tt::ChipId device_id, uint64_t runtime_id);
 
 // Look up the kernel source paths for a given runtime_id.
 // Returns a comma-separated string of kernel source paths, or empty string if not found.

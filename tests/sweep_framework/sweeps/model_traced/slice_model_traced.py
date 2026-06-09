@@ -46,10 +46,20 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
+    import os as _os
+
     mesh_shape = get_mesh_shape()
     if mesh_shape:
         try:
-            device = create_mesh_device(mesh_shape)
+            # Prefer WORKER COL (every traced slice config runs on COL; the
+            # auto-detect over-routes the module to ROW from a single x=7/8-8
+            # master config). Defer to TTNN_DISPATCH_AXIS so CI's two-pass holds.
+            _axis = (
+                None
+                if _os.environ.get("TTNN_DISPATCH_AXIS", "").strip().lower() in ("col", "row")
+                else ttnn.DispatchCoreAxis.COL
+            )
+            device = create_mesh_device(mesh_shape, dispatch_core_axis=_axis)
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_mesh_device(device)
@@ -101,6 +111,37 @@ def _slice_input_shard_axis_and_factor(placement_dict):
     return axis, factor
 
 
+def invalidate_vector(test_vector) -> tuple:
+    """Exclude the distributed mesh-partition slice whose bound tensors weren't traced.
+
+    One traced config (8dc9af…) calls ttnn.slice in its tensor-parallel form
+    (slice_dim + num_devices, with starts/ends passed as device TENSORS that shard
+    the input across the mesh). The tracer captured only the starts/ends tensor
+    *shapes*, not their *values*, so the exact per-device slice bounds are
+    unrecoverable — the generic golden has to guess (defaulting to a [0:dim/2]
+    index slice), which doesn't match the partition the op actually performs. Rather
+    than assert against a fabricated golden, mark these unreconstructable.
+
+    Regular slice configs (no num_devices, or with concrete list starts/ends) are
+    unaffected.
+    """
+
+    def _present(v):
+        return v is not None and v != "__ABSENT__"
+
+    num_devices = test_vector.get("num_devices")
+    starts_val = test_vector.get("starts")
+    ends_val = test_vector.get("ends")
+    # tensor-form bounds: a *_shape is recorded but no concrete value list.
+    tensor_bounds = _present(test_vector.get("starts_shape")) or _present(test_vector.get("ends_shape"))
+    if _present(num_devices) and tensor_bounds and not (_present(starts_val) or _present(ends_val)):
+        return (
+            True,
+            "tensor-parallel slice (slice_dim+num_devices) with untraced starts/ends tensor values — slice bounds unrecoverable",
+        )
+    return False, None
+
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -119,7 +160,21 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    # Some V2 traced vectors deliver the input as input_tensor_* instead of
+    # input_a_* (the positional then arrives absent/None). Fall back per-field so
+    # shape isn't None -> torch.zeros(None) crash.
+    if input_a_shape is None:
+        input_a_shape = kwargs.get("input_tensor_shape")
+    if input_a_dtype is None:
+        input_a_dtype = kwargs.get("input_tensor_dtype", ttnn.bfloat16)
+    if input_a_layout is None:
+        input_a_layout = kwargs.get("input_tensor_layout", ttnn.TILE_LAYOUT)
+    if input_a_memory_config is None:
+        input_a_memory_config = kwargs.get("input_tensor_memory_config", ttnn.DRAM_MEMORY_CONFIG)
+
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None) or kwargs.get(
+        "input_tensor_tensor_placement", None
+    )
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(
         kwargs,
@@ -205,9 +260,11 @@ def run(
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
-    # Pre-allocate output tensor if the master config recorded one
+    # Pre-allocate output tensor if the master config recorded one (and the
+    # recorded shape is fully concrete — some traces have a None dim, which
+    # would crash torch.zeros; skip pre-allocation and let the op allocate).
     output_tensor_info = extract_named_tensor_kwargs(kwargs, "output_tensor")
-    if output_tensor_info and output_tensor_info.get("shape"):
+    if output_tensor_info and output_tensor_info.get("shape") and None not in tuple(output_tensor_info["shape"]):
         ot_shape = tuple(output_tensor_info["shape"])
         ot_dtype = output_tensor_info.get("dtype") or input_a_dtype
         if isinstance(ot_dtype, dict):

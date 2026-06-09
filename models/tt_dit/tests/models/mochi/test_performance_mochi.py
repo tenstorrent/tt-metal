@@ -11,6 +11,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
+from ....pipelines.events import profiler_event_callback
 from ....pipelines.mochi.pipeline_mochi import MochiPipeline as TTMochiPipeline
 
 
@@ -99,6 +100,9 @@ def test_mochi_pipeline_performance(
     tt_pipe = TTMochiPipeline.create_pipeline(
         mesh_device=mesh_device,
         checkpoint_name=model_location_generator(model_name),
+        height=image_h,
+        width=image_w,
+        num_frames=num_frames,
     )
 
     # Test prompts
@@ -115,14 +119,10 @@ def test_mochi_pipeline_performance(
 
     with benchmark_profiler("run", iteration=0):
         frames = tt_pipe(
-            prompts[0],
+            prompts=[prompts[0]],
             num_inference_steps=2,  # Small number of steps to reduce test time.
             guidance_scale=guidance_scale,
-            num_frames=num_frames,
-            height=image_h,
-            width=image_w,
-            seed=0,  # Make deterministic
-        ).frames[0]
+        )[0]
 
     logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
 
@@ -168,16 +168,11 @@ def test_mochi_pipeline_performance(
             prompt_idx = (i + 1) % len(prompts)
             with benchmark_profiler("run", iteration=i):
                 frames = tt_pipe(
-                    prompts[prompt_idx],
+                    prompts=[prompts[prompt_idx]],
                     num_inference_steps=num_inference_steps,
                     guidance_scale=guidance_scale,
-                    num_frames=num_frames,
-                    height=image_h,
-                    width=image_w,
-                    seed=0,  # Make deterministic
-                    profiler=benchmark_profiler,
-                    profiler_iteration=i,
-                ).frames[0]
+                    on_event=profiler_event_callback(benchmark_profiler, i),
+                )[0]
 
             logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
 

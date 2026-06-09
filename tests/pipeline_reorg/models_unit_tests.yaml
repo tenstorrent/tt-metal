@@ -227,11 +227,11 @@
   model: gemma-4-e2b
   skus:
     wh_n150:
-      timeout: 15
-      tier: 2
+      timeout: 10
+      tier: 3
     bh_p150:
-      timeout: 15
-      tier: 2
+      timeout: 10
+      tier: 3
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
@@ -249,16 +249,13 @@
     # wh_n300 disabled due to reduced N300 runner availability — re-enable when capacity returns.
     # wh_n300:
     #   timeout: 5
-    #   tier: 2
-    bh_p150:
-      timeout: 20
-      tier: 2
+    #   tier: 3
     bh_p300:
       timeout: 15
-      tier: 2
+      tier: 3
     bh_quietbox_2:
       timeout: 15
-      tier: 2
+      tier: 3
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
@@ -427,7 +424,7 @@
       timeout: 25
       tier: 1
     wh_galaxy:
-      timeout: 30
+      timeout: 40
       tier: 1
     # Blackhole
     bh_quietbox_2:

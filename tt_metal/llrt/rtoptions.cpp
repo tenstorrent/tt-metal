@@ -114,6 +114,7 @@ enum class EnvVarID {
     TT_METAL_FORCE_JIT_COMPILE,                         // Force JIT compilation
     TT_METAL_DISABLE_SFPLOADMACRO,                      // Disable use of SFPLOADMACRO instructions
     TT_METAL_DRAM_BACKED_CQ,                            // Store command queues in device DRAM
+    TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,            // Simulator tensor preload bypasses FD CQ copies
     TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Enable Blackhole DRAM programmable cores
 
     // ========================================
@@ -780,6 +781,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_DRAM_BACKED_CQ=1
         case EnvVarID::TT_METAL_DRAM_BACKED_CQ: this->dram_backed_cq = is_env_enabled(value); break;
 
+        // TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES
+        // Use synchronous direct buffer writes for simulator tensor preloads instead of FD CQ copies.
+        // Default: false
+        // Usage: export TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1
+        case EnvVarID::TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES:
+            this->simulator_direct_tensor_writes = is_env_enabled(value);
+            break;
+
         // ========================================
         // PROFILING & PERFORMANCE
         // ========================================
@@ -975,9 +984,18 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // the profiler infrastructure will be used to continuously dump NOC debug packets to a file. Default: false
         // (debug dump mode disabled) Usage: export TT_METAL_NOC_DEBUG_DUMP=1
         case EnvVarID::TT_METAL_NOC_DEBUG_DUMP: {
+#if !defined(TRACY_ENABLE)
+            if (is_env_enabled(value)) {
+                log_warning(
+                    tt::LogMetal,
+                    "TT_METAL_NOC_DEBUG_DUMP=1 requires a Tracy-enabled build (build with ENABLE_TRACY=ON). "
+                    "Ignoring; NOC debug events will not be collected.");
+            }
+#else
             if (is_env_enabled(value)) {
                 this->set_experimental_noc_debug_dump_enabled(true);
             }
+#endif
             break;
         }
 
