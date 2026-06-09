@@ -746,15 +746,18 @@ def test_dram_core_prefetcher_trace_replay(device, replay_count):
     expected = pt_act.float() @ pt_weight.float()
 
     def fill_and_matmul():
-        ttnn.experimental.queue_dram_core_prefetcher_request(device, [(tt_weight, ring_size)], global_cb=gcb, cq_id=0)
-        return ttnn.linear(
+        # prefetch_and_linear queues the prefetch request and runs the consuming
+        # matmul against the same gcb/program_config in one call; block_count is
+        # derived from the gcb's receiver count (no need to pass ring_size).
+        return ttnn.experimental.dram_core_prefetcher_matmul.prefetch_and_linear(
             tt_act,
             tt_weight,
+            global_cb=gcb,
             program_config=program_config,
+            cq_id=0,
             memory_config=output_mem_config,
             compute_kernel_config=compute_kernel_config,
             dtype=ttnn.bfloat16,
-            global_cb=gcb,
         )
 
     with dram_core_prefetcher_session(device):
