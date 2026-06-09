@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 """Report how much CI test time a (team, test type, machine[, tier]) uses, and
 compare it against the budget declared in .github/time_budget.yaml.
 
