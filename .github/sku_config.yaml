@@ -198,12 +198,6 @@ skus:
       - pipeline-perf
       - in-service
 
-  bh_deskbox:
-    runs_on:
-      - BH-DeskBox
-      - pipeline-functional
-      - in-service
-
   bh_loudbox_civ2_viommu:
     runs_on:
       - tt-ubuntu-2204-BH-LoudBox-viommu-stable

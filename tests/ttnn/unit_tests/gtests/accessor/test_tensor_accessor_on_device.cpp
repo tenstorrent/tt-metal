@@ -482,9 +482,6 @@ class ShardedAccessorTestsReshardOnDevice : public GenericMeshDeviceFixture,
                                             public ::testing::WithParamInterface<InputOutputBufferParams> {};
 
 TEST_P(ShardedAccessorTestsReshardOnDevice, SingleCoreReshard) {
-    if (mesh_device_->num_devices() >= 8 && mesh_device_->arch() == tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "Disabled on T3K Wormhole: see #45681";
-    }
     const auto& params = GetParam();
 
     switch (params.dtype) {
@@ -710,9 +707,6 @@ class ShardedAccessorTestsCopyOnDevice : public GenericMeshDeviceFixture,
                                          public ::testing::WithParamInterface<CopyParams> {};
 
 TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocal) {
-    if (mesh_device_->num_devices() >= 8 && mesh_device_->arch() == tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "Disabled on T3K Wormhole: see #45681";
-    }
     const auto& params = GetParam();
 
     const std::string kernel_path = "tests/ttnn/unit_tests/gtests/accessor/kernels/copy_local.cpp";
@@ -725,9 +719,6 @@ TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocal) {
 }
 
 TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocalShardIterator) {
-    if (mesh_device_->num_devices() >= 8 && mesh_device_->arch() == tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "Disabled on T3K Wormhole: see #45681";
-    }
     const auto& params = GetParam();
 
     const std::string kernel_path = "tests/ttnn/unit_tests/gtests/accessor/kernels/copy_local_shard_iterator.cpp";
@@ -740,9 +731,6 @@ TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocalShardIterator) {
 }
 
 TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocalViaBankBaseAddress) {
-    if (mesh_device_->num_devices() >= 8 && mesh_device_->arch() == tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "Disabled on T3K Wormhole: see #45681";
-    }
     const auto& params = GetParam();
 
     const std::string kernel_path = "tests/ttnn/unit_tests/gtests/accessor/kernels/copy_local_via_bank_base.cpp";
@@ -755,9 +743,6 @@ TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocalViaBankBaseAddress) {
 }
 
 TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocalShardIteratorBigStep) {
-    if (mesh_device_->num_devices() >= 8 && mesh_device_->arch() == tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "Disabled on T3K Wormhole: see #45681";
-    }
     const auto& params = GetParam();
 
     const std::string kernel_path = "tests/ttnn/unit_tests/gtests/accessor/kernels/copy_local_shard_iterator.cpp";
@@ -776,9 +761,6 @@ TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocalShardIteratorBigStep)
 }
 
 TEST_P(ShardedAccessorTestsCopyOnDevice, SingleCoreCopyAllPages) {
-    if (mesh_device_->num_devices() >= 8 && mesh_device_->arch() == tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "Disabled on T3K Wormhole: see #45681";
-    }
     const auto& params = GetParam();
 
     switch (params.dtype) {
@@ -793,9 +775,6 @@ class InterleavedAccessorTestsCopyOnDevice : public GenericMeshDeviceFixture,
                                              public ::testing::WithParamInterface<CopyParams> {};
 
 TEST_P(InterleavedAccessorTestsCopyOnDevice, SingleCoreCopyAllPages) {
-    if (mesh_device_->num_devices() >= 8 && mesh_device_->arch() == tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "Disabled on T3K Wormhole: see #45681";
-    }
     const auto& params = GetParam();
 
     switch (params.dtype) {
@@ -818,9 +797,6 @@ TEST_P(InterleavedAccessorTestsCopyOnDevice, SingleCoreCopyAllPagesAbstractWrapp
 }
 
 TEST_P(InterleavedAccessorTestsCopyOnDevice, MultiCoreCopyAllPages) {
-    if (mesh_device_->num_devices() >= 8 && mesh_device_->arch() == tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "Disabled on T3K Wormhole: see #45681";
-    }
     const auto& params = GetParam();
 
     // Use all available cores for multi-core testing
@@ -837,9 +813,6 @@ TEST_P(InterleavedAccessorTestsCopyOnDevice, MultiCoreCopyAllPages) {
 }
 
 TEST_P(InterleavedAccessorTestsCopyOnDevice, MultiCoreCopyAllPagesBigStep) {
-    if (mesh_device_->num_devices() >= 8 && mesh_device_->arch() == tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "Disabled on T3K Wormhole: see #45681";
-    }
     const auto& params = GetParam();
 
     // Use all available cores for multi-core testing

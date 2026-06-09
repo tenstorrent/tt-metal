@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_embedding ${LIB_TYPE})
 add_library(TTNN::Ops::Embedding ALIAS ttnn_op_embedding)
 
-tt_reuse_precompile_headers(ttnn_op_embedding TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_embedding TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_embedding)
 
 set_target_properties(

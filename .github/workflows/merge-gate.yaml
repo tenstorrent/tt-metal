@@ -212,6 +212,7 @@ jobs:
       runner: ${{ matrix.platform }}
       per-test-timeout: 11 # TSan can be slow; relax the timeout somewhat
       product: tt-metalium
+      enable-kernel-ccache: true
 
   ttnn-smoke-tests:
     needs: [find-changes, resolve-docker-pull-refs-tsan, build-tsan, check-harbor]
@@ -235,6 +236,7 @@ jobs:
       runner: ${{ matrix.platform }}
       per-test-timeout: 11 # TSan can be slow; relax the timeout somewhat
       product: tt-nn
+      enable-kernel-ccache: true
 
   build-asan:
     if: ${{ github.ref_name == 'main' ||
