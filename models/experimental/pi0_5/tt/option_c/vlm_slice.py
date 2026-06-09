@@ -992,26 +992,47 @@ class Pi0_5OptionCVLMSliceParent:
         o_proj = self.weights_on_parent["o_proj"]
         eps = self.config.vlm_config.rms_norm_eps
 
+        num_heads = self.config.vlm_config.num_heads
+        num_kv_heads = self.config.vlm_config.num_kv_heads
+        head_dim = self.config.vlm_config.head_dim
+
         h = activation
         for i in range(self.num_layers):
+            seq_len = h.shape[-2]
             # 1. RMSNorm
             normed = ttnn.rms_norm(h, weight=input_ln, epsilon=eps, memory_config=ttnn.L1_MEMORY_CONFIG)
-            # 2. Q matmul (this validates K, V matmuls have right shape from
-            #    sharded weights)
+            # 2. Q matmul → [1, 1, M, num_heads*head_dim]
             q_flat = ttnn.linear(normed, q_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
-            # 3. K matmul (smaller output for MQA: [..., num_kv_heads * head_dim])
+            # 3. K matmul → [1, 1, M, num_kv_heads*head_dim]
             k_flat = ttnn.linear(normed, k_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
-            # 4. V matmul (same shape as K)
+            # 4. V matmul → [1, 1, M, num_kv_heads*head_dim]
             v_flat = ttnn.linear(normed, v_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(normed)
-            # Deallocate K, V for now (real path: reshape to heads + RoPE on K +
-            # add to KV cache + feed to SDPA). For this validation pass we just
-            # confirm the matmuls run.
-            ttnn.deallocate(k_flat)
-            ttnn.deallocate(v_flat)
-            # 5. O matmul on Q (stubbed)
-            attn_out = ttnn.linear(q_flat, o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            # 4a. Reshape Q, K to heads layout: [1, num_heads, M, head_dim]
+            q = ttnn.reshape(q_flat, (1, seq_len, num_heads, head_dim))
+            q = ttnn.permute(q, (0, 2, 1, 3))  # [1, num_heads, M, head_dim]
             ttnn.deallocate(q_flat)
+            k = ttnn.reshape(k_flat, (1, seq_len, num_kv_heads, head_dim))
+            k = ttnn.permute(k, (0, 2, 1, 3))  # [1, num_kv_heads, M, head_dim]
+            ttnn.deallocate(k_flat)
+            # 4b. Apply RoPE to Q and K using replicated cos/sin tables
+            cos_slice = ttnn.slice(self._cos_meta, [0, 0, 0, 0], [1, 1, seq_len, head_dim])
+            sin_slice = ttnn.slice(self._sin_meta, [0, 0, 0, 0], [1, 1, seq_len, head_dim])
+            q_rope = ttnn.experimental.rotary_embedding(q, cos_slice, sin_slice)
+            k_rope = ttnn.experimental.rotary_embedding(k, cos_slice, sin_slice)
+            ttnn.deallocate(cos_slice)
+            ttnn.deallocate(sin_slice)
+            # Q, K now have RoPE applied. (Real attention would now do SDPA;
+            # we still stub it with Q→O for this validation.)
+            # Reshape Q back to [1, 1, M, num_heads*head_dim] for the O matmul.
+            q_rope_flat = ttnn.permute(q_rope, (0, 2, 1, 3))
+            q_rope_flat = ttnn.reshape(q_rope_flat, (1, 1, seq_len, num_heads * head_dim))
+            ttnn.deallocate(q_rope)
+            ttnn.deallocate(k_rope)
+            ttnn.deallocate(v_flat)
+            # 5. O matmul on Q-with-RoPE
+            attn_out = ttnn.linear(q_rope_flat, o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(q_rope_flat)
             # 6. Residual
             h_new = ttnn.add(h, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(attn_out)
