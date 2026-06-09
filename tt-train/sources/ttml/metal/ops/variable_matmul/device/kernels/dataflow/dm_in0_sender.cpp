@@ -97,6 +97,9 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* offsets_stage = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(offsets_l1_addr);
         const uint32_t row_start = offsets_stage[offsets_start_index];
         const uint32_t row_end = offsets_stage[offsets_start_index + 1U];
+        // Contract: offsets must be tile-aligned — the windows below are addressed at tile
+        // granularity (offset / 32), so a non-multiple-of-32 offset would alias the wrong tile.
+        ASSERT(row_start % 32U == 0U && row_end % 32U == 0U);
 #ifdef OFFSET_ROW_MODE
         const uint32_t in0_idx = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 9);
         const uint32_t actual_eff_M = (row_end - row_start) / 32U;

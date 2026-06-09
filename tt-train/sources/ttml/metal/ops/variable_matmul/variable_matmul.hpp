@@ -25,6 +25,12 @@ using VariableMatmulConfig = ttml::metal::ops::variable_matmul::device::Variable
 // at runtime and derive the per-call M/K ranges (and, for InputAndOutputRow, the output
 // write-at-offset row). One cached program serves all expert slices.
 //
+// CONTRACT: offsets values MUST be tile-aligned (multiples of TILE_HEIGHT = 32). The kernels
+// address the read/write/K windows at tile granularity (offset / 32), so a non-multiple-of-32
+// offset cannot be represented — it would silently start on the wrong tile and overlap a
+// neighbouring slice. Callers (e.g. moe_ffn) must pad each expert's row range to a tile
+// boundary. Debug builds assert this in the dataflow kernels.
+//
 // On-device offsets are what makes the op viable under EP-sharded MoE — when the per-expert
 // dispatch counts live on the device, a host scalar would require an all-gather of offsets
 // across the EP dim. This is the motivation; the contract works the same on a single device.

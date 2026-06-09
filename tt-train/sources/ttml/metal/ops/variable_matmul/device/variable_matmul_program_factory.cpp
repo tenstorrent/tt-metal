@@ -246,9 +246,6 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         tt::tt_metal::CreateCircularBuffer(program, core_grid, cb_ctrl_cfg);
     }
 
-    // OFFSET_* are the only kernel defines variable_matmul uses today.
-    std::map<std::string, std::string> defines;
-
     // Dataflow kernels always read offsets_tensor[start..start+2] and use the values to
     // override the RT-derived offsets. For InputAndOutputRow the compute kernel also needs
     // M values; dm_in0_sender publishes them via cb_ctrl.
@@ -270,8 +267,8 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     // Compute reads its override values from cb_ctrl, not directly from offsets.
     constexpr bool in0_needs_offsets = true;
     constexpr bool in1_needs_offsets = true;
-    std::map<std::string, std::string> in0_defines = defines;
-    std::map<std::string, std::string> in1_defines = defines;
+    std::map<std::string, std::string> in0_defines;
+    std::map<std::string, std::string> in1_defines;
     std::map<std::string, std::string> compute_offsets_defines;  // merged into compute_defines below
     auto set_flag = [](std::map<std::string, std::string>& m, const char* name, bool active) {
         if (active) {
