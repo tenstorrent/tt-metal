@@ -51,6 +51,7 @@ inline void dprint_tensix_dest_reg(int tile_id = 0)
     // Program SEC1 once up front, then read every row from 0xFFBD8000.
     // Element pointer type matches the format's element width.
     // Informed by tt_llk_blackhole/common/inc/ckernel_debug.h:dbg_copy_dest_tile.
+    const uint32_t saved_dest_access = ckernel::cfg_read(RISC_DEST_ACCESS_CTRL_SEC1_fmt_ADDR32);
     {
         ckernel::set_dest_fmt<ckernel::MathThreadId>(ckernel::fmt_to_dest_type(data_format));
         ckernel::set_dest_enable_swizzling<ckernel::MathThreadId>(true);
@@ -105,6 +106,10 @@ inline void dprint_tensix_dest_reg(int tile_id = 0)
                 break;
         }
     }
+
+    // Restore the caller's DEST access config.
+    ckernel::cfg_write(RISC_DEST_ACCESS_CTRL_SEC1_fmt_ADDR32, saved_dest_access);
+    ckernel::tensix_sync();
 #else
     // Wormhole (reuse Metal helpers)
     uint32_t row = tile_id * NUM_ROWS_PER_TILE;
