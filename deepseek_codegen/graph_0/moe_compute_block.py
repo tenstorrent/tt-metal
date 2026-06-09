@@ -368,23 +368,29 @@ def run_routed_experts(x_normed, indices_i32, scores_bf16, st):
     ttnn.deallocate(weighted)
     summed = ttnn.reshape(summed, [1, 1, TOKENS_PER_DEV, HIDDEN], memory_config=DRAM)
     _dbg(dev, "weighted_k_sum")
-    ar = ttnn.experimental.all_reduce_async(
-        summed,
+    # E_rs_fuse (opt iter2): reduce_scatter(dim=3, cluster_axis=1) == all_reduce(axis1) +
+    # mesh_partition(dim=3, axis1) in ONE op — sum across the 8 axis-1 devices AND scatter the 7168
+    # hidden so each device keeps its 896 shard. Drops the all_reduce's all_gather half + the
+    # mesh_partition op (per MoE layer). Semantically identical; PCC-gated (argmax must stay invariant).
+    rs = ttnn.reduce_scatter(
+        input_tensor=summed,
+        dim=3,
         cluster_axis=1,
-        mesh_device=dev,
-        barrier_semaphores=st.pools[0][0],
-        rs_global_semaphores=st.pools[1][0],
-        ag_global_semaphores=st.pools[2][0],
-        math_op=ttnn.ReduceType.Sum,
+        subdevice_id=None,
         memory_config=DRAM,
+        num_links=None,
+        topology=ttnn.Topology.Ring,
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        ),
     )
     ttnn.deallocate(summed)
-    _dbg(dev, "all_reduce_async")
-    part = ttnn.mesh_partition(input_tensor=ar, dim=3, cluster_axis=1, memory_config=DRAM)  # [1,1,32,896]
-    _dbg(dev, "mesh_partition")
-    ttnn.deallocate(ar)
-    routed = ttnn.reshape(part, [1, TOKENS_PER_DEV, HIDDEN // NUM_REPL], memory_config=DRAM)  # [1,32,896]
-    ttnn.deallocate(part)
+    _dbg(dev, "reduce_scatter")
+    routed = ttnn.reshape(rs, [1, TOKENS_PER_DEV, HIDDEN // NUM_REPL], memory_config=DRAM)  # [1,32,896]
+    ttnn.deallocate(rs)
     # Match the sparse path's ttnn_typecast_101 dtype (BFLOAT16, moe_test.py:760). The downstream
     # add (moe_test.py:913) does add(matmul_33[bf16], typecast_101); feeding FLOAT32 here mismatches
     # the bf16 tile layout the add expects -> scrambled values. Return BFLOAT16 like the sparse path.

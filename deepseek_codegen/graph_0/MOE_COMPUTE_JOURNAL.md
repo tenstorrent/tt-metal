@@ -1,5 +1,17 @@
 # MoE Compute Integration Journal
 
+## ITER 2 (2026-06-09) — fuse moe tail all_reduce+mesh_partition -> reduce_scatter (256ms, 4.13x)
+
+`moe_compute_block.run_routed_experts`: replaced `all_reduce_async(axis1) + mesh_partition(dim=3,axis1)`
+with ONE `reduce_scatter(dim=3, cluster_axis=1, HiFi4 fp32-acc)` — identical semantics (sum across the 8
+axis-1 devices AND scatter the 7168 hidden so each device keeps its 896 shard). moe_test PCC **0.995592
+PASS** (== the 0.995591 with the old tail => scatter order matches). Device: moe phase **2.331 -> 2.271 ms**
+(−0.06/layer; drops the all_reduce's all_gather half + the mesh_partition op), est full e2e **259 -> 256.4 ms
+(4.13x)**. Report 2026_06_09_12_44_17; CSVs perf_reports/main_moe2_*.
+NEXT (iter3): adopt the canonical fused moe tail (models/common/modules/moe/tt_moe_decode.py) —
+`deepseek_moe_fast_reduce_nc_fused` (score-weighted k-combine in ONE op, replacing my typecast+multiply+
+sum-over-k) + (for 8-way axis1) `deepseek_moe_reduce_scatter` — a bigger moe-tail win.
+
 ## ITER 1 (2026-06-09) — moe_compute INTEGRATED into main.py; combine hang FIXED by freeing dead weights — WORKS e2e (argmax 100%)
 
 **Swap DONE.** Replaced main.py layer-1 sparse routed span (eq-mask + matmul_29/30 score path +
@@ -672,7 +684,8 @@ fixed/comparable measurement + a git commit per useful win + run the loop and DO
 |------|--------|--------|------------------------------|--------------|-----------------------|-----|-------|
 | 2026-06-04 | baseline: sparse_matmul path (moe_compute NOT yet used) | (uncommitted) | TBD (use Tracy/trace; 2.10s wall is dispatch-bound, not device) | TBD | TBD (fill in step 2) | 1.0000 | starting point |
 | 2026-06-09 | **BASELINE**: full main.py 2-layer device profile (sparse MoE path) | (this commit) | full=23.216 (2L device-busy, eager) | attn 1.969 / dense 0.685 / **moe 16.112** | **1059** | 1.0000 | tracy `-r -p main.py`; DS-V3 61L=3 dense+58 MoE; MoE=88.2%; top op SparseMatmul 5.56ms×2; 1 MoE layer in test |
-| 2026-06-09 | **iter1**: moe_compute routed-experts in main.py + free dead sparse weights | (this commit) | full=9.407 (2L) | attn 1.956 / dense 0.683 / **moe 2.331** | **259** | argmax 1.0 / block 0.9956 / logits 0.975 | MoE 16.11→2.33ms (6.9x); **4.09x e2e**; SparseMatmul 5.56→MoECompute 0.69ms; freeing gate_up/_39 fixed the combine hang; MoE now 52% / attn 46% |
+| 2026-06-09 | **iter1**: moe_compute routed-experts in main.py + free dead sparse weights | dcec039 | full=9.407 (2L) | attn 1.956 / dense 0.683 / **moe 2.331** | **259** | argmax 1.0 / block 0.9956 / logits 0.975 | MoE 16.11→2.33ms (6.9x); **4.09x e2e**; SparseMatmul 5.56→MoECompute 0.69ms; freeing gate_up/_39 fixed the combine hang; MoE now 52% / attn 46% |
+| 2026-06-09 | **iter2**: moe tail all_reduce+mesh_partition → single reduce_scatter | (this commit) | full=9.359 (2L) | **moe 2.271** | **256** | block 0.9956 | −0.06ms/moe-layer; **4.13x e2e**; drops all_gather half + mesh_partition |
 | … | … | … | … | … | … | … | … |
 
 ### Commit convention (keep the history)
