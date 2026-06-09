@@ -83,6 +83,8 @@ InterProcessCounterChannel::InterProcessCounterChannel(const std::string& shm_na
         throw_posix("mmap", shm_path_);
     }
     seg_ = static_cast<InterProcessCounterSegment*>(mapped);
+    ::close(fd_);
+    fd_ = -1;
 
     // Initial state — producer_counter=0, consumer_cursor=0 — is
     // guaranteed by POSIX ftruncate.
