@@ -169,6 +169,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         width: int = 0,
         num_frames: int = 81,
         run_warmup: bool = True,
+        lora_enabled: bool = False,
     ):
         super().__init__()
 
@@ -230,6 +231,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             parallel_config=self.encoder_parallel_config,
         )
 
+        self.lora_enabled = lora_enabled
+
         self.transformer = WanTransformer3DModel(
             patch_size=self.torch_transformer.config.patch_size,
             num_heads=self.torch_transformer.config.num_attention_heads,
@@ -247,6 +250,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             parallel_config=self.parallel_config,
             is_fsdp=self.is_fsdp,
             model_type=self.model_type,
+            lora_enabled=lora_enabled,
         )
 
         self.transformer_2 = WanTransformer3DModel(
@@ -267,6 +271,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             parallel_config=self.parallel_config,
             is_fsdp=self.is_fsdp,
             model_type=self.model_type,
+            lora_enabled=lora_enabled,
         )
 
         self.tt_vae = WanDecoder(
