@@ -22,9 +22,10 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
+from models.common.utility_functions import is_blackhole, run_for_blackhole
 from models.tt_transformers.tt.common import Mode
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tests.ttnn.unit_tests.operations.prefetcher_common import round_up
 
 pytestmark = [
     run_for_blackhole("DRAM-core prefetcher requires Blackhole"),
@@ -33,10 +34,6 @@ pytestmark = [
         reason="TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES not set",
     ),
 ]
-
-
-def _round_up(n, m):
-    return ((n + m - 1) // m) * m
 
 
 @torch.no_grad()
@@ -90,7 +87,7 @@ def test_dram_core_prefetcher_class_smoke(device, recv_per_bank):
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, recv_per_bank - 1))}
     )
     pt_act = torch.randn(1, 1, M, K)
-    K_per_shard = _round_up(math.ceil(K / ring_size), TILE)
+    K_per_shard = round_up(math.ceil(K / ring_size), TILE)
     act_mem_config = ttnn.create_sharded_memory_config(
         shape=(M, K_per_shard),
         core_grid=receiver_core_range_set,
@@ -102,9 +99,11 @@ def test_dram_core_prefetcher_class_smoke(device, recv_per_bank):
         pt_act, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=act_mem_config
     )
 
-    # ---- Program config matches what get_mlp_ff1_3_prg_config would build ----
+    # ---- Program config matches what get_mlp_ff1_3_prg_config / matmul_1d_ring_config build ----
+    # Mirror that builder's DEST-budget clamp: fp32 accumulation (the decode 1D-ring default on
+    # Blackhole) halves the budget to 4, otherwise 8. This test is Blackhole-only (see pytestmark).
     out_block_w = N // ring_size // TILE
-    out_subblock_w = min(out_block_w, 8)
+    out_subblock_w = min(out_block_w, 4 if is_blackhole() else 8)
     while out_subblock_w > 1 and out_block_w % out_subblock_w != 0:
         out_subblock_w -= 1
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
