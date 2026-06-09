@@ -13,19 +13,15 @@
 // each arg by name (get_arg(args::<name>)) and calls this entry. The DPRINT output is identical
 // to the Phase-0 baseline.
 //
-// NOTE: In Phase 1 the TT_KERNEL marker only needs to be a distinctive token for the
-// tokenizer; it expands to FORCE_INLINE so the user entry folds into the generated
-// kernel_main() with no call indirection. The [[tt::kernel_main]] attribute from the design
-// doc is deferred to Phase 2 (its AST parser needs it, and it requires -Wno-attributes since
-// kernels build with -Wall -Werror). The macro will move to a shared kernel header then.
+// NOTE: TT_KERNEL is provided by experimental/kernel_args.h (the Metal 2.0 device header), so
+// the kernel never defines it. In Phase 1 it expands to FORCE_INLINE, so the user entry folds
+// into the generated kernel_main() with no call indirection; the parser keys on the literal
+// token, not the expansion. (The [[tt::kernel_main]] attribute from the design doc is deferred
+// to Phase 2, which needs -Wno-attributes since kernels build with -Wall -Werror.)
 
 #include <cstdint>
 #include "api/debug/dprint.h"
-#include "experimental/kernel_args.h"
-
-#ifndef TT_KERNEL
-#define TT_KERNEL FORCE_INLINE
-#endif
+#include "experimental/kernel_args.h"  // provides get_arg, the args:: accessors, and TT_KERNEL
 
 template <uint32_t block_h, uint32_t block_w, uint32_t untilize>  // CTAs (compile-time)
 TT_KERNEL void named_kernel_args_kernel(
