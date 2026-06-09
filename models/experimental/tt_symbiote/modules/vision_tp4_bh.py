@@ -332,9 +332,9 @@ def bh_tp4_qkv_pc(device):
 
 
 def bh_tp4_o_proj_pc(device, *, seq_len: int = _VISION_TP4_SEQ_LEN, ctx_dim: int = 384):
-    """Hardware-swept o_proj for 11264×384×1536, BFP8×BFP8→BFP8 L1 (~80 μs).
+    """Hardware-swept o_proj for 11264×384×1536, BFP8×BFP8→BFP8 L1 (~77 μs).
 
-    Silicon sweep 2026-06-07: grid=(8,8) tm=False M=44 N=6 obh=22 ibw=6 sub=(2,3).
+    Silicon sweep 2026-06-09: grid=(8,8) tm=False M=44 N=6 obh=22 ibw=6 sub=(2,3); ~77 μs (11264x384x1536).
     BFP8 matmul out removes the TypecastDeviceOperation before the bf8 residual add.
     """
     grid = device.compute_with_storage_grid_size()
@@ -389,9 +389,9 @@ def bh_tp4_mlp_gate_up_pc(device):
 
 
 def bh_tp4_mlp_down_pc(device, *, seq_len: int = _VISION_TP4_SEQ_LEN, itp: int = 1056):
-    """Down matmul for 11264×1056×1536 on BH P150 11×10 (~166 μs).
+    """Down matmul for 11264×1056×1536 on BH P150 11×10 (~159 μs).
 
-    Silicon sweep 2026-06-07: grid=(8,8) tm=False M=44 N=6 obh=22 ibw=3 sub=(2,3).
+    Silicon sweep 2026-06-09: grid=(8,8) tm=False M=44 N=6 obh=22 ibw=3 sub=(2,3); ~159 μs (11264x1056x1536).
     """
     grid = device.compute_with_storage_grid_size()
     gum_resident = _l1_shard_bytes_per_core(device, seq_len, itp, ttnn.bfloat8_b)
