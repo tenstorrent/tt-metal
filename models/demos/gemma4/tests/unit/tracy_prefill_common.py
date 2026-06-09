@@ -92,7 +92,9 @@ def load_prefill_trace_generator(mesh_device, model_path, fixtures):
     )
     model_args = generator.model_args[0]
     kernel_len = fixtures["kernel_len"]
-    assert model_args.can_enable_trace(kernel_len), f"Trace not enabled for kernel_len={kernel_len}"
+    assert model_args.can_enable_trace(kernel_len, batch_size=fixtures["max_batch_size"]), (
+        f"Trace not enabled for kernel_len={kernel_len} batch_size={fixtures['max_batch_size']}"
+    )
     skip_gemma4_full_prefill_warmup(generator)
     return generator, kv_caches
 
