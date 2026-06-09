@@ -122,10 +122,39 @@ def apply_rope(tensor, cos_cache, sin_cache, token_index=None):
     return result
 
 
-def concat_heads(tensor, is_decode_mode: bool):
-    """Concatenate attention heads back to hidden dimension."""
+def concat_heads(tensor, is_decode_mode: bool, num_heads: int = None, head_dim: int = None):
+    """Concatenate attention heads back to hidden dimension.
+
+    Decode uses ``nlp_concat_heads_decode`` (multi-core, width-sharded output)
+    instead of ``transpose + nlp_concat_heads``. The decode op needs a
+    height-sharded input ([1, batch, heads_padded_to_32, head_dim] on the batch
+    core), so the SDPA output (DRAM, [1, batch, heads, head_dim]) is resharded
+    first. The old path ran the concat on a single core (~30 us/layer) and
+    needed a separate transpose; the decode op spreads the work across one core
+    per head and drops the transpose. Output is converted back to DRAM
+    interleaved so the downstream o_proj matmul is unchanged.
+    """
     if is_decode_mode:
-        tensor = ttnn.transpose(tensor, 1, 2)
+        if num_heads is None or head_dim is None:
+            raise ValueError("decode concat_heads requires num_heads and head_dim")
+        batch = tensor.shape[1]
+        shard_cfg = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, head_dim),
+            core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        tensor_sh = ttnn.to_memory_config(tensor, shard_cfg)
+        # Output is [1, 1, B(padded to 32), num_heads*head_dim] width-sharded.
+        out = ttnn.experimental.nlp_concat_heads_decode(tensor_sh, num_heads=num_heads)
+        tensor_sh.deallocate(True)
+        out = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
+        # Drop the batch padding (decode runs batch=1 here) so downstream sees
+        # [1, 1, batch, hidden_local] just like the old transpose+concat path.
+        if out.shape[2] != batch:
+            out = out[:, :, :batch, :]
+        return out
     return ttnn.experimental.nlp_concat_heads(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 

@@ -880,18 +880,25 @@ class Gemma4Model:
     def prepare_prefill_inputs_trace(self, tokens, **kwargs):
         return self.prepare_inputs_prefill(tokens, trace_enabled=True, **kwargs)
 
-    def transform_and_embed_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table):
+    def transform_and_embed_prefill_inputs_device(
+        self, tokens, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx=None
+    ):
         """Inside-trace input transform: lookup embeddings and tile-lay them.
 
         Called when the captured trace owns the embed step (so the input
         tensor is the raw token tensor staged by ``prepare_inputs_prefill``
         with ``trace_enabled=True``).
+
+        ``tt_chunk_start_idx`` is threaded through unchanged so the return
+        tuple lines up with ``Generator``'s traced-prefill unpack
+        (``transformed_inputs[3]`` → ``ttnn_prefill_forward(chunk_start_idx=...)``).
+        Gemma4 doesn't chunk-prefill, so it's always ``None`` in practice.
         """
         tt_embeds = self.embed_tokens(tokens)
         if len(tt_embeds.shape) == 3:
             tt_embeds = ttnn.unsqueeze_to_4D(tt_embeds)
         tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
-        return tt_embeds, tt_page_table, tt_chunk_page_table
+        return tt_embeds, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx
 
     def ttnn_prefill_forward(
         self,

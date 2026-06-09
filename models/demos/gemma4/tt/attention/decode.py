@@ -209,7 +209,8 @@ def decode_forward(
     tt_q.deallocate(True)
 
     # 7. Concat heads + output projection + allreduce
-    tt_out = concat_heads(tt_sdpa, is_decode_mode=True)
+    num_local_heads = config.num_attention_heads // tp
+    tt_out = concat_heads(tt_sdpa, is_decode_mode=True, num_heads=num_local_heads, head_dim=config.head_dim)
     tt_out = apply_output_projection(tt_out, weights)
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
 

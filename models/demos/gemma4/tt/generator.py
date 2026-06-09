@@ -28,15 +28,24 @@ def _patch_model_args(model_args, mesh_device, max_batch_size, max_seq_len, mode
         and prefill_seq_len in model_args.trace_prefill_supported_seq_lens
     )
     model_args.is_llama_vision = lambda: False
-    model_args.encode_prompt = lambda prompt, instruct=False: (
-        tokenizer.apply_chat_template(
-            [{"role": "user", "content": prompt}],
-            tokenize=True,
-            add_generation_prompt=True,
-        )
-        if instruct and getattr(tokenizer, "chat_template", None)
-        else tokenizer.encode(prompt, add_special_tokens=True)
-    )
+
+    def _encode_prompt(prompt, instruct=False):
+        if instruct and getattr(tokenizer, "chat_template", None):
+            # tokenize=True can return a BatchEncoding (dict) depending on the
+            # transformers/tokenizer version; return_dict=False forces a plain
+            # List[int], which is what preprocess_inputs_prefill / torch.tensor
+            # expect.
+            out = tokenizer.apply_chat_template(
+                [{"role": "user", "content": prompt}],
+                tokenize=True,
+                add_generation_prompt=True,
+                return_dict=False,
+            )
+            # Defensive: some versions still hand back a dict-like with input_ids.
+            return out["input_ids"] if isinstance(out, dict) else out
+        return tokenizer.encode(prompt, add_special_tokens=True)
+
+    model_args.encode_prompt = _encode_prompt
 
 
 class Gemma4Generator(Generator):
