@@ -1274,6 +1274,7 @@ class MatmulGolden(FidelityMasking):
             input_B_format,
         )
 
+    # Integer matmul is LoFi-only on Quasar.
     def _matmul_integer(
         self,
         operand1,

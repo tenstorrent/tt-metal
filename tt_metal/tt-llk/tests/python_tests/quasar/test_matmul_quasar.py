@@ -89,6 +89,7 @@ _ARCH = get_chip_architecture()
 @pytest.mark.quasar
 @parametrize(
     format=MATMUL_FORMAT,
+    # Integer matmul is LoFi-only on Quasar.
     math_fidelity=lambda format: (
         [MathFidelity.LoFi]
         if format.input_format == DataFormat.Int8
