@@ -27,10 +27,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TT_METAL_HOME="${TT_METAL_HOME:-$(cd "${SCRIPT_DIR}/../../../../.." && pwd)}"
 export TT_METAL_HOME
 export TT_METAL_DEVICE_PROFILER=1
+export TT_METAL_DEVICE_PROFILER_DISPATCH=1
 
 BUILD_DIR="${BUILD_DIR:-${TT_METAL_HOME}/build_Release}"
 TEST_BIN="${BUILD_DIR}/test/tt_metal/perf_microbenchmark/op_to_op_latency/test_op_to_op_latency"
 EXPORT_PY="${SCRIPT_DIR}/export_op_to_op_profiler_csv.py"
+EXPORT_PY_LITE="${SCRIPT_DIR}/export_op_to_op_gaps_csvlite.py"
+PYTHON="${TT_METAL_HOME}/python_env/bin/python3"
+if [[ ! -x "${PYTHON}" ]]; then
+  PYTHON="python3"
+fi
 LOG_DIR="${TT_METAL_HOME}/generated/profiler/.logs"
 RUNS_PARENT="${TT_METAL_HOME}/generated/profiler/op_to_op_runs/${CONFIG_LABEL}"
 
@@ -58,16 +64,24 @@ for i in $(seq 1 "${NUM_RUNS}"); do
   if [[ -f "${LOG_DIR}/profile_log_device_rt.csv" ]]; then
     cp "${LOG_DIR}/profile_log_device_rt.csv" "${run_dir}/profile_log_device_rt.csv"
   fi
-  python3 "${EXPORT_PY}" \
+  if ! "${PYTHON}" "${EXPORT_PY}" \
     --input-file "${run_dir}/profile_log_device.csv" \
     --rt-input-file "${run_dir}/profile_log_device_rt.csv" \
     --tiles-per-core "${TILES_PER_CORE}" \
     --input-cb-depth-tiles "${INPUT_CB_DEPTH}" \
     --reader-push-tiles "${READER_PUSH}" \
     --min-prog-id "${MIN_PROG_ID}" \
-    --output-dir "${run_dir}"
+    --output-dir "${run_dir}" 2>/dev/null; then
+    echo "  pandas export failed; using csvlite fallback"
+    "${PYTHON}" "${EXPORT_PY_LITE}" \
+      --input-file "${run_dir}/profile_log_device.csv" \
+      --output-file "${run_dir}/profile_log_device_op_to_op_complete.csv" \
+      --min-prog-id "${MIN_PROG_ID}"
+  fi
 done
 
-python3 "${EXPORT_PY}" --aggregate-runs-dir "${RUNS_PARENT}" --output-dir "${RUNS_PARENT}"
+"${PYTHON}" "${EXPORT_PY}" --aggregate-runs-dir "${RUNS_PARENT}" --output-dir "${RUNS_PARENT}" 2>/dev/null \
+  || "${PYTHON}" "${EXPORT_PY_LITE}" --aggregate-runs-dir "${RUNS_PARENT}" --min-prog-id "${MIN_PROG_ID}" 2>/dev/null \
+  || true
 echo "Done. Per-run CSVs under ${RUNS_PARENT}/run_*/"
 echo "Multi-run summary: ${RUNS_PARENT}/multi_run_*.csv"

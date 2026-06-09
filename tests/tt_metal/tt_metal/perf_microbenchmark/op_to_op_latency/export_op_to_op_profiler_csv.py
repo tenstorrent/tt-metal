@@ -134,7 +134,6 @@ def walk_done_to_go(df: pd.DataFrame, freq_mhz: float, min_prog_id: int) -> pd.D
     # The dispatch_s core appears in both DISP_* and (sometimes, on startup)
     # WORKER_GO_OBSERVED if FW happens to log it. Identify dispatch cores per chip
     # and exclude them from the worker pool.
-    dispatch_cores = disp_done.groupby("PCIe slot")[["core_x", "core_y"]].agg(lambda s: list(s.unique())).reset_index()
     worker_go = worker_go.copy()
     # Drop rows where worker is actually a dispatch core for the same chip.
     dispatch_set: set[tuple] = set()
@@ -167,10 +166,8 @@ def walk_done_to_go(df: pd.DataFrame, freq_mhz: float, min_prog_id: int) -> pd.D
             # Find DISP_GO_ISSUED that immediately follows.
             dg_after = dg_chip[dg_chip["time[cycles since reset]"] > d_t]
             if len(dg_after) > 0:
-                go_t = int(dg_after.iloc[0]["time[cycles since reset]"])
-                issue_cycles = go_t - d_t
+                issue_cycles = int(dg_after.iloc[0]["time[cycles since reset]"]) - d_t
             else:
-                go_t = pd.NA
                 issue_cycles = pd.NA
             rows.append(
                 {
@@ -322,7 +319,6 @@ def build_rt_dispatch_gaps(rt_df: pd.DataFrame, freq_mhz: float, min_prog_id: in
     if rt_df.empty:
         return pd.DataFrame(), 0
     rt_df, collapsed = dedupe_rt_records(rt_df)
-    rt_mhz = rt_freq_mhz(rt_df, freq_mhz)
     rows: list[dict] = []
     skipped_same_pid = 0
     for chip_id, group in rt_df.groupby("chip_id"):
@@ -576,7 +572,6 @@ def print_buffering_summary(timeline: pd.DataFrame) -> None:
         return
     depth = int(timeline["input_cb_depth_tiles"].iloc[0])
     tiles = int(timeline["tiles_per_core"].iloc[0])
-    dbl = bool(timeline["input_cb_double_buffered"].iloc[0])
     push = (
         int(timeline["reader_push_tiles_per_chunk"].iloc[0]) if "reader_push_tiles_per_chunk" in timeline.columns else 2
     )

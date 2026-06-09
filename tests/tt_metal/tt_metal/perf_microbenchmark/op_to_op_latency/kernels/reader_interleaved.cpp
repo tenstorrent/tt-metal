@@ -10,7 +10,7 @@
 //   2: start_tile_id          (in tiles)
 //   3: program_id
 //
-// Compile-time args (see TensorAccessorArgs<1> for src accessor):
+// Compile-time args (see TensorAccessorArgs<6> for src accessor):
 //   0: cb_in
 //   1: READER_MODE            (0 = reserve N, read+push one-by-one with a global barrier
 //                              1 = reserve N, read all, single barrier, push N
@@ -23,6 +23,9 @@
 //                              per page, so we push this many CB pages per DRAM page read)
 //   4: TRID_IN_FLIGHT         (reads in flight per TRID for mode 2; CB depth must be
 //                              >= 2 * TRID_IN_FLIGHT * TILES_PER_PAGE)
+//   5: CROSS_PROGRAM_OFFSET_TILES (0 = every program reads the same slice; >0 = program k
+//                              reads pages starting at start_tile_id + k*OFFSET. Host
+//                              must allocate a buffer big enough for all program slices.)
 //
 // Profiler on first tile of the slice only: READ_BEFORE_BARRIER / READ_AFTER_BARRIER.
 
@@ -41,7 +44,8 @@ void kernel_main() {
     constexpr uint32_t PUSH_TILE_COUNT = get_compile_time_arg_val(2);
     constexpr uint32_t TILES_PER_PAGE = get_compile_time_arg_val(3);
     constexpr uint32_t TRID_IN_FLIGHT = get_compile_time_arg_val(4);
-    constexpr auto src_args = TensorAccessorArgs<5>();
+    constexpr uint32_t CROSS_PROGRAM_OFFSET_TILES = get_compile_time_arg_val(5);
+    constexpr auto src_args = TensorAccessorArgs<6>();
 
     constexpr uint32_t chunk_size = PUSH_TILE_COUNT > 0 ? PUSH_TILE_COUNT : 1;
     constexpr uint32_t tiles_per_page = TILES_PER_PAGE > 0 ? TILES_PER_PAGE : 1;
@@ -52,12 +56,15 @@ void kernel_main() {
     DeviceTimestampedData("PROG_ID", program_id);
     DeviceTimestampedData("NCRISC_GO", program_id);
 
-    const uint32_t end_tile_id = start_tile_id + n_tiles;
+    // When CROSS_PROGRAM_OFFSET_TILES > 0, each program reads a disjoint tile slice
+    // so the DRAM controller sees fresh row opens per program (more app-like).
+    const uint32_t effective_start_tile_id = start_tile_id + program_id * CROSS_PROGRAM_OFFSET_TILES;
+    const uint32_t end_tile_id = effective_start_tile_id + n_tiles;
     const uint32_t tile_bytes = get_local_cb_interface(cb_in).fifo_page_size;
 
     // DRAM page = tiles_per_page tiles (one NoC transaction per page).
     // src accessor is configured with the matching page_size at build time.
-    const uint32_t start_page_id = start_tile_id / tiles_per_page;
+    const uint32_t start_page_id = effective_start_tile_id / tiles_per_page;
     const uint32_t n_pages = n_tiles / tiles_per_page;
     const uint32_t end_page_id = start_page_id + n_pages;
 
@@ -99,7 +106,7 @@ void kernel_main() {
         cb_reserve_back(cb_in, initial_fill_pages * tiles_per_page);
         const uint32_t cb_base = get_write_ptr(cb_in);
 
-        DeviceTimestampedData("READ_BEFORE_BARRIER", start_tile_id);
+        DeviceTimestampedData("READ_BEFORE_BARRIER", effective_start_tile_id);
 
         uint32_t next_page_id = start_page_id;
         uint32_t pages_pushed = 0;
@@ -124,11 +131,11 @@ void kernel_main() {
         // Push initial A, then initial B (consumer can start at full bandwidth).
         if (a_count > 0) {
             noc_async_read_barrier_with_trid(TRID_A);
-            DeviceTimestampedData("READ_AFTER_BARRIER", start_tile_id);
+            DeviceTimestampedData("READ_AFTER_BARRIER", effective_start_tile_id);
             cb_push_back(cb_in, a_count * tiles_per_page);
             pages_pushed += a_count;
         } else {
-            DeviceTimestampedData("READ_AFTER_BARRIER", start_tile_id);
+            DeviceTimestampedData("READ_AFTER_BARRIER", effective_start_tile_id);
         }
         if (b_count > 0) {
             noc_async_read_barrier_with_trid(TRID_B);
@@ -180,7 +187,7 @@ void kernel_main() {
     }
 
     // Legacy reader modes (0 = incremental push-1; 1 = batch read+push).
-    for (uint32_t tile_id = start_tile_id; tile_id < end_tile_id;) {
+    for (uint32_t tile_id = effective_start_tile_id; tile_id < end_tile_id;) {
         const uint32_t tiles_left = end_tile_id - tile_id;
         const uint32_t chunk = tiles_left < chunk_size ? tiles_left : chunk_size;
 
@@ -191,12 +198,12 @@ void kernel_main() {
             for (uint32_t i = 0; i < chunk; ++i) {
                 const uint32_t tid = tile_id + i;
                 const uint32_t l1_write_addr = cb_base + i * tile_bytes;
-                if (tid == start_tile_id) {
+                if (tid == effective_start_tile_id) {
                     DeviceTimestampedData("READ_BEFORE_BARRIER", tid);
                 }
                 noc_async_read_tile(tid, src, l1_write_addr);
                 noc_async_read_barrier();
-                if (tid == start_tile_id) {
+                if (tid == effective_start_tile_id) {
                     DeviceTimestampedData("READ_AFTER_BARRIER", tid);
                 }
             }
@@ -205,12 +212,12 @@ void kernel_main() {
             for (uint32_t i = 0; i < chunk; ++i) {
                 const uint32_t tid = tile_id + i;
                 const uint32_t l1_write_addr = get_write_ptr(cb_in);
-                if (tid == start_tile_id) {
+                if (tid == effective_start_tile_id) {
                     DeviceTimestampedData("READ_BEFORE_BARRIER", tid);
                 }
                 noc_async_read_tile(tid, src, l1_write_addr);
                 noc_async_read_barrier();
-                if (tid == start_tile_id) {
+                if (tid == effective_start_tile_id) {
                     DeviceTimestampedData("READ_AFTER_BARRIER", tid);
                 }
                 cb_push_back(cb_in, 1);
