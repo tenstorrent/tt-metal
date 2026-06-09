@@ -347,8 +347,7 @@ class GRPOTrainer:
 
         weighted_surr = surr * weight_tt
         weighted_surr_4d = ttml.ops.reshape.reshape(weighted_surr, [1, 1, B_local, Tp])
-        # return ttml.ops.unary.mean(weighted_surr_4d) * (-float(B_local) * float(Tp) / completions_batch_len)
-        return ttml.ops.unary.mean(weighted_surr_4d) * (-float(Tp) / completions_batch_len)
+        return ttml.ops.unary.mean(weighted_surr_4d) * (-float(B_local) * float(Tp) / completions_batch_len)
 
     def train(self) -> None:
         grpo_cfg = self.config
@@ -477,36 +476,6 @@ class GRPOTrainer:
 
                     if ddp_enabled:
                         ttml.core.distributed.synchronize_gradients(tt_model.parameters())
-
-                    # TEMP DEBUG (remove after validation): one-time step-1 probe
-                    # of the global gradient L2 norm. Step 1 is the only step
-                    # where mb=32 and mb=256 see identical completions/advantages,
-                    # so the accumulated gradient here MUST be invariant to
-                    # micro_batch_size if it is truly just a memory knob. Run both
-                    # configs and compare: post-fix the norms should match to
-                    # ~bf16 precision; reverting the fix should make them differ
-                    # by ~num_devices/ (the B_local factor). With DDP the grad is
-                    # replicated across devices and the composer concatenates the
-                    # replicas along dim 0, so sum_sq carries a constant
-                    # num_devices factor that cancels in the A/B ratio.
-                    if num_steps == 0:
-                        probe_sum_sq = 0.0
-                        probe_nparams = 0
-                        for _pname, _param in tt_model.parameters().items():
-                            if not _param.is_grad_initialized():
-                                continue
-                            _g = _param.get_grad_tensor().to_numpy(ttnn.DataType.FLOAT32, dp_composer)
-                            probe_sum_sq += float(np.sum(_g.astype(np.float64) ** 2))
-                            probe_nparams += 1
-                        _replica = float(num_devices) if ddp_enabled else 1.0
-                        probe_norm = (probe_sum_sq / _replica) ** 0.5
-                        print(
-                            f"[GRAD-PROBE] step1 micro_batch_size={grpo_cfg.micro_batch_size} "
-                            f"num_devices={num_devices} params_with_grad={probe_nparams} "
-                            f"global_grad_l2_norm={probe_norm:.8e} "
-                            f"(raw_sum_sq={probe_sum_sq:.8e})",
-                            flush=True,
-                        )
 
                     for cb in self.callbacks:
                         cb.on_before_optimizer_step(self)
