@@ -107,6 +107,104 @@ def _build_acoustic_1d_mcast_configs(dim: int, hidden_dim: int, n_heads: int, n_
     return ff1_3_config, ff2_config, wqkv_config, wo_config, proj_config
 
 
+def _build_acoustic_ds_configs(
+    device: ttnn.MeshDevice,
+    dim: int,
+    hidden_dim: int,
+    n_heads: int,
+    n_kv_heads: int,
+    head_dim: int,
+) -> dict:
+    """Build DRAM-sharded matmul configs for the acoustic FM transformer decode.
+
+    DS is used for w1/w3 (K=dim→N=hidden_dim) and wqkv (K=dim→N=Q+K+V).
+    w2 and wo keep 1D mcast (sweep winners for those shapes; DS is slower there).
+
+    CFG doubles effective batch to 2 inside the FM transformer: each sample has
+    1 M-tile (3 tokens padded to 32), so per_core_M=2 and m_phys=64.
+
+    Returns a dict consumed by VoxtralTTAcousticModel.__init__.
+    """
+    TILE = ttnn.TILE_SIZE  # 32
+
+    dram_grid = device.dram_grid_size()
+    n_dram_banks = dram_grid.x
+    compute_grid = device.compute_with_storage_grid_size()
+    max_x = compute_grid.x
+    max_y = compute_grid.y
+
+    def _gcd(a, b):
+        while b:
+            a, b = b, a % b
+        return a
+
+    def _ds_cores(k: int, n: int):
+        """(gx, gy) for DS: largest num_cores dividing gcd(K_tiles, N_tiles) and fitting device grid."""
+        k_tiles = k // TILE
+        n_tiles = math.ceil(n / TILE)
+        g = _gcd(k_tiles, n_tiles)
+        for nc in range(min(g, max_x * max_y), 0, -1):
+            if g % nc != 0:
+                continue
+            for gy in range(min(nc, max_y), 0, -1):
+                if nc % gy == 0:
+                    gx = nc // gy
+                    if gx <= max_x:
+                        return gx, gy
+        return 1, 1
+
+    def _ds_weight_mem(k: int, n: int) -> ttnn.MemoryConfig:
+        n_padded = math.ceil(n / (TILE * n_dram_banks)) * (TILE * n_dram_banks)
+        # DRAM bank grid is a single row: (0,0) → (n_banks-1, 0)
+        cr = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(n_dram_banks - 1, 0))})
+        return ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            buffer_type=ttnn.BufferType.DRAM,
+            shard_spec=ttnn.ShardSpec(cr, [k, n_padded // n_dram_banks], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+    # CFG effective batch: bsz=2, each sample pads 3 tokens to 1 tile (32 rows) → 2 M-tiles total.
+    PER_CORE_M = 2
+    M_PHYS = PER_CORE_M * TILE  # 64 physical rows (used as in0 shard height)
+
+    def _ds_in0_mem(k: int, gx: int, gy: int) -> ttnn.MemoryConfig:
+        nc = gx * gy
+        k_per_core = k // nc
+        cr = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))})
+        return ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            buffer_type=ttnn.BufferType.L1,
+            shard_spec=ttnn.ShardSpec(cr, [M_PHYS, k_per_core], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+    def _ds_prog(k: int, n: int, gx: int, gy: int) -> ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig:
+        nc = gx * gy
+        n_padded = math.ceil(n / (TILE * n_dram_banks)) * (TILE * n_dram_banks)
+        per_core_n = math.ceil(n_padded / (TILE * nc))
+        k_per_core_tiles = (k // nc) // TILE
+        in0_bw = next((w for w in (8, 4, 2, 1) if k_per_core_tiles % w == 0), 1)
+        return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=in0_bw,
+            per_core_M=PER_CORE_M,
+            per_core_N=per_core_n,
+            fused_activation=None,
+        )
+
+    nt_wqkv = (n_heads + 2 * n_kv_heads) * head_dim  # 6144 for Voxtral acoustic
+
+    ff1_3_gx, ff1_3_gy = _ds_cores(dim, hidden_dim)
+    wqkv_gx, wqkv_gy = _ds_cores(dim, nt_wqkv)
+
+    return {
+        "ff1_3_weight_mem": _ds_weight_mem(dim, hidden_dim),
+        "ff1_3_in0_shard_mem": _ds_in0_mem(dim, ff1_3_gx, ff1_3_gy),
+        "ff1_3_program_config": _ds_prog(dim, hidden_dim, ff1_3_gx, ff1_3_gy),
+        "wqkv_weight_mem": _ds_weight_mem(dim, nt_wqkv),
+        "wqkv_in0_shard_mem": _ds_in0_mem(dim, wqkv_gx, wqkv_gy),
+        "wqkv_program_config": _ds_prog(dim, nt_wqkv, wqkv_gx, wqkv_gy),
+    }
+
+
 def _linear_weight_ttnn(w_out_in: torch.Tensor, device, dtype) -> ttnn.Tensor:
     return ttnn.from_torch(
         w_out_in.transpose(-2, -1).contiguous(),
@@ -230,12 +328,13 @@ class VoxtralTTAcousticModel:
         self._compute_kernel_config = COMPUTE_KERNEL_CONFIG_VOXTRAL_ACOUSTIC
         self._semantic_compute_kernel_config = COMPUTE_KERNEL_CONFIG_VOXTRAL_SEMANTIC
 
-        # Build 1D-mcast program configs for acoustic FM decode (M=3 tokens → 1 tile).
         # Infer hidden_dim from the w1 weight shape (dim→hidden_dim after transpose).
-        _w1_key = f"layers.0.feed_forward.w1"
+        _w1_key = "layers.0.feed_forward.w1"
         _w1_key_w = f"{_w1_key}.weight"
         _w1_raw = sd.get(_w1_key_w, sd.get(_w1_key))
         _hidden_dim = int(_w1_raw.shape[0]) if _w1_raw is not None else 9216
+
+        # 1D-mcast program configs for all FM transformer matmuls.
         _ff1_3_cfg, _ff2_cfg, _wqkv_cfg, _wo_cfg, _proj_cfg = _build_acoustic_1d_mcast_configs(
             dim=dim,
             hidden_dim=_hidden_dim,
@@ -278,6 +377,11 @@ class VoxtralTTAcousticModel:
             tt_ccl=None,
         )
 
+        # BFP8_B weights: 2× bandwidth reduction vs BF16 with same 1D-mcast program configs.
+        # DS sharding requires fuse_batch semantics that 1D-mcast provides but DS does not;
+        # the acoustic FM input (2,1,3,dim) needs per_core_M=2 via fuse_batch, which DS cannot match.
+        _fm_wdtype = ttnn.bfloat8_b
+
         self.attentions = [
             VoxtralTTAttention(
                 mesh_device,
@@ -287,7 +391,7 @@ class VoxtralTTAcousticModel:
                 head_dim=head_dim,
                 state_dict=sd,
                 weight_prefix=f"layers.{i}.attention",
-                weight_dtype=dtype,
+                weight_dtype=_fm_wdtype,
                 output_dtype=dtype,
                 compute_kernel_config=self._compute_kernel_config,
                 activation_memory_config=self._matmul_act_mem_config,
@@ -303,7 +407,7 @@ class VoxtralTTAcousticModel:
                 w1_key=f"layers.{i}.feed_forward.w1",
                 w2_key=f"layers.{i}.feed_forward.w2",
                 w3_key=f"layers.{i}.feed_forward.w3",
-                weight_dtype=dtype,
+                weight_dtype=_fm_wdtype,
                 output_dtype=dtype,
                 exact_silu=True,
                 compute_kernel_config=self._compute_kernel_config,
@@ -555,7 +659,7 @@ class VoxtralTTAcousticModel:
         owned_tile = llm_tile is not llm_hidden_tt
         bsz = int(llm_tile.shape[0])
 
-        llm_sem = ttnn.typecast(llm_tile, ttnn.float32, memory_config=self._semantic_dram_mem_config)
+        llm_sem = ttnn.typecast(llm_tile, ttnn.float32, memory_config=self._matmul_act_mem_config)
         masked_logits = self.semantic_logits_tt(llm_sem)
         if llm_sem is not llm_tile and llm_sem.is_allocated():
             ttnn.deallocate(llm_sem)
