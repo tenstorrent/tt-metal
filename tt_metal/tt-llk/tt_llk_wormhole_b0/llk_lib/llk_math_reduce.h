@@ -325,6 +325,7 @@ inline void _llk_math_reduce_init_()
     if constexpr (enforce_fp32_accumulation)
     {
         static_assert(is_fp32_dest_acc_en, "FP32 Dest must be enabled for FP32 accumulation");
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
     }
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
@@ -334,4 +335,8 @@ inline void _llk_math_reduce_init_()
 template <bool enforce_fp32_accumulation = false>
 inline void _llk_math_reduce_uninit_([[maybe_unused]] const std::uint32_t srca_data_format)
 {
+    if constexpr (enforce_fp32_accumulation)
+    {
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(srca_data_format);
+    }
 }
