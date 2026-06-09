@@ -8,8 +8,6 @@
 
 # Team names are currently assigned to tests by best guess.
 #   Please message #tt-metal-infra if there are any concerns.
-# Sku names do not make the distinction between baremetal/vm, or viommu/non-viommu.
-#   This will be determined per pipeline based on need.
 
 # Example:
 metal_infra:
@@ -18,7 +16,7 @@ metal_infra:
     N150: 0
     N300: 0
     wh_llmbox: 0
-  sanity: # APC will be renamed to sanity
+  sanity: # APC and BHPC will be renamed to sanity
     CPU: 0
     N150: 0
     N300: 0
@@ -84,8 +82,8 @@ ttnn:
     bh_p300: 145
     bh_quietbox_2: 145
   integration:
-    wh_llmbox: 30   # t3k_integration_tests.yaml (ttnn entries)
-    wh_galaxy: 340  # galaxy_integration_tests.yaml
+    wh_llmbox: 30
+    wh_galaxy: 340
   l2:
     wh_n150: 970
     wh_n300: 970
@@ -99,11 +97,9 @@ ttnn:
   # test-framework assignment is being settled. Tracked in
   # https://github.com/tenstorrent/tt-metal/issues/44285
   profiler:
-    # Budgets sized against the per-test decomposition of the umbrella
-    # run_profiling_test (each unique test now has its own matrix entry).
-    wh_llmbox: 150              # t3k_profiler_tests.yaml (~141m actual + headroom)
-    wh_galaxy: 50               # galaxy_profiler_tests.yaml (~45m actual + headroom)
-    wh_n150_civ2: 60            # single_card_profiler_tests.yaml (~53m actual + headroom)
+    wh_llmbox: 150
+    wh_galaxy: 50
+    wh_n150_civ2: 60
     wh_n300_civ2: 60
     bh_p100a_civ2_viommu: 60
     bh_p150b_civ2_viommu: 60
@@ -195,9 +191,6 @@ models:
     wh_n150: 90
     wh_n300: 115
     bh_p150b_civ2: 70
-  # Plain `e2e` budget for the non-tiered pipelines that share the models team
-  # (blackhole-e2e, t3000-e2e). SKUs that are only exercised by the tiered model
-  # pipeline have moved to the e2e_tier* keys below.
   e2e:
     wh_llmbox: 198
     bh_p150b_civ2: 63
@@ -205,13 +198,8 @@ models:
     bh_loudbox: 160
     bh_llmbox: 30
     bh_quietbox_2: 30
-  # Per-tier e2e budgets, consumed by the tiered model pipelines
-  # (all-model-tests.yaml + models-t{1,2,3}-e2e-tests.yaml via
-  # models-e2e-tests-impl.yaml, which passes the leg's tier to
-  # verify_time_budget.py). These are a split of the plain `e2e` budget above,
-  # apportioned across tiers in proportion to each SKU's current per-tier usage.
-  # The plain `e2e` key is kept for the non-tiered pipelines that still rely on
-  # it (blackhole-e2e, t3000-e2e).
+  # Per-tier e2e budgets, consumed by the tiered model pipelines;
+  # The plain `e2e` key is used for the non-tiered pipelines (blackhole-e2e, t3000-e2e).
   e2e_tier1:
     wh_n150: 28
     wh_galaxy_perf: 120
@@ -231,15 +219,11 @@ models:
     bh_p150: 7
     bh_p300: 8
     bh_quietbox_2: 30
-  # Plain `unit` budget for the non-tiered pipelines that share the models team
-  # (galaxy-unit, t3000-unit). SKUs that are only exercised by the tiered model
-  # pipeline have moved to the unit_tier* keys below.
   unit:
     wh_llmbox: 100
     wh_galaxy_perf: 10
-  # Per-tier unit budgets — split of the plain `unit` budget above (see the
-  # e2e_tier* note). Consumed by the tiered model pipelines; the plain `unit`
-  # key is kept for the non-tiered pipelines (galaxy-unit, t3000-unit).
+  # Per-tier unit budgets. Consumed by the tiered model pipelines; the plain `unit`
+  # key is used for the non-tiered pipelines (galaxy-unit, t3000-unit).
   unit_tier1:
     wh_llmbox: 61
     wh_n150: 47
@@ -272,7 +256,6 @@ models:
     bh_p150: 20
     bh_p300: 20
     bh_quietbox_2: 80
-
   demo:
     wh_llmbox_perf: 200
     wh_llmbox_perf_release: 1090
@@ -293,9 +276,6 @@ models:
     bh_loudbox: 1200
     bh_p300: 800
     bh_quietbox_2: 280
-  # No plain `sweep` key: sweep tests run only through the tiered model pipeline,
-  # so the budget lives entirely in the sweep_tier* keys below. No tier 3 sweep
-  # tests exist today, so there is no sweep_tier3 key.
   sweep_tier1:
     wh_n150: 10
     wh_galaxy: 30
