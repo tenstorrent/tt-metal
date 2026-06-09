@@ -326,25 +326,23 @@ void blocked_matmul_and_pack(
 }
 
 /**
- * Matmul + pack of the already-softmaxed scores against latent V, specialized for in-place latent-V
- * (V read straight from K^T: V[sk][vd] == K^T[vd][sk]). Output column vd comes from its own matmul
- * chain over K^T row vd (in1 base vd*KT_stride, inner stride 1). Unlike blocked_matmul_and_pack —
- * which walks one contiguous in1 subblock from a single base — the columns here sit at strided in1
- * bases (different K^T rows), so they are independent chains and can't be folded into one matmul.
+ * Matmul + pack of scores against in-place latent V (V read from K^T: V[sk][vd] == K^T[vd][sk]).
+ * Each output column vd is its own matmul chain over K^T row vd (in1 base vd*KT_stride, inner
+ * stride 1), so unlike blocked_matmul_and_pack the strided columns can't be folded into one matmul.
+ * Batches as many columns as DST holds per acquire/commit/pack to keep the FPU busy, instead of
+ * paying the handshake + pack-configure per column (~2/3 FPU idle for the 1-wide path).
  *
- * To keep the FPU busy it batches: every output column that fits in DST shares one
- * tile_regs_acquire/commit/wait/release handshake and one pack, instead of paying that handshake +
- * a pack-configure per column (which left the FPU idle ~2/3 of the time for the 1-wide path).
- *
- * noinline on Wormhole, mirroring blocked_matmul_and_pack: keeps sdpa_inner_loop_step's frame off
- * the TR0 stack so the ring cases stay within budget; WH-only to avoid the call overhead elsewhere.
+ * Loops: outer walks columns in DST-sized batches; middle does one column (= one matmul chain) per
+ * DST tile; inner accumulates that chain over inner_dim tiles. Each batch is packed out in one go.
  */
 template <uint32_t vDHt, uint32_t dst_size, uint32_t subblock_h>
-#if defined(ARCH_WORMHOLE)
-__attribute__((noinline))
-#endif
 void inplace_v_matmul_pack_batched(
-    uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t in0_index_start, uint32_t inner_dim, uint32_t KT_stride) {
+    uint32_t in0_cb,
+    uint32_t in1_cb,
+    uint32_t out_cb,
+    uint32_t in0_index_start,
+    uint32_t inner_dim,
+    uint32_t KT_stride) {
     // Each output column is written column-major into DST (column c at c*subblock_h), but the
     // pack below reads DST row-major; the two orderings only coincide when subblock_h==1, which
     // kt_inplace_v guarantees via Sq_chunk_t==1. Enforce it so this can't silently corrupt if
