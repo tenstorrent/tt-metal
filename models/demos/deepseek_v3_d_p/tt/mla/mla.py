@@ -306,10 +306,8 @@ class ttMLA:
         # Ring-attention persistent buffers. Chunked prefill (ring_mla) and the standard ring
         # joint SDPA use disjoint buffer sets, so allocate only the one the configured mode needs --
         # holding both would waste DRAM.
-        # TODO: these are scratch buffers reused across the whole ring op and don't hold per-layer
-        # state, so they should be allocated ONCE and shared by all layers. With the current per-layer
-        # ttMLA instance they are re-allocated for every layer -- wasted DRAM that scales with depth.
-        # Hoist them to a shared owner (or pass them in) when ttMLA instances are created per layer.
+        # TODO: the chunked _chunked_kv_buf is still allocated per-layer; hoist it into TT_CCL like the
+        # non-chunked branch below (it's a scratch gather buffer, uniform across layers).
         if self.is_chunked:
             # Single combined gathered-KV buffer for ring_mla: K and V both come from the latent
             # kvpe cache, so one (cache_batch, 1, seq_len, kvpe_dim) buffer replaces the separate
@@ -333,71 +331,24 @@ class ttMLA:
                 ),
             )
         else:
-            # ring attention setup
-            persistent_v_shard_dims = [None, None]
-            persistent_v_shard_dims[self.tp_axis] = 1  # TP heads
-            persistent_k_shard_dims = [None, None]
-
-            ag_output_shape_k = (1, 1, seq_len, self.kv_lora_rank + self.qk_rope_head_dim)
-            ag_output_shape_v = (1, self.num_heads, seq_len, self.v_head_dim)
-
-            self.persistent_k_output_buffer = ttnn.from_torch(
-                torch.zeros(ag_output_shape_k),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,  # hardcoded for now
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=persistent_k_shard_dims
-                ),
+            # All-gather K/V outputs + dummy joint_q/kv/v placeholders are uniform across layers
+            # (config + seq_len + mesh), so they're owned once per model by TT_CCL and shared by every
+            # layer's MLA instead of re-allocated per layer. forward() reads them off self exactly as
+            # before. See TT_CCL.get_mla_ring_attention_buffers.
+            ring_buffers = self.tt_ccl.get_mla_ring_attention_buffers(
+                seq_len=seq_len,
+                kv_lora_rank=self.kv_lora_rank,
+                qk_rope_head_dim=self.qk_rope_head_dim,
+                qk_head_dim=self.qk_head_dim,
+                v_head_dim=self.v_head_dim,
+                num_heads=self.num_heads,
+                tp_axis=self.tp_axis,
             )
-
-            self.persistent_v_output_buffer = ttnn.from_torch(
-                torch.zeros(ag_output_shape_v),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,  # hardcoded for now
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=persistent_v_shard_dims
-                ),
-            )
-
-            # Pre-allocate dummy joint tensors for ring_joint_scaled_dot_product_attention (seq_len=0)
-            num_heads_local = self.num_heads // self.tp_factor
-            joint_shard_dims = [None, None]
-            joint_shard_dims[self.tp_axis] = 1  # shard on head dimension
-
-            self.joint_q = ttnn.from_torch(
-                torch.zeros(1, num_heads_local, 0, self.qk_head_dim),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=joint_shard_dims
-                ),
-            )
-
-            self.joint_kv = ttnn.from_torch(
-                torch.zeros(1, 1, 0, self.kv_lora_rank + self.qk_rope_head_dim),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-
-            self.joint_v = ttnn.from_torch(
-                torch.zeros(1, num_heads_local, 0, self.v_head_dim),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=joint_shard_dims
-                ),
-            )
+            self.persistent_k_output_buffer = ring_buffers["persistent_k_output_buffer"]
+            self.persistent_v_output_buffer = ring_buffers["persistent_v_output_buffer"]
+            self.joint_q = ring_buffers["joint_q"]
+            self.joint_kv = ring_buffers["joint_kv"]
+            self.joint_v = ring_buffers["joint_v"]
 
         # Load weights to TT device
         weights = self._convert_and_cache_weights(
