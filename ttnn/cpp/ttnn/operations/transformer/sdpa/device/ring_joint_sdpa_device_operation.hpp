@@ -21,9 +21,10 @@ struct RingJointSDPADeviceOperation {
     using tensor_args_t = RingJointSDPAInputs;
     using spec_return_value_t = RingJointSDPAResultSpec;
     using tensor_return_value_t = RingJointSDPAResult;
-    using program_factory_t = std::variant<RingJointSDPAProgramFactory>;
+    using program_factory_t = std::variant<RingJointSDPAMeshWorkloadFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
@@ -53,6 +54,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
     bool is_causal = false,
     bool is_balanced = false,
+    bool is_cross = false,
     std::optional<float> scale = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,

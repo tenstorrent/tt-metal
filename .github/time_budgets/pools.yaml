@@ -39,7 +39,6 @@ bh_p300_viommu:              0  # see bh_p300
 bh_quietbox:               347
 bh_quietbox_perf:            5
 bh_quietbox_2:             106
-bh_deskbox:                415
 bh_galaxy:                  38
 bh_galaxy_perf:             15
 bh_galaxy_release:           0

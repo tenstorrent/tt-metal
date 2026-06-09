@@ -55,6 +55,24 @@ def get_cos_sin_matrix(hf_config):
     return cos, sin
 
 
+def block_cyclic_reorder(matrix: torch.Tensor, chunk_local: int, sp_factor: int, seq_dim: int = 2) -> torch.Tensor:
+    """Reorder a [.., seq, ..] matrix into block-cyclic order keyed by `chunk_local`.
+
+    Splits the sequence into blocks of `chunk_local` rows and concatenates them so that device c's
+    contiguous shard (after a plain SP shard over `seq_dim`) holds blocks c, c+sp, c+2sp, ... — the
+    same block-cyclic layout the per-chip KV cache writes into. This makes the indexed-RoPE op's
+    contiguous, `update_idxt`-offset read of each device's cos/sin shard land on the right global
+    positions, including the boundary chip's older-then-wrap rows.
+    """
+    seq_len = matrix.shape[seq_dim]
+    assert seq_len % chunk_local == 0, f"seq_len {seq_len} must be a multiple of chunk_local {chunk_local}"
+    num_blocks = seq_len // chunk_local
+    assert num_blocks % sp_factor == 0, f"num_blocks {num_blocks} must be a multiple of sp_factor {sp_factor}"
+    blocks = list(torch.split(matrix, chunk_local, dim=seq_dim))
+    order = [b for c in range(sp_factor) for b in range(c, num_blocks, sp_factor)]
+    return torch.cat([blocks[b] for b in order], dim=seq_dim)
+
+
 class RotarySetup:
     """Rotary positional embedding setup for MLA prefill with SP sharding and balanced reordering."""
 
