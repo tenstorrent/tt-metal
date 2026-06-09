@@ -75,6 +75,11 @@ TTT_RANK: int = 1
 
 _MANIFEST_LEN_TAG: int = 1
 _MANIFEST_BODY_TAG: int = 2
+# Per-direction tags so a send cannot self-match the same rank's recv.
+_HANDSHAKE_TAG_FROM_TTML: int = 3
+_HANDSHAKE_TAG_FROM_TTT: int = 4
+
+_HANDSHAKE_PAYLOAD: bytes = b"ready"
 
 _ROLE_TTML: str = "ttml"
 _ROLE_TTT: str = "ttt"
@@ -168,8 +173,18 @@ class WeightBridge:
     on the ttt side it is whatever ``ttnn.open_mesh_device(...)``
     returned (the bridge does not look at AutoContext).
 
-    Use ``transfer_state`` for a single rank-aware call, or
-    ``send_state`` / ``recv_state`` for the explicit per-side flow.
+    Lifecycle
+    ---------
+
+    1. ``WeightBridge(...)`` -- cheap, non-blocking; validates args.
+    2. ``bridge.connect()`` -- both ranks call once; handshakes and
+       opens the ``MeshSocket``. Blocks until the peer also calls it.
+    3. ``transfer_state`` / ``send_state`` / ``recv_state`` -- moves
+       the weights; may be called multiple times.
+    4. ``bridge.barrier()`` -- optional post-transfer fence.
+
+    Transfer methods raise ``RuntimeError`` if ``connect()`` has not
+    been called.
     """
 
     def __init__(
@@ -203,13 +218,47 @@ class WeightBridge:
                 f"WeightBridge: role={role!r} but local MPI rank is {self.rank} " f"(expected TTT_RANK={TTT_RANK})"
             )
 
-        # Lazily constructed on first transfer; caching avoids rebuilding
-        # the SocketConfig + MeshSocket per tensor.
+        # Populated by ``connect()``; ``None`` triggers fail-fast in
+        # ``send_state``/``recv_state``.
         self._socket: Optional[ttnn.MeshSocket] = None
 
-    def _get_socket(self) -> "ttnn.MeshSocket":
+    # ------------------------------------------------------------------ #
+    # Synchronisation primitives                                         #
+    # ------------------------------------------------------------------ #
+
+    def _handshake(self) -> None:
+        """Two-rank barrier: each side eager-sends, then blocks on recv."""
+        if self.role == _ROLE_TTML:
+            _mpi_send_bytes(_HANDSHAKE_PAYLOAD, self.peer_rank, _HANDSHAKE_TAG_FROM_TTML)
+            _mpi_recv_bytes(len(_HANDSHAKE_PAYLOAD), self.peer_rank, _HANDSHAKE_TAG_FROM_TTT)
+        else:
+            _mpi_send_bytes(_HANDSHAKE_PAYLOAD, self.peer_rank, _HANDSHAKE_TAG_FROM_TTT)
+            _mpi_recv_bytes(len(_HANDSHAKE_PAYLOAD), self.peer_rank, _HANDSHAKE_TAG_FROM_TTML)
+
+    def _require_connected(self, op: str) -> "ttnn.MeshSocket":
+        if self._socket is None:
+            raise RuntimeError(
+                f"WeightBridge.{op}() called before WeightBridge.connect(). "
+                "Both ranks must call bridge.connect() once after constructing "
+                "the bridge and before any transfer."
+            )
+        return self._socket
+
+    # ------------------------------------------------------------------ #
+    # Public API                                                         #
+    # ------------------------------------------------------------------ #
+
+    def connect(self) -> None:
+        """Handshake with the peer and open the ``MeshSocket``. Idempotent.
+
+        Both ranks must call this exactly once before any transfer.
+        The handshake pins both ranks to the same point so the
+        ``MeshSocket`` constructor's MPI descriptor exchange does not
+        trip its 10s timeout when pre-work is asymmetric.
+        """
         if self._socket is not None:
-            return self._socket
+            return
+        self._handshake()
         mesh_shape = _shape_to_list(self.device.shape)
         socket_config = ttnn.SocketConfig(
             _make_socket_connection_config(mesh_shape),
@@ -218,17 +267,12 @@ class WeightBridge:
             receiver_rank=TTT_RANK,
         )
         self._socket = ttnn.MeshSocket(self.device, socket_config)
-        return self._socket
-
-    # ------------------------------------------------------------------ #
-    # Public API                                                         #
-    # ------------------------------------------------------------------ #
 
     def transfer_state(
         self,
         source: Optional[dict[str, "ttnn.Tensor"]] = None,
     ) -> Optional[dict[str, "ttnn.Tensor"]]:
-        """Single rank-aware entry point.
+        """Single rank-aware entry point. Requires a prior ``connect()``.
 
         On the ttml rank, pass ``source=ttml_model.export_to_hf_dict()``
         and the bridge sends. Returns ``None``.
@@ -264,6 +308,7 @@ class WeightBridge:
         """
         if self.role != _ROLE_TTML:
             raise RuntimeError(f"WeightBridge.send_state called with role={self.role!r}; expected {_ROLE_TTML!r}")
+        socket = self._require_connected("send_state")
 
         keys = sorted(hf_dict.keys())
         for k in keys:
@@ -290,7 +335,6 @@ class WeightBridge:
         _mpi_send_bytes(struct.pack("<Q", len(body)), self.peer_rank, _MANIFEST_LEN_TAG)
         _mpi_send_bytes(body, self.peer_rank, _MANIFEST_BODY_TAG)
 
-        socket = self._get_socket()
         for k in keys:
             ttnn.experimental.send_async(hf_dict[k], socket)
         ttnn.synchronize_device(self.device)
@@ -307,6 +351,7 @@ class WeightBridge:
         """
         if self.role != _ROLE_TTT:
             raise RuntimeError(f"WeightBridge.recv_state called with role={self.role!r}; expected {_ROLE_TTT!r}")
+        socket = self._require_connected("recv_state")
 
         header = _mpi_recv_bytes(8, self.peer_rank, _MANIFEST_LEN_TAG)
         (n,) = struct.unpack("<Q", header)
@@ -322,7 +367,6 @@ class WeightBridge:
                 f"ttml mesh {sender_shape} != ttt mesh {receiver_shape}."
             )
 
-        socket = self._get_socket()
         hf_dict: dict[str, ttnn.Tensor] = {}
         for entry in manifest["entries"]:
             template = _alloc_replicated_template(
@@ -340,15 +384,9 @@ class WeightBridge:
         return hf_dict
 
     def barrier(self) -> None:
-        """Best-practice fence after a transfer.
-
-        Lets the ttml rank hold its source tensors live until the ttt
-        rank finishes copying them into TTT's destination buffers (in
-        particular the per-layer K/V slices that ``export_to_hf_dict``
-        newly allocates would otherwise race against ``update_weights``
-        if the ttml rank freed them too eagerly).
-        """
-        ttnn.distributed_context_barrier()
+        """Post-transfer fence so the sender does not free source
+        tensors before the receiver drains them."""
+        self._handshake()
 
     # ------------------------------------------------------------------ #
     # Internal validation                                                #
