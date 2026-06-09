@@ -142,7 +142,7 @@ Use **`--no-use-cot-caption`** when you need the **exact** `--prompt` text in Di
 
 ### 4. TTNN vs host PyTorch (BH_QB default path)
 
-On **BH_QB**, the default is **split TTNN preprocess** (Phase A on a 1×1 chip → re-exec → Phase B on 2×2 mesh). PyTorch on CPU/GPU handles orchestration, tokenization, and opt-in fallbacks.
+On **BH_QB**, the default is **split TTNN preprocess** (Phase A on a 1×1 chip → re-exec → Phase B on 2×2 mesh). PyTorch on CPU/GPU handles orchestration, tokenization, and stages where TTNN either cannot match HF numerics yet or would regress audio quality.
 
 The denoise loop runs DiT forwards on TTNN; on BH_QB the per-step CFG (APG/ADG) and Euler update run on host PyTorch between TTNN steps.
 
@@ -152,15 +152,39 @@ The denoise loop runs DiT forwards on TTNN; on BH_QB the per-step CFG (APG/ADG) 
 | 5 Hz LM forward | **TTNN** | 1×1 preprocess chip; `--pytorch-lm` or `ACE_STEP_MESH_HOST_PREPROCESS=1` → host PyTorch |
 | LM tokenize / constrained FSM | **Host** | HF `AutoTokenizer` + metadata FSM (not the causal LM matmuls) |
 | Qwen3 caption + lyric embed | **TTNN** | 1×1 preprocess chip (host PyTorch if `ACE_STEP_MESH_HOST_PREPROCESS=1`) |
-| Audio-code → 25 Hz hints | **TTNN** (chunked) | Device-native by default (`precomputed_lm_hints_25Hz_tt`); opt-in torch: `ACE_STEP_TORCH_DETOK_HINTS=1`. HF detok: `ACE_STEP_PYTORCH_DETOK=1` |
+| Audio-code → 25 Hz hints | **HF PyTorch** (>200 codes) / **TTNN** (≤200) | See [Host PyTorch fallbacks](#host-pytorch-fallbacks-why-not-full-ttnn) below |
 | Condition encoder | **TTNN** | 1×1 preprocess for **<30 s** (<750 latent frames); **deferred to 2×2 DiT mesh** at **≥30 s** (avoids 1×1 readback drift) |
 | DiT denoise forward | **TTNN** | Opt-in HF DiT: `ACE_STEP_PYTORCH_DIT=1` |
 | Latent noise init | **On mesh** (short) / **Host CPU** (long) | With default `--use-trace`, latents stay on device for **≤15 s**; trace is forced off at **≥30 s** → host latent init |
 | Euler / APG / ADG between steps | **Host CPU** | Always on multi-device mesh (short and long clips); DiT forwards stay TTNN |
-| VAE decode | **TTNN** | Opt-in: `--torch-vae` |
+| VAE decode | **TTNN** (eager tiled) | Opt-in: `--torch-vae` |
 | WAV write | **Host** | Peak normalize + file I/O |
 
-**Not used in the default demo** unless you opt in:
+#### Host PyTorch fallbacks — why not full TTNN
+
+These are **production defaults**, not temporary debug flags. Each row is something that still runs (fully or partially) on host PyTorch, why a pure-TTNN path is not enabled, and how it shows up in WAV output when the wrong backend is forced.
+
+| Stage | Default | Why TTNN-only is not used | What you hear if forced wrong |
+|-------|---------|---------------------------|-------------------------------|
+| **Audio-code detokenizer** (>200 codes, e.g. **>40 s**) | **HF PyTorch** (global attention over all codes) | TTNN is L1-limited to **~200 codes/forward** on 1×1 BH. A multi-forward TTNN path **concatenates chunks with no cross-chunk attention**, so latent hints around the ~40 s seam and the whole second half are wrong vs HF. Demo **auto-sets** `ACE_STEP_PYTORCH_DETOK=1` when expect >200 codes. | Muddy / noisy / lost instruments — **most obvious with 4B LM @ 60 s**; turbo + 1.7B can also degrade. **Fix:** leave auto HF detok on (default) or do not set `ACE_STEP_PYTORCH_DETOK=0`. |
+| **Audio-code detokenizer** (≤200 codes, e.g. **≤40 s**) | **TTNN** | Single forward fits in L1; PCC ~0.986 vs HF on 15–30 s shapes. Hints stay on device as `precomputed_lm_hints_25Hz_tt` until the condition encoder consumes them. | Good on default path. `ACE_STEP_TORCH_DETOK_HINTS=1` adds a host round-trip (debug/A-B only). |
+| **DiT Euler + APG/ADG** (mesh) | **Host CPU** between TTNN forwards | Per-step guidance math (`sigma`, APG/ADG) uses host control flow and FP32 staging; not fused into the DiT body trace. | Stable default. Forcing full-step DiT trace without eager post-step CFG was tried — **audible noise**. |
+| **DiT CFG batch setup** (enc/ctx concat before loop) | **Eager TTNN** (not traced) | Traced prep for CFG duplicate batches was **not bit-accurate** vs eager setup. | Noise / smear if traced CFG prep is re-enabled. |
+| **VAE decode** | **TTNN eager** `decode_tiled` | Traced VAE replay failed PCC / produced **hiss** on long multi-tile decode. | Tile-boundary hiss on long clips → try `--torch-vae` or `--clarity` (wider overlap). |
+| **Condition encode** (≥30 s mesh) | **TTNN on DiT mesh** (not 1×1 preprocess) | Encoding on 1×1 then readback for long clips added **numeric drift** at ≥750 latent frames. | Long-clip drift / wrong timbre if condition is forced back to 1×1 preprocess only. |
+| **Latent noise init** (≥30 s mesh) | **Host CPU** | DiT body trace is forced off on long clips; host init matches the eager denoise path. | Minor vs detok/VAE issues; trace-on long clips was unstable. |
+| **LM constrained FSM + tokenize** | **Host** | Python metadata FSM and HF tokenizer — not LM matmuls. | N/A (orchestration only). |
+
+**Not landed (reverted or debug-only) — do not expect these on the default demo path:**
+
+| Idea | Status | Why dropped / not default | Demo impact if re-enabled |
+|------|--------|---------------------------|---------------------------|
+| TTNN **chunked** detok as default for >200 codes | **Off** (auto HF detok instead) | Chunks break bidirectional detok attention | Bad 60 s audio (especially 4B); use `ACE_STEP_PYTORCH_DETOK=0` only to reproduce the bug |
+| Skip condition **f32 readback** / all-device condition handoff | **Reverted** | Hurt **60 s accuracy** on golden WAV / stage PCCs | Long-clip quality regression |
+| Device-only Qwen caption / lyric (no host token path) | **Reverted** | Did not improve 60 s quality | No benefit on default path |
+| Device Euler / CFG on mesh as default | **Not default** | Host Euler + TTNN DiT body is the validated long-clip path | Unvalidated for 60 s golden audio |
+
+**Opt-in host PyTorch (A/B isolation — not default):**
 
 | Flag / env | Effect |
 |------------|--------|
@@ -169,6 +193,8 @@ The denoise loop runs DiT forwards on TTNN; on BH_QB the per-step CFG (APG/ADG) 
 | `ACE_STEP_PYTORCH_DIT=1` | HF PyTorch DiT denoise instead of TTNN |
 | `ACE_STEP_PYTORCH_CONDITION=1` | HF `prepare_condition` instead of TTNN condition encoder |
 | `ACE_STEP_MESH_HOST_PREPROCESS=1` | Skip TTNN Phase A — host PyTorch preprocess, Qwen, and 5 Hz LM |
+| `ACE_STEP_PYTORCH_DETOK=0` | Force TTNN chunked detok even when >200 codes (**debug only** — expect bad long-clip audio) |
+| `ACE_STEP_TORCH_DETOK_HINTS=1` | After TTNN detok (≤200 codes), round-trip hints via `ttnn.to_torch` instead of device-native `precomputed_lm_hints_25Hz_tt` |
 
 ### 5. Long clips (≥30 s on mesh)
 
@@ -178,7 +204,7 @@ Automatic behavior (no extra flags):
 - **Condition encode on DiT mesh** — avoids 1×1 readback drift at ≥750 latent frames.
 - **Host latent sampler** — latent init on CPU when trace is off (forced at ≥30 s on mesh); Euler/APG/ADG always on CPU on multi-device mesh.
 - **Wider VAE overlap** — fewer tile-boundary artifacts on decode.
-- **Audio codes** — demo sets `ACE_STEP_MAX_AUDIO_CODES` from `--duration_sec`; long streams use chunked TTNN detokenizer forwards (200 codes/forward by default).
+- **HF detokenizer** — demo auto-enables `ACE_STEP_PYTORCH_DETOK=1` when expect **>200 audio codes** (>40 s @ 5 Hz). See [Host PyTorch fallbacks](#host-pytorch-fallbacks-why-not-full-ttnn).
 
 ### Weight caching (avoid reloading from disk)
 
@@ -260,9 +286,9 @@ python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
 |----------|---------|
 | `ACE_STEP_MESH_DEVICE` / `MESH_DEVICE` | Default mesh SKU if `--mesh-device` omitted |
 | `ACE_STEP_MAX_AUDIO_CODES` | LM audio-code planning cap (auto **350** for 60s via demo) |
-| `ACE_STEP_DETOK_CHUNK_CODES` | Max codes per TTNN detokenizer forward (default **200**, L1 limit; longer streams use multiple chunked TTNN forwards) |
-| `ACE_STEP_PYTORCH_DETOK=1` | HF PyTorch detokenizer instead of TTNN (A/B debug) |
-| `ACE_STEP_TORCH_DETOK_HINTS=1` | Round-trip detok hints through host torch (`ttnn.to_torch`) instead of device-native path |
+| `ACE_STEP_DETOK_CHUNK_CODES` | Max codes per TTNN detokenizer forward (default **200**, L1 limit) |
+| `ACE_STEP_PYTORCH_DETOK` | **Auto `=1`** when expect >200 codes. HF global detok (default for long clips). **`=0`** forces TTNN chunked detok — debug only, bad long-clip audio. **`=1`** always HF |
+| `ACE_STEP_TORCH_DETOK_HINTS=1` | Round-trip TTNN detok hints through host torch (≤200-code path only; irrelevant when HF detok is active) |
 | `ACE_STEP_VAE_QUALITY=1` | Force BF16 VAE decode on mesh |
 | `ACE_STEP_DEMO_PERF_LOG=0` | Disable `[ace_step_v1_5][perf]` timing tables (on by default; set `=1` to force on) |
 | `ACE_STEP_DISABLE_WEIGHT_CACHE=1` | Disable in-memory weight reuse |
@@ -281,12 +307,12 @@ With trace on, the device opens with **`num_command_queues=2`** and a **128 MiB*
 | **LM CFG logit combine** | **Yes** (when used) | ``cfg_linear_combination_bf16`` trace per ``(device, K, cfg_scale)`` when ``_ttnn_lm_use_trace``; demo often sets ``lm_cfg_scale=1`` |
 | Qwen3 caption (`forward_traced`) | **Yes** | Handler / fast-preprocess text prefill |
 | Lyric token embed (`embed_tokens_traced`) | **Yes** | During handler `preprocess_batch` |
-| Audio-code detokenizer (`forward_traced`) | **Yes** | When LM emits audio codes |
+| Audio-code detokenizer (`forward_traced`) | **Yes** (≤200 codes) | TTNN single-chunk path; **>200 codes use HF PyTorch** (no trace) |
 | **Lyric transformer (8L)** | **Yes** | Inside ``forward_payload_traced`` capture (shape-keyed) |
 | **Timbre transformer (4L)** | **Yes** | Same |
 | Condition payload (`forward_payload_traced`) | **Yes** | Lyric + timbre + text + concat on CQ0; CQ1 input refresh |
 | Context latents + chunk mask (`ctx_concat_traced`) | **Yes** | ``concat([src_latents, chunk_mask], dim=-1)`` |
-| Cover / LM hints for `src_latents` | **Device-native (default)** | TTNN detok → `precomputed_lm_hints_25Hz_tt`; torch fallback via `ACE_STEP_TORCH_DETOK_HINTS=1` |
+| Cover / LM hints for `src_latents` | **TTNN on device** (≤200 codes) | `precomputed_lm_hints_25Hz_tt`; long streams use HF detok → host hints. Debug: `ACE_STEP_TORCH_DETOK_HINTS=1` |
 | Condition `enc_mask` | **Host + device** | NumPy for handler; ``upload_enc_mask_dev`` mirrors mask on device |
 | DiT CFG batch concat (pre-loop) | **No (eager)** | One-shot ``enc``/``ctx``/null setup; traced replay caused audible noise |
 | DiT ``compute_temb_tp`` | **No (eager)** | Precomputed per step; **streamed** into body trace via ``ttnn.copy`` on ``temb_buf``/``tp_buf`` |
@@ -299,17 +325,19 @@ With trace on, the device opens with **`num_command_queues=2`** and a **128 MiB*
 
 #### Stages that stay eager or host-only (by design)
 
-| Stage | Why |
-|-------|-----|
-| **5 Hz LM weight init** | Not a replay graph |
-| **LM constrained FSM** | Python control flow + dynamic token masks |
-| **LM CFG combine** | Skipped when ``lm_cfg_scale=1`` |
-| **DiT CFG enc/ctx concat** | Traced prep not bit-accurate vs eager |
-| **DiT full-step trace** | Opt-in only (``use_full_step``); default is body trace + eager post |
-| **VAE decode** | Traced replay not bit-accurate vs eager |
-| **DiT warmup (2 steps)** | Capture priming |
-| **Cover hint selection** | Host branch |
-| **VAE multi-tile overlap-add** | Trace replay PCC / audible noise |
+| Stage | Why | Demo impact if traced / forced TTNN-only |
+|-------|-----|------------------------------------------|
+| **5 Hz LM weight init** | Not a replay graph | N/A |
+| **LM constrained FSM** | Python control flow + dynamic token masks | N/A |
+| **LM CFG combine** | Skipped when ``lm_cfg_scale=1`` | N/A |
+| **Audio-code detok** (>200 codes) | TTNN chunked path lacks global attention | **Bad long-clip audio** — use default HF detok |
+| **DiT CFG enc/ctx concat** | Traced prep not bit-accurate vs eager | Audible noise |
+| **DiT full-step trace** | Opt-in only (``use_full_step``); default is body trace + eager post | Noise / smear |
+| **VAE decode** | Traced replay not bit-accurate vs eager | Hiss → ``--torch-vae`` |
+| **DiT warmup (2 steps)** | Capture priming | N/A |
+| **Cover hint selection** | Host branch | N/A |
+| **VAE multi-tile overlap-add** | Trace replay PCC / audible noise | Hiss on long decode |
+| **DiT Euler + APG/ADG** | Host staging between TTNN body replays | Noise if fused incorrectly |
 
 ---
 

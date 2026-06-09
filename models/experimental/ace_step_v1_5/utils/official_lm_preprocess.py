@@ -492,14 +492,14 @@ def attach_payload_preprocess_ttnn(
         from models.experimental.ace_step_v1_5.ttnn_impl.audio_code_detokenizer import parse_audio_code_string
         from models.experimental.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_detok_chunk_n
 
+        from models.experimental.ace_step_v1_5.ttnn_impl.math_perf_env import (
+            ace_step_detok_chunk_n,
+            ace_step_use_pytorch_detok,
+        )
+
         n_codes = len(parse_audio_code_string(code_str or ""))
         chunk_n = ace_step_detok_chunk_n()
-        use_pytorch_detok = os.environ.get("ACE_STEP_PYTORCH_DETOK", "").strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        )
+        use_pytorch_detok = ace_step_use_pytorch_detok(n_codes=n_codes)
         if use_pytorch_detok and orig_decode is not None:
             logger.info(
                 "[detokenizer] ACE_STEP_PYTORCH_DETOK=1: HF PyTorch detokenizer for {} codes",
@@ -551,7 +551,6 @@ def attach_payload_preprocess_ttnn(
     ):
         if not ace_step_device_native_detok_hints() or tt_audio_detokenizer is None or orig_prepare_hints is None:
             return orig_prepare_hints(
-                self,
                 batch_size,
                 audio_code_hints,
                 max_latent_length,
@@ -591,7 +590,6 @@ def attach_payload_preprocess_ttnn(
                 "[ace_step_v1_5] device-native LM hints support B=1 only; falling back to torch hints",
             )
             return orig_prepare_hints(
-                self,
                 batch_size,
                 audio_code_hints,
                 max_latent_length,

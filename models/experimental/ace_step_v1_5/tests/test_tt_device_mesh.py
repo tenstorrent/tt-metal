@@ -237,6 +237,72 @@ def test_configure_audio_code_limits_sets_env(monkeypatch):
     assert m.ace_step_detok_chunk_n() == m.ACE_STEP_DETOK_L1_CHUNK_CODES
 
 
+def test_configure_pytorch_detok_auto_sets_env(monkeypatch):
+    from models.experimental.ace_step_v1_5.ttnn_impl import math_perf_env as m
+
+    monkeypatch.delenv("ACE_STEP_PYTORCH_DETOK", raising=False)
+    assert m.ace_step_configure_pytorch_detok_auto(lm_variant="acestep-5Hz-lm-4B", duration_sec=60.0)
+    assert os.environ["ACE_STEP_PYTORCH_DETOK"] == "1"
+    assert m.ace_step_use_pytorch_detok(duration_sec=60.0)
+
+    monkeypatch.delenv("ACE_STEP_PYTORCH_DETOK", raising=False)
+    assert not m.ace_step_configure_pytorch_detok_auto(lm_variant="acestep-5Hz-lm-1.7B", duration_sec=15.0)
+    assert "ACE_STEP_PYTORCH_DETOK" not in os.environ
+    assert not m.ace_step_use_pytorch_detok(duration_sec=15.0)
+
+    monkeypatch.setenv("ACE_STEP_PYTORCH_DETOK", "0")
+    assert not m.ace_step_configure_pytorch_detok_auto(lm_variant="acestep-5Hz-lm-4B", duration_sec=60.0)
+    assert os.environ["ACE_STEP_PYTORCH_DETOK"] == "0"
+
+
+def test_preprocess_detok_shim_auto_hf_for_long_streams(monkeypatch):
+    """Without explicit opt-out, >200 codes route to HF detok."""
+    from unittest.mock import MagicMock
+
+    import torch
+
+    from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import attach_payload_preprocess_ttnn
+
+    monkeypatch.delenv("ACE_STEP_PYTORCH_DETOK", raising=False)
+    monkeypatch.delenv("ACE_STEP_TORCH_DETOK_HINTS", raising=False)
+
+    class _Handler:
+        device = torch.device("cpu")
+        dtype = torch.float32
+        text_tokenizer = type("Tok", (), {"pad_token_id": 0})()
+        hf_called = False
+
+        def infer_text_embeddings(self, x):
+            return x
+
+        def infer_lyric_embeddings(self, x):
+            return x
+
+        def _decode_audio_codes_to_latents(self, code_str: str):
+            self.hf_called = True
+            return torch.zeros(1, 1500, 64)
+
+        def _prepare_precomputed_lm_hints(self, *args, **kwargs):
+            raise AssertionError("orig prepare hints must not run")
+
+    handler = _Handler()
+    fake_detok = type("D", (), {"device": object(), "forward": MagicMock(), "dtype": object(), "mem": None})()
+    restore = attach_payload_preprocess_ttnn(
+        handler,
+        tt_qwen_encoder=type("Q", (), {"device": object()})(),
+        tt_audio_detokenizer=fake_detok,
+        use_trace=False,
+    )
+    try:
+        codes = "".join(f"<|audio_code_{i}|>" for i in range(300))
+        out = handler._decode_audio_codes_to_latents(codes)
+        assert handler.hf_called
+        assert out is not None
+        fake_detok.forward.assert_not_called()
+    finally:
+        restore()
+
+
 def test_detok_chunk_n_default():
     from models.experimental.ace_step_v1_5.ttnn_impl.math_perf_env import (
         ACE_STEP_DETOK_L1_CHUNK_CODES,
@@ -262,14 +328,14 @@ def test_device_native_detok_hints_env(monkeypatch):
 
 
 def test_preprocess_detok_shim_uses_ttnn_for_long_streams(monkeypatch):
-    """Default shim must not call HF detok when n_codes > chunk (chunked TTNN instead)."""
+    """Chunked TTNN detok is opt-in when ACE_STEP_PYTORCH_DETOK=0 (default auto uses HF for >200 codes)."""
     from unittest.mock import MagicMock
 
     import torch
 
     from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import attach_payload_preprocess_ttnn
 
-    monkeypatch.delenv("ACE_STEP_PYTORCH_DETOK", raising=False)
+    monkeypatch.setenv("ACE_STEP_PYTORCH_DETOK", "0")
     monkeypatch.delenv("ACE_STEP_TORCH_DETOK_HINTS", raising=False)
     ttnn_forward = MagicMock(return_value=MagicMock(name="hid_tt"))
     import ttnn
@@ -360,6 +426,59 @@ def test_preprocess_detok_shim_torch_hints_opt_in(monkeypatch):
         assert out is not None
         assert tuple(out.shape) == (1, 1500, 64)
         ttnn_forward.assert_called_once()
+    finally:
+        restore()
+
+
+def test_prepare_hints_replacement_torch_hints_fallback(monkeypatch):
+    """ACE_STEP_TORCH_DETOK_HINTS=1 must delegate to orig _prepare_precomputed_lm_hints."""
+    import torch
+
+    from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import attach_payload_preprocess_ttnn
+
+    monkeypatch.delenv("ACE_STEP_PYTORCH_DETOK", raising=False)
+    monkeypatch.setenv("ACE_STEP_TORCH_DETOK_HINTS", "1")
+
+    class _Handler:
+        device = torch.device("cpu")
+        dtype = torch.float32
+        text_tokenizer = type("Tok", (), {"pad_token_id": 0})()
+        orig_calls = 0
+
+        def infer_text_embeddings(self, x):
+            return x
+
+        def infer_lyric_embeddings(self, x):
+            return x
+
+        def _decode_audio_codes_to_latents(self, code_str: str):
+            return torch.zeros(1, 10, 64)
+
+        def _prepare_precomputed_lm_hints(
+            self,
+            batch_size: int,
+            audio_code_hints: list,
+            max_latent_length: int,
+            silence_latent_tiled: torch.Tensor,
+        ):
+            self.orig_calls += 1
+            assert batch_size == 1
+            assert max_latent_length == 100
+            return torch.zeros(1, 100, 64)
+
+    handler = _Handler()
+    sil = torch.zeros(1, 100, 64)
+    restore = attach_payload_preprocess_ttnn(
+        handler,
+        tt_qwen_encoder=type("Q", (), {"device": object()})(),
+        tt_audio_detokenizer=type("D", (), {"device": object(), "dtype": None, "mem": None})(),
+        use_trace=False,
+    )
+    try:
+        out = handler._prepare_precomputed_lm_hints(1, ["codes"], 100, sil)
+        assert handler.orig_calls == 1
+        assert out is not None
+        assert tuple(out.shape) == (1, 100, 64)
     finally:
         restore()
 

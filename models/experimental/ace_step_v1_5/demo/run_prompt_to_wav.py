@@ -968,9 +968,14 @@ def main() -> None:
         ace_step_configure_cond_long_clip_quality,
         ace_step_configure_dit_long_clip_quality,
         ace_step_configure_dit_ultra_long_clip_quality,
+        ace_step_configure_pytorch_detok_auto,
     )
 
     ace_step_configure_audio_code_limits(float(args.duration_sec))
+    ace_step_configure_pytorch_detok_auto(
+        lm_variant=str(getattr(args, "lm_variant", "") or ""),
+        duration_sec=float(args.duration_sec),
+    )
 
     ace_step_configure_cond_long_clip_quality(
         latent_frames=_predicted_latent_frames,
