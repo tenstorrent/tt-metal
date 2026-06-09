@@ -9,13 +9,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-import torch
 from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
@@ -163,7 +163,14 @@ class TtDeepSeekPrefillPipeline:
         chunk = self.config.chunk_size
         logger.info(f"TtDeepSeekPrefillPipeline.compile() — warming up one {chunk}-token chunk")
         t0 = time.perf_counter()
-        tt_tokens = self._prepare_chunk_tensor([0] * chunk)
+        tt_tokens = prepare_prefill_input_tensor(
+            [0] * chunk,
+            self.mesh_device,
+            self.config.sp_factor,
+            self.config.is_balanced,
+            self.config.mesh_shape,
+            self.config.sp_axis,
+        )
         h, _ = self.model.forward_chunk(
             tt_tokens,
             self.kvpe_cache,
@@ -180,25 +187,26 @@ class TtDeepSeekPrefillPipeline:
 
     def prefill(
         self,
-        token_ids: list[int],
+        input_tensor: ttnn.Tensor,
         slot_id: int,
         kv_actual_isl: int,
     ) -> None:
-        """Prefill ONE chunk: run the model over `token_ids` (a single chunk) and write its KV into
-        user `slot_id`'s cache at offset `kv_actual_isl`. Does NOT sample — the populated cache is the
-        output (read by the decode stage / migration consumer).
+        """Prefill ONE chunk into user `slot_id`'s KV cache at offset `kv_actual_isl`. Does NOT sample
+        — the populated cache is the output (read by the decode stage / migration consumer).
 
         The caller drives chunked prefill by calling this once per chunk, in order, managing the
-        cumulative `kv_actual_isl` externally (e.g. += chunk_size per call). Each layer attends to the
-        [0, kv_actual_isl + chunk_size) prefix and writes this chunk at the kv_actual_isl offset, so a
-        chunk's KV must be populated before the next chunk reads it.
+        cumulative `kv_actual_isl` externally (advanced by the real token count per chunk). Each layer
+        attends to the [0, kv_actual_isl + chunk_size) prefix and writes this chunk at the
+        kv_actual_isl offset, so a chunk's KV must be populated before the next chunk reads it.
 
         Args:
-            token_ids: exactly chunk_size tokens for this chunk, already in chip-major block-cyclic
-                order (the caller owns reformatting — see test_prefill_transformer_chunked's
-                rotated_chip_positions gather).
+            input_tensor: one chunk's tokens, pre-sharded as a uint32 ROW_MAJOR DRAM tensor
+                [sp_factor, 1, chunk_local] — as produced by runner_utils.prepare_prefill_input_tensor
+                or streamed over the H2D socket. Assumed already in chip-major block-cyclic order (the
+                caller owns reformatting — see test_prefill_transformer_chunked's rotated_chip_positions
+                gather). Consumed (deallocated) here.
             slot_id: cache user slot to fill, in [0, num_users).
-            kv_actual_isl: cumulative valid-KV count before this chunk (managed by the caller).
+            kv_actual_isl: cumulative valid-KV count before this chunk (the cache write offset).
         """
         assert self.compiled, "Call compile() before prefill()"
         assert 0 <= slot_id < self.config.num_users, f"slot_id {slot_id} out of range [0, {self.config.num_users})"
@@ -206,47 +214,22 @@ class TtDeepSeekPrefillPipeline:
             kv_actual_isl + self.config.chunk_size <= self.config.max_seq_len
         ), f"chunk at kv_actual_isl={kv_actual_isl} exceeds per-user cache {self.config.max_seq_len}"
 
-        tt_tokens = self._prepare_chunk_tensor(token_ids)
         h, _ = self.model.forward_chunk(
-            tt_tokens,
+            input_tensor,
             self.kvpe_cache,
             self.indexed_rope,
             kv_actual_isl=kv_actual_isl,
             cache_user_id=slot_id,
         )
-        ttnn.deallocate(tt_tokens)
+        ttnn.deallocate(input_tensor)
         ttnn.deallocate(h)
-
-    def _prepare_chunk_tensor(self, chunk_token_ids: list[int]) -> ttnn.Tensor:
-        """One chunk's tokens -> [sp, 1, chunk_local] uint32, SP-sharded on dim 0.
-
-        The chunk is assumed to already be in chip-major block-cyclic order (chip c's chunk_local rows
-        are contiguous), so we only reshape + shard — no reordering is done here.
-        """
-        sp_factor = self.config.sp_factor
-        assert len(chunk_token_ids) == self.config.chunk_size
-        chunk_local = self.config.chunk_size // sp_factor
-        token_ids_sharded = torch.tensor(chunk_token_ids, dtype=torch.int64).reshape(sp_factor, 1, chunk_local)
-
-        return ttnn.from_torch(
-            token_ids_sharded,
-            device=self.mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.mesh_device,
-                mesh_shape=self.config.mesh_shape,
-                dims=(self.config.sp_axis, None),
-            ),
-        )
 
     def setup_migration(self, endpoint, remote_endpoint_id: int) -> None:
         assert self.compiled, "Call compile() before setup_migration()"
         self.migration_layer = BoundMigrationEndpoint(endpoint, remote_endpoint_id)
 
     def _build_migration_callback(self, slot_id: int, actual_isl: int, dst_slot: int):
-        from models.demos.deepseek_v3_d_p.tt.runners.migration_setup import INVALID_SLOT_ID
+        from models.demos.deepseek_v3_d_p.tt.runners.integration_setup import INVALID_SLOT_ID
 
         if self.migration_layer is None or dst_slot == INVALID_SLOT_ID:
             return None
