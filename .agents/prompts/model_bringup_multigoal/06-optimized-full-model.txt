@@ -13,8 +13,10 @@ Goal completion requirements:
 - Runtime fallback audit is clean for the measured full-model/generator path, or every remaining host boundary is named as an explicit production compromise with evidence.
 - models/autoports/<model>/doc/optimized_full_model/README.md and work_log.md summarize commands, before/after accuracy and perf, mesh/optimization decisions, tt-perf-report conclusions, limitations, and exact artifacts.
 - The checklist in the $optimize skill has been completed with evidence
-- Fully-traced decode path from token in to token out including on-device sampling
+- Fully-traced decode path from token in to token out including on-device sampling (via models.common.sampling) that supports top-k/top-p as well as greedy sampling
 - run_prefill_check and run_teacher_forcing report top-1, top-5, and top-100 for prefill and decode using the AIME24 chat-template reference; expected bar is top-5 >= 98% and top-100 = 100% unless a model-specific issue or evidence justifies otherwise.
 - Prefill TTFT and decode t/s/u reported for batch 1 inference reported at the top of README.md
 
 Do not mark this goal blocked just because PCC, trace replay, watcher, profiler, CCL, cache, MoE or other validation currently fails. Those failures are expected bringup work. Before marking blocked, isolate the failure to the smallest reproducible component, compare against the optimized single-chip baseline, try a concrete fix/refutation loop, and for subtle PCC, mesh/CCL, cache, or routed-expert bugs use $autofix or document why those skills could not be used. A blocked result requires evidence that continued debugging by the agent is no longer meaningful, not merely that a requirement is still failing.
+
+Above all: take your time. Sit with it for a moment. The above sounds like a lot but *we are not in any kind of hurry* here - we have all the time we need! So let's make a careful step by step plan and work through it one item at a time ticking things off as we go. When we come to problems we'll figure them out, update the plan and keep on going.
