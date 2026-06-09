@@ -507,7 +507,6 @@ def _tp_fused_qkv_col_parallel(
         bias_slice = torch.cat([q_b[start:end], k_b[start:end], v_b[start:end]])
         bias_slices.append(bias_slice.to(torch.bfloat16))
 
-    in_dim = int(q_w.shape[1])
     stacked_w = torch.stack(weight_slices, dim=0)  # [tp, in, 3*local_out]
     stacked_b = torch.stack(bias_slices, dim=0)  # [tp, 3*local_out]
 
