@@ -28,25 +28,6 @@
 // MULTI-BLOCK A1 diagnostic: with num_blocks>1, output ONLY this block's top-8 (run the full per-256
 // pipeline per block) so each block can be validated against its own 256-golden. Unset for A2 (combine).
 // #define GMG_DIAG_BLOCK 1
-// COMBINE ISOLATION: with num_blocks>1 (combine path), output ONLY run0 (block 0's top-8, global idx
-// 0-255) instead of the full combine — to validate merge16_to_run + run pack/unpack/place. Unset for
-// the real combine.
-// #define GMG_COMBINE_DIAG 1
-// 256-PATH ISOLATION: build the 256 top-8 via produce_run + relocate + normalize (the A2 blocks,
-// NO L1 stash). Validates merge16_to_run/relocate/normalize against the 256 golden.
-// #define GMG_TEST_PRODUCE_RUN 1
-// 256-PATH STASH ISOLATION: produce run -> pack to L1 run_cb -> unpack -> relocate + normalize.
-// Tests the pack/unpack stash round-trip without block1. Matches 256 golden => stash works.
-#define GMG_TEST_STASH 1
-// 256-PATH PARK ISOLATION: produce_run -> park to {32,34} -> restore to {0,4} -> normalize. Tests
-// whether copy_topk_run can address the free upper-half offsets (the in-DEST combine park location).
-// #define GMG_TEST_PARK 1
-// 256-PATH PARK2: produce run -> park {32,34} -> run pipeline AGAIN -> restore -> merge. Tests whether
-// a full pipeline pass between park and restore leaves the park (offset 32-63) intact.
-// #define GMG_TEST_PARK2 1
-// OCCUPANCY PROBE: indices region pre-filled with arange, run one pipeline, pack raw. Diff vs arange
-// shows which offsets the pipeline writes (occupied) vs leaves free -> safe park location.
-// #define GMG_DUMP_OCCUPANCY 1
 
 #include "../unified_kernels/kernel_op_api.hpp"
 #include "../unified_kernels/kernel_utils.hpp"

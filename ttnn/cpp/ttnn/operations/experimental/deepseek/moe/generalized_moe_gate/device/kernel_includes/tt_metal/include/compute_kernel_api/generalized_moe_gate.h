@@ -77,43 +77,21 @@ ALWI void generalized_moe_gate_combine_init() {
     MATH((llk_math_sfpu_generalized_moe_gate_topk_init<APPROX, DST_ACCUM_MODE>()));
 }
 
-// Transpose-dest step2 ONLY (no finalize/normalize). Used to "settle" the math state at the end of a
-// block's produce_run pass (the full pipeline normally ends with step2; without it the next block's
-// transpose_wh pipeline doesn't start cleanly).
+// Transpose-dest step2 ONLY (no finalize/normalize): transpose the run from the SFPU "math" layout to the
+// "standard" layout, so PACK (pack_untilize) can read it for the L1 stash. step2_init uses num_tiles=3, so
+// it transposes all three regions (scores tile0 + idx tile1 + BIAS tile2) — the combine merge needs the bias
+// too. Used by process_block_to_run before pack_untilize. (It also "settles" the math state so the NEXT
+// block's produce_run/transpose_wh pipeline starts cleanly.)
 template <bool is_32bit = false>
 ALWI void generalized_moe_gate_step2_only() {
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init<is_32bit>()));
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step2<DST_ACCUM_MODE, is_32bit>()));
 }
 
-// transpose-dest COMMON init (the addrmods the step0/1/2 transposes need). copy_tile_to_dst_init_short
-// clobbers these, so re-run this before a standalone step2 that follows a copy_tile.
-template <bool is_32bit = false>
-ALWI void generalized_moe_gate_transpose_common_init() {
-    MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_common_init<is_32bit>()));
-}
-
-// step2 INIT only (addrmod config, NO transpose op -> does not touch DEST). Resets the addrmods that the
-// next block's transpose_wh pipeline (or a following copy_tile) needs, without scrambling the run still
-// sitting in DEST -> safe to call before packing the (math-layout) run to L1.
-template <bool is_32bit = false>
-ALWI void generalized_moe_gate_step2_init_only() {
-    MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init<is_32bit>()));
-}
-
 // Relocate a run between column-pairs within the scores/idx/bias regions (proven copy_topk_run).
 template <uint32_t from_lo, uint32_t from_hi, uint32_t to_lo, uint32_t to_hi>
 ALWI void generalized_moe_gate_relocate_run() {
     MATH((llk_math_sfpu_generalized_moe_gate_copy_topk_run<APPROX, DST_ACCUM_MODE, from_lo, from_hi, to_lo, to_hi>(0)));
-}
-
-// DIAGNOSTIC (combine bring-up): normalize a single run already placed at scores/indices {0,4} +
-// transpose-dest step2 to the output layout. Pairs with place_run_at<0,4> to output ONE block's run.
-template <bool is_32bit = false>
-ALWI void generalized_moe_gate_normalize_step2(uint32_t eps, uint32_t scale) {
-    MATH((llk_math_sfpu_generalized_moe_gate_normalize_run<APPROX, DST_ACCUM_MODE>(0, eps, scale)));
-    MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init<is_32bit>()));
-    MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step2<DST_ACCUM_MODE, is_32bit>()));
 }
 
 // produce_run: for the multi-block (>256) path, end the ungrouped pipeline at merge16_to_run (a

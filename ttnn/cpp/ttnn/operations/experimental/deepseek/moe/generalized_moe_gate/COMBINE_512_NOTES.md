@@ -93,7 +93,7 @@ Why **merge-only acquire**: `produce_run` leaves SFPU/SrcB/addrmod state that *p
 | 3 | scores/idx/bias all pack as **scores** | `pack_untilize_dest` selects the DEST tile via the **runtime `tile_dst_rt_offset` (last arg)**, NOT the 3rd positional arg (that's `block_c_index`). Use `pack_untilize_dest<1,1>(cb, 1, 0, 16, 4, 0/1/2)`. |
 | 4 | idx (uint16) comes back as garbage | The bf16 scores path left the **runtime unpack format at bf16**, and `tilize_uninit` doesn't fully restore it on WH, so the idx `tilize_block` decoded raw uint16 as bf16. → give the idx tilize its **own `compute_kernel_hw_startup(run_idx_cb, cb_tilize_idx)`** (UInt16 CBs). The CB compile-time format was always correct; it was the *runtime* format. **bf16 as a raw-bit carrier is unsafe** (denormal flush — ids 0-255 = 0x00xx are subnormal). |
 | 5 | restored run is **`[a,b,a,b]` 2-period duplicated** | `step2` is built for the FINALIZE layout (`store8_even_cols` at offsets `{0,4}`); applied to `produce_run`'s `{0,2}` run it mis-strides and 2-period-collapses the second half. → **`relocate_run<0,2,0,4>` before `step2`** (align to `{0,4}`). |
-| 6 | place / transpose restore is all-zero | **`llk_unpack_set_srcb_dummy_valid()` placed BEFORE a `transpose_wh`** makes its TRNSPSRCB read the dummy SrcB → all-0. transpose_wh itself needs NO srcb-dummy-valid; it goes **AFTER all transposes**, right before the `step2` (in normalize_step2 / combine_finalize) that needs it. (Also: transpose_wh's `idst` is NOT tile-limited — it writes any DEST tile; the earlier "can't write tile 2/3" was this same srcb bug.) |
+| 6 | place / transpose restore is all-zero | **`llk_unpack_set_srcb_dummy_valid()` placed BEFORE a `transpose_wh`** makes its TRNSPSRCB read the dummy SrcB → all-0. transpose_wh itself needs NO srcb-dummy-valid; it goes **AFTER all transposes**, right before the `step2` (in `combine_finalize`) that needs it. (Also: transpose_wh's `idst` is NOT tile-limited — it writes any DEST tile; the earlier "can't write tile 2/3" was this same srcb bug.) |
 | 7 | combine: garbage + hang, then **wrong half selected** | `produce_run` + restore in the SAME acquire — `produce_run`'s SFPU/SrcB state poisons the same-acquire transpose_wh. → **merge-only acquire** (stash BOTH blocks, restore+merge with no produce_run inside). |
 | 8 | combine: merge picks the **wrong 8** (dev max key == gold min key) | The **bias sort-key was 2-period corrupted** while scores+idx were fine: `step2` used `num_tiles=2`, so it transposed only scores(tile0)+idx(tile1) math→standard, **NOT bias(tile2)** → bias packed in math layout → corrupt round-trip. The 256 output path never reads bias (normalize reads only scores), so this was invisible until the merge sorted by bias. → **`step2_configure_mop<3>`** (transpose tiles 0,1,2). Harmless for the 256/finalize output (they pack only tiles 0,1). |
 
@@ -117,18 +117,20 @@ showed no effect) → sidestepped with **per-block `input_indices` tiles** (tile
 
 ## 7. Test / debug macros (`generalized_moe_gate_kernel.cpp`) & tests
 
-Macros: `GMG_UNGROUPED_TOP8` (default), `GMG_DIAG_BLOCK`, `GMG_TEST_PRODUCE_RUN`, `GMG_TEST_STASH` (256 stash
-isolation), `GMG_TEST_PARK/PARK2`, `GMG_DUMP_OCCUPANCY`, `GMG_COMBINE_DIAG`. Tests (in
-`models/demos/deepseek_v3/tests/test_generalized_moe_gate.py`): `test_generalized_moe_gate` (256),
+Kept macros: `GMG_UNGROUPED_TOP8` (default ON), `GMG_DIAG_BLOCK` (per-block A1 validation in the combine path),
+`GMG_DUMP_AFTER_SUM_TOP2/STEP0/STEP1` and `GMG_DIAG_TOPA/TOPB` (stage probes). The combine-bring-up isolation macros
+(`GMG_TEST_STASH/PARK/PARK2/PRODUCE_RUN`, `GMG_DUMP_OCCUPANCY`, `GMG_COMBINE_DIAG`) and the dead helper functions
+(`place_run_at`, `unpack_run_to_regions[_transpose]`) were removed after the combine landed. Tests (in
+`models/demos/deepseek_v3/tests/test_generalized_moe_gate.py`): `test_generalized_moe_gate` (256/128),
 `test_generalized_moe_gate_512_global` (the combine), `test_generalized_moe_gate_512_per_block`,
-`test_dump_stash_run` (256 full-16×16 region dump), `test_dump_combine_run` (512 full-16×16 dump of the placed
-runs — the tool that finally localized the bias bug: dump a 32×32 output to read the whole face).
+`test_dump_stash_run` / `test_dump_combine_run` (debug-only full-16×16 region dumps — `test_dump_combine_run` is the
+tool that finally localized the bias bug by reading the whole 32×32 face).
 
 ## 8. Remaining work (none block 512)
 
-1. **Cleanup:** `GMG_TEST_STASH` is still ON → the 256 (`num_blocks==1`) path runs through the stash+place
-   isolation (slower). Turn it OFF so 256 uses the original fast single op. (Only affects `num_blocks==1`.)
-2. **Kimi 384:** `num_blocks=2` with block1 = 256-383 (+128 padding). Likely just an op.py/test concern — set the
+1. **Kimi 384:** `num_blocks=2` with block1 = 256-383 (+128 padding). Likely just an op.py/test concern — set the
    padding experts' keys very low so they're never selected; the kernel combine should be unchanged.
-3. **>512:** needs a combine **tree** (the current path is a single 2-run merge).
-4. **Perf** + softmax fusion.
+2. **Top-n (k = 4/6/10):** currently k=8 is baked into `merge16_to_run`/`finalize`/the bitonic sort. Parameterize k.
+3. **Softmax / sqrt-softplus** normalization variants (see `SOFTMAX_NOTES.md`).
+4. **>512:** needs a combine **tree** (the current path is a single 2-run merge).
+5. **Perf.**
