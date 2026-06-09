@@ -130,6 +130,29 @@ inline ProgramSpec MakeSpecWithBothKernelRTAs(
     return spec;
 }
 
+inline ProgramSpec MakeSpecWithAliasedDfbs(uint32_t es_a, uint32_t ne_a, uint32_t es_b, uint32_t ne_b) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    DataflowBufferSpec dfb_a = MakeMinimalDFB("dfb_a", es_a, ne_a);
+    dfb_a.data_format_metadata = tt::DataFormat::Float16_b;
+    dfb_a.advanced_options = DFBAdvancedOptions{.alias_with = {DFBSpecName{"dfb_b"}}};
+    DataflowBufferSpec dfb_b = MakeMinimalDFB("dfb_b", es_b, ne_b);
+    dfb_b.data_format_metadata = tt::DataFormat::Float16_b;
+    dfb_b.advanced_options = DFBAdvancedOptions{.alias_with = {DFBSpecName{"dfb_a"}}};
+    spec.dataflow_buffers = {dfb_a, dfb_b};
+
+    // Replace the single dfb_0 bindings: each kernel binds both aliased DFBs.
+    spec.kernels[0].dfb_bindings = {
+        ProducerOf(DFBSpecName{"dfb_a"}, "input_dfb_a"),
+        ProducerOf(DFBSpecName{"dfb_b"}, "input_dfb_b"),
+    };
+    spec.kernels[1].dfb_bindings = {
+        ConsumerOf(DFBSpecName{"dfb_a"}, "input_dfb_a"),
+        ConsumerOf(DFBSpecName{"dfb_b"}, "input_dfb_b"),
+    };
+    return spec;
+}
+
 // Helper to create ProgramRunArgs for a single kernel
 inline ProgramRunArgs::KernelRunArgs MakeKernelRunArgs(
     KernelSpecName kernel,
@@ -474,6 +497,102 @@ TEST_F(ProgramRunArgsTestQuasar, DFBReentryEntrySizeRingExtentFails) {
     EXPECT_THAT(
         [&] { SetProgramRunArgs(program, params); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("exceeds uint16_t")));
+}
+
+// Isolated change on the primary: entry_size and num_entries traded so total_size is unchanged.
+TEST_F(ProgramRunArgsTestQuasar, AliasIsolatedResizeSucceeds) {
+    NodeCoord node{0, 0};
+    // dfb_a = 512*8 = 4096, dfb_b = 1024*4 = 4096 (equal totals).
+    ProgramSpec spec = MakeSpecWithAliasedDfbs(/*es_a=*/512, /*ne_a=*/8, /*es_b=*/1024, /*ne_b=*/4);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    auto a = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_a"));
+    auto b = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_b"));
+    ASSERT_TRUE(a->alias_primary_id.has_value() || !a->alias_secondary_ids.empty()) << "dfb_a not aliased";
+    const uint32_t total_before = a->total_size();
+    const uint32_t b_es_before = b->config.entry_size;
+    const uint32_t b_ne_before = b->config.num_entries;
+
+    // 512*8 -> 256*16: total_size stays 4096.
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_a"}, .entry_size = 256, .num_entries = 16});
+    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+
+    EXPECT_EQ(a->config.entry_size, 256u);
+    EXPECT_EQ(a->config.num_entries, 16u);
+    EXPECT_EQ(a->total_size(), total_before);  // unchanged -> isolated
+    // The other alias is untouched.
+    EXPECT_EQ(b->config.entry_size, b_es_before);
+    EXPECT_EQ(b->config.num_entries, b_ne_before);
+}
+
+// Isolated change on the secondary alias.
+TEST_F(ProgramRunArgsTestQuasar, AliasSecondaryIsolatedResizeSucceeds) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithAliasedDfbs(/*es_a=*/512, /*ne_a=*/8, /*es_b=*/1024, /*ne_b=*/4);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    auto b = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_b"));
+    const uint32_t total_before = b->total_size();
+
+    // 1024*4 -> 2048*2: total_size stays 4096.
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_b"}, .entry_size = 2048, .num_entries = 2});
+    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+
+    EXPECT_EQ(b->config.entry_size, 2048u);
+    EXPECT_EQ(b->config.num_entries, 2u);
+    EXPECT_EQ(b->total_size(), total_before);  // unchanged -> isolated
+}
+
+// Agreed group resize: BOTH members overridden to the same new total size.
+TEST_F(ProgramRunArgsTestQuasar, AliasGroupAgreedResizeSucceeds) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithAliasedDfbs(/*es_a=*/512, /*ne_a=*/8, /*es_b=*/1024, /*ne_b=*/4);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    auto a = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_a"));
+    auto b = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_b"));
+
+    // 4096 -> 8192 for both, via different views (512*16 and 1024*8).
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_a"}, .entry_size = 512, .num_entries = 16});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_b"}, .entry_size = 1024, .num_entries = 8});
+    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+
+    EXPECT_EQ(a->total_size(), 8192u);
+    EXPECT_EQ(b->total_size(), 8192u);
+    EXPECT_EQ(a->config.num_entries, 16u);
+    EXPECT_EQ(b->config.num_entries, 8u);
+}
+
+// Total-size change on one alias without overriding the rest of the group -> rejected.
+TEST_F(ProgramRunArgsTestQuasar, AliasPartialGroupResizeFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithAliasedDfbs(/*es_a=*/512, /*ne_a=*/8, /*es_b=*/1024, /*ne_b=*/4);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // dfb_a 4096 -> 8192 (total changes) but dfb_b is left out of the batch.
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_a"}, .num_entries = 16});
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("was not overridden")));
+}
+
+// Group members overridden to DIFFERENT new total sizes -> rejected.
+TEST_F(ProgramRunArgsTestQuasar, AliasGroupDisagreeResizeFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithAliasedDfbs(/*es_a=*/512, /*ne_a=*/8, /*es_b=*/1024, /*ne_b=*/4);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // dfb_a -> 8192, dfb_b -> 16384: both change total_size but disagree.
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_a"}, .num_entries = 16});  // 512*16 = 8192
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_b"}, .num_entries = 16});  // 1024*16 = 16384
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("different total sizes")));
 }
 
 // ============================================================================
