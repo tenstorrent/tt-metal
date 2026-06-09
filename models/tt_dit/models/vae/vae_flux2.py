@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 import ttnn
 
-from ...blocks.vae_opt import VaeContext, VaeConv2d, VaeMidBlock, VaeNormDescGroup, VaeUpBlock, _all_gather_hw, _norm
+from ...blocks.vae import VaeContext, VaeConv2d, VaeMidBlock, VaeNormDescGroup, VaeUpBlock, _all_gather_hw, _norm
 from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList, Parameter
 from ...parallel.config import Flux2VaeParallelConfig
