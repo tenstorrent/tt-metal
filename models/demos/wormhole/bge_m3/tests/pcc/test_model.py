@@ -34,7 +34,19 @@ def model_artifacts(model_location_generator):
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("seq_len", SEQUENCE_LENGTHS, ids=[f"S{seq_len}" for seq_len in SEQUENCE_LENGTHS])
+@pytest.mark.parametrize(
+    "seq_len",
+    [
+        pytest.param(
+            seq_len,
+            id=f"S{seq_len}",
+            marks=pytest.mark.skip(reason="https://github.com/tenstorrent/tt-metal/issues/46445")
+            if seq_len == 4096
+            else [],
+        )
+        for seq_len in SEQUENCE_LENGTHS
+    ],
+)
 def test_model_full_end_to_end(device, model_artifacts, seq_len, reset_seeds):
     require_single_device(device)
     backbone, state_dict, model_id_or_path = model_artifacts
