@@ -2,12 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import yaml
 
 from models.demos.utils.model_targets import normalize_sku
 from models.demos.utils.trace_region_sizes import (
-    DEFAULT_TRACE_REGION_SIZE,
     TRACE_REGION_SIZES_YAML_PATH,
+    TraceRegionSizeNotConfiguredError,
     apply_trace_region_override,
     is_trace_region_size_placeholder,
     load_trace_region_sizes,
@@ -122,7 +123,7 @@ def test_tt_transformers_specific_entries():
 
 def test_is_trace_region_size_placeholder():
     assert is_trace_region_size_placeholder(None)
-    assert is_trace_region_size_placeholder(DEFAULT_TRACE_REGION_SIZE)
+    assert not is_trace_region_size_placeholder(50_000_000)
     assert not is_trace_region_size_placeholder(216580672)
     assert not is_trace_region_size_placeholder(102000000)
 
@@ -130,7 +131,7 @@ def test_is_trace_region_size_placeholder():
 def test_should_apply_trace_region_override():
     override_size = 80000000
     assert should_apply_trace_region_override({}, override_size)
-    assert should_apply_trace_region_override({"trace_region_size": DEFAULT_TRACE_REGION_SIZE}, override_size)
+    assert should_apply_trace_region_override({"trace_region_size": None}, override_size)
     assert not should_apply_trace_region_override({"trace_region_size": 216580672}, override_size)
     assert not should_apply_trace_region_override({"trace_region_size": 102000000}, override_size)
     assert not should_apply_trace_region_override({}, None)
@@ -141,9 +142,14 @@ def test_apply_trace_region_override():
     assert apply_trace_region_override(device_params, 80000000) == 216580672
     assert device_params["trace_region_size"] == 216580672
 
-    device_params = {"trace_region_size": DEFAULT_TRACE_REGION_SIZE}
+    device_params = {}
     assert apply_trace_region_override(device_params, 52000000) == 52000000
     assert device_params["trace_region_size"] == 52000000
+
+
+def test_resolve_trace_region_size_raises_when_not_configured():
+    with pytest.raises(TraceRegionSizeNotConfiguredError, match="trace_region_size is not configured"):
+        resolve_trace_region_size("unknown-model", "wh_n150")
 
 
 def test_load_trace_region_sizes_is_cached():

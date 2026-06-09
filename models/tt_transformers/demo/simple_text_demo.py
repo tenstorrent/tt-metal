@@ -20,7 +20,6 @@ from models.common.sampling import SamplingParams
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_accuracy, verify_perf
 from models.demos.utils.model_targets import resolve_accuracy_targets, resolve_perf_targets
-from models.demos.utils.trace_region_sizes import DEFAULT_TRACE_REGION_SIZE
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
@@ -808,7 +807,7 @@ def prepare_generator_args(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": True, "trace_region_size": DEFAULT_TRACE_REGION_SIZE, "num_command_queues": 1}],
+    [{"fabric_config": True, "num_command_queues": 1}],
     indirect=True,
 )
 @pytest.mark.parametrize(

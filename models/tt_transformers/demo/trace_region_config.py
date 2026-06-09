@@ -10,7 +10,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.utils.model_targets import normalize_sku
-from models.demos.utils.trace_region_sizes import resolve_trace_region_size
+from models.demos.utils.trace_region_sizes import TraceRegionSizeNotConfiguredError, resolve_trace_region_size
 
 # NOTE: We need to override trace_region_size before the mesh device is opened
 # NOTE: When using DP, we need to have the imlpemented logic because when we parametrize the test with a specific trace region size, all submeshes will have that trace region size
@@ -95,14 +95,25 @@ def _model_name_candidates() -> list[str]:
 
 
 def get_supported_trace_region_size(request, mesh_device):
-    # If no YAML entry matches, callers fall back to DEFAULT_TRACE_REGION_SIZE in device_params.
     device_name_based_on_dp = device_name_based_on_data_parallel(request, mesh_device, os.getenv("MESH_DEVICE"))
     if not device_name_based_on_dp:
         return None
 
     sku = normalize_sku(device_name_based_on_dp)
-    for model_name in _model_name_candidates():
-        size = resolve_trace_region_size(model_name, sku)
-        if size is not None:
-            return size
+    candidates = _model_name_candidates()
+    if not candidates:
+        return None
+
+    last_error: TraceRegionSizeNotConfiguredError | None = None
+    for model_name in candidates:
+        try:
+            return resolve_trace_region_size(model_name, sku)
+        except TraceRegionSizeNotConfiguredError as exc:
+            last_error = exc
+
+    if last_error is not None:
+        raise TraceRegionSizeNotConfiguredError(
+            f"trace_region_size is not configured for model candidates {candidates!r} and SKU={sku!r}. "
+            f"Add a (model, SKU) entry with trace_region_size to models/model_trace_region_sizes.yaml."
+        ) from last_error
     return None

@@ -16,8 +16,16 @@ from models.demos.utils.model_targets import _model_matches, normalize_sku
 
 TRACE_REGION_SIZES_YAML_PATH = Path(__file__).resolve().parents[2] / "model_trace_region_sizes.yaml"
 
-# Fallback when no YAML entry matches (local dev without HF_MODEL override).
-DEFAULT_TRACE_REGION_SIZE = 50_000_000
+
+class TraceRegionSizeNotConfiguredError(ValueError):
+    """Raised when trace_region_size is missing from model_trace_region_sizes.yaml."""
+
+
+def _missing_trace_region_size_message(model_name: str, sku: str) -> str:
+    return (
+        f"trace_region_size is not configured for model={model_name!r} and SKU={sku!r}. "
+        f"Add a (model, SKU) entry with trace_region_size to {TRACE_REGION_SIZES_YAML_PATH}."
+    )
 
 
 @functools.cache
@@ -32,7 +40,7 @@ def load_trace_region_sizes() -> dict[str, Any]:
 
 def is_trace_region_size_placeholder(trace_region_size: int | None) -> bool:
     """Return True when a test did not set a custom trace region size."""
-    return trace_region_size is None or trace_region_size == DEFAULT_TRACE_REGION_SIZE
+    return trace_region_size is None
 
 
 def should_apply_trace_region_override(device_params: dict, override_trace_region_size: int | None) -> bool:
@@ -50,10 +58,12 @@ def apply_trace_region_override(device_params: dict, override_trace_region_size:
     return device_params.get("trace_region_size")
 
 
-def resolve_trace_region_size(model_name: str | None, sku: str | None) -> int | None:
-    """Resolve trace region size in bytes for a model/SKU pair, or None if not configured."""
-    if not model_name or not sku:
-        return None
+def resolve_trace_region_size(model_name: str | None, sku: str | None) -> int:
+    """Resolve trace region size in bytes for a model/SKU pair from the centralized YAML."""
+    if not model_name:
+        raise ValueError("model_name is required to resolve trace_region_size")
+    if not sku:
+        raise ValueError("sku is required to resolve trace_region_size")
 
     sizes_doc = load_trace_region_sizes()
     sizes = sizes_doc.get("sizes", {})
@@ -72,4 +82,5 @@ def resolve_trace_region_size(model_name: str | None, sku: str | None) -> int | 
             value = sku_block.get("trace_region_size")
             if isinstance(value, int) and not isinstance(value, bool) and value > 0:
                 return value
-    return None
+
+    raise TraceRegionSizeNotConfiguredError(_missing_trace_region_size_message(model_name, sku_norm))

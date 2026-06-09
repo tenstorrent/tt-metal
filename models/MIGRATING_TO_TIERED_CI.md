@@ -544,9 +544,9 @@ entry is on the books so it's not forgotten.
 
 Trace buffer sizes live in [`models/model_trace_region_sizes.yaml`](./model_trace_region_sizes.yaml).
 Add a `(model, SKU)` block with `trace_region_size: <bytes>` whenever a
-demo or test needs tracing and the default (`DEFAULT_TRACE_REGION_SIZE`
-in [`demos/utils/trace_region_sizes.py`](./demos/utils/trace_region_sizes.py))
-is insufficient.
+demo or test needs tracing. Every `(model, SKU)` pair must be configured in
+the YAML; [`resolve_trace_region_size`](./demos/utils/trace_region_sizes.py)
+raises `TraceRegionSizeNotConfiguredError` if an entry is missing.
 
 - **Model keys** — same short kebab-case + `aliases` convention as `model_targets.yaml`.
 - **SKU keys** — canonical names (`wh_n150`, `wh_llmbox_perf`, `bh_p150`, …); legacy labels like `T3K` / `P150x4` resolve via `normalize_sku`.
