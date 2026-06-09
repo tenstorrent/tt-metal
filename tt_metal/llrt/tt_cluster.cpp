@@ -87,9 +87,16 @@ namespace tt {
 
 tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
     const llrt::RunTimeOptions& rtoptions, const umd::ClusterDescriptor* cluster_desc) {
-    // When ttsim is active, derive cluster type from the simulator soc descriptor even if a mock
-    // cluster descriptor is also configured (tt-run MP sweeps set both).
-    if (rtoptions.get_simulator_enabled()) {
+    std::unique_ptr<umd::ClusterDescriptor> temp_cluster_desc = nullptr;
+    if (cluster_desc == nullptr && rtoptions.get_mock_enabled()) {
+        temp_cluster_desc = get_mock_cluster_desc(rtoptions);
+        cluster_desc = temp_cluster_desc.get();
+    }
+
+    // Single-chip simulator runs do not necessarily have a meaningful board descriptor, so derive their cluster type
+    // from the simulator soc descriptor. Multi-chip simulator runs need the descriptor below to preserve board
+    // topology.
+    if (rtoptions.get_simulator_enabled() && (cluster_desc == nullptr || cluster_desc->get_all_chips().size() <= 1)) {
         auto soc_desc =
             tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
         auto arch = tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
@@ -105,10 +112,8 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
         return tt::tt_metal::ClusterType::INVALID;
     }
 
-    std::unique_ptr<umd::ClusterDescriptor> temp_cluster_desc = nullptr;
     if (cluster_desc == nullptr) {
-        temp_cluster_desc = rtoptions.get_mock_enabled() ? get_mock_cluster_desc(rtoptions)
-                                                         : tt::umd::Cluster::create_cluster_descriptor();
+        temp_cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
         cluster_desc = temp_cluster_desc.get();
     }
     tt::tt_metal::ClusterType cluster_type = tt::tt_metal::ClusterType::INVALID;
@@ -402,7 +407,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
             mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
                 .chip_type = tt::umd::ChipType::SIMULATION,
-                .num_host_mem_ch_per_mmio_device = 1,
+                .num_host_mem_ch_per_mmio_device = std::nullopt,
                 .sdesc_path = sdesc_path,
                 .cluster_descriptor = mock_cluster_desc.get(),
                 .simulator_directory = rtoptions_.get_simulator_path(),

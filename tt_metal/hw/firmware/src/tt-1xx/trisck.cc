@@ -61,7 +61,7 @@ uint32_t _start() {
     extern uint32_t __kernel_data_lma[];
     do_crt1((uint32_t tt_l1_ptr*)__kernel_data_lma);
 
-#if defined(UCK_CHLKC_UNPACK)
+#if defined(UCK_CHLKC_MATH)
     // Make sure DBG_FEATURE_DISABLE register is cleared before every kernel is executed
     memory_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0);
 #endif
