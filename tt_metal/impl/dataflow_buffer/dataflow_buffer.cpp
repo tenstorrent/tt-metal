@@ -1587,21 +1587,77 @@ std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl> Pro
     return dataflow_buffer_by_id_.at(dfb_id);
 }
 
-void ProgramImpl::apply_dfb_size_override(
-    uint32_t dfb_id, std::optional<uint32_t> entry_size, std::optional<uint32_t> num_entries) {
-    if (!entry_size.has_value() && !num_entries.has_value()) {
-        return;  // no-op
+void ProgramImpl::apply_dfb_size_overrides(const std::vector<DfbSizeOverride>& overrides) {
+    if (overrides.empty()) {
+        return;
     }
-    auto dfb = get_dataflow_buffer(dfb_id);
-    // Aliased DFBs share one L1 region and TC layout; an independent size override would desync them.
-    TT_FATAL(
-        !dfb->alias_primary_id.has_value() && dfb->alias_secondary_ids.empty(),
-        "DFB {}: size overrides are not supported on aliased dataflow buffers",
-        dfb_id);
-    dfb->update_size(entry_size, num_entries);
-    // Force allocate_dataflow_buffers() to recompute the L1 layout for the new total_size() on the
-    // next launch. For ephemeral DFBs this re-lays-out the region (and may shift later DFBs); for
-    // borrowed DFBs the base address is unchanged but this keeps the bookkeeping consistent.
+
+    // (a) Resolve each override to its new total_size (entry_size * num_entries), filling unset fields
+    //     from the current config. Indexed by dfb_id for the alias-group agreement check below.
+    std::unordered_map<uint32_t, uint32_t> new_total_by_id;
+    new_total_by_id.reserve(overrides.size());
+    for (const auto& o : overrides) {
+        auto dfb = get_dataflow_buffer(o.dfb_id);
+        uint32_t es = o.entry_size.value_or(dfb->config.entry_size);
+        uint32_t ne = o.num_entries.value_or(dfb->config.num_entries);
+        new_total_by_id[o.dfb_id] = es * ne;
+    }
+
+    // (b) Alias-group coherence gate. Aliased DFBs total-size change is only safe if the whole group
+    //     agrees on one new total size. An change with total_size unchanged does not disturb the shared
+    //     region and is allowed.
+    for (const auto& o : overrides) {
+        auto dfb = get_dataflow_buffer(o.dfb_id);
+        bool is_aliased = dfb->alias_primary_id.has_value() || !dfb->alias_secondary_ids.empty();
+        if (!is_aliased) {
+            continue;
+        }
+        if (new_total_by_id.at(o.dfb_id) == dfb->total_size()) {
+            continue;  // isolated change -> footprint unchanged -> safe
+        }
+        // total_size changes on an aliased member: every member of the group must be overridden to the
+        // same new total size. The primary sets the agreed size.
+        uint32_t primary_id = dfb->alias_primary_id.value_or(o.dfb_id);
+        auto primary = get_dataflow_buffer(primary_id);
+        std::vector<uint32_t> group;
+        group.reserve(primary->alias_secondary_ids.size() + 1);
+        group.push_back(primary_id);
+        group.insert(group.end(), primary->alias_secondary_ids.begin(), primary->alias_secondary_ids.end());
+
+        std::optional<uint32_t> agreed_total;
+        for (uint32_t member_id : group) {
+            auto it = new_total_by_id.find(member_id);
+            TT_FATAL(
+                it != new_total_by_id.end(),
+                "Aliased DFB {} was not overridden in alias group with "
+                "primary DFB {}. Aliased DFBs must have the same total size (entry_size * num_entries): when "
+                "one member is resized, every member of the group must be overridden to the same new total size "
+                "in one SetProgramRunArgs call.",
+                member_id,
+                primary_id);
+            if (!agreed_total.has_value()) {
+                agreed_total = it->second;
+            }
+            TT_FATAL(
+                it->second == agreed_total.value(),
+                "Aliased DFBs in the alias group (primary DFB {}) have different total sizes ({} vs {} bytes) "
+                "after the requested override. Aliased DFBs must have the same total size (entry_size * "
+                "num_entries): every member of the group must be overridden to the same new total size in one "
+                "SetProgramRunArgs call.",
+                primary_id,
+                agreed_total.value(),
+                it->second);
+        }
+    }
+
+    // (c) Apply: mutate each DFB's size.
+    for (const auto& o : overrides) {
+        get_dataflow_buffer(o.dfb_id)->update_size(o.entry_size, o.num_entries);
+    }
+
+    // (d) Force allocate_dataflow_buffers() to recompute the L1 layout for the new total_size() on the next
+    //     launch. For ephemeral DFBs this re-lays-out the region (and may shift later DFBs); for borrowed
+    //     DFBs the base address is unchanged but this keeps the bookkeeping consistent.
     invalidate_dataflow_buffer_allocation();
 }
 

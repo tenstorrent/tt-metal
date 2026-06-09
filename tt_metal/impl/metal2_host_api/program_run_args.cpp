@@ -723,14 +723,18 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     //   - DFB size overrides (entry_size / num_entries)
     //   - Borrowed-memory DFB backing L1 Buffer*
     // Apply size overrides BEFORE attaching borrowed buffers so the borrowed per-bank fit check in
-    // AttachBorrowedDFBBuffers validates the NEW size.
+    // AttachBorrowedDFBBuffers validates the NEW size. Overrides are applied as a single batch so an alias
+    // group can be validated for size agreement before any DFB is mutated.
+    std::vector<detail::ProgramImpl::DfbSizeOverride> size_overrides;
+    size_overrides.reserve(params.dfb_run_overrides.size());
     for (const auto& dfb_params : params.dfb_run_overrides) {
         if (!dfb_params.entry_size.has_value() && !dfb_params.num_entries.has_value()) {
             continue;
         }
-        program_impl.apply_dfb_size_override(
-            program_impl.get_dfb_handle(*dfb_params.dfb), dfb_params.entry_size, dfb_params.num_entries);
+        size_overrides.push_back(
+            {program_impl.get_dfb_handle(*dfb_params.dfb), dfb_params.entry_size, dfb_params.num_entries});
     }
+    program_impl.apply_dfb_size_overrides(size_overrides);
     AttachBorrowedDFBBuffers(program_impl, tensor_by_param);
 }
 
