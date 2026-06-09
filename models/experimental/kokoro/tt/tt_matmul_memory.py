@@ -28,6 +28,9 @@ _TILE = 32
 # Larger T_aligned should use the 1D-mcast path or default matmul.
 _EN_WIDTH_SHARD_MAX_M = 64
 
+# 1x(N/32) output width-shard CoreGrid overflows BH P150 (13-wide) when N >= 416.
+_MAX_STYLE_LINEAR_WIDTH_SHARD_CORES = 12
+
 
 def tile_padded_rows(n: int) -> int:
     return math.ceil(int(n) / _TILE) * _TILE
@@ -136,7 +139,9 @@ def style_linear_plan(batch: int, style_dim: int, out_features: int):
     N = int(out_features)
     if not matmul_dims_tile_aligned(M, K, N):
         return None, False
-    return l1_width_sharded_out_mc(M, K, N), True
+    if int(N) // _TILE <= _MAX_STYLE_LINEAR_WIDTH_SHARD_CORES:
+        return l1_width_sharded_out_mc(M, K, N), True
+    return None, False
 
 
 def maybe_to_memory_config(x: ttnn.Tensor, mc: ttnn.MemoryConfig) -> tuple[ttnn.Tensor, bool]:

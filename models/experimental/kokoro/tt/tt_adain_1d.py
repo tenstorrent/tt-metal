@@ -20,7 +20,7 @@ import torch.nn as nn
 
 import ttnn
 
-from .tt_matmul_memory import maybe_reshard_to_caller, style_linear_plan
+from .tt_matmul_memory import activation_interleaved_mc, maybe_reshard_to_caller, style_linear_plan
 
 
 @dataclass(frozen=True)
@@ -154,12 +154,13 @@ class TTAdaIN1d:
 
         b = int(style_bs.shape[0])
         style_out_mc, style_reshard = style_linear_plan(b, int(p.fc_weight.shape[-1]), 2 * c)
+        linear_mc = style_out_mc if style_out_mc is not None else activation_interleaved_mc(memory_config)
         h = ttnn.linear(
             style_bs,
             p.fc_weight,
             bias=p.fc_bias,
             transpose_b=True,
-            memory_config=style_out_mc if style_out_mc is not None else memory_config,
+            memory_config=linear_mc,
             compute_kernel_config=compute_kernel_config,
         )
         if style_reshard:
