@@ -29,6 +29,7 @@ struct DispatchParams {
     CoreRangeSet worker_core_range_set;
     bool use_l1_small_for_semaphores = false;
     bool use_fp8_dispatch = false;
+    uint32_t num_untilizers_per_sender = 2;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dispatch_group_size",
@@ -43,7 +44,8 @@ struct DispatchParams {
         "output_mem_config",
         "worker_core_range_set",
         "use_l1_small_for_semaphores",
-        "use_fp8_dispatch");
+        "use_fp8_dispatch",
+        "num_untilizers_per_sender");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -59,7 +61,8 @@ struct DispatchParams {
             output_mem_config,
             worker_core_range_set,
             use_l1_small_for_semaphores,
-            use_fp8_dispatch);
+            use_fp8_dispatch,
+            num_untilizers_per_sender);
     };
 };
 
