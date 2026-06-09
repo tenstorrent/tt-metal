@@ -29,7 +29,7 @@ import pytest
 import torch
 import ttnn
 
-from models.experimental.pi0_5.tt.option_c.transport import send_shard_via_p2p
+from models.experimental.pi0_5.tt.option_c.transport import send_shard_via_p2p_multihop
 
 
 pytestmark = pytest.mark.skipif(
@@ -122,22 +122,16 @@ def test_parent_mesh_chain():
             )
             assert ok, f"layer {i} output mismatch"
 
-            # P2P to next chip.
+            # P2P to next chip via multi-hop helper (handles same-row,
+            # same-col, and diagonal routing transparently).
             if i + 1 < N_LAYERS:
-                next_coord = _prefill_coord_for_layer(i + 1)
-                # NOTE: Both source and dest must be on same row OR same column
-                # of the parent mesh for 1D linear topology. Check this:
                 cur = _prefill_coord_for_layer(i)
-                if cur[0] != next_coord[0] and cur[1] != next_coord[1]:
-                    print(
-                        f"  ⚠ layer {i}→{i+1}: src={cur} dst={next_coord} on neither same row nor col, "
-                        f"P2P may need multi-hop or routing — skipping this transition for now"
-                    )
-                    ttnn.deallocate(act)
-                    act = out  # carry forward without P2P (for diagnostic purposes)
-                    continue
-                act = send_shard_via_p2p(out, cur, next_coord)
-                ttnn.deallocate(out)
+                next_coord = _prefill_coord_for_layer(i + 1)
+                hops = "1-hop" if (cur[0] == next_coord[0] or cur[1] == next_coord[1]) else "2-hop"
+                act = send_shard_via_p2p_multihop(out, cur, next_coord)
+                if act is not out:
+                    ttnn.deallocate(out)
+                print(f"    [transport] {cur} → {next_coord} ({hops})")
             else:
                 act = out
 

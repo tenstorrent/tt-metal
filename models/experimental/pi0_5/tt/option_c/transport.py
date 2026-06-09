@@ -120,6 +120,37 @@ def send_shard_via_p2p(
     return ttnn.point_to_point(tensor, src, dst, **kwargs)
 
 
+def send_shard_via_p2p_multihop(
+    tensor: "ttnn.Tensor",
+    sender_coord: Tuple[int, int],
+    receiver_coord: Tuple[int, int],
+) -> "ttnn.Tensor":
+    """Multi-hop variant of `send_shard_via_p2p` for arbitrary coord pairs.
+
+    When sender and receiver share a row OR column, this is a single P2P
+    call (same as `send_shard_via_p2p`). When they differ on both row and
+    column (e.g. prefill row-boundary transitions (2, 2) → (3, 0)), routes
+    via an intermediate chip on a shared row/column: A → (A_row, B_col) → B.
+    That's two P2P calls = two fabric hops, still microseconds-class.
+
+    Discovered constraint (per tests/test_parent_mesh_chain_smoke.py):
+    `ttnn.Topology.Linear` only routes within a single mesh row or column.
+    Diagonal transitions need this 2-hop pattern.
+    """
+    src_r, src_c = sender_coord
+    dst_r, dst_c = receiver_coord
+    if src_r == dst_r or src_c == dst_c:
+        # Same row or same column → single hop.
+        return send_shard_via_p2p(tensor, sender_coord, receiver_coord)
+    # Route via (src_r, dst_c): same row as src, same column as dst.
+    intermediate = (src_r, dst_c)
+    hop1 = send_shard_via_p2p(tensor, sender_coord, intermediate)
+    hop2 = send_shard_via_p2p(hop1, intermediate, receiver_coord)
+    if hop1 is not hop2:
+        ttnn.deallocate(hop1)
+    return hop2
+
+
 def send_per_chip_activation_via_host(src_tensor: "ttnn.Tensor", src_chip_idx: int, dst_submesh) -> "ttnn.Tensor":
     """Move a single chip's shard from a source submesh to a (replicated)
     placement on a destination submesh, via host DRAM.
