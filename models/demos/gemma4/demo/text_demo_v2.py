@@ -505,10 +505,15 @@ def test_demo_text(
     logger.info("=== Performance metrics ===")
     logger.info(f"Prompt tokens: {prefill_lens[0]}, generated tokens: {iteration}")
     logger.info(f"Time to First Token (TTFT): {ttft_ms:.1f} ms")
-    logger.info(
-        f"Decode: {1000 / decode_tps_u:.2f} ms/token @ {decode_tps_u:.2f} tok/s/user "
-        f"({decode_tps:.2f} tok/s throughput)"
-    )
+    if decode_tps_u > 0:
+        logger.info(
+            f"Decode: {1000 / decode_tps_u:.2f} ms/token @ {decode_tps_u:.2f} tok/s/user "
+            f"({decode_tps:.2f} tok/s throughput)"
+        )
+    else:
+        # No steady-state decode timing (e.g. EoS hit on the first token, so only
+        # the compile iteration ran) — avoid dividing by zero.
+        logger.info("Decode: n/a (no steady-state decode iterations recorded)")
     logger.info(f"Full demo runtime: {profiler.get_duration('run'):.1f} s")
 
     if is_ci_env:
