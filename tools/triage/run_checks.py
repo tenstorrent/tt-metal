@@ -9,7 +9,7 @@ Usage:
 
 Options:
     --dev=<device_id>   Specify the device id. Repeatable. 'all' is also an option  [default: in_use]
-    --loc=<location>    Specify location/core. Repeatable. Formats: X-Y (noc0), X,Y or eX,Y/dX,Y (logical), CHn (dram). Default: all locations
+    --loc=<location>    Specify location/core. Repeatable. Logical coordinates only: R,C (tensix), eX,Y (eth), dX,Y / CHn (dram). Default: all locations
 
 Description:
      Data provider script for running checks on devices, block locations and RISC cores. This script provides a single interface for:
@@ -220,8 +220,12 @@ def get_block_locations(
         for block_type in BLOCK_TYPES:
             block_locations[device][block_type] = _exalens_block_locations(device, block_type)
 
-    # Keep only the requested locations. A loc string is device-relative, so parse it per device.
+    # Keep only the requested locations. Only logical coordinates are accepted — physical (noc0)
+    # layout shifts with harvesting, so a logical string maps to the same core on every device.
     if locations:
+        for loc in locations:
+            if "-" in loc:
+                raise TTTriageError(f"--loc expects a logical coordinate (R,C / eX,Y / dX,Y / CHn), got '{loc}'")
         for device in devices:
             wanted = {OnChipCoordinate.create(loc, device) for loc in locations}
             for block_type in BLOCK_TYPES:
