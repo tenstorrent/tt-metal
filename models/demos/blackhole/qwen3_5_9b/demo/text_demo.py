@@ -112,6 +112,33 @@ def _get_prompt(seqlen, tokenizer):
     Tile alignment (multiples of 32) ensures the same programs compile regardless
     of small differences between actual and target token counts.
     """
+    # QWEN35_REF_PROMPT=1: replicate the REFERENCE 27B's exact 64k task (quote-extraction + AI
+    # metaphors) for an apples-to-apples comparison — same corpus (pg84.txt), the reference's
+    # "You are a helpful assistant" system prompt + apply_chat_template (default thinking), and NO
+    # manual <think> seed. Resolves whether the demo's summary-gibberish is a forward bug or just
+    # the hard generative-summary task (the reference is coherent on this extractive task, greedy).
+    if os.environ.get("QWEN35_REF_PROMPT") and seqlen >= 4096:
+        with open(f"{SHARED_PROMPTS_DIR}/input_data_long_64k.json") as f:
+            rd = json.load(f)[0]
+        context = _load_and_cache_context(rd["context"], rd.get("max_length"))
+        instruction = rd["prompt"]
+        sys_msg = "You are a helpful assistant."
+        overhead = len(
+            tokenizer.apply_chat_template(
+                [{"role": "system", "content": sys_msg}, {"role": "user", "content": "\n\n" + instruction}],
+                add_generation_prompt=True,
+                tokenize=True,
+            )
+        )
+        ctx_ids = tokenizer(context, add_special_tokens=False)["input_ids"]
+        context = tokenizer.decode(ctx_ids[: max(0, seqlen - overhead - 8)])
+        text = tokenizer.apply_chat_template(
+            [{"role": "system", "content": sys_msg}, {"role": "user", "content": context + "\n\n" + instruction}],
+            add_generation_prompt=True,
+            tokenize=False,
+        )
+        return tokenizer(text, add_special_tokens=False, return_tensors="pt")["input_ids"][:, :seqlen]
+
     if seqlen <= 128:
         # Use the same prompt file as other models (Llama, etc.)
         path = f"{SHARED_PROMPTS_DIR}/input_data_questions_prefill_128.json"
@@ -135,7 +162,12 @@ def _get_prompt(seqlen, tokenizer):
         # the DeltaNet recurrent state's finite capacity [B,32,128,128] dilutes the
         # suffix signal, making argmax split ~33% <|im_end|> vs ~15% <think>.
         # Explicit <think> ensures the model enters reasoning mode.
-        suffix = f"\n\nBased on the above text: {instruction}<|im_end|>\n<|im_start|>assistant\n<think>\n"
+        # QWEN35_NO_THINK=1 disables thinking (Qwen /no_think + no <think> seed) to test whether
+        # the long-context degeneration is the known thinking-mode loop vs a real forward issue.
+        if os.environ.get("QWEN35_NO_THINK"):
+            suffix = f"\n\nBased on the above text: {instruction} /no_think<|im_end|>\n<|im_start|>assistant\n"
+        else:
+            suffix = f"\n\nBased on the above text: {instruction}<|im_end|>\n<|im_start|>assistant\n<think>\n"
         wrapper_ids = tokenizer(prefix + suffix, add_special_tokens=False, return_tensors="pt")["input_ids"]
         max_context_tokens = seqlen - wrapper_ids.shape[1]
         context_ids = tokenizer(context, add_special_tokens=False, return_tensors="pt")["input_ids"][
@@ -406,10 +438,54 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     ttnn.synchronize_device(model.device)
     ttft = time.time() - t0
 
+    # Decode token selection: greedy by default; QWEN35_TEMP>0 enables temperature sampling.
+    # QWEN35_DEBUG_LOGITS=1 logs logit sharpness (max prob + entropy + top-5) per step — a
+    # confident (max_p~1) repeat means the logits are genuinely bad (temperature won't help);
+    # an uncertain (low max_p, close competitors) repeat means greedy is just unlucky and
+    # sampling will break the loop. Directly answers "is this a temperature/decoding problem?".
+    _temp = float(os.environ.get("QWEN35_TEMP", "0") or 0)
+    _dbg_logits = bool(os.environ.get("QWEN35_DEBUG_LOGITS"))
+    # Anti-repetition (default off). Greedy decoding on soft long-context (>=64k, esp. 256k) logits
+    # falls into phrase loops ("you have been here for a long time..."). These break it: a
+    # repetition penalty (HF-style, ~1.3) discourages already-emitted tokens, and a no-repeat-ngram
+    # (~3) hard-blocks completing an n-gram that already occurred. Both are decoding-only; the
+    # forward pass / retrieval is correct (the q_norm fix). Set QWEN35_REP_PENALTY / QWEN35_NO_REPEAT_NGRAM.
+    _rep_pen = float(os.environ.get("QWEN35_REP_PENALTY", "1.0") or 1.0)
+    _no_repeat = int(os.environ.get("QWEN35_NO_REPEAT_NGRAM", "0") or 0)
+    _pick_step = [0]
+    generated = []
+
+    def _pick(vec):
+        v = vec.float()
+        if _rep_pen != 1.0 and generated:
+            idx = torch.tensor(sorted(set(generated)))
+            s = v[idx]
+            v[idx] = torch.where(s > 0, s / _rep_pen, s * _rep_pen)
+        if _no_repeat > 0 and len(generated) >= _no_repeat - 1:
+            prefix = tuple(generated[-(_no_repeat - 1) :]) if _no_repeat > 1 else ()
+            n = _no_repeat
+            for i in range(len(generated) - n + 1):
+                if tuple(generated[i : i + n - 1]) == prefix:
+                    v[generated[i + n - 1]] = float("-inf")
+        if _dbg_logits:
+            p = torch.softmax(v, dim=-1)
+            topp, topi = p.topk(5)
+            ent = float(-(p * torch.clamp(p, min=1e-12).log()).sum())
+            logger.info(
+                f"[LOGITDBG step={_pick_step[0]}] max_p={float(topp[0]):.3f} ent={ent:.2f} "
+                f"top5={[(int(i), round(float(pp), 3)) for pp, i in zip(topp, topi)]}"
+            )
+        _pick_step[0] += 1
+        if _temp > 0:
+            return int(torch.multinomial(torch.softmax(v / _temp, dim=-1), 1).item())
+        return int(torch.argmax(v).item())
+
     # Logits are replicated across the mesh ([1,1,vocab]); gather one replica.
     lt = ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(model.mesh_device, dim=0))
-    nxt = int(lt.reshape(-1, vocab)[0].argmax().item())
-    generated = [nxt]
+    nxt = _pick(lt.reshape(-1, vocab)[0])
+    generated.append(nxt)
+    # Systematic probe: full per-layer GDN state right after prefill (QWEN35_DEBUG_LAYERS=1).
+    model._dbg_gdn_stats(f"post-prefill T={T} first_tok={nxt}", layers="all")
 
     # ---- Traced paged single-token decode, continuing from the carried GDN + KV state. ----
     # Decode is captured ONCE as a trace and replayed with ttnn.execute_trace, so each step costs
@@ -433,7 +509,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     eager = os.environ.get("QWEN35_TP_DECODE_EAGER") == "1"
 
     def _read(out):
-        return int(model.process_output_decode(out, B=1, S=1).reshape(-1)[:vocab].argmax().item())
+        return _pick(model.process_output_decode(out, B=1, S=1).reshape(-1)[:vocab])
 
     def _update(token, position):
         host = model.prepare_decode_inputs_host(
@@ -505,6 +581,8 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
         decode_times.append(time.time() - t_step)
         nxt = _read(tt_logits)
         generated.append(nxt)
+        if os.environ.get("QWEN35_DEBUG_LAYERS"):
+            model._dbg_gdn_stats(f"decode step={len(generated) - 1} pos={pos} tok={nxt} {tokenizer.decode([nxt])!r}")
         pos += 1
     if trace_id is not None:
         ttnn.release_trace(mesh, trace_id)
