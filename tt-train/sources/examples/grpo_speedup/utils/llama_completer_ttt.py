@@ -69,6 +69,7 @@ class LlamaCompleterTtt:
         max_seq_len: int = 2048,
         instruct: bool = True,
         dummy_weights: bool = False,
+        disable_disk_cache: bool = False,
     ) -> None:
         import torch
 
@@ -92,6 +93,7 @@ class LlamaCompleterTtt:
             optimizations=lambda ma: _bf16_decoders_precision(ma.n_layers, ma.model_name),
             max_seq_len=max_seq_len,
             cache_hf=True,
+            disable_disk_cache=disable_disk_cache,
         )
         self.model_args.lm_head_dtype = ttnn.bfloat16
         self.model_args.ccl_dtype = ttnn.bfloat16
@@ -114,6 +116,10 @@ class LlamaCompleterTtt:
             self.model_args.dummy_weights = True
             weight_cache_path: Optional[Path] = None
             cache_dir_tmp: Optional[tempfile.TemporaryDirectory] = None
+        elif disable_disk_cache:
+            # Real weights, but every tt-transformers cache gate is short-circuited via ModelArgs.disable_disk_cache.
+            weight_cache_path = None
+            cache_dir_tmp = None
         else:
             cache_dir_tmp = tempfile.TemporaryDirectory(prefix="ttt_grpo_completer_")
             weight_cache_path = Path(cache_dir_tmp.name)

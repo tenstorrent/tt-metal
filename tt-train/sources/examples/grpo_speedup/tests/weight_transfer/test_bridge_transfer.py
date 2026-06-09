@@ -1,40 +1,45 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Multi-process ttml -> tt-transformers weight bridge test (option A).
+"""Multi-process ttml -> tt-transformers weight bridge test.
 
 Launched under tt-run with world_size == 2 (see ``runner.sh``):
 
 * Rank 0 (TTML_RANK)
-    - Opens its own ``[1, 4]`` half of T3K via ttml ``AutoContext`` with
-      DDP enabled.
-    - Builds a ttml ``LlamaCompositeKV`` for ``Llama-3.2-1B-Instruct``.
+    - Owns one full N300 board (``TT_VISIBLE_DEVICES="0"``). The MGD
+      declares a ``[1, 2]`` mesh covering both chips on the board so UMD's
+      eth discovery has a mapping for every ASIC, but the application
+      opens only a ``[1, 1]`` sub-mesh pinned to chip 0 -- the second chip
+      sits idle.
+    - Builds a ttml ``LlamaCompositeKV`` for ``Llama-3.2-1B`` from real
+      HuggingFace weights, DDP disabled (degenerate on one chip).
     - Generates a short completion as a "model is healthy" sanity check.
     - Calls ``model.export_to_hf_dict()`` and ships the resulting on-device
       tensor dict over a :class:`WeightBridge` to rank 1.
 
 * Rank 1 (TTT_RANK)
-    - Opens its own ``[1, 4]`` half of T3K via ``ttnn.open_mesh_device``
-      (no AutoContext, no ttml device init -- the ttt rank stays
-      ttml-free).
+    - Owns the second N300 board (``TT_VISIBLE_DEVICES="1"``), same
+      declared ``[1, 2]`` / used ``[1, 1]`` split as the TTML rank. No
+      AutoContext, no ttml device init -- the ttt rank stays ttml-free.
     - Builds a tt-transformers :class:`Transformer` for ``Llama-3.2-1B``
-      (base weights). Construction alone is enough for option A; we do
-      *not* call ``Transformer.update_weights`` yet because
-      ``Attention.update`` raises ``NotImplementedError`` for
-      ``num_devices_per_group > 1`` and a ``[1, 4]`` mesh forces TP=4 in
-      ``ModelArgs``. Once on-device resharding lands in
-      ``models/tt_transformers``, this test will be extended to do the
-      full apply-and-compare path.
+      from real HuggingFace weights, with ``disable_disk_cache=True`` to
+      skip the cold-cache ``dump_tensor_flatbuffer`` collective (which
+      would deadlock against the asymmetric TTML rank).
     - Receives the HF-keyed dict from the bridge and asserts on every
       tensor's metadata: dtype, layout, full replication, distribution
       shape, and 4D ``(1, 1, *, *)`` rank.
+    - Calls ``Transformer.update_weights(hf_dict)`` to apply the received
+      weights in place. Single-chip sub-mesh today
+      (``num_devices_per_group == 1``) so every leaf ``.update()`` lands
+      on the implemented fast path; the multi-chip path is still TODO.
+    - Generates a short completion from the freshly-updated model so the
+      whole bridge -> update -> generate pipeline runs end-to-end.
 
 The test is a pytest test so failures surface as standard pytest errors;
 it self-skips when not launched under tt-run (``OMPI_COMM_WORLD_SIZE``
 unset or != 2).
 
-HF auth: requires ``HF_TOKEN`` set in the environment; both repos are
-gated.
+HF auth: requires ``HF_TOKEN`` set in the environment.
 """
 
 from __future__ import annotations
@@ -62,15 +67,15 @@ import ttnn  # noqa: E402
 from utils.weight_bridge import TTML_RANK, TTT_RANK, WeightBridge  # noqa: E402
 
 BASE_MODEL_ID = "meta-llama/Llama-3.2-1B"
-INSTRUCT_MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
+INSTRUCT_MODEL_ID = "meta-llama/Llama-3.2-1B-instruct"
 PROMPT = "The capital of France is"
-SANITY_MAX_NEW_TOKENS = 8
+MAX_NEW_TOKENS = 256
 TEMPERATURE = 0.0
-MESH_SHAPE = (1, 4)
+MESH_SHAPE = (1, 1)
 
 
 def _ttml_rank_send_state() -> None:
-    """Open the ttml mesh, build the instruct model, ship its weights."""
+    """Open the ttml mesh, build the model, ship its weights."""
     import ttml
     from ttml.common.config import get_model_config
 
@@ -82,15 +87,18 @@ def _ttml_rank_send_state() -> None:
 
     device_config, raw = load_device_config()
     device_config.mesh_shape = list(MESH_SHAPE)
-    device_config.enable_ddp = True
+    device_config.enable_ddp = False
     device_config.enable_tp = False
-    device_config.device_ids = None
+    # MGD declares a [1, 2] mesh per rank to match the N300 board's two
+    # chips; we deterministically pick chip 0 so the used sub-mesh is the
+    # one the test's metadata assertions expect.
+    device_config.device_ids = [0]
 
     mesh_device = open_device(device_config)
     completer: Any = None
     try:
         ctx = LlamaCompletionCtx(
-            max_tokens_to_complete=SANITY_MAX_NEW_TOKENS,
+            max_tokens_to_complete=MAX_NEW_TOKENS,
             temperature=TEMPERATURE,
             completions_per_prompt=MESH_SHAPE[0] * MESH_SHAPE[1],
         )
@@ -98,8 +106,8 @@ def _ttml_rank_send_state() -> None:
             ctx=ctx,
             transformer_config=get_model_config(raw["training_config"]["model_config"]),
             mesh_device=mesh_device,
-            model_source=BASE_MODEL_ID,
-            enable_ddp=True,
+            model_source=INSTRUCT_MODEL_ID,
+            enable_ddp=False,
         )
 
         prompt_ids = completer.tokenizer.encode(PROMPT, add_special_tokens=True)
@@ -134,26 +142,54 @@ def _ttml_rank_send_state() -> None:
         close_device()
 
 
-def _ttt_rank_recv_state_and_assert() -> None:
-    """Open the ttt mesh, build the base TTT model, receive and validate weights."""
+def _ttt_rank_recv_update_and_generate() -> None:
+    """Open the ttt mesh, build the TTT model, receive + apply weights, generate."""
     from utils.llama_completer_ttt import LlamaCompleterTtt
 
     if not ttnn.distributed_context_is_initialized():
         ttnn.init_distributed_context()
 
-    mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*MESH_SHAPE))
+    # MGD declares a [1, 2] mesh per rank (the full N300); we pin the
+    # sub-mesh origin to chip 0 so the second chip stays idle and
+    # num_devices_per_group == 1 across every leaf .update() dispatch.
+    mesh_device = ttnn.open_mesh_device(
+        mesh_shape=ttnn.MeshShape(*MESH_SHAPE),
+        offset=ttnn.MeshCoordinate(0, 0),
+    )
     completer: Any = None
     try:
-        # Building TTT here keeps the receiver shape consistent with what
-        # ``Transformer.update_weights`` will eventually consume; it also
-        # exercises the [1, 4] mesh on the ttt side under realistic memory
-        # pressure (one full model already resident when we receive).
+        # Build TTT with real HF weights so the post-transfer generate
+        # exercises the fully-loaded forward path. ``disable_disk_cache``
+        # short-circuits the on-disk tensor cache that would otherwise
+        # call ``dump_tensor_flatbuffer`` in DISTRIBUTED_GATHER mode and
+        # deadlock against the asymmetric TTML rank on MPI_COMM_WORLD.
         completer = LlamaCompleterTtt(
             mesh_device=mesh_device,
-            model_source=INSTRUCT_MODEL_ID,
+            model_source=BASE_MODEL_ID,
             max_batch_size=1,
             instruct=False,
-            dummy_weights=True,
+            disable_disk_cache=True,
+        )
+
+        # Baseline completion from the freshly-built TTT model (no bridge
+        # update yet). Lets us diff against the post-update completion to
+        # see whether the bridged weights actually changed the forward
+        # path. Safe to run before bridge.connect(): TTML waits at its own
+        # connect() handshake recv (an MPI blocking call with no timeout)
+        # while TTT does this generate.
+        prompt_ids = completer.tokenizer.encode(PROMPT, add_special_tokens=True)
+        pre_update_ids = [
+            int(t)
+            for t in completer.generate(
+                [prompt_ids],
+                max_new_tokens=MAX_NEW_TOKENS,
+                temperature=TEMPERATURE,
+            )[0]
+        ]
+        pre_update_text = completer.tokenizer.decode(pre_update_ids, skip_special_tokens=False)
+        print(
+            f"[TTT rank {TTT_RANK}] pre-update  completion ({len(pre_update_ids)} tok): " f"{pre_update_text!r}",
+            flush=True,
         )
 
         bridge = WeightBridge(role="ttt", peer_rank=TTML_RANK, device=mesh_device)
@@ -195,16 +231,44 @@ def _ttt_rank_recv_state_and_assert() -> None:
             ), f"key={key!r} distribution_shape={distribution_shape}, expected {expected_dist_shape}"
 
         # Smoke-check a few well-known keys so a silent rename / dispatch
-        # error in export_to_hf_dict shows up here, not in update_weights
-        # (when this test is later extended to also call update_weights).
+        # error in export_to_hf_dict shows up here, not in update_weights.
         for required_key in ("model.embed_tokens.weight", "lm_head.weight"):
             assert required_key in hf_dict, f"missing required HF key {required_key!r} in received dict"
 
         print(f"[TTT rank {TTT_RANK}] all received tensors pass replicated/dtype/layout checks", flush=True)
 
-        bridge.barrier()
+        # In-place apply: every required HF key must match a leaf
+        # .update(); every provided HF key must be consumed exactly once.
+        # On the [1, 1] mesh num_devices_per_group == 1 so every dispatch
+        # hits the single-device fast path.
+        t0 = time.perf_counter()
+        completer.model.update_weights(hf_dict)
+        print(
+            f"[TTT rank {TTT_RANK}] update_weights complete in {time.perf_counter() - t0:.2f}s",
+            flush=True,
+        )
+
+        # Drop the now-consumed bridge tensors so the on-device buffers
+        # backing them can be reclaimed before generate() allocates trace
+        # / KV-cache scratch.
         del hf_dict
         gc.collect()
+
+        post_update_ids = [
+            int(t)
+            for t in completer.generate(
+                [prompt_ids],
+                max_new_tokens=MAX_NEW_TOKENS,
+                temperature=TEMPERATURE,
+            )[0]
+        ]
+        post_update_text = completer.tokenizer.decode(post_update_ids, skip_special_tokens=False)
+        print(
+            f"[TTT rank {TTT_RANK}] post-update completion ({len(post_update_ids)} tok): " f"{post_update_text!r}",
+            flush=True,
+        )
+
+        bridge.barrier()
     finally:
         completer = None
         gc.collect()
@@ -212,7 +276,7 @@ def _ttt_rank_recv_state_and_assert() -> None:
 
 
 def test_ttml_to_ttt_weight_bridge_transfer() -> None:
-    """Option A: end-to-end bridge transfer + receiver-side metadata assertions.
+    """End-to-end bridge transfer + update_weights + generate.
 
     Branches on the MPI rank set by ``tt-run`` -- the same test function
     runs in both processes. The bridge's host-side manifest exchange and
@@ -221,7 +285,7 @@ def test_ttml_to_ttt_weight_bridge_transfer() -> None:
     if _MPI_RANK == TTML_RANK:
         _ttml_rank_send_state()
     elif _MPI_RANK == TTT_RANK:
-        _ttt_rank_recv_state_and_assert()
+        _ttt_rank_recv_update_and_generate()
     else:
         raise RuntimeError(
             f"Unexpected MPI rank {_MPI_RANK} (world_size={_WORLD_SIZE}); "
