@@ -128,6 +128,10 @@ def prefill_forward(
             ttnn.experimental.paged_fill_cache(
                 v_cache, v_fill, page_table, batch_idx=user_id, block_size=eff_bs, **paged_modulo_kwargs
             )
+            if k_fill is not tt_k:
+                k_fill.deallocate(True)
+            if v_fill is not tt_v:
+                v_fill.deallocate(True)
         else:
             ttnn.fill_cache(k_cache, tt_k, batch_idx=user_id)
             ttnn.fill_cache(v_cache, tt_v, batch_idx=user_id)

@@ -738,12 +738,12 @@ class Gemma4Model:
         return embeds
 
     def raw_embed(self, tokens):
-        """Token embedding WITHOUT the sqrt(hidden) scale, full hidden width.
+        """Token embedding table lookup without the sqrt(hidden) scale.
 
-        The it-assistant drafter's input is ``cat(target_embed(token),
-        target_hidden)`` where ``target_embed`` is the target's *raw* input
-        embedding (HF ``get_input_embeddings()(ids)`` — no embed_scale, unlike
-        the scaled embedding the target's own forward consumes).
+        This helper exposes the raw table for diagnostics/compatibility. The
+        it-assistant drafter path intentionally uses ``embed_tokens()``, matching
+        HF ``get_input_embeddings()(ids)`` where Gemma4 applies the embedding
+        scale inside the module.
         """
         if self.embedding_weight is None:
             raise RuntimeError("Embedding weights not loaded")

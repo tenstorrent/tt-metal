@@ -241,8 +241,10 @@ def chunked_prefill_sdpa(tt_q, k_cache, v_cache, page_table, user_id, head_dim, 
     num_pages = page_table.shape[-1]
     if page_table.shape[0] > 1:
         user_pt = ttnn.slice(page_table, [user_id, 0], [user_id + 1, num_pages])
+        owns_user_pt = True
     else:
         user_pt = page_table
+        owns_user_pt = False
 
     outs = []
     start = 0
@@ -253,7 +255,9 @@ def chunked_prefill_sdpa(tt_q, k_cache, v_cache, page_table, user_id, head_dim, 
         # of 128; pad the (tile-aligned) tail chunk up and slice the result back.
         pad = (-clen) % 128
         if pad:
-            q_chunk = ttnn.pad(q_chunk, [(0, 0), (0, 0), (0, pad), (0, 0)], value=0.0)
+            q_unpadded = q_chunk
+            q_chunk = ttnn.pad(q_unpadded, [(0, 0), (0, 0), (0, pad), (0, 0)], value=0.0)
+            q_unpadded.deallocate(True)
         out_chunk = ttnn.transformer.chunked_scaled_dot_product_attention(
             q_chunk,
             k_cache,
@@ -263,12 +267,22 @@ def chunked_prefill_sdpa(tt_q, k_cache, v_cache, page_table, user_id, head_dim, 
             scale=scale,
             program_config=program_config,
         )
+        q_chunk.deallocate(True)
         if pad:
-            out_chunk = ttnn.slice(out_chunk, [0, 0, 0, 0], [1, nh, clen, head_dim])
+            out_padded = out_chunk
+            out_chunk = ttnn.slice(out_padded, [0, 0, 0, 0], [1, nh, clen, head_dim])
+            out_padded.deallocate(True)
         outs.append(out_chunk)
         start += clen
 
-    return outs[0] if len(outs) == 1 else ttnn.concat(outs, dim=2)
+    if owns_user_pt:
+        user_pt.deallocate(True)
+    if len(outs) == 1:
+        return outs[0]
+    out = ttnn.concat(outs, dim=2)
+    for chunk in outs:
+        chunk.deallocate(True)
+    return out
 
 
 def chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, head_dim, scale=1.0):
@@ -317,14 +331,24 @@ def chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, head_dim, sca
             scale=scale,
             sliding_window_size=sliding_window,
         )
+        q_slice.deallocate(True)
+        k_slice.deallocate(True)
+        v_slice.deallocate(True)
         # Keep only the queries [start, slice_end); drop the leading history rows.
         drop = start - slice_start
         if drop:
-            o = ttnn.slice(o, [0, 0, drop, 0], [1, nh, slice_end - slice_start, head_dim])
+            o_full = o
+            o = ttnn.slice(o_full, [0, 0, drop, 0], [1, nh, slice_end - slice_start, head_dim])
+            o_full.deallocate(True)
         outs.append(o)
         start += out_len
 
-    return outs[0] if len(outs) == 1 else ttnn.concat(outs, dim=2)
+    if len(outs) == 1:
+        return outs[0]
+    out = ttnn.concat(outs, dim=2)
+    for chunk in outs:
+        chunk.deallocate(True)
+    return out
 
 
 def concat_heads(tensor, is_decode_mode: bool, num_heads: int = None, head_dim: int = None, mesh_device=None):
@@ -346,12 +370,15 @@ def concat_heads(tensor, is_decode_mode: bool, num_heads: int = None, head_dim: 
         # One core per user (batch), arranged as a contiguous rectangle. A plain
         # num_cores_to_corerangeset spills into a non-rectangular set once
         # batch > grid width, which the height-sharded mem config rejects
-        # ("bad optional access"); num_to_corerange forces an 8-wide rectangle
-        # (batch=8→8x1, 16→8x2, 32→8x4) that the kernel accepts.
+        # ("bad optional access"); num_to_corerange forces a grid-width-aligned
+        # rectangle (e.g. batch=8→8x1, 16→8x2, 32→8x4 on an 8-wide grid) that
+        # the kernel accepts.
         from models.tt_transformers.tt.model_config import num_to_corerange
 
-        grid_y = mesh_device.compute_with_storage_grid_size().y if mesh_device is not None else 8
-        core_grid = ttnn.CoreRangeSet({num_to_corerange(batch, grid_x=8, grid_y=grid_y)})
+        compute_grid = mesh_device.compute_with_storage_grid_size() if mesh_device is not None else None
+        grid_x = compute_grid.x if compute_grid is not None else 8
+        grid_y = compute_grid.y if compute_grid is not None else 8
+        core_grid = ttnn.CoreRangeSet({num_to_corerange(batch, grid_x=grid_x, grid_y=grid_y)})
         shard_cfg = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, head_dim),
             core_grid=core_grid,
@@ -363,11 +390,15 @@ def concat_heads(tensor, is_decode_mode: bool, num_heads: int = None, head_dim: 
         # Output is [1, 1, B(padded to 32), num_heads*head_dim] width-sharded.
         out = ttnn.experimental.nlp_concat_heads_decode(tensor_sh, num_heads=num_heads)
         tensor_sh.deallocate(True)
-        out = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
+        out_sh = out
+        out = ttnn.sharded_to_interleaved(out_sh, ttnn.DRAM_MEMORY_CONFIG)
+        out_sh.deallocate(True)
         # Drop the batch padding (B is padded to 32 by the op) so downstream sees
         # [1, 1, batch, hidden_local] just like the old transpose+concat path.
         if out.shape[2] != batch:
-            out = out[:, :, :batch, :]
+            out_padded = out
+            out = out_padded[:, :, :batch, :]
+            out_padded.deallocate(True)
         return out
     return ttnn.experimental.nlp_concat_heads(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 

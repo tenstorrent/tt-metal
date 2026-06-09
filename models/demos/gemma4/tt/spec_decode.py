@@ -108,11 +108,11 @@ class SpeculativeDecoder:
         self._use_trace = os.environ.get("GEMMA4_SPEC_TRACE", "0") == "1"
         self._verify_traces = {}
         # Single batch=1 drafter-step trace, replayed K times. The recurrent
-        # hidden is kept ON DEVICE: the trace body ends with ttnn.copy(next_hidden
-        # -> h_in), an in-place RMW of the persistent recurrent buffer, so each
-        # replay consumes the previous replay's hidden with no host round-trip.
-        # Only the next draft *token* round-trips (host argmax -> tok_in), which
-        # is a read + tiny scalar copy (no device allocation -> trace-safe).
+        # hidden is kept ON DEVICE: between trace replays, ttnn.copy(next_hidden
+        # -> h_in) refreshes the persistent recurrent buffer, so each replay
+        # consumes the previous replay's hidden without a host round-trip. Only
+        # the next draft *token* round-trips (host argmax -> tok_in), which is a
+        # read + tiny scalar copy (no device allocation -> trace-safe).
         self._draft_trace = None
         # Single FUSED per-iteration trace (K drafter steps + verify in ONE
         # CCL-bearing trace). Replaying ONE trace per iter avoids interleaving
