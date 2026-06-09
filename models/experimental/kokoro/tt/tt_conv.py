@@ -345,15 +345,10 @@ def tt_conv1d_nlc(
     orig_L = L
     if _BL_BROKEN_MAX < L < _BL_PAD_TARGET:
         pad = _BL_PAD_TARGET - L
-        zeros = ttnn.zeros(
-            [1, pad, C_in],
-            dtype=x_nlc.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=memory_config,
-        )
-        x_nlc = ttnn.concat([x_nlc, zeros], dim=1, memory_config=memory_config)
-        ttnn.deallocate(zeros)
+        # ttnn.pad (one op, zero fill) instead of concat([x, zeros], dim=1): the dim=1 concat of
+        # TILE tensors unpads both inputs (untilize+untilize+concat triple) along the tile-padded
+        # length dim. pad appends the zero rows directly. Bit-identical (same 0.0 fill, x untouched).
+        x_nlc = ttnn.pad(x_nlc, padding=[(0, 0), (0, pad), (0, 0)], value=0.0, memory_config=memory_config)
         L = _BL_PAD_TARGET
 
     # For large L with stride=1: use sliding-window chunked conv to avoid L1 CB overflow.
@@ -688,18 +683,10 @@ def tt_conv_transpose1d_nlc(
             numerator = _TRANSPOSE_BROKEN_MIN - params.kernel_size + 2 * params.padding - params.output_padding
             target_seq = (numerator + params.stride - 1) // params.stride + 1
             pad_len = target_seq - seq
-            C_in = int(x_nlc.shape[-1])
             if x_nlc.layout != ttnn.TILE_LAYOUT:
                 x_nlc = ttnn.to_layout(x_nlc, ttnn.TILE_LAYOUT, memory_config=memory_config)
-            z = ttnn.zeros(
-                [bsz, pad_len, C_in],
-                dtype=x_nlc.dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=memory_config,
-            )
-            x_padded = ttnn.concat([x_nlc, z], dim=1, memory_config=memory_config)
-            ttnn.deallocate(z)
+            # ttnn.pad (one op) vs concat([x, zeros], dim=1) (untilize+untilize+concat). Bit-identical.
+            x_padded = ttnn.pad(x_nlc, padding=[(0, 0), (0, pad_len), (0, 0)], value=0.0, memory_config=memory_config)
             y_full = tt_conv_transpose1d_nlc(
                 x_nlc=x_padded,
                 params=params,
