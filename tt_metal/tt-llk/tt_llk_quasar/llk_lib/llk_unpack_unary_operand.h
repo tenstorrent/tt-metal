@@ -256,8 +256,8 @@ inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t
  * @tparam reuse_dest: When not NONE, configures per-face unpack with dummy dvalid, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  *        stored in the buffer descriptor table, values = 0 - 16
+ * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  * @param num_tiles: Number of tiles to unpack at a time for a single operand; default 1 tile of 32x32.
- * @param num_faces: Number of faces per tile (used by the reuse_dest path).
  * @note On the math thread (T1): for the plain datacopy path pair with @ref _llk_math_eltwise_unary_datacopy_init_; for reuse_dest != NONE this is the
  *       unpack half of an eltwise binary op, so pair with @ref _llk_math_eltwise_binary_init_ (the dummy-dvalid NOP here feeds the source register that math
  *       fills with MOVD2A/B from dest).
@@ -304,8 +304,8 @@ inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, Ten
  * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
  * @tparam reuse_dest: When not NONE, sets the source counter for the CB unpacker only, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @param l1_tile_idx: Index into the L1 buffer for a tile.
- * @note Call @ref _llk_unpack_unary_operand_init_ with matching template args before this function.
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
+ * @note Call @ref _llk_unpack_unary_operand_init_ with matching template args before this function.
  */
 template <std::uint32_t UNP_SEL, EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void _llk_unpack_unary_operand_(const std::uint32_t l1_tile_idx, const TensorShape& tensor_shape)
