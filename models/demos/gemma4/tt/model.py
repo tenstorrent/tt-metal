@@ -351,6 +351,14 @@ class Gemma4Model:
             else:
                 self.tt_kv_cache.append(layer.self_attn.kv_cache)
 
+        # Last layer index of each attention type — these are the layers whose
+        # KV the Gemma4 *it-assistant* drafter cross-attends into (HF
+        # ``shared_kv_states`` exposes "the last layer of each layer_type"). Used
+        # by speculative decoding (see tt/assistant/model.py + tt/spec_decode.py).
+        self.last_kv_layer_by_type = {}
+        for i in range(n_layers):
+            self.last_kv_layer_by_type[hf_config.layer_types[i]] = i
+
         # Final norm
         if state_dict and "model.language_model.norm.weight" in state_dict:
             norm_state = substate(state_dict, "model.language_model.norm")
@@ -485,9 +493,17 @@ class Gemma4Model:
         pli_combined=None,
         get_last_token=-1,
         page_tables_per_layer=None,
+        return_hidden=False,
+        sequential_kv_write=False,
     ):
         """
         Forward pass through decoder layers + final norm + lm_head + softcapping.
+
+        ``return_hidden`` (decode only): also return the post-norm hidden states
+        ``[1,1,B,hidden]`` alongside logits, as ``(logits, hidden)``. The Gemma4
+        it-assistant drafter consumes the target's last-token hidden state, and
+        the multi-token verify forward (``ttnn_verify_forward``) needs the hidden
+        states for every verified position to seed the next drafter iteration.
 
         Args:
             hidden_states: [1, 1, seq_len, hidden_size] on device (post-embedding)
@@ -606,6 +622,7 @@ class Gemma4Model:
                 is_kv_shared=is_kv_shared,
                 position_idx_cache=position_idx_cache,
                 valid_seq_len=prefill_valid_len,
+                sequential_kv_write=sequential_kv_write,
             )
 
             # For KV source layers during prefill, capture the K/V from the attention
@@ -622,6 +639,13 @@ class Gemma4Model:
         # Final norm
         hidden_states = self.norm.forward(hidden_states)
 
+        # Speculative decoding seed: the it-assistant drafter's recurrent hidden
+        # is HF's ``model_outputs.hidden_states[-1]``. For the gemma4_unified text
+        # model that output is the POST-norm ``last_hidden_state`` (the model only
+        # returns ``last_hidden_state``; there is no recorded pre-norm tuple), so
+        # the drafter seed is captured AFTER ``self.norm``.
+        post_norm_hidden = ttnn.clone(hidden_states) if (is_decode and return_hidden) else None
+
         # Traced prefill returns post-norm hidden states and runs the lm_head
         # OUTSIDE the trace, on just the last-token tile (see
         # process_logits_after_prefill_trace). The lm_head over the full padded
@@ -632,6 +656,17 @@ class Gemma4Model:
         # to host-side post-processing on a 32-row slice of these hidden states.
         if not is_decode and getattr(self, "_prefill_trace_mode", False):
             return hidden_states
+
+        # Speculative decoding: logits and the returned drafter seed both come
+        # from the post-final-norm hidden, matching the target model's
+        # ``last_hidden_state`` used by the assistant candidate generator.
+        # lm_head deallocates its input.
+        if is_decode and return_hidden:
+            # is_decode=False forces the TP all-gather: spec-decode reads full-vocab
+            # logits to host and never uses the on-device sampling module (whose
+            # presence would otherwise make the decode path skip the gather).
+            logits = self._apply_lm_head(hidden_states, is_decode=False)
+            return logits, post_norm_hidden
 
         # Slice to the last token tile before lm_head when caller only wants
         # next-token logits (prefill). Keeps the 262k-vocab matmul output at
@@ -701,6 +736,87 @@ class Gemma4Model:
 
             embeds = ccl_allgather(embeds, self.mesh_config, self.ccl_manager)
         return embeds
+
+    def raw_embed(self, tokens):
+        """Token embedding WITHOUT the sqrt(hidden) scale, full hidden width.
+
+        The it-assistant drafter's input is ``cat(target_embed(token),
+        target_hidden)`` where ``target_embed`` is the target's *raw* input
+        embedding (HF ``get_input_embeddings()(ids)`` — no embed_scale, unlike
+        the scaled embedding the target's own forward consumes).
+        """
+        if self.embedding_weight is None:
+            raise RuntimeError("Embedding weights not loaded")
+        embeds = ttnn.embedding(tokens, self.embedding_weight, dtype=ttnn.bfloat16)
+        if self.mesh_config is not None and self.mesh_config.tp > 1:
+            embeds = ttnn.unsqueeze_to_4D(embeds)
+            from models.demos.gemma4.tt.ccl import ccl_allgather
+
+            embeds = ccl_allgather(embeds, self.mesh_config, self.ccl_manager)
+        return embeds
+
+    def get_shared_kv_caches(self):
+        """Return the target KV caches the it-assistant drafter cross-attends to.
+
+        ``{layer_type: [k_cache, v_cache]}`` for the last full-attention and last
+        sliding-attention layer — the EAGLE/MTP ``shared_kv_states`` contract.
+        """
+        return {lt: self.tt_kv_cache[idx] for lt, idx in self.last_kv_layer_by_type.items()}
+
+    def ttnn_verify_forward(
+        self, x, current_pos, current_pos_cache=None, page_table=None, kv_cache=None, page_tables_per_layer=None
+    ):
+        """Multi-token speculative *verify* forward (batch holds the candidates).
+
+        The K candidate tokens occupy the batch dimension at consecutive
+        positions ``current_pos = [p+1, ..., p+K]`` with the user's page-table
+        row replicated K times. This reuses the ordinary batched-decode path:
+        ``paged_update_cache`` writes all K tokens' KV before SDPA, so the
+        per-position ``paged_scaled_dot_product_attention_decode`` (with the
+        per-batch ``cur_pos`` and sliding window) yields exactly-correct causal +
+        sliding-window verify attention — token p+i attends to [0..p+i] (full) or
+        the last window (sliding). Rejected positions are simply overwritten on
+        the next iteration (KV rollback = position bookkeeping at batch=1).
+
+        Args:
+            x: [1, K] uint32 candidate token ids (or precomputed [1,1,K,hidden] embeds).
+            current_pos: [1,32] uint32 padded positions (first K = p+1..p+K).
+            page_table: [K, num_blocks] int32 (the user's row replicated K times).
+            kv_cache: optional KV cache override (defaults to self.tt_kv_cache).
+
+        Returns:
+            (logits, hidden) — logits [1,1,K,vocab] from the post-norm hidden;
+            ``hidden`` is the post-final-norm hidden [1,1,K,hidden], the
+            it-assistant drafter's recurrent seed.
+        """
+        if x.dtype in (ttnn.uint32, ttnn.int32):
+            input_embeds = self.embed_tokens(x)
+            if len(input_embeds.shape) == 3:
+                input_embeds = ttnn.unsqueeze_to_4D(input_embeds)
+            input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
+        else:
+            input_embeds = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+
+        token_index = None if self.rope_caches_2d else 0
+        if page_tables_per_layer is None:
+            page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
+        page_tables_per_layer = self._page_tables_to_ttnn(page_tables_per_layer)
+
+        return self(
+            hidden_states=input_embeds,
+            position_idx=current_pos,
+            page_table=page_table,
+            kv_caches=kv_cache,
+            is_decode=True,
+            token_index=token_index,
+            position_idx_cache=current_pos_cache if current_pos_cache is not None else current_pos,
+            page_tables_per_layer=page_tables_per_layer,
+            return_hidden=True,
+            # Default True (race-safe). A timing/experiment harness can set
+            # `_verify_seq_kv_write=False` to measure the cost of the per-candidate
+            # serialized KV-write loop (KV is corrupted when False — timing only).
+            sequential_kv_write=getattr(self, "_verify_seq_kv_write", True),
+        )
 
     def compute_host_pli(self, token_id):
         """Compute per-layer input (PLI) on CPU for a single decode token.

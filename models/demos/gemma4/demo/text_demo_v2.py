@@ -140,7 +140,7 @@ def _host_sample(logits, temperature, top_p):
 def _device_params():
     """Blackhole needs a larger trace region; keep a single command queue (host sampling)."""
     if is_blackhole():
-        return {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90_000_000, "num_command_queues": 1}
+        return {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000, "num_command_queues": 1}
     return {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30_000_000, "num_command_queues": 1}
 
 
@@ -328,6 +328,31 @@ def test_demo_text(
     # Batch sweep hook: GEMMA4_BATCH overrides the config's batch_size so the
     # same config can probe batch-1 / 8 / 32 to find the QB2 ceiling.
     batch_size = int(os.environ.get("GEMMA4_BATCH", batch_size))
+
+    # ── Speculative-decoding dispatch ────────────────────────────────────────
+    # `--speculative` reroutes the demo through the it-assistant drafter +
+    # target verifier path. Delegated to _run_spec_decode, which builds its own
+    # target+drafter, so we return before this test loads a model.
+    if request.config.getoption("--speculative"):
+        if batch_size != 1:
+            pytest.skip("speculative decode batch>1 is disabled until it can beat traced target throughput")
+        draft_len = request.config.getoption("--spec-draft-len")
+        if draft_len is None:
+            draft_len = int(os.environ.get("GEMMA4_SPEC_DRAFT_LEN", 3))
+        prompt = load_inputs(input_prompts, 1, instruct)[0]
+        _run_spec_decode(
+            prompt=prompt,
+            instruct=instruct,
+            max_seq_len=max_seq_len,
+            max_generated_tokens=max_generated_tokens,
+            page_params=page_params,
+            sampling_params=sampling_params,
+            mesh_device=mesh_device,
+            enable_trace=enable_trace,
+            draft_len=draft_len,
+            num_layers=num_layers,
+        )
+        return
 
     model_path = _model_path()
     temperature = sampling_params.get("temperature", 0)
@@ -542,3 +567,204 @@ def test_demo_text(
         )
 
     assert iteration > 0, "decode produced no tokens"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Speculative decoding (Gemma4 it-assistant drafter), batch=1
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def _run_spec_decode(
+    prompt,
+    instruct,
+    max_seq_len,
+    max_generated_tokens,
+    page_params,
+    sampling_params,
+    mesh_device,
+    enable_trace=False,
+    draft_len=None,
+    num_layers=None,
+):
+    """Single-user speculative decode: target verifies the it-assistant drafter.
+
+    The drafter defaults to ``<HF_MODEL>-assistant`` (e.g. HF_MODEL=
+    google/gemma-4-12B-it -> google/gemma-4-12B-it-assistant); override with
+    GEMMA4_ASSISTANT_MODEL. Greedy spec-decode is token-identical to greedy
+    decode; we report the acceptance rate and decode tok/s/u (throughput).
+    """
+    import math
+    import time
+
+    from models.demos.gemma4.tt.common import create_assistant_model
+    from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
+
+    model_path = _model_path()
+    assistant_path = os.getenv("GEMMA4_ASSISTANT_MODEL")
+    if not assistant_path:
+        # Default to the matching it-assistant drafter so the demo runs without
+        # an explicit env (e.g. google/gemma-4-12B-it -> ...-it-assistant).
+        assistant_path = f"{model_path}-assistant"
+        logger.info(f"GEMMA4_ASSISTANT_MODEL unset; defaulting drafter to {assistant_path}")
+    temperature = sampling_params.get("temperature", 0)
+    top_p = sampling_params.get("top_p", 1.0)
+    top_k = sampling_params.get("top_k", 0)
+    if draft_len is None:
+        draft_len = int(os.environ.get("GEMMA4_SPEC_DRAFT_LEN", 3))
+    batch_size = 1
+
+    block_size = page_params["page_block_size"]
+    paged_attention_config = PagedAttentionConfig(
+        block_size=block_size, max_num_blocks=batch_size * math.ceil(max_seq_len / block_size)
+    )
+
+    generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
+        mesh_device=mesh_device,
+        model_path=model_path,
+        max_batch_size=batch_size,
+        max_seq_len=max_seq_len,
+        num_layers=num_layers,
+        paged_attention_config=paged_attention_config,
+        bounded_sliding_kv_cache=False,  # spec-decode needs unbounded sliding KV
+    )
+    target = generator.model[0]
+    model_args = generator.model_args
+
+    page_table = create_tt_page_table(batch_size, paged_attention_config)
+
+    generator.warmup_model_prefill(
+        kv_cache=tt_kv_cache, enable_trace=enable_trace, can_sample_on_device=False, non_greedy_decoding_on_device=False
+    )
+
+    input_tokens_prefill_pt, encoded_prompts, decoding_pos, prefill_lens = preprocess_inputs_prefill(
+        [prompt], tokenizer, model_args, instruct, max_generated_tokens, max_prefill_len=max_seq_len
+    )
+    input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
+
+    logger.info("Spec-decode prefill...")
+    generator.prefill_forward_text(
+        input_tokens_prefill_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos
+    )
+
+    prompt_len = int(decoding_pos[0])
+    anchor_pos = prompt_len - 1
+    anchor_token = int(encoded_prompts[0][anchor_pos])
+
+    # Load the assistant only after target prefill warmup/prefill is complete.
+    # Loading it earlier makes the target prefill trace capture run with extra
+    # assistant tensors resident and has been observed to trigger runtime
+    # profiler sync timeouts in the speculative path while the plain path stays
+    # clean.
+    _, assistant = create_assistant_model(
+        mesh_device=mesh_device,
+        target_model=target,
+        mesh_config=target.mesh_config,
+        ccl_manager=target.ccl_manager,
+        assistant_path=assistant_path,
+    )
+
+    spec = SpeculativeDecoder(
+        target_model=target,
+        assistant_model=assistant,
+        mesh_device=mesh_device,
+        tt_kv_cache=tt_kv_cache,
+        page_table_torch=page_table,
+        stop_tokens=tokenizer.stop_tokens,
+        draft_len=draft_len,
+    )
+
+    # Greedy uses the fully on-device fused iteration (argmax + re-embed on
+    # device, only 2K+1 ids read back per iter). With GEMMA4_SPEC_TRACE=1 the
+    # whole iteration is ONE metal trace replayed per step (K draft steps +
+    # verify fused — avoids the distinct-CCL-trace interleave deadlock). Sampling
+    # (temp>0) falls back to the host-readback generate for batch=1.
+    use_fused = batch_size == 1 and ((not temperature) or temperature <= 0)
+    # The fused greedy path is HOST-DISPATCH bound when untraced (~10 tok/s/u —
+    # SLOWER than plain decode); the single fused Metal trace removes that
+    # overhead (>3x, exceeding plain decode). Default tracing to the demo's
+    # `enable_trace` so spec-decode is fast out of the box; GEMMA4_SPEC_TRACE
+    # overrides explicitly (=1 force on, =0 force off — e.g. to A/B the cost).
+    if use_fused:
+        _trace_env = os.environ.get("GEMMA4_SPEC_TRACE")
+        spec._use_trace = enable_trace if _trace_env is None else (_trace_env == "1")
+    logger.info(
+        f"Spec-decode generate (draft_len={draft_len}, temp={temperature}, "
+        f"path={'fused' if use_fused else 'host'}, trace={spec._use_trace}, "
+        f"seed={'reseed' if spec._fused_reseed else 'shift'}, "
+        f"shift_seed={getattr(spec, '_fused_shift_seed', 'n/a')})..."
+    )
+    t0 = time.time()
+    if use_fused:
+        generated, accepts = spec.generate_fused(
+            anchor_token=anchor_token, anchor_pos=anchor_pos, max_new_tokens=max_generated_tokens
+        )
+    else:
+        generated, accepts = spec.generate(
+            anchor_token=anchor_token,
+            anchor_pos=anchor_pos,
+            max_new_tokens=max_generated_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+        )
+    elapsed = time.time() - t0
+
+    text = tokenizer.decode(generated)
+    n_tokens = len(generated)
+    n_iters = len(accepts)
+    mean_accept = (sum(accepts) / n_iters) if n_iters else 0.0
+    setup_elapsed = getattr(spec, "_last_fused_setup_s", 0.0) if use_fused else 0.0
+    steady_elapsed = getattr(spec, "_last_fused_replay_s", elapsed) if use_fused else elapsed
+    # batch=1 single-user: per-user rate == aggregate throughput (kept explicit
+    # so the line is coherent with the plain-decode demo's metric format). Match
+    # the plain demo's steady-state decode convention by excluding one-time spec
+    # setup/trace capture from the main Decode line; report wall throughput too.
+    tok_s_u = n_tokens / steady_elapsed if steady_elapsed > 0 else 0.0
+    tok_s = tok_s_u * batch_size
+    ms_per_token = (steady_elapsed * 1000.0 / n_tokens) if n_tokens else 0.0
+    ms_per_iter = (steady_elapsed * 1000.0 / n_iters) if n_iters else 0.0
+    wall_tok_s_u = n_tokens / elapsed if elapsed > 0 else 0.0
+
+    logger.info(f"\n== SPEC-DECODE GENERATION ==\n{text.strip()}\n")
+    logger.info("=== Speculative decoding metrics ===")
+    logger.info(f"Prompt tokens: {prompt_len}, generated tokens: {n_tokens}")
+    logger.info(
+        f"Drafter: {draft_len} drafts/iter; mean accepted {mean_accept:.2f}/{draft_len} (tokens/iter: {mean_accept + 1:.2f})"
+    )
+    if setup_elapsed > 0:
+        logger.info(
+            f"Spec setup/trace capture: {setup_elapsed:.2f}s (wall decode incl. setup: {wall_tok_s_u:.2f} tok/s/user)"
+        )
+    logger.info(f"Verify iterations: {n_iters} ({ms_per_iter:.2f} ms/iter)")
+    logger.info(f"Decode: {ms_per_token:.2f} ms/token @ {tok_s_u:.2f} tok/s/user " f"({tok_s:.2f} tok/s throughput)")
+    assert n_tokens > 0, "speculative decode produced no tokens"
+    return generated, accepts
+
+
+@pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "P150": (1, 1),
+            "P300": (1, 2),
+            "P150x4": (1, 4),
+            "P150x8": (1, 8),
+            "T3K": (1, 8),
+        }.get(os.environ.get("MESH_DEVICE"), (1, 4))
+    ],
+    indirect=True,
+)
+def test_demo_spec_decode(mesh_device, reset_seeds):
+    """Speculative-decode demo (target HF_MODEL + drafter GEMMA4_ASSISTANT_MODEL)."""
+    _run_spec_decode(
+        prompt=os.getenv("GEMMA4_SPEC_PROMPT", "Tell me about the history of computing in three sentences."),
+        instruct=True,
+        max_seq_len=int(os.environ.get("GEMMA4_MAX_SEQ_LEN", 4096)),
+        max_generated_tokens=int(os.environ.get("GEMMA4_MAX_NEW_TOKENS", 200)),
+        page_params={"page_block_size": 64, "page_max_num_blocks": 2048},
+        sampling_params={"temperature": float(os.environ.get("GEMMA4_TEMPERATURE", 0.0)), "top_p": 0.95, "top_k": 64},
+        mesh_device=mesh_device,
+    )

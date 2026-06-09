@@ -242,3 +242,65 @@ class Gemma4ModelArgs:
         cache_path = self.model_cache_path / f"tensor_cache_{dtype_str}"
         cache_path.mkdir(parents=True, exist_ok=True)
         return cache_path
+
+
+@dataclass
+class Gemma4AssistantArgs:
+    """Model args for a Gemma4 ``it-assistant`` MTP/EAGLE drafter.
+
+    The drafter is a tiny Gemma4 text model (``text_args``, e.g. hidden 1024 / 4
+    layers) whose every layer is KV-shared: it computes only Q and cross-attends
+    into the *target* model's last full-attention and last sliding-attention
+    layer KV caches (``backbone_hidden_size`` = the target's hidden size). It also
+    has ``pre_projection`` (2*backbone -> hidden), ``post_projection`` (hidden ->
+    backbone) and an ``lm_head`` tied to the target vocab.
+
+    Covers both ``gemma4_assistant`` (31B target, backbone 5376) and
+    ``gemma4_unified_assistant`` (12B target, backbone 3840): same drafter shape,
+    different head counts / backbone, which are read straight off the HF config.
+    """
+
+    text_args: "Gemma4ModelArgs"
+    backbone_hidden_size: int
+    use_ordered_embeddings: bool = False
+    num_centroids: int = 2048
+    centroid_intermediate_top_k: int = 32
+    model_cache_path: Path | None = None
+
+    @classmethod
+    def from_hf_config(cls, hf_config):
+        """Build assistant args from a ``Gemma4AssistantConfig`` HF AutoConfig."""
+        tc = hf_config.text_config
+        text_args = Gemma4ModelArgs.from_hf_config(tc)
+        # RoPE cache creation (create_rope_caches) needs the real HF text config.
+        text_args._hf_text_config = tc
+        return cls(
+            text_args=text_args,
+            backbone_hidden_size=int(hf_config.backbone_hidden_size),
+            use_ordered_embeddings=bool(getattr(hf_config, "use_ordered_embeddings", False)),
+            num_centroids=int(getattr(hf_config, "num_centroids", 2048)),
+            centroid_intermediate_top_k=int(getattr(hf_config, "centroid_intermediate_top_k", 32)),
+        )
+
+    @staticmethod
+    def load_hf_config(model_path):
+        return AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+
+    @staticmethod
+    def load_state_dict(weights_path, dummy_weights=False):
+        # The assistant checkpoint stores plain HF weights (pre_projection,
+        # post_projection, lm_head, model.layers.*, model.norm) — same on-disk
+        # format the target uses, so reuse the target's loader verbatim.
+        return Gemma4ModelArgs.load_state_dict(weights_path, dummy_weights=dummy_weights)
+
+    @staticmethod
+    def resolve_model_cache_path(model_path):
+        return Gemma4ModelArgs.resolve_model_cache_path(model_path)
+
+    def weight_cache_path(self, dtype):
+        if self.model_cache_path is None:
+            raise ValueError("model_cache_path must be initialized before requesting a weight cache path")
+        dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
+        cache_path = self.model_cache_path / f"assistant_tensor_cache_{dtype_str}"
+        cache_path.mkdir(parents=True, exist_ok=True)
+        return cache_path
