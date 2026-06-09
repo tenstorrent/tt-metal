@@ -814,3 +814,70 @@ def test_batch_norm_aliased_running_and_affine_tensors(device):
     # weight is all zeros, so the normalized term is zeroed out and the output collapses to the
     # bias (all ones) on both backends - the comparison is therefore exact.
     assert_numeric_metrics(torch_output, tt_output, pcc_threshold=1.0, rtol=0.0, atol=0.0, frobenius_threshold=0.0)
+
+
+def test_batch_norm_program_cache_shape_collision(device):
+    """Covers #46018: program cache collision in BatchNormOperation.
+
+    BatchNormOperation::compute_program_hash keys only on operation attributes and tensor
+    dtype/memory_config, not on tensor shape/layout/padded shape. Two batch_norm calls that
+    differ only in shape therefore share a program cache entry, and with the program cache
+    enabled the second call silently reuses the first call's program.
+
+    This runs a sequence of distinct shapes (all sharing dtype/memory_config/eps, so they only
+    differ in shape) with a freshly-cleared program cache and asserts each distinct shape adds
+    its own cache entry. On buggy main the shapes collide and the cache stays at a single entry,
+    so this test FAILS. Once the hash includes tensor shape/layout the cache grows by one per
+    distinct shape and the test PASSES. Outputs are also validated to be numerically correct.
+    """
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    # Distinct shapes, all bfloat16 / TILE / DRAM-interleaved / same eps -> identical buggy hash.
+    # NOTE: deliberately do NOT call fill_implicit_tile_padding here - that op adds its own
+    # shape-dependent program cache entries which would mask the batch_norm collision we test.
+    # With plain batch_norm, ttnn.batch_norm contributes exactly one program per distinct shape.
+    shapes = [
+        torch.Size([1, 8, 32, 32]),
+        torch.Size([2, 16, 64, 120]),
+        torch.Size([4, 32, 128, 128]),
+        torch.Size([1, 128, 14, 14]),
+        torch.Size([3, 2, 64, 96]),
+    ]
+    eps = 1e-05
+
+    try:
+        for idx, input_shapes in enumerate(shapes, start=1):
+            in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
+            mean_data, mean_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device)
+            var_data, var_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 20, device)
+
+            tt_output_tensor_on_device = ttnn.batch_norm(
+                input_tensor,
+                running_mean=mean_tensor,
+                running_var=var_tensor,
+                eps=eps,
+            )
+            tt_output = ttnn.to_torch(tt_output_tensor_on_device)
+            torch_result = torch.nn.functional.batch_norm(
+                input=in_data, running_mean=mean_data, running_var=var_data, eps=eps
+            )
+            assert_numeric_metrics(
+                torch_result,
+                tt_output,
+                pcc_threshold=0.99,
+                rtol=0.1,
+                atol=4.0,
+                frobenius_threshold=0.15,
+            )
+
+            # Each distinct shape must create a distinct program cache entry. If the hash ignores
+            # shape (the #46018 bug) the entry count stays at 1 and this assertion fails.
+            entries = device.num_program_cache_entries()
+            assert entries == idx, (
+                f"Program cache collision (#46018): after {idx} distinct shapes the cache holds "
+                f"{entries} entries, expected {idx}. Shape {tuple(input_shapes)} reused a program "
+                f"built for a different shape."
+            )
+    finally:
+        device.disable_and_clear_program_cache()

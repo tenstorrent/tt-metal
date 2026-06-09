@@ -348,15 +348,17 @@ def write_pcc_summary(result: dict, threshold: float = 0.99, output_dir: str = N
         result: Dict with 'pcc' tuple and metadata.
         threshold: PCC threshold for pass/fail.
         output_dir: Directory for summary files.
-                    Defaults to PCC_SUMMARY_DIR env var or /tmp/{user}_pcc_summaries.
+                    Defaults to PCC_SUMMARY_DIR env var or /tmp/pcc_summaries_{user}.
 
     Returns:
         Path to the written file.
     """
     if output_dir is None:
-        # Namespace by user to avoid cross-user permission collisions on the shared /tmp dir.
-        user = os.getenv("USER", "shared")
-        output_dir = os.getenv("PCC_SUMMARY_DIR", f"/tmp/{user}_pcc_summaries")
+        # Per-user default dir: a shared hardcoded /tmp/pcc_summaries is owned by
+        # whoever created it first and raises PermissionError for everyone else.
+        import getpass
+
+        output_dir = os.getenv("PCC_SUMMARY_DIR", f"/tmp/pcc_summaries_{getpass.getuser()}")
 
     out = Path(output_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)

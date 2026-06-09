@@ -16,6 +16,11 @@ on:
           - prefill_block
           - prefill_transformer_25k
           - prefill_transformer_5k
+          - kimi_mla
+          - kimi_moe
+          - kimi_prefill_block
+          - prefill_block_determinism
+          - prefill_transformer_determinism
         default: 'all'
       platform:
         required: false

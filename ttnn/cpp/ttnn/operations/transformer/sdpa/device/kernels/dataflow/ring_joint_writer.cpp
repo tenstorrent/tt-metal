@@ -363,7 +363,8 @@ void kernel_main() {
     constexpr uint32_t kv_local_padded_Nt = get_compile_time_arg_val(8);
     constexpr uint32_t padded_Nt = get_compile_time_arg_val(9);
     constexpr uint32_t logical_n = get_compile_time_arg_val(10);
-    constexpr uint32_t logical_nt = get_compile_time_arg_val(11);
+    // Slot 11 is retained for compile-time arg index stability; live logical_nt is a runtime arg below.
+    constexpr uint32_t logical_nt_compile [[maybe_unused]] = get_compile_time_arg_val(11);
     constexpr uint32_t Lt = get_compile_time_arg_val(12);
     constexpr uint32_t L = get_compile_time_arg_val(13);
     constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(14);
@@ -384,9 +385,11 @@ void kernel_main() {
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(28);
     constexpr bool chunked_enabled = get_compile_time_arg_val(29) == 1;
     constexpr uint32_t chunk_size_t = get_compile_time_arg_val(30);
-    constexpr uint32_t active_ring_iter_mask = get_compile_time_arg_val(31);
-    constexpr uint32_t last_active_ring_iter = get_compile_time_arg_val(32);
-    constexpr uint32_t single_valid_kv_chunk_mask = get_compile_time_arg_val(33);
+    // Slots 31-33 are retained for compile-time arg index stability; live ring-work masks
+    // are runtime args below.
+    constexpr uint32_t active_ring_iter_mask_compile [[maybe_unused]] = get_compile_time_arg_val(31);
+    constexpr uint32_t last_active_ring_iter_compile [[maybe_unused]] = get_compile_time_arg_val(32);
+    constexpr uint32_t single_valid_kv_chunk_mask_compile [[maybe_unused]] = get_compile_time_arg_val(33);
     // Diagonal-mask tile slot is shared by the kernel's is_causal path and the chunked-prefill
     // path. The program factory masks kernel_is_causal off when chunked is on, so only one of
     // the two paths drives the stamp per program — but they share the CB slot layout.
@@ -407,7 +410,9 @@ void kernel_main() {
     const uint32_t stats_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
-
+    const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
+    const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+    const uint32_t single_valid_kv_chunk_mask = get_arg_val<uint32_t>(argidx++);
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         false, /* wait_for_op_signal */
         argidx);
@@ -550,7 +555,7 @@ void kernel_main() {
             // Deferred norm: accumulates across ring iterations with exponential rescaling.
             // Single Q-chunk: accumulators persist in L1, write final output on last ring_iter.
             // Multi Q-chunk: raw accumulators round-trip through DRAM between ring iterations.
-            const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
+            const bool is_last_ring_iter = is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
             const bool single_q_chunk = (global_q_end - global_q_start == 1);
             constexpr uint32_t sum_offset = q_local_padded_Nt + Lt;
             constexpr uint32_t out_num_tiles = Sq_chunk_t * vDHt;

@@ -43,10 +43,10 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
 
     // Second Newton-Raphson iteration (interleaved with abs(a) computation)
     sfpi::vFloat e = inv_b_f * neg_b_f + sfpi::vConst1;
-    sfpi::vUInt a = sfpi::abs(a_signed);
+    sfpi::vMag a = sfpi::abs(a_signed);
     inv_b_f = e * inv_b_f + inv_b_f;
 
-    sfpi::vFloat a_f = sfpi::int32_to_float(a, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat a_f = sfpi::convert<sfpi::vFloat>(a, sfpi::RoundMode::NearestEven);
     v_if(a_f < 0.0f) { a_f = TWO_POW_31; }
     v_endif;
 
@@ -84,12 +84,12 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
     sfpi::vInt r = a - qb;
 
     // Use abs(r) for correction computation
-    sfpi::vFloat r_f = sfpi::int32_to_float(sfpi::abs(r), sfpi::RoundMode::NearestEven);
+    sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r), sfpi::RoundMode::NearestEven);
 
     // Compute correction: r / b in float32
     sfpi::vFloat correction_f = r_f * inv_b_f;
-    sfpi::vInt correction = sfpi::float_to_uint16(correction_f, sfpi::RoundMode::NearestEven);
-    correction_f = sfpi::int32_to_float(correction, sfpi::RoundMode::NearestEven);
+    auto correction = sfpi::convert<sfpi::vUInt16>(correction_f, sfpi::RoundMode::NearestEven);
+    correction_f = sfpi::convert<sfpi::vFloat>(correction, sfpi::RoundMode::NearestEven);
 
     // Recompute b chunks for correction multiplication to reduce register pressure
     b = sfpi::abs(b_signed);

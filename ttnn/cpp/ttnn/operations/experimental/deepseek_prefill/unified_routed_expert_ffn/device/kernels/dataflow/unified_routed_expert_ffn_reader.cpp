@@ -481,8 +481,20 @@ void kernel_main() {
                 const uint32_t mcast_bytes = d_in0_block_num_tiles * intermed_tile_bytes;
                 const uint64_t data_mcast_noc =
                     get_noc_multicast_addr(mrow_first_nx, mrow_first_ny, mrow_last_nx, mrow_last_ny, dst_l1);
+                // linked=true keeps the multicast path RESERVED so the
+                // valid-semaphore multicast below travels the SAME path and is
+                // delivered AFTER the data at every receiver. With linked=false
+                // the path is released and the (posted) valid-sem multicast can
+                // overtake the bulk data multicast at a receiver -> the receiver
+                // observes act_valid, pushes cb_in0_down_full, and compute reads
+                // stale L1 -> that core's whole down-matmul output block is wrong
+                // (run-to-run nondeterministic). A write barrier does NOT fix this
+                // on Blackhole (multicast writes are posted; no completion ack to
+                // wait on) — only path-linking orders the sem behind the data.
+                // Mirrors the canonical matmul in0 sender
+                // (reader_bmm_tile_layout_in0_sender_padding.cpp).
                 noc_async_write_multicast_loopback_src(
-                    src_l1, data_mcast_noc, mcast_bytes, GRID_X_NOC, /*linked=*/false);
+                    src_l1, data_mcast_noc, mcast_bytes, GRID_X_NOC, /*linked=*/true);
                 noc_async_writes_flushed();
 
                 *act_valid_local = ACT_VALID;
@@ -500,8 +512,11 @@ void kernel_main() {
                 const uint64_t mcast_data_noc = get_noc_multicast_addr(
                     in1_mcast_nx_start, in1_mcast_ny_start, in1_mcast_nx_end, in1_mcast_ny_end, in1_block_start);
                 const uint32_t block_bytes = d_in1_block_num_tiles * down_tile_bytes;
+                // linked=true so the in1_valid-sem multicast is ordered behind
+                // the weight data on the same reserved path (see the activated
+                // mcast above for the full rationale).
                 noc_async_write_multicast(
-                    in1_block_start, mcast_data_noc, block_bytes, in1_num_receivers, /*linked=*/false);
+                    in1_block_start, mcast_data_noc, block_bytes, in1_num_receivers, /*linked=*/true);
                 noc_async_writes_flushed();
 
                 *in1_valid_local = IN1_VALID;
