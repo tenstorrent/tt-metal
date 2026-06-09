@@ -83,6 +83,20 @@ Per-stage breakdown shows where the remaining time goes:
 
 The 18% + 63% = **81% of total time is in host-bounced transport** that D2D would eliminate.
 
+## Additional constraint discovered: P2P 1D topology limit
+
+Validated by `tests/test_parent_mesh_chain_smoke.py` running on hardware:
+
+**`ttnn.point_to_point` with `Topology.Linear` only routes between chips on the same ROW or same COLUMN of the parent mesh.** Row-transition hops (e.g. prefill chip (2, 2) → next prefill chip (3, 0)) are NOT directly routable.
+
+For pi0.5 Option C prefill with row-major layer ordering:
+- 12 of 17 inter-layer transitions are within-row: P2P-routable in 1 hop ✓
+- **5 are row-boundary transitions** ((2,2)→(3,0), (3,2)→(4,0), (4,2)→(5,0), (5,2)→(6,0), (6,2)→(7,0)): need **2-hop routing** via an intermediate chip on the column
+
+Workaround: implement `send_shard_via_p2p_multihop(tensor, src, dst, parent_mesh)` that, when src and dst differ on both row and col, picks an intermediate chip on a shared row/col and does two P2P calls. Cost: 2× the per-hop latency (still microseconds-class, but doubles the per-transition cost).
+
+For the full prefill chain: 12 × 1 hop + 5 × 2 hops = 22 fabric ops. Cost is still ms-class total, well below the current 80-100 ms host-bounce equivalent.
+
 ## Concrete next session plan
 
 1. Implement Option A above for prefill (the lowest-risk single stage).
