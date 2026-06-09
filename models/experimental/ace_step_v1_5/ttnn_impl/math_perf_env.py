@@ -1322,7 +1322,7 @@ def ace_step_configure_audio_code_limits(duration_sec: float) -> int:
 
     Only ``ACE_STEP_MAX_AUDIO_CODES`` is auto-set. ``ACE_STEP_DETOK_CHUNK_CODES`` stays at
     the L1-safe default (200): raising it causes TTNN OOM on ~300-code single forwards.
-    Longer streams use chunked TTNN detokenizer forwards (``ACE_STEP_PYTORCH_DETOK=1`` for HF).
+    Longer streams auto-enable HF detok via :func:`ace_step_configure_pytorch_detok_auto`.
     """
     limit = ace_step_audio_code_limit_for_duration(duration_sec)
     configured = False
@@ -1339,10 +1339,9 @@ def ace_step_configure_audio_code_limits(duration_sec: float) -> int:
             flush=True,
         )
         if expected > chunk:
-            n_forwards = (expected + chunk - 1) // chunk
             print(
-                f"[ace_step_v1_5] note: expect~{expected} audio codes → TTNN detokenizer "
-                f"({n_forwards} chunked forwards, {chunk} codes/forward)",
+                f"[ace_step_v1_5] note: expect~{expected} audio codes (> TTNN chunk={chunk}) "
+                f"→ HF PyTorch detokenizer (auto; chunked TTNN lacks cross-chunk attention)",
                 flush=True,
             )
     elif active < expected:
@@ -1352,6 +1351,74 @@ def ace_step_configure_audio_code_limits(duration_sec: float) -> int:
             flush=True,
         )
     return active
+
+
+def ace_step_is_4b_lm_variant(lm_variant: str | None) -> bool:
+    """True when *lm_variant* names the 5 Hz ``acestep-5Hz-lm-4B`` checkpoint."""
+    return bool(lm_variant) and "4b" in str(lm_variant).lower()
+
+
+def ace_step_pytorch_detok_env_truthy() -> bool | None:
+    """Return explicit ``ACE_STEP_PYTORCH_DETOK`` when set; ``None`` when unset."""
+    env = os.environ.get("ACE_STEP_PYTORCH_DETOK", "").strip().lower()
+    if env in ("1", "true", "yes", "on"):
+        return True
+    if env in ("0", "false", "no", "off"):
+        return False
+    return None
+
+
+def ace_step_use_pytorch_detok(
+    *,
+    lm_variant: str | None = None,
+    duration_sec: float | None = None,
+    n_codes: int | None = None,
+) -> bool:
+    """Whether to route audio-code detok through HF PyTorch (global attention).
+
+    Explicit ``ACE_STEP_PYTORCH_DETOK`` wins. Otherwise default-on when the stream
+    exceeds the TTNN L1 chunk (typically >200 codes, e.g. >40 s @ 5 Hz). The 4B LM
+    is the most audible failure mode, but the gate applies to all variants.
+    """
+    explicit = ace_step_pytorch_detok_env_truthy()
+    if explicit is not None:
+        return explicit
+    chunk = ace_step_detok_chunk_n()
+    if n_codes is not None:
+        count = int(n_codes)
+    elif duration_sec is not None:
+        count = ace_step_expected_audio_code_count(float(duration_sec))
+    else:
+        return False
+    return count > chunk
+
+
+def ace_step_configure_pytorch_detok_auto(*, lm_variant: str | None, duration_sec: float) -> bool:
+    """Arm ``ACE_STEP_PYTORCH_DETOK=1`` for long streams when env is unset.
+
+    Clears a prior auto-set value on shorter follow-up requests (HTTP service).
+    User overrides via ``ACE_STEP_PYTORCH_DETOK=0`` (force TTNN chunked) or ``=1``.
+    """
+    explicit = ace_step_pytorch_detok_env_truthy()
+    if explicit is not None:
+        return explicit
+
+    expected = ace_step_expected_audio_code_count(float(duration_sec))
+    chunk = ace_step_detok_chunk_n()
+    use_hf = ace_step_use_pytorch_detok(lm_variant=lm_variant, duration_sec=float(duration_sec))
+    if use_hf:
+        os.environ["ACE_STEP_PYTORCH_DETOK"] = "1"
+        lm_note = f", lm={lm_variant}" if ace_step_is_4b_lm_variant(lm_variant) else ""
+        print(
+            f"[ace_step_v1_5] auto ACE_STEP_PYTORCH_DETOK=1: HF detokenizer "
+            f"(expect~{expected} codes > TTNN chunk={chunk}{lm_note}; "
+            f"set ACE_STEP_PYTORCH_DETOK=0 to force chunked TTNN)",
+            flush=True,
+        )
+        return True
+
+    os.environ.pop("ACE_STEP_PYTORCH_DETOK", None)
+    return False
 
 
 def ace_step_dit_long_clip_quality_active() -> bool:

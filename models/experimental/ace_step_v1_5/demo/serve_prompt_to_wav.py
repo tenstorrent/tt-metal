@@ -356,6 +356,14 @@ class AceStepModelRegistry:
         log.info("─" * 60)
         log.info("REQUEST  prompt=%r  duration=%.1fs  seed=%d", prompt, duration_sec, seed)
 
+        from models.experimental.ace_step_v1_5.ttnn_impl.math_perf_env import (
+            ace_step_configure_audio_code_limits,
+            ace_step_configure_pytorch_detok_auto,
+        )
+
+        ace_step_configure_audio_code_limits(duration_sec)
+        ace_step_configure_pytorch_detok_auto(lm_variant=lm_variant, duration_sec=duration_sec)
+
         # ── Log REUSE for every component ─────────────────────────
         _log_reuse("DiT-handler")
         _log_reuse("5Hz-LM")
