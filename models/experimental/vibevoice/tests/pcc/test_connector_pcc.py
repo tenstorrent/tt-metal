@@ -7,8 +7,6 @@ Loads real acoustic_connector and semantic_connector weights,
 runs reference PyTorch forward and TT forward, asserts PCC >= 0.99.
 """
 
-from pathlib import Path
-
 import pytest
 import torch
 import ttnn
@@ -24,8 +22,6 @@ from models.experimental.vibevoice.tt.ttnn_speech_connector import (
     TTSpeechConnector,
 )
 from models.experimental.vibevoice.tt.vibevoice_config import load_vibevoice_model_config
-
-pytestmark = pytest.mark.skipif(not Path(MODEL_PATH).is_dir(), reason="VIBEVOICE_MODEL_PATH weights missing")
 
 
 def _reference_connector_forward(state: dict, x: torch.Tensor) -> torch.Tensor:
