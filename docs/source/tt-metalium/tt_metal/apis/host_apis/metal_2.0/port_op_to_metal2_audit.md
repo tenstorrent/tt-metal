@@ -83,21 +83,28 @@ For the op in scope, run through six steps (Step 0.1 prereqs, Step 0.2 feature c
 - **Multiple device-operations in one op directory.** If the directory contains more than one `DeviceOperation` type sharing factories or kernels (e.g. `ReduceDeviceOperation` plus `WelfordReduceDeviceOperation`), audit them together and produce a single combined report. If the device-operations are independent, audit each separately. Ask the user if unsure whether to bundle. **When bundling, retain per-DeviceOperation attribution where findings differ** — name which DeviceOperation (or which of its factories) a given finding applies to, so a downstream consumer (per-op spreadsheet, ticket tracker, port planner) can extract per-DeviceOperation status from the bundled report when their accounting needs it. Bundling reflects the porting unit (shared code → shared port); downstream tools may legitimately operate at the DeviceOperation level (e.g. Tracy profiling, per-op leadership reporting).
 - **Routine runtime-arg setup is not a general audit signal — Step 0.5 handles the one specific case.** Most RTAs translate directly to `KernelSpec::runtime_arg_schema` and `ProgramRunArgs`; treat them as routine port work, not gates. The historical `tensor.buffer()->address()`-as-RTA pattern is the one exception: pre–Metal 2.0 it was style-yuck-but-correct, but under TTNN's recent fast-path-cache binding-injection changes it is now a per-binding correctness hazard. Step 0.5 catches and reports buffer-address RTAs specifically; routine runtime-arg setup outside that pattern remains non-signal.
 
-Gating semantics across the six steps:
+**Gating semantics.** Three of the six steps can block the port; the rest are informational or describe port-time work. This table is the single source of truth for what gates — the per-step sections below give the detail, not a different rule:
 
-- **Step 0.1 Check 1 (ProgramDescriptor API), Step 0.2 (feature compatibility), and Step 0.6 (TTNN ProgramFactory selection)** produce port-gating RED findings — an unmet prereq, an UNSUPPORTED feature, or a port that requires a not-yet-implemented Advanced factory concept each block this op's Metal 2.0 port until the missing piece lands.
-- **Step 0.1 Check 3 (TensorAccessor usage) and Step 0.5 (TensorAccessor bypass)** produce YELLOW findings — port-time work items, not port blockers. With `TensorAccessor::get_bank_base_address` (landed 2026-05-24 via PR #45091) providing a sanctioned bridge for genuinely-exotic cases, every TensorAccessor concern has a port-time resolution path. The two checks roll up to a single TensorAccessor-concerns bullet in the Result section when both fire (see Output section).
-- **Step 0.1 Check 2 (Device 2.0 DM), Steps 0.3, and Step 0.4** are informational only. Check 2 in particular captures NoC-API-style cleanup (`Noc` wrapper coverage, method-form CB ops) that is **orthogonal to the Metal 2.0 binding-token mechanism** — binding-mechanism issues are caught by Check 3 and by Step 0.4's ⭐ markers, not by Check 2. **Check 2 status — YELLOW or RED — must not propagate to the Result-section Overall tier**; surface findings in side-issues as informational ("op-team cleanup pending").
+| Step | Outcome that fires | Gates the port? |
+|---|---|---|
+| 0.1 Check 1 — ProgramDescriptor API | RED (op on imperative `host_api.hpp`) | **Yes** — until the ProgramDescriptor migration lands |
+| 0.1 Check 2 — Device 2.0 DM | GREEN / YELLOW / RED | **No** — op-team cleanup, informational; must *not* propagate to the Overall tier |
+| 0.1 Check 3 — TensorAccessor usage | GREEN / YELLOW | **No** — YELLOW is port-time work (convertible → re-express; exotic → `get_bank_base_address` bridge) |
+| 0.2 — Feature compatibility | RED (UNSUPPORTED match) | **Yes** — until the feature lands |
+| 0.3 — Port complexity signals | informational | **No** — scope / planning signal only |
+| 0.4 — Out-of-directory call surface | informational | **No** — but a pre-Device-2.0 donor is a *scheduling* block (⭐); surface for planning |
+| 0.5 — TensorAccessor bypass | YELLOW | **No** — per-binding port-time work; `get_bank_base_address` covers exotic cases |
+| 0.6 — TTNN ProgramFactory selection | RED (Advanced concept required) | **Yes** — blocked on framework (Advanced concepts stubbed) |
 
-Do not attempt to port an op with Step 0.1 Check 1, Step 0.2, or Step 0.6 RED (modulo the scoped-subset case described in the report-output section). Step 0.1 Check 2 (YELLOW or RED), Step 0.1 Check 3 YELLOW, and Step 0.5 YELLOW do not gate the port — they describe op-team-owned cleanup or port-time work respectively.
+So: **do not port** an op with Check 1, Step 0.2, or Step 0.6 RED (modulo the scoped-subset case in the [report-output section](#output-the-audit-report)). The `get_bank_base_address` bridge landed 2026-05-24 via PR #45091. When Check 3 and Step 0.5 both fire, they roll up to a single TensorAccessor-concerns bullet in the Result section (see [Output](#output-the-audit-report)).
 
 ### Step 0.1 — Porting prerequisites
 
-Metal 2.0 migration sits at the end of a chain of prior modernizations. The three Step 0.1 checks confirm three distinct kinds of state — only one is a hard prereq to the Metal 2.0 port:
+Metal 2.0 migration sits at the end of a chain of prior modernizations. The three Step 0.1 checks confirm three distinct kinds of state — and per the gating table above, only Check 1 gates the port:
 
-- **Standalone hard prereq** (Check 1 below): `ProgramDescriptor` migration is the only Step 0.1 check that gates the Metal 2.0 port. Substantial, separate body of work with TTNN-infrastructure implications. If unmet, it is its own PR — it does not bundle with the Metal 2.0 port. Record the gap and continue the audit; do not attempt the migration here.
-- **Port-time work item** (Check 3 below): TensorAccessor adoption. YELLOW findings are resolved during the port itself (convertible → re-express; exotic → use `TensorAccessor::get_bank_base_address`). Not a hard prereq; surfaces here for scope planning.
-- **Op-team-owned cleanup** (Check 2 below): Device 2.0 DM kernel-side cleanup. **Not a Metal 2.0 prereq** — captures NoC-API-style work orthogonal to the binding-token mechanism. The audit surfaces Check 2 findings as informational; they do **not** gate Overall Status.
+- **Check 1 — `ProgramDescriptor` API** is the standalone hard prereq. If unmet, it is its own PR — substantial, separate work with TTNN-infrastructure implications that does *not* bundle with the Metal 2.0 port. Record the gap and continue the audit; do not attempt the migration here.
+- **Check 2 — Device 2.0 DM cleanup** is op-team-owned and informational.
+- **Check 3 — TensorAccessor usage** is a port-time concern surfaced here for scope planning, not a hard prereq; the port resolves it within the [kernel-side whitelist](port_op_to_metal2_recipe.md#kernel-side-whitelist).
 
 **Complete all three checks regardless of individual outcomes, then continue to Steps 0.2, 0.3, 0.4, and 0.5.** The audit's job is to gather a complete picture of what porting this op will require, including features the op uses that may be blocked on prereq work, characteristics that shape the port's scope, downstream dependencies on donor migrations, and per-binding correctness hazards. Do not exit early on a RED prereq — surface all findings to the report.
 
