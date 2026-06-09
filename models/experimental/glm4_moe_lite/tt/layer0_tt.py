@@ -24,6 +24,14 @@ def _round_up(x: int, multiple: int) -> int:
     return ((x + multiple - 1) // multiple) * multiple
 
 
+def mesh_shard0_to_torch(tt_tensor: ttnn.Tensor) -> torch.Tensor:
+    """Mesh-safe ``to_torch``: read device-0 shard (replicated meshes are identical per device)."""
+    device_tensors = ttnn.get_device_tensors(tt_tensor)
+    if device_tensors:
+        return ttnn.to_torch(device_tensors[0].cpu())
+    return ttnn.to_torch(tt_tensor.cpu())
+
+
 def _mla_scale() -> float:
     """Return the MLA scaling factor.
 
@@ -483,9 +491,9 @@ def run_layer0_prefill_tt(
     x_mlp_out = ttnn.slice(x_mlp_out, [0, 0, 0, 0], [1, 1, seq_len, 2048])
 
     out = Layer0TTOutputs(
-        x_embed=ttnn.to_torch(x_embed).reshape(batch, seq_len, 2048),
-        x_attn_out=ttnn.to_torch(x_attn_out).reshape(batch, seq_len, 2048),
-        x_mlp_out=ttnn.to_torch(x_mlp_out).reshape(batch, seq_len, 2048),
+        x_embed=mesh_shard0_to_torch(x_embed).reshape(batch, seq_len, 2048),
+        x_attn_out=mesh_shard0_to_torch(x_attn_out).reshape(batch, seq_len, 2048),
+        x_mlp_out=mesh_shard0_to_torch(x_mlp_out).reshape(batch, seq_len, 2048),
     )
 
     # Deallocate final TT tensors to keep tests from accumulating buffers.

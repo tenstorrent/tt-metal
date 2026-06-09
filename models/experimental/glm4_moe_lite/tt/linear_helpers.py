@@ -1039,7 +1039,8 @@ def attn_wo_linear(
     """
     if cfg.dram_sharded_attn:
         return dram_sharded_linear(a, b, device=device, cfg=cfg)
-    if cfg.tp_enabled and not cfg.attn_dp:
+    # w_o is always row-parallel under TP (even with ATTN_DP=1).
+    if cfg.tp_enabled:
         return tp_row_parallel_linear(a, b, device=device, cfg=cfg)
 
     # Resolve compute grid: fit _WO_NUM_CORES into the physical grid dimensions.

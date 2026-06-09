@@ -292,14 +292,17 @@ def _moe_all_reduce_across_mesh(
             )
         return tensor
 
-    reduced = ttnn.all_reduce(
+    # 1D mesh (e.g. 1x4 BH QB or 1x8 N300): use all_gather+fast_reduce like Galaxy.
+    cluster_axis = 0 if mesh_shape[0] > 1 else 1
+    return _all_gather_reduce_single_axis(
         tensor,
+        device=device,
+        axis=cluster_axis,
         num_links=safe_links,
         topology=safe_topology,
         memory_config=memory_config,
+        tt_ccl=tt_ccl,
     )
-    ttnn.deallocate(tensor, force=False)
-    return reduced
 
 
 @dataclass(frozen=True)
