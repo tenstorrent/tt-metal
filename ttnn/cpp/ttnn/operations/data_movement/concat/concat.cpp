@@ -352,8 +352,11 @@ ttnn::Tensor concat(
         if (has_tile_padding_on_concat_dim) {
             const uint64_t second_last_dim = first_tensor.logical_shape()[rank - 2];
             const uint64_t elem_size = first_tensor.element_size();
-            const uint64_t buf_align = first_tensor.buffer()->alignment();
             tt::tt_metal::IDevice* device = first_tensor.device();
+            // Match the factory's CB page alignment (concat_program_factory.cpp uses
+            // common_align_len = max(input_alignment, output_alignment)).
+            const uint64_t buf_align = std::max<uint64_t>(
+                first_tensor.buffer()->alignment(), device->allocator()->get_alignment(mem_config.buffer_type()));
             const uint64_t l1_capacity =
                 device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
