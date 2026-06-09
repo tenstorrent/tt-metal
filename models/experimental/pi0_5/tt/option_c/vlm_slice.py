@@ -932,6 +932,88 @@ class Pi0_5OptionCVLMSliceParent:
                 h = h_new
         return h
 
+    def forward_full_block_chain(self, activation: "ttnn.Tensor") -> "ttnn.Tensor":
+        """Full Gemma block chain (RMSNorm + attn + residual + RMSNorm + MLP + residual).
+
+        Per-layer:
+          h_attn = RMSNorm(h, input_ln)
+          q = h_attn @ q_proj
+          attn_out = q @ o_proj            # stubbed attention (real: SDPA(Q,K,V))
+          h = h + attn_out
+          h_mlp = RMSNorm(h, post_attn_ln)
+          g = h_mlp @ gate_proj
+          u = h_mlp @ up_proj
+          mid = g * silu(u)
+          mlp_out = mid @ down_proj
+          h = h + mlp_out
+          P2P advance
+
+        This is the FULL Gemma block topology except for real SDPA on Q/K/V
+        (currently Q→O stub). Numerically valid except for the lack of
+        cross-token attention context — all the per-chip op compositions
+        are exercised at production scale.
+        """
+        from .transport import send_shard_via_p2p_multihop
+
+        required = [
+            "input_layernorm",
+            "post_attention_layernorm",
+            "q_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+        ]
+        for r in required:
+            if r not in self.weights_on_parent:
+                raise RuntimeError(f"{r} weight not loaded")
+
+        input_ln = self.weights_on_parent["input_layernorm"]
+        post_attn_ln = self.weights_on_parent["post_attention_layernorm"]
+        q_proj = self.weights_on_parent["q_proj"]
+        o_proj = self.weights_on_parent["o_proj"]
+        gate = self.weights_on_parent["gate_proj"]
+        up = self.weights_on_parent["up_proj"]
+        down = self.weights_on_parent["down_proj"]
+        eps = self.config.vlm_config.rms_norm_eps
+
+        h = activation
+        for i in range(self.num_layers):
+            # ---- Attention sublayer ----
+            normed = ttnn.rms_norm(h, weight=input_ln, epsilon=eps, memory_config=ttnn.L1_MEMORY_CONFIG)
+            q = ttnn.linear(normed, q_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(normed)
+            attn_out = ttnn.linear(q, o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(q)
+            h_post_attn = ttnn.add(h, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(attn_out)
+            ttnn.deallocate(h)
+            # ---- MLP sublayer ----
+            normed = ttnn.rms_norm(h_post_attn, weight=post_attn_ln, epsilon=eps, memory_config=ttnn.L1_MEMORY_CONFIG)
+            g = ttnn.linear(normed, gate, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            u = ttnn.linear(normed, up, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(normed)
+            u_act = ttnn.silu(u, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(u)
+            mid = ttnn.multiply(g, u_act, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(g)
+            ttnn.deallocate(u_act)
+            d = ttnn.linear(mid, down, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(mid)
+            h_new = ttnn.add(h_post_attn, d, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(d)
+            ttnn.deallocate(h_post_attn)
+            # ---- P2P advance ----
+            if i + 1 < self.num_layers:
+                cur = self.prefill_coord_for_layer(i)
+                nxt = self.prefill_coord_for_layer(i + 1)
+                h = send_shard_via_p2p_multihop(h_new, cur, nxt)
+                if h is not h_new:
+                    ttnn.deallocate(h_new)
+            else:
+                h = h_new
+        return h
+
     def forward_attention_sublayer_chain(self, activation: "ttnn.Tensor") -> "ttnn.Tensor":
         """Run the attention sublayer chain (RMSNorm + Q + O + residual).
 
