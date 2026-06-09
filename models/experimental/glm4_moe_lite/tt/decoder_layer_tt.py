@@ -693,6 +693,8 @@ def run_decoder_layer_prefill_update_cache_tt(
     ccl_num_links = int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
     ccl_topology_str = os.environ.get("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear").strip().lower()
     ccl_topology = ttnn.Topology.Ring if ccl_topology_str == "ring" else ttnn.Topology.Linear
+    fuse_mlp_moe_reduce = os.environ.get("GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE", "").strip() == "1"
+    _skip_shared_reduce = fuse_mlp_moe_reduce and tp_enabled
 
     def _tp_row_parallel_linear_from_replicated(a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
         a_tp = ttnn.mesh_partition(a, dim=3, cluster_axis=tp_axis)
@@ -763,7 +765,8 @@ def run_decoder_layer_prefill_update_cache_tt(
     # Project q_nope into KV latent space (per-head).
     # TTNN non-bcast matmul requires dim-0==1 for 4D×2D. When batch>1, reshape
     # [B,H,S,D] → [1,B*H,S,D] so dim-0 is 1, then reshape back after.
-    use_tp_kv_b1 = tp_enabled and not attn_dp
+    # w_kv_b1 stays row-parallel under TP regardless of ATTN_DP.
+    use_tp_kv_b1 = tp_enabled
     if use_tp_kv_b1:
         qk_nope = int(hparams.qk_nope_head_dim)
         qk_nope_per_shard = qk_nope // max(1, int(tp_size))
@@ -943,42 +946,89 @@ def run_decoder_layer_prefill_update_cache_tt(
     attn_latent = ttnn.slice(attn_latent, [0, 0, 0, 0], [batch, num_heads, seq_len, int(hparams.kv_lora_rank)])
 
     t0 = time.perf_counter() if profile is not None else 0.0
-    # Same per-batch loop as w_kv_b1 for w_kv_b2 (small per-head matmul).
-    if batch > 1:
-        kv_b2_fn = _tp_row_parallel_linear_from_replicated if (tp_enabled and not attn_dp) else _mlp_linear
-        v_parts = []
-        for bi in range(batch):
-            a_bi = ttnn.slice(attn_latent, [bi, 0, 0, 0], [bi + 1, num_heads, seq_len, int(hparams.kv_lora_rank)])
-            v_bi = kv_b2_fn(a_bi, w.w_kv_b2)
-            ttnn.deallocate(a_bi, force=False)
-            v_parts.append(v_bi)
-        ttnn.deallocate(attn_latent, force=False)
-        v = ttnn.concat(v_parts, dim=0)  # [B,H,S,v_head_dim]
-        for p in v_parts:
-            ttnn.deallocate(p, force=False)
-    else:
-        if tp_enabled and not attn_dp:
-            v = _tp_row_parallel_linear_from_replicated(attn_latent, w.w_kv_b2)
-        else:
-            v = _mlp_linear(attn_latent, w.w_kv_b2)
-        ttnn.deallocate(attn_latent, force=False)
-
-    # Flatten back from [B,H,S_pad,v_head_dim] to [1,1,B*S_pad,H*v_head_dim]
-    # for the output projection (token-wise linear).
     use_nlp_concat = os.environ.get("GLM4_MOE_LITE_NLP_CONCAT_HEADS", "").strip() == "1"
-    if use_nlp_concat:
-        v = ttnn.experimental.nlp_concat_heads(v)  # [1,B,S_pad,H*v_head_dim]
-        v = ttnn.reshape(v, (1, 1, total_seq, int(num_heads * hparams.v_head_dim)))  # [1,1,B*S_pad,H*v_head_dim]
+    head_parallel_kvb2 = (
+        os.environ.get("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2", "").strip() == "1" and tp_enabled and tp_size > 1
+    )
+
+    if head_parallel_kvb2:
+        # Shard heads across TP; fuse kv_b2 + w_o partials into one all_reduce (matches decode).
+        heads_per_dev = num_heads // tp_size
+        flat_dim = heads_per_dev * int(hparams.v_head_dim)
+
+        def _kvb2_head_parallel_prefill(a_latent: ttnn.Tensor) -> ttnn.Tensor:
+            # a_latent: [1, H, S, kv_lora]
+            a_part = ttnn.mesh_partition(a_latent, dim=1, cluster_axis=tp_axis)
+            v_local = _mlp_linear(a_part, w.w_kv_b2)
+            ttnn.deallocate(a_part, force=False)
+            if use_nlp_concat:
+                v_local = ttnn.experimental.nlp_concat_heads(v_local)
+                return ttnn.reshape(v_local, (1, 1, seq_len, flat_dim))
+            v_local = ttnn.permute(v_local, (0, 2, 1, 3))
+            return ttnn.reshape(v_local, (1, 1, seq_len, flat_dim))
+
+        if batch > 1:
+            v_parts = []
+            for bi in range(batch):
+                a_bi = ttnn.slice(attn_latent, [bi, 0, 0, 0], [bi + 1, num_heads, seq_len, int(hparams.kv_lora_rank)])
+                v_parts.append(_kvb2_head_parallel_prefill(a_bi))
+            ttnn.deallocate(attn_latent, force=False)
+            v = ttnn.concat(v_parts, dim=0)  # [B,1,S,flat_dim]
+            for p in v_parts:
+                ttnn.deallocate(p, force=False)
+            v = ttnn.permute(v, (0, 2, 1, 3))
+            v = ttnn.reshape(v, (1, 1, total_seq, flat_dim))
+        else:
+            v = _kvb2_head_parallel_prefill(attn_latent)
+            ttnn.deallocate(attn_latent, force=False)
+
+        attn_out_partial = _mlp_linear(v, w.w_o)
+        ttnn.deallocate(v, force=False)
+        attn_out_reduced = ttnn.all_reduce(
+            attn_out_partial,
+            num_links=ccl_num_links,
+            topology=ccl_topology,
+            cluster_axis=tp_axis,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(attn_out_partial, force=False)
+        attn_out = attn_out_reduced
     else:
-        v = ttnn.permute(v, (0, 2, 1, 3))  # [B,S_pad,H,v_head_dim]
-        v = ttnn.reshape(v, (1, 1, total_seq, int(num_heads * hparams.v_head_dim)))  # [1,1,B*S_pad,H*v_head_dim]
-    if tp_enabled:
-        attn_out = _tp_row_parallel_linear_from_replicated(
-            v, w.w_o
-        )  # [1,1,B*S_pad,hidden] — w_o stays row-parallel even with ATTN_DP
-    else:
-        attn_out = _mlp_linear(v, w.w_o)  # [1,1,B*S_pad,hidden]
-    ttnn.deallocate(v, force=False)
+        # Same per-batch loop as w_kv_b1 for w_kv_b2 (small per-head matmul).
+        if batch > 1:
+            kv_b2_fn = _tp_row_parallel_linear_from_replicated if (tp_enabled and not attn_dp) else _mlp_linear
+            v_parts = []
+            for bi in range(batch):
+                a_bi = ttnn.slice(attn_latent, [bi, 0, 0, 0], [bi + 1, num_heads, seq_len, int(hparams.kv_lora_rank)])
+                v_bi = kv_b2_fn(a_bi, w.w_kv_b2)
+                ttnn.deallocate(a_bi, force=False)
+                v_parts.append(v_bi)
+            ttnn.deallocate(attn_latent, force=False)
+            v = ttnn.concat(v_parts, dim=0)  # [B,H,S,v_head_dim]
+            for p in v_parts:
+                ttnn.deallocate(p, force=False)
+        else:
+            if tp_enabled and not attn_dp:
+                v = _tp_row_parallel_linear_from_replicated(attn_latent, w.w_kv_b2)
+            else:
+                v = _mlp_linear(attn_latent, w.w_kv_b2)
+            ttnn.deallocate(attn_latent, force=False)
+
+        # Flatten back from [B,H,S_pad,v_head_dim] to [1,1,B*S_pad,H*v_head_dim]
+        # for the output projection (token-wise linear).
+        if use_nlp_concat:
+            v = ttnn.experimental.nlp_concat_heads(v)  # [1,B,S_pad,H*v_head_dim]
+            v = ttnn.reshape(v, (1, 1, total_seq, int(num_heads * hparams.v_head_dim)))  # [1,1,B*S_pad,H*v_head_dim]
+        else:
+            v = ttnn.permute(v, (0, 2, 1, 3))  # [B,S_pad,H,v_head_dim]
+            v = ttnn.reshape(v, (1, 1, total_seq, int(num_heads * hparams.v_head_dim)))  # [1,1,B*S_pad,H*v_head_dim]
+        if tp_enabled:
+            attn_out = _tp_row_parallel_linear_from_replicated(
+                v, w.w_o
+            )  # [1,1,B*S_pad,hidden] — w_o stays row-parallel even with ATTN_DP
+        else:
+            attn_out = _mlp_linear(v, w.w_o)  # [1,1,B*S_pad,hidden]
+        ttnn.deallocate(v, force=False)
 
     x_attn_out = residual + attn_out
     ttnn.deallocate(attn_out, force=False)
@@ -1063,7 +1113,9 @@ def run_decoder_layer_prefill_update_cache_tt(
         t0 = time.perf_counter() if profile is not None else 0.0
         if fuse_shared_gate_up and w.w_mlp_gate_up is not None:
             _gate_up_w = _ensure_interleaved(w.w_mlp_gate_up)
-            gate_up = _mlp_linear(x, _gate_up_w)
+            # Keep WIDTH_SHARDED L1 (skip gather) so silu*mul matches the unfused path
+            # and layer-0 dense MLP; gathering to DRAM before slice breaks TP column shards.
+            gate_up = _mlp_linear(x, _gate_up_w, skip_gather=True)
             _batch = int(gate_up.shape[2])
             _inter_tp = int(gate_up.shape[3]) // 2
             gate_shared = ttnn.slice(gate_up, [0, 0, 0, 0], [1, 1, _batch, _inter_tp])
@@ -1079,7 +1131,7 @@ def run_decoder_layer_prefill_update_cache_tt(
         ttnn.deallocate(up_shared, force=False)
         shared_out = _mlp_linear(x_ff_shared, _down_w)
         ttnn.deallocate(x_ff_shared, force=False)
-        if tp_enabled:
+        if tp_enabled and not _skip_shared_reduce:
             shared_out_reduced = ttnn.all_reduce(
                 shared_out,
                 num_links=ccl_num_links,
@@ -1138,13 +1190,28 @@ def run_decoder_layer_prefill_update_cache_tt(
                 moe_w=w.moe,
                 rt=moe_runtime,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                skip_final_reduce=_skip_shared_reduce,
             )
         _profile_add(profile, "moe_experts_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
         t0 = time.perf_counter() if profile is not None else 0.0
-        mlp_out = shared_out + routed_out
+        # Match decode: explicit add with DRAM MC. Python `+` on L1 shared + DRAM routed
+        # can produce wrong results after TP all_reduce leaves shared_out in L1.
+        shared_dram = ttnn.to_memory_config(shared_out, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(shared_out, force=False)
+        mlp_out = ttnn.add(shared_dram, routed_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(shared_dram, force=False)
         ttnn.deallocate(routed_out, force=False)
+        if tp_enabled and _skip_shared_reduce:
+            mlp_out_reduced = ttnn.all_reduce(
+                mlp_out,
+                num_links=ccl_num_links,
+                topology=ccl_topology,
+                cluster_axis=tp_axis,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(mlp_out, force=False)
+            mlp_out = mlp_out_reduced
 
         # Slice back to the real token count if we padded.
         if pad_tokens:
