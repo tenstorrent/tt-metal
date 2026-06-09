@@ -138,9 +138,7 @@ class _LoRAPipelineMixin:
             low_handle = load_adapter_into(self.transformer_2, str(low_path), scale=scale, name=name)
 
         combined = CombinedAdapterHandle(name=name, high=high_handle, low=low_handle)
-        self._lora_registry[name] = _RegisteredLoRA(
-            name=name, handle_high=high_handle, handle_low=low_handle
-        )
+        self._lora_registry[name] = _RegisteredLoRA(name=name, handle_high=high_handle, handle_low=low_handle)
         return combined
 
     def unregister_lora(self, handle: CombinedAdapterHandle | str) -> None:

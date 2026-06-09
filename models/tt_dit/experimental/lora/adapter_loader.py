@@ -40,7 +40,6 @@ from safetensors.torch import load_file
 
 from models.tt_dit.experimental.utils.lightx2v_loader import wan_lightx2v_to_diffusers_key
 
-
 # Reused from pipeline_wan_lora.py — kept inline so this module is self-contained.
 _STRIP_PREFIXES = ("diffusion_model.", "transformer.", "unet.", "model.")
 _LOW_RANK_RE = re.compile(r"^(?P<base>.*)\.lora_(?P<slot>A|B|down|up)(?:\.[^.]+)?\.weight$")
@@ -50,7 +49,7 @@ _SLOT_MAP = {"A": "A", "down": "A", "B": "B", "up": "B"}
 def _strip_known_prefixes(key: str) -> str:
     for prefix in _STRIP_PREFIXES:
         if key.startswith(prefix):
-            return key[len(prefix):]
+            return key[len(prefix) :]
     return key
 
 
@@ -58,7 +57,7 @@ def _kohya_to_lightx2v(key: str) -> str:
     if not key.startswith("lora_unet_"):
         return key
     parts = key.split(".", 1)
-    module_path = parts[0][len("lora_unet_"):]
+    module_path = parts[0][len("lora_unet_") :]
     suffix = f".{parts[1]}" if len(parts) > 1 else ""
     m = re.match(r"blocks_(\d+)_(cross_attn|self_attn)_([a-z]+)", module_path)
     if m:
@@ -101,9 +100,7 @@ def load_adapter_into(
     """
     raw = load_file(str(path))
     if not any(_is_lora_key(k) for k in raw):
-        raise RuntimeError(
-            f"no LoRA-style keys (lora_A/lora_B, lora_down/lora_up) in {path}"
-        )
+        raise RuntimeError(f"no LoRA-style keys (lora_A/lora_B, lora_down/lora_up) in {path}")
 
     pairs, alphas, skipped_direct = _collect_pairs(raw)
     if skipped_direct:
@@ -258,9 +255,7 @@ def _resolve_singleton(transformer, diff_path: str):
     m = re.match(r"blocks\.(\d+)\.(attn1|attn2)\.to_out\.0$", diff_path)
     if m:
         block_idx, attn_name = int(m.group(1)), m.group(2)
-        return getattr(transformer.blocks[block_idx], attn_name).to_out, (
-            f"blocks.{block_idx}.{attn_name}.to_out"
-        )
+        return getattr(transformer.blocks[block_idx], attn_name).to_out, (f"blocks.{block_idx}.{attn_name}.to_out")
     m = re.match(r"blocks\.(\d+)\.ffn\.net\.0\.proj$", diff_path)
     if m:
         block_idx = int(m.group(1))
@@ -366,8 +361,7 @@ def _head_interleave_lora_B(
     out_per = n_dev * n_local_heads * head_dim
     fused_rank = tensors[0].shape[1]
     assert all(t.shape == (out_per, fused_rank) for t in tensors), (
-        f"all B tensors must be [{out_per}, {fused_rank}]; got "
-        f"{[tuple(t.shape) for t in tensors]}"
+        f"all B tensors must be [{out_per}, {fused_rank}]; got " f"{[tuple(t.shape) for t in tensors]}"
     )
     n = len(tensors)
     # Transpose each to [fused_rank, out_per]

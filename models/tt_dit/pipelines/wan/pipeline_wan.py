@@ -283,9 +283,8 @@ class WanPipeline(PipelineAPIMixin):
         run_warmup: bool = True,
         lora_enabled: bool = False,
     ) -> None:
-        
         super().__init__()
-        
+
         self.checkpoint_name = config.checkpoint_name
         self.model_type = config.model_type
         self._cfg_enabled = config.cfg_enabled

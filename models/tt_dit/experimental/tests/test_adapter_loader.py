@@ -28,7 +28,6 @@ import pytest
 import torch
 
 import ttnn
-
 from models.tt_dit.experimental.lora.adapter_loader import load_adapter_into
 from models.tt_dit.layers.lora import LoRAMixin
 from models.tt_dit.models.transformers.wan2_2.transformer_wan import WanTransformer3DModel
@@ -128,9 +127,9 @@ def test_adapter_loader_registers_all_lora_linears(mesh_device: ttnn.MeshDevice)
     # That's 1 + 1 + 1 + 2 + 1 + 1 = 7 modules per block.
     expected_per_block = 7
     n_modules = sum(1 for _ in _iter_lora_modules(transformer))
-    assert n_modules == num_blocks * expected_per_block, (
-        f"expected {num_blocks * expected_per_block} LoRA modules; got {n_modules}"
-    )
+    assert (
+        n_modules == num_blocks * expected_per_block
+    ), f"expected {num_blocks * expected_per_block} LoRA modules; got {n_modules}"
 
     with tempfile.TemporaryDirectory() as tmp:
         adapter_path = Path(tmp) / "synthetic.safetensors"
@@ -140,9 +139,9 @@ def test_adapter_loader_registers_all_lora_linears(mesh_device: ttnn.MeshDevice)
 
     # All 7 LoRA modules per block should have a registered adapter.
     registered = _count_registered(transformer)
-    assert registered == num_blocks * expected_per_block, (
-        f"expected {num_blocks * expected_per_block} registered adapters; got {registered}"
-    )
+    assert (
+        registered == num_blocks * expected_per_block
+    ), f"expected {num_blocks * expected_per_block} registered adapters; got {registered}"
 
     # Fused-QKV (to_qkv self-attn): rank should be 3*r. Fused KV (cross-attn
     # to_kv): rank should be 2*r. Singletons: rank = r.
@@ -162,9 +161,7 @@ def test_adapter_loader_registers_all_lora_linears(mesh_device: ttnn.MeshDevice)
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 def test_pipeline_bind_unbind_walks_all_modules(mesh_device: ttnn.MeshDevice) -> None:
     """The pipeline mixin's bind/unbind walks every LoRA module on each set_active_lora."""
-    from models.tt_dit.experimental.pipelines.pipeline_wan_runtime_lora import (
-        _iter_lora_modules as pipeline_iter,
-    )
+    from models.tt_dit.experimental.pipelines.pipeline_wan_runtime_lora import _iter_lora_modules as pipeline_iter
 
     num_heads = 4
     head_dim = 32

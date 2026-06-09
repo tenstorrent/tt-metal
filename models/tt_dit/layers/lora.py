@@ -65,6 +65,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import torch
+
 import ttnn
 
 from ..utils.tensor import from_torch as _from_torch
@@ -140,13 +141,11 @@ class LoRAMixin:
         rank = A_torch.shape[0]
         if A_torch.shape != (rank, self.in_features):
             raise ValueError(
-                f"A must be [rank, in_features]; got {tuple(A_torch.shape)} "
-                f"expected (*, {self.in_features})"
+                f"A must be [rank, in_features]; got {tuple(A_torch.shape)} " f"expected (*, {self.in_features})"
             )
         if B_torch.shape != (self.out_features, rank):
             raise ValueError(
-                f"B must be [out_features, rank]; got {tuple(B_torch.shape)} "
-                f"expected ({self.out_features}, {rank})"
+                f"B must be [out_features, rank]; got {tuple(B_torch.shape)} " f"expected ({self.out_features}, {rank})"
             )
 
         adapter = LoRAAdapter(
@@ -292,9 +291,7 @@ class LoRAMixin:
             if saved_fused[0] == ttnn.UnaryOpType.GELU:
                 out = ttnn.gelu(out)
             else:
-                raise NotImplementedError(
-                    f"runtime LoRA cannot replay fused activation {saved_fused}"
-                )
+                raise NotImplementedError(f"runtime LoRA cannot replay fused activation {saved_fused}")
         if saved_activation is not None:
             from .linear import _apply_activation_fn
 
@@ -333,9 +330,7 @@ class LoRAMixin:
     def _upload_runtime_ab(self, A_torch: torch.Tensor, B_torch: torch.Tensor) -> None:
         """Upload A and B for the runtime forward path. The active scale
         is baked into B so forward stays as two pure matmuls + one add."""
-        self._runtime_A, self._runtime_B = self._upload_ab_for_w_sharding(
-            A_torch, B_torch, scale=self.active_scale
-        )
+        self._runtime_A, self._runtime_B = self._upload_ab_for_w_sharding(A_torch, B_torch, scale=self.active_scale)
 
     def _free_runtime_ab(self) -> None:
         if self._runtime_A is not None:

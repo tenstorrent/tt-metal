@@ -28,12 +28,7 @@ import pytest
 import torch
 
 import ttnn
-
-from models.tt_dit.layers.linear import (
-    LoRAColParallelLinear,
-    LoRALinear,
-    LoRARowParallelLinear,
-)
+from models.tt_dit.layers.linear import LoRAColParallelLinear, LoRALinear, LoRARowParallelLinear
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.tensor import bf16_tensor
 
@@ -115,11 +110,11 @@ def test_lora_linear_variant(
 # its delta into the same chunk layout as the base output.
 _COL_PARALLEL_PARAMS = [
     # (label, lora_mode, seq, in, out, rank, chunks, activation_fn)
-    ("plain_fuse",       "fuse",    128, 256, 512,     8, None, None),
-    ("plain_runtime",    "runtime", 128, 256, 512,     8, None, None),
-    ("gelu_fuse",        "fuse",    128, 256, 1024,    8, None, "gelu"),
-    ("gelu_runtime",     "runtime", 128, 256, 1024,    8, None, "gelu"),
-    ("chunked_qkv_fuse", "fuse",    128, 256, 3 * 256, 8, 3,    None),
+    ("plain_fuse", "fuse", 128, 256, 512, 8, None, None),
+    ("plain_runtime", "runtime", 128, 256, 512, 8, None, None),
+    ("gelu_fuse", "fuse", 128, 256, 1024, 8, None, "gelu"),
+    ("gelu_runtime", "runtime", 128, 256, 1024, 8, None, "gelu"),
+    ("chunked_qkv_fuse", "fuse", 128, 256, 3 * 256, 8, 3, None),
 ]
 
 

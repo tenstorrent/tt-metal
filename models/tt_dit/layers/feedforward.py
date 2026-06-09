@@ -4,13 +4,7 @@
 
 import ttnn
 
-from .linear import (
-    ColParallelLinear,
-    Linear,
-    LoRAColParallelLinear,
-    LoRARowParallelLinear,
-    RowParallelLinear,
-)
+from .linear import ColParallelLinear, Linear, LoRAColParallelLinear, LoRARowParallelLinear, RowParallelLinear
 from .module import Module
 
 
