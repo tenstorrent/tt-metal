@@ -454,7 +454,13 @@ ALWI void matmul_block(
                         tile_regs_commit();
                         if constexpr (
                             tile_order == OutputCBLayout::SubblockMajor && !caller_owns_pack_target &&
-                            !pin_interm_to_captured_base) {
+                            !(pin_interm_to_captured_base && pack_last_to_interm)) {
+                            // pin suppresses the per-subblock reserve ONLY for the Interm target, whose
+                            // one-shot interm reservation (helper entry) + exit push cover the whole block.
+                            // For the Out target (!pack_last_to_interm — plain TILE output) the last block
+                            // packs to out_buf, which was never pre-reserved; it needs sequential
+                            // per-subblock reserve/push so multi-output-block convs (in0_num_blocks_h>1)
+                            // advance out_buf's FIFO instead of overwriting the same offsets every block.
                             pack_target_buf.reserve_back(out_num_tiles);
                         }
                         // Pack-side sync: apply_activation_from_pack runs SFPU on the
@@ -495,12 +501,14 @@ ALWI void matmul_block(
                                 0, pack_target_id, col_base, out_row_width, shape.out_subblock_h, shape.out_subblock_w);
                         } else if constexpr (last_block_target == LastBlockTarget::OutWithUntilize) {
                             pack_untilize_dest<untilize_block_ct_dim>(pack_target_id);
-                        } else if constexpr (pin_interm_to_captured_base) {
-                            // Pinned SubblockMajor pack: write each tile at its absolute
-                            // position in the one-shot reservation. pack_target_id is
-                            // interm_cb_id (pack_last_to_interm) or out_cb_id (which aliases
-                            // interm_cb_id in conv2d's partials_cb_uses_output) — same L1,
-                            // same offset arithmetic either way.
+                        } else if constexpr (pin_interm_to_captured_base && pack_last_to_interm) {
+                            // Pinned SubblockMajor pack to INTERM (Interm target only): write each tile at
+                            // its absolute position in the one-shot interm reservation; the entry reserve +
+                            // exit push make the full block visible. The Out target (!pack_last_to_interm,
+                            // plain TILE output) must NOT pin here — its offset would be relative to
+                            // out_buf's wr_ptr, which does not advance per output block, so multi-block
+                            // convs would overwrite. It falls through to the sequential pack below, which
+                            // advances out_buf's FIFO one output block at a time.
                             for (uint32_t t = 0; t < out_num_tiles; t++) {
                                 pack_tile<true>(t, pack_target_id, subblock_pin_offset + t);
                             }
@@ -514,7 +522,7 @@ ALWI void matmul_block(
                         }
                         if constexpr (
                             tile_order == OutputCBLayout::SubblockMajor && !caller_owns_pack_target &&
-                            !pin_interm_to_captured_base) {
+                            !(pin_interm_to_captured_base && pack_last_to_interm)) {
                             pack_target_buf.push_back(out_num_tiles);
                         }
 
