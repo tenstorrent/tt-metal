@@ -199,9 +199,12 @@ def test_kv_cache_table(
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        }
+        },
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        },
     ],
-    ids=["line"],
+    ids=["line", "ring"],
     indirect=True,
 )
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
@@ -326,8 +329,15 @@ def test_kimi_kv_cache_table(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    ids=["line"],
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        },
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        },
+    ],
+    ids=["line", "ring"],
     indirect=True,
 )
 @pytest.mark.parametrize("seq_len", [5 * 1024, 10 * 1024, 25 * 1024], ids=["seq5k", "seq10k", "seq25k"])
