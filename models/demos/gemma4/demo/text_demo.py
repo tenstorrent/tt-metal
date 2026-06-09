@@ -47,6 +47,7 @@ except ModuleNotFoundError:
 from models.demos.gemma4.tests.test_factory import PREFILL_BUCKETS, parametrize_mesh_with_fabric
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.generator import GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN, Gemma4Generator
+from models.demos.gemma4.tt.model_config import recommended_page_block_size
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig, get_padded_prefill_len, sample_host
@@ -172,21 +173,23 @@ def _batch_demo_size():
     return size
 
 
-# Default paged-attention block size; override via GEMMA4_PAGE_BLOCK_SIZE for the
-# page_block_size sweep (issue #44946). Restricted to powers of two the swept set
-# {32, 64, 128, 256} plus larger powers, since paged-cache ops tile on block_size.
-_DEFAULT_PAGE_BLOCK_SIZE = 64
+# Supported paged-attention block sizes; paged-cache ops tile on block_size, so
+# restrict to the swept power-of-two set {32, 64, 128, 256} (issue #44946). The
+# per-variant default comes from model_config.recommended_page_block_size().
 _SUPPORTED_PAGE_BLOCK_SIZES = (32, 64, 128, 256)
 
 
-def _page_block_size():
-    """Paged-attention block size; defaults to 64, overridable via GEMMA4_PAGE_BLOCK_SIZE.
+def _page_block_size(model_path=None):
+    """Paged-attention block size for the demo's KV cache.
 
-    Used by the page_block_size audit sweep so a single demo command can be run
-    across block sizes without code edits. Validates against the swept set so a
-    typo doesn't silently allocate a mis-sized KV pool.
+    Defaults to the evidence-backed per-variant pin
+    (``recommended_page_block_size``), overridable via GEMMA4_PAGE_BLOCK_SIZE for
+    the page_block_size audit sweep so a single demo command can be run across
+    block sizes without code edits. Validates against the swept set so a typo
+    doesn't silently allocate a mis-sized KV pool.
     """
-    size = int(os.getenv("GEMMA4_PAGE_BLOCK_SIZE", str(_DEFAULT_PAGE_BLOCK_SIZE)))
+    default = recommended_page_block_size(model_path)
+    size = int(os.getenv("GEMMA4_PAGE_BLOCK_SIZE", str(default)))
     if size not in _SUPPORTED_PAGE_BLOCK_SIZES:
         supported = ", ".join(str(b) for b in _SUPPORTED_PAGE_BLOCK_SIZES)
         raise ValueError(f"GEMMA4_PAGE_BLOCK_SIZE={size} must be one of: {supported}")
@@ -528,7 +531,7 @@ def run_generation(
 
     # Paged attention config
     if page_params is None:
-        page_block_size = _page_block_size()
+        page_block_size = _page_block_size(model_path)
         page_params = {"page_block_size": page_block_size, "page_max_num_blocks": max_seq_len // page_block_size}
     paged_attention_config = PagedAttentionConfig(
         block_size=page_params["page_block_size"],
@@ -1116,7 +1119,7 @@ def test_demo(mesh_device, model_path, prefill_len, request):
     max_new_tokens = int(os.getenv("GEMMA4_MAX_NEW_TOKENS", "200"))
     enable_decode_trace = os.getenv("GEMMA4_DECODE_TRACE", "1") != "0"
     max_seq_len = max(prefill_len + max_new_tokens, 4096)
-    page_block_size = _page_block_size()
+    page_block_size = _page_block_size(model_path)
     page_params = {
         "page_block_size": page_block_size,
         "page_max_num_blocks": max_seq_len // page_block_size,

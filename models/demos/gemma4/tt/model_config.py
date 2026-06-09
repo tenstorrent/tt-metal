@@ -24,6 +24,44 @@ from transformers import AutoConfig, AutoModelForCausalLM
 
 import ttnn
 
+# ── Paged-attention block size (issue #44946) ──────────────────────────────
+#
+# Default block size for the paged KV cache. The page_block_size audit
+# (1x4 Blackhole, gemma-4-31B-it) found decode performance, paged_update_cache
+# device time, dispatch overhead, and PCC to all be invariant across
+# block_size ∈ {32, 64, 128, 256}, and the KV-cache DRAM footprint is identical
+# for power-of-two max_seq_len (max_num_blocks = max_seq_len // block_size, so
+# rows = max_seq_len regardless of block_size). With no metric discriminating,
+# 64 is retained as the balanced default: large enough to keep the page table /
+# per-block indirection small, small enough to avoid wasting a partial trailing
+# block for non-power-of-two sequence lengths.
+#
+# Evidence: models/demos/gemma4/tests/audit_44946/ (sweep wall-clock,
+# microbench device time, traced-decode dispatch share, PCC sweep).
+_DEFAULT_PAGE_BLOCK_SIZE = 64
+
+# Per-variant pins (keyed by the model-path basename, e.g. "gemma-4-31B-it",
+# matching the pcc_thresholds.json top-level key). Variants absent here fall
+# back to _DEFAULT_PAGE_BLOCK_SIZE. Only add an entry once it is backed by a
+# block-size sweep for that variant.
+PAGE_BLOCK_SIZE_BY_VARIANT = {
+    "gemma-4-31B-it": 64,  # measured: flat across {32,64,128,256} on 1x4 (issue #44946)
+}
+
+
+def recommended_page_block_size(model_path=None):
+    """Evidence-backed paged-attention block size for the given Gemma4 variant.
+
+    Resolves the variant from ``model_path`` (or the ``HF_MODEL`` /
+    ``GEMMA4_MODEL_PATH`` env vars) to its pinned ``PAGE_BLOCK_SIZE_BY_VARIANT``
+    entry, falling back to ``_DEFAULT_PAGE_BLOCK_SIZE`` for unmeasured variants.
+    This is the single source of truth for the demo / test KV-cache block size,
+    replacing the previously hardcoded 64.
+    """
+    path = model_path or os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH")
+    variant = os.path.basename(str(path).rstrip("/")) if path else None
+    return PAGE_BLOCK_SIZE_BY_VARIANT.get(variant, _DEFAULT_PAGE_BLOCK_SIZE)
+
 
 @dataclass
 class Gemma4ModelArgs:
