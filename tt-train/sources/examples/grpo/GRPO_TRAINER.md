@@ -58,8 +58,8 @@ trainer = GRPOTrainer(
     completer=completer,
     dataset=dataset,
     config=GRPOConfig(
-        batch_size=4,
-        num_generations=8,
+        prompts_per_batch=4,
+        completions_per_prompt=8,
         max_completion_length=256,
         gradient_accumulation_steps=4,
         logging_steps=1,
@@ -160,14 +160,14 @@ from ttml.trainers import GRPOConfig
 
 | Parameter | Type | Default | TRL equivalent | Description |
 |-----------|------|---------|----------------|-------------|
-| `batch_size` | `int` | — | `per_device_train_batch_size` | Number of prompts sampled per batch, **across all devices combined** (not per device). With DDP each device processes `batch_size // num_devices` prompts. |
-| `num_generations` | `int` | — | `num_generations` | Number of completions generated per prompt. Each prompt produces this many candidate responses for reward scoring. |
+| `prompts_per_batch` | `int` | — | `per_device_train_batch_size` | Number of prompts sampled per batch, **across all devices combined** (not per device). With DDP each device processes `prompts_per_batch // num_devices` prompts. |
+| `completions_per_prompt` | `int` | — | `num_generations` | Number of completions generated per prompt. Each prompt produces this many candidate responses for reward scoring. |
 | `max_completion_length` | `int` | — | `max_completion_length` | Maximum number of tokens to generate per completion. |
-| `micro_batch_size` | `int` | — | `generation_batch_size` | Number of completions processed in a single forward pass during loss computation. Controls memory usage. |
-| `gradient_accumulation_steps` | `int` | — | `gradient_accumulation_steps` | Number of batches accumulated before each optimizer step. Effective batch = `batch_size * gradient_accumulation_steps`. |
+| `completions_per_microbatch` | `int` | — | `generation_batch_size` | Number of completions processed in a single forward pass during loss computation. Controls memory usage. |
+| `gradient_accumulation_steps` | `int` | — | `gradient_accumulation_steps` | Number of batches accumulated before each optimizer step. Effective batch in prompts = `prompts_per_batch * gradient_accumulation_steps`. |
 | `num_iterations` | `int` | — | `num_iterations` | Number of training passes over each batch of completions (mini-epochs). |
 | `epsilon` | `float` | — | `epsilon` | Clipping parameter for the GRPO surrogate loss (analogous to PPO clip range). |
-| `prompts_to_train` | `int` | — | *(use `max_steps`)* | Total number of prompts to train on. Unlike TRL which uses `max_steps`, this directly specifies the data budget. Equivalent to `max_steps * batch_size * gradient_accumulation_steps`. |
+| `prompts_to_train` | `int` | — | *(use `max_steps`)* | Total number of prompts to train on. Unlike TRL which uses `max_steps`, this directly specifies the data budget. Equivalent to `max_steps * prompts_per_batch * gradient_accumulation_steps`. |
 | `temperature` | `float` | — | `temperature` | Sampling temperature for completion generation. |
 | `warmup_steps` | `int` | — | `warmup_steps` | Number of linear learning rate warmup steps. |
 | `output_dir` | `str` | — | `output_dir` | Directory for logs, metrics CSV, and checkpoints. |

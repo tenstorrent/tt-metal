@@ -16,8 +16,8 @@ Speed strategy:
     ``utils.llama_completer`` to no-ops; the model keeps its random init.
   * ``max_completion_length=4`` so autoregressive generation is cheap.
   * Exactly one optimizer step (``gradient_accumulation_steps=1``,
-    ``num_iterations=1``, ``prompts_to_train=2``, ``batch_size=2``).
-  * ``num_generations=2`` is the minimum that yields a non-zero advantage
+    ``num_iterations=1``, ``prompts_to_train=2``, ``prompts_per_batch=2``).
+  * ``completions_per_prompt=2`` is the minimum that yields a non-zero advantage
     (group of 1 -> mean == reward -> advantage == 0 -> loss == 0).
 
 Note on CI: the tokenizer load uses ``meta-llama/Llama-3.2-1B-Instruct``,
@@ -208,8 +208,8 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
 
     grpo_cfg = GRPOConfig(
         epsilon=0.2,
-        batch_size=2,
-        micro_batch_size=4,
+        prompts_per_batch=2,
+        completions_per_microbatch=4,
         num_iterations=1,
         gradient_accumulation_steps=1,
         logging_steps=1,
@@ -219,7 +219,7 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
         prompts_to_train=2,
         temperature=1.0,
         max_completion_length=4,
-        num_generations=2,
+        completions_per_prompt=2,
         warmup_steps=0,
     )
 
@@ -275,7 +275,7 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
     assert recorder.train_end == 1, "on_train_end should fire exactly once"
 
     assert reward_calls, "reward_func was never invoked"
-    expected_completions = grpo_cfg.batch_size * grpo_cfg.num_generations
+    expected_completions = grpo_cfg.prompts_per_batch * grpo_cfg.completions_per_prompt
     assert (
         len(reward_calls[0]) == expected_completions
     ), f"expected {expected_completions} completions per batch, got {len(reward_calls[0])}"
@@ -315,7 +315,7 @@ def test_capitals_one_by_one_equals_single_batch():
     Loads the real Llama-3.2-1B-Instruct weights (no monkey-patch) and runs
     the same four prompts through ``LlamaGRPOCompleter.generate_str`` twice:
     once one prompt at a time, once as a single batch. With temperature=0
-    and ``num_generations=1`` the outputs must match exactly; any drift
+    and ``completions_per_prompt=1`` the outputs must match exactly; any drift
     indicates a batching / padding / mask bug in the generation path.
     """
     completer = LlamaGRPOCompleter(

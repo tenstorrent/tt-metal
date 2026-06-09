@@ -135,7 +135,7 @@ if __name__ == "__main__":
         ctx=LlamaCompletionCtx(
             max_tokens_to_complete=grpo_config.max_completion_length,
             temperature=grpo_config.temperature,
-            completions_per_prompt=grpo_config.num_generations,
+            completions_per_prompt=grpo_config.completions_per_prompt,
         ),
         transformer_config=transformer_config,
         device_config=device_config,
