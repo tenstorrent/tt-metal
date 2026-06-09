@@ -36,18 +36,15 @@
  *   compute_kernel_hw_startup(dfb_in, dfb_scaler, dfb_out);
  *
  *   // Reduce each row (W dimension) - output has Ht tiles per batch
- *   compute_kernel_lib::reduce<SUM, REDUCE_ROW>(
- *       dfb_in, dfb_scaler, dfb_out,
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, dfb_in, dfb_scaler, dfb_out>(
  *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
  *
  *   // Reduce each column (H dimension) - output has Wt tiles per batch
- *   compute_kernel_lib::reduce<SUM, REDUCE_COL>(
- *       dfb_in, dfb_scaler, dfb_out,
+ *   compute_kernel_lib::reduce<SUM, REDUCE_COL, dfb_in, dfb_scaler, dfb_out>(
  *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
  *
  *   // Reduce entire HxW grid to single tile (REDUCE_SCALAR)
- *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR>(
- *       dfb_in, dfb_scaler, dfb_out,
+ *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR, dfb_in, dfb_scaler, dfb_out>(
  *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
  *
  * See reduce() function documentation for advanced usage examples including:

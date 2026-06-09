@@ -54,18 +54,20 @@ void kernel_main() {
             // Phase 1: reduce Wt-1 full tiles into cb_max via the helper.
             // cb_in0 holds all Wt tiles persistently for later steps, so use
             // WaitUpfrontNoPop — the helper waits for the slice it needs and never pops.
-            compute_kernel_lib::
-                reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
-                    cb_in0, cb_max_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::row(Wt - 1));
+            compute_kernel_lib::reduce<
+                PoolType::MAX,
+                ReduceDim::REDUCE_ROW,
+                cb_in0,
+                cb_max_scaler,
+                cb_max,
+                compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
+                compute_kernel_lib::ReduceInputBlockShape::row(Wt - 1));
 
             // Phase 2: mask the last tile (index Wt-1, no pop) and continue reducing
             // into cb_max via Accumulate. The accumulator and output are both cb_max:
             // the helper waits+pops the previous tile, then packs+pushes the new one.
             mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, Wt - 1, 0, /*pop0=*/0, /*popm=*/0);
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW>(
-                cb_tmp,
-                cb_max_scaler,
-                cb_max,
+            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_tmp, cb_max_scaler, cb_max>(
                 compute_kernel_lib::ReduceInputBlockShape::row(1),
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                 compute_kernel_lib::Accumulate::at(cb_max, /*iter=*/1));

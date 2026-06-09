@@ -44,7 +44,7 @@ void kernel_main() {
         init_sfpu(cb_input, cb_output);
         copy_tile_to_dst_init_short(cb_input);
         cb_wait_front(cb_scaler, onetile);
-        PACK((llk_pack_reduce_mask_config<REDUCE_DIM>()));
+        PACK((llk_pack_reduce_mask_config<REDUCE_DIM, PackMode::Default>(cb_output)));
 
         for (uint32_t nc = 0; nc < NC; ++nc) {
             for (uint32_t wt_base = 0; wt_base < Wt; wt_base += row_chunk) {
