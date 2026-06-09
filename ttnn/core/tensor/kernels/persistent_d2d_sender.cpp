@@ -50,7 +50,14 @@ constexpr uint32_t worker_mcast_noc_y_start = get_compile_time_arg_val(14);
 constexpr uint32_t worker_mcast_noc_x_end = get_compile_time_arg_val(15);
 constexpr uint32_t worker_mcast_noc_y_end = get_compile_time_arg_val(16);
 constexpr uint32_t num_workers = get_compile_time_arg_val(17);
-constexpr auto input_tensor_accessor_args = TensorAccessorArgs<18>();
+// Metadata block (indices 18..20). Unused when metadata_enabled == 0. The
+// designated worker wrote the blob into this service core's L1 at
+// sender_metadata_l1_addr before acking; this kernel ships it as one trailing
+// socket page after the data drain.
+constexpr uint32_t metadata_enabled = get_compile_time_arg_val(18);
+constexpr uint32_t metadata_size_bytes = get_compile_time_arg_val(19);
+constexpr uint32_t sender_metadata_l1_addr = get_compile_time_arg_val(20);
+constexpr auto input_tensor_accessor_args = TensorAccessorArgs<21>();
 
 // Emit one socket page (socket_page_size bytes) from a contiguous L1 source to
 // the downstream FIFO over fabric, split into <= fabric_max_payload_size
@@ -79,6 +86,8 @@ void kernel_main() {
     size_t rt_args_idx = 0;
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+
+    DEVICE_PRINT("D2DStreamService sender opening fabric connection\n");
 
     // Two fabric headers in the packet-header CB: one for the data writes, one
     // for the socket control-flow notify.
@@ -140,6 +149,7 @@ void kernel_main() {
         }
 
         if (terminated) {
+            DEVICE_PRINT("D2DStreamService sender terminated\n");
             break;
         }
 
@@ -164,11 +174,25 @@ void kernel_main() {
             fabric_socket_notify_receiver(sender_socket, fabric_connection, socket_packet_header_addr);
         }
 
-        // TODO: Send metadata (1 page)
-        // if (metadata_enabled) {
-        //     1. Read metadata page (from DRAM)
-        //     2. Send page to socket
-        // }
+        // 2b. Optional trailing metadata page. The designated worker wrote the
+        //     blob into this service core's L1 at sender_metadata_l1_addr before
+        //     acking (and the kernel only got here after num_workers acks), so the
+        //     blob is present. Stage it into the scratch CB (the rest of the page
+        //     is padding the receiver ignores) and ship it as one more socket page.
+        if constexpr (metadata_enabled) {
+            socket_reserve_pages(sender_socket, 1);
+            volatile tt_l1_ptr uint32_t* md_src =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_metadata_l1_addr);
+            volatile tt_l1_ptr uint32_t* md_dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_l1_addr);
+            for (uint32_t i = 0; i < metadata_size_bytes / sizeof(uint32_t); ++i) {
+                md_dst[i] = md_src[i];
+            }
+            const uint64_t md_fifo_dst_addr = get_noc_addr(
+                receiver_noc_x, receiver_noc_y, sender_socket.write_ptr + sender_socket.downstream_fifo_addr);
+            fabric_write_socket_page(fabric_connection, md_fifo_dst_addr, cb_l1_addr, data_packet_header_addr);
+            socket_push_pages(sender_socket, 1);
+            fabric_socket_notify_receiver(sender_socket, fabric_connection, socket_packet_header_addr);
+        }
 
         // 3. Release the sender worker grid (consumed_sem) so it can overwrite
         //    the backing tensor with the next iteration's slice.
@@ -178,5 +202,7 @@ void kernel_main() {
     }
 
     update_socket_config(sender_socket);
+
+    DEVICE_PRINT("D2DStreamService sender closing fabric connection\n");
     fabric_connection.close();
 }

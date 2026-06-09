@@ -62,6 +62,15 @@ struct D2DStreamConfig {
     CoreRange sender_worker_cores;
 
     CoreRange receiver_worker_cores;
+
+    // Optional inline metadata. When > 0, each transfer carries one extra
+    // trailing socket page holding `metadata_size_bytes` of metadata (<= one
+    // socket page). On the sender mesh, one designated worker writes the blob
+    // into an L1 buffer on its sender service core before acking; the sender
+    // service ships it after the data drain. On the receiver mesh, the receiver
+    // service multicasts it into every receiver worker core's L1. 0 = disabled.
+    // Mirrors H2DStreamService::Config::metadata_size_bytes.
+    uint32_t metadata_size_bytes = 0;
 };
 
 // Sender-side handle. Owns: the sender backing tensor, one claimed service core
@@ -101,6 +110,13 @@ public:
     // each produce; the service kernel multicast-incs it once per drained iter.
     // Same address across (device, worker core).
     DeviceAddr get_consumed_sem_addr() const;
+
+    // Service-core L1 address of the inline-metadata buffer for this coord. The
+    // designated sender worker writes the metadata blob here (over NoC) before
+    // acking; the sender service reads it locally and ships it after the data
+    // drain. Per-coord because each device's service core is independent.
+    // TT_FATALs if metadata was not configured (Config::metadata_size_bytes == 0).
+    DeviceAddr get_metadata_addr(const distributed::MeshCoordinate& coord) const;
 
 private:
     friend class D2DStreamService;
@@ -147,6 +163,12 @@ public:
     // Service-core L1 slot. Receiver workers atomic-inc here once per iter. Per-
     // coord because each device's service core is independent.
     DeviceAddr get_consumed_counter_addr(const distributed::MeshCoordinate& coord) const;
+
+    // Worker-L1 address of the inline-metadata buffer. The receiver service
+    // multicasts the metadata blob here on every (device, receiver worker core)
+    // after each transfer lands. Same address across the mesh. TT_FATALs if
+    // metadata was not configured (Config::metadata_size_bytes == 0).
+    DeviceAddr get_metadata_addr() const;
 
 private:
     friend class D2DStreamService;

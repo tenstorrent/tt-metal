@@ -31,12 +31,19 @@ constexpr uint32_t tensor_page_size = get_compile_time_arg_val(3);
 constexpr uint32_t num_iters = get_compile_time_arg_val(4);
 constexpr uint32_t scratch_cb_index = get_compile_time_arg_val(5);
 constexpr uint32_t fill_base = get_compile_time_arg_val(6);
-constexpr auto backing_tensor_accessor_args = TensorAccessorArgs<7>();
+// Optional metadata (indices 7..8). When enabled, the designated worker writes a
+// {-1, 0, fill_base+iter} blob into the sender service core's metadata L1 before
+// acking. Unused when metadata_enabled == 0.
+constexpr uint32_t metadata_enabled = get_compile_time_arg_val(7);
+constexpr uint32_t metadata_size_bytes = get_compile_time_arg_val(8);
+constexpr auto backing_tensor_accessor_args = TensorAccessorArgs<9>();
 
 void kernel_main() {
     const uint32_t data_ready_counter_addr = get_arg_val<uint32_t>(0);
     const uint32_t service_noc_x = get_arg_val<uint32_t>(1);
     const uint32_t service_noc_y = get_arg_val<uint32_t>(2);
+    const uint32_t is_metadata_writer = get_arg_val<uint32_t>(3);       // 1 only on the designated core
+    const uint32_t sender_metadata_l1_addr = get_arg_val<uint32_t>(4);  // service-core L1 metadata buffer
 
     auto backing = TensorAccessor(backing_tensor_accessor_args, backing_tensor_addr);
 
@@ -59,6 +66,21 @@ void kernel_main() {
             noc_async_write(cb_l1_addr, backing.get_noc_addr(p), tensor_page_size);
         }
         noc_async_write_barrier();
+
+        // 1b. (Designated core only) write this iter's metadata blob to the sender
+        //     service core's L1 metadata buffer, BEFORE acking. The data writes are
+        //     already flushed (barrier above), so the scratch CB is free to reuse as
+        //     the NoC source (a CB-backed address — never a stack-local).
+        if constexpr (metadata_enabled) {
+            if (is_metadata_writer != 0) {
+                scratch[0] = static_cast<uint32_t>(-1);
+                scratch[1] = 0u;
+                scratch[2] = value;
+                const uint64_t md_noc = get_noc_addr(service_noc_x, service_noc_y, sender_metadata_l1_addr);
+                noc_async_write(cb_l1_addr, md_noc, metadata_size_bytes);
+                noc_async_write_barrier();
+            }
+        }
 
         // 2. Ack into data_ready_counter — the service kernel waits for num_workers.
         noc_semaphore_inc(data_ready_counter_noc, 1);

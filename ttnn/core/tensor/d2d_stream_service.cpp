@@ -23,6 +23,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/internal/service/service_core_manager.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
@@ -178,6 +179,12 @@ struct D2DStreamServiceSender::Impl {
     // multicast-incs it once per drained iteration.
     std::optional<GlobalSemaphore> consumed_sem;
 
+    // Optional inline metadata. Per-coord L1 buffer on the sender service core
+    // (allocated via ServiceCoreManager, AFTER the socket reservation); the
+    // designated worker writes the blob here before acking. Empty when disabled.
+    uint32_t metadata_size_bytes = 0;
+    std::map<distributed::MeshCoordinate, DeviceAddr> metadata_addrs;
+
     // Persistent sender workload, launched once at create_pair.
     std::unique_ptr<distributed::MeshWorkload> workload;
     bool launched = false;
@@ -204,6 +211,13 @@ struct D2DStreamServiceReceiver::Impl {
     // Mesh-wide GlobalSemaphore on receiver_worker_cores; the service kernel
     // multicast-incs it after the transfer has landed.
     std::optional<GlobalSemaphore> data_ready_sem;
+
+    // Optional inline metadata. L1 MeshBuffer sharded across receiver_worker_cores
+    // (uniform address mesh-wide), mirroring H2D; the service kernel multicasts
+    // the blob here on every receiver worker core. Null/0 when disabled.
+    uint32_t metadata_size_bytes = 0;
+    std::shared_ptr<distributed::MeshBuffer> metadata_buffer;
+    DeviceAddr metadata_l1_addr = 0;
 
     // Persistent receiver workload, launched once at create_pair.
     std::unique_ptr<distributed::MeshWorkload> workload;
@@ -254,6 +268,9 @@ D2DStreamServiceSender::~D2DStreamServiceSender() {
             for (const auto& [coord, addr] : impl_->data_ready_counter_addrs) {
                 svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
             }
+            for (const auto& [coord, addr] : impl_->metadata_addrs) {
+                svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
+            }
         }
 
         // 3. Drop the socket (frees its config buffer), then release the cores.
@@ -299,6 +316,18 @@ DeviceAddr D2DStreamServiceSender::get_consumed_sem_addr() const {
         impl_->consumed_sem.has_value(),
         "D2DStreamServiceSender::get_consumed_sem_addr: consumed_sem not allocated (sender_worker_cores empty?)");
     return impl_->consumed_sem->address();
+}
+
+DeviceAddr D2DStreamServiceSender::get_metadata_addr(const distributed::MeshCoordinate& coord) const {
+    TT_FATAL(
+        impl_->metadata_size_bytes > 0,
+        "D2DStreamServiceSender::get_metadata_addr: metadata not configured (Config::metadata_size_bytes == 0)");
+    auto it = impl_->metadata_addrs.find(coord);
+    TT_FATAL(
+        it != impl_->metadata_addrs.end(),
+        "D2DStreamServiceSender::get_metadata_addr: no metadata buffer at coord {}",
+        coord);
+    return it->second;
 }
 
 // ===========================================================================
@@ -389,6 +418,13 @@ DeviceAddr D2DStreamServiceReceiver::get_consumed_counter_addr(const distributed
     return it->second;
 }
 
+DeviceAddr D2DStreamServiceReceiver::get_metadata_addr() const {
+    TT_FATAL(
+        impl_->metadata_size_bytes > 0,
+        "D2DStreamServiceReceiver::get_metadata_addr: metadata not configured (Config::metadata_size_bytes == 0)");
+    return impl_->metadata_l1_addr;
+}
+
 // ===========================================================================
 // Persistent program builders
 // ===========================================================================
@@ -451,6 +487,9 @@ Program build_receiver_program(
     const ChunkPlan& plan,
     uint32_t tensor_page_size,
     const WorkerSyncArgs& ws,
+    bool metadata_enabled,
+    uint32_t metadata_size_bytes,
+    uint32_t metadata_l1_addr,
     const tt::tt_fabric::FabricNodeId& receiver_node,
     const tt::tt_fabric::FabricNodeId& sender_node,
     uint32_t link_index) {
@@ -482,6 +521,9 @@ Program build_receiver_program(
         ws.mcast_noc_x_end,
         ws.mcast_noc_y_end,
         ws.num_workers,
+        metadata_enabled ? 1u : 0u,  // [16]
+        metadata_size_bytes,         // [17]
+        metadata_l1_addr,            // [18] receiver worker-grid L1 (uniform)
     };
     ct_args.insert(ct_args.end(), accessor_ct.begin(), accessor_ct.end());
 
@@ -515,6 +557,9 @@ Program build_sender_program(
     uint32_t fabric_max_payload_size,
     DataType dtype,
     const WorkerSyncArgs& ws,
+    bool metadata_enabled,
+    uint32_t metadata_size_bytes,
+    uint32_t sender_metadata_l1_addr,
     const tt::tt_fabric::FabricNodeId& sender_node,
     const tt::tt_fabric::FabricNodeId& receiver_node,
     uint32_t link_index) {
@@ -552,6 +597,9 @@ Program build_sender_program(
         ws.mcast_noc_x_end,
         ws.mcast_noc_y_end,
         ws.num_workers,
+        metadata_enabled ? 1u : 0u,  // [18]
+        metadata_size_bytes,         // [19]
+        sender_metadata_l1_addr,     // [20] sender service-core L1 (per-coord)
     };
     ct_args.insert(ct_args.end(), accessor_ct.begin(), accessor_ct.end());
 
@@ -718,6 +766,16 @@ D2DStreamService::create_pair(
         tt::round_down(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(), static_cast<size_t>(l1_alignment)));
     TT_FATAL(fabric_max_payload_size > 0, "D2DStreamService: fabric max payload size rounded to zero");
 
+    // Optional inline metadata ships as one trailing socket page, so the blob
+    // must fit a single socket page (same single-page rule as H2D).
+    const uint32_t metadata_size_bytes = cfg.metadata_size_bytes;
+    const bool metadata_enabled = metadata_size_bytes > 0;
+    TT_FATAL(
+        !metadata_enabled || metadata_size_bytes <= plan.socket_page_size,
+        "D2DStreamService: metadata_size_bytes ({}) exceeds socket_page_size ({}); metadata must fit one socket page",
+        metadata_size_bytes,
+        plan.socket_page_size);
+
     // --- (h) allocate the per-side worker-sync resources ----------------------
     const uint32_t sender_num_workers = CMAKE_UNIQUE_NAMESPACE::core_range_size(cfg.sender_worker_cores);
     const uint32_t receiver_num_workers = CMAKE_UNIQUE_NAMESPACE::core_range_size(cfg.receiver_worker_cores);
@@ -765,6 +823,26 @@ D2DStreamService::create_pair(
     auto receiver_consumed_counter_addrs =
         CMAKE_UNIQUE_NAMESPACE::allocate_service_core_words(receiver_mesh, receiver_service_cores);
 
+    // Optional sender-side inline-metadata buffer: a per-coord L1 region on the
+    // SENDER service core (not the worker grid — the service is agnostic to which
+    // worker produced the blob). Allocated via ServiceCoreManager AFTER the socket
+    // reservation above, so it can't alias the socket buffers. The designated
+    // sender worker writes the blob here before acking; the sender service ships
+    // it after the data drain (step 3).
+    std::map<distributed::MeshCoordinate, DeviceAddr> sender_metadata_addrs;
+    if (metadata_enabled) {
+        auto& svc = tt::tt_metal::internal::ServiceCoreManager::get();
+        const uint32_t aligned_md = tt::align(metadata_size_bytes, l1_alignment);
+        std::vector<uint32_t> zero(aligned_md / sizeof(uint32_t), 0u);
+        for (const auto& coord : coords) {
+            auto* d = sender_mesh->get_device(coord);
+            const CoreCoord core = sender_service_cores.at(coord);
+            const DeviceAddr addr = svc.allocate_l1(d, core, aligned_md);
+            tt::tt_metal::detail::WriteToDeviceL1(d, core, static_cast<uint32_t>(addr), zero);
+            sender_metadata_addrs.emplace(coord, addr);
+        }
+    }
+
     // Mesh-wide worker-grid GlobalSemaphores (same L1 address on every
     // (device, worker core)), exposed to the user's worker kernels via the
     // getters.
@@ -772,6 +850,38 @@ D2DStreamService::create_pair(
         sender_mesh.get(), CoreRangeSet(cfg.sender_worker_cores), /*initial_value=*/0, BufferType::L1);
     auto data_ready_sem = ttnn::global_semaphore::create_global_semaphore(
         receiver_mesh.get(), CoreRangeSet(cfg.receiver_worker_cores), /*initial_value=*/0, BufferType::L1);
+
+    // Optional receiver-side inline-metadata buffer: L1, HEIGHT_SHARDED across the
+    // receiver worker grid (one shard per worker), REPLICATED across the mesh so
+    // the in-core L1 address is uniform. Mirrors H2DStreamService's metadata
+    // buffer (socket_services.cpp B7.6). The receiver service multicasts the blob
+    // here on every receiver worker core after each transfer lands. No service-
+    // core involvement, so no reserve_l1_to_top interaction.
+    std::shared_ptr<distributed::MeshBuffer> receiver_metadata_buffer;
+    DeviceAddr receiver_metadata_l1_addr = 0;
+    if (metadata_enabled) {
+        const DeviceAddr aligned_shard_size =
+            tt::align(static_cast<DeviceAddr>(metadata_size_bytes), static_cast<DeviceAddr>(l1_alignment));
+        distributed::DeviceLocalBufferConfig device_local = {
+            .page_size = aligned_shard_size,
+            .buffer_type = BufferType::L1,
+            .sharding_args = BufferShardingArgs(
+                ShardSpecBuffer(
+                    CoreRangeSet(cfg.receiver_worker_cores),
+                    {1, 1},
+                    ShardOrientation::ROW_MAJOR,
+                    {1, 1},
+                    {receiver_num_workers, 1}),
+                TensorMemoryLayout::HEIGHT_SHARDED),
+            .bottom_up = std::nullopt,
+            .sub_device_id = std::nullopt,
+        };
+        distributed::MeshBufferConfig mesh_config = distributed::ReplicatedBufferConfig{
+            .size = aligned_shard_size * static_cast<DeviceAddr>(receiver_num_workers),
+        };
+        receiver_metadata_buffer = distributed::MeshBuffer::create(mesh_config, device_local, receiver_mesh.get());
+        receiver_metadata_l1_addr = receiver_metadata_buffer->address();
+    }
 
     // --- (i) build the persistent receiver + sender workloads -----------------
     // Worker sync is always on: the receiver multicast-incs data_ready_sem after
@@ -820,6 +930,9 @@ D2DStreamService::create_pair(
                 plan,
                 tensor_page_size,
                 recv_ws,
+                metadata_enabled,
+                metadata_size_bytes,
+                static_cast<uint32_t>(receiver_metadata_l1_addr),
                 receiver_node,
                 recv_upstream_sender_node,
                 recv_links.front()));
@@ -856,6 +969,9 @@ D2DStreamService::create_pair(
                 fabric_max_payload_size,
                 sender_backing.dtype(),
                 send_ws,
+                metadata_enabled,
+                metadata_size_bytes,
+                metadata_enabled ? static_cast<uint32_t>(sender_metadata_addrs.at(coord)) : 0u,
                 sender_node,
                 send_downstream_receiver_node,
                 send_links.front()));
@@ -878,6 +994,8 @@ D2DStreamService::create_pair(
         .data_ready_counter_addrs = std::move(sender_data_ready_counter_addrs),
         .termination_addrs = std::move(sender_termination_addrs),
         .consumed_sem = std::move(consumed_sem),
+        .metadata_size_bytes = metadata_size_bytes,
+        .metadata_addrs = std::move(sender_metadata_addrs),
         .workload = std::move(sender_workload),
         .launched = false,
     });
@@ -896,6 +1014,9 @@ D2DStreamService::create_pair(
         .consumed_counter_addrs = std::move(receiver_consumed_counter_addrs),
         .termination_addrs = std::move(receiver_termination_addrs),
         .data_ready_sem = std::move(data_ready_sem),
+        .metadata_size_bytes = metadata_size_bytes,
+        .metadata_buffer = std::move(receiver_metadata_buffer),
+        .metadata_l1_addr = receiver_metadata_l1_addr,
         .workload = std::move(receiver_workload),
         .launched = false,
     });

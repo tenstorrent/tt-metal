@@ -48,12 +48,22 @@ constexpr uint32_t worker_mcast_noc_y_start = get_compile_time_arg_val(12);
 constexpr uint32_t worker_mcast_noc_x_end = get_compile_time_arg_val(13);
 constexpr uint32_t worker_mcast_noc_y_end = get_compile_time_arg_val(14);
 constexpr uint32_t num_workers = get_compile_time_arg_val(15);
-constexpr auto output_tensor_accessor_args = TensorAccessorArgs<16>();
+// Metadata multicast block (indices 16..18). Unused when metadata_enabled == 0.
+// Mirrors persistent_h2d_receiver.cpp: metadata_size_bytes is the un-padded user
+// size; the kernel multicasts exactly that many bytes to metadata_l1_addr (the
+// uniform receiver worker-grid L1 address) using the same worker bbox as
+// data_ready_sem.
+constexpr uint32_t metadata_enabled = get_compile_time_arg_val(16);
+constexpr uint32_t metadata_size_bytes = get_compile_time_arg_val(17);
+constexpr uint32_t metadata_l1_addr = get_compile_time_arg_val(18);
+constexpr auto output_tensor_accessor_args = TensorAccessorArgs<19>();
 
 void kernel_main() {
     size_t rt_args_idx = 0;
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+
+    DEVICE_PRINT("D2DStreamService receiver opening fabric connection\n");
 
     // The socket packet header lives in the fabric packet-header CB; it's used
     // only by fabric_socket_notify_sender for the credit return.
@@ -82,6 +92,18 @@ void kernel_main() {
             worker_mcast_noc_y_end,
             data_ready_sem_addr);
         consumed_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(consumed_counter_addr);
+    }
+
+    // Metadata multicast destination — same worker bbox as data_ready_sem, a
+    // different in-core L1 address. Hoisted out of the per-transfer loop.
+    uint64_t metadata_mcast_addr = 0;
+    if constexpr (metadata_enabled) {
+        metadata_mcast_addr = get_noc_multicast_addr(
+            worker_mcast_noc_x_start,
+            worker_mcast_noc_y_start,
+            worker_mcast_noc_x_end,
+            worker_mcast_noc_y_end,
+            metadata_l1_addr);
     }
 
     bool terminated = false;
@@ -124,6 +146,44 @@ void kernel_main() {
         // termination poll, no transfer completed — skip the worker handshake
         // (workers aren't running during teardown).
         if (terminated) {
+            DEVICE_PRINT("D2DStreamService receiver terminated\n");
+            break;
+        }
+
+        // Optional inline-metadata: drain ONE trailing socket page carrying the
+        // metadata blob, then multicast its first metadata_size_bytes to every
+        // receiver worker core's L1. The barrier must complete BEFORE the
+        // data_ready_sem mcast below so workers observing data_ready see
+        // consistent (DRAM + metadata-L1) state. The wait is termination-aware so
+        // teardown stays responsive if no trailing page is coming.
+        if constexpr (metadata_enabled) {
+            bool got_md = true;
+            while (!socket_wait_for_pages(receiver_socket, 1, /*early_exit_iter_count=*/1000)) {
+                invalidate_l1_cache();
+                if (termination_semaphore[0] == 1) {
+                    got_md = false;
+                    break;
+                }
+            }
+            if (!got_md) {
+                terminated = true;
+            } else {
+                // The metadata page sits in this core's L1 FIFO at read_ptr (an
+                // allocated buffer address — a valid NoC multicast source, unlike a
+                // stack-local). Multicast it straight to the worker grid.
+                noc_async_write_multicast(
+                    receiver_socket.read_ptr,
+                    metadata_mcast_addr,
+                    metadata_size_bytes,
+                    /*num_dests=*/num_workers);
+                noc_async_write_barrier();
+                socket_pop_pages(receiver_socket, 1);
+                fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
+            }
+        }
+
+        if (terminated) {
+            DEVICE_PRINT("D2DStreamService receiver terminated in metadata wait\n");
             break;
         }
 
@@ -153,6 +213,7 @@ void kernel_main() {
                 }
             }
             if (terminated) {
+                DEVICE_PRINT("D2DStreamService receiver terminated in worker handshake\n");
                 break;
             }
         }
@@ -161,5 +222,6 @@ void kernel_main() {
     noc_async_write_barrier();
     noc_async_atomic_barrier();
     update_socket_config(receiver_socket);
+    DEVICE_PRINT("D2DStreamService receiver closing fabric connection\n");
     fabric_connection.close();
 }
