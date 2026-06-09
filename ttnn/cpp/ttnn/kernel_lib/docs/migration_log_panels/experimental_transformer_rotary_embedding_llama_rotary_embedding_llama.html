@@ -1,0 +1,379 @@
+<section class="panel" id="panel-experimental_transformer_rotary_embedding_llama_rotary_embedding_llama">
+  <h1>rotary_embedding_llama — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/rotary_embedding_llama.cpp</div>
+  <div class="meta"><b>Δ</b> +104/-38 &nbsp; <b>Decisions:</b> 4</div>
+
+  <div class="focus-toolbar" data-fkernel="experimental_transformer_rotary_embedding_llama_rotary_embedding_llama">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; include swap</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; sin/cos → eltwise_chain</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; add → add<> chain</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; RELOAD_IMPL → sincos_blife</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+<span class="dz" data-d="1">#include &quot;api/compute/common.h&quot;
+#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/bcast.h&quot;
+#include &quot;api/compute/matmul.h&quot;</span>
+
+ALWI void ACQ() { acquire_dst(); }
+ALWI void REL() { release_dst(); }
+
+void kernel_main() {
+    uint32_t argrt = 0;
+    uint32_t batch_start = get_arg_val&lt;uint32_t&gt;(argrt++);
+    uint32_t batch_end = get_arg_val&lt;uint32_t&gt;(argrt++);
+    uint32_t seq_t_start = get_arg_val&lt;uint32_t&gt;(argrt++);
+    uint32_t seq_t_end = get_arg_val&lt;uint32_t&gt;(argrt++);
+
+    constexpr uint32_t onetile = 1;
+    constexpr uint32_t in_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t cos_cb = get_compile_time_arg_val(1);
+    constexpr uint32_t sin_cb = get_compile_time_arg_val(2);
+    constexpr uint32_t trans_mat_cb = get_compile_time_arg_val(3);
+
+    constexpr uint32_t rotated_in_interm_cb = get_compile_time_arg_val(4);
+    constexpr uint32_t cos_interm_cb = get_compile_time_arg_val(5);
+    constexpr uint32_t sin_interm_cb = get_compile_time_arg_val(6);
+    constexpr uint32_t out_cb = get_compile_time_arg_val(7);
+    constexpr uint32_t Wt = get_compile_time_arg_val(8);
+    constexpr uint32_t n_heads = get_compile_time_arg_val(9);
+    constexpr uint32_t rotary_Ht = get_compile_time_arg_val(10);
+
+    const uint32_t rotary_seq_t_end = seq_t_end &lt; rotary_Ht ? seq_t_end : rotary_Ht;
+    const uint32_t my_rotary_seq_tiles = seq_t_start &lt; rotary_seq_t_end ? rotary_seq_t_end - seq_t_start : 0;
+    const uint32_t my_cos_sin_tiles = my_rotary_seq_tiles * Wt;
+
+    mm_init(in_cb, trans_mat_cb, out_cb);
+    binary_op_init_common(rotated_in_interm_cb, cos_cb, out_cb);  // General Init for all binary ops
+
+    // Get the trans_mat
+    cb_wait_front(trans_mat_cb, onetile);
+
+    uint32_t in0_index = 0;
+    uint32_t in1_index = 0;
+    uint32_t interm_index = 0;
+
+    for (uint32_t batch_id = batch_start; batch_id &lt; batch_end; ++batch_id) {
+<span class="dz" data-d="5">#if RELOAD_IMPL == 0
+        if (my_cos_sin_tiles &gt; 0) {
+            cb_wait_front(sin_cb, my_cos_sin_tiles);
+            cb_wait_front(cos_cb, my_cos_sin_tiles);
+        }
+#endif</span>
+        for (uint32_t head_num = 0; head_num &lt; n_heads; ++head_num) {
+            uint32_t sin_cos_row_cnt = 0;
+            for (uint32_t seq_tile = seq_t_start; seq_tile &lt; rotary_seq_t_end; ++seq_tile) {
+                // input cb wait and reserve
+                cb_wait_front(in_cb, Wt);
+#if RELOAD_IMPL == 1
+                cb_wait_front(sin_cb, Wt);
+                cb_wait_front(cos_cb, Wt);
+#endif
+
+                cb_reserve_back(rotated_in_interm_cb, Wt);
+                cb_reserve_back(sin_interm_cb, Wt);
+                cb_reserve_back(cos_interm_cb, Wt);
+                cb_reserve_back(out_cb, Wt);
+
+                // // rotated = x @ trans_mat
+                mm_init_short(in_cb, trans_mat_cb);
+                ACQ();
+                for (uint32_t j = 0; j &lt; Wt; ++j) {
+                    matmul_tiles(in_cb, trans_mat_cb, j, in1_index, j);
+                    pack_tile(j, rotated_in_interm_cb, j);
+                }
+                REL();
+                cb_push_back(rotated_in_interm_cb, Wt);
+                cb_wait_front(rotated_in_interm_cb, Wt);
+
+<span class="dz" data-d="3">                mul_tiles_init(rotated_in_interm_cb, sin_cb);
+                ACQ();
+                for (uint32_t j = 0; j &lt; Wt; ++j) {
+                    // sin_interim = rotated * sin
+                    mul_tiles(rotated_in_interm_cb, sin_cb, j, j + (sin_cos_row_cnt * Wt), j);
+                    pack_tile(j, sin_interm_cb, j);
+                }
+                REL();
+                cb_push_back(sin_interm_cb, Wt);
+                cb_pop_front(rotated_in_interm_cb, Wt);</span>
+
+<span class="dz" data-d="3">                ACQ();
+                for (uint32_t j = 0; j &lt; Wt; ++j) {
+                    // cos_interim = x * cos
+                    mul_tiles(in_cb, cos_cb, j, j + (sin_cos_row_cnt * Wt), j);
+                    pack_tile(j, cos_interm_cb, j);
+                }
+                REL();
+                cb_push_back(cos_interm_cb, Wt);
+                cb_pop_front(in_cb, Wt);  // Done with input</span>
+#if RELOAD_IMPL == 1
+                cb_pop_front(sin_cb, Wt);
+                cb_pop_front(cos_cb, Wt);
+#endif
+
+<span class="dz" data-d="4">                cb_wait_front(sin_interm_cb, Wt);
+                cb_wait_front(cos_interm_cb, Wt);
+                add_tiles_init(cos_interm_cb, sin_interm_cb);
+                ACQ();
+                for (uint32_t j = 0; j &lt; Wt; ++j) {
+                    // out = cos_interim + sin_interim
+                    add_tiles(cos_interm_cb, sin_interm_cb, j, j, j);
+                    pack_tile(j, out_cb, j);
+                }
+                REL();
+                cb_push_back(out_cb, Wt);
+                cb_pop_front(sin_interm_cb, Wt);
+                cb_pop_front(cos_interm_cb, Wt);</span>
+
+#if RELOAD_IMPL == 0
+                // no-reload needs to increment this counter
+                // Used a sin/cos row
+                sin_cos_row_cnt++;
+#endif
+            }
+        }
+
+#if RELOAD_IMPL == 0
+        if (my_cos_sin_tiles &gt; 0) {
+            cb_pop_front(sin_cb, my_cos_sin_tiles);
+            cb_pop_front(cos_cb, my_cos_sin_tiles);
+        }
+#endif
+    }
+
+    // Done with the transformation matrix, so remove from CB
+    cb_pop_front(trans_mat_cb, onetile);
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+#include &quot;api/compute/common.h&quot;
+#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/bcast.h&quot;
+#include &quot;api/compute/matmul.h&quot;
+<span class="dz" data-d="1">#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp&quot;</span>
+
+ALWI void ACQ() { acquire_dst(); }
+ALWI void REL() { release_dst(); }
+
+void kernel_main() {
+    uint32_t argrt = 0;
+    uint32_t batch_start = get_arg_val&lt;uint32_t&gt;(argrt++);
+    uint32_t batch_end = get_arg_val&lt;uint32_t&gt;(argrt++);
+    uint32_t seq_t_start = get_arg_val&lt;uint32_t&gt;(argrt++);
+    uint32_t seq_t_end = get_arg_val&lt;uint32_t&gt;(argrt++);
+
+    constexpr uint32_t onetile = 1;
+    constexpr uint32_t in_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t cos_cb = get_compile_time_arg_val(1);
+    constexpr uint32_t sin_cb = get_compile_time_arg_val(2);
+    constexpr uint32_t trans_mat_cb = get_compile_time_arg_val(3);
+
+    constexpr uint32_t rotated_in_interm_cb = get_compile_time_arg_val(4);
+    constexpr uint32_t cos_interm_cb = get_compile_time_arg_val(5);
+    constexpr uint32_t sin_interm_cb = get_compile_time_arg_val(6);
+    constexpr uint32_t out_cb = get_compile_time_arg_val(7);
+    constexpr uint32_t Wt = get_compile_time_arg_val(8);
+    constexpr uint32_t n_heads = get_compile_time_arg_val(9);
+    constexpr uint32_t rotary_Ht = get_compile_time_arg_val(10);
+
+<span class="dz" data-d="5">    // RELOAD_IMPL selects how sin/cos tiles are delivered, which is the only thing that
+    // differs between the two builds — express it as compile-time chain args instead of
+    // duplicating the whole sin/cos chains under #if:
+    //   ==0 (no reload): the reader waits the whole my_cos_sin_tiles window once per batch
+    //        and holds it; each seq-tile reads it CallerManaged at offset sin_cos_row_cnt*Wt.
+    //   ==1 (reload):    the reader streams Wt sin/cos tiles per seq-tile; the chain
+    //        Bulk-waits+pops them and sin_cos_row_cnt stays 0, so the offset folds to 0.
+    constexpr compute_kernel_lib::InputLifecycle sincos_blife =
+        (RELOAD_IMPL == 0) ? compute_kernel_lib::InputLifecycle::CallerManaged
+                           : compute_kernel_lib::InputLifecycle::Bulk;</span>
+
+    const uint32_t rotary_seq_t_end = seq_t_end &lt; rotary_Ht ? seq_t_end : rotary_Ht;
+    const uint32_t my_rotary_seq_tiles = seq_t_start &lt; rotary_seq_t_end ? rotary_seq_t_end - seq_t_start : 0;
+    const uint32_t my_cos_sin_tiles = my_rotary_seq_tiles * Wt;
+
+    mm_init(in_cb, trans_mat_cb, out_cb);
+    binary_op_init_common(rotated_in_interm_cb, cos_cb, out_cb);  // General Init for all binary ops
+
+    // Get the trans_mat
+    cb_wait_front(trans_mat_cb, onetile);
+
+    uint32_t in0_index = 0;
+    uint32_t in1_index = 0;
+    uint32_t interm_index = 0;
+
+    for (uint32_t batch_id = batch_start; batch_id &lt; batch_end; ++batch_id) {
+#if RELOAD_IMPL == 0
+        if (my_cos_sin_tiles &gt; 0) {
+            cb_wait_front(sin_cb, my_cos_sin_tiles);
+            cb_wait_front(cos_cb, my_cos_sin_tiles);
+        }
+#endif
+        for (uint32_t head_num = 0; head_num &lt; n_heads; ++head_num) {
+            uint32_t sin_cos_row_cnt = 0;
+            for (uint32_t seq_tile = seq_t_start; seq_tile &lt; rotary_seq_t_end; ++seq_tile) {
+                // input cb wait and reserve
+                cb_wait_front(in_cb, Wt);
+#if RELOAD_IMPL == 1
+                cb_wait_front(sin_cb, Wt);
+                cb_wait_front(cos_cb, Wt);
+#endif
+
+                cb_reserve_back(rotated_in_interm_cb, Wt);
+                cb_reserve_back(sin_interm_cb, Wt);
+                cb_reserve_back(cos_interm_cb, Wt);
+                cb_reserve_back(out_cb, Wt);
+
+                // // rotated = x @ trans_mat
+                mm_init_short(in_cb, trans_mat_cb);
+                ACQ();
+                for (uint32_t j = 0; j &lt; Wt; ++j) {
+                    matmul_tiles(in_cb, trans_mat_cb, j, in1_index, j);
+                    pack_tile(j, rotated_in_interm_cb, j);
+                }
+                REL();
+                cb_push_back(rotated_in_interm_cb, Wt);
+                cb_wait_front(rotated_in_interm_cb, Wt);
+
+<span class="dz" data-d="3">                // sin_interim = rotated * sin
+                // A = rotated_in_interm_cb InputLifecycle::Bulk + Block (Wt tiles waited above, popped below).
+                // B = sin_cb: index = j + (sin_cos_row_cnt * Wt). Block + compute_kernel_lib::TileOffset::Set.
+                //   B lifecycle is sincos_blife (CallerManaged for no-reload held sin/cos, Bulk for
+                //   the per-iter reload stream). For reload sin_cos_row_cnt stays 0, so the Set base
+                //   folds to 0 — behaviourally identical to the old TileOffset::Unset reload path.
+                // Output sin_interm_cb OutputLifecycle::Bulk + Block (Wt tiles).
+                // Reconfig audit: mul_tiles_init reconfigs srca/srcb -&gt; Input.
+                //   No explicit pack_reconfig (relies on sin_interm_cb format == out_cb&#x27;s
+                //   from startup) -&gt; PackTileReconfig::None.
+                compute_kernel_lib::eltwise_chain(
+                    compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
+                    compute_kernel_lib::BinaryFpu&lt;
+                        rotated_in_interm_cb,
+                        sin_cb,
+                        compute_kernel_lib::BinaryFpuOp::Mul,
+                        compute_kernel_lib::BroadcastDim::None,
+                        compute_kernel_lib::InputLifecycle::Bulk,
+                        sincos_blife,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::TileOffset::Unset,
+                        compute_kernel_lib::TileOffset::Set&gt;{0u, sin_cos_row_cnt * Wt},
+                    compute_kernel_lib::PackTile&lt;
+                        sin_interm_cb,
+                        compute_kernel_lib::OutputLifecycle::Bulk,
+                        compute_kernel_lib::PackTileReconfig::None&gt;{});</span>
+
+<span class="dz" data-d="3">                // cos_interim = x * cos  — same pattern as sin_interim.
+                compute_kernel_lib::eltwise_chain(
+                    compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
+                    compute_kernel_lib::BinaryFpu&lt;
+                        in_cb,
+                        cos_cb,
+                        compute_kernel_lib::BinaryFpuOp::Mul,
+                        compute_kernel_lib::BroadcastDim::None,
+                        compute_kernel_lib::InputLifecycle::Bulk,
+                        sincos_blife,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::TileOffset::Unset,
+                        compute_kernel_lib::TileOffset::Set&gt;{0u, sin_cos_row_cnt * Wt},
+                    compute_kernel_lib::PackTile&lt;
+                        cos_interm_cb,
+                        compute_kernel_lib::OutputLifecycle::Bulk,
+                        compute_kernel_lib::PackTileReconfig::None&gt;{});</span>
+
+<span class="dz" data-d="4">                // out = cos_interim + sin_interim
+                // Both operands InputLifecycle::Bulk + Block (Wt tiles, popped at end), out_cb OutputLifecycle::Bulk +
+                // Block. Reconfig: add_tiles_init reconfigs srca/srcb -&gt; Input. No pack_reconfig -&gt; None.
+                compute_kernel_lib::add&lt;
+                    cos_interm_cb,
+                    sin_interm_cb,
+                    out_cb,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::PackTileReconfig::None,
+                    compute_kernel_lib::OperandKind::Block&gt;(
+                    compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));</span>
+
+#if RELOAD_IMPL == 0
+                // no-reload needs to increment this counter
+                // Used a sin/cos row
+                sin_cos_row_cnt++;
+#endif
+            }
+        }
+
+#if RELOAD_IMPL == 0
+        if (my_cos_sin_tiles &gt; 0) {
+            cb_pop_front(sin_cb, my_cos_sin_tiles);
+            cb_pop_front(cos_cb, my_cos_sin_tiles);
+        }
+#endif
+    }
+
+    // Done with the transformation matrix, so remove from CB
+    cb_pop_front(trans_mat_cb, onetile);
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; include swap</b> — Added <code>eltwise_chain.hpp</code> and <code>eltwise_convenience.hpp</code>; matmul / bcast includes unchanged (the matmul rotated-in stage stays raw).</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; sin & cos multiplies → eltwise_chain</b> — <code>sin_interim = rotated*sin</code> and <code>cos_interim = x*cos</code> (each a Wt-wide raw <code>mul_tiles</code> loop) became <code>eltwise_chain(EltwiseShape::tiles(Wt, Wt), BinaryFpu&lt;…,Mul,None, Bulk, sincos_blife, Input, …, TileOffset::Set&gt;{0u, sin_cos_row_cnt*Wt}, PackTile&lt;…interm, Bulk, None&gt;)</code>. The B operand's lifecycle is the <code>sincos_blife</code> constexpr.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; sin+cos add → add<> chain</b> — <code>out = cos_interim + sin_interim</code> migrated to <code>add&lt;cos_interm_cb, sin_interm_cb, out_cb, BroadcastDim::None, Bulk, Bulk, Bulk, BinaryDataFormatReconfig::Input, PackTileReconfig::None, OperandKind::Block&gt;(EltwiseShape::tiles(Wt, Wt))</code>.</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; collapse #if branches via sincos_blife</b> — The two <code>#if RELOAD_IMPL</code> sin/cos delivery paths are collapsed into single chain calls parameterized by a <code>constexpr InputLifecycle sincos_blife</code>: <code>==0</code> (no-reload) → <code>CallerManaged</code> (window held once per batch, read at offset <code>sin_cos_row_cnt*Wt</code>); <code>==1</code> (reload) → <code>Bulk</code> (chain waits+pops Wt per seq-tile, and <code>sin_cos_row_cnt</code> stays 0 so the Set base folds to 0). No more duplicated chains under <code>#if</code>.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-experimental_transformer_rotary_embedding_llama_rotary_embedding_llama">
+{
+  "1": {
+    "title": "include swap",
+    "body": "Added <code>eltwise_chain.hpp</code> and <code>eltwise_convenience.hpp</code>; matmul / bcast includes unchanged (the matmul rotated-in stage stays raw).",
+    "color": "#d6a000"
+  },
+  "3": {
+    "title": "sin & cos multiplies → eltwise_chain",
+    "body": "<code>sin_interim = rotated*sin</code> and <code>cos_interim = x*cos</code> (each a Wt-wide raw <code>mul_tiles</code> loop) became <code>eltwise_chain(EltwiseShape::tiles(Wt, Wt), BinaryFpu&lt;…,Mul,None, Bulk, sincos_blife, Input, …, TileOffset::Set&gt;{0u, sin_cos_row_cnt*Wt}, PackTile&lt;…interm, Bulk, None&gt;)</code>. The B operand's lifecycle is the <code>sincos_blife</code> constexpr.",
+    "color": "#3f8ae0"
+  },
+  "4": {
+    "title": "sin+cos add → add<> chain",
+    "body": "<code>out = cos_interim + sin_interim</code> migrated to <code>add&lt;cos_interm_cb, sin_interm_cb, out_cb, BroadcastDim::None, Bulk, Bulk, Bulk, BinaryDataFormatReconfig::Input, PackTileReconfig::None, OperandKind::Block&gt;(EltwiseShape::tiles(Wt, Wt))</code>.",
+    "color": "#cf222e"
+  },
+  "5": {
+    "title": "collapse #if branches via sincos_blife",
+    "body": "The two <code>#if RELOAD_IMPL</code> sin/cos delivery paths are collapsed into single chain calls parameterized by a <code>constexpr InputLifecycle sincos_blife</code>: <code>==0</code> (no-reload) → <code>CallerManaged</code> (window held once per batch, read at offset <code>sin_cos_row_cnt*Wt</code>); <code>==1</code> (reload) → <code>Bulk</code> (chain waits+pops Wt per seq-tile, and <code>sin_cos_row_cnt</code> stays 0 so the Set base folds to 0). No more duplicated chains under <code>#if</code>.",
+    "color": "#9f4bbf"
+  }
+}
+</script>

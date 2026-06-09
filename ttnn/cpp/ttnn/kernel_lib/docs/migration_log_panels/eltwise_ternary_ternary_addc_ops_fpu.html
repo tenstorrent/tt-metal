@@ -1,0 +1,200 @@
+<section class="panel" id="panel-eltwise_ternary_ternary_addc_ops_fpu">
+  <h1>ternary_addc_ops_fpu — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_addc_ops_fpu.cpp</div>
+  <div class="meta"><b>Δ</b> +60/-50 &nbsp; <b>Decisions:</b> 5</div>
+
+  <div class="focus-toolbar" data-fkernel="eltwise_ternary_ternary_addc_ops_fpu">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; includes + runtime-&gt;ct dispatch</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; early-pop lifecycle</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; chain + PackTile Streaming</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; DestReuseBinary Add</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; BinaryFpu Mul + MulUnary</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+<span class="dz" data-d="1">#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;api/compute/tile_move_copy.h&quot;</span>
+
+void kernel_main() {
+    uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(0);
+    uint32_t scalar_arg = get_arg_val&lt;uint32_t&gt;(3);
+
+    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);  // set to 1
+    const bool scalar_is_not_1 = scalar_arg != 1u;
+
+    constexpr auto cb_in0 = tt::CBIndex::c_0;  // input_a
+    constexpr auto cb_in1 = tt::CBIndex::c_1;  // input_b
+    constexpr auto cb_in2 = tt::CBIndex::c_2;  // input_c
+    constexpr auto cb_out = tt::CBIndex::c_3;
+
+    // output = input_a + value * input_b * input_c
+    binary_op_init_common(cb_in1, cb_in2, cb_out);
+
+<span class="dz" data-d="3">    for (uint32_t tile_id = 0; tile_id &lt; num_tiles; ++tile_id) {
+        // Wait for input_b and input_c first (needed for first computation)
+        cb_wait_front(cb_in1, num_tiles_per_cycle);
+        cb_wait_front(cb_in2, num_tiles_per_cycle);
+
+        tile_regs_acquire();
+
+        // (input_b * input_c)</span>
+<span class="dz" data-d="6">        mul_tiles_init(cb_in1, cb_in2);
+        mul_tiles(cb_in1, cb_in2, 0, 0, 0);</span>
+
+        // Done with cb_in1 and cb_in2, pop them early for pipeline efficiency
+<span class="dz" data-d="2">        cb_pop_front(cb_in1, num_tiles_per_cycle);
+        cb_pop_front(cb_in2, num_tiles_per_cycle);
+
+        // Step 2: (input_b * input_c) * value -&gt; DST[0]
+        if (scalar_is_not_1) {</span>
+<span class="dz" data-d="6">            binop_with_scalar_tile_init();
+            mul_unary_tile(0, scalar_arg);  // DST[0] * scalar -&gt; DST[0]</span>
+<span class="dz" data-d="2">        }
+
+        // Now wait for input_a (only when we need it)
+        cb_wait_front(cb_in0, num_tiles_per_cycle);</span>
+
+        // Step 3: Load A and add with result DST[0] + cb_in0 -&gt; DST[0]
+<span class="dz" data-d="4">        binary_dest_reuse_tiles_init&lt;EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA&gt;(cb_in0);
+        binary_dest_reuse_tiles&lt;EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA&gt;(cb_in0, 0, 0);</span>
+
+<span class="dz" data-d="3">        tile_regs_commit();
+        tile_regs_wait();
+
+        // Reserve output buffer only when ready to write
+        cb_reserve_back(cb_out, num_tiles_per_cycle);
+
+        // Pack the result from DST[0] to output
+        pack_tile(0, cb_out);
+
+        tile_regs_release();
+
+        cb_push_back(cb_out, num_tiles_per_cycle);
+        cb_pop_front(cb_in0, num_tiles_per_cycle);</span>
+    }
+}
+</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+<span class="dz" data-d="1">#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/eltwise_unary/binop_with_scalar.h&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_scalar.hpp&quot;    // MulUnary
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp&quot;  // OptionalChainElement</span>
+
+// addcmul (FPU): out = in0 + value * (in1 * in2).
+//   (in1 * in2) -&gt; D0          BinaryFpu&lt;Mul&gt;, both inputs Streaming/Scalar, pops B,C early
+//   [* value when value != 1]  MulUnary&lt;D0&gt; (binop_with_scalar)
+//   D0 = in0 + D0              DestReuseBinary&lt;Add, DEST_TO_SRCA&gt;: DEST-&gt;srca, cb_in0-&gt;srcb,
+//                              late wait on A — chain runs wait-&gt;exec-&gt;pop per element, so the
+//                              emitted schedule is wait(B,C)-&gt;mul-&gt;pop(B,C)-&gt;[*v]-&gt;wait(A)-&gt;add-&gt;pop(A),
+//                              byte-for-byte the original&#x27;s early-pop ordering.
+//
+// `scalar_is_not_1` is a RUNTIME arg, so it drives compile-time dispatch via a bool-
+// templated body (eltwise_optional.hpp runtime pattern), not compile-time OptionalChainElement&lt;COND&gt;.
+// 1 tile/iter (num_tiles_per_cycle==1): inputs are Streaming + OperandKind::Scalar (pop advances
+// the CB front each iter); Block+Streaming would be the absolute-index footgun. No new elements.
+namespace ckl = compute_kernel_lib;
+
+<span class="dz" data-d="1">template &lt;bool ScalarIsNot1&gt;
+inline void run_addcmul(uint32_t num_tiles, uint32_t scalar_arg) {</span>
+    constexpr auto cb_in0 = tt::CBIndex::c_0;  // input_a
+    constexpr auto cb_in1 = tt::CBIndex::c_1;  // input_b
+    constexpr auto cb_in2 = tt::CBIndex::c_2;  // input_c
+    constexpr auto cb_out = tt::CBIndex::c_3;
+
+<span class="dz" data-d="3">    ckl::eltwise_chain(
+        num_tiles,</span>
+<span class="dz" data-d="6">        ckl::BinaryFpu&lt;
+            cb_in1,
+            cb_in2,
+            ckl::BinaryFpuOp::Mul,
+            ckl::BroadcastDim::None,
+            ckl::InputLifecycle::Streaming,
+            ckl::InputLifecycle::Streaming,
+            ckl::BinaryDataFormatReconfig::None&gt;{},
+        ckl::OptionalChainElement&lt;ScalarIsNot1, ckl::MulUnary&lt;ckl::Dst::D0&gt;&gt;{scalar_arg},</span>
+<span class="dz" data-d="4">        ckl::DestReuseBinary&lt;cb_in0, ckl::BinaryFpuOp::Add, ckl::DestReuseType::DEST_TO_SRCA&gt;{},</span>
+<span class="dz" data-d="3">        ckl::PackTile&lt;cb_out, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None&gt;{});</span>
+}
+
+void kernel_main() {
+    uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(0);
+    uint32_t scalar_arg = get_arg_val&lt;uint32_t&gt;(3);
+    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);  // set to 1
+
+    constexpr auto cb_in1 = tt::CBIndex::c_1;
+    constexpr auto cb_in2 = tt::CBIndex::c_2;
+    constexpr auto cb_out = tt::CBIndex::c_3;
+
+    // output = input_a + value * input_b * input_c. Caller-owned BIG init.
+    binary_op_init_common(cb_in1, cb_in2, cb_out);
+
+<span class="dz" data-d="1">    if (scalar_arg != 1u) {
+        run_addcmul&lt;true&gt;(num_tiles, scalar_arg);
+    } else {
+        run_addcmul&lt;false&gt;(num_tiles, scalar_arg);
+    }</span>
+}
+</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; Includes &amp; runtime-&gt;compile-time scalar dispatch</b> — Added the chain headers (<code>eltwise_chain.hpp</code>, <code>eltwise_scalar.hpp</code>, <code>eltwise_optional.hpp</code>). The runtime <code>scalar_is_not_1</code> flag now drives a <code>template&lt;bool ScalarIsNot1&gt; run_addcmul</code> dispatched from an <code>if (scalar_arg != 1u)</code> so the chain body is compile-time specialized.</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; Manual early-pop of B,C + late wait A preserved by Streaming</b> — The original popped <code>cb_in1</code>/<code>cb_in2</code> early then late-waited <code>cb_in0</code>. The chain reproduces this byte-for-byte: <code>BinaryFpu</code> with two <code>Streaming</code> inputs waits/pops B,C in place, and <code>DestReuseBinary&lt;cb_in0&gt;</code> does the late wait+add+pop of A — same wait->exec->pop schedule.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; Manual loop + pack -&gt; eltwise_chain / PackTile Streaming</b> — The whole <code>for</code> loop with <code>tile_regs_*</code>, <code>cb_reserve_back</code>, <code>pack_tile(0,cb_out)</code>, <code>cb_push_back</code> collapses into <code>eltwise_chain(num_tiles, …, PackTile&lt;cb_out, OutputLifecycle::Streaming&gt;)</code>.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; binary_dest_reuse_tiles -&gt; DestReuseBinary</b> — The raw <code>binary_dest_reuse_tiles_init/&lt;ELWADD, DEST_TO_SRCA&gt;</code> + <code>binary_dest_reuse_tiles(cb_in0,0,0)</code> became <code>DestReuseBinary&lt;cb_in0, BinaryFpuOp::Add, DestReuseType::DEST_TO_SRCA&gt;</code> (DEST->srca, cb_in0->srcb).</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; mul_tiles + mul_unary_tile -&gt; BinaryFpu / MulUnary</b> — <code>mul_tiles_init</code>+<code>mul_tiles(cb_in1,cb_in2,…)</code> became <code>BinaryFpu&lt;cb_in1, cb_in2, BinaryFpuOp::Mul, BroadcastDim::None, Streaming, Streaming&gt;</code>. The guarded <code>binop_with_scalar</code> <code>mul_unary_tile</code> became <code>OptionalChainElement&lt;ScalarIsNot1, MulUnary&lt;D0&gt;&gt;</code>.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-eltwise_ternary_ternary_addc_ops_fpu">
+{
+  "1": {
+    "title": "Includes & runtime->compile-time scalar dispatch",
+    "body": "Added the chain headers (<code>eltwise_chain.hpp</code>, <code>eltwise_scalar.hpp</code>, <code>eltwise_optional.hpp</code>). The runtime <code>scalar_is_not_1</code> flag now drives a <code>template&lt;bool ScalarIsNot1&gt; run_addcmul</code> dispatched from an <code>if (scalar_arg != 1u)</code> so the chain body is compile-time specialized.",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "Manual early-pop of B,C + late wait A preserved by Streaming",
+    "body": "The original popped <code>cb_in1</code>/<code>cb_in2</code> early then late-waited <code>cb_in0</code>. The chain reproduces this byte-for-byte: <code>BinaryFpu</code> with two <code>Streaming</code> inputs waits/pops B,C in place, and <code>DestReuseBinary&lt;cb_in0&gt;</code> does the late wait+add+pop of A \u2014 same wait->exec->pop schedule.",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "Manual loop + pack -> eltwise_chain / PackTile Streaming",
+    "body": "The whole <code>for</code> loop with <code>tile_regs_*</code>, <code>cb_reserve_back</code>, <code>pack_tile(0,cb_out)</code>, <code>cb_push_back</code> collapses into <code>eltwise_chain(num_tiles, \u2026, PackTile&lt;cb_out, OutputLifecycle::Streaming&gt;)</code>.",
+    "color": "#3f8ae0"
+  },
+  "4": {
+    "title": "binary_dest_reuse_tiles -> DestReuseBinary",
+    "body": "The raw <code>binary_dest_reuse_tiles_init/&lt;ELWADD, DEST_TO_SRCA&gt;</code> + <code>binary_dest_reuse_tiles(cb_in0,0,0)</code> became <code>DestReuseBinary&lt;cb_in0, BinaryFpuOp::Add, DestReuseType::DEST_TO_SRCA&gt;</code> (DEST->srca, cb_in0->srcb).",
+    "color": "#cf222e"
+  },
+  "6": {
+    "title": "mul_tiles + mul_unary_tile -> BinaryFpu / MulUnary",
+    "body": "<code>mul_tiles_init</code>+<code>mul_tiles(cb_in1,cb_in2,\u2026)</code> became <code>BinaryFpu&lt;cb_in1, cb_in2, BinaryFpuOp::Mul, BroadcastDim::None, Streaming, Streaming&gt;</code>. The guarded <code>binop_with_scalar</code> <code>mul_unary_tile</code> became <code>OptionalChainElement&lt;ScalarIsNot1, MulUnary&lt;D0&gt;&gt;</code>.",
+    "color": "#ff7a00"
+  }
+}
+</script>

@@ -1,0 +1,722 @@
+<section class="panel" id="panel-moreh_moreh_adamw_moreh_adamw">
+  <h1>moreh_adamw — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/moreh/moreh_adamw/device/kernels/moreh_adamw.cpp</div>
+  <div class="meta"><b>Δ</b> +157/-91 &nbsp; <b>Decisions:</b> 6</div>
+
+  <div class="focus-toolbar" data-fkernel="moreh_moreh_adamw_moreh_adamw">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; lib includes</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; weight-decay chain</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; convenience tail</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; recip chains</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; sqrt/eps chains</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; binary_sfpu max</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+<span class="dz" data-d="1">#include &quot;api/compute/compute_kernel_api.h&quot;
+#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;api/compute/eltwise_unary/recip.h&quot;
+#include &quot;api/compute/eltwise_unary/sqrt.h&quot;
+#include &quot;api/compute/tile_move_copy.h&quot;
+#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+void kernel_main() {
+    uint32_t step = get_arg_val&lt;uint32_t&gt;(0);
+    constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+
+    constexpr auto cb_param_in = tt::CBIndex::c_0;
+    CircularBuffer cb_param_in_obj(cb_param_in);
+    constexpr auto cb_grad_in = tt::CBIndex::c_1;
+    CircularBuffer cb_grad_in_obj(cb_grad_in);
+    constexpr auto cb_exp_avg_in = tt::CBIndex::c_2;
+    CircularBuffer cb_exp_avg_in_obj(cb_exp_avg_in);
+    constexpr auto cb_exp_avg_sq_in = tt::CBIndex::c_3;
+    CircularBuffer cb_exp_avg_sq_in_obj(cb_exp_avg_sq_in);
+#ifdef AMSGRAD
+    constexpr auto cb_max_exp_avg_sq_in = tt::CBIndex::c_4;
+    CircularBuffer cb_max_exp_avg_sq_in_obj(cb_max_exp_avg_sq_in);
+#endif
+    // lr, beta1, beta2, eps, weight_decay
+    constexpr auto cb_scalar_args = tt::CBIndex::c_5;
+    CircularBuffer cb_scalar_args_obj(cb_scalar_args);
+    constexpr auto cb_one = tt::CBIndex::c_6;
+    CircularBuffer cb_one_obj(cb_one);
+    constexpr auto cb_param_out = tt::CBIndex::c_16;
+    constexpr auto cb_exp_avg_out = tt::CBIndex::c_17;
+    constexpr auto cb_exp_avg_sq_out = tt::CBIndex::c_18;
+#ifdef AMSGRAD
+    constexpr auto cb_max_exp_avg_sq_out = tt::CBIndex::c_19;
+#endif
+
+    constexpr auto tmp_cb_param = tt::CBIndex::c_24;
+    constexpr auto tmp_cb_exp_avg = tt::CBIndex::c_25;
+    constexpr auto tmp_cb_exp_avg_sq = tt::CBIndex::c_26;
+    CircularBuffer tmp_cb_exp_avg_sq_obj(tmp_cb_exp_avg_sq);
+#ifdef AMSGRAD
+    constexpr auto tmp_cb_max_exp_avg_sq = tt::CBIndex::c_27;
+    CircularBuffer tmp_cb_max_exp_avg_sq_obj(tmp_cb_max_exp_avg_sq);
+#endif
+    constexpr auto cb_beta1_exponent = tt::CBIndex::c_28;
+    CircularBuffer cb_beta1_exponent_obj(cb_beta1_exponent);
+    constexpr auto cb_beta2_exponent = tt::CBIndex::c_29;
+    CircularBuffer cb_beta2_exponent_obj(cb_beta2_exponent);
+    constexpr auto cb_tmp1 = tt::CBIndex::c_30;
+    CircularBuffer cb_tmp1_obj(cb_tmp1);
+    constexpr auto cb_tmp2 = tt::CBIndex::c_31;
+    CircularBuffer cb_tmp2_obj(cb_tmp2);
+
+    constexpr uint32_t dst0 = 0;
+    constexpr uint32_t dst1 = 1;
+
+    constexpr uint32_t first_tile = 0;
+    constexpr uint32_t lr_tile = 0;
+    constexpr uint32_t beta1_tile = 1;
+    constexpr uint32_t beta2_tile = 2;
+    constexpr uint32_t eps_tile = 3;
+    constexpr uint32_t weight_decay_tile = 4;
+    constexpr uint32_t onetile = 1;
+
+    cb_scalar_args_obj.wait_front(5);
+    cb_one_obj.wait_front(onetile);
+    cb_beta1_exponent_obj.wait_front(onetile);
+    cb_beta2_exponent_obj.wait_front(onetile);
+
+    binary_op_init_common(cb_param_in, cb_scalar_args, cb_param_out);
+
+    for (uint32_t b = 0; b &lt; per_core_tile_cnt; ++b) {
+        cb_param_in_obj.wait_front(onetile);
+        cb_grad_in_obj.wait_front(onetile);
+        cb_exp_avg_in_obj.wait_front(onetile);
+        cb_exp_avg_sq_in_obj.wait_front(onetile);
+#ifdef AMSGRAD
+        cb_max_exp_avg_sq_in_obj.wait_front(onetile);
+#endif
+        // param = param - lr * weight_decay * param.
+        // cb_tmp1 : weight_decay * cb_param_in
+<span class="dz" data-d="2">        mul_tiles_to_cb(cb_scalar_args, cb_param_in, cb_tmp1, weight_decay_tile, first_tile, /*pop0=*/0, /*pop1=*/0);
+
+        // cb_tmp1 : lr * cb_tmp1
+        mul_tiles_to_cb(cb_scalar_args, cb_tmp1, cb_tmp1, lr_tile, first_tile, /*pop0=*/0, /*pop1=*/1);
+
+        // tmp_cb_param : cb_param_in - cb_tmp1
+        sub_tiles_to_cb(cb_param_in, cb_tmp1, tmp_cb_param, first_tile, first_tile, /*pop0=*/0, /*pop1=*/1);</span>
+
+        ////////////////////////////////////////////////////////////////////////
+        // exp_avg = exp_avg * beta1 + grad * (1 - beta1);
+        // cb_tmp1 = (1 - beta1)
+        sub_tiles_to_cb(cb_one, cb_scalar_args, cb_tmp1, first_tile, beta1_tile, /*pop0=*/0, /*pop1=*/0);
+
+        // cb_tmp1 = cb_grad_in * cb_tmp1
+        mul_tiles_to_cb(cb_grad_in, cb_tmp1, cb_tmp1, first_tile, first_tile, /*pop0=*/0, /*pop1=*/1);
+
+        // tmp_cb_exp_avg = cb_exp_avg_in * beta1
+        mul_tiles_to_cb(cb_exp_avg_in, cb_scalar_args, tmp_cb_exp_avg, first_tile, beta1_tile, /*pop0=*/0, /*pop1=*/0);
+
+        // tmp_cb_exp_avg = tmp_cb_exp_avg + cb_tmp1
+        add_tiles_to_cb(tmp_cb_exp_avg, cb_tmp1, tmp_cb_exp_avg, first_tile, first_tile);
+
+        // cb_exp_avg_out
+        copy_tile_to_cb(tmp_cb_exp_avg, cb_exp_avg_out, first_tile, /*pop=*/0);
+        //////////////////////////////////////////////////////////////////////
+
+        ////////////////////////////////////////////////////////////////////////
+        // exp_avg_sq = exp_avg_sq * beta2 + grad * grad * (1 - beta2);
+        // cb_tmp1 = (1 - beta2)
+<span class="dz" data-d="4">        tile_regs_acquire();
+        cb_tmp1_obj.reserve_back(onetile);
+        sub_tiles_init_with_dt(cb_one, cb_scalar_args);
+        sub_tiles(cb_one, cb_scalar_args, first_tile, beta2_tile, dst0);
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, cb_tmp1);
+        cb_tmp1_obj.push_back(onetile);
+        tile_regs_release();
+
+        // cb_tmp2 = grad * grad
+        mul_tiles_to_cb(cb_grad_in, cb_grad_in, cb_tmp2, first_tile, first_tile, /*pop0=*/0, /*pop1=*/0);
+
+        // cb_tmp1 = cb_tmp1 * cb_tmp2
+        mul_tiles_to_cb(cb_tmp1, cb_tmp2, cb_tmp1, first_tile, first_tile);
+
+        // tmp_cb_exp_avg_sq = cb_exp_avg_sq_in * beta2
+        mul_tiles_to_cb(
+            cb_exp_avg_sq_in, cb_scalar_args, tmp_cb_exp_avg_sq, first_tile, beta2_tile, /*pop0=*/0, /*pop1=*/0);
+
+        // tmp_cb_exp_avg_sq = tmp_cb_exp_avg_sq + cb_tmp1
+        add_tiles_to_cb(tmp_cb_exp_avg_sq, cb_tmp1, tmp_cb_exp_avg_sq, first_tile, first_tile);
+
+        // cb_exp_avg_sq_out
+        copy_tile_to_cb(tmp_cb_exp_avg_sq, cb_exp_avg_sq_out, first_tile, /*pop=*/0);
+        //////////////////////////////////////////////////////////////////////
+
+        ////////////////////////////////////////////////////////////////////////
+        // denom = sqrt(max_exp_avg_sq) / sqrt(bias_correction2) + eps;
+        // denom = sqrt(exp_avg_sq) / sqrt(bias_correction2) + eps;
+        // bias_correction2 = 1 - pow(beta2, step);
+        // cb_beta2_exponent = pow(beta2, step); Calculated from host
+
+        // cb_tmp1 = 1 / (1 - cb_beta2_exponent);
+        tile_regs_acquire();
+        cb_tmp1_obj.reserve_back(onetile);
+        sub_tiles_init_with_dt(cb_one, cb_beta2_exponent);
+        sub_tiles(cb_one, cb_beta2_exponent, first_tile, first_tile, dst0);
+        recip_tile_init();
+        recip_tile(dst0);
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, cb_tmp1);
+        cb_tmp1_obj.push_back(onetile);
+        tile_regs_release();</span>
+
+<span class="dz" data-d="6">#ifdef AMSGRAD
+        // tmp_cb_max_exp_avg_sq = max(cb_max_exp_avg_sq_in, tmp_cb_exp_avg_sq);
+        tile_regs_acquire();
+        tmp_cb_max_exp_avg_sq_obj.reserve_back(onetile);
+        copy_tile_init_with_dt(cb_max_exp_avg_sq_in);
+        copy_tile(cb_max_exp_avg_sq_in, first_tile, dst0);
+        copy_tile_init_with_dt(tmp_cb_exp_avg_sq);
+        copy_tile(tmp_cb_exp_avg_sq, first_tile, dst1);
+        binary_max_tile_init();
+        binary_max_tile(dst0, dst1, dst0);
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, tmp_cb_max_exp_avg_sq);
+        tmp_cb_max_exp_avg_sq_obj.push_back(onetile);
+        tile_regs_release();
+
+        // cb_max_exp_avg_sq_out
+        copy_tile_to_cb(tmp_cb_max_exp_avg_sq, cb_max_exp_avg_sq_out, first_tile, /*pop=*/0);
+#endif</span>
+
+<span class="dz" data-d="5">        // cb_tmp1 = sqrt(exp_avg_sq / cb_tmp1);
+        tile_regs_acquire();
+        cb_tmp1_obj.wait_front(onetile);
+        cb_tmp1_obj.reserve_back(onetile);
+#ifdef AMSGRAD
+        mul_tiles_init_with_dt(tmp_cb_max_exp_avg_sq, cb_tmp1);
+        mul_tiles(tmp_cb_max_exp_avg_sq, cb_tmp1, first_tile, first_tile, dst0);
+#else
+        mul_tiles_init_with_dt(tmp_cb_exp_avg_sq, cb_tmp1);
+        mul_tiles(tmp_cb_exp_avg_sq, cb_tmp1, first_tile, first_tile, dst0);
+#endif
+        sqrt_tile_init();
+        sqrt_tile(dst0);
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, cb_tmp1);
+        cb_tmp1_obj.pop_front(onetile);
+        cb_tmp1_obj.push_back(onetile);
+#ifdef AMSGRAD
+        tmp_cb_max_exp_avg_sq_obj.pop_front(onetile);
+#endif
+        tmp_cb_exp_avg_sq_obj.pop_front(onetile);
+        tile_regs_release();
+
+        // cb_tmp1 = 1 / (cb_tmp1 + eps)
+        tile_regs_acquire();
+        cb_tmp1_obj.wait_front(onetile);
+        cb_tmp1_obj.reserve_back(onetile);
+        add_tiles_init_with_dt(cb_tmp1, cb_scalar_args);
+        add_tiles(cb_tmp1, cb_scalar_args, first_tile, eps_tile, dst0);
+        recip_tile_init();
+        recip_tile(dst0);
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, cb_tmp1);
+        cb_tmp1_obj.pop_front(onetile);
+        cb_tmp1_obj.push_back(onetile);
+        tile_regs_release();</span>
+
+        // bias_correction1 = 1 - pow(beta1, step);
+        // cb_beta1_exponent = pow(beta1, step); Calculated from host
+
+        // cb_tmp2 = 1 / (1 - cb_beta1_exponent);
+        tile_regs_acquire();
+        cb_tmp2_obj.reserve_back(onetile);
+        sub_tiles_init_with_dt(cb_one, cb_beta1_exponent);
+        sub_tiles(cb_one, cb_beta1_exponent, first_tile, first_tile, dst0);
+        recip_tile_init();
+        recip_tile(dst0);
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, cb_tmp2);
+        cb_tmp2_obj.push_back(onetile);
+        tile_regs_release();
+
+<span class="dz" data-d="3">        // cb_tmp2 = lr * cb_tmp2;
+        mul_tiles_to_cb(cb_scalar_args, cb_tmp2, cb_tmp2, lr_tile, first_tile, /*pop0=*/0, /*pop1=*/1);
+
+        // cb_tmp2 = cb_tmp2 * tmp_cb_exp_avg;
+        mul_tiles_to_cb(cb_tmp2, tmp_cb_exp_avg, cb_tmp2, first_tile, first_tile);
+
+        // cb_tmp1 = cb_tmp1 * cb_tmp2;
+        mul_tiles_to_cb(cb_tmp1, cb_tmp2, cb_tmp1, first_tile, first_tile);
+
+        // param = tmp_cb_param - cb_tmp1;
+        sub_tiles_to_cb(tmp_cb_param, cb_tmp1, cb_param_out, first_tile, first_tile);</span>
+
+        cb_param_in_obj.pop_front(onetile);
+        cb_grad_in_obj.pop_front(onetile);
+        cb_exp_avg_in_obj.pop_front(onetile);
+        cb_exp_avg_sq_in_obj.pop_front(onetile);
+#ifdef AMSGRAD
+        cb_max_exp_avg_sq_in_obj.pop_front(onetile);
+#endif
+    }
+
+    cb_scalar_args_obj.pop_front(5);
+    cb_one_obj.pop_front(onetile);
+    cb_beta1_exponent_obj.pop_front(onetile);
+    cb_beta2_exponent_obj.pop_front(onetile);
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+<span class="dz" data-d="1">#include &quot;api/compute/compute_kernel_api.h&quot;
+#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;api/compute/eltwise_unary/recip.h&quot;
+#include &quot;api/compute/eltwise_unary/sqrt.h&quot;
+#include &quot;api/compute/tile_move_copy.h&quot;
+#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp&quot;</span>
+
+void kernel_main() {
+    uint32_t step = get_arg_val&lt;uint32_t&gt;(0);
+    constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+
+    constexpr auto cb_param_in = tt::CBIndex::c_0;
+    CircularBuffer cb_param_in_obj(cb_param_in);
+    constexpr auto cb_grad_in = tt::CBIndex::c_1;
+    CircularBuffer cb_grad_in_obj(cb_grad_in);
+    constexpr auto cb_exp_avg_in = tt::CBIndex::c_2;
+    CircularBuffer cb_exp_avg_in_obj(cb_exp_avg_in);
+    constexpr auto cb_exp_avg_sq_in = tt::CBIndex::c_3;
+    CircularBuffer cb_exp_avg_sq_in_obj(cb_exp_avg_sq_in);
+#ifdef AMSGRAD
+    constexpr auto cb_max_exp_avg_sq_in = tt::CBIndex::c_4;
+    CircularBuffer cb_max_exp_avg_sq_in_obj(cb_max_exp_avg_sq_in);
+#endif
+    // lr, beta1, beta2, eps, weight_decay
+    constexpr auto cb_scalar_args = tt::CBIndex::c_5;
+    CircularBuffer cb_scalar_args_obj(cb_scalar_args);
+    constexpr auto cb_one = tt::CBIndex::c_6;
+    CircularBuffer cb_one_obj(cb_one);
+    constexpr auto cb_param_out = tt::CBIndex::c_16;
+    constexpr auto cb_exp_avg_out = tt::CBIndex::c_17;
+    constexpr auto cb_exp_avg_sq_out = tt::CBIndex::c_18;
+#ifdef AMSGRAD
+    constexpr auto cb_max_exp_avg_sq_out = tt::CBIndex::c_19;
+#endif
+
+    constexpr auto tmp_cb_param = tt::CBIndex::c_24;
+    constexpr auto tmp_cb_exp_avg = tt::CBIndex::c_25;
+    constexpr auto tmp_cb_exp_avg_sq = tt::CBIndex::c_26;
+    CircularBuffer tmp_cb_exp_avg_sq_obj(tmp_cb_exp_avg_sq);
+#ifdef AMSGRAD
+    constexpr auto tmp_cb_max_exp_avg_sq = tt::CBIndex::c_27;
+    CircularBuffer tmp_cb_max_exp_avg_sq_obj(tmp_cb_max_exp_avg_sq);
+#endif
+    constexpr auto cb_beta1_exponent = tt::CBIndex::c_28;
+    CircularBuffer cb_beta1_exponent_obj(cb_beta1_exponent);
+    constexpr auto cb_beta2_exponent = tt::CBIndex::c_29;
+    CircularBuffer cb_beta2_exponent_obj(cb_beta2_exponent);
+    constexpr auto cb_tmp1 = tt::CBIndex::c_30;
+    CircularBuffer cb_tmp1_obj(cb_tmp1);
+    constexpr auto cb_tmp2 = tt::CBIndex::c_31;
+    CircularBuffer cb_tmp2_obj(cb_tmp2);
+
+    constexpr uint32_t dst0 = 0;
+    constexpr uint32_t dst1 = 1;
+
+    constexpr uint32_t first_tile = 0;
+    constexpr uint32_t lr_tile = 0;
+    constexpr uint32_t beta1_tile = 1;
+    constexpr uint32_t beta2_tile = 2;
+    constexpr uint32_t eps_tile = 3;
+    constexpr uint32_t weight_decay_tile = 4;
+    constexpr uint32_t onetile = 1;
+
+    cb_scalar_args_obj.wait_front(5);
+    cb_one_obj.wait_front(onetile);
+    cb_beta1_exponent_obj.wait_front(onetile);
+    cb_beta2_exponent_obj.wait_front(onetile);
+
+    binary_op_init_common(cb_param_in, cb_scalar_args, cb_param_out);
+
+    for (uint32_t b = 0; b &lt; per_core_tile_cnt; ++b) {
+        cb_param_in_obj.wait_front(onetile);
+        cb_grad_in_obj.wait_front(onetile);
+        cb_exp_avg_in_obj.wait_front(onetile);
+        cb_exp_avg_sq_in_obj.wait_front(onetile);
+#ifdef AMSGRAD
+        cb_max_exp_avg_sq_in_obj.wait_front(onetile);
+#endif
+        // param = param - lr * weight_decay * param.
+        // cb_tmp1 = weight_decay * param  (scalar_args held @ weight_decay_tile -&gt; CallerManaged + Set on A;
+        //   param_in CallerManaged). _with_dt -&gt; Input/Output.
+<span class="dz" data-d="2">        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu&lt;
+                cb_scalar_args,
+                cb_param_in,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::TileOffset::Set,
+                compute_kernel_lib::TileOffset::Unset&gt;{weight_decay_tile, 0u},
+            compute_kernel_lib::PackTile&lt;cb_tmp1&gt;{});
+
+        // cb_tmp1 = lr * cb_tmp1  (scalar_args held @ lr_tile==0 -&gt; CallerManaged + Scalar; cb_tmp1 Streaming)
+        compute_kernel_lib::mul&lt;
+            cb_scalar_args,
+            cb_tmp1,
+            cb_tmp1,
+            compute_kernel_lib::BroadcastDim::None,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::InputLifecycle::Streaming&gt;(onetile);
+
+        // tmp_cb_param = param - cb_tmp1  (param_in CallerManaged; cb_tmp1 Streaming)
+        compute_kernel_lib::sub&lt;
+            cb_param_in,
+            cb_tmp1,
+            tmp_cb_param,
+            compute_kernel_lib::BroadcastDim::None,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::InputLifecycle::Streaming&gt;(onetile);</span>
+
+        ////////////////////////////////////////////////////////////////////////
+        // exp_avg = exp_avg * beta1 + grad * (1 - beta1);
+        // cb_tmp1 = (1 - beta1)
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu&lt;
+                cb_one,
+                cb_scalar_args,
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::TileOffset::Unset,
+                compute_kernel_lib::TileOffset::Set&gt;{0u, beta1_tile},
+            compute_kernel_lib::PackTile&lt;cb_tmp1&gt;{});
+
+        // cb_tmp1 = grad * (1 - beta1)  (grad_in held -&gt; CallerManaged; cb_tmp1 Streaming, same-CB out)
+        compute_kernel_lib::mul&lt;
+            cb_grad_in,
+            cb_tmp1,
+            cb_tmp1,
+            compute_kernel_lib::BroadcastDim::None,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::InputLifecycle::Streaming&gt;(onetile);
+
+        // tmp_cb_exp_avg = cb_exp_avg_in * beta1
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu&lt;
+                cb_exp_avg_in,
+                cb_scalar_args,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::TileOffset::Unset,
+                compute_kernel_lib::TileOffset::Set&gt;{0u, beta1_tile},
+            compute_kernel_lib::PackTile&lt;tmp_cb_exp_avg&gt;{});
+
+        // tmp_cb_exp_avg = tmp_cb_exp_avg + cb_tmp1  (both Streaming, same-CB out)
+        compute_kernel_lib::add&lt;tmp_cb_exp_avg, cb_tmp1, tmp_cb_exp_avg&gt;(onetile);
+
+        // cb_exp_avg_out = tmp_cb_exp_avg  (held -&gt; HeldStream; reused below)
+        compute_kernel_lib::copy&lt;tmp_cb_exp_avg, cb_exp_avg_out, compute_kernel_lib::InputLifecycle::HeldStream&gt;(
+            onetile);
+        //////////////////////////////////////////////////////////////////////
+
+        ////////////////////////////////////////////////////////////////////////
+        // exp_avg_sq = exp_avg_sq * beta2 + grad * grad * (1 - beta2);
+        // cb_tmp1 = cb_one[first_tile] - cb_scalar_args[beta2_tile]
+        // Reconfig: sub_tiles_init_with_dt -&gt; Input. pack_tile_with_dt -&gt; Output.
+        // Both operands held externally -&gt; InputLifecycle::CallerManaged + Scalar; cb_scalar_args at
+        // beta2_tile -&gt; compute_kernel_lib::TileOffset::Set.
+<span class="dz" data-d="4">        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu&lt;
+                cb_one,
+                cb_scalar_args,
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::TileOffset::Unset,
+                compute_kernel_lib::TileOffset::Set&gt;{0u, beta2_tile},
+            compute_kernel_lib::PackTile&lt;cb_tmp1&gt;{});
+
+        // cb_tmp2 = grad * grad  (same-buffer -&gt; square; grad_in held -&gt; CallerManaged)
+        compute_kernel_lib::square&lt;cb_grad_in, cb_tmp2, compute_kernel_lib::InputLifecycle::CallerManaged&gt;(onetile);
+
+        // cb_tmp1 = cb_tmp1 * cb_tmp2  (both Streaming, same-CB out)
+        compute_kernel_lib::mul&lt;cb_tmp1, cb_tmp2, cb_tmp1&gt;(onetile);
+
+        // tmp_cb_exp_avg_sq = cb_exp_avg_sq_in * beta2
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu&lt;
+                cb_exp_avg_sq_in,
+                cb_scalar_args,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::TileOffset::Unset,
+                compute_kernel_lib::TileOffset::Set&gt;{0u, beta2_tile},
+            compute_kernel_lib::PackTile&lt;tmp_cb_exp_avg_sq&gt;{});
+
+        // tmp_cb_exp_avg_sq = tmp_cb_exp_avg_sq + cb_tmp1  (both Streaming, same-CB out)
+        compute_kernel_lib::add&lt;tmp_cb_exp_avg_sq, cb_tmp1, tmp_cb_exp_avg_sq&gt;(onetile);
+
+        // cb_exp_avg_sq_out = tmp_cb_exp_avg_sq  (held -&gt; HeldStream; reused below)
+        compute_kernel_lib::copy&lt;tmp_cb_exp_avg_sq, cb_exp_avg_sq_out, compute_kernel_lib::InputLifecycle::HeldStream&gt;(
+            onetile);
+        //////////////////////////////////////////////////////////////////////
+
+        ////////////////////////////////////////////////////////////////////////
+        // denom = sqrt(max_exp_avg_sq) / sqrt(bias_correction2) + eps;
+        // denom = sqrt(exp_avg_sq) / sqrt(bias_correction2) + eps;
+        // bias_correction2 = 1 - pow(beta2, step);
+        // cb_beta2_exponent = pow(beta2, step); Calculated from host
+
+        // cb_tmp1 = 1 / (cb_one[first_tile] - cb_beta2_exponent[first_tile])
+        // Reconfig: sub_tiles_init_with_dt -&gt; Input. pack_tile_with_dt -&gt; Output.
+        // Both operands held externally -&gt; InputLifecycle::CallerManaged + Scalar (first_tile == 0
+        // -&gt; default TileBase).
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu&lt;
+                cb_one,
+                cb_beta2_exponent,
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged&gt;{},
+            compute_kernel_lib::Recip&lt;compute_kernel_lib::Dst::D0&gt;{},
+            compute_kernel_lib::PackTile&lt;cb_tmp1&gt;{});</span>
+
+<span class="dz" data-d="6">#ifdef AMSGRAD
+        // tmp_cb_max_exp_avg_sq = max(cb_max_exp_avg_sq_in, tmp_cb_exp_avg_sq)
+        // CopyTile&lt;D0&gt; + CopyTile&lt;D1&gt; + BinaryMax + PackTile chain.
+        // Reconfig: copy_tile_init_with_dt reconfigs srca per copy -&gt; Input on both.
+        //   pack_tile_with_dt -&gt; Output.
+        compute_kernel_lib::binary_sfpu&lt;
+            compute_kernel_lib::BinaryMax&lt;&gt;,
+            cb_max_exp_avg_sq_in,
+            tmp_cb_exp_avg_sq,
+            tmp_cb_max_exp_avg_sq,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::InputLifecycle::CallerManaged&gt;(onetile);
+
+        // cb_max_exp_avg_sq_out = tmp_cb_max_exp_avg_sq  (held -&gt; HeldStream; reused below)
+        compute_kernel_lib::
+            copy&lt;tmp_cb_max_exp_avg_sq, cb_max_exp_avg_sq_out, compute_kernel_lib::InputLifecycle::HeldStream&gt;(onetile);
+#endif</span>
+
+<span class="dz" data-d="5">        // cb_tmp1 = sqrt(exp_avg_sq * cb_tmp1)  — same-CB in/out on cb_tmp1.
+        // Same pattern as moreh_adam d7edb1924ec.
+#ifdef AMSGRAD
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu&lt;
+                tmp_cb_max_exp_avg_sq,
+                cb_tmp1,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::CallerManaged&gt;{},
+            compute_kernel_lib::Sqrt&lt;compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0&gt;{},
+            compute_kernel_lib::PackTile&lt;cb_tmp1&gt;{});
+        tmp_cb_max_exp_avg_sq_obj.pop_front(onetile);
+#else
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu&lt;
+                tmp_cb_exp_avg_sq,
+                cb_tmp1,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::CallerManaged&gt;{},
+            compute_kernel_lib::Sqrt&lt;compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0&gt;{},
+            compute_kernel_lib::PackTile&lt;cb_tmp1&gt;{});
+#endif
+        tmp_cb_exp_avg_sq_obj.pop_front(onetile);
+
+        // cb_tmp1 = 1 / (cb_tmp1 + eps)  — same-CB in/out on cb_tmp1.
+        // Reconfig: add_tiles_init_with_dt reconfigs srca/srcb -&gt; Input.
+        //   pack_tile_with_dt -&gt; Output.
+        // Lifecycles: cb_tmp1 InputLifecycle::Streaming + OutputLifecycle::Streaming (same-CB).
+        //   cb_scalar_args InputLifecycle::CallerManaged + Scalar + compute_kernel_lib::TileOffset::Set.
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu&lt;
+                cb_tmp1,
+                cb_scalar_args,
+                compute_kernel_lib::BinaryFpuOp::Add,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::TileOffset::Unset,
+                compute_kernel_lib::TileOffset::Set&gt;{0u, eps_tile},
+            compute_kernel_lib::Recip&lt;compute_kernel_lib::Dst::D0&gt;{},
+            compute_kernel_lib::PackTile&lt;cb_tmp1&gt;{});</span>
+
+        // bias_correction1 = 1 - pow(beta1, step);
+        // cb_beta1_exponent = pow(beta1, step); Calculated from host
+
+        // cb_tmp2 = 1 / (1 - cb_beta1_exponent)
+        // Reconfig: sub_tiles_init_with_dt + pack_tile_with_dt -&gt; Input + Output.
+        // Lifecycles: cb_one InputLifecycle::CallerManaged + Scalar; cb_beta1_exponent
+        //   InputLifecycle::CallerManaged + Scalar (held externally); cb_tmp2 OutputLifecycle::Streaming.
+<span class="dz" data-d="3">        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu&lt;
+                cb_one,
+                cb_beta1_exponent,
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged&gt;{},
+            compute_kernel_lib::Recip&lt;compute_kernel_lib::Dst::D0&gt;{},
+            compute_kernel_lib::PackTile&lt;cb_tmp2&gt;{});
+
+        // cb_tmp2 = lr * cb_tmp2  (scalar_args held @ lr_tile==0 -&gt; CallerManaged + Scalar; cb_tmp2 Streaming)
+        compute_kernel_lib::mul&lt;
+            cb_scalar_args,
+            cb_tmp2,
+            cb_tmp2,
+            compute_kernel_lib::BroadcastDim::None,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::InputLifecycle::Streaming&gt;(onetile);
+
+        // cb_tmp2 = cb_tmp2 * tmp_cb_exp_avg  (both Streaming; tmp_cb_exp_avg popped here)
+        compute_kernel_lib::mul&lt;cb_tmp2, tmp_cb_exp_avg, cb_tmp2&gt;(onetile);
+
+        // cb_tmp1 = cb_tmp1 * cb_tmp2  (both Streaming, same-CB out)
+        compute_kernel_lib::mul&lt;cb_tmp1, cb_tmp2, cb_tmp1&gt;(onetile);
+
+        // cb_param_out = tmp_cb_param - cb_tmp1  (both Streaming)
+        compute_kernel_lib::sub&lt;tmp_cb_param, cb_tmp1, cb_param_out&gt;(onetile);</span>
+
+        cb_param_in_obj.pop_front(onetile);
+        cb_grad_in_obj.pop_front(onetile);
+        cb_exp_avg_in_obj.pop_front(onetile);
+        cb_exp_avg_sq_in_obj.pop_front(onetile);
+#ifdef AMSGRAD
+        cb_max_exp_avg_sq_in_obj.pop_front(onetile);
+#endif
+    }
+
+    cb_scalar_args_obj.pop_front(5);
+    cb_one_obj.pop_front(onetile);
+    cb_beta1_exponent_obj.pop_front(onetile);
+    cb_beta2_exponent_obj.pop_front(onetile);
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; kernel_lib includes</b> — Added <code>eltwise_chain.hpp</code>, <code>eltwise_convenience.hpp</code>, <code>eltwise_math.hpp</code>, <code>eltwise_binary_sfpu.hpp</code> to the raw compute-api header set.</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; weight_decay scalar chain</b> — Raw <code>mul_tiles_to_cb(cb_scalar_args, cb_param_in, ...)</code> became a <code>BinaryFpu&lt;..,OperandKind::Scalar,TileOffset::Set&gt;</code> chain reading weight_decay at its tile, then convenience <code>mul</code>/<code>sub</code>.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; Convenience add/mul/sub tail</b> — bias-correction-1 recip plus the closing <code>mul</code>/<code>mul</code>/<code>sub</code> steps now use <code>compute_kernel_lib</code> convenience ops with explicit lifecycles.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; Reconfig recip/sub chains</b> — Hand <code>sub_tiles_init_with_dt</code>+<code>recip_tile</code>+<code>pack_tile_with_dt</code> blocks (beta2, bias_correction2) became <code>eltwise_chain(BinaryFpu Sub, Recip, PackTile)</code> with the reconfig folded in.</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; sqrt &amp;amp; 1/(x+eps) chains</b> — The raw sqrt and <code>add_tiles_init_with_dt</code>+recip blocks became <code>eltwise_chain</code> stages with <code>BinaryDataFormatReconfig::Input</code> and same-CB in/out on <code>cb_tmp1</code>.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; AMSGRAD binary_max → binary_sfpu</b> — The <code>copy_tile</code>×2 + <code>binary_max_tile</code> AMSGRAD block became <code>binary_sfpu&lt;BinaryMax&lt;&gt;&gt;()</code>, both inputs CallerManaged.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-moreh_moreh_adamw_moreh_adamw">
+{
+  "1": {
+    "title": "kernel_lib includes",
+    "body": "Added <code>eltwise_chain.hpp</code>, <code>eltwise_convenience.hpp</code>, <code>eltwise_math.hpp</code>, <code>eltwise_binary_sfpu.hpp</code> to the raw compute-api header set.",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "weight_decay scalar chain",
+    "body": "Raw <code>mul_tiles_to_cb(cb_scalar_args, cb_param_in, ...)</code> became a <code>BinaryFpu&lt;..,OperandKind::Scalar,TileOffset::Set&gt;</code> chain reading weight_decay at its tile, then convenience <code>mul</code>/<code>sub</code>.",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "Convenience add/mul/sub tail",
+    "body": "bias-correction-1 recip plus the closing <code>mul</code>/<code>mul</code>/<code>sub</code> steps now use <code>compute_kernel_lib</code> convenience ops with explicit lifecycles.",
+    "color": "#3f8ae0"
+  },
+  "4": {
+    "title": "Reconfig recip/sub chains",
+    "body": "Hand <code>sub_tiles_init_with_dt</code>+<code>recip_tile</code>+<code>pack_tile_with_dt</code> blocks (beta2, bias_correction2) became <code>eltwise_chain(BinaryFpu Sub, Recip, PackTile)</code> with the reconfig folded in.",
+    "color": "#cf222e"
+  },
+  "5": {
+    "title": "sqrt &amp; 1/(x+eps) chains",
+    "body": "The raw sqrt and <code>add_tiles_init_with_dt</code>+recip blocks became <code>eltwise_chain</code> stages with <code>BinaryDataFormatReconfig::Input</code> and same-CB in/out on <code>cb_tmp1</code>.",
+    "color": "#9f4bbf"
+  },
+  "6": {
+    "title": "AMSGRAD binary_max \u2192 binary_sfpu",
+    "body": "The <code>copy_tile</code>\u00d72 + <code>binary_max_tile</code> AMSGRAD block became <code>binary_sfpu&lt;BinaryMax&lt;&gt;&gt;()</code>, both inputs CallerManaged.",
+    "color": "#ff7a00"
+  }
+}
+</script>

@@ -4,7 +4,7 @@ Scoreboard for the per-kernel before/after review at `ttnn/cpp/ttnn/kernel_lib/d
 
 - **Before base:** `d0f737b9497` (pre-eltwise) · **After:** working tree
 
-- **Total kernels:** 100 — **92 full**, **8 partial**
+- **Total kernels:** 99 — **91 full**, **8 partial** (the `lab_eltwise_binary/tiles_add.cpp` example was reverted to its original raw-LLK form — examples stay unmigrated)
 
 
 ## By group
@@ -20,7 +20,7 @@ Scoreboard for the per-kernel before/after review at `ttnn/cpp/ttnn/kernel_lib/d
 | experimental | 15 | 11 | 4 |
 | rand/uniform | 2 | 2 | 0 |
 | kernel_lib tests | 6 | 6 | 0 |
-| toy/examples | 3 | 3 | 0 |
+| toy/examples | 2 | 2 | 0 |
 | misc | 1 | 1 | 0 |
 
 ## Partial migrations (some stages remain raw LLK)
@@ -136,5 +136,4 @@ Scoreboard for the per-kernel before/after review at `ttnn/cpp/ttnn/kernel_lib/d
 | `kernel_lib/tests/chain_reconfig/chain_singleside.cpp` | full | new | 4 |
 | `toy_binary_in_place/kernels/compute.cpp` | full | new | 5 |
 | `toy_variance/kernels/compute.cpp` | full | new | 6 |
-| `ttnn/examples/lab_eltwise_binary/kernels/compute/tiles_add.cpp` | full | +10/-66 | 3 |
 | `kernel/compute/eltwise_copy.cpp` | full | +17/-20 | 4 |

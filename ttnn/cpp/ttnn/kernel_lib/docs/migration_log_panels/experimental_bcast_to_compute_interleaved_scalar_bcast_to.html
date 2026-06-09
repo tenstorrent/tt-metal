@@ -1,0 +1,162 @@
+<section class="panel" id="panel-experimental_bcast_to_compute_interleaved_scalar_bcast_to">
+  <h1>compute_interleaved_scalar_bcast_to — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/experimental/bcast_to/device/kernels/compute/compute_interleaved_scalar_bcast_to.cpp</div>
+  <div class="meta"><b>Δ</b> +10/-13 &nbsp; <b>Decisions:</b> 4</div>
+
+  <div class="focus-toolbar" data-fkernel="experimental_bcast_to_compute_interleaved_scalar_bcast_to">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; include swap</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; count-only loop</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; hw_startup BIG init</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; single chain (hoisted)</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+<span class="dz" data-d="1">#include &quot;api/compute/bcast.h&quot;
+#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;tools/profiler/kernel_profiler.hpp&quot;</span>
+
+void kernel_main() {
+    uint32_t arg_index = 0;
+    uint32_t start_n = get_arg_val&lt;uint32_t&gt;(arg_index++);
+    uint32_t start_c = get_arg_val&lt;uint32_t&gt;(arg_index++);
+    uint32_t start_t = get_arg_val&lt;uint32_t&gt;(arg_index++);
+    uint32_t start_th = get_arg_val&lt;uint32_t&gt;(arg_index++);
+    uint32_t start_tw = get_arg_val&lt;uint32_t&gt;(arg_index++);
+    uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(arg_index++);
+    uint32_t n_stride = get_arg_val&lt;uint32_t&gt;(arg_index++);
+    uint32_t c_stride = get_arg_val&lt;uint32_t&gt;(arg_index++);
+    uint32_t N = get_arg_val&lt;uint32_t&gt;(arg_index++);
+    uint32_t C = get_arg_val&lt;uint32_t&gt;(arg_index++);
+    uint32_t Ht = get_arg_val&lt;uint32_t&gt;(arg_index++);
+    uint32_t Wt = get_arg_val&lt;uint32_t&gt;(arg_index++);
+
+    constexpr auto cb_id_src = get_compile_time_arg_val(0);
+    constexpr auto cb_id_dst = get_compile_time_arg_val(1);
+<span class="dz" data-d="5">    unary_bcast_init&lt;BroadcastType::SCALAR&gt;(cb_id_src, cb_id_dst);</span>
+
+    uint32_t HtWt = Ht * Wt;
+    uint32_t num_tiles_read = 0;
+<span class="dz" data-d="6">    for (uint32_t n = start_n; n &lt; N &amp;&amp; num_tiles_read &lt; num_tiles; ++n, start_c = 0) {
+        for (uint32_t c = start_c; c &lt; C &amp;&amp; num_tiles_read &lt; num_tiles; ++c, start_t = 0) {</span>
+<span class="dz" data-d="3">            cb_wait_front(cb_id_src, 1);
+            tile_regs_acquire();
+            unary_bcast&lt;BroadcastType::SCALAR&gt;(cb_id_src, 0, 0);
+            tile_regs_commit();
+
+            cb_pop_front(cb_id_src, 1);</span>
+<span class="dz" data-d="6">            cb_reserve_back(cb_id_dst, 1);
+            tile_regs_wait();
+            pack_tile(0, cb_id_dst);
+
+            cb_push_back(cb_id_dst, 1);
+            tile_regs_release();
+            num_tiles_read += HtWt - start_t;</span>
+        }
+    }
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+<span class="dz" data-d="1">#include &quot;api/compute/bcast.h&quot;
+#include &quot;api/compute/compute_kernel_hw_startup.h&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp&quot;
+#include &quot;tools/profiler/kernel_profiler.hpp&quot;</span>
+
+void kernel_main() {
+    uint32_t arg_index = 0;
+    uint32_t start_n = get_arg_val&lt;uint32_t&gt;(arg_index++);
+    uint32_t start_c = get_arg_val&lt;uint32_t&gt;(arg_index++);
+    uint32_t start_t = get_arg_val&lt;uint32_t&gt;(arg_index++);
+    uint32_t start_th = get_arg_val&lt;uint32_t&gt;(arg_index++);
+    uint32_t start_tw = get_arg_val&lt;uint32_t&gt;(arg_index++);
+    uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(arg_index++);
+    uint32_t n_stride = get_arg_val&lt;uint32_t&gt;(arg_index++);
+    uint32_t c_stride = get_arg_val&lt;uint32_t&gt;(arg_index++);
+    uint32_t N = get_arg_val&lt;uint32_t&gt;(arg_index++);
+    uint32_t C = get_arg_val&lt;uint32_t&gt;(arg_index++);
+    uint32_t Ht = get_arg_val&lt;uint32_t&gt;(arg_index++);
+    uint32_t Wt = get_arg_val&lt;uint32_t&gt;(arg_index++);
+
+    constexpr auto cb_id_src = get_compile_time_arg_val(0);
+    constexpr auto cb_id_dst = get_compile_time_arg_val(1);
+
+<span class="dz" data-d="5">    compute_kernel_hw_startup(cb_id_src, cb_id_dst);</span>
+
+    // Scalar-bcast reads one src tile per (n,c) step and the writer expands it across the
+    // whole Ht*Wt tile grid, so the compute&#x27;s source-tile count is the number of c-steps,
+    // not num_tiles (which counts output tiles). Walk the original n/c nest once just to
+    // count those steps, then feed the whole run through a single chain call — that hoists
+    // the per-op bcast init (UnaryBcast::init) to one chain entry instead of re-running it
+    // every iteration. compute_kernel_hw_startup supplies the BIG init the chain expects.
+<span class="dz" data-d="3">    uint32_t HtWt = Ht * Wt;
+    uint32_t num_src_tiles = 0;
+    uint32_t num_tiles_read = 0;
+    for (uint32_t n = start_n; n &lt; N &amp;&amp; num_tiles_read &lt; num_tiles; ++n, start_c = 0) {
+        for (uint32_t c = start_c; c &lt; C &amp;&amp; num_tiles_read &lt; num_tiles; ++c, start_t = 0) {
+            ++num_src_tiles;
+            num_tiles_read += HtWt - start_t;
+        }
+    }</span>
+
+<span class="dz" data-d="6">    compute_kernel_lib::unary_bcast&lt;
+        compute_kernel_lib::BroadcastDim::Scalar,
+        cb_id_src,
+        cb_id_dst,
+        compute_kernel_lib::InputLifecycle::Streaming,
+        compute_kernel_lib::OutputLifecycle::Streaming,
+        compute_kernel_lib::UnaryBcastReconfig::Input,
+        compute_kernel_lib::PackTileReconfig::None&gt;(num_src_tiles);</span>
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; include swap</b> — Added <code>compute_kernel_hw_startup.h</code>, <code>eltwise_chain.hpp</code> and <code>eltwise_convenience.hpp</code>; dropped the raw <code>eltwise_binary.h</code> that backed <code>unary_bcast_init</code>.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; count-only source-tile loop</b> — Scalar-bcast reads one src tile per (n,c) step but the writer expands it across the whole Ht*Wt grid, so the compute source-tile count ≠ <code>num_tiles</code>. The original n/c nest is reduced to a pure counter deriving <code>num_src_tiles</code> (<code>++num_src_tiles; num_tiles_read += HtWt - start_t;</code>).</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; compute_kernel_hw_startup</b> — Replaced <code>unary_bcast_init&lt;BroadcastType::SCALAR&gt;</code> with <code>compute_kernel_hw_startup(cb_id_src, cb_id_dst)</code>; the per-op <code>UnaryBcast::init</code> hoists once at chain entry instead of re-running per iteration.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; single unary_bcast, init hoisted</b> — The per-iter compute + manual CB calls became one <code>unary_bcast&lt;BroadcastDim::Scalar, cb_id_src, cb_id_dst, InputLifecycle::Streaming, OutputLifecycle::Streaming, UnaryBcastReconfig::Input, PackTileReconfig::None&gt;(num_src_tiles)</code> after the count loop.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-experimental_bcast_to_compute_interleaved_scalar_bcast_to">
+{
+  "1": {
+    "title": "include swap",
+    "body": "Added <code>compute_kernel_hw_startup.h</code>, <code>eltwise_chain.hpp</code> and <code>eltwise_convenience.hpp</code>; dropped the raw <code>eltwise_binary.h</code> that backed <code>unary_bcast_init</code>.",
+    "color": "#d6a000"
+  },
+  "3": {
+    "title": "count-only source-tile loop",
+    "body": "Scalar-bcast reads one src tile per (n,c) step but the writer expands it across the whole Ht*Wt grid, so the compute source-tile count ≠ <code>num_tiles</code>. The original n/c nest is reduced to a pure counter deriving <code>num_src_tiles</code> (<code>++num_src_tiles; num_tiles_read += HtWt - start_t;</code>).",
+    "color": "#3f8ae0"
+  },
+  "5": {
+    "title": "compute_kernel_hw_startup",
+    "body": "Replaced <code>unary_bcast_init&lt;BroadcastType::SCALAR&gt;</code> with <code>compute_kernel_hw_startup(cb_id_src, cb_id_dst)</code>; the per-op <code>UnaryBcast::init</code> hoists once at chain entry instead of re-running per iteration.",
+    "color": "#9f4bbf"
+  },
+  "6": {
+    "title": "single unary_bcast, init hoisted",
+    "body": "The per-iter compute + manual CB calls became one <code>unary_bcast&lt;BroadcastDim::Scalar, cb_id_src, cb_id_dst, InputLifecycle::Streaming, OutputLifecycle::Streaming, UnaryBcastReconfig::Input, PackTileReconfig::None&gt;(num_src_tiles)</code> after the count loop.",
+    "color": "#ff7a00"
+  }
+}
+</script>

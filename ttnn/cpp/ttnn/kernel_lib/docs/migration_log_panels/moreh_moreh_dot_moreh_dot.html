@@ -1,0 +1,155 @@
+<section class="panel" id="panel-moreh_moreh_dot_moreh_dot">
+  <h1>moreh_dot — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/moreh_dot.cpp</div>
+  <div class="meta"><b>Δ</b> +16/-23 &nbsp; <b>Decisions:</b> 4</div>
+
+  <div class="focus-toolbar" data-fkernel="moreh_moreh_dot_moreh_dot">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; lib includes</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; mul convenience</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; init/setup</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; reduce kept</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+<span class="dz" data-d="1">#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+<span class="dz" data-d="5">ALWI void ACQ() { acquire_dst(); }
+ALWI void REL() { release_dst(); }</span>
+
+void kernel_main() {
+    constexpr int onetile = 1;
+    uint32_t per_core_block_cnt = get_arg_val&lt;uint32_t&gt;(0);
+<span class="dz" data-d="5">    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+
+    CircularBuffer cb_c0(tt::CBIndex::c_0);
+    CircularBuffer cb_c1(tt::CBIndex::c_1);
+    CircularBuffer cb_c24(tt::CBIndex::c_24);</span>
+
+    for (uint32_t block = 0; block &lt; per_core_block_cnt; ++block) {
+        bool last_out = block == (per_core_block_cnt - 1);
+
+<span class="dz" data-d="3">        ACQ();
+        cb_c0.wait_front(onetile);
+        cb_c1.wait_front(onetile);
+
+        cb_c24.reserve_back(onetile);
+        mul_tiles_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
+        mul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0);
+        pack_tile(0, tt::CBIndex::c_24);
+        cb_c24.push_back(onetile);
+
+        cb_c0.pop_front(onetile);
+        cb_c1.pop_front(onetile);
+        REL();</span>
+
+<span class="dz" data-d="6">        // reduce-w
+        compute_kernel_lib::reduce&lt;
+            REDUCE_OP,
+            REDUCE_DIM,
+            compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+            compute_kernel_lib::ReduceDataFormatReconfigMode::NONE&gt;(
+            tt::CBIndex::c_24,
+            tt::CBIndex::c_2,
+            last_out ? tt::CBIndex::c_16 : tt::CBIndex::c_25,
+            compute_kernel_lib::ReduceInputBlockShape::single(),
+            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+            compute_kernel_lib::Accumulate::at(tt::CBIndex::c_25, block));</span>
+    }
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+<span class="dz" data-d="1">#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp&quot;</span>
+
+void kernel_main() {
+    constexpr int onetile = 1;
+    uint32_t per_core_block_cnt = get_arg_val&lt;uint32_t&gt;(0);
+<span class="dz" data-d="5">    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);</span>
+
+    for (uint32_t block = 0; block &lt; per_core_block_cnt; ++block) {
+        bool last_out = block == (per_core_block_cnt - 1);
+
+<span class="dz" data-d="3">        // elemwise-mul: cb_intermed0 = cb_in0 * cb_in1
+        compute_kernel_lib::mul&lt;
+            tt::CBIndex::c_0,
+            tt::CBIndex::c_1,
+            tt::CBIndex::c_24,
+            compute_kernel_lib::BroadcastDim::None,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::None&gt;(onetile);</span>
+
+<span class="dz" data-d="6">        // reduce-w
+        compute_kernel_lib::reduce&lt;
+            REDUCE_OP,
+            REDUCE_DIM,
+            compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+            compute_kernel_lib::ReduceDataFormatReconfigMode::NONE&gt;(
+            tt::CBIndex::c_24,
+            tt::CBIndex::c_2,
+            last_out ? tt::CBIndex::c_16 : tt::CBIndex::c_25,
+            compute_kernel_lib::ReduceInputBlockShape::single(),
+            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+            compute_kernel_lib::Accumulate::at(tt::CBIndex::c_25, block));</span>
+    }
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; kernel_lib includes</b> — Swapped raw <code>eltwise_binary.h</code> for <code>eltwise_chain.hpp</code> + <code>eltwise_convenience.hpp</code>; <code>reduce_helpers_compute.hpp</code> stays.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; mul_tiles → convenience mul</b> — The <code>tile_regs_acquire/mul_tiles/pack_tile/release</code> block became one <code>compute_kernel_lib::mul&lt;c_0,c_1,c_24,..,BinaryDataFormatReconfig::Input,PackTileReconfig::None&gt;(onetile)</code>.</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; Init &amp;amp; ACQ/REL removal</b> — <code>binary_op_init_common</code> + the <code>ACQ()/REL()</code> helpers and explicit <code>CircularBuffer</code> objects replaced by <code>compute_kernel_hw_startup</code>; the chain owns tile-reg lifecycle.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; reduce helper unchanged</b> — The W-reduction already used <code>compute_kernel_lib::reduce&lt;...,WaitAndPopPerTile,...,Accumulate::at&gt;</code> and is carried over verbatim.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-moreh_moreh_dot_moreh_dot">
+{
+  "1": {
+    "title": "kernel_lib includes",
+    "body": "Swapped raw <code>eltwise_binary.h</code> for <code>eltwise_chain.hpp</code> + <code>eltwise_convenience.hpp</code>; <code>reduce_helpers_compute.hpp</code> stays.",
+    "color": "#d6a000"
+  },
+  "3": {
+    "title": "mul_tiles \u2192 convenience mul",
+    "body": "The <code>tile_regs_acquire/mul_tiles/pack_tile/release</code> block became one <code>compute_kernel_lib::mul&lt;c_0,c_1,c_24,..,BinaryDataFormatReconfig::Input,PackTileReconfig::None&gt;(onetile)</code>.",
+    "color": "#3f8ae0"
+  },
+  "5": {
+    "title": "Init &amp; ACQ/REL removal",
+    "body": "<code>binary_op_init_common</code> + the <code>ACQ()/REL()</code> helpers and explicit <code>CircularBuffer</code> objects replaced by <code>compute_kernel_hw_startup</code>; the chain owns tile-reg lifecycle.",
+    "color": "#9f4bbf"
+  },
+  "6": {
+    "title": "reduce helper unchanged",
+    "body": "The W-reduction already used <code>compute_kernel_lib::reduce&lt;...,WaitAndPopPerTile,...,Accumulate::at&gt;</code> and is carried over verbatim.",
+    "color": "#ff7a00"
+  }
+}
+</script>

@@ -1,0 +1,138 @@
+<section class="panel" id="panel-experimental_dropout_dropout_kernel">
+  <h1>dropout_kernel — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/compute/dropout_kernel.cpp</div>
+  <div class="meta"><b>Δ</b> +29/-32 &nbsp; <b>Decisions:</b> 3</div>
+
+  <div class="focus-toolbar" data-fkernel="experimental_dropout_dropout_kernel">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; includes</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; chain CopyTile+Dropout+PackTile</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; init</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+<span class="dz" data-d="1">#include &quot;api/compute/common.h&quot;
+#include &quot;api/compute/tile_move_copy.h&quot;
+#include &quot;api/compute/eltwise_unary/dropout.h&quot;
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;api/compute/eltwise_unary/sfpu_split_includes.h&quot;</span>
+
+void kernel_main() {
+    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
+    uint32_t per_core_block_dim = get_compile_time_arg_val(1);
+    uint32_t int_probability = get_compile_time_arg_val(2);
+    uint32_t int_scale_factor = get_compile_time_arg_val(3);
+
+    uint32_t seed = get_arg_val&lt;uint32_t&gt;(0);
+
+<span class="dz" data-d="5">    init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_2);
+    dropout_kernel_init(seed);</span>
+<span class="dz" data-d="2">    for (uint32_t block_index = 0; block_index &lt; per_core_block_cnt; block_index++) {
+        cb_reserve_back(tt::CBIndex::c_2, per_core_block_dim);
+        for (uint32_t tile_index = 0; tile_index &lt; per_core_block_dim; ++tile_index) {
+            tile_regs_acquire();
+
+            // Pop tile after tile, copy to DST and pack
+            cb_wait_front(tt::CBIndex::c_0, 1);
+
+            copy_tile(tt::CBIndex::c_0, 0, 0);
+
+            dropout_tile(0, int_probability, int_scale_factor);
+
+            tile_regs_commit();
+
+            tile_regs_wait();
+
+            pack_tile(0, tt::CBIndex::c_2);
+
+            cb_pop_front(tt::CBIndex::c_0, 1);
+
+            tile_regs_release();
+        }
+        cb_push_back(tt::CBIndex::c_2, per_core_block_dim);
+    }</span>
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+<span class="dz" data-d="1">#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_scalar.hpp&quot;  // Dropout
+#include &quot;api/compute/eltwise_unary/dropout.h&quot;          // dropout_kernel_init</span>
+
+void kernel_main() {
+    constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
+    constexpr uint32_t per_core_block_dim = get_compile_time_arg_val(1);
+    constexpr uint32_t int_probability = get_compile_time_arg_val(2);
+    constexpr uint32_t int_scale_factor = get_compile_time_arg_val(3);
+
+    uint32_t seed = get_arg_val&lt;uint32_t&gt;(0);
+
+<span class="dz" data-d="5">    constexpr auto cb_input = tt::CBIndex::c_0;
+    constexpr auto cb_output = tt::CBIndex::c_2;
+
+    init_sfpu(cb_input, cb_output);
+    dropout_kernel_init(seed);</span>
+
+<span class="dz" data-d="2">    // Original: per-tile copy_tile + dropout_tile + pack_tile. Chain compresses
+    // the two nested loops into a single n=block_cnt*block_dim sweep, since
+    // there&#x27;s no inter-block state.
+    constexpr uint32_t total_tiles = per_core_block_cnt * per_core_block_dim;
+    compute_kernel_lib::eltwise_chain(
+        total_tiles,
+        compute_kernel_lib::CopyTile&lt;
+            cb_input,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::CopyTileReconfig::None&gt;{},
+        compute_kernel_lib::Dropout&lt;compute_kernel_lib::Dst::D0&gt;{int_probability, int_scale_factor},
+        compute_kernel_lib::PackTile&lt;
+            cb_output,
+            compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::PackTileReconfig::None&gt;{});</span>
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; Chain + Dropout headers</b> — Replaced the raw <code>common.h</code> / <code>tile_move_copy.h</code> / <code>eltwise_unary.h</code> / <code>sfpu_split_includes.h</code> set with <code>eltwise_chain.hpp</code> + <code>eltwise_scalar.hpp</code> (provides <code>Dropout</code>). <code>dropout.h</code> kept only for <code>dropout_kernel_init</code>.</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; copy/dropout/pack loops -&gt; eltwise_chain</b> — The doubly-nested <code>copy_tile</code> + <code>dropout_tile</code> + <code>pack_tile</code> loop (with manual <code>cb_reserve_back</code>/<code>cb_wait_front</code>/<code>tile_regs_*</code>/<code>cb_pop_front</code>/<code>cb_push_back</code>) collapses into a single <code>eltwise_chain(total_tiles, CopyTile&lt;cb_input, Dst::D0, Streaming, CopyTileReconfig::None&gt;, Dropout&lt;Dst::D0&gt;{int_probability, int_scale_factor}, PackTile&lt;cb_output, Streaming, PackTileReconfig::None&gt;)</code>. The two loops fuse into one <code>n = block_cnt*block_dim</code> sweep since there is no inter-block state.</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; init_sfpu + CB constexpr</b> — CB ids promoted to <code>constexpr auto cb_input/cb_output</code>; compile-time args promoted to <code>constexpr</code>. <code>init_sfpu(cb_input, cb_output)</code> + <code>dropout_kernel_init(seed)</code> stay as the caller-owned boot init (chain elements use no per-iter reconfig).</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-experimental_dropout_dropout_kernel">
+{
+  "1": {
+    "title": "Chain + Dropout headers",
+    "body": "Replaced the raw <code>common.h</code> / <code>tile_move_copy.h</code> / <code>eltwise_unary.h</code> / <code>sfpu_split_includes.h</code> set with <code>eltwise_chain.hpp</code> + <code>eltwise_scalar.hpp</code> (provides <code>Dropout</code>). <code>dropout.h</code> kept only for <code>dropout_kernel_init</code>.",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "copy/dropout/pack loops -> eltwise_chain",
+    "body": "The doubly-nested <code>copy_tile</code> + <code>dropout_tile</code> + <code>pack_tile</code> loop (with manual <code>cb_reserve_back</code>/<code>cb_wait_front</code>/<code>tile_regs_*</code>/<code>cb_pop_front</code>/<code>cb_push_back</code>) collapses into a single <code>eltwise_chain(total_tiles, CopyTile&lt;cb_input, Dst::D0, Streaming, CopyTileReconfig::None&gt;, Dropout&lt;Dst::D0&gt;{int_probability, int_scale_factor}, PackTile&lt;cb_output, Streaming, PackTileReconfig::None&gt;)</code>. The two loops fuse into one <code>n = block_cnt*block_dim</code> sweep since there is no inter-block state.",
+    "color": "#2ea043"
+  },
+  "5": {
+    "title": "init_sfpu + CB constexpr",
+    "body": "CB ids promoted to <code>constexpr auto cb_input/cb_output</code>; compile-time args promoted to <code>constexpr</code>. <code>init_sfpu(cb_input, cb_output)</code> + <code>dropout_kernel_init(seed)</code> stay as the caller-owned boot init (chain elements use no per-iter reconfig).",
+    "color": "#9f4bbf"
+  }
+}
+</script>

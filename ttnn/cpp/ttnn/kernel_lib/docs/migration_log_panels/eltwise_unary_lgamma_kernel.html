@@ -1,0 +1,284 @@
+<section class="panel" id="panel-eltwise_unary_lgamma_kernel">
+  <h1>lgamma_kernel — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/lgamma_kernel.cpp</div>
+  <div class="meta"><b>Δ</b> +86/-120 &nbsp; <b>Decisions:</b> 6</div>
+
+  <div class="focus-toolbar" data-fkernel="eltwise_unary_lgamma_kernel">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; helper includes</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; single wait/pop via lifecycles</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; fill+binary+predicate chain</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; Where Float32 + special lgamma</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; trig/rounding/abs elements</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; manual loop → eltwise_chain</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+<span class="dz" data-d="1">#include &lt;cstdint&gt;
+#include &quot;api/compute/common.h&quot;
+#include &quot;api/compute/eltwise_binary_sfpu.h&quot;
+#include &quot;api/compute/tile_move_copy.h&quot;
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;api/compute/eltwise_unary/sfpu_split_includes.h&quot;
+#include &quot;api/compute/eltwise_unary/binop_with_scalar.h&quot;
+#include &quot;api/compute/eltwise_unary/lgamma.h&quot;
+#include &quot;api/compute/eltwise_unary/fill.h&quot;
+#include &quot;api/compute/eltwise_unary/rounding.h&quot;
+#include &quot;api/compute/eltwise_unary/trigonometry.h&quot;
+#include &quot;api/compute/eltwise_unary/where.h&quot;
+#include &quot;api/compute/eltwise_unary/comp.h&quot;
+#include &quot;api/compute/compute_kernel_api.h&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+void kernel_main() {
+    uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(0);
+
+    constexpr auto cb_input = tt::CBIndex::c_0;
+    constexpr auto cb_output = tt::CBIndex::c_2;
+
+    constexpr float M_PI = 3.14159265358979323846f;
+
+    CircularBuffer cb_in(cb_input);
+    CircularBuffer cb_out(cb_output);
+
+<span class="dz" data-d="6">    init_sfpu(cb_input, cb_output);</span>
+
+    for (uint32_t i = 0; i &lt; num_tiles; ++i) {
+<span class="dz" data-d="2">        tile_regs_acquire();
+        cb_in.wait_front(1);
+        cb_out.reserve_back(1);
+
+        // copy input to dst 0 and 1</span>
+        copy_tile_to_dst_init_short(cb_input);
+<span class="dz" data-d="3">        copy_tile(cb_input, 0, 0);  // x
+        copy_tile(cb_input, 0, 1);  // x
+
+        fill_tile_init();
+        fill_tile(2, 0.5f);
+
+        // x - 0.5
+        sub_binary_tile_init();
+        sub_binary_tile(1, 2, 1);
+
+        // (x - 0.5) &lt; 0
+        ltz_tile_init();
+        ltz_tile(1);
+
+        fill_tile_init();
+        fill_tile(2, 1.0f);</span>
+
+<span class="dz" data-d="4">        // 1 - x
+        sub_binary_tile_init();
+        sub_binary_tile(2, 0, 2);
+
+        // tile 1 = z = (x &lt; 0.5) ? 1-x : x
+        where_tile_init();
+        where_tile&lt;DataFormat::Float32&gt;(1, 2, 0, 1);
+
+        // log z
+        log_tile_init&lt;false&gt;();
+        log_tile&lt;false&gt;(1);
+
+        // tile 0 = res_stirling
+        lgamma_stirling_float_tile_init();</span>
+        lgamma_stirling_float_tile(0, 1, 0);  // x, log_z
+<span class="dz" data-d="5">
+        // fill tile 2 with M_PI
+        fill_tile_init();
+        fill_tile(2, M_PI);
+
+        copy_tile_to_dst_init_short(cb_input);
+        copy_tile(cb_input, 0, 1);  // x
+
+        // tile 1 = frac (x)
+        rounding_op_tile_init();
+        frac_tile(1);
+
+        // tile 1 = frac (x) * M_PI
+        mul_binary_tile_init();
+        mul_binary_tile(1, 2, 1);
+</span>
+        // tile 1 =  sin(frac (x) * M_PI)
+<span class="dz" data-d="3">        sin_tile_init();
+        sin_tile(1);
+
+        copy_tile_to_dst_init_short(cb_input);
+        copy_tile(cb_input, 0, 2);  // x
+        copy_tile(cb_input, 0, 3);  // x
+
+        // tile 3 = floor(x)
+        rounding_op_tile_init();
+        floor_tile(3);
+</span>
+        // tile 2 = ( x == floor(x)) condition
+<span class="dz" data-d="4">        eq_binary_tile_init();
+        eq_binary_tile(2, 3, 2);
+
+        // fill tile 3 with 0.0f
+        fill_tile_init();
+        fill_tile(3, 0.0f);
+
+        // tile 1 = 0 if x == floor(x), otherwise sin(frac (x) * M_PI)
+        where_tile_init();
+        where_tile&lt;DataFormat::Float32&gt;(2, 3, 1, 1);
+
+        // abs(integer adjusted sin(frac (x) * M_PI))
+        abs_tile_init();
+        abs_tile(1);
+</span>
+        // log|sin(pi*x)|. Zero sin(pi*x) at integers handled
+<span class="dz" data-d="6">        log_tile_init();
+        log_tile(1);
+
+        copy_tile_to_dst_init_short(cb_input);
+        copy_tile(cb_input, 0, 2);  // x
+
+        lgamma_adjusted_tile_init();
+        lgamma_adjusted_tile(0, 1, 2, 0);
+
+        tile_regs_commit();
+
+        tile_regs_wait();
+
+        pack_tile(0, cb_output);
+</span>
+        cb_in.pop_front(1);
+        cb_out.push_back(1);
+
+        tile_regs_release();
+    }
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+<span class="dz" data-d="1">#include &lt;cstdint&gt;
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp&quot;         // FillScalar
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp&quot;  // SubBinary, MulBinary, EqBinary
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_predicates.hpp&quot;   // Ltz
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_special.hpp&quot;      // Where, LgammaStirlingFloat, LgammaAdjusted
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_trig.hpp&quot;         // Sin
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_rounding.hpp&quot;     // Floor, Frac
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp&quot;         // Abs
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp&quot;         // Log
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+// lgamma(x) via reflection: stirling(x, log z) adjusted by log|sin(pi*x)|.
+// One tile_regs window, single cb_input wait/pop per iter. cb_input is read 6
+// times into D0..D3; the chain reproduces the single wait/pop by giving the
+// FIRST read HeldStream (owns wait), the middle reads CallerManaged (no edges),
+// and the LAST read NoWaitPop (owns pop). All compute ops are DEST-internal.
+// where_tile is hardcoded Float32 here (matches the original kernel).
+namespace ckl = compute_kernel_lib;
+
+void kernel_main() {
+    uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(0);
+
+    constexpr auto cb_input = tt::CBIndex::c_0;
+    constexpr auto cb_output = tt::CBIndex::c_2;
+    constexpr float M_PI = 3.14159265358979323846f;
+
+    init_sfpu(cb_input, cb_output);
+
+<span class="dz" data-d="6">    ckl::eltwise_chain(
+        num_tiles,
+        // x -&gt; D0 (owns the wait), x -&gt; D1.</span>
+<span class="dz" data-d="2">        ckl::CopyTile&lt;cb_input, ckl::Dst::D0, ckl::InputLifecycle::HeldStream, ckl::CopyTileReconfig::None&gt;{},
+        ckl::CopyTile&lt;cb_input, ckl::Dst::D1, ckl::InputLifecycle::CallerManaged, ckl::CopyTileReconfig::None&gt;{},</span>
+<span class="dz" data-d="3">        // D2 = 0.5 ; D1 = x - 0.5 ; D1 = (x-0.5 &lt; 0)
+        ckl::FillScalar&lt;ckl::Dst::D2&gt;{0.5f},
+        ckl::SubBinary&lt;ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1&gt;{},
+        ckl::Ltz&lt;ckl::Dst::D1&gt;{},
+        // D2 = 1.0 ; D2 = 1 - x
+        ckl::FillScalar&lt;ckl::Dst::D2&gt;{1.0f},
+        ckl::SubBinary&lt;ckl::Dst::D2, ckl::Dst::D0, ckl::Dst::D2&gt;{},
+        // D1 = z = where(cond=D1, a=1-x, b=x)</span>
+<span class="dz" data-d="4">        ckl::Where&lt;DataFormat::Float32, ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0, ckl::Dst::D1&gt;{},
+        // D1 = log z
+        ckl::Log&lt;ckl::Approx::Exact, ckl::Dst::D1&gt;{},
+        // D0 = stirling(x=D0, log_z=D1)
+        ckl::LgammaStirlingFloat&lt;ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0&gt;{},</span>
+<span class="dz" data-d="5">        // D2 = M_PI ; reload x -&gt; D1 ; D1 = sin(frac(x) * M_PI)
+        ckl::FillScalar&lt;ckl::Dst::D2&gt;{M_PI},
+        ckl::CopyTile&lt;cb_input, ckl::Dst::D1, ckl::InputLifecycle::CallerManaged, ckl::CopyTileReconfig::None&gt;{},
+        ckl::Frac&lt;ckl::Dst::D1&gt;{},
+        ckl::MulBinary&lt;ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1&gt;{},
+        ckl::Sin&lt;ckl::Dst::D1&gt;{},</span>
+<span class="dz" data-d="2">        // reload x -&gt; D2, D3 ; D3 = floor(x) ; D2 = (x == floor(x))
+        ckl::CopyTile&lt;cb_input, ckl::Dst::D2, ckl::InputLifecycle::CallerManaged, ckl::CopyTileReconfig::None&gt;{},
+        ckl::CopyTile&lt;cb_input, ckl::Dst::D3, ckl::InputLifecycle::CallerManaged, ckl::CopyTileReconfig::None&gt;{},</span>
+<span class="dz" data-d="5">        ckl::Floor&lt;ckl::Dst::D3&gt;{},</span>
+<span class="dz" data-d="3">        ckl::EqBinary&lt;ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D2&gt;{},</span>
+<span class="dz" data-d="4">        // D3 = 0 ; D1 = where(cond=D2, a=0, b=sin) -&gt; 0 at integers else sin
+        ckl::FillScalar&lt;ckl::Dst::D3&gt;{0.0f},
+        ckl::Where&lt;DataFormat::Float32, ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D1, ckl::Dst::D1&gt;{},
+        // D1 = log|D1|
+        ckl::Abs&lt;ckl::Dst::D1&gt;{},
+        ckl::Log&lt;ckl::Approx::Exact, ckl::Dst::D1&gt;{},</span>
+<span class="dz" data-d="2">        // reload x -&gt; D2 (owns the pop) ; D0 = adjusted(stirling=D0, logsin=D1, x=D2)
+        ckl::CopyTile&lt;cb_input, ckl::Dst::D2, ckl::InputLifecycle::NoWaitPop, ckl::CopyTileReconfig::None&gt;{},</span>
+<span class="dz" data-d="4">        ckl::LgammaAdjusted&lt;ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0&gt;{},</span>
+<span class="dz" data-d="6">        ckl::PackTile&lt;cb_output, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None&gt;{});</span>
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; kernel_lib header includes</b> — Replaced the dozen <code>api/compute/eltwise_unary/*.h</code> SFPU headers with the <code>kernel_lib/eltwise_*.hpp</code> set (chain, fill, binary_sfpu, predicates, special, trig, rounding, misc, math).</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; HeldStream / CallerManaged / NoWaitPop reproduce one wait+pop</b> — The original had one <code>cb_in.wait_front(1)</code>/<code>pop_front(1)</code> wrapping 6 <code>copy_tile</code> reads. The chain reproduces that exactly: first <code>CopyTile</code> is <code>HeldStream</code> (owns the wait), middle reads <code>CallerManaged</code> (no CB edges), last read <code>NoWaitPop</code> (owns the pop).</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; Raw SFPU tiles → chain elements</b> — <code>fill_tile</code>→<code>FillScalar</code>, <code>sub_binary_tile</code>→<code>SubBinary</code>, <code>ltz_tile</code>→<code>Ltz</code>, <code>eq_binary_tile</code>→<code>EqBinary</code>, <code>mul_binary_tile</code>→<code>MulBinary</code>; each carrying its own per-init, hoisted by the chain.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; where / log / lgamma special elements</b> — <code>where_tile&lt;Float32&gt;</code>→<code>Where&lt;DataFormat::Float32,…&gt;</code> (DF hardcoded to match original), <code>log_tile</code>→<code>Log&lt;Approx::Exact&gt;</code>, <code>lgamma_stirling_float_tile</code>→<code>LgammaStirlingFloat</code>, <code>lgamma_adjusted_tile</code>→<code>LgammaAdjusted</code>.</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; frac / sin / floor / abs elements</b> — <code>frac_tile</code>→<code>Frac</code>, <code>sin_tile</code>→<code>Sin</code>, <code>floor_tile</code>→<code>Floor</code>, <code>abs_tile</code>→<code>Abs</code> — the integer-adjusted reflection term, DEST-internal.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; Hand-rolled tile_regs loop → eltwise_chain(num_tiles, …)</b> — The whole <code>for</code> loop with <code>tile_regs_acquire/commit/wait/release</code>, <code>cb.reserve_back</code>, manual <code>pack_tile</code> and <code>copy_tile_to_dst_init_short</code> boilerplate collapses into one <code>eltwise_chain(num_tiles, …)</code> call. <code>PackTile&lt;cb_output, Streaming&gt;</code> replaces the manual pack.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-eltwise_unary_lgamma_kernel">
+{
+  "1": {
+    "title": "kernel_lib header includes",
+    "body": "Replaced the dozen <code>api/compute/eltwise_unary/*.h</code> SFPU headers with the <code>kernel_lib/eltwise_*.hpp</code> set (chain, fill, binary_sfpu, predicates, special, trig, rounding, misc, math).",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "HeldStream / CallerManaged / NoWaitPop reproduce one wait+pop",
+    "body": "The original had one <code>cb_in.wait_front(1)</code>/<code>pop_front(1)</code> wrapping 6 <code>copy_tile</code> reads. The chain reproduces that exactly: first <code>CopyTile</code> is <code>HeldStream</code> (owns the wait), middle reads <code>CallerManaged</code> (no CB edges), last read <code>NoWaitPop</code> (owns the pop).",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "Raw SFPU tiles \u2192 chain elements",
+    "body": "<code>fill_tile</code>\u2192<code>FillScalar</code>, <code>sub_binary_tile</code>\u2192<code>SubBinary</code>, <code>ltz_tile</code>\u2192<code>Ltz</code>, <code>eq_binary_tile</code>\u2192<code>EqBinary</code>, <code>mul_binary_tile</code>\u2192<code>MulBinary</code>; each carrying its own per-init, hoisted by the chain.",
+    "color": "#3f8ae0"
+  },
+  "4": {
+    "title": "where / log / lgamma special elements",
+    "body": "<code>where_tile&lt;Float32&gt;</code>\u2192<code>Where&lt;DataFormat::Float32,\u2026&gt;</code> (DF hardcoded to match original), <code>log_tile</code>\u2192<code>Log&lt;Approx::Exact&gt;</code>, <code>lgamma_stirling_float_tile</code>\u2192<code>LgammaStirlingFloat</code>, <code>lgamma_adjusted_tile</code>\u2192<code>LgammaAdjusted</code>.",
+    "color": "#cf222e"
+  },
+  "5": {
+    "title": "frac / sin / floor / abs elements",
+    "body": "<code>frac_tile</code>\u2192<code>Frac</code>, <code>sin_tile</code>\u2192<code>Sin</code>, <code>floor_tile</code>\u2192<code>Floor</code>, <code>abs_tile</code>\u2192<code>Abs</code> \u2014 the integer-adjusted reflection term, DEST-internal.",
+    "color": "#9f4bbf"
+  },
+  "6": {
+    "title": "Hand-rolled tile_regs loop \u2192 eltwise_chain(num_tiles, \u2026)",
+    "body": "The whole <code>for</code> loop with <code>tile_regs_acquire/commit/wait/release</code>, <code>cb.reserve_back</code>, manual <code>pack_tile</code> and <code>copy_tile_to_dst_init_short</code> boilerplate collapses into one <code>eltwise_chain(num_tiles, \u2026)</code> call. <code>PackTile&lt;cb_output, Streaming&gt;</code> replaces the manual pack.",
+    "color": "#ff7a00"
+  }
+}
+</script>

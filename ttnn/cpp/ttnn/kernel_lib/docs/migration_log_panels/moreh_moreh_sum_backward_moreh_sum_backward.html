@@ -1,0 +1,185 @@
+<section class="panel" id="panel-moreh_moreh_sum_backward_moreh_sum_backward">
+  <h1>moreh_sum_backward &mdash; <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/moreh/moreh_sum_backward/device/kernels/moreh_sum_backward.cpp</div>
+  <div class="meta"><b>&Delta;</b> +47/-22 &nbsp; <b>Decisions:</b> 5</div>
+
+  <div class="focus-toolbar" data-fkernel="moreh_moreh_sum_backward_moreh_sum_backward">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; includes</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; CB lifecycle</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; PackTile</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; reconfig None</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; Optional gates</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;
+void kernel_main() {
+    // compile-time args
+    constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);
+    constexpr bool wt_need_bcast = (get_compile_time_arg_val(1) == 1);
+    constexpr bool ht_need_bcast = (get_compile_time_arg_val(2) == 1);
+
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    CircularBuffer cb_in0_obj(cb_in0);  // input
+    constexpr auto cb_in1 = tt::CBIndex::c_1;
+    CircularBuffer cb_in1_obj(cb_in1);  // zero tile
+    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    CircularBuffer cb_out0_obj(cb_out0);
+    constexpr uint32_t onetile = 1;
+    constexpr uint32_t dst0 = 0;
+
+    binary_op_init_common(cb_in1, cb_in0, cb_out0);
+    cb_in1_obj.wait_front(onetile);
+    for (uint32_t i = 0; i &lt; num_output_tiles; i++) {
+<span class="dz" data-d="6">        tile_regs_acquire();</span>
+<span class="dz" data-d="2">        cb_in0_obj.wait_front(onetile);</span>
+<span class="dz" data-d="6">        if (ht_need_bcast &amp;&amp; wt_need_bcast) {
+            add_bcast_scalar_init_short(cb_in1, cb_in0);
+            add_tiles_bcast_scalar(cb_in1, cb_in0, 0, 0, dst0);
+        } else if (ht_need_bcast) {
+            add_bcast_rows_init_short(cb_in1, cb_in0);
+            add_tiles_bcast_rows(cb_in1, cb_in0, 0, 0, dst0);
+        } else if (wt_need_bcast) {
+            add_bcast_cols_init_short(cb_in1, cb_in0);
+            add_tiles_bcast_cols(cb_in1, cb_in0, 0, 0, dst0);</span>
+        } else {
+            copy_tile_to_dst_init_short(cb_in0);
+            copy_tile(cb_in0, 0, dst0);
+        }
+        tile_regs_commit();
+        cb_out0_obj.reserve_back(onetile);
+        tile_regs_wait();
+<span class="dz" data-d="3">        pack_tile(dst0, cb_out0);</span>
+        tile_regs_release();
+        cb_out0_obj.push_back(onetile);
+<span class="dz" data-d="2">        cb_in0_obj.pop_front(onetile);</span>
+    }
+    cb_in1_obj.pop_front(onetile);
+}
+</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;
+<span class="dz" data-d="1">#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp&quot;</span>
+void kernel_main() {
+    // compile-time args
+    constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);
+    constexpr bool wt_need_bcast = (get_compile_time_arg_val(1) == 1);
+    constexpr bool ht_need_bcast = (get_compile_time_arg_val(2) == 1);
+
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    CircularBuffer cb_in0_obj(cb_in0);  // input
+    constexpr auto cb_in1 = tt::CBIndex::c_1;
+    CircularBuffer cb_in1_obj(cb_in1);  // zero tile
+    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    CircularBuffer cb_out0_obj(cb_out0);
+    constexpr uint32_t onetile = 1;
+    constexpr uint32_t dst0 = 0;
+
+    binary_op_init_common(cb_in1, cb_in0, cb_out0);
+    cb_in1_obj.wait_front(onetile);
+
+    // cb_out0 = add_bcast&lt;dim&gt;(cb_in1, cb_in0)  (or plain copy if no bcast).
+    // Reconfig: original uses *_init_short (NOT _with_dt) and plain pack_tile,
+    // relying on startup binary_op_init_common formats -&gt; None + None.
+    // cb_in1 InputLifecycle::CallerManaged + Scalar (held outside loop). cb_in0 InputLifecycle::Streaming + Scalar.
+    // cb_out0 OutputLifecycle::Streaming + Scalar.
+    //
+    // The four (ht_need_bcast × wt_need_bcast) cases collapse into one chain via two
+    // mutually-exclusive OptionalChainElement gates: the BinaryFpu&lt;Add, bcast_dim&gt;
+    // runs when any bcast is needed (Scalar / Row / Col); the CopyTile runs when
+    // neither is needed (faster than add(zero, x) for the no-bcast path).
+<span class="dz" data-d="6">    constexpr bool has_bcast = ht_need_bcast || wt_need_bcast;
+    constexpr auto bcast_dim = (ht_need_bcast &amp;&amp; wt_need_bcast) ? compute_kernel_lib::BroadcastDim::Scalar
+                               : ht_need_bcast                  ? compute_kernel_lib::BroadcastDim::Row
+                               : wt_need_bcast                  ? compute_kernel_lib::BroadcastDim::Col
+                                                                : compute_kernel_lib::BroadcastDim::None;</span>
+
+    for (uint32_t i = 0; i &lt; num_output_tiles; i++) {
+<span class="dz" data-d="2">        compute_kernel_lib::eltwise_chain(</span>
+            onetile,
+<span class="dz" data-d="6">            compute_kernel_lib::OptionalChainElement&lt;
+                has_bcast,
+                compute_kernel_lib::BinaryFpu&lt;
+                    cb_in1,
+                    cb_in0,
+                    compute_kernel_lib::BinaryFpuOp::Add,
+                    bcast_dim,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::InputLifecycle::Streaming,</span>
+<span class="dz" data-d="4">                    compute_kernel_lib::BinaryDataFormatReconfig::None&gt;&gt;{},</span>
+<span class="dz" data-d="6">            compute_kernel_lib::OptionalChainElement&lt;
+                !has_bcast,
+                compute_kernel_lib::CopyTile&lt;
+                    cb_in0,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::CopyTileReconfig::None&gt;&gt;{},</span>
+<span class="dz" data-d="3">            compute_kernel_lib::PackTile&lt;
+                cb_out0,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::None&gt;{});</span>
+    }
+    cb_in1_obj.pop_front(onetile);
+}
+</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions &mdash; hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; eltwise_chain + eltwise_optional headers</b> &mdash; Add <code>eltwise_chain.hpp</code> and <code>eltwise_optional.hpp</code> for <code>OptionalChainElement</code>.</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; chain absorbs wait/pop</b> &mdash; The manual <code>cb_in0_obj.wait_front</code>/<code>pop_front</code> around the loop become <code>InputLifecycle::Streaming</code>; <code>cb_in1</code> is <code>CallerManaged</code> (held outside).</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; PackTile&lt;cb_out0&gt;</b> &mdash; Manual <code>pack_tile(dst0, cb_out0)</code> + reserve/push replaced by the trailing <code>PackTile&lt;cb_out0, OutputLifecycle::Streaming&gt;</code>.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; BinaryDataFormatReconfig::None</b> &mdash; Original used <code>*_init_short</code> (not <code>_with_dt</code>) + plain <code>pack_tile</code>, relying on startup formats; encoded as <code>::None</code> on both Binary and Pack reconfig.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; two mutually-exclusive OptionalChainElement</b> &mdash; The 4-way <code>if(ht/wt_need_bcast)</code> add-bcast/copy select collapses to one chain: <code>BinaryFpu&lt;Add,bcast_dim&gt;</code> gated by <code>has_bcast</code>, <code>CopyTile</code> gated by <code>!has_bcast</code>, with <code>bcast_dim</code> a compile-time <code>BroadcastDim</code>.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-moreh_moreh_sum_backward_moreh_sum_backward">
+{
+  "1": {
+    "title": "eltwise_chain + eltwise_optional headers",
+    "body": "Add <code>eltwise_chain.hpp</code> and <code>eltwise_optional.hpp</code> for <code>OptionalChainElement</code>.",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "chain absorbs wait/pop",
+    "body": "The manual <code>cb_in0_obj.wait_front</code>/<code>pop_front</code> around the loop become <code>InputLifecycle::Streaming</code>; <code>cb_in1</code> is <code>CallerManaged</code> (held outside).",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "PackTile&lt;cb_out0&gt;",
+    "body": "Manual <code>pack_tile(dst0, cb_out0)</code> + reserve/push replaced by the trailing <code>PackTile&lt;cb_out0, OutputLifecycle::Streaming&gt;</code>.",
+    "color": "#3f8ae0"
+  },
+  "4": {
+    "title": "BinaryDataFormatReconfig::None",
+    "body": "Original used <code>*_init_short</code> (not <code>_with_dt</code>) + plain <code>pack_tile</code>, relying on startup formats; encoded as <code>::None</code> on both Binary and Pack reconfig.",
+    "color": "#cf222e"
+  },
+  "6": {
+    "title": "two mutually-exclusive OptionalChainElement",
+    "body": "The 4-way <code>if(ht/wt_need_bcast)</code> add-bcast/copy select collapses to one chain: <code>BinaryFpu&lt;Add,bcast_dim&gt;</code> gated by <code>has_bcast</code>, <code>CopyTile</code> gated by <code>!has_bcast</code>, with <code>bcast_dim</code> a compile-time <code>BroadcastDim</code>.",
+    "color": "#ff7a00"
+  }
+}
+</script>

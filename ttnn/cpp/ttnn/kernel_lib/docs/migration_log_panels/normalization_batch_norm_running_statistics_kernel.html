@@ -1,0 +1,243 @@
+<section class="panel" id="panel-normalization_batch_norm_running_statistics_kernel">
+  <h1>running_statistics_kernel — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/running_statistics_kernel.cpp</div>
+  <div class="meta"><b>Δ</b> +99/-29 &nbsp; <b>Decisions:</b> 4</div>
+
+  <div class="focus-toolbar" data-fkernel="normalization_batch_norm_running_statistics_kernel">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; drop tmp CBs</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; held one/momentum</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; D1 reconfig</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; AlsoOut0 gate</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+<span class="dz" data-d="6">#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/tile_move_copy.h&quot;
+#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;</span>
+#include &quot;api/dataflow/circular_buffer.h&quot;
+
+void kernel_main() {
+    uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(0);
+    constexpr uint32_t old_running_mean_has_value = get_compile_time_arg_val(0) == 1;
+    constexpr uint32_t old_running_var_has_value = get_compile_time_arg_val(1) == 1;
+
+    constexpr auto cb_batch_mean = get_compile_time_arg_val(2);  // batch mean
+    constexpr auto cb_batch_var = get_compile_time_arg_val(3);   // batch var
+    constexpr auto cb_out0 = get_compile_time_arg_val(4);
+    constexpr auto cb_old_running_mean = get_compile_time_arg_val(5);      // old running mean tensor
+    constexpr auto cb_old_running_var = get_compile_time_arg_val(6);       // old running var tensor
+    constexpr auto cb_updated_running_mean = get_compile_time_arg_val(7);  // updated running mean tensor
+    constexpr auto cb_updated_running_var = get_compile_time_arg_val(8);   // updated running var tensor
+    constexpr auto cb_momentum = get_compile_time_arg_val(9);              // momentum
+    constexpr auto cb_one = get_compile_time_arg_val(10);                  // stores 1
+<span class="dz" data-d="1">    constexpr auto cb_tmp1 = get_compile_time_arg_val(11);                 // tmp 1
+    constexpr auto cb_tmp2 = get_compile_time_arg_val(12);                 // tmp 2
+    constexpr auto cb_tmp3 = get_compile_time_arg_val(13);                 // tmp 3
+</span>
+<span class="dz" data-d="2">    CircularBuffer cb_out0_obj(cb_out0);
+    CircularBuffer cb_momentum_obj(cb_momentum);
+    CircularBuffer cb_one_obj(cb_one);</span>
+
+    binary_op_init_common(cb_batch_mean, cb_batch_var, cb_out0);
+    constexpr uint32_t onetile = 1;
+
+<span class="dz" data-d="2">    cb_one_obj.wait_front(1);
+    cb_momentum_obj.wait_front(1);</span>
+
+    for (uint32_t tile_id = 0; tile_id &lt; num_tiles; ++tile_id) {
+<span class="dz" data-d="6">        tile_regs_acquire();
+        // updated_running_stat = (1 − momentum) × running_stat + momentum × batch_stat</span>
+
+        if constexpr (old_running_mean_has_value) {
+<span class="dz" data-d="1">            sub_tiles_to_cb(cb_one, cb_momentum, cb_tmp1, 0, 0, 0, 0);               // 1 - momentum
+            mul_tiles_to_cb(cb_momentum, cb_batch_mean, cb_tmp2, 0, 0, 0, 1);        // momentum * batch stat
+            mul_tiles_to_cb(cb_tmp1, cb_old_running_mean, cb_tmp3, 0, 0, 1, 1);      // cb_tmp1 * running stats
+            add_tiles_to_cb(cb_tmp2, cb_tmp3, cb_updated_running_mean, 0, 0, 1, 1);  // cb_tmp2 + cb_tmp3</span>
+        }
+        if constexpr (old_running_var_has_value) {
+<span class="dz" data-d="1">            sub_tiles_to_cb(cb_one, cb_momentum, cb_tmp1, 0, 0, 0, 0);              // 1 - momentum
+            mul_tiles_to_cb(cb_momentum, cb_batch_var, cb_tmp2, 0, 0, 0, 1);        // momentum * batch stat
+            mul_tiles_to_cb(cb_tmp1, cb_old_running_var, cb_tmp3, 0, 0, 1, 1);      // cb_tmp1 * running stats
+            add_tiles_to_cb(cb_tmp2, cb_tmp3, cb_updated_running_var, 0, 0, 1, 1);  // cb_tmp2 + cb_tmp3</span>
+        }
+<span class="dz" data-d="6">        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, cb_out0);
+        tile_regs_release();
+        cb_out0_obj.push_back(1);</span>
+    }
+
+<span class="dz" data-d="6">    cb_one_obj.pop_front(1);
+    cb_momentum_obj.pop_front(1);</span>
+}
+</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+<span class="dz" data-d="6">#include &quot;api/compute/eltwise_binary.h&quot;                      // binary_op_init_common (BIG init)
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;        // BinaryFpu, DestReuseBinary, PackTile
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp&quot;  // AddBinary (DEST + DEST)
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp&quot;     // OptionalChainElement</span>
+#include &quot;api/dataflow/circular_buffer.h&quot;
+<span class="dz" data-d="6">
+// running_statistics (FPU path): updated_stat = (1 - momentum) * old_stat + momentum * batch_stat
+// for mean and/or var (compile-time gated).
+//</span>
+<span class="dz" data-d="1">// One chain per stat, no intermediate CBs (the original staged through cb_tmp1/2/3). The two</span>
+<span class="dz" data-d="6">// products live in separate DEST slots and are summed in DEST by an SFPU add:
+//
+//   D0 = (1 - momentum) ;  D0 *= old_stat        BinaryFpu Sub(one, momentum) -&gt; DestReuse Mul(.old)
+//   D1 = momentum * batch_stat                    BinaryFpu Mul(momentum, batch) -&gt; D1
+//   D0 = D0 + D1                                  AddBinary (DEST + DEST)
+//
+// cb_out0 receives a copy of the last computed stat (var if present, else mean), reproducing the
+// original&#x27;s trailing pack_tile(0, cb_out0).
+namespace ckl = compute_kernel_lib;
+
+template &lt;
+    uint32_t cb_batch,
+    uint32_t cb_old,
+    uint32_t cb_updated,
+    bool AlsoOut0,
+    uint32_t cb_one,
+    uint32_t cb_momentum,
+    uint32_t cb_out0&gt;
+ALWI void update_running_stat() {
+    using D = ckl::Dst;
+    using ckl::BinaryFpuOp;
+
+    // one/momentum held (CallerManaged); old_stat and batch_stat streamed (wait 1 / pop 1, as the
+    // original popped them). cb_updated is caller-reserved/pushed (CallerManaged output); cb_out0 is
+    // reserved/pushed once per loop iteration by kernel_main.
+    cb_reserve_back(cb_updated, 1);
+    ckl::eltwise_chain(
+        1,
+        ckl::BinaryFpu&lt;
+            cb_one,
+            cb_momentum,
+            BinaryFpuOp::Sub,
+            ckl::BroadcastDim::None,
+            ckl::InputLifecycle::CallerManaged,
+            ckl::InputLifecycle::CallerManaged&gt;{},                                           // D0 = 1 - momentum
+        ckl::DestReuseBinary&lt;cb_old, BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA&gt;{},  // D0 = (1 - momentum) *
+                                                                                             // old_stat
+        ckl::BinaryFpu&lt;
+            cb_momentum,
+            cb_batch,
+            BinaryFpuOp::Mul,
+            ckl::BroadcastDim::None,
+            ckl::InputLifecycle::CallerManaged,
+            ckl::InputLifecycle::Streaming,</span>
+<span class="dz" data-d="4">            ckl::BinaryDataFormatReconfig::Input,
+            D::D1&gt;{},                           // D1 = momentum * batch_stat</span>
+<span class="dz" data-d="6">        ckl::AddBinary&lt;D::D0, D::D1, D::D0&gt;{},  // D0 = D0 + D1
+        ckl::PackTile&lt;cb_updated, ckl::OutputLifecycle::CallerManaged&gt;{},
+        ckl::OptionalChainElement&lt;AlsoOut0, ckl::PackTile&lt;cb_out0, ckl::OutputLifecycle::CallerManaged&gt;&gt;{});
+    cb_push_back(cb_updated, 1);
+}</span>
+
+void kernel_main() {
+    uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(0);
+    constexpr uint32_t old_running_mean_has_value = get_compile_time_arg_val(0) == 1;
+    constexpr uint32_t old_running_var_has_value = get_compile_time_arg_val(1) == 1;
+
+    constexpr auto cb_batch_mean = get_compile_time_arg_val(2);  // batch mean
+    constexpr auto cb_batch_var = get_compile_time_arg_val(3);   // batch var
+    constexpr auto cb_out0 = get_compile_time_arg_val(4);
+    constexpr auto cb_old_running_mean = get_compile_time_arg_val(5);      // old running mean tensor
+    constexpr auto cb_old_running_var = get_compile_time_arg_val(6);       // old running var tensor
+    constexpr auto cb_updated_running_mean = get_compile_time_arg_val(7);  // updated running mean tensor
+    constexpr auto cb_updated_running_var = get_compile_time_arg_val(8);   // updated running var tensor
+    constexpr auto cb_momentum = get_compile_time_arg_val(9);              // momentum
+    constexpr auto cb_one = get_compile_time_arg_val(10);                  // stores 1
+
+    binary_op_init_common(cb_batch_mean, cb_batch_var, cb_out0);
+    constexpr uint32_t onetile = 1;
+
+<span class="dz" data-d="2">    cb_wait_front(cb_one, 1);  // held for the whole kernel
+    cb_wait_front(cb_momentum, 1);</span>
+
+    for (uint32_t tile_id = 0; tile_id &lt; num_tiles; ++tile_id) {
+<span class="dz" data-d="6">        cb_reserve_back(cb_out0, onetile);</span>
+
+        if constexpr (old_running_mean_has_value) {
+<span class="dz" data-d="6">            update_running_stat&lt;
+                cb_batch_mean,
+                cb_old_running_mean,
+                cb_updated_running_mean,
+                /*AlsoOut0=*/!old_running_var_has_value,
+                cb_one,
+                cb_momentum,
+                cb_out0&gt;();</span>
+        }
+<span class="dz" data-d="6"></span>
+        if constexpr (old_running_var_has_value) {
+<span class="dz" data-d="6">            update_running_stat&lt;
+                cb_batch_var,
+                cb_old_running_var,
+                cb_updated_running_var,
+                /*AlsoOut0=*/true,
+                cb_one,
+                cb_momentum,
+                cb_out0&gt;();</span>
+        }
+<span class="dz" data-d="6">
+        cb_push_back(cb_out0, onetile);</span>
+    }
+
+<span class="dz" data-d="2">    cb_pop_front(cb_one, 1);
+    cb_pop_front(cb_momentum, 1);</span>
+}
+</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; cb_tmp1/2/3 CT-args removed</b> — The three intermediate-CB compile-time args are gone — the result is threaded through DEST slots instead of CB round-trips. CB ids are passed as template params to the helper.</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; <code>CallerManaged</code> held scalars</b> — <code>cb_one</code>/<code>cb_momentum</code> are waited once at the top of kernel_main and popped at the end — passed as <code>InputLifecycle::CallerManaged</code> so the chain emits no extra wait/pop; <code>old_stat</code>/<code>batch_stat</code> stay <code>Streaming</code>.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; <code>BinaryDataFormatReconfig::Input</code> on the D1 product</b> — The <code>momentum * batch_stat</code> product targets <code>Dst::D1</code> with an explicit <code>BinaryDataFormatReconfig::Input</code>, matching the original's data-format handling before the in-DEST add.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; <code>OptionalChainElement</code> trailing cb_out0 pack</b> — The original's trailing <code>pack_tile(0, cb_out0)</code> became a gated <code>PackTile&lt;cb_out0&gt;</code> element selected by <code>AlsoOut0</code> (true for var, or for mean when var is absent), reproducing which stat lands in cb_out0.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-normalization_batch_norm_running_statistics_kernel">
+{
+  "1": {
+    "title": "cb_tmp1/2/3 CT-args removed",
+    "body": "The three intermediate-CB compile-time args are gone \u2014 the result is threaded through DEST slots instead of CB round-trips. CB ids are passed as template params to the helper.",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "<code>CallerManaged</code> held scalars",
+    "body": "<code>cb_one</code>/<code>cb_momentum</code> are waited once at the top of kernel_main and popped at the end \u2014 passed as <code>InputLifecycle::CallerManaged</code> so the chain emits no extra wait/pop; <code>old_stat</code>/<code>batch_stat</code> stay <code>Streaming</code>.",
+    "color": "#2ea043"
+  },
+  "4": {
+    "title": "<code>BinaryDataFormatReconfig::Input</code> on the D1 product",
+    "body": "The <code>momentum * batch_stat</code> product targets <code>Dst::D1</code> with an explicit <code>BinaryDataFormatReconfig::Input</code>, matching the original's data-format handling before the in-DEST add.",
+    "color": "#cf222e"
+  },
+  "6": {
+    "title": "<code>OptionalChainElement</code> trailing cb_out0 pack",
+    "body": "The original's trailing <code>pack_tile(0, cb_out0)</code> became a gated <code>PackTile&lt;cb_out0&gt;</code> element selected by <code>AlsoOut0</code> (true for var, or for mean when var is absent), reproducing which stat lands in cb_out0.",
+    "color": "#ff7a00"
+  }
+}
+</script>

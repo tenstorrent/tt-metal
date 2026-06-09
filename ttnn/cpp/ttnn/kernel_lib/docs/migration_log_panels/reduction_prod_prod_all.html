@@ -1,0 +1,179 @@
+<section class="panel" id="panel-reduction_prod_prod_all">
+  <h1>prod_all — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/compute/prod_all.cpp</div>
+  <div class="meta"><b>&Delta;</b> +48/-61 &nbsp; <b>Decisions:</b> 5</div>
+
+  <div class="focus-toolbar" data-fkernel="reduction_prod_prod_all">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; slim headers + constexpr</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; 3-stage chain</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; reconfig folded</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; init kept</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; num_tiles==1</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+<span class="dz" data-d="1">#include &quot;api/compute/common.h&quot;
+#include &quot;api/compute/tile_move_copy.h&quot;
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/eltwise_unary/sfpu_split_includes.h&quot;
+#include &quot;api/compute/eltwise_unary/negative.h&quot;
+#include &quot;api/compute/compute_kernel_api.h&quot;
+#include &quot;api/debug/dprint_pages.h&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+void kernel_main() {
+<span class="dz" data-d="1">    const tt::CBIndex input_cb = tt::CBIndex::c_0;
+    const tt::CBIndex partial_prod_cb = tt::CBIndex::c_2;
+    const tt::CBIndex final_output_cb = tt::CBIndex::c_3;
+
+    CircularBuffer input_cb_obj(input_cb);
+    CircularBuffer partial_prod_cb_obj(partial_prod_cb);
+    CircularBuffer final_output_cb_obj(final_output_cb);</span>
+
+    const int one_tile = 1;
+    constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t per_core_block_dim = get_compile_time_arg_val(1);
+<span class="dz" data-d="5">    binary_op_init_common(input_cb, partial_prod_cb, final_output_cb);</span>
+
+<span class="dz" data-d="4">    reconfig_data_format(input_cb, partial_prod_cb);
+    pack_reconfig_data_format(final_output_cb);</span>
+
+    // Ultimate goal is to have a single tile in the final output cb
+    final_output_cb_obj.reserve_back(one_tile);
+
+    // Copy the first tile to DST[0]
+    input_cb_obj.wait_front(one_tile);
+    tile_regs_acquire();
+
+<span class="dz" data-d="3">    copy_tile_to_dst_init_short(input_cb);
+    copy_tile(input_cb, 0, 0);  // copy from c_in[0] to DST[0]
+
+    input_cb_obj.pop_front(one_tile);
+    mul_tiles_init(input_cb, partial_prod_cb);
+
+    // When we have more than one tile, we can do the tile-wise multiplication of them all to yield one final tile
+    for (uint32_t t = 1; t &lt; num_tiles; t++) {
+        // Save the current partial prod into CB
+        tile_regs_commit();
+        tile_regs_wait();
+
+        partial_prod_cb_obj.reserve_back(one_tile);
+        pack_tile(0, partial_prod_cb);
+        partial_prod_cb_obj.push_back(one_tile);
+        tile_regs_release();
+
+        // Load the next input tile and multiply it with the partial prod
+        input_cb_obj.wait_front(one_tile);
+
+        tile_regs_acquire();
+
+        mul_tiles(input_cb, partial_prod_cb, /*tile0=*/0, /*tile1=*/0, /*dst_tile=*/0);
+
+        input_cb_obj.pop_front(one_tile);
+        partial_prod_cb_obj.pop_front(one_tile);
+    }</span>
+
+    tile_regs_commit();
+    tile_regs_wait();
+
+    pack_tile(0, final_output_cb);
+    final_output_cb_obj.push_back(one_tile);
+    tile_regs_release();
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+<span class="dz" data-d="1">#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+void kernel_main() {
+<span class="dz" data-d="1">    constexpr auto input_cb = tt::CBIndex::c_0;
+    constexpr auto partial_prod_cb = tt::CBIndex::c_2;
+    constexpr auto final_output_cb = tt::CBIndex::c_3;</span>
+
+    constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
+
+<span class="dz" data-d="5">    binary_op_init_common(input_cb, partial_prod_cb, final_output_cb);</span>
+
+    // Reduction by running product across num_tiles. The original kernel kept
+    // DST alive across iterations via pack-to-partial + reload pattern; the
+    // chain reproduces the same dataflow via three stages:
+    //   Stage 1 (seed): input[0] -&gt; partial_prod
+    //   Stage 2 (accumulator, n_tiles=num_tiles-1):
+    //       partial_prod *= input[t]  (BinaryFpu + PackTile&lt;partial_prod&gt;)
+    //   Stage 3 (final): partial_prod -&gt; final_output
+    //
+<span class="dz" data-d="4">    // Reconfig audit: original used reconfig_data_format(input, partial_prod)
+    // + pack_reconfig_data_format(final_output) once at boot, then plain
+    // copy_tile / mul_tiles / pack_tile (no per-call _with_dt). Chain emits
+    // Input + Output reconfigs on the boot-to-first-call transition (folded
+    // by prev-CB elision when formats match the boot state) so the effective
+    // sequence matches.</span>
+<span class="dz" data-d="3">    if constexpr (num_tiles == 1) {</span>
+<span class="dz" data-d="6">        // Single tile: copy direct to final.
+        compute_kernel_lib::copy&lt;input_cb, final_output_cb&gt;(1u);</span>
+<span class="dz" data-d="3">    } else {
+        compute_kernel_lib::copy&lt;input_cb, partial_prod_cb&gt;(1u);
+        compute_kernel_lib::mul&lt;input_cb, partial_prod_cb, partial_prod_cb&gt;(num_tiles - 1u);
+        compute_kernel_lib::copy&lt;partial_prod_cb, final_output_cb&gt;(1u);
+    }</span>
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; Slim headers + constexpr CBs</b> — Dropped the long include list (<code>eltwise_binary.h</code>, <code>negative.h</code>, <code>dprint_pages.h</code>, …) for just <code>eltwise_chain.hpp</code> + <code>eltwise_convenience.hpp</code>; CB ids → <code>constexpr auto</code>; dropped the three <code>CircularBuffer</code> objects.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; Seed/accumulate/final chain stages</b> — The pack-to-partial + reload running-product loop became three chain calls: <code>copy&lt;input,partial&gt;(1)</code> seed, <code>mul&lt;input,partial,partial&gt;(num_tiles-1)</code> accumulate, <code>copy&lt;partial,final&gt;(1)</code>.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; Boot reconfigs folded into chain</b> — Original called <code>reconfig_data_format(input,partial)</code> + <code>pack_reconfig_data_format(final)</code> once at boot; chain emits Input+Output reconfigs on the boot→first-call transition, folded by prev-CB elision when formats match.</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; binary_op_init_common preserved</b> — <code>binary_op_init_common(input, partial, final)</code> stays as the boot init.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; Single-tile fast path</b> — <code>if constexpr (num_tiles==1)</code> copies input directly to final, replacing the original's implicit single-iteration handling of the copy-then-loop.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-reduction_prod_prod_all">
+{
+  "1": {
+    "title": "Slim headers + constexpr CBs",
+    "body": "Dropped the long include list (<code>eltwise_binary.h</code>, <code>negative.h</code>, <code>dprint_pages.h</code>, \u2026) for just <code>eltwise_chain.hpp</code> + <code>eltwise_convenience.hpp</code>; CB ids \u2192 <code>constexpr auto</code>; dropped the three <code>CircularBuffer</code> objects.",
+    "color": "#d6a000"
+  },
+  "3": {
+    "title": "Seed/accumulate/final chain stages",
+    "body": "The pack-to-partial + reload running-product loop became three chain calls: <code>copy&lt;input,partial&gt;(1)</code> seed, <code>mul&lt;input,partial,partial&gt;(num_tiles-1)</code> accumulate, <code>copy&lt;partial,final&gt;(1)</code>.",
+    "color": "#3f8ae0"
+  },
+  "4": {
+    "title": "Boot reconfigs folded into chain",
+    "body": "Original called <code>reconfig_data_format(input,partial)</code> + <code>pack_reconfig_data_format(final)</code> once at boot; chain emits Input+Output reconfigs on the boot\u2192first-call transition, folded by prev-CB elision when formats match.",
+    "color": "#cf222e"
+  },
+  "5": {
+    "title": "binary_op_init_common preserved",
+    "body": "<code>binary_op_init_common(input, partial, final)</code> stays as the boot init.",
+    "color": "#9f4bbf"
+  },
+  "6": {
+    "title": "Single-tile fast path",
+    "body": "<code>if constexpr (num_tiles==1)</code> copies input directly to final, replacing the original's implicit single-iteration handling of the copy-then-loop.",
+    "color": "#ff7a00"
+  }
+}
+</script>

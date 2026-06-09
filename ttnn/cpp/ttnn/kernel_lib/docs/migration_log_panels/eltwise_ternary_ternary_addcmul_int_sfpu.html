@@ -1,0 +1,168 @@
+<section class="panel" id="panel-eltwise_ternary_ternary_addcmul_int_sfpu">
+  <h1>ternary_addcmul_int_sfpu — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_addcmul_int_sfpu.cpp</div>
+  <div class="meta"><b>Δ</b> +39/-46 &nbsp; <b>Decisions:</b> 4</div>
+
+  <div class="focus-toolbar" data-fkernel="eltwise_ternary_ternary_addcmul_int_sfpu">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; includes</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; chain lifecycle + PackTile</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; CopyTile x3</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; FillInt + int-binary ops</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;api/compute/tile_move_copy.h&quot;
+<span class="dz" data-d="1">#include &quot;api/compute/eltwise_unary/fill.h&quot;
+#include &quot;api/compute/mul_int_sfpu.h&quot;
+#include &quot;api/compute/add_int_sfpu.h&quot;</span>
+
+void kernel_main() {
+    uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(0);
+    uint32_t scalar_arg = get_arg_val&lt;uint32_t&gt;(3);
+    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);  // set to 1
+
+    constexpr auto cb_in0 = tt::CBIndex::c_0;  // input_a
+    constexpr auto cb_in1 = tt::CBIndex::c_1;  // input_b
+    constexpr auto cb_in2 = tt::CBIndex::c_2;  // input_c
+    constexpr auto cb_out = tt::CBIndex::c_3;
+
+    unary_op_init_common(cb_in0, cb_out);
+
+<span class="dz" data-d="2">    for (uint32_t tile_id = 0; tile_id &lt; num_tiles; ++tile_id) {
+        cb_wait_front(cb_in0, num_tiles_per_cycle);
+        cb_wait_front(cb_in1, num_tiles_per_cycle);
+        cb_wait_front(cb_in2, num_tiles_per_cycle);
+
+        cb_reserve_back(cb_out, num_tiles_per_cycle);
+
+        tile_regs_acquire();
+</span>
+<span class="dz" data-d="3">        copy_tile_init(cb_in0);
+        copy_tile(cb_in0, 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
+
+        copy_tile_init(cb_in1);
+        copy_tile(cb_in1, 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
+
+        copy_tile_init(cb_in2);
+        copy_tile(cb_in2, 0 /*in_tile_index*/, 2 /*dst_tile_index*/);</span>
+
+<span class="dz" data-d="6">        fill_tile_init();
+        fill_tile_int&lt;ADDCMUL_DATA_FORMAT&gt;(3, scalar_arg);
+
+        mul_int_tile_init&lt;ADDCMUL_DATA_FORMAT&gt;();
+        mul_int_tile&lt;ADDCMUL_DATA_FORMAT&gt;(3, 1, 3);
+        mul_int_tile&lt;ADDCMUL_DATA_FORMAT&gt;(3, 2, 2);
+
+        add_int_tile_init();
+        add_int_tile&lt;ADDCMUL_DATA_FORMAT&gt;(0, 2, 0);</span>
+
+<span class="dz" data-d="2">        tile_regs_commit();
+        tile_regs_wait();
+
+        pack_tile(0, cb_out);
+
+        tile_regs_release();
+
+        cb_push_back(cb_out, num_tiles_per_cycle);
+        cb_pop_front(cb_in0, num_tiles_per_cycle);
+        cb_pop_front(cb_in1, num_tiles_per_cycle);
+        cb_pop_front(cb_in2, num_tiles_per_cycle);</span>
+    }
+}
+</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+<span class="dz" data-d="1">#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp&quot;         // FillInt
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp&quot;  // MulIntBinary, AddIntBinary</span>
+
+// addcmul (integer): out = in0 + scalar * (in1 * in2), all int32 (ADDCMUL_DATA_FORMAT).
+//   copy in0/in1/in2 -&gt; D0/D1/D2 ; D3 = scalar ; D3 = D3*in1 ; D2 = D3*in2 ;
+//   D0 = in0 + D2 ; pack D0.
+// All LLK already have chain elements — no new helper additions. Each CopyTile uses
+// CopyTileReconfig::None, which emits copy_tile_init(Cb) — identical to the original&#x27;s
+// per-input copy_tile_init(cb_inX). Lifecycle: 3 Streaming inputs (wait1/pop1) + 1
+// Streaming output (reserve1/push1) per iter — matches the original counts exactly.
+namespace ckl = compute_kernel_lib;
+
+void kernel_main() {
+    uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(0);
+    uint32_t scalar_arg = get_arg_val&lt;uint32_t&gt;(3);
+    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);  // set to 1
+
+    constexpr auto cb_in0 = tt::CBIndex::c_0;  // input_a
+    constexpr auto cb_in1 = tt::CBIndex::c_1;  // input_b
+    constexpr auto cb_in2 = tt::CBIndex::c_2;  // input_c
+    constexpr auto cb_out = tt::CBIndex::c_3;
+
+    unary_op_init_common(cb_in0, cb_out);  // caller-owned BIG init
+
+<span class="dz" data-d="2">    ckl::eltwise_chain(
+        num_tiles,</span>
+<span class="dz" data-d="3">        ckl::CopyTile&lt;cb_in0, ckl::Dst::D0, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None&gt;{},
+        ckl::CopyTile&lt;cb_in1, ckl::Dst::D1, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None&gt;{},
+        ckl::CopyTile&lt;cb_in2, ckl::Dst::D2, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None&gt;{},</span>
+<span class="dz" data-d="6">        ckl::FillInt&lt;ADDCMUL_DATA_FORMAT, ckl::Dst::D3&gt;{scalar_arg},
+        ckl::MulIntBinary&lt;ADDCMUL_DATA_FORMAT, ckl::Dst::D3, ckl::Dst::D1, ckl::Dst::D3&gt;{},  // D3 = scalar*in1
+        ckl::MulIntBinary&lt;ADDCMUL_DATA_FORMAT, ckl::Dst::D3, ckl::Dst::D2, ckl::Dst::D2&gt;{},  // D2 = D3*in2
+        ckl::AddIntBinary&lt;ADDCMUL_DATA_FORMAT, ckl::Dst::D0, ckl::Dst::D2, ckl::Dst::D0&gt;{},  // D0 = in0 + D2</span>
+<span class="dz" data-d="2">        ckl::PackTile&lt;cb_out, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None&gt;{});</span>
+}
+</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; Includes: raw int-SFPU headers -&gt; chain headers</b> — Replaced <code>fill.h</code>/<code>mul_int_sfpu.h</code>/<code>add_int_sfpu.h</code>/<code>tile_move_copy.h</code> with <code>eltwise_chain.hpp</code>, <code>eltwise_fill.hpp</code> (FillInt) and <code>eltwise_binary_sfpu.hpp</code> (MulIntBinary, AddIntBinary).</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; Manual CB sync + pack -&gt; eltwise_chain / PackTile</b> — <code>cb_wait_front</code> x3 / <code>cb_reserve_back</code> / <code>tile_regs_*</code> / <code>pack_tile</code> / <code>cb_push_back</code> / <code>cb_pop_front</code> x3 collapse into <code>eltwise_chain(num_tiles, …, PackTile&lt;cb_out, OutputLifecycle::Streaming&gt;)</code> — 3 Streaming in + 1 Streaming out per iter, matching counts.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; copy_tile_init + copy_tile -&gt; CopyTile Streaming x3</b> — The three <code>copy_tile_init</code>+<code>copy_tile(cb_inX,0,k)</code> pairs became <code>CopyTile&lt;cb_inX, Dk, InputLifecycle::Streaming, CopyTileReconfig::None&gt;</code>; None emits <code>copy_tile_init(Cb)</code> identical to the originals.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; fill/mul/add_int LLK -&gt; FillInt / MulIntBinary / AddIntBinary</b> — <code>fill_tile_int&lt;DF&gt;(3,scalar)</code> -> <code>FillInt&lt;DF, D3&gt;</code>; the two <code>mul_int_tile&lt;DF&gt;</code> -> <code>MulIntBinary&lt;DF,…&gt;</code> (D3=scalar*in1, D2=D3*in2); <code>add_int_tile&lt;DF&gt;(0,2,0)</code> -> <code>AddIntBinary&lt;DF, D0,D2,D0&gt;</code>. All keep <code>ADDCMUL_DATA_FORMAT</code>.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-eltwise_ternary_ternary_addcmul_int_sfpu">
+{
+  "1": {
+    "title": "Includes: raw int-SFPU headers -> chain headers",
+    "body": "Replaced <code>fill.h</code>/<code>mul_int_sfpu.h</code>/<code>add_int_sfpu.h</code>/<code>tile_move_copy.h</code> with <code>eltwise_chain.hpp</code>, <code>eltwise_fill.hpp</code> (FillInt) and <code>eltwise_binary_sfpu.hpp</code> (MulIntBinary, AddIntBinary).",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "Manual CB sync + pack -> eltwise_chain / PackTile",
+    "body": "<code>cb_wait_front</code> x3 / <code>cb_reserve_back</code> / <code>tile_regs_*</code> / <code>pack_tile</code> / <code>cb_push_back</code> / <code>cb_pop_front</code> x3 collapse into <code>eltwise_chain(num_tiles, \u2026, PackTile&lt;cb_out, OutputLifecycle::Streaming&gt;)</code> \u2014 3 Streaming in + 1 Streaming out per iter, matching counts.",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "copy_tile_init + copy_tile -> CopyTile Streaming x3",
+    "body": "The three <code>copy_tile_init</code>+<code>copy_tile(cb_inX,0,k)</code> pairs became <code>CopyTile&lt;cb_inX, Dk, InputLifecycle::Streaming, CopyTileReconfig::None&gt;</code>; None emits <code>copy_tile_init(Cb)</code> identical to the originals.",
+    "color": "#3f8ae0"
+  },
+  "6": {
+    "title": "fill/mul/add_int LLK -> FillInt / MulIntBinary / AddIntBinary",
+    "body": "<code>fill_tile_int&lt;DF&gt;(3,scalar)</code> -> <code>FillInt&lt;DF, D3&gt;</code>; the two <code>mul_int_tile&lt;DF&gt;</code> -> <code>MulIntBinary&lt;DF,\u2026&gt;</code> (D3=scalar*in1, D2=D3*in2); <code>add_int_tile&lt;DF&gt;(0,2,0)</code> -> <code>AddIntBinary&lt;DF, D0,D2,D0&gt;</code>. All keep <code>ADDCMUL_DATA_FORMAT</code>.",
+    "color": "#ff7a00"
+  }
+}
+</script>

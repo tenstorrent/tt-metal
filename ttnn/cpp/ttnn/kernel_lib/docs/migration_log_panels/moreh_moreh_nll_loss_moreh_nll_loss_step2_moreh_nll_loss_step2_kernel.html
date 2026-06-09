@@ -1,0 +1,319 @@
+<section class="panel" id="panel-moreh_moreh_nll_loss_moreh_nll_loss_step2_moreh_nll_loss_step2_kernel">
+  <h1>moreh_nll_loss_step2_kernel — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step2/device/kernels/moreh_nll_loss_step2_kernel.cpp</div>
+  <div class="meta"><b>Δ</b> +103/-135 &nbsp; <b>Decisions:</b> 6</div>
+
+  <div class="focus-toolbar" data-fkernel="moreh_moreh_nll_loss_moreh_nll_loss_step2_moreh_nll_loss_step2_kernel">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; CB ids → constexpr + headers</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; weight mul → OptionalChainElement</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; per-tile body → eltwise_chain</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; FP32 reconfig folded into chain</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; WEIGHT/DIVISOR → constexpr bool</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; recip(divisor) prologue → unary</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+<span class="dz" data-d="1">#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+void kernel_main() {
+    constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+
+<span class="dz" data-d="1">    constexpr uint32_t cb_weight = tt::CBIndex::c_2;
+    constexpr uint32_t cb_divisor = tt::CBIndex::c_3;
+    CircularBuffer cb_divisor_obj(cb_divisor);
+
+    constexpr uint32_t cb_tmp_weight = tt::CBIndex::c_24;
+    CircularBuffer cb_tmp_weight_obj(cb_tmp_weight);
+    constexpr uint32_t cb_tmp_input = tt::CBIndex::c_25;
+    CircularBuffer cb_tmp_input_obj(cb_tmp_input);
+    constexpr uint32_t cb_tmp1 = tt::CBIndex::c_26;
+    CircularBuffer cb_tmp1_obj(cb_tmp1);
+    constexpr uint32_t cb_divisor_recip = tt::CBIndex::c_27;
+    CircularBuffer cb_divisor_recip_obj(cb_divisor_recip);  // 1/divisor
+    constexpr uint32_t cb_tmp3 = tt::CBIndex::c_28;
+    CircularBuffer cb_tmp3_obj(cb_tmp3);
+
+    constexpr uint32_t cb_output = tt::CBIndex::c_16;
+    CircularBuffer cb_output_obj(cb_output);</span>
+
+    constexpr uint32_t dst0 = 0;
+    constexpr uint32_t onetile = 1;
+
+    binary_op_init_common(cb_tmp_weight, cb_tmp_input, cb_output);
+
+<span class="dz" data-d="6">#if defined(DIVISOR)
+    cb_divisor_obj.wait_front(onetile);
+
+    tile_regs_acquire();
+    copy_tile_init_with_dt(cb_divisor);
+    copy_tile(cb_divisor, 0, dst0);
+    recip_tile_init();
+    recip_tile(dst0);
+    tile_regs_commit();
+
+    cb_divisor_obj.pop_front(onetile);
+    cb_divisor_recip_obj.reserve_back(onetile);
+    tile_regs_wait();
+    pack_tile_with_dt(dst0, cb_divisor_recip);
+    tile_regs_release();
+    cb_divisor_recip_obj.push_back(onetile);
+#endif</span>
+
+<span class="dz" data-d="3">    for (uint32_t b = 0; b &lt; per_core_tile_cnt; ++b) {
+        cb_tmp_input_obj.wait_front(onetile);
+
+        tile_regs_acquire();
+        copy_tile_init_with_dt(cb_tmp_input);
+        copy_tile(cb_tmp_input, 0, dst0);
+
+        negative_tile_init();
+        negative_tile(dst0);
+        tile_regs_commit();
+
+        cb_tmp_input_obj.pop_front(onetile);
+
+#if defined(WEIGHT)
+        cb_tmp1_obj.reserve_back(onetile);
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, cb_tmp1);
+        tile_regs_release();
+        cb_tmp1_obj.push_back(onetile);
+
+        // multiply weight
+        cb_tmp1_obj.wait_front(onetile);
+        cb_tmp_weight_obj.wait_front(onetile);
+
+        tile_regs_acquire();
+        mul_tiles_init_with_dt(cb_tmp1, cb_tmp_weight);
+        mul_tiles(cb_tmp1, cb_tmp_weight, 0, 0, dst0);
+        tile_regs_commit();
+
+        cb_tmp_weight_obj.pop_front(onetile);
+        cb_tmp1_obj.pop_front(onetile);
+
+#if defined(DIVISOR)
+        cb_tmp3_obj.reserve_back(onetile);
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, cb_tmp3);
+        tile_regs_release();
+        cb_tmp3_obj.push_back(onetile);
+
+        cb_tmp3_obj.wait_front(onetile);
+        cb_divisor_recip_obj.wait_front(onetile);
+        tile_regs_acquire();</span>
+<span class="dz" data-d="4">#if defined FP32_DEST_ACC_EN
+        reconfig_data_format(cb_tmp3, cb_divisor_recip);
+#endif</span>
+<span class="dz" data-d="3">        mul_tiles_bcast_scalar_init_short(cb_tmp3, cb_divisor_recip);
+        mul_tiles_bcast_scalar(cb_tmp3, cb_divisor_recip, 0, 0, dst0);
+        tile_regs_commit();
+        cb_tmp3_obj.pop_front(onetile);
+
+        cb_output_obj.reserve_back(onetile);
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, cb_output);
+        tile_regs_release();
+        cb_output_obj.push_back(onetile);
+#else
+        cb_output_obj.reserve_back(onetile);
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, cb_output);
+        tile_regs_release();
+        cb_output_obj.push_back(onetile);
+#endif
+#else
+#if defined(DIVISOR)
+        cb_tmp1_obj.reserve_back(onetile);
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, cb_tmp1);
+        tile_regs_release();
+        cb_tmp1_obj.push_back(onetile);
+
+        cb_divisor_recip_obj.wait_front(onetile);
+        cb_tmp1_obj.wait_front(onetile);
+
+        tile_regs_acquire();</span>
+<span class="dz" data-d="4">#if defined FP32_DEST_ACC_EN
+        reconfig_data_format(cb_tmp1, cb_divisor_recip);
+#endif</span>
+<span class="dz" data-d="3">        mul_tiles_bcast_scalar_init_short(cb_tmp1, cb_divisor_recip);
+        mul_tiles_bcast_scalar(cb_tmp1, cb_divisor_recip, 0, 0, dst0);
+        tile_regs_commit();
+
+        cb_tmp1_obj.pop_front(onetile);
+
+        cb_output_obj.reserve_back(onetile);
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, cb_output);
+        tile_regs_release();
+        cb_output_obj.push_back(onetile);
+#else
+        cb_output_obj.reserve_back(onetile);
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, cb_output);
+        tile_regs_release();
+        cb_output_obj.push_back(onetile);
+#endif
+#endif
+    }</span>
+
+#if defined(DIVISOR)
+    cb_divisor_recip_obj.pop_front(onetile);
+#endif
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+<span class="dz" data-d="1">#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;     // BinaryFpu, CopyTile, DestReuseBinary, PackTile
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp&quot;  // unary
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp&quot;      // Recip
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp&quot;      // Negative
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp&quot;  // OptionalChainElement
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+// moreh nll_loss step2:  output = -input [* weight] [* (1/divisor)]
+//   input, weight stream 1 tile/iter (full tiles); 1/divisor is a held SCALAR.
+//
+// recip(divisor) is precomputed once into cb_divisor_recip, then everything else is one chain per
+// iteration with no intermediate-CB spill. The three per-tile ops are applied in a chain-friendly
+// order (mathematically identical to the original): the held scalar recip folds into the input load
+// as a scalar-bcast multiply, then negate, then the full-tile weight multiply (DEST-reuse):
+//   -(input * recip) * weight  ==  -input * weight * recip
+// weight is gated by an OptionalChainElement; recip forks the load element (scalar-bcast BinaryFpu
+// vs plain CopyTile) since DestReuseBinary has no broadcast.
+//
+// The WEIGHT / DIVISOR factory #defines map to compile-time `constexpr bool`s, branched with
+// `if constexpr` directly in kernel_main.
+//
+// NOTE (pre-existing reduction=mean failures, NOT fixable in this kernel): for a rank-1 input
+// (e.g. shape [5,10] → target [5]) the divisor read from cb_divisor is garbage. The divisor is
+// `moreh_sum(step1_result)` computed in moreh_nll_loss.cpp, and moreh_sum&#x27;s full-reduce of a
+// rank-1 tensor returns inf/garbage (its reduce kernel needs a 2D [Ht,Wt] tile grid). This kernel
+// faithfully divides by whatever divisor it is handed, so it cannot correct it. Upstream
+// workaround: reshape step1_result to [1, N] before the divisor moreh_sum in moreh_nll_loss.cpp.
+namespace ckl = compute_kernel_lib;
+
+void kernel_main() {
+    constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+
+<span class="dz" data-d="1">    constexpr uint32_t cb_tmp_weight = tt::CBIndex::c_24;
+    constexpr uint32_t cb_tmp_input = tt::CBIndex::c_25;
+    constexpr uint32_t cb_divisor = tt::CBIndex::c_3;
+    constexpr uint32_t cb_divisor_recip = tt::CBIndex::c_27;  // 1/divisor (held scalar)
+    constexpr uint32_t cb_output = tt::CBIndex::c_16;
+    using D = ckl::Dst;</span>
+
+<span class="dz" data-d="5">#if defined(WEIGHT)
+    constexpr bool has_weight = true;
+#else
+    constexpr bool has_weight = false;
+#endif
+
+#if defined(DIVISOR)
+    constexpr bool has_divisor = true;
+#else
+    constexpr bool has_divisor = false;
+#endif</span>
+
+    binary_op_init_common(cb_tmp_weight, cb_tmp_input, cb_output);
+
+<span class="dz" data-d="5">    if constexpr (has_divisor) {
+        // recip(divisor) -&gt; cb_divisor_recip (one tile, consumed Bulk by the loop chain).
+        ckl::unary&lt;ckl::Recip&lt;D::D0&gt;, cb_divisor, cb_divisor_recip, ckl::InputLifecycle::Bulk&gt;(1);
+    }</span>
+
+<span class="dz" data-d="2">    // Full-tile weight multiply (DEST-reuse), gated on has_weight — collapses to a no-op tag when
+    // the caller didn&#x27;t pass a weight tensor.
+    constexpr auto weight_mul = ckl::OptionalChainElement&lt;
+        has_weight,
+        ckl::DestReuseBinary&lt;cb_tmp_weight, ckl::BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA&gt;&gt;{};</span>
+
+    constexpr auto negate = ckl::Negative&lt;D::D0&gt;{};
+    constexpr auto pack_out = ckl::PackTile&lt;cb_output&gt;{};
+
+    if constexpr (has_divisor) {
+        // D0 = input * recip (scalar-bcast); input streamed, recip held (Bulk scalar).
+<span class="dz" data-d="3">        ckl::eltwise_chain(
+            per_core_tile_cnt,</span>
+<span class="dz" data-d="4">            ckl::BinaryFpu&lt;
+                cb_tmp_input,
+                cb_divisor_recip,
+                ckl::BinaryFpuOp::Mul,
+                ckl::BroadcastDim::Scalar,
+                ckl::InputLifecycle::Streaming,
+                ckl::InputLifecycle::Bulk&gt;{},</span>
+<span class="dz" data-d="3">            negate,
+            weight_mul,
+            pack_out);
+    } else {
+        ckl::eltwise_chain(per_core_tile_cnt, ckl::CopyTile&lt;cb_tmp_input&gt;{}, negate, weight_mul, pack_out);
+    }</span>
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; CB ids → constexpr, eltwise headers, CircularBuffer objs dropped</b> — Raw <code>tt::CBIndex</code> + <code>CircularBuffer cb_*_obj</code> wrappers replaced by <code>constexpr uint32_t</code> CB ids; pulls in <code>eltwise_chain.hpp</code>, <code>eltwise_convenience.hpp</code>, <code>eltwise_math.hpp</code>, <code>eltwise_misc.hpp</code>, <code>eltwise_optional.hpp</code>.</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; weight multiply → OptionalChainElement&amp;lt;has_weight, DestReuseBinary&amp;gt;</b> — The <code>#if defined(WEIGHT)</code> full-tile mul became <code>OptionalChainElement&lt;has_weight, DestReuseBinary&lt;cb_tmp_weight, Mul, DEST_TO_SRCA&gt;&gt;</code> — collapses to a no-op tag when no weight tensor.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; Per-iter copy/neg/mul/pack → one eltwise_chain</b> — The whole streaming loop body (copy, negative, optional weight mul, scalar-bcast divisor mul, pack) collapsed to a single <code>ckl::eltwise_chain(per_core_tile_cnt, …)</code>; <code>BinaryFpu</code> with <code>BroadcastDim::Scalar</code> folds the held recip into the input load.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; Manual reconfig_data_format removed</b> — The <code>#if FP32_DEST_ACC_EN reconfig_data_format(cb_tmp3,cb_divisor_recip)</code> guard is gone; per-stage data-format reconfig is now derived by the chain from operand CB types.</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; Factory #defines → if constexpr</b> — <code>#if defined(WEIGHT)</code>/<code>DIVISOR</code> CPP branching mapped to <code>constexpr bool has_weight/has_divisor</code> driving <code>if constexpr</code> in kernel_main, eliminating the nested preprocessor tree.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; recip(divisor) prologue → ckl::unary&amp;lt;Recip&amp;gt;</b> — The hand-rolled copy_tile+recip_tile+pack prologue became one <code>ckl::unary&lt;Recip, cb_divisor, cb_divisor_recip, InputLifecycle::Bulk&gt;(1)</code> — Bulk so the loop chain re-reads the held scalar.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-moreh_moreh_nll_loss_moreh_nll_loss_step2_moreh_nll_loss_step2_kernel">
+{
+  "1": {
+    "title": "CB ids \u2192 constexpr, eltwise headers, CircularBuffer objs dropped",
+    "body": "Raw <code>tt::CBIndex</code> + <code>CircularBuffer cb_*_obj</code> wrappers replaced by <code>constexpr uint32_t</code> CB ids; pulls in <code>eltwise_chain.hpp</code>, <code>eltwise_convenience.hpp</code>, <code>eltwise_math.hpp</code>, <code>eltwise_misc.hpp</code>, <code>eltwise_optional.hpp</code>.",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "weight multiply \u2192 OptionalChainElement&lt;has_weight, DestReuseBinary&gt;",
+    "body": "The <code>#if defined(WEIGHT)</code> full-tile mul became <code>OptionalChainElement&lt;has_weight, DestReuseBinary&lt;cb_tmp_weight, Mul, DEST_TO_SRCA&gt;&gt;</code> \u2014 collapses to a no-op tag when no weight tensor.",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "Per-iter copy/neg/mul/pack \u2192 one eltwise_chain",
+    "body": "The whole streaming loop body (copy, negative, optional weight mul, scalar-bcast divisor mul, pack) collapsed to a single <code>ckl::eltwise_chain(per_core_tile_cnt, \u2026)</code>; <code>BinaryFpu</code> with <code>BroadcastDim::Scalar</code> folds the held recip into the input load.",
+    "color": "#3f8ae0"
+  },
+  "4": {
+    "title": "Manual reconfig_data_format removed",
+    "body": "The <code>#if FP32_DEST_ACC_EN reconfig_data_format(cb_tmp3,cb_divisor_recip)</code> guard is gone; per-stage data-format reconfig is now derived by the chain from operand CB types.",
+    "color": "#cf222e"
+  },
+  "5": {
+    "title": "Factory #defines \u2192 if constexpr",
+    "body": "<code>#if defined(WEIGHT)</code>/<code>DIVISOR</code> CPP branching mapped to <code>constexpr bool has_weight/has_divisor</code> driving <code>if constexpr</code> in kernel_main, eliminating the nested preprocessor tree.",
+    "color": "#9f4bbf"
+  },
+  "6": {
+    "title": "recip(divisor) prologue \u2192 ckl::unary&lt;Recip&gt;",
+    "body": "The hand-rolled copy_tile+recip_tile+pack prologue became one <code>ckl::unary&lt;Recip, cb_divisor, cb_divisor_recip, InputLifecycle::Bulk&gt;(1)</code> \u2014 Bulk so the loop chain re-reads the held scalar.",
+    "color": "#ff7a00"
+  }
+}
+</script>

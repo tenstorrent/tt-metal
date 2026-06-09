@@ -1,0 +1,87 @@
+<section class="panel" id="panel-kernel_lib_tests_chain_reconfig_chain_mixed_prev">
+  <h1>chain_mixed_prev — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/kernel_lib/tests/chain_reconfig/chain_mixed_prev.cpp</div>
+  <div class="meta"><b>Δ</b> new &nbsp; <b>Decisions:</b> 3</div>
+
+  <div class="focus-toolbar" data-fkernel="kernel_lib_tests_chain_reconfig_chain_mixed_prev">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; CB ids → constexpr</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; D0 not pipelined</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; mixed-prev fallback</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// (new file — no pre-migration version)</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Case C — mixed-prev fallback. srca has prev (from CopyTile), srcb is first-emit.
+//
+// Chain shape: CopyTile(CbA, D0) -&gt; BinaryFpu(CbB, CbC, D0) -&gt; PackTile(CbOut).
+// At BinaryFpu (element 1): prev_a=CbA (set by element 0's CopyTile), curr_a=CbB → reconf_a=true,
+// prev_a known. prev_b=NO_PREV_DFB (element 0's CopyTile doesn't touch srcb), curr_b=CbC →
+// reconf_b=true, prev_b first-emit. emit_pre_element_transitions takes the mixed-prev branch:
+// reconfig_data_format_srca(prev_a, curr_a) (2-arg _with_dt) plus reconfig_data_format_srcb(curr_b) (1-arg).
+//
+// Note: BinaryFpu reads srca from CbB (not CbA) — CopyTile's result in D0 is overwritten because the
+// chain library doesn't pipeline D0 between elements unless DestReuse is used. Net semantic = CbB + CbC.
+
+#include &lt;cstdint&gt;
+<span class="dz" data-d="1">#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"</span>
+
+void kernel_main() {
+<span class="dz" data-d="1">    constexpr uint32_t cb_a = tt::CBIndex::c_0;
+    constexpr uint32_t cb_b = tt::CBIndex::c_1;
+    constexpr uint32_t cb_c = tt::CBIndex::c_2;
+    constexpr uint32_t cb_out = tt::CBIndex::c_16;</span>
+
+    constexpr uint32_t total_tiles = get_compile_time_arg_val(0);
+
+    compute_kernel_hw_startup(cb_a, cb_b, cb_out);
+
+<span class="dz" data-d="6">    compute_kernel_lib::eltwise_chain(
+        total_tiles,
+        compute_kernel_lib::CopyTile&lt;cb_a&gt;{},</span>
+<span class="dz" data-d="4">        compute_kernel_lib::BinaryFpu&lt;cb_b, cb_c&gt;{},</span>
+<span class="dz" data-d="6">        compute_kernel_lib::PackTile&lt;cb_out&gt;{});</span>
+}
+</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; CB ids as constexpr template args</b> — Four <code>constexpr uint32_t</code> CB ids (a/b/c/out) feed the chain; sole include <code>eltwise_chain.hpp</code>.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; net semantic CbB + CbC</b> — BinaryFpu reads srca from CbB, not CbA — CopyTile's D0 result is overwritten because the chain doesn't pipeline D0 between elements without DestReuse. Net semantic = CbB + CbC.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; CopyTile → BinaryFpu mixed-prev branch</b> — <code>eltwise_chain(total_tiles, CopyTile&lt;cb_a&gt;{}, BinaryFpu&lt;cb_b,cb_c&gt;{}, PackTile&lt;cb_out&gt;{})</code>. At the BinaryFpu, srca has prev=CbA (from CopyTile) but srcb is first-emit (NO_PREV_DFB). <code>emit_pre_element_transitions</code> takes the mixed-prev branch: 2-arg <code>reconfig_data_format_srca(prev_a, curr_a)</code> plus 1-arg <code>reconfig_data_format_srcb(curr_b)</code>.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-kernel_lib_tests_chain_reconfig_chain_mixed_prev">
+{
+  "1": {
+    "title": "CB ids as constexpr template args",
+    "body": "Four <code>constexpr uint32_t</code> CB ids (a/b/c/out) feed the chain; sole include <code>eltwise_chain.hpp</code>.",
+    "color": "#d6a000"
+  },
+  "4": {
+    "title": "net semantic CbB + CbC",
+    "body": "BinaryFpu reads srca from CbB, not CbA \u2014 CopyTile's D0 result is overwritten because the chain doesn't pipeline D0 between elements without DestReuse. Net semantic = CbB + CbC.",
+    "color": "#cf222e"
+  },
+  "6": {
+    "title": "CopyTile \u2192 BinaryFpu mixed-prev branch",
+    "body": "<code>eltwise_chain(total_tiles, CopyTile&lt;cb_a&gt;{}, BinaryFpu&lt;cb_b,cb_c&gt;{}, PackTile&lt;cb_out&gt;{})</code>. At the BinaryFpu, srca has prev=CbA (from CopyTile) but srcb is first-emit (NO_PREV_DFB). <code>emit_pre_element_transitions</code> takes the mixed-prev branch: 2-arg <code>reconfig_data_format_srca(prev_a, curr_a)</code> plus 1-arg <code>reconfig_data_format_srcb(curr_b)</code>.",
+    "color": "#ff7a00"
+  }
+}
+</script>

@@ -117,57 +117,60 @@ void kernel_main() {
                 compute_kernel_lib::OperandKind::Scalar>(
                 compute_kernel_lib::EltwiseShape::tiles(block_size, /*block_size=*/block_size));
 
-            // 2) normalize: (x-mean) * inv_std
+            // 2) normalize: (x-mean) * inv_std  ->  norm_target_cb
+            // In-place when there is no gamma/beta (norm_target_cb == cb_intermediate). The
+            // Chunked lifecycle reproduces the original's in-place-safe ordering: the chain's
+            // compute phase pops the block_size input tiles BEFORE the pack phase reserves the
+            // output block, so a block_size-capacity cb_intermediate is reused in place. (Bulk
+            // would reserve the output before popping the input and deadlock the tight buffer.)
+            // cb_recip_sqrt_var is the COL-bcast scalar, held across the col loop (waited here,
+            // popped once per row below) -> CallerManaged + Scalar.
+            // Reconfig: Input (reconfig_data_format + mul_bcast_cols_init_short) + Output
+            // (pack_reconfig_data_format).
             constexpr uint32_t norm_target_cb = (do_gamma || do_beta) ? cb_intermediate : cb_out;
-            reconfig_data_format(cb_intermediate, cb_recip_sqrt_var);
-            pack_reconfig_data_format(norm_target_cb);
-            mul_bcast_cols_init_short(cb_intermediate, cb_recip_sqrt_var);
-            cb_wait_front(cb_intermediate, block_size);
             cb_wait_front(cb_recip_sqrt_var, 1);
-            tile_regs_acquire();
-            for (uint32_t i = 0; i < block_size; i++) {
-                mul_tiles_bcast_cols(cb_intermediate, cb_recip_sqrt_var, i, 0, i);
-            }
-            tile_regs_commit();
+            compute_kernel_lib::mul<
+                cb_intermediate,
+                cb_recip_sqrt_var,
+                norm_target_cb,
+                compute_kernel_lib::BroadcastDim::Col,
+                compute_kernel_lib::InputLifecycle::Chunked,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OutputLifecycle::Chunked,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::PackTileReconfig::Output,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::OperandKind::Scalar>(
+                compute_kernel_lib::EltwiseShape::tiles(block_size, /*block_size=*/block_size));
 
-            // Note that compute and pack are separated because it's possible that
-            // norm_target_cb == cb_intermediate (in the case of no gamma/beta), so this
-            // must be able to support in-place operations.
-            cb_pop_front(cb_intermediate, block_size);
-            cb_reserve_back(norm_target_cb, block_size);
-            tile_regs_wait();
-            for (uint32_t i = 0; i < block_size; i++) {
-                pack_tile(i, norm_target_cb);
-            }
-            tile_regs_release();
-            cb_push_back(norm_target_cb, block_size);
-
-            // 3) optional gamma
+            // 3) optional gamma: norm_target_cb * gamma (bcast rows) -> gamma_out_cb.
+            // In-place when beta follows (gamma_out_cb == cb_intermediate == norm_target_cb),
+            // so it uses the same Chunked in-place-safe ordering as the normalize step. gamma
+            // is the ROW-bcast operand, read at the running col_tile offset and held across the
+            // col loop (cumulative wait here, popped per-batch / at end) -> CallerManaged +
+            // Block + TileOffset::Set{col_tile}. Reconfig: Input + Output.
             if constexpr (do_gamma) {
                 constexpr uint32_t gamma_out_cb = do_beta ? cb_intermediate : cb_out;
-                reconfig_data_format(norm_target_cb, cb_gamma);
-                pack_reconfig_data_format(gamma_out_cb);
-                mul_bcast_rows_init_short(norm_target_cb, cb_gamma);
-
                 cb_wait_front(cb_gamma, col_tile + block_size);
-                cb_wait_front(norm_target_cb, block_size);
-
-                tile_regs_acquire();
-                for (uint32_t i = 0; i < block_size; i++) {
-                    mul_tiles_bcast_rows(norm_target_cb, cb_gamma, i, col_tile + i, i);
-                }
-                tile_regs_commit();
-
-                cb_pop_front(norm_target_cb, block_size);
-                cb_reserve_back(gamma_out_cb, block_size);
-
-                tile_regs_wait();
-                for (uint32_t i = 0; i < block_size; i++) {
-                    pack_tile(i, gamma_out_cb);
-                }
-                tile_regs_release();
-
-                cb_push_back(gamma_out_cb, block_size);
+                compute_kernel_lib::eltwise_chain(
+                    compute_kernel_lib::EltwiseShape::tiles(block_size, /*block_size=*/block_size),
+                    compute_kernel_lib::BinaryFpu<
+                        norm_target_cb,
+                        cb_gamma,
+                        compute_kernel_lib::BinaryFpuOp::Mul,
+                        compute_kernel_lib::BroadcastDim::Row,
+                        compute_kernel_lib::InputLifecycle::Chunked,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::TileOffset::Unset,
+                        compute_kernel_lib::TileOffset::Set>{0u, col_tile},
+                    compute_kernel_lib::PackTile<
+                        gamma_out_cb,
+                        compute_kernel_lib::OutputLifecycle::Chunked,
+                        compute_kernel_lib::PackTileReconfig::Output>{});
             }
 
             // 4) optional beta (only if gamma was provided)

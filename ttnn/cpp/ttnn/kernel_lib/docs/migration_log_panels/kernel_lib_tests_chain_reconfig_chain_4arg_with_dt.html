@@ -1,0 +1,92 @@
+<section class="panel" id="panel-kernel_lib_tests_chain_reconfig_chain_4arg_with_dt">
+  <h1>chain_4arg_with_dt — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/kernel_lib/tests/chain_reconfig/chain_4arg_with_dt.cpp</div>
+  <div class="meta"><b>Δ</b> new &nbsp; <b>Decisions:</b> 4</div>
+
+  <div class="focus-toolbar" data-fkernel="kernel_lib_tests_chain_reconfig_chain_4arg_with_dt">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; CB ids → constexpr</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; 4-arg _with_dt fold</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; arg-order regression</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; single hw_startup</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// (new file — no pre-migration version)</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Case A — 4-arg reconfig_data_format(prev_a, curr_a, prev_b, curr_b) (_with_dt).
+//
+// Chain shape: BinaryFpu(CbA, CbB) → BinaryFpu(CbC, CbD) → PackTile(CbOut).
+// At element 1 the fold sees: srca rotates CbA → CbC (both with prev) AND srcb rotates CbB → CbD (both with prev),
+// so emit_pre_element_transitions emits the 4-arg _with_dt overload. The first BinaryFpu's result is overwritten by
+// the second; the chain's net semantic is CbC + CbD, packed to CbOut. Argument-order regressions in the 4-arg
+// overload surface as wrong outputs when the (CbA, CbB) dtypes differ from (CbC, CbD).
+
+#include &lt;cstdint&gt;
+<span class="dz" data-d="1">#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"</span>
+
+void kernel_main() {
+<span class="dz" data-d="1">    constexpr uint32_t cb_a = tt::CBIndex::c_0;
+    constexpr uint32_t cb_b = tt::CBIndex::c_1;
+    constexpr uint32_t cb_c = tt::CBIndex::c_2;
+    constexpr uint32_t cb_d = tt::CBIndex::c_3;
+    constexpr uint32_t cb_out = tt::CBIndex::c_16;</span>
+
+    constexpr uint32_t total_tiles = get_compile_time_arg_val(0);
+
+<span class="dz" data-d="5">    compute_kernel_hw_startup(cb_a, cb_b, cb_out);</span>
+
+<span class="dz" data-d="3">    compute_kernel_lib::eltwise_chain(
+        total_tiles,</span>
+<span class="dz" data-d="4">        compute_kernel_lib::BinaryFpu&lt;cb_a, cb_b&gt;{},
+        compute_kernel_lib::BinaryFpu&lt;cb_c, cb_d&gt;{},</span>
+<span class="dz" data-d="3">        compute_kernel_lib::PackTile&lt;cb_out&gt;{});</span>
+}
+</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; CB ids as constexpr template args</b> — Five <code>constexpr uint32_t</code> CB ids (a/b/c/d/out) feed the chain elements as template args; sole include is <code>eltwise_chain.hpp</code>.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; Two BinaryFpu → PackTile chain</b> — <code>eltwise_chain(total_tiles, BinaryFpu&lt;cb_a,cb_b&gt;{}, BinaryFpu&lt;cb_c,cb_d&gt;{}, PackTile&lt;cb_out&gt;{})</code>. At element 1 both srca (CbA→CbC) and srcb (CbB→CbD) rotate with prev set, so the fold emits the 4-arg <code>reconfig_data_format(prev_a, curr_a, prev_b, curr_b)</code> <code>_with_dt</code> overload.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; distinct (a,b) vs (c,d) dtypes</b> — When (CbA,CbB) dtypes differ from (CbC,CbD), an argument-order regression in the 4-arg overload surfaces as a wrong output. Net semantic is CbC + CbD packed to CbOut.</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; compute_kernel_hw_startup</b> — <code>compute_kernel_hw_startup(cb_a, cb_b, cb_out)</code> boots once; chain owns per-element reconfig.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-kernel_lib_tests_chain_reconfig_chain_4arg_with_dt">
+{
+  "1": {
+    "title": "CB ids as constexpr template args",
+    "body": "Five <code>constexpr uint32_t</code> CB ids (a/b/c/d/out) feed the chain elements as template args; sole include is <code>eltwise_chain.hpp</code>.",
+    "color": "#d6a000"
+  },
+  "3": {
+    "title": "Two BinaryFpu \u2192 PackTile chain",
+    "body": "<code>eltwise_chain(total_tiles, BinaryFpu&lt;cb_a,cb_b&gt;{}, BinaryFpu&lt;cb_c,cb_d&gt;{}, PackTile&lt;cb_out&gt;{})</code>. At element 1 both srca (CbA\u2192CbC) and srcb (CbB\u2192CbD) rotate with prev set, so the fold emits the 4-arg <code>reconfig_data_format(prev_a, curr_a, prev_b, curr_b)</code> <code>_with_dt</code> overload.",
+    "color": "#3f8ae0"
+  },
+  "4": {
+    "title": "distinct (a,b) vs (c,d) dtypes",
+    "body": "When (CbA,CbB) dtypes differ from (CbC,CbD), an argument-order regression in the 4-arg overload surfaces as a wrong output. Net semantic is CbC + CbD packed to CbOut.",
+    "color": "#cf222e"
+  },
+  "5": {
+    "title": "compute_kernel_hw_startup",
+    "body": "<code>compute_kernel_hw_startup(cb_a, cb_b, cb_out)</code> boots once; chain owns per-element reconfig.",
+    "color": "#9f4bbf"
+  }
+}
+</script>

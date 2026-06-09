@@ -1,0 +1,166 @@
+<section class="panel" id="panel-eltwise_unary_logsigmoid_kernel">
+  <h1>logsigmoid_kernel — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/logsigmoid_kernel.cpp</div>
+  <div class="meta"><b>Δ</b> +33/-37 &nbsp; <b>Decisions:</b> 5</div>
+
+  <div class="focus-toolbar" data-fkernel="eltwise_unary_logsigmoid_kernel">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; helper includes</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; HeldStream + NoWaitPop dual read</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; negative/exp/logsigmoid</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; manual loop → eltwise_chain</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; PackTile streaming</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+<span class="dz" data-d="1">#include &lt;cstdint&gt;
+#include &quot;api/compute/common.h&quot;
+#include &quot;api/compute/tile_move_copy.h&quot;
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;api/compute/eltwise_unary/sfpu_split_includes.h&quot;
+#include &quot;api/compute/eltwise_unary/exp.h&quot;
+#include &quot;api/compute/logsigmoid.h&quot;
+#include &quot;api/compute/eltwise_unary/negative.h&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+void kernel_main() {
+    uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(0);
+
+    constexpr auto cb_input = tt::CBIndex::c_0;
+    constexpr auto cb_output = tt::CBIndex::c_2;
+
+    CircularBuffer cb_in(cb_input);
+    CircularBuffer cb_out(cb_output);
+
+    init_sfpu(cb_input, cb_output);
+
+<span class="dz" data-d="5">    for (uint32_t i = 0; i &lt; num_tiles; ++i) {
+        cb_in.wait_front(1);
+        cb_out.reserve_back(1);
+
+        tile_regs_acquire();
+
+        copy_tile_to_dst_init_short(cb_input);</span>
+<span class="dz" data-d="2">        copy_tile(cb_input, 0, 0);
+        copy_tile(cb_input, 0, 1);
+</span>
+        negative_tile_init();
+<span class="dz" data-d="4">        negative_tile(1);
+
+        exp_tile_init&lt;true&gt;();
+        exp_tile&lt;true&gt;(1);
+
+        logsigmoid_tile_init();
+        logsigmoid_tile(0, 1, 0);</span>
+
+<span class="dz" data-d="6">        tile_regs_commit();
+        tile_regs_wait();
+</span>
+<span class="dz" data-d="5">        pack_tile(0, cb_output);
+        tile_regs_release();
+
+        cb_in.pop_front(1);</span>
+        cb_out.push_back(1);
+    }
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+<span class="dz" data-d="1">#include &lt;cstdint&gt;
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp&quot;         // Exp
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp&quot;         // Negative
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_activations.hpp&quot;  // Logsigmoid
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+void kernel_main() {
+    uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(0);
+
+    constexpr auto cb_input = tt::CBIndex::c_0;
+    constexpr auto cb_output = tt::CBIndex::c_2;
+
+    init_sfpu(cb_input, cb_output);
+
+    // Logsigmoid(x) = -log(1 + exp(-x)) = -softplus(-x).
+    //   D0 = cb_input   (InputLifecycle::HeldStream — second copy reuses same tile)
+    //   D1 = -cb_input -&gt; exp -&gt; exp(-x) (InputLifecycle::NoWaitPop pops cb_input)
+    //   Logsigmoid&lt;D0, D1, D0&gt; reads D0=x and D1=exp(-x), writes D0.
+    //   pack_tile(D0) -&gt; cb_output.
+<span class="dz" data-d="5">    compute_kernel_lib::eltwise_chain(
+        num_tiles,</span>
+<span class="dz" data-d="2">        compute_kernel_lib::CopyTile&lt;
+            cb_input,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::InputLifecycle::HeldStream,
+            compute_kernel_lib::CopyTileReconfig::None&gt;{},
+        compute_kernel_lib::CopyTile&lt;
+            cb_input,
+            compute_kernel_lib::Dst::D1,
+            compute_kernel_lib::InputLifecycle::NoWaitPop,
+            compute_kernel_lib::CopyTileReconfig::None&gt;{},</span>
+<span class="dz" data-d="4">        compute_kernel_lib::Negative&lt;compute_kernel_lib::Dst::D1&gt;{},
+        compute_kernel_lib::
+            Exp&lt;compute_kernel_lib::Approx::Fast, compute_kernel_lib::Approx::Fast, compute_kernel_lib::Dst::D1&gt;{},
+        compute_kernel_lib::
+            Logsigmoid&lt;compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0&gt;{},</span>
+<span class="dz" data-d="6">        compute_kernel_lib::PackTile&lt;
+            cb_output,
+            compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::PackTileReconfig::None&gt;{});</span>
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; kernel_lib header includes</b> — Replaced <code>exp.h</code>/<code>logsigmoid.h</code>/<code>negative.h</code> raw headers with <code>eltwise_chain.hpp</code>, <code>eltwise_math.hpp</code> (Exp), <code>eltwise_misc.hpp</code> (Negative), <code>eltwise_activations.hpp</code> (Logsigmoid).</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; One wait/pop across two copies</b> — Original wrapped two <code>copy_tile(cb_input,…)</code> in a single <code>wait_front(1)</code>/<code>pop_front(1)</code>. Chain: <code>CopyTile&lt;cb_input, D0, HeldStream&gt;</code> (owns wait) + <code>CopyTile&lt;cb_input, D1, NoWaitPop&gt;</code> (owns pop).</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; SFPU tiles → chain elements</b> — <code>negative_tile</code>→<code>Negative&lt;D1&gt;</code>, <code>exp_tile&lt;true&gt;</code>→<code>Exp&lt;Approx::Fast, Approx::Fast, D1&gt;</code>, <code>logsigmoid_tile</code>→<code>Logsigmoid&lt;D0,D1,D0&gt;</code>.</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; tile_regs loop → eltwise_chain(num_tiles, …)</b> — The <code>for</code> loop with <code>tile_regs_acquire/commit/wait/release</code>, <code>reserve_back</code>/<code>push_back</code> and manual <code>pack_tile</code> collapses into one chain; CircularBuffer objects removed.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; pack_tile → PackTile&lt;cb_output, Streaming&gt;</b> — Manual <code>pack_tile(0, cb_output)</code> + <code>cb_out.push_back(1)</code> become <code>PackTile&lt;cb_output, OutputLifecycle::Streaming, PackTileReconfig::None&gt;</code>.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-eltwise_unary_logsigmoid_kernel">
+{
+  "1": {
+    "title": "kernel_lib header includes",
+    "body": "Replaced <code>exp.h</code>/<code>logsigmoid.h</code>/<code>negative.h</code> raw headers with <code>eltwise_chain.hpp</code>, <code>eltwise_math.hpp</code> (Exp), <code>eltwise_misc.hpp</code> (Negative), <code>eltwise_activations.hpp</code> (Logsigmoid).",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "One wait/pop across two copies",
+    "body": "Original wrapped two <code>copy_tile(cb_input,\u2026)</code> in a single <code>wait_front(1)</code>/<code>pop_front(1)</code>. Chain: <code>CopyTile&lt;cb_input, D0, HeldStream&gt;</code> (owns wait) + <code>CopyTile&lt;cb_input, D1, NoWaitPop&gt;</code> (owns pop).",
+    "color": "#2ea043"
+  },
+  "4": {
+    "title": "SFPU tiles \u2192 chain elements",
+    "body": "<code>negative_tile</code>\u2192<code>Negative&lt;D1&gt;</code>, <code>exp_tile&lt;true&gt;</code>\u2192<code>Exp&lt;Approx::Fast, Approx::Fast, D1&gt;</code>, <code>logsigmoid_tile</code>\u2192<code>Logsigmoid&lt;D0,D1,D0&gt;</code>.",
+    "color": "#cf222e"
+  },
+  "5": {
+    "title": "tile_regs loop \u2192 eltwise_chain(num_tiles, \u2026)",
+    "body": "The <code>for</code> loop with <code>tile_regs_acquire/commit/wait/release</code>, <code>reserve_back</code>/<code>push_back</code> and manual <code>pack_tile</code> collapses into one chain; CircularBuffer objects removed.",
+    "color": "#9f4bbf"
+  },
+  "6": {
+    "title": "pack_tile \u2192 PackTile<cb_output, Streaming>",
+    "body": "Manual <code>pack_tile(0, cb_output)</code> + <code>cb_out.push_back(1)</code> become <code>PackTile&lt;cb_output, OutputLifecycle::Streaming, PackTileReconfig::None&gt;</code>.",
+    "color": "#ff7a00"
+  }
+}
+</script>

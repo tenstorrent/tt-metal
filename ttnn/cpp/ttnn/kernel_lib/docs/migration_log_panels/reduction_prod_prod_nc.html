@@ -1,0 +1,188 @@
+<section class="panel" id="panel-reduction_prod_prod_nc">
+  <h1>prod_nc — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/compute/prod_nc.cpp</div>
+  <div class="meta"><b>&Delta;</b> +40/-37 &nbsp; <b>Decisions:</b> 5</div>
+
+  <div class="focus-toolbar" data-fkernel="reduction_prod_prod_nc">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; slim headers</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; HeldStream scaler</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; seed/middle/final muls</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; reconfig no-op</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; num_input==1</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+<span class="dz" data-d="1">#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/tile_move_copy.h&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+void kernel_main() {
+    const auto num_input_tiles = get_arg_val&lt;uint32_t&gt;(0);
+    const auto num_output_tiles = get_arg_val&lt;uint32_t&gt;(1);
+
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    constexpr auto cb_in1 = tt::CBIndex::c_1;
+    constexpr auto cb_out0 = tt::CBIndex::c_3;
+    constexpr auto cb_intermed0 = tt::CBIndex::c_2;
+    constexpr uint32_t onetile = 1;
+    constexpr uint32_t dst0 = 0;
+    constexpr uint32_t dst1 = 1;
+    constexpr uint32_t first_tile = 0;
+
+<span class="dz" data-d="1">    CircularBuffer cb_in0_obj(cb_in0);
+    CircularBuffer cb_in1_obj(cb_in1);
+    CircularBuffer cb_intermed0_obj(cb_intermed0);
+    CircularBuffer cb_out0_obj(cb_out0);</span>
+
+    binary_op_init_common(cb_in0, cb_in1, cb_out0);
+    cb_in1_obj.wait_front(onetile);
+
+<span class="dz" data-d="3">    for (uint32_t i = 0; i &lt; num_output_tiles; i++) {
+        bool enable_reload = false;
+        for (uint32_t j = 0; j &lt; num_input_tiles; ++j) {
+            bool last_out = (j == num_input_tiles - 1);
+            uint32_t cb_add = (enable_reload) ? (cb_intermed0) : (cb_in1);
+
+            cb_in0_obj.wait_front(onetile);
+            if (enable_reload) {
+                cb_intermed0_obj.wait_front(onetile);
+            }
+
+            tile_regs_acquire();
+            mul_tiles_init(cb_in0, cb_add);
+            mul_tiles(cb_in0, cb_add, first_tile, first_tile, dst0);
+            tile_regs_commit();
+
+            cb_in0_obj.pop_front(onetile);
+            if (enable_reload) {
+                cb_intermed0_obj.pop_front(onetile);
+            }
+
+            auto&amp; cb_out_obj = last_out ? cb_out0_obj : cb_intermed0_obj;
+            cb_out_obj.reserve_back(onetile);
+            tile_regs_wait();
+            pack_tile(dst0, cb_out_obj.get_cb_id());
+            tile_regs_release();
+            cb_out_obj.push_back(onetile);
+            enable_reload = true;
+        }</span>
+    }
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+<span class="dz" data-d="1">#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+void kernel_main() {
+    const auto num_input_tiles = get_arg_val&lt;uint32_t&gt;(0);
+    const auto num_output_tiles = get_arg_val&lt;uint32_t&gt;(1);
+
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    constexpr auto cb_in1 = tt::CBIndex::c_1;
+    constexpr auto cb_out0 = tt::CBIndex::c_3;
+    constexpr auto cb_intermed0 = tt::CBIndex::c_2;
+    constexpr uint32_t onetile = 1;
+
+<span class="dz" data-d="2">    CircularBuffer cb_in1_obj(cb_in1);</span>
+
+    binary_op_init_common(cb_in0, cb_in1, cb_out0);
+<span class="dz" data-d="2">    cb_in1_obj.wait_front(onetile);</span>
+
+<span class="dz" data-d="3">    // Reduction by product across num_input_tiles per output tile.
+    // First iteration multiplies cb_in0 by cb_in1 (ones scaler held outside);
+    // subsequent iterations multiply cb_in0 by the running cb_intermed0
+    // partial. Final iteration packs to cb_out0 instead of cb_intermed0.</span>
+<span class="dz" data-d="4">    //
+    // Reconfig: original used `mul_tiles_init(cb_in0, cb_add)` (NOT _with_dt)
+    // each iteration and plain `pack_tile` — no reconfigs. BinaryFpu emits
+    // Input reconfig per chain call which is a no-op when the data format
+    // doesn&#x27;t change (cb_in0/cb_in1/cb_intermed0 share intermed_data_format
+    // by program-factory layout).</span>
+    for (uint32_t i = 0; i &lt; num_output_tiles; ++i) {
+<span class="dz" data-d="6">        if (num_input_tiles == 1) {
+            // Single input tile: cb_in0 * cb_in1 -&gt; cb_out0.
+            compute_kernel_lib::mul&lt;
+                cb_in0,
+                cb_in1,
+                cb_out0,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::HeldStream&gt;(onetile);</span>
+<span class="dz" data-d="3">        } else {
+            // Seed: cb_in0 * cb_in1 -&gt; cb_intermed0 (cb_in1 = scaler, held).
+            compute_kernel_lib::mul&lt;
+                cb_in0,
+                cb_in1,
+                cb_intermed0,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::HeldStream&gt;(onetile);
+            // Middle: cb_in0 * cb_intermed0 -&gt; cb_intermed0 (n_input - 2 iters).
+            if (num_input_tiles &gt; 2) {
+                compute_kernel_lib::mul&lt;cb_in0, cb_intermed0, cb_intermed0&gt;(num_input_tiles - 2u);
+            }
+            // Final: cb_in0 * cb_intermed0 -&gt; cb_out0.
+            compute_kernel_lib::mul&lt;cb_in0, cb_intermed0, cb_out0&gt;(onetile);
+        }</span>
+    }
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; Slim headers, drop CB objects</b> — Dropped <code>eltwise_binary.h</code>/<code>tile_move_copy.h</code> for <code>eltwise_chain.hpp</code> + <code>eltwise_convenience.hpp</code>; removed the per-CB <code>CircularBuffer</code> objects except <code>cb_in1_obj</code> (held scaler).</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; cb_in1 held via HeldStream</b> — <code>cb_in1</code> (ones scaler) is waited once outside the loop and consumed each chain call as <code>InputLifecycle::HeldStream</code>, matching the original's single <code>wait_front</code> + never-pop.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; Three-phase mul chain</b> — The enable_reload running-product inner loop became <code>mul&lt;cb_in0,cb_in1,cb_intermed0&gt;</code> seed, <code>mul&lt;cb_in0,cb_intermed0,cb_intermed0&gt;(n-2)</code> middle, and <code>mul&lt;cb_in0,cb_intermed0,cb_out0&gt;</code> final.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; Input reconfig is a no-op</b> — Original used <code>mul_tiles_init</code> (not <code>_with_dt</code>) + plain <code>pack_tile</code>; BinaryFpu's per-call Input reconfig is a no-op since cb_in0/cb_in1/cb_intermed0 share the intermed data format.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; Single input-tile fast path</b> — <code>if (num_input_tiles==1)</code> does <code>mul&lt;cb_in0,cb_in1,cb_out0&gt;</code> directly, replacing the loop's <code>last_out</code> single-iteration case.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-reduction_prod_prod_nc">
+{
+  "1": {
+    "title": "Slim headers, drop CB objects",
+    "body": "Dropped <code>eltwise_binary.h</code>/<code>tile_move_copy.h</code> for <code>eltwise_chain.hpp</code> + <code>eltwise_convenience.hpp</code>; removed the per-CB <code>CircularBuffer</code> objects except <code>cb_in1_obj</code> (held scaler).",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "cb_in1 held via HeldStream",
+    "body": "<code>cb_in1</code> (ones scaler) is waited once outside the loop and consumed each chain call as <code>InputLifecycle::HeldStream</code>, matching the original's single <code>wait_front</code> + never-pop.",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "Three-phase mul chain",
+    "body": "The enable_reload running-product inner loop became <code>mul&lt;cb_in0,cb_in1,cb_intermed0&gt;</code> seed, <code>mul&lt;cb_in0,cb_intermed0,cb_intermed0&gt;(n-2)</code> middle, and <code>mul&lt;cb_in0,cb_intermed0,cb_out0&gt;</code> final.",
+    "color": "#3f8ae0"
+  },
+  "4": {
+    "title": "Input reconfig is a no-op",
+    "body": "Original used <code>mul_tiles_init</code> (not <code>_with_dt</code>) + plain <code>pack_tile</code>; BinaryFpu's per-call Input reconfig is a no-op since cb_in0/cb_in1/cb_intermed0 share the intermed data format.",
+    "color": "#cf222e"
+  },
+  "6": {
+    "title": "Single input-tile fast path",
+    "body": "<code>if (num_input_tiles==1)</code> does <code>mul&lt;cb_in0,cb_in1,cb_out0&gt;</code> directly, replacing the loop's <code>last_out</code> single-iteration case.",
+    "color": "#ff7a00"
+  }
+}
+</script>

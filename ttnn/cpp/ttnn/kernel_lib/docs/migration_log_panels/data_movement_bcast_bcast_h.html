@@ -1,0 +1,144 @@
+<section class="panel" id="panel-data_movement_bcast_bcast_h">
+  <h1>bcast_h — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_h.cpp</div>
+  <div class="meta"><b>&Delta;</b> +34/-26 &nbsp; <b>Decisions:</b> 4</div>
+
+  <div class="focus-toolbar" data-fkernel="data_movement_bcast_bcast_h">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; constexpr CBs</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; BinaryFpu stream</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; reconfig None</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; init_bcast kept</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+<span class="dz" data-d="1">#include &quot;api/compute/bcast.h&quot;</span>
+
+void kernel_main() {
+    constexpr uint32_t onetile = 1;
+    uint32_t B = get_arg_val&lt;uint32_t&gt;(0);
+    uint32_t Ht = get_arg_val&lt;uint32_t&gt;(1);
+    uint32_t Wt = get_arg_val&lt;uint32_t&gt;(2);
+<span class="dz" data-d="6">    init_bcast&lt;BCAST_LLKOP, BCAST_DIM&gt;(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);</span>
+
+<span class="dz" data-d="3">    for (uint32_t b = 0; b &lt; B; b++) {
+        for (uint32_t h = 0; h &lt; Ht; h++) {
+            for (uint32_t w = 0; w &lt; Wt; w++) {
+                // For this bcast-h op the reader will wrap the RHS source tile around at Wt
+                // so here we just linearly read 2 parallel arrays and apply bcast op per tile
+                // (bcast_h propagates the op down the H dimension, so it can be though of as bcast to H)
+                cb_wait_front(tt::CBIndex::c_1, onetile);
+
+                cb_reserve_back(tt::CBIndex::c_16, onetile);
+
+                acquire_dst();
+
+                cb_wait_front(tt::CBIndex::c_0, onetile);
+
+                BCAST_OP&lt;BroadcastType::ROW&gt;(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0);
+                pack_tile(0, tt::CBIndex::c_16);
+
+                cb_pop_front(tt::CBIndex::c_0, onetile);
+
+                release_dst();
+
+                cb_push_back(tt::CBIndex::c_16, onetile);
+                cb_pop_front(tt::CBIndex::c_1, onetile);
+            }</span>
+        }
+    }
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+#include &quot;api/compute/bcast.h&quot;
+<span class="dz" data-d="1">#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;</span>
+
+void kernel_main() {
+    uint32_t B = get_arg_val&lt;uint32_t&gt;(0);
+    uint32_t Ht = get_arg_val&lt;uint32_t&gt;(1);
+    uint32_t Wt = get_arg_val&lt;uint32_t&gt;(2);
+
+<span class="dz" data-d="1">    constexpr auto cb_lhs = tt::CBIndex::c_0;
+    constexpr auto cb_rhs = tt::CBIndex::c_1;
+    constexpr auto cb_out = tt::CBIndex::c_16;</span>
+
+    // Bcast-H: original `init_bcast&lt;BCAST_LLKOP, BCAST_DIM&gt;` preserved as the
+    // big init (hw_configure + pack_dest_init + sync_init + per-op MOP). Chain&#x27;s
+    // BinaryFpu uses CHAIN_BCAST_OP / CHAIN_BCAST_DIM (helper-lib types emitted
+    // by bcast_op_utils alongside the LLK enum macros).
+<span class="dz" data-d="6">    init_bcast&lt;BCAST_LLKOP, BCAST_DIM&gt;(cb_lhs, cb_rhs, cb_out);</span>
+
+    // Reader supplies cb_rhs wrapped at Wt boundary, so per-tile we stream
+    // cb_lhs + cb_rhs and apply the bcast op. Flat 1D chain over total tiles
+    // (B*Ht*Wt) — bcast_h is tile-by-tile, no need for 2D shape.
+    //
+    // Reconfig: original used init_bcast at boot then plain bcast op + plain
+    // pack_tile — no per-iter reconfig. BinaryDataFormatReconfig::None +
+    // PackTileReconfig::None preserve that.
+<span class="dz" data-d="3">    compute_kernel_lib::eltwise_chain(
+        B * Ht * Wt,
+        compute_kernel_lib::BinaryFpu&lt;
+            cb_lhs,
+            cb_rhs,
+            CHAIN_BCAST_OP,
+            CHAIN_BCAST_DIM,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::BinaryDataFormatReconfig::None&gt;{},</span>
+<span class="dz" data-d="4">        compute_kernel_lib::PackTile&lt;
+            cb_out,
+            compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::PackTileReconfig::None&gt;{});</span>
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; CB ids → constexpr + chain header</b> — <code>tt::CBIndex::c_0/c_1/c_16</code> hoisted to <code>constexpr auto cb_lhs/cb_rhs/cb_out</code>; added <code>eltwise_chain.hpp</code>.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; BinaryFpu over flat tile count</b> — The manual <code>BCAST_OP&lt;ROW&gt;</code> loop became <code>eltwise_chain(B*Ht*Wt, BinaryFpu&lt;...&gt;, PackTile&lt;...&gt;)</code> with both inputs <code>InputLifecycle::Streaming</code>.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; No per-iter reconfig</b> — Original used <code>init_bcast</code> at boot + plain bcast op + plain <code>pack_tile</code>: <code>BinaryDataFormatReconfig::None</code> + <code>PackTileReconfig::None</code>.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; init_bcast preserved + CHAIN_BCAST types</b> — <code>init_bcast&lt;BCAST_LLKOP, BCAST_DIM&gt;</code> stays as the big init; chain's <code>BinaryFpu</code> consumes <code>CHAIN_BCAST_OP</code> / <code>CHAIN_BCAST_DIM</code> (helper-lib types from bcast_op_utils).</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-data_movement_bcast_bcast_h">
+{
+  "1": {
+    "title": "CB ids \u2192 constexpr + chain header",
+    "body": "<code>tt::CBIndex::c_0/c_1/c_16</code> hoisted to <code>constexpr auto cb_lhs/cb_rhs/cb_out</code>; added <code>eltwise_chain.hpp</code>.",
+    "color": "#d6a000"
+  },
+  "3": {
+    "title": "BinaryFpu over flat tile count",
+    "body": "The manual <code>BCAST_OP&lt;ROW&gt;</code> loop became <code>eltwise_chain(B*Ht*Wt, BinaryFpu&lt;...&gt;, PackTile&lt;...&gt;)</code> with both inputs <code>InputLifecycle::Streaming</code>.",
+    "color": "#3f8ae0"
+  },
+  "4": {
+    "title": "No per-iter reconfig",
+    "body": "Original used <code>init_bcast</code> at boot + plain bcast op + plain <code>pack_tile</code>: <code>BinaryDataFormatReconfig::None</code> + <code>PackTileReconfig::None</code>.",
+    "color": "#cf222e"
+  },
+  "6": {
+    "title": "init_bcast preserved + CHAIN_BCAST types",
+    "body": "<code>init_bcast&lt;BCAST_LLKOP, BCAST_DIM&gt;</code> stays as the big init; chain's <code>BinaryFpu</code> consumes <code>CHAIN_BCAST_OP</code> / <code>CHAIN_BCAST_DIM</code> (helper-lib types from bcast_op_utils).",
+    "color": "#ff7a00"
+  }
+}
+</script>

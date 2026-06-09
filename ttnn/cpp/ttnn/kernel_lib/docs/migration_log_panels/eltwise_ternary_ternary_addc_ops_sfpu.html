@@ -1,0 +1,176 @@
+<section class="panel" id="panel-eltwise_ternary_ternary_addc_ops_sfpu">
+  <h1>ternary_addc_ops_sfpu — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_addc_ops_sfpu.cpp</div>
+  <div class="meta"><b>Δ</b> +51/-40 &nbsp; <b>Decisions:</b> 4</div>
+
+  <div class="focus-toolbar" data-fkernel="eltwise_ternary_ternary_addc_ops_sfpu">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; includes + op-sel define</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; chain lifecycle + PackTile</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; CopyTile x3</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; Addcmul/Addcdiv Optional</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+<span class="dz" data-d="1">#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;api/compute/eltwise_binary_sfpu.h&quot;
+#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/tile_move_copy.h&quot;
+#include &quot;api/compute/eltwise_unary/binop_with_scalar.h&quot;
+#include &quot;api/compute/eltwise_unary/addcmul.h&quot;
+#include &quot;api/compute/eltwise_unary/addcdiv.h&quot;</span>
+
+void kernel_main() {
+    uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(0);
+    uint32_t scalar_arg = get_arg_val&lt;uint32_t&gt;(3);
+    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);  // set to 1
+
+    constexpr auto cb_in0 = tt::CBIndex::c_0;  // input_a
+    constexpr auto cb_in1 = tt::CBIndex::c_1;  // input_b
+    constexpr auto cb_in2 = tt::CBIndex::c_2;  // input_c
+    constexpr auto cb_out = tt::CBIndex::c_3;
+
+    unary_op_init_common(cb_in0, cb_out);
+
+<span class="dz" data-d="2">    for (uint32_t tile_id = 0; tile_id &lt; num_tiles; ++tile_id) {
+        cb_wait_front(cb_in0, num_tiles_per_cycle);
+        cb_wait_front(cb_in1, num_tiles_per_cycle);
+        cb_wait_front(cb_in2, num_tiles_per_cycle);
+
+        cb_reserve_back(cb_out, num_tiles_per_cycle);
+
+        tile_regs_acquire();
+</span>
+<span class="dz" data-d="3">        copy_tile_init(cb_in0);
+        copy_tile(cb_in0, 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
+
+        copy_tile_init(cb_in1);
+        copy_tile(cb_in1, 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
+
+        copy_tile_init(cb_in2);
+        copy_tile(cb_in2, 0 /*in_tile_index*/, 2 /*dst_tile_index*/);</span>
+
+<span class="dz" data-d="6">        TERNARY_SFPU_OP_INIT();
+        TERNARY_SFPU_OP_FUNC(0, 1, 2, 0, scalar_arg);</span>
+
+        tile_regs_commit();
+<span class="dz" data-d="2">        tile_regs_wait();
+
+        pack_tile(0, cb_out);
+
+        tile_regs_release();
+
+        cb_push_back(cb_out, num_tiles_per_cycle);
+        cb_pop_front(cb_in0, num_tiles_per_cycle);
+        cb_pop_front(cb_in1, num_tiles_per_cycle);
+        cb_pop_front(cb_in2, num_tiles_per_cycle);</span>
+    }
+}
+</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+<span class="dz" data-d="1">#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_ternary.hpp&quot;   // Addcmul, Addcdiv
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp&quot;  // OptionalChainElement
+</span>
+// addcmul / addcdiv (SFPU): out = in0 + value * (in1 OP in2).
+//   copy in0/in1/in2 -&gt; D0/D1/D2 ; addc{mul,div}_tile&lt;DF&gt;(0,1,2,0,value) ; pack D0.
+// The op + dtype were a string macro (TERNARY_SFPU_OP_FUNC); now the program
+// factory emits TERNARY_OP_SEL (2=addcmul, 3=addcdiv) + TERNARY_DF, and the
+// kernel selects the concrete chain element via OptionalChainElement. Lifecycle:
+// 3 Streaming inputs (wait1/pop1) + 1 Streaming output — matches the original.
+<span class="dz" data-d="1">#ifndef TERNARY_OP_SEL
+#error &quot;ternary_addc_ops_sfpu requires TERNARY_OP_SEL/TERNARY_DF from get_compute_defines&quot;
+#endif
+
+namespace ckl = compute_kernel_lib;
+constexpr int kSel = TERNARY_OP_SEL;</span>
+
+void kernel_main() {
+    uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(0);
+    uint32_t scalar_arg = get_arg_val&lt;uint32_t&gt;(3);
+    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);  // set to 1
+
+    constexpr auto cb_in0 = tt::CBIndex::c_0;  // input_a
+    constexpr auto cb_in1 = tt::CBIndex::c_1;  // input_b
+    constexpr auto cb_in2 = tt::CBIndex::c_2;  // input_c
+    constexpr auto cb_out = tt::CBIndex::c_3;
+
+    unary_op_init_common(cb_in0, cb_out);  // caller-owned BIG init
+
+<span class="dz" data-d="2">    ckl::eltwise_chain(
+        num_tiles,</span>
+<span class="dz" data-d="3">        ckl::CopyTile&lt;cb_in0, ckl::Dst::D0, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None&gt;{},
+        ckl::CopyTile&lt;cb_in1, ckl::Dst::D1, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None&gt;{},
+        ckl::CopyTile&lt;cb_in2, ckl::Dst::D2, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None&gt;{},</span>
+        // exactly one active (the inactive folds to a no-op tag, swallowing scalar_arg).
+<span class="dz" data-d="6">        ckl::OptionalChainElement &lt; kSel == 2,
+        ckl::Addcmul &lt; TERNARY_DF,
+        ckl::Dst::D0,
+        ckl::Dst::D1,
+        ckl::Dst::D2,
+        ckl::Dst::D0 &gt;&gt; {scalar_arg},
+        ckl::OptionalChainElement &lt; kSel == 3,
+        ckl::Addcdiv &lt; TERNARY_DF,
+        ckl::Dst::D0,
+        ckl::Dst::D1,
+        ckl::Dst::D2,
+        ckl::Dst::D0 &gt;&gt; {scalar_arg},</span>
+<span class="dz" data-d="2">        ckl::PackTile&lt;cb_out, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None&gt;{});</span>
+}
+</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; Includes &amp; TERNARY_OP_SEL/TERNARY_DF compile-time selector</b> — Dropped the raw <code>addcmul.h</code>/<code>addcdiv.h</code>/<code>binop_with_scalar.h</code> headers for the chain headers. The op + dtype that were a string macro (<code>TERNARY_SFPU_OP_FUNC</code>) are now numeric defines <code>TERNARY_OP_SEL</code> (2=addcmul, 3=addcdiv) + <code>TERNARY_DF</code>, with a <code>#error</code> guard.</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; Manual CB sync + pack -&gt; eltwise_chain / PackTile</b> — <code>cb_wait_front</code> x3 / <code>cb_reserve_back</code> / <code>tile_regs_*</code> / <code>pack_tile</code> / <code>cb_push_back</code> / <code>cb_pop_front</code> x3 collapse into <code>eltwise_chain(num_tiles, …, PackTile&lt;cb_out, OutputLifecycle::Streaming&gt;)</code> — 3 Streaming inputs + 1 Streaming output.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; copy_tile_init + copy_tile -&gt; CopyTile Streaming x3</b> — The three <code>copy_tile_init(cb_inX)</code>+<code>copy_tile(cb_inX,0,k)</code> pairs became three <code>CopyTile&lt;cb_inX, Dk, InputLifecycle::Streaming, CopyTileReconfig::None&gt;</code> elements (None emits <code>copy_tile_init</code>, matching the originals).</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; TERNARY_SFPU_OP macro -&gt; OptionalChainElement Addcmul/Addcdiv</b> — <code>TERNARY_SFPU_OP_INIT()</code>+<code>TERNARY_SFPU_OP_FUNC(0,1,2,0,scalar)</code> became <code>OptionalChainElement&lt;kSel==2, Addcmul&lt;TERNARY_DF,…&gt;&gt;</code> / <code>OptionalChainElement&lt;kSel==3, Addcdiv&lt;…&gt;&gt;</code>; exactly one active, the inactive folds to a no-op swallowing <code>scalar_arg</code>.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-eltwise_ternary_ternary_addc_ops_sfpu">
+{
+  "1": {
+    "title": "Includes & TERNARY_OP_SEL/TERNARY_DF compile-time selector",
+    "body": "Dropped the raw <code>addcmul.h</code>/<code>addcdiv.h</code>/<code>binop_with_scalar.h</code> headers for the chain headers. The op + dtype that were a string macro (<code>TERNARY_SFPU_OP_FUNC</code>) are now numeric defines <code>TERNARY_OP_SEL</code> (2=addcmul, 3=addcdiv) + <code>TERNARY_DF</code>, with a <code>#error</code> guard.",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "Manual CB sync + pack -> eltwise_chain / PackTile",
+    "body": "<code>cb_wait_front</code> x3 / <code>cb_reserve_back</code> / <code>tile_regs_*</code> / <code>pack_tile</code> / <code>cb_push_back</code> / <code>cb_pop_front</code> x3 collapse into <code>eltwise_chain(num_tiles, \u2026, PackTile&lt;cb_out, OutputLifecycle::Streaming&gt;)</code> \u2014 3 Streaming inputs + 1 Streaming output.",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "copy_tile_init + copy_tile -> CopyTile Streaming x3",
+    "body": "The three <code>copy_tile_init(cb_inX)</code>+<code>copy_tile(cb_inX,0,k)</code> pairs became three <code>CopyTile&lt;cb_inX, Dk, InputLifecycle::Streaming, CopyTileReconfig::None&gt;</code> elements (None emits <code>copy_tile_init</code>, matching the originals).",
+    "color": "#3f8ae0"
+  },
+  "6": {
+    "title": "TERNARY_SFPU_OP macro -> OptionalChainElement Addcmul/Addcdiv",
+    "body": "<code>TERNARY_SFPU_OP_INIT()</code>+<code>TERNARY_SFPU_OP_FUNC(0,1,2,0,scalar)</code> became <code>OptionalChainElement&lt;kSel==2, Addcmul&lt;TERNARY_DF,\u2026&gt;&gt;</code> / <code>OptionalChainElement&lt;kSel==3, Addcdiv&lt;\u2026&gt;&gt;</code>; exactly one active, the inactive folds to a no-op swallowing <code>scalar_arg</code>.",
+    "color": "#ff7a00"
+  }
+}
+</script>

@@ -1,0 +1,338 @@
+<section class="panel" id="panel-moreh_moreh_norm_moreh_norm_other_moreh_norm_other_kernel">
+  <h1>moreh_norm_other_kernel — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/moreh_norm_other/kernels/moreh_norm_other_kernel.cpp</div>
+  <div class="meta"><b>Δ</b> +184/-90 &nbsp; <b>Decisions:</b> 5</div>
+
+  <div class="focus-toolbar" data-fkernel="moreh_moreh_norm_moreh_norm_other_moreh_norm_other_kernel">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; CB ids → constexpr + headers</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; accumulator → copy / add</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; final |sum|^(1/p) → 4 chain stages</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; power_tile_to_cb → 4 chain stages</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; |x| → ckl::unary&lt;Abs&gt;</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+<span class="dz" data-d="1">#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+void kernel_main() {
+    int i{0};
+    const auto num_output_tiles_per_core = get_arg_val&lt;uint32_t&gt;(i++);
+    const auto num_reduced_tiles_along_dim = get_arg_val&lt;uint32_t&gt;(i++);
+    const auto p = get_arg_val&lt;uint32_t&gt;(i++);
+    const bool p_is_negative = get_arg_val&lt;uint32_t&gt;(i++) == 1;
+    const auto recip_p = get_arg_val&lt;uint32_t&gt;(i++);
+    const bool recip_p_is_negative = get_arg_val&lt;uint32_t&gt;(i++) == 1;
+
+<span class="dz" data-d="1">    std::uint8_t input_id{tt::CBIndex::c_0};
+    const auto cb_x = input_id++;
+    CircularBuffer cb_x_obj(cb_x);  // input
+    const auto cb_one = input_id++;
+    CircularBuffer cb_one_obj(cb_one);  // one
+    const auto cb_decimal = input_id++;
+    CircularBuffer cb_decimal_obj(cb_decimal);  // decimal
+    const auto cb_recip_p_decimal = input_id++;
+    CircularBuffer cb_recip_p_decimal_obj(cb_recip_p_decimal);  // recip_p_decimal
+
+    std::uint8_t output_id{tt::CBIndex::c_16};
+    const auto cb_y = output_id++;  // output
+
+    std::uint8_t intermed_id{tt::CBIndex::c_24};
+    const auto cb_tmp0 = intermed_id++;
+    const auto cb_tmp1 = intermed_id++;
+    const auto cb_tmp2 = intermed_id++;
+    const auto cb_tmp3 = intermed_id++;
+    const auto cb_tmp4 = intermed_id++;
+    const auto cb_tmp5 = intermed_id++;
+
+    const auto cb_xabs = cb_tmp0;
+    CircularBuffer cb_xabs_obj(cb_xabs);   // |x|
+    const auto cb_xpow = cb_tmp1;          // |x|^p
+    const auto cb_logx = cb_tmp2;          // log(|x|)
+    const auto cb_exp_lxmd = cb_tmp3;      // exp(log(|x|) * decimal)
+    const auto cb_correct_xpow = cb_tmp4;
+    CircularBuffer cb_correct_xpow_obj(cb_correct_xpow);  // |x|^p * exp(log(|x|) * decimal)(==|x + decimal|^p)
+    const auto cb_xpowadd = cb_tmp5;
+    CircularBuffer cb_xpowadd_obj(cb_xpowadd);  // Add(|x + decimal|^p)</span>
+
+    constexpr uint32_t onetile = 1;
+    constexpr uint32_t dst0 = 0;
+    constexpr uint32_t dst1 = 1;
+
+    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
+
+    cb_one_obj.wait_front(onetile);              // comes from the reader
+    cb_decimal_obj.wait_front(onetile);          // comes from the reader
+    cb_recip_p_decimal_obj.wait_front(onetile);  // comes from the reader
+
+    for (uint32_t outer_idx = 0; outer_idx &lt; num_output_tiles_per_core; ++outer_idx) {
+        for (uint32_t inner_idx = 0; inner_idx &lt; num_reduced_tiles_along_dim; ++inner_idx) {
+<span class="dz" data-d="6">            // |x|
+            tile_regs_acquire();
+            cb_x_obj.wait_front(onetile);  // comes from the reader
+            cb_xabs_obj.reserve_back(onetile);
+
+            copy_tile_init_with_dt(cb_x);
+            copy_tile(cb_x, 0, dst0);
+
+            abs_tile_init();
+            abs_tile(dst0);
+            tile_regs_commit();
+
+            tile_regs_wait();
+            pack_tile_with_dt(dst0, cb_xabs);
+            tile_regs_release();
+
+            cb_x_obj.pop_front(onetile);
+            cb_xabs_obj.push_back(onetile);</span>
+
+<span class="dz" data-d="4">            power_tile_to_cb(cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_correct_xpow, p, p_is_negative);</span>
+
+<span class="dz" data-d="2">            // Add(|x|^p)
+            if (inner_idx == 0) {
+                tile_regs_acquire();
+                cb_correct_xpow_obj.wait_front(onetile);
+                cb_xpowadd_obj.reserve_back(onetile);
+
+                copy_tile_init_with_dt(cb_correct_xpow);
+                copy_tile(cb_correct_xpow, 0, dst0);
+                tile_regs_commit();
+
+                tile_regs_wait();
+                pack_tile_with_dt(dst0, cb_xpowadd);
+                tile_regs_release();
+
+                cb_correct_xpow_obj.pop_front(onetile);
+                cb_xpowadd_obj.push_back(onetile);
+            } else {
+                tile_regs_acquire();
+                cb_correct_xpow_obj.wait_front(onetile);
+                cb_xpowadd_obj.wait_front(onetile);
+                cb_xpowadd_obj.reserve_back(onetile);
+
+                add_tiles_init_with_dt(cb_correct_xpow, cb_xpowadd);
+                add_tiles(cb_correct_xpow, cb_xpowadd, 0, 0, dst0);
+                tile_regs_commit();
+
+                tile_regs_wait();
+                pack_tile_with_dt(dst0, cb_xpowadd);
+                tile_regs_release();
+
+                cb_correct_xpow_obj.pop_front(onetile);
+                cb_xpowadd_obj.pop_front(onetile);
+                cb_xpowadd_obj.push_back(onetile);
+            }</span>
+        }
+
+        // Compute cb_y
+<span class="dz" data-d="3">        power_tile_to_cb(cb_xpowadd, cb_tmp0, cb_tmp1, cb_recip_p_decimal, cb_tmp2, cb_y, recip_p, recip_p_is_negative);</span>
+    }
+    cb_one_obj.pop_front(onetile);
+    cb_decimal_obj.pop_front(onetile);
+    cb_recip_p_decimal_obj.pop_front(onetile);
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+<span class="dz" data-d="1">#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp&quot;  // PowerIterative, Recip, Log, Exp
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp&quot;  // Abs
+#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+void kernel_main() {
+    int i{0};
+    const auto num_output_tiles_per_core = get_arg_val&lt;uint32_t&gt;(i++);
+    const auto num_reduced_tiles_along_dim = get_arg_val&lt;uint32_t&gt;(i++);
+    const auto p = get_arg_val&lt;uint32_t&gt;(i++);
+    const bool p_is_negative = get_arg_val&lt;uint32_t&gt;(i++) == 1;
+    const auto recip_p = get_arg_val&lt;uint32_t&gt;(i++);
+    const bool recip_p_is_negative = get_arg_val&lt;uint32_t&gt;(i++) == 1;
+
+<span class="dz" data-d="1">    constexpr uint32_t cb_x = tt::CBIndex::c_0;
+    constexpr uint32_t cb_one = tt::CBIndex::c_1;
+    constexpr uint32_t cb_decimal = tt::CBIndex::c_2;
+    constexpr uint32_t cb_recip_p_decimal = tt::CBIndex::c_3;
+
+    constexpr uint32_t cb_y = tt::CBIndex::c_16;
+
+    constexpr uint32_t cb_tmp0 = tt::CBIndex::c_24;
+    constexpr uint32_t cb_tmp1 = tt::CBIndex::c_25;
+    constexpr uint32_t cb_tmp2 = tt::CBIndex::c_26;
+    constexpr uint32_t cb_tmp3 = tt::CBIndex::c_27;
+    constexpr uint32_t cb_tmp4 = tt::CBIndex::c_28;
+    constexpr uint32_t cb_tmp5 = tt::CBIndex::c_29;
+
+    constexpr uint32_t cb_xabs = cb_tmp0;
+    constexpr uint32_t cb_xpow = cb_tmp1;
+    constexpr uint32_t cb_logx = cb_tmp2;
+    constexpr uint32_t cb_exp_lxmd = cb_tmp3;
+    constexpr uint32_t cb_correct_xpow = cb_tmp4;
+    constexpr uint32_t cb_xpowadd = cb_tmp5;</span>
+
+    constexpr uint32_t onetile = 1;
+    constexpr uint32_t dst0 = 0;
+    constexpr uint32_t dst1 = 1;
+
+    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
+
+    cb_wait_front(cb_one, onetile);
+    cb_wait_front(cb_decimal, onetile);
+    cb_wait_front(cb_recip_p_decimal, onetile);
+
+    for (uint32_t outer_idx = 0; outer_idx &lt; num_output_tiles_per_core; ++outer_idx) {
+        for (uint32_t inner_idx = 0; inner_idx &lt; num_reduced_tiles_along_dim; ++inner_idx) {
+<span class="dz" data-d="6">            // |x| — no mask in ord_other variant.
+            compute_kernel_lib::unary&lt;compute_kernel_lib::Abs&lt;compute_kernel_lib::Dst::D0&gt;, cb_x, cb_xabs&gt;(onetile);</span>
+
+<span class="dz" data-d="4">            // power_tile_to_cb 4 chain stages -&gt; cb_correct_xpow.
+            if (p_is_negative) {
+                compute_kernel_lib::eltwise_chain(
+                    onetile,
+                    compute_kernel_lib::CopyTile&lt;
+                        cb_xabs,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::InputLifecycle::HeldStream&gt;{},
+                    compute_kernel_lib::PowerIterative&lt;compute_kernel_lib::Dst::D0&gt;{p},
+                    compute_kernel_lib::Recip&lt;compute_kernel_lib::Dst::D0&gt;{},
+                    compute_kernel_lib::PackTile&lt;cb_xpow&gt;{});
+            } else {
+                compute_kernel_lib::eltwise_chain(
+                    onetile,
+                    compute_kernel_lib::CopyTile&lt;
+                        cb_xabs,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::InputLifecycle::HeldStream&gt;{},
+                    compute_kernel_lib::PowerIterative&lt;compute_kernel_lib::Dst::D0&gt;{p},
+                    compute_kernel_lib::PackTile&lt;cb_xpow&gt;{});
+            }
+            compute_kernel_lib::unary&lt;
+                compute_kernel_lib::Log&lt;compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0&gt;,
+                cb_xabs,
+                cb_logx,
+                compute_kernel_lib::InputLifecycle::NoWaitPop&gt;(onetile);
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::BinaryFpu&lt;
+                    cb_logx,
+                    cb_decimal,
+                    compute_kernel_lib::BinaryFpuOp::Mul,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::CallerManaged&gt;{},
+                compute_kernel_lib::Exp&lt;
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Dst::D0&gt;{},
+                compute_kernel_lib::PackTile&lt;cb_exp_lxmd&gt;{});
+            compute_kernel_lib::mul&lt;cb_xpow, cb_exp_lxmd, cb_correct_xpow&gt;(onetile);</span>
+
+<span class="dz" data-d="2">            // Accumulator (cb_xpowadd): inner_idx==0 -&gt; seed; else -&gt; add.
+            if (inner_idx == 0) {
+                compute_kernel_lib::copy&lt;cb_correct_xpow, cb_xpowadd&gt;(onetile);
+            } else {
+                compute_kernel_lib::add&lt;cb_correct_xpow, cb_xpowadd, cb_xpowadd&gt;(onetile);
+            }</span>
+        }
+
+<span class="dz" data-d="3">        // Final |xpowadd|^(1/p) — power_tile_to_cb on cb_xpowadd -&gt; cb_y.
+        // Same 4-stage decomposition: cb_xpow=cb_tmp0, cb_logx=cb_tmp1,
+        // cb_exp_lxmd=cb_tmp2, cb_correct_xpow=cb_y.
+        if (recip_p_is_negative) {
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::
+                    CopyTile&lt;cb_xpowadd, compute_kernel_lib::Dst::D0, compute_kernel_lib::InputLifecycle::HeldStream&gt;{},
+                compute_kernel_lib::PowerIterative&lt;compute_kernel_lib::Dst::D0&gt;{recip_p},
+                compute_kernel_lib::Recip&lt;compute_kernel_lib::Dst::D0&gt;{},
+                compute_kernel_lib::PackTile&lt;cb_tmp0&gt;{});
+        } else {
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::
+                    CopyTile&lt;cb_xpowadd, compute_kernel_lib::Dst::D0, compute_kernel_lib::InputLifecycle::HeldStream&gt;{},
+                compute_kernel_lib::PowerIterative&lt;compute_kernel_lib::Dst::D0&gt;{recip_p},
+                compute_kernel_lib::PackTile&lt;cb_tmp0&gt;{});
+        }
+        compute_kernel_lib::unary&lt;
+            compute_kernel_lib::Log&lt;compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0&gt;,
+            cb_xpowadd,
+            cb_tmp1,
+            compute_kernel_lib::InputLifecycle::NoWaitPop&gt;(onetile);
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu&lt;
+                cb_tmp1,
+                cb_recip_p_decimal,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged&gt;{},
+            compute_kernel_lib::Exp&lt;
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Dst::D0&gt;{},
+            compute_kernel_lib::PackTile&lt;cb_tmp2&gt;{});
+        compute_kernel_lib::mul&lt;cb_tmp0, cb_tmp2, cb_y&gt;(onetile);</span>
+    }
+    cb_pop_front(cb_one, onetile);
+    cb_pop_front(cb_decimal, onetile);
+    cb_pop_front(cb_recip_p_decimal, onetile);
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; CB ids → constexpr; eltwise + reduce headers</b> — <code>std::uint8_t input_id++</code> CB allocation and <code>CircularBuffer cb_*_obj</code> wrappers replaced by <code>constexpr uint32_t</code> ids; pulls in <code>eltwise_chain.hpp</code>, <code>eltwise_math.hpp</code> (PowerIterative/Recip/Log/Exp), <code>eltwise_misc.hpp</code> (Abs/Mask).</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; Add accumulator → ckl::copy seed + ckl::add in-place</b> — row/col idx==0 seed copy_tile+pack → <code>ckl::copy&lt;cb_correct_xpow, cb_xpowadd&gt;</code>; else add_tiles+pack → <code>ckl::add&lt;cb_correct_xpow, cb_xpowadd, cb_xpowadd&gt;</code> (in-place).</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; Final power_tile_to_cb → 4 eltwise stages → cb_y</b> — Trailing <code>power_tile_to_cb(cb_xpowsum/cb_xpowadd → cb_y)</code> expanded into the same CopyTile/Power/Log/Exp/mul chain set producing cb_y.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; power_tile_to_cb inlined as 4 eltwise stages</b> — The <code>power_tile_to_cb</code> macro is expanded inline: A) CopyTile→PowerIterative→[Recip]→cb_xpow, B) <code>unary&lt;Log,NoWaitPop&gt;</code>, C) BinaryFpu(Mul)+Exp→cb_exp_lxmd, D) <code>ckl::mul</code>→cb_correct_xpow.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; |x| prologue → ckl::unary&amp;lt;Abs&amp;gt; (no mask)</b> — copy_tile+abs_tile+pack became <code>ckl::unary&lt;Abs, cb_x, cb_xabs&gt;(onetile)</code>; no mask in this variant.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-moreh_moreh_norm_moreh_norm_other_moreh_norm_other_kernel">
+{
+  "1": {
+    "title": "CB ids \u2192 constexpr; eltwise + reduce headers",
+    "body": "<code>std::uint8_t input_id++</code> CB allocation and <code>CircularBuffer cb_*_obj</code> wrappers replaced by <code>constexpr uint32_t</code> ids; pulls in <code>eltwise_chain.hpp</code>, <code>eltwise_math.hpp</code> (PowerIterative/Recip/Log/Exp), <code>eltwise_misc.hpp</code> (Abs/Mask).",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "Add accumulator \u2192 ckl::copy seed + ckl::add in-place",
+    "body": "row/col idx==0 seed copy_tile+pack \u2192 <code>ckl::copy&lt;cb_correct_xpow, cb_xpowadd&gt;</code>; else add_tiles+pack \u2192 <code>ckl::add&lt;cb_correct_xpow, cb_xpowadd, cb_xpowadd&gt;</code> (in-place).",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "Final power_tile_to_cb \u2192 4 eltwise stages \u2192 cb_y",
+    "body": "Trailing <code>power_tile_to_cb(cb_xpowsum/cb_xpowadd \u2192 cb_y)</code> expanded into the same CopyTile/Power/Log/Exp/mul chain set producing cb_y.",
+    "color": "#3f8ae0"
+  },
+  "4": {
+    "title": "power_tile_to_cb inlined as 4 eltwise stages",
+    "body": "The <code>power_tile_to_cb</code> macro is expanded inline: A) CopyTile\u2192PowerIterative\u2192[Recip]\u2192cb_xpow, B) <code>unary&lt;Log,NoWaitPop&gt;</code>, C) BinaryFpu(Mul)+Exp\u2192cb_exp_lxmd, D) <code>ckl::mul</code>\u2192cb_correct_xpow.",
+    "color": "#cf222e"
+  },
+  "6": {
+    "title": "|x| prologue \u2192 ckl::unary&lt;Abs&gt; (no mask)",
+    "body": "copy_tile+abs_tile+pack became <code>ckl::unary&lt;Abs, cb_x, cb_xabs&gt;(onetile)</code>; no mask in this variant.",
+    "color": "#ff7a00"
+  }
+}
+</script>

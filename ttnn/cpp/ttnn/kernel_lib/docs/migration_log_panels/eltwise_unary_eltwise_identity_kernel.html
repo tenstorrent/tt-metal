@@ -1,0 +1,128 @@
+<section class="panel" id="panel-eltwise_unary_eltwise_identity_kernel">
+  <h1>eltwise_identity_kernel — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_identity_kernel.cpp</div>
+  <div class="meta"><b>Δ</b> +12/-25 &nbsp; <b>Decisions:</b> 4</div>
+
+  <div class="focus-toolbar" data-fkernel="eltwise_unary_eltwise_identity_kernel">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; includes</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; CB lifecycle Streaming</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; init</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; copy&lt;&gt; convenience</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+<span class="dz" data-d="1">#include &quot;api/compute/common.h&quot;
+#include &quot;api/compute/tile_move_copy.h&quot;</span>
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;
+
+void kernel_main() {
+    uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(0);
+
+    constexpr auto cb_input = tt::CBIndex::c_0;
+    constexpr auto cb_output = tt::CBIndex::c_2;
+
+<span class="dz" data-d="6">    CircularBuffer cb_in(cb_input);
+    CircularBuffer cb_out(cb_output);</span>
+
+<span class="dz" data-d="5">    init_sfpu(cb_input, cb_output);
+    copy_tile_init(cb_input);</span>
+
+<span class="dz" data-d="6">    for (uint32_t i = 0; i &lt; num_tiles; ++i) {
+        tile_regs_acquire();
+</span>
+<span class="dz" data-d="2">        cb_in.wait_front(1);
+        cb_out.reserve_back(1);
+
+        copy_tile(cb_input, 0, 0);
+
+        tile_regs_commit();
+        tile_regs_wait();
+
+        pack_tile(0, cb_output);
+
+        cb_in.pop_front(1);
+        cb_out.push_back(1);</span>
+<span class="dz" data-d="6">
+        tile_regs_release();</span>
+    }
+}
+</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+<span class="dz" data-d="1">#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp&quot;</span>
+#include &quot;api/dataflow/circular_buffer.h&quot;
+
+void kernel_main() {
+    uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(0);
+
+    constexpr auto cb_input = tt::CBIndex::c_0;
+    constexpr auto cb_output = tt::CBIndex::c_2;
+
+<span class="dz" data-d="5">    init_sfpu(cb_input, cb_output);</span>
+
+    // Identity: per-tile cb_input -&gt; cb_output. Single-stage chain.
+<span class="dz" data-d="6">    compute_kernel_lib::copy&lt;
+        cb_input,
+        cb_output,</span>
+<span class="dz" data-d="2">        compute_kernel_lib::InputLifecycle::Streaming,
+        compute_kernel_lib::OutputLifecycle::Streaming,</span>
+<span class="dz" data-d="6">        compute_kernel_lib::CopyTileReconfig::None,
+        compute_kernel_lib::PackTileReconfig::None&gt;(num_tiles);</span>
+}
+</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; Includes: tile_move_copy -&gt; chain + convenience</b> — Swapped <code>common.h</code>/<code>tile_move_copy.h</code> for <code>eltwise_chain.hpp</code> + <code>eltwise_convenience.hpp</code> (the <code>copy</code> one-liner).</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; Manual wait/reserve/pop/push -&gt; Streaming lifecycle</b> — The hand-written <code>cb_in.wait_front(1)</code>/<code>cb_out.reserve_back(1)</code>/<code>cb_in.pop_front(1)</code>/<code>cb_out.push_back(1)</code> are now expressed by the <code>InputLifecycle::Streaming</code> / <code>OutputLifecycle::Streaming</code> template args of <code>copy</code>.</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; init unchanged; per-CB copy_tile_init folded into chain</b> — <code>init_sfpu(cb_input, cb_output)</code> stays as the caller-owned BIG init; the standalone <code>copy_tile_init(cb_input)</code> is absorbed by the convenience helper (<code>CopyTileReconfig::None</code>).</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; copy_tile + manual loop -&gt; compute_kernel_lib::copy&lt;&gt;()</b> — The entire body (<code>CircularBuffer</code> handles, the <code>for</code> loop, <code>tile_regs_*</code>, <code>copy_tile(cb_input,0,0)</code>, <code>pack_tile</code>) collapses into a single <code>compute_kernel_lib::copy&lt;cb_input, cb_output, Streaming, Streaming, CopyTileReconfig::None, PackTileReconfig::None&gt;(num_tiles)</code> single-stage chain.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-eltwise_unary_eltwise_identity_kernel">
+{
+  "1": {
+    "title": "Includes: tile_move_copy -> chain + convenience",
+    "body": "Swapped <code>common.h</code>/<code>tile_move_copy.h</code> for <code>eltwise_chain.hpp</code> + <code>eltwise_convenience.hpp</code> (the <code>copy</code> one-liner).",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "Manual wait/reserve/pop/push -> Streaming lifecycle",
+    "body": "The hand-written <code>cb_in.wait_front(1)</code>/<code>cb_out.reserve_back(1)</code>/<code>cb_in.pop_front(1)</code>/<code>cb_out.push_back(1)</code> are now expressed by the <code>InputLifecycle::Streaming</code> / <code>OutputLifecycle::Streaming</code> template args of <code>copy</code>.",
+    "color": "#2ea043"
+  },
+  "5": {
+    "title": "init unchanged; per-CB copy_tile_init folded into chain",
+    "body": "<code>init_sfpu(cb_input, cb_output)</code> stays as the caller-owned BIG init; the standalone <code>copy_tile_init(cb_input)</code> is absorbed by the convenience helper (<code>CopyTileReconfig::None</code>).",
+    "color": "#9f4bbf"
+  },
+  "6": {
+    "title": "copy_tile + manual loop -> compute_kernel_lib::copy<>()",
+    "body": "The entire body (<code>CircularBuffer</code> handles, the <code>for</code> loop, <code>tile_regs_*</code>, <code>copy_tile(cb_input,0,0)</code>, <code>pack_tile</code>) collapses into a single <code>compute_kernel_lib::copy&lt;cb_input, cb_output, Streaming, Streaming, CopyTileReconfig::None, PackTileReconfig::None&gt;(num_tiles)</code> single-stage chain.",
+    "color": "#ff7a00"
+  }
+}
+</script>

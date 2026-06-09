@@ -71,7 +71,7 @@ void kernel_main() {
 
     for (uint32_t ht = 0; ht < Ht; ht++) {  // Over n_heads_t dimension
         cb_reserve_back(rotated_in_interm_cb, Wt);
-        cb_reserve_back(sin_interm_cb, Wt);
+        // sin_interm_cb reserve folded into the mul<> chain below (OutputLifecycle::Bulk).
         cb_reserve_back(cos_interm_cb, Wt);
         cb_reserve_back(out_cb, Wt);
 
@@ -101,8 +101,12 @@ void kernel_main() {
         // at line 17). PARTIAL gate cite: chain template constexpr CB constraint;
         // file-level TRISC2 size budget blocks the duplication workaround.
         //
-        // Lifecycles: NoWait* / NoReserve* on all sides. Outer cb_wait_front /
-        // cb_pop_front (line 92, 103) and cb_push_back (102) stay on raw LLK.
+        // Lifecycles: rotated_in_interm_cb is DeferredPop (caller waited at line 93, chain
+        //   bulk-pops the Wt-tile block); sin_cb is CallerManaged (persistent across heads);
+        //   output is Bulk so the chain owns the whole sin_interm window — reserves Wt
+        //   upfront, walks the block, and bulk-pushes Wt at end. So the chain now owns the
+        //   sin_interm reserve+push and the rotated_in pop directly (a Wt-tile block needs a
+        //   walked pack window; DeferredReserve would pin to a single output tile).
         // Reconfig: mul_bcast_rows_init_short reconfigs srca/srcb -> Input.
         // No pack_reconfig -> None.
         compute_kernel_lib::mul<
@@ -110,14 +114,12 @@ void kernel_main() {
             sin_cb,
             sin_interm_cb,
             compute_kernel_lib::BroadcastDim::Row,
+            compute_kernel_lib::InputLifecycle::DeferredPop,
             compute_kernel_lib::InputLifecycle::CallerManaged,
-            compute_kernel_lib::InputLifecycle::CallerManaged,
-            compute_kernel_lib::OutputLifecycle::CallerManaged,
+            compute_kernel_lib::OutputLifecycle::Bulk,
             compute_kernel_lib::BinaryDataFormatReconfig::Input,
             compute_kernel_lib::PackTileReconfig::None,
             compute_kernel_lib::OperandKind::Block>(compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
-        cb_push_back(sin_interm_cb, Wt);
-        cb_pop_front(rotated_in_interm_cb, Wt);
 
         ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {

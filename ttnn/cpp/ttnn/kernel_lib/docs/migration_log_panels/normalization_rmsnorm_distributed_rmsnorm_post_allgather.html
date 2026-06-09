@@ -1,0 +1,422 @@
+<section class="panel" id="panel-normalization_rmsnorm_distributed_rmsnorm_post_allgather">
+  <h1>rmsnorm_post_allgather — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/rmsnorm_post_allgather.cpp</div>
+  <div class="meta"><b>Δ</b> +83/-83 &nbsp; <b>Decisions:</b> 5</div>
+
+  <div class="focus-toolbar" data-fkernel="normalization_rmsnorm_distributed_rmsnorm_post_allgather">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; includes+CB</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; mul x·rstd</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; gamma/beta</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; ACQ/REL gone</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; rsqrt chain</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+/*
+ * This kernel computes rmsnorm, dependent on the RMSNORM define.
+ * For rmsnorm we receive E(x**2) and compute the remaining normalization based on gamma, beta and epsilon.
+ *   E(x**2) is contained in a one tile wide tensor containing E(x**2) in the left most column.
+ */
+
+#include &lt;cstdint&gt;
+
+#define BCAST_LLKOP EltwiseBinaryType::ELWMUL
+#define BCAST_DIM BroadcastType::COL
+
+#include "api/compute/reduce.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/layernorm.h"
+<span class="dz" data-d="1">#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"</span>
+
+<span class="dz" data-d="5">ALWI void ACQ() {
+    tile_regs_acquire();
+    tile_regs_wait();
+}
+ALWI void REL() {
+    tile_regs_commit();
+    tile_regs_release();</span>
+}
+
+void kernel_main() {
+    uint32_t NCHt = get_arg_val&lt;uint32_t&gt;(0);
+    constexpr uint32_t Wt = get_compile_time_arg_val(0);
+    constexpr uint32_t blk = get_compile_time_arg_val(1);
+    constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(2);
+    constexpr uint32_t do_gamma = get_compile_time_arg_val(3);
+    constexpr uint32_t do_beta = get_compile_time_arg_val(4);
+    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(5) == 1;
+    constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(7) == 1;
+
+    constexpr uint32_t onetile = 1;
+
+    constexpr uint32_t cb_inp = tt::CBIndex::c_0;
+    constexpr uint32_t cb_stats = tt::CBIndex::c_1;
+
+    constexpr uint32_t cb_eps = tt::CBIndex::c_4;
+    constexpr uint32_t cb_reduce = tt::CBIndex::c_5;
+
+    constexpr uint32_t cb_out = tt::CBIndex::c_14;
+
+    constexpr uint32_t cb_var_eps = tt::CBIndex::c_9;          // var + epsilon (or E(x**2) + epsilon)
+    constexpr uint32_t cb_recip_sqrt_var = tt::CBIndex::c_10;  // 1/sqrt(var+eps)
+    constexpr uint32_t cb_x_normed = tt::CBIndex::c_12;  // (x - E(x)) * 1/sqrt(var+eps) or x * 1/sqrt(E(x**2) + eps)
+
+    constexpr uint32_t cb_var = tt::CBIndex::c_8;  // E(x**2) - E(x)**2 or E(x**2)
+    constexpr uint32_t cb_norm_x_input = cb_inp;
+
+    constexpr uint32_t cb_gamma = tt::CBIndex::c_2;
+    constexpr uint32_t cb_beta = tt::CBIndex::c_3;
+<span class="dz" data-d="1">    uint32_t cb_times_gamma_out = cb_out;
+    if constexpr (do_gamma and do_beta) {
+        cb_times_gamma_out = tt::CBIndex::c_13;</span>
+    }
+
+    binary_op_init_common(cb_inp, cb_inp, cb_var);
+
+    cb_wait_front(cb_reduce, 1);  // comes from the reader
+    cb_wait_front(cb_eps, 1);     // comes from the reader
+
+    for (uint32_t ncht = 0; ncht &lt; NCHt; ncht++) {
+        constexpr int onetile = 1;
+        constexpr int dst0 = 0;
+
+        /*
+         * Reduce stats input.
+         * cb_stats = [sum(x0**2), sum(x1**2), ...]
+         * RMSNorm reduces sum(x**2) directly into cb_var for rsqrt computation.
+         * Uses auto-batched STREAMING mode - library handles CB lifecycle.
+         */
+        compute_kernel_lib::reduce&lt;PoolType::AVG, ReduceDim::REDUCE_ROW&gt;(
+            cb_stats, cb_reduce, cb_var, compute_kernel_lib::ReduceInputBlockShape::row(stats_tiles_cols));
+
+        /*
+<span class="dz" data-d="6">         * 1/sqrt(var + eps)
+         */
+        cb_wait_front(cb_var, 1);
+        cb_reserve_back(cb_recip_sqrt_var, 1);
+        reconfig_data_format(cb_var, cb_eps);
+        pack_reconfig_data_format(cb_recip_sqrt_var);
+
+        add_tiles_init(cb_var, cb_eps);
+        ACQ();
+        add_tiles(cb_var, cb_eps, 0, 0, 0);
+        rsqrt_tile_init&lt;LEGACY_RSQRT&gt;();
+        rsqrt_tile&lt;LEGACY_RSQRT&gt;(0);
+        pack_tile(0, cb_recip_sqrt_var);
+        REL();
+        cb_push_back(cb_recip_sqrt_var, 1);
+        cb_pop_front(cb_var, 1);</span>
+
+        /*
+         * norm x
+         * RMSNorm: X * 1/sqrt(E[X**2] + eps)
+         */
+
+        uint32_t normed_output_cb = cb_x_normed;
+        if constexpr (!do_gamma) {
+            normed_output_cb = cb_out;
+        }
+
+<span class="dz" data-d="2">        reconfig_data_format(cb_norm_x_input, cb_recip_sqrt_var);
+        pack_reconfig_data_format(normed_output_cb);
+        mul_bcast_cols_init_short(cb_norm_x_input, cb_recip_sqrt_var);
+        cb_wait_front(cb_recip_sqrt_var, 1);
+        for (uint32_t wt = 0; wt &lt; Wt; wt += blk) {
+            cb_wait_front(cb_norm_x_input, blk);
+            cb_reserve_back(normed_output_cb, blk);
+            ACQ();
+            for (uint32_t wtr = 0; wtr &lt; blk; wtr++) {
+                mul_tiles_bcast_cols(cb_norm_x_input, cb_recip_sqrt_var, wtr, 0, wtr);
+                pack_tile(wtr, normed_output_cb);
+            }
+            REL();
+            cb_push_back(normed_output_cb, blk);
+            cb_pop_front(cb_norm_x_input, blk);
+        }
+        cb_pop_front(cb_recip_sqrt_var, 1);</span>
+
+        if constexpr (do_gamma) {
+            /*
+             * x_normed * gamma
+             */
+            reconfig_data_format(cb_x_normed, cb_gamma);
+            pack_reconfig_data_format(cb_times_gamma_out);
+            cb_wait_front(cb_gamma, Wt);
+            mul_bcast_rows_init_short(cb_x_normed, cb_gamma);
+            for (uint32_t wt = 0; wt &lt; Wt; wt += blk) {
+                cb_wait_front(cb_x_normed, blk);
+                cb_reserve_back(cb_times_gamma_out, blk);
+                ACQ();
+                for (uint32_t wtr = 0; wtr &lt; blk; wtr++) {
+                    mul_tiles_bcast_rows(cb_x_normed, cb_gamma, wtr, wt + wtr, wtr);
+                    pack_tile(wtr, cb_times_gamma_out);
+                }
+                REL();
+                cb_push_back(cb_times_gamma_out, blk);
+                cb_pop_front(cb_x_normed, blk);
+            }
+
+            if constexpr (do_beta) {
+                /*
+<span class="dz" data-d="3">                 * x_normed * gamma + beta
+                 */
+                reconfig_data_format(cb_times_gamma_out, cb_beta);
+                pack_reconfig_data_format(cb_out);
+                cb_wait_front(cb_beta, Wt);
+                add_bcast_rows_init_short(cb_times_gamma_out, cb_beta);
+                for (uint32_t wt = 0; wt &lt; Wt; wt += blk) {
+                    cb_wait_front(cb_times_gamma_out, blk);
+                    cb_reserve_back(cb_out, blk);
+                    ACQ();
+                    for (uint32_t wtr = 0; wtr &lt; blk; wtr++) {
+                        add_tiles_bcast_rows(cb_times_gamma_out, cb_beta, wtr, wt + wtr, wtr);
+                        pack_tile(wtr, cb_out);
+                    }
+                    REL();
+                    cb_push_back(cb_out, blk);
+                    cb_pop_front(cb_times_gamma_out, blk);</span>
+                }
+            }
+        }
+    }
+    cb_pop_front(cb_eps, 1);
+    cb_pop_front(cb_reduce, 1);
+    if constexpr (do_gamma) {
+        cb_pop_front(cb_gamma, Wt);
+    }
+    if constexpr (do_beta) {
+        cb_pop_front(cb_beta, Wt);
+    }
+}
+</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+/*
+ * This kernel computes rmsnorm, dependent on the RMSNORM define.
+ * For rmsnorm we receive E(x**2) and compute the remaining normalization based on gamma, beta and epsilon.
+ *   E(x**2) is contained in a one tile wide tensor containing E(x**2) in the left most column.
+ */
+
+#include &lt;cstdint&gt;
+
+#define BCAST_LLKOP EltwiseBinaryType::ELWMUL
+#define BCAST_DIM BroadcastType::COL
+
+#include "api/compute/reduce.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/layernorm.h"
+<span class="dz" data-d="1">#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"</span>
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+
+void kernel_main() {
+    uint32_t NCHt = get_arg_val&lt;uint32_t&gt;(0);
+    constexpr uint32_t Wt = get_compile_time_arg_val(0);
+    constexpr uint32_t blk = get_compile_time_arg_val(1);
+    constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(2);
+    constexpr uint32_t do_gamma = get_compile_time_arg_val(3);
+    constexpr uint32_t do_beta = get_compile_time_arg_val(4);
+    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(5) == 1;
+    constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(7) == 1;
+
+    constexpr uint32_t onetile = 1;
+
+    constexpr uint32_t cb_inp = tt::CBIndex::c_0;
+    constexpr uint32_t cb_stats = tt::CBIndex::c_1;
+
+    constexpr uint32_t cb_eps = tt::CBIndex::c_4;
+    constexpr uint32_t cb_reduce = tt::CBIndex::c_5;
+
+    constexpr uint32_t cb_out = tt::CBIndex::c_14;
+
+    constexpr uint32_t cb_var_eps = tt::CBIndex::c_9;          // var + epsilon (or E(x**2) + epsilon)
+    constexpr uint32_t cb_recip_sqrt_var = tt::CBIndex::c_10;  // 1/sqrt(var+eps)
+    constexpr uint32_t cb_x_normed = tt::CBIndex::c_12;  // (x - E(x)) * 1/sqrt(var+eps) or x * 1/sqrt(E(x**2) + eps)
+
+    constexpr uint32_t cb_var = tt::CBIndex::c_8;  // E(x**2) - E(x)**2 or E(x**2)
+    constexpr uint32_t cb_norm_x_input = cb_inp;
+
+    constexpr uint32_t cb_gamma = tt::CBIndex::c_2;
+    constexpr uint32_t cb_beta = tt::CBIndex::c_3;
+<span class="dz" data-d="1">    constexpr uint32_t cb_times_gamma_out = (do_gamma &amp;&amp; do_beta) ? tt::CBIndex::c_13 : cb_out;</span>
+
+    binary_op_init_common(cb_inp, cb_inp, cb_var);
+
+    cb_wait_front(cb_reduce, 1);  // comes from the reader
+    cb_wait_front(cb_eps, 1);     // comes from the reader
+
+    for (uint32_t ncht = 0; ncht &lt; NCHt; ncht++) {
+        /*
+         * Reduce stats input.
+         * cb_stats = [sum(x0**2), sum(x1**2), ...]
+         * RMSNorm reduces sum(x**2) directly into cb_var for rsqrt computation.
+         * Uses auto-batched STREAMING mode - library handles CB lifecycle.
+         */
+        compute_kernel_lib::reduce&lt;PoolType::AVG, ReduceDim::REDUCE_ROW&gt;(
+            cb_stats, cb_reduce, cb_var, compute_kernel_lib::ReduceInputBlockShape::row(stats_tiles_cols));
+
+        /*
+<span class="dz" data-d="6">         * 1/sqrt(var + eps)
+         * BinaryFpu(Add, cb_var, cb_eps) + Rsqrt + PackTile(cb_recip_sqrt_var).
+         * cb_var: InputLifecycle::Streaming (per-tile wait/pop). cb_eps: InputLifecycle::CallerManaged (pre-waited
+         * before NCHt loop, popped once after). cb_recip_sqrt_var: OutputLifecycle::Streaming.
+         */
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu&lt;
+                cb_var,
+                cb_eps,
+                compute_kernel_lib::BinaryFpuOp::Add,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged&gt;{},
+            compute_kernel_lib::Rsqrt&lt;
+                compute_kernel_lib::Approx::Exact,
+                LEGACY_RSQRT ? compute_kernel_lib::Legacy::On : compute_kernel_lib::Legacy::Off,
+                compute_kernel_lib::Dst::D0&gt;{},
+            compute_kernel_lib::PackTile&lt;cb_recip_sqrt_var&gt;{});</span>
+
+        /*
+         * norm x
+         * RMSNorm: X * 1/sqrt(E[X**2] + eps)
+         *
+         * Three eltwise stages via eltwise_chain. Each stage is a single chain
+         * call over the full Wt with BlockSize=blk; the chain owns all of:
+         *   - A-side wait_upfront / pop_at_end on the streaming input CB,
+         *   - B-side index walk (Scalar for cb_recip_sqrt_var, Block for
+         *     cb_gamma / cb_beta which already span all Wt tiles upfront),
+         *   - pack-side reserve_upfront / push_at_end on the output CB,
+         *   - entry-time srca/srcb + pack reconfig.
+         * The kernel only sets up the once-per-NCHt wait on cb_recip_sqrt_var
+         * (per ncht) and the once-per-row cb_gamma / cb_beta waits — the latter
+         * are reused across rows and the trailing cb_pop_front after the NCHt
+         * loop releases them.
+         */
+        constexpr uint32_t normed_output_cb = do_gamma ? cb_x_normed : cb_out;
+
+        /*
+<span class="dz" data-d="2">         * x * 1/sqrt(stdev)
+         */
+        cb_wait_front(cb_recip_sqrt_var, 1);
+        compute_kernel_lib::mul&lt;
+            cb_norm_x_input,
+            cb_recip_sqrt_var,
+            normed_output_cb,
+            compute_kernel_lib::BroadcastDim::Col,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::OutputLifecycle::Bulk,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::Output,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::OperandKind::Scalar&gt;(compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/blk));</span>
+        cb_pop_front(cb_recip_sqrt_var, 1);
+
+        if constexpr (do_gamma) {
+            /*
+             * x_normed * gamma   (cb_gamma walks Block — index = 0..Wt-1)
+             */
+            cb_wait_front(cb_gamma, Wt);  // gamma is reused across NCHt — wait once per row
+            compute_kernel_lib::mul&lt;
+                cb_x_normed,
+                cb_gamma,
+                cb_times_gamma_out,
+                compute_kernel_lib::BroadcastDim::Row,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OutputLifecycle::Bulk,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::PackTileReconfig::Output,
+                compute_kernel_lib::OperandKind::Block&gt;(
+                compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/blk));
+
+            if constexpr (do_beta) {
+                /*
+<span class="dz" data-d="3">                 * (x_normed * gamma) + beta   (cb_beta walks Block — 0..Wt-1)
+                 */
+                cb_wait_front(cb_beta, Wt);
+                compute_kernel_lib::add&lt;
+                    cb_times_gamma_out,
+                    cb_beta,
+                    cb_out,
+                    compute_kernel_lib::BroadcastDim::Row,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::PackTileReconfig::Output,
+                    compute_kernel_lib::OperandKind::Block&gt;(
+                    compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/blk));</span>
+            }
+        }
+    }
+    cb_pop_front(cb_eps, 1);
+    cb_pop_front(cb_reduce, 1);
+    if constexpr (do_gamma) {
+        cb_pop_front(cb_gamma, Wt);
+    }
+    if constexpr (do_beta) {
+        cb_pop_front(cb_beta, Wt);
+    }
+}
+</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; Includes + constexpr CB select</b> — Added <code>eltwise_chain/convenience/math</code> headers; the runtime <code>uint32_t cb_times_gamma_out=…; if(do_gamma&&do_beta)…</code> became a single <code>constexpr</code> ternary so it can feed the helper NTTPs.</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; mul() — x * 1/sqrt(stdev)</b> — The <code>mul_tiles_bcast_cols</code> blk-loop → <code>compute_kernel_lib::mul&lt;cb_norm_x_input,cb_recip_sqrt_var,...,BroadcastDim::Col&gt;</code>; chain owns wait/reserve/pop.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; mul()/add() — gamma &amp; beta</b> — <code>x_normed*gamma</code> (<code>mul</code>, <code>BroadcastDim::Row</code>) and <code>+beta</code> (<code>add</code>, Row) blk-loops migrated; <code>cb_gamma</code>/<code>cb_beta</code> walk <code>OperandKind::Block</code> over all Wt with <code>CallerManaged</code> held waits.</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; ACQ/REL helpers removed</b> — <code>tile_regs_acquire/wait/commit/release</code> wrappers deleted; DEST handling moves inside each chain.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; eltwise_chain — 1/sqrt(var+eps)</b> — <code>add_tiles</code>+<code>rsqrt_tile</code>+<code>pack_tile</code> → <code>eltwise_chain(BinaryFpu&lt;Add&gt;, Rsqrt&lt;Legacy=LEGACY_RSQRT&gt;, PackTile&lt;cb_recip_sqrt_var&gt;)</code>; cb_eps is <code>CallerManaged</code> (pre-waited once).</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-normalization_rmsnorm_distributed_rmsnorm_post_allgather">
+{
+  "1": {
+    "title": "Includes + constexpr CB select",
+    "body": "Added <code>eltwise_chain/convenience/math</code> headers; the runtime <code>uint32_t cb_times_gamma_out=\u2026; if(do_gamma&&do_beta)\u2026</code> became a single <code>constexpr</code> ternary so it can feed the helper NTTPs.",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "mul() \u2014 x * 1/sqrt(stdev)",
+    "body": "The <code>mul_tiles_bcast_cols</code> blk-loop \u2192 <code>compute_kernel_lib::mul&lt;cb_norm_x_input,cb_recip_sqrt_var,...,BroadcastDim::Col&gt;</code>; chain owns wait/reserve/pop.",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "mul()/add() \u2014 gamma & beta",
+    "body": "<code>x_normed*gamma</code> (<code>mul</code>, <code>BroadcastDim::Row</code>) and <code>+beta</code> (<code>add</code>, Row) blk-loops migrated; <code>cb_gamma</code>/<code>cb_beta</code> walk <code>OperandKind::Block</code> over all Wt with <code>CallerManaged</code> held waits.",
+    "color": "#3f8ae0"
+  },
+  "5": {
+    "title": "ACQ/REL helpers removed",
+    "body": "<code>tile_regs_acquire/wait/commit/release</code> wrappers deleted; DEST handling moves inside each chain.",
+    "color": "#9f4bbf"
+  },
+  "6": {
+    "title": "eltwise_chain \u2014 1/sqrt(var+eps)",
+    "body": "<code>add_tiles</code>+<code>rsqrt_tile</code>+<code>pack_tile</code> \u2192 <code>eltwise_chain(BinaryFpu&lt;Add&gt;, Rsqrt&lt;Legacy=LEGACY_RSQRT&gt;, PackTile&lt;cb_recip_sqrt_var&gt;)</code>; cb_eps is <code>CallerManaged</code> (pre-waited once).",
+    "color": "#ff7a00"
+  }
+}
+</script>

@@ -1,0 +1,179 @@
+<section class="panel" id="panel-eltwise_unary_backward_tanh_bw_eltwise_bw_tanh_deriv">
+  <h1>eltwise_bw_tanh_deriv — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/eltwise/unary_backward/tanh_bw/device/kernels/compute/eltwise_bw_tanh_deriv.cpp</div>
+  <div class="meta"><b>Δ</b> +42/-40 &nbsp; <b>Decisions:</b> 4</div>
+
+  <div class="focus-toolbar" data-fkernel="eltwise_unary_backward_tanh_bw_eltwise_bw_tanh_deriv">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; helper includes</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; Chunked + Block lifecycle</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; EltwiseShape::tiles(n, block)</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; tanh&#x27; + mul elements</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Compute kernel for tanh backward using sech²(x) = 4·exp(-2|x|) / (1 + exp(-2|x|))²
+// Avoids catastrophic cancellation in the naive 1 - tanh²(x) formula.
+
+<span class="dz" data-d="1">#include &lt;cstdint&gt;
+#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/tile_move_copy.h&quot;
+#include &quot;api/compute/eltwise_unary/sfpu_split_includes.h&quot;
+#include &quot;api/compute/common.h&quot;
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;api/compute/eltwise_unary/tanh_derivative.h&quot;
+#include &quot;api/compute/eltwise_binary_sfpu.h&quot;
+#include &quot;api/compute/compute_kernel_api.h&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;
+</span>
+void kernel_main() {
+    uint32_t per_core_block_cnt = get_arg_val&lt;uint32_t&gt;(0);
+    uint32_t per_core_block_size = get_arg_val&lt;uint32_t&gt;(1);
+
+    constexpr auto cb_grad_out = tt::CBIndex::c_0;
+    constexpr auto cb_input = tt::CBIndex::c_1;
+    constexpr auto cb_grad_in = tt::CBIndex::c_2;
+
+<span class="dz" data-d="2">    CircularBuffer exp_cb_grad_out(cb_grad_out);
+    CircularBuffer exp_cb_input(cb_input);
+    CircularBuffer exp_cb_grad_in(cb_grad_in);</span>
+
+<span class="dz" data-d="4">    unary_op_init_common(cb_grad_out, cb_grad_in);
+    tanh_derivative_tile_init&lt;false&gt;();</span>
+    mul_binary_tile_init();
+<span class="dz" data-d="3"></span>
+<span class="dz" data-d="2">    for (uint32_t block = 0; block &lt; per_core_block_cnt; ++block) {
+        exp_cb_grad_in.reserve_back(per_core_block_size);
+        exp_cb_grad_out.wait_front(per_core_block_size);</span>
+        exp_cb_input.wait_front(per_core_block_size);
+<span class="dz" data-d="3"></span>
+<span class="dz" data-d="4">        for (uint32_t i = 0; i &lt; per_core_block_size; ++i) {
+            tile_regs_acquire();
+
+            copy_tile(cb_grad_out, i, 0);    // dest[0] = grad_out
+            copy_tile(cb_input, i, 1);       // dest[1] = input
+            tanh_derivative_tile&lt;false&gt;(1);  // dest[1] = sech²(input)
+            mul_binary_tile(0, 1, 0);        // dest[0] = grad_out * sech²(input)
+
+            tile_regs_commit();
+            tile_regs_wait();
+
+            pack_tile(0, cb_grad_in);
+</span>
+            tile_regs_release();
+<span class="dz" data-d="2">        }
+
+        exp_cb_grad_out.pop_front(per_core_block_size);
+        exp_cb_input.pop_front(per_core_block_size);</span>
+        exp_cb_grad_in.push_back(per_core_block_size);
+    }
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Compute kernel for tanh backward using sech²(x) = 4·exp(-2|x|) / (1 + exp(-2|x|))².
+// Avoids catastrophic cancellation in the naive 1 - tanh²(x) formula.
+
+<span class="dz" data-d="1">#include &lt;cstdint&gt;
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_activations.hpp&quot;  // TanhDerivative
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp&quot;  // MulBinary
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+void kernel_main() {
+    uint32_t per_core_tile_cnt = get_arg_val&lt;uint32_t&gt;(0);
+    uint32_t per_core_block_size = get_arg_val&lt;uint32_t&gt;(1);
+
+    constexpr auto cb_grad_out = tt::CBIndex::c_0;
+    constexpr auto cb_input = tt::CBIndex::c_1;
+    constexpr auto cb_grad_in = tt::CBIndex::c_2;
+
+    unary_op_init_common(cb_grad_out, cb_grad_in);
+
+    // tanh backward: grad_in = grad_out * sech²(input).
+    //   D0 = grad_out, D1 = input -&gt; TanhDerivative&lt;D1&gt;, MulBinary&lt;D0, D1, D0&gt;.
+    //
+    // 1D shape with explicit block size: EltwiseShape::tiles(n, block_size) emits
+    // a chain that walks n tiles in chunks of block_size each. Per-element inits
+    // (tanh_derivative_tile_init, mul_binary_tile_init, copy_tile_to_dst_init_short)
+    // are hoisted once at chain entry; per-chunk InputLifecycle::Chunked lifecycle waits / pops
+    // block_size tiles at a time. PF picks per_core_block_size as the largest
+    // power-of-2 divisor of per_core_tile_cnt (&lt;= 8).
+    //
+    // Lifecycles:
+    //   cb_grad_out / cb_input  InputLifecycle::Chunked + Block (per-chunk wait+pop of per_core_block_size tiles)
+    //   cb_grad_in              OutputLifecycle::Chunked + Block (per-chunk reserve+push)
+<span class="dz" data-d="3">    const auto shape = compute_kernel_lib::EltwiseShape::tiles(per_core_tile_cnt, per_core_block_size);
+
+    compute_kernel_lib::eltwise_chain(
+        shape,</span>
+<span class="dz" data-d="2">        compute_kernel_lib::CopyTile&lt;
+            cb_grad_out,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::InputLifecycle::Chunked,
+            compute_kernel_lib::CopyTileReconfig::None,
+            compute_kernel_lib::OperandKind::Block&gt;{},
+        compute_kernel_lib::CopyTile&lt;
+            cb_input,
+            compute_kernel_lib::Dst::D1,
+            compute_kernel_lib::InputLifecycle::Chunked,
+            compute_kernel_lib::CopyTileReconfig::None,
+            compute_kernel_lib::OperandKind::Block&gt;{},</span>
+<span class="dz" data-d="4">        compute_kernel_lib::TanhDerivative&lt;compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D1&gt;{},
+        compute_kernel_lib::
+            MulBinary&lt;compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0&gt;{},</span>
+<span class="dz" data-d="2">        compute_kernel_lib::PackTile&lt;
+            cb_grad_in,
+            compute_kernel_lib::OutputLifecycle::Chunked,
+            compute_kernel_lib::PackTileReconfig::None&gt;{});</span>
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; kernel_lib header includes</b> — Swapped raw <code>eltwise_binary*.h</code>/<code>tanh_derivative.h</code> headers for <code>eltwise_chain.hpp</code>, <code>eltwise_activations.hpp</code> (TanhDerivative), <code>eltwise_binary_sfpu.hpp</code> (MulBinary).</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; Per-block wait/pop → Chunked + OperandKind::Block</b> — Original outer block did <code>reserve_back/wait_front/pop_front(per_core_block_size)</code> via CircularBuffer objects with an inner per-tile loop. Chain inputs use <code>InputLifecycle::Chunked</code> + <code>OperandKind::Block</code>; output <code>PackTile&lt;cb_grad_in, Chunked&gt;</code>. CircularBuffer objects removed.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; 2-level loop → EltwiseShape::tiles</b> — Nested <code>for block</code> / <code>for i</code> collapse into <code>EltwiseShape::tiles(per_core_tile_cnt, per_core_block_size)</code> passed to one <code>eltwise_chain(shape, …)</code>.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; Compute body → chain elements</b> — <code>copy_tile</code>→<code>CopyTile&lt;…, D0/D1&gt;</code>, <code>tanh_derivative_tile&lt;false&gt;</code>→<code>TanhDerivative&lt;Approx::Exact, D1&gt;</code>, <code>mul_binary_tile</code>→<code>MulBinary&lt;D0,D1,D0&gt;</code>. Per-element inits hoisted once at chain entry.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-eltwise_unary_backward_tanh_bw_eltwise_bw_tanh_deriv">
+{
+  "1": {
+    "title": "kernel_lib header includes",
+    "body": "Swapped raw <code>eltwise_binary*.h</code>/<code>tanh_derivative.h</code> headers for <code>eltwise_chain.hpp</code>, <code>eltwise_activations.hpp</code> (TanhDerivative), <code>eltwise_binary_sfpu.hpp</code> (MulBinary).",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "Per-block wait/pop \u2192 Chunked + OperandKind::Block",
+    "body": "Original outer block did <code>reserve_back/wait_front/pop_front(per_core_block_size)</code> via CircularBuffer objects with an inner per-tile loop. Chain inputs use <code>InputLifecycle::Chunked</code> + <code>OperandKind::Block</code>; output <code>PackTile&lt;cb_grad_in, Chunked&gt;</code>. CircularBuffer objects removed.",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "2-level loop \u2192 EltwiseShape::tiles",
+    "body": "Nested <code>for block</code> / <code>for i</code> collapse into <code>EltwiseShape::tiles(per_core_tile_cnt, per_core_block_size)</code> passed to one <code>eltwise_chain(shape, \u2026)</code>.",
+    "color": "#3f8ae0"
+  },
+  "4": {
+    "title": "Compute body \u2192 chain elements",
+    "body": "<code>copy_tile</code>\u2192<code>CopyTile&lt;\u2026, D0/D1&gt;</code>, <code>tanh_derivative_tile&lt;false&gt;</code>\u2192<code>TanhDerivative&lt;Approx::Exact, D1&gt;</code>, <code>mul_binary_tile</code>\u2192<code>MulBinary&lt;D0,D1,D0&gt;</code>. Per-element inits hoisted once at chain entry.",
+    "color": "#cf222e"
+  }
+}
+</script>

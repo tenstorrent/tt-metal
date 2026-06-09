@@ -1,0 +1,138 @@
+<section class="panel" id="panel-uniform_compute_uniform">
+  <h1>compute_uniform — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/uniform/device/kernels/compute_uniform.cpp</div>
+  <div class="meta"><b>&Delta;</b> +13/-13 &nbsp; <b>Decisions:</b> 4</div>
+
+  <div class="focus-toolbar" data-fkernel="uniform_compute_uniform">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; chain headers</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; RandTile chain</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; reconfig None</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; runtime seed init</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &quot;api/compute/compute_kernel_api.h&quot;
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;api/compute/eltwise_unary/rand.h&quot;
+
+void kernel_main() {
+    constexpr uint32_t intermed_cb_id = get_compile_time_arg_val(0);
+
+    const uint32_t seed = get_arg_val&lt;uint32_t&gt;(0);
+    union {
+        float f;
+        uint32_t u;
+    } f2u_from, f2u_to, f2u_scale;
+    f2u_from.u = get_arg_val&lt;uint32_t&gt;(1);
+    f2u_to.u = get_arg_val&lt;uint32_t&gt;(2);
+    f2u_scale.f = f2u_to.f - f2u_from.f;
+    const uint32_t start_id = get_arg_val&lt;uint32_t&gt;(3);
+    const uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(4);
+    const uint32_t end_id = start_id + num_tiles;
+
+    init_sfpu(intermed_cb_id, intermed_cb_id);
+
+<span class="dz" data-d="6">    rand_tile_init(seed);</span>
+<span class="dz" data-d="3">    for (uint32_t i = start_id; i &lt; end_id; ++i) {
+        cb_reserve_back(intermed_cb_id, 1);
+
+        tile_regs_acquire();
+        rand_tile(0, f2u_from.u, f2u_scale.u);
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile(0, intermed_cb_id, 0);
+        tile_regs_release();
+
+        cb_push_back(intermed_cb_id, 1);
+    }</span>
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &quot;api/compute/compute_kernel_api.h&quot;
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;api/compute/eltwise_unary/rand.h&quot;
+<span class="dz" data-d="1">#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_rand.hpp&quot;</span>
+
+void kernel_main() {
+<span class="dz" data-d="1">    using namespace compute_kernel_lib;</span>
+
+    constexpr uint32_t intermed_cb_id = get_compile_time_arg_val(0);
+
+    const uint32_t seed = get_arg_val&lt;uint32_t&gt;(0);
+    union {
+        float f;
+        uint32_t u;
+    } f2u_from, f2u_to, f2u_scale;
+    f2u_from.u = get_arg_val&lt;uint32_t&gt;(1);
+    f2u_to.u = get_arg_val&lt;uint32_t&gt;(2);
+    f2u_scale.f = f2u_to.f - f2u_from.f;
+    const uint32_t start_id = get_arg_val&lt;uint32_t&gt;(3);
+    const uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(4);
+<span class="dz" data-d="3">    (void)start_id;  // num_tiles is the work this core consumes — start_id is unused here.</span>
+
+    init_sfpu(intermed_cb_id, intermed_cb_id);
+
+    // Out-of-band runtime-seed init — RandTile::init() is a no-op because the
+    // chain has no way to thread a runtime seed through its static init hook.
+<span class="dz" data-d="6">    rand_tile_init(seed);</span>
+
+    // Per-tile rand into D0 + pack to intermed_cb. Reconfig: original used
+    // init_sfpu at boot then plain pack_tile (no _with_dt) -&gt; PackTileReconfig::None.
+<span class="dz" data-d="3">    eltwise_chain(
+        num_tiles,
+        RandTile&lt;Dst::D0&gt;{f2u_from.u, f2u_scale.u},</span>
+<span class="dz" data-d="4">        PackTile&lt;intermed_cb_id, OutputLifecycle::Streaming, PackTileReconfig::None&gt;{});</span>
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; Chain headers + namespace</b> — Added <code>eltwise_chain.hpp</code> + <code>eltwise_rand.hpp</code> and <code>using namespace compute_kernel_lib</code>.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; RandTile + PackTile chain</b> — The <code>rand_tile</code>/<code>pack_tile</code> per-tile loop became <code>eltwise_chain(num_tiles, RandTile&lt;Dst::D0&gt;{from,scale}, PackTile&lt;...&gt;)</code>; <code>start_id</code> dropped (only num_tiles is the work).</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; No per-iter reconfig</b> — Original ran <code>init_sfpu</code> at boot + plain <code>pack_tile</code>: <code>PackTileReconfig::None</code>.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; Out-of-band runtime-seed init</b> — <code>rand_tile_init(seed)</code> stays a manual call — <code>RandTile::init()</code> is a no-op because a runtime seed can't thread through the chain's static init hook.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-uniform_compute_uniform">
+{
+  "1": {
+    "title": "Chain headers + namespace",
+    "body": "Added <code>eltwise_chain.hpp</code> + <code>eltwise_rand.hpp</code> and <code>using namespace compute_kernel_lib</code>.",
+    "color": "#d6a000"
+  },
+  "3": {
+    "title": "RandTile + PackTile chain",
+    "body": "The <code>rand_tile</code>/<code>pack_tile</code> per-tile loop became <code>eltwise_chain(num_tiles, RandTile&lt;Dst::D0&gt;{from,scale}, PackTile&lt;...&gt;)</code>; <code>start_id</code> dropped (only num_tiles is the work).",
+    "color": "#3f8ae0"
+  },
+  "4": {
+    "title": "No per-iter reconfig",
+    "body": "Original ran <code>init_sfpu</code> at boot + plain <code>pack_tile</code>: <code>PackTileReconfig::None</code>.",
+    "color": "#cf222e"
+  },
+  "6": {
+    "title": "Out-of-band runtime-seed init",
+    "body": "<code>rand_tile_init(seed)</code> stays a manual call \u2014 <code>RandTile::init()</code> is a no-op because a runtime seed can't thread through the chain's static init hook.",
+    "color": "#ff7a00"
+  }
+}
+</script>

@@ -1,0 +1,284 @@
+<section class="panel" id="panel-moreh_moreh_sum_moreh_sum_h_impl_kernels_moreh_sum_h">
+  <h1>moreh_sum_h &mdash; <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/moreh_sum_h.cpp</div>
+  <div class="meta"><b>&Delta;</b> +34/-23 &nbsp; <b>Decisions:</b> 6</div>
+
+  <div class="focus-toolbar" data-fkernel="moreh_moreh_sum_moreh_sum_h_impl_kernels_moreh_sum_h">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; includes</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; CB lifecycle</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; PackTile</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; reconfig</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; entry srca</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; copy+mask</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &quot;ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp&quot;
+#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;
+
+void kernel_main() {
+    uint32_t Ht = get_compile_time_arg_val(0);
+    uint32_t Wt = get_compile_time_arg_val(1);
+    uint32_t NC = get_compile_time_arg_val(2);
+    constexpr uint32_t origin_H = get_compile_time_arg_val(3);
+
+    constexpr auto cb_input = tt::CBIndex::c_0;
+    CircularBuffer cb_input_obj(cb_input);
+    constexpr auto cb_scaler = tt::CBIndex::c_2;
+    CircularBuffer cb_scaler_obj(cb_scaler);
+    constexpr auto cb_mask_h = tt::CBIndex::c_3;
+    CircularBuffer cb_mask_h_obj(cb_mask_h);
+    constexpr auto cb_accum_dst = tt::CBIndex::c_24;
+    constexpr auto cb_masked_input = tt::CBIndex::c_25;
+    CircularBuffer cb_masked_input_obj(cb_masked_input);
+    constexpr auto cb_out = tt::CBIndex::c_16;
+    constexpr uint32_t TILE_H = 32;
+    constexpr bool do_mask_h = (origin_H % TILE_H) != 0;
+
+    binary_op_init_common(cb_input, cb_input, cb_out);
+
+    cb_scaler_obj.wait_front(1);  // scaler tile from the reader
+
+    constexpr int onetile = 1;
+    int reduce_dst_idx = 0;
+    const uint32_t mask_dst_idx = reduce_dst_idx + 1;
+
+    if (do_mask_h) {
+        cb_mask_h_obj.wait_front(onetile);
+    }
+
+    for (uint32_t nc = 0; nc &lt; NC; nc++) {
+        for (uint32_t wt = 0; wt &lt; Wt; ++wt) {
+            // tiles are expected to be coming in in NCWH order (H-contiguous)
+            // reducing in W means out[0][w] = sum(h=0..H-1, in[h][w])
+            // in this case we just sequentially add to accumulator all the H-tiles in a column
+            bool is_h_single_tile = (Ht == 1);
+
+            // Phase 1: Reduce Ht-1 tiles into accumulator (if Ht &gt; 1)
+            if (!is_h_single_tile) {
+                compute_kernel_lib::reduce&lt;REDUCE_OP, REDUCE_DIM&gt;(
+                    cb_input, cb_scaler, cb_accum_dst, compute_kernel_lib::ReduceInputBlockShape::col(Ht - 1));
+            }
+
+            // Optional masking of last H tile
+            if constexpr (do_mask_h) {
+                tile_regs_acquire();
+<span class="dz" data-d="2">                cb_input_obj.wait_front(onetile);</span>
+#if defined FP32_DEST_ACC_EN
+<span class="dz" data-d="5">                reconfig_data_format_srca(cb_input);</span>
+#endif
+<span class="dz" data-d="6">                copy_tile_to_dst_init_short(cb_input);
+                copy_tile(cb_input, 0, reduce_dst_idx);
+                copy_tile(cb_mask_h, 0, mask_dst_idx);
+                mask_tile_init();
+                mask_tile(reduce_dst_idx, mask_dst_idx);</span>
+                tile_regs_commit();
+
+                cb_masked_input_obj.reserve_back(onetile);
+                tile_regs_wait();
+#if defined FP32_DEST_ACC_EN
+<span class="dz" data-d="4">                pack_reconfig_data_format(cb_masked_input);</span>
+#endif
+<span class="dz" data-d="3">                pack_tile(reduce_dst_idx, cb_masked_input);</span>
+                tile_regs_release();
+                cb_masked_input_obj.push_back(onetile);
+
+                cb_input_obj.pop_front(onetile);
+
+                // Phase 2 with masked input: Reduce final masked tile with accumulation
+                compute_kernel_lib::reduce&lt;REDUCE_OP, REDUCE_DIM&gt;(
+                    cb_masked_input,
+                    cb_scaler,
+                    cb_out,
+                    compute_kernel_lib::ReduceInputBlockShape::single(),
+                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                    compute_kernel_lib::Accumulate::at(cb_accum_dst, is_h_single_tile ? 0 : 1));
+            } else {
+                // Phase 2 without masking: Reduce final tile with accumulation
+                // - If Ht == 1 (single tile): iteration=0, no accumulator reload
+                // - If Ht &gt; 1 (multi-tile): iteration=1, reload accumulator from cb_accum_dst
+                compute_kernel_lib::reduce&lt;REDUCE_OP, REDUCE_DIM&gt;(
+                    cb_input,
+                    cb_scaler,
+                    cb_out,
+                    compute_kernel_lib::ReduceInputBlockShape::single(),
+                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                    compute_kernel_lib::Accumulate::at(cb_accum_dst, is_h_single_tile ? 0 : 1));
+            }
+        }
+    }
+
+    if (do_mask_h) {
+        cb_mask_h_obj.pop_front(onetile);
+    }
+    cb_scaler_obj.pop_front(onetile);
+}
+</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &quot;ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp&quot;
+<span class="dz" data-d="1">#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp&quot;  // Mask</span>
+#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;
+
+void kernel_main() {
+    uint32_t Ht = get_compile_time_arg_val(0);
+    uint32_t Wt = get_compile_time_arg_val(1);
+    uint32_t NC = get_compile_time_arg_val(2);
+    constexpr uint32_t origin_H = get_compile_time_arg_val(3);
+
+    constexpr auto cb_input = tt::CBIndex::c_0;
+    CircularBuffer cb_input_obj(cb_input);
+    constexpr auto cb_scaler = tt::CBIndex::c_2;
+    CircularBuffer cb_scaler_obj(cb_scaler);
+    constexpr auto cb_mask_h = tt::CBIndex::c_3;
+    CircularBuffer cb_mask_h_obj(cb_mask_h);
+    constexpr auto cb_accum_dst = tt::CBIndex::c_24;
+    constexpr auto cb_masked_input = tt::CBIndex::c_25;
+    CircularBuffer cb_masked_input_obj(cb_masked_input);
+    constexpr auto cb_out = tt::CBIndex::c_16;
+    constexpr uint32_t TILE_H = 32;
+    constexpr bool do_mask_h = (origin_H % TILE_H) != 0;
+
+    binary_op_init_common(cb_input, cb_input, cb_out);
+
+    cb_scaler_obj.wait_front(1);  // scaler tile from the reader
+
+    constexpr int onetile = 1;
+    int reduce_dst_idx = 0;
+    const uint32_t mask_dst_idx = reduce_dst_idx + 1;
+
+    if (do_mask_h) {
+        cb_mask_h_obj.wait_front(onetile);
+    }
+
+    for (uint32_t nc = 0; nc &lt; NC; nc++) {
+        for (uint32_t wt = 0; wt &lt; Wt; ++wt) {
+            // tiles are expected to be coming in in NCWH order (H-contiguous)
+            // reducing in W means out[0][w] = sum(h=0..H-1, in[h][w])
+            // in this case we just sequentially add to accumulator all the H-tiles in a column
+            bool is_h_single_tile = (Ht == 1);
+
+            // Phase 1: Reduce Ht-1 tiles into accumulator (if Ht &gt; 1)
+            if (!is_h_single_tile) {
+                compute_kernel_lib::reduce&lt;REDUCE_OP, REDUCE_DIM&gt;(
+                    cb_input, cb_scaler, cb_accum_dst, compute_kernel_lib::ReduceInputBlockShape::col(Ht - 1));
+            }
+
+            // Optional masking of last H tile.
+            if constexpr (do_mask_h) {
+                // CopyTile&lt;cb_input&gt; + CopyTile&lt;cb_mask_h, D1&gt; + Mask + PackTile.
+                // Reconfig: original uses `copy_tile_to_dst_init_short` (no _with_dt)
+                // and plain pack_tile, with a single FP32_DEST_ACC_EN-guarded
+                // reconfig_data_format_srca(cb_input) on entry. The chain&#x27;s
+                // per-element fold emits reconfig per CopyTile (Input mode) which
+                // matches the FP32 path and is a no-op transition for bf16.
+<span class="dz" data-d="4">                // pack_reconfig is also FP32-only in original; PackTileReconfig::Output</span>
+                // emits unconditional pack reconfig — same effective behavior since
+                // chain&#x27;s prev-CB elision handles the no-op case at compile time.
+                // cb_input InputLifecycle::Streaming; cb_mask_h InputLifecycle::CallerManaged + Scalar (held outside);
+                // cb_masked_input OutputLifecycle::Streaming.
+<span class="dz" data-d="2">                compute_kernel_lib::eltwise_chain(</span>
+                    onetile,
+<span class="dz" data-d="6">                    compute_kernel_lib::CopyTile&lt;cb_input&gt;{},
+                    compute_kernel_lib::CopyTile&lt;
+                        cb_mask_h,
+                        compute_kernel_lib::Dst::D1,
+                        compute_kernel_lib::InputLifecycle::CallerManaged&gt;{},
+                    compute_kernel_lib::Mask&lt;DataFormat::Float16_b, compute_kernel_lib::Dst::D0&gt;{},</span>
+<span class="dz" data-d="3">                    compute_kernel_lib::PackTile&lt;cb_masked_input&gt;{});</span>
+
+                // Phase 2 with masked input: Reduce final masked tile with accumulation
+                compute_kernel_lib::reduce&lt;REDUCE_OP, REDUCE_DIM&gt;(
+                    cb_masked_input,
+                    cb_scaler,
+                    cb_out,
+                    compute_kernel_lib::ReduceInputBlockShape::single(),
+                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                    compute_kernel_lib::Accumulate::at(cb_accum_dst, is_h_single_tile ? 0 : 1));
+            } else {
+                // Phase 2 without masking: Reduce final tile with accumulation
+                // - If Ht == 1 (single tile): iteration=0, no accumulator reload
+                // - If Ht &gt; 1 (multi-tile): iteration=1, reload accumulator from cb_accum_dst
+                compute_kernel_lib::reduce&lt;REDUCE_OP, REDUCE_DIM&gt;(
+                    cb_input,
+                    cb_scaler,
+                    cb_out,
+                    compute_kernel_lib::ReduceInputBlockShape::single(),
+                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                    compute_kernel_lib::Accumulate::at(cb_accum_dst, is_h_single_tile ? 0 : 1));
+            }
+        }
+    }
+
+    if (do_mask_h) {
+        cb_mask_h_obj.pop_front(onetile);
+    }
+    cb_scaler_obj.pop_front(onetile);
+}
+</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions &mdash; hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; eltwise_chain + Mask headers</b> &mdash; Add <code>eltwise_chain.hpp</code> and <code>eltwise_misc.hpp</code> (for <code>Mask</code>).</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; chain owns input wait/pop</b> &mdash; Manual <code>cb_input_obj.wait_front</code>/<code>pop_front</code> drop; <code>cb_input</code> is <code>InputLifecycle::Streaming</code>, <code>cb_mask_h</code> is <code>CallerManaged</code> (held outside).</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; PackTile&lt;cb_masked_input&gt;</b> &mdash; <code>pack_tile(reduce_dst_idx, cb_masked_input)</code> + reserve/push replaced by trailing <code>PackTile&lt;cb_masked_input&gt;</code>.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; Input/Output reconfig via fold</b> &mdash; FP32-only <code>reconfig_data_format_srca</code> + <code>pack_reconfig_data_format</code> become the chain's per-element <code>CopyTileReconfig::Input</code> + <code>PackTileReconfig::Output</code> (no-op transitions elided for bf16).</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; FP32 entry reconfig</b> &mdash; The <code>FP32_DEST_ACC_EN</code>-guarded <code>reconfig_data_format_srca(cb_input)</code> on entry is subsumed by the chain's first <code>CopyTile</code> reconfig.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; CopyTile + CopyTile&lt;D1&gt; + Mask</b> &mdash; <code>copy_tile(cb_input)</code> + <code>copy_tile(cb_mask_h)</code> + <code>mask_tile</code> become <code>CopyTile&lt;cb_input&gt;</code> + <code>CopyTile&lt;cb_mask_h,D1&gt;</code> + <code>Mask&lt;Float16_b,D0&gt;</code>.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-moreh_moreh_sum_moreh_sum_h_impl_kernels_moreh_sum_h">
+{
+  "1": {
+    "title": "eltwise_chain + Mask headers",
+    "body": "Add <code>eltwise_chain.hpp</code> and <code>eltwise_misc.hpp</code> (for <code>Mask</code>).",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "chain owns input wait/pop",
+    "body": "Manual <code>cb_input_obj.wait_front</code>/<code>pop_front</code> drop; <code>cb_input</code> is <code>InputLifecycle::Streaming</code>, <code>cb_mask_h</code> is <code>CallerManaged</code> (held outside).",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "PackTile&lt;cb_masked_input&gt;",
+    "body": "<code>pack_tile(reduce_dst_idx, cb_masked_input)</code> + reserve/push replaced by trailing <code>PackTile&lt;cb_masked_input&gt;</code>.",
+    "color": "#3f8ae0"
+  },
+  "4": {
+    "title": "Input/Output reconfig via fold",
+    "body": "FP32-only <code>reconfig_data_format_srca</code> + <code>pack_reconfig_data_format</code> become the chain's per-element <code>CopyTileReconfig::Input</code> + <code>PackTileReconfig::Output</code> (no-op transitions elided for bf16).",
+    "color": "#cf222e"
+  },
+  "5": {
+    "title": "FP32 entry reconfig",
+    "body": "The <code>FP32_DEST_ACC_EN</code>-guarded <code>reconfig_data_format_srca(cb_input)</code> on entry is subsumed by the chain's first <code>CopyTile</code> reconfig.",
+    "color": "#9f4bbf"
+  },
+  "6": {
+    "title": "CopyTile + CopyTile&lt;D1&gt; + Mask",
+    "body": "<code>copy_tile(cb_input)</code> + <code>copy_tile(cb_mask_h)</code> + <code>mask_tile</code> become <code>CopyTile&lt;cb_input&gt;</code> + <code>CopyTile&lt;cb_mask_h,D1&gt;</code> + <code>Mask&lt;Float16_b,D0&gt;</code>.",
+    "color": "#ff7a00"
+  }
+}
+</script>

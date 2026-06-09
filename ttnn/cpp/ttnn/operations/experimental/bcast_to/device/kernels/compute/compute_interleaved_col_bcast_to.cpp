@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/bcast.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
@@ -25,27 +26,32 @@ void kernel_main() {
 
     constexpr auto cb_id_src = get_compile_time_arg_val(0);
     constexpr auto cb_id_dst = get_compile_time_arg_val(1);
-    unary_bcast_init<BroadcastType::COL>(cb_id_src, cb_id_dst);
 
-    uint32_t HtWt = Ht * Wt;
+    compute_kernel_hw_startup(cb_id_src, cb_id_dst);
+
+    // Col-bcast reads one src tile per (n,c,th) step and the writer expands it across the
+    // Wt-wide row, so the compute's source-tile count is the number of th-steps, not
+    // num_tiles (which counts output tiles). Walk the original n/c/th nest once just to
+    // count those steps, then feed the whole run through a single chain call — that hoists
+    // the per-op bcast init (UnaryBcast::init) to one chain entry instead of re-running it
+    // every iteration. compute_kernel_hw_startup supplies the BIG init the chain expects.
+    uint32_t num_src_tiles = 0;
     uint32_t num_tiles_read = 0;
-    // Per-tile col-bcast via chain: UnaryBcast<Col> + PackTile.
-    // Reconfig matches original unary_bcast_init startup + plain pack_tile
-    // per iter (no _with_dt). PackTileReconfig::None preserves the original
-    // boot-time pack format.
     for (uint32_t n = start_n; n < N && num_tiles_read < num_tiles; ++n, start_c = 0) {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_th = 0) {
             for (uint32_t th = start_th; th < Ht && num_tiles_read < num_tiles; ++th, start_tw = 0) {
-                compute_kernel_lib::unary_bcast<
-                    compute_kernel_lib::BroadcastDim::Col,
-                    cb_id_src,
-                    cb_id_dst,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::UnaryBcastReconfig::Input,
-                    compute_kernel_lib::PackTileReconfig::None>(1u);
+                ++num_src_tiles;
                 num_tiles_read += Wt - start_tw;
             }
         }
     }
+
+    compute_kernel_lib::unary_bcast<
+        compute_kernel_lib::BroadcastDim::Col,
+        cb_id_src,
+        cb_id_dst,
+        compute_kernel_lib::InputLifecycle::Streaming,
+        compute_kernel_lib::OutputLifecycle::Streaming,
+        compute_kernel_lib::UnaryBcastReconfig::Input,
+        compute_kernel_lib::PackTileReconfig::None>(num_src_tiles);
 }

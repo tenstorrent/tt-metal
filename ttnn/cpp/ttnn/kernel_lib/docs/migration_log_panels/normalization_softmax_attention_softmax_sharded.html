@@ -1,0 +1,580 @@
+<section class="panel" id="panel-normalization_softmax_attention_softmax_sharded">
+  <h1>softmax_sharded — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/attention/compute/softmax_sharded.cpp</div>
+  <div class="meta"><b>Δ</b> +50/-43 &nbsp; <b>Decisions:</b> 5</div>
+
+  <div class="focus-toolbar" data-fkernel="normalization_softmax_attention_softmax_sharded">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; template+inc</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; x−max·exp</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; scale+mask</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; exp chain</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; ·1/sum</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/bcast.h"
+#include "api/compute/softmax.h"
+#include "api/compute/reduce.h"
+#include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+
+template &lt;uint32_t block_w, uint32_t num_subblocks_w, uint32_t subblock_w&gt;
+<span class="dz" data-d="1">ALWI void calc_numeric_stable(uint32_t cb_in, uint32_t cb_max_scaler, uint32_t cb_max, uint32_t cb_out) {</span>
+    auto cb_in_obj = CircularBuffer(cb_in);
+    auto cb_max_obj = CircularBuffer(cb_max);
+    auto cb_out_obj = CircularBuffer(cb_out);
+
+    // Use reduce_helpers for MAX reduce (REDUCE_ROW, PRELOADED mode)
+    // Note: The library handles waiting for scaler tile internally
+    compute_kernel_lib::
+        reduce&lt;PoolType::MAX, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop&gt;(
+            cb_in, cb_max_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::row(block_w));
+
+<span class="dz" data-d="2">    // calculate x-max(x)
+    exp_tile_init&lt;EXP_APPROX&gt;();
+    reconfig_data_format_srcb(cb_max);
+    cb_max_obj.wait_front(1);
+    sub_bcast_cols_init_short(cb_in, cb_max);
+    uint32_t index_subblock_w_offset = 0;
+    for (uint32_t j = 0; j &lt; num_subblocks_w; j++) {
+        tile_regs_acquire();
+        cb_out_obj.reserve_back(subblock_w);
+        for (uint32_t w = 0; w &lt; subblock_w; w++) {
+            uint32_t index = w + index_subblock_w_offset;
+            sub_tiles_bcast_cols(cb_in, cb_max, index, 0, w);
+        }
+        cb_out_obj.reserve_back(subblock_w);
+        for (uint32_t w = 0; w &lt; subblock_w; w++) {
+            exp_tile&lt;EXP_APPROX&gt;(w);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t w = 0; w &lt; subblock_w; w++) {
+            pack_tile(w, cb_out);
+        }
+        tile_regs_release();
+        cb_out_obj.push_back(subblock_w);
+        index_subblock_w_offset += subblock_w;
+    }
+    cb_in_obj.pop_front(block_w);</span>
+    cb_max_obj.pop_front(1);
+    cb_out_obj.wait_front(block_w);
+}
+
+void kernel_main() {
+    constexpr uint32_t block_h = get_compile_time_arg_val(0);
+    constexpr uint32_t block_w = get_compile_time_arg_val(1);
+    constexpr uint32_t subblock_w = get_compile_time_arg_val(2);
+    constexpr uint32_t num_subblocks_w = get_compile_time_arg_val(3);
+
+    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_6);
+
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    constexpr auto cb_max_scaler = tt::CBIndex::c_1;
+    constexpr auto cb_sum_scaler = tt::CBIndex::c_13;
+    constexpr auto cb_fused_scale = tt::CBIndex::c_2;
+    constexpr auto cb_fused_attn = tt::CBIndex::c_3;
+    constexpr auto cb_exps = tt::CBIndex::c_6;
+    constexpr auto cb_recipsumexps = tt::CBIndex::c_7;
+    constexpr auto cb_scale_mask = tt::CBIndex::c_8;
+    constexpr auto cb_out0 = tt::CBIndex::c_11;
+#ifdef NUMERIC_STABLE
+    constexpr auto cb_max = tt::CBIndex::c_9;
+    constexpr auto cb_x = tt::CBIndex::c_10;
+#else
+    constexpr auto cb_x = cb_exps;
+#endif
+
+    auto cb_in0_obj = CircularBuffer(cb_in0);
+    auto cb_max_scaler_obj = CircularBuffer(cb_max_scaler);
+    auto cb_fused_scale_obj = CircularBuffer(cb_fused_scale);
+    auto cb_fused_attn_obj = CircularBuffer(cb_fused_attn);
+    auto cb_exps_obj = CircularBuffer(cb_exps);
+    auto cb_recipsumexps_obj = CircularBuffer(cb_recipsumexps);
+    auto cb_scale_mask_obj = CircularBuffer(cb_scale_mask);
+    auto cb_out0_obj = CircularBuffer(cb_out0);
+    auto cb_x_obj = CircularBuffer(cb_x);
+#ifdef NUMERIC_STABLE
+    auto cb_max_obj = CircularBuffer(cb_max);
+#endif
+
+    constexpr int dst0 = 0;
+    int index_subblock_w_offset = 0;
+    int index = 0;
+
+    for (uint32_t i = 0; i &lt; block_h; i++) {
+#if FUSED_SCALE_MASK
+<span class="dz" data-d="3">        // fused scale
+        reconfig_data_format(cb_in0, cb_fused_scale);
+        pack_reconfig_data_format(cb_scale_mask);
+        cb_fused_scale_obj.wait_front(1);
+        mul_tiles_bcast_scalar_init_short(cb_in0, cb_fused_scale);
+        index_subblock_w_offset = 0;
+        for (uint32_t j = 0; j &lt; num_subblocks_w; j++) {
+            tile_regs_acquire();
+            cb_scale_mask_obj.reserve_back(subblock_w);
+            for (uint32_t w = 0; w &lt; subblock_w; w++) {
+                index = w + index_subblock_w_offset;
+                mul_tiles_bcast_scalar(cb_in0, cb_fused_scale, index, 0, w);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t w = 0; w &lt; subblock_w; w++) {
+                pack_tile(w, cb_scale_mask);
+            }
+            tile_regs_release();
+            cb_scale_mask_obj.push_back(subblock_w);
+            index_subblock_w_offset += subblock_w;
+        }
+        cb_in0_obj.pop_front(block_w);
+        reconfig_data_format(cb_scale_mask, cb_fused_attn);
+
+        // fused attn
+        cb_scale_mask_obj.wait_front(block_w);
+
+#ifndef SHARDED_CAUSAL_MASK
+        cb_fused_attn_obj.wait_front(block_w);
+#endif
+
+        index_subblock_w_offset = 0;
+
+#ifdef CAUSAL_MASK
+        add_tiles_init(cb_scale_mask, cb_fused_attn);
+#else
+        add_bcast_rows_init_short(cb_scale_mask, cb_fused_attn);
+#endif
+
+#ifndef NUMERIC_STABLE
+        exp_tile_init&lt;EXP_APPROX&gt;();
+#endif
+        for (uint32_t j = 0; j &lt; num_subblocks_w; j++) {
+            tile_regs_acquire();
+#ifdef CAUSAL_MASK
+            for (uint32_t w = 0; w &lt; subblock_w; w++) {
+                index = w + index_subblock_w_offset;
+                add_tiles(cb_scale_mask, cb_fused_attn, index, index, w);
+            }
+#else
+            for (uint32_t w = 0; w &lt; subblock_w; w++) {
+                index = w + index_subblock_w_offset;
+                add_tiles_bcast_rows(cb_scale_mask, cb_fused_attn, index, index, w);
+            }
+#endif
+            cb_x_obj.reserve_back(subblock_w);
+#ifndef NUMERIC_STABLE
+            for (uint32_t w = 0; w &lt; subblock_w; w++) {
+                exp_tile&lt;EXP_APPROX&gt;(w);
+            }
+#endif
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t w = 0; w &lt; subblock_w; w++) {
+                pack_tile(w, cb_x);
+            }
+            tile_regs_release();
+            cb_x_obj.push_back(subblock_w);
+            index_subblock_w_offset += subblock_w;
+        }
+        cb_scale_mask_obj.pop_front(block_w);
+
+// add numeric_stable
+// fuse exp with sub tiles
+#ifdef NUMERIC_STABLE
+        cb_x_obj.wait_front(block_w);
+        calc_numeric_stable&lt;block_w, num_subblocks_w, subblock_w&gt;(cb_x, cb_max_scaler, cb_max, cb_exps);
+#endif
+
+#ifdef CAUSAL_MASK
+        cb_fused_attn_obj.pop_front(block_w);</span>
+#endif
+        reconfig_data_format(cb_exps, cb_sum_scaler);
+
+#else
+
+#ifdef NUMERIC_STABLE
+        calc_numeric_stable&lt;block_w, num_subblocks_w, subblock_w&gt;(cb_in0, cb_max_scaler, cb_max, cb_exps);
+#else
+        reconfig_data_format(cb_in0, cb_in0);
+        pack_reconfig_data_format(cb_exps);
+<span class="dz" data-d="5">        // exp(x)
+        index_subblock_w_offset = 0;
+        copy_tile_to_dst_init_short(cb_in0);
+        exp_tile_init&lt;EXP_APPROX&gt;();
+        for (uint32_t j = 0; j &lt; num_subblocks_w; j++) {
+            tile_regs_acquire();
+            for (uint32_t w = 0; w &lt; subblock_w; w++) {
+                index = w + index_subblock_w_offset;
+                copy_tile(cb_in0, index, w);
+            }
+            cb_exps_obj.reserve_back(subblock_w);
+            for (uint32_t w = 0; w &lt; subblock_w; w++) {
+                exp_tile&lt;EXP_APPROX&gt;(w);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t w = 0; w &lt; subblock_w; w++) {
+                pack_tile(w, cb_exps);
+            }
+            tile_regs_release();
+            cb_exps_obj.push_back(subblock_w);
+            index_subblock_w_offset += subblock_w;
+        }
+        cb_in0_obj.pop_front(block_w);</span>
+#endif
+#endif  // FUSED_SCALE_MASK
+
+        // SUM reduce with reciprocal operation using PRELOADED mode
+        // PRELOADED is correct for sharded - all tiles loaded at once
+        // Auto-detects FP32 mode from ENABLE_FP32_DEST_ACC define
+        cb_wait_front(cb_exps, block_w);
+        compute_kernel_lib::
+            reduce&lt;PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop&gt;(
+                cb_exps,
+                cb_sum_scaler,
+                cb_recipsumexps,
+                compute_kernel_lib::ReduceInputBlockShape::row(block_w),
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                compute_kernel_lib::NoAccumulation{},
+                [](uint32_t) {
+                    recip_tile_init();
+                    recip_tile(0);
+                });
+
+<span class="dz" data-d="6">        // exp(x) / (sum(exp(x)))
+        reconfig_data_format(cb_exps, cb_recipsumexps);
+        pack_reconfig_data_format(cb_out0);
+        cb_recipsumexps_obj.wait_front(1);
+        mul_bcast_cols_init_short(cb_exps, cb_recipsumexps);
+        index_subblock_w_offset = 0;
+        for (uint32_t j = 0; j &lt; num_subblocks_w; j++) {
+            tile_regs_acquire();
+            cb_out0_obj.reserve_back(subblock_w);
+            for (uint32_t w = 0; w &lt; subblock_w; w++) {
+                index = w + index_subblock_w_offset;
+                mul_tiles_bcast&lt;BroadcastType::COL&gt;(cb_exps, cb_recipsumexps, index, 0, w);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t w = 0; w &lt; subblock_w; w++) {
+                pack_tile(w, cb_out0);
+            }
+            tile_regs_release();
+            cb_out0_obj.push_back(subblock_w);
+            index_subblock_w_offset += subblock_w;
+        }
+        cb_recipsumexps_obj.pop_front(1);
+        cb_exps_obj.pop_front(block_w);</span>
+    }
+}
+</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/bcast.h"
+#include "api/compute/softmax.h"
+#include "api/compute/reduce.h"
+#include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
+
+// Templated on the CBs so the eltwise_chain below can take them as compile-time NTTPs.
+<span class="dz" data-d="1">template &lt;
+    uint32_t block_w,
+    uint32_t num_subblocks_w,
+    uint32_t subblock_w,
+    uint32_t cb_in,
+    uint32_t cb_max_scaler,
+    uint32_t cb_max,
+    uint32_t cb_out&gt;
+ALWI void calc_numeric_stable() {</span>
+    auto cb_max_obj = CircularBuffer(cb_max);
+    auto cb_out_obj = CircularBuffer(cb_out);
+
+    // Use reduce_helpers for MAX reduce (REDUCE_ROW, PRELOADED mode)
+    // Note: The library handles waiting for scaler tile internally
+    compute_kernel_lib::
+        reduce&lt;PoolType::MAX, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop&gt;(
+            cb_in, cb_max_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::row(block_w));
+
+<span class="dz" data-d="2">    // x - max(x) then exp, fused. cb_in resident (popped at chain end) -&gt; DeferredPop + Block;
+    // cb_max held (wait/pop kept outside) -&gt; CallerManaged + Scalar; cb_out reserve+push block_w
+    // -&gt; Bulk. sub_bcast_cols_init_short -&gt; BinaryDataFormatReconfig::Input; plain pack_tile
+    // (format already cb_out) -&gt; PackTileReconfig::None.
+    cb_max_obj.wait_front(1);
+    compute_kernel_lib::eltwise_chain(
+        compute_kernel_lib::EltwiseShape::tiles(block_w),
+        compute_kernel_lib::BinaryFpu&lt;
+            cb_in,
+            cb_max,
+            compute_kernel_lib::BinaryFpuOp::Sub,
+            compute_kernel_lib::BroadcastDim::Col,
+            compute_kernel_lib::InputLifecycle::DeferredPop,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::OperandKind::Scalar&gt;{},
+        compute_kernel_lib::Exp&lt;
+            static_cast&lt;compute_kernel_lib::Approx&gt;(EXP_APPROX),
+            compute_kernel_lib::Approx::Exact,
+            compute_kernel_lib::Dst::D0&gt;{},
+        compute_kernel_lib::
+            PackTile&lt;cb_out, compute_kernel_lib::OutputLifecycle::Bulk, compute_kernel_lib::PackTileReconfig::None&gt;{});</span>
+    cb_max_obj.pop_front(1);
+    cb_out_obj.wait_front(block_w);
+}
+
+void kernel_main() {
+    constexpr uint32_t block_h = get_compile_time_arg_val(0);
+    constexpr uint32_t block_w = get_compile_time_arg_val(1);
+    constexpr uint32_t subblock_w = get_compile_time_arg_val(2);
+    constexpr uint32_t num_subblocks_w = get_compile_time_arg_val(3);
+
+    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_6);
+
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    constexpr auto cb_max_scaler = tt::CBIndex::c_1;
+    constexpr auto cb_sum_scaler = tt::CBIndex::c_13;
+    constexpr auto cb_fused_scale = tt::CBIndex::c_2;
+    constexpr auto cb_fused_attn = tt::CBIndex::c_3;
+    constexpr auto cb_exps = tt::CBIndex::c_6;
+    constexpr auto cb_recipsumexps = tt::CBIndex::c_7;
+    constexpr auto cb_scale_mask = tt::CBIndex::c_8;
+    constexpr auto cb_out0 = tt::CBIndex::c_11;
+#ifdef NUMERIC_STABLE
+    constexpr auto cb_max = tt::CBIndex::c_9;
+    constexpr auto cb_x = tt::CBIndex::c_10;
+#else
+    constexpr auto cb_x = cb_exps;
+#endif
+
+    auto cb_in0_obj = CircularBuffer(cb_in0);
+    auto cb_max_scaler_obj = CircularBuffer(cb_max_scaler);
+    auto cb_fused_scale_obj = CircularBuffer(cb_fused_scale);
+    auto cb_fused_attn_obj = CircularBuffer(cb_fused_attn);
+    auto cb_exps_obj = CircularBuffer(cb_exps);
+    auto cb_recipsumexps_obj = CircularBuffer(cb_recipsumexps);
+    auto cb_scale_mask_obj = CircularBuffer(cb_scale_mask);
+    auto cb_out0_obj = CircularBuffer(cb_out0);
+    auto cb_x_obj = CircularBuffer(cb_x);
+#ifdef NUMERIC_STABLE
+    auto cb_max_obj = CircularBuffer(cb_max);
+#endif
+
+    constexpr int dst0 = 0;
+    int index_subblock_w_offset = 0;
+
+    for (uint32_t i = 0; i &lt; block_h; i++) {
+#if FUSED_SCALE_MASK
+<span class="dz" data-d="3">        // fused scale: cb_in0 (resident sharded, popped at chain end) * cb_fused_scale (held
+        // scalar) -&gt; cb_scale_mask. cb_in0 DeferredPop + Block; cb_fused_scale CallerManaged +
+        // Scalar (wait kept below); cb_scale_mask reserve+push block_w -&gt; Bulk.
+        // reconfig + mul_tiles_bcast_scalar_init_short -&gt; Input; pack_reconfig -&gt; Output.
+        cb_fused_scale_obj.wait_front(1);
+        compute_kernel_lib::mul&lt;
+            cb_in0,
+            cb_fused_scale,
+            cb_scale_mask,
+            compute_kernel_lib::BroadcastDim::Scalar,
+            compute_kernel_lib::InputLifecycle::DeferredPop,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::OutputLifecycle::Bulk,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::Output,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::OperandKind::Scalar&gt;(block_w);
+
+        // fused mask add (+exp): cb_scale_mask (Bulk: wait+pop block_w) + cb_fused_attn
+        // (lifecycle per the CAUSAL_MASK / SHARDED_CAUSAL_MASK matrix — chain owns wait+pop,
+        // exactly reproducing the original's #ifndef SHARDED_CAUSAL_MASK wait + #ifdef CAUSAL_MASK
+        // pop) -&gt; cb_x (reserve+push block_w -&gt; Bulk). add init -&gt; Input; plain pack_tile -&gt; None.
+        // Exp dropped when NUMERIC_STABLE (done in calc_numeric_stable below).
+        compute_kernel_lib::eltwise_chain(
+            compute_kernel_lib::EltwiseShape::tiles(block_w),
+            compute_kernel_lib::BinaryFpu&lt;
+                cb_scale_mask,
+                cb_fused_attn,
+                compute_kernel_lib::BinaryFpuOp::Add,
+#ifdef CAUSAL_MASK
+                compute_kernel_lib::BroadcastDim::None,
+#else
+                compute_kernel_lib::BroadcastDim::Row,
+#endif
+                compute_kernel_lib::InputLifecycle::Bulk,
+#if defined(CAUSAL_MASK) &amp;&amp; defined(SHARDED_CAUSAL_MASK)
+                compute_kernel_lib::InputLifecycle::DeferredPop,  // no wait (SHARDED), pop (CAUSAL)
+#elif defined(CAUSAL_MASK)
+                compute_kernel_lib::InputLifecycle::Bulk,  // wait + pop
+#elif !defined(SHARDED_CAUSAL_MASK)
+                compute_kernel_lib::InputLifecycle::HeldBulk,  // wait, no pop (held across block_h)
+#else
+                compute_kernel_lib::InputLifecycle::CallerManaged,  // no wait, no pop
+#endif
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::OperandKind::Block&gt;{},
+#ifndef NUMERIC_STABLE
+            compute_kernel_lib::Exp&lt;
+                static_cast&lt;compute_kernel_lib::Approx&gt;(EXP_APPROX),
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Dst::D0&gt;{},
+#endif
+            compute_kernel_lib::PackTile&lt;
+                cb_x,
+                compute_kernel_lib::OutputLifecycle::Bulk,
+                compute_kernel_lib::PackTileReconfig::None&gt;{});
+
+// add numeric_stable
+// fuse exp with sub tiles
+#ifdef NUMERIC_STABLE
+        cb_x_obj.wait_front(block_w);
+        calc_numeric_stable&lt;block_w, num_subblocks_w, subblock_w, cb_x, cb_max_scaler, cb_max, cb_exps&gt;();
+#endif
+
+        // cb_fused_attn pop is now owned by the fused-attn chain above (DeferredPop/Bulk under</span>
+        // CAUSAL_MASK; held otherwise) — no external pop needed.
+        reconfig_data_format(cb_exps, cb_sum_scaler);
+
+#else
+
+#ifdef NUMERIC_STABLE
+        calc_numeric_stable&lt;block_w, num_subblocks_w, subblock_w, cb_in0, cb_max_scaler, cb_max, cb_exps&gt;();
+#else
+<span class="dz" data-d="5">        // exp(x): migrated to per-subblock eltwise_chain. Each outer iter is a
+        // CopyTile + Exp + PackTile chain with subblock_w tiles read from cb_in0
+        // at offset index_subblock_w_offset.
+        //
+        // Reconfig audit: explicit reconfig_data_format(cb_in0, cb_in0) +
+        //   pack_reconfig_data_format(cb_exps) ONCE outside the outer loop —
+        //   chain emits per-call (fold-elided after first since prev == curr).
+        //   -&gt; CopyTileReconfig::Input + PackTileReconfig::Output.
+        // Lifecycles: cb_in0 InputLifecycle::HeldBulk + Block +
+        // compute_kernel_lib::TileOffset::Set(index_subblock_w_offset)
+        //   per outer iter — chain emits cb_wait_front(base + subblock_w) per call,
+        //   matching the caller's pre-pushed sharded input. cb_exps OutputLifecycle::Bulk + Block.
+        // BlockSize=1 (subblock_w is runtime; per-tile semantics).
+        index_subblock_w_offset = 0;
+        for (uint32_t j = 0; j &lt; num_subblocks_w; j++) {
+            compute_kernel_lib::eltwise_chain(
+                subblock_w,
+                compute_kernel_lib::CopyTile&lt;
+                    cb_in0,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::InputLifecycle::HeldBulk,
+                    compute_kernel_lib::CopyTileReconfig::Input,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::TileOffset::Set&gt;{index_subblock_w_offset},
+                compute_kernel_lib::Exp&lt;
+                    static_cast&lt;compute_kernel_lib::Approx&gt;(EXP_APPROX),
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Dst::D0&gt;{},
+                compute_kernel_lib::PackTile&lt;cb_exps, compute_kernel_lib::OutputLifecycle::Bulk&gt;{});
+            index_subblock_w_offset += subblock_w;
+        }
+        cb_in0_obj.pop_front(block_w);</span>
+#endif
+#endif  // FUSED_SCALE_MASK
+
+        // SUM reduce with reciprocal operation using PRELOADED mode
+        // PRELOADED is correct for sharded - all tiles loaded at once
+        // Auto-detects FP32 mode from ENABLE_FP32_DEST_ACC define
+        cb_wait_front(cb_exps, block_w);
+        compute_kernel_lib::
+            reduce&lt;PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop&gt;(
+                cb_exps,
+                cb_sum_scaler,
+                cb_recipsumexps,
+                compute_kernel_lib::ReduceInputBlockShape::row(block_w),
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                compute_kernel_lib::NoAccumulation{},
+                [](uint32_t) {
+                    recip_tile_init();
+                    recip_tile(0);
+                });
+
+<span class="dz" data-d="6">        // exp(x) / (sum(exp(x))) — bcast COL on cb_recipsumexps (1 tile held).
+        // Original per-subblock DEST batching with sequential index becomes
+        // per-tile streaming via chain InputLifecycle::Streaming + Scalar on cb_exps.
+        //
+        // Reconfig: reconfig_data_format + mul_bcast_cols_init_short -&gt; Input;
+        // pack_reconfig_data_format(cb_out0) -&gt; PackTileReconfig::Output.
+        // cb_recipsumexps InputLifecycle::CallerManaged (external wait/pop bracket).
+        cb_recipsumexps_obj.wait_front(1);
+        compute_kernel_lib::mul&lt;
+            cb_exps,
+            cb_recipsumexps,
+            cb_out0,
+            compute_kernel_lib::BroadcastDim::Col,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::InputLifecycle::CallerManaged&gt;(block_w);
+        cb_recipsumexps_obj.pop_front(1);</span>
+    }
+}
+</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; Template-on-CBs + includes</b> — <code>calc_numeric_stable</code> gained <code>uint32_t cb_in,…</code> template params (were runtime args) so the chain can take CBs as NTTPs; added <code>eltwise_chain/convenience/math</code> headers.</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; calc_numeric_stable — x−max then exp</b> — Per-subblock <code>sub_tiles_bcast_cols</code>+<code>exp_tile</code>+<code>pack_tile</code> → <code>eltwise_chain(BinaryFpu&lt;Sub,Col,DeferredPop,...&gt;, Exp, PackTile&lt;cb_out,Bulk,None&gt;)</code>; cb_in <code>DeferredPop</code> (popped at chain end), cb_max <code>CallerManaged</code>.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; fused scale mul + mask-add chain</b> — Fused-scale subblock loop → <code>mul&lt;cb_in0,cb_fused_scale,...,DeferredPop,Scalar&gt;</code>; mask-add(+exp) → <code>eltwise_chain</code> whose <code>cb_fused_attn</code> lifecycle is selected by the <code>CAUSAL_MASK</code>/<code>SHARDED_CAUSAL_MASK</code> matrix (<code>DeferredPop</code>/<code>Bulk</code>/<code>HeldBulk</code>/<code>CallerManaged</code>), reproducing the original external wait+pop.</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; non-fused exp — per-subblock chain</b> — The copy+exp+pack subblock loop → per-subblock <code>eltwise_chain(CopyTile&lt;cb_in0,...,HeldBulk,Block,TileOffset::Set&gt;{offset}, Exp, PackTile&lt;cb_exps,Bulk&gt;)</code>; offset advances by subblock_w each outer iter.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; mul() — exp · 1/sum(exp)</b> — <code>mul_tiles_bcast&lt;COL&gt;</code> subblock loop → <code>compute_kernel_lib::mul&lt;cb_exps,cb_recipsumexps,cb_out0,Col,Streaming,CallerManaged&gt;(block_w)</code>; trailing <code>cb_exps pop_front(block_w)</code> now owned by the chain.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-normalization_softmax_attention_softmax_sharded">
+{
+  "1": {
+    "title": "Template-on-CBs + includes",
+    "body": "<code>calc_numeric_stable</code> gained <code>uint32_t cb_in,\u2026</code> template params (were runtime args) so the chain can take CBs as NTTPs; added <code>eltwise_chain/convenience/math</code> headers.",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "calc_numeric_stable \u2014 x\u2212max then exp",
+    "body": "Per-subblock <code>sub_tiles_bcast_cols</code>+<code>exp_tile</code>+<code>pack_tile</code> \u2192 <code>eltwise_chain(BinaryFpu&lt;Sub,Col,DeferredPop,...&gt;, Exp, PackTile&lt;cb_out,Bulk,None&gt;)</code>; cb_in <code>DeferredPop</code> (popped at chain end), cb_max <code>CallerManaged</code>.",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "fused scale mul + mask-add chain",
+    "body": "Fused-scale subblock loop \u2192 <code>mul&lt;cb_in0,cb_fused_scale,...,DeferredPop,Scalar&gt;</code>; mask-add(+exp) \u2192 <code>eltwise_chain</code> whose <code>cb_fused_attn</code> lifecycle is selected by the <code>CAUSAL_MASK</code>/<code>SHARDED_CAUSAL_MASK</code> matrix (<code>DeferredPop</code>/<code>Bulk</code>/<code>HeldBulk</code>/<code>CallerManaged</code>), reproducing the original external wait+pop.",
+    "color": "#3f8ae0"
+  },
+  "5": {
+    "title": "non-fused exp \u2014 per-subblock chain",
+    "body": "The copy+exp+pack subblock loop \u2192 per-subblock <code>eltwise_chain(CopyTile&lt;cb_in0,...,HeldBulk,Block,TileOffset::Set&gt;{offset}, Exp, PackTile&lt;cb_exps,Bulk&gt;)</code>; offset advances by subblock_w each outer iter.",
+    "color": "#9f4bbf"
+  },
+  "6": {
+    "title": "mul() \u2014 exp \u00b7 1/sum(exp)",
+    "body": "<code>mul_tiles_bcast&lt;COL&gt;</code> subblock loop \u2192 <code>compute_kernel_lib::mul&lt;cb_exps,cb_recipsumexps,cb_out0,Col,Streaming,CallerManaged&gt;(block_w)</code>; trailing <code>cb_exps pop_front(block_w)</code> now owned by the chain.",
+    "color": "#ff7a00"
+  }
+}
+</script>

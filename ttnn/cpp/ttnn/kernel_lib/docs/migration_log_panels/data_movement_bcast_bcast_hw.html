@@ -1,0 +1,149 @@
+<section class="panel" id="panel-data_movement_bcast_bcast_hw">
+  <h1>bcast_hw — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_hw.cpp</div>
+  <div class="meta"><b>&Delta;</b> +40/-28 &nbsp; <b>Decisions:</b> 3</div>
+
+  <div class="focus-toolbar" data-fkernel="data_movement_bcast_bcast_hw">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; BCAST_SCALAR lifecycle</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; BinaryFpu stream</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; init_bcast kept</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+#include &quot;api/compute/bcast.h&quot;
+
+void kernel_main() {
+    constexpr uint32_t onetile = 1;
+    uint32_t B = get_arg_val&lt;uint32_t&gt;(0);
+    uint32_t Ht = get_arg_val&lt;uint32_t&gt;(1);
+    uint32_t Wt = get_arg_val&lt;uint32_t&gt;(2);
+<span class="dz" data-d="6">    init_bcast&lt;BCAST_LLKOP, BCAST_DIM&gt;(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);</span>
+
+<span class="dz" data-d="2">#ifdef BCAST_SCALAR
+    cb_wait_front(tt::CBIndex::c_1, onetile);
+#endif</span>
+
+<span class="dz" data-d="3">    for (uint32_t b = 0; b &lt; B; b++) {
+        for (uint32_t h = 0; h &lt; Ht; h++) {
+            for (uint32_t w = 0; w &lt; Wt; w++) {
+#ifndef BCAST_SCALAR
+                cb_wait_front(tt::CBIndex::c_1, onetile);
+#endif
+                cb_reserve_back(tt::CBIndex::c_16, onetile);
+
+                acquire_dst();
+
+                cb_wait_front(tt::CBIndex::c_0, onetile);
+
+                BCAST_OP&lt;BroadcastType::SCALAR&gt;(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0);
+                pack_tile(0, tt::CBIndex::c_16);
+
+                cb_pop_front(tt::CBIndex::c_0, onetile);
+#ifndef BCAST_SCALAR
+                cb_pop_front(tt::CBIndex::c_1, onetile);
+#endif
+                release_dst();
+
+                cb_push_back(tt::CBIndex::c_16, onetile);
+            }
+        }
+    }</span>
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+#include &quot;api/compute/bcast.h&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+
+void kernel_main() {
+    constexpr uint32_t onetile = 1;
+    uint32_t B = get_arg_val&lt;uint32_t&gt;(0);
+    uint32_t Ht = get_arg_val&lt;uint32_t&gt;(1);
+    uint32_t Wt = get_arg_val&lt;uint32_t&gt;(2);
+
+    constexpr auto cb_lhs = tt::CBIndex::c_0;
+    constexpr auto cb_rhs = tt::CBIndex::c_1;
+    constexpr auto cb_out = tt::CBIndex::c_16;
+
+    // Bcast-HW (scalar bcast). Original `init_bcast&lt;BCAST_LLKOP, BCAST_DIM&gt;`
+    // preserved as the big init. Chain&#x27;s BinaryFpu uses CHAIN_BCAST_OP /
+    // CHAIN_BCAST_DIM (helper-lib types emitted by bcast_op_utils).
+<span class="dz" data-d="6">    init_bcast&lt;BCAST_LLKOP, BCAST_DIM&gt;(cb_lhs, cb_rhs, cb_out);</span>
+
+    // BCAST_SCALAR flips the cb_rhs lifecycle:
+    //   defined  -&gt; cb_rhs is held outside the entire loop with a single scalar
+    //               tile. External wait_front(1) here; chain&#x27;s InputLifecycle::CallerManaged
+    //               emits neither wait nor pop. No pop at end of kernel (matches
+    //               the original&#x27;s never-popped held tile).
+    //   undefined -&gt; cb_rhs is popped each iter (InputLifecycle::Streaming).
+<span class="dz" data-d="2">#ifdef BCAST_SCALAR
+    cb_wait_front(cb_rhs, onetile);
+    constexpr auto rhs_lifecycle = compute_kernel_lib::InputLifecycle::CallerManaged;
+#else
+    constexpr auto rhs_lifecycle = compute_kernel_lib::InputLifecycle::Streaming;
+#endif</span>
+
+    // Flat 1D chain over total tiles (B*Ht*Wt) — bcast_hw is tile-by-tile,
+    // no need for 2D shape.
+<span class="dz" data-d="3">    compute_kernel_lib::eltwise_chain(
+        B * Ht * Wt,
+        compute_kernel_lib::BinaryFpu&lt;
+            cb_lhs,
+            cb_rhs,
+            CHAIN_BCAST_OP,
+            CHAIN_BCAST_DIM,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            rhs_lifecycle,
+            compute_kernel_lib::BinaryDataFormatReconfig::None&gt;{},
+        compute_kernel_lib::PackTile&lt;
+            cb_out,
+            compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::PackTileReconfig::None&gt;{});</span>
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; BCAST_SCALAR → CallerManaged held rhs</b> — With <code>BCAST_SCALAR</code> the single rhs tile is held outside the loop: explicit <code>cb_wait_front(cb_rhs,1)</code> + <code>InputLifecycle::CallerManaged</code> (chain emits neither wait nor pop); otherwise <code>Streaming</code>.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; BinaryFpu over flat tile count</b> — The manual <code>BCAST_OP&lt;SCALAR&gt;</code> loop became <code>eltwise_chain(B*Ht*Wt, BinaryFpu&lt;...&gt;, PackTile&lt;...&gt;)</code>.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; init_bcast preserved + CHAIN_BCAST types</b> — <code>init_bcast&lt;BCAST_LLKOP, BCAST_DIM&gt;</code> stays as the big init; <code>BinaryFpu</code> uses <code>CHAIN_BCAST_OP</code> / <code>CHAIN_BCAST_DIM</code>. Reconfig stays <code>None</code>.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-data_movement_bcast_bcast_hw">
+{
+  "2": {
+    "title": "BCAST_SCALAR \u2192 CallerManaged held rhs",
+    "body": "With <code>BCAST_SCALAR</code> the single rhs tile is held outside the loop: explicit <code>cb_wait_front(cb_rhs,1)</code> + <code>InputLifecycle::CallerManaged</code> (chain emits neither wait nor pop); otherwise <code>Streaming</code>.",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "BinaryFpu over flat tile count",
+    "body": "The manual <code>BCAST_OP&lt;SCALAR&gt;</code> loop became <code>eltwise_chain(B*Ht*Wt, BinaryFpu&lt;...&gt;, PackTile&lt;...&gt;)</code>.",
+    "color": "#3f8ae0"
+  },
+  "6": {
+    "title": "init_bcast preserved + CHAIN_BCAST types",
+    "body": "<code>init_bcast&lt;BCAST_LLKOP, BCAST_DIM&gt;</code> stays as the big init; <code>BinaryFpu</code> uses <code>CHAIN_BCAST_OP</code> / <code>CHAIN_BCAST_DIM</code>. Reconfig stays <code>None</code>.",
+    "color": "#ff7a00"
+  }
+}
+</script>

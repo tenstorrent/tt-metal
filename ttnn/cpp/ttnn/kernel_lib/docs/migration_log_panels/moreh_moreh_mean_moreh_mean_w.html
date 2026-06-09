@@ -1,0 +1,317 @@
+<section class="panel" id="panel-moreh_moreh_mean_moreh_mean_w">
+  <h1>moreh_mean_w — <span class="badge badge-partial">PARTIAL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_w.cpp</div>
+  <div class="meta"><b>Δ</b> +28/-20 &nbsp; <b>Decisions:</b> 4</div>
+
+  <div class="focus-toolbar" data-fkernel="moreh_moreh_mean_moreh_mean_w">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; lib includes</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; mask chain</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; init kept</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; matmul stays raw</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+<span class="dz" data-d="1">#include &quot;api/compute/matmul.h&quot;
+#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/mask.h&quot;
+#include &quot;api/compute/reduce.h&quot;
+#include &quot;api/compute/tile_move_copy.h&quot;
+#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+void kernel_main() {
+    uint32_t Ht = get_compile_time_arg_val(0);
+    uint32_t Wt = get_compile_time_arg_val(1);
+    uint32_t NC = get_compile_time_arg_val(2);
+    constexpr uint32_t origin_W = get_compile_time_arg_val(3);
+
+    auto cb_input = tt::CBIndex::c_0;
+    constexpr auto cb_scaler = tt::CBIndex::c_2;
+    CircularBuffer cb_scaler_obj(cb_scaler);
+    constexpr auto cb_mask_w = tt::CBIndex::c_3;
+    CircularBuffer cb_mask_w_obj(cb_mask_w);
+    constexpr auto cb_accum_dst = tt::CBIndex::c_24;
+    CircularBuffer cb_accum_dst_obj(cb_accum_dst);
+    constexpr auto cb_masked_input = tt::CBIndex::c_25;
+    CircularBuffer cb_masked_input_obj(cb_masked_input);
+    constexpr auto cb_out = tt::CBIndex::c_16;
+    CircularBuffer cb_out_obj(cb_out);
+    constexpr bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
+
+<span class="dz" data-d="5">    binary_op_init_common(cb_input, cb_input, cb_out);</span>
+
+    cb_scaler_obj.wait_front(1);  // scaler tile from the reader
+
+    constexpr int onetile = 1;
+    int reduce_dst_idx = 0;
+    const uint32_t mask_dst_idx = reduce_dst_idx + 1;
+
+    if (do_mask_w) {
+        cb_mask_w_obj.wait_front(onetile);
+    }
+
+    for (uint32_t nc = 0; nc &lt; NC; nc++) {
+        for (uint32_t ht = 0; ht &lt; Ht; ++ht) {
+            // tiles are expected to be coming in in NCHW order (W-contiguous)
+            // reducing in W means out[h][0] = sum(w=0..W-1, in[h][w])
+            // in this case we just sequentially add to accumulator all the W-tiles in a row
+            cb_input = tt::CBIndex::c_0;
+            bool is_w_single_tile = (Wt == 1);
+<span class="dz" data-d="6">            if (!is_w_single_tile) {
+                tile_regs_acquire();
+
+                for (uint32_t wt = 0; wt &lt; Wt - 1; ++wt) {
+                    CircularBuffer(cb_input).wait_front(onetile);
+#if defined FP32_DEST_ACC_EN
+                    reconfig_data_format(cb_input, cb_scaler);
+#endif
+                    mm_init_short(cb_input, cb_scaler, false);
+                    matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
+                    CircularBuffer(cb_input).pop_front(onetile);
+                }
+                tile_regs_commit();
+
+                cb_accum_dst_obj.reserve_back(onetile);
+                tile_regs_wait();
+                pack_tile_with_dt(reduce_dst_idx, cb_accum_dst);
+                tile_regs_release();
+                cb_accum_dst_obj.push_back(onetile);
+            }</span>
+
+<span class="dz" data-d="2">            if (do_mask_w) {
+                tile_regs_acquire();
+                CircularBuffer(cb_input).wait_front(onetile);
+
+                copy_tile_init_with_dt(cb_input);
+                copy_tile(cb_input, 0, reduce_dst_idx);
+
+                copy_tile_init_with_dt(cb_mask_w);
+                copy_tile(cb_mask_w, 0, mask_dst_idx);
+
+                mask_tile_init();
+                mask_tile(reduce_dst_idx, mask_dst_idx);
+                tile_regs_commit();
+
+                cb_masked_input_obj.reserve_back(onetile);
+                tile_regs_wait();
+                pack_tile_with_dt(reduce_dst_idx, cb_masked_input);
+                tile_regs_release();
+                cb_masked_input_obj.push_back(onetile);
+
+                CircularBuffer(cb_input).pop_front(onetile);
+                cb_input = cb_masked_input;
+            }</span>
+
+<span class="dz" data-d="6">            tile_regs_acquire();
+            CircularBuffer(cb_input).wait_front(onetile);
+            if (!is_w_single_tile) {
+                cb_accum_dst_obj.wait_front(onetile);
+
+                copy_tile_init_with_dt(cb_accum_dst);
+                copy_tile(cb_accum_dst, 0, reduce_dst_idx);
+            }
+
+#if defined FP32_DEST_ACC_EN
+            reconfig_data_format(cb_input, cb_scaler);
+#endif
+            mm_init_short(cb_input, cb_scaler, false);
+            matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
+            tile_regs_commit();
+
+            cb_out_obj.reserve_back(onetile);
+            tile_regs_wait();
+            pack_tile_with_dt(reduce_dst_idx, cb_out);
+            tile_regs_release();
+            cb_out_obj.push_back(onetile);
+
+            CircularBuffer(cb_input).pop_front(onetile);
+            if (!is_w_single_tile) {
+                cb_accum_dst_obj.pop_front(onetile);
+            }</span>
+        }
+    }
+
+    if (do_mask_w) {
+        cb_mask_w_obj.pop_front(onetile);
+    }
+    cb_scaler_obj.pop_front(onetile);
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+<span class="dz" data-d="1">#include &quot;api/compute/matmul.h&quot;
+#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/mask.h&quot;
+#include &quot;api/compute/reduce.h&quot;
+#include &quot;api/compute/tile_move_copy.h&quot;
+#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp&quot;  // Mask</span>
+
+void kernel_main() {
+    uint32_t Ht = get_compile_time_arg_val(0);
+    uint32_t Wt = get_compile_time_arg_val(1);
+    uint32_t NC = get_compile_time_arg_val(2);
+    constexpr uint32_t origin_W = get_compile_time_arg_val(3);
+
+    auto cb_input = tt::CBIndex::c_0;
+    constexpr auto cb_scaler = tt::CBIndex::c_2;
+    CircularBuffer cb_scaler_obj(cb_scaler);
+    constexpr auto cb_mask_w = tt::CBIndex::c_3;
+    CircularBuffer cb_mask_w_obj(cb_mask_w);
+    constexpr auto cb_accum_dst = tt::CBIndex::c_24;
+    CircularBuffer cb_accum_dst_obj(cb_accum_dst);
+    constexpr auto cb_masked_input = tt::CBIndex::c_25;
+    CircularBuffer cb_masked_input_obj(cb_masked_input);
+    constexpr auto cb_out = tt::CBIndex::c_16;
+    CircularBuffer cb_out_obj(cb_out);
+    constexpr bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
+
+<span class="dz" data-d="5">    binary_op_init_common(cb_input, cb_input, cb_out);</span>
+
+    cb_scaler_obj.wait_front(1);  // scaler tile from the reader
+
+    constexpr int onetile = 1;
+    int reduce_dst_idx = 0;
+    const uint32_t mask_dst_idx = reduce_dst_idx + 1;
+
+    if (do_mask_w) {
+        cb_mask_w_obj.wait_front(onetile);
+    }
+
+    for (uint32_t nc = 0; nc &lt; NC; nc++) {
+        for (uint32_t ht = 0; ht &lt; Ht; ++ht) {
+            // tiles are expected to be coming in in NCHW order (W-contiguous)
+            // reducing in W means out[h][0] = sum(w=0..W-1, in[h][w])
+            // in this case we just sequentially add to accumulator all the W-tiles in a row
+            cb_input = tt::CBIndex::c_0;
+            bool is_w_single_tile = (Wt == 1);
+<span class="dz" data-d="6">            if (!is_w_single_tile) {
+                tile_regs_acquire();
+
+                for (uint32_t wt = 0; wt &lt; Wt - 1; ++wt) {
+                    CircularBuffer(cb_input).wait_front(onetile);
+#if defined FP32_DEST_ACC_EN
+                    reconfig_data_format(cb_input, cb_scaler);
+#endif
+                    mm_init_short(cb_input, cb_scaler, false);
+                    matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
+                    CircularBuffer(cb_input).pop_front(onetile);
+                }
+                tile_regs_commit();
+
+                cb_accum_dst_obj.reserve_back(onetile);
+                tile_regs_wait();
+                pack_tile_with_dt(reduce_dst_idx, cb_accum_dst);
+                tile_regs_release();
+                cb_accum_dst_obj.push_back(onetile);
+            }</span>
+
+<span class="dz" data-d="2">            if (do_mask_w) {
+                // CopyTile&lt;cb_input(=c_0)&gt; + CopyTile&lt;cb_mask_w, D1&gt; + Mask + PackTile.
+                // cb_input here is always c_0 (the runtime variable cb_input was reset to c_0
+                // at line 51 before this conditional). cb_input InputLifecycle::Streaming; cb_mask_w
+                // InputLifecycle::CallerManaged (held outside the NC×Ht loop); cb_masked_input
+                // OutputLifecycle::Streaming. Reconfig: copy_tile_init_with_dt -&gt; Input on each; pack_tile_with_dt -&gt;
+                // Output.
+                compute_kernel_lib::eltwise_chain(
+                    onetile,
+                    compute_kernel_lib::CopyTile&lt;tt::CBIndex::c_0&gt;{},
+                    compute_kernel_lib::CopyTile&lt;
+                        cb_mask_w,
+                        compute_kernel_lib::Dst::D1,
+                        compute_kernel_lib::InputLifecycle::CallerManaged&gt;{},
+                    compute_kernel_lib::Mask&lt;DataFormat::Float16_b, compute_kernel_lib::Dst::D0&gt;{},
+                    compute_kernel_lib::PackTile&lt;cb_masked_input&gt;{});
+                cb_input = cb_masked_input;
+            }</span>
+
+<span class="dz" data-d="6">            tile_regs_acquire();
+            CircularBuffer(cb_input).wait_front(onetile);
+            if (!is_w_single_tile) {
+                cb_accum_dst_obj.wait_front(onetile);
+
+                copy_tile_init_with_dt(cb_accum_dst);
+                copy_tile(cb_accum_dst, 0, reduce_dst_idx);
+            }
+
+#if defined FP32_DEST_ACC_EN
+            reconfig_data_format(cb_input, cb_scaler);
+#endif
+            mm_init_short(cb_input, cb_scaler, false);
+            matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
+            tile_regs_commit();
+
+            cb_out_obj.reserve_back(onetile);
+            tile_regs_wait();
+            pack_tile_with_dt(reduce_dst_idx, cb_out);
+            tile_regs_release();
+            cb_out_obj.push_back(onetile);
+
+            CircularBuffer(cb_input).pop_front(onetile);
+            if (!is_w_single_tile) {
+                cb_accum_dst_obj.pop_front(onetile);
+            }
+        }</span>
+    }
+
+    if (do_mask_w) {
+        cb_mask_w_obj.pop_front(onetile);
+    }
+    cb_scaler_obj.pop_front(onetile);
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; kernel_lib includes</b> — Added <code>eltwise_chain.hpp</code> and <code>eltwise_misc.hpp</code> (for <code>Mask</code>) on top of the raw matmul/reduce headers, which remain in use.</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; W-mask → CopyTile/Mask chain</b> — The only migrated region: the raw <code>copy_tile</code>(c_0)+<code>copy_tile</code>(mask_w)+<code>mask_tile</code>+<code>pack_tile_with_dt</code> block became <code>eltwise_chain(CopyTile&lt;c_0&gt;, CopyTile&lt;mask_w,D1,CallerManaged&gt;, Mask&lt;Float16_b&gt;, PackTile&lt;cb_masked_input&gt;)</code>.</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; binary_op_init_common kept</b> — Startup <code>binary_op_init_common(cb_input, cb_input, cb_out)</code> is preserved; the matmul path re-inits via <code>mm_init_short</code> per row and the mask chain layers its own copy/mask init.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; Matmul W-reduction stays raw LLK (blocker)</b> — Per <code>migration_status.md</code>: only the <code>do_mask_w</code> masking block is migrated. The matmul-based W reduction (<code>mm_init_short</code>/<code>matmul_tiles</code> with <code>cb_scaler</code> and the <code>cb_accum_dst</code> reload) has no eltwise-chain equivalent and stays raw LLK.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-moreh_moreh_mean_moreh_mean_w">
+{
+  "1": {
+    "title": "kernel_lib includes",
+    "body": "Added <code>eltwise_chain.hpp</code> and <code>eltwise_misc.hpp</code> (for <code>Mask</code>) on top of the raw matmul/reduce headers, which remain in use.",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "W-mask \u2192 CopyTile/Mask chain",
+    "body": "The only migrated region: the raw <code>copy_tile</code>(c_0)+<code>copy_tile</code>(mask_w)+<code>mask_tile</code>+<code>pack_tile_with_dt</code> block became <code>eltwise_chain(CopyTile&lt;c_0&gt;, CopyTile&lt;mask_w,D1,CallerManaged&gt;, Mask&lt;Float16_b&gt;, PackTile&lt;cb_masked_input&gt;)</code>.",
+    "color": "#2ea043"
+  },
+  "5": {
+    "title": "binary_op_init_common kept",
+    "body": "Startup <code>binary_op_init_common(cb_input, cb_input, cb_out)</code> is preserved; the matmul path re-inits via <code>mm_init_short</code> per row and the mask chain layers its own copy/mask init.",
+    "color": "#9f4bbf"
+  },
+  "6": {
+    "title": "Matmul W-reduction stays raw LLK (blocker)",
+    "body": "Per <code>migration_status.md</code>: only the <code>do_mask_w</code> masking block is migrated. The matmul-based W reduction (<code>mm_init_short</code>/<code>matmul_tiles</code> with <code>cb_scaler</code> and the <code>cb_accum_dst</code> reload) has no eltwise-chain equivalent and stays raw LLK.",
+    "color": "#ff7a00"
+  }
+}
+</script>

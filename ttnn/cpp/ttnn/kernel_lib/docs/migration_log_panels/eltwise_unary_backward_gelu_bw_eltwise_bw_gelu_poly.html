@@ -1,0 +1,182 @@
+<section class="panel" id="panel-eltwise_unary_backward_gelu_bw_eltwise_bw_gelu_poly">
+  <h1>eltwise_bw_gelu_poly — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/eltwise/unary_backward/gelu_bw/device/kernels/compute/eltwise_bw_gelu_poly.cpp</div>
+  <div class="meta"><b>Δ</b> +46/-41 &nbsp; <b>Decisions:</b> 4</div>
+
+  <div class="focus-toolbar" data-fkernel="eltwise_unary_backward_gelu_bw_eltwise_bw_gelu_poly">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; helper includes</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; Chunked + Block lifecycle</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; EltwiseShape::tiles(n, block)</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; gelu&#x27; + mul elements</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Compute kernel for GELU backward using polynomial-based GELU derivative
+// Uses Sollya-derived minimax polynomials for high accuracy (Max ULP = 1)
+
+<span class="dz" data-d="1">#include &lt;cstdint&gt;
+#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/tile_move_copy.h&quot;
+#include &quot;api/compute/eltwise_unary/sfpu_split_includes.h&quot;
+#include &quot;api/compute/common.h&quot;
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;api/compute/eltwise_binary_sfpu.h&quot;
+#include &quot;api/compute/binary_bitwise_sfpu.h&quot;
+#include &quot;api/compute/binary_shift.h&quot;
+#include &quot;api/compute/compute_kernel_api.h&quot;
+#include &quot;api/compute/eltwise_unary/gelu.h&quot;</span>
+
+void kernel_main() {
+    uint32_t per_core_block_cnt = get_arg_val&lt;uint32_t&gt;(0);
+    uint32_t per_core_block_size = get_arg_val&lt;uint32_t&gt;(1);
+
+    constexpr auto cb_grad_out = tt::CBIndex::c_0;
+    constexpr auto cb_input = tt::CBIndex::c_1;
+    constexpr auto cb_grad_in = tt::CBIndex::c_2;
+
+    unary_op_init_common(cb_grad_out, cb_grad_in);
+    gelu_derivative_tile_init&lt;false&gt;();
+<span class="dz" data-d="4">    mul_binary_tile_init();
+</span>
+    for (uint32_t block = 0; block &lt; per_core_block_cnt; ++block) {
+<span class="dz" data-d="3">        cb_reserve_back(cb_grad_in, per_core_block_size);</span>
+<span class="dz" data-d="2">        cb_wait_front(cb_grad_out, per_core_block_size);
+        cb_wait_front(cb_input, per_core_block_size);
+
+        // Per-tile canonical pattern: acquire → compute → commit → wait → pack → release
+        // Multi-tile batching in dest is not possible here because gelu_derivative_tile
+        // uses additional dest registers as scratch during polynomial evaluation.
+        for (uint32_t i = 0; i &lt; per_core_block_size; ++i) {
+            tile_regs_acquire();</span>
+<span class="dz" data-d="3"></span>
+<span class="dz" data-d="4">            copy_tile(cb_grad_out, i, 0);    // dest[0] = grad_out
+            copy_tile(cb_input, i, 1);       // dest[1] = input
+            gelu_derivative_tile&lt;false&gt;(1);  // dest[1] = GELU&#x27;(input)
+            mul_binary_tile(0, 1, 0);        // dest[0] = grad_out * GELU&#x27;(input)
+
+            tile_regs_commit();
+            tile_regs_wait();
+
+            pack_tile(0, cb_grad_in);
+
+            tile_regs_release();
+        }
+</span>
+        cb_pop_front(cb_grad_out, per_core_block_size);
+<span class="dz" data-d="2">        cb_pop_front(cb_input, per_core_block_size);
+        cb_push_back(cb_grad_in, per_core_block_size);
+    }
+}</span></span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Compute kernel for GELU backward using polynomial-based GELU derivative.
+// Uses Sollya-derived minimax polynomials for high accuracy (Max ULP = 1).
+
+<span class="dz" data-d="1">#include &lt;cstdint&gt;
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_activations.hpp&quot;  // GeluDerivative
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp&quot;  // MulBinary
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+void kernel_main() {
+    uint32_t per_core_tile_cnt = get_arg_val&lt;uint32_t&gt;(0);
+    uint32_t per_core_block_size = get_arg_val&lt;uint32_t&gt;(1);
+
+    constexpr auto cb_grad_out = tt::CBIndex::c_0;
+    constexpr auto cb_input = tt::CBIndex::c_1;
+    constexpr auto cb_grad_in = tt::CBIndex::c_2;
+
+    unary_op_init_common(cb_grad_out, cb_grad_in);
+
+    // GELU backward: grad_in = grad_out * GELU&#x27;(input).
+    //   D0 = grad_out, D1 = input -&gt; GeluDerivative&lt;D1&gt;, MulBinary&lt;D0, D1, D0&gt;.
+    //
+    // 1D shape with explicit block size: EltwiseShape::tiles(n, block_size)
+    // emits a chain that walks n tiles in chunks of block_size each. Per-element
+    // inits (gelu_derivative_tile_init, mul_binary_tile_init,
+    // copy_tile_to_dst_init_short) are hoisted once at chain entry instead of
+    // once per chunk; per-chunk InputLifecycle::Chunked lifecycle waits / pops block_size tiles
+    // at a time (vs InputLifecycle::Streaming&#x27;s per-tile wait/pop).
+    //
+    // The program factory picks per_core_block_size as the largest power-of-2
+    // divisor of per_core_tile_cnt that is &lt;= 8 (falls back to 1 if odd).
+    //
+    // Lifecycles:
+    //   cb_grad_out / cb_input  InputLifecycle::Chunked + Block (per-chunk wait+pop of per_core_block_size tiles)
+    //   cb_grad_in              OutputLifecycle::Chunked + Block (per-chunk reserve+push)
+<span class="dz" data-d="3">    const auto shape = compute_kernel_lib::EltwiseShape::tiles(per_core_tile_cnt, per_core_block_size);
+
+    compute_kernel_lib::eltwise_chain(
+        shape,</span>
+<span class="dz" data-d="2">        compute_kernel_lib::CopyTile&lt;
+            cb_grad_out,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::InputLifecycle::Chunked,
+            compute_kernel_lib::CopyTileReconfig::None,
+            compute_kernel_lib::OperandKind::Block&gt;{},
+        compute_kernel_lib::CopyTile&lt;
+            cb_input,
+            compute_kernel_lib::Dst::D1,
+            compute_kernel_lib::InputLifecycle::Chunked,
+            compute_kernel_lib::CopyTileReconfig::None,
+            compute_kernel_lib::OperandKind::Block&gt;{},</span>
+<span class="dz" data-d="4">        compute_kernel_lib::GeluDerivative&lt;compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D1&gt;{},
+        compute_kernel_lib::
+            MulBinary&lt;compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0&gt;{},</span>
+<span class="dz" data-d="2">        compute_kernel_lib::PackTile&lt;
+            cb_grad_in,
+            compute_kernel_lib::OutputLifecycle::Chunked,
+            compute_kernel_lib::PackTileReconfig::None&gt;{});</span>
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; kernel_lib header includes</b> — Swapped raw <code>eltwise_binary*.h</code>/<code>gelu.h</code> headers for <code>eltwise_chain.hpp</code>, <code>eltwise_activations.hpp</code> (GeluDerivative), <code>eltwise_binary_sfpu.hpp</code> (MulBinary).</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; Per-block wait/pop → Chunked + OperandKind::Block</b> — Original outer block did <code>cb_wait_front/cb_pop_front(per_core_block_size)</code> with an inner per-tile loop. Chain inputs use <code>InputLifecycle::Chunked</code> + <code>OperandKind::Block</code> (per-chunk wait+pop of block_size tiles); output <code>PackTile&lt;cb_grad_in, OutputLifecycle::Chunked&gt;</code>.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; 2-level loop → EltwiseShape::tiles</b> — The nested <code>for block</code> / <code>for i</code> loops collapse into <code>EltwiseShape::tiles(per_core_tile_cnt, per_core_block_size)</code> passed to a single <code>eltwise_chain(shape, …)</code>.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; Compute body → chain elements</b> — <code>copy_tile</code> reads→<code>CopyTile&lt;…, D0/D1&gt;</code>, <code>gelu_derivative_tile&lt;false&gt;</code>→<code>GeluDerivative&lt;Approx::Exact, D1&gt;</code>, <code>mul_binary_tile</code>→<code>MulBinary&lt;D0,D1,D0&gt;</code>. Per-element inits hoisted once at chain entry instead of the manual <code>*_tile_init</code> before the loop.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-eltwise_unary_backward_gelu_bw_eltwise_bw_gelu_poly">
+{
+  "1": {
+    "title": "kernel_lib header includes",
+    "body": "Swapped raw <code>eltwise_binary*.h</code>/<code>gelu.h</code> headers for <code>eltwise_chain.hpp</code>, <code>eltwise_activations.hpp</code> (GeluDerivative), <code>eltwise_binary_sfpu.hpp</code> (MulBinary).",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "Per-block wait/pop \u2192 Chunked + OperandKind::Block",
+    "body": "Original outer block did <code>cb_wait_front/cb_pop_front(per_core_block_size)</code> with an inner per-tile loop. Chain inputs use <code>InputLifecycle::Chunked</code> + <code>OperandKind::Block</code> (per-chunk wait+pop of block_size tiles); output <code>PackTile&lt;cb_grad_in, OutputLifecycle::Chunked&gt;</code>.",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "2-level loop \u2192 EltwiseShape::tiles",
+    "body": "The nested <code>for block</code> / <code>for i</code> loops collapse into <code>EltwiseShape::tiles(per_core_tile_cnt, per_core_block_size)</code> passed to a single <code>eltwise_chain(shape, \u2026)</code>.",
+    "color": "#3f8ae0"
+  },
+  "4": {
+    "title": "Compute body \u2192 chain elements",
+    "body": "<code>copy_tile</code> reads\u2192<code>CopyTile&lt;\u2026, D0/D1&gt;</code>, <code>gelu_derivative_tile&lt;false&gt;</code>\u2192<code>GeluDerivative&lt;Approx::Exact, D1&gt;</code>, <code>mul_binary_tile</code>\u2192<code>MulBinary&lt;D0,D1,D0&gt;</code>. Per-element inits hoisted once at chain entry instead of the manual <code>*_tile_init</code> before the loop.",
+    "color": "#cf222e"
+  }
+}
+</script>

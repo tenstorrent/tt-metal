@@ -1,0 +1,116 @@
+<section class="panel" id="panel-kernel_eltwise_copy">
+  <h1>eltwise_copy — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/kernel/compute/eltwise_copy.cpp</div>
+  <div class="meta"><b>&Delta;</b> +17/-20 &nbsp; <b>Decisions:</b> 4</div>
+
+  <div class="focus-toolbar" data-fkernel="kernel_eltwise_copy">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; constexpr CBs + headers</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; copy&lt;&gt; chain</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; reconfig None</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; init kept</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+<span class="dz" data-d="1">#include &quot;api/compute/common.h&quot;
+#include &quot;api/compute/tile_move_copy.h&quot;</span>
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+
+void kernel_main() {
+    uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+
+<span class="dz" data-d="5">    unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    copy_tile_init(tt::CBIndex::c_0);</span>
+<span class="dz" data-d="3">    for (uint32_t b = 0; b &lt; per_core_tile_cnt; ++b) {
+        acquire_dst();
+
+        // Pop tile after tile, copy to DST and pack
+        cb_wait_front(tt::CBIndex::c_0, 1);
+        cb_reserve_back(tt::CBIndex::c_16, 1);
+        copy_tile(tt::CBIndex::c_0, 0, 0);
+
+        pack_tile(0, tt::CBIndex::c_16);
+
+        cb_pop_front(tt::CBIndex::c_0, 1);
+        cb_push_back(tt::CBIndex::c_16, 1);
+
+        release_dst();
+    }</span>
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+<span class="dz" data-d="1">#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp&quot;</span>
+
+void kernel_main() {
+    constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+<span class="dz" data-d="1">    constexpr auto cb_in = tt::CBIndex::c_0;
+    constexpr auto cb_out = tt::CBIndex::c_16;</span>
+
+<span class="dz" data-d="5">    unary_op_init_common(cb_in, cb_out);</span>
+
+    // Per-tile copy cb_in -&gt; cb_out via a single chain over all tiles.
+    // Original used unary_op_init_common + copy_tile_init at boot (no per-iter
+    // reconfig) — CopyTileReconfig::None + PackTileReconfig::None preserve that.
+<span class="dz" data-d="3">    compute_kernel_lib::copy&lt;
+        cb_in,
+        cb_out,
+        compute_kernel_lib::InputLifecycle::Streaming,
+        compute_kernel_lib::OutputLifecycle::Streaming,</span>
+<span class="dz" data-d="4">        compute_kernel_lib::CopyTileReconfig::None,
+        compute_kernel_lib::PackTileReconfig::None&gt;(per_core_tile_cnt);</span>
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; constexpr CB ids + helper headers</b> — <code>c_0/c_16</code> hoisted to <code>constexpr auto cb_in/cb_out</code>; dropped <code>common.h</code>/<code>tile_move_copy.h</code>, added <code>eltwise_chain.hpp</code> + <code>eltwise_convenience.hpp</code>.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; copy&lt;&gt; replaces the manual loop</b> — The <code>acquire_dst</code>/<code>copy_tile</code>/<code>pack_tile</code> per-tile loop became one <code>compute_kernel_lib::copy&lt;cb_in,cb_out&gt;(per_core_tile_cnt)</code>.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; No per-iter reconfig</b> — Boot-time format only: <code>CopyTileReconfig::None</code> + <code>PackTileReconfig::None</code>.</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; init preserved, copy_tile_init folded</b> — <code>unary_op_init_common</code> stays; the separate <code>copy_tile_init</code> is folded into the chain element.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-kernel_eltwise_copy">
+{
+  "1": {
+    "title": "constexpr CB ids + helper headers",
+    "body": "<code>c_0/c_16</code> hoisted to <code>constexpr auto cb_in/cb_out</code>; dropped <code>common.h</code>/<code>tile_move_copy.h</code>, added <code>eltwise_chain.hpp</code> + <code>eltwise_convenience.hpp</code>.",
+    "color": "#d6a000"
+  },
+  "3": {
+    "title": "copy&lt;&gt; replaces the manual loop",
+    "body": "The <code>acquire_dst</code>/<code>copy_tile</code>/<code>pack_tile</code> per-tile loop became one <code>compute_kernel_lib::copy&lt;cb_in,cb_out&gt;(per_core_tile_cnt)</code>.",
+    "color": "#3f8ae0"
+  },
+  "4": {
+    "title": "No per-iter reconfig",
+    "body": "Boot-time format only: <code>CopyTileReconfig::None</code> + <code>PackTileReconfig::None</code>.",
+    "color": "#cf222e"
+  },
+  "5": {
+    "title": "init preserved, copy_tile_init folded",
+    "body": "<code>unary_op_init_common</code> stays; the separate <code>copy_tile_init</code> is folded into the chain element.",
+    "color": "#9f4bbf"
+  }
+}
+</script>

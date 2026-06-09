@@ -1,0 +1,318 @@
+<section class="panel" id="panel-moreh_moreh_softmax_backward_moreh_softmax_backward_w_large">
+  <h1>moreh_softmax_backward_w_large &mdash; <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/moreh_softmax_backward_w_large.cpp</div>
+  <div class="meta"><b>&Delta;</b> +143/-29 &nbsp; <b>Decisions:</b> 5</div>
+
+  <div class="focus-toolbar" data-fkernel="moreh_moreh_softmax_backward_moreh_softmax_backward_w_large">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; includes</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; held bcast</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; convenience</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; Exp unary</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; mask/neg chains</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+#include &quot;ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp&quot;
+#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;
+
+void kernel_main() {
+    constexpr uint32_t onetile = 1;
+
+    constexpr auto cb_y = tt::CBIndex::c_0;
+    constexpr auto cb_dy = tt::CBIndex::c_1;
+    constexpr auto cb_bcast_scaler = tt::CBIndex::c_2;
+    constexpr auto cb_mask = tt::CBIndex::c_3;
+    constexpr auto cb_dx = tt::CBIndex::c_16;
+
+    constexpr auto cb_ydy = tt::CBIndex::c_24;  // y * dy
+    constexpr auto cb_sum = tt::CBIndex::c_25;
+    CircularBuffer cb_sum_obj(cb_sum);
+    constexpr auto cb_inter2 = tt::CBIndex::c_26;
+    constexpr auto cb_add = tt::CBIndex::c_27;
+
+    binary_op_init_common(cb_y, cb_bcast_scaler, cb_dx);
+
+    uint32_t N = get_compile_time_arg_val(0);
+    uint32_t Wt = get_compile_time_arg_val(1);
+
+    for (uint32_t n = 0; n &lt; N; ++n) {
+#ifdef LOG
+        // sum(dy)
+        for (uint32_t w = 0; w &lt; Wt; ++w) {
+            if (w == Wt - 1) {
+                if (w == 0) {
+<span class="dz" data-d="6">                    mask_tile_to_cb(cb_dy, cb_mask, cb_add, /*itile=*/0, /*mtile=*/0, /*pop=*/1, /*popm=*/0);</span>
+                } else {
+                    constexpr auto cb_inter0 = tt::CBIndex::c_24;
+<span class="dz" data-d="6">                    mask_tile_to_cb(cb_dy, cb_mask, cb_inter0, /*itile=*/0, /*mtile=*/0, /*pop=*/1, /*popm=*/0);
+
+                    add_tiles_to_cb(cb_add, cb_inter0, cb_add);</span>
+                }
+            } else {
+                if (w == 0) {
+<span class="dz" data-d="3">                    copy_tile_to_cb(cb_dy, cb_add);
+                } else {
+                    add_tiles_to_cb(cb_add, cb_dy, cb_add);</span>
+                }
+            }
+        }
+
+        compute_kernel_lib::reduce&lt;PoolType::SUM, ReduceDim::REDUCE_ROW&gt;(
+            cb_add, cb_bcast_scaler, cb_sum, compute_kernel_lib::ReduceInputBlockShape::single());
+
+        for (uint32_t w = 0; w &lt; Wt; w += onetile) {
+            // exp(y)
+            constexpr auto cb_exp = tt::CBIndex::c_24;
+<span class="dz" data-d="5">            exp_tile_to_cb(cb_y, cb_exp, 0);</span>
+            // sum * exp(y)
+<span class="dz" data-d="2">            mul_tiles_bcast_cols_to_cb(cb_exp, cb_sum, cb_inter2, 0, 0, /*pop0=*/1, /*pop1=*/0);</span>
+
+            // dy - sum * exp(y)
+<span class="dz" data-d="3">            sub_tiles_to_cb(cb_dy, cb_inter2, cb_dx);</span>
+        }
+
+        cb_sum_obj.pop_front(onetile);
+#else
+        // step 1, compute y * dy
+        for (uint32_t w = 0; w &lt; Wt; ++w) {
+            if (w == Wt - 1) {
+<span class="dz" data-d="6">                mul_tiles_and_mask_tile_to_cb(
+                    cb_y, cb_dy, cb_mask, cb_ydy, 0, 0, 0, /*pop0=*/1, /*pop1=*/1, /*popm=*/0);</span>
+            } else {
+<span class="dz" data-d="3">                mul_tiles_to_cb(cb_y, cb_dy, cb_ydy);
+            }
+
+            if (w == 0) {
+                copy_tile_to_cb(cb_ydy, cb_add);
+            } else {
+                add_tiles_to_cb(cb_add, cb_ydy, cb_add);</span>
+            }
+        }
+
+        // step 2, compute sum(y * dy)
+        compute_kernel_lib::reduce&lt;PoolType::SUM, ReduceDim::REDUCE_ROW&gt;(
+            cb_add, cb_bcast_scaler, cb_sum, compute_kernel_lib::ReduceInputBlockShape::single());
+
+        // step 3, compute final result
+        for (uint32_t w = 0; w &lt; Wt; w += onetile) {
+            // dy - sum
+<span class="dz" data-d="2">            sub_tiles_bcast_cols_to_cb(cb_dy, cb_sum, cb_inter2, 0, 0, /*pop0=*/1, /*pop1=*/0);</span>
+
+#ifdef SOFTMAX
+            // (dy - sum) * y
+<span class="dz" data-d="3">            mul_tiles_to_cb(cb_y, cb_inter2, cb_dx);</span>
+#else
+            // -(dy - sum) * y
+<span class="dz" data-d="6">            mul_tiles_and_negative_to_cb(cb_y, cb_inter2, cb_dx);</span>
+#endif
+        }
+
+        cb_sum_obj.pop_front(onetile);
+#endif
+    }
+}
+</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+#include &quot;ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp&quot;
+<span class="dz" data-d="1">#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp&quot;  // Exp
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp&quot;  // Mask, Negative</span>
+#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;
+
+void kernel_main() {
+    constexpr uint32_t onetile = 1;
+
+    constexpr auto cb_y = tt::CBIndex::c_0;
+    constexpr auto cb_dy = tt::CBIndex::c_1;
+    constexpr auto cb_bcast_scaler = tt::CBIndex::c_2;
+    constexpr auto cb_mask = tt::CBIndex::c_3;
+    constexpr auto cb_dx = tt::CBIndex::c_16;
+
+    constexpr auto cb_ydy = tt::CBIndex::c_24;  // y * dy
+    constexpr auto cb_sum = tt::CBIndex::c_25;
+    CircularBuffer cb_sum_obj(cb_sum);
+    constexpr auto cb_inter2 = tt::CBIndex::c_26;
+    constexpr auto cb_add = tt::CBIndex::c_27;
+
+    binary_op_init_common(cb_y, cb_bcast_scaler, cb_dx);
+
+    uint32_t N = get_compile_time_arg_val(0);
+    uint32_t Wt = get_compile_time_arg_val(1);
+
+    for (uint32_t n = 0; n &lt; N; ++n) {
+#ifdef LOG
+        // sum(dy) — accumulate with mask on last tile.
+        for (uint32_t w = 0; w &lt; Wt; ++w) {
+            if (w == Wt - 1) {
+                if (w == 0) {
+<span class="dz" data-d="6">                    compute_kernel_lib::eltwise_chain(
+                        onetile,
+                        compute_kernel_lib::CopyTile&lt;cb_dy&gt;{},
+                        compute_kernel_lib::CopyTile&lt;
+                            cb_mask,
+                            compute_kernel_lib::Dst::D1,
+                            compute_kernel_lib::InputLifecycle::HeldStream&gt;{},
+                        compute_kernel_lib::Mask&lt;DataFormat::Float16_b, compute_kernel_lib::Dst::D0&gt;{},
+                        compute_kernel_lib::PackTile&lt;cb_add&gt;{});</span>
+                } else {
+                    constexpr auto cb_inter0 = tt::CBIndex::c_24;
+<span class="dz" data-d="6">                    compute_kernel_lib::eltwise_chain(
+                        onetile,
+                        compute_kernel_lib::CopyTile&lt;cb_dy&gt;{},
+                        compute_kernel_lib::CopyTile&lt;
+                            cb_mask,
+                            compute_kernel_lib::Dst::D1,
+                            compute_kernel_lib::InputLifecycle::HeldStream&gt;{},
+                        compute_kernel_lib::Mask&lt;DataFormat::Float16_b, compute_kernel_lib::Dst::D0&gt;{},
+                        compute_kernel_lib::PackTile&lt;cb_inter0&gt;{});
+                    compute_kernel_lib::add&lt;cb_add, cb_inter0, cb_add&gt;(onetile);</span>
+                }
+            } else {
+                if (w == 0) {
+<span class="dz" data-d="3">                    compute_kernel_lib::copy&lt;cb_dy, cb_add&gt;(onetile);
+                } else {
+                    compute_kernel_lib::add&lt;cb_add, cb_dy, cb_add&gt;(onetile);</span>
+                }
+            }
+        }
+
+        compute_kernel_lib::reduce&lt;PoolType::SUM, ReduceDim::REDUCE_ROW&gt;(
+            cb_add, cb_bcast_scaler, cb_sum, compute_kernel_lib::ReduceInputBlockShape::single());
+
+        for (uint32_t w = 0; w &lt; Wt; w += onetile) {
+            constexpr auto cb_exp = tt::CBIndex::c_24;
+<span class="dz" data-d="5">            compute_kernel_lib::unary&lt;
+                compute_kernel_lib::Exp&lt;
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Dst::D0&gt;,
+                cb_y,
+                cb_exp&gt;(onetile);</span>
+<span class="dz" data-d="2">            compute_kernel_lib::mul&lt;
+                cb_exp,
+                cb_sum,
+                cb_inter2,
+                compute_kernel_lib::BroadcastDim::Col,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::HeldStream&gt;(onetile);
+            compute_kernel_lib::sub&lt;cb_dy, cb_inter2, cb_dx&gt;(onetile);
+        }
+
+        cb_sum_obj.pop_front(onetile);
+#else
+        // step 1: y*dy + accumulator.
+        for (uint32_t w = 0; w &lt; Wt; ++w) {
+            if (w == Wt - 1) {
+                compute_kernel_lib::eltwise_chain(
+                    onetile,
+                    compute_kernel_lib::BinaryFpu&lt;cb_y, cb_dy, compute_kernel_lib::BinaryFpuOp::Mul&gt;{},
+                    compute_kernel_lib::CopyTile&lt;
+                        cb_mask,
+                        compute_kernel_lib::Dst::D1,
+                        compute_kernel_lib::InputLifecycle::HeldStream&gt;{},
+                    compute_kernel_lib::Mask&lt;DataFormat::Float16_b, compute_kernel_lib::Dst::D0&gt;{},
+                    compute_kernel_lib::PackTile&lt;cb_ydy&gt;{});
+            } else {
+                compute_kernel_lib::mul&lt;cb_y, cb_dy, cb_ydy&gt;(onetile);
+            }
+
+            if (w == 0) {
+                compute_kernel_lib::copy&lt;cb_ydy, cb_add&gt;(onetile);
+            } else {
+                compute_kernel_lib::add&lt;cb_add, cb_ydy, cb_add&gt;(onetile);
+            }
+        }
+
+        compute_kernel_lib::reduce&lt;PoolType::SUM, ReduceDim::REDUCE_ROW&gt;(
+            cb_add, cb_bcast_scaler, cb_sum, compute_kernel_lib::ReduceInputBlockShape::single());
+
+        // Per-tile result.
+        for (uint32_t w = 0; w &lt; Wt; w += onetile) {
+            compute_kernel_lib::sub&lt;
+                cb_dy,
+                cb_sum,
+                cb_inter2,
+                compute_kernel_lib::BroadcastDim::Col,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::HeldStream&gt;(onetile);</span>
+#ifdef SOFTMAX
+<span class="dz" data-d="3">            compute_kernel_lib::mul&lt;cb_y, cb_inter2, cb_dx&gt;(onetile);</span>
+#else
+<span class="dz" data-d="6">            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::BinaryFpu&lt;cb_y, cb_inter2, compute_kernel_lib::BinaryFpuOp::Mul&gt;{},
+                compute_kernel_lib::Negative&lt;compute_kernel_lib::Dst::D0&gt;{},
+                compute_kernel_lib::PackTile&lt;cb_dx&gt;{});</span>
+#endif
+        }
+
+        cb_sum_obj.pop_front(onetile);
+#endif
+    }
+}
+</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions &mdash; hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; eltwise_chain + convenience + Exp + Mask/Negative</b> &mdash; Add <code>eltwise_chain.hpp</code>, <code>eltwise_convenience.hpp</code>, <code>eltwise_math.hpp</code> (Exp), <code>eltwise_misc.hpp</code> (Mask, Negative).</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; HeldStream on cb_sum bcast operand</b> &mdash; <code>mul/sub_tiles_bcast_cols_to_cb</code> with <code>pop1=0</code> become <code>BroadcastDim::Col</code> + <code>InputLifecycle::HeldStream</code> on <code>cb_sum</code>.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; copy/add/mul/sub convenience wrappers</b> &mdash; Non-masked <code>copy_tile_to_cb</code>, <code>add_tiles_to_cb</code>, <code>mul_tiles_to_cb</code>, <code>sub_tiles_to_cb</code> replaced by <code>compute_kernel_lib</code> convenience calls.</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; unary&lt;Exp&gt;</b> &mdash; <code>exp_tile_to_cb(cb_y, cb_exp)</code> becomes <code>unary&lt;Exp&lt;Exact,Exact,D0&gt;, cb_y, cb_exp&gt;(onetile)</code>.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; eltwise_chain for mask + negate fusions</b> &mdash; <code>mask_tile_to_cb</code>, <code>mul_tiles_and_mask_tile_to_cb</code>, and <code>mul_tiles_and_negative_to_cb</code> become explicit <code>eltwise_chain</code>s (<code>CopyTile</code>/<code>BinaryFpu</code> + <code>Mask&lt;Float16_b,D0&gt;</code> or <code>Negative&lt;D0&gt;</code> + <code>PackTile</code>); <code>cb_mask</code> held via <code>HeldStream</code>.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-moreh_moreh_softmax_backward_moreh_softmax_backward_w_large">
+{
+  "1": {
+    "title": "eltwise_chain + convenience + Exp + Mask/Negative",
+    "body": "Add <code>eltwise_chain.hpp</code>, <code>eltwise_convenience.hpp</code>, <code>eltwise_math.hpp</code> (Exp), <code>eltwise_misc.hpp</code> (Mask, Negative).",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "HeldStream on cb_sum bcast operand",
+    "body": "<code>mul/sub_tiles_bcast_cols_to_cb</code> with <code>pop1=0</code> become <code>BroadcastDim::Col</code> + <code>InputLifecycle::HeldStream</code> on <code>cb_sum</code>.",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "copy/add/mul/sub convenience wrappers",
+    "body": "Non-masked <code>copy_tile_to_cb</code>, <code>add_tiles_to_cb</code>, <code>mul_tiles_to_cb</code>, <code>sub_tiles_to_cb</code> replaced by <code>compute_kernel_lib</code> convenience calls.",
+    "color": "#3f8ae0"
+  },
+  "5": {
+    "title": "unary&lt;Exp&gt;",
+    "body": "<code>exp_tile_to_cb(cb_y, cb_exp)</code> becomes <code>unary&lt;Exp&lt;Exact,Exact,D0&gt;, cb_y, cb_exp&gt;(onetile)</code>.",
+    "color": "#9f4bbf"
+  },
+  "6": {
+    "title": "eltwise_chain for mask + negate fusions",
+    "body": "<code>mask_tile_to_cb</code>, <code>mul_tiles_and_mask_tile_to_cb</code>, and <code>mul_tiles_and_negative_to_cb</code> become explicit <code>eltwise_chain</code>s (<code>CopyTile</code>/<code>BinaryFpu</code> + <code>Mask&lt;Float16_b,D0&gt;</code> or <code>Negative&lt;D0&gt;</code> + <code>PackTile</code>); <code>cb_mask</code> held via <code>HeldStream</code>.",
+    "color": "#ff7a00"
+  }
+}
+</script>

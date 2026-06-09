@@ -1,0 +1,221 @@
+<section class="panel" id="panel-normalization_rmsnorm_distributed_rmsnorm_pre_allgather">
+  <h1>rmsnorm_pre_allgather — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/rmsnorm_pre_allgather.cpp</div>
+  <div class="meta"><b>Δ</b> +20/-30 &nbsp; <b>Decisions:</b> 4</div>
+
+  <div class="focus-toolbar" data-fkernel="normalization_rmsnorm_distributed_rmsnorm_pre_allgather">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; includes</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; square()</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; reconfig</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; shape+lifecycle</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+/*
+ * This kernel computes rmsnorm statistics.
+ * For rmsnorm we compute E(x**2) and return it as a one tile wide output
+ * tensor containing E(x**2) in the left most column per tile.
+ */
+
+#include &lt;cstdint&gt;
+
+#include "api/compute/reduce.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/layernorm.h"
+<span class="dz" data-d="1">#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/operations/normalization/kernel_util/compute/pre_add.h"</span>
+
+namespace pre_add = norm::kernel_util::compute::pre_add;
+
+ALWI void ACQ() {
+    tile_regs_acquire();
+    tile_regs_wait();
+}
+ALWI void REL() {
+    tile_regs_commit();
+    tile_regs_release();
+}
+
+void kernel_main() {
+    uint32_t NCHt = get_arg_val&lt;uint32_t&gt;(0);
+    constexpr uint32_t Wt = get_compile_time_arg_val(0);
+    constexpr uint32_t blk = get_compile_time_arg_val(1);
+
+    constexpr uint32_t onetile = 1;
+
+    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t cb_reduce = tt::CBIndex::c_1;
+
+    constexpr uint32_t cb_out = tt::CBIndex::c_14;
+
+    constexpr uint32_t cb_x2 = tt::CBIndex::c_6;                           // x**2
+    constexpr uint32_t cb_res = tt::CBIndex::c_5;                          // residual b (unused when !FUSE_PRE_ADD)
+    constexpr uint32_t cb_inp = FUSE_PRE_ADD ? tt::CBIndex::c_3 : cb_in0;  // fused a + b, or just a
+
+    if constexpr (FUSE_PRE_ADD) {
+        binary_op_init_common(cb_in0, cb_res, cb_inp);
+    } else {
+        binary_op_init_common(cb_inp, cb_reduce, cb_x2);
+    }
+
+    for (uint32_t ncht = 0; ncht &lt; NCHt; ncht++) {
+        // Fuse pre-add: cb_inp = cb_in0 + cb_res (no-op when !FUSE_PRE_ADD)
+        pre_add::one_row&lt;FUSE_PRE_ADD&gt;(cb_in0, cb_res, cb_inp, Wt, blk);
+
+        /*
+         * x**2
+         */
+<span class="dz" data-d="4">        reconfig_data_format(cb_inp, cb_inp);
+        pack_reconfig_data_format(cb_x2);
+        mul_tiles_init(cb_inp, cb_inp);</span>
+<span class="dz" data-d="2">        for (uint32_t wt = 0; wt &lt; Wt; wt += blk) {
+            cb_wait_front(cb_inp, wt + blk);  // cumulative wait
+            cb_reserve_back(cb_x2, blk);
+            ACQ();
+            for (uint32_t wtr = 0; wtr &lt; blk; wtr++) {
+                mul_tiles(cb_inp, cb_inp, wt + wtr, wt + wtr, wtr);
+                pack_tile(wtr, cb_x2, wt + wtr);
+            }
+            REL();
+            cb_push_back(cb_x2, blk);</span>
+        }
+
+        /*
+         * sum(x**2)
+         */
+        // BulkWaitBulkPop: All Wt tiles already in CB (see cumulative wait above)
+        compute_kernel_lib::
+            reduce&lt;PoolType::AVG, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop&gt;(
+                cb_x2, cb_reduce, cb_out, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+        cb_pop_front(cb_inp, Wt);
+    }
+    cb_pop_front(cb_reduce, 1);
+}
+</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+/*
+ * This kernel computes rmsnorm statistics.
+ * For rmsnorm we compute E(x**2) and return it as a one tile wide output
+ * tensor containing E(x**2) in the left most column per tile.
+ */
+
+#include &lt;cstdint&gt;
+
+#include "api/compute/reduce.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/layernorm.h"
+<span class="dz" data-d="1">#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"</span>
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/operations/normalization/kernel_util/compute/pre_add.h"
+
+namespace pre_add = norm::kernel_util::compute::pre_add;
+
+void kernel_main() {
+    uint32_t NCHt = get_arg_val&lt;uint32_t&gt;(0);
+    constexpr uint32_t Wt = get_compile_time_arg_val(0);
+    constexpr uint32_t blk = get_compile_time_arg_val(1);
+
+    constexpr uint32_t onetile = 1;
+
+    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t cb_reduce = tt::CBIndex::c_1;
+
+    constexpr uint32_t cb_out = tt::CBIndex::c_14;
+
+    constexpr uint32_t cb_x2 = tt::CBIndex::c_6;                           // x**2
+    constexpr uint32_t cb_res = tt::CBIndex::c_5;                          // residual b (unused when !FUSE_PRE_ADD)
+    constexpr uint32_t cb_inp = FUSE_PRE_ADD ? tt::CBIndex::c_3 : cb_in0;  // fused a + b, or just a
+
+    if constexpr (FUSE_PRE_ADD) {
+        binary_op_init_common(cb_in0, cb_res, cb_inp);
+    } else {
+        binary_op_init_common(cb_inp, cb_reduce, cb_x2);
+    }
+
+<span class="dz" data-d="6">    // 2D walk for the squaring chain: outer = Wt/blk subblocks, inner = blk tiles.
+    // Total iterations = Wt. Wt is assumed divisible by blk (matches the original
+    // loop `for (wt = 0; wt &lt; Wt; wt += blk)` which has no tail handling).
+    constexpr auto squaring_shape = compute_kernel_lib::EltwiseShape::of(Wt / blk, blk);</span>
+
+    for (uint32_t ncht = 0; ncht &lt; NCHt; ncht++) {
+        // Fuse pre-add: cb_inp = cb_in0 + cb_res (no-op when !FUSE_PRE_ADD)
+        pre_add::one_row&lt;FUSE_PRE_ADD&gt;(cb_in0, cb_res, cb_inp, Wt, blk);
+
+        // x**2 — same-CB FPU mul. cb_inp lifecycle: InputLifecycle::HeldCumulative (chain emits
+        // cumulative `cb_wait_front(cb_inp, (i+1)*blk)` per blk-chunk; never pops).
+        // The caller pops Wt from cb_inp after the reduce below. cb_x2 lifecycle:
+        // OutputLifecycle::Chunked (chain emits reserve_back(blk) + push_back(blk) per chunk;
+        // pack writes absolute slots via Block index).
+<span class="dz" data-d="2">        compute_kernel_lib::square&lt;
+            cb_inp,
+            cb_x2,
+            compute_kernel_lib::InputLifecycle::HeldCumulative,
+            compute_kernel_lib::OutputLifecycle::Bulk,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::Output,
+            compute_kernel_lib::OperandKind::Block&gt;(squaring_shape);</span>
+
+        // sum(x**2) — BulkWaitBulkPop: all Wt tiles already in CB.
+        compute_kernel_lib::
+            reduce&lt;PoolType::AVG, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop&gt;(
+                cb_x2, cb_reduce, cb_out, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+        cb_pop_front(cb_inp, Wt);
+    }
+    cb_pop_front(cb_reduce, 1);
+}
+</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; Helper includes</b> — Added <code>eltwise_chain.hpp</code> + <code>eltwise_convenience.hpp</code>; the raw <code>eltwise_binary.h</code> mul path now routes through the helper.</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; square() replaces raw mul+pack loop</b> — The <code>mul_tiles(cb_inp,cb_inp)</code>+<code>pack_tile</code> blk-loop became <code>compute_kernel_lib::square&lt;cb_inp,cb_x2,...&gt;</code>; the chain owns the cumulative wait, reserve/push and FPU window.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; Reconfig flags</b> — <code>reconfig_data_format(cb_inp,cb_inp)</code>+<code>mul_tiles_init</code> → <code>BinaryDataFormatReconfig::Input</code>; <code>pack_reconfig_data_format(cb_x2)</code> → <code>PackTileReconfig::Output</code>.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; EltwiseShape::of + lifecycle</b> — 2D walk <code>EltwiseShape::of(Wt/blk, blk)</code>; <code>InputLifecycle::HeldCumulative</code> on cb_inp (never pops — caller pops Wt after reduce), <code>OperandKind::Block</code> for absolute pack slots.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-normalization_rmsnorm_distributed_rmsnorm_pre_allgather">
+{
+  "1": {
+    "title": "Helper includes",
+    "body": "Added <code>eltwise_chain.hpp</code> + <code>eltwise_convenience.hpp</code>; the raw <code>eltwise_binary.h</code> mul path now routes through the helper.",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "square() replaces raw mul+pack loop",
+    "body": "The <code>mul_tiles(cb_inp,cb_inp)</code>+<code>pack_tile</code> blk-loop became <code>compute_kernel_lib::square&lt;cb_inp,cb_x2,...&gt;</code>; the chain owns the cumulative wait, reserve/push and FPU window.",
+    "color": "#2ea043"
+  },
+  "4": {
+    "title": "Reconfig flags",
+    "body": "<code>reconfig_data_format(cb_inp,cb_inp)</code>+<code>mul_tiles_init</code> \u2192 <code>BinaryDataFormatReconfig::Input</code>; <code>pack_reconfig_data_format(cb_x2)</code> \u2192 <code>PackTileReconfig::Output</code>.",
+    "color": "#cf222e"
+  },
+  "6": {
+    "title": "EltwiseShape::of + lifecycle",
+    "body": "2D walk <code>EltwiseShape::of(Wt/blk, blk)</code>; <code>InputLifecycle::HeldCumulative</code> on cb_inp (never pops \u2014 caller pops Wt after reduce), <code>OperandKind::Block</code> for absolute pack slots.",
+    "color": "#ff7a00"
+  }
+}
+</script>

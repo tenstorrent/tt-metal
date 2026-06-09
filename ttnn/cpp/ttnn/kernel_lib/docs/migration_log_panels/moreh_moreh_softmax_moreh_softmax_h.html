@@ -1,0 +1,467 @@
+<section class="panel" id="panel-moreh_moreh_softmax_moreh_softmax_h">
+  <h1>moreh_softmax_h &mdash; <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_h.cpp</div>
+  <div class="meta"><b>&Delta;</b> +118/-81 &nbsp; <b>Decisions:</b> 5</div>
+
+  <div class="focus-toolbar" data-fkernel="moreh_moreh_softmax_moreh_softmax_h">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; includes</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; Bulk lifecycle</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; bcast sub/mul</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; reconfig</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; split exp chain</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+#include &quot;ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp&quot;
+#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;
+
+void kernel_main() {
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    CircularBuffer cb_in0_obj(cb_in0);
+    constexpr auto cb_mask = tt::CBIndex::c_1;
+    CircularBuffer cb_mask_obj(cb_mask);
+    constexpr auto cb_max_scaler = tt::CBIndex::c_2;
+    CircularBuffer cb_max_scaler_obj(cb_max_scaler);
+    constexpr auto cb_sum_scaler = tt::CBIndex::c_3;
+    CircularBuffer cb_sum_scaler_obj(cb_sum_scaler);
+    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    CircularBuffer cb_out0_obj(cb_out0);
+    constexpr auto cb_exps = tt::CBIndex::c_24;
+    CircularBuffer cb_exps_obj(cb_exps);
+    constexpr auto cb_recipsumexps = tt::CBIndex::c_25;
+    CircularBuffer cb_recipsumexps_obj(cb_recipsumexps);
+    constexpr auto cb_max = tt::CBIndex::c_26;
+    CircularBuffer cb_max_obj(cb_max);
+    constexpr auto cb_x_m_max = tt::CBIndex::c_27;
+    CircularBuffer cb_x_m_max_obj(cb_x_m_max);
+    constexpr auto cb_tmp = tt::CBIndex::c_28;
+
+    constexpr int dst0 = 0;
+    constexpr int dst1 = 1;
+    constexpr uint32_t onetile = 1;
+
+    binary_op_init_common(cb_in0, cb_max_scaler, cb_out0);
+
+    uint32_t N = get_compile_time_arg_val(0);
+    uint32_t Ht = get_compile_time_arg_val(1);
+
+    cb_mask_obj.wait_front(onetile);
+    cb_max_scaler_obj.wait_front(onetile);
+    cb_sum_scaler_obj.wait_front(onetile);
+
+    for (uint32_t n = 0; n &lt; N; ++n) {
+        // find max value
+        if (Ht == 1) {
+            mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, 0, 0, /*pop0=*/0, /*popm=*/0);
+
+            compute_kernel_lib::reduce&lt;PoolType::MAX, ReduceDim::REDUCE_COL&gt;(
+                cb_tmp, cb_max_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::single());
+        } else {
+            compute_kernel_lib::
+                reduce&lt;PoolType::MAX, ReduceDim::REDUCE_COL, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop&gt;(
+                    cb_in0, cb_max_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::col(Ht - 1));
+
+            mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, Ht - 1, 0, /*pop0=*/0, /*popm=*/0);
+            compute_kernel_lib::reduce&lt;PoolType::MAX, ReduceDim::REDUCE_COL&gt;(
+                cb_tmp,
+                cb_max_scaler,
+                cb_max,
+                compute_kernel_lib::ReduceInputBlockShape::single(),
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                compute_kernel_lib::Accumulate::at(cb_max, 1));  // iteration=1, reload from cb_max
+        }
+
+        // compute x - max(x)
+        cb_x_m_max_obj.reserve_back(Ht);
+<span class="dz" data-d="2">        cb_in0_obj.wait_front(Ht);</span>
+        cb_max_obj.wait_front(1);
+
+        for (uint32_t h = 0; h &lt; Ht; ++h) {
+            tile_regs_acquire();
+<span class="dz" data-d="4">            sub_bcast_rows_init_short_with_dt(cb_in0, cb_max);</span>
+<span class="dz" data-d="3">            sub_tiles_bcast&lt;BroadcastType::ROW&gt;(cb_in0, cb_max, h, 0, dst0);</span>
+            tile_regs_commit();
+
+            tile_regs_wait();
+<span class="dz" data-d="4">            pack_tile_with_dt(dst0, cb_x_m_max);</span>
+            tile_regs_release();
+        }
+        cb_max_obj.pop_front(1);
+        cb_in0_obj.pop_front(Ht);
+        cb_x_m_max_obj.push_back(Ht);
+
+        // compute exp(x - max(x))
+        cb_exps_obj.reserve_back(Ht);
+        cb_x_m_max_obj.wait_front(Ht);
+        for (uint32_t h = 0; h &lt; Ht; ++h) {
+            tile_regs_acquire();
+<span class="dz" data-d="6">            copy_tile_init_with_dt(cb_x_m_max);
+            copy_tile(cb_x_m_max, h, dst0);
+
+#ifndef SOFTMAX
+            negative_tile_init();
+            negative_tile(dst0);
+#endif
+
+            exp_tile_init();
+            exp_tile(dst0);
+
+            if (h == Ht - 1) {
+                copy_tile_init_with_dt(cb_mask);
+                copy_tile(cb_mask, 0, dst1);
+
+                mask_tile_init();
+                mask_tile(dst0, dst1);</span>
+            }
+            tile_regs_commit();
+
+            tile_regs_wait();
+<span class="dz" data-d="4">            pack_tile_with_dt(dst0, cb_exps);</span>
+            tile_regs_release();
+        }
+        cb_exps_obj.push_back(Ht);
+
+#ifdef LOG
+        // log(sum) - pop tiles after reduce
+        compute_kernel_lib::
+            reduce&lt;PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop&gt;(
+                cb_exps,
+                cb_sum_scaler,
+                cb_recipsumexps,
+                compute_kernel_lib::ReduceInputBlockShape::col(Ht),
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                compute_kernel_lib::NoAccumulation{},
+                [](uint32_t dst_idx) {
+                    log_tile_init();
+                    log_tile(dst_idx);
+                });
+#else
+        // 1/sum - keep tiles for subsequent multiplication
+        compute_kernel_lib::
+            reduce&lt;PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop&gt;(
+                cb_exps,
+                cb_sum_scaler,
+                cb_recipsumexps,
+                compute_kernel_lib::ReduceInputBlockShape::col(Ht),
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                compute_kernel_lib::NoAccumulation{},
+                [](uint32_t dst_idx) {
+                    recip_tile_init();
+                    recip_tile(dst_idx);
+                });
+#endif
+
+        // compute final result
+        cb_out0_obj.reserve_back(Ht);
+        cb_x_m_max_obj.wait_front(Ht);
+        cb_recipsumexps_obj.wait_front(1);
+#ifndef LOG
+        cb_exps_obj.wait_front(Ht);
+#endif
+
+        for (uint32_t h = 0; h &lt; Ht; h += onetile) {
+#ifdef LOG
+            // x - max - log(sum)
+            tile_regs_acquire();
+<span class="dz" data-d="4">            sub_bcast_rows_init_short_with_dt(cb_x_m_max, cb_recipsumexps);</span>
+<span class="dz" data-d="3">            sub_tiles_bcast&lt;BroadcastType::ROW&gt;(cb_x_m_max, cb_recipsumexps, h, 0, dst0);</span>
+            tile_regs_commit();
+
+            tile_regs_wait();
+            pack_tile_with_dt(dst0, cb_out0);
+            tile_regs_release();
+#else
+            // exp(x - max) / psum
+            tile_regs_acquire();
+<span class="dz" data-d="4">            mul_bcast_rows_init_short_with_dt(cb_exps, cb_recipsumexps);</span>
+<span class="dz" data-d="3">            mul_tiles_bcast_rows(cb_exps, cb_recipsumexps, h, 0, dst0);</span>
+            tile_regs_commit();
+
+            tile_regs_wait();
+            pack_tile_with_dt(dst0, cb_out0);
+            tile_regs_release();
+#endif
+        }
+
+        cb_recipsumexps_obj.pop_front(1);
+<span class="dz" data-d="2">        cb_x_m_max_obj.pop_front(Ht);
+        cb_out0_obj.push_back(Ht);
+#ifndef LOG
+        cb_exps_obj.pop_front(Ht);</span>
+#endif
+    }
+}
+</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+#include &quot;ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp&quot;
+<span class="dz" data-d="1">#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp&quot;  // Exp
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp&quot;  // Mask, Negative</span>
+#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;
+
+void kernel_main() {
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    CircularBuffer cb_in0_obj(cb_in0);
+    constexpr auto cb_mask = tt::CBIndex::c_1;
+    CircularBuffer cb_mask_obj(cb_mask);
+    constexpr auto cb_max_scaler = tt::CBIndex::c_2;
+    CircularBuffer cb_max_scaler_obj(cb_max_scaler);
+    constexpr auto cb_sum_scaler = tt::CBIndex::c_3;
+    CircularBuffer cb_sum_scaler_obj(cb_sum_scaler);
+    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    CircularBuffer cb_out0_obj(cb_out0);
+    constexpr auto cb_exps = tt::CBIndex::c_24;
+    CircularBuffer cb_exps_obj(cb_exps);
+    constexpr auto cb_recipsumexps = tt::CBIndex::c_25;
+    CircularBuffer cb_recipsumexps_obj(cb_recipsumexps);
+    constexpr auto cb_max = tt::CBIndex::c_26;
+    CircularBuffer cb_max_obj(cb_max);
+    constexpr auto cb_x_m_max = tt::CBIndex::c_27;
+    CircularBuffer cb_x_m_max_obj(cb_x_m_max);
+    constexpr auto cb_tmp = tt::CBIndex::c_28;
+
+    constexpr int dst0 = 0;
+    constexpr int dst1 = 1;
+    constexpr uint32_t onetile = 1;
+
+    binary_op_init_common(cb_in0, cb_max_scaler, cb_out0);
+
+    uint32_t N = get_compile_time_arg_val(0);
+    uint32_t Ht = get_compile_time_arg_val(1);
+
+    cb_mask_obj.wait_front(onetile);
+    cb_max_scaler_obj.wait_front(onetile);
+    cb_sum_scaler_obj.wait_front(onetile);
+
+    for (uint32_t n = 0; n &lt; N; ++n) {
+        // find max value
+        if (Ht == 1) {
+            mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, 0, 0, /*pop0=*/0, /*popm=*/0);
+
+            compute_kernel_lib::reduce&lt;PoolType::MAX, ReduceDim::REDUCE_COL&gt;(
+                cb_tmp, cb_max_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::single());
+        } else {
+            compute_kernel_lib::
+                reduce&lt;PoolType::MAX, ReduceDim::REDUCE_COL, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop&gt;(
+                    cb_in0, cb_max_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::col(Ht - 1));
+
+            mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, Ht - 1, 0, /*pop0=*/0, /*popm=*/0);
+            compute_kernel_lib::reduce&lt;PoolType::MAX, ReduceDim::REDUCE_COL&gt;(
+                cb_tmp,
+                cb_max_scaler,
+                cb_max,
+                compute_kernel_lib::ReduceInputBlockShape::single(),
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                compute_kernel_lib::Accumulate::at(cb_max, 1));  // iteration=1, reload from cb_max
+        }
+
+        // compute x - max(x)  — ROW bcast: cb_max is 1 tile broadcast across Ht rows.
+        // Reconfig audit: sub_bcast_rows_init_short_with_dt reconfigs srca/srcb -&gt; Input.
+        //   pack_tile_with_dt -&gt; Output.
+        // Lifecycles: cb_in0 InputLifecycle::Bulk + Block (chain owns wait Ht + pop Ht). cb_max
+        //   InputLifecycle::Bulk + Scalar — chain emits cb_wait_front(cb_max, 1) thanks to the
+        //   OperandKind-aware window_1d helper. cb_x_m_max OutputLifecycle::Bulk + Block.
+<span class="dz" data-d="3">        compute_kernel_lib::sub&lt;
+            cb_in0,
+            cb_max,
+            cb_x_m_max,
+            compute_kernel_lib::BroadcastDim::Row,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::OutputLifecycle::Bulk,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::Output,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::OperandKind::Scalar&gt;(Ht);</span>
+
+        // compute exp(x - max(x)). Original per-tile copy + (Negative if !SOFTMAX)
+        // + Exp + (Mask on last tile) + pack with cb_exps reserve(Ht) upfront and
+        // push(Ht) at end. Split into 2 chains:
+        //   A (Ht-1 iters, non-last): CopyTile(cb_x_m_max @ i) + ... + Exp + Pack
+        //   B (1 iter, last with mask): CopyTile(cb_x_m_max @ Ht-1) + ... + Exp +
+        //                                CopyTile(cb_mask) + Mask + Pack
+        //
+        // cb_x_m_max InputLifecycle::CallerManaged + Block (held outside; sequential read 0..Ht-1
+        // across iters; compute_kernel_lib::TileOffset::Set(Ht-1) for the last tile).
+        // cb_mask InputLifecycle::CallerManaged + Scalar (held outside via line 42 wait_front(1)).
+        // cb_exps OutputLifecycle::Streaming (per-tile reserve+push replaces upfront reserve+
+        // push; net Ht tiles pushed matches original).
+        //
+        // Reconfig: copy_tile_init_with_dt -&gt; CopyTileReconfig::Input.
+        // pack_tile_with_dt -&gt; PackTileReconfig::Output.
+<span class="dz" data-d="2">        cb_x_m_max_obj.wait_front(Ht);</span>
+<span class="dz" data-d="6">        compute_kernel_lib::eltwise_chain(
+            Ht - 1,
+            compute_kernel_lib::CopyTile&lt;
+                cb_x_m_max,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::CopyTileReconfig::Input,
+                compute_kernel_lib::OperandKind::Block&gt;{},
+#ifndef SOFTMAX
+            compute_kernel_lib::Negative&lt;compute_kernel_lib::Dst::D0&gt;{},
+#endif
+            compute_kernel_lib::Exp&lt;
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Dst::D0&gt;{},
+            compute_kernel_lib::PackTile&lt;cb_exps&gt;{});
+
+        compute_kernel_lib::eltwise_chain(
+            1u,
+            compute_kernel_lib::CopyTile&lt;
+                cb_x_m_max,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::CopyTileReconfig::Input,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::TileOffset::Set&gt;{Ht - 1},
+#ifndef SOFTMAX
+            compute_kernel_lib::Negative&lt;compute_kernel_lib::Dst::D0&gt;{},
+#endif
+            compute_kernel_lib::Exp&lt;
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Dst::D0&gt;{},
+            compute_kernel_lib::
+                CopyTile&lt;cb_mask, compute_kernel_lib::Dst::D1, compute_kernel_lib::InputLifecycle::CallerManaged&gt;{},
+            compute_kernel_lib::Mask&lt;DataFormat::Float16_b, compute_kernel_lib::Dst::D0&gt;{},
+            compute_kernel_lib::PackTile&lt;cb_exps&gt;{});</span>
+
+#ifdef LOG
+        // log(sum) - pop tiles after reduce
+        compute_kernel_lib::
+            reduce&lt;PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop&gt;(
+                cb_exps,
+                cb_sum_scaler,
+                cb_recipsumexps,
+                compute_kernel_lib::ReduceInputBlockShape::col(Ht),
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                compute_kernel_lib::NoAccumulation{},
+                [](uint32_t dst_idx) {
+                    log_tile_init();
+                    log_tile(dst_idx);
+                });
+#else
+        // 1/sum - keep tiles for subsequent multiplication
+        compute_kernel_lib::
+            reduce&lt;PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop&gt;(
+                cb_exps,
+                cb_sum_scaler,
+                cb_recipsumexps,
+                compute_kernel_lib::ReduceInputBlockShape::col(Ht),
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                compute_kernel_lib::NoAccumulation{},
+                [](uint32_t dst_idx) {
+                    recip_tile_init();
+                    recip_tile(dst_idx);
+                });
+#endif
+
+        // compute final result — ROW bcast on cb_recipsumexps (1 tile).
+        // LOG path: out = (x - max) - log(sum_exp). Reads cb_x_m_max (held by
+        //   external wait/pop) and cb_recipsumexps.
+        // !LOG path: out = exp(x-max) / sum_exp. Reads cb_exps (chain-owned bulk
+        //   wait+pop) and cb_recipsumexps; cb_x_m_max held externally because
+        //   the chain doesn&#x27;t touch it.
+        // cb_x_m_max wait/pop wrap the chain symmetrically in both paths (chain
+        // uses InputLifecycle::CallerManaged on it in LOG path).
+        // Reconfig: *_bcast_rows_init_short_with_dt -&gt; Input.
+        //   pack_tile_with_dt -&gt; Output.
+<span class="dz" data-d="2">        cb_x_m_max_obj.wait_front(Ht);</span>
+#ifdef LOG
+<span class="dz" data-d="3">        compute_kernel_lib::sub&lt;
+            cb_x_m_max,
+            cb_recipsumexps,
+            cb_out0,
+            compute_kernel_lib::BroadcastDim::Row,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::OutputLifecycle::Bulk,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::Output,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::OperandKind::Scalar&gt;(Ht);
+#else
+        compute_kernel_lib::mul&lt;
+            cb_exps,
+            cb_recipsumexps,
+            cb_out0,
+            compute_kernel_lib::BroadcastDim::Row,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::OutputLifecycle::Bulk,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::Output,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::OperandKind::Scalar&gt;(Ht);</span>
+#endif
+<span class="dz" data-d="2">        cb_x_m_max_obj.pop_front(Ht);</span>
+    }
+}
+</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions &mdash; hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; eltwise_chain + convenience + Exp + Mask/Negative</b> &mdash; Add <code>eltwise_chain.hpp</code>, <code>eltwise_convenience.hpp</code> (sub/mul), <code>eltwise_math.hpp</code> (Exp), <code>eltwise_misc.hpp</code> (Mask, Negative).</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; Bulk + chain-owned wait/pop</b> &mdash; Manual <code>reserve_back/wait_front/pop_front/push_back(Ht)</code> around the x-max and final loops become <code>InputLifecycle::Bulk</code>/<code>OutputLifecycle::Bulk</code>; <code>cb_max</code> is <code>Bulk + Scalar</code> (chain emits the 1-tile wait via <code>window_1d&lt;Scalar&gt;</code>).</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; sub/mul Row bcast convenience</b> &mdash; <code>sub_tiles_bcast&lt;ROW&gt;</code> and <code>mul_tiles_bcast_rows</code> loops replaced by single <code>compute_kernel_lib::sub/mul&lt;...,BroadcastDim::Row,...&gt;(Ht)</code> block calls.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; Input/Output reconfig flags</b> &mdash; <code>*_bcast_*_init_short_with_dt</code> and <code>pack_tile_with_dt</code> become <code>BinaryDataFormatReconfig::Input</code> + <code>PackTileReconfig::Output</code> (or <code>CopyTileReconfig::Input</code> in the exp chain).</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; exp(x-max) split into 2 chains</b> &mdash; The per-tile <code>copy_tile_with_dt</code> + (<code>Negative</code> if !SOFTMAX) + <code>exp_tile</code> + (mask on last) loop is split: chain A over <code>Ht-1</code> non-last tiles, chain B (1 tile, <code>TileOffset::Set(Ht-1)</code>) adds <code>CopyTile&lt;cb_mask,D1&gt;</code> + <code>Mask</code>. <code>cb_exps</code> becomes per-tile <code>OutputLifecycle::Streaming</code>.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-moreh_moreh_softmax_moreh_softmax_h">
+{
+  "1": {
+    "title": "eltwise_chain + convenience + Exp + Mask/Negative",
+    "body": "Add <code>eltwise_chain.hpp</code>, <code>eltwise_convenience.hpp</code> (sub/mul), <code>eltwise_math.hpp</code> (Exp), <code>eltwise_misc.hpp</code> (Mask, Negative).",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "Bulk + chain-owned wait/pop",
+    "body": "Manual <code>reserve_back/wait_front/pop_front/push_back(Ht)</code> around the x-max and final loops become <code>InputLifecycle::Bulk</code>/<code>OutputLifecycle::Bulk</code>; <code>cb_max</code> is <code>Bulk + Scalar</code> (chain emits the 1-tile wait via <code>window_1d&lt;Scalar&gt;</code>).",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "sub/mul Row bcast convenience",
+    "body": "<code>sub_tiles_bcast&lt;ROW&gt;</code> and <code>mul_tiles_bcast_rows</code> loops replaced by single <code>compute_kernel_lib::sub/mul&lt;...,BroadcastDim::Row,...&gt;(Ht)</code> block calls.",
+    "color": "#3f8ae0"
+  },
+  "4": {
+    "title": "Input/Output reconfig flags",
+    "body": "<code>*_bcast_*_init_short_with_dt</code> and <code>pack_tile_with_dt</code> become <code>BinaryDataFormatReconfig::Input</code> + <code>PackTileReconfig::Output</code> (or <code>CopyTileReconfig::Input</code> in the exp chain).",
+    "color": "#cf222e"
+  },
+  "6": {
+    "title": "exp(x-max) split into 2 chains",
+    "body": "The per-tile <code>copy_tile_with_dt</code> + (<code>Negative</code> if !SOFTMAX) + <code>exp_tile</code> + (mask on last) loop is split: chain A over <code>Ht-1</code> non-last tiles, chain B (1 tile, <code>TileOffset::Set(Ht-1)</code>) adds <code>CopyTile&lt;cb_mask,D1&gt;</code> + <code>Mask</code>. <code>cb_exps</code> becomes per-tile <code>OutputLifecycle::Streaming</code>.",
+    "color": "#ff7a00"
+  }
+}
+</script>

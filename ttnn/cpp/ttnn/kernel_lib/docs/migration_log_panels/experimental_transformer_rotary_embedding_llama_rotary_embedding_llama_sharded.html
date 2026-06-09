@@ -1,0 +1,295 @@
+<section class="panel" id="panel-experimental_transformer_rotary_embedding_llama_rotary_embedding_llama_sharded">
+  <h1>rotary_embedding_llama_sharded — <span class="badge badge-partial">PARTIAL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/rotary_embedding_llama_sharded.cpp</div>
+  <div class="meta"><b>Δ</b> +43/-32 &nbsp; <b>Decisions:</b> 5</div>
+
+  <div class="focus-toolbar" data-fkernel="experimental_transformer_rotary_embedding_llama_rotary_embedding_llama_sharded">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; chain includes</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; out = cos + sin</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; sin_interim = rotated * sin (ROW bcast)</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; cos_interim = x * cos (ROW bcast)</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; BLOCKER: matmul stays raw</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+#include &quot;api/compute/common.h&quot;
+#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/bcast.h&quot;
+#include &quot;api/compute/matmul.h&quot;
+
+ALWI void ACQ() { acquire_dst(); }
+ALWI void REL() { release_dst(); }
+
+void kernel_main() {
+    constexpr uint32_t onetile = 1;
+    constexpr uint32_t in_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t cos_cb = get_compile_time_arg_val(1);
+    constexpr uint32_t sin_cb = get_compile_time_arg_val(2);
+    constexpr uint32_t trans_mat_cb = get_compile_time_arg_val(3);
+
+    constexpr uint32_t rotated_in_interm_cb = get_compile_time_arg_val(4);
+    constexpr uint32_t cos_interm_cb = get_compile_time_arg_val(5);
+    constexpr uint32_t sin_interm_cb = get_compile_time_arg_val(6);
+    constexpr uint32_t out_cb = get_compile_time_arg_val(7);
+    constexpr uint32_t Wt = get_compile_time_arg_val(8);
+    constexpr uint32_t Ht = get_compile_time_arg_val(9);  // How many rows (tiles) in n_heads dimension
+
+    mm_init(in_cb, trans_mat_cb, out_cb);
+    binary_op_init_common(rotated_in_interm_cb, sin_cb, sin_interm_cb);  // General Init for all binary ops
+
+    // Get the trans_mat
+    cb_reserve_back(trans_mat_cb, onetile);
+    cb_push_back(trans_mat_cb, onetile);
+    cb_wait_front(trans_mat_cb, onetile);
+
+    // Get the sin/cos matrices
+    // TODO: To parallelize across multiple batch, this should be in a batch loop
+    cb_reserve_back(sin_cb, Wt);
+    cb_reserve_back(cos_cb, Wt);
+
+    cb_push_back(sin_cb, Wt);
+    cb_push_back(cos_cb, Wt);
+
+    for (uint32_t ht = 0; ht &lt; Ht; ht++) {  // Over n_heads_t dimension
+        cb_reserve_back(rotated_in_interm_cb, Wt);
+        cb_reserve_back(sin_interm_cb, Wt);
+        cb_reserve_back(cos_interm_cb, Wt);
+        cb_reserve_back(out_cb, Wt);
+
+        // Get the input
+        cb_reserve_back(in_cb, Wt);
+        cb_push_back(in_cb, Wt);
+        cb_wait_front(in_cb, Wt);
+
+        // Do the computation
+
+<span class="dz" data-d="6">        // rotated = x @ trans_mat
+        mm_init_short(in_cb, trans_mat_cb);
+        ACQ();
+        for (uint32_t j = 0; j &lt; Wt; ++j) {
+            matmul_tiles(in_cb, trans_mat_cb, j, 0, j);
+            pack_tile(j, rotated_in_interm_cb, j);
+        }
+        REL();
+        cb_push_back(rotated_in_interm_cb, Wt);</span>
+        cb_wait_front(rotated_in_interm_cb, Wt);
+
+<span class="dz" data-d="4">        mul_bcast_rows_init_short(rotated_in_interm_cb, sin_cb);
+        ACQ();
+        for (uint32_t j = 0; j &lt; Wt; ++j) {
+            // sin_interim = rotated * sin
+            mul_tiles_bcast&lt;BroadcastType::ROW&gt;(rotated_in_interm_cb, sin_cb, j, j, j);
+            pack_tile(j, sin_interm_cb, j);
+        }
+        REL();
+        cb_push_back(sin_interm_cb, Wt);
+        cb_pop_front(rotated_in_interm_cb, Wt);</span>
+
+<span class="dz" data-d="5">        ACQ();
+        for (uint32_t j = 0; j &lt; Wt; ++j) {
+            // cos_interim = x * cos
+            mul_tiles_bcast&lt;BroadcastType::ROW&gt;(in_cb, cos_cb, j, j, j);
+            pack_tile(j, cos_interm_cb, j);
+        }
+        REL();
+        cb_push_back(cos_interm_cb, Wt);
+        cb_pop_front(in_cb, Wt);  // Done with input</span>
+
+<span class="dz" data-d="2">        cb_wait_front(sin_interm_cb, Wt);
+        cb_wait_front(cos_interm_cb, Wt);
+        add_tiles_init(cos_interm_cb, sin_interm_cb);
+        ACQ();
+        for (uint32_t j = 0; j &lt; Wt; ++j) {
+            // out = cos_interim + sin_interim
+            add_tiles(cos_interm_cb, sin_interm_cb, j, j, j);
+            pack_tile(j, out_cb, j);
+        }
+        REL();
+        cb_push_back(out_cb, Wt);
+        cb_pop_front(sin_interm_cb, Wt);
+        cb_pop_front(cos_interm_cb, Wt);</span>
+    }
+
+    // Done with the sin/cos matrices, so remove from CB
+    cb_pop_front(sin_cb, Wt);
+    cb_pop_front(cos_cb, Wt);
+
+    // Done with the transformation matrix, so remove from CB
+    cb_pop_front(trans_mat_cb, onetile);
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+#include &quot;api/compute/common.h&quot;
+#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/bcast.h&quot;
+#include &quot;api/compute/matmul.h&quot;
+<span class="dz" data-d="1">#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp&quot;</span>
+
+ALWI void ACQ() { acquire_dst(); }
+ALWI void REL() { release_dst(); }
+
+void kernel_main() {
+    constexpr uint32_t onetile = 1;
+    constexpr uint32_t in_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t cos_cb = get_compile_time_arg_val(1);
+    constexpr uint32_t sin_cb = get_compile_time_arg_val(2);
+    constexpr uint32_t trans_mat_cb = get_compile_time_arg_val(3);
+
+    constexpr uint32_t rotated_in_interm_cb = get_compile_time_arg_val(4);
+    constexpr uint32_t cos_interm_cb = get_compile_time_arg_val(5);
+    constexpr uint32_t sin_interm_cb = get_compile_time_arg_val(6);
+    constexpr uint32_t out_cb = get_compile_time_arg_val(7);
+    constexpr uint32_t Wt = get_compile_time_arg_val(8);
+    constexpr uint32_t Ht = get_compile_time_arg_val(9);  // How many rows (tiles) in n_heads dimension
+
+    mm_init(in_cb, trans_mat_cb, out_cb);
+    binary_op_init_common(rotated_in_interm_cb, sin_cb, sin_interm_cb);  // General Init for all binary ops
+
+    // Get the trans_mat
+    cb_reserve_back(trans_mat_cb, onetile);
+    cb_push_back(trans_mat_cb, onetile);
+    cb_wait_front(trans_mat_cb, onetile);
+
+    // Get the sin/cos matrices
+    // TODO: To parallelize across multiple batch, this should be in a batch loop
+    cb_reserve_back(sin_cb, Wt);
+    cb_reserve_back(cos_cb, Wt);
+
+    cb_push_back(sin_cb, Wt);
+    cb_push_back(cos_cb, Wt);
+
+    for (uint32_t ht = 0; ht &lt; Ht; ht++) {  // Over n_heads_t dimension
+        cb_reserve_back(rotated_in_interm_cb, Wt);
+        cb_reserve_back(sin_interm_cb, Wt);
+        cb_reserve_back(cos_interm_cb, Wt);
+        cb_reserve_back(out_cb, Wt);
+
+        // Get the input
+        cb_reserve_back(in_cb, Wt);
+        cb_push_back(in_cb, Wt);
+        cb_wait_front(in_cb, Wt);
+
+        // Do the computation
+
+<span class="dz" data-d="6">        // rotated = x @ trans_mat
+        mm_init_short(in_cb, trans_mat_cb);
+        ACQ();
+        for (uint32_t j = 0; j &lt; Wt; ++j) {
+            matmul_tiles(in_cb, trans_mat_cb, j, 0, j);
+            pack_tile(j, rotated_in_interm_cb, j);
+        }
+        REL();
+        cb_push_back(rotated_in_interm_cb, Wt);</span>
+        cb_wait_front(rotated_in_interm_cb, Wt);
+
+<span class="dz" data-d="4">        // sin_interim = rotated * sin (bcast ROW).
+        // rotated InputLifecycle::Bulk + Block; sin InputLifecycle::HeldBulk + Block (pre-waited line 42, popped at
+        // 106). sin_interm OutputLifecycle::Bulk + Block. Reconfig Input + None (no explicit pack_reconfig).
+        compute_kernel_lib::mul&lt;
+            rotated_in_interm_cb,
+            sin_cb,
+            sin_interm_cb,
+            compute_kernel_lib::BroadcastDim::Row,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::InputLifecycle::HeldBulk,
+            compute_kernel_lib::OutputLifecycle::Bulk,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::None,
+            compute_kernel_lib::OperandKind::Block&gt;(compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));</span>
+
+<span class="dz" data-d="5">        // cos_interim = x * cos (bcast ROW). Same pattern as sin_interim.
+        compute_kernel_lib::mul&lt;
+            in_cb,
+            cos_cb,
+            cos_interm_cb,
+            compute_kernel_lib::BroadcastDim::Row,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::InputLifecycle::HeldBulk,
+            compute_kernel_lib::OutputLifecycle::Bulk,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::None,
+            compute_kernel_lib::OperandKind::Block&gt;(compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));</span>
+
+<span class="dz" data-d="2">        // out = cos_interim + sin_interim. Both InputLifecycle::Bulk + Block, out_cb OutputLifecycle::Bulk + Block.
+        compute_kernel_lib::add&lt;
+            cos_interm_cb,
+            sin_interm_cb,
+            out_cb,
+            compute_kernel_lib::BroadcastDim::None,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::OutputLifecycle::Bulk,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::None,
+            compute_kernel_lib::OperandKind::Block&gt;(compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));</span>
+    }
+
+    // Done with the sin/cos matrices, so remove from CB
+    cb_pop_front(sin_cb, Wt);
+    cb_pop_front(cos_cb, Wt);
+
+    // Done with the transformation matrix, so remove from CB
+    cb_pop_front(trans_mat_cb, onetile);
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; chain includes</b> — Added <code>eltwise_chain.hpp</code> / <code>eltwise_convenience.hpp</code>; matmul headers kept for the raw rotate matmul.</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; out = cos + sin</b> — Raw <code>add_tiles_init + Wt-loop add_tiles/pack_tile</code> became <code>add&lt;cos_interm_cb, sin_interm_cb, out_cb, …, Bulk, Bulk, Bulk, …, OperandKind::Block&gt;</code>; held sin/cos popped after the loop.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; sin_interim = rotated * sin (ROW bcast)</b> — Raw <code>mul_bcast_rows_init_short + Wt-loop mul_tiles_bcast&lt;ROW&gt;</code> became <code>mul&lt;…, BroadcastDim::Row, Bulk, HeldBulk, Bulk, BinaryDataFormatReconfig::Input, PackTileReconfig::None, OperandKind::Block&gt;</code>; sin is <code>HeldBulk</code> (pre-waited, popped at loop end).</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; cos_interim = x * cos (ROW bcast)</b> — Same ROW-bcast convenience <code>mul&lt;in_cb, cos_cb, cos_interm_cb, …&gt;</code>; <code>in_cb</code> Bulk, <code>cos_cb</code> HeldBulk.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; BLOCKER: matmul stays raw</b> — Per migration_status: the three FPU eltwise loops migrate but the <code>x @ trans_mat</code> matmul loop stays raw LLK (<code>mm_init_short + Wt-loop matmul_tiles/pack_tile</code>) — no chain matmul element.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-experimental_transformer_rotary_embedding_llama_rotary_embedding_llama_sharded">
+{
+  "1": {
+    "title": "chain includes",
+    "body": "Added <code>eltwise_chain.hpp</code> / <code>eltwise_convenience.hpp</code>; matmul headers kept for the raw rotate matmul.",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "out = cos + sin",
+    "body": "Raw <code>add_tiles_init + Wt-loop add_tiles/pack_tile</code> became <code>add&lt;cos_interm_cb, sin_interm_cb, out_cb, \u2026, Bulk, Bulk, Bulk, \u2026, OperandKind::Block&gt;</code>; held sin/cos popped after the loop.",
+    "color": "#2ea043"
+  },
+  "4": {
+    "title": "sin_interim = rotated * sin (ROW bcast)",
+    "body": "Raw <code>mul_bcast_rows_init_short + Wt-loop mul_tiles_bcast&lt;ROW&gt;</code> became <code>mul&lt;\u2026, BroadcastDim::Row, Bulk, HeldBulk, Bulk, BinaryDataFormatReconfig::Input, PackTileReconfig::None, OperandKind::Block&gt;</code>; sin is <code>HeldBulk</code> (pre-waited, popped at loop end).",
+    "color": "#cf222e"
+  },
+  "5": {
+    "title": "cos_interim = x * cos (ROW bcast)",
+    "body": "Same ROW-bcast convenience <code>mul&lt;in_cb, cos_cb, cos_interm_cb, \u2026&gt;</code>; <code>in_cb</code> Bulk, <code>cos_cb</code> HeldBulk.",
+    "color": "#9f4bbf"
+  },
+  "6": {
+    "title": "BLOCKER: matmul stays raw",
+    "body": "Per migration_status: the three FPU eltwise loops migrate but the <code>x @ trans_mat</code> matmul loop stays raw LLK (<code>mm_init_short + Wt-loop matmul_tiles/pack_tile</code>) \u2014 no chain matmul element.",
+    "color": "#ff7a00"
+  }
+}
+</script>

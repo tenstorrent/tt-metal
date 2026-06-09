@@ -1,0 +1,262 @@
+<section class="panel" id="panel-moreh_moreh_clip_grad_norm_moreh_clip_grad_norm_step2_moreh_clip_grad_norm_step2_kernel">
+  <h1>moreh_clip_grad_norm_step2_kernel — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step2/device/kernels/moreh_clip_grad_norm_step2_kernel.cpp</div>
+  <div class="meta"><b>Δ</b> +116/-44 &nbsp; <b>Decisions:</b> 5</div>
+
+  <div class="focus-toolbar" data-fkernel="moreh_moreh_clip_grad_norm_moreh_clip_grad_norm_step2_moreh_clip_grad_norm_step2_kernel">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; CB ids→constexpr</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; held decimal</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; power inlined</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; x accumulate</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; init branch kept</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+<span class="dz" data-d="1">#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+void kernel_main() {
+    int i{0};
+    const auto num_tiles = get_arg_val&lt;uint32_t&gt;(i++);
+    const auto p = get_arg_val&lt;uint32_t&gt;(i++);
+    const bool p_is_negative = get_arg_val&lt;uint32_t&gt;(i++) == 1;
+
+<span class="dz" data-d="1">    std::uint8_t input_id{0};
+    const auto cb_input = input_id++;
+    CircularBuffer cb_input_obj(cb_input);  // input(==tmp_pow_sum)
+    const auto cb_decimal = input_id++;
+    CircularBuffer cb_decimal_obj(cb_decimal);  // decimal
+
+    std::uint8_t output_id{16};
+    // x^p * exp(log(x) * decimal)
+    const auto cb_y = output_id++;  // output(==total_norm)
+
+    std::uint8_t intermed_id{24};
+    const auto cb_x = intermed_id++;
+    CircularBuffer cb_x_obj(cb_x);           // Sum[tmp_pow_sum](==x)
+    const auto cb_xpow = intermed_id++;      // x^p
+    const auto cb_logx = intermed_id++;      // log(x)
+    const auto cb_exp_lxmd = intermed_id++;  // exp(log(x) * decimal)</span>
+
+<span class="dz" data-d="5">    constexpr uint32_t onetile = 1;
+    constexpr uint32_t dst0 = 0;
+
+    if (num_tiles &gt; 1) {
+        binary_op_init_common(cb_input, cb_x, cb_y);
+    } else {
+        binary_op_init_common(cb_logx, cb_decimal, cb_y);
+    }</span>
+
+<span class="dz" data-d="2">    cb_decimal_obj.wait_front(onetile);  // comes from the reader</span>
+
+    // Compute cb_x
+    for (uint32_t tile_idx = 0; tile_idx &lt; num_tiles; tile_idx++) {
+<span class="dz" data-d="4">        if (tile_idx == 0) {
+            tile_regs_acquire();
+            cb_input_obj.wait_front(onetile);  // comes from the reader
+            cb_x_obj.reserve_back(onetile);
+
+            copy_tile_init(cb_input);
+            copy_tile(cb_input, 0, dst0);
+            cb_input_obj.pop_front(onetile);
+            tile_regs_commit();
+
+            tile_regs_wait();
+            pack_tile(dst0, cb_x);
+            cb_x_obj.push_back(onetile);
+            tile_regs_release();
+        } else {
+            tile_regs_acquire();
+            cb_input_obj.wait_front(onetile);  // comes from the reader
+            cb_x_obj.wait_front(onetile);
+            cb_x_obj.reserve_back(onetile);
+
+            add_tiles_init(cb_input, cb_x);
+            add_tiles(cb_input, cb_x, 0, 0, dst0);
+            cb_x_obj.pop_front(onetile);
+            cb_input_obj.pop_front(onetile);
+            tile_regs_commit();
+
+            tile_regs_wait();
+            pack_tile(dst0, cb_x);
+            cb_x_obj.push_back(onetile);
+            tile_regs_release();
+        }</span>
+    }
+    // x^p
+<span class="dz" data-d="3">    power_tile_to_cb(cb_x, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_y, p, p_is_negative);</span>
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+<span class="dz" data-d="1">#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp&quot;  // PowerIterative, Recip, Log, Exp
+#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+void kernel_main() {
+    int i{0};
+    const auto num_tiles = get_arg_val&lt;uint32_t&gt;(i++);
+    const auto p = get_arg_val&lt;uint32_t&gt;(i++);
+    const bool p_is_negative = get_arg_val&lt;uint32_t&gt;(i++) == 1;
+
+<span class="dz" data-d="1">    constexpr uint32_t cb_input = 0;    // input(==tmp_pow_sum)
+    constexpr uint32_t cb_decimal = 1;  // decimal
+
+    // x^p * exp(log(x) * decimal)
+    constexpr uint32_t cb_y = 16;  // output(==total_norm)
+
+    constexpr uint32_t cb_x = 24;         // Sum[tmp_pow_sum](==x)
+    constexpr uint32_t cb_xpow = 25;      // x^p
+    constexpr uint32_t cb_logx = 26;      // log(x)
+    constexpr uint32_t cb_exp_lxmd = 27;  // exp(log(x) * decimal)</span>
+
+    constexpr uint32_t onetile = 1;
+    constexpr uint32_t dst0 = 0;
+
+<span class="dz" data-d="5">    if (num_tiles &gt; 1) {
+        binary_op_init_common(cb_input, cb_x, cb_y);
+    } else {
+        binary_op_init_common(cb_logx, cb_decimal, cb_y);
+    }</span>
+
+<span class="dz" data-d="2">    cb_wait_front(cb_decimal, onetile);  // comes from the reader</span>
+
+    // Compute cb_x
+<span class="dz" data-d="4">    for (uint32_t tile_idx = 0; tile_idx &lt; num_tiles; tile_idx++) {
+        if (tile_idx == 0) {
+            // Seed cb_x with first cb_input tile.
+            // Original: copy_tile_init(cb_input) reconfigs srca; pack_tile no reconfig.
+            compute_kernel_lib::copy&lt;
+                cb_input,
+                cb_x,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::CopyTileReconfig::Input,
+                compute_kernel_lib::PackTileReconfig::None&gt;(onetile);
+        } else {
+            // cb_x = cb_input + cb_x (in-place accumulator).
+            // Original: add_tiles_init reconfigs srca/srcb; pack_tile no reconfig.
+            compute_kernel_lib::add&lt;
+                cb_input,
+                cb_x,
+                cb_x,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::PackTileReconfig::None&gt;(onetile);
+        }</span>
+    }
+<span class="dz" data-d="3">    // Inline power_tile_to_cb body as 4 eltwise_chain stages:
+    //   A: x^p  (InputLifecycle::HeldStream on cb_x → CopyTile + PowerIterative(p) + [Recip if p&lt;0] +
+    //   PackTile&lt;cb_xpow&gt;) B: log(x) (InputLifecycle::NoWaitPop on cb_x → CopyTile + Log + PackTile&lt;cb_logx&gt;) C:
+    //   exp(log(x) * decimal) (BinaryFpu Mul + Exp + PackTile&lt;cb_exp_lxmd&gt;) D: xpow * exp_lxmd (BinaryFpu Mul +
+    //   PackTile&lt;cb_y&gt;)
+    //
+    // Reconfig audit (matches power_tile_to_cb&#x27;s per-stage *_with_dt calls):
+    //   - copy_tile_init_with_dt -&gt; CopyTileReconfig::Input
+    //   - mul_tiles_init_with_dt -&gt; BinaryDataFormatReconfig::Input
+    //   - pack_tile_with_dt      -&gt; PackTileReconfig::Output
+    //
+    // cb_decimal InputLifecycle::CallerManaged + Scalar (held by external wait_front at top of kernel).
+    if (p_is_negative) {
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::
+                CopyTile&lt;cb_x, compute_kernel_lib::Dst::D0, compute_kernel_lib::InputLifecycle::HeldStream&gt;{},
+            compute_kernel_lib::PowerIterative&lt;compute_kernel_lib::Dst::D0&gt;{p},
+            compute_kernel_lib::Recip&lt;compute_kernel_lib::Dst::D0&gt;{},
+            compute_kernel_lib::PackTile&lt;cb_xpow&gt;{});
+    } else {
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::
+                CopyTile&lt;cb_x, compute_kernel_lib::Dst::D0, compute_kernel_lib::InputLifecycle::HeldStream&gt;{},
+            compute_kernel_lib::PowerIterative&lt;compute_kernel_lib::Dst::D0&gt;{p},
+            compute_kernel_lib::PackTile&lt;cb_xpow&gt;{});
+    }
+
+    // Stage B: log(x). cb_x already waited (Stage A&#x27;s InputLifecycle::HeldStream did wait but no pop);
+    //   now pop it via InputLifecycle::NoWaitPop.
+    compute_kernel_lib::unary&lt;
+        compute_kernel_lib::Log&lt;compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0&gt;,
+        cb_x,
+        cb_logx,
+        compute_kernel_lib::InputLifecycle::NoWaitPop&gt;(onetile);
+
+    // Stage C: exp(log(x) * decimal). cb_decimal pre-waited at top of kernel.
+    compute_kernel_lib::eltwise_chain(
+        onetile,
+        compute_kernel_lib::BinaryFpu&lt;
+            cb_logx,
+            cb_decimal,
+            compute_kernel_lib::BinaryFpuOp::Mul,
+            compute_kernel_lib::BroadcastDim::None,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::InputLifecycle::CallerManaged&gt;{},
+        compute_kernel_lib::
+            Exp&lt;compute_kernel_lib::Approx::Exact, compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0&gt;{},
+        compute_kernel_lib::PackTile&lt;cb_exp_lxmd&gt;{});
+
+    // Stage D: x^p * exp(log(x) * decimal) = (x + decimal)^p -&gt; cb_y.
+    compute_kernel_lib::mul&lt;cb_xpow, cb_exp_lxmd, cb_y&gt;(onetile);</span>
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; CB ids → constexpr + includes</b> — Dynamic <code>std::uint8_t input_id++</code> CB allocation replaced with <code>constexpr</code> ids; added <code>eltwise_chain/convenience/math</code> headers.</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; Pre-waited held decimal</b> — <code>cb_decimal</code> is waited once at the top and read inside the Exp chain as an <code>InputLifecycle::CallerManaged</code> Scalar operand — no per-stage re-wait.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; power_tile_to_cb inlined as 4 chains</b> — The <code>power_tile_to_cb</code> call was inlined: PowerIterative(+Recip if p&lt;0), Log via <code>unary&lt;..,NoWaitPop&gt;</code>, Exp via <code>BinaryFpu Mul</code>, and final <code>mul&lt;cb_xpow,cb_exp_lxmd,cb_y&gt;</code>.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; x seed/accumulate reconfig</b> — First-tile <code>copy_tile</code> seed and per-tile <code>add_tiles</code> accumulator into <code>cb_x</code> became <code>compute_kernel_lib::copy</code> / <code>add&lt;..,BinaryDataFormatReconfig::Input, PackTileReconfig::None&gt;</code>.</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; Runtime init branch preserved</b> — The <code>num_tiles &gt; 1</code> conditional choosing <code>binary_op_init_common(cb_input,cb_x,cb_y)</code> vs <code>(cb_logx,cb_decimal,cb_y)</code> is kept verbatim ahead of the chains.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-moreh_moreh_clip_grad_norm_moreh_clip_grad_norm_step2_moreh_clip_grad_norm_step2_kernel">
+{
+  "1": {
+    "title": "CB ids \u2192 constexpr + includes",
+    "body": "Dynamic <code>std::uint8_t input_id++</code> CB allocation replaced with <code>constexpr</code> ids; added <code>eltwise_chain/convenience/math</code> headers.",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "Pre-waited held decimal",
+    "body": "<code>cb_decimal</code> is waited once at the top and read inside the Exp chain as an <code>InputLifecycle::CallerManaged</code> Scalar operand \u2014 no per-stage re-wait.",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "power_tile_to_cb inlined as 4 chains",
+    "body": "The <code>power_tile_to_cb</code> call was inlined: PowerIterative(+Recip if p&lt;0), Log via <code>unary&lt;..,NoWaitPop&gt;</code>, Exp via <code>BinaryFpu Mul</code>, and final <code>mul&lt;cb_xpow,cb_exp_lxmd,cb_y&gt;</code>.",
+    "color": "#3f8ae0"
+  },
+  "4": {
+    "title": "x seed/accumulate reconfig",
+    "body": "First-tile <code>copy_tile</code> seed and per-tile <code>add_tiles</code> accumulator into <code>cb_x</code> became <code>compute_kernel_lib::copy</code> / <code>add&lt;..,BinaryDataFormatReconfig::Input, PackTileReconfig::None&gt;</code>.",
+    "color": "#cf222e"
+  },
+  "5": {
+    "title": "Runtime init branch preserved",
+    "body": "The <code>num_tiles &gt; 1</code> conditional choosing <code>binary_op_init_common(cb_input,cb_x,cb_y)</code> vs <code>(cb_logx,cb_decimal,cb_y)</code> is kept verbatim ahead of the chains.",
+    "color": "#9f4bbf"
+  }
+}
+</script>

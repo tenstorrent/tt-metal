@@ -20,8 +20,11 @@
 //
 // DECODE_MODE branch: in1_cb is the retilized sin/cos held across the entire
 // num_rows*Wt walk; we read tile at runtime offset `in1_idx` (= j) with
-// bcast-rows, never popping in1. compute_kernel_lib::TileOffset::Set requires InputLifecycle::CallerManaged
-// lifecycle, so the wait/reserve/pop/push are emitted externally.
+// bcast-rows, never popping in1. compute_kernel_lib::TileOffset::Set requires the
+// InputLifecycle::CallerManaged lifecycle, so in1's wait stays external. in0, by
+// contrast, uses TileOffset::Unset and is a plain per-iter tile, so it owns its own
+// wait+pop via InputLifecycle::Streaming (the chain emits the in0 wait_front/pop_front).
+// Only the held-in1 wait and the out reserve/push are emitted externally.
 //
 // Non-DECODE_MODE branch: standard per-iter InputLifecycle::Streaming on both sides + plain
 // mul_tiles (no bcast).
@@ -29,7 +32,6 @@ template <uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb>
 ALWI void mul_tiles_chain(uint32_t in1_idx) {
     using namespace compute_kernel_lib;
 #ifdef DECODE_MODE
-    cb_wait_front(in0_cb, 1);
     cb_wait_front(in1_cb, in1_idx + 1);
     cb_reserve_back(out_cb, 1);
     eltwise_chain(
@@ -39,7 +41,7 @@ ALWI void mul_tiles_chain(uint32_t in1_idx) {
             in1_cb,
             BinaryFpuOp::Mul,
             BroadcastDim::Row,
-            InputLifecycle::CallerManaged,
+            InputLifecycle::Streaming,
             InputLifecycle::CallerManaged,
             BinaryDataFormatReconfig::None,
             Dst::D0,
@@ -48,7 +50,6 @@ ALWI void mul_tiles_chain(uint32_t in1_idx) {
             compute_kernel_lib::TileOffset::Unset,
             compute_kernel_lib::TileOffset::Set>{0u, in1_idx},
         PackTile<out_cb, OutputLifecycle::CallerManaged, PackTileReconfig::None>{});
-    cb_pop_front(in0_cb, 1);
     cb_push_back(out_cb, 1);
     // in1 NOT popped — held across the whole walk per DECODE_MODE contract.
 #else

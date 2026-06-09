@@ -1,0 +1,137 @@
+<section class="panel" id="panel-data_movement_bcast_bcast_w">
+  <h1>bcast_w — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_w.cpp</div>
+  <div class="meta"><b>&Delta;</b> +35/-21 &nbsp; <b>Decisions:</b> 3</div>
+
+  <div class="focus-toolbar" data-fkernel="data_movement_bcast_bcast_w">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; HeldStream + pop</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; per-row chain</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; init_bcast kept</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+#include &quot;api/compute/bcast.h&quot;
+
+void kernel_main() {
+    uint32_t w = 0;
+    constexpr uint32_t onetile = 1;
+    uint32_t B = get_arg_val&lt;uint32_t&gt;(0);
+    uint32_t Ht = get_arg_val&lt;uint32_t&gt;(1);
+    uint32_t Wt = get_arg_val&lt;uint32_t&gt;(2);
+
+<span class="dz" data-d="6">    init_bcast&lt;BCAST_LLKOP, BCAST_DIM&gt;(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);</span>
+
+<span class="dz" data-d="3">    for (uint32_t b = 0; b &lt; B; b++) {
+        for (uint32_t h = 0; h &lt; Ht; h++) {
+            cb_wait_front(tt::CBIndex::c_1, onetile);
+            for (uint32_t w = 0; w &lt; Wt; w++) {
+                cb_reserve_back(tt::CBIndex::c_16, onetile);
+
+                acquire_dst();
+
+                cb_wait_front(tt::CBIndex::c_0, onetile);
+                BCAST_OP&lt;BroadcastType::COL&gt;(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0);
+                pack_tile(0, tt::CBIndex::c_16);
+                cb_pop_front(tt::CBIndex::c_0, onetile);
+
+                release_dst();
+
+                cb_push_back(tt::CBIndex::c_16, onetile);
+            }
+            cb_pop_front(tt::CBIndex::c_1, onetile);
+        }</span>
+    }
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+#include &quot;api/compute/bcast.h&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+
+void kernel_main() {
+    constexpr uint32_t onetile = 1;
+    uint32_t B = get_arg_val&lt;uint32_t&gt;(0);
+    uint32_t Ht = get_arg_val&lt;uint32_t&gt;(1);
+    uint32_t Wt = get_arg_val&lt;uint32_t&gt;(2);
+
+    constexpr auto cb_lhs = tt::CBIndex::c_0;
+    constexpr auto cb_rhs = tt::CBIndex::c_1;
+    constexpr auto cb_out = tt::CBIndex::c_16;
+<span class="dz" data-d="2">    CircularBuffer cb_rhs_obj(cb_rhs);</span>
+
+    // Bcast-W: original `init_bcast&lt;BCAST_LLKOP, BCAST_DIM&gt;` preserved as the
+    // big init. Chain&#x27;s BinaryFpu uses CHAIN_BCAST_OP / CHAIN_BCAST_DIM
+    // (helper-lib types emitted by bcast_op_utils).
+<span class="dz" data-d="6">    init_bcast&lt;BCAST_LLKOP, BCAST_DIM&gt;(cb_lhs, cb_rhs, cb_out);</span>
+
+    // bcast_w: 1 cb_rhs scalar per row, broadcast across Wt cb_lhs tiles.
+    // cb_rhs is held across the inner Wt loop and popped once at end-of-row.
+    // Outer B*Ht loop flattened. InputLifecycle::HeldStream gives chain-emitted per-iter
+    // cb_wait_front(1) without popping; explicit pop_front after the chain
+    // matches the original&#x27;s cb_pop_front(cb_rhs, 1) at end of h iter.
+<span class="dz" data-d="3">    for (uint32_t row = 0; row &lt; B * Ht; ++row) {
+        compute_kernel_lib::eltwise_chain(
+            Wt,
+            compute_kernel_lib::BinaryFpu&lt;
+                cb_lhs,
+                cb_rhs,
+                CHAIN_BCAST_OP,
+                CHAIN_BCAST_DIM,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::HeldStream,
+                compute_kernel_lib::BinaryDataFormatReconfig::None&gt;{},
+            compute_kernel_lib::PackTile&lt;
+                cb_out,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::None&gt;{});
+        cb_rhs_obj.pop_front(onetile);
+    }</span>
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; HeldStream rhs + explicit end-of-row pop</b> — 1 rhs scalar per row broadcast across Wt lhs tiles: <code>InputLifecycle::HeldStream</code> gives a per-iter <code>wait_front(1)</code> without pop; an explicit <code>cb_rhs_obj.pop_front(onetile)</code> after the chain matches the original's end-of-row <code>cb_pop_front(c_1,1)</code>.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; Per-row chain over Wt</b> — Outer <code>B*Ht</code> loop flattened to <code>for(row)</code>; each row runs <code>eltwise_chain(Wt, BinaryFpu&lt;COL&gt;, PackTile&lt;...&gt;)</code> replacing the inner <code>BCAST_OP&lt;COL&gt;</code> loop.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; init_bcast preserved + CHAIN_BCAST types</b> — <code>init_bcast&lt;BCAST_LLKOP, BCAST_DIM&gt;</code> stays as the big init; <code>BinaryFpu</code> uses <code>CHAIN_BCAST_OP</code> / <code>CHAIN_BCAST_DIM</code>; reconfig <code>None</code>.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-data_movement_bcast_bcast_w">
+{
+  "2": {
+    "title": "HeldStream rhs + explicit end-of-row pop",
+    "body": "1 rhs scalar per row broadcast across Wt lhs tiles: <code>InputLifecycle::HeldStream</code> gives a per-iter <code>wait_front(1)</code> without pop; an explicit <code>cb_rhs_obj.pop_front(onetile)</code> after the chain matches the original's end-of-row <code>cb_pop_front(c_1,1)</code>.",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "Per-row chain over Wt",
+    "body": "Outer <code>B*Ht</code> loop flattened to <code>for(row)</code>; each row runs <code>eltwise_chain(Wt, BinaryFpu&lt;COL&gt;, PackTile&lt;...&gt;)</code> replacing the inner <code>BCAST_OP&lt;COL&gt;</code> loop.",
+    "color": "#3f8ae0"
+  },
+  "6": {
+    "title": "init_bcast preserved + CHAIN_BCAST types",
+    "body": "<code>init_bcast&lt;BCAST_LLKOP, BCAST_DIM&gt;</code> stays as the big init; <code>BinaryFpu</code> uses <code>CHAIN_BCAST_OP</code> / <code>CHAIN_BCAST_DIM</code>; reconfig <code>None</code>.",
+    "color": "#ff7a00"
+  }
+}
+</script>

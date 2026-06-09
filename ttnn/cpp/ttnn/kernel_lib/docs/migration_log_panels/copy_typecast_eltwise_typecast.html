@@ -1,0 +1,123 @@
+<section class="panel" id="panel-copy_typecast_eltwise_typecast">
+  <h1>eltwise_typecast — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp</div>
+  <div class="meta"><b>&Delta;</b> +16/-27 &nbsp; <b>Decisions:</b> 3</div>
+
+  <div class="focus-toolbar" data-fkernel="copy_typecast_eltwise_typecast">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; helper headers</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; unary&lt;Typecast&gt; chain</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; reconfig None</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+<span class="dz" data-d="1">#include &quot;api/compute/common.h&quot;
+#include &quot;api/compute/tile_move_copy.h&quot;
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;api/compute/eltwise_unary/typecast.h&quot;</span>
+
+void kernel_main() {
+    constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
+    constexpr uint32_t per_core_block_dim = get_compile_time_arg_val(1);
+    constexpr uint32_t input_cb = get_compile_time_arg_val(2);
+    constexpr uint32_t output_cb = get_compile_time_arg_val(3);
+
+    init_sfpu(input_cb, output_cb);
+<span class="dz" data-d="3">    for (uint32_t block_index = 0; block_index &lt; per_core_block_cnt; block_index++) {
+        cb_reserve_back(output_cb, per_core_block_dim);
+        for (uint32_t tile_index = 0; tile_index &lt; per_core_block_dim; ++tile_index) {
+            tile_regs_acquire();
+
+            // Pop tile after tile, copy to DST and pack
+            cb_wait_front(input_cb, 1);
+
+            copy_tile(input_cb, 0, 0);
+
+            TYPECAST_LLK_INIT();
+            TYPECAST_LLK(0);
+
+            tile_regs_commit();
+
+            tile_regs_wait();
+
+            pack_tile(0, output_cb);
+
+            cb_pop_front(input_cb, 1);
+
+            tile_regs_release();
+        }
+        cb_push_back(output_cb, per_core_block_dim);
+    }</span>
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+<span class="dz" data-d="1">#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp&quot;  // Typecast</span>
+
+void kernel_main() {
+    constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
+    constexpr uint32_t per_core_block_dim = get_compile_time_arg_val(1);
+    constexpr uint32_t input_cb = get_compile_time_arg_val(2);
+    constexpr uint32_t output_cb = get_compile_time_arg_val(3);
+
+    init_sfpu(input_cb, output_cb);
+
+    // CHAIN_TYPECAST_IN_DF / CHAIN_TYPECAST_OUT_DF are numeric defines emitted
+    // by the program factory; they map to DataFormat enum values consumed by
+    // the chain Typecast&lt;InDF, OutDF, Slot&gt; element.
+<span class="dz" data-d="3">    constexpr uint32_t total_tiles = per_core_block_cnt * per_core_block_dim;
+    compute_kernel_lib::unary&lt;
+        compute_kernel_lib::Typecast&lt;CHAIN_TYPECAST_IN_DF, CHAIN_TYPECAST_OUT_DF, compute_kernel_lib::Dst::D0&gt;,
+        input_cb,
+        output_cb,
+        compute_kernel_lib::InputLifecycle::Streaming,
+        compute_kernel_lib::OutputLifecycle::Streaming,</span>
+<span class="dz" data-d="4">        compute_kernel_lib::CopyTileReconfig::None,
+        compute_kernel_lib::PackTileReconfig::None&gt;(total_tiles);</span>
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; Helper headers</b> — Dropped <code>tile_move_copy.h</code> / <code>typecast.h</code>; added <code>eltwise_chain.hpp</code>, <code>eltwise_convenience.hpp</code> and <code>eltwise_misc.hpp</code> (for the <code>Typecast</code> chain element).</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; unary&lt;Typecast&gt; replaces copy+TYPECAST loop</b> — The hand-rolled <code>copy_tile</code> + <code>TYPECAST_LLK_INIT/TYPECAST_LLK</code> + <code>pack_tile</code> per-tile loop became one <code>compute_kernel_lib::unary&lt;Typecast&lt;...&gt;&gt;</code> over <code>total_tiles</code>, streaming <code>input_cb</code>→<code>output_cb</code>.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; No per-iter reconfig</b> — Original ran <code>init_sfpu</code> at boot then plain copy/pack — encoded as <code>CopyTileReconfig::None</code> + <code>PackTileReconfig::None</code>.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-copy_typecast_eltwise_typecast">
+{
+  "1": {
+    "title": "Helper headers",
+    "body": "Dropped <code>tile_move_copy.h</code> / <code>typecast.h</code>; added <code>eltwise_chain.hpp</code>, <code>eltwise_convenience.hpp</code> and <code>eltwise_misc.hpp</code> (for the <code>Typecast</code> chain element).",
+    "color": "#d6a000"
+  },
+  "3": {
+    "title": "unary&lt;Typecast&gt; replaces copy+TYPECAST loop",
+    "body": "The hand-rolled <code>copy_tile</code> + <code>TYPECAST_LLK_INIT/TYPECAST_LLK</code> + <code>pack_tile</code> per-tile loop became one <code>compute_kernel_lib::unary&lt;Typecast&lt;...&gt;&gt;</code> over <code>total_tiles</code>, streaming <code>input_cb</code>\u2192<code>output_cb</code>.",
+    "color": "#3f8ae0"
+  },
+  "4": {
+    "title": "No per-iter reconfig",
+    "body": "Original ran <code>init_sfpu</code> at boot then plain copy/pack \u2014 encoded as <code>CopyTileReconfig::None</code> + <code>PackTileReconfig::None</code>.",
+    "color": "#cf222e"
+  }
+}
+</script>

@@ -4,46 +4,32 @@
 
 #include <cstdint>
 #include "api/compute/bcast.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
-    uint32_t arg_index = 0;
-    uint32_t start_n = get_arg_val<uint32_t>(arg_index++);
-    uint32_t start_c = get_arg_val<uint32_t>(arg_index++);
-    uint32_t start_t = get_arg_val<uint32_t>(arg_index++);
-    uint32_t start_th = get_arg_val<uint32_t>(arg_index++);
-    uint32_t start_tw = get_arg_val<uint32_t>(arg_index++);
-    uint32_t num_tiles = get_arg_val<uint32_t>(arg_index++);
-    uint32_t n_stride = get_arg_val<uint32_t>(arg_index++);
-    uint32_t c_stride = get_arg_val<uint32_t>(arg_index++);
-    uint32_t N = get_arg_val<uint32_t>(arg_index++);
-    uint32_t C = get_arg_val<uint32_t>(arg_index++);
-    uint32_t Ht = get_arg_val<uint32_t>(arg_index++);
-    uint32_t Wt = get_arg_val<uint32_t>(arg_index++);
+    // The compute reads src tiles straight off the CB front in order; the n/c/th/tw
+    // start offsets and N/C/Ht/Wt extents only steer the *reader*, never the compute.
+    // Row-bcast is 1 src tile -> 1 dst tile, and the original innermost loop did exactly
+    // one unary_bcast per tile with ++num_tiles_read, so the whole 4-deep nest is just a
+    // streaming walk of `num_tiles` tiles. Flatten it into a single chain call so the
+    // per-op bcast init (UnaryBcast::init) hoists once at chain entry; compute_kernel_hw_startup
+    // supplies the BIG init the chain expects the caller to own.
+    uint32_t num_tiles = get_arg_val<uint32_t>(5);
 
     constexpr auto cb_id_src = get_compile_time_arg_val(0);
     constexpr auto cb_id_dst = get_compile_time_arg_val(1);
-    unary_bcast_init<BroadcastType::ROW>(cb_id_src, cb_id_dst);
 
-    uint32_t HtWt = Ht * Wt;
-    uint32_t num_tiles_read = 0;
-    for (uint32_t n = start_n; n < N && num_tiles_read < num_tiles; ++n, start_c = 0) {
-        for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_th = 0) {
-            for (uint32_t th = start_th; th < Ht && num_tiles_read < num_tiles; ++th, start_tw = 0) {
-                for (uint32_t tw = start_tw; tw < Wt && num_tiles_read < num_tiles; ++tw) {
-                    compute_kernel_lib::unary_bcast<
-                        compute_kernel_lib::BroadcastDim::Row,
-                        cb_id_src,
-                        cb_id_dst,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::OutputLifecycle::Streaming,
-                        compute_kernel_lib::UnaryBcastReconfig::Input,
-                        compute_kernel_lib::PackTileReconfig::None>(1u);
-                    ++num_tiles_read;
-                }
-            }
-        }
-    }
+    compute_kernel_hw_startup(cb_id_src, cb_id_dst);
+
+    compute_kernel_lib::unary_bcast<
+        compute_kernel_lib::BroadcastDim::Row,
+        cb_id_src,
+        cb_id_dst,
+        compute_kernel_lib::InputLifecycle::Streaming,
+        compute_kernel_lib::OutputLifecycle::Streaming,
+        compute_kernel_lib::UnaryBcastReconfig::Input,
+        compute_kernel_lib::PackTileReconfig::None>(num_tiles);
 }

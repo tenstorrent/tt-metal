@@ -1,0 +1,403 @@
+<section class="panel" id="panel-experimental_transformer_rotary_embedding_rotary_embedding">
+  <h1>rotary_embedding — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/compute/rotary_embedding.cpp</div>
+  <div class="meta"><b>Δ</b> +87/-66 &nbsp; <b>Decisions:</b> 5</div>
+
+  <div class="focus-toolbar" data-fkernel="experimental_transformer_rotary_embedding_rotary_embedding">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; include swap</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; scalar-mul + sin chain</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; else-branch + cos chain</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; add → add<> chain</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; mul_tiles_chain (DECODE Streaming)</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+#include &quot;api/compute/common.h&quot;
+#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/bcast.h&quot;
+#include &quot;api/compute/tilize.h&quot;
+#include &quot;api/compute/untilize.h&quot;
+#include &quot;ttnn/kernel_lib/tilize_helpers.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp&quot;
+<span class="dz" data-d="1">
+ALWI void ACQ() { acquire_dst(); }</span>
+ALWI void REL() { release_dst(); }
+
+<span class="dz" data-d="6">ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles, uint32_t in1_idx) {
+    // Multiply input by cos
+    cb_wait_front(in0_cb, num_tiles);
+    cb_wait_front(in1_cb, in1_idx + 1);
+    cb_reserve_back(out_cb, num_tiles);
+
+#ifdef DECODE_MODE
+    ACQ();
+    mul_bcast_rows_init_short(in0_cb, in1_cb);
+    mul_tiles_bcast_rows(in0_cb, in1_cb, 0, in1_idx, 0);
+    pack_tile(0, out_cb);
+    REL();
+    cb_push_back(out_cb, num_tiles);
+    cb_pop_front(in0_cb, num_tiles);
+// We don&#x27;t pop in1 in decode which is sin/cos since we don&#x27;t stream
+#else
+    ACQ();
+    mul_tiles_init(in0_cb, in1_cb);
+    mul_tiles(in0_cb, in1_cb, 0, 0, 0);
+    pack_tile(0, out_cb);
+    REL();
+    cb_push_back(out_cb, num_tiles);
+    cb_pop_front(in0_cb, num_tiles);
+    cb_pop_front(in1_cb, num_tiles);
+#endif
+}</span>
+
+template &lt;uint32_t num_tiles, uint32_t in0_cb, uint32_t out_cb&gt;
+ALWI void UNTILIZE_TILES() {
+    compute_kernel_lib::untilize&lt;
+        num_tiles,
+        in0_cb,
+        out_cb,
+        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
+        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure&gt;(1);
+}
+
+template &lt;uint32_t num_tiles, uint32_t in0_cb, uint32_t out_cb&gt;
+ALWI void TILIZE_ROWS(uint32_t sync_cb) {
+    cb_wait_front(sync_cb, num_tiles);
+    compute_kernel_lib::tilize&lt;
+        num_tiles,
+        in0_cb,
+        out_cb,
+        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure&gt;(1);
+    cb_pop_front(sync_cb, num_tiles);
+}
+
+void kernel_main() {
+    constexpr uint32_t onetile = 1;
+
+    constexpr uint32_t in_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t rotated_in_cb = get_compile_time_arg_val(1);
+    constexpr uint32_t cos_cb = get_compile_time_arg_val(2);
+    constexpr uint32_t sin_cb = get_compile_time_arg_val(3);
+    constexpr uint32_t scalar_cb = get_compile_time_arg_val(4);
+    constexpr uint32_t rotated_in_interm_cb = get_compile_time_arg_val(5);
+    constexpr uint32_t cos_interm_cb = get_compile_time_arg_val(6);
+    constexpr uint32_t sin_interm_cb = get_compile_time_arg_val(7);
+    constexpr uint32_t out_cb = get_compile_time_arg_val(8);
+    constexpr uint32_t num_rows = get_compile_time_arg_val(9);
+    constexpr uint32_t Wt = get_compile_time_arg_val(10);
+    constexpr uint32_t half_Wt = get_compile_time_arg_val(11);
+
+    cb_wait_front(scalar_cb, onetile);
+
+    uint32_t updated_cos_cb = cos_cb;
+    uint32_t updated_sin_cb = sin_cb;
+
+#ifdef DECODE_MODE
+    constexpr uint32_t untilized_cos_cb = get_compile_time_arg_val(12);
+    constexpr uint32_t untilized_cos_sync_cb = get_compile_time_arg_val(13);
+    constexpr uint32_t untilized_sin_cb = get_compile_time_arg_val(14);
+    constexpr uint32_t untilized_sin_sync_cb = get_compile_time_arg_val(15);
+    constexpr uint32_t retilized_cos_cb = get_compile_time_arg_val(16);
+    constexpr uint32_t retilized_sin_cb = get_compile_time_arg_val(17);
+    binary_op_init_common(sin_cb, scalar_cb, untilized_sin_cb);
+    UNTILIZE_TILES&lt;Wt, sin_cb, untilized_sin_cb&gt;();
+    UNTILIZE_TILES&lt;Wt, cos_cb, untilized_cos_cb&gt;();
+    reconfig_data_format_srca(cos_cb, untilized_sin_cb);
+    pack_reconfig_data_format(untilized_cos_cb, retilized_sin_cb);
+    TILIZE_ROWS&lt;Wt, untilized_sin_cb, retilized_sin_cb&gt;(untilized_sin_sync_cb);
+    TILIZE_ROWS&lt;Wt, untilized_cos_cb, retilized_cos_cb&gt;(untilized_cos_sync_cb);
+    updated_cos_cb = retilized_cos_cb;
+    updated_sin_cb = retilized_sin_cb;
+#else
+    binary_op_init_common(rotated_in_cb, scalar_cb, rotated_in_interm_cb);
+#endif
+    uint32_t in1_idx = 0;
+    for (uint32_t i = 0; i &lt; num_rows; ++i) {
+        for (uint32_t j = 0; j &lt; Wt; ++j) {
+#ifdef DECODE_MODE
+            in1_idx = j;
+#endif
+            if (j &lt; half_Wt) {
+                // Multiply half of the rotated input by scalar (-1)
+                reconfig_data_format(rotated_in_cb, scalar_cb);
+                pack_reconfig_data_format(rotated_in_interm_cb);
+<span class="dz" data-d="2">                cb_wait_front(rotated_in_cb, onetile);
+                cb_reserve_back(rotated_in_interm_cb, onetile);
+                ACQ();
+                mul_tiles_bcast_scalar_init_short(rotated_in_cb, scalar_cb);
+                mul_tiles_bcast_scalar(rotated_in_cb, scalar_cb, 0, 0, 0);
+                pack_tile(0, rotated_in_interm_cb);
+                REL();
+                cb_push_back(rotated_in_interm_cb, onetile);
+                cb_pop_front(rotated_in_cb, onetile);
+                reconfig_data_format_srcb(scalar_cb, updated_sin_cb);
+                pack_reconfig_data_format(rotated_in_interm_cb, sin_interm_cb);
+                // Multiply rotated input by sin
+                MUL_TILES(rotated_in_interm_cb, updated_sin_cb, sin_interm_cb, onetile, in1_idx);</span>
+<span class="dz" data-d="3">            } else {
+                reconfig_data_format(rotated_in_cb, updated_sin_cb);
+                pack_reconfig_data_format(out_cb, sin_interm_cb);
+                // Multiply rotated input by sin
+                MUL_TILES(rotated_in_cb, updated_sin_cb, sin_interm_cb, onetile, in1_idx);
+            }
+
+            // Multiply input by cos
+            MUL_TILES(in_cb, updated_cos_cb, cos_interm_cb, onetile, in1_idx);</span>
+
+            // Add applied sin/cos tensors
+<span class="dz" data-d="4">            cb_wait_front(cos_interm_cb, onetile);
+            cb_wait_front(sin_interm_cb, onetile);
+            cb_reserve_back(out_cb, onetile);
+
+            reconfig_data_format_srca(rotated_in_cb, cos_interm_cb);
+            pack_reconfig_data_format(cos_interm_cb, out_cb);
+            ACQ();
+            add_tiles_init(cos_interm_cb, sin_interm_cb);
+            add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);
+            pack_tile(0, out_cb);
+            REL();
+
+            cb_push_back(out_cb, onetile);
+            cb_pop_front(cos_interm_cb, onetile);
+            cb_pop_front(sin_interm_cb, onetile);</span>
+        }
+    }
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+#include &quot;api/compute/common.h&quot;
+#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/bcast.h&quot;
+#include &quot;api/compute/tilize.h&quot;
+#include &quot;api/compute/untilize.h&quot;
+#include &quot;ttnn/kernel_lib/tilize_helpers.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp&quot;
+<span class="dz" data-d="1">#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp&quot;</span>
+
+<span class="dz" data-d="6">// Per-CB-constexpr chain wrapper for `mul(in0, in1) -&gt; out`. Replaces the
+// older raw-LLK ALWI MUL_TILES helper. All three CBs are compile-time
+// (compile-time args) so this resolves to a single eltwise_chain call.
+//
+// DECODE_MODE branch: in1_cb is the retilized sin/cos held across the entire
+// num_rows*Wt walk; we read tile at runtime offset `in1_idx` (= j) with
+// bcast-rows, never popping in1. compute_kernel_lib::TileOffset::Set requires the
+// InputLifecycle::CallerManaged lifecycle, so in1&#x27;s wait stays external. in0, by
+// contrast, uses TileOffset::Unset and is a plain per-iter tile, so it owns its own
+// wait+pop via InputLifecycle::Streaming (the chain emits the in0 wait_front/pop_front).
+// Only the held-in1 wait and the out reserve/push are emitted externally.
+//
+// Non-DECODE_MODE branch: standard per-iter InputLifecycle::Streaming on both sides + plain
+// mul_tiles (no bcast).
+template &lt;uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb&gt;
+ALWI void mul_tiles_chain(uint32_t in1_idx) {
+    using namespace compute_kernel_lib;
+#ifdef DECODE_MODE
+    cb_wait_front(in1_cb, in1_idx + 1);
+    cb_reserve_back(out_cb, 1);
+    eltwise_chain(
+        1u,
+        BinaryFpu&lt;
+            in0_cb,
+            in1_cb,
+            BinaryFpuOp::Mul,
+            BroadcastDim::Row,
+            InputLifecycle::Streaming,
+            InputLifecycle::CallerManaged,
+            BinaryDataFormatReconfig::None,
+            Dst::D0,
+            OperandKind::Scalar,
+            OperandKind::Scalar,
+            compute_kernel_lib::TileOffset::Unset,
+            compute_kernel_lib::TileOffset::Set&gt;{0u, in1_idx},
+        PackTile&lt;out_cb, OutputLifecycle::CallerManaged, PackTileReconfig::None&gt;{});
+    cb_push_back(out_cb, 1);
+    // in1 NOT popped — held across the whole walk per DECODE_MODE contract.
+#else
+    (void)in1_idx;  // unused — in1 is per-iter streamed at index 0.
+    compute_kernel_lib::mul&lt;
+        in0_cb,
+        in1_cb,
+        out_cb,
+        compute_kernel_lib::BroadcastDim::None,
+        compute_kernel_lib::InputLifecycle::Streaming,
+        compute_kernel_lib::InputLifecycle::Streaming,
+        compute_kernel_lib::OutputLifecycle::Streaming,
+        compute_kernel_lib::BinaryDataFormatReconfig::None,
+        compute_kernel_lib::PackTileReconfig::None&gt;(1u);
+#endif
+}</span>
+
+template &lt;uint32_t num_tiles, uint32_t in0_cb, uint32_t out_cb&gt;
+ALWI void UNTILIZE_TILES() {
+    compute_kernel_lib::untilize&lt;
+        num_tiles,
+        in0_cb,
+        out_cb,
+        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
+        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure&gt;(1);
+}
+
+template &lt;uint32_t num_tiles, uint32_t in0_cb, uint32_t out_cb&gt;
+ALWI void TILIZE_ROWS(uint32_t sync_cb) {
+    cb_wait_front(sync_cb, num_tiles);
+    compute_kernel_lib::tilize&lt;
+        num_tiles,
+        in0_cb,
+        out_cb,
+        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure&gt;(1);
+    cb_pop_front(sync_cb, num_tiles);
+}
+
+void kernel_main() {
+    constexpr uint32_t onetile = 1;
+
+    constexpr uint32_t in_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t rotated_in_cb = get_compile_time_arg_val(1);
+    constexpr uint32_t cos_cb = get_compile_time_arg_val(2);
+    constexpr uint32_t sin_cb = get_compile_time_arg_val(3);
+    constexpr uint32_t scalar_cb = get_compile_time_arg_val(4);
+    constexpr uint32_t rotated_in_interm_cb = get_compile_time_arg_val(5);
+    constexpr uint32_t cos_interm_cb = get_compile_time_arg_val(6);
+    constexpr uint32_t sin_interm_cb = get_compile_time_arg_val(7);
+    constexpr uint32_t out_cb = get_compile_time_arg_val(8);
+    constexpr uint32_t num_rows = get_compile_time_arg_val(9);
+    constexpr uint32_t Wt = get_compile_time_arg_val(10);
+    constexpr uint32_t half_Wt = get_compile_time_arg_val(11);
+
+    cb_wait_front(scalar_cb, onetile);
+
+#ifdef DECODE_MODE
+    constexpr uint32_t untilized_cos_cb = get_compile_time_arg_val(12);
+    constexpr uint32_t untilized_cos_sync_cb = get_compile_time_arg_val(13);
+    constexpr uint32_t untilized_sin_cb = get_compile_time_arg_val(14);
+    constexpr uint32_t untilized_sin_sync_cb = get_compile_time_arg_val(15);
+    constexpr uint32_t retilized_cos_cb = get_compile_time_arg_val(16);
+    constexpr uint32_t retilized_sin_cb = get_compile_time_arg_val(17);
+    binary_op_init_common(sin_cb, scalar_cb, untilized_sin_cb);
+    UNTILIZE_TILES&lt;Wt, sin_cb, untilized_sin_cb&gt;();
+    UNTILIZE_TILES&lt;Wt, cos_cb, untilized_cos_cb&gt;();
+    reconfig_data_format_srca(cos_cb, untilized_sin_cb);
+    pack_reconfig_data_format(untilized_cos_cb, retilized_sin_cb);
+    TILIZE_ROWS&lt;Wt, untilized_sin_cb, retilized_sin_cb&gt;(untilized_sin_sync_cb);
+    TILIZE_ROWS&lt;Wt, untilized_cos_cb, retilized_cos_cb&gt;(untilized_cos_sync_cb);
+    constexpr uint32_t updated_cos_cb = retilized_cos_cb;
+    constexpr uint32_t updated_sin_cb = retilized_sin_cb;
+#else
+    binary_op_init_common(rotated_in_cb, scalar_cb, rotated_in_interm_cb);
+    constexpr uint32_t updated_cos_cb = cos_cb;
+    constexpr uint32_t updated_sin_cb = sin_cb;
+#endif
+    for (uint32_t i = 0; i &lt; num_rows; ++i) {
+        for (uint32_t j = 0; j &lt; Wt; ++j) {
+#ifdef DECODE_MODE
+            const uint32_t in1_idx = j;
+#else
+            const uint32_t in1_idx = 0;
+#endif
+            if (j &lt; half_Wt) {
+<span class="dz" data-d="2">                // Multiply half of the rotated input by scalar (-1).
+                // Reconfig audit: explicit reconfig_data_format(rotated_in_cb, scalar_cb) +
+                //   mul_tiles_bcast_scalar_init_short reconfigs srca/srcb -&gt; Input.
+                //   Explicit pack_reconfig_data_format(rotated_in_interm_cb) -&gt; Output.
+                // Lifecycles: rotated_in_cb InputLifecycle::Streaming (wait+pop per iter); scalar_cb
+                //   InputLifecycle::CallerManaged (waited once at line 85, never popped); rotated_in_interm_cb
+                //   OutputLifecycle::Streaming.
+                compute_kernel_lib::mul&lt;
+                    rotated_in_cb,
+                    scalar_cb,
+                    rotated_in_interm_cb,
+                    compute_kernel_lib::BroadcastDim::Scalar,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::CallerManaged&gt;(onetile);
+                reconfig_data_format_srcb(scalar_cb, updated_sin_cb);
+                pack_reconfig_data_format(rotated_in_interm_cb, sin_interm_cb);
+                // Multiply rotated input by sin (chain-based)
+                mul_tiles_chain&lt;rotated_in_interm_cb, updated_sin_cb, sin_interm_cb&gt;(in1_idx);</span>
+<span class="dz" data-d="3">            } else {
+                reconfig_data_format(rotated_in_cb, updated_sin_cb);
+                pack_reconfig_data_format(out_cb, sin_interm_cb);
+                // Multiply rotated input by sin (chain-based)
+                mul_tiles_chain&lt;rotated_in_cb, updated_sin_cb, sin_interm_cb&gt;(in1_idx);
+            }
+
+            // Multiply input by cos (chain-based)
+            mul_tiles_chain&lt;in_cb, updated_cos_cb, cos_interm_cb&gt;(in1_idx);</span>
+
+<span class="dz" data-d="4">            // Add applied sin/cos tensors -&gt; out_cb.
+            // Reconfig audit: reconfig_data_format_srca(rotated_in_cb, cos_interm_cb)
+            //   reconfigs srca to cos_interm_cb; add_tiles_init reconfigs srca/srcb to
+            //   (cos_interm, sin_interm) -&gt; Input. Explicit pack_reconfig to out_cb -&gt; Output.
+            // Lifecycles: cos_interm_cb/sin_interm_cb InputLifecycle::Streaming (per-iter wait+pop);
+            //   out_cb OutputLifecycle::Streaming.
+            compute_kernel_lib::add&lt;cos_interm_cb, sin_interm_cb, out_cb&gt;(onetile);</span>
+        }
+    }
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; include swap</b> — Added <code>eltwise_chain.hpp</code> and <code>eltwise_convenience.hpp</code> on top of the existing tilize/untilize helpers; the <code>UNTILIZE_TILES</code>/<code>TILIZE_ROWS</code> wrappers are unchanged.</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; rotated×scalar + rotated×sin</b> — The <code>j&lt;half_Wt</code> branch's raw <code>mul_tiles_bcast_scalar</code> became <code>mul&lt;rotated_in_cb, scalar_cb, rotated_in_interm_cb, BroadcastDim::Scalar, InputLifecycle::Streaming, InputLifecycle::CallerManaged&gt;</code> (scalar_cb waited once, never popped), then the sin multiply goes through <code>mul_tiles_chain</code>.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; else branch + ×cos</b> — The <code>j&gt;=half_Wt</code> branch routes <code>rotated_in_cb</code> straight into <code>mul_tiles_chain&lt;…, sin_interm_cb&gt;</code>, and the ×cos multiply for every j is <code>mul_tiles_chain&lt;in_cb, updated_cos_cb, cos_interm_cb&gt;</code>.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; sin+cos add → add<> chain</b> — The final <code>add_tiles(cos_interm, sin_interm)</code> + manual wait/reserve/pack/push became <code>add&lt;cos_interm_cb, sin_interm_cb, out_cb&gt;(onetile)</code> with per-iter <code>InputLifecycle::Streaming</code> on both interm CBs and <code>OutputLifecycle::Streaming</code> on out_cb.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; mul_tiles_chain wrapper</b> — The raw <code>ALWI MUL_TILES</code> helper is replaced by a per-CB-constexpr <code>mul_tiles_chain</code>. In <code>DECODE_MODE</code>, <code>in0_cb</code> is now <code>InputLifecycle::Streaming</code> (the chain emits its own <code>cb_wait_front</code>/<code>cb_pop_front</code> — the external waits/pops are gone), while the held sin/cos <code>in1_cb</code> stays <code>InputLifecycle::CallerManaged</code> with <code>TileOffset::Set{in1_idx}</code> (never popped). Non-decode uses plain <code>mul&lt;…Streaming,Streaming,Streaming&gt;</code>.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-experimental_transformer_rotary_embedding_rotary_embedding">
+{
+  "1": {
+    "title": "include swap",
+    "body": "Added <code>eltwise_chain.hpp</code> and <code>eltwise_convenience.hpp</code> on top of the existing tilize/untilize helpers; the <code>UNTILIZE_TILES</code>/<code>TILIZE_ROWS</code> wrappers are unchanged.",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "rotated×scalar + rotated×sin",
+    "body": "The <code>j&lt;half_Wt</code> branch's raw <code>mul_tiles_bcast_scalar</code> became <code>mul&lt;rotated_in_cb, scalar_cb, rotated_in_interm_cb, BroadcastDim::Scalar, InputLifecycle::Streaming, InputLifecycle::CallerManaged&gt;</code> (scalar_cb waited once, never popped), then the sin multiply goes through <code>mul_tiles_chain</code>.",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "else branch + ×cos",
+    "body": "The <code>j&gt;=half_Wt</code> branch routes <code>rotated_in_cb</code> straight into <code>mul_tiles_chain&lt;…, sin_interm_cb&gt;</code>, and the ×cos multiply for every j is <code>mul_tiles_chain&lt;in_cb, updated_cos_cb, cos_interm_cb&gt;</code>.",
+    "color": "#3f8ae0"
+  },
+  "4": {
+    "title": "sin+cos add → add<> chain",
+    "body": "The final <code>add_tiles(cos_interm, sin_interm)</code> + manual wait/reserve/pack/push became <code>add&lt;cos_interm_cb, sin_interm_cb, out_cb&gt;(onetile)</code> with per-iter <code>InputLifecycle::Streaming</code> on both interm CBs and <code>OutputLifecycle::Streaming</code> on out_cb.",
+    "color": "#cf222e"
+  },
+  "6": {
+    "title": "mul_tiles_chain wrapper",
+    "body": "The raw <code>ALWI MUL_TILES</code> helper is replaced by a per-CB-constexpr <code>mul_tiles_chain</code>. In <code>DECODE_MODE</code>, <code>in0_cb</code> is now <code>InputLifecycle::Streaming</code> (the chain emits its own <code>cb_wait_front</code>/<code>cb_pop_front</code> — the external waits/pops are gone), while the held sin/cos <code>in1_cb</code> stays <code>InputLifecycle::CallerManaged</code> with <code>TileOffset::Set{in1_idx}</code> (never popped). Non-decode uses plain <code>mul&lt;…Streaming,Streaming,Streaming&gt;</code>.",
+    "color": "#ff7a00"
+  }
+}
+</script>

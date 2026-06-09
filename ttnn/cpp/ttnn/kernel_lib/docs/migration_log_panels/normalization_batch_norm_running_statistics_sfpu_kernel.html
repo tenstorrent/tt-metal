@@ -1,0 +1,501 @@
+<section class="panel" id="panel-normalization_batch_norm_running_statistics_sfpu_kernel">
+  <h1>running_statistics_sfpu_kernel — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/running_statistics_sfpu_kernel.cpp</div>
+  <div class="meta"><b>Δ</b> +120/-259 &nbsp; <b>Decisions:</b> 4</div>
+
+  <div class="focus-toolbar" data-fkernel="normalization_batch_norm_running_statistics_sfpu_kernel">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; drop tmp CBs</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; AlsoOut0 gate</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; reconfig flags</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; typecast tail</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+<span class="dz" data-d="6">#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/tile_move_copy.h&quot;
+#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/compute/eltwise_binary_sfpu.h&quot;
+#include &quot;api/compute/eltwise_unary/sfpu_split_includes.h&quot;</span>
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+<span class="dz" data-d="6">#include &quot;api/compute/eltwise_unary/typecast.h&quot;</span>
+#include &quot;api/dataflow/circular_buffer.h&quot;
+
+<span class="dz" data-d="6">template &lt;bool NeedsTypecast, uint32_t TcInFmt, uint32_t TcOutFmt&gt;
+ALWI void maybe_typecast_stat(</span>
+<span class="dz" data-d="2">    CircularBuffer&amp; src_obj,</span>
+<span class="dz" data-d="6">    uint32_t src_cb,
+    uint32_t dst_cb,</span>
+<span class="dz" data-d="1">    uint32_t&amp; last_srca_cb,</span>
+<span class="dz" data-d="6">    uint32_t tile_index) {</span>
+    if constexpr (NeedsTypecast) {
+<span class="dz" data-d="1">        constexpr uint32_t onetile = 1;</span>
+<span class="dz" data-d="2">        src_obj.wait_front(onetile);
+        CircularBuffer dst_obj(dst_cb);</span>
+<span class="dz" data-d="1">        dst_obj.reserve_back(onetile);
+
+        tile_regs_acquire();
+        copy_tile_to_dst_init_short_with_dt(last_srca_cb, src_cb);
+        last_srca_cb = src_cb;
+        copy_tile(src_cb, tile_index, tile_index * 2);
+        typecast_tile_init&lt;TcInFmt, TcOutFmt&gt;();
+        typecast_tile&lt;TcInFmt, TcOutFmt&gt;(tile_index * 2);
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_reconfig_data_format(dst_cb);
+        pack_tile(tile_index * 2, dst_cb);
+        tile_regs_release();
+
+        pack_reconfig_data_format(dst_cb, src_cb);
+
+        src_obj.pop_front(onetile);
+        dst_obj.push_back(onetile);</span>
+    }
+}
+
+void kernel_main() {
+    uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(0);
+    constexpr uint32_t old_running_mean_has_value = get_compile_time_arg_val(0) == 1;
+    constexpr uint32_t old_running_var_has_value = get_compile_time_arg_val(1) == 1;
+
+<span class="dz" data-d="6">    constexpr auto cb_batch_mean = get_compile_time_arg_val(2);  // batch mean
+    constexpr auto cb_batch_var = get_compile_time_arg_val(3);   // batch var</span>
+    constexpr auto cb_out0 = get_compile_time_arg_val(4);
+<span class="dz" data-d="1">    constexpr auto cb_old_running_mean = get_compile_time_arg_val(5);      // old running mean tensor
+    constexpr auto cb_old_running_var = get_compile_time_arg_val(6);       // old running var tensor
+    constexpr auto cb_updated_running_mean = get_compile_time_arg_val(7);  // updated running mean tensor
+    constexpr auto cb_updated_running_var = get_compile_time_arg_val(8);   // updated running var tensor
+    constexpr auto cb_momentum = get_compile_time_arg_val(9);              // momentum
+    constexpr auto cb_one = get_compile_time_arg_val(10);                  // stores 1
+    constexpr auto cb_tmp1 = get_compile_time_arg_val(11);                 // tmp 1
+    constexpr auto cb_tmp2 = get_compile_time_arg_val(12);                 // tmp 2
+    constexpr auto cb_tmp3 = get_compile_time_arg_val(13);                 // tmp 3
+    constexpr auto cb_writer_updated_mean = get_compile_time_arg_val(14);  // writer-facing updated mean
+    constexpr auto cb_writer_updated_var = get_compile_time_arg_val(15);   // writer-facing updated var
+    constexpr bool stat_needs_typecast = get_compile_time_arg_val(16) == 1;
+    constexpr uint32_t tc_in_fmt = get_compile_time_arg_val(17);
+    constexpr uint32_t tc_out_fmt = get_compile_time_arg_val(18);</span>
+    constexpr bool needs_mean_typecast = old_running_mean_has_value &amp;&amp; stat_needs_typecast;
+    constexpr bool needs_var_typecast = old_running_var_has_value &amp;&amp; stat_needs_typecast;
+
+<span class="dz" data-d="2">    CircularBuffer cb_batch_mean_obj(cb_batch_mean);
+    CircularBuffer cb_batch_var_obj(cb_batch_var);
+    CircularBuffer cb_out0_obj(cb_out0);
+    CircularBuffer cb_old_running_mean_obj(cb_old_running_mean);
+    CircularBuffer cb_old_running_var_obj(cb_old_running_var);
+    CircularBuffer cb_updated_running_mean_obj(cb_updated_running_mean);
+    CircularBuffer cb_updated_running_var_obj(cb_updated_running_var);
+    CircularBuffer cb_momentum_obj(cb_momentum);
+    CircularBuffer cb_one_obj(cb_one);</span>
+<span class="dz" data-d="1">    CircularBuffer cb_tmp1_obj(cb_tmp1);
+    CircularBuffer cb_tmp2_obj(cb_tmp2);
+    CircularBuffer cb_tmp3_obj(cb_tmp3);
+</span>
+    unary_op_init_common(cb_batch_mean, cb_out0);
+<span class="dz" data-d="1">    uint32_t last_srca_cb = cb_batch_mean;</span>
+    constexpr uint32_t onetile = 1;
+
+<span class="dz" data-d="2">    cb_momentum_obj.wait_front(1);
+    cb_one_obj.wait_front(1);</span>
+
+<span class="dz" data-d="6">    // updated_running_stat = (1 − momentum) × running_stat + momentum × batch_stat</span>
+    for (uint32_t tile_id = 0; tile_id &lt; num_tiles; ++tile_id) {
+<span class="dz" data-d="2">        // cb tile index
+        constexpr uint32_t tile_index = 0;
+
+        cb_batch_mean_obj.wait_front(onetile);
+        cb_out0_obj.reserve_back(1);</span>
+
+        if constexpr (old_running_mean_has_value) {
+<span class="dz" data-d="6">            // 1 - momentum</span>
+<span class="dz" data-d="1">            cb_tmp1_obj.reserve_back(onetile);</span>
+<span class="dz" data-d="6">            tile_regs_acquire();
+            sub_binary_tile_init();</span>
+<span class="dz" data-d="1">            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_one);
+            last_srca_cb = cb_one;</span>
+<span class="dz" data-d="6">            copy_tile(cb_one, tile_index, tile_index * 2);</span>
+<span class="dz" data-d="1">            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_momentum);
+            last_srca_cb = cb_momentum;</span>
+<span class="dz" data-d="6">            copy_tile(cb_momentum, tile_index, tile_index * 2 + 1);
+            sub_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
+            tile_regs_commit();
+
+            tile_regs_wait();</span>
+<span class="dz" data-d="1">            pack_reconfig_data_format(cb_tmp1);
+            pack_tile_with_dt(tile_index * 2, cb_tmp1);</span>
+<span class="dz" data-d="6">            tile_regs_release();</span>
+<span class="dz" data-d="1">            cb_tmp1_obj.push_back(onetile);</span>
+<span class="dz" data-d="6">
+            // momentum * batch stat</span>
+<span class="dz" data-d="1">            cb_tmp2_obj.reserve_back(onetile);</span>
+<span class="dz" data-d="6">            tile_regs_acquire();
+            mul_binary_tile_init();</span>
+<span class="dz" data-d="1">            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_batch_mean);
+            last_srca_cb = cb_batch_mean;</span>
+<span class="dz" data-d="6">            copy_tile(cb_batch_mean, tile_index, tile_index * 2);</span>
+<span class="dz" data-d="1">            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_momentum);
+            last_srca_cb = cb_momentum;</span>
+<span class="dz" data-d="6">            copy_tile(cb_momentum, tile_index, tile_index * 2 + 1);
+            mul_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
+            tile_regs_commit();
+
+            tile_regs_wait();</span>
+<span class="dz" data-d="1">            // No pack reconfig needed: cb_tmp1 and cb_tmp2 share interm_data_format
+            pack_tile_with_dt(tile_index * 2, cb_tmp2);</span>
+<span class="dz" data-d="6">            tile_regs_release();</span>
+<span class="dz" data-d="1">            cb_tmp2_obj.push_back(onetile);</span>
+<span class="dz" data-d="6"></span>
+<span class="dz" data-d="1">            // cb_tmp1 * running stats --&gt; (1 - momentum) * running stats
+            cb_tmp1_obj.wait_front(onetile);</span>
+<span class="dz" data-d="2">            cb_old_running_mean_obj.wait_front(onetile);</span>
+<span class="dz" data-d="1">            cb_tmp3_obj.reserve_back(onetile);</span>
+<span class="dz" data-d="6">            tile_regs_acquire();</span>
+<span class="dz" data-d="1">            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_old_running_mean);
+            last_srca_cb = cb_old_running_mean;</span>
+<span class="dz" data-d="6">            copy_tile(cb_old_running_mean, tile_index, tile_index * 2);</span>
+<span class="dz" data-d="1">            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_tmp1);
+            last_srca_cb = cb_tmp1;
+            copy_tile(cb_tmp1, tile_index, tile_index * 2 + 1);</span>
+<span class="dz" data-d="6">            mul_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
+            tile_regs_commit();
+
+            tile_regs_wait();</span>
+<span class="dz" data-d="1">            // No pack reconfig needed: cb_tmp2 and cb_tmp3 share interm_data_format
+            pack_tile_with_dt(tile_index * 2, cb_tmp3);</span>
+<span class="dz" data-d="6">            tile_regs_release();</span>
+<span class="dz" data-d="1">            cb_tmp3_obj.push_back(onetile);</span>
+<span class="dz" data-d="6">
+            cb_old_running_mean_obj.pop_front(onetile);</span>
+<span class="dz" data-d="1">            cb_tmp1_obj.pop_front(onetile);</span>
+<span class="dz" data-d="6"></span>
+<span class="dz" data-d="1">            // cb_tmp2 + cb_tmp3 --&gt; (momentum * batch stat) + ((1 - momentum) * running stats)
+            cb_tmp2_obj.wait_front(onetile);
+            cb_tmp3_obj.wait_front(onetile);</span>
+<span class="dz" data-d="6">            cb_updated_running_mean_obj.reserve_back(onetile);
+            tile_regs_acquire();
+            add_binary_tile_init();</span>
+<span class="dz" data-d="1">            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_tmp3);
+            last_srca_cb = cb_tmp3;
+            copy_tile(cb_tmp3, tile_index, tile_index * 2);
+            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_tmp2);
+            last_srca_cb = cb_tmp2;
+            copy_tile(cb_tmp2, tile_index, tile_index * 2 + 1);</span>
+<span class="dz" data-d="6">            add_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
+            tile_regs_commit();
+
+            tile_regs_wait();</span>
+<span class="dz" data-d="1">            // No pack reconfig needed: cb_tmp3 and cb_updated_running_mean share interm_data_format</span>
+<span class="dz" data-d="6">            pack_tile_with_dt(tile_index * 2, cb_updated_running_mean);
+            // For the output tensor, return the same values as either of the stats.
+            if constexpr (!old_running_var_has_value) {
+                pack_reconfig_data_format(cb_updated_running_mean, cb_out0);
+                pack_tile_with_dt(tile_index * 2, cb_out0);
+            }
+            tile_regs_release();
+            cb_updated_running_mean_obj.push_back(onetile);
+
+            maybe_typecast_stat&lt;needs_mean_typecast, tc_in_fmt, tc_out_fmt&gt;(</span>
+<span class="dz" data-d="1">                cb_updated_running_mean_obj, cb_updated_running_mean, cb_writer_updated_mean, last_srca_cb, tile_index);</span>
+<span class="dz" data-d="6"></span>
+<span class="dz" data-d="1">            cb_tmp3_obj.pop_front(onetile);
+            cb_tmp2_obj.pop_front(onetile);</span>
+        }
+
+<span class="dz" data-d="6">        cb_batch_mean_obj.pop_front(onetile);
+</span>
+        if constexpr (old_running_var_has_value) {
+<span class="dz" data-d="6">            // 1 - momentum</span>
+<span class="dz" data-d="1">            cb_tmp1_obj.reserve_back(onetile);</span>
+<span class="dz" data-d="6">            tile_regs_acquire();
+            sub_binary_tile_init();</span>
+<span class="dz" data-d="1">            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_one);
+            last_srca_cb = cb_one;</span>
+<span class="dz" data-d="6">            copy_tile(cb_one, tile_index, tile_index * 2);</span>
+<span class="dz" data-d="1">            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_momentum);
+            last_srca_cb = cb_momentum;</span>
+<span class="dz" data-d="6">            copy_tile(cb_momentum, tile_index, tile_index * 2 + 1);
+            sub_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
+            tile_regs_commit();
+
+            tile_regs_wait();</span>
+<span class="dz" data-d="1">            pack_reconfig_data_format(cb_tmp1);
+            pack_tile_with_dt(tile_index * 2, cb_tmp1);</span>
+<span class="dz" data-d="6">            tile_regs_release();</span>
+<span class="dz" data-d="1">            cb_tmp1_obj.push_back(onetile);</span>
+<span class="dz" data-d="6">
+            // momentum * batch stat</span>
+<span class="dz" data-d="2">            cb_batch_var_obj.wait_front(onetile);</span>
+<span class="dz" data-d="1">            cb_tmp2_obj.reserve_back(onetile);</span>
+<span class="dz" data-d="6">            tile_regs_acquire();
+            mul_binary_tile_init();</span>
+<span class="dz" data-d="1">            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_batch_var);
+            last_srca_cb = cb_batch_var;</span>
+<span class="dz" data-d="6">            copy_tile(cb_batch_var, tile_index, tile_index * 2);</span>
+<span class="dz" data-d="1">            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_momentum);
+            last_srca_cb = cb_momentum;</span>
+<span class="dz" data-d="6">            copy_tile(cb_momentum, tile_index, tile_index * 2 + 1);
+            mul_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
+            tile_regs_commit();
+
+            tile_regs_wait();</span>
+<span class="dz" data-d="1">            pack_tile_with_dt(tile_index * 2, cb_tmp2);</span>
+<span class="dz" data-d="6">            tile_regs_release();</span>
+<span class="dz" data-d="1">            cb_tmp2_obj.push_back(onetile);</span>
+<span class="dz" data-d="6">
+            cb_batch_var_obj.pop_front(onetile);
+</span>
+<span class="dz" data-d="1">            // cb_tmp1 * running stats --&gt; (1 - momentum) * running stats
+            cb_tmp1_obj.wait_front(onetile);</span>
+<span class="dz" data-d="2">            cb_old_running_var_obj.wait_front(onetile);</span>
+<span class="dz" data-d="1">            cb_tmp3_obj.reserve_back(onetile);</span>
+<span class="dz" data-d="6">            tile_regs_acquire();</span>
+<span class="dz" data-d="1">            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_old_running_var);
+            last_srca_cb = cb_old_running_var;</span>
+<span class="dz" data-d="6">            copy_tile(cb_old_running_var, tile_index, tile_index * 2);</span>
+<span class="dz" data-d="1">            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_tmp1);
+            last_srca_cb = cb_tmp1;
+            copy_tile(cb_tmp1, tile_index, tile_index * 2 + 1);</span>
+<span class="dz" data-d="6">            mul_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
+            tile_regs_commit();
+
+            tile_regs_wait();</span>
+<span class="dz" data-d="1">            pack_tile_with_dt(tile_index * 2, cb_tmp3);</span>
+<span class="dz" data-d="6">            tile_regs_release();</span>
+<span class="dz" data-d="1">            cb_tmp3_obj.push_back(onetile);</span>
+<span class="dz" data-d="6">
+            cb_old_running_var_obj.pop_front(onetile);</span>
+<span class="dz" data-d="1">            cb_tmp1_obj.pop_front(onetile);</span>
+<span class="dz" data-d="6"></span>
+<span class="dz" data-d="1">            // cb_tmp2 + cb_tmp3 --&gt; (momentum * batch stat) + ((1 - momentum) * running stats)
+            cb_tmp2_obj.wait_front(onetile);
+            cb_tmp3_obj.wait_front(onetile);</span>
+<span class="dz" data-d="6">            cb_updated_running_var_obj.reserve_back(onetile);
+            tile_regs_acquire();
+            add_binary_tile_init();</span>
+<span class="dz" data-d="1">            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_tmp3);
+            last_srca_cb = cb_tmp3;
+            copy_tile(cb_tmp3, tile_index, tile_index * 2);
+            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_tmp2);
+            last_srca_cb = cb_tmp2;
+            copy_tile(cb_tmp2, tile_index, tile_index * 2 + 1);</span>
+<span class="dz" data-d="6">            add_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
+            tile_regs_commit();
+
+            tile_regs_wait();
+            pack_tile_with_dt(tile_index * 2, cb_updated_running_var);
+            pack_reconfig_data_format(cb_updated_running_var, cb_out0);
+            pack_tile_with_dt(tile_index * 2, cb_out0);
+            tile_regs_release();
+            cb_updated_running_var_obj.push_back(onetile);
+
+            maybe_typecast_stat&lt;needs_var_typecast, tc_in_fmt, tc_out_fmt&gt;(</span>
+<span class="dz" data-d="1">                cb_updated_running_var_obj, cb_updated_running_var, cb_writer_updated_var, last_srca_cb, tile_index);</span>
+<span class="dz" data-d="6"></span>
+<span class="dz" data-d="1">            cb_tmp3_obj.pop_front(onetile);
+            cb_tmp2_obj.pop_front(onetile);</span>
+        }
+
+<span class="dz" data-d="6">        cb_out0_obj.push_back(1);</span>
+    }
+<span class="dz" data-d="6">    cb_momentum_obj.pop_front(1);
+    cb_one_obj.pop_front(1);</span>
+}
+</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+<span class="dz" data-d="6">#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp&quot;  // unary
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp&quot;  // SubBinary, MulBinary, AddBinary
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp&quot;         // Typecast</span>
+<span class="dz" data-d="2">#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp&quot;     // OptionalChainElement</span>
+#include &quot;api/dataflow/circular_buffer.h&quot;
+
+<span class="dz" data-d="6">// running_statistics (SFPU / fp32 path): updated_stat = (1 - momentum) * old_stat + momentum * batch_stat
+// for mean and/or var (compile-time gated).
+//</span>
+<span class="dz" data-d="1">// One chain per stat, no intermediate CBs (the original staged through cb_tmp1/2/3). The CBs are</span>
+<span class="dz" data-d="6">// unpacked to DEST as fp32 (UnpackToDestFp32) and the arithmetic runs on DEST via SFPU binaries, so
+// the running result is threaded through DEST slots:
+//   D0 = one ; D1 = momentum ; D0 = D0 - D1            (1 - momentum)
+//   D1 = old_stat ; D0 = D0 * D1                        (1 - momentum) * old
+//   D1 = momentum ; D2 = batch_stat ; D1 = D1 * D2      momentum * batch
+//   D0 = D0 + D1                                        sum
+// (3 DEST slots — within the fp32 limit of 4/8). cb_out0 receives a copy of the last computed stat
+// (var if present, else mean). When the output dtype differs from the fp32 compute format the result
+// is typecast into a writer-facing CB by maybe_typecast_stat (unchanged).
+namespace ckl = compute_kernel_lib;
+using D = ckl::Dst;
+
+template &lt;
+    uint32_t cb_batch,
+    uint32_t cb_old,
+    uint32_t cb_updated,
+    bool AlsoOut0,
+    uint32_t cb_one,
+    uint32_t cb_momentum,
+    uint32_t cb_out0&gt;
+ALWI void update_running_stat() {
+    using ckl::AddBinary;
+    using ckl::MulBinary;
+    using ckl::SubBinary;
+    constexpr auto CM = ckl::InputLifecycle::CallerManaged;
+    constexpr auto STREAM = ckl::InputLifecycle::Streaming;
+    constexpr auto OUT_CM = ckl::OutputLifecycle::CallerManaged;
+    constexpr auto SCALAR = ckl::OperandKind::Scalar;</span>
+<span class="dz" data-d="4">    constexpr auto CP_IN = ckl::CopyTileReconfig::Input;
+    constexpr auto PK_OUT = ckl::PackTileReconfig::Output;</span>
+<span class="dz" data-d="6">
+    // one/momentum held (CallerManaged); old_stat and batch_stat streamed (wait 1 / pop 1, as the
+    // original popped them). cb_updated is caller-reserved/pushed; cb_out0 is handled by kernel_main.
+    cb_reserve_back(cb_updated, 1);
+    ckl::eltwise_chain(
+        1,
+        ckl::CopyTile&lt;cb_one, D::D0, CM, CP_IN, SCALAR&gt;{},
+        ckl::CopyTile&lt;cb_momentum, D::D1, CM, CP_IN, SCALAR&gt;{},
+        SubBinary&lt;D::D0, D::D1, D::D0&gt;{},  // D0 = 1 - momentum
+        ckl::CopyTile&lt;cb_old, D::D1, STREAM, CP_IN, SCALAR&gt;{},
+        MulBinary&lt;D::D0, D::D1, D::D0&gt;{},  // D0 = (1 - momentum) * old_stat
+        ckl::CopyTile&lt;cb_momentum, D::D1, CM, CP_IN, SCALAR&gt;{},
+        ckl::CopyTile&lt;cb_batch, D::D2, STREAM, CP_IN, SCALAR&gt;{},
+        MulBinary&lt;D::D1, D::D2, D::D1&gt;{},  // D1 = momentum * batch_stat
+        AddBinary&lt;D::D0, D::D1, D::D0&gt;{},  // D0 = (1 - momentum) * old + momentum * batch
+        ckl::PackTile&lt;cb_updated, OUT_CM, PK_OUT&gt;{},</span>
+<span class="dz" data-d="2">        ckl::OptionalChainElement&lt;AlsoOut0, ckl::PackTile&lt;cb_out0, OUT_CM, PK_OUT&gt;&gt;{});</span>
+<span class="dz" data-d="6">    cb_push_back(cb_updated, 1);
+}
+
+template &lt;bool NeedsTypecast, uint32_t TcInFmt, uint32_t TcOutFmt, uint32_t SrcCb, uint32_t DstCb&gt;
+ALWI void maybe_typecast_stat() {</span>
+    if constexpr (NeedsTypecast) {
+<span class="dz" data-d="6">        // src (the updated stat just written) -&gt; typecast -&gt; writer-facing CB.
+        ckl::unary&lt;ckl::Typecast&lt;TcInFmt, TcOutFmt, D::D0&gt;, SrcCb, DstCb&gt;(1);</span>
+    }
+}
+
+void kernel_main() {
+    uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(0);
+    constexpr uint32_t old_running_mean_has_value = get_compile_time_arg_val(0) == 1;
+    constexpr uint32_t old_running_var_has_value = get_compile_time_arg_val(1) == 1;
+
+<span class="dz" data-d="6">    constexpr auto cb_batch_mean = get_compile_time_arg_val(2);
+    constexpr auto cb_batch_var = get_compile_time_arg_val(3);</span>
+    constexpr auto cb_out0 = get_compile_time_arg_val(4);
+<span class="dz" data-d="1">    constexpr auto cb_old_running_mean = get_compile_time_arg_val(5);
+    constexpr auto cb_old_running_var = get_compile_time_arg_val(6);
+    constexpr auto cb_updated_running_mean = get_compile_time_arg_val(7);
+    constexpr auto cb_updated_running_var = get_compile_time_arg_val(8);
+    constexpr auto cb_momentum = get_compile_time_arg_val(9);
+    constexpr auto cb_one = get_compile_time_arg_val(10);
+    // The former cb_tmp1/2/3 CT-args are gone — the chain threads the result through DEST.
+    constexpr auto cb_writer_updated_mean = get_compile_time_arg_val(11);
+    constexpr auto cb_writer_updated_var = get_compile_time_arg_val(12);
+    constexpr bool stat_needs_typecast = get_compile_time_arg_val(13) == 1;
+    constexpr uint32_t tc_in_fmt = get_compile_time_arg_val(14);
+    constexpr uint32_t tc_out_fmt = get_compile_time_arg_val(15);</span>
+    constexpr bool needs_mean_typecast = old_running_mean_has_value &amp;&amp; stat_needs_typecast;
+    constexpr bool needs_var_typecast = old_running_var_has_value &amp;&amp; stat_needs_typecast;
+
+    unary_op_init_common(cb_batch_mean, cb_out0);
+    constexpr uint32_t onetile = 1;
+
+<span class="dz" data-d="2">    cb_wait_front(cb_momentum, 1);  // held for the whole kernel
+    cb_wait_front(cb_one, 1);</span>
+
+    for (uint32_t tile_id = 0; tile_id &lt; num_tiles; ++tile_id) {
+<span class="dz" data-d="6">        cb_reserve_back(cb_out0, onetile);</span>
+
+        if constexpr (old_running_mean_has_value) {
+<span class="dz" data-d="6">            update_running_stat&lt;
+                cb_batch_mean,
+                cb_old_running_mean,
+                cb_updated_running_mean,
+                /*AlsoOut0=*/!old_running_var_has_value,
+                cb_one,
+                cb_momentum,
+                cb_out0&gt;();
+            maybe_typecast_stat&lt;
+                needs_mean_typecast,
+                tc_in_fmt,
+                tc_out_fmt,
+                cb_updated_running_mean,
+                cb_writer_updated_mean&gt;();</span>
+        }
+
+        if constexpr (old_running_var_has_value) {
+<span class="dz" data-d="6">            update_running_stat&lt;
+                cb_batch_var,
+                cb_old_running_var,
+                cb_updated_running_var,
+                /*AlsoOut0=*/true,
+                cb_one,
+                cb_momentum,
+                cb_out0&gt;();
+            maybe_typecast_stat&lt;
+                needs_var_typecast,
+                tc_in_fmt,
+                tc_out_fmt,
+                cb_updated_running_var,
+                cb_writer_updated_var&gt;();</span>
+        }
+
+<span class="dz" data-d="6">        cb_push_back(cb_out0, onetile);</span>
+    }
+<span class="dz" data-d="2">
+    cb_pop_front(cb_momentum, 1);
+    cb_pop_front(cb_one, 1);</span>
+}
+</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; cb_tmp1/2/3 + last_srca_cb removed</b> — The three intermediate-CB CT-args and the manual <code>last_srca_cb</code> SrcA tracking are gone — DEST threads the result and the chain owns reconfig. CB ids passed as template params.</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; <code>OptionalChainElement</code> cb_out0 pack</b> — The trailing cb_out0 copy became a gated <code>PackTile&lt;cb_out0&gt;</code> selected by <code>AlsoOut0</code>.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; <code>CopyTileReconfig::Input</code> / <code>PackTileReconfig::Output</code></b> — The per-copy <code>copy_tile_to_dst_init_short_with_dt</code> and per-pack <code>pack_reconfig_data_format</code> were replaced by per-element <code>CopyTileReconfig::Input</code> on the loads and <code>PackTileReconfig::Output</code> on the packs.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; <code>maybe_typecast_stat</code> &rarr; <code>unary&lt;Typecast&gt;</code></b> — The standalone typecast helper's hand-rolled window became <code>unary&lt;Typecast&lt;TcInFmt,TcOutFmt,D0&gt;, SrcCb, DstCb&gt;(1)</code>; gated by <code>NeedsTypecast</code> as before.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-normalization_batch_norm_running_statistics_sfpu_kernel">
+{
+  "1": {
+    "title": "cb_tmp1/2/3 + last_srca_cb removed",
+    "body": "The three intermediate-CB CT-args and the manual <code>last_srca_cb</code> SrcA tracking are gone \u2014 DEST threads the result and the chain owns reconfig. CB ids passed as template params.",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "<code>OptionalChainElement</code> cb_out0 pack",
+    "body": "The trailing cb_out0 copy became a gated <code>PackTile&lt;cb_out0&gt;</code> selected by <code>AlsoOut0</code>.",
+    "color": "#2ea043"
+  },
+  "4": {
+    "title": "<code>CopyTileReconfig::Input</code> / <code>PackTileReconfig::Output</code>",
+    "body": "The per-copy <code>copy_tile_to_dst_init_short_with_dt</code> and per-pack <code>pack_reconfig_data_format</code> were replaced by per-element <code>CopyTileReconfig::Input</code> on the loads and <code>PackTileReconfig::Output</code> on the packs.",
+    "color": "#cf222e"
+  },
+  "6": {
+    "title": "<code>maybe_typecast_stat</code> &rarr; <code>unary&lt;Typecast&gt;</code>",
+    "body": "The standalone typecast helper's hand-rolled window became <code>unary&lt;Typecast&lt;TcInFmt,TcOutFmt,D0&gt;, SrcCb, DstCb&gt;(1)</code>; gated by <code>NeedsTypecast</code> as before.",
+    "color": "#ff7a00"
+  }
+}
+</script>

@@ -35,6 +35,17 @@ void kernel_main() {
     constexpr uint32_t n_heads = get_compile_time_arg_val(9);
     constexpr uint32_t rotary_Ht = get_compile_time_arg_val(10);
 
+    // RELOAD_IMPL selects how sin/cos tiles are delivered, which is the only thing that
+    // differs between the two builds — express it as compile-time chain args instead of
+    // duplicating the whole sin/cos chains under #if:
+    //   ==0 (no reload): the reader waits the whole my_cos_sin_tiles window once per batch
+    //        and holds it; each seq-tile reads it CallerManaged at offset sin_cos_row_cnt*Wt.
+    //   ==1 (reload):    the reader streams Wt sin/cos tiles per seq-tile; the chain
+    //        Bulk-waits+pops them and sin_cos_row_cnt stays 0, so the offset folds to 0.
+    constexpr compute_kernel_lib::InputLifecycle sincos_blife = (RELOAD_IMPL == 0)
+                                                                    ? compute_kernel_lib::InputLifecycle::CallerManaged
+                                                                    : compute_kernel_lib::InputLifecycle::Bulk;
+
     const uint32_t rotary_seq_t_end = seq_t_end < rotary_Ht ? seq_t_end : rotary_Ht;
     const uint32_t my_rotary_seq_tiles = seq_t_start < rotary_seq_t_end ? rotary_seq_t_end - seq_t_start : 0;
     const uint32_t my_cos_sin_tiles = my_rotary_seq_tiles * Wt;
@@ -85,15 +96,13 @@ void kernel_main() {
                 // sin_interim = rotated * sin
                 // A = rotated_in_interm_cb InputLifecycle::Bulk + Block (Wt tiles waited above, popped below).
                 // B = sin_cb: index = j + (sin_cos_row_cnt * Wt). Block + compute_kernel_lib::TileOffset::Set.
-                //   RELOAD_IMPL==0: sin held externally (waited my_cos_sin_tiles outside)
-                //     -> InputLifecycle::CallerManaged; sin_cos_row_cnt increments per seq_tile so offset varies.
-                //   RELOAD_IMPL==1: sin waited Wt per iter (line 63), popped Wt below
-                //     -> InputLifecycle::Bulk; sin_cos_row_cnt always 0 so compute_kernel_lib::TileOffset::Set(0).
+                //   B lifecycle is sincos_blife (CallerManaged for no-reload held sin/cos, Bulk for
+                //   the per-iter reload stream). For reload sin_cos_row_cnt stays 0, so the Set base
+                //   folds to 0 — behaviourally identical to the old TileOffset::Unset reload path.
                 // Output sin_interm_cb OutputLifecycle::Bulk + Block (Wt tiles).
                 // Reconfig audit: mul_tiles_init reconfigs srca/srcb -> Input.
                 //   No explicit pack_reconfig (relies on sin_interm_cb format == out_cb's
                 //   from startup) -> PackTileReconfig::None.
-#if RELOAD_IMPL == 0
                 compute_kernel_lib::eltwise_chain(
                     compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
                     compute_kernel_lib::BinaryFpu<
@@ -102,7 +111,7 @@ void kernel_main() {
                         compute_kernel_lib::BinaryFpuOp::Mul,
                         compute_kernel_lib::BroadcastDim::None,
                         compute_kernel_lib::InputLifecycle::Bulk,
-                        compute_kernel_lib::InputLifecycle::CallerManaged,
+                        sincos_blife,
                         compute_kernel_lib::BinaryDataFormatReconfig::Input,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OperandKind::Block,
@@ -113,23 +122,8 @@ void kernel_main() {
                         sin_interm_cb,
                         compute_kernel_lib::OutputLifecycle::Bulk,
                         compute_kernel_lib::PackTileReconfig::None>{});
-#else
-                compute_kernel_lib::mul<
-                    rotated_in_interm_cb,
-                    sin_cb,
-                    sin_interm_cb,
-                    compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::OutputLifecycle::Bulk,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::PackTileReconfig::None,
-                    compute_kernel_lib::OperandKind::Block>(
-                    compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
-#endif
 
                 // cos_interim = x * cos  — same pattern as sin_interim.
-#if RELOAD_IMPL == 0
                 compute_kernel_lib::eltwise_chain(
                     compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
                     compute_kernel_lib::BinaryFpu<
@@ -138,7 +132,7 @@ void kernel_main() {
                         compute_kernel_lib::BinaryFpuOp::Mul,
                         compute_kernel_lib::BroadcastDim::None,
                         compute_kernel_lib::InputLifecycle::Bulk,
-                        compute_kernel_lib::InputLifecycle::CallerManaged,
+                        sincos_blife,
                         compute_kernel_lib::BinaryDataFormatReconfig::Input,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OperandKind::Block,
@@ -149,20 +143,6 @@ void kernel_main() {
                         cos_interm_cb,
                         compute_kernel_lib::OutputLifecycle::Bulk,
                         compute_kernel_lib::PackTileReconfig::None>{});
-#else
-                compute_kernel_lib::mul<
-                    in_cb,
-                    cos_cb,
-                    cos_interm_cb,
-                    compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::OutputLifecycle::Bulk,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::PackTileReconfig::None,
-                    compute_kernel_lib::OperandKind::Block>(
-                    compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
-#endif
 
                 // out = cos_interim + sin_interim
                 // Both operands InputLifecycle::Bulk + Block (Wt tiles, popped at end), out_cb OutputLifecycle::Bulk +

@@ -1,0 +1,197 @@
+<section class="panel" id="panel-eltwise_unary_tanhshrink_kernel">
+  <h1>tanhshrink_kernel — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/tanhshrink_kernel.cpp</div>
+  <div class="meta"><b>Δ</b> +60/-46 &nbsp; <b>Decisions:</b> 5</div>
+
+  <div class="focus-toolbar" data-fkernel="eltwise_unary_tanhshrink_kernel">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; constexpr branch selectors</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; HeldStream owns wait</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; tanh element</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; manual loop → eltwise_chain</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; OptionalChainElement fork + DestReuse</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+<span class="dz" data-d="1">#include &lt;cstdint&gt;
+#include &quot;api/compute/common.h&quot;
+#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/eltwise_binary_sfpu.h&quot;
+#include &quot;api/compute/tile_move_copy.h&quot;
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;api/compute/eltwise_unary/sfpu_split_includes.h&quot;
+#include &quot;api/compute/compute_kernel_api.h&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+void kernel_main() {
+    uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(0);
+
+    constexpr auto cb_input = tt::CBIndex::c_0;
+    constexpr auto cb_output = tt::CBIndex::c_2;
+
+    CircularBuffer cb_in(cb_input);
+    CircularBuffer cb_out(cb_output);
+
+    init_sfpu(cb_input, cb_output);
+
+<span class="dz" data-d="5">    for (uint32_t i = 0; i &lt; num_tiles; ++i) {
+        cb_in.wait_front(1);
+        cb_out.reserve_back(1);
+        tile_regs_acquire();
+</span>
+<span class="dz" data-d="2">#ifdef INP_FLOAT32
+        copy_tile_init(cb_input);
+        copy_tile(cb_input, 0, 1);</span>
+<span class="dz" data-d="4">
+        tanh_tile_init();</span>
+<span class="dz" data-d="6">        tanh_tile(1);
+
+        copy_tile_init(cb_input);
+        copy_tile(cb_input, 0, 0);
+        sub_binary_tile_init();
+        sub_binary_tile(0, 1, 0);
+#endif
+#ifdef INP_FLOAT
+        copy_tile_init(cb_input);
+        copy_tile(cb_input, 0, 0);
+
+        tanh_tile_init();
+        tanh_tile(0);
+
+        binary_dest_reuse_tiles_init&lt;EltwiseBinaryType::ELWSUB, EltwiseBinaryReuseDestType::DEST_TO_SRCB&gt;(cb_input);
+        binary_dest_reuse_tiles&lt;EltwiseBinaryType::ELWSUB, EltwiseBinaryReuseDestType::DEST_TO_SRCB&gt;(cb_input, 0, 0);</span>
+#endif
+<span class="dz" data-d="5">
+        tile_regs_commit();
+        tile_regs_wait();
+
+        pack_tile(0, cb_output);
+        tile_regs_release();
+
+        cb_in.pop_front(1);</span>
+        cb_out.push_back(1);
+    }
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+<span class="dz" data-d="1">#include &lt;cstdint&gt;
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_activations.hpp&quot;  // Tanh
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp&quot;  // SubBinary
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp&quot;     // OptionalChainElement
+#include &quot;api/dataflow/circular_buffer.h&quot;
+
+// #ifdef-driven constexpr selectors: collapse FLOAT / FLOAT32 fork into a
+// single chain call gated by OptionalChainElement.
+#ifdef INP_FLOAT32
+constexpr bool kIsFloat32 = true;
+#else
+constexpr bool kIsFloat32 = false;
+#endif
+constexpr bool kIsFloat = !kIsFloat32;</span>
+
+void kernel_main() {
+    uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(0);
+
+    constexpr auto cb_input = tt::CBIndex::c_0;
+    constexpr auto cb_output = tt::CBIndex::c_2;
+
+    init_sfpu(cb_input, cb_output);
+
+    // Tanhshrink: x - tanh(x).
+    //
+    // Common prefix: D0 = tanh(cb_input).
+    //   FLOAT32 tail: D1 = cb_input (InputLifecycle::NoWaitPop) ; SubBinary&lt;D1, D0, D0&gt; -&gt; D0 = x - tanh(x).
+    //   FLOAT tail:   DestReuseBinary&lt;cb_input, Sub, DEST_TO_SRCB&gt; with srcb = DEST = tanh(x),
+    //                 srca = cb_input from CB ; result = cb_input - tanh(cb_input) -&gt; D0.
+    //
+    // OptionalChainElement&lt;kIsFloat32 / kIsFloat, ...&gt; collapses the inactive branch to a
+    // no-op tag (no wait, no pop, no compute emitted). Single chain replaces the two
+    // top-level #ifdef&#x27;d chain calls.
+<span class="dz" data-d="5">    compute_kernel_lib::eltwise_chain(
+        num_tiles,</span>
+<span class="dz" data-d="2">        compute_kernel_lib::CopyTile&lt;
+            cb_input,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::InputLifecycle::HeldStream,
+            compute_kernel_lib::CopyTileReconfig::None&gt;{},</span>
+<span class="dz" data-d="4">        compute_kernel_lib::Tanh&lt;compute_kernel_lib::Dst::D0&gt;{},</span>
+<span class="dz" data-d="6">        compute_kernel_lib::OptionalChainElement&lt;
+            kIsFloat32,
+            compute_kernel_lib::CopyTile&lt;
+                cb_input,
+                compute_kernel_lib::Dst::D1,
+                compute_kernel_lib::InputLifecycle::NoWaitPop,
+                compute_kernel_lib::CopyTileReconfig::None&gt;&gt;{},
+        compute_kernel_lib::OptionalChainElement&lt;
+            kIsFloat32,
+            compute_kernel_lib::
+                SubBinary&lt;compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D0&gt;&gt;{},
+        compute_kernel_lib::OptionalChainElement&lt;
+            kIsFloat,
+            compute_kernel_lib::DestReuseBinary&lt;
+                cb_input,
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                compute_kernel_lib::DestReuseType::DEST_TO_SRCB&gt;&gt;{},</span>
+<span class="dz" data-d="5">        compute_kernel_lib::PackTile&lt;
+            cb_output,
+            compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::PackTileReconfig::None&gt;{});</span>
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; #ifdef INP_FLOAT32 → constexpr bool selectors + includes</b> — The two raw-LLK <code>#ifdef INP_FLOAT32</code>/<code>INP_FLOAT</code> blocks become <code>constexpr bool kIsFloat32 / kIsFloat</code>; headers swapped to <code>eltwise_chain/activations/binary_sfpu/optional</code>.</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; CopyTile HeldStream</b> — First read <code>CopyTile&lt;cb_input, D0, HeldStream&gt;</code> owns the single <code>wait_front</code> that wrapped both #ifdef branches in the original loop.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; tanh_tile → Tanh&lt;D0&gt;</b> — Common-prefix <code>tanh_tile</code> becomes <code>Tanh&lt;D0&gt;</code> applied once before the branch fork.</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; tile_regs loop → single eltwise_chain</b> — The <code>for</code> loop with <code>tile_regs_*</code>/<code>reserve_back</code>/<code>pack_tile</code> and the two top-level #ifdef chains collapse into one <code>eltwise_chain(num_tiles, …)</code>.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; FLOAT/FLOAT32 fork → OptionalChainElement; binary_dest_reuse → DestReuseBinary</b> — FLOAT32 tail (<code>copy_tile</code>+<code>sub_binary_tile</code>) and FLOAT tail (<code>binary_dest_reuse_tiles&lt;ELWSUB,DEST_TO_SRCB&gt;</code>) are each wrapped in <code>OptionalChainElement&lt;flag, …&gt;</code> — the inactive branch folds to a no-op tag. FLOAT path uses <code>DestReuseBinary&lt;cb_input, Sub, DEST_TO_SRCB&gt;</code> with the pop owned there.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-eltwise_unary_tanhshrink_kernel">
+{
+  "1": {
+    "title": "#ifdef INP_FLOAT32 \u2192 constexpr bool selectors + includes",
+    "body": "The two raw-LLK <code>#ifdef INP_FLOAT32</code>/<code>INP_FLOAT</code> blocks become <code>constexpr bool kIsFloat32 / kIsFloat</code>; headers swapped to <code>eltwise_chain/activations/binary_sfpu/optional</code>.",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "CopyTile HeldStream",
+    "body": "First read <code>CopyTile&lt;cb_input, D0, HeldStream&gt;</code> owns the single <code>wait_front</code> that wrapped both #ifdef branches in the original loop.",
+    "color": "#2ea043"
+  },
+  "4": {
+    "title": "tanh_tile \u2192 Tanh<D0>",
+    "body": "Common-prefix <code>tanh_tile</code> becomes <code>Tanh&lt;D0&gt;</code> applied once before the branch fork.",
+    "color": "#cf222e"
+  },
+  "5": {
+    "title": "tile_regs loop \u2192 single eltwise_chain",
+    "body": "The <code>for</code> loop with <code>tile_regs_*</code>/<code>reserve_back</code>/<code>pack_tile</code> and the two top-level #ifdef chains collapse into one <code>eltwise_chain(num_tiles, \u2026)</code>.",
+    "color": "#9f4bbf"
+  },
+  "6": {
+    "title": "FLOAT/FLOAT32 fork \u2192 OptionalChainElement; binary_dest_reuse \u2192 DestReuseBinary",
+    "body": "FLOAT32 tail (<code>copy_tile</code>+<code>sub_binary_tile</code>) and FLOAT tail (<code>binary_dest_reuse_tiles&lt;ELWSUB,DEST_TO_SRCB&gt;</code>) are each wrapped in <code>OptionalChainElement&lt;flag, \u2026&gt;</code> \u2014 the inactive branch folds to a no-op tag. FLOAT path uses <code>DestReuseBinary&lt;cb_input, Sub, DEST_TO_SRCB&gt;</code> with the pop owned there.",
+    "color": "#ff7a00"
+  }
+}
+</script>

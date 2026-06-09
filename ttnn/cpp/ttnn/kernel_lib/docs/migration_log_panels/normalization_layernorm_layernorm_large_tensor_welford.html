@@ -1,0 +1,1079 @@
+<section class="panel" id="panel-normalization_layernorm_layernorm_large_tensor_welford">
+  <h1>layernorm_large_tensor_welford — <span class="badge badge-partial">PARTIAL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_large_tensor_welford.cpp</div>
+  <div class="meta"><b>Δ</b> +42/-32 &nbsp; <b>Decisions:</b> 5</div>
+
+  <div class="focus-toolbar" data-fkernel="normalization_layernorm_layernorm_large_tensor_welford">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; inc+cb_xmm</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; add pre-add</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; 2nd pass</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; rsqrt+bcast</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; Welford raw</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+#define BCAST_LLKOP EltwiseBinaryType::ELWMUL
+#define BCAST_DIM BroadcastType::COL
+
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/welford.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/rsqrt.h"
+#include "api/compute/transpose_wh.h"
+#include "ttnn/operations/normalization/kernel_util/compute/memory.h"
+#include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
+#include "api/dataflow/circular_buffer.h"
+
+namespace generic = norm::kernel_util::generic;
+
+template &lt;
+    uint32_t cb_in,
+    uint32_t cb_inb,
+    uint32_t cb_interm_pre_add,
+    uint32_t cb_ex,
+    uint32_t cb_ex2,
+    uint32_t input_dst,
+    uint32_t mean_dst,
+    uint32_t var_dst,
+    uint32_t Wt,
+    uint32_t tile_width,
+    uint32_t W,
+    uint32_t blk&gt;
+void welford_fuse_pre_add(const std::array&lt;uint32_t, W&gt;&amp; reciprocal_lut) {
+    CircularBuffer cb_in_obj(cb_in);
+    CircularBuffer cb_inb_obj(cb_inb);
+    CircularBuffer cb_interm_pre_add_obj(cb_interm_pre_add);
+    CircularBuffer cb_ex_obj(cb_ex);
+    CircularBuffer cb_ex2_obj(cb_ex2);
+
+    // The number of valid columns in the last tile in width dimension.
+    // Because the Welford's llk is given transposed data, skip some rows when
+    // we want to skip some columns from getting processed by layer_norm.
+    // When last tile is full the value is 0 and is not used because full update is done.
+    constexpr uint32_t last_tile_rows = W % tile_width;
+    constexpr bool is_last_tile_full = (last_tile_rows == 0);
+
+    uint32_t sample_idx = 0;
+
+    tile_regs_acquire();
+    welford_init();
+    welford_save_state(mean_dst);
+    tile_regs_commit();
+
+    cb_ex_obj.reserve_back(1);
+    cb_ex2_obj.reserve_back(1);
+    tile_regs_wait();
+    pack_reconfig_data_format(cb_ex);
+    pack_tile(mean_dst, cb_ex);
+    pack_tile(var_dst, cb_ex2);
+    tile_regs_release();
+    cb_ex_obj.push_back(1);
+    cb_ex2_obj.push_back(1);
+
+    for (auto block : generic::blocks(Wt, blk)) {
+<span class="dz" data-d="2">        // Fused pre-add
+        reconfig_data_format(cb_in, cb_inb);
+        add_tiles_init(cb_in, cb_inb);
+        cb_in_obj.wait_front(block.full_block_size());
+        cb_inb_obj.wait_front(block.full_block_size());
+        tile_regs_acquire();
+        for (auto i : block.local()) {
+            add_tiles(cb_in, cb_inb, i, i, i);
+        }
+        tile_regs_commit();
+        cb_in_obj.pop_front(block.full_block_size());
+        cb_inb_obj.pop_front(block.full_block_size());
+
+        // Pack to intermediate CB (needed
+        // to workaround transpose_wh_dest bug)
+        pack_reconfig_data_format(cb_interm_pre_add);
+        cb_interm_pre_add_obj.reserve_back(block.full_block_size());
+        tile_regs_wait();
+        for (auto i : block.local()) {
+            pack_tile(i, cb_interm_pre_add);
+        }
+        tile_regs_release();
+        cb_interm_pre_add_obj.push_back(block.full_block_size());</span>
+
+<span class="dz" data-d="6">        // Now run Welfords in these blk number of tiles
+        cb_interm_pre_add_obj.wait_front(block.full_block_size());
+        cb_ex_obj.wait_front(1);
+        cb_ex2_obj.wait_front(1);
+        tile_regs_acquire();
+        reconfig_data_format_srca(cb_in, cb_ex);
+        copy_tile_init(cb_ex);
+        copy_tile(cb_ex, 0, mean_dst);
+        reconfig_data_format_srca(cb_ex, cb_ex2);
+        copy_tile_to_dst_init_short_with_dt(cb_ex, cb_ex2);
+        copy_tile(cb_ex2, 0, var_dst);
+        welford_restore_state(mean_dst);
+
+        reconfig_data_format_srca(cb_ex2, cb_interm_pre_add);
+        transpose_wh_init_short(cb_interm_pre_add);</span>
+        for (auto i : block.local()) {
+            // Welford's needs transposed input tile
+            transpose_wh_tile(cb_interm_pre_add, i, input_dst);
+
+            // Welford over this tile: include only valid elements, never padding.
+            if constexpr (is_last_tile_full) {
+                // All tiles can go through the faster call which does 32 rows
+                welford_update&lt;W&gt;(input_dst, sample_idx, reciprocal_lut);
+            } else {
+                // Last tile in width has padding; process only first last_tile_rows rows.
+                if ((block.start() + i) == (Wt - 1)) {
+                    welford_update_rows&lt;W&gt;(input_dst, sample_idx, 0, last_tile_rows, reciprocal_lut);
+                } else {
+                    welford_update&lt;W&gt;(input_dst, sample_idx, reciprocal_lut);
+                }
+            }
+            sample_idx += tile_width;
+        }
+        welford_save_state(mean_dst);
+        tile_regs_commit();
+        cb_interm_pre_add_obj.pop_front(block.full_block_size());
+        cb_ex_obj.pop_front(1);
+        cb_ex2_obj.pop_front(1);
+
+        cb_ex_obj.reserve_back(1);
+        cb_ex2_obj.reserve_back(1);
+        tile_regs_wait();
+        pack_reconfig_data_format(cb_interm_pre_add, cb_ex);
+        pack_tile(mean_dst, cb_ex);
+        pack_tile(var_dst, cb_ex2);
+        tile_regs_release();
+        cb_ex_obj.push_back(1);
+        cb_ex2_obj.push_back(1);
+    }
+
+    cb_ex_obj.wait_front(1);
+    cb_ex2_obj.wait_front(1);
+    tile_regs_acquire();
+    copy_tile_init(cb_ex);
+    copy_tile(cb_ex, 0, mean_dst);
+    copy_tile_to_dst_init_short_with_dt(cb_ex, cb_ex2);
+    copy_tile(cb_ex2, 0, var_dst);
+    welford_restore_state(mean_dst);
+    // Store the mean and variance to the destination registers
+    welford_finalize_to_row&lt;W&gt;(mean_dst, W - 1, reciprocal_lut);
+    tile_regs_commit();
+    cb_ex_obj.pop_front(1);
+    cb_ex2_obj.pop_front(1);
+}
+
+/* @brief: Welford's algorithm for no fused pre-add
+ * @param: cb_in: input CB
+ * @param: input_dst: input tile for Welford's algorithm
+ * @param: mean_dst: mean tile for Welford's algorithm
+ * @param: Wt: width of the input in tiles
+ * @param: tile_width: width of each tile
+ * @param: W: width of the input
+ * @param: p_reciprocals: pointer to the reciprocal LUT
+ */
+template &lt;
+    uint32_t cb_in,
+    uint32_t input_dst,
+    uint32_t mean_dst,
+    uint32_t Wt,
+    uint32_t tile_width,
+    uint32_t W,
+    uint32_t blk&gt;
+void welford_no_fuse_pre_add(const std::array&lt;uint32_t, W&gt;&amp; reciprocal_lut) {
+    CircularBuffer cb_in_obj(cb_in);
+
+    // The number of valid columns in the last tile in width dimension.
+    // Because the Welford's llk is given transposed data, skip some rows when
+    // we want to skip some columns from getting processed by layer_norm.
+    // When last tile is full the value is 0 and is not used because full update is done.
+    constexpr uint32_t last_tile_rows = W % tile_width;
+    constexpr bool is_last_tile_full = (last_tile_rows == 0);
+
+    uint32_t sample_idx = 0;
+    reconfig_data_format_srca(cb_in);
+    transpose_wh_init_short(cb_in);
+    tile_regs_acquire();
+    welford_init();
+
+    // Process all but the last tile
+    for (uint32_t wt = 0; wt &lt; (Wt - 1); ++wt) {
+        cb_in_obj.wait_front(1);
+        // Welford's needs transposed input tile
+        transpose_wh_tile(cb_in, 0, input_dst);
+        welford_update&lt;W&gt;(input_dst, sample_idx, reciprocal_lut);
+
+        // Pop the input
+        cb_in_obj.pop_front(1);
+        sample_idx += tile_width;
+    }
+
+    // Process the last tile
+    // Reader is sending full blocks, so we need to stay in sync.
+    // wait/pop the last tile + any remaining in the last block
+    const auto num_to_sync = generic::blocks(Wt, blk).back().remainder() + 1;
+    cb_in_obj.wait_front(num_to_sync);
+    transpose_wh_tile(cb_in, 0, input_dst);
+
+    if constexpr (is_last_tile_full) {
+        welford_update&lt;W&gt;(input_dst, sample_idx, reciprocal_lut);
+    } else {
+        welford_update_rows&lt;W&gt;(input_dst, sample_idx, 0, last_tile_rows, reciprocal_lut);
+    }
+
+    // Store the mean and variance to the destination registers
+    welford_finalize_to_row&lt;W&gt;(mean_dst, W - 1, reciprocal_lut);
+
+    tile_regs_commit();
+
+    cb_in_obj.pop_front(num_to_sync);
+}
+
+void kernel_main() {
+    namespace kutil = norm::kernel_util;
+
+    uint32_t NCHt = get_arg_val&lt;uint32_t&gt;(0);
+    constexpr uint32_t Wt = get_compile_time_arg_val(0);
+    constexpr uint32_t blk = get_compile_time_arg_val(1);
+    constexpr uint32_t do_gamma = get_compile_time_arg_val(2);
+    constexpr uint32_t do_beta = get_compile_time_arg_val(3);
+    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(4) == 1;
+    constexpr uint32_t W = get_compile_time_arg_val(5);
+    constexpr uint32_t tile_width = get_compile_time_arg_val(6);
+    constexpr bool fuse_pre_add = static_cast&lt;bool&gt;(get_compile_time_arg_val(8));
+
+    // Note that the entire W dimension must fit in the intermed0 CB for this kernel to be correct
+    // CB indices - configurable via named compile-time args for kernel chaining support
+    constexpr auto cb_eps = get_named_compile_time_arg_val("cb_eps");  // single tile generated by the reader
+    constexpr auto cb_in = get_named_compile_time_arg_val("cb_in");    // input x or a for fused pre-add (x=a+b)
+    constexpr auto cb_inb = get_named_compile_time_arg_val("cb_inb");  // input b for fused pre-add
+    constexpr auto cb_out = get_named_compile_time_arg_val("cb_out");  // output
+    constexpr auto cb_gamma = get_named_compile_time_arg_val("cb_gamma");
+    constexpr auto cb_beta = get_named_compile_time_arg_val("cb_beta");
+<span class="dz" data-d="1">    uint32_t cb_xmm = get_named_compile_time_arg_val("cb_xmm");                        // x - E[x]</span>
+    constexpr auto cb_ex = get_named_compile_time_arg_val("cb_ex");                    // E[x]
+    constexpr auto cb_ex2 = get_named_compile_time_arg_val("cb_ex2");                  // Var[x] = E[(x-E[x])^2]
+    constexpr auto cb_ex2pe = get_named_compile_time_arg_val("cb_ex2pe");              // Var[x]+ε
+    constexpr auto cb_fusion = get_named_compile_time_arg_val("cb_fusion");            // stream gamma/beta
+    constexpr auto cb_interm_pre_add = get_named_compile_time_arg_val("cb_x");         // intermediate for fused pre-add
+    constexpr auto cb_reciprocals = get_named_compile_time_arg_val("cb_reciprocals");  // Pre-computed reciprocals
+
+    CircularBuffer cb_eps_obj(cb_eps);
+    CircularBuffer cb_in_obj(cb_in);
+    CircularBuffer cb_inb_obj(cb_inb);
+    CircularBuffer cb_out_obj(cb_out);
+    CircularBuffer cb_gamma_obj(cb_gamma);
+    CircularBuffer cb_beta_obj(cb_beta);
+    CircularBuffer cb_ex_obj(cb_ex);
+    CircularBuffer cb_ex2_obj(cb_ex2);
+    CircularBuffer cb_ex2pe_obj(cb_ex2pe);
+
+    constexpr uint32_t onetile = 1;
+
+    // Initialize the hardware based on the first op
+    // that will be done
+    if constexpr (fuse_pre_add) {
+        // Init for x = in + b
+        binary_op_init_common(cb_in, cb_inb, cb_interm_pre_add);
+    } else {
+        // Init for transpose
+        constexpr auto first_out_cb = cb_ex;
+        unary_op_init_common(cb_in, first_out_cb);
+    }
+
+    cb_eps_obj.wait_front(onetile);  // comes from the reader
+
+    constexpr uint32_t dst0 = 0;
+    constexpr uint32_t input_dst = 0;  // Input tile for Welford's algorithm
+    constexpr uint32_t mean_dst = 1;   // Mean tile for Welford's
+    constexpr uint32_t var_dst = 2;    // Variance tile for Welford's
+
+    // Get pointer to the reciprocal LUT
+    using recip_lut_t = std::array&lt;uint32_t, W&gt;;
+    auto p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data&lt;recip_lut_t&gt;(cb_reciprocals, 0);
+
+    for (uint32_t ncht = 0; ncht &lt; NCHt; ncht++) {
+        // Depending on whether we need to fuse pre-add, the approach for welford is different.
+        // So we move it to a separate function.
+        if constexpr (fuse_pre_add) {
+            welford_fuse_pre_add&lt;
+                cb_in,
+                cb_inb,
+                cb_interm_pre_add,
+                cb_ex,
+                cb_ex2,
+                input_dst,
+                mean_dst,
+                var_dst,
+                Wt,
+                tile_width,
+                W,
+                blk&gt;(*p_reciprocals);
+        } else {
+            welford_no_fuse_pre_add&lt;cb_in, input_dst, mean_dst, Wt, tile_width, W, blk&gt;(*p_reciprocals);
+        }
+        // We should expect that either of the two would have have populated dst regs with mean and
+        // variance in mean_dst and var_dst respectively.
+
+        cb_ex_obj.reserve_back(onetile);
+        cb_ex2_obj.reserve_back(onetile);
+        tile_regs_wait();
+        pack_reconfig_data_format(cb_ex);
+        pack_tile(mean_dst, cb_ex);
+        pack_tile(var_dst, cb_ex2);
+        tile_regs_release();
+        cb_ex_obj.push_back(onetile);
+        cb_ex2_obj.push_back(onetile);
+
+        // Transpose mean and variance back to
+        // columns and pack back to CBs
+        reconfig_data_format_srca(cb_ex);
+        transpose_wh_init_short(cb_ex);
+
+        cb_ex_obj.wait_front(onetile);
+        cb_ex2_obj.wait_front(onetile);
+        tile_regs_acquire();
+        transpose_wh_tile(cb_ex, 0, mean_dst);
+        transpose_wh_tile(cb_ex2, 0, var_dst);
+        tile_regs_commit();
+        cb_ex_obj.pop_front(onetile);
+        cb_ex2_obj.pop_front(onetile);
+
+        cb_ex_obj.reserve_back(onetile);
+        cb_ex2_obj.reserve_back(onetile);
+        tile_regs_wait();
+        pack_reconfig_data_format(cb_ex);
+        pack_tile(mean_dst, cb_ex);
+        pack_reconfig_data_format(cb_ex2);
+        pack_tile(var_dst, cb_ex2);
+        tile_regs_release();
+        cb_ex_obj.push_back(onetile);
+        cb_ex2_obj.push_back(onetile);
+
+        // =====================================
+<span class="dz" data-d="4">        // Calculate 1/(√(Var(X) + ε))
+        // =====================================
+        reconfig_data_format(cb_ex2, cb_eps);
+        add_tiles_init(cb_ex2, cb_eps);
+
+        cb_ex2_obj.wait_front(onetile);
+        tile_regs_acquire();
+        add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
+        rsqrt_tile_init();
+        rsqrt_tile(dst0);
+        tile_regs_commit();
+        cb_ex2_obj.pop_front(onetile);
+
+        cb_ex2pe_obj.reserve_back(onetile);
+        tile_regs_wait();
+        pack_tile(dst0, cb_ex2pe);
+        tile_regs_release();
+        cb_ex2pe_obj.push_back(onetile);
+
+        // broadcasts the tile since cb_ex2pe is a column vector that contains the important data
+        cb_ex2pe_obj.wait_front(onetile);
+        tile_regs_acquire();
+        reconfig_data_format_srca(cb_ex2pe);
+        unary_bcast_init&lt;BroadcastType::COL&gt;(cb_ex2pe, cb_ex2pe);
+        unary_bcast&lt;BroadcastType::COL&gt;(cb_ex2pe, 0, dst0);
+        cb_ex2pe_obj.pop_front(onetile);
+        tile_regs_commit();
+
+        cb_ex2pe_obj.reserve_back(onetile);
+        tile_regs_wait();
+        pack_tile(dst0, cb_ex2pe);
+        tile_regs_release();
+        cb_ex2pe_obj.push_back(onetile);</span>
+
+        // =====================================
+<span class="dz" data-d="3">        // Second pass over the input.
+        // Computes the final value:
+        //    x-E[x]
+        //(---------------*𝛄)+ß
+        //  √(Var(x)+ε)
+        // =====================================
+        cb_ex2pe_obj.wait_front(onetile);
+        cb_ex_obj.wait_front(onetile);
+
+        for (auto block : generic::blocks(Wt, blk)) {
+            // Last block may only be partially-filled,
+            // and only tiles that have data in them are
+            // processed, but need to sync with reader on full blocks
+            cb_in_obj.wait_front(block.full_block_size());
+            tile_regs_acquire();
+            reconfig_data_format(cb_in, cb_ex);
+            sub_bcast_cols_init_short(cb_in, cb_ex);
+            // x-E[x]
+            for (auto i : block.local()) {
+                sub_tiles_bcast_cols(cb_in, cb_ex, i, 0, i);
+            }
+            cb_in_obj.pop_front(block.full_block_size());
+
+            if constexpr (fuse_pre_add) {
+                // Fuse in = in + b
+                reconfig_data_format_srca(cb_in, cb_inb);
+                binary_dest_reuse_tiles_init&lt;EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB&gt;(
+                    cb_inb);
+                cb_inb_obj.wait_front(block.full_block_size());
+                for (auto i : block.local()) {
+                    binary_dest_reuse_tiles&lt;EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB&gt;(
+                        cb_inb, i, i);
+                }
+                cb_inb_obj.pop_front(block.full_block_size());
+                reconfig_data_format_srca(cb_inb, cb_ex2pe);
+            }
+
+            // Multiply by 1/(√(Var(X) + ε))
+            reconfig_data_format_srca(fuse_pre_add ? cb_inb : cb_in, cb_ex2pe);
+            binary_dest_reuse_tiles_init&lt;EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB&gt;(cb_ex2pe);
+            for (auto i : block.local()) {
+                binary_dest_reuse_tiles&lt;EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB&gt;(
+                    cb_ex2pe, 0 /*in_tile_index*/, i);
+            }
+            tile_regs_commit();
+
+            if constexpr (!(do_gamma == 1 or do_beta == 1)) {
+                cb_xmm = cb_out;
+            }
+
+            pack_reconfig_data_format(cb_xmm);
+            // Sync with writer on full blocks
+            CircularBuffer(cb_xmm).reserve_back(block.full_block_size());
+            tile_regs_wait();
+            for (auto i : block.local()) {
+                pack_tile(i, cb_xmm);
+            }
+            CircularBuffer(cb_xmm).push_back(block.full_block_size());
+            tile_regs_release();
+
+            if constexpr (do_gamma == 1) {
+                // Multiply by gamma
+                reconfig_data_format(cb_xmm, cb_gamma);
+                tile_regs_acquire();
+                cb_gamma_obj.wait_front(block.full_block_size());
+                CircularBuffer(cb_xmm).wait_front(block.full_block_size());
+                mul_bcast_rows_init_short(cb_xmm, cb_gamma);
+                for (auto i : block.local()) {
+                    mul_tiles_bcast_rows(cb_xmm, cb_gamma, i, i, i);
+                }
+                tile_regs_commit();
+                cb_gamma_obj.pop_front(block.full_block_size());
+                CircularBuffer(cb_xmm).pop_front(block.full_block_size());
+
+                if constexpr (!do_beta) {
+                    pack_reconfig_data_format(cb_out);
+                }
+                tile_regs_wait();
+                if constexpr (!do_beta) {
+                    cb_out_obj.reserve_back(block.full_block_size());
+                    for (auto i : block.local()) {
+                        pack_tile(i, cb_out);
+                    }
+                    cb_out_obj.push_back(block.full_block_size());
+                } else {
+                    CircularBuffer(cb_xmm).reserve_back(block.full_block_size());
+                    for (auto i : block.local()) {
+                        pack_tile(i, cb_xmm);
+                    }
+                    CircularBuffer(cb_xmm).push_back(block.full_block_size());
+                }
+                tile_regs_release();
+            }
+
+            if constexpr (do_beta == 1) {
+                // Add beta
+                tile_regs_acquire();
+                reconfig_data_format(cb_xmm, cb_beta);
+                add_bcast_rows_init_short(cb_xmm, cb_beta);
+                CircularBuffer(cb_xmm).wait_front(block.full_block_size());
+                cb_beta_obj.wait_front(block.full_block_size());
+                for (auto i : block.local()) {
+                    add_tiles_bcast_rows(cb_xmm, cb_beta, i, i, i);
+                }
+                tile_regs_commit();
+                cb_beta_obj.pop_front(block.full_block_size());
+                CircularBuffer(cb_xmm).pop_front(block.full_block_size());
+
+                pack_reconfig_data_format(cb_out);
+                cb_out_obj.reserve_back(block.full_block_size());
+                tile_regs_wait();
+                for (auto i : block.local()) {
+                    pack_tile(i, cb_out);
+                }
+                tile_regs_release();
+                cb_out_obj.push_back(block.full_block_size());
+            }
+        }
+
+        cb_xmm = get_named_compile_time_arg_val("cb_xmm");  // x minus mean</span>
+        cb_ex2pe_obj.pop_front(onetile);
+        cb_ex_obj.pop_front(onetile);
+    }  // NCHt loop
+}
+</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+#define BCAST_LLKOP EltwiseBinaryType::ELWMUL
+#define BCAST_DIM BroadcastType::COL
+
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/welford.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/rsqrt.h"
+#include "api/compute/transpose_wh.h"
+#include "ttnn/operations/normalization/kernel_util/compute/memory.h"
+#include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
+#include "api/dataflow/circular_buffer.h"
+<span class="dz" data-d="1">#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"</span>
+
+namespace generic = norm::kernel_util::generic;
+
+template &lt;
+    uint32_t cb_in,
+    uint32_t cb_inb,
+    uint32_t cb_interm_pre_add,
+    uint32_t cb_ex,
+    uint32_t cb_ex2,
+    uint32_t input_dst,
+    uint32_t mean_dst,
+    uint32_t var_dst,
+    uint32_t Wt,
+    uint32_t tile_width,
+    uint32_t W,
+    uint32_t blk&gt;
+void welford_fuse_pre_add(const std::array&lt;uint32_t, W&gt;&amp; reciprocal_lut) {
+    CircularBuffer cb_in_obj(cb_in);
+    CircularBuffer cb_inb_obj(cb_inb);
+    CircularBuffer cb_interm_pre_add_obj(cb_interm_pre_add);
+    CircularBuffer cb_ex_obj(cb_ex);
+    CircularBuffer cb_ex2_obj(cb_ex2);
+
+    // The number of valid columns in the last tile in width dimension.
+    // Because the Welford's llk is given transposed data, skip some rows when
+    // we want to skip some columns from getting processed by layer_norm.
+    // When last tile is full the value is 0 and is not used because full update is done.
+    constexpr uint32_t last_tile_rows = W % tile_width;
+    constexpr bool is_last_tile_full = (last_tile_rows == 0);
+
+    uint32_t sample_idx = 0;
+
+    tile_regs_acquire();
+    welford_init();
+    welford_save_state(mean_dst);
+    tile_regs_commit();
+
+    cb_ex_obj.reserve_back(1);
+    cb_ex2_obj.reserve_back(1);
+    tile_regs_wait();
+    pack_reconfig_data_format(cb_ex);
+    pack_tile(mean_dst, cb_ex);
+    pack_tile(var_dst, cb_ex2);
+    tile_regs_release();
+    cb_ex_obj.push_back(1);
+    cb_ex2_obj.push_back(1);
+
+    for (auto block : generic::blocks(Wt, blk)) {
+<span class="dz" data-d="2">        // Fused pre-add: cb_in + cb_inb -&gt; cb_interm_pre_add over one padded block (Bulk in/out,
+        // block_size = full_block_size so all tiles run in one DEST window — matches the original
+        // for(i:block.local()) inside one ACQ; padding tiles are processed harmlessly).
+        // add_tiles_init + reconfig -&gt; Input; pack_reconfig(cb_interm_pre_add) -&gt; Output.
+        compute_kernel_lib::add&lt;
+            cb_in,
+            cb_inb,
+            cb_interm_pre_add,
+            compute_kernel_lib::BroadcastDim::None,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::OutputLifecycle::Bulk,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::Output,
+            compute_kernel_lib::OperandKind::Block&gt;(
+            compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()));</span>
+
+<span class="dz" data-d="6">        // Now run Welfords in these blk number of tiles
+        cb_interm_pre_add_obj.wait_front(block.full_block_size());
+        cb_ex_obj.wait_front(1);
+        cb_ex2_obj.wait_front(1);
+        tile_regs_acquire();
+        reconfig_data_format_srca(cb_in, cb_ex);
+        copy_tile_init(cb_ex);
+        copy_tile(cb_ex, 0, mean_dst);
+        reconfig_data_format_srca(cb_ex, cb_ex2);
+        copy_tile_to_dst_init_short_with_dt(cb_ex, cb_ex2);
+        copy_tile(cb_ex2, 0, var_dst);
+        welford_restore_state(mean_dst);
+
+        reconfig_data_format_srca(cb_ex2, cb_interm_pre_add);
+        transpose_wh_init_short(cb_interm_pre_add);</span>
+        for (auto i : block.local()) {
+            // Welford's needs transposed input tile
+            transpose_wh_tile(cb_interm_pre_add, i, input_dst);
+
+            // Welford over this tile: include only valid elements, never padding.
+            if constexpr (is_last_tile_full) {
+                // All tiles can go through the faster call which does 32 rows
+                welford_update&lt;W&gt;(input_dst, sample_idx, reciprocal_lut);
+            } else {
+                // Last tile in width has padding; process only first last_tile_rows rows.
+                if ((block.start() + i) == (Wt - 1)) {
+                    welford_update_rows&lt;W&gt;(input_dst, sample_idx, 0, last_tile_rows, reciprocal_lut);
+                } else {
+                    welford_update&lt;W&gt;(input_dst, sample_idx, reciprocal_lut);
+                }
+            }
+            sample_idx += tile_width;
+        }
+        welford_save_state(mean_dst);
+        tile_regs_commit();
+        cb_interm_pre_add_obj.pop_front(block.full_block_size());
+        cb_ex_obj.pop_front(1);
+        cb_ex2_obj.pop_front(1);
+
+        cb_ex_obj.reserve_back(1);
+        cb_ex2_obj.reserve_back(1);
+        tile_regs_wait();
+        pack_reconfig_data_format(cb_interm_pre_add, cb_ex);
+        pack_tile(mean_dst, cb_ex);
+        pack_tile(var_dst, cb_ex2);
+        tile_regs_release();
+        cb_ex_obj.push_back(1);
+        cb_ex2_obj.push_back(1);
+    }
+
+    cb_ex_obj.wait_front(1);
+    cb_ex2_obj.wait_front(1);
+    tile_regs_acquire();
+    copy_tile_init(cb_ex);
+    copy_tile(cb_ex, 0, mean_dst);
+    copy_tile_to_dst_init_short_with_dt(cb_ex, cb_ex2);
+    copy_tile(cb_ex2, 0, var_dst);
+    welford_restore_state(mean_dst);
+    // Store the mean and variance to the destination registers
+    welford_finalize_to_row&lt;W&gt;(mean_dst, W - 1, reciprocal_lut);
+    tile_regs_commit();
+    cb_ex_obj.pop_front(1);
+    cb_ex2_obj.pop_front(1);
+}
+
+/* @brief: Welford's algorithm for no fused pre-add
+ * @param: cb_in: input CB
+ * @param: input_dst: input tile for Welford's algorithm
+ * @param: mean_dst: mean tile for Welford's algorithm
+ * @param: Wt: width of the input in tiles
+ * @param: tile_width: width of each tile
+ * @param: W: width of the input
+ * @param: p_reciprocals: pointer to the reciprocal LUT
+ */
+template &lt;
+    uint32_t cb_in,
+    uint32_t input_dst,
+    uint32_t mean_dst,
+    uint32_t Wt,
+    uint32_t tile_width,
+    uint32_t W,
+    uint32_t blk&gt;
+void welford_no_fuse_pre_add(const std::array&lt;uint32_t, W&gt;&amp; reciprocal_lut) {
+    CircularBuffer cb_in_obj(cb_in);
+
+    // The number of valid columns in the last tile in width dimension.
+    // Because the Welford's llk is given transposed data, skip some rows when
+    // we want to skip some columns from getting processed by layer_norm.
+    // When last tile is full the value is 0 and is not used because full update is done.
+    constexpr uint32_t last_tile_rows = W % tile_width;
+    constexpr bool is_last_tile_full = (last_tile_rows == 0);
+
+    uint32_t sample_idx = 0;
+    reconfig_data_format_srca(cb_in);
+    transpose_wh_init_short(cb_in);
+    tile_regs_acquire();
+    welford_init();
+
+    // Process all but the last tile
+    for (uint32_t wt = 0; wt &lt; (Wt - 1); ++wt) {
+        cb_in_obj.wait_front(1);
+        // Welford's needs transposed input tile
+        transpose_wh_tile(cb_in, 0, input_dst);
+        welford_update&lt;W&gt;(input_dst, sample_idx, reciprocal_lut);
+
+        // Pop the input
+        cb_in_obj.pop_front(1);
+        sample_idx += tile_width;
+    }
+
+    // Process the last tile
+    // Reader is sending full blocks, so we need to stay in sync.
+    // wait/pop the last tile + any remaining in the last block
+    const auto num_to_sync = generic::blocks(Wt, blk).back().remainder() + 1;
+    cb_in_obj.wait_front(num_to_sync);
+    transpose_wh_tile(cb_in, 0, input_dst);
+
+    if constexpr (is_last_tile_full) {
+        welford_update&lt;W&gt;(input_dst, sample_idx, reciprocal_lut);
+    } else {
+        welford_update_rows&lt;W&gt;(input_dst, sample_idx, 0, last_tile_rows, reciprocal_lut);
+    }
+
+    // Store the mean and variance to the destination registers
+    welford_finalize_to_row&lt;W&gt;(mean_dst, W - 1, reciprocal_lut);
+
+    tile_regs_commit();
+
+    cb_in_obj.pop_front(num_to_sync);
+}
+
+void kernel_main() {
+    namespace kutil = norm::kernel_util;
+
+    uint32_t NCHt = get_arg_val&lt;uint32_t&gt;(0);
+    constexpr uint32_t Wt = get_compile_time_arg_val(0);
+    constexpr uint32_t blk = get_compile_time_arg_val(1);
+    constexpr uint32_t do_gamma = get_compile_time_arg_val(2);
+    constexpr uint32_t do_beta = get_compile_time_arg_val(3);
+    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(4) == 1;
+    constexpr uint32_t W = get_compile_time_arg_val(5);
+    constexpr uint32_t tile_width = get_compile_time_arg_val(6);
+    constexpr bool fuse_pre_add = static_cast&lt;bool&gt;(get_compile_time_arg_val(8));
+
+    // Note that the entire W dimension must fit in the intermed0 CB for this kernel to be correct
+    // CB indices - configurable via named compile-time args for kernel chaining support
+    constexpr auto cb_eps = get_named_compile_time_arg_val("cb_eps");  // single tile generated by the reader
+    constexpr auto cb_in = get_named_compile_time_arg_val("cb_in");    // input x or a for fused pre-add (x=a+b)
+    constexpr auto cb_inb = get_named_compile_time_arg_val("cb_inb");  // input b for fused pre-add
+    constexpr auto cb_out = get_named_compile_time_arg_val("cb_out");  // output
+    constexpr auto cb_gamma = get_named_compile_time_arg_val("cb_gamma");
+    constexpr auto cb_beta = get_named_compile_time_arg_val("cb_beta");
+<span class="dz" data-d="1">    constexpr auto cb_xmm = get_named_compile_time_arg_val("cb_xmm");                  // x - E[x]</span>
+    constexpr auto cb_ex = get_named_compile_time_arg_val("cb_ex");                    // E[x]
+    constexpr auto cb_ex2 = get_named_compile_time_arg_val("cb_ex2");                  // Var[x] = E[(x-E[x])^2]
+    constexpr auto cb_ex2pe = get_named_compile_time_arg_val("cb_ex2pe");              // Var[x]+ε
+    constexpr auto cb_fusion = get_named_compile_time_arg_val("cb_fusion");            // stream gamma/beta
+    constexpr auto cb_interm_pre_add = get_named_compile_time_arg_val("cb_x");         // intermediate for fused pre-add
+    constexpr auto cb_reciprocals = get_named_compile_time_arg_val("cb_reciprocals");  // Pre-computed reciprocals
+
+    CircularBuffer cb_eps_obj(cb_eps);
+    CircularBuffer cb_in_obj(cb_in);
+    CircularBuffer cb_inb_obj(cb_inb);
+    CircularBuffer cb_out_obj(cb_out);
+    CircularBuffer cb_gamma_obj(cb_gamma);
+    CircularBuffer cb_beta_obj(cb_beta);
+    CircularBuffer cb_ex_obj(cb_ex);
+    CircularBuffer cb_ex2_obj(cb_ex2);
+    CircularBuffer cb_ex2pe_obj(cb_ex2pe);
+
+    constexpr uint32_t onetile = 1;
+
+    // Initialize the hardware based on the first op
+    // that will be done
+    if constexpr (fuse_pre_add) {
+        // Init for x = in + b
+        binary_op_init_common(cb_in, cb_inb, cb_interm_pre_add);
+    } else {
+        // Init for transpose
+        constexpr auto first_out_cb = cb_ex;
+        unary_op_init_common(cb_in, first_out_cb);
+    }
+
+    cb_eps_obj.wait_front(onetile);  // comes from the reader
+
+    constexpr uint32_t dst0 = 0;
+    constexpr uint32_t input_dst = 0;  // Input tile for Welford's algorithm
+    constexpr uint32_t mean_dst = 1;   // Mean tile for Welford's
+    constexpr uint32_t var_dst = 2;    // Variance tile for Welford's
+
+    // Get pointer to the reciprocal LUT
+    using recip_lut_t = std::array&lt;uint32_t, W&gt;;
+    auto p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data&lt;recip_lut_t&gt;(cb_reciprocals, 0);
+
+    for (uint32_t ncht = 0; ncht &lt; NCHt; ncht++) {
+        // Depending on whether we need to fuse pre-add, the approach for welford is different.
+        // So we move it to a separate function.
+        if constexpr (fuse_pre_add) {
+            welford_fuse_pre_add&lt;
+                cb_in,
+                cb_inb,
+                cb_interm_pre_add,
+                cb_ex,
+                cb_ex2,
+                input_dst,
+                mean_dst,
+                var_dst,
+                Wt,
+                tile_width,
+                W,
+                blk&gt;(*p_reciprocals);
+        } else {
+            welford_no_fuse_pre_add&lt;cb_in, input_dst, mean_dst, Wt, tile_width, W, blk&gt;(*p_reciprocals);
+        }
+        // We should expect that either of the two would have have populated dst regs with mean and
+        // variance in mean_dst and var_dst respectively.
+
+        cb_ex_obj.reserve_back(onetile);
+        cb_ex2_obj.reserve_back(onetile);
+        tile_regs_wait();
+        pack_reconfig_data_format(cb_ex);
+        pack_tile(mean_dst, cb_ex);
+        pack_tile(var_dst, cb_ex2);
+        tile_regs_release();
+        cb_ex_obj.push_back(onetile);
+        cb_ex2_obj.push_back(onetile);
+
+        // Transpose mean and variance back to
+        // columns and pack back to CBs
+        reconfig_data_format_srca(cb_ex);
+        transpose_wh_init_short(cb_ex);
+
+        cb_ex_obj.wait_front(onetile);
+        cb_ex2_obj.wait_front(onetile);
+        tile_regs_acquire();
+        transpose_wh_tile(cb_ex, 0, mean_dst);
+        transpose_wh_tile(cb_ex2, 0, var_dst);
+        tile_regs_commit();
+        cb_ex_obj.pop_front(onetile);
+        cb_ex2_obj.pop_front(onetile);
+
+        cb_ex_obj.reserve_back(onetile);
+        cb_ex2_obj.reserve_back(onetile);
+        tile_regs_wait();
+        pack_reconfig_data_format(cb_ex);
+        pack_tile(mean_dst, cb_ex);
+        pack_reconfig_data_format(cb_ex2);
+        pack_tile(var_dst, cb_ex2);
+        tile_regs_release();
+        cb_ex_obj.push_back(onetile);
+        cb_ex2_obj.push_back(onetile);
+
+        // =====================================
+        // Calculate 1/(√(Var(X) + ε))
+        // =====================================
+<span class="dz" data-d="4">        // PARTIAL migration: BinaryFpu(Add, cb_ex2, cb_eps) + Rsqrt + PackTile(cb_ex2pe).
+        // Reconfig audit: explicit reconfig_data_format(cb_ex2, cb_eps) + add_tiles_init's
+        // reconfig (idempotent) -&gt; BinaryDataFormatReconfig::Input.
+        // NO pack_reconfig in original (pack stays at cb_ex2 from preceding stage; cb_ex2 and
+        // cb_ex2pe formats assumed compatible) -&gt; PackTileReconfig::None.
+        // cb_ex2pe.reserve_back IS called in original -&gt; use OutputLifecycle::Streaming (reserve + push per tile).
+        // Non-LEGACY rsqrt -&gt; Legacy::Off.
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu&lt;
+                cb_ex2,
+                cb_eps,
+                compute_kernel_lib::BinaryFpuOp::Add,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged&gt;{},
+            compute_kernel_lib::Rsqrt&lt;
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Legacy::Off,
+                compute_kernel_lib::Dst::D0&gt;{},
+            compute_kernel_lib::PackTile&lt;
+                cb_ex2pe,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::None&gt;{});
+
+        // PARTIAL migration: UnaryBcast&lt;COL&gt; + PackTile (same-CB in/out on cb_ex2pe).
+        // Reconfig: UnaryBcast's small init reconfigs BOTH srca and srcb to cb_ex2pe
+        // (UnaryBcastReconfig::Input) — the COL bcast datacopy drives the FPU SrcB lane, and the
+        // preceding BinaryFpu(cb_ex2, cb_eps) left SrcB = cb_eps, so both sources must be
+        // reprogrammed. Pack-side reconfig is owned by the downstream PackTile
+        // (PackTileReconfig::Output). No mid-kernel hw_configure needed.
+        // Lifecycle: cb_ex2pe InputLifecycle::Streaming in, OutputLifecycle::Streaming out.
+        compute_kernel_lib::unary_bcast&lt;compute_kernel_lib::BroadcastDim::Col, cb_ex2pe, cb_ex2pe&gt;(onetile);</span>
+
+        // =====================================
+        // Second pass over the input.
+        // Computes the final value:
+        //    x-E[x]
+        //(---------------*𝛄)+ß
+        //  √(Var(x)+ε)
+        // =====================================
+        cb_ex2pe_obj.wait_front(onetile);
+        cb_ex_obj.wait_front(onetile);
+
+        for (auto block : generic::blocks(Wt, blk)) {
+            // Last block may only be partially-filled,
+            // and only tiles that have data in them are
+            // processed, but need to sync with reader on full blocks
+<span class="dz" data-d="3">            // Normalize, fused in DEST: (x - E[x]) [+ b if fuse_pre_add] * 1/sqrt(Var+eps) -&gt; cb_norm_out.
+            //   cb_in Bulk (wait+pop full_block); cb_ex held col-bcast (1 tile) -&gt; CallerManaged + Scalar;
+            //   cb_inb Bulk; cb_ex2pe held (1 tile) -&gt; CallerManaged + Scalar. block_size = full_block_size
+            //   (one DEST window; padding tiles processed harmlessly). sub/dest_reuse inits + reconfigs
+            //   -&gt; Input; pack_reconfig(cb_xmm/cb_out) -&gt; Output.
+            constexpr uint32_t cb_norm_out =
+                (do_gamma == 1 || do_beta == 1) ? get_named_compile_time_arg_val("cb_xmm") : cb_out;
+            if constexpr (fuse_pre_add) {
+                compute_kernel_lib::eltwise_chain(
+                    compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()),
+                    compute_kernel_lib::BinaryFpu&lt;
+                        cb_in,
+                        cb_ex,
+                        compute_kernel_lib::BinaryFpuOp::Sub,
+                        compute_kernel_lib::BroadcastDim::Col,
+                        compute_kernel_lib::InputLifecycle::Bulk,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::OperandKind::Scalar&gt;{},
+                    compute_kernel_lib::DestReuseBinary&lt;
+                        cb_inb,
+                        compute_kernel_lib::BinaryFpuOp::Add,
+                        compute_kernel_lib::DestReuseType::DEST_TO_SRCB,
+                        compute_kernel_lib::InputLifecycle::Bulk,
+                        compute_kernel_lib::DestReuseReconfig::Input,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Block&gt;{},
+                    compute_kernel_lib::DestReuseBinary&lt;
+                        cb_ex2pe,
+                        compute_kernel_lib::BinaryFpuOp::Mul,
+                        compute_kernel_lib::DestReuseType::DEST_TO_SRCB,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
+                        compute_kernel_lib::DestReuseReconfig::Input,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Scalar&gt;{},
+                    compute_kernel_lib::PackTile&lt;
+                        cb_norm_out,
+                        compute_kernel_lib::OutputLifecycle::Bulk,
+                        compute_kernel_lib::PackTileReconfig::Output&gt;{});
+            } else {
+                compute_kernel_lib::eltwise_chain(
+                    compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()),
+                    compute_kernel_lib::BinaryFpu&lt;
+                        cb_in,
+                        cb_ex,
+                        compute_kernel_lib::BinaryFpuOp::Sub,
+                        compute_kernel_lib::BroadcastDim::Col,
+                        compute_kernel_lib::InputLifecycle::Bulk,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::OperandKind::Scalar&gt;{},
+                    compute_kernel_lib::DestReuseBinary&lt;
+                        cb_ex2pe,
+                        compute_kernel_lib::BinaryFpuOp::Mul,
+                        compute_kernel_lib::DestReuseType::DEST_TO_SRCB,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
+                        compute_kernel_lib::DestReuseReconfig::Input,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Scalar&gt;{},
+                    compute_kernel_lib::PackTile&lt;
+                        cb_norm_out,
+                        compute_kernel_lib::OutputLifecycle::Bulk,
+                        compute_kernel_lib::PackTileReconfig::Output&gt;{});
+            }
+
+            if constexpr (do_gamma == 1) {
+                // gamma: cb_xmm * gamma (bcast rows) -&gt; cb_out, or in-place cb_xmm when do_beta.
+                //   cb_xmm holds one padded block at a time (sized Wt_padded &gt;= 2*block for large
+                //   tensors), so the in-place chain's reserve+read fits. mul_bcast_rows + reconfig
+                //   -&gt; Input; pack_reconfig -&gt; Output.
+                constexpr uint32_t cb_gamma_out = (do_beta == 1) ? cb_xmm : cb_out;
+                compute_kernel_lib::mul&lt;
+                    cb_xmm,
+                    cb_gamma,
+                    cb_gamma_out,
+                    compute_kernel_lib::BroadcastDim::Row,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::PackTileReconfig::Output,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::OperandKind::Block&gt;(
+                    compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()));
+            }
+
+            if constexpr (do_beta == 1) {
+                // beta: cb_xmm + beta (bcast rows) -&gt; cb_out. add_bcast_rows + reconfig -&gt; Input; pack -&gt; Output.
+                compute_kernel_lib::add&lt;
+                    cb_xmm,
+                    cb_beta,
+                    cb_out,
+                    compute_kernel_lib::BroadcastDim::Row,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::PackTileReconfig::Output,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::OperandKind::Block&gt;(
+                    compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()));</span>
+            }
+        }
+
+        cb_ex2pe_obj.pop_front(onetile);
+        cb_ex_obj.pop_front(onetile);
+    }  // NCHt loop
+}
+</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; Includes + cb_xmm → constexpr</b> — Added <code>eltwise_chain/convenience/math</code> headers; the reassigned <code>uint32_t cb_xmm</code> became <code>constexpr auto cb_xmm</code> (the trailing <code>cb_xmm = get_named…</code> reset is deleted) so it can feed the chain NTTPs.</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; add() — fused pre-add</b> — The <code>add_tiles</code>+<code>pack_tile</code> body → <code>compute_kernel_lib::add&lt;cb_in,cb_inb,cb_interm_pre_add,...,OperandKind::Block&gt;</code> with <code>block_size = full_block_size</code> (one DEST window; padding tiles processed harmlessly).</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; Second pass — DestReuse chain + gamma/beta</b> — <code>(x−E[x])[+b]·rstd</code> migrated to <code>eltwise_chain(BinaryFpu&lt;Sub,Col&gt;, DestReuseBinary&lt;cb_inb,Add&gt;, DestReuseBinary&lt;cb_ex2pe,Mul&gt;, PackTile)</code> (replacing the raw <code>binary_dest_reuse_tiles</code>); gamma → <code>mul&lt;Row&gt;</code>, beta → <code>add&lt;Row&gt;</code>.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; rsqrt chain + unary_bcast (COL)</b> — <code>add_tiles</code>+<code>rsqrt_tile</code>+<code>pack_tile</code> → <code>eltwise_chain(BinaryFpu&lt;Add&gt;, Rsqrt&lt;Legacy::Off&gt;, PackTile&lt;cb_ex2pe,...,None&gt;)</code>; the COL <code>unary_bcast</code>+pack → <code>compute_kernel_lib::unary_bcast&lt;Col,cb_ex2pe,cb_ex2pe&gt;(onetile)</code>.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; BLOCKER — Welford LLK stays raw</b> — Per <code>migration_status.md</code>: the first-pass Welford LLK (<code>welford_restore_state</code>, <code>transpose_wh</code>, <code>copy_tile_to_dst_init_short_with_dt</code>, the running mean/var accumulation) has no eltwise_chain equivalent and remains raw — this is the reason the kernel is classified <b>partial</b>. Only the eltwise prologue/epilogue stages around it were migrated.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-normalization_layernorm_layernorm_large_tensor_welford">
+{
+  "1": {
+    "title": "Includes + cb_xmm \u2192 constexpr",
+    "body": "Added <code>eltwise_chain/convenience/math</code> headers; the reassigned <code>uint32_t cb_xmm</code> became <code>constexpr auto cb_xmm</code> (the trailing <code>cb_xmm = get_named\u2026</code> reset is deleted) so it can feed the chain NTTPs.",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "add() \u2014 fused pre-add",
+    "body": "The <code>add_tiles</code>+<code>pack_tile</code> body \u2192 <code>compute_kernel_lib::add&lt;cb_in,cb_inb,cb_interm_pre_add,...,OperandKind::Block&gt;</code> with <code>block_size = full_block_size</code> (one DEST window; padding tiles processed harmlessly).",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "Second pass \u2014 DestReuse chain + gamma/beta",
+    "body": "<code>(x\u2212E[x])[+b]\u00b7rstd</code> migrated to <code>eltwise_chain(BinaryFpu&lt;Sub,Col&gt;, DestReuseBinary&lt;cb_inb,Add&gt;, DestReuseBinary&lt;cb_ex2pe,Mul&gt;, PackTile)</code> (replacing the raw <code>binary_dest_reuse_tiles</code>); gamma \u2192 <code>mul&lt;Row&gt;</code>, beta \u2192 <code>add&lt;Row&gt;</code>.",
+    "color": "#3f8ae0"
+  },
+  "4": {
+    "title": "rsqrt chain + unary_bcast (COL)",
+    "body": "<code>add_tiles</code>+<code>rsqrt_tile</code>+<code>pack_tile</code> \u2192 <code>eltwise_chain(BinaryFpu&lt;Add&gt;, Rsqrt&lt;Legacy::Off&gt;, PackTile&lt;cb_ex2pe,...,None&gt;)</code>; the COL <code>unary_bcast</code>+pack \u2192 <code>compute_kernel_lib::unary_bcast&lt;Col,cb_ex2pe,cb_ex2pe&gt;(onetile)</code>.",
+    "color": "#cf222e"
+  },
+  "6": {
+    "title": "BLOCKER \u2014 Welford LLK stays raw",
+    "body": "Per <code>migration_status.md</code>: the first-pass Welford LLK (<code>welford_restore_state</code>, <code>transpose_wh</code>, <code>copy_tile_to_dst_init_short_with_dt</code>, the running mean/var accumulation) has no eltwise_chain equivalent and remains raw \u2014 this is the reason the kernel is classified <b>partial</b>. Only the eltwise prologue/epilogue stages around it were migrated.",
+    "color": "#ff7a00"
+  }
+}
+</script>

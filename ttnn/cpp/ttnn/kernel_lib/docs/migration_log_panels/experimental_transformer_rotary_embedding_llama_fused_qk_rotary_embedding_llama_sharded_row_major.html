@@ -1,0 +1,280 @@
+<section class="panel" id="panel-experimental_transformer_rotary_embedding_llama_fused_qk_rotary_embedding_llama_sharded_row_major">
+  <h1>rotary_embedding_llama_sharded_row_major — <span class="badge badge-partial">PARTIAL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/device/kernels/compute/rotary_embedding_llama_sharded_row_major.cpp</div>
+  <div class="meta"><b>Δ</b> +21/-6 &nbsp; <b>Decisions:</b> 3</div>
+
+  <div class="focus-toolbar" data-fkernel="experimental_transformer_rotary_embedding_llama_fused_qk_rotary_embedding_llama_sharded_row_major">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; include swap</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; sin → mul<> (DeferredPop+DeferredReserve)</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; cos/add stay raw (BLOCKED)</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+<span class="dz" data-d="1">#include &quot;api/compute/common.h&quot;
+#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/bcast.h&quot;
+#include &quot;api/compute/matmul.h&quot;</span>
+
+ALWI void ACQ() { acquire_dst(); }
+ALWI void REL() { release_dst(); }
+
+void kernel_main() {
+    // TODO: Add back early return? Currently, running out of code size in TRISC2 by 4B
+    // const bool has_work = get_arg_val&lt;uint32_t&gt;(0);
+    // if (!has_work) {
+    //     return;
+    // }
+    const bool is_q = get_arg_val&lt;uint32_t&gt;(0);
+
+    // First 6 args for q and k heads
+    // - First 3 are for q
+    // - Next 3 are for k
+    constexpr uint32_t q_in_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t q_out_cb = get_compile_time_arg_val(1);
+    constexpr uint32_t q_Ht = get_compile_time_arg_val(2);
+    constexpr uint32_t k_in_cb = get_compile_time_arg_val(3);
+    constexpr uint32_t k_out_cb = get_compile_time_arg_val(4);
+    constexpr uint32_t k_Ht = get_compile_time_arg_val(5);
+    uint32_t in_cb = q_in_cb;
+    uint32_t out_cb = q_out_cb;
+    uint32_t Ht = q_Ht;
+    if (!is_q) {
+        in_cb = k_in_cb;
+        out_cb = k_out_cb;
+        Ht = k_Ht;
+    }
+
+    constexpr uint32_t Wt = get_compile_time_arg_val(6);  // How many tiles in wrapped RM inputs
+
+    constexpr uint32_t cos_cb = get_compile_time_arg_val(7);
+    constexpr uint32_t sin_cb = get_compile_time_arg_val(8);
+    constexpr uint32_t trans_mat_cb = get_compile_time_arg_val(9);
+
+    constexpr uint32_t rotated_in_interm_cb = get_compile_time_arg_val(10);
+    constexpr uint32_t cos_interm_cb = get_compile_time_arg_val(11);
+    constexpr uint32_t sin_interm_cb = get_compile_time_arg_val(12);
+
+    mm_init(in_cb, trans_mat_cb, out_cb);
+    binary_op_init_common(rotated_in_interm_cb, sin_cb, sin_interm_cb);  // General Init for all binary ops
+
+    for (uint32_t ht = 0; ht &lt; Ht; ht++) {  // Over n_heads_t dimension
+        cb_reserve_back(rotated_in_interm_cb, Wt);
+<span class="dz" data-d="2">        cb_reserve_back(sin_interm_cb, Wt);</span>
+        cb_reserve_back(cos_interm_cb, Wt);
+        cb_reserve_back(out_cb, Wt);
+
+        // Get the input
+        cb_reserve_back(in_cb, Wt);
+        cb_push_back(in_cb, Wt);
+        cb_wait_front(in_cb, Wt);
+
+        // Do the computation
+
+        // rotated = x @ trans_mat
+        mm_init_short(in_cb, trans_mat_cb);
+        ACQ();
+
+        matmul_tiles(in_cb, trans_mat_cb, 0, 0, 0);
+        pack_tile(0, rotated_in_interm_cb, 0);
+
+        REL();
+        cb_push_back(rotated_in_interm_cb, Wt);
+        cb_wait_front(rotated_in_interm_cb, Wt);
+
+<span class="dz" data-d="2">        mul_tiles_init(rotated_in_interm_cb, sin_cb);
+        ACQ();
+        // sin_interim = rotated * sin
+        mul_tiles(rotated_in_interm_cb, sin_cb, 0, 0, 0);
+        pack_tile(0, sin_interm_cb, 0);
+        REL();
+        cb_push_back(sin_interm_cb, Wt);
+        cb_pop_front(rotated_in_interm_cb, Wt);</span>
+
+<span class="dz" data-d="6">        mul_tiles_init(in_cb, cos_cb);
+        ACQ();
+        // cos_interim = x * cos
+        mul_tiles(in_cb, cos_cb, 0, 0, 0);
+        pack_tile(0, cos_interm_cb, 0);
+        REL();
+        cb_push_back(cos_interm_cb, Wt);
+        cb_pop_front(in_cb, Wt);  // Done with input
+
+        cb_wait_front(sin_interm_cb, Wt);
+        cb_wait_front(cos_interm_cb, Wt);
+        add_tiles_init(cos_interm_cb, sin_interm_cb);
+        ACQ();
+        // out = cos_interim + sin_interim
+        add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);
+        pack_tile(0, out_cb, 0);
+        REL();
+        cb_push_back(out_cb, Wt);
+        cb_pop_front(sin_interm_cb, Wt);
+        cb_pop_front(cos_interm_cb, Wt);</span>
+    }
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+#include &quot;api/compute/common.h&quot;
+#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/bcast.h&quot;
+#include &quot;api/compute/matmul.h&quot;
+<span class="dz" data-d="1">#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp&quot;</span>
+
+ALWI void ACQ() { acquire_dst(); }
+ALWI void REL() { release_dst(); }
+
+void kernel_main() {
+    // TODO: Add back early return? Currently, running out of code size in TRISC2 by 4B
+    // const bool has_work = get_arg_val&lt;uint32_t&gt;(0);
+    // if (!has_work) {
+    //     return;
+    // }
+    const bool is_q = get_arg_val&lt;uint32_t&gt;(0);
+
+    // First 6 args for q and k heads
+    // - First 3 are for q
+    // - Next 3 are for k
+    constexpr uint32_t q_in_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t q_out_cb = get_compile_time_arg_val(1);
+    constexpr uint32_t q_Ht = get_compile_time_arg_val(2);
+    constexpr uint32_t k_in_cb = get_compile_time_arg_val(3);
+    constexpr uint32_t k_out_cb = get_compile_time_arg_val(4);
+    constexpr uint32_t k_Ht = get_compile_time_arg_val(5);
+    uint32_t in_cb = q_in_cb;
+    uint32_t out_cb = q_out_cb;
+    uint32_t Ht = q_Ht;
+    if (!is_q) {
+        in_cb = k_in_cb;
+        out_cb = k_out_cb;
+        Ht = k_Ht;
+    }
+
+    constexpr uint32_t Wt = get_compile_time_arg_val(6);  // How many tiles in wrapped RM inputs
+
+    constexpr uint32_t cos_cb = get_compile_time_arg_val(7);
+    constexpr uint32_t sin_cb = get_compile_time_arg_val(8);
+    constexpr uint32_t trans_mat_cb = get_compile_time_arg_val(9);
+
+    constexpr uint32_t rotated_in_interm_cb = get_compile_time_arg_val(10);
+    constexpr uint32_t cos_interm_cb = get_compile_time_arg_val(11);
+    constexpr uint32_t sin_interm_cb = get_compile_time_arg_val(12);
+
+    mm_init(in_cb, trans_mat_cb, out_cb);
+    binary_op_init_common(rotated_in_interm_cb, sin_cb, sin_interm_cb);  // General Init for all binary ops
+
+    for (uint32_t ht = 0; ht &lt; Ht; ht++) {  // Over n_heads_t dimension
+        cb_reserve_back(rotated_in_interm_cb, Wt);
+        cb_reserve_back(sin_interm_cb, Wt);
+        cb_reserve_back(cos_interm_cb, Wt);
+        cb_reserve_back(out_cb, Wt);
+
+        // Get the input
+        cb_reserve_back(in_cb, Wt);
+        cb_push_back(in_cb, Wt);
+        cb_wait_front(in_cb, Wt);
+
+        // Do the computation
+
+        // rotated = x @ trans_mat
+        mm_init_short(in_cb, trans_mat_cb);
+        ACQ();
+
+        matmul_tiles(in_cb, trans_mat_cb, 0, 0, 0);
+        pack_tile(0, rotated_in_interm_cb, 0);
+
+        REL();
+        cb_push_back(rotated_in_interm_cb, Wt);
+        cb_wait_front(rotated_in_interm_cb, Wt);
+
+        // sin_interim = rotated * sin (single tile compute; outer push/pop on Wt, Wt==1 here).
+        // PARTIAL: only sin stage migrates. cos and add stages use runtime in_cb /
+        // out_cb (lines 33-38 select from q_*_cb / k_*_cb based on runtime is_q).
+        // BLOCKED — same constexpr-CB constraint as sibling sharded.cpp.
+        // Reconfig: mul_tiles_init reconfigs srca/srcb -&gt; Input. No pack_reconfig -&gt; None.
+        // Lifecycles: rotated_in_interm_cb is DeferredPop (caller waited at line 78, chain
+        //   bulk-pops it); sin_cb is CallerManaged (persistent across heads); output is
+        //   DeferredReserve (caller reserved at line 58, chain bulk-pushes). So the chain
+        //   now owns the sin_interm push and the rotated_in pop directly.
+<span class="dz" data-d="2">        compute_kernel_lib::mul&lt;
+            rotated_in_interm_cb,
+            sin_cb,
+            sin_interm_cb,
+            compute_kernel_lib::BroadcastDim::None,
+            compute_kernel_lib::InputLifecycle::DeferredPop,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::OutputLifecycle::DeferredReserve,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::None&gt;(1);</span>
+
+<span class="dz" data-d="6">        mul_tiles_init(in_cb, cos_cb);
+        ACQ();
+        // cos_interim = x * cos
+        mul_tiles(in_cb, cos_cb, 0, 0, 0);
+        pack_tile(0, cos_interm_cb, 0);
+        REL();
+        cb_push_back(cos_interm_cb, Wt);
+        cb_pop_front(in_cb, Wt);  // Done with input
+
+        cb_wait_front(sin_interm_cb, Wt);
+        cb_wait_front(cos_interm_cb, Wt);
+        add_tiles_init(cos_interm_cb, sin_interm_cb);
+        ACQ();
+        // out = cos_interim + sin_interim
+        add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);
+        pack_tile(0, out_cb, 0);
+        REL();
+        cb_push_back(out_cb, Wt);
+        cb_pop_front(sin_interm_cb, Wt);
+        cb_pop_front(cos_interm_cb, Wt);</span>
+    }
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; include swap</b> — Added <code>eltwise_chain.hpp</code> and <code>eltwise_convenience.hpp</code>; matmul/bcast includes unchanged.</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; sin multiply → mul<> chain</b> — <code>sin_interim = rotated*sin</code> (single-tile) became <code>mul&lt;rotated_in_interm_cb, sin_cb, sin_interm_cb, BroadcastDim::None, InputLifecycle::DeferredPop, InputLifecycle::CallerManaged, OutputLifecycle::DeferredReserve, …&gt;(1)</code>. The mul<> now folds the push/pop: <code>rotated_in_interm_cb</code> is <code>DeferredPop</code> (caller waited; chain pops) and the output is <code>OutputLifecycle::DeferredReserve</code> (caller reserved; chain pushes) — the manual <code>cb_push_back(sin_interm)</code> / <code>cb_pop_front(rotated_in_interm)</code> lines are gone.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; cos & add stages blocked</b> — Only the sin stage migrates. The cos multiply and the final add use the runtime-selected <code>in_cb</code>/<code>out_cb</code> (<code>is_q</code> chosen at runtime), but chain template args require <code>constexpr</code> CBs — same blocker as the sibling <code>rotary_embedding_llama_sharded.cpp</code>, compounded by the TRISC2 code-size budget.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-experimental_transformer_rotary_embedding_llama_fused_qk_rotary_embedding_llama_sharded_row_major">
+{
+  "1": {
+    "title": "include swap",
+    "body": "Added <code>eltwise_chain.hpp</code> and <code>eltwise_convenience.hpp</code>; matmul/bcast includes unchanged.",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "sin multiply → mul<> chain",
+    "body": "<code>sin_interim = rotated*sin</code> (single-tile) became <code>mul&lt;rotated_in_interm_cb, sin_cb, sin_interm_cb, BroadcastDim::None, InputLifecycle::DeferredPop, InputLifecycle::CallerManaged, OutputLifecycle::DeferredReserve, …&gt;(1)</code>. The mul<> now folds the push/pop: <code>rotated_in_interm_cb</code> is <code>DeferredPop</code> (caller waited; chain pops) and the output is <code>OutputLifecycle::DeferredReserve</code> (caller reserved; chain pushes) — the manual <code>cb_push_back(sin_interm)</code> / <code>cb_pop_front(rotated_in_interm)</code> lines are gone.",
+    "color": "#2ea043"
+  },
+  "6": {
+    "title": "cos & add stages blocked",
+    "body": "Only the sin stage migrates. The cos multiply and the final add use the runtime-selected <code>in_cb</code>/<code>out_cb</code> (<code>is_q</code> chosen at runtime), but chain template args require <code>constexpr</code> CBs — same blocker as the sibling <code>rotary_embedding_llama_sharded.cpp</code>, compounded by the TRISC2 code-size budget.",
+    "color": "#ff7a00"
+  }
+}
+</script>

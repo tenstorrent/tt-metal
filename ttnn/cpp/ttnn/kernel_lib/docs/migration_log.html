@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Eltwise migration log — before/after review</title>
+<!--
+  MODULAR DOC. Panels live in migration_log_panels/<tab_id>.html and are fetched lazily.
+  Browsers block fetch() on file:// URLs, so serve over HTTP:
+      cd ttnn/cpp/ttnn/kernel_lib/docs && python3 -m http.server 8000
+      open http://localhost:8000/migration_log.html
+  Opening this file directly (file://) will show an empty main pane.
+-->
+<style>
+  :root{
+    --bg:#0d1117; --bg2:#0b0f14; --panel:#0f141b; --ink:#e6edf3; --mut:#8b949e; --line:#222a33;
+    --hover:#161b22; --input-bg:#0d1117; --code-bg:#0a0e13; --code-ink:#c9d1d9; --dim-ink:#48515c;
+    --focus-ink:#e6edf3; --link:#79c0ff; --accent:#1f6feb; --accent-ink:#fff; --ghost-bg:#21262d;
+    --pop-bg:#161b22; --strong:#fff; --chip-card:#161b22;
+    --c1:#d6a000; --c2:#2ea043; --c3:#3f8ae0; --c4:#cf222e; --c5:#9f4bbf; --c6:#ff7a00;
+  }
+  body.light{
+    --bg:#ffffff; --bg2:#f6f8fa; --panel:#ffffff; --ink:#1f2328; --mut:#656d76; --line:#d0d7de;
+    --hover:#eaeef2; --input-bg:#ffffff; --code-bg:#f6f8fa; --code-ink:#1f2328; --dim-ink:#b6bdc6;
+    --focus-ink:#1f2328; --link:#0969da; --accent:#0969da; --accent-ink:#fff; --ghost-bg:#eef1f4;
+    --pop-bg:#ffffff; --strong:#0b0f14; --chip-card:#eef1f4;
+  }
+  body.light .badge-full{background:#dafbe1;color:#1a7f37;border-color:#2ea04355}
+  body.light .badge-partial{background:#fff8c5;color:#9a6700;border-color:#bb800955}
+  body.light .badge-blocked{background:#ffebe9;color:#cf222e;border-color:#cf222e55}
+  body.light .badge-skip{background:#eef1f4;color:#656d76;border-color:#d0d7de}
+  body.light .export-bar{background:#f6f8faee}
+  body.light pre.code,body.light .modal textarea{box-shadow:none}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:var(--bg);color:var(--ink);font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;display:flex}
+
+  /* ---------- sidebar ---------- */
+  .sidebar{width:320px;min-width:320px;height:100vh;overflow:auto;border-right:1px solid var(--line);
+           background:var(--bg2);padding:14px 10px 60px}
+  .sidebar h2{font-size:14px;margin:4px 6px 10px;color:var(--strong)}
+  .sidebar h2 .sub{display:block;font-size:11px;color:var(--mut);font-weight:400;margin-top:2px}
+  .sidebar h3{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--mut);
+              margin:16px 6px 6px;border-bottom:1px solid var(--line);padding-bottom:4px;display:flex;justify-content:space-between}
+  .grp-count{color:#586069;font-weight:600}
+  .tab-btn{display:grid;grid-template-columns:1fr auto;align-items:center;gap:2px 8px;
+           padding:6px 8px;border-radius:6px;cursor:pointer;margin:1px 0}
+  .tab-btn:hover{background:var(--hover)}
+  .tab-btn.active{background:#1f6feb22;outline:1px solid #1f6feb55}
+  .tb-name{font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tb-ctx{grid-column:1;font-size:10px;color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .badge{grid-row:1/3;font-size:9px;font-weight:700;letter-spacing:.04em;padding:2px 6px;border-radius:10px;white-space:nowrap}
+  .badge-full{background:#19361f;color:#56d364;border:1px solid #2ea04355}
+  .badge-partial{background:#3a2d08;color:#e3b341;border:1px solid #bb800955}
+  .badge-blocked{background:#3a1316;color:#ff7b72;border:1px solid #cf222e55}
+  .badge-skip{background:#21262d;color:#8b949e;border:1px solid #30363d}
+
+  /* reviewed marker */
+  .tab-btn.reviewed .tb-name::after{content:"✓";color:#3fb950;margin-left:6px;font-weight:700}
+  .tab-btn.reviewed{opacity:.5}
+  body.hide-reviewed .tab-btn.reviewed{display:none}
+  .sb-controls{position:sticky;top:0;z-index:5;background:var(--bg2);padding:6px;margin:0 0 6px;
+               border-bottom:1px solid var(--line)}
+  .sb-controls input[type=text]{width:100%;background:var(--input-bg);border:1px solid var(--line);color:var(--ink);
+               border-radius:6px;padding:5px 8px;font-size:12px}
+  .sb-row{display:flex;align-items:center;gap:8px;margin-top:6px;font-size:11px;color:var(--mut)}
+  .sb-row label{display:flex;align-items:center;gap:5px;cursor:pointer;user-select:none}
+  .progress{margin-left:auto;font-weight:700;color:var(--ink)}
+  .progress .done{color:#3fb950}
+
+  /* ---------- main ---------- */
+  main{flex:1;height:100vh;overflow:auto;position:relative}
+  .export-bar{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:12px;
+              background:var(--bg2);backdrop-filter:blur(4px);border-bottom:1px solid var(--line);
+              padding:10px 18px}
+  .export-bar .title{font-weight:700}
+  .export-bar .count{color:var(--mut)}
+  .export-bar button{background:var(--accent);color:var(--accent-ink);border:0;border-radius:6px;padding:6px 12px;cursor:pointer;font-weight:600}
+  .export-bar button.ghost{background:var(--ghost-bg);color:var(--ink);border:1px solid var(--line)}
+  .export-bar .spacer{flex:1}
+
+  .panel{display:none;padding:18px 22px 80px}
+  .panel.active{display:block}
+  .panel h1{font-size:20px;margin:4px 0 6px;display:flex;align-items:center;gap:10px}
+  .panel .path{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--link);font-size:12px;
+               word-break:break-all;margin-bottom:6px}
+  .panel .meta{color:var(--mut);font-size:12px;margin-bottom:14px}
+  .panel .meta code{background:var(--chip-card);padding:1px 5px;border-radius:4px}
+  .commit-link{font-family:ui-monospace,monospace;color:#d2a8ff}
+
+  .focus-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:8px 0 14px;
+                 padding:8px;background:var(--bg2);border:1px solid var(--line);border-radius:8px}
+  .focus-label{color:var(--mut);font-size:11px;margin-right:4px}
+  .focus-toolbar button{background:var(--hover);color:var(--ink);border:1px solid var(--line);
+                        border-left:3px solid var(--fbtn-border,#444);border-radius:6px;
+                        padding:4px 9px;cursor:pointer;font-size:11px;display:flex;align-items:center;gap:6px}
+  .focus-toolbar button .dot{width:8px;height:8px;border-radius:50%;background:var(--fbtn-border,#444)}
+  .focus-toolbar button.active{background:#1f6feb33;outline:1px solid #1f6feb}
+  .focus-toolbar button.show-all{border-left-color:#444;color:var(--mut)}
+
+  .side-by-side{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .code-col h3{font-size:12px;color:var(--mut);margin:0 0 6px;text-transform:uppercase;letter-spacing:.06em}
+  pre.code{margin:0;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;
+           padding:12px;max-height:72vh;overflow:auto;
+           font:11.5px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--code-ink);white-space:pre;tab-size:4}
+  .code-body{display:block}
+
+  /* decision zones */
+  .dz{border-radius:3px;padding:0 1px;transition:background .15s,box-shadow .15s}
+  .dz[data-d="1"]{background:rgba(214,160,0,.16);box-shadow:inset 2px 0 0 var(--c1)}
+  .dz[data-d="2"]{background:rgba(46,160,67,.16);box-shadow:inset 2px 0 0 var(--c2)}
+  .dz[data-d="3"]{background:rgba(63,138,224,.16);box-shadow:inset 2px 0 0 var(--c3)}
+  .dz[data-d="4"]{background:rgba(207,34,46,.16);box-shadow:inset 2px 0 0 var(--c4)}
+  .dz[data-d="5"]{background:rgba(159,75,191,.16);box-shadow:inset 2px 0 0 var(--c5)}
+  .dz[data-d="6"]{background:rgba(255,122,0,.16);box-shadow:inset 2px 0 0 var(--c6)}
+  .dz:hover{filter:brightness(1.5);cursor:help}
+
+  /* focus dimming */
+  body[data-focus] pre.code .code-body{color:var(--dim-ink)}
+  body[data-focus] pre.code .dz{background:transparent !important;box-shadow:none !important}
+  body[data-focus="1"] .dz[data-d="1"],body[data-focus="2"] .dz[data-d="2"],
+  body[data-focus="3"] .dz[data-d="3"],body[data-focus="4"] .dz[data-d="4"],
+  body[data-focus="5"] .dz[data-d="5"],body[data-focus="6"] .dz[data-d="6"]{color:var(--focus-ink) !important;filter:brightness(1.1)}
+  body[data-focus="1"] .dz[data-d="1"]{background:rgba(214,160,0,.22) !important;box-shadow:inset 2px 0 0 var(--c1) !important}
+  body[data-focus="2"] .dz[data-d="2"]{background:rgba(46,160,67,.22) !important;box-shadow:inset 2px 0 0 var(--c2) !important}
+  body[data-focus="3"] .dz[data-d="3"]{background:rgba(63,138,224,.22) !important;box-shadow:inset 2px 0 0 var(--c3) !important}
+  body[data-focus="4"] .dz[data-d="4"]{background:rgba(207,34,46,.22) !important;box-shadow:inset 2px 0 0 var(--c4) !important}
+  body[data-focus="5"] .dz[data-d="5"]{background:rgba(159,75,191,.22) !important;box-shadow:inset 2px 0 0 var(--c5) !important}
+  body[data-focus="6"] .dz[data-d="6"]{background:rgba(255,122,0,.22) !important;box-shadow:inset 2px 0 0 var(--c6) !important}
+
+  .legend{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}
+  .legend h4{margin:0 0 8px;font-size:12px;color:var(--mut)}
+  .legend ul{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+  .legend li{font-size:12px;color:var(--ink)}
+  .swatch{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:6px;vertical-align:middle}
+  .legend code{background:var(--chip-card);padding:1px 5px;border-radius:4px;color:var(--link)}
+
+  /* review box */
+  .review-box{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}
+  .review-box .rb-head{display:flex;align-items:center;gap:12px;margin-bottom:6px}
+  .review-box h4{margin:0;font-size:12px;color:var(--mut)}
+  .review-box textarea{width:100%;min-height:80px;background:var(--input-bg);border:1px solid var(--line);
+                       color:var(--ink);border-radius:6px;padding:8px;font:12px/1.5 inherit;resize:vertical}
+  .rb-reviewed{display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;
+               font-size:12px;color:#3fb950;font-weight:600;margin-left:auto}
+  .rb-saved{font-size:11px;color:var(--mut)}
+
+  /* popover */
+  .decision-popover{position:fixed;z-index:50;max-width:360px;background:var(--pop-bg);border:1px solid var(--line);
+                    border-radius:8px;padding:10px 12px;box-shadow:0 8px 28px #000a;pointer-events:none;
+                    display:none;font-size:12px}
+  .decision-popover b{color:var(--strong)}
+  .decision-popover .pp-title{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+  .decision-popover .pp-dot{width:10px;height:10px;border-radius:50%}
+  .decision-popover code{background:var(--input-bg);padding:1px 4px;border-radius:4px;color:var(--link)}
+
+  /* modal */
+  .modal-bg{position:fixed;inset:0;background:#000a;z-index:60;display:none;align-items:center;justify-content:center}
+  .modal-bg.show{display:flex}
+  .modal{background:var(--panel);border:1px solid var(--line);border-radius:10px;width:min(760px,92vw);max-height:84vh;
+         display:flex;flex-direction:column;padding:16px}
+  .modal h3{margin:0 0 10px}
+  .modal textarea{flex:1;min-height:340px;background:var(--code-bg);border:1px solid var(--line);color:var(--ink);
+                  border-radius:6px;padding:10px;font:12px/1.5 ui-monospace,monospace;white-space:pre}
+  .modal .row{display:flex;gap:10px;margin-top:12px;justify-content:flex-end}
+  .modal button{background:var(--accent);color:var(--accent-ink);border:0;border-radius:6px;padding:7px 14px;cursor:pointer;font-weight:600}
+  .modal button.ghost{background:var(--ghost-bg);border:1px solid var(--line);color:var(--ink)}
+  .empty-msg{padding:60px;text-align:center;color:var(--mut);font-size:15px}
+</style>
+</head>
+<body>
+
+<nav class="sidebar">
+  <h2>Eltwise migration log<span class="sub">99 kernels · before (d0f737b9497) → working tree</span></h2>
+  <div class="sb-controls">
+    <input type="text" id="filter" placeholder="filter by path / name…"/>
+    <div class="sb-row">
+      <label><input type="checkbox" id="hideReviewed"/> Hide reviewed</label>
+      <label><input type="checkbox" id="themeToggle"/> Light</label>
+      <span class="progress"><span class="done" id="revCount">0</span> / <span id="totCount">99</span> reviewed</span>
+    </div>
+  </div>
+    <h3>Eltwise <span class="grp-count">15</span></h3>
+    <div class="tab-btn" data-tab="eltwise_binary_ng_eltwise_where_no_bcast" data-group="eltwise" title="eltwise/binary_ng/device/kernels/compute/eltwise_where_no_bcast.cpp"><span class="tb-name">eltwise_where_no_bcast</span><span class="tb-ctx">eltwise/binary_ng</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="eltwise_ternary_ternary_addc_ops_fpu" data-group="eltwise" title="eltwise/ternary/device/kernels/compute/ternary_addc_ops_fpu.cpp"><span class="tb-name">ternary_addc_ops_fpu</span><span class="tb-ctx">eltwise/ternary</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="eltwise_ternary_ternary_addc_ops_sfpu" data-group="eltwise" title="eltwise/ternary/device/kernels/compute/ternary_addc_ops_sfpu.cpp"><span class="tb-name">ternary_addc_ops_sfpu</span><span class="tb-ctx">eltwise/ternary</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="eltwise_ternary_ternary_addcmul_int_sfpu" data-group="eltwise" title="eltwise/ternary/device/kernels/compute/ternary_addcmul_int_sfpu.cpp"><span class="tb-name">ternary_addcmul_int_sfpu</span><span class="tb-ctx">eltwise/ternary</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="eltwise_ternary_ternary_sfpu_no_bcast_ttt" data-group="eltwise" title="eltwise/ternary/device/kernels/compute/ternary_sfpu_no_bcast_ttt.cpp"><span class="tb-name">ternary_sfpu_no_bcast_ttt</span><span class="tb-ctx">eltwise/ternary</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="eltwise_unary_eltwise_identity_kernel" data-group="eltwise" title="eltwise/unary/device/kernels/compute/eltwise_identity_kernel.cpp"><span class="tb-name">eltwise_identity_kernel</span><span class="tb-ctx">eltwise/unary</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="eltwise_unary_hardswish_kernel" data-group="eltwise" title="eltwise/unary/device/kernels/compute/hardswish_kernel.cpp"><span class="tb-name">hardswish_kernel</span><span class="tb-ctx">eltwise/unary</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="eltwise_unary_lgamma_fast_kernel" data-group="eltwise" title="eltwise/unary/device/kernels/compute/lgamma_fast_kernel.cpp"><span class="tb-name">lgamma_fast_kernel</span><span class="tb-ctx">eltwise/unary</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="eltwise_unary_lgamma_kernel" data-group="eltwise" title="eltwise/unary/device/kernels/compute/lgamma_kernel.cpp"><span class="tb-name">lgamma_kernel</span><span class="tb-ctx">eltwise/unary</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="eltwise_unary_logit_kernel" data-group="eltwise" title="eltwise/unary/device/kernels/compute/logit_kernel.cpp"><span class="tb-name">logit_kernel</span><span class="tb-ctx">eltwise/unary</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="eltwise_unary_logsigmoid_kernel" data-group="eltwise" title="eltwise/unary/device/kernels/compute/logsigmoid_kernel.cpp"><span class="tb-name">logsigmoid_kernel</span><span class="tb-ctx">eltwise/unary</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="eltwise_unary_tanhshrink_kernel" data-group="eltwise" title="eltwise/unary/device/kernels/compute/tanhshrink_kernel.cpp"><span class="tb-name">tanhshrink_kernel</span><span class="tb-ctx">eltwise/unary</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="eltwise_unary_where_tss_kernel" data-group="eltwise" title="eltwise/unary/device/kernels/compute/where_tss_kernel.cpp"><span class="tb-name">where_tss_kernel</span><span class="tb-ctx">eltwise/unary</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="eltwise_unary_backward_gelu_bw_eltwise_bw_gelu_poly" data-group="eltwise" title="eltwise/unary_backward/gelu_bw/device/kernels/compute/eltwise_bw_gelu_poly.cpp"><span class="tb-name">eltwise_bw_gelu_poly</span><span class="tb-ctx">eltwise/unary_backward</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="eltwise_unary_backward_tanh_bw_eltwise_bw_tanh_deriv" data-group="eltwise" title="eltwise/unary_backward/tanh_bw/device/kernels/compute/eltwise_bw_tanh_deriv.cpp"><span class="tb-name">eltwise_bw_tanh_deriv</span><span class="tb-ctx">eltwise/unary_backward</span><span class="badge badge-full">FULL</span></div>
+    <h3>Copy <span class="grp-count">1</span></h3>
+    <div class="tab-btn" data-tab="copy_typecast_eltwise_typecast" data-group="copy" title="copy/typecast/device/kernels/compute/eltwise_typecast.cpp"><span class="tb-name">eltwise_typecast</span><span class="tb-ctx">copy/typecast</span><span class="badge badge-full">FULL</span></div>
+    <h3>Data movement <span class="grp-count">5</span></h3>
+    <div class="tab-btn" data-tab="data_movement_bcast_bcast_h" data-group="data_movement" title="data_movement/bcast/device/kernels/compute/bcast_h.cpp"><span class="tb-name">bcast_h</span><span class="tb-ctx">data_movement/bcast</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="data_movement_bcast_bcast_hw" data-group="data_movement" title="data_movement/bcast/device/kernels/compute/bcast_hw.cpp"><span class="tb-name">bcast_hw</span><span class="tb-ctx">data_movement/bcast</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="data_movement_bcast_bcast_w" data-group="data_movement" title="data_movement/bcast/device/kernels/compute/bcast_w.cpp"><span class="tb-name">bcast_w</span><span class="tb-ctx">data_movement/bcast</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="data_movement_clone_compute_kernel" data-group="data_movement" title="data_movement/clone/device/kernels/compute_kernel.cpp"><span class="tb-name">compute_kernel</span><span class="tb-ctx">data_movement/clone</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="data_movement_sharded_eltwise_copy" data-group="data_movement" title="data_movement/sharded/device/kernels/compute/eltwise_copy.cpp"><span class="tb-name">eltwise_copy</span><span class="tb-ctx">data_movement/sharded</span><span class="badge badge-full">FULL</span></div>
+    <h3>Normalization <span class="grp-count">19</span></h3>
+    <div class="tab-btn" data-tab="normalization_batch_norm_batch_norm_kernel" data-group="normalization" title="normalization/batch_norm/device/kernels/compute/batch_norm_kernel.cpp"><span class="tb-name">batch_norm_kernel</span><span class="tb-ctx">normalization/batch_norm</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="normalization_batch_norm_batch_norm_sfpu_kernel" data-group="normalization" title="normalization/batch_norm/device/kernels/compute/batch_norm_sfpu_kernel.cpp"><span class="tb-name">batch_norm_sfpu_kernel</span><span class="tb-ctx">normalization/batch_norm</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="normalization_batch_norm_running_statistics_kernel" data-group="normalization" title="normalization/batch_norm/device/kernels/compute/running_statistics_kernel.cpp"><span class="tb-name">running_statistics_kernel</span><span class="tb-ctx">normalization/batch_norm</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="normalization_batch_norm_running_statistics_sfpu_kernel" data-group="normalization" title="normalization/batch_norm/device/kernels/compute/running_statistics_sfpu_kernel.cpp"><span class="tb-name">running_statistics_sfpu_kernel</span><span class="tb-ctx">normalization/batch_norm</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="normalization_groupnorm_groupnorm" data-group="normalization" title="normalization/groupnorm/device/kernels/compute/groupnorm.cpp"><span class="tb-name">groupnorm</span><span class="tb-ctx">normalization/groupnorm</span><span class="badge badge-partial">PARTIAL</span></div>
+    <div class="tab-btn" data-tab="normalization_groupnorm_groupnorm_sharded_v2" data-group="normalization" title="normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp"><span class="tb-name">groupnorm_sharded_v2</span><span class="tb-ctx">normalization/groupnorm</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="normalization_groupnorm_welford_groupnorm" data-group="normalization" title="normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp"><span class="tb-name">welford_groupnorm</span><span class="tb-ctx">normalization/groupnorm</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="normalization_groupnorm_welford_groupnorm_sharded_v2" data-group="normalization" title="normalization/groupnorm/device/kernels/compute/welford_groupnorm_sharded_v2.cpp"><span class="tb-name">welford_groupnorm_sharded_v2</span><span class="tb-ctx">normalization/groupnorm</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="normalization_layernorm_layernorm" data-group="normalization" title="normalization/layernorm/device/kernels/compute/layernorm.cpp"><span class="tb-name">layernorm</span><span class="tb-ctx">normalization/layernorm</span><span class="badge badge-partial">PARTIAL</span></div>
+    <div class="tab-btn" data-tab="normalization_layernorm_layernorm_large_tensor" data-group="normalization" title="normalization/layernorm/device/kernels/compute/layernorm_large_tensor.cpp"><span class="tb-name">layernorm_large_tensor</span><span class="tb-ctx">normalization/layernorm</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="normalization_layernorm_layernorm_large_tensor_welford" data-group="normalization" title="normalization/layernorm/device/kernels/compute/layernorm_large_tensor_welford.cpp"><span class="tb-name">layernorm_large_tensor_welford</span><span class="tb-ctx">normalization/layernorm</span><span class="badge badge-partial">PARTIAL</span></div>
+    <div class="tab-btn" data-tab="normalization_layernorm_layernorm_welford" data-group="normalization" title="normalization/layernorm/device/kernels/compute/layernorm_welford.cpp"><span class="tb-name">layernorm_welford</span><span class="tb-ctx">normalization/layernorm</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="normalization_layernorm_distributed_layernorm_post_allgather" data-group="normalization" title="normalization/layernorm_distributed/device/kernels/compute/layernorm_post_allgather.cpp"><span class="tb-name">layernorm_post_allgather</span><span class="tb-ctx">normalization/layernorm_distributed</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="normalization_layernorm_distributed_layernorm_post_allgather_welford" data-group="normalization" title="normalization/layernorm_distributed/device/kernels/compute/layernorm_post_allgather_welford.cpp"><span class="tb-name">layernorm_post_allgather_welford</span><span class="tb-ctx">normalization/layernorm_distributed</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="normalization_layernorm_distributed_layernorm_pre_allgather" data-group="normalization" title="normalization/layernorm_distributed/device/kernels/compute/layernorm_pre_allgather.cpp"><span class="tb-name">layernorm_pre_allgather</span><span class="tb-ctx">normalization/layernorm_distributed</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="normalization_rmsnorm_distributed_rmsnorm_post_allgather" data-group="normalization" title="normalization/rmsnorm_distributed/device/kernels/compute/rmsnorm_post_allgather.cpp"><span class="tb-name">rmsnorm_post_allgather</span><span class="tb-ctx">normalization/rmsnorm_distributed</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="normalization_rmsnorm_distributed_rmsnorm_pre_allgather" data-group="normalization" title="normalization/rmsnorm_distributed/device/kernels/compute/rmsnorm_pre_allgather.cpp"><span class="tb-name">rmsnorm_pre_allgather</span><span class="tb-ctx">normalization/rmsnorm_distributed</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="normalization_softmax_attention_softmax" data-group="normalization" title="normalization/softmax/device/kernels/attention/compute/softmax.cpp"><span class="tb-name">softmax</span><span class="tb-ctx">normalization/softmax</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="normalization_softmax_attention_softmax_sharded" data-group="normalization" title="normalization/softmax/device/kernels/attention/compute/softmax_sharded.cpp"><span class="tb-name">softmax_sharded</span><span class="tb-ctx">normalization/softmax</span><span class="badge badge-full">FULL</span></div>
+    <h3>Moreh <span class="grp-count">31</span></h3>
+    <div class="tab-btn" data-tab="moreh_moreh_adam_moreh_adam" data-group="moreh" title="moreh/moreh_adam/device/kernels/moreh_adam.cpp"><span class="tb-name">moreh_adam</span><span class="tb-ctx">moreh/moreh_adam</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_adamw_moreh_adamw" data-group="moreh" title="moreh/moreh_adamw/device/kernels/moreh_adamw.cpp"><span class="tb-name">moreh_adamw</span><span class="tb-ctx">moreh/moreh_adamw</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_clip_grad_norm_moreh_clip_grad_norm_step1_moreh_clip_grad_norm_step1_kernel" data-group="moreh" title="moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/device/kernels/moreh_clip_grad_norm_step1_kernel.cpp"><span class="tb-name">moreh_clip_grad_norm_step1_kernel</span><span class="tb-ctx">moreh/moreh_clip_grad_norm</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_clip_grad_norm_moreh_clip_grad_norm_step2_moreh_clip_grad_norm_step2_kernel" data-group="moreh" title="moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step2/device/kernels/moreh_clip_grad_norm_step2_kernel.cpp"><span class="tb-name">moreh_clip_grad_norm_step2_kernel</span><span class="tb-ctx">moreh/moreh_clip_grad_norm</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_clip_grad_norm_moreh_clip_grad_norm_step3_moreh_clip_grad_norm_step3_kernel" data-group="moreh" title="moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step3/device/kernels/moreh_clip_grad_norm_step3_kernel.cpp"><span class="tb-name">moreh_clip_grad_norm_step3_kernel</span><span class="tb-ctx">moreh/moreh_clip_grad_norm</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_dot_moreh_dot" data-group="moreh" title="moreh/moreh_dot/device/kernels/moreh_dot.cpp"><span class="tb-name">moreh_dot</span><span class="tb-ctx">moreh/moreh_dot</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_dot_backward_moreh_dot_backward" data-group="moreh" title="moreh/moreh_dot_backward/device/kernels/moreh_dot_backward.cpp"><span class="tb-name">moreh_dot_backward</span><span class="tb-ctx">moreh/moreh_dot_backward</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_mean_moreh_mean_h" data-group="moreh" title="moreh/moreh_mean/device/kernels/moreh_mean_h.cpp"><span class="tb-name">moreh_mean_h</span><span class="tb-ctx">moreh/moreh_mean</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_mean_moreh_mean_nc" data-group="moreh" title="moreh/moreh_mean/device/kernels/moreh_mean_nc.cpp"><span class="tb-name">moreh_mean_nc</span><span class="tb-ctx">moreh/moreh_mean</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_mean_moreh_mean_w" data-group="moreh" title="moreh/moreh_mean/device/kernels/moreh_mean_w.cpp"><span class="tb-name">moreh_mean_w</span><span class="tb-ctx">moreh/moreh_mean</span><span class="badge badge-partial">PARTIAL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_mean_backward_moreh_mean_backward" data-group="moreh" title="moreh/moreh_mean_backward/device/kernels/moreh_mean_backward.cpp"><span class="tb-name">moreh_mean_backward</span><span class="tb-ctx">moreh/moreh_mean_backward</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_nll_loss_moreh_nll_loss_step2_moreh_nll_loss_step2_kernel" data-group="moreh" title="moreh/moreh_nll_loss/moreh_nll_loss_step2/device/kernels/moreh_nll_loss_step2_kernel.cpp"><span class="tb-name">moreh_nll_loss_step2_kernel</span><span class="tb-ctx">moreh/moreh_nll_loss</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_nll_loss_backward_moreh_nll_loss_backward_kernel" data-group="moreh" title="moreh/moreh_nll_loss_backward/device/kernels/moreh_nll_loss_backward_kernel.cpp"><span class="tb-name">moreh_nll_loss_backward_kernel</span><span class="tb-ctx">moreh/moreh_nll_loss_backward</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_norm_moreh_norm_h_moreh_norm_h_kernel" data-group="moreh" title="moreh/moreh_norm/device/moreh_norm_h/kernels/moreh_norm_h_kernel.cpp"><span class="tb-name">moreh_norm_h_kernel</span><span class="tb-ctx">moreh/moreh_norm</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_norm_moreh_norm_other_moreh_norm_other_kernel" data-group="moreh" title="moreh/moreh_norm/device/moreh_norm_other/kernels/moreh_norm_other_kernel.cpp"><span class="tb-name">moreh_norm_other_kernel</span><span class="tb-ctx">moreh/moreh_norm</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_norm_moreh_norm_w_moreh_norm_w_kernel" data-group="moreh" title="moreh/moreh_norm/device/moreh_norm_w/kernels/moreh_norm_w_kernel.cpp"><span class="tb-name">moreh_norm_w_kernel</span><span class="tb-ctx">moreh/moreh_norm</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_norm_ord_other_moreh_norm_h_moreh_norm_h_kernel" data-group="moreh" title="moreh/moreh_norm/device/ord_other/moreh_norm_h/kernels/moreh_norm_h_kernel.cpp"><span class="tb-name">moreh_norm_h_kernel</span><span class="tb-ctx">moreh/moreh_norm</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_norm_ord_other_moreh_norm_nc_moreh_norm_nc_kernel" data-group="moreh" title="moreh/moreh_norm/device/ord_other/moreh_norm_nc/kernels/moreh_norm_nc_kernel.cpp"><span class="tb-name">moreh_norm_nc_kernel</span><span class="tb-ctx">moreh/moreh_norm</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_norm_ord_other_moreh_norm_w_moreh_norm_w_kernel" data-group="moreh" title="moreh/moreh_norm/device/ord_other/moreh_norm_w/kernels/moreh_norm_w_kernel.cpp"><span class="tb-name">moreh_norm_w_kernel</span><span class="tb-ctx">moreh/moreh_norm</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_norm_backward_moreh_norm_backward_kernel" data-group="moreh" title="moreh/moreh_norm_backward/device/kernels/moreh_norm_backward_kernel.cpp"><span class="tb-name">moreh_norm_backward_kernel</span><span class="tb-ctx">moreh/moreh_norm_backward</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_softmax_moreh_softmax_c_large" data-group="moreh" title="moreh/moreh_softmax/device/kernels/moreh_softmax_c_large.cpp"><span class="tb-name">moreh_softmax_c_large</span><span class="tb-ctx">moreh/moreh_softmax</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_softmax_moreh_softmax_h" data-group="moreh" title="moreh/moreh_softmax/device/kernels/moreh_softmax_h.cpp"><span class="tb-name">moreh_softmax_h</span><span class="tb-ctx">moreh/moreh_softmax</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_softmax_moreh_softmax_h_large" data-group="moreh" title="moreh/moreh_softmax/device/kernels/moreh_softmax_h_large.cpp"><span class="tb-name">moreh_softmax_h_large</span><span class="tb-ctx">moreh/moreh_softmax</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_softmax_moreh_softmax_w" data-group="moreh" title="moreh/moreh_softmax/device/kernels/moreh_softmax_w.cpp"><span class="tb-name">moreh_softmax_w</span><span class="tb-ctx">moreh/moreh_softmax</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_softmax_moreh_softmax_w_large" data-group="moreh" title="moreh/moreh_softmax/device/kernels/moreh_softmax_w_large.cpp"><span class="tb-name">moreh_softmax_w_large</span><span class="tb-ctx">moreh/moreh_softmax</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_softmax_backward_moreh_softmax_backward_c_large" data-group="moreh" title="moreh/moreh_softmax_backward/device/kernels/moreh_softmax_backward_c_large.cpp"><span class="tb-name">moreh_softmax_backward_c_large</span><span class="tb-ctx">moreh/moreh_softmax_backward</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_softmax_backward_moreh_softmax_backward_h_large" data-group="moreh" title="moreh/moreh_softmax_backward/device/kernels/moreh_softmax_backward_h_large.cpp"><span class="tb-name">moreh_softmax_backward_h_large</span><span class="tb-ctx">moreh/moreh_softmax_backward</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_softmax_backward_moreh_softmax_backward_w_large" data-group="moreh" title="moreh/moreh_softmax_backward/device/kernels/moreh_softmax_backward_w_large.cpp"><span class="tb-name">moreh_softmax_backward_w_large</span><span class="tb-ctx">moreh/moreh_softmax_backward</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_sum_moreh_sum_h_impl_kernels_moreh_sum_h" data-group="moreh" title="moreh/moreh_sum/device/moreh_sum_h_impl_kernels/moreh_sum_h.cpp"><span class="tb-name">moreh_sum_h</span><span class="tb-ctx">moreh/moreh_sum</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_sum_moreh_sum_w_impl_kernels_moreh_sum_w" data-group="moreh" title="moreh/moreh_sum/device/moreh_sum_w_impl_kernels/moreh_sum_w.cpp"><span class="tb-name">moreh_sum_w</span><span class="tb-ctx">moreh/moreh_sum</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="moreh_moreh_sum_backward_moreh_sum_backward" data-group="moreh" title="moreh/moreh_sum_backward/device/kernels/moreh_sum_backward.cpp"><span class="tb-name">moreh_sum_backward</span><span class="tb-ctx">moreh/moreh_sum_backward</span><span class="badge badge-full">FULL</span></div>
+    <h3>Reduction <span class="grp-count">2</span></h3>
+    <div class="tab-btn" data-tab="reduction_prod_prod_all" data-group="reduction" title="reduction/prod/device/kernels/compute/prod_all.cpp"><span class="tb-name">prod_all</span><span class="tb-ctx">reduction/prod</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="reduction_prod_prod_nc" data-group="reduction" title="reduction/prod/device/kernels/compute/prod_nc.cpp"><span class="tb-name">prod_nc</span><span class="tb-ctx">reduction/prod</span><span class="badge badge-full">FULL</span></div>
+    <h3>Experimental <span class="grp-count">15</span></h3>
+    <div class="tab-btn" data-tab="experimental_bcast_to_compute_interleaved_col_bcast_to" data-group="experimental" title="experimental/bcast_to/device/kernels/compute/compute_interleaved_col_bcast_to.cpp"><span class="tb-name">compute_interleaved_col_bcast_to</span><span class="tb-ctx">experimental/bcast_to</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="experimental_bcast_to_compute_interleaved_row_bcast_to" data-group="experimental" title="experimental/bcast_to/device/kernels/compute/compute_interleaved_row_bcast_to.cpp"><span class="tb-name">compute_interleaved_row_bcast_to</span><span class="tb-ctx">experimental/bcast_to</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="experimental_bcast_to_compute_interleaved_scalar_bcast_to" data-group="experimental" title="experimental/bcast_to/device/kernels/compute/compute_interleaved_scalar_bcast_to.cpp"><span class="tb-name">compute_interleaved_scalar_bcast_to</span><span class="tb-ctx">experimental/bcast_to</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="experimental_ccl_rms_allgather_rms_compute" data-group="experimental" title="experimental/ccl/rms_allgather/device/kernels/compute/rms_compute.cpp"><span class="tb-name">rms_compute</span><span class="tb-ctx">experimental/ccl</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="experimental_dropout_dropout_kernel" data-group="experimental" title="experimental/dropout/device/kernels/compute/dropout_kernel.cpp"><span class="tb-name">dropout_kernel</span><span class="tb-ctx">experimental/dropout</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="experimental_transformer_dit_layernorm_post_all_gather_layernorm_post_allgather_welford" data-group="experimental" title="experimental/transformer/dit_layernorm_post_all_gather/device/kernels/compute/layernorm_post_allgather_welford.cpp"><span class="tb-name">layernorm_post_allgather_welford</span><span class="tb-ctx">experimental/transformer</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="experimental_transformer_fused_distributed_rmsnorm_rmsnorm_post_allgather" data-group="experimental" title="experimental/transformer/fused_distributed_rmsnorm/device/kernels/compute/rmsnorm_post_allgather.cpp"><span class="tb-name">rmsnorm_post_allgather</span><span class="tb-ctx">experimental/transformer</span><span class="badge badge-partial">PARTIAL</span></div>
+    <div class="tab-btn" data-tab="experimental_transformer_rotary_embedding_rotary_embedding" data-group="experimental" title="experimental/transformer/rotary_embedding/device/kernels/compute/rotary_embedding.cpp"><span class="tb-name">rotary_embedding</span><span class="tb-ctx">experimental/transformer</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="experimental_transformer_rotary_embedding_rotary_embedding_single_tile" data-group="experimental" title="experimental/transformer/rotary_embedding/device/kernels/compute/rotary_embedding_single_tile.cpp"><span class="tb-name">rotary_embedding_single_tile</span><span class="tb-ctx">experimental/transformer</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="experimental_transformer_rotary_embedding_llama_rotary_embedding_llama" data-group="experimental" title="experimental/transformer/rotary_embedding_llama/device/kernels/compute/rotary_embedding_llama.cpp"><span class="tb-name">rotary_embedding_llama</span><span class="tb-ctx">experimental/transformer</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="experimental_transformer_rotary_embedding_llama_rotary_embedding_llama_sharded" data-group="experimental" title="experimental/transformer/rotary_embedding_llama/device/kernels/compute/rotary_embedding_llama_sharded.cpp"><span class="tb-name">rotary_embedding_llama_sharded</span><span class="tb-ctx">experimental/transformer</span><span class="badge badge-partial">PARTIAL</span></div>
+    <div class="tab-btn" data-tab="experimental_transformer_rotary_embedding_llama_fused_qk_rotary_embedding_llama_sharded" data-group="experimental" title="experimental/transformer/rotary_embedding_llama_fused_qk/device/kernels/compute/rotary_embedding_llama_sharded.cpp"><span class="tb-name">rotary_embedding_llama_sharded</span><span class="tb-ctx">experimental/transformer</span><span class="badge badge-partial">PARTIAL</span></div>
+    <div class="tab-btn" data-tab="experimental_transformer_rotary_embedding_llama_fused_qk_rotary_embedding_llama_sharded_row_major" data-group="experimental" title="experimental/transformer/rotary_embedding_llama_fused_qk/device/kernels/compute/rotary_embedding_llama_sharded_row_major.cpp"><span class="tb-name">rotary_embedding_llama_sharded_row_major</span><span class="tb-ctx">experimental/transformer</span><span class="badge badge-partial">PARTIAL</span></div>
+    <div class="tab-btn" data-tab="experimental_unary_backward_gelu_backward_eltwise_bw_gelu_approx_tanh" data-group="experimental" title="experimental/unary_backward/gelu_backward/device/kernels/compute/eltwise_bw_gelu_approx_tanh.cpp"><span class="tb-name">eltwise_bw_gelu_approx_tanh</span><span class="tb-ctx">experimental/unary_backward</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="experimental_unary_backward_gelu_backward_eltwise_bw_gelu_poly" data-group="experimental" title="experimental/unary_backward/gelu_backward/device/kernels/compute/eltwise_bw_gelu_poly.cpp"><span class="tb-name">eltwise_bw_gelu_poly</span><span class="tb-ctx">experimental/unary_backward</span><span class="badge badge-full">FULL</span></div>
+    <h3>Rand / Uniform <span class="grp-count">2</span></h3>
+    <div class="tab-btn" data-tab="rand_compute_uniform" data-group="rand_uniform" title="rand/device/kernels/compute_uniform.cpp"><span class="tb-name">compute_uniform</span><span class="tb-ctx">rand/device</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="uniform_compute_uniform" data-group="rand_uniform" title="uniform/device/kernels/compute_uniform.cpp"><span class="tb-name">compute_uniform</span><span class="tb-ctx">uniform/device</span><span class="badge badge-full">FULL</span></div>
+    <h3>kernel_lib tests <span class="grp-count">6</span></h3>
+    <div class="tab-btn" data-tab="kernel_lib_tests_chain_reconfig_chain_2arg_combined" data-group="kernel_lib_tests" title="kernel_lib/tests/chain_reconfig/chain_2arg_combined.cpp"><span class="tb-name">chain_2arg_combined</span><span class="tb-ctx">kernel_lib/tests</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="kernel_lib_tests_chain_reconfig_chain_4arg_with_dt" data-group="kernel_lib_tests" title="kernel_lib/tests/chain_reconfig/chain_4arg_with_dt.cpp"><span class="tb-name">chain_4arg_with_dt</span><span class="tb-ctx">kernel_lib/tests</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="kernel_lib_tests_chain_reconfig_chain_elide" data-group="kernel_lib_tests" title="kernel_lib/tests/chain_reconfig/chain_elide.cpp"><span class="tb-name">chain_elide</span><span class="tb-ctx">kernel_lib/tests</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="kernel_lib_tests_chain_reconfig_chain_mixed_prev" data-group="kernel_lib_tests" title="kernel_lib/tests/chain_reconfig/chain_mixed_prev.cpp"><span class="tb-name">chain_mixed_prev</span><span class="tb-ctx">kernel_lib/tests</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="kernel_lib_tests_chain_reconfig_chain_pack_to_bfp8" data-group="kernel_lib_tests" title="kernel_lib/tests/chain_reconfig/chain_pack_to_bfp8.cpp"><span class="tb-name">chain_pack_to_bfp8</span><span class="tb-ctx">kernel_lib/tests</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="kernel_lib_tests_chain_reconfig_chain_singleside" data-group="kernel_lib_tests" title="kernel_lib/tests/chain_reconfig/chain_singleside.cpp"><span class="tb-name">chain_singleside</span><span class="tb-ctx">kernel_lib/tests</span><span class="badge badge-full">FULL</span></div>
+    <h3>Toy / Examples <span class="grp-count">2</span></h3>
+    <div class="tab-btn" data-tab="toy_binary_in_place" data-group="toy_examples" title="toy_binary_in_place/kernels/compute.cpp"><span class="tb-name">compute</span><span class="tb-ctx">toy_binary_in_place/kernels</span><span class="badge badge-full">FULL</span></div>
+    <div class="tab-btn" data-tab="toy_variance" data-group="toy_examples" title="toy_variance/kernels/compute.cpp"><span class="tb-name">compute</span><span class="tb-ctx">toy_variance/kernels</span><span class="badge badge-full">FULL</span></div>
+    <h3>Misc <span class="grp-count">1</span></h3>
+    <div class="tab-btn" data-tab="kernel_eltwise_copy" data-group="misc" title="kernel/compute/eltwise_copy.cpp"><span class="tb-name">eltwise_copy</span><span class="tb-ctx">kernel/compute</span><span class="badge badge-full">FULL</span></div>
+</nav>
+
+<main>
+  <div class="export-bar">
+    <span class="title">Reviews</span>
+    <span class="count" id="exportCount">0 notes</span>
+    <span class="spacer"></span>
+    <button class="ghost" id="markAllBtn" title="Mark the current kernel reviewed">Mark current reviewed</button>
+    <button id="exportBtn">Export reviews</button>
+    <button class="ghost" id="clearBtn">Clear all</button>
+  </div>
+
+  <div id="panel-host"></div>
+
+  <section class="panel active" id="panel-empty">
+    <div class="empty-msg">Select a kernel from the sidebar to see its before/after.</div>
+  </section>
+</main>
+
+<div class="decision-popover" id="dp">
+  <div class="pp-title"><span class="pp-dot" id="ppDot"></span><b id="ppTitle"></b></div>
+  <div id="ppBody"></div>
+</div>
+
+<div class="modal-bg" id="modalBg">
+  <div class="modal">
+    <h3>Exported reviews</h3>
+    <textarea id="modalText" readonly></textarea>
+    <div class="row">
+      <button class="ghost" id="copyBtn">Copy to clipboard</button>
+      <button class="ghost" id="dlBtn">Download .txt</button>
+      <button id="closeModal">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const STORAGE_KEY  = 'eltwise_migration_reviews_v1';
+const REVIEWED_KEY = 'eltwise_migration_reviewed_v1';
+const PALETTE = {1:'#d6a000',2:'#2ea043',3:'#3f8ae0',4:'#cf222e',5:'#9f4bbf',6:'#ff7a00'};
+
+const decisions = {};
+const loaded = new Set();
+let currentKernel = null;
+
+/* ---------- storage helpers ---------- */
+function loadReviews(){ try{return JSON.parse(localStorage.getItem(STORAGE_KEY))||{};}catch(e){return {};} }
+function saveReviews(o){ localStorage.setItem(STORAGE_KEY, JSON.stringify(o)); }
+function loadReviewed(){ try{return new Set(JSON.parse(localStorage.getItem(REVIEWED_KEY))||[]);}catch(e){return new Set();} }
+function saveReviewed(s){ localStorage.setItem(REVIEWED_KEY, JSON.stringify([...s])); }
+
+function refreshCounts(){
+  const reviews = loadReviews();
+  const n = Object.values(reviews).filter(r=>r.text&&r.text.trim()).length;
+  document.getElementById('exportCount').textContent = n + (n===1?' note':' notes');
+  const reviewed = loadReviewed();
+  document.getElementById('revCount').textContent = reviewed.size;
+}
+
+/* ---------- sidebar reviewed marks ---------- */
+function applyReviewedMarks(){
+  const reviewed = loadReviewed();
+  document.querySelectorAll('.tab-btn').forEach(b=>{
+    b.classList.toggle('reviewed', reviewed.has(b.dataset.tab));
+  });
+  refreshCounts();
+}
+
+/* ---------- panel lazy load ---------- */
+async function loadPanel(tabId){
+  if(loaded.has(tabId)){ showPanel(tabId); return; }
+  const url = `migration_log_panels/${tabId}.html`;
+  let html;
+  try{
+    html = await fetch(url).then(r=>{ if(!r.ok) throw new Error(`${url} → ${r.status}`); return r.text(); });
+  }catch(e){
+    const host=document.getElementById('panel-host');
+    const sec=document.createElement('section');
+    sec.className='panel'; sec.id='panel-'+tabId;
+    sec.innerHTML=`<div class="empty-msg">Panel not generated yet for <code>${tabId}</code>.<br>(${e.message})</div>`;
+    host.appendChild(sec); loaded.add(tabId); showPanel(tabId); return;
+  }
+  const tmp=document.createElement('div'); tmp.innerHTML=html;
+  const panel=tmp.querySelector('section.panel');
+  if(!panel){ console.warn(`${url}: no section.panel`); return; }
+  document.getElementById('panel-host').appendChild(panel);
+  const dec=tmp.querySelector(`script#dec-${CSS.escape(tabId)}`);
+  if(dec){ try{ decisions[tabId]=JSON.parse(dec.textContent); }catch(e){ console.warn(`${tabId}: bad JSON`,e);} }
+  attachPanelHandlers(panel);
+  injectReviewBox(panel);
+  loaded.add(tabId);
+  showPanel(tabId);
+}
+
+function showPanel(tabId){
+  clearFocus();
+  document.querySelectorAll('main .panel').forEach(p=>p.classList.remove('active'));
+  const p=document.getElementById('panel-'+tabId);
+  if(p) p.classList.add('active');
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active', b.dataset.tab===tabId));
+  currentKernel=tabId;
+}
+
+/* ---------- decision popover + focus toolbar ---------- */
+function attachPanelHandlers(panel){
+  panel.querySelectorAll('.dz').forEach(z=>{
+    z.addEventListener('mouseenter',ev=>{
+      const d=decisions[currentKernel]; if(!d) return;
+      const info=d[z.dataset.d]; if(!info) return;
+      const dp=document.getElementById('dp');
+      document.getElementById('ppDot').style.background=info.color||PALETTE[z.dataset.d]||'#888';
+      document.getElementById('ppTitle').textContent=`${z.dataset.d} · ${info.title||''}`;
+      document.getElementById('ppBody').innerHTML=info.body||'';
+      dp.style.display='block'; positionPopover(ev);
+    });
+    z.addEventListener('mousemove',positionPopover);
+    z.addEventListener('mouseleave',()=>{document.getElementById('dp').style.display='none';});
+  });
+  attachFocusToolbar(panel);
+}
+function positionPopover(ev){
+  const dp=document.getElementById('dp');
+  let x=ev.clientX+16, y=ev.clientY+16;
+  const r=dp.getBoundingClientRect();
+  if(x+r.width>innerWidth-12) x=ev.clientX-r.width-16;
+  if(y+r.height>innerHeight-12) y=innerHeight-r.height-12;
+  dp.style.left=x+'px'; dp.style.top=y+'px';
+}
+function clearFocus(){
+  delete document.body.dataset.focus;
+  document.querySelectorAll('.focus-toolbar button').forEach(x=>x.classList.remove('active'));
+}
+function attachFocusToolbar(panel){
+  panel.querySelectorAll('.focus-toolbar button[data-focus-id]').forEach(b=>{
+    b.addEventListener('click',()=>{
+      const id=b.dataset.focusId;
+      if(document.body.dataset.focus===id){ clearFocus(); return; }
+      document.body.dataset.focus=id;
+      panel.querySelectorAll('.focus-toolbar button').forEach(x=>x.classList.toggle('active',x.dataset.focusId===id));
+      panel.querySelectorAll('pre.code').forEach(pre=>{
+        const t=pre.querySelector(`.dz[data-d="${id}"]`); if(!t) return;
+        const top=t.offsetTop - pre.clientHeight/2 + t.offsetHeight/2;
+        pre.scrollTo({top:Math.max(0,top),behavior:'smooth'});
+      });
+    });
+  });
+  panel.querySelector('.focus-toolbar .show-all')?.addEventListener('click',clearFocus);
+}
+
+/* ---------- review box injection ---------- */
+function injectReviewBox(panel){
+  const pathEl=panel.querySelector('.path');
+  if(!pathEl) return;
+  const path=pathEl.textContent.trim();
+  const pid=panel.id;
+  const box=document.createElement('div');
+  box.className='review-box';
+  box.innerHTML=`
+    <div class="rb-head">
+      <h4>Review notes</h4>
+      <span class="rb-saved" data-saved></span>
+      <label class="rb-reviewed"><input type="checkbox" data-reviewed/> Mark reviewed</label>
+    </div>
+    <textarea placeholder="Notes on this migration… (saved automatically)"></textarea>`;
+  panel.appendChild(box);
+  const ta=box.querySelector('textarea');
+  const saved=box.querySelector('[data-saved]');
+  const chk=box.querySelector('[data-reviewed]');
+  const reviews=loadReviews();
+  if(reviews[pid]&&reviews[pid].text) ta.value=reviews[pid].text;
+  chk.checked=loadReviewed().has(panel.id.replace(/^panel-/,''));
+  let t;
+  ta.addEventListener('input',()=>{
+    clearTimeout(t);
+    t=setTimeout(()=>{
+      const r=loadReviews();
+      if(ta.value.trim()) r[pid]={path,text:ta.value};
+      else delete r[pid];
+      saveReviews(r); refreshCounts();
+      saved.textContent='saved'; setTimeout(()=>saved.textContent='',1200);
+    },350);
+  });
+  chk.addEventListener('change',()=>{
+    const tab=panel.id.replace(/^panel-/,'');
+    const s=loadReviewed();
+    if(chk.checked) s.add(tab); else s.delete(tab);
+    saveReviewed(s); applyReviewedMarks();
+  });
+}
+
+/* ---------- export ---------- */
+function buildExport(){
+  const reviews=loadReviews();
+  const lines=[];
+  for(const k in reviews){
+    const r=reviews[k];
+    if(r&&r.text&&r.text.trim()) lines.push(`${r.path}: ${r.text.trim().replace(/\s+/g,' ')}`);
+  }
+  return lines.join('\n');
+}
+
+/* ---------- wire up ---------- */
+document.querySelectorAll('.tab-btn').forEach(b=>{
+  b.addEventListener('click',()=>loadPanel(b.dataset.tab));
+});
+document.getElementById('hideReviewed').addEventListener('change',e=>{
+  document.body.classList.toggle('hide-reviewed',e.target.checked);
+});
+document.getElementById('filter').addEventListener('input',e=>{
+  const q=e.target.value.toLowerCase();
+  document.querySelectorAll('.tab-btn').forEach(b=>{
+    const hay=(b.getAttribute('title')+' '+b.textContent).toLowerCase();
+    b.style.display = hay.includes(q) ? '' : 'none';
+  });
+});
+document.getElementById('markAllBtn').addEventListener('click',()=>{
+  if(!currentKernel) return;
+  const s=loadReviewed(); s.add(currentKernel); saveReviewed(s); applyReviewedMarks();
+  const p=document.getElementById('panel-'+currentKernel);
+  const chk=p&&p.querySelector('[data-reviewed]'); if(chk) chk.checked=true;
+});
+document.getElementById('exportBtn').addEventListener('click',()=>{
+  document.getElementById('modalText').value=buildExport()||'(no review notes yet)';
+  document.getElementById('modalBg').classList.add('show');
+});
+document.getElementById('closeModal').addEventListener('click',()=>document.getElementById('modalBg').classList.remove('show'));
+document.getElementById('modalBg').addEventListener('click',e=>{if(e.target.id==='modalBg')e.target.classList.remove('show');});
+document.getElementById('copyBtn').addEventListener('click',()=>{
+  navigator.clipboard.writeText(document.getElementById('modalText').value);
+  document.getElementById('copyBtn').textContent='Copied!';
+  setTimeout(()=>document.getElementById('copyBtn').textContent='Copy to clipboard',1200);
+});
+document.getElementById('dlBtn').addEventListener('click',()=>{
+  const blob=new Blob([document.getElementById('modalText').value],{type:'text/plain'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='migration_reviews.txt'; a.click();
+});
+document.getElementById('clearBtn').addEventListener('click',()=>{
+  if(!confirm('Clear ALL review notes and reviewed marks?')) return;
+  localStorage.removeItem(STORAGE_KEY); localStorage.removeItem(REVIEWED_KEY);
+  document.querySelectorAll('.review-box textarea').forEach(t=>t.value='');
+  document.querySelectorAll('.review-box [data-reviewed]').forEach(c=>c.checked=false);
+  applyReviewedMarks();
+});
+
+/* ---------- theme ---------- */
+const THEME_KEY='eltwise_migration_theme_v1';
+function applyTheme(t){
+  document.body.classList.toggle('light', t==='light');
+  document.getElementById('themeToggle').checked = (t==='light');
+}
+document.getElementById('themeToggle').addEventListener('change',e=>{
+  const t = e.target.checked ? 'light' : 'dark';
+  localStorage.setItem(THEME_KEY, t); applyTheme(t);
+});
+applyTheme(localStorage.getItem(THEME_KEY) || 'light');
+
+applyReviewedMarks();
+</script>
+</body>
+</html>

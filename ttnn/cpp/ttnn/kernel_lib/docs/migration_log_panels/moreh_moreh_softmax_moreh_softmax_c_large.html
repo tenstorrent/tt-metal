@@ -1,0 +1,393 @@
+<section class="panel" id="panel-moreh_moreh_softmax_moreh_softmax_c_large">
+  <h1>moreh_softmax_c_large — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_c_large.cpp</div>
+  <div class="meta"><b>Δ</b> +207/-71 &nbsp; <b>Decisions:</b> 6</div>
+
+  <div class="focus-toolbar" data-fkernel="moreh_moreh_softmax_moreh_softmax_c_large">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; CB ids + eltwise headers</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; sum accumulator → copy / add</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; exp(x−max) → eltwise_chain</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; final result → sub/mul chains</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; log/recip(sum) → ckl::unary</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; running max → binary_sfpu&lt;BinaryMax&gt;</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+<span class="dz" data-d="1">#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+void kernel_main() {
+<span class="dz" data-d="1">    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    CircularBuffer cb_in0_obj(cb_in0);</span>
+    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    constexpr auto cb_exps = tt::CBIndex::c_24;
+    constexpr auto cb_recipsumexps = tt::CBIndex::c_25;
+    CircularBuffer cb_recipsumexps_obj(cb_recipsumexps);
+    constexpr auto cb_add = tt::CBIndex::c_26;
+    constexpr auto cb_max = tt::CBIndex::c_27;
+    CircularBuffer cb_max_obj(cb_max);
+    constexpr auto cb_tmp = tt::CBIndex::c_28;
+
+    constexpr uint32_t onetile = 1;
+    constexpr int dst0 = 0;
+    constexpr int dst1 = 1;
+
+    uint32_t N = get_compile_time_arg_val(0);
+    uint32_t dim_size = get_compile_time_arg_val(1);
+
+    binary_op_init_common(cb_in0, cb_exps, cb_out0);
+
+    for (uint32_t n = 0; n &lt; N; ++n) {
+        // find max
+<span class="dz" data-d="6">        for (uint32_t i = 0; i &lt; dim_size; ++i) {
+            if (i == 0) {
+                copy_tile_to_cb(cb_in0, cb_max);
+            } else {
+                cb_in0_obj.wait_front(onetile);
+                cb_max_obj.wait_front(onetile);
+
+                tile_regs_acquire();
+
+                copy_tile_init_with_dt(cb_in0);
+                copy_tile(cb_in0, 0, dst0);
+
+                copy_tile_init_with_dt(cb_max);
+                copy_tile(cb_max, 0, dst1);
+
+                binary_max_tile_init();
+                binary_max_tile(dst0, dst1, dst0);
+                tile_regs_commit();
+
+                cb_max_obj.pop_front(onetile);
+                cb_max_obj.reserve_back(onetile);
+
+                tile_regs_wait();
+                pack_tile_with_dt(dst0, cb_max);
+                tile_regs_release();
+
+                cb_max_obj.push_back(onetile);
+                cb_in0_obj.pop_front(onetile);
+            }
+        }</span>
+
+        // compute exp(x - max(x))
+<span class="dz" data-d="3">        for (uint32_t i = 0; i &lt; dim_size; ++i) {
+#ifdef SOFTMAX
+            sub_tiles_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
+
+            exp_tile_to_cb(cb_tmp, cb_exps);
+#else
+            sub_tiles_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
+
+            rexp_tile_to_cb(cb_tmp, cb_exps);
+#endif</span>
+
+<span class="dz" data-d="2">            if (i == 0) {
+                copy_tile_to_cb(cb_exps, cb_add);
+            } else {
+                add_tiles_to_cb(cb_add, cb_exps, cb_add);
+            }</span>
+        }
+
+<span class="dz" data-d="5">#ifdef LOG
+        // compute log(sum)
+        log_tile_to_cb(cb_add, cb_recipsumexps);
+#else
+        // compute 1/sum(exp(x))
+        recip_tile_to_cb(cb_add, cb_recipsumexps);
+#endif</span>
+
+        // step 3, compute final result
+<span class="dz" data-d="4">        cb_recipsumexps_obj.wait_front(onetile);
+        for (uint32_t i = 0; i &lt; dim_size; ++i) {
+#ifdef LOG
+#ifdef SOFTMAX
+            // x - max - log(sum)
+            sub_tiles_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
+
+            sub_tiles_to_cb(cb_tmp, cb_recipsumexps, cb_out0, 0, 0, /*pop0=*/1, /*pop1=*/0);
+#else
+            // -x + max - log(sum)
+            sub_tiles_to_cb(cb_max, cb_in0, cb_tmp, 0, 0, /*pop0=*/0, /*pop1=*/1);
+
+            sub_tiles_to_cb(cb_tmp, cb_recipsumexps, cb_out0, 0, 0, /*pop0=*/1, /*pop1=*/0);
+#endif
+#else
+#ifdef SOFTMAX
+            // exp(x - max) / sum
+            sub_tiles_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
+
+            exp_tile_to_cb(cb_tmp, cb_exps);
+
+            mul_tiles_to_cb(cb_exps, cb_recipsumexps, cb_out0, 0, 0, /*pop0=*/1, /*pop1=*/0);
+#else
+            // rexp(x - max) / sum
+            sub_tiles_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
+
+            rexp_tile_to_cb(cb_tmp, cb_exps);
+
+            mul_tiles_to_cb(cb_exps, cb_recipsumexps, cb_out0, 0, 0, /*pop0=*/1, /*pop1=*/0);
+#endif
+#endif
+        }</span>
+
+        cb_recipsumexps_obj.pop_front(onetile);
+        cb_max_obj.pop_front(onetile);
+    }
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+<span class="dz" data-d="1">#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp&quot;         // Exp, Log, Recip
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp&quot;         // Negative
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp&quot;  // BinaryMax
+#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+void kernel_main() {
+<span class="dz" data-d="1">    constexpr auto cb_in0 = tt::CBIndex::c_0;</span>
+    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    constexpr auto cb_exps = tt::CBIndex::c_24;
+    constexpr auto cb_recipsumexps = tt::CBIndex::c_25;
+    CircularBuffer cb_recipsumexps_obj(cb_recipsumexps);
+    constexpr auto cb_add = tt::CBIndex::c_26;
+    constexpr auto cb_max = tt::CBIndex::c_27;
+    CircularBuffer cb_max_obj(cb_max);
+    constexpr auto cb_tmp = tt::CBIndex::c_28;
+
+    constexpr uint32_t onetile = 1;
+
+    uint32_t N = get_compile_time_arg_val(0);
+    uint32_t dim_size = get_compile_time_arg_val(1);
+
+    binary_op_init_common(cb_in0, cb_exps, cb_out0);
+
+    for (uint32_t n = 0; n &lt; N; ++n) {
+        // find max via running BinaryMax across C-dim.
+<span class="dz" data-d="6">        for (uint32_t i = 0; i &lt; dim_size; ++i) {
+            if (i == 0) {
+                // Seed cb_max with first cb_in0 tile.
+                compute_kernel_lib::copy&lt;cb_in0, cb_max&gt;(onetile);
+            } else {
+                // cb_max = max(cb_in0, cb_max) — same accumulator pattern as
+                // moreh_norm_h/w ord_other (7e61967482a).
+                compute_kernel_lib::binary_sfpu&lt;compute_kernel_lib::BinaryMax&lt;&gt;, cb_in0, cb_max, cb_max&gt;(onetile);
+            }
+        }</span>
+
+        // compute exp(x - max(x)) per C tile. No bcast since cb_max and cb_in0
+        // are both full tiles. cb_max held outside loop (InputLifecycle::CallerManaged).
+<span class="dz" data-d="3">        for (uint32_t i = 0; i &lt; dim_size; ++i) {
+#ifdef SOFTMAX
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::BinaryFpu&lt;
+                    cb_in0,
+                    cb_max,
+                    compute_kernel_lib::BinaryFpuOp::Sub,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::HeldStream&gt;{},
+                compute_kernel_lib::Exp&lt;
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Dst::D0&gt;{},
+                compute_kernel_lib::PackTile&lt;cb_exps&gt;{});
+#else
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::BinaryFpu&lt;
+                    cb_in0,
+                    cb_max,
+                    compute_kernel_lib::BinaryFpuOp::Sub,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::HeldStream&gt;{},
+                compute_kernel_lib::Negative&lt;compute_kernel_lib::Dst::D0&gt;{},
+                compute_kernel_lib::Exp&lt;
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Dst::D0&gt;{},
+                compute_kernel_lib::PackTile&lt;cb_exps&gt;{});
+#endif</span>
+
+<span class="dz" data-d="2">            // Accumulator over C-dim.
+            if (i == 0) {
+                compute_kernel_lib::copy&lt;cb_exps, cb_add&gt;(onetile);
+            } else {
+                compute_kernel_lib::add&lt;cb_add, cb_exps, cb_add&gt;(onetile);
+            }
+        }</span>
+
+        // log(sum) or 1/sum: single chain on cb_add -&gt; cb_recipsumexps.
+<span class="dz" data-d="5">#ifdef LOG
+        compute_kernel_lib::unary&lt;
+            compute_kernel_lib::Log&lt;compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0&gt;,
+            cb_add,
+            cb_recipsumexps&gt;(onetile);
+#else
+        compute_kernel_lib::unary&lt;compute_kernel_lib::Recip&lt;compute_kernel_lib::Dst::D0&gt;, cb_add, cb_recipsumexps&gt;(
+            onetile);
+#endif</span>
+
+<span class="dz" data-d="4">        // step 3, compute final result per C tile.
+        cb_recipsumexps_obj.wait_front(onetile);
+        for (uint32_t i = 0; i &lt; dim_size; ++i) {
+#ifdef LOG
+#ifdef SOFTMAX
+            // x - max - log(sum). Two chains.
+            compute_kernel_lib::sub&lt;
+                cb_in0,
+                cb_max,
+                cb_tmp,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::HeldStream&gt;(onetile);
+            compute_kernel_lib::sub&lt;
+                cb_tmp,
+                cb_recipsumexps,
+                cb_out0,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::HeldStream&gt;(onetile);
+#else
+            // -x + max - log(sum). Same as Sub(cb_max, cb_in0) followed by Sub.
+            // cb_max held (pop0=0); cb_in0 popped (pop1=1).
+            compute_kernel_lib::sub&lt;
+                cb_max,
+                cb_in0,
+                cb_tmp,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::HeldStream&gt;(onetile);
+            compute_kernel_lib::sub&lt;
+                cb_tmp,
+                cb_recipsumexps,
+                cb_out0,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::HeldStream&gt;(onetile);
+#endif
+#else
+#ifdef SOFTMAX
+            // exp(x - max) / sum. Sub+Exp folded; then Mul.
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::BinaryFpu&lt;
+                    cb_in0,
+                    cb_max,
+                    compute_kernel_lib::BinaryFpuOp::Sub,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::HeldStream&gt;{},
+                compute_kernel_lib::Exp&lt;
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Dst::D0&gt;{},
+                compute_kernel_lib::PackTile&lt;cb_exps&gt;{});
+            compute_kernel_lib::mul&lt;
+                cb_exps,
+                cb_recipsumexps,
+                cb_out0,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::HeldStream&gt;(onetile);
+#else
+            // rexp(x - max) / sum (softmin path).
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::BinaryFpu&lt;
+                    cb_in0,
+                    cb_max,
+                    compute_kernel_lib::BinaryFpuOp::Sub,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::HeldStream&gt;{},
+                compute_kernel_lib::Negative&lt;compute_kernel_lib::Dst::D0&gt;{},
+                compute_kernel_lib::Exp&lt;
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Dst::D0&gt;{},
+                compute_kernel_lib::PackTile&lt;cb_exps&gt;{});
+            compute_kernel_lib::mul&lt;
+                cb_exps,
+                cb_recipsumexps,
+                cb_out0,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::HeldStream&gt;(onetile);
+#endif
+#endif
+        }</span>
+
+        cb_recipsumexps_obj.pop_front(onetile);
+        cb_max_obj.pop_front(onetile);
+    }
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; CircularBuffer objs trimmed; eltwise headers</b> — Unused <code>CircularBuffer cb_in0_obj</code> dropped; includes <code>eltwise_chain.hpp</code>, <code>eltwise_math.hpp</code> (Exp/Log/Recip), <code>eltwise_misc.hpp</code> (Negative), <code>eltwise_binary_sfpu.hpp</code> (BinaryMax).</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; sum accumulator → ckl::copy seed + ckl::add</b> — i==0 → <code>ckl::copy&lt;cb_exps,cb_add&gt;</code>; else <code>add_tiles_to_cb</code> → <code>ckl::add&lt;cb_add,cb_exps,cb_add&gt;</code>.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; sub+exp/rexp folded into one eltwise_chain</b> — <code>sub_tiles_to_cb</code> + <code>exp_tile_to_cb</code> (or rexp) became <code>eltwise_chain(BinaryFpu&lt;Sub,…,HeldStream&gt;, [Negative], Exp, PackTile&lt;cb_exps&gt;)</code>; cb_max held (HeldStream).</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; Step-3 final result → ckl::sub / eltwise_chain + ckl::mul</b> — The LOG and non-LOG <code>sub/exp/mul_tiles_to_cb</code> sequences became <code>ckl::sub</code> pairs (LOG) or <code>eltwise_chain(Sub,[Neg],Exp)</code>+<code>ckl::mul</code> (non-LOG), all with cb_max/cb_recipsumexps held.</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; log_tile_to_cb / recip_tile_to_cb → ckl::unary</b> — <code>log_tile_to_cb</code> → <code>ckl::unary&lt;Log&gt;</code>; <code>recip_tile_to_cb</code> → <code>ckl::unary&lt;Recip&gt;</code> on cb_add → cb_recipsumexps, #ifdef LOG selecting.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; find-max loop → ckl::copy seed + binary_sfpu&amp;lt;BinaryMax&amp;gt;</b> — i==0 seed <code>copy_tile_to_cb</code> → <code>ckl::copy&lt;cb_in0,cb_max&gt;</code>; else copy+copy+binary_max_tile+pack → <code>ckl::binary_sfpu&lt;BinaryMax, cb_in0, cb_max, cb_max&gt;</code>.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-moreh_moreh_softmax_moreh_softmax_c_large">
+{
+  "1": {
+    "title": "CircularBuffer objs trimmed; eltwise headers",
+    "body": "Unused <code>CircularBuffer cb_in0_obj</code> dropped; includes <code>eltwise_chain.hpp</code>, <code>eltwise_math.hpp</code> (Exp/Log/Recip), <code>eltwise_misc.hpp</code> (Negative), <code>eltwise_binary_sfpu.hpp</code> (BinaryMax).",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "sum accumulator \u2192 ckl::copy seed + ckl::add",
+    "body": "i==0 \u2192 <code>ckl::copy&lt;cb_exps,cb_add&gt;</code>; else <code>add_tiles_to_cb</code> \u2192 <code>ckl::add&lt;cb_add,cb_exps,cb_add&gt;</code>.",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "sub+exp/rexp folded into one eltwise_chain",
+    "body": "<code>sub_tiles_to_cb</code> + <code>exp_tile_to_cb</code> (or rexp) became <code>eltwise_chain(BinaryFpu&lt;Sub,\u2026,HeldStream&gt;, [Negative], Exp, PackTile&lt;cb_exps&gt;)</code>; cb_max held (HeldStream).",
+    "color": "#3f8ae0"
+  },
+  "4": {
+    "title": "Step-3 final result \u2192 ckl::sub / eltwise_chain + ckl::mul",
+    "body": "The LOG and non-LOG <code>sub/exp/mul_tiles_to_cb</code> sequences became <code>ckl::sub</code> pairs (LOG) or <code>eltwise_chain(Sub,[Neg],Exp)</code>+<code>ckl::mul</code> (non-LOG), all with cb_max/cb_recipsumexps held.",
+    "color": "#cf222e"
+  },
+  "5": {
+    "title": "log_tile_to_cb / recip_tile_to_cb \u2192 ckl::unary",
+    "body": "<code>log_tile_to_cb</code> \u2192 <code>ckl::unary&lt;Log&gt;</code>; <code>recip_tile_to_cb</code> \u2192 <code>ckl::unary&lt;Recip&gt;</code> on cb_add \u2192 cb_recipsumexps, #ifdef LOG selecting.",
+    "color": "#9f4bbf"
+  },
+  "6": {
+    "title": "find-max loop \u2192 ckl::copy seed + binary_sfpu&lt;BinaryMax&gt;",
+    "body": "i==0 seed <code>copy_tile_to_cb</code> \u2192 <code>ckl::copy&lt;cb_in0,cb_max&gt;</code>; else copy+copy+binary_max_tile+pack \u2192 <code>ckl::binary_sfpu&lt;BinaryMax, cb_in0, cb_max, cb_max&gt;</code>.",
+    "color": "#ff7a00"
+  }
+}
+</script>

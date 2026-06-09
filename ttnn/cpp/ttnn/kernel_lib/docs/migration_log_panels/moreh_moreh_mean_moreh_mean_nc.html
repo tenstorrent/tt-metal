@@ -1,0 +1,213 @@
+<section class="panel" id="panel-moreh_moreh_mean_moreh_mean_nc">
+  <h1>moreh_mean_nc — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_nc.cpp</div>
+  <div class="meta"><b>Δ</b> +31/-34 &nbsp; <b>Decisions:</b> 4</div>
+
+  <div class="focus-toolbar" data-fkernel="moreh_moreh_mean_moreh_mean_nc">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; lib includes</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; held in1/scalar</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; add accumulator</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; scalar mul output</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+<span class="dz" data-d="1">#include &quot;api/compute/bcast.h&quot;
+#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/tile_move_copy.h&quot;
+#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+void kernel_main() {
+    const auto num_input_tiles = get_arg_val&lt;uint32_t&gt;(0);
+    const auto num_output_tiles = get_arg_val&lt;uint32_t&gt;(1);
+
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    CircularBuffer cb_in0_obj(cb_in0);
+    constexpr auto cb_in1 = tt::CBIndex::c_1;
+    CircularBuffer cb_in1_obj(cb_in1);
+    constexpr auto cb_scalar = tt::CBIndex::c_2;
+    CircularBuffer cb_scalar_obj(cb_scalar);
+    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    CircularBuffer cb_out0_obj(cb_out0);
+    constexpr auto cb_intermed0 = tt::CBIndex::c_24;
+    CircularBuffer cb_intermed0_obj(cb_intermed0);
+    constexpr uint32_t onetile = 1;
+    constexpr uint32_t dst0 = 0;
+    constexpr uint32_t dst1 = 1;
+    constexpr uint32_t first_tile = 0;
+
+    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+
+<span class="dz" data-d="2">    cb_in1_obj.wait_front(onetile);
+    cb_scalar_obj.wait_front(1);  // scalar tile from the reader</span>
+
+    for (uint32_t i = 0; i &lt; num_output_tiles; i++) {
+        bool enable_reload = false;
+        for (uint32_t j = 0; j &lt; num_input_tiles; ++j) {
+            bool last_out = (j == num_input_tiles - 1);
+
+<span class="dz" data-d="3">            tile_regs_acquire();
+            cb_in0_obj.wait_front(onetile);
+            if (enable_reload) {
+                cb_intermed0_obj.wait_front(onetile);
+            }
+
+            uint32_t cb_add = (enable_reload) ? (cb_intermed0) : (cb_in1);
+            add_tiles_init_with_dt(cb_in0, cb_add);
+            add_tiles(cb_in0, cb_add, first_tile, first_tile, dst0);
+
+            cb_in0_obj.pop_front(onetile);
+            if (enable_reload) {
+                cb_intermed0_obj.pop_front(onetile);
+            }
+            tile_regs_commit();
+
+            cb_intermed0_obj.reserve_back(onetile);
+            tile_regs_wait();
+            pack_tile_with_dt(dst0, cb_intermed0);
+            tile_regs_release();
+            cb_intermed0_obj.push_back(onetile);
+
+            enable_reload = true;
+        }</span>
+
+<span class="dz" data-d="4">        // output * (1 / number_of_elements)
+        tile_regs_acquire();
+        cb_intermed0_obj.wait_front(onetile);
+        mul_tiles_bcast_scalar_init_short_with_dt(cb_intermed0, cb_scalar);
+        mul_tiles_bcast&lt;BroadcastType::SCALAR&gt;(cb_intermed0, cb_scalar, 0, 0, 0);
+        tile_regs_commit();
+
+        cb_out0_obj.reserve_back(onetile);
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, cb_out0);
+        tile_regs_release();
+        cb_out0_obj.push_back(onetile);
+        cb_intermed0_obj.pop_front(onetile);</span>
+    }
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+<span class="dz" data-d="1">#include &quot;api/compute/bcast.h&quot;
+#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/tile_move_copy.h&quot;
+#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp&quot;</span>
+
+void kernel_main() {
+    const auto num_input_tiles = get_arg_val&lt;uint32_t&gt;(0);
+    const auto num_output_tiles = get_arg_val&lt;uint32_t&gt;(1);
+
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    CircularBuffer cb_in0_obj(cb_in0);
+    constexpr auto cb_in1 = tt::CBIndex::c_1;
+    CircularBuffer cb_in1_obj(cb_in1);
+    constexpr auto cb_scalar = tt::CBIndex::c_2;
+    CircularBuffer cb_scalar_obj(cb_scalar);
+    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    CircularBuffer cb_out0_obj(cb_out0);
+    constexpr auto cb_intermed0 = tt::CBIndex::c_24;
+    CircularBuffer cb_intermed0_obj(cb_intermed0);
+    constexpr uint32_t onetile = 1;
+    constexpr uint32_t dst0 = 0;
+    constexpr uint32_t dst1 = 1;
+    constexpr uint32_t first_tile = 0;
+
+    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+
+<span class="dz" data-d="2">    cb_in1_obj.wait_front(onetile);
+    cb_scalar_obj.wait_front(1);  // scalar tile from the reader</span>
+
+    for (uint32_t i = 0; i &lt; num_output_tiles; i++) {
+        bool enable_reload = false;
+        for (uint32_t j = 0; j &lt; num_input_tiles; ++j) {
+<span class="dz" data-d="3">            // Accumulator add: cb_intermed0 = cb_in0 + (reload? cb_intermed0 : cb_in1)
+            // First iter (!reload): B=cb_in1 (InputLifecycle::CallerManaged — pre-waited, never popped).
+            // Subsequent iters (reload): B=cb_intermed0 (InputLifecycle::Streaming, same-CB in/out).
+            // cb_in0 InputLifecycle::Streaming on A. cb_intermed0 OutputLifecycle::Streaming.
+            // Reconfig: add_tiles_init_with_dt + pack_tile_with_dt -&gt; Input + Output.
+            if (enable_reload) {
+                compute_kernel_lib::add&lt;cb_in0, cb_intermed0, cb_intermed0&gt;(onetile);
+            } else {
+                compute_kernel_lib::add&lt;
+                    cb_in0,
+                    cb_in1,
+                    cb_intermed0,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::CallerManaged&gt;(onetile);
+            }</span>
+
+            enable_reload = true;
+        }
+
+<span class="dz" data-d="4">        // output * (1 / number_of_elements)  — SCALAR bcast Mul.
+        // cb_intermed0 InputLifecycle::Streaming (last iter&#x27;s push, popped here);
+        // cb_scalar InputLifecycle::CallerManaged + Scalar (pre-waited at top of kernel);
+        // cb_out0 OutputLifecycle::Streaming.
+        compute_kernel_lib::mul&lt;
+            cb_intermed0,
+            cb_scalar,
+            cb_out0,
+            compute_kernel_lib::BroadcastDim::Scalar,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::InputLifecycle::CallerManaged&gt;(onetile);</span>
+    }
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; kernel_lib includes</b> — Added <code>eltwise_chain.hpp</code> + <code>eltwise_convenience.hpp</code> to the raw bcast/eltwise compute-api headers.</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; Pre-waited held operands</b> — <code>cb_in1</code> and <code>cb_scalar</code> are waited once at the top and consumed as <code>InputLifecycle::CallerManaged</code> operands inside the chains — no per-iter re-wait/pop.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; Accumulator add → convenience add</b> — The <code>add_tiles_init_with_dt</code> reload/first-iter accumulator block became <code>compute_kernel_lib::add</code>: same-CB <code>add&lt;cb_in0,cb_intermed0,cb_intermed0&gt;</code> on reload, else <code>add&lt;cb_in0,cb_in1,..,CallerManaged&gt;</code>.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; Scalar-bcast mul output</b> — The <code>mul_tiles_bcast_scalar_init_short_with_dt</code>+<code>mul_tiles_bcast&lt;SCALAR&gt;</code>+<code>pack_tile_with_dt</code> output block became <code>compute_kernel_lib::mul&lt;..,BroadcastDim::Scalar, cb_scalar CallerManaged&gt;</code>.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-moreh_moreh_mean_moreh_mean_nc">
+{
+  "1": {
+    "title": "kernel_lib includes",
+    "body": "Added <code>eltwise_chain.hpp</code> + <code>eltwise_convenience.hpp</code> to the raw bcast/eltwise compute-api headers.",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "Pre-waited held operands",
+    "body": "<code>cb_in1</code> and <code>cb_scalar</code> are waited once at the top and consumed as <code>InputLifecycle::CallerManaged</code> operands inside the chains \u2014 no per-iter re-wait/pop.",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "Accumulator add \u2192 convenience add",
+    "body": "The <code>add_tiles_init_with_dt</code> reload/first-iter accumulator block became <code>compute_kernel_lib::add</code>: same-CB <code>add&lt;cb_in0,cb_intermed0,cb_intermed0&gt;</code> on reload, else <code>add&lt;cb_in0,cb_in1,..,CallerManaged&gt;</code>.",
+    "color": "#3f8ae0"
+  },
+  "4": {
+    "title": "Scalar-bcast mul output",
+    "body": "The <code>mul_tiles_bcast_scalar_init_short_with_dt</code>+<code>mul_tiles_bcast&lt;SCALAR&gt;</code>+<code>pack_tile_with_dt</code> output block became <code>compute_kernel_lib::mul&lt;..,BroadcastDim::Scalar, cb_scalar CallerManaged&gt;</code>.",
+    "color": "#cf222e"
+  }
+}
+</script>

@@ -1,0 +1,172 @@
+<section class="panel" id="panel-experimental_unary_backward_gelu_backward_eltwise_bw_gelu_poly">
+  <h1>eltwise_bw_gelu_poly — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/kernels/compute/eltwise_bw_gelu_poly.cpp</div>
+  <div class="meta"><b>Δ</b> +43/-36 &nbsp; <b>Decisions:</b> 5</div>
+
+  <div class="focus-toolbar" data-fkernel="experimental_unary_backward_gelu_backward_eltwise_bw_gelu_poly">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; include swap</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; Streaming lifecycles</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; single tile-count arg</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; drop per-tile init</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; single eltwise_chain</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Compute kernel for GELU backward using polynomial-based GELU derivative
+// Uses Sollya-derived minimax polynomials for high accuracy (Max ULP = 1)
+
+#include &lt;cstdint&gt;
+<span class="dz" data-d="1">#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/tile_move_copy.h&quot;
+#include &quot;api/compute/eltwise_unary/sfpu_split_includes.h&quot;
+#include &quot;api/compute/common.h&quot;
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;api/compute/eltwise_binary_sfpu.h&quot;
+#include &quot;api/compute/binary_bitwise_sfpu.h&quot;
+#include &quot;api/compute/binary_shift.h&quot;
+#include &quot;api/compute/compute_kernel_api.h&quot;
+#include &quot;api/compute/eltwise_unary/gelu.h&quot;</span>
+
+void kernel_main() {
+<span class="dz" data-d="3">    uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(0);</span>
+
+    constexpr auto cb_grad_out = tt::CBIndex::c_0;
+    constexpr auto cb_input = tt::CBIndex::c_1;
+    constexpr auto cb_grad_in = tt::CBIndex::c_2;
+
+<span class="dz" data-d="5">    unary_op_init_common(cb_grad_out, cb_grad_in);
+    gelu_derivative_tile_init&lt;false&gt;();
+    mul_binary_tile_init();</span>
+
+<span class="dz" data-d="2">    for (uint32_t i = 0; i &lt; num_tiles; ++i) {
+        cb_reserve_back(cb_grad_in, 1);
+        cb_wait_front(cb_grad_out, 1);
+        cb_wait_front(cb_input, 1);</span>
+
+<span class="dz" data-d="6">        tile_regs_acquire();
+
+        copy_tile(cb_grad_out, 0, 0);    // dest[0] = grad_out
+        copy_tile(cb_input, 0, 1);       // dest[1] = input
+        gelu_derivative_tile&lt;false&gt;(1);  // dest[1] = GELU&#x27;(input)
+        mul_binary_tile(0, 1, 0);        // dest[0] = grad_out * GELU&#x27;(input)
+
+        tile_regs_commit();
+        tile_regs_wait();
+
+        pack_tile(0, cb_grad_in);
+
+        tile_regs_release();
+
+        cb_pop_front(cb_grad_out, 1);
+        cb_pop_front(cb_input, 1);
+        cb_push_back(cb_grad_in, 1);
+    }</span>
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Compute kernel for GELU backward using polynomial-based GELU derivative.
+// Uses Sollya-derived minimax polynomials for high accuracy (Max ULP = 1).
+
+#include &lt;cstdint&gt;
+<span class="dz" data-d="1">#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_activations.hpp&quot;  // GeluDerivative
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp&quot;  // MulBinary
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+void kernel_main() {
+<span class="dz" data-d="3">    uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(0);</span>
+
+    constexpr auto cb_grad_out = tt::CBIndex::c_0;
+    constexpr auto cb_input = tt::CBIndex::c_1;
+    constexpr auto cb_grad_in = tt::CBIndex::c_2;
+
+<span class="dz" data-d="5">    unary_op_init_common(cb_grad_out, cb_grad_in);</span>
+
+    // GELU backward: grad_in = grad_out * GELU&#x27;(input).
+    //
+    // Faithful 1:1 of the original per-tile loop: EltwiseShape::tiles(num_tiles)
+    // (block_size = 1) streams one tile at a time. Per-element inits
+    // (gelu_derivative_tile_init, mul_binary_tile_init, copy_tile_to_dst_init_short)
+    // are hoisted once at chain entry; InputLifecycle::Streaming waits/pops 1 per
+    // iter and OutputLifecycle::Streaming reserves/pushes 1 per iter — matching the
+    // original cb_wait_front/cb_pop_front/cb_push_back of 1.
+<span class="dz" data-d="3">    const auto shape = compute_kernel_lib::EltwiseShape::tiles(num_tiles);</span>
+
+<span class="dz" data-d="6">    compute_kernel_lib::eltwise_chain(
+        shape,
+        compute_kernel_lib::CopyTile&lt;</span>
+<span class="dz" data-d="2">            cb_grad_out,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::CopyTileReconfig::None&gt;{},
+        compute_kernel_lib::CopyTile&lt;
+            cb_input,
+            compute_kernel_lib::Dst::D1,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::CopyTileReconfig::None&gt;{},</span>
+        compute_kernel_lib::GeluDerivative&lt;compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D1&gt;{},
+        compute_kernel_lib::
+            MulBinary&lt;compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0&gt;{},
+<span class="dz" data-d="6">        compute_kernel_lib::PackTile&lt;
+            cb_grad_in,
+            compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::PackTileReconfig::None&gt;{});</span>
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; include swap</b> — Replaced the raw SFPU headers (<code>eltwise_binary.h</code>, <code>tile_move_copy.h</code>, <code>eltwise_binary_sfpu.h</code>, <code>gelu.h</code>, <code>compute_kernel_api.h</code>, …) with the kernel_lib chain headers (<code>eltwise_chain.hpp</code> / <code>eltwise_activations.hpp</code> / <code>eltwise_binary_sfpu.hpp</code>) plus <code>circular_buffer.h</code>.</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; Streaming lifecycles</b> — Per-tile streaming: <code>CopyTile&lt;cb_grad_out,…,InputLifecycle::Streaming&gt;</code> and <code>CopyTile&lt;cb_input,…,InputLifecycle::Streaming&gt;</code> wait/pop 1 tile each iter; <code>PackTile&lt;cb_grad_in,OutputLifecycle::Streaming&gt;</code> reserves/pushes 1 — exactly the original per-iter <code>cb_wait_front</code>/<code>cb_pop_front</code>/<code>cb_push_back</code> of 1. (Replaces the earlier Chunked/block-size form.)</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; single tile-count arg</b> — Only the original runtime arg 0 (<code>num_tiles</code>) is read — no second block-size arg. It drives <code>EltwiseShape::tiles(num_tiles)</code> (block_size = 1), a faithful 1:1 of the original one-tile-at-a-time loop.</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; drop per-tile init</b> — Removed <code>gelu_derivative_tile_init&lt;false&gt;()</code> and <code>mul_binary_tile_init()</code> — only <code>unary_op_init_common(cb_grad_out, cb_grad_in)</code> remains; the chain hoists the element inits (incl. <code>copy_tile_to_dst_init_short</code>) once at entry.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; single eltwise_chain</b> — The per-tile loop (<code>copy_tile×2 + gelu_derivative_tile + mul_binary_tile + pack</code>) became one <code>eltwise_chain(shape, CopyTile&lt;grad_out,D0&gt;, CopyTile&lt;input,D1&gt;, GeluDerivative&lt;Approx::Exact,D1&gt;, MulBinary&lt;D0,D1,D0&gt;, PackTile&lt;grad_in&gt;)</code>; grad_in = grad_out * GELU'(input).</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-experimental_unary_backward_gelu_backward_eltwise_bw_gelu_poly">
+{
+  "1": {
+    "title": "include swap",
+    "body": "Replaced the raw SFPU headers (<code>eltwise_binary.h</code>, <code>tile_move_copy.h</code>, <code>eltwise_binary_sfpu.h</code>, <code>gelu.h</code>, <code>compute_kernel_api.h</code>, …) with the kernel_lib chain headers (<code>eltwise_chain.hpp</code> / <code>eltwise_activations.hpp</code> / <code>eltwise_binary_sfpu.hpp</code>) plus <code>circular_buffer.h</code>.",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "Streaming lifecycles",
+    "body": "Per-tile streaming: <code>CopyTile&lt;cb_grad_out,…,InputLifecycle::Streaming&gt;</code> and <code>CopyTile&lt;cb_input,…,InputLifecycle::Streaming&gt;</code> wait/pop 1 tile each iter; <code>PackTile&lt;cb_grad_in,OutputLifecycle::Streaming&gt;</code> reserves/pushes 1 — exactly the original per-iter <code>cb_wait_front</code>/<code>cb_pop_front</code>/<code>cb_push_back</code> of 1. (Replaces the earlier Chunked/block-size form.)",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "single tile-count arg",
+    "body": "Only the original runtime arg 0 (<code>num_tiles</code>) is read — no second block-size arg. It drives <code>EltwiseShape::tiles(num_tiles)</code> (block_size = 1), a faithful 1:1 of the original one-tile-at-a-time loop.",
+    "color": "#3f8ae0"
+  },
+  "5": {
+    "title": "drop per-tile init",
+    "body": "Removed <code>gelu_derivative_tile_init&lt;false&gt;()</code> and <code>mul_binary_tile_init()</code> — only <code>unary_op_init_common(cb_grad_out, cb_grad_in)</code> remains; the chain hoists the element inits (incl. <code>copy_tile_to_dst_init_short</code>) once at entry.",
+    "color": "#9f4bbf"
+  },
+  "6": {
+    "title": "single eltwise_chain",
+    "body": "The per-tile loop (<code>copy_tile×2 + gelu_derivative_tile + mul_binary_tile + pack</code>) became one <code>eltwise_chain(shape, CopyTile&lt;grad_out,D0&gt;, CopyTile&lt;input,D1&gt;, GeluDerivative&lt;Approx::Exact,D1&gt;, MulBinary&lt;D0,D1,D0&gt;, PackTile&lt;grad_in&gt;)</code>; grad_in = grad_out * GELU'(input).",
+    "color": "#ff7a00"
+  }
+}
+</script>

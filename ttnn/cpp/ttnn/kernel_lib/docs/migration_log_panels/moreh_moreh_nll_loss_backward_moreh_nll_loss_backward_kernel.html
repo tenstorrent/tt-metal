@@ -1,0 +1,280 @@
+<section class="panel" id="panel-moreh_moreh_nll_loss_backward_moreh_nll_loss_backward_kernel">
+  <h1>moreh_nll_loss_backward_kernel — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/moreh_nll_loss_backward_kernel.cpp</div>
+  <div class="meta"><b>Δ</b> +88/-92 &nbsp; <b>Decisions:</b> 6</div>
+
+  <div class="focus-toolbar" data-fkernel="moreh_moreh_nll_loss_backward_moreh_nll_loss_backward_kernel">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; CB ids → constexpr + headers</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; held scalars: external wait + CallerManaged</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; stage1 → eltwise_chain</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; stage2 → ckl::mul scalar-bcast</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; no-divisor single chain</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; recip(divisor) → unary</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+<span class="dz" data-d="1">#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+void kernel_main() {
+    constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+
+    const uint32_t tile_offset = get_arg_val&lt;uint32_t&gt;(1);
+
+<span class="dz" data-d="1">    constexpr uint32_t cb_divisor = tt::CBIndex::c_3;
+    CircularBuffer cb_divisor_obj(cb_divisor);
+    constexpr uint32_t cb_output_grad = tt::CBIndex::c_0;
+    CircularBuffer cb_output_grad_obj(cb_output_grad);
+    constexpr uint32_t cb_tmp_weight = tt::CBIndex::c_24;
+    CircularBuffer cb_tmp_weight_obj(cb_tmp_weight);
+    constexpr uint32_t cb_tmp1 = tt::CBIndex::c_25;
+    CircularBuffer cb_tmp1_obj(cb_tmp1);
+    constexpr uint32_t cb_tmp2 = tt::CBIndex::c_26;
+    CircularBuffer cb_tmp2_obj(cb_tmp2);
+    constexpr uint32_t cb_input_grad = tt::CBIndex::c_16;
+    CircularBuffer cb_input_grad_obj(cb_input_grad);
+
+    constexpr uint32_t dst0 = 0;
+    constexpr uint32_t onetile = 1;</span>
+
+    init_sfpu(cb_output_grad, tt::CBIndex::c_16);
+
+<span class="dz" data-d="6">#if defined(DIVISOR)
+    cb_divisor_obj.wait_front(onetile);
+    cb_tmp1_obj.reserve_back(onetile);
+
+    tile_regs_acquire();
+    copy_tile_init_with_dt(cb_divisor);
+    copy_tile(cb_divisor, 0, dst0);
+    recip_tile_init();
+    recip_tile(dst0);
+    tile_regs_commit();
+
+    tile_regs_wait();
+    pack_tile_with_dt(dst0, cb_tmp1);
+    tile_regs_release();
+
+    cb_tmp1_obj.push_back(onetile);
+#endif</span>
+
+    cb_output_grad_obj.wait_front(onetile);
+
+    for (uint32_t b = 0; b &lt; per_core_tile_cnt; ++b) {
+<span class="dz" data-d="3">#if defined(DIVISOR)
+        cb_tmp_weight_obj.wait_front(onetile);
+        cb_tmp2_obj.reserve_back(onetile);
+
+        tile_regs_acquire();
+        mul_tiles_bcast_scalar_init_short_with_dt(cb_tmp_weight, cb_output_grad);
+        mul_tiles_bcast_scalar(cb_tmp_weight, cb_output_grad, 0, 0, dst0);
+        negative_tile_init();
+        negative_tile(dst0);
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, cb_tmp2);
+        tile_regs_release();
+
+        cb_tmp2_obj.push_back(onetile);
+        cb_tmp_weight_obj.pop_front(onetile);
+
+        cb_input_grad_obj.reserve_back(onetile);
+        cb_tmp2_obj.wait_front(onetile);
+        cb_tmp1_obj.wait_front(onetile);
+
+        tile_regs_acquire();
+        mul_tiles_bcast_scalar_init_short_with_dt(cb_tmp2, cb_tmp1);
+        mul_tiles_bcast_scalar(cb_tmp2, cb_tmp1, 0, 0, dst0);
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, cb_input_grad);
+        tile_regs_release();
+
+        cb_input_grad_obj.push_back(onetile);
+        cb_tmp2_obj.pop_front(onetile);
+</span>
+<span class="dz" data-d="5">#else
+        cb_tmp_weight_obj.wait_front(onetile);
+
+        cb_input_grad_obj.reserve_back(onetile);
+
+        tile_regs_acquire();
+        mul_tiles_bcast_scalar_init_short_with_dt(cb_tmp_weight, cb_output_grad);
+        mul_tiles_bcast_scalar(cb_tmp_weight, cb_output_grad, 0, 0, dst0);
+        negative_tile_init();
+        negative_tile(dst0);
+
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, cb_input_grad);
+        tile_regs_release();
+
+        cb_input_grad_obj.push_back(onetile);
+
+        cb_tmp_weight_obj.pop_front(onetile);</span>
+#endif
+    }
+
+#if defined(DIVISOR)
+    cb_divisor_obj.pop_front(onetile);
+#endif
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+<span class="dz" data-d="1">#include &lt;cstdint&gt;
+
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp&quot;  // unary
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp&quot;  // Recip
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp&quot;  // Negative
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+// moreh nll_loss backward (faithful port — keep the per-tile loop, small chains inside):
+//   input_grad = -(weight * output_grad)                [no divisor]
+//   input_grad = -(weight * output_grad) * (1/divisor)  [reduction == mean]
+//
+// output_grad and 1/divisor are scalars (broadcast). The divisor path keeps the
+// original&#x27;s two per-tile stages with the 1-tile intermediate cb_tmp2; each stage is
+// its own eltwise_chain(1) inside the C++ tile loop (one tile_regs window each, same
+// as the original). cb_tmp2 is produced by stage 1 and consumed by stage 2 every
+// iteration, so the single-tile buffer interleaves cleanly. Held scalars
+// (output_grad, recip) are waited once externally and read CallerManaged in the
+// chains (the bcast_hw idiom for operands held across a tile loop).
+namespace ckl = compute_kernel_lib;
+
+void kernel_main() {
+    constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+
+<span class="dz" data-d="1">    using D = ckl::Dst;
+    constexpr uint32_t cb_divisor = tt::CBIndex::c_3;
+    constexpr uint32_t cb_output_grad = tt::CBIndex::c_0;  // scalar (held)
+    constexpr uint32_t cb_tmp_weight = tt::CBIndex::c_24;  // streams 1 tile/iter
+    constexpr uint32_t cb_tmp1 = tt::CBIndex::c_25;        // recip(divisor) (held scalar)
+    constexpr uint32_t cb_tmp2 = tt::CBIndex::c_26;        // intermediate -(weight*og)
+    constexpr uint32_t cb_input_grad = tt::CBIndex::c_16;
+
+    init_sfpu(cb_output_grad, cb_input_grad);</span>
+
+<span class="dz" data-d="6">#if defined(DIVISOR)
+    // recip(divisor) -&gt; cb_tmp1 (held scalar, one tile).
+    ckl::unary&lt;ckl::Recip&lt;D::D0&gt;, cb_divisor, cb_tmp1, ckl::InputLifecycle::Bulk&gt;(1);</span>
+
+<span class="dz" data-d="2">    cb_wait_front(cb_tmp1, 1);         // held recip
+    cb_wait_front(cb_output_grad, 1);  // held output_grad</span>
+
+    for (uint32_t b = 0; b &lt; per_core_tile_cnt; ++b) {
+<span class="dz" data-d="3">        // stage 1: cb_tmp2 = -(weight * output_grad)
+        ckl::eltwise_chain(
+            1,
+            ckl::BinaryFpu&lt;
+                cb_tmp_weight,
+                cb_output_grad,
+                ckl::BinaryFpuOp::Mul,
+                ckl::BroadcastDim::Scalar,
+                ckl::InputLifecycle::Streaming,
+                ckl::InputLifecycle::CallerManaged&gt;{},
+            ckl::Negative&lt;D::D0&gt;{},
+            ckl::PackTile&lt;cb_tmp2&gt;{});</span>
+
+<span class="dz" data-d="4">        // stage 2: input_grad = cb_tmp2 * (1/divisor)
+        compute_kernel_lib::mul&lt;
+            cb_tmp2,
+            cb_tmp1,
+            cb_input_grad,
+            compute_kernel_lib::BroadcastDim::Scalar,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::InputLifecycle::CallerManaged&gt;(1);</span>
+    }
+
+<span class="dz" data-d="2">    cb_pop_front(cb_output_grad, 1);
+    cb_pop_front(cb_tmp1, 1);</span>
+<span class="dz" data-d="5">#else
+    // input_grad = -(weight * output_grad).  Single stage per tile.</span>
+<span class="dz" data-d="2">    cb_wait_front(cb_output_grad, 1);  // held output_grad</span>
+<span class="dz" data-d="5">
+    for (uint32_t b = 0; b &lt; per_core_tile_cnt; ++b) {
+        ckl::eltwise_chain(
+            1,
+            ckl::BinaryFpu&lt;
+                cb_tmp_weight,
+                cb_output_grad,
+                ckl::BinaryFpuOp::Mul,
+                ckl::BroadcastDim::Scalar,
+                ckl::InputLifecycle::Streaming,
+                ckl::InputLifecycle::CallerManaged&gt;{},
+            ckl::Negative&lt;D::D0&gt;{},
+            ckl::PackTile&lt;cb_input_grad&gt;{});
+    }</span>
+
+<span class="dz" data-d="2">    cb_pop_front(cb_output_grad, 1);</span>
+#endif
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; CB ids → constexpr; eltwise headers</b> — <code>CircularBuffer cb_*_obj</code> wrappers dropped for <code>constexpr uint32_t</code> ids; includes <code>eltwise_chain.hpp</code>, <code>eltwise_convenience.hpp</code>, <code>eltwise_math.hpp</code>, <code>eltwise_misc.hpp</code>.</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; output_grad / recip held → external wait + CallerManaged</b> — <code>cb_wait_front(cb_tmp1,1)</code> / <code>cb_wait_front(cb_output_grad,1)</code> done once outside the loop; chains read them <code>InputLifecycle::CallerManaged</code> (bcast_hw idiom). Final <code>cb_pop_front</code> after the loop.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; Stage 1 −(weight·og) → eltwise_chain(1)</b> — mul_tiles_bcast_scalar+negative_tile+pack became <code>eltwise_chain(1, BinaryFpu&lt;…,Scalar,Streaming,CallerManaged&gt;, Negative, PackTile&lt;cb_tmp2&gt;)</code> per tile inside the C++ loop.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; Stage 2 ·(1/divisor) → ckl::mul scalar-bcast</b> — Second per-tile mul_tiles_bcast_scalar+pack replaced by <code>ckl::mul&lt;cb_tmp2, cb_tmp1, cb_input_grad, Scalar, Streaming, CallerManaged&gt;(1)</code>.</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; No-divisor path → single eltwise_chain</b> — <code>#else</code> branch (no divisor) is one <code>eltwise_chain(1, BinaryFpu&lt;…Scalar&gt;, Negative, PackTile&lt;cb_input_grad&gt;)</code> per tile with the held output_grad.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; recip(divisor) prologue → ckl::unary&amp;lt;Recip, Bulk&amp;gt;</b> — copy_tile+recip_tile+pack prologue replaced by <code>ckl::unary&lt;Recip, cb_divisor, cb_tmp1, InputLifecycle::Bulk&gt;(1)</code>.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-moreh_moreh_nll_loss_backward_moreh_nll_loss_backward_kernel">
+{
+  "1": {
+    "title": "CB ids \u2192 constexpr; eltwise headers",
+    "body": "<code>CircularBuffer cb_*_obj</code> wrappers dropped for <code>constexpr uint32_t</code> ids; includes <code>eltwise_chain.hpp</code>, <code>eltwise_convenience.hpp</code>, <code>eltwise_math.hpp</code>, <code>eltwise_misc.hpp</code>.",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "output_grad / recip held \u2192 external wait + CallerManaged",
+    "body": "<code>cb_wait_front(cb_tmp1,1)</code> / <code>cb_wait_front(cb_output_grad,1)</code> done once outside the loop; chains read them <code>InputLifecycle::CallerManaged</code> (bcast_hw idiom). Final <code>cb_pop_front</code> after the loop.",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "Stage 1 \u2212(weight\u00b7og) \u2192 eltwise_chain(1)",
+    "body": "mul_tiles_bcast_scalar+negative_tile+pack became <code>eltwise_chain(1, BinaryFpu&lt;\u2026,Scalar,Streaming,CallerManaged&gt;, Negative, PackTile&lt;cb_tmp2&gt;)</code> per tile inside the C++ loop.",
+    "color": "#3f8ae0"
+  },
+  "4": {
+    "title": "Stage 2 \u00b7(1/divisor) \u2192 ckl::mul scalar-bcast",
+    "body": "Second per-tile mul_tiles_bcast_scalar+pack replaced by <code>ckl::mul&lt;cb_tmp2, cb_tmp1, cb_input_grad, Scalar, Streaming, CallerManaged&gt;(1)</code>.",
+    "color": "#cf222e"
+  },
+  "5": {
+    "title": "No-divisor path \u2192 single eltwise_chain",
+    "body": "<code>#else</code> branch (no divisor) is one <code>eltwise_chain(1, BinaryFpu&lt;\u2026Scalar&gt;, Negative, PackTile&lt;cb_input_grad&gt;)</code> per tile with the held output_grad.",
+    "color": "#9f4bbf"
+  },
+  "6": {
+    "title": "recip(divisor) prologue \u2192 ckl::unary&lt;Recip, Bulk&gt;",
+    "body": "copy_tile+recip_tile+pack prologue replaced by <code>ckl::unary&lt;Recip, cb_divisor, cb_tmp1, InputLifecycle::Bulk&gt;(1)</code>.",
+    "color": "#ff7a00"
+  }
+}
+</script>

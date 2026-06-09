@@ -1,0 +1,509 @@
+<section class="panel" id="panel-experimental_transformer_dit_layernorm_post_all_gather_layernorm_post_allgather_welford">
+  <h1>layernorm_post_allgather_welford — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/device/kernels/compute/layernorm_post_allgather_welford.cpp</div>
+  <div class="meta"><b>Δ</b> +80/-49 &nbsp; <b>Decisions:</b> 5</div>
+
+  <div class="focus-toolbar" data-fkernel="experimental_transformer_dit_layernorm_post_all_gather_layernorm_post_allgather_welford">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; include swap</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; normalize Chunked (in-place)</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; beta → eltwise_chain</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; rsqrt + sub stages</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; gamma → eltwise_chain</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+/*
+ * LayerNorm-only Welford post-allgather.
+ * Expects stats with two TILE columns per device (E(x**2), E(x)), applies LN with optional gamma/beta.
+ */
+
+#include &lt;cstdint&gt;
+
+#define BCAST_LLKOP EltwiseBinaryType::ELWMUL
+#define BCAST_DIM BroadcastType::COL
+
+<span class="dz" data-d="1">#include &quot;api/compute/reduce.h&quot;
+#include &quot;api/compute/bcast.h&quot;
+#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/layernorm.h&quot;
+#include &quot;ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h&quot;</span>
+
+void kernel_main() {
+    constexpr uint32_t cb_inp = tt::CBIndex::c_0;
+    constexpr uint32_t cb_stats = tt::CBIndex::c_1;
+    constexpr uint32_t cb_gamma = tt::CBIndex::c_2;
+    constexpr uint32_t cb_beta = tt::CBIndex::c_3;
+    constexpr uint32_t cb_eps = tt::CBIndex::c_4;
+    constexpr uint32_t cb_stats_reduced = tt::CBIndex::c_5;   // [mean, var]
+    constexpr uint32_t cb_recip_sqrt_var = tt::CBIndex::c_6;  // 1/sqrt(var+eps)
+    constexpr uint32_t cb_intermediate = tt::CBIndex::c_7;    // intermediate result
+    constexpr uint32_t cb_out = tt::CBIndex::c_8;
+
+    constexpr uint32_t stats_tile_stride = 2;
+
+    constexpr uint32_t Wt = get_compile_time_arg_val(0);
+    constexpr uint32_t W = get_compile_time_arg_val(1);
+    constexpr uint32_t block_size = get_compile_time_arg_val(2);
+    constexpr uint32_t num_devices = get_compile_time_arg_val(3);
+
+    constexpr uint32_t do_gamma = get_compile_time_arg_val(4);
+    constexpr uint32_t do_beta = get_compile_time_arg_val(5);
+    constexpr uint32_t gamma_is_batched = get_compile_time_arg_val(6);
+    constexpr uint32_t beta_is_batched = get_compile_time_arg_val(7);
+    constexpr uint32_t Ht = get_compile_time_arg_val(8);
+
+    constexpr uint32_t Wt_round_up_block_sizes = get_compile_time_arg_val(9);
+
+    const uint32_t num_tile_rows = get_arg_val&lt;uint32_t&gt;(0);
+    const uint32_t tile_row_start = get_arg_val&lt;uint32_t&gt;(1);
+
+    binary_op_init_common(cb_inp, cb_inp, cb_stats_reduced);
+
+    cb_wait_front(cb_eps, 1);  // broadcast epsilon is ready
+
+    for (uint32_t tile_row = 0; tile_row &lt; num_tile_rows; tile_row++) {
+        // Calculate global tile row and batch index
+        uint32_t global_tile_row = tile_row_start + tile_row;
+        uint32_t batch_idx = global_tile_row / Ht;
+        // Combine per-device stats into mean/variance
+        norm::kernel_util::compute::combine_welford_partials(
+            cb_stats,
+            cb_stats_reduced,
+            num_devices,
+            [&amp;](uint32_t) { return (static_cast&lt;float&gt;(W)); },
+            norm::kernel_util::compute::RSqrtPolicy{false, 0});
+        cb_push_back(cb_stats_reduced, stats_tile_stride);
+        cb_wait_front(cb_stats_reduced, stats_tile_stride);
+
+<span class="dz" data-d="4">        // Compute 1/sqrt(var + eps) into cb_recip_sqrt_var
+        cb_reserve_back(cb_recip_sqrt_var, 1);
+        reconfig_data_format(cb_stats_reduced, cb_eps);
+        pack_reconfig_data_format(cb_recip_sqrt_var);
+
+        add_tiles_init(cb_stats_reduced, cb_eps);
+        rsqrt_tile_init&lt;true&gt;();
+        tile_regs_acquire();
+        tile_regs_wait();
+        // stats_reduced tile 1 holds variance (after combine_welford_partials)
+        add_tiles(cb_stats_reduced, cb_eps, 1, 0, 0);
+        rsqrt_tile&lt;true&gt;(0);
+        pack_tile(0, cb_recip_sqrt_var);
+        tile_regs_commit();
+        tile_regs_release();
+        cb_push_back(cb_recip_sqrt_var, 1);</span>
+
+        // Process tiles across width in blocks
+<span class="dz" data-d="4">        for (uint32_t col_tile = 0; col_tile &lt; Wt; col_tile += block_size) {
+            // 1) x_minus_mean
+            reconfig_data_format(cb_inp, cb_stats_reduced);
+            pack_reconfig_data_format(cb_intermediate);
+            sub_bcast_cols_init_short(cb_inp, cb_stats_reduced);
+            cb_wait_front(cb_inp, block_size);
+            cb_reserve_back(cb_intermediate, block_size);
+            tile_regs_acquire();
+            tile_regs_wait();
+            for (uint32_t i = 0; i &lt; block_size; i++) {
+                sub_tiles_bcast_cols(cb_inp, cb_stats_reduced, i, 0, i);
+                pack_tile(i, cb_intermediate);
+            }
+            tile_regs_commit();
+            tile_regs_release();
+            cb_pop_front(cb_inp, block_size);
+            cb_push_back(cb_intermediate, block_size);</span>
+
+<span class="dz" data-d="2">            // 2) normalize: (x-mean) * inv_std
+            constexpr uint32_t norm_target_cb = (do_gamma || do_beta) ? cb_intermediate : cb_out;
+            reconfig_data_format(cb_intermediate, cb_recip_sqrt_var);
+            pack_reconfig_data_format(norm_target_cb);
+            mul_bcast_cols_init_short(cb_intermediate, cb_recip_sqrt_var);
+            cb_wait_front(cb_intermediate, block_size);
+            cb_wait_front(cb_recip_sqrt_var, 1);
+            tile_regs_acquire();
+            for (uint32_t i = 0; i &lt; block_size; i++) {
+                mul_tiles_bcast_cols(cb_intermediate, cb_recip_sqrt_var, i, 0, i);
+            }
+            tile_regs_commit();
+
+            // Note that compute and pack are separated because it&#x27;s possible that
+            // norm_target_cb == cb_intermediate (in the case of no gamma/beta), so this
+            // must be able to support in-place operations.
+            cb_pop_front(cb_intermediate, block_size);
+            cb_reserve_back(norm_target_cb, block_size);
+            tile_regs_wait();
+            for (uint32_t i = 0; i &lt; block_size; i++) {
+                pack_tile(i, norm_target_cb);
+            }
+            tile_regs_release();
+            cb_push_back(norm_target_cb, block_size);</span>
+
+<span class="dz" data-d="6">            // 3) optional gamma
+            if constexpr (do_gamma) {
+                constexpr uint32_t gamma_out_cb = do_beta ? cb_intermediate : cb_out;
+                reconfig_data_format(norm_target_cb, cb_gamma);
+                pack_reconfig_data_format(gamma_out_cb);
+                mul_bcast_rows_init_short(norm_target_cb, cb_gamma);
+
+                cb_wait_front(cb_gamma, col_tile + block_size);
+                cb_wait_front(norm_target_cb, block_size);
+
+                tile_regs_acquire();
+                for (uint32_t i = 0; i &lt; block_size; i++) {
+                    mul_tiles_bcast_rows(norm_target_cb, cb_gamma, i, col_tile + i, i);
+                }
+                tile_regs_commit();
+
+                cb_pop_front(norm_target_cb, block_size);
+                cb_reserve_back(gamma_out_cb, block_size);
+
+                tile_regs_wait();
+                for (uint32_t i = 0; i &lt; block_size; i++) {
+                    pack_tile(i, gamma_out_cb);
+                }
+                tile_regs_release();
+
+                cb_push_back(gamma_out_cb, block_size);
+            }</span>
+
+<span class="dz" data-d="3">            // 4) optional beta (only if gamma was provided)
+            if constexpr (do_beta) {
+                // Input is always in cb_intermediate, output is always cb_out
+                reconfig_data_format(cb_intermediate, cb_beta);
+                pack_reconfig_data_format(cb_out);
+                add_bcast_rows_init_short(cb_intermediate, cb_beta);
+
+                cb_wait_front(cb_beta, col_tile + block_size);
+                cb_wait_front(cb_intermediate, block_size);
+                cb_reserve_back(cb_out, block_size);
+                tile_regs_acquire();
+                tile_regs_wait();
+                for (uint32_t i = 0; i &lt; block_size; i++) {
+                    add_tiles_bcast_rows(cb_intermediate, cb_beta, i, col_tile + i, i);
+                    pack_tile(i, cb_out);
+                }
+                tile_regs_commit();
+                tile_regs_release();
+                cb_pop_front(cb_intermediate, block_size);
+                cb_push_back(cb_out, block_size);
+            }</span>
+        }
+
+        // free up per-row resources
+        cb_pop_front(cb_stats_reduced, stats_tile_stride);
+        cb_pop_front(cb_recip_sqrt_var, 1);
+
+        // Check if next tile_row is in a different batch - if so, pop gamma/beta
+        if (tile_row + 1 &lt; num_tile_rows) {
+            uint32_t next_global_tile_row = tile_row_start + tile_row + 1;
+            uint32_t next_batch_idx = next_global_tile_row / Ht;
+            if (next_batch_idx != batch_idx) {
+                // Pop gamma/beta to prepare for next batch
+                if constexpr (do_gamma &amp;&amp; gamma_is_batched) {
+                    cb_pop_front(cb_gamma, Wt_round_up_block_sizes);
+                }
+                if constexpr (do_beta &amp;&amp; beta_is_batched) {
+                    cb_pop_front(cb_beta, Wt_round_up_block_sizes);
+                }
+            }
+        }
+    }
+
+    // Pop remaining gamma/beta at the end (if batched, only the last batch&#x27;s data)
+    if constexpr (do_gamma) {
+        cb_pop_front(cb_gamma, Wt_round_up_block_sizes);
+    }
+    if constexpr (do_beta) {
+        cb_pop_front(cb_beta, Wt_round_up_block_sizes);
+    }
+
+    cb_pop_front(cb_eps, 1);
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+/*
+ * LayerNorm-only Welford post-allgather.
+ * Expects stats with two TILE columns per device (E(x**2), E(x)), applies LN with optional gamma/beta.
+ */
+
+#include &lt;cstdint&gt;
+
+#define BCAST_LLKOP EltwiseBinaryType::ELWMUL
+#define BCAST_DIM BroadcastType::COL
+
+<span class="dz" data-d="1">#include &quot;api/compute/reduce.h&quot;
+#include &quot;api/compute/bcast.h&quot;
+#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/layernorm.h&quot;
+#include &quot;ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp&quot;</span>
+
+void kernel_main() {
+    constexpr uint32_t cb_inp = tt::CBIndex::c_0;
+    constexpr uint32_t cb_stats = tt::CBIndex::c_1;
+    constexpr uint32_t cb_gamma = tt::CBIndex::c_2;
+    constexpr uint32_t cb_beta = tt::CBIndex::c_3;
+    constexpr uint32_t cb_eps = tt::CBIndex::c_4;
+    constexpr uint32_t cb_stats_reduced = tt::CBIndex::c_5;   // [mean, var]
+    constexpr uint32_t cb_recip_sqrt_var = tt::CBIndex::c_6;  // 1/sqrt(var+eps)
+    constexpr uint32_t cb_intermediate = tt::CBIndex::c_7;    // intermediate result
+    constexpr uint32_t cb_out = tt::CBIndex::c_8;
+
+    constexpr uint32_t stats_tile_stride = 2;
+
+    constexpr uint32_t Wt = get_compile_time_arg_val(0);
+    constexpr uint32_t W = get_compile_time_arg_val(1);
+    constexpr uint32_t block_size = get_compile_time_arg_val(2);
+    constexpr uint32_t num_devices = get_compile_time_arg_val(3);
+
+    constexpr uint32_t do_gamma = get_compile_time_arg_val(4);
+    constexpr uint32_t do_beta = get_compile_time_arg_val(5);
+    constexpr uint32_t gamma_is_batched = get_compile_time_arg_val(6);
+    constexpr uint32_t beta_is_batched = get_compile_time_arg_val(7);
+    constexpr uint32_t Ht = get_compile_time_arg_val(8);
+
+    constexpr uint32_t Wt_round_up_block_sizes = get_compile_time_arg_val(9);
+
+    const uint32_t num_tile_rows = get_arg_val&lt;uint32_t&gt;(0);
+    const uint32_t tile_row_start = get_arg_val&lt;uint32_t&gt;(1);
+
+    binary_op_init_common(cb_inp, cb_inp, cb_stats_reduced);
+
+    cb_wait_front(cb_eps, 1);  // broadcast epsilon is ready
+
+    for (uint32_t tile_row = 0; tile_row &lt; num_tile_rows; tile_row++) {
+        // Calculate global tile row and batch index
+        uint32_t global_tile_row = tile_row_start + tile_row;
+        uint32_t batch_idx = global_tile_row / Ht;
+        // Combine per-device stats into mean/variance
+        norm::kernel_util::compute::combine_welford_partials(
+            cb_stats,
+            cb_stats_reduced,
+            num_devices,
+            [&amp;](uint32_t) { return (static_cast&lt;float&gt;(W)); },
+            norm::kernel_util::compute::RSqrtPolicy{false, 0});
+        cb_push_back(cb_stats_reduced, stats_tile_stride);
+        cb_wait_front(cb_stats_reduced, stats_tile_stride);
+
+<span class="dz" data-d="4">        // Compute 1/sqrt(var + eps) into cb_recip_sqrt_var.
+        // Same migration as layernorm_distributed/layernorm_post_allgather_welford.
+        // cb_stats_reduced tile 1 holds variance (after combine_welford_partials).
+        // Reconfig: Input + Output (explicit reconfig_data_format +
+        //   pack_reconfig_data_format + add_tiles_init in original).
+        // Lifecycles: cb_stats_reduced InputLifecycle::HeldBulk + Scalar + compute_kernel_lib::TileOffset::Set;
+        //   cb_eps InputLifecycle::CallerManaged + Scalar; cb_recip_sqrt_var OutputLifecycle::Streaming.
+        // rsqrt_tile_init&lt;true&gt; -&gt; Legacy::On.
+        compute_kernel_lib::eltwise_chain(
+            1,
+            compute_kernel_lib::BinaryFpu&lt;
+                cb_stats_reduced,
+                cb_eps,
+                compute_kernel_lib::BinaryFpuOp::Add,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::HeldBulk,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::TileOffset::Set&gt;{1, 0u},
+            compute_kernel_lib::
+                Rsqrt&lt;compute_kernel_lib::Approx::Exact, compute_kernel_lib::Legacy::On, compute_kernel_lib::Dst::D0&gt;{},
+            compute_kernel_lib::PackTile&lt;cb_recip_sqrt_var&gt;{});</span>
+
+        // Process tiles across width in blocks
+        for (uint32_t col_tile = 0; col_tile &lt; Wt; col_tile += block_size) {
+<span class="dz" data-d="4">            // 1) x_minus_mean: cb_intermediate[i] = cb_inp[i] - cb_stats_reduced[0]
+            // (bcast cols).  cb_inp: InputLifecycle::Bulk + Block (per-block_size wait+pop).
+            // cb_stats_reduced: InputLifecycle::CallerManaged + Scalar (held by outer per-row scope).
+            // cb_intermediate: OutputLifecycle::Bulk + Block (per-block_size reserve+push).
+            // Reconfig: explicit reconfig_data_format + sub_bcast_cols_init_short -&gt;
+            // BinaryDataFormatReconfig::Input. pack_reconfig_data_format -&gt;
+            // PackTileReconfig::Output.
+            compute_kernel_lib::sub&lt;
+                cb_inp,
+                cb_stats_reduced,
+                cb_intermediate,
+                compute_kernel_lib::BroadcastDim::Col,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OutputLifecycle::Bulk,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::PackTileReconfig::Output,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::OperandKind::Scalar&gt;(
+                compute_kernel_lib::EltwiseShape::tiles(block_size, /*block_size=*/block_size));</span>
+
+<span class="dz" data-d="2">            // 2) normalize: (x-mean) * inv_std  -&gt;  norm_target_cb
+            // In-place when there is no gamma/beta (norm_target_cb == cb_intermediate). The
+            // Chunked lifecycle reproduces the original&#x27;s in-place-safe ordering: the chain&#x27;s
+            // compute phase pops the block_size input tiles BEFORE the pack phase reserves the
+            // output block, so a block_size-capacity cb_intermediate is reused in place. (Bulk
+            // would reserve the output before popping the input and deadlock the tight buffer.)
+            // cb_recip_sqrt_var is the COL-bcast scalar, held across the col loop (waited here,
+            // popped once per row below) -&gt; CallerManaged + Scalar.
+            // Reconfig: Input (reconfig_data_format + mul_bcast_cols_init_short) + Output
+            // (pack_reconfig_data_format).
+            constexpr uint32_t norm_target_cb = (do_gamma || do_beta) ? cb_intermediate : cb_out;
+            cb_wait_front(cb_recip_sqrt_var, 1);
+            compute_kernel_lib::mul&lt;
+                cb_intermediate,
+                cb_recip_sqrt_var,
+                norm_target_cb,
+                compute_kernel_lib::BroadcastDim::Col,
+                compute_kernel_lib::InputLifecycle::Chunked,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OutputLifecycle::Chunked,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::PackTileReconfig::Output,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::OperandKind::Scalar&gt;(
+                compute_kernel_lib::EltwiseShape::tiles(block_size, /*block_size=*/block_size));</span>
+
+<span class="dz" data-d="6">            // 3) optional gamma: norm_target_cb * gamma (bcast rows) -&gt; gamma_out_cb.
+            // In-place when beta follows (gamma_out_cb == cb_intermediate == norm_target_cb),
+            // so it uses the same Chunked in-place-safe ordering as the normalize step. gamma
+            // is the ROW-bcast operand, read at the running col_tile offset and held across the
+            // col loop (cumulative wait here, popped per-batch / at end) -&gt; CallerManaged +
+            // Block + TileOffset::Set{col_tile}. Reconfig: Input + Output.
+            if constexpr (do_gamma) {
+                constexpr uint32_t gamma_out_cb = do_beta ? cb_intermediate : cb_out;
+                cb_wait_front(cb_gamma, col_tile + block_size);
+                compute_kernel_lib::eltwise_chain(
+                    compute_kernel_lib::EltwiseShape::tiles(block_size, /*block_size=*/block_size),
+                    compute_kernel_lib::BinaryFpu&lt;
+                        norm_target_cb,
+                        cb_gamma,
+                        compute_kernel_lib::BinaryFpuOp::Mul,
+                        compute_kernel_lib::BroadcastDim::Row,
+                        compute_kernel_lib::InputLifecycle::Chunked,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::TileOffset::Unset,
+                        compute_kernel_lib::TileOffset::Set&gt;{0u, col_tile},
+                    compute_kernel_lib::PackTile&lt;
+                        gamma_out_cb,
+                        compute_kernel_lib::OutputLifecycle::Chunked,
+                        compute_kernel_lib::PackTileReconfig::Output&gt;{});
+            }</span>
+
+<span class="dz" data-d="3">            // 4) optional beta (only if gamma was provided)
+            // cb_out[i] = cb_intermediate[i] + cb_beta[col_tile + i] (bcast rows).
+            // Different CBs (no in-place). cb_intermediate InputLifecycle::Bulk + Block. cb_beta
+            // InputLifecycle::CallerManaged + Block + col_tile (cb_beta is held
+            // across the col_tile loop via the cumulative wait_front above).
+            // cb_out OutputLifecycle::Bulk + Block.
+            // Reconfig: reconfig_data_format + add_bcast_rows_init_short -&gt;
+            // BinaryDataFormatReconfig::Input. pack_reconfig_data_format -&gt;
+            // PackTileReconfig::Output.
+            if constexpr (do_beta) {
+                cb_wait_front(cb_beta, col_tile + block_size);
+                compute_kernel_lib::eltwise_chain(
+                    compute_kernel_lib::EltwiseShape::tiles(block_size, /*block_size=*/block_size),
+                    compute_kernel_lib::BinaryFpu&lt;
+                        cb_intermediate,
+                        cb_beta,
+                        compute_kernel_lib::BinaryFpuOp::Add,
+                        compute_kernel_lib::BroadcastDim::Row,
+                        compute_kernel_lib::InputLifecycle::Bulk,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::TileOffset::Unset,
+                        compute_kernel_lib::TileOffset::Set&gt;{0u, col_tile},
+                    compute_kernel_lib::PackTile&lt;cb_out, compute_kernel_lib::OutputLifecycle::Bulk&gt;{});
+            }</span>
+        }
+
+        // free up per-row resources
+        cb_pop_front(cb_stats_reduced, stats_tile_stride);
+        cb_pop_front(cb_recip_sqrt_var, 1);
+
+        // Check if next tile_row is in a different batch - if so, pop gamma/beta
+        if (tile_row + 1 &lt; num_tile_rows) {
+            uint32_t next_global_tile_row = tile_row_start + tile_row + 1;
+            uint32_t next_batch_idx = next_global_tile_row / Ht;
+            if (next_batch_idx != batch_idx) {
+                // Pop gamma/beta to prepare for next batch
+                if constexpr (do_gamma &amp;&amp; gamma_is_batched) {
+                    cb_pop_front(cb_gamma, Wt_round_up_block_sizes);
+                }
+                if constexpr (do_beta &amp;&amp; beta_is_batched) {
+                    cb_pop_front(cb_beta, Wt_round_up_block_sizes);
+                }
+            }
+        }
+    }
+
+    // Pop remaining gamma/beta at the end (if batched, only the last batch&#x27;s data)
+    if constexpr (do_gamma) {
+        cb_pop_front(cb_gamma, Wt_round_up_block_sizes);
+    }
+    if constexpr (do_beta) {
+        cb_pop_front(cb_beta, Wt_round_up_block_sizes);
+    }
+
+    cb_pop_front(cb_eps, 1);
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; include swap</b> — Added the kernel_lib chain headers (<code>eltwise_chain.hpp</code>, <code>eltwise_convenience.hpp</code>, <code>eltwise_math.hpp</code>) alongside the existing reduce/bcast/layernorm + <code>combine_welford.h</code> includes.</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; normalize → mul Chunked, in-place-safe</b> — <code>(x-mean) * inv_std</code> migrated to <code>mul&lt;cb_intermediate, cb_recip_sqrt_var, norm_target_cb, BroadcastDim::Col, InputLifecycle::Chunked, …, OutputLifecycle::Chunked&gt;</code>. <code>Chunked</code> reproduces the original in-place-safe ordering — the compute phase <em>pops</em> the block before the pack phase <em>reserves</em> — so a block_size-capacity <code>cb_intermediate</code> can be reused in place when there's no gamma/beta (Bulk would reserve-before-pop and deadlock).</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; optional beta → eltwise_chain (Bulk)</b> — <code>cb_out = cb_intermediate + cb_beta[col_tile+i]</code> (bcast rows) became <code>eltwise_chain(shape, BinaryFpu&lt;…,Add,Row, Bulk, CallerManaged, …, TileOffset::Set&gt;{0u, col_tile}, PackTile&lt;cb_out, Bulk&gt;)</code>. Different CBs (no in-place) → plain Bulk; <code>cb_beta</code> held across the col loop via the cumulative wait → <code>CallerManaged</code>.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; rsqrt + x_minus_mean stages</b> — 1/sqrt(var+eps): <code>add_tiles + rsqrt_tile&lt;true&gt; + pack</code> → <code>eltwise_chain(1, BinaryFpu&lt;stats_reduced,eps,Add,…,HeldBulk,CallerManaged,…,TileOffset::Set&gt;{1,0u}, Rsqrt&lt;Exact,Legacy::On,D0&gt;, PackTile&lt;recip_sqrt_var&gt;)</code>. x_minus_mean: <code>sub_tiles_bcast_cols</code> loop → <code>sub&lt;cb_inp, cb_stats_reduced, cb_intermediate, BroadcastDim::Col, Bulk, CallerManaged, Bulk, …&gt;</code>. Both carry <code>BinaryDataFormatReconfig::Input</code> + <code>PackTileReconfig::Output</code> matching the explicit reconfigs.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; optional gamma → eltwise_chain (Chunked)</b> — <code>norm_target_cb * gamma</code> (bcast rows) migrated to <code>eltwise_chain(shape, BinaryFpu&lt;…,Mul,Row, Chunked, CallerManaged, …, TileOffset::Set&gt;{0u, col_tile}, PackTile&lt;gamma_out_cb, Chunked&gt;)</code>. In-place when beta follows (<code>gamma_out_cb == cb_intermediate == norm_target_cb</code>), so it reuses the same Chunked in-place-safe ordering as normalize. This kernel is no longer a raw-LLK blocker for the normalize/gamma stages.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-experimental_transformer_dit_layernorm_post_all_gather_layernorm_post_allgather_welford">
+{
+  "1": {
+    "title": "include swap",
+    "body": "Added the kernel_lib chain headers (<code>eltwise_chain.hpp</code>, <code>eltwise_convenience.hpp</code>, <code>eltwise_math.hpp</code>) alongside the existing reduce/bcast/layernorm + <code>combine_welford.h</code> includes.",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "normalize → mul Chunked, in-place-safe",
+    "body": "<code>(x-mean) * inv_std</code> migrated to <code>mul&lt;cb_intermediate, cb_recip_sqrt_var, norm_target_cb, BroadcastDim::Col, InputLifecycle::Chunked, …, OutputLifecycle::Chunked&gt;</code>. <code>Chunked</code> reproduces the original in-place-safe ordering — the compute phase <em>pops</em> the block before the pack phase <em>reserves</em> — so a block_size-capacity <code>cb_intermediate</code> can be reused in place when there's no gamma/beta (Bulk would reserve-before-pop and deadlock).",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "optional beta → eltwise_chain (Bulk)",
+    "body": "<code>cb_out = cb_intermediate + cb_beta[col_tile+i]</code> (bcast rows) became <code>eltwise_chain(shape, BinaryFpu&lt;…,Add,Row, Bulk, CallerManaged, …, TileOffset::Set&gt;{0u, col_tile}, PackTile&lt;cb_out, Bulk&gt;)</code>. Different CBs (no in-place) → plain Bulk; <code>cb_beta</code> held across the col loop via the cumulative wait → <code>CallerManaged</code>.",
+    "color": "#3f8ae0"
+  },
+  "4": {
+    "title": "rsqrt + x_minus_mean stages",
+    "body": "1/sqrt(var+eps): <code>add_tiles + rsqrt_tile&lt;true&gt; + pack</code> → <code>eltwise_chain(1, BinaryFpu&lt;stats_reduced,eps,Add,…,HeldBulk,CallerManaged,…,TileOffset::Set&gt;{1,0u}, Rsqrt&lt;Exact,Legacy::On,D0&gt;, PackTile&lt;recip_sqrt_var&gt;)</code>. x_minus_mean: <code>sub_tiles_bcast_cols</code> loop → <code>sub&lt;cb_inp, cb_stats_reduced, cb_intermediate, BroadcastDim::Col, Bulk, CallerManaged, Bulk, …&gt;</code>. Both carry <code>BinaryDataFormatReconfig::Input</code> + <code>PackTileReconfig::Output</code> matching the explicit reconfigs.",
+    "color": "#cf222e"
+  },
+  "6": {
+    "title": "optional gamma → eltwise_chain (Chunked)",
+    "body": "<code>norm_target_cb * gamma</code> (bcast rows) migrated to <code>eltwise_chain(shape, BinaryFpu&lt;…,Mul,Row, Chunked, CallerManaged, …, TileOffset::Set&gt;{0u, col_tile}, PackTile&lt;gamma_out_cb, Chunked&gt;)</code>. In-place when beta follows (<code>gamma_out_cb == cb_intermediate == norm_target_cb</code>), so it reuses the same Chunked in-place-safe ordering as normalize. This kernel is no longer a raw-LLK blocker for the normalize/gamma stages.",
+    "color": "#ff7a00"
+  }
+}
+</script>

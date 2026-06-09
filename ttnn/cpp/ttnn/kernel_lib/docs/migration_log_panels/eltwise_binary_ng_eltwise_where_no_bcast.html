@@ -1,0 +1,247 @@
+<section class="panel" id="panel-eltwise_binary_ng_eltwise_where_no_bcast">
+  <h1>eltwise_where_no_bcast — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_where_no_bcast.cpp</div>
+  <div class="meta"><b>Δ</b> +80/-59 &nbsp; <b>Decisions:</b> 5</div>
+
+  <div class="focus-toolbar" data-fkernel="eltwise_binary_ng_eltwise_where_no_bcast">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; includes + Dst slots</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; chain lifecycle + PackTile</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; CopyTile Chunked</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; init</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; fill -&gt; OptionalChainElement + Where</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+<span class="dz" data-d="1">#include &quot;api/compute/eltwise_unary/where.h&quot;
+#include &quot;api/compute/eltwise_unary/fill.h&quot;
+#include &quot;eltwise_utils_common.hpp&quot;
+#include &quot;eltwise_utils_sfpu.hpp&quot;
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;</span>
+
+void kernel_main() {
+    uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(0);
+    const uint32_t scalar_value = get_arg_val&lt;uint32_t&gt;(3);
+    const auto scalar_val = reinterpret_cast&lt;const float*&gt;(&amp;scalar_value);
+
+    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
+
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    constexpr auto cb_in1 = tt::CBIndex::c_1;
+    constexpr auto cb_out = tt::CBIndex::c_2;
+
+<span class="dz" data-d="5">    unary_op_init_common(cb_in0, cb_out);
+    BINARY_SFPU_INIT</span>
+
+<span class="dz" data-d="3">    for (uint32_t tile_id = 0; tile_id &lt; num_tiles; ++tile_id) {
+        cb_wait_front(cb_in0, num_tiles_per_cycle);
+        cb_wait_front(cb_in1, num_tiles_per_cycle);
+        cb_reserve_back(cb_out, num_tiles_per_cycle);
+
+        tile_regs_acquire();
+        copy_tile_to_dst_init_short(cb_in0);
+        for (uint32_t i = 0; i &lt; num_tiles_per_cycle; ++i) {
+            copy_tile(cb_in0, i, i * 3);
+        }
+        copy_tile_to_dst_init_short(cb_in1);</span>
+<span class="dz" data-d="6">        for (uint32_t i = 0; i &lt; num_tiles_per_cycle; ++i) {
+            // TTS: tensor is true value, goes to dst_reg 1
+#if WHERE_TTS
+            copy_tile(cb_in1, i, i * 3 + 1);  // Copy true tensor to dst_reg 1
+            fill_tile_init();
+            // TTS: scalar is false value, goes to dst_reg 2
+#ifdef FILL_WITH_VALUE_FLOAT
+            FILL_LLK(i * 3 + 2, *scalar_val);
+#endif
+#ifdef FILL_WITH_VALUE_INT
+            FILL_LLK(i * 3 + 2, scalar_value);
+#endif
+#endif
+
+// TST: tensor is false value, goes to dst_reg 2
+#if WHERE_TST
+            copy_tile(cb_in1, i, i * 3 + 2);  // Copy false tensor to dst_reg 2
+            fill_tile_init();
+            // TST: scalar is true value, goes to dst_reg 1
+#ifdef FILL_WITH_VALUE_FLOAT
+            FILL_LLK(i * 3 + 1, *scalar_val);
+#endif
+#ifdef FILL_WITH_VALUE_INT
+            FILL_LLK(i * 3 + 1, scalar_value);
+#endif
+#endif
+
+            BINARY_SFPU_OP(i * 3, i * 3 + 1, i * 3 + 2, i * 3);
+        }</span>
+<span class="dz" data-d="2">
+        tile_regs_commit();
+
+        tile_regs_wait();
+        for (uint32_t i = 0; i &lt; num_tiles_per_cycle; ++i) {
+            pack_tile(i * 3, cb_out);
+        }
+        tile_regs_release();
+
+        cb_push_back(cb_out, num_tiles_per_cycle);
+        cb_pop_front(cb_in0, num_tiles_per_cycle);
+        cb_pop_front(cb_in1, num_tiles_per_cycle);</span>
+    }
+}
+</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+<span class="dz" data-d="1">#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_special.hpp&quot;   // Where
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp&quot;      // FillBitcast / FillInt
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp&quot;  // OptionalChainElement
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+// where(cond, true_value, false_value) — no-broadcast binary_ng path (WHERE_TTS / WHERE_TST).
+//
+// Original kernel (eltwise_where_no_bcast.cpp before migration) processed a block of
+// `num_tiles_per_cycle` tiles per outer iter, with 3 DST slots per tile:
+//   cond  -&gt; i*3       (copy from cb_in0)
+//   TTS: true tensor -&gt; i*3+1 (copy from cb_in1), false scalar -&gt; i*3+2 (fill)
+//   TST: false tensor -&gt; i*3+2 (copy from cb_in1), true scalar -&gt; i*3+1 (fill)
+//   where_tile&lt;DF&gt;(i*3, i*3+1, i*3+2, i*3); pack i*3 -&gt; cb_out
+// It waited/popped `num_tiles_per_cycle` per outer iter on each input CB (the intermediate
+// CBs are only sized for num_tiles_per_cycle tiles), looping `num_tiles` times.
+//
+// Chain mapping: EltwiseShape::tiles(num_tiles, num_tiles_per_cycle) gives outer=num_tiles,
+// block_size=num_tiles_per_cycle. The chain lane width is 3 (max DST slot + 1), so lane j
+// writes to slot base + j*3 — reproducing the original i*3 stride exactly.
+//   - cond/tensor: CopyTile&lt;..., InputLifecycle::Chunked, OperandKind::Block&gt;. Chunked
+//     waits block_size per outer iter and pops block_size per outer iter — matching the
+//     original cb_wait_front/cb_pop_front(num_tiles_per_cycle). CopyTileReconfig::Input
+//     emits copy_tile_to_dst_init_short(cb) per CB, matching the original&#x27;s two init_shorts.
+//   - scalar fill: FillInt (int dtypes) / FillBitcast (float dtypes), to the slot the
+//     tensor did NOT occupy. OptionalChainElement folds the inactive flavor to a no-op.
+//   - Where&lt;WHERE_DATA_FORMAT, D0, D1, D2, D0&gt;: the host passes WHERE_DATA_FORMAT mirroring
+//     get_sfpu_init_fn(WHERE, a_dtype) — the exact format the legacy BINARY_SFPU_OP baked in.
+//   - PackTile&lt;cb_out, OutputLifecycle::Chunked, OperandKind::Block&gt;.
+
+#ifdef FILL_WITH_VALUE_INT
+constexpr bool kIsInt = true;
+#else
+constexpr bool kIsInt = false;
+#endif
+constexpr bool kIsFloat = !kIsInt;
+
+constexpr DataFormat kWhereDF = DataFormat::WHERE_DATA_FORMAT;
+
+void kernel_main() {
+    uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(0);
+    const uint32_t scalar_value = get_arg_val&lt;uint32_t&gt;(3);
+
+    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
+
+    constexpr auto cb_cond = tt::CBIndex::c_0;
+    constexpr auto cb_tensor = tt::CBIndex::c_1;
+    constexpr auto cb_out = tt::CBIndex::c_2;
+
+<span class="dz" data-d="1">    // TTS: tensor (cb_in1) is the TRUE value -&gt; D1, scalar is the FALSE value -&gt; D2.
+    // TST: tensor (cb_in1) is the FALSE value -&gt; D2, scalar is the TRUE value -&gt; D1.
+#if WHERE_TTS
+    constexpr auto kTensorSlot = compute_kernel_lib::Dst::D1;
+    constexpr auto kFillSlot = compute_kernel_lib::Dst::D2;
+#else  // WHERE_TST
+    constexpr auto kTensorSlot = compute_kernel_lib::Dst::D2;
+    constexpr auto kFillSlot = compute_kernel_lib::Dst::D1;
+#endif</span>
+
+<span class="dz" data-d="5">    init_sfpu(cb_cond, cb_out);  // caller-owned BIG init</span>
+
+<span class="dz" data-d="2">    compute_kernel_lib::eltwise_chain(
+        compute_kernel_lib::EltwiseShape::tiles(num_tiles, num_tiles_per_cycle),
+        // cond -&gt; D0 (block read, init_short for cb_cond).</span>
+<span class="dz" data-d="3">        compute_kernel_lib::CopyTile&lt;
+            cb_cond,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::InputLifecycle::Chunked,
+            compute_kernel_lib::CopyTileReconfig::Input,
+            compute_kernel_lib::OperandKind::Block&gt;{},
+        // tensor -&gt; D1 (TTS) / D2 (TST) (block read, init_short for cb_tensor).
+        compute_kernel_lib::CopyTile&lt;
+            cb_tensor,
+            kTensorSlot,
+            compute_kernel_lib::InputLifecycle::Chunked,
+            compute_kernel_lib::CopyTileReconfig::Input,
+            compute_kernel_lib::OperandKind::Block&gt;{},</span>
+        // scalar fill -&gt; the other slot. Inactive flavor folds to a no-op.
+<span class="dz" data-d="6">        compute_kernel_lib::OptionalChainElement&lt;kIsInt, compute_kernel_lib::FillInt&lt;kWhereDF, kFillSlot&gt;&gt;{
+            scalar_value},
+        compute_kernel_lib::OptionalChainElement&lt;kIsFloat, compute_kernel_lib::FillBitcast&lt;kFillSlot&gt;&gt;{scalar_value},
+        // where(D0, D1, D2) -&gt; D0.
+        compute_kernel_lib::Where&lt;
+            kWhereDF,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::Dst::D1,
+            compute_kernel_lib::Dst::D2,
+            compute_kernel_lib::Dst::D0&gt;{},</span>
+<span class="dz" data-d="2">        compute_kernel_lib::PackTile&lt;
+            cb_out,
+            compute_kernel_lib::OutputLifecycle::Chunked,
+            compute_kernel_lib::PackTileReconfig::None&gt;{});</span>
+}
+</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; Includes &amp; compile-time Dst slot selection</b> — Replaced the <code>where.h</code>/<code>fill.h</code>/<code>eltwise_utils_*</code> raw headers with the chain headers (<code>eltwise_chain.hpp</code>, <code>eltwise_special.hpp</code>, <code>eltwise_fill.hpp</code>, <code>eltwise_optional.hpp</code>). The TTS/TST <code>#if</code> now picks <code>kTensorSlot</code>/<code>kFillSlot</code> as <code>compute_kernel_lib::Dst</code> constants instead of literal <code>i*3+1</code>/<code>i*3+2</code> indices.</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; Manual CB sync + pack -&gt; eltwise_chain / PackTile</b> — The hand-written <code>cb_wait_front</code>/<code>cb_reserve_back</code>/<code>tile_regs_*</code>/<code>pack_tile</code> loop/<code>cb_push_back</code>/<code>cb_pop_front</code> all collapse into <code>eltwise_chain(EltwiseShape::tiles(num_tiles, num_tiles_per_cycle), …, PackTile&lt;cb_out, OutputLifecycle::Chunked&gt;)</code>.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; copy_tile loops -&gt; CopyTile Chunked/Block</b> — The two <code>copy_tile_to_dst_init_short</code> + inner <code>copy_tile(cb,i,i*3+k)</code> loops became <code>CopyTile&lt;cb, Dst, InputLifecycle::Chunked, CopyTileReconfig::Input, OperandKind::Block&gt;</code>. Lane width 3 reproduces the original <code>i*3</code> stride; Chunked waits/pops <code>block_size</code> per outer iter.</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; Init: BINARY_SFPU_INIT -&gt; init_sfpu</b> — The <code>unary_op_init_common</code> + <code>BINARY_SFPU_INIT</code> macro pair becomes the caller-owned BIG init <code>init_sfpu(cb_cond, cb_out)</code>; per-iter <code>copy_tile_to_dst_init_short</code> now flows from <code>CopyTileReconfig::Input</code> inside the chain.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; FILL_LLK macros + BINARY_SFPU_OP -&gt; Optional fill + Where</b> — The <code>FILL_WITH_VALUE_FLOAT</code>/<code>FILL_WITH_VALUE_INT</code> <code>FILL_LLK</code> macros became <code>OptionalChainElement&lt;kIsInt, FillInt&gt;</code> / <code>OptionalChainElement&lt;kIsFloat, FillBitcast&gt;</code> (inactive flavor folds to no-op). <code>BINARY_SFPU_OP</code> became <code>Where&lt;kWhereDF, D0,D1,D2,D0&gt;</code>.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-eltwise_binary_ng_eltwise_where_no_bcast">
+{
+  "1": {
+    "title": "Includes & compile-time Dst slot selection",
+    "body": "Replaced the <code>where.h</code>/<code>fill.h</code>/<code>eltwise_utils_*</code> raw headers with the chain headers (<code>eltwise_chain.hpp</code>, <code>eltwise_special.hpp</code>, <code>eltwise_fill.hpp</code>, <code>eltwise_optional.hpp</code>). The TTS/TST <code>#if</code> now picks <code>kTensorSlot</code>/<code>kFillSlot</code> as <code>compute_kernel_lib::Dst</code> constants instead of literal <code>i*3+1</code>/<code>i*3+2</code> indices.",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "Manual CB sync + pack -> eltwise_chain / PackTile",
+    "body": "The hand-written <code>cb_wait_front</code>/<code>cb_reserve_back</code>/<code>tile_regs_*</code>/<code>pack_tile</code> loop/<code>cb_push_back</code>/<code>cb_pop_front</code> all collapse into <code>eltwise_chain(EltwiseShape::tiles(num_tiles, num_tiles_per_cycle), \u2026, PackTile&lt;cb_out, OutputLifecycle::Chunked&gt;)</code>.",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "copy_tile loops -> CopyTile Chunked/Block",
+    "body": "The two <code>copy_tile_to_dst_init_short</code> + inner <code>copy_tile(cb,i,i*3+k)</code> loops became <code>CopyTile&lt;cb, Dst, InputLifecycle::Chunked, CopyTileReconfig::Input, OperandKind::Block&gt;</code>. Lane width 3 reproduces the original <code>i*3</code> stride; Chunked waits/pops <code>block_size</code> per outer iter.",
+    "color": "#3f8ae0"
+  },
+  "5": {
+    "title": "Init: BINARY_SFPU_INIT -> init_sfpu",
+    "body": "The <code>unary_op_init_common</code> + <code>BINARY_SFPU_INIT</code> macro pair becomes the caller-owned BIG init <code>init_sfpu(cb_cond, cb_out)</code>; per-iter <code>copy_tile_to_dst_init_short</code> now flows from <code>CopyTileReconfig::Input</code> inside the chain.",
+    "color": "#9f4bbf"
+  },
+  "6": {
+    "title": "FILL_LLK macros + BINARY_SFPU_OP -> Optional fill + Where",
+    "body": "The <code>FILL_WITH_VALUE_FLOAT</code>/<code>FILL_WITH_VALUE_INT</code> <code>FILL_LLK</code> macros became <code>OptionalChainElement&lt;kIsInt, FillInt&gt;</code> / <code>OptionalChainElement&lt;kIsFloat, FillBitcast&gt;</code> (inactive flavor folds to no-op). <code>BINARY_SFPU_OP</code> became <code>Where&lt;kWhereDF, D0,D1,D2,D0&gt;</code>.",
+    "color": "#ff7a00"
+  }
+}
+</script>

@@ -1,0 +1,276 @@
+<section class="panel" id="panel-moreh_moreh_norm_ord_other_moreh_norm_nc_moreh_norm_nc_kernel">
+  <h1>moreh_norm_nc_kernel — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_nc/kernels/moreh_norm_nc_kernel.cpp</div>
+  <div class="meta"><b>Δ</b> +65/-105 &nbsp; <b>Decisions:</b> 5</div>
+
+  <div class="focus-toolbar" data-fkernel="moreh_moreh_norm_ord_other_moreh_norm_nc_moreh_norm_nc_kernel">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; CB ids → constexpr + headers</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; accumulator → copy / add / binary_sfpu</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; final copy/[neg]/pack → eltwise_chain</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; MINUS_INF / IS_ZERO #ifdef preserved</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; f(x) prologue → chain/unary</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+<span class="dz" data-d="1">#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+void kernel_main() {
+    int i{0};
+    const auto num_output_tiles_per_core = get_arg_val&lt;uint32_t&gt;(i++);
+    const auto num_reduced_tiles_along_dim = get_arg_val&lt;uint32_t&gt;(i++);
+
+<span class="dz" data-d="1">    std::uint8_t input_id{tt::CB::c_in0};
+    const auto cb_x = input_id++;
+    CircularBuffer cb_x_obj(cb_x);  // input
+    const auto cb_one = input_id++;
+    CircularBuffer cb_one_obj(cb_one);  // one
+
+    std::uint8_t output_id{tt::CB::c_out0};
+    const auto cb_y = output_id++;
+    CircularBuffer cb_y_obj(cb_y);  // output
+
+    std::uint8_t intermed_id{tt::CB::c_intermed0};
+    const auto cb_tmp0 = intermed_id++;
+    const auto cb_tmp1 = intermed_id++;
+
+    const auto cb_val = cb_tmp0;
+    CircularBuffer cb_val_obj(cb_val);  // f(x)
+    const auto cb_cal = cb_tmp1;
+    CircularBuffer cb_cal_obj(cb_cal);  // calculate f(x) over dimensions</span>
+
+    constexpr uint32_t onetile = 1;
+    constexpr uint32_t dst0 = 0;
+    constexpr uint32_t dst1 = 1;
+
+    binary_op_init_common(tt::CB::c_in0, tt::CB::c_in0, tt::CB::c_out0);
+
+    cb_one_obj.wait_front(onetile);  // comes from the reader
+
+    for (uint32_t outer_idx = 0; outer_idx &lt; num_output_tiles_per_core; ++outer_idx) {
+        for (uint32_t inner_idx = 0; inner_idx &lt; num_reduced_tiles_along_dim; ++inner_idx) {
+<span class="dz" data-d="6">            // x != 0
+            tile_regs_acquire();
+            cb_x_obj.wait_front(onetile);  // comes from the reader
+            cb_val_obj.reserve_back(onetile);
+
+            copy_tile_init_with_dt(cb_x);
+            copy_tile(cb_x, 0, dst0);</span>
+<span class="dz" data-d="5">#ifdef IS_ZERO
+            unary_ne_tile_init();
+            unary_ne_tile(dst0, 0);
+#else
+            abs_tile_init();
+            abs_tile(dst0);
+#endif
+
+#ifdef MINUS_INF
+            negative_tile_init();
+            negative_tile(dst0);
+#endif</span>
+<span class="dz" data-d="6">            tile_regs_commit();
+
+            tile_regs_wait();
+            pack_tile_with_dt(dst0, cb_val);
+            tile_regs_release();
+
+            cb_x_obj.pop_front(onetile);
+            cb_val_obj.push_back(onetile);</span>
+
+<span class="dz" data-d="2">            // Add(x != 0)
+            if (inner_idx == 0) {
+                tile_regs_acquire();
+                cb_val_obj.wait_front(onetile);
+                cb_cal_obj.reserve_back(onetile);
+
+                copy_tile_init_with_dt(cb_val);
+                copy_tile(cb_val, 0, dst0);
+                tile_regs_commit();
+
+                tile_regs_wait();
+                pack_tile_with_dt(dst0, cb_cal);
+                tile_regs_release();
+
+                cb_val_obj.pop_front(onetile);
+                cb_cal_obj.push_back(onetile);
+
+            } else {
+                tile_regs_acquire();
+                cb_val_obj.wait_front(onetile);
+                cb_cal_obj.wait_front(onetile);
+                cb_cal_obj.reserve_back(onetile);
+#ifdef IS_ZERO
+                add_tiles_init_with_dt(cb_val, cb_cal);
+                add_tiles(cb_val, cb_cal, 0, 0, dst0);
+#else
+                copy_tile_init_with_dt(cb_val);
+                copy_tile(cb_val, 0, dst0);
+
+                copy_tile_init_with_dt(cb_cal);
+                copy_tile(cb_cal, 0, dst1);
+
+                binary_max_tile_init();
+                binary_max_tile(dst0, dst1, dst0);
+#endif
+                tile_regs_commit();
+
+                tile_regs_wait();
+                pack_tile_with_dt(dst0, cb_cal);
+                tile_regs_release();
+
+                cb_val_obj.pop_front(onetile);
+                cb_cal_obj.pop_front(onetile);
+                cb_cal_obj.push_back(onetile);
+            }</span>
+        }
+
+<span class="dz" data-d="4">        // Compute cb_y
+        tile_regs_acquire();
+
+        cb_cal_obj.wait_front(onetile);
+        cb_y_obj.reserve_back(onetile);
+
+        copy_tile_init_with_dt(cb_cal);
+        copy_tile(cb_cal, 0, dst0);
+#ifdef MINUS_INF
+        negative_tile_init();
+        negative_tile(dst0);
+#endif
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, cb_y);
+        tile_regs_release();
+
+        cb_cal_obj.pop_front(onetile);
+        cb_y_obj.push_back(onetile);</span>
+    }
+    cb_one_obj.pop_front(onetile);
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+<span class="dz" data-d="1">#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp&quot;         // Abs, Negative
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp&quot;  // BinaryMax
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_predicates.hpp&quot;   // UnaryNe
+#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+void kernel_main() {
+    int i{0};
+    const auto num_output_tiles_per_core = get_arg_val&lt;uint32_t&gt;(i++);
+    const auto num_reduced_tiles_along_dim = get_arg_val&lt;uint32_t&gt;(i++);
+
+<span class="dz" data-d="1">    constexpr uint32_t cb_x = tt::CBIndex::c_0;    // input
+    constexpr uint32_t cb_one = tt::CBIndex::c_1;  // one
+    CircularBuffer cb_one_obj(cb_one);
+
+    constexpr uint32_t cb_y = tt::CBIndex::c_16;  // output
+
+    constexpr uint32_t cb_val = tt::CBIndex::c_24;
+    constexpr uint32_t cb_cal = tt::CBIndex::c_25;</span>
+
+    constexpr uint32_t onetile = 1;
+
+    binary_op_init_common(tt::CB::c_in0, tt::CB::c_in0, tt::CB::c_out0);
+
+    cb_one_obj.wait_front(onetile);
+
+    for (uint32_t outer_idx = 0; outer_idx &lt; num_output_tiles_per_core; ++outer_idx) {
+        for (uint32_t inner_idx = 0; inner_idx &lt; num_reduced_tiles_along_dim; ++inner_idx) {
+<span class="dz" data-d="6">            // f(x): no mask in nc path. IS_ZERO -&gt; unary_ne; default -&gt; abs.
+            // MINUS_INF additionally negates.
+            // Per-stage reconfig matches original *_with_dt calls.
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::CopyTile&lt;cb_x&gt;{},</span>
+<span class="dz" data-d="5">#ifdef IS_ZERO
+                compute_kernel_lib::UnaryNe&lt;compute_kernel_lib::Dst::D0&gt;{0u},
+#else
+                compute_kernel_lib::Abs&lt;compute_kernel_lib::Dst::D0&gt;{},
+#endif
+#ifdef MINUS_INF
+                compute_kernel_lib::Negative&lt;compute_kernel_lib::Dst::D0&gt;{},
+#endif</span>
+<span class="dz" data-d="6">                compute_kernel_lib::PackTile&lt;cb_val&gt;{});</span>
+
+<span class="dz" data-d="2">            // Accumulator over N/C dimension.
+            if (inner_idx == 0) {
+                compute_kernel_lib::copy&lt;cb_val, cb_cal&gt;(onetile);
+            } else {
+#ifdef IS_ZERO
+                compute_kernel_lib::add&lt;cb_val, cb_cal, cb_cal&gt;(onetile);
+#else
+                compute_kernel_lib::binary_sfpu&lt;compute_kernel_lib::BinaryMax&lt;&gt;, cb_val, cb_cal, cb_cal&gt;(onetile);
+#endif
+            }</span>
+        }
+
+<span class="dz" data-d="4">        // Final: copy cb_cal -&gt; [negate if MINUS_INF] -&gt; cb_y.
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::CopyTile&lt;cb_cal&gt;{},
+#ifdef MINUS_INF
+            compute_kernel_lib::Negative&lt;compute_kernel_lib::Dst::D0&gt;{},
+#endif
+            compute_kernel_lib::PackTile&lt;cb_y&gt;{});</span>
+    }
+    cb_one_obj.pop_front(onetile);
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; CB ids → constexpr; eltwise + predicate headers</b> — <code>std::uint8_t ... id++</code> CB allocation replaced by <code>constexpr uint32_t</code> ids; includes <code>eltwise_chain.hpp</code>, <code>eltwise_misc.hpp</code> (Abs/Negative/Mask), <code>eltwise_binary_sfpu.hpp</code> (BinaryMax), <code>eltwise_predicates.hpp</code> (UnaryNe).</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; Accumulator → ckl::copy seed, ckl::add or binary_sfpu&amp;lt;BinaryMax&amp;gt;</b> — idx==0 seed → <code>ckl::copy&lt;cb_val,cb_cal&gt;</code>; IS_ZERO → <code>ckl::add</code>; default running-max binary_max_tile (two-DEST) → <code>ckl::binary_sfpu&lt;BinaryMax, cb_val, cb_cal, cb_cal&gt;</code>.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; Final accumulator write → eltwise_chain</b> — copy_tile+[negative if MINUS_INF]+pack of cb_cal → cb_y became <code>eltwise_chain(CopyTile&lt;cb_cal&gt;, [Negative], PackTile&lt;cb_y&gt;)</code>.</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; MINUS_INF / IS_ZERO branches kept as in-chain #ifdef</b> — The op-selecting preprocessor branches stay, but now toggle individual chain elements (UnaryNe/Abs, Mask/MaskPosInf, Negative) instead of whole raw-LLK blocks.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; f(x) prologue → eltwise_chain (no mask)</b> — copy_tile+[abs|ne]+[neg]+pack became an <code>eltwise_chain</code> with <code>#ifdef</code>-selected middle elements (<code>UnaryNe</code> vs <code>Abs</code>, optional <code>Negative</code>); no mask in nc path.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-moreh_moreh_norm_ord_other_moreh_norm_nc_moreh_norm_nc_kernel">
+{
+  "1": {
+    "title": "CB ids \u2192 constexpr; eltwise + predicate headers",
+    "body": "<code>std::uint8_t ... id++</code> CB allocation replaced by <code>constexpr uint32_t</code> ids; includes <code>eltwise_chain.hpp</code>, <code>eltwise_misc.hpp</code> (Abs/Negative/Mask), <code>eltwise_binary_sfpu.hpp</code> (BinaryMax), <code>eltwise_predicates.hpp</code> (UnaryNe).",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "Accumulator \u2192 ckl::copy seed, ckl::add or binary_sfpu&lt;BinaryMax&gt;",
+    "body": "idx==0 seed \u2192 <code>ckl::copy&lt;cb_val,cb_cal&gt;</code>; IS_ZERO \u2192 <code>ckl::add</code>; default running-max binary_max_tile (two-DEST) \u2192 <code>ckl::binary_sfpu&lt;BinaryMax, cb_val, cb_cal, cb_cal&gt;</code>.",
+    "color": "#2ea043"
+  },
+  "4": {
+    "title": "Final accumulator write \u2192 eltwise_chain",
+    "body": "copy_tile+[negative if MINUS_INF]+pack of cb_cal \u2192 cb_y became <code>eltwise_chain(CopyTile&lt;cb_cal&gt;, [Negative], PackTile&lt;cb_y&gt;)</code>.",
+    "color": "#cf222e"
+  },
+  "5": {
+    "title": "MINUS_INF / IS_ZERO branches kept as in-chain #ifdef",
+    "body": "The op-selecting preprocessor branches stay, but now toggle individual chain elements (UnaryNe/Abs, Mask/MaskPosInf, Negative) instead of whole raw-LLK blocks.",
+    "color": "#9f4bbf"
+  },
+  "6": {
+    "title": "f(x) prologue \u2192 eltwise_chain (no mask)",
+    "body": "copy_tile+[abs|ne]+[neg]+pack became an <code>eltwise_chain</code> with <code>#ifdef</code>-selected middle elements (<code>UnaryNe</code> vs <code>Abs</code>, optional <code>Negative</code>); no mask in nc path.",
+    "color": "#ff7a00"
+  }
+}
+</script>

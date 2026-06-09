@@ -1,0 +1,145 @@
+<section class="panel" id="panel-moreh_moreh_clip_grad_norm_moreh_clip_grad_norm_step3_moreh_clip_grad_norm_step3_kernel">
+  <h1>moreh_clip_grad_norm_step3_kernel — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step3/device/kernels/moreh_clip_grad_norm_step3_kernel.cpp</div>
+  <div class="meta"><b>Δ</b> +29/-34 &nbsp; <b>Decisions:</b> 4</div>
+
+  <div class="focus-toolbar" data-fkernel="moreh_moreh_clip_grad_norm_moreh_clip_grad_norm_step3_moreh_clip_grad_norm_step3_kernel">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; CB ids→constexpr</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; mul Bulk+Scalar</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; per-tile loop removed</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; hw_startup</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+<span class="dz" data-d="1">#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+void kernel_main() {
+    int i{0};
+    const auto num_tiles = get_arg_val&lt;uint32_t&gt;(i++);
+
+<span class="dz" data-d="1">    std::uint8_t input_id{0};
+    const auto cb_x = input_id++;
+    CircularBuffer cb_x_obj(cb_x);  // input
+    const auto cb_clip_coef_clamped = input_id++;
+    CircularBuffer cb_clip_coef_clamped_obj(cb_clip_coef_clamped);  // clip_coef_clamped
+
+    std::uint8_t output_id{16};
+    const auto cb_y = output_id++;
+    CircularBuffer cb_y_obj(cb_y);  // output
+
+    constexpr uint32_t onetile = 1;
+    constexpr uint32_t dst0 = 0;</span>
+
+<span class="dz" data-d="5">    binary_op_init_common(cb_x, cb_clip_coef_clamped, cb_y);</span>
+
+<span class="dz" data-d="2">    cb_clip_coef_clamped_obj.wait_front(onetile);  // comes from the reader</span>
+
+    // Compute cb_y
+<span class="dz" data-d="3">    for (uint32_t tile_idx = 0; tile_idx &lt; num_tiles; tile_idx++) {
+        tile_regs_acquire();
+        cb_x_obj.wait_front(onetile);  // comes from the reader
+        cb_y_obj.reserve_back(onetile);
+
+        mul_tiles_bcast_scalar_init_short(cb_x, cb_clip_coef_clamped);
+        mul_tiles_bcast_scalar(cb_x, cb_clip_coef_clamped, 0, 0, dst0);
+        cb_x_obj.pop_front(onetile);
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile(dst0, cb_y);
+        cb_y_obj.push_back(onetile);
+        tile_regs_release();
+    }
+
+    cb_clip_coef_clamped_obj.pop_front(onetile);</span>
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+<span class="dz" data-d="1">#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+void kernel_main() {
+    int i{0};
+    const auto num_tiles = get_arg_val&lt;uint32_t&gt;(i++);
+
+<span class="dz" data-d="1">    constexpr uint32_t cb_x = 0;                  // input
+    constexpr uint32_t cb_clip_coef_clamped = 1;  // clip_coef_clamped (held scalar)
+    constexpr uint32_t cb_y = 16;                 // output</span>
+
+<span class="dz" data-d="5">    compute_kernel_hw_startup(cb_x, cb_clip_coef_clamped, cb_y);</span>
+
+    // cb_y = cb_x × cb_clip_coef_clamped[scalar bcast].
+    // Lifecycles:
+    //   cb_x — InputLifecycle::Streaming + Scalar OperandKind (per-iter wait+pop of one tile).
+    //   cb_clip_coef_clamped — InputLifecycle::Bulk + Scalar. `window_1d&lt;Scalar&gt;` collapses
+    //     the InputLifecycle::Bulk window to 1 tile (the old &quot;InputLifecycle::Bulk + Scalar over-waits&quot;
+    //     gotcha was fixed in 14a5a61e462), so the chain emits exactly
+    //     `cb_wait_front(1)` at the head and `cb_pop_front(1)` at the tail —
+    //     no external wait/pop needed.
+    // Reconfig: original used `mul_tiles_bcast_scalar_init_short` (no
+    // `_with_dt`) and plain `pack_tile` — no per-iter format reconfig.
+    // Chain matches with `BinaryDataFormatReconfig::None` + `PackTileReconfig::None`.
+<span class="dz" data-d="2">    compute_kernel_lib::mul&lt;
+        cb_x,
+        cb_clip_coef_clamped,
+        cb_y,
+        compute_kernel_lib::BroadcastDim::Scalar,
+        compute_kernel_lib::InputLifecycle::Streaming,
+        compute_kernel_lib::InputLifecycle::Bulk,
+        compute_kernel_lib::OutputLifecycle::Streaming,
+        compute_kernel_lib::BinaryDataFormatReconfig::None,
+        compute_kernel_lib::PackTileReconfig::None&gt;(num_tiles);</span>
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; CB ids → constexpr + includes</b> — Dynamic <code>std::uint8_t input_id++</code> CB allocation became three <code>constexpr uint32_t</code> ids; raw <code>moreh_common</code> include swapped for <code>eltwise_chain/convenience</code>.</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; Whole-op scalar-bcast mul</b> — The per-tile <code>mul_tiles_bcast_scalar</code> loop became one <code>compute_kernel_lib::mul&lt;..,BroadcastDim::Scalar, InputLifecycle::Bulk&gt;(num_tiles)</code>; <code>window_1d&lt;Scalar&gt;</code> absorbs the held-operand wait(1)/pop(1) internally.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; Per-tile loop folded into op</b> — The explicit <code>for(tile_idx)</code> + <code>tile_regs_*</code> + <code>pack_tile</code> loop is gone — the chain iterates internally over <code>num_tiles</code>.</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; binary_op_init_common → hw_startup</b> — <code>binary_op_init_common(cb_x, cb_clip_coef_clamped, cb_y)</code> replaced by <code>compute_kernel_hw_startup(...)</code>; the chain emits the per-op init itself.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-moreh_moreh_clip_grad_norm_moreh_clip_grad_norm_step3_moreh_clip_grad_norm_step3_kernel">
+{
+  "1": {
+    "title": "CB ids \u2192 constexpr + includes",
+    "body": "Dynamic <code>std::uint8_t input_id++</code> CB allocation became three <code>constexpr uint32_t</code> ids; raw <code>moreh_common</code> include swapped for <code>eltwise_chain/convenience</code>.",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "Whole-op scalar-bcast mul",
+    "body": "The per-tile <code>mul_tiles_bcast_scalar</code> loop became one <code>compute_kernel_lib::mul&lt;..,BroadcastDim::Scalar, InputLifecycle::Bulk&gt;(num_tiles)</code>; <code>window_1d&lt;Scalar&gt;</code> absorbs the held-operand wait(1)/pop(1) internally.",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "Per-tile loop folded into op",
+    "body": "The explicit <code>for(tile_idx)</code> + <code>tile_regs_*</code> + <code>pack_tile</code> loop is gone \u2014 the chain iterates internally over <code>num_tiles</code>.",
+    "color": "#3f8ae0"
+  },
+  "5": {
+    "title": "binary_op_init_common \u2192 hw_startup",
+    "body": "<code>binary_op_init_common(cb_x, cb_clip_coef_clamped, cb_y)</code> replaced by <code>compute_kernel_hw_startup(...)</code>; the chain emits the per-op init itself.",
+    "color": "#9f4bbf"
+  }
+}
+</script>

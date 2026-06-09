@@ -1,0 +1,227 @@
+<section class="panel" id="panel-moreh_moreh_mean_backward_moreh_mean_backward">
+  <h1>moreh_mean_backward — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/moreh/moreh_mean_backward/device/kernels/moreh_mean_backward.cpp</div>
+  <div class="meta"><b>Δ</b> +59/-40 &nbsp; <b>Decisions:</b> 6</div>
+
+  <div class="focus-toolbar" data-fkernel="moreh_moreh_mean_backward_moreh_mean_backward">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; lib includes</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; held in1</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; scalar mul output</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; intermed pack</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; init kept</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; Optional bcast chain</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+<span class="dz" data-d="1">#include &quot;api/compute/bcast.h&quot;
+#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/tile_move_copy.h&quot;
+#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;</span>
+
+void kernel_main() {
+    // compile-time args
+    constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);
+    constexpr bool wt_need_bcast = (get_compile_time_arg_val(1) == 1);
+    constexpr bool ht_need_bcast = (get_compile_time_arg_val(2) == 1);
+
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    CircularBuffer cb_in0_obj(cb_in0);  // input
+    constexpr auto cb_in1 = tt::CBIndex::c_1;
+    CircularBuffer cb_in1_obj(cb_in1);  // zero tile
+    constexpr auto cb_scalar = tt::CBIndex::c_2;
+    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    CircularBuffer cb_out0_obj(cb_out0);
+    constexpr auto cb_intermed0 = tt::CBIndex::c_24;
+    CircularBuffer cb_intermed0_obj(cb_intermed0);
+    constexpr uint32_t onetile = 1;
+    constexpr uint32_t dst0 = 0;
+
+<span class="dz" data-d="5">    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);</span>
+<span class="dz" data-d="2">    cb_in1_obj.wait_front(onetile);</span>
+    for (uint32_t i = 0; i &lt; num_output_tiles; i++) {
+<span class="dz" data-d="6">        tile_regs_acquire();
+        cb_in0_obj.wait_front(onetile);
+        if (ht_need_bcast &amp;&amp; wt_need_bcast) {
+            add_bcast_scalar_init_short_with_dt(cb_in1, cb_in0);
+            add_tiles_bcast_scalar(cb_in1, cb_in0, 0, 0, dst0);
+        } else if (ht_need_bcast) {
+            add_bcast_rows_init_short_with_dt(cb_in1, cb_in0);
+            add_tiles_bcast_rows(cb_in1, cb_in0, 0, 0, dst0);
+        } else if (wt_need_bcast) {
+            add_bcast_cols_init_short_with_dt(cb_in1, cb_in0);
+            add_tiles_bcast_cols(cb_in1, cb_in0, 0, 0, dst0);
+        } else {
+            copy_tile_init_with_dt(cb_in0);
+            copy_tile(cb_in0, 0, dst0);
+        }</span>
+        tile_regs_commit();
+
+<span class="dz" data-d="4">        cb_intermed0_obj.reserve_back(onetile);
+
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, cb_intermed0);
+        tile_regs_release();
+
+        cb_intermed0_obj.push_back(onetile);
+        cb_in0_obj.pop_front(onetile);</span>
+
+<span class="dz" data-d="3">        // output * (1 / number_of_elements)
+        tile_regs_acquire();
+        cb_intermed0_obj.wait_front(onetile);
+        mul_tiles_bcast_scalar_init_short_with_dt(cb_intermed0, cb_scalar);
+        mul_tiles_bcast&lt;BroadcastType::SCALAR&gt;(cb_intermed0, cb_scalar, 0, 0, 0);
+        tile_regs_commit();
+
+        cb_out0_obj.reserve_back(onetile);
+
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, cb_out0);
+        tile_regs_release();
+
+        cb_out0_obj.push_back(onetile);
+        cb_intermed0_obj.pop_front(onetile);</span>
+    }
+    cb_in1_obj.pop_front(onetile);
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include &lt;cstdint&gt;
+
+<span class="dz" data-d="1">#include &quot;api/compute/bcast.h&quot;
+#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/tile_move_copy.h&quot;
+#include &quot;ttnn/kernel/compute/moreh_common.hpp&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp&quot;</span>
+
+void kernel_main() {
+    // compile-time args
+    constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);
+    constexpr bool wt_need_bcast = (get_compile_time_arg_val(1) == 1);
+    constexpr bool ht_need_bcast = (get_compile_time_arg_val(2) == 1);
+
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    CircularBuffer cb_in0_obj(cb_in0);  // input
+    constexpr auto cb_in1 = tt::CBIndex::c_1;
+    CircularBuffer cb_in1_obj(cb_in1);  // zero tile
+    constexpr auto cb_scalar = tt::CBIndex::c_2;
+    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    CircularBuffer cb_out0_obj(cb_out0);
+    constexpr auto cb_intermed0 = tt::CBIndex::c_24;
+    CircularBuffer cb_intermed0_obj(cb_intermed0);
+    constexpr uint32_t onetile = 1;
+    constexpr uint32_t dst0 = 0;
+
+<span class="dz" data-d="5">    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);</span>
+<span class="dz" data-d="2">    cb_in1_obj.wait_front(onetile);</span>
+
+    // Stage A: cb_intermed0 = add_bcast&lt;dim&gt;(cb_in1, cb_in0) (or plain copy if no bcast).
+    //   bcast dim chosen at compile time from (ht_need_bcast, wt_need_bcast).
+    //   cb_in1 InputLifecycle::CallerManaged + Scalar (held outside the loop).
+    //   cb_in0 InputLifecycle::Streaming + Scalar (chain owns wait+pop).
+    //   cb_intermed0 OutputLifecycle::Streaming + Scalar.
+    // Reconfig: *_init_short_with_dt + pack_tile_with_dt -&gt; Input + Output.
+    //
+    // Four (ht_need_bcast × wt_need_bcast) cases collapse into one chain via two
+    // mutually-exclusive OptionalChainElement gates: BinaryFpu&lt;Add, bcast_dim&gt; runs
+    // when any bcast is needed (Scalar / Row / Col); CopyTile runs when neither is
+    // needed (faster than add(zero, x) for the no-bcast path).
+<span class="dz" data-d="6">    constexpr bool has_bcast = ht_need_bcast || wt_need_bcast;
+    constexpr auto bcast_dim = (ht_need_bcast &amp;&amp; wt_need_bcast) ? compute_kernel_lib::BroadcastDim::Scalar
+                               : ht_need_bcast                  ? compute_kernel_lib::BroadcastDim::Row
+                               : wt_need_bcast                  ? compute_kernel_lib::BroadcastDim::Col
+                                                                : compute_kernel_lib::BroadcastDim::None;</span>
+
+    for (uint32_t i = 0; i &lt; num_output_tiles; i++) {
+<span class="dz" data-d="6">        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::OptionalChainElement&lt;
+                has_bcast,
+                compute_kernel_lib::BinaryFpu&lt;
+                    cb_in1,
+                    cb_in0,
+                    compute_kernel_lib::BinaryFpuOp::Add,
+                    bcast_dim,
+                    compute_kernel_lib::InputLifecycle::CallerManaged&gt;&gt;{},
+            compute_kernel_lib::OptionalChainElement&lt;!has_bcast, compute_kernel_lib::CopyTile&lt;cb_in0&gt;&gt;{},
+            compute_kernel_lib::PackTile&lt;cb_intermed0&gt;{});</span>
+
+<span class="dz" data-d="3">        // Stage B: cb_out0 = cb_intermed0 * cb_scalar (SCALAR bcast).
+        compute_kernel_lib::mul&lt;
+            cb_intermed0,
+            cb_scalar,
+            cb_out0,
+            compute_kernel_lib::BroadcastDim::Scalar,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::InputLifecycle::CallerManaged&gt;(onetile);</span>
+    }
+    cb_in1_obj.pop_front(onetile);
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; kernel_lib includes</b> — Added <code>eltwise_chain.hpp</code>, <code>eltwise_convenience.hpp</code> and <code>eltwise_optional.hpp</code> (for <code>OptionalChainElement</code>) to the raw bcast headers.</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; Pre-waited held zero tile</b> — <code>cb_in1</code> (the zero tile) is waited once at the top and read as an <code>InputLifecycle::CallerManaged</code> Scalar operand inside the bcast-add chain — no per-iter re-wait.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; Scalar-bcast mul output</b> — The <code>mul_tiles_bcast_scalar_init_short_with_dt</code> output block became <code>compute_kernel_lib::mul&lt;cb_intermed0,cb_scalar,cb_out0,BroadcastDim::Scalar,..,CallerManaged&gt;</code> (absorbs the terminal <code>PackTile&lt;cb_intermed0&gt;</code> from the prior chain).</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; Intermediate pack absorbed</b> — The separate <code>pack_tile_with_dt(dst0, cb_intermed0)</code> + reserve/push of the raw block is now the bcast-add chain's terminal <code>PackTile&lt;cb_intermed0&gt;</code>.</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; binary_op_init_common kept</b> — The startup <code>binary_op_init_common(c_0, c_1, c_16)</code> is preserved as-is ahead of the per-iter chains.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; 4-branch bcast → OptionalChainElement</b> — The runtime if/else over (ht,wt) <code>add_bcast_*</code>/<code>copy_tile</code> became a compile-time <code>bcast_dim</code> selection driving one chain with two mutually-exclusive <code>OptionalChainElement</code>s: <code>BinaryFpu&lt;Add,bcast_dim&gt;</code> when any bcast is needed, else <code>CopyTile&lt;cb_in0&gt;</code>.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-moreh_moreh_mean_backward_moreh_mean_backward">
+{
+  "1": {
+    "title": "kernel_lib includes",
+    "body": "Added <code>eltwise_chain.hpp</code>, <code>eltwise_convenience.hpp</code> and <code>eltwise_optional.hpp</code> (for <code>OptionalChainElement</code>) to the raw bcast headers.",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "Pre-waited held zero tile",
+    "body": "<code>cb_in1</code> (the zero tile) is waited once at the top and read as an <code>InputLifecycle::CallerManaged</code> Scalar operand inside the bcast-add chain \u2014 no per-iter re-wait.",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "Scalar-bcast mul output",
+    "body": "The <code>mul_tiles_bcast_scalar_init_short_with_dt</code> output block became <code>compute_kernel_lib::mul&lt;cb_intermed0,cb_scalar,cb_out0,BroadcastDim::Scalar,..,CallerManaged&gt;</code> (absorbs the terminal <code>PackTile&lt;cb_intermed0&gt;</code> from the prior chain).",
+    "color": "#3f8ae0"
+  },
+  "4": {
+    "title": "Intermediate pack absorbed",
+    "body": "The separate <code>pack_tile_with_dt(dst0, cb_intermed0)</code> + reserve/push of the raw block is now the bcast-add chain's terminal <code>PackTile&lt;cb_intermed0&gt;</code>.",
+    "color": "#cf222e"
+  },
+  "5": {
+    "title": "binary_op_init_common kept",
+    "body": "The startup <code>binary_op_init_common(c_0, c_1, c_16)</code> is preserved as-is ahead of the per-iter chains.",
+    "color": "#9f4bbf"
+  },
+  "6": {
+    "title": "4-branch bcast \u2192 OptionalChainElement",
+    "body": "The runtime if/else over (ht,wt) <code>add_bcast_*</code>/<code>copy_tile</code> became a compile-time <code>bcast_dim</code> selection driving one chain with two mutually-exclusive <code>OptionalChainElement</code>s: <code>BinaryFpu&lt;Add,bcast_dim&gt;</code> when any bcast is needed, else <code>CopyTile&lt;cb_in0&gt;</code>.",
+    "color": "#ff7a00"
+  }
+}
+</script>

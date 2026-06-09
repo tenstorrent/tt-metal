@@ -1,0 +1,366 @@
+<section class="panel" id="panel-experimental_transformer_rotary_embedding_rotary_embedding_single_tile">
+  <h1>rotary_embedding_single_tile — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/compute/rotary_embedding_single_tile.cpp</div>
+  <div class="meta"><b>Δ</b> +37/-61 &nbsp; <b>Decisions:</b> 6</div>
+
+  <div class="focus-toolbar" data-fkernel="experimental_transformer_rotary_embedding_rotary_embedding_single_tile">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; include + using</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; DECODE vs non-DECODE selectors</button>
+    <button data-focus-id="3" style="--fbtn-border:#3f8ae0;"><span class="dot"></span>3 &middot; drop binary_op_init_common</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; sin_interim = rotated * sin</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; cos_interim = in * cos</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; out = cos_interim + sin_interim</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Compute kernel for ttnn.experimental.rotary_embedding when head_dim == TILE_WIDTH
+// (single tile along the W dimension). Uses an in-L1 transformation matrix to do
+// HF-style rotate_half via matmul_tiles, since the inter-tile half-swap used for
+// Wt &gt;= 2 cannot express a sub-tile rotation.
+
+#include &lt;cstdint&gt;
+
+#include &quot;api/compute/common.h&quot;
+#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/bcast.h&quot;
+#include &quot;api/compute/matmul.h&quot;
+#include &quot;api/compute/tilize.h&quot;
+#include &quot;api/compute/untilize.h&quot;
+#include &quot;ttnn/kernel_lib/tilize_helpers.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp&quot;
+
+ALWI void ACQ() { acquire_dst(); }
+ALWI void REL() { release_dst(); }
+
+template &lt;uint32_t in0_cb, uint32_t out_cb&gt;
+ALWI void UNTILIZE_ONE_TILE() {
+    compute_kernel_lib::untilize&lt;
+        1,
+        in0_cb,
+        out_cb,
+        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
+        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure&gt;(1);
+}
+
+template &lt;uint32_t in0_cb, uint32_t out_cb&gt;
+ALWI void TILIZE_ONE_TILE(uint32_t sync_cb) {
+    cb_wait_front(sync_cb, 1);
+    compute_kernel_lib::tilize&lt;
+        1,
+        in0_cb,
+        out_cb,
+        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure&gt;(1);
+    cb_pop_front(sync_cb, 1);
+}
+
+void kernel_main() {
+    constexpr uint32_t onetile = 1;
+
+    constexpr uint32_t in_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t cos_cb = get_compile_time_arg_val(1);
+    constexpr uint32_t sin_cb = get_compile_time_arg_val(2);
+    constexpr uint32_t trans_mat_cb = get_compile_time_arg_val(3);
+    constexpr uint32_t rotated_in_interm_cb = get_compile_time_arg_val(4);
+    constexpr uint32_t cos_interm_cb = get_compile_time_arg_val(5);
+    constexpr uint32_t sin_interm_cb = get_compile_time_arg_val(6);
+    constexpr uint32_t out_cb = get_compile_time_arg_val(7);
+    constexpr uint32_t num_rows = get_compile_time_arg_val(8);
+
+<span class="dz" data-d="2">    uint32_t updated_cos_cb = cos_cb;
+    uint32_t updated_sin_cb = sin_cb;</span>
+
+#ifdef DECODE_MODE
+    constexpr uint32_t untilized_cos_cb = get_compile_time_arg_val(9);
+    constexpr uint32_t untilized_cos_sync_cb = get_compile_time_arg_val(10);
+    constexpr uint32_t untilized_sin_cb = get_compile_time_arg_val(11);
+    constexpr uint32_t untilized_sin_sync_cb = get_compile_time_arg_val(12);
+    constexpr uint32_t retilized_cos_cb = get_compile_time_arg_val(13);
+    constexpr uint32_t retilized_sin_cb = get_compile_time_arg_val(14);
+
+    binary_op_init_common(sin_cb, sin_cb, untilized_sin_cb);
+    UNTILIZE_ONE_TILE&lt;sin_cb, untilized_sin_cb&gt;();
+    UNTILIZE_ONE_TILE&lt;cos_cb, untilized_cos_cb&gt;();
+    reconfig_data_format_srca(cos_cb, untilized_sin_cb);
+    pack_reconfig_data_format(untilized_cos_cb, retilized_sin_cb);
+    TILIZE_ONE_TILE&lt;untilized_sin_cb, retilized_sin_cb&gt;(untilized_sin_sync_cb);
+    TILIZE_ONE_TILE&lt;untilized_cos_cb, retilized_cos_cb&gt;(untilized_cos_sync_cb);
+    updated_cos_cb = retilized_cos_cb;
+    updated_sin_cb = retilized_sin_cb;
+#endif
+
+    cb_wait_front(trans_mat_cb, onetile);
+<span class="dz" data-d="3">    mm_init(in_cb, trans_mat_cb, rotated_in_interm_cb);
+    // Binary ops (mul, add) below need their own init path; without this the
+    // math-thread register routing stays in matmul mode and mixed-precision</span>
+    // binaries (e.g. bf16 x bfp8) produce incorrect results.
+    binary_op_init_common(rotated_in_interm_cb, updated_sin_cb, sin_interm_cb);
+
+    for (uint32_t i = 0; i &lt; num_rows; ++i) {
+        // rotated = in @ trans_mat  (HF rotate_half on a single 32x32 tile)
+        cb_wait_front(in_cb, onetile);
+        cb_reserve_back(rotated_in_interm_cb, onetile);
+        reconfig_data_format(in_cb, trans_mat_cb);
+        pack_reconfig_data_format(rotated_in_interm_cb);
+<span class="dz" data-d="4">        mm_init_short(in_cb, trans_mat_cb);
+        ACQ();
+        matmul_tiles(in_cb, trans_mat_cb, 0, 0, 0);
+        pack_tile(0, rotated_in_interm_cb);
+        REL();
+        cb_push_back(rotated_in_interm_cb, onetile);
+
+        // sin_interim = rotated * sin
+        cb_wait_front(rotated_in_interm_cb, onetile);
+        cb_wait_front(updated_sin_cb, onetile);
+        cb_reserve_back(sin_interm_cb, onetile);
+        reconfig_data_format(rotated_in_interm_cb, updated_sin_cb);
+        pack_reconfig_data_format(sin_interm_cb);
+        ACQ();
+#ifdef DECODE_MODE
+        mul_bcast_rows_init_short(rotated_in_interm_cb, updated_sin_cb);
+        mul_tiles_bcast_rows(rotated_in_interm_cb, updated_sin_cb, 0, 0, 0);
+#else
+        mul_tiles_init(rotated_in_interm_cb, updated_sin_cb);
+        mul_tiles(rotated_in_interm_cb, updated_sin_cb, 0, 0, 0);
+#endif
+        pack_tile(0, sin_interm_cb);
+        REL();
+        cb_push_back(sin_interm_cb, onetile);</span>
+        cb_pop_front(rotated_in_interm_cb, onetile);
+<span class="dz" data-d="5">#ifndef DECODE_MODE
+        cb_pop_front(updated_sin_cb, onetile);
+#endif
+
+        // cos_interim = in * cos
+        cb_wait_front(updated_cos_cb, onetile);
+        cb_reserve_back(cos_interm_cb, onetile);
+        reconfig_data_format(in_cb, updated_cos_cb);
+        pack_reconfig_data_format(cos_interm_cb);
+        ACQ();
+#ifdef DECODE_MODE
+        mul_bcast_rows_init_short(in_cb, updated_cos_cb);
+        mul_tiles_bcast_rows(in_cb, updated_cos_cb, 0, 0, 0);
+#else
+        mul_tiles_init(in_cb, updated_cos_cb);
+        mul_tiles(in_cb, updated_cos_cb, 0, 0, 0);
+#endif
+        pack_tile(0, cos_interm_cb);
+        REL();
+        cb_push_back(cos_interm_cb, onetile);
+        cb_pop_front(in_cb, onetile);</span>
+#ifndef DECODE_MODE
+<span class="dz" data-d="6">        cb_pop_front(updated_cos_cb, onetile);
+#endif
+
+        // out = cos_interim + sin_interim
+        cb_wait_front(cos_interm_cb, onetile);
+        cb_wait_front(sin_interm_cb, onetile);
+        cb_reserve_back(out_cb, onetile);
+        reconfig_data_format(cos_interm_cb, sin_interm_cb);
+        pack_reconfig_data_format(out_cb);
+        add_tiles_init(cos_interm_cb, sin_interm_cb);
+        ACQ();
+        add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);
+        pack_tile(0, out_cb);
+        REL();
+        cb_push_back(out_cb, onetile);
+        cb_pop_front(cos_interm_cb, onetile);</span>
+        cb_pop_front(sin_interm_cb, onetile);
+    }
+}</span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Compute kernel for ttnn.experimental.rotary_embedding when head_dim == TILE_WIDTH
+// (single tile along the W dimension). Uses an in-L1 transformation matrix to do
+// HF-style rotate_half via matmul_tiles, since the inter-tile half-swap used for
+// Wt &gt;= 2 cannot express a sub-tile rotation.
+
+#include &lt;cstdint&gt;
+
+#include &quot;api/compute/common.h&quot;
+#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/bcast.h&quot;
+#include &quot;api/compute/matmul.h&quot;
+#include &quot;api/compute/tilize.h&quot;
+#include &quot;api/compute/untilize.h&quot;
+#include &quot;ttnn/kernel_lib/tilize_helpers.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp&quot;
+<span class="dz" data-d="1">#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp&quot;</span>
+
+ALWI void ACQ() { acquire_dst(); }
+ALWI void REL() { release_dst(); }
+
+template &lt;uint32_t in0_cb, uint32_t out_cb&gt;
+ALWI void UNTILIZE_ONE_TILE() {
+    compute_kernel_lib::untilize&lt;
+        1,
+        in0_cb,
+        out_cb,
+        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
+        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure&gt;(1);
+}
+
+template &lt;uint32_t in0_cb, uint32_t out_cb&gt;
+ALWI void TILIZE_ONE_TILE(uint32_t sync_cb) {
+    cb_wait_front(sync_cb, 1);
+    compute_kernel_lib::tilize&lt;
+        1,
+        in0_cb,
+        out_cb,
+        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure&gt;(1);
+    cb_pop_front(sync_cb, 1);
+}
+
+void kernel_main() {
+    using namespace compute_kernel_lib;
+    constexpr uint32_t onetile = 1;
+
+    constexpr uint32_t in_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t cos_cb = get_compile_time_arg_val(1);
+    constexpr uint32_t sin_cb = get_compile_time_arg_val(2);
+    constexpr uint32_t trans_mat_cb = get_compile_time_arg_val(3);
+    constexpr uint32_t rotated_in_interm_cb = get_compile_time_arg_val(4);
+    constexpr uint32_t cos_interm_cb = get_compile_time_arg_val(5);
+    constexpr uint32_t sin_interm_cb = get_compile_time_arg_val(6);
+    constexpr uint32_t out_cb = get_compile_time_arg_val(7);
+    constexpr uint32_t num_rows = get_compile_time_arg_val(8);
+
+#ifdef DECODE_MODE
+    constexpr uint32_t untilized_cos_cb = get_compile_time_arg_val(9);
+    constexpr uint32_t untilized_cos_sync_cb = get_compile_time_arg_val(10);
+    constexpr uint32_t untilized_sin_cb = get_compile_time_arg_val(11);
+    constexpr uint32_t untilized_sin_sync_cb = get_compile_time_arg_val(12);
+    constexpr uint32_t retilized_cos_cb = get_compile_time_arg_val(13);
+    constexpr uint32_t retilized_sin_cb = get_compile_time_arg_val(14);
+
+    binary_op_init_common(sin_cb, sin_cb, untilized_sin_cb);
+    UNTILIZE_ONE_TILE&lt;sin_cb, untilized_sin_cb&gt;();
+    UNTILIZE_ONE_TILE&lt;cos_cb, untilized_cos_cb&gt;();
+    reconfig_data_format_srca(cos_cb, untilized_sin_cb);
+    pack_reconfig_data_format(untilized_cos_cb, retilized_sin_cb);
+    TILIZE_ONE_TILE&lt;untilized_sin_cb, retilized_sin_cb&gt;(untilized_sin_sync_cb);
+    TILIZE_ONE_TILE&lt;untilized_cos_cb, retilized_cos_cb&gt;(untilized_cos_sync_cb);
+<span class="dz" data-d="2">    constexpr uint32_t updated_cos_cb = retilized_cos_cb;
+    constexpr uint32_t updated_sin_cb = retilized_sin_cb;
+    // DECODE: sin/cos held across all iters, bcast across rows.
+    constexpr auto trig_bcast = BroadcastDim::Row;
+    constexpr auto trig_lifecycle = InputLifecycle::HeldStream;
+#else
+    constexpr uint32_t updated_cos_cb = cos_cb;
+    constexpr uint32_t updated_sin_cb = sin_cb;
+    // Non-DECODE: sin/cos streamed per-iter, full-tile mul.
+    constexpr auto trig_bcast = BroadcastDim::None;
+    constexpr auto trig_lifecycle = InputLifecycle::Streaming;
+#endif</span>
+
+    cb_wait_front(trans_mat_cb, onetile);
+    mm_init(in_cb, trans_mat_cb, rotated_in_interm_cb);
+
+    for (uint32_t i = 0; i &lt; num_rows; ++i) {
+        // rotated = in @ trans_mat  (HF rotate_half on a single 32x32 tile)
+        cb_wait_front(in_cb, onetile);
+        cb_reserve_back(rotated_in_interm_cb, onetile);
+        reconfig_data_format(in_cb, trans_mat_cb);
+        pack_reconfig_data_format(rotated_in_interm_cb);
+        mm_init_short(in_cb, trans_mat_cb);
+        ACQ();
+        matmul_tiles(in_cb, trans_mat_cb, 0, 0, 0);
+        pack_tile(0, rotated_in_interm_cb);
+        REL();
+        cb_push_back(rotated_in_interm_cb, onetile);
+
+<span class="dz" data-d="3">        // sin_interim = rotated * sin
+        // DECODE_MODE / non-DECODE collapse via constexpr selectors above —
+        // the chain&#x27;s per-element init programs the eltwise-binary math state
+        // out of the matmul mode set by mm_init / mm_init_short above, so no
+        // explicit binary_op_init_common is needed here.</span>
+<span class="dz" data-d="4">        compute_kernel_lib::mul&lt;
+            rotated_in_interm_cb,
+            updated_sin_cb,
+            sin_interm_cb,
+            trig_bcast,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            trig_lifecycle&gt;(onetile);</span>
+
+<span class="dz" data-d="5">        // cos_interim = in * cos
+        compute_kernel_lib::mul&lt;
+            in_cb,
+            updated_cos_cb,
+            cos_interm_cb,
+            trig_bcast,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            trig_lifecycle&gt;(onetile);</span>
+
+<span class="dz" data-d="6">        // out = cos_interim + sin_interim
+        compute_kernel_lib::add&lt;cos_interm_cb, sin_interm_cb, out_cb&gt;(onetile);</span>
+    }
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; include + using</b> — Added <code>eltwise_chain.hpp</code> / <code>eltwise_convenience.hpp</code> and a <code>using namespace compute_kernel_lib</code>; CB ids stay constexpr compile-time args.</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; DECODE vs non-DECODE selectors</b> — Collapsed the <code>#ifdef DECODE_MODE</code> branching inside the loop into compile-time selectors: <code>trig_bcast</code> (<code>BroadcastDim::Row</code> vs <code>None</code>) and <code>trig_lifecycle</code> (<code>HeldStream</code> vs <code>Streaming</code>), plus <code>constexpr</code> updated_cos/sin CBs.</li>
+      <li><span class="swatch" style="background:rgba(63,138,224,0.45)"></span><b>3 &middot; drop binary_op_init_common</b> — The second <code>binary_op_init_common(rotated_in_interm_cb, …)</code> that re-armed math out of matmul mode was removed — the chain's per-element init reprograms the eltwise-binary math state itself.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; sin_interim = rotated * sin</b> — Raw <code>reconfig/pack_reconfig + mul_tiles[_bcast_rows] + pack_tile</code> block became <code>mul&lt;rotated_in_interm_cb, updated_sin_cb, sin_interm_cb, trig_bcast, Streaming, trig_lifecycle&gt;</code>; chain owns the reconfig and wait/pop.</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; cos_interim = in * cos</b> — Same: raw mul block replaced by <code>mul&lt;in_cb, updated_cos_cb, cos_interm_cb, trig_bcast, Streaming, trig_lifecycle&gt;</code> — in_cb streamed, cos held/streamed per the same selectors.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; out = cos_interim + sin_interim</b> — Raw <code>add_tiles_init + add_tiles + pack_tile</code> became <code>add&lt;cos_interm_cb, sin_interm_cb, out_cb&gt;</code> (default Streaming lifecycles).</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-experimental_transformer_rotary_embedding_rotary_embedding_single_tile">
+{
+  "1": {
+    "title": "include + using",
+    "body": "Added <code>eltwise_chain.hpp</code> / <code>eltwise_convenience.hpp</code> and a <code>using namespace compute_kernel_lib</code>; CB ids stay constexpr compile-time args.",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "DECODE vs non-DECODE selectors",
+    "body": "Collapsed the <code>#ifdef DECODE_MODE</code> branching inside the loop into compile-time selectors: <code>trig_bcast</code> (<code>BroadcastDim::Row</code> vs <code>None</code>) and <code>trig_lifecycle</code> (<code>HeldStream</code> vs <code>Streaming</code>), plus <code>constexpr</code> updated_cos/sin CBs.",
+    "color": "#2ea043"
+  },
+  "3": {
+    "title": "drop binary_op_init_common",
+    "body": "The second <code>binary_op_init_common(rotated_in_interm_cb, \u2026)</code> that re-armed math out of matmul mode was removed \u2014 the chain's per-element init reprograms the eltwise-binary math state itself.",
+    "color": "#3f8ae0"
+  },
+  "4": {
+    "title": "sin_interim = rotated * sin",
+    "body": "Raw <code>reconfig/pack_reconfig + mul_tiles[_bcast_rows] + pack_tile</code> block became <code>mul&lt;rotated_in_interm_cb, updated_sin_cb, sin_interm_cb, trig_bcast, Streaming, trig_lifecycle&gt;</code>; chain owns the reconfig and wait/pop.",
+    "color": "#cf222e"
+  },
+  "5": {
+    "title": "cos_interim = in * cos",
+    "body": "Same: raw mul block replaced by <code>mul&lt;in_cb, updated_cos_cb, cos_interm_cb, trig_bcast, Streaming, trig_lifecycle&gt;</code> \u2014 in_cb streamed, cos held/streamed per the same selectors.",
+    "color": "#9f4bbf"
+  },
+  "6": {
+    "title": "out = cos_interim + sin_interim",
+    "body": "Raw <code>add_tiles_init + add_tiles + pack_tile</code> became <code>add&lt;cos_interm_cb, sin_interm_cb, out_cb&gt;</code> (default Streaming lifecycles).",
+    "color": "#ff7a00"
+  }
+}
+</script>

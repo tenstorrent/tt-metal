@@ -1,0 +1,208 @@
+<section class="panel" id="panel-eltwise_unary_where_tss_kernel">
+  <h1>where_tss_kernel — <span class="badge badge-full">FULL</span></h1>
+  <div class="path">ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/where_tss_kernel.cpp</div>
+  <div class="meta"><b>Δ</b> +71/-42 &nbsp; <b>Decisions:</b> 5</div>
+
+  <div class="focus-toolbar" data-fkernel="eltwise_unary_where_tss_kernel">
+    <span class="focus-label">Focus on decision:</span>
+    <button data-focus-id="1" style="--fbtn-border:#d6a000;"><span class="dot"></span>1 &middot; constexpr DF + selectors</button>
+    <button data-focus-id="2" style="--fbtn-border:#2ea043;"><span class="dot"></span>2 &middot; Streaming single read</button>
+    <button data-focus-id="4" style="--fbtn-border:#cf222e;"><span class="dot"></span>4 &middot; Where DF element</button>
+    <button data-focus-id="5" style="--fbtn-border:#9f4bbf;"><span class="dot"></span>5 &middot; manual loop → eltwise_chain</button>
+    <button data-focus-id="6" style="--fbtn-border:#ff7a00;"><span class="dot"></span>6 &middot; SFPU_OP_CHAIN_0 macro removed + fills</button>
+    <button class="show-all">Show all</button>
+  </div>
+
+  <div class="side-by-side">
+    <div class="code-col">
+      <h3>Before (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+<span class="dz" data-d="1">#include &lt;cstdint&gt;
+#include &quot;api/compute/common.h&quot;
+#include &quot;api/compute/eltwise_binary.h&quot;
+#include &quot;api/compute/eltwise_binary_sfpu.h&quot;
+#include &quot;api/compute/tile_move_copy.h&quot;
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;api/compute/eltwise_unary/sfpu_split_includes.h&quot;
+#include &quot;api/compute/eltwise_unary/fill.h&quot;
+#include &quot;api/dataflow/circular_buffer.h&quot;
+</span>
+void kernel_main() {
+    uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(0);
+    const uint32_t packed_scalar1 = get_arg_val&lt;uint32_t&gt;(1);
+    const uint32_t packed_scalar2 = get_arg_val&lt;uint32_t&gt;(2);
+    const auto true_value = reinterpret_cast&lt;const float*&gt;(&amp;packed_scalar1);
+    const auto false_value = reinterpret_cast&lt;const float*&gt;(&amp;packed_scalar2);
+
+    constexpr auto cb_input = tt::CBIndex::c_0;
+    constexpr auto cb_output = tt::CBIndex::c_2;
+
+    CircularBuffer cb_in(cb_input);
+    CircularBuffer cb_out(cb_output);
+
+<span class="dz" data-d="5">    init_sfpu(cb_input, cb_output);
+    for (uint32_t i = 0; i &lt; num_tiles; ++i) {
+        cb_in.wait_front(1);
+        cb_out.reserve_back(1);</span>
+<span class="dz" data-d="2">        tile_regs_acquire();
+        copy_tile_to_dst_init_short(cb_input);
+        copy_tile(cb_input, 0, 0);</span>
+
+<span class="dz" data-d="6">        fill_tile_init();
+#if defined(INP_INT32) || defined(INP_UINT32)
+        fill_tile_int&lt;DataFormat::Int32&gt;(1, packed_scalar1);
+        fill_tile_int&lt;DataFormat::Int32&gt;(2, packed_scalar2);
+#endif
+#if defined(INP_FLOAT) || defined(INP_FLOAT32)
+        fill_tile(1, *true_value);
+        fill_tile(2, *false_value);
+#endif
+#ifndef SFPU_OP_CHAIN_0
+#error &quot;where_tss_kernel requires SFPU_OP_CHAIN_0 to be defined via get_block_defines&quot;
+#endif
+        SFPU_OP_CHAIN_0
+        tile_regs_commit();
+        tile_regs_wait();
+</span>
+<span class="dz" data-d="5">        pack_tile(0, cb_output);
+        tile_regs_release();
+
+        cb_in.pop_front(1);
+        cb_out.push_back(1);
+    }
+}</span></span></pre>
+    </div>
+    <div class="code-col">
+      <h3>After (full kernel)</h3>
+      <pre class="code"><span class="code-body">// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+<span class="dz" data-d="1">#include &lt;cstdint&gt;
+#include &quot;api/compute/eltwise_unary/eltwise_unary.h&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp&quot;
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_special.hpp&quot;   // Where
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp&quot;      // FillBitcast / FillInt
+#include &quot;ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp&quot;  // OptionalChainElement
+#include &quot;api/dataflow/circular_buffer.h&quot;
+
+// where(cond, true_value, false_value): copy cond -&gt; D0, fill true -&gt; D1,
+// fill false -&gt; D2, Where(D0,D1,D2 -&gt; D0), pack D0 -&gt; out. The factory used to
+// inject this as the SFPU_OP_CHAIN_0 macro, but for WHERE_TSS the op-chain is
+// always exactly [WHERE_TSS] (where_tile&lt;DF&gt;(0,1,2,0)), so the macro is removed
+// and the explicit `Where` chain element expresses it directly.
+//
+// `Where`&#x27;s DataFormat template arg matches unary_op_utils.cpp:538-545 exactly:
+//   INT32 -&gt; Int32, UINT32 -&gt; UInt32, FLOAT32 -&gt; Float32, else -&gt; Float16_b.
+// The fills follow the original kernel: int dtypes fill via fill_tile_int&lt;Int32&gt;
+// (Int32 for BOTH int32 and uint32), float dtypes fill the float whose bits are
+// the packed scalar arg — FillBitcast(bits) == the original fill_tile(*float*),
+// without the strict-aliasing type-pun.
+#if defined(INP_INT32) || defined(INP_UINT32)
+constexpr bool kIsInt = true;
+#else
+constexpr bool kIsInt = false;
+#endif
+constexpr bool kIsFloat = !kIsInt;
+
+#if defined(INP_INT32)
+constexpr DataFormat kWhereDF = DataFormat::Int32;
+#elif defined(INP_UINT32)
+constexpr DataFormat kWhereDF = DataFormat::UInt32;
+#elif defined(INP_FLOAT32)
+constexpr DataFormat kWhereDF = DataFormat::Float32;
+#else
+constexpr DataFormat kWhereDF = DataFormat::Float16_b;
+#endif</span>
+
+void kernel_main() {
+    uint32_t num_tiles = get_arg_val&lt;uint32_t&gt;(0);
+    const uint32_t packed_scalar1 = get_arg_val&lt;uint32_t&gt;(1);  // true_value (bits)
+    const uint32_t packed_scalar2 = get_arg_val&lt;uint32_t&gt;(2);  // false_value (bits)
+
+    constexpr auto cb_input = tt::CBIndex::c_0;
+    constexpr auto cb_output = tt::CBIndex::c_2;
+
+    init_sfpu(cb_input, cb_output);  // caller-owned BIG init
+
+<span class="dz" data-d="5">    compute_kernel_lib::eltwise_chain(
+        num_tiles,</span>
+<span class="dz" data-d="2">        // cond -&gt; D0. Single CB read: Streaming (wait 1 / pop 1 per iter), Scalar index.
+        compute_kernel_lib::CopyTile&lt;
+            cb_input,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::CopyTileReconfig::None&gt;{},</span>
+<span class="dz" data-d="6">        // true_value -&gt; D1 (inactive flavor folds to a FillTileTag no-op).
+        compute_kernel_lib::
+            OptionalChainElement&lt;kIsInt, compute_kernel_lib::FillInt&lt;DataFormat::Int32, compute_kernel_lib::Dst::D1&gt;&gt;{
+                packed_scalar1},
+        compute_kernel_lib::
+            OptionalChainElement&lt;kIsFloat, compute_kernel_lib::FillBitcast&lt;compute_kernel_lib::Dst::D1&gt;&gt;{
+                packed_scalar1},
+        // false_value -&gt; D2.
+        compute_kernel_lib::
+            OptionalChainElement&lt;kIsInt, compute_kernel_lib::FillInt&lt;DataFormat::Int32, compute_kernel_lib::Dst::D2&gt;&gt;{
+                packed_scalar2},
+        compute_kernel_lib::
+            OptionalChainElement&lt;kIsFloat, compute_kernel_lib::FillBitcast&lt;compute_kernel_lib::Dst::D2&gt;&gt;{
+                packed_scalar2},</span>
+<span class="dz" data-d="4">        // where(D0, D1, D2) -&gt; D0.
+        compute_kernel_lib::Where&lt;
+            kWhereDF,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::Dst::D1,
+            compute_kernel_lib::Dst::D2,
+            compute_kernel_lib::Dst::D0&gt;{},</span>
+<span class="dz" data-d="5">        compute_kernel_lib::PackTile&lt;
+            cb_output,
+            compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::PackTileReconfig::None&gt;{});</span>
+}</span></pre>
+    </div>
+  </div>
+
+  <div class="legend">
+    <h4>Decisions — hover code for tooltip, click a focus button to isolate one decision</h4>
+    <ul>
+      <li><span class="swatch" style="background:rgba(214,160,0,0.45)"></span><b>1 &middot; Compile-time DataFormat + int/float selectors</b> — <code>kIsInt/kIsFloat</code> and <code>kWhereDF</code> constexprs encode the dtype fork that was previously #ifdef'd; <code>kWhereDF</code> mirrors unary_op_utils (INT32→Int32, UINT32→UInt32, FLOAT32→Float32, else Float16_b).</li>
+      <li><span class="swatch" style="background:rgba(46,160,67,0.45)"></span><b>2 &middot; CopyTile Streaming (cond)</b> — cond <code>copy_tile_to_dst_init_short</code>+<code>copy_tile(cb_input,0,0)</code> → <code>CopyTile&lt;cb_input, D0, Streaming&gt;</code> — single wait/pop per iter.</li>
+      <li><span class="swatch" style="background:rgba(207,34,46,0.45)"></span><b>4 &middot; where_tile&lt;DF&gt; → Where&lt;kWhereDF,…&gt;</b> — The injected <code>where_tile&lt;DF&gt;(0,1,2,0)</code> (compute body) becomes an explicit <code>Where&lt;kWhereDF, D0, D1, D2, D0&gt;</code> element.</li>
+      <li><span class="swatch" style="background:rgba(159,75,191,0.45)"></span><b>5 &middot; tile_regs loop → eltwise_chain</b> — The <code>for</code> loop and manual pack collapse into one chain; <code>init_sfpu</code> stays as the caller-owned big init.</li>
+      <li><span class="swatch" style="background:rgba(255,122,0,0.45)"></span><b>6 &middot; Drop SFPU_OP_CHAIN_0 macro; fills via OptionalChainElement</b> — The <code>#error</code>-guarded <code>SFPU_OP_CHAIN_0</code> macro injection is removed (WHERE_TSS chain is always exactly [WHERE_TSS]). The two <code>fill_tile_int&lt;Int32&gt;</code> / <code>fill_tile(*float*)</code> #ifdef pairs become <code>OptionalChainElement&lt;kIsInt, FillInt&gt;</code> / <code>OptionalChainElement&lt;kIsFloat, FillBitcast&gt;</code> — <code>FillBitcast(bits)</code> replaces the strict-aliasing type-pun.</li>
+    </ul>
+  </div>
+</section>
+
+<script type="application/json" id="dec-eltwise_unary_where_tss_kernel">
+{
+  "1": {
+    "title": "Compile-time DataFormat + int/float selectors",
+    "body": "<code>kIsInt/kIsFloat</code> and <code>kWhereDF</code> constexprs encode the dtype fork that was previously #ifdef'd; <code>kWhereDF</code> mirrors unary_op_utils (INT32\u2192Int32, UINT32\u2192UInt32, FLOAT32\u2192Float32, else Float16_b).",
+    "color": "#d6a000"
+  },
+  "2": {
+    "title": "CopyTile Streaming (cond)",
+    "body": "cond <code>copy_tile_to_dst_init_short</code>+<code>copy_tile(cb_input,0,0)</code> \u2192 <code>CopyTile&lt;cb_input, D0, Streaming&gt;</code> \u2014 single wait/pop per iter.",
+    "color": "#2ea043"
+  },
+  "4": {
+    "title": "where_tile<DF> \u2192 Where<kWhereDF,\u2026>",
+    "body": "The injected <code>where_tile&lt;DF&gt;(0,1,2,0)</code> (compute body) becomes an explicit <code>Where&lt;kWhereDF, D0, D1, D2, D0&gt;</code> element.",
+    "color": "#cf222e"
+  },
+  "5": {
+    "title": "tile_regs loop \u2192 eltwise_chain",
+    "body": "The <code>for</code> loop and manual pack collapse into one chain; <code>init_sfpu</code> stays as the caller-owned big init.",
+    "color": "#9f4bbf"
+  },
+  "6": {
+    "title": "Drop SFPU_OP_CHAIN_0 macro; fills via OptionalChainElement",
+    "body": "The <code>#error</code>-guarded <code>SFPU_OP_CHAIN_0</code> macro injection is removed (WHERE_TSS chain is always exactly [WHERE_TSS]). The two <code>fill_tile_int&lt;Int32&gt;</code> / <code>fill_tile(*float*)</code> #ifdef pairs become <code>OptionalChainElement&lt;kIsInt, FillInt&gt;</code> / <code>OptionalChainElement&lt;kIsFloat, FillBitcast&gt;</code> \u2014 <code>FillBitcast(bits)</code> replaces the strict-aliasing type-pun.",
+    "color": "#ff7a00"
+  }
+}
+</script>
