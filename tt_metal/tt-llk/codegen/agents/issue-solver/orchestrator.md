@@ -80,6 +80,36 @@ Inside the issue-solver and its subagents:
   No other agent performs git writes.
 - Commit/PR decisions are returned to the caller via the final report.
 
+## Cost Accounting
+
+Token + cost tracking reuses the shared `codegen/scripts/session_cost.py`
+engine (the same one Quasar kernel-gen uses). It reads Claude Code's session
+transcript — the main jsonl plus every subagent jsonl — and sums the **real
+per-type usage** (`input`, `output`, `cache_read`, `cache_creation`) with
+per-model pricing, then atomically patches `run.json`'s `tokens` object and the
+top-level `cost_usd`. Don't hand-parse the Agent `<usage>` trailer; it only
+gives a single blended total, whereas the transcript has the real split.
+
+Capture the session once in Step 0 (see Step 0), then **refresh after every
+agent returns** (analyzer, arch_lookup, writer, tester, perf, fix_tests) and
+once more in Step 6 before returning, so the final spend lands in `run.json`:
+
+```bash
+python codegen/scripts/session_cost.py \
+  --since "$START_TIME" --log-dir "$LOG_DIR" \
+  ${SESSION_ID:+--session-id "$SESSION_ID" --project-cwd "$PROJECT_CWD"} \
+  >/dev/null 2>&1 || true
+```
+
+Pass the run's values explicitly (rather than relying on the shared
+`/tmp/codegen_run_state.sh` fallback in `refresh_cost.sh`) so concurrent
+issue-solver runs never patch each other's `run.json`. Do not pass `--model` —
+the tier is derived per message from the transcript. The dollar figure is an
+estimate (same quality as the `/cost` slash command); the per-type token counts
+are the detailed analysis. For batch runs a `cli_output.json` dropped into
+`LOG_DIR` later supersedes it with the authoritative total. If Anthropic
+changes prices, update `PRICING` in `session_cost.py`.
+
 ## Step 0: Setup
 
 Load the minimal arch profile:
@@ -193,6 +223,21 @@ python codegen/scripts/run_json_writer.py init \
   --pipeline-steps "$PIPELINE_STEPS" \
   --issue "$ISSUE_JSON"
 ```
+
+Capture the Claude Code session identity now, while this is still the most
+recently started session (later, `session_cost.py`'s PID/CWD fallback could
+pick the wrong one). Pass it explicitly on every cost refresh — see Cost
+Accounting:
+
+```bash
+SESSION_PAIR=$(python codegen/scripts/session_cost.py --print-session 2>/dev/null || echo "")
+SESSION_ID=$(echo "$SESSION_PAIR" | awk '{print $1}')
+PROJECT_CWD=$(echo "$SESSION_PAIR" | cut -d' ' -f2-)
+```
+
+Then take the first cost snapshot (`session_cost.py --since "$START_TIME"
+--log-dir "$LOG_DIR" ...`; see Cost Accounting) so `run.json` carries spend
+from the start.
 
 ## Step 1: Analyze
 
@@ -550,6 +595,10 @@ Issue-Solver Result:
     test: ...                     # perf module + -k filter, or "n/a"
     baseline_vs_current: ...      # "<base> -> <cur> cycles (median <pct>%, worst <pct>%)", or "not measured"
     retries_used: ${PERF_RETRIES}/${MAX_PERF_RETRIES}
+  cost:
+    tokens: ...                   # "in=<n> out=<n> cache_read=<n> cache_creation=<n>" (tokens.*)
+    total_tokens: ...             # tokens.total (input + output)
+    est_usd: ...                  # tokens.cost_usd (estimate), or "n/a"
   create_local_branch_requested: ${CREATE_LOCAL_BRANCH}
   create_pr_requested: ${CREATE_PR}
   changed_files:
@@ -560,3 +609,7 @@ Issue-Solver Result:
 Populate the `perf:` block from the `perf` object in `run.json` (written by the
 perf-tester). When the perf stage was gated out, report `verdict: not_measured`
 and `test: n/a`.
+
+Populate the `cost:` block from the `tokens` object in `run.json` (written by
+the `session_cost.py` refreshes). If the session could not be discovered,
+report `est_usd: n/a` and token totals as `0`.

@@ -82,7 +82,35 @@ Inside the issue-solver and its subagents:
 
 - Allowed: `git status`, `git diff`, `git show`, `git log`, `git rev-parse`.
 - Not allowed: `git push`, PR creation, branch deletion, destructive reset/restore.
+- One scoped exception: the perf-tester (`perf-tester.md` Step 3) may use a
+  `git stash push` / `git stash pop` pair only to revert the fix while it
+  re-measures the perf baseline, and must always pop it back.
 - Commit/PR decisions are returned to the caller via the final report.
+
+## Cost Accounting
+
+Identical to single-arch (`orchestrator.md` → Cost Accounting). Capture the
+session once in Step 0, then refresh after every agent returns using the shared
+`session_cost.py` engine — it sums the real per-type usage (`input`, `output`,
+`cache_read`, `cache_creation`) from the session transcript and patches
+`run.json`'s `tokens` + `cost_usd`:
+
+```bash
+# Step 0, once: capture the session identity.
+SESSION_PAIR=$(python codegen/scripts/session_cost.py --print-session 2>/dev/null || echo "")
+SESSION_ID=$(echo "$SESSION_PAIR" | awk '{print $1}')
+PROJECT_CWD=$(echo "$SESSION_PAIR" | cut -d' ' -f2-)
+
+# Every step boundary: refresh (pass values explicitly; no shared /tmp state).
+python codegen/scripts/session_cost.py \
+  --since "$START_TIME" --log-dir "$LOG_DIR" \
+  ${SESSION_ID:+--session-id "$SESSION_ID" --project-cwd "$PROJECT_CWD"} \
+  >/dev/null 2>&1 || true
+```
+
+There is one run and one session across all arches, so the transcript-summed
+`tokens` cover the whole multi-arch run. Don't pass `--model` (derived per
+message). `cost_usd` is an estimate; per-type token counts are the detail.
 
 ## Step 0: Setup One Run
 
@@ -603,7 +631,15 @@ Multi-Arch Issue-Solver Result:
       tests_passed: N
       perf_verdict: improved|neutral|regressed|not_improved|no_baseline|not_measured
       obstacle: ...
+  cost:
+    tokens: ...                   # "in=<n> out=<n> cache_read=<n> cache_creation=<n>"
+    total_tokens: ...             # tokens.total (input + output, whole run, all arches)
+    est_usd: ...                  # tokens.cost_usd (estimate), or "n/a"
   changed_files:
     ...
   obstacle: ...
 ```
+
+Populate the `cost:` block from the `tokens` object in `run.json` (written by
+the `session_cost.py` refreshes); `est_usd: n/a` if the session could not be
+discovered.
