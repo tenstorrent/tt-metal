@@ -67,7 +67,6 @@ uint32_t compute_geometry(
             num_pages,
             elements_per_page,
             aligned_page_size,
-            logical_last_dim,
             pages_per_bank,
             grid_w,
             lshape[1],      // logical_N: N-dimension for (b,n,h,c) index decomposition

@@ -41,18 +41,17 @@ void kernel_main() {
     // Pages are rows (or batches of the last dimension). TensorAccessor handles
     // any underlying buffer layout (interleaved or sharded) transparently.
     uint32_t num_pages = get_arg_val<uint32_t>(4);
-    // Physical elements per page (== logical_last_dim; padded_shape==logical_shape is
-    // enforced by validate_on_program_cache_miss, so this is safe to use as both the
-    // iteration bound and the column-index stride).
+    // Physical elements per page; padded_shape==logical_shape is enforced by
+    // validate_on_program_cache_miss, so this is safe to use as both the
+    // iteration bound and the column-index stride.
     uint32_t last_dim = get_arg_val<uint32_t>(5);
     uint32_t aligned_page_size = get_arg_val<uint32_t>(6);
-    uint32_t logical_last_dim = get_arg_val<uint32_t>(7);
-    uint32_t pages_per_bank = get_arg_val<uint32_t>(8);
-    uint32_t grid_w = get_arg_val<uint32_t>(9);
-    uint32_t logical_N = get_arg_val<uint32_t>(10);
-    uint32_t logical_H = get_arg_val<uint32_t>(11);
-    uint32_t grid_h = get_arg_val<uint32_t>(12);
-    uint32_t is_col_major = get_arg_val<uint32_t>(13);
+    uint32_t pages_per_bank = get_arg_val<uint32_t>(7);
+    uint32_t grid_w = get_arg_val<uint32_t>(8);
+    uint32_t logical_N = get_arg_val<uint32_t>(9);
+    uint32_t logical_H = get_arg_val<uint32_t>(10);
+    uint32_t grid_h = get_arg_val<uint32_t>(11);
+    uint32_t is_col_major = get_arg_val<uint32_t>(12);
 
     // TensorAccessor computes a page's NOC address as: bank_base + bank_page_id * page_size_bytes.
     // For INTERLEAVED buffers the allocator pads each page to aligned_page_size, so the stride
