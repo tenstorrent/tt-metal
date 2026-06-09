@@ -39,7 +39,7 @@ followed by activation upload.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import torch
 import ttnn
@@ -566,3 +566,308 @@ class Pi0_5OptionCVisionSliceSplit:
     def last_chip_submesh(self):
         """Where build_prefix_hidden's output lives — the projector chip."""
         return self.micro_submeshes[self.projector_chip_idx]
+
+
+# ---------------------------------------------------------------------------- #
+# Parent-mesh vision slice (D2D SigLIP).                                        #
+#                                                                              #
+# Same logical mapping as Pi0_5OptionCVisionSliceSplit (4+4+4+4+3+3+3+2 split   #
+# of SigLIP-27 across 8 vision chips + co-located mm_projector), but weights   #
+# and activations live on the VISION SUBMESH as sharded tensors, and chunk-    #
+# to-chunk transitions use ttnn.point_to_point on the vision submesh's fabric  #
+# (validated by tests/test_vision_submesh_p2p_smoke.py). 6 same-row hops + 1  #
+# diagonal (chip 3 → 4, (0,3) → (1,0)) handled by send_shard_via_p2p_multihop. #
+#                                                                              #
+# Weights are uploaded chunk-LOCAL via chunk-position-stacked sharded tensors  #
+# (one tensor per per-chunk-layer-position per weight category). Per chip      #
+# L1 cost matches the existing single-chip-submesh budget (~140 MB busy chip). #
+# ---------------------------------------------------------------------------- #
+
+
+def _siglip_layer_key(layer_idx: int, suffix: str) -> str:
+    """Build a SigLIP weight key for an absolute layer index."""
+    return f"vision_model.encoder.layers.{layer_idx}.{suffix}"
+
+
+def _siglip_layer_key_alt(layer_idx: int, suffix: str) -> str:
+    """Legacy SigLIP weight key (no vision_model. prefix)."""
+    return f"encoder.layers.{layer_idx}.{suffix}"
+
+
+def _fetch_layer_weight(
+    full_weights: Dict[str, torch.Tensor],
+    layer_idx: int,
+    suffix: str,
+) -> Optional[torch.Tensor]:
+    """Return one SigLIP layer's weight tensor, trying both prefix conventions."""
+    k = _siglip_layer_key(layer_idx, suffix)
+    if k in full_weights:
+        return full_weights[k]
+    k_alt = _siglip_layer_key_alt(layer_idx, suffix)
+    if k_alt in full_weights:
+        return full_weights[k_alt]
+    return None
+
+
+def _load_siglip_weights_chunk_stacked_sharded(
+    full_weights: Dict[str, torch.Tensor],
+    layers_per_chip: List[int],
+    vision_submesh,
+    dtype=ttnn.bfloat8_b,
+) -> Dict[str, List[Optional["ttnn.Tensor"]]]:
+    """Upload all SigLIP layer weights as vision-submesh sharded tensors.
+
+    For each per-chunk layer position `j ∈ [0, max(layers_per_chip))` and each
+    weight category, build one vision-submesh stacked tensor where chunk i's
+    slot holds the weights for layer (sum(layers_per_chip[:i]) + j). When a
+    chunk has fewer than `j+1` layers, its slot is zeros and the forward will
+    skip the matmul at that position (no live data, no garbage propagates).
+
+    Per-chip L1 cost = (max layers per chunk) × (per-layer weights) ≈ 140 MB
+    on the busiest chip — matches the existing single-chip-submesh budget.
+
+    Returns a dict keyed by weight name (e.g. "q_proj_w", "fc1_w",
+    "layer_norm1_w") → list of `max_layers_per_chunk` parent-mesh tensors,
+    indexed by per-chunk position. Entry j is None if no chunk has a layer
+    at position j (impossible with current splits but defensive).
+    """
+    num_chunks = len(layers_per_chip)
+    max_layers_per_chunk = max(layers_per_chip) if layers_per_chip else 0
+    num_devices = vision_submesh.get_num_devices()
+    if num_devices != num_chunks:
+        raise ValueError(
+            f"vision_submesh device count {num_devices} must equal " f"num_chunks {num_chunks} (one chunk per chip)"
+        )
+
+    # Build the absolute layer range for each chunk.
+    chunk_layer_ranges: List[Tuple[int, int]] = []
+    lo = 0
+    for n in layers_per_chip:
+        chunk_layer_ranges.append((lo, lo + n))
+        lo += n
+
+    matmul_suffixes_attn = [
+        "self_attn.q_proj.weight",
+        "self_attn.k_proj.weight",
+        "self_attn.v_proj.weight",
+        "self_attn.out_proj.weight",
+    ]
+    matmul_suffixes_mlp = [
+        "mlp.fc1.weight",
+        "mlp.fc2.weight",
+    ]
+    bias_suffixes = [
+        "self_attn.q_proj.bias",
+        "self_attn.k_proj.bias",
+        "self_attn.v_proj.bias",
+        "self_attn.out_proj.bias",
+        "mlp.fc1.bias",
+        "mlp.fc2.bias",
+        "layer_norm1.bias",
+        "layer_norm2.bias",
+    ]
+    ln_weight_suffixes = [
+        "layer_norm1.weight",
+        "layer_norm2.weight",
+    ]
+
+    def _build_position_tensor(
+        suffix: str,
+        position: int,
+        weight_dtype,
+        is_matmul: bool,
+        is_norm: bool = False,
+    ) -> Optional["ttnn.Tensor"]:
+        """Build the chunk-position-`j` vision-submesh sharded tensor for `suffix`."""
+        # Discover a reference shape from the first chunk that has a layer at this position.
+        ref: Optional[torch.Tensor] = None
+        for chunk_idx in range(num_chunks):
+            cl_lo, cl_hi = chunk_layer_ranges[chunk_idx]
+            if cl_lo + position < cl_hi:
+                global_layer = cl_lo + position
+                ref = _fetch_layer_weight(full_weights, global_layer, suffix)
+                if ref is not None:
+                    break
+        if ref is None:
+            return None
+        ref_t = ref.T.contiguous() if is_matmul else ref
+        target_shape = tuple(ref_t.shape)
+        stacked = torch.zeros((num_chunks,) + target_shape, dtype=ref_t.dtype)
+        for chunk_idx in range(num_chunks):
+            cl_lo, cl_hi = chunk_layer_ranges[chunk_idx]
+            if cl_lo + position >= cl_hi:
+                continue  # this chunk has no layer at this position; leave zeros
+            global_layer = cl_lo + position
+            w = _fetch_layer_weight(full_weights, global_layer, suffix)
+            if w is None:
+                continue
+            if is_matmul:
+                w = w.T.contiguous()
+            stacked[chunk_idx] = w
+        return ttnn.from_torch(
+            stacked,
+            dtype=weight_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=vision_submesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(vision_submesh, dim=0),
+        )
+
+    out: Dict[str, List[Optional["ttnn.Tensor"]]] = {}
+
+    for s in matmul_suffixes_attn + matmul_suffixes_mlp:
+        key = s.replace(".weight", "").replace("self_attn.", "").replace("mlp.", "")
+        per_pos: List[Optional["ttnn.Tensor"]] = []
+        for j in range(max_layers_per_chunk):
+            t = _build_position_tensor(s, j, dtype, is_matmul=True)
+            per_pos.append(t)
+        out[key] = per_pos
+
+    # LN weights at bf16 (matches the existing slice's precision policy).
+    for s in ln_weight_suffixes:
+        key = s.replace(".weight", "").replace(".", "_")
+        per_pos = []
+        for j in range(max_layers_per_chunk):
+            t = _build_position_tensor(s, j, ttnn.bfloat16, is_matmul=False, is_norm=True)
+            per_pos.append(t)
+        out[key + "_w"] = per_pos
+
+    # Biases (1D). Keep at bf8_b for matmul biases, bf16 for LN biases.
+    for s in bias_suffixes:
+        key = s.replace(".bias", "_b").replace("self_attn.", "").replace("mlp.", "").replace(".", "_")
+        per_pos = []
+        for j in range(max_layers_per_chunk):
+            # Probe for reference shape.
+            ref: Optional[torch.Tensor] = None
+            for chunk_idx in range(num_chunks):
+                cl_lo, cl_hi = chunk_layer_ranges[chunk_idx]
+                if cl_lo + j < cl_hi:
+                    ref = _fetch_layer_weight(full_weights, cl_lo + j, s)
+                    if ref is not None:
+                        break
+            if ref is None:
+                per_pos.append(None)
+                continue
+            target_shape = (1, ref.shape[0])  # tile-pad to [1, dim]
+            stacked = torch.zeros((num_chunks,) + target_shape, dtype=ref.dtype)
+            for chunk_idx in range(num_chunks):
+                cl_lo, cl_hi = chunk_layer_ranges[chunk_idx]
+                if cl_lo + j >= cl_hi:
+                    continue
+                w = _fetch_layer_weight(full_weights, cl_lo + j, s)
+                if w is None:
+                    continue
+                stacked[chunk_idx] = w.reshape(1, -1)
+            b_dtype = ttnn.bfloat16 if "layer_norm" in s else ttnn.bfloat8_b
+            t = ttnn.from_torch(
+                stacked,
+                dtype=b_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=vision_submesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensorToMesh(vision_submesh, dim=0),
+            )
+            per_pos.append(t)
+        out[key] = per_pos
+
+    return out
+
+
+class Pi0_5OptionCVisionSliceSplitParent:
+    """8-chip vision-submesh SigLIP slice — D2D variant of Pi0_5OptionCVisionSliceSplit.
+
+    STATUS: scaffolding. Weight upload + per-chunk coord helpers; the
+    inline forward (patch_embed + per-chunk encoder layers + P2P advance +
+    post_ln + mm_projector) is the next sub-commit.
+
+    Same logical placement as the host-bounce variant:
+        chip (0,0): patch_embed + pos_embed + SigLIP layers 0-3
+        chip (0,1): SigLIP layers 4-7
+        chip (0,2): SigLIP layers 8-11
+        chip (0,3): SigLIP layers 12-15
+        chip (1,0): SigLIP layers 16-18                  ← diagonal P2P entry
+        chip (1,1): SigLIP layers 19-21
+        chip (1,2): SigLIP layers 22-24
+        chip (1,3): SigLIP layers 25-26 + post_ln + mm_projector
+
+    But all weights live as chunk-stacked sharded tensors on the vision
+    submesh (8 chips), with each chip's slot holding ONLY its chunk's
+    weights — per-chip L1 cost matches the existing budget (~140 MB busy
+    chip). Activations flow chip-to-chip via send_shard_via_p2p (single
+    hop for same-row transitions, send_shard_via_p2p_multihop for the
+    one diagonal transition (0,3) → (1,0)).
+
+    Args:
+        config:           full PaliGemma config (uses .siglip_config).
+        weights:          full categorized weights dict.
+        vision_submesh:   the 2x4 vision submesh (carved from the parent).
+        layers_per_chip:  default (4, 4, 4, 4, 3, 3, 3, 2).
+        siglip_depth:     default 27.
+
+    NOT YET IMPLEMENTED:
+        - patch_embed forward on chip (0,0)
+        - per-chunk encoder forward on parent-mesh tensors
+        - P2P transitions
+        - post_ln + mm_projector on chip (1,3)
+        - mm_projector wiring
+    """
+
+    def __init__(
+        self,
+        config: PaliGemmaConfig,
+        weights: Dict[str, Dict[str, torch.Tensor]],
+        vision_submesh,
+        layers_per_chip: Optional[List[int]] = None,
+        siglip_depth: int = 27,
+    ) -> None:
+        if layers_per_chip is None:
+            layers_per_chip = [4, 4, 4, 4, 3, 3, 3, 2]
+        if sum(layers_per_chip) != siglip_depth:
+            raise ValueError(f"sum(layers_per_chip) ({sum(layers_per_chip)}) must equal siglip_depth ({siglip_depth})")
+        n_chunks = len(layers_per_chip)
+        if vision_submesh.get_num_devices() != n_chunks:
+            raise ValueError(
+                f"vision_submesh device count {vision_submesh.get_num_devices()} must equal "
+                f"num_chunks {n_chunks} (one chunk per chip)"
+            )
+
+        self.config = config
+        self.vision_submesh = vision_submesh
+        self.layers_per_chip = layers_per_chip
+        self.siglip_depth = siglip_depth
+        self.num_chunks = n_chunks
+        self.max_layers_per_chunk = max(layers_per_chip)
+        self.projector_chunk_idx = n_chunks - 1
+        # Vision submesh shape (rows, cols); reads from the submesh handle.
+        # ttnn submeshes expose .shape as (rows, cols).
+        self.submesh_shape = (vision_submesh.shape[0], vision_submesh.shape[1])
+
+        # Upload all SigLIP layer weights as chunk-stacked sharded tensors.
+        self.weights_on_vision = _load_siglip_weights_chunk_stacked_sharded(
+            weights["vlm_vision"],
+            layers_per_chip,
+            vision_submesh,
+        )
+
+    def chunk_coord(self, chunk_idx: int) -> Tuple[int, int]:
+        """Vision-submesh coord (row, col) of the given chunk's chip."""
+        cols = self.submesh_shape[1]
+        return (chunk_idx // cols, chunk_idx % cols)
+
+    def chunk_for_layer(self, global_layer_idx: int) -> int:
+        """Map a global SigLIP layer index → owning chunk index."""
+        lo = 0
+        for chunk_idx, n in enumerate(self.layers_per_chip):
+            if global_layer_idx < lo + n:
+                return chunk_idx
+            lo += n
+        raise ValueError(f"global_layer_idx {global_layer_idx} out of range for siglip_depth {self.siglip_depth}")
+
+    def position_in_chunk(self, global_layer_idx: int) -> int:
+        """Position of `global_layer_idx` within its owning chunk (0-indexed)."""
+        lo = 0
+        for n in self.layers_per_chip:
+            if global_layer_idx < lo + n:
+                return global_layer_idx - lo
+            lo += n
+        raise ValueError(f"global_layer_idx {global_layer_idx} out of range for siglip_depth {self.siglip_depth}")
