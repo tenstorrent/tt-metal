@@ -52,9 +52,14 @@ def make_indices(num_tokens, num_experts, device):
     """Create indices tensor with random global expert IDs."""
     # Each token routes to num_experts random experts out of NUM_ROUTED_EXPERTS
     indices = torch.stack([torch.randperm(NUM_ROUTED_EXPERTS)[:num_experts] for _ in range(num_tokens)])
-    indices = indices.unsqueeze(0).to(torch.int32)  # [1, num_tokens, num_experts]
+    indices = indices.unsqueeze(0).to(torch.int16)  # [1, num_tokens, num_experts]
+    # Kernel requires UINT16 indices (post_combine_reduce_device_operation.cpp:97).
     return indices, ttnn.from_torch(
-        indices, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        indices,
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
 
