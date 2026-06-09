@@ -236,23 +236,23 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
 }
 
 /**
- * @brief Update the source zero-substitution flag after a data-format reconfig.
+ * @brief Re-establish the Src zero-substitution flag after a data-format reconfig.
  *
- * The zero-src flag causes the hardware to substitute 0 for values whose bit pattern matches
- * -0.0f in bfloat16 (e.g. 0x8000). configure_unpack_AB disables the flag whenever either dest
- * format is uint16, because 0x8000 is a valid uint16 value (32768) that must not be zeroed. The
- * same adjustment is needed every time formats are reconfigured.
+ * configure_unpack_AB disables the flag (writes 1) whenever an operand converts to UInt16, so that
+ * 16-bit integer values with a zero low byte are not flushed to 0; see
+ * @ref requires_disabled_src_zero_flag for the full rationale (tt-llk #960). reconfig_data_format
+ * switches operands without re-running hw_configure, so the flag must be refreshed here too.
  *
  * @param srca_dst_format: Destination data format of operand A after reconfig.
  * @param srcb_dst_format: Destination data format of operand B after reconfig.
- * @note Only disables the flag (writes 1) when transitioning TO uint16; it never re-enables it
- *       (writes 0) for non-uint16 transitions, since other LLK ops (e.g. reduce init with
+ * @note Only disables the flag (writes 1) when reconfiguring TO UInt16; it never re-enables it
+ *       (writes 0) for non-UInt16 reconfigs, since other LLK ops (e.g. reduce init with
  *       enforce_fp32_accumulation) may have disabled it for unrelated reasons (MOVB2D hi16/lo16),
  *       and overwriting that state breaks float32 accumulation.
  */
 inline void _llk_unpack_reconfig_zero_src_flag_(const std::uint32_t srca_dst_format, const std::uint32_t srcb_dst_format)
 {
-    if ((srca_dst_format == static_cast<std::uint32_t>(DataFormat::UInt16)) || (srcb_dst_format == static_cast<std::uint32_t>(DataFormat::UInt16)))
+    if (requires_disabled_src_zero_flag(srca_dst_format, srcb_dst_format))
     {
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
     }
