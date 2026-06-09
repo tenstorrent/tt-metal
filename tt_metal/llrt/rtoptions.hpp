@@ -395,6 +395,8 @@ class RunTimeOptions {
     TargetDevice runtime_target_device_ = TargetDevice::Silicon;
     // Timeout duration for operations in seconds (0 = off)
     std::atomic<float> timeout_duration_for_operations = 0.0f;
+    // Simulator cycle-count timeout (0 = disabled)
+    uint64_t sim_cycle_timeout = 0;
     // Command to run when a dispatch timeout occurs
     std::string dispatch_timeout_command_to_execute;
     // Dispatch kernel progress update period in milliseconds (default 100ms)
@@ -1014,6 +1016,7 @@ public:
     void set_timeout_duration_for_operations(std::chrono::duration<float> timeout) {
         timeout_duration_for_operations.store(timeout.count(), std::memory_order_relaxed);
     }
+    uint64_t get_sim_cycle_timeout() const { return sim_cycle_timeout; }
     std::string get_dispatch_timeout_command_to_execute() const { return dispatch_timeout_command_to_execute; }
     uint32_t get_dispatch_progress_update_ms() const { return dispatch_progress_update_ms; }
 
