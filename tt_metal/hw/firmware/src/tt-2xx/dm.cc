@@ -111,7 +111,6 @@ void device_setup() {
     // clock gating
     set_deassert_addresses();
     setup_isr_csrs();
-    // wzeromem
     // invalidate_l1_cache
     // clear_destination_registers
     // set_default_sfpu_constant_register_state

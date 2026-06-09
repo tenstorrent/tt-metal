@@ -20,17 +20,10 @@
 template <uint32_t tile_bytes>
 void fill_tile(uint32_t cb_id, uint32_t tile_id, uint32_t val) {
     if (val == 0) {
-        constexpr uint32_t num_zeros_reads = tile_bytes / MEM_ZEROS_SIZE;
-        uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-        uint32_t write_addr = get_write_ptr(cb_id) + tile_id * tile_bytes;
-        volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
-
-        // Fill tile with zeros
-        for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-            noc_async_read(zeros_noc_addr, write_addr, MEM_ZEROS_SIZE);
-            write_addr += MEM_ZEROS_SIZE;
-        }
-        noc_async_read_barrier();
+        Noc noc;
+        CircularBuffer cb(cb_id);
+        noc.async_write_zeros(cb, tile_bytes, {.offset_bytes = tile_id * tile_bytes});
+        noc.write_zeros_l1_barrier();
     } else {
         // Fill 2 uint16 datums in each writes to optimize for performance
         volatile tt_l1_ptr uint32_t* ptr =

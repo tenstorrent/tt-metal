@@ -68,8 +68,6 @@
 #define MEM_TRISC2_KERNEL_SIZE (24 * 1024)
 #define MEM_TRISC3_KERNEL_SIZE (24 * 1024)
 
-#define MEM_ZEROS_SIZE 512
-
 #define MEM_LLK_DEBUG_SIZE 1024
 
 #define MEM_BOOT_CODE_BASE 0
@@ -96,9 +94,8 @@
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
 #define MEM_MAILBOX_SIZE 57696
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
-#define MEM_ZEROS_BASE ((MEM_MAILBOX_END + 31) & ~31)
 
-#define MEM_LLK_DEBUG_BASE (MEM_ZEROS_BASE + MEM_ZEROS_SIZE)
+#define MEM_LLK_DEBUG_BASE ((MEM_MAILBOX_END + 31) & ~31)
 
 #define MEM_DM0_LOCAL_BASE (MEM_DM_FIRMWARE_BASE + MEM_DM_FIRMWARE_SIZE)
 #define MEM_DM1_LOCAL_BASE (MEM_DM0_LOCAL_BASE + MEM_DM_FIRMWARE_SIZE)
