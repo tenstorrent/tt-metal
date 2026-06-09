@@ -172,21 +172,47 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     //     [sender0, untilizer0_0..untilizer0_{k0-1}, sender1, untilizer1_0..untilizer1_{k1-1}, ...]
     //   ROW_MAJOR: first num_cores cores are senders, remaining are untilizer (for output-zeroing only).
     //     [sender0, sender1, untilizer0, untilizer1, untilizer2, ...]
-    // Collect all cores in the first row (y == subdevice_cores[0].y), sorted by x.
-    uint32_t sender_row_y = subdevice_cores.at(0).y;
-    std::vector<CoreCoord> all_row_cores;
+    // Lay the sender/untilizer groups along a 1-D line of worker cores taken from the (sub)device
+    // grid.  The subdevice is guaranteed to be a single line — first/last row OR first/last column —
+    // and the orientation is inferred here from the grid shape (no extra API flag is needed):
+    //   - single-column grid (all cores share x): use the whole column, ordered by y.
+    //   - single-row grid, or the default full 2-D worker grid (subdevice_id == None): use the first
+    //     row (smallest y), ordered by x — byte-identical to the previous behavior.
+    // Everything downstream is geometry-agnostic: it treats `all_row_cores` as an ordered line and
+    // addresses cores by absolute NOC coordinates, so a column needs no further changes.
+    uint32_t min_x = subdevice_cores.at(0).x, max_x = subdevice_cores.at(0).x;
+    uint32_t min_y = subdevice_cores.at(0).y, max_y = subdevice_cores.at(0).y;
     for (const auto& core : subdevice_cores) {
-        if (core.y == sender_row_y) {
-            all_row_cores.push_back(core);
-        }
+        min_x = std::min(min_x, (uint32_t)core.x);
+        max_x = std::max(max_x, (uint32_t)core.x);
+        min_y = std::min(min_y, (uint32_t)core.y);
+        max_y = std::max(max_y, (uint32_t)core.y);
     }
-    std::sort(
-        all_row_cores.begin(), all_row_cores.end(), [](const CoreCoord& a, const CoreCoord& b) { return a.x < b.x; });
+    const bool is_single_column = (min_x == max_x) && (max_y > min_y);
+
+    std::vector<CoreCoord> all_row_cores;
+    if (is_single_column) {
+        // First/last-column subdevice: every core shares x, so order the line by y.
+        all_row_cores = subdevice_cores;
+        std::sort(all_row_cores.begin(), all_row_cores.end(), [](const CoreCoord& a, const CoreCoord& b) {
+            return a.y < b.y;
+        });
+    } else {
+        // First/last-row subdevice or full 2-D grid: take the first row, ordered by x (legacy path).
+        for (const auto& core : subdevice_cores) {
+            if (core.y == min_y) {
+                all_row_cores.push_back(core);
+            }
+        }
+        std::sort(all_row_cores.begin(), all_row_cores.end(), [](const CoreCoord& a, const CoreCoord& b) {
+            return a.x < b.x;
+        });
+    }
 
     uint32_t total_row_cores = static_cast<uint32_t>(all_row_cores.size());
     TT_FATAL(
         total_row_cores > num_cores,
-        "Same-row has only {} cores for {} senders — need at least one untilizer core per sender",
+        "Worker line has only {} cores for {} senders — need at least one untilizer core per sender",
         total_row_cores,
         num_cores);
 
@@ -248,7 +274,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     uint32_t num_untilizer_cores = static_cast<uint32_t>(all_untilizer_cores.size());
     TT_FATAL(
         num_untilizer_cores >= num_cores,
-        "Same-row has only {} untilizer cores for {} senders — need at least one untilizer core per sender",
+        "Worker line has only {} untilizer cores for {} senders — need at least one untilizer core per sender",
         num_untilizer_cores,
         num_cores);
     uint32_t untilizer_cores_per_sender = num_untilizer_cores / num_cores;
