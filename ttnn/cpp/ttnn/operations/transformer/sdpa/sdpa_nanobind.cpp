@@ -48,7 +48,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     bool use_column_major_ccl,
     bool is_causal,
     bool is_balanced,
-    std::optional<uint32_t> cache_batch_idx) {
+    bool is_cross,
+    std::optional<uint32_t> kv_cache_batch_idx,
+    std::optional<uint32_t> kv_actual_isl) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -74,11 +76,59 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         ccl_core_grid_offset,
         is_causal,
         is_balanced,
+        is_cross,
         scale,
         compute_kernel_config,
         strategy,
-        cache_batch_idx);
+        kv_cache_batch_idx,
+        kv_actual_isl);
     return outputs;
+}
+
+std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla_wrapper(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_kv,
+    ttnn::Tensor& persistent_output_buffer_kv,
+    uint32_t head_dim_v,
+    std::size_t logical_n,
+    const SDPAProgramConfig& program_config,
+    std::optional<float> scale,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    int32_t dim,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    uint32_t num_links,
+    uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    CoreCoord ccl_core_grid_offset,
+    bool use_column_major_ccl,
+    bool is_balanced,
+    std::optional<uint32_t> kv_cache_batch_idx,
+    std::optional<uint32_t> kv_actual_isl) {
+    auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
+                                         : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
+    return ttnn::transformer::ring_mla(
+        input_tensor_q,
+        input_tensor_kv,
+        persistent_output_buffer_kv,
+        head_dim_v,
+        logical_n,
+        program_config,
+        dim,
+        multi_device_global_semaphore,
+        num_links,
+        cluster_axis,
+        mesh_device,
+        topology,
+        subdevice_id,
+        ccl_core_grid_offset,
+        is_balanced,
+        scale,
+        compute_kernel_config,
+        strategy,
+        kv_cache_batch_idx,
+        kv_actual_isl);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_product_attention_wrapper(
@@ -397,11 +447,12 @@ void bind_sdpa(nb::module_& mod) {
         Args:
             input_tensor_q (ttnn.Tensor): Original queries  [b x nh x N/num_devices x dh].
             input_tensor_k (ttnn.Tensor): Original keys     [b x nh x N/num_devices x dh].
-            input_tensor_v (ttnn.Tensor): Original values   [b x nh x N/num_devices x dh].
+            input_tensor_v (ttnn.Tensor): Original values [b x nhv x N/num_devices x dv].
 
             joint_tensor_q (ttnn.Tensor, optional): Joint queries     [b x nh x L x dh]. Defaults to None.
             joint_tensor_k (ttnn.Tensor, optional): Joint keys        [b x nh x L x dh]. Defaults to None.
-            joint_tensor_v (ttnn.Tensor, optional): Joint values      [b x nh x L x dh]. Defaults to None.
+            joint_tensor_v (ttnn.Tensor, optional): Joint values [b x nhv x L x dv].
+                Defaults to None when L == 0.
 
         Keyword args:
             persistent_output_buffer_k (ttnn.Tensor): Persistent buffer for gathered K tensor.
@@ -424,21 +475,27 @@ void bind_sdpa(nb::module_& mod) {
                 If False (default), uses row-major allocation. Defaults to False.
             is_causal (bool): Whether to use causal attention masking. Defaults to False.
             is_balanced (bool): Whether to use balanced attention computation. Defaults to False.
-            cache_batch_idx (int, optional): Selects the shared K/V cache batch slot when K and V are full caches.
+            is_cross (bool): Whether to use non-causal cross-attention (short Q, long K/V). Defaults to False.
+            kv_cache_batch_idx (int, optional): Selects the shared K/V cache batch slot when K and V are full caches.
+            kv_actual_isl (int, optional): Prior valid global KV length before this fixed-size chunk.
+                When passed, enables KV-pad-aware rotation and derives current valid tokens as
+                logical_n - kv_actual_isl.
 
         Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
         length is less than input_tensor_k's (Q is the latest slab; K is the populated
         prefix from chunk 0 through the current chunk). The op derives chunk_size and
         the absolute Q-row offset from the shapes plus sp_size — no extra args needed.
         Chunked prefill is mathematically causal; callers must pass is_causal=True.
-        When cache_batch_idx is provided, input_tensor_k and input_tensor_v may be whole caches.
-        The same cache_batch_idx selects the K and V cache slot, and the full K/V sequence
-        dimension is treated as valid.
+        When kv_cache_batch_idx is provided, input_tensor_k and input_tensor_v may be whole caches.
+        The same kv_cache_batch_idx selects the K and V cache slot, and the full K/V sequence
+        dimension is treated as valid. When kv_actual_isl is provided, the chunked path switches
+        to KV-pad-aware rotation: logical_n remains the total valid KV length after this iteration,
+        while kv_actual_isl marks the prior valid cache length before the current chunk.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
-              - The attention output for the original Q/K/V shape [b x nh x N/num_devices x dh].
-              - The attention output for the joint Q/K/V shape    [b x nh x L x dh].
+              - The attention output for the original Q/K/V shape [b x nh x N/num_devices x dv].
+              - The attention output for the joint Q/K/V shape    [b x nh x L x dv].
               - The final log-sum-exp of the operation.           [b x nh x (N/num_devices + L) x 1]
         )doc";
 
@@ -471,7 +528,74 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("use_column_major_ccl") = false,
         nb::arg("is_causal").noconvert() = false,
         nb::arg("is_balanced").noconvert() = false,
-        nb::arg("cache_batch_idx").noconvert() = nb::none());
+        nb::arg("is_cross").noconvert() = false,
+        nb::arg("kv_cache_batch_idx").noconvert() = nb::none(),
+        nb::arg("kv_actual_isl").noconvert() = nb::none());
+
+    const auto* const ring_mla_doc = R"doc(
+        Causal Ring MLA attention over a single KV tensor.
+
+        K and V are represented by one tensor. QK uses the full KV head dimension and
+        QKT@V uses the first head_dim_v columns as V. The V dimension must be smaller
+        than K and tile aligned. The KV tensor must have one shared KV head.
+
+        Args:
+            input_tensor_q (ttnn.Tensor): Queries [b x nqh x N/num_devices x dh].
+            input_tensor_kv (ttnn.Tensor): Shared KV tensor [b x nkv x N/num_devices x dh].
+
+        Keyword args:
+            persistent_output_buffer_kv (ttnn.Tensor): Persistent buffer for gathered KV tensor.
+            head_dim_v (int): Tile-aligned V hidden dimension, read from KV's prefix.
+            logical_n (int): Logical global sequence length before sharding.
+            program_config (ttnn.SDPAProgramConfig): Program configuration for the operation.
+            scale (float, optional): Scale factor for QK^T. Defaults to None.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to None.
+            dim (int): Dimension for ring all-gather.
+            multi_device_global_semaphore (List[ttnn.GlobalSemaphore]): Global semaphores for CCL synchronization.
+            num_links (int): Number of CCL links.
+            cluster_axis (int): Mesh axis for all-gather.
+            mesh_device (ttnn.MeshDevice): Multi-device mesh.
+            topology (ttnn.ccl.Topology): Communication topology.
+            subdevice_id (Optional[tt.tt_metal.SubDeviceId]): Sub-device identifier. Defaults to None.
+            ccl_core_grid_offset (ttnn.CoreCoord): Core grid offset for CCL workers.
+            use_column_major_ccl (bool): If true, allocate CCL workers column-major. Defaults to False.
+            is_balanced (bool): Whether to use balanced causal work distribution. Defaults to False.
+            kv_cache_batch_idx (int, optional): Selects one batch slot from an indexed K/V cache. Defaults to None.
+            kv_actual_isl (int, optional): Prior valid global KV length before this fixed-size chunk.
+                When passed, enables KV-pad-aware rotation and derives current valid tokens as
+                logical_n - kv_actual_isl.
+
+        Returns:
+            (ttnn.Tensor, ttnn.Tensor):
+              - Attention output [b x nqh x N/num_devices x head_dim_v].
+              - Streaming statistics scratch [b x nqh x 2*N/num_devices x 1].
+        )doc";
+
+    ttnn::bind_function<"ring_mla", "ttnn.transformer.">(
+        mod,
+        ring_mla_doc,
+        &ring_mla_wrapper,
+        nb::arg("input_tensor_q").noconvert(),
+        nb::arg("input_tensor_kv").noconvert(),
+        nb::kw_only(),
+        nb::arg("persistent_output_buffer_kv").noconvert(),
+        nb::arg("head_dim_v").noconvert(),
+        nb::arg("logical_n"),
+        nb::arg("program_config").noconvert(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("dim"),
+        nb::arg("multi_device_global_semaphore"),
+        nb::arg("num_links"),
+        nb::arg("cluster_axis"),
+        nb::arg("mesh_device"),
+        nb::arg("topology"),
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("ccl_core_grid_offset"),
+        nb::arg("use_column_major_ccl") = false,
+        nb::arg("is_balanced").noconvert() = false,
+        nb::arg("kv_cache_batch_idx").noconvert() = nb::none(),
+        nb::arg("kv_actual_isl").noconvert() = nb::none());
 
     const auto* exp_ring_joint_doc = R"doc(
         ExpRingJointAttention operation that efficiently performs non-causal attention over two

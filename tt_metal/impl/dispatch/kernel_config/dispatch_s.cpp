@@ -315,7 +315,7 @@ void DispatchSKernel::CreateKernel() {
         {"DEVICE_PRINT_CYCLES_FOR_FULL",
          std::to_string(static_config_.device_print_cycles_for_full.value_or(0)) + "ULL"},
     };
-    configure_kernel_variant(dispatch_kernel_file_names[DISPATCH_S], {}, defines, false, false, false);
+    configure_kernel_variant(dispatch_kernel_file_names[DISPATCH_S], {}, defines);
 
     if (GetCoreType() == CoreType::WORKER) {
         const std::string compute_kernel_path = "tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp";

@@ -17,19 +17,24 @@ on:
 
 permissions:
   packages: write
+  contents: read
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
+    needs: check-harbor
     if: ${{ !inputs.build-artifact-name }}
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: Release
       skip-tt-train: false
       platform: "Ubuntu 22.04"
 
   run-tt-train-tests:
-    needs: [build-artifact]
+    needs: [check-harbor, build-artifact]
     if: ${{ always() && (needs.build-artifact.result == 'success' || needs.build-artifact.result == 'skipped') }}
     uses: ./.github/workflows/tt-train-post-commit.yaml
     secrets: inherit
@@ -38,7 +43,7 @@ jobs:
       runner-label: N150
       docker-image: >-
         ${{ inputs.docker-image
-            || needs.build-artifact.outputs.dev-docker-image
+            || format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image)
             || 'docker-image-unresolved!' }}
       build-artifact-name: >-
         ${{ inputs.build-artifact-name

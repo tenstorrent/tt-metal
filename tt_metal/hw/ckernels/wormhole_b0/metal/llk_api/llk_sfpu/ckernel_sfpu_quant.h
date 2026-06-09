@@ -91,7 +91,7 @@ inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index
     // first call here.
     constexpr std::uint32_t dst_tile_size = 64;
 
-    constexpr std::uint32_t out_mode =
+    constexpr InstrModLoadStore out_mode =
         SIGN_MAGNITUDE_FORMAT ? InstrModLoadStore::INT32 : InstrModLoadStore::INT32_2S_COMP;
 
     const std::uint32_t in0_off = dst_index_in0 * dst_tile_size;
@@ -127,7 +127,7 @@ inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_ind
     // first call here.
     constexpr std::uint32_t dst_tile_size = 64;
 
-    constexpr std::uint32_t int_mode =
+    constexpr InstrModLoadStore int_mode =
         SIGN_MAGNITUDE_FORMAT ? InstrModLoadStore::INT32 : InstrModLoadStore::INT32_2S_COMP;
 
     const std::uint32_t in0_off = dst_index_in0 * dst_tile_size;
@@ -164,7 +164,7 @@ inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_ind
     // first call here.
     constexpr std::uint32_t dst_tile_size = 64;
 
-    constexpr std::uint32_t in_mode =
+    constexpr InstrModLoadStore in_mode =
         SIGN_MAGNITUDE_FORMAT ? InstrModLoadStore::INT32 : InstrModLoadStore::INT32_2S_COMP;
 
     const std::uint32_t in0_off = dst_index_in0 * dst_tile_size;

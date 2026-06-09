@@ -4,8 +4,14 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
+    Noc noc;
+
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t num_sticks = get_arg_val<uint32_t>(1);
     uint32_t start_id = get_arg_val<uint32_t>(2);
@@ -19,17 +25,22 @@ void kernel_main() {
 
     const auto s0 = TensorAccessor(dst0_args, dst_addr, output_page_size);
 
+    CircularBuffer cb_out0(cb_id_out0);
+
     uint32_t end_id = start_id + num_sticks;
     for (uint32_t row = start_id; row < end_id; ++row) {
-        uint64_t row_base_addr = s0.get_noc_addr(row);
         for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
-            cb_wait_front(cb_id_out0, 1);
-            uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+            cb_out0.wait_front(1);
+            uint32_t l1_read_addr = cb_out0.get_read_ptr();
             uint32_t write_size = (chunk < num_chunks - 1) ? chunk_size : last_chunk_size;
-            uint64_t dst_noc_addr = row_base_addr + chunk * chunk_size;
-            noc_async_write(l1_read_addr, dst_noc_addr, write_size);
-            noc_async_write_barrier();
-            cb_pop_front(cb_id_out0, 1);
+            noc.async_write(
+                CoreLocalMem<uint32_t>(l1_read_addr),
+                s0,
+                write_size,
+                {},
+                {.page_id = row, .offset_bytes = chunk * chunk_size});
+            noc.async_write_barrier();
+            cb_out0.pop_front(1);
         }
     }
 }

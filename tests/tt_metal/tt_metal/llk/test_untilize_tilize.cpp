@@ -223,11 +223,11 @@ void run_single_core_tilize_program(
     const tt::DataFormat output_buf_format =
         (test_config.fp32_dest_acc_en && !is_8bit_format) ? tt::DataFormat::Float32 : test_config.output_fmt;
 
-    constexpr const char* INPUT_DFB = "input_dfb";
-    constexpr const char* OUTPUT_DFB = "output_dfb";
-    constexpr const char* READER = "reader";
-    constexpr const char* WRITER = "writer";
-    constexpr const char* COMPUTE = "compute";
+    const experimental::DFBSpecName INPUT_DFB{"input_dfb"};
+    const experimental::DFBSpecName OUTPUT_DFB{"output_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
 
     experimental::DataflowBufferSpec input_dfb_spec{
         .unique_id = INPUT_DFB,
@@ -241,6 +241,11 @@ void run_single_core_tilize_program(
         .num_entries = num_tiles,
         .data_format_metadata = output_buf_format,
     };
+    if (test_config.untilize_type.has_value() && test_config.untilize_type == UntilizeType::DST) {
+        // DST untilize reads face geometry from the output CB metadata (no explicit kernel args).
+        output_dfb_spec.unpack_face_geometry_metadata =
+            tt::tt_metal::FaceGeometry{test_config.face_r_dim, test_config.num_faces_per_tile};
+    }
 
     // Reader kernel: untilize types stream native tiles from DRAM (`reader_unary_2_0`);
     // UNPACK_A tilize uses the push-N variant (`reader_unary_push_n_2_0`) so the reader
@@ -302,10 +307,6 @@ void run_single_core_tilize_program(
             return std::tolower(c);
         });
         compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/" + untilize_type + "_untilize.cpp";
-        if (test_config.untilize_type == UntilizeType::DST) {
-            compute_cta_bindings.push_back({"num_faces", test_config.num_faces_per_tile});
-            compute_cta_bindings.push_back({"num_rows_per_face", test_config.face_r_dim});
-        }
     } else if (is_unpack_a_tilize) {
         compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/tilize.cpp";
     } else {
@@ -314,10 +315,10 @@ void run_single_core_tilize_program(
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
     if (test_config.fp32_dest_acc_en) {
-        compute_defines.emplace_back("DST_ACCUM_MODE", "1");
+        compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
     if (test_config.fast_tilize) {
-        compute_defines.emplace_back("FAST_TILIZE", "1");
+        compute_defines.emplace("FAST_TILIZE", "1");
     }
 
     experimental::KernelSpec compute_spec{
@@ -375,32 +376,27 @@ void run_single_core_tilize_program(
     experimental::ProgramRunArgs params;
     if (is_unpack_a_tilize) {
         params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = READER,
+            .kernel = READER,
             .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"src_addr", dram_buffer_src0_addr},
-                       {"src_dram_bank_id", 0u},
-                       {"num_tiles", num_tiles},
-                       {"ublock_size_tiles", test_config.num_tiles_c},
-                       {"reader_only", 0u}}}},
+                {{node,
+                  {{"src_addr", dram_buffer_src0_addr},
+                   {"src_dram_bank_id", 0u},
+                   {"num_tiles", num_tiles},
+                   {"ublock_size_tiles", test_config.num_tiles_c},
+                   {"reader_only", 0u}}}},
         });
     } else {
         params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = READER,
+            .kernel = READER,
             .runtime_arg_values =
-                {{.node = node,
-                  .args = {{"src_addr", dram_buffer_src0_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}}}},
+                {{node, {{"src_addr", dram_buffer_src0_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}}}},
         });
     }
     params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
-        .kernel_spec_name = WRITER,
-        .runtime_arg_values =
-            {{.node = node, .args = {{"dst_addr", dram_buffer_dst_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}}}},
+        .kernel = WRITER,
+        .runtime_arg_values = {{node, {{"dst_addr", dram_buffer_dst_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}}}},
     });
-    params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
-        .kernel_spec_name = COMPUTE,
-    });
+    params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE});
     experimental::SetProgramRunArgs(program_, params);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -750,11 +746,11 @@ static void run_quasar_tilize_untilize_test(
         output_data_format = tt::DataFormat::Float32;
     }
 
-    constexpr const char* INPUT_DFB = "input_dfb";
-    constexpr const char* OUTPUT_DFB = "output_dfb";
-    constexpr const char* READER = "reader";
-    constexpr const char* WRITER = "writer";
-    constexpr const char* COMPUTE = "compute";
+    const experimental::DFBSpecName INPUT_DFB{"input_dfb"};
+    const experimental::DFBSpecName OUTPUT_DFB{"output_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
 
     experimental::DataflowBufferSpec input_dfb_spec{
         .unique_id = INPUT_DFB,
@@ -814,13 +810,9 @@ static void run_quasar_tilize_untilize_test(
             break;
         case QuasarTestMode::UNTILIZE_DST: {
             compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/dst_untilize.cpp";
-            uint32_t num_faces = 4;
-            uint32_t face_r_dim = 16;
             compute_cta_bindings = {
                 {"per_core_block_cnt", num_tiles_r},
                 {"per_core_block_tile_cnt", num_tiles_c},
-                {"num_faces", num_faces},
-                {"num_rows_per_face", face_r_dim},
             };
             break;
         }
@@ -901,28 +893,24 @@ static void run_quasar_tilize_untilize_test(
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = READER,
+            .kernel = READER,
             .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"src_addr", dram_buffer_src_addr},
-                       {"src_bank_id", 0u},
-                       {"num_tiles", num_tiles},
-                       {"dram_page_stride", src_tile_stride_bytes}}}},
+                {{node,
+                  {{"src_addr", dram_buffer_src_addr},
+                   {"src_bank_id", 0u},
+                   {"num_tiles", num_tiles},
+                   {"dram_page_stride", src_tile_stride_bytes}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = WRITER,
+            .kernel = WRITER,
             .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"dst_addr", dram_buffer_dst_addr},
-                       {"dst_bank_id", 0u},
-                       {"num_tiles", num_tiles},
-                       {"dram_page_stride", dst_tile_stride_bytes}}}},
+                {{node,
+                  {{"dst_addr", dram_buffer_dst_addr},
+                   {"dst_bank_id", 0u},
+                   {"num_tiles", num_tiles},
+                   {"dram_page_stride", dst_tile_stride_bytes}}}},
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = COMPUTE,
-        },
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     experimental::SetProgramRunArgs(program_run, params);
 

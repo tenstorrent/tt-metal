@@ -6,7 +6,6 @@
       { "id": "U08CEGF78ET", "name": "Salar Hosseini Khorasgani" }
     ] },
     { "job-name-component": "vllm-tests / vllm-tests ([WH-T3K] Qwen2.5-VL-72B-Instruct", "owner": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" } },
-    { "job-name-component": "vllm-tests / vllm-tests ([BH-DB] Llama-3.1-8B-Instruct", "owner": { "id": "U08GELBB1AP", "name": "Ambrose Ling" } },
     { "job-name-component": "vllm-tests / vllm-tests ([BH-QB] Llama-3.1-8B-Instruct", "owner": { "id": "U08CEGF78ET", "name": "Salar Hosseini Khorasgani" } },
     { "job-name-component": "vllm-tests / vllm-tests ([WH-GLX] Llama-3.3-70B-Instruct", "owner": [
       { "id": "U08E1JCDVNX", "name": "Pavle Petrovic" },
@@ -323,6 +322,12 @@
     { "job-name-component": "ttnn reduce and misc ops group", "owner": { "id": "U084B1CES7M", "name": "Borys Bradel" } },
     { "job-name-component": "tt-metal-l2-nightly / ttnn nightly data_movement tests", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
     { "job-name-component": "ttnn nightly data_movement tests", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
+    { "job-name-component": "tt-metal-l2-nightly / ttnn nightly fused tests", "owner": { "id": "U084B1CES7M", "name": "Borys Bradel" } },
+    { "job-name-component": "ttnn nightly fused tests", "owner": { "id": "U084B1CES7M", "name": "Borys Bradel" } },
+    { "job-name-component": "tt-metal-l2-nightly / ttnn nightly reduction tests", "owner": { "id": "U084B1CES7M", "name": "Borys Bradel" } },
+    { "job-name-component": "ttnn nightly reduction tests", "owner": { "id": "U084B1CES7M", "name": "Borys Bradel" } },
+    { "job-name-component": "tt-metal-l2-nightly / ttnn nightly matmul tests", "owner": { "id": "U084B1CES7M", "name": "Borys Bradel" } },
+    { "job-name-component": "ttnn nightly matmul tests", "owner": { "id": "U084B1CES7M", "name": "Borys Bradel" } },
     { "job-name-component": "cpp-post-commit / CCL", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
     { "job-name-component": "CCL", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
     { "job-name-component": "cpp-post-commit / data movement", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
@@ -534,7 +539,6 @@
     { "job-name-component": "whisper performance", "owner": { "id": "U05RWH3QUPM", "name": "Salar Hosseini" } },
     { "job-name-component": "llama3-8b performance", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
     { "job-name-component": "unet-shallow performance", "owner": { "id": "U06ECNVR0EN", "name": "Evan Smal" } },
-    { "job-name-component": "[BH-DB] Llama-3.1-8B-Instruct", "owner": { "id": "U08GELBB1AP", "name": "Ambrose Ling" } },
     { "job-name-component": "[BH-LB] Llama-3.1-8B-Instruct", "owner": { "id": "U08GELBB1AP", "name": "Ambrose Ling" } },
     { "job-name-component": "[BH-QB] Llama-3.1-8B-Instruct", "owner": { "id": "U08CEGF78ET", "name": "Salar Hosseini Khorasgani" } },
     { "job-name-component": "[WH-GLX] Llama-3.3-70B-Instruct v0 structured-output", "owner": { "id": "U091SNDA4TS", "name": "Tomasz Cheda" } },
