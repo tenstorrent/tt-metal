@@ -200,6 +200,75 @@ def load_hf_model_cascade(
     return (hf_model, used_loader)
 
 
+def iter_hf_model_variants(
+    model_id: str,
+    *,
+    torch_dtype: str = "float32",
+    timeout_s: float = 900.0,
+    verbose: bool = False,
+):
+    """Yield ``(model, loader_name)`` for EACH ``transformers.AutoModelFor*``
+    class that can load ``model_id`` — lazily, one at a time.
+
+    Unlike :func:`load_hf_model_cascade` (which returns only the FIRST
+    success), this lets a caller pull a component from whichever variant
+    actually exposes it. Needed for models whose submodules are split across
+    task variants: seamless-m4t-v2 keeps ``speech_encoder`` in
+    ``ForSpeechToText`` but ``t2u_model``/``vocoder`` in ``ForTextToSpeech``,
+    so no single auto-class exposes everything. Includes the text-to-waveform
+    / spectrogram classes the plain cascade omits.
+
+    The caller should drop its reference to each yielded model before
+    requesting the next, so only one is resident at a time.
+    """
+    import time as _t
+
+    start = _t.monotonic()
+    try:
+        import torch
+        import transformers
+    except Exception:
+        return
+    from scripts.tt_hw_planner.activation_diff import _torch_dtype_from_string
+
+    dtype = _torch_dtype_from_string(torch_dtype) or torch.float32
+    loaders = (
+        "AutoModelForCausalLM",
+        "AutoModelForSpeechSeq2Seq",
+        "AutoModelForTextToWaveform",
+        "AutoModelForTextToSpectrogram",
+        "AutoModelForImageTextToText",
+        "AutoModelForVision2Seq",
+        "AutoModelForImageClassification",
+        "AutoModel",
+    )
+    seen_classes: set = set()
+    for loader in loaders:
+        if _t.monotonic() - start > timeout_s - 5:
+            break
+        cls = getattr(transformers, loader, None)
+        if cls is None:
+            continue
+        try:
+            model = cls.from_pretrained(model_id, torch_dtype=dtype, trust_remote_code=True)
+        except Exception as exc:
+            if verbose:
+                print(f"  [hf-variants] {loader} failed: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+            continue
+        key = type(model).__name__
+        if key in seen_classes:
+            del model
+            continue
+        seen_classes.add(key)
+        try:
+            model.eval()
+        except Exception:
+            pass
+        if verbose:
+            print(f"  [hf-variants] {model_id} via {loader} -> {key}", file=sys.stderr, flush=True)
+        yield model, loader
+
+
 def probe_hf_modules(
     *,
     model_id: str,

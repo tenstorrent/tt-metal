@@ -335,13 +335,34 @@ def capture_real_inputs(
             file=sys.stderr,
         )
 
-    from scripts.tt_hw_planner.agentic.probe import load_hf_model_cascade
+    from scripts.tt_hw_planner.agentic.probe import iter_hf_model_variants, load_hf_model_cascade
 
-    model, loader_or_err = load_hf_model_cascade(model_id, torch_dtype="float32", verbose=verbose)
+    model = None
+    best_loader = None
+    best_count = -1
+    for _cand_model, _cand_loader in iter_hf_model_variants(model_id, torch_dtype="float32", verbose=verbose):
+        _cnt = sum(1 for _c in components if _resolve_submodule(_cand_model, _c, demo_dir=demo_dir) is not None)
+        if _cnt > best_count:
+            if model is not None:
+                del model
+            model, best_loader, best_count = _cand_model, _cand_loader, _cnt
+        else:
+            del _cand_model
+        if best_count >= len(components):
+            break
     if model is None:
-        if verbose:
-            print(f"  [capture] {loader_or_err}", file=sys.stderr)
-        return {c: {"status": "model_load_failed", "error": loader_or_err or "load failed"} for c in components}
+        _m, loader_or_err = load_hf_model_cascade(model_id, torch_dtype="float32", verbose=verbose)
+        if _m is None:
+            if verbose:
+                print(f"  [capture] {loader_or_err}", file=sys.stderr)
+            return {c: {"status": "model_load_failed", "error": loader_or_err or "load failed"} for c in components}
+        model = _m
+    elif verbose:
+        print(
+            f"  [capture] selected {best_loader} ({type(model).__name__}) "
+            f"resolving {best_count}/{len(components)} component(s)",
+            file=sys.stderr,
+        )
 
     resolved: List[Tuple[str, Any, str]] = []
     out: Dict[str, Dict[str, Any]] = {}
@@ -435,6 +456,27 @@ def capture_real_inputs(
                     f"model(input_ids=..., attention_mask=...) " f"[{_input_ids.shape[-1]} tokens]",
                     _run_text,
                 )
+
+                if hasattr(model, "generate"):
+                    try:
+                        _gen_n = int(os.environ.get("TT_PLANNER_CAPTURE_GEN_TOKENS", "") or 0) or 16
+                    except ValueError:
+                        _gen_n = 16
+                    _tgt_lang = os.environ.get("TT_PLANNER_CAPTURE_TGT_LANG", "eng")
+
+                    def _run_generate():
+                        _gkw = {"input_ids": _input_ids, "max_new_tokens": _gen_n}
+                        if _attn_mask is not None:
+                            _gkw["attention_mask"] = _attn_mask
+                        try:
+                            model.generate(**_gkw)
+                        except (TypeError, ValueError) as _ge:
+                            if "lang" in str(_ge).lower():
+                                model.generate(tgt_lang=_tgt_lang, **_gkw)
+                            else:
+                                raise
+
+                    _try(f"model.generate(input_ids=..., max_new_tokens={_gen_n})", _run_generate)
         except Exception as _exc:
             if verbose:
                 print(
