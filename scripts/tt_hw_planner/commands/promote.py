@@ -8,6 +8,30 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 
+def _latest_worktree_demo(model_id: str):
+    """Find the newest active worktree holding this model's demo, point BRINGUP_ROOT there, and return its demo_dir (or None)."""
+    from ..bringup_loop import find_demo_dir
+
+    if os.environ.get("TT_HW_PLANNER_BRINGUP_CWD"):
+        return None
+    try:
+        from .. import worktree as _wt
+
+        sessions = sorted(
+            (s for s in _wt.list_active() if s.model_id == model_id),
+            key=lambda s: s.created_ts,
+            reverse=True,
+        )
+    except Exception:
+        return None
+    for s in sessions:
+        d = find_demo_dir(model_id, repo_root=s.path)
+        if d is not None:
+            os.environ["TT_HW_PLANNER_BRINGUP_CWD"] = str(s.path)
+            return d
+    return None
+
+
 def cmd_promote(args) -> int:
     from ..cli import (
         _API_KEY_ENV_VAR,
@@ -48,8 +72,14 @@ def cmd_promote(args) -> int:
 
     demo_dir = find_demo_dir(MODEL)
     if demo_dir is None:
+        demo_dir = _latest_worktree_demo(MODEL)
+        if demo_dir is not None:
+            banner("PROMOTE  no demo in current tree — resuming from latest worktree")
+            print(f"  worktree: {os.environ.get('TT_HW_PLANNER_BRINGUP_CWD')}")
+    if demo_dir is None:
         print(
-            f"ERROR: no scaffolded demo for {MODEL}. Run bring-up first:\n"
+            f"ERROR: no scaffolded demo for {MODEL} (not in this tree, and no active "
+            f"worktree holds it). Run bring-up first:\n"
             f"    python -m scripts.tt_hw_planner up {MODEL} --box {BOX} --execute\n",
             file=sys.stderr,
         )
