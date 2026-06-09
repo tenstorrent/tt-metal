@@ -5,16 +5,16 @@
 Integration tests for the runtime-LoRA adapter loader.
 
 Builds a tiny WanTransformer3DModel (1 block) with ``lora_enabled=True``,
-writes a synthetic LoRA safetensors file, runs `load_adapter_into`, and
+writes a synthetic LoRA safetensors file, runs ``load_adapter_into``, and
 checks that:
 
   - every LoRA-aware Linear in the block got an adapter registered
-  - `prepare_for_trace` + `bind_active` populate the bound tensors
-  - `unbind_active` zeros them
+  - ``bind_active`` marks the right modules active across all paths
+  - ``unbind_active`` clears the active state
 
-We don't run a full forward pass here — the variant tests
-(`test_lora_variants.py`) cover the forward math. This file is about
-the loader's key-mapping logic and the pipeline-mixin bind flow.
+The forward math is covered by ``test_lora_variants.py``; this file
+exercises the loader's key-mapping logic and the pipeline-mixin bind
+flow against the default (``fuse``) mode.
 
 Run with:
     pytest -xvs models/tt_dit/experimental/tests/test_adapter_loader.py
@@ -155,7 +155,7 @@ def test_adapter_loader_registers_all_lora_linears(mesh_device: ttnn.MeshDevice)
     assert block0.ffn.ff1.lora_bank[0].rank == rank
     assert block0.ffn.ff2.lora_bank[0].rank == rank
 
-    # handle should reflect the rank we expect to prepare_for_trace at.
+    # handle.rank tracks the max rank across targets (3*rank for the fused-QKV group).
     assert handle.rank == 3 * rank
 
 
@@ -206,26 +206,22 @@ def test_pipeline_bind_unbind_walks_all_modules(mesh_device: ttnn.MeshDevice) ->
         cur = transformer
         for part in dotted.split("."):
             cur = cur[int(part)] if part.isdigit() else getattr(cur, part)
-        adapter = cur.lora_bank[bank_idx]
-        cur.prepare_for_trace(rank=adapter.rank)
         cur.bind_active(bank_idx)
 
-    # All modules covered by the handle should have bound tensors.
+    # All modules covered by the handle should be active (delta merged).
     for dotted in handle.target_indices:
         cur = transformer
         for part in dotted.split("."):
             cur = cur[int(part)] if part.isdigit() else getattr(cur, part)
-        assert cur.has_bound_tensors, f"{dotted} bound tensors not allocated"
         assert cur.is_lora_active, f"{dotted} not active after bind_active"
 
-    # Unbind everything → has_bound_tensors stays True (zeros kept), but
-    # active_idx clears so set_active_lora(None) is the "off" semantic.
+    # Unbind everything → delta subtracted, is_lora_active False.
     for mod in pipeline_iter(transformer):
-        if mod.has_bound_tensors:
+        if mod.is_lora_active:
             mod.unbind_active()
     for dotted in handle.target_indices:
         cur = transformer
         for part in dotted.split("."):
             cur = cur[int(part)] if part.isdigit() else getattr(cur, part)
-        assert cur.has_bound_tensors  # tensors still allocated
-        assert cur.active_idx is None  # but unbound
+        assert not cur.is_lora_active
+        assert cur.active_idx is None
