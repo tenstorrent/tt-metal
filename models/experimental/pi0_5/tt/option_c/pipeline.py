@@ -348,6 +348,23 @@ class Pi0_5PipelineC:
                 expert_layer_range=(0, self.config.expert_config.depth),
                 layers_per_chip=EXPERT_LAYERS_PER_DENOISE_CHIP,
             )
+            # Parent-mesh suffix slice. Weights replicated across all 32
+            # chips of the parent (~2 MB × 32 chips = trivial). embed_actions
+            # / embed_adarms_cond / project_output produce parent-mesh
+            # tensors whose live shard is at chip 0's denoise coord (2, 3)
+            # — feeding the parent-mesh expert chain with zero cross-submesh
+            # transport.
+            from .suffix_slice import Pi0_5OptionCSuffixSliceParent
+
+            self.parent_mesh_suffix_slice = Pi0_5OptionCSuffixSliceParent(
+                config=self.config,
+                weights=self.weights,
+                parent_mesh=self.parent_mesh,
+                action_dim=self.action_dim,
+                action_horizon=self.action_horizon,
+            )
+        else:
+            self.parent_mesh_suffix_slice = None
 
         # Opt-in L1 migration for the TP prefill path. Mirrors Option B's
         # pattern. The migration helper walks each TP block on the slice
@@ -483,26 +500,55 @@ class Pi0_5PipelineC:
             t.kv_migration_ms = (time.perf_counter() - t0) * 1000
 
         # ---------- Stage 2: denoise (full Euler loop) ----------------------
-        # Suffix MLP and the first expert layer live on chip 0 of the denoise
-        # submesh in paired mode, so x_t and the joint mask both need to land
-        # there. In replicated mode this is the full denoise submesh.
-        denoise_in_submesh = self.stage_2.first_chip_submesh
-        noisy_on_denoise = self._upload_replicated(noisy_actions, denoise_in_submesh, dtype=ttnn.bfloat16)
-        joint_mask_on_denoise = self._build_or_upload_joint_mask(
-            attention_mask_joint,
-            S_prefix=S_prefix,
-            S_suffix_padded=noisy_on_denoise.shape[1],
-            submesh=denoise_in_submesh,
-        )
+        if self.use_parent_mesh_denoise:
+            # D2D denoise: noisy_actions onto parent mesh (replicated); the
+            # parent-mesh expert + suffix slices run the full Euler loop on
+            # the parent without any inter-stage host bounces.
+            S_suffix_padded = noisy_actions.shape[1]
+            joint_mask_on_parent = self._build_joint_mask_on_parent(
+                attention_mask_joint, S_prefix=S_prefix, S_suffix_padded=S_suffix_padded
+            )
+            noisy_on_parent = ttnn.from_torch(
+                noisy_actions.to(torch.bfloat16).contiguous(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.parent_mesh,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.parent_mesh),
+            )
+            t0 = time.perf_counter()
+            clean_actions, step_ms = self._denoise_with_per_step_timing_parent_mesh(
+                noisy_on_parent,
+                prefix_kv_cache=prefix_kv_on_denoise,
+                attention_mask=joint_mask_on_parent,
+            )
+            t.stage_2_denoise_ms = (time.perf_counter() - t0) * 1000
+            t.denoise_step_ms = step_ms
+            if joint_mask_on_parent is not None:
+                ttnn.deallocate(joint_mask_on_parent)
+        else:
+            # Host-bouncing layer-paired path (current default).
+            # Suffix MLP and the first expert layer live on chip 0 of the
+            # denoise submesh in paired mode, so x_t and the joint mask both
+            # need to land there. In replicated mode this is the full
+            # denoise submesh.
+            denoise_in_submesh = self.stage_2.first_chip_submesh
+            noisy_on_denoise = self._upload_replicated(noisy_actions, denoise_in_submesh, dtype=ttnn.bfloat16)
+            joint_mask_on_denoise = self._build_or_upload_joint_mask(
+                attention_mask_joint,
+                S_prefix=S_prefix,
+                S_suffix_padded=noisy_on_denoise.shape[1],
+                submesh=denoise_in_submesh,
+            )
 
-        t0 = time.perf_counter()
-        clean_actions, step_ms = self._denoise_with_per_step_timing(
-            noisy_on_denoise,
-            prefix_kv_cache=prefix_kv_on_denoise,
-            attention_mask=joint_mask_on_denoise,
-        )
-        t.stage_2_denoise_ms = (time.perf_counter() - t0) * 1000
-        t.denoise_step_ms = step_ms
+            t0 = time.perf_counter()
+            clean_actions, step_ms = self._denoise_with_per_step_timing(
+                noisy_on_denoise,
+                prefix_kv_cache=prefix_kv_on_denoise,
+                attention_mask=joint_mask_on_denoise,
+            )
+            t.stage_2_denoise_ms = (time.perf_counter() - t0) * 1000
+            t.denoise_step_ms = step_ms
 
         t.total_ms = (time.perf_counter() - t_total0) * 1000
         return clean_actions, t
@@ -571,6 +617,104 @@ class Pi0_5PipelineC:
             step_times.append((time.perf_counter() - t_s0) * 1000)
 
         return x_t, step_times
+
+    def _denoise_with_per_step_timing_parent_mesh(
+        self,
+        noisy_actions: "ttnn.Tensor",
+        prefix_kv_cache: List[Optional[Tuple["ttnn.Tensor", "ttnn.Tensor"]]],
+        attention_mask: Optional["ttnn.Tensor"],
+    ) -> Tuple["ttnn.Tensor", List[float]]:
+        """D2D parent-mesh Euler loop. Mirrors `_denoise_with_per_step_timing`
+        but routes through the parent-mesh suffix + expert slices with the
+        P2P wrap-back. Zero host bounces inside the loop.
+        """
+        assert self.parent_mesh_denoise_slice is not None and self.parent_mesh_suffix_slice is not None
+
+        expert_p = self.parent_mesh_denoise_slice
+        suffix_p = self.parent_mesh_suffix_slice
+        W = self.config.expert_config.width
+
+        num_steps = self.denoise_steps
+        dt = -1.0 / num_steps
+
+        x_t = noisy_actions  # [B, M, A] on parent (replicated)
+        x_t_owned = False
+        step_times: List[float] = []
+        B = x_t.shape[0]
+        M = x_t.shape[1]
+        A = x_t.shape[2]
+
+        for i in range(num_steps):
+            t_step = 1.0 - i / num_steps
+            t_s0 = time.perf_counter()
+
+            # Suffix: per-token modulation cond + per-step action embedding.
+            adarms_cond = suffix_p.embed_adarms_cond(t_step, batch_size=B)
+            suffix_h_3d = suffix_p.embed_actions(x_t)
+            # Reshape to 4D for the expert's nlp_create_qkv_heads contract.
+            suffix_h = ttnn.reshape(suffix_h_3d, (B, 1, M, W))
+            if len(adarms_cond.shape) == 2:
+                adarms_cond_4d = ttnn.reshape(adarms_cond, (B, 1, 1, W))
+                ttnn.deallocate(adarms_cond)
+                adarms_cond = adarms_cond_4d
+
+            # Expert chain (18 layers + 5 same-column P2P advances).
+            velocity_hidden = expert_p.forward_real_block_chain(
+                suffix_h, adarms_cond, attention_mask=attention_mask, prefix_kv_cache=prefix_kv_cache
+            )
+            ttnn.deallocate(suffix_h)
+            ttnn.deallocate(adarms_cond)
+
+            # Wrap-back: last denoise chip → first (single-hop, same column).
+            velocity_at_first = expert_p.wrap_back_to_chip0(velocity_hidden)
+
+            # Suffix output projection + reshape back to 3D for the Euler add.
+            v_t_4d = suffix_p.project_output(velocity_at_first)
+            ttnn.deallocate(velocity_at_first)
+            v_t = ttnn.reshape(v_t_4d, (B, M, A))
+
+            dx = ttnn.multiply(v_t, dt)
+            ttnn.deallocate(v_t)
+            x_t_new = ttnn.add(x_t, dx)
+            ttnn.deallocate(dx)
+            if x_t_owned:
+                ttnn.deallocate(x_t)
+            x_t = x_t_new
+            x_t_owned = True
+
+            step_times.append((time.perf_counter() - t_s0) * 1000)
+
+        return x_t, step_times
+
+    def _build_joint_mask_on_parent(
+        self,
+        attention_mask_joint: Optional[torch.Tensor],
+        S_prefix: int,
+        S_suffix_padded: int,
+    ) -> Optional["ttnn.Tensor"]:
+        """Upload (or build) the joint attention mask onto the parent mesh.
+
+        Joint mask shape: [B, 1, S_suffix_padded, S_prefix + S_suffix_padded].
+        DRAM-resident — SDPA TT_FATALs on L1 masks. Replicated across all
+        chips of the parent mesh (each chip computes its own SDPA on its
+        own live shard; the mask is identical everywhere).
+        """
+        if attention_mask_joint is None:
+            # All-zeros mask = fully unmasked. Shape matches the existing
+            # build-mask helper used by the host-bounce path.
+            B = 1
+            kv_seq_len = S_prefix + S_suffix_padded
+            mask_torch = torch.zeros(B, 1, S_suffix_padded, kv_seq_len, dtype=torch.bfloat16)
+        else:
+            mask_torch = attention_mask_joint.to(torch.bfloat16).contiguous()
+        return ttnn.from_torch(
+            mask_torch,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.parent_mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.parent_mesh),
+        )
 
     def _lift_activation_to_parent_mesh(self, src: "ttnn.Tensor") -> "ttnn.Tensor":
         """Move a vision-submesh activation onto the GALAXY PARENT mesh,
