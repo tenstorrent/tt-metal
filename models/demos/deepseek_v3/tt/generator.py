@@ -990,6 +990,26 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
             seed_slots[self._sampling_device_slot(user_id)] = seeds[user_id]
         return seed_slots
 
+    def _sampling_device_slot_remap(self, slot_remap: list[int] | None) -> list[int] | None:
+        if slot_remap is None:
+            return None
+        if len(slot_remap) > self.batch_size:
+            raise ValueError(
+                f"slot_remap length {len(slot_remap)} exceeds DeepSeek batch size {self.batch_size}"
+            )
+
+        seed_slot_count = self.sampling_generator.seed_manager.max_batch_size
+        seed_slot_remap = list(range(seed_slot_count))
+        for new_user_slot, old_user_slot in enumerate(slot_remap):
+            old_user_slot = int(old_user_slot)
+            if old_user_slot < 0 or old_user_slot >= self.batch_size:
+                raise ValueError(
+                    f"slot_remap[{new_user_slot}]={old_user_slot} is outside the valid user-slot range "
+                    f"[0, {self.batch_size})"
+                )
+            seed_slot_remap[self._sampling_device_slot(new_user_slot)] = self._sampling_device_slot(old_user_slot)
+        return seed_slot_remap
+
     def _sample_tokens_device(
         self,
         logits: ttnn.Tensor,
@@ -1044,8 +1064,9 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
             else:
                 sampling_logits = padded_logits
 
-        if slot_remap is not None:
-            self.sampling_generator.seed_manager.apply_slot_remap(slot_remap)
+        seed_slot_remap = self._sampling_device_slot_remap(slot_remap)
+        if seed_slot_remap is not None:
+            self.sampling_generator.seed_manager.apply_slot_remap(seed_slot_remap)
         self.sampling_generator.seed_manager.get_new_values(self._sampling_device_slots(user_slots))
         try:
             tt_out = self.sampling_generator.sample(

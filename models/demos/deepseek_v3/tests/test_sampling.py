@@ -94,10 +94,12 @@ def _fake_deepseek_generator(*, batch_size_per_row=8, sampling_dp=2):
         _sampling_device_slot = DeepseekGenerator._sampling_device_slot
         _sampling_device_slots = DeepseekGenerator._sampling_device_slots
         _sampling_device_seed_slots = DeepseekGenerator._sampling_device_seed_slots
+        _sampling_device_slot_remap = DeepseekGenerator._sampling_device_slot_remap
         _sample_tokens_device = DeepseekGenerator._sample_tokens_device
 
         def __init__(self):
             self.batch_size_per_row = batch_size_per_row
+            self.batch_size = self.batch_size_per_row * sampling_dp
             self.sampling_generator = _FakeSamplingGenerator(padded_batch_size=32, sampling_dp=sampling_dp)
             self._sampling_trace_logits_device = None
             self._sampling_trace_logits_host = None
@@ -164,7 +166,15 @@ def test_deepseek_sampling_seed_reset_uses_row_padded_device_slots():
     assert seeds[104:] == [None] * 24
 
 
-def test_deepseek_sample_tokens_device_applies_slot_remap_before_seed_advance():
+def test_deepseek_sampling_slot_remap_expands_to_row_padded_seed_slots():
+    generator = _fake_deepseek_generator(batch_size_per_row=8, sampling_dp=2)
+
+    expanded = DeepseekGenerator._sampling_device_slot_remap(generator, [7, 6, 5, 4, 3, 2, 1, 0, 15, 14, 13, 12])
+
+    assert expanded == [7, 6, 5, 4, 3, 2, 1, 0] + list(range(8, 32)) + [39, 38, 37, 36] + list(range(36, 64))
+
+
+def test_deepseek_sample_tokens_device_applies_row_padded_slot_remap_before_seed_advance():
     generator = _fake_deepseek_generator(batch_size_per_row=8, sampling_dp=2)
     sampling_generator = generator.sampling_generator
 
@@ -172,7 +182,7 @@ def test_deepseek_sample_tokens_device_applies_slot_remap_before_seed_advance():
         shape = (1, 1, 32, 128)
 
     sampling_generator.sample = lambda logits, **kwargs: logits
-    slot_remap = list(range(63, -1, -1))
+    slot_remap = [7, 6, 5, 4, 3, 2, 1, 0, 15, 14, 13, 12]
 
     DeepseekGenerator._sample_tokens_device(
         generator,
@@ -183,7 +193,7 @@ def test_deepseek_sample_tokens_device_applies_slot_remap_before_seed_advance():
     )
 
     [applied_remap] = sampling_generator.seed_manager.slot_remap_calls
-    assert applied_remap == slot_remap
+    assert applied_remap == [7, 6, 5, 4, 3, 2, 1, 0] + list(range(8, 32)) + [39, 38, 37, 36] + list(range(36, 64))
     [advanced_slots] = sampling_generator.seed_manager.new_value_calls
     assert advanced_slots == [0, 32, 33]
 
