@@ -17,6 +17,7 @@
 #include <tt-metalium/tt_metal.hpp>
 
 #include "context/metal_context.hpp"
+#include "llrt/tt_cluster.hpp"
 #include "fabric_mux_benchmark_program_utils.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"

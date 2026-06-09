@@ -61,7 +61,7 @@ struct FabricMuxV2ClientConnectionRtArgs {
     uint32_t teardown_sem_id = 0;
     uint32_t mux_status_address = 0;
 
-    static constexpr size_t kWordCount = sizeof(FabricMuxV2ClientConnectionRtArgs) / sizeof(uint32_t);
+    static constexpr size_t kWordCount = 11;
 
     std::array<uint32_t, kWordCount> serialize() const {
         return {
@@ -80,7 +80,8 @@ struct FabricMuxV2ClientConnectionRtArgs {
     }
 };
 
-static_assert(sizeof(FabricMuxV2ClientConnectionRtArgs) == 11 * sizeof(uint32_t));
+static_assert(
+    sizeof(FabricMuxV2ClientConnectionRtArgs) == FabricMuxV2ClientConnectionRtArgs::kWordCount * sizeof(uint32_t));
 
 void validate_forwarder_service_burst_size(uint32_t service_burst_size) {
     TT_FATAL(service_burst_size > 0, "FabricMuxV2 forwarder service burst size must be greater than zero");

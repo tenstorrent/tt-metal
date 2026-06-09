@@ -74,8 +74,9 @@ void write_zero_words_to_device(
 
 void write_word_to_device(
     tt::tt_metal::IDevice* device, const CoreCoord& logical_core, size_t address, uint32_t value) {
+    std::vector<uint32_t> word_buffer{value};
     tt::tt_metal::detail::WriteToDeviceL1(
-        device, logical_core, to_uint32_checked(address, "word_init_address"), std::vector<uint32_t>{value});
+        device, logical_core, to_uint32_checked(address, "word_init_address"), word_buffer);
 }
 
 void initialize_sender_start_barrier_state(

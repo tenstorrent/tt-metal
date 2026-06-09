@@ -12,12 +12,14 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 #include "context/metal_context.hpp"
+#include "llrt/tt_cluster.hpp"
 #include "fabric_mux_benchmark_program_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 
