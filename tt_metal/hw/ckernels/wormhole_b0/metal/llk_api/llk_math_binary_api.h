@@ -40,6 +40,20 @@ inline void llk_math_eltwise_binary_init(
         tensor_shape, acc_to_dest);
 }
 
+/**
+ * @brief Perform an elementwise binary op: Output = SrcA [+, -, *] SrcB, using default tile dimensions.
+ *
+ * Dispatches to the standard or dest-reuse implementation based on binary_reuse_dest.
+ *
+ * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
+ * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled.
+ * @tparam math_fidelity: Multiplication precision (applies to ELWMUL only), values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
+ * @param dst_index: Tile index into the destination register.
+ * @param clear_fp32_dst_acc: Clear the FP32 dest accumulator before writing.
+ * @note Call @ref llk_math_eltwise_binary_init with matching template args before this function.
+ */
 template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,
@@ -66,6 +80,23 @@ inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_ac
         binary_reuse_dest>(ckernel::DEFAULT_TENSOR_SHAPE, dst_index, clear_fp32_dst_acc);
 }
 
+/**
+ * @brief Perform an elementwise binary op: Output = SrcA [+, -, *] SrcB.
+ *
+ * Derives the tile shape from operand A's circular buffer, then dispatches to the standard or
+ * dest-reuse implementation based on binary_reuse_dest.
+ *
+ * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
+ * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled.
+ * @tparam math_fidelity: Multiplication precision (applies to ELWMUL only), values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
+ * @param operand_A: Circular-buffer index of input A, used to derive the tile shape.
+ * @param operand_B: Unused.
+ * @param dst_index: Tile index into the destination register.
+ * @param clear_fp32_dst_acc: Clear the FP32 dest accumulator before writing.
+ * @note Call @ref llk_math_eltwise_binary_init with matching template args before this function.
+ */
 template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,

@@ -9,6 +9,20 @@
  * LLK PACK
  *************************************************************************/
 
+/**
+ * @brief Initialize the packer (addrmod + MOP + strides) for a pack op.
+ *
+ * Derives the destination format and tile geometry from the output's circular buffer. The skip_*
+ * template flags let a caller reuse state already established by a prior init or hw-configure.
+ *
+ * @tparam pack_mode: Packing layout, values = <Default/Untilize>
+ * @tparam zero_output: When true, packer emits zeros instead of dest data.
+ * @tparam skip_addrmod_config: When true, leave ADDR_MOD slots untouched (assume already programmed).
+ * @tparam skip_packer_strides: When true, do not re-program the packer strides.
+ * @param pack_output: Circular-buffer index of the pack output.
+ * @param num_tiles: Number of tiles processed per MOP run.
+ * @ref llk_pack is the matching execute call.
+ */
 template <
     PackMode pack_mode = PackMode::Default,
     bool zero_output = false,
@@ -32,6 +46,20 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
         pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
 }
 
+/**
+ * @brief Pack one tile from the destination register to the output circular buffer.
+ *
+ * Resolves the L1 destination address from the output's circular buffer (in order, or via
+ * output_tile_index for out-of-order output), then runs the packer MOP.
+ *
+ * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
+ * @tparam out_of_order_output: Address the output tile by output_tile_index rather than sequentially.
+ * @tparam pack_mode: Packing layout, values = <Default/Untilize> (out-of-order untilize is unsupported).
+ * @param tile_index: Index of the source tile in the destination register.
+ * @param output: Circular-buffer index of the pack output.
+ * @param output_tile_index: Tile index within the output CB (used for out-of-order output).
+ * @note Call @ref llk_pack_init with matching template/runtime args before this function.
+ */
 template <bool is_fp32_dest_acc_en, bool out_of_order_output = false, PackMode pack_mode = PackMode::Default>
 inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32_t output_tile_index = 0) {
     LLK_ASSERT(
@@ -51,6 +79,21 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
     _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
 }
 
+/**
+ * @brief Pack a contiguous block of matmul output tiles from the destination register to L1.
+ *
+ * Repeats the single-tile pack over @p ntiles consecutive dest tiles, resolving the output address
+ * from the output's circular buffer.
+ *
+ * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
+ * @tparam out_of_order_output: Address the output tile by output_tile_index rather than sequentially.
+ * @tparam pack_mode: Packing layout, values = <Default/Untilize> (out-of-order untilize is unsupported).
+ * @param start_tile_index: First source tile index in the destination register.
+ * @param output: Circular-buffer index of the pack output.
+ * @param ntiles: Number of consecutive tiles to pack.
+ * @param output_tile_index: Tile index within the output CB (used for out-of-order output).
+ * @note Call @ref llk_pack_init with matching template/runtime args before this function.
+ */
 template <bool is_fp32_dest_acc_en, bool out_of_order_output = false, PackMode pack_mode = PackMode::Default>
 inline void llk_matmul_pack(
     std::uint32_t start_tile_index, std::uint32_t output, uint32_t ntiles, std::uint32_t output_tile_index = 0) {
