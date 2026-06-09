@@ -582,3 +582,92 @@ def test_stage_c_vocoder_with_bwe(
     assert tt_out.shape == ref_out.shape
     if pc is not None:
         _assert_sharded_matches_unsharded(tt_full_un(mel), tt_out, name="stage_c_full")
+
+
+# ---------------------------------------------------------------------------
+# Localized audio-static regression check (Stage B). Aggregate PCC over the full
+# clip masks a ~1s burst of static heard near the 2s mark in the AV demo; the
+# default _vocoder_mel (t_frames=120 -> 0.8s) is too short to even contain a 2s
+# mark. This drives a long-enough input and compares per-window so a localized
+# burst can't hide. Skipped by default; run with LTX_AUDIO_STATIC_CHECK=1.
+# ---------------------------------------------------------------------------
+_STATIC_SR = 24000  # main vocoder output rate
+_STATIC_WIN_S = 0.5
+
+
+def _window_error_rows(ref: torch.Tensor, tt: torch.Tensor, *, sr: int, win_s: float):
+    """Per-window (start_s, max|Δ|, rmse/σ_ref) over the time axis of (B, C, T)."""
+    T = ref.shape[-1]
+    n = max(1, int(win_s * sr))
+    rows = []
+    for start in range(0, T, n):
+        r = ref[..., start : start + n]
+        t = tt[..., start : start + n]
+        max_abs = (r - t).abs().max().item()
+        rmse = ((r - t) ** 2).mean().sqrt().item()
+        sigma = ((r**2).mean().sqrt().item()) + 1e-9
+        rows.append((start / sr, max_abs, rmse / sigma))
+    return rows
+
+
+@pytest.mark.skipif(
+    os.environ.get("LTX_AUDIO_STATIC_CHECK", "0").lower() not in ("1", "true", "yes"),
+    reason="diagnostic: localized audio-static window check; run with LTX_AUDIO_STATIC_CHECK=1",
+)
+@pytest.mark.parametrize(
+    (
+        "mesh_device",
+        "mesh_shape",
+        "sp_axis",
+        "tp_axis",
+        "num_links",
+        "dynamic_load",
+        "device_params",
+        "topology",
+        "is_fsdp",
+    ),
+    _AUDIO_FAST_AV_MESH_PARAMS,
+    indirect=["mesh_device", "device_params"],
+)
+def test_stage_b_static_window(mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp):
+    _ = (sp_axis, tp_axis, dynamic_load, is_fsdp)
+    parent_mesh = mesh_device
+    mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+    pc = _audio_parallel_config(mesh_shape)
+    ccl = CCLManager(mesh_device, num_links=num_links, topology=topology) if pc is not None else None
+
+    torch_voc = _build_torch_stage_b(seed=42)
+    tt_voc = _build_tt_stage_b(mesh_device, parallel_config=pc, ccl_manager=ccl)
+    tt_voc.load_torch_state_dict(_diffusers_vocoder_state_to_tt(torch_voc.state_dict()))
+    tt_voc_un = _build_tt_stage_b(mesh_device, parallel_config=None, ccl_manager=None)
+    tt_voc_un.load_torch_state_dict(_diffusers_vocoder_state_to_tt(torch_voc.state_dict()))
+
+    torch.manual_seed(7)
+    mel = torch.randn(1, 2, 400, 64, dtype=torch.float32) * 0.5  # -> ~2.67s @ 24kHz
+    with torch.no_grad():
+        ref = torch_voc(mel)
+    tt = tt_voc(mel)
+    tt_un = tt_voc_un(mel)
+
+    logger.info(f"[static] output shape {tuple(tt.shape)} = {tt.shape[-1]/_STATIC_SR:.2f}s @ {_STATIC_SR}Hz")
+    logger.info("[static] per-0.5s window — vs torch (sharded) | sharded-vs-unsharded")
+    vt = _window_error_rows(ref, tt, sr=_STATIC_SR, win_s=_STATIC_WIN_S)
+    su = _window_error_rows(tt_un, tt, sr=_STATIC_SR, win_s=_STATIC_WIN_S)
+    for (s, vt_max, vt_rmse), (_, su_max, su_rmse) in zip(vt, su):
+        logger.info(
+            f"[static]  t={s:4.2f}s  vsTorch max|Δ|={vt_max:.3e} rmse/σ={vt_rmse:.3e}   "
+            f"shard-vs-un max|Δ|={su_max:.3e} rmse/σ={su_rmse:.3e}"
+        )
+    # Focused 1.5–2.5s window (where the demo static is heard).
+    lo, hi = int(1.5 * _STATIC_SR), int(2.5 * _STATIC_SR)
+    w_vt = (ref[..., lo:hi] - tt[..., lo:hi]).abs().max().item()
+    w_su = (tt_un[..., lo:hi] - tt[..., lo:hi]).abs().max().item()
+    full_vt = (ref - tt).abs().max().item()
+    print(
+        f"\nSTATIC_WINDOW full_vsTorch_max={full_vt:.3e}  "
+        f"win1.5-2.5_vsTorch_max={w_vt:.3e}  win1.5-2.5_shard-vs-un_max={w_su:.3e}",
+        flush=True,
+    )
+    # Gate: MAC-baseline depthwise lands ~6e-4 in this window; conv1d_depthwise's high-freq
+    # divergence pushes it to ~1.0e-3 (the audible static). 8e-4 separates the two.
+    assert w_vt < 8e-4, f"vocoder 1.5–2.5s window max|Δ| {w_vt:.3e} vs torch — depthwise divergence (static) regressed"
