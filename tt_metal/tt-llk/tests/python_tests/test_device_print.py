@@ -5,6 +5,7 @@ import re
 
 import pytest
 import torch
+from conftest import skip_for_coverage
 from helpers.bfp_format_utils import bfp4b_to_float16b, bfp8b_to_float16b
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
