@@ -9,8 +9,7 @@ Just signature adaptation for TTModelRunner.
 """
 
 import ttnn
-from models.common.models.llama3_8b.executor import EagerLlamaExecutor, TracedLlamaExecutor
-from models.common.models.llama3_8b.model import Llama3Transformer1D
+from models.common.models.llama3_8b.model import EagerLlamaExecutor, Llama3Transformer1D, TracedLlamaExecutor
 
 
 class Llama3Generator:
