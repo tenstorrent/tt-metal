@@ -299,44 +299,181 @@ TEST_F(ProgramRunArgsTestQuasar, MissingNodeRTAsFails) {
             ::testing::HasSubstr("Kernel 'dm_kernel' is missing vararg runtime args for node")));
 }
 
-// TODO: Replace when feature is implemented
-TEST_F(ProgramRunArgsTestQuasar, DFBSizeOverrideFails) {
+// First-launch override: entry_size only (per-TC base/limit recompute; capacity unchanged).
+TEST_F(ProgramRunArgsTestQuasar, DFBEntrySizeOverrideSucceeds) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .entry_size = 2048});
 
-    // Add DFB run params with size override (not implemented)
-    params.dfb_run_overrides.push_back(ProgramRunArgs::DFBRunOverrides{
-        .dfb = DFBSpecName{"dfb_0"},
-        .entry_size = 2048,  // Override - not implemented!
-    });
+    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
 
-    EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("DFB size overrides are not yet implemented")));
+    auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    EXPECT_EQ(dfb->config.entry_size, 2048u);
+    EXPECT_EQ(dfb->config.num_entries, 2u);  // unchanged
+    EXPECT_EQ(dfb->capacity, 2u);            // capacity = num_entries / max(prod,cons)
+    EXPECT_EQ(dfb->stride_in_entries, 1u);
 }
 
-// TODO: Replace when feature is implemented
-TEST_F(ProgramRunArgsTestQuasar, DFBNumEntriesOverrideFails) {
+// First-launch override: num_entries only (changes capacity).
+TEST_F(ProgramRunArgsTestQuasar, DFBNumEntriesOverrideSucceeds) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .num_entries = 4});
 
-    // Add DFB run params with num_entries override (not implemented)
-    params.dfb_run_overrides.push_back(ProgramRunArgs::DFBRunOverrides{
-        .dfb = DFBSpecName{"dfb_0"},
-        .num_entries = 4,  // Override - not implemented!
-    });
+    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+
+    auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    EXPECT_EQ(dfb->config.entry_size, 1024u);  // unchanged
+    EXPECT_EQ(dfb->config.num_entries, 4u);
+    EXPECT_EQ(dfb->capacity, 4u);
+    EXPECT_EQ(dfb->stride_in_entries, 1u);
+}
+
+// First-launch override: both entry_size and num_entries.
+TEST_F(ProgramRunArgsTestQuasar, DFBBothOverridesSucceed) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .entry_size = 512, .num_entries = 8});
+
+    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+
+    auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    EXPECT_EQ(dfb->config.entry_size, 512u);
+    EXPECT_EQ(dfb->config.num_entries, 8u);
+    EXPECT_EQ(dfb->capacity, 8u);
+}
+
+TEST_F(ProgramRunArgsTestQuasar, DFBEntrySizeOverrideZeroFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .entry_size = 0});
 
     EXPECT_THAT(
         [&] { SetProgramRunArgs(program, params); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("DFB size overrides are not yet implemented")));
+            ::testing::HasSubstr("entry_size must be set to a non-zero value")));
+}
+
+TEST_F(ProgramRunArgsTestQuasar, DFBNumEntriesOverrideZeroFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .num_entries = 0});
+
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("num_entries must be set to a non-zero value")));
+}
+
+TEST_F(ProgramRunArgsTestQuasar, DFBSizeOverrideUnknownNameFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"does_not_exist"}, .entry_size = 2048});
+
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Unknown DFB spec name")));
+}
+
+// Re-entry: after the DFB is finalized, a num_entries override must recompute the
+// txn descriptor in place while PRESERVING the TC assignment and transaction IDs.
+TEST_F(ProgramRunArgsTestQuasar, DFBReentryOverridePreservesTcAndRecomputesTxn) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // Force the finalized state (allocates TCs/txn-ids and computes txn descriptors) without a launch.
+    program.impl().finalize_dataflow_buffer_configs();
+
+    auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    ASSERT_TRUE(dfb->configs_finalized);
+    ASSERT_TRUE(dfb->config.enable_producer_implicit_sync);
+    ASSERT_GT(dfb->producer_txn_descriptor.num_txn_ids, 0);
+
+    // Snapshot TC assignment + transaction IDs before the override.
+    auto snapshot_tcs = [](const auto& d) {
+        std::vector<uint32_t> tcs;
+        for (const auto& group : d->groups) {
+            for (const auto& rc : group.hw_risc_configs) {
+                for (uint8_t i = 0; i < rc.config.num_tcs_to_rr; ++i) {
+                    tcs.push_back(static_cast<uint32_t>(rc.config.packed_tile_counter[i]));
+                }
+            }
+        }
+        return tcs;
+    };
+    const std::vector<uint32_t> tcs_before = snapshot_tcs(dfb);
+    const uint8_t num_txn_ids_before = dfb->producer_txn_descriptor.num_txn_ids;
+    const std::vector<uint8_t> txn_ids_before(
+        dfb->producer_txn_descriptor.txn_ids, dfb->producer_txn_descriptor.txn_ids + num_txn_ids_before);
+    const uint8_t threshold_before = dfb->producer_txn_descriptor.num_entries_to_process_threshold;
+
+    // Override num_entries 2 -> 4 (still divisible by the preserved txn-id divisor).
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .num_entries = 4});
+    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+
+    // Size-derived state updated.
+    EXPECT_EQ(dfb->config.num_entries, 4u);
+    EXPECT_EQ(dfb->capacity, 4u);
+    EXPECT_TRUE(dfb->configs_finalized);  // not reset
+
+    // TC assignment + transaction IDs preserved.
+    EXPECT_EQ(snapshot_tcs(dfb), tcs_before);
+    EXPECT_EQ(dfb->producer_txn_descriptor.num_txn_ids, num_txn_ids_before);
+    const std::vector<uint8_t> txn_ids_after(
+        dfb->producer_txn_descriptor.txn_ids,
+        dfb->producer_txn_descriptor.txn_ids + dfb->producer_txn_descriptor.num_txn_ids);
+    EXPECT_EQ(txn_ids_after, txn_ids_before);
+
+    // Threshold recomputed for the new num_entries (threshold = num_entries / num_txn_ids).
+    EXPECT_EQ(dfb->producer_txn_descriptor.num_entries_to_process_threshold, threshold_before * 2);
+}
+
+TEST_F(ProgramRunArgsTestQuasar, DFBReentryNumEntriesViolatesTxnDivisorFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    program.impl().finalize_dataflow_buffer_configs();
+
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .num_entries = 3});
+
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("not divisible")));
+}
+
+TEST_F(ProgramRunArgsTestQuasar, DFBReentryEntrySizeRingExtentFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    program.impl().finalize_dataflow_buffer_configs();
+
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .entry_size = 64u * 1024u * 1024u});
+
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("exceeds uint16_t")));
 }
 
 // ============================================================================
