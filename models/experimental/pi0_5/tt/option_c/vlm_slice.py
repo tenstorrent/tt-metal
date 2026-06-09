@@ -932,6 +932,122 @@ class Pi0_5OptionCVLMSliceParent:
                 h = h_new
         return h
 
+    def forward_real_block_chain(self, activation: "ttnn.Tensor") -> "ttnn.Tensor":
+        """Complete Gemma block forward on parent mesh — REAL attention + MLP.
+
+        Per layer:
+          # Attention sublayer
+          1. RMSNorm(input_layernorm)
+          2. Q + K + V matmuls + head reshapes
+          3. RoPE on Q and K
+          4. SDPA(Q, K, V, is_causal=True)
+          5. O matmul on SDPA output
+          6. Residual add
+          # MLP sublayer
+          7. RMSNorm(post_attention_layernorm)
+          8. gate + up matmuls + silu + multiply (GLU)
+          9. down matmul
+         10. Residual add
+          # Transport
+         11. P2P-multihop to next layer's chip
+
+        Returns the final activation after 18 complete Gemma blocks.
+        """
+        from .transport import send_shard_via_p2p_multihop
+
+        self._ensure_rope_tables()
+
+        for r in [
+            "input_layernorm",
+            "post_attention_layernorm",
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+        ]:
+            if r not in self.weights_on_parent:
+                raise RuntimeError(f"{r} not loaded")
+
+        input_ln = self.weights_on_parent["input_layernorm"]
+        post_attn_ln = self.weights_on_parent["post_attention_layernorm"]
+        q_proj = self.weights_on_parent["q_proj"]
+        k_proj = self.weights_on_parent["k_proj"]
+        v_proj = self.weights_on_parent["v_proj"]
+        o_proj = self.weights_on_parent["o_proj"]
+        gate = self.weights_on_parent["gate_proj"]
+        up = self.weights_on_parent["up_proj"]
+        down = self.weights_on_parent["down_proj"]
+        eps = self.config.vlm_config.rms_norm_eps
+        num_heads = self.config.vlm_config.num_heads
+        num_kv_heads = self.config.vlm_config.num_kv_heads
+        head_dim = self.config.vlm_config.head_dim
+
+        h = activation
+        for i in range(self.num_layers):
+            seq_len = h.shape[-2]
+
+            # ---- Attention sublayer ----
+            normed = ttnn.rms_norm(h, weight=input_ln, epsilon=eps, memory_config=ttnn.L1_MEMORY_CONFIG)
+            q_flat = ttnn.linear(normed, q_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            k_flat = ttnn.linear(normed, k_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            v_flat = ttnn.linear(normed, v_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(normed)
+            q = ttnn.permute(ttnn.reshape(q_flat, (1, seq_len, num_heads, head_dim)), (0, 2, 1, 3))
+            ttnn.deallocate(q_flat)
+            k = ttnn.permute(ttnn.reshape(k_flat, (1, seq_len, num_kv_heads, head_dim)), (0, 2, 1, 3))
+            ttnn.deallocate(k_flat)
+            v = ttnn.permute(ttnn.reshape(v_flat, (1, seq_len, num_kv_heads, head_dim)), (0, 2, 1, 3))
+            ttnn.deallocate(v_flat)
+            cos_slice = ttnn.slice(self._cos_meta, [0, 0, 0, 0], [1, 1, seq_len, head_dim])
+            sin_slice = ttnn.slice(self._sin_meta, [0, 0, 0, 0], [1, 1, seq_len, head_dim])
+            q_rope = ttnn.experimental.rotary_embedding(q, cos_slice, sin_slice)
+            k_rope = ttnn.experimental.rotary_embedding(k, cos_slice, sin_slice)
+            ttnn.deallocate(cos_slice)
+            ttnn.deallocate(sin_slice)
+            attn = ttnn.transformer.scaled_dot_product_attention(
+                q_rope, k_rope, v, is_causal=True, memory_config=ttnn.L1_MEMORY_CONFIG
+            )
+            ttnn.deallocate(q_rope)
+            ttnn.deallocate(k_rope)
+            ttnn.deallocate(v)
+            attn_flat = ttnn.reshape(ttnn.permute(attn, (0, 2, 1, 3)), (1, 1, seq_len, num_heads * head_dim))
+            ttnn.deallocate(attn)
+            attn_out = ttnn.linear(attn_flat, o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(attn_flat)
+            h_post_attn = ttnn.add(h, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(attn_out)
+            ttnn.deallocate(h)
+
+            # ---- MLP sublayer ----
+            normed = ttnn.rms_norm(h_post_attn, weight=post_attn_ln, epsilon=eps, memory_config=ttnn.L1_MEMORY_CONFIG)
+            g = ttnn.linear(normed, gate, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            u = ttnn.linear(normed, up, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(normed)
+            u_act = ttnn.silu(u, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(u)
+            mid = ttnn.multiply(g, u_act, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(g)
+            ttnn.deallocate(u_act)
+            d = ttnn.linear(mid, down, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(mid)
+            h_new = ttnn.add(h_post_attn, d, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(d)
+            ttnn.deallocate(h_post_attn)
+
+            # ---- P2P advance ----
+            if i + 1 < self.num_layers:
+                cur = self.prefill_coord_for_layer(i)
+                nxt = self.prefill_coord_for_layer(i + 1)
+                h = send_shard_via_p2p_multihop(h_new, cur, nxt)
+                if h is not h_new:
+                    ttnn.deallocate(h_new)
+            else:
+                h = h_new
+        return h
+
     def _ensure_rope_tables(self):
         """Lazy-init cos/sin tables on the parent mesh, replicated to all chips.
 
