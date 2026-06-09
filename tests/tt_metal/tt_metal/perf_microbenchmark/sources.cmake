@@ -9,6 +9,8 @@ set(PERF_MICROBENCH_TESTS_SRCS
     ethernet/test_ethernet_bidirectional_bandwidth_no_edm.cpp
     ethernet/test_ethernet_link_ping_latency_no_edm.cpp
     ethernet/test_all_ethernet_links.cpp
+    routing/benchmark_fabric_mux_saturation.cpp
+    routing/benchmark_fabric_mux_v2_throughput.cpp
     routing/test_tt_fabric_mux_bandwidth.cpp
     routing/test_tt_fabric.cpp
     noc/test_noc_unicast_vs_multicast_to_single_core_latency.cpp

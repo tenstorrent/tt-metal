@@ -206,6 +206,7 @@ set(JITAPI_FILES
     impl/dispatch/kernels/cq_realtime_profiler_push.cpp
     fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
     fabric/impl/kernels/tt_fabric_mux.cpp
+    fabric/impl/kernels/tt_fabric_mux_v2.cpp
     kernels/compute/blank.cpp
     kernels/compute/eltwise_binary.cpp
     kernels/compute/eltwise_sfpu.cpp
