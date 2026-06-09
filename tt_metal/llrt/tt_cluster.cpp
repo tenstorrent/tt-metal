@@ -1629,13 +1629,11 @@ void Cluster::register_sim_fabric_endpoint_direction(
 #endif
 }
 
-void Cluster::sim_arm_launch_watcher(ChipId chip_id, CoreCoord virtual_core, bool is_eth) const {
-    if (this->target_type_ != tt::TargetDevice::Simulator) {
-        return;
-    }
-    tt::umd::CoreCoord core_coord(virtual_core.x, virtual_core.y);
-    this->get_driver()->sim_arm_launch_watcher(chip_id, core_coord, is_eth);
+void Cluster::sim_arm_launch_watcher(ChipId /*chip_id*/, CoreCoord /*virtual_core*/, bool /*is_eth*/) const {
+    // WIP debug hook for sim watcher; UMD/craq-sim do not expose this API on blaze-metal-main yet.
 }
+
+void Cluster::advance_device_execution(ChipId chip_id) const { this->get_driver()->advance_device_execution(chip_id); }
 
 }  // namespace tt
 

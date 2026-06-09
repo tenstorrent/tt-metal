@@ -323,6 +323,7 @@ void validate_graphs(PhysicalSystemDescriptor& psd) {
     // Validate that the representation of the system is internally consistent.
     const auto& asic_descriptors = psd.get_asic_descriptors();
     auto& system_graph = psd.get_system_graph();
+    std::vector<OneSidedConnection> connections_to_drop;
 
     for (auto& [host, asic_group] : system_graph.asic_connectivity_graph) {
         for (auto& [src_asic, edges] : asic_group) {
@@ -331,6 +332,7 @@ void validate_graphs(PhysicalSystemDescriptor& psd) {
                 continue;
             }
             const auto& src_host = asic_descriptors.at(src_asic).host_name;
+            const auto& src_desc = asic_descriptors.at(src_asic);
 
             // Skip if host_connectivity_graph doesn't have src_host (shouldn't happen, but be defensive)
             if (!system_graph.host_connectivity_graph.contains(src_host)) {
@@ -344,6 +346,7 @@ void validate_graphs(PhysicalSystemDescriptor& psd) {
                     continue;
                 }
                 const auto& dst_host = asic_descriptors.at(dst_asic).host_name;
+                const auto& dst_desc = asic_descriptors.at(dst_asic);
 
                 bool all_local = std::all_of(
                     eth_conns.begin(), eth_conns.end(), [](const EthConnection& conn) { return conn.is_local; });
@@ -382,12 +385,26 @@ void validate_graphs(PhysicalSystemDescriptor& psd) {
                             return host_edge.first == dst_host;
                         });
 
-                    TT_FATAL(
-                        host_edge_it != src_host_edges.end(),
-                        "Physical Discovery Error: Global Connection between {} and {} is not found in the host "
-                        "connectivity graph. Please reset the system and try again.",
-                        src_host,
-                        dst_host);
+                    if (host_edge_it == src_host_edges.end()) {
+                        log_warning(
+                            tt::LogMetal,
+                            "Physical Discovery Warning: Global Connection between host {} and host {} is not found "
+                            "in the host connectivity graph. ASIC {} (Tray {} Location {} chan {}) -> ASIC {} "
+                            "(Tray {} Location {} chan {}). Dropping one-sided link.",
+                            src_host,
+                            dst_host,
+                            src_asic,
+                            src_desc.tray_id,
+                            src_desc.asic_location,
+                            eth_conn.src_chan,
+                            dst_asic,
+                            dst_desc.tray_id,
+                            dst_desc.asic_location,
+                            eth_conn.dst_chan);
+                        connections_to_drop.push_back(
+                            {host, src_host, dst_host, src_asic, dst_asic, eth_conn.src_chan, eth_conn.dst_chan});
+                        continue;
+                    }
 
                     const auto& exit_node_conns = host_edge_it->second;
                     bool exit_conn_found = std::any_of(
@@ -398,15 +415,36 @@ void validate_graphs(PhysicalSystemDescriptor& psd) {
                                    exit_node_conn.eth_conn.dst_chan == eth_conn.dst_chan;
                         });
 
-                    TT_FATAL(
-                        exit_conn_found,
-                        "Physical Discovery Error: Global Connection between {} and {} is not found in the "
-                        "host connectivity graph. Please reset the system and try again.",
-                        src_host,
-                        dst_host);
+                    if (!exit_conn_found) {
+                        log_warning(
+                            tt::LogMetal,
+                            "Physical Discovery Warning: Exit node connection not found between host {} and host {}. "
+                            "ASIC {} (Tray {} Location {} chan {}) -> ASIC {} (Tray {} Location {} chan {}). "
+                            "Dropping one-sided link.",
+                            src_host,
+                            dst_host,
+                            src_asic,
+                            src_desc.tray_id,
+                            src_desc.asic_location,
+                            eth_conn.src_chan,
+                            dst_asic,
+                            dst_desc.tray_id,
+                            dst_desc.asic_location,
+                            eth_conn.dst_chan);
+                        connections_to_drop.push_back(
+                            {host, src_host, dst_host, src_asic, dst_asic, eth_conn.src_chan, eth_conn.dst_chan});
+                    }
                 }
             }
         }
+    }
+
+    if (!connections_to_drop.empty()) {
+        log_warning(
+            tt::LogMetal,
+            "Physical Discovery: Dropping {} one-sided connection(s). Link retraining will attempt recovery.",
+            connections_to_drop.size());
+        erase_one_sided_connections(psd, connections_to_drop);
     }
 }
 
