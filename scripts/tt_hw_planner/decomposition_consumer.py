@@ -22,21 +22,27 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 
 def consume_decomposition_plan(
     *,
     model_id: str,
     demo_dir: Path,
+    passed_components: Optional[Set[str]] = None,
 ) -> Tuple[int, List[str]]:
     """Apply ``<demo_dir>/decomposition_plan.json`` to ``bringup_status.json``.
+
+    ``passed_components`` is the set of components the seed pytest shows
+    already passing this run; a stale plan must not decompose (and mark
+    ``no_emit``) a parent that has since graduated.
 
     Returns ``(children_added, notes)``. ``children_added`` is the count
     of new NEW-status components added to bringup_status. ``notes`` is
     a list of human-readable lines describing what happened (for the
     auto-iterate banner / RUN_REPORT.md).
     """
+    passed = passed_components or set()
     plan_path = demo_dir / "decomposition_plan.json"
     if not plan_path.is_file():
         return 0, []
@@ -77,6 +83,9 @@ def consume_decomposition_plan(
         parent_name = entry.get("parent_name") or ""
         children = entry.get("children") or []
         if not parent_name or not isinstance(children, list):
+            continue
+        if parent_name in passed:
+            notes.append(f"[decompose] skip `{parent_name}`: already passing this run (stale plan)")
             continue
         added_this_entry = 0
         for child in children:

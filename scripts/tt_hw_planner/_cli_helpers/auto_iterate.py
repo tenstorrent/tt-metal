@@ -723,7 +723,11 @@ def _run_auto_iterate_loop(
     try:
         from ..decomposition_consumer import consume_decomposition_plan
 
-        _decomp_added, _decomp_notes = consume_decomposition_plan(model_id=MODEL, demo_dir=demo_dir)
+        _decomp_added, _decomp_notes = consume_decomposition_plan(
+            model_id=MODEL,
+            demo_dir=demo_dir,
+            passed_components=set(seed_report.get("passed_components", []) or []),
+        )
         for _line in _decomp_notes:
             print(f"  {_line}")
         if _decomp_added:

@@ -61,11 +61,11 @@ def test_consumer_adds_children_to_bringup_status(tmp_path: Path, monkeypatch) -
 
     status = json.loads((demo_dir / "bringup_status.json").read_text())
     names = [c["name"] for c in status["components"]]
-    assert "child1" in names
-    assert "child2" in names
-    # Each child has its submodule_path
+    # children are namespaced by submodule_path slug: encoder.layers.0 -> encoder_layers_0
+    assert "encoder_layers_0" in names
+    assert "encoder_layers_1" in names
     by_name = {c["name"]: c for c in status["components"]}
-    assert by_name["child1"]["submodule_path"] == "encoder.layers.0"
+    assert by_name["encoder_layers_0"]["submodule_path"] == "encoder.layers.0"
 
 
 def test_consumer_marks_parent_no_emit(tmp_path: Path, monkeypatch) -> None:
@@ -128,7 +128,7 @@ def test_consumer_skips_already_added_children(tmp_path: Path, monkeypatch) -> N
         tmp_path,
         [
             {"name": "parent_a", "status": "NEW", "submodule_path": "encoder"},
-            {"name": "child1", "status": "NEW", "submodule_path": "encoder.layers.0"},
+            {"name": "encoder_layers_0", "status": "NEW", "submodule_path": "encoder.layers.0"},
         ],
     )
     plan = [
@@ -143,9 +143,31 @@ def test_consumer_skips_already_added_children(tmp_path: Path, monkeypatch) -> N
     (demo_dir / "decomposition_plan.json").write_text(json.dumps(plan))
 
     added, _ = consume_decomposition_plan(model_id="test/m", demo_dir=demo_dir)
-    assert added == 1  # only child2 is new
+    assert added == 1  # only encoder_layers_1 is new
 
     status = json.loads((demo_dir / "bringup_status.json").read_text())
     names = [c["name"] for c in status["components"]]
-    assert names.count("child1") == 1  # not duplicated
-    assert "child2" in names
+    assert names.count("encoder_layers_0") == 1  # not duplicated
+    assert "encoder_layers_1" in names
+
+
+def test_consumer_skips_parent_already_passing(tmp_path: Path, monkeypatch) -> None:
+    """A stale plan must NOT decompose a parent that's already passing this
+    run (per seed pytest) — otherwise it un-graduates working components and
+    marks them no_emit."""
+    from scripts.tt_hw_planner import overlay_manager as om
+
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+
+    demo_dir = _make_demo(tmp_path, [{"name": "parent_a", "status": "NEW", "submodule_path": "encoder"}])
+    plan = [
+        {
+            "parent_name": "parent_a",
+            "children": [{"name": "child1", "submodule_path": "encoder.layers.0", "class_name": "Block"}],
+        }
+    ]
+    (demo_dir / "decomposition_plan.json").write_text(json.dumps(plan))
+
+    added, _ = consume_decomposition_plan(model_id="test/m", demo_dir=demo_dir, passed_components={"parent_a"})
+    assert added == 0  # passing parent is not decomposed
+    assert "parent_a" not in om.load_no_emit_tests("test/m")  # and not un-graduated
