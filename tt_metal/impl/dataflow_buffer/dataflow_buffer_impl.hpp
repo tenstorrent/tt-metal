@@ -137,6 +137,9 @@ void verify_dfb_per_risc_byte_offsets(
 uint32_t compute_dfb_config_serialized_size(
     const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
 
+// DM0 ISR blob region: core header + per-DFB hw entries + trailing txn desc pool.
+uint32_t dm0_isr_blob_region_size(const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
 // Packs Quasar DFB config: [header | offset table | DM1 blobs | DM0 blobs | per-DFB layouts]. Returns bytes written.
 size_t serialize_dfb_config_for_core(
     const CoreCoord& core,

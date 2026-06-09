@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include "dataflow_buffer_config.h"
 #ifndef COMPILE_FOR_TRISC
@@ -140,3 +141,15 @@ struct TxnDFBDescriptor {
     uint8_t _pad[12];  // pad 20 → 32 bytes
 };
 static_assert(sizeof(TxnDFBDescriptor) == 32, "TxnDFBDescriptor size is incorrect");
+static_assert(
+    sizeof(TxnDFBDescriptor) == sizeof(dfb_dm0_txn_descriptor_image_t),
+    "TxnDFBDescriptor must match dfb_dm0_txn_descriptor_image_t for ISR blob memcpy");
+static_assert(
+    offsetof(TxnDFBDescriptor, num_counters) == offsetof(dfb_dm0_txn_descriptor_image_t, num_counters),
+    "TxnDFBDescriptor field layout must match dfb_dm0_txn_descriptor_image_t");
+static_assert(
+    offsetof(TxnDFBDescriptor, tile_counters) == offsetof(dfb_dm0_txn_descriptor_image_t, tile_counters),
+    "TxnDFBDescriptor field layout must match dfb_dm0_txn_descriptor_image_t");
+static_assert(
+    offsetof(TxnDFBDescriptor, tiles_to_post) == offsetof(dfb_dm0_txn_descriptor_image_t, tiles_to_post_or_ack),
+    "TxnDFBDescriptor tiles_to_post must match dfb_dm0_txn_descriptor_image_t tiles_to_post_or_ack");

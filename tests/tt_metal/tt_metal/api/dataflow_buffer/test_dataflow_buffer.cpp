@@ -29,6 +29,7 @@
 
 #include "device_fixture.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "hw/inc/internal/tt-2xx/quasar/dev_mem_map.h"
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
 #include "impl/program/program_impl.hpp"
@@ -2216,7 +2217,205 @@ experimental::DataflowBufferSpec MakeBenchDfbSpec(
     const std::string& id, uint32_t entry_size, uint32_t num_entries) {
     return MakeBenchDfbSpec(id.c_str(), entry_size, num_entries);
 }
+
+constexpr const char* kDfbInitTimingSlotNames[::dfb::DFB_INIT_TIMING_NUM_SLOTS] = {
+    "DM0",
+    "DM1",
+    "DM2",
+    "DM3",
+    "DM4",
+    "DM5",
+    "DM6",
+    "DM7",
+    "Neo0 unpack",
+    "Neo0 pack",
+    "Neo1 unpack",
+    "Neo1 pack",
+    "Neo2 unpack",
+    "Neo2 pack",
+    "Neo3 unpack",
+    "Neo3 pack",
+};
+
+void LogDfbInitTimingFromL1(IDevice* device, const CoreCoord& core, const char* benchmark_name) {
+    const uint32_t l1_addr = ::dfb::DFB_INIT_TIMING_L1_BYTE_OFFSET;
+    std::vector<uint32_t> timing_words;
+    detail::ReadFromDeviceL1(
+        device,
+        core,
+        l1_addr,
+        ::dfb::DFB_INIT_TIMING_REGION_BYTES,
+        timing_words);
+
+    log_info(tt::LogTest, "DFB init timing [{}] @ L1 0x{:x}:", benchmark_name, l1_addr);
+    for (uint8_t slot = 0; slot < ::dfb::DFB_INIT_TIMING_NUM_SLOTS; ++slot) {
+        const uint32_t base = static_cast<uint32_t>(slot) * ::dfb::DFB_INIT_TIMING_WORDS_PER_SLOT;
+        const uint32_t* words = timing_words.data() + base;
+        if (words[::dfb::DFB_INIT_TIMING_W_VALID] != 1u ||
+            words[::dfb::DFB_INIT_TIMING_W_MAGIC] != ::dfb::DFB_INIT_TIMING_MAGIC) {
+            log_info(tt::LogTest, "  {}: (not written)", kDfbInitTimingSlotNames[slot]);
+            continue;
+        }
+
+        const uint8_t role = static_cast<uint8_t>(words[::dfb::DFB_INIT_TIMING_W_ROLE]);
+        const uint32_t e2e = words[::dfb::DFB_INIT_TIMING_W_E2E];
+        const uint32_t metric_a = words[::dfb::DFB_INIT_TIMING_W_METRIC_A];
+        const uint32_t metric_b = words[::dfb::DFB_INIT_TIMING_W_METRIC_B];
+        const uint32_t metric_c = words[::dfb::DFB_INIT_TIMING_W_METRIC_C];
+        const uint32_t metric_d = words[::dfb::DFB_INIT_TIMING_W_METRIC_D];
+        const uint32_t metric_e = words[::dfb::DFB_INIT_TIMING_W_METRIC_E];
+        const uint32_t metric_f = words[::dfb::DFB_INIT_TIMING_W_METRIC_F];
+        const uint32_t start_time = words[::dfb::DFB_INIT_TIMING_W_START];
+        const uint32_t end_time = words[::dfb::DFB_INIT_TIMING_W_END];
+
+        if (role == ::dfb::DFB_INIT_TIMING_ROLE_DM0_ISR) {
+            log_info(
+                tt::LogTest,
+                "  {}: e2e={} subpassA={} subpassB_desc={} subpassB_hw={} isr_ie_writes={} isr_enable={} "
+                "implicit_sync_stores={} start={} end={}",
+                kDfbInitTimingSlotNames[slot],
+                e2e,
+                metric_a,
+                metric_b,
+                metric_c,
+                metric_d,
+                metric_e,
+                metric_f,
+                start_time,
+                end_time);
+        } else if (role == ::dfb::DFB_INIT_TIMING_ROLE_DM1_RMP) {
+            log_info(
+                tt::LogTest,
+                "  {}: e2e={} total_rmp={} write_pairs_hw={} enable_remapper_hw={} start={} end={}",
+                kDfbInitTimingSlotNames[slot],
+                e2e,
+                metric_a,
+                metric_b,
+                metric_c,
+                start_time,
+                end_time);
+        } else {
+            log_info(
+                tt::LogTest,
+                "  {}: e2e={} merged_sw={} remapper_spin={} tc_hw={} wait_all={} start={} end={}",
+                kDfbInitTimingSlotNames[slot],
+                e2e,
+                metric_a,
+                metric_b,
+                metric_c,
+                metric_d,
+                start_time,
+                end_time);
+        }
+    }
+}
 }  // namespace
+
+// Base-case DFB init benchmark.
+//
+// One 1Sx1S DM→Tensix DFB on core (0,0) — same configuration as
+// DFBImplicitSyncParamFixture.DMTensixTest1xDFB1Sx1S/ImplicitSyncTrue:
+//   entry_size=1024, num_entries=16, 1 STRIDED producer, 1 STRIDED consumer,
+//   implicit sync enabled, no remapper.
+//
+// Reuses dfb_producer.cpp and dfb_t6_consumer.cpp (same kernels as DMTensixTest1xDFB1Sx1S).
+// Data movement is commented out in those kernels so measured time reflects DFB init overhead.
+TEST_F(MeshDeviceFixture, BenchmarkCaseBase) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB init benchmarks require Quasar";
+    }
+
+    auto mesh_device = this->devices_.at(0);
+    IDevice* device = mesh_device->get_devices()[0];
+    CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+
+    constexpr uint32_t ENTRY_SIZE = 1024;
+    constexpr uint32_t NUM_ENTRIES = 16;
+    constexpr uint8_t NUM_PRODUCERS = 1;
+    constexpr uint8_t NUM_CONSUMERS = 1;
+    constexpr uint32_t NUM_ENTRIES_PER_PRODUCER = NUM_ENTRIES;
+    constexpr uint32_t NUM_ENTRIES_PER_CONSUMER = NUM_ENTRIES;
+
+    constexpr const char* DFB = "dfb";
+    constexpr const char* PRODUCER = "producer";
+    constexpr const char* CONSUMER = "consumer";
+    constexpr const char* IN_TENSOR = "in_tensor";
+
+    const experimental::DataMovementHardwareConfig dm_producer_cfg{
+        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
+    };
+
+    auto in_tensor = MeshTensor::allocate_on_device(
+        *mesh_device, make_flat_dram_tensor_spec(ENTRY_SIZE, NUM_ENTRIES), TensorTopology{});
+
+    experimental::DataflowBufferSpec dfb_spec = MakeBenchDfbSpec(DFB, ENTRY_SIZE, NUM_ENTRIES);
+
+    experimental::KernelSpec producer_spec{
+        .unique_id = PRODUCER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
+        .num_threads = NUM_PRODUCERS,
+        .dfb_bindings = {experimental::ProducerOf(DFB, "out")},
+        .tensor_bindings = {{
+            .tensor_parameter_name = IN_TENSOR,
+            .accessor_name = "src_tensor",
+        }},
+        .compile_time_args =
+            {
+                {"num_entries_per_producer", NUM_ENTRIES_PER_PRODUCER},
+                {"implicit_sync", 1u},
+                {"num_producers", static_cast<uint32_t>(NUM_PRODUCERS)},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}},
+        .hw_config = dm_producer_cfg,
+    };
+
+    experimental::KernelSpec consumer_spec{
+        .unique_id = CONSUMER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer.cpp",
+        .num_threads = NUM_CONSUMERS,
+        .dfb_bindings = {{
+            .dfb_spec_name = DFB,
+            .accessor_name = "in",
+            .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+            .access_pattern = experimental::DFBAccessPattern::STRIDED,
+        }},
+        .compile_time_args = {{"num_entries_per_consumer", NUM_ENTRIES_PER_CONSUMER}},
+        .hw_config = experimental::ComputeHardwareConfig{},
+    };
+
+    experimental::WorkUnitSpec wu{
+        .name = "bench_base_wu",
+        .kernels = {PRODUCER, CONSUMER},
+        .target_nodes = core_range_set,
+    };
+
+    experimental::ProgramSpec spec{
+        .name = "bench_base",
+        .kernels = {producer_spec, consumer_spec},
+        .dataflow_buffers = {dfb_spec},
+        .tensor_parameters = {{.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()}},
+        .work_units = {wu},
+    };
+
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+
+    experimental::ProgramRunArgs run_args;
+    run_args.kernel_run_args = {{
+        .kernel_spec_name = PRODUCER,
+        .runtime_arg_values = {{
+            experimental::ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{
+                experimental::NodeCoord{0, 0},
+                {{"chunk_offset", 0u}, {"entries_per_core", NUM_ENTRIES}},
+            },
+        }},
+    }};
+    run_args.kernel_run_args.push_back({.kernel_spec_name = CONSUMER});
+    run_args.tensor_args = {{.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)}};
+    experimental::SetProgramRunArgs(program, run_args);
+
+    detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+    LogDfbInitTimingFromL1(device, CoreCoord(0, 0), "BenchmarkCaseBase");
+}
 
 // Average-case DFB init benchmark.
 //
@@ -2314,6 +2513,7 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseTwo) {
     experimental::SetProgramRunArgs(program, run_args);
 
     detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+    LogDfbInitTimingFromL1(device, CoreCoord(0, 0), "BenchmarkCaseTwo");
 }
 
 // Worst-case DFB init benchmark.
@@ -2407,6 +2607,7 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseFour) {
     experimental::SetProgramRunArgs(program, run_args);
 
     detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+    LogDfbInitTimingFromL1(device, CoreCoord(0, 0), "BenchmarkCaseFour");
 }
 
 
@@ -2415,7 +2616,7 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseFour) {
 // Three concurrent 4Sx4S DM→Tensix DFBs: 4 STRIDED DM producers, 4 STRIDED
 // Tensix consumers. This is a STRIDED-STRIDED variant of BenchmarkCaseWorst
 // (which uses ALL consumers). No remapper is used, making this a clean mid-point
-// between BenchmarkCaseBest (1 DFB, no remapper) and BenchmarkCaseWorst (remapper).
+// between BenchmarkCaseBase (1 DFB, no remapper) and BenchmarkCaseWorst (remapper).
 //
 // Per-tensix TC budget:
 //   Each 4Sx4S DFB uses 1 TC per (producer, consumer) pair, all on the same tensix.
@@ -2427,6 +2628,7 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseFour) {
 //
 // Reuses dfb_bench_worst_reader_dm.cpp (4 DM threads, 2 reads per DFB)
 // and dfb_bench_worst_compute.cpp (4 Neo threads, wait_front(1)+pop_front(2) per DFB).
+// l1 base: 767872
 TEST_F(MeshDeviceFixture, BenchmarkCaseThree) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "DFB init benchmarks require Quasar";
@@ -2503,6 +2705,7 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseThree) {
     experimental::SetProgramRunArgs(program, run_args);
 
     detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+    LogDfbInitTimingFromL1(device, CoreCoord(0, 0), "BenchmarkCaseThree");
 }
 
 
@@ -2631,6 +2834,7 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseFive) {
     experimental::SetProgramRunArgs(program, run_args);
 
     detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+    LogDfbInitTimingFromL1(device, CoreCoord(0, 0), "BenchmarkCaseFive");
 }
 
 
@@ -2799,6 +3003,7 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseSeven) {
         });
 
     detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+    LogDfbInitTimingFromL1(device, CoreCoord(0, 0), "BenchmarkCaseSeven");
 }
 
 // BenchmarkWorstCaseFour — exhausts all 16 one-to-many remapper slots AND exercises
@@ -2953,6 +3158,7 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseSix) {
         });
 
     detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+    LogDfbInitTimingFromL1(device, CoreCoord(0, 0), "BenchmarkCaseSix");
 }
 
 

@@ -283,6 +283,31 @@ TEST_F(MeshDeviceFixture, DfbSerializeGlobalHeader1Sx1S) {
     EXPECT_GT(ghdr->dm0_isr_blob_offset, ghdr->dm1_remapper_blob_offset);
     EXPECT_GT(ghdr->per_dfb_layout_offset, ghdr->dm0_isr_blob_offset);
 
+    // Phase A: 8B core header + per-DFB hw-only ISR entries + trailing txn desc pool.
+    const auto* dm0_core_hdr = reinterpret_cast<const dfb_dm0_isr_blob_core_header_t*>(
+        buf.data() + ghdr->dm0_isr_blob_offset);
+    EXPECT_EQ(ghdr->dm0_isr_blob_offset, prefix_size + sizeof(dfb_dm1_remapper_entry_header_t));
+    EXPECT_EQ(
+        ghdr->per_dfb_layout_offset,
+        ghdr->dm0_isr_blob_offset +
+            experimental::dfb::detail::dm0_isr_blob_region_size(dfbs));
+    EXPECT_EQ(ghdr->dm0_isr_ready, 0u);
+    const auto* dm0_entry_hdr = reinterpret_cast<const dfb_dm0_isr_entry_header_t*>(
+        buf.data() + ghdr->dm0_isr_blob_offset + sizeof(dfb_dm0_isr_blob_core_header_t));
+    EXPECT_EQ(dm0_entry_hdr->num_producer_txns, dfbs[0]->producer_txn_descriptor.num_txn_ids);
+    EXPECT_EQ(dm0_entry_hdr->num_consumer_txns, dfbs[0]->consumer_txn_descriptor.num_txn_ids);
+    uint32_t expected_prod_mask = 0;
+    uint32_t expected_cons_mask = 0;
+    for (uint8_t i = 0; i < dfbs[0]->producer_txn_descriptor.num_txn_ids; ++i) {
+        expected_prod_mask |= 1u << dfbs[0]->producer_txn_descriptor.txn_ids[i];
+    }
+    for (uint8_t i = 0; i < dfbs[0]->consumer_txn_descriptor.num_txn_ids; ++i) {
+        expected_cons_mask |= 1u << dfbs[0]->consumer_txn_descriptor.txn_ids[i];
+    }
+    EXPECT_EQ(dm0_core_hdr->producer_txn_id_mask, expected_prod_mask);
+    EXPECT_EQ(dm0_core_hdr->consumer_txn_id_mask, expected_cons_mask);
+    EXPECT_EQ(sizeof(dfb_dm0_isr_hw_slot_t), 4u);
+
     const uint16_t* offset_table =
         reinterpret_cast<const uint16_t*>(buf.data() + dfb_byte_offset_table_byte_offset());
     EXPECT_EQ(offset_table[0], ghdr->per_dfb_layout_offset);

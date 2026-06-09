@@ -76,8 +76,10 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
 
     [dfb_config_base + dm0_isr_blob_offset]:
       DM0 ISR blob — contiguous across all DFBs, read by DM0:
-        [DFB0: dfb_dm0_isr_entry_header_t(4B) + dfb_dm0_txn_entry_t × (num_prod + num_cons)]
+        [dfb_dm0_isr_blob_core_header_t(8B): precomputed producer/consumer txn IE masks]
+        [DFB0: dfb_dm0_isr_entry_header_t(4B) + dfb_dm0_isr_hw_slot_t × (num_prod + num_cons)]
         [DFB1: ...]
+        [txn_desc_pool: dfb_dm0_txn_descriptor_image_t indexed by txn_id, trailing]
         ...
 
     [dfb_config_base + per_dfb_layout_offset]:
@@ -90,8 +92,8 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
     DM1 and DM0 run their respective blob loops in parallel.
     Other DMs/TRISCs read from per_dfb_layout_offset (no DM blob pollution).
 
-    Base cost (1Sx1S, 2 riscs, 1 txn blob):
-      66 + 4 + 20 + (32 + 64*2) * 1 = 250 bytes
+    Base cost (1Sx1S, 2 riscs, no implicit-sync txns):
+      92 + 4 + (8 + 4) + (32 + 64*2) * 1 = 268 bytes
     Worst case (4Sx4A, 5 riscs, 4 rmp slots, 1 txn), 8 DFBs:
       80 + (4+4*16)*8 + (4+20)*8 + (32 + 64*5)*8 = 80 + 544 + 192 + 2816 = 3632 bytes
 */
@@ -106,7 +108,7 @@ struct dfb_global_header_t {
     uint32_t dm0_isr_blob_offset;       // → DM0 ISR blob (dfb_dm0_isr_entry_header_t + txn entries per DFB)
     uint32_t per_dfb_layout_offset;     // → shared per-DFB layout (dfb_initializer_t + per_risc entries)
     uint8_t num_dfbs;                   // DFB count on this core; logical ids 0 .. num_dfbs-1
-    uint8_t _pad;
+    uint8_t dm0_isr_ready;              // 0 until DM0 finishes ISR setup + implicit_sync batch; host zeros at serialize
     // participation_mask[h] bit i set → hartid h participates in DFB i (host-derived from risc_mask).
     uint32_t participation_mask[dfb::NUM_PARTICIPATING_HARTIDS];
 };
@@ -212,13 +214,46 @@ struct dfb_dm1_remapper_entry_header_t {  // 4 bytes
     uint8_t _pad[3];
 } __attribute__((packed));
 
+// Core-wide header at dm0_isr_blob_offset (before per-DFB entries).
+// Host ORs txn ids across all DFBs on this core; DM0 loads once for CMDBUF IE programming.
+struct dfb_dm0_isr_blob_core_header_t {
+    uint32_t producer_txn_id_mask;
+    uint32_t consumer_txn_id_mask;
+};
+
 // Per-DFB header for the DM0 ISR blob.
-// DM0 reads linearly through this region, processing only CMDBUF threshold / ISR data.
 struct dfb_dm0_isr_entry_header_t {  // 4 bytes
     uint8_t num_producer_txns;
     uint8_t num_consumer_txns;
     uint8_t _pad[2];
 } __attribute__((packed));
+
+// CMDBUF metadata for one txn (descriptor image is host-precomputed separately).
+struct dfb_dm0_isr_txn_hw_t {
+    uint8_t txn_id;
+    uint8_t threshold;
+    uint8_t is_producer;  // 1 → TR_ACK CMDBUF path, 0 → WR_SENT
+    uint8_t _pad;
+};
+
+// 32-byte image matching TxnDFBDescriptor layout in dataflow_buffer_interface.h.
+struct dfb_dm0_txn_descriptor_image_t {
+    uint8_t num_counters;
+    uint8_t tile_counters[18];
+    uint8_t tiles_to_post_or_ack;  // union post/ack share offset in TxnDFBDescriptor
+    uint8_t _pad[12];
+};
+
+// Legacy full slot (hw + desc); host DM0 blob uses hw-only entries + txn_id-indexed desc pool.
+struct dfb_dm0_isr_txn_slot_t {
+    dfb_dm0_isr_txn_hw_t hw;
+    dfb_dm0_txn_descriptor_image_t desc;
+};
+
+// Per-txn CMDBUF metadata in the DM0 ISR blob (descriptor images live in the trailing pool).
+struct dfb_dm0_isr_hw_slot_t {
+    dfb_dm0_isr_txn_hw_t hw;
+};
 
 // One entry per producer RISC that uses the remapper.
 // 16 bytes (power of 2): array index compiles to i << 4 (shift, not multiply).
@@ -249,17 +284,10 @@ struct dfb_dm0_remapper_slot_t {
 } __attribute__((packed));
 static_assert(sizeof(dfb_dm0_remapper_slot_t) == 16, "dfb_dm0_remapper_slot_t must be 16 bytes");
 
-// One entry per txn ID in the producer or consumer txn descriptor.
-// 16 bytes (power of 2): array index compiles to i << 4 (shift, not multiply).
-struct dfb_dm0_txn_entry_t {
-    uint8_t txn_id;
-    uint8_t tiles_to_post_or_ack;  // num_entries_per_txn_id_per_tc
-    uint8_t threshold;             // num_entries_to_process_threshold
-    uint8_t num_tcs;               // number of valid tile_counters entries
-    dfb::PackedTileCounter tile_counters[dfb::MAX_TCS_PER_TXN];  // 8 bytes
-    uint8_t _pad[4];               // pad to 16 bytes
-} __attribute__((packed));
-static_assert(sizeof(dfb_dm0_txn_entry_t) == 16, "dfb_dm0_txn_entry_t must be 16 bytes");
+static_assert(sizeof(dfb_dm0_isr_blob_core_header_t) == 8, "dfb_dm0_isr_blob_core_header_t must be 8 bytes");
+static_assert(sizeof(dfb_dm0_txn_descriptor_image_t) == 32, "dfb_dm0_txn_descriptor_image_t must be 32 bytes");
+static_assert(sizeof(dfb_dm0_isr_txn_slot_t) == 36, "dfb_dm0_isr_txn_slot_t must be 36 bytes");
+static_assert(sizeof(dfb_dm0_isr_hw_slot_t) == 4, "dfb_dm0_isr_hw_slot_t must be 4 bytes");
 
 static_assert(sizeof(dfb_global_header_t) == 64, "dfb_global_header_t size changed — check field alignment");
 static_assert(sizeof(dfb_dm1_remapper_entry_header_t) == 4, "dfb_dm1_remapper_entry_header_t must be 4 bytes");
@@ -268,3 +296,51 @@ static_assert(sizeof(TCAddressEntry) == 8, "TCAddressEntry size is incorrect");
 static_assert(sizeof(dfb_initializer_t) == 32, "dfb_initializer_t size is incorrect");
 static_assert(sizeof(dfb_initializer_per_risc_t) == 64, "dfb_initializer_per_risc_t size is incorrect");
 static_assert(sizeof(dfb_initializer_intra_tensix_t) == 24, "dfb_initializer_intra_tensix_t size is incorrect");
+
+namespace dfb {
+
+// ---------------------------------------------------------------------------
+// DFB init timing scratch (written by device during setup_*; host reads after benchmarks).
+// Layout: 16 fixed slots × 16 uint32 words (64 B each), 1024 B total in cached L1
+// (tail of the 4 MiB region so host watcher reads succeed and DFB config is not clobbered).
+//
+// Slot order:
+//   0-7:  DM0-DM7
+//   8-15: Neo0 unpack, Neo0 pack, Neo1 unpack, Neo1 pack, Neo2 unpack, Neo2 pack,
+//         Neo3 unpack, Neo3 pack
+// ---------------------------------------------------------------------------
+constexpr uint8_t DFB_INIT_TIMING_NUM_SLOTS = 16;
+constexpr uint8_t DFB_INIT_TIMING_WORDS_PER_SLOT = 16;
+constexpr uint32_t DFB_INIT_TIMING_REGION_BYTES =
+    static_cast<uint32_t>(DFB_INIT_TIMING_NUM_SLOTS) * static_cast<uint32_t>(DFB_INIT_TIMING_WORDS_PER_SLOT) *
+    sizeof(uint32_t);
+// Cached L1 byte offset for host reads (DEBUG_VALID_L1_ADDR allows [0, 4 MiB)).
+// Device writes use MEM_L1_UNCACHED_BASE + this offset so TL1 is updated without L2 flush.
+constexpr uint32_t DFB_INIT_TIMING_L1_BYTE_OFFSET =
+    (4u * 1024u * 1024u) - DFB_INIT_TIMING_REGION_BYTES;
+
+constexpr uint32_t DFB_INIT_TIMING_MAGIC = 0xDFB07100u;
+
+enum DfbInitTimingRole : uint8_t {
+    DFB_INIT_TIMING_ROLE_DM0_ISR = 0,
+    DFB_INIT_TIMING_ROLE_DM1_RMP = 1,
+    DFB_INIT_TIMING_ROLE_DM_LOCAL = 2,
+    DFB_INIT_TIMING_ROLE_TRISC_LOCAL = 3,
+};
+
+enum DfbInitTimingWord : uint8_t {
+    DFB_INIT_TIMING_W_MAGIC = 0,
+    DFB_INIT_TIMING_W_VALID = 1,
+    DFB_INIT_TIMING_W_ROLE = 2,
+    DFB_INIT_TIMING_W_E2E = 3,
+    DFB_INIT_TIMING_W_METRIC_A = 4,
+    DFB_INIT_TIMING_W_METRIC_B = 5,
+    DFB_INIT_TIMING_W_METRIC_C = 6,
+    DFB_INIT_TIMING_W_METRIC_D = 7,
+    DFB_INIT_TIMING_W_METRIC_E = 8,
+    DFB_INIT_TIMING_W_METRIC_F = 9,
+    DFB_INIT_TIMING_W_START = 10,
+    DFB_INIT_TIMING_W_END = 11,
+};
+
+}  // namespace dfb

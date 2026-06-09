@@ -50,13 +50,12 @@ uint32_t _start() {
     uint32_t thread_0_hartid = hartid;
     if (launch_msg->kernel_config.enables & (1u << hartid)) {
         for (uint32_t j = 0; j < MaxDMProcessorsPerCoreType; j++) {
-            // DM0 and DM1 are reserved, so their kernel_text_offset[] slots are
-            // left zero-initialized. Skip reserved slots here, otherwise if the
-            // user binary happens to land at offset 0 (e.g. no RTAs/CRTAs/sems/CBs/DFBs
-            // precede it in the kernel-config ring buffer), the search would falsely
-            // match slot 0 and set thread_0_hartid = 0. DM0 never sets
-            // shared_globals_ready[0] = GO, so the user DMs hang forever in the
-            // wait loop below.
+            // DM0 (ISR) and DM1 (remapper) are firmware coordinators: they are often
+            // present in enables and share kernel_text_offset with user DMs, but never
+            // enter this entry point, so they must not be chosen as thread_0.
+            if (j == 0 || j == 1) {
+                continue;
+            }
             if ((launch_msg->kernel_config.enables & (1u << j)) &&
                 launch_msg->kernel_config.kernel_text_offset[j] == my_kt) {
                 thread_0_hartid = j;

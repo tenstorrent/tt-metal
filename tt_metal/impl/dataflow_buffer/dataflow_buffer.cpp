@@ -34,7 +34,120 @@ uint32_t align_dfb_config_transfer_size(uint32_t payload_bytes) {
     return static_cast<uint32_t>(tt::align(payload_bytes, align_bytes));
 }
 
+dfb_dm0_txn_descriptor_image_t build_dm0_txn_descriptor_image(
+    uint8_t num_tcs,
+    const std::vector<::dfb::PackedTileCounter>& tcs,
+    uint8_t tiles_to_post_or_ack) {
+    dfb_dm0_txn_descriptor_image_t img = {};
+    img.num_counters = num_tcs;
+    for (uint8_t j = 0; j < num_tcs && j < ::dfb::MAX_TCS_PER_TXN; ++j) {
+        img.tile_counters[j] = tcs[j];
+    }
+    img.tiles_to_post_or_ack = tiles_to_post_or_ack;
+    return img;
+}
+
+uint32_t compute_dm0_isr_txn_desc_pool_byte_size(uint32_t producer_txn_id_mask, uint32_t consumer_txn_id_mask) {
+    const uint32_t all_mask = producer_txn_id_mask | consumer_txn_id_mask;
+    if (all_mask == 0) {
+        return 0;
+    }
+    return 32u * (32u - static_cast<uint32_t>(__builtin_clz(all_mask)));
+}
+
+std::vector<uint8_t> serialize_dm0_isr_txn_desc_pool_for_core(
+    const CoreCoord& core,
+    const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core,
+    uint32_t producer_txn_id_mask,
+    uint32_t consumer_txn_id_mask) {
+    const uint32_t pool_bytes = compute_dm0_isr_txn_desc_pool_byte_size(producer_txn_id_mask, consumer_txn_id_mask);
+    if (pool_bytes == 0) {
+        return {};
+    }
+
+    std::vector<uint8_t> pool(pool_bytes, 0);
+    for (const auto& dfb : dfbs_on_core) {
+        auto it = dfb->core_lookup_.find(core);
+        if (it == dfb->core_lookup_.end()) {
+            continue;
+        }
+        const auto& [group_idx, alloc_addr] = it->second;
+        (void)alloc_addr;
+        const auto& hw_risc_configs = dfb->groups[group_idx].hw_risc_configs;
+
+        std::vector<::dfb::PackedTileCounter> blob_producer_tcs;
+        std::vector<::dfb::PackedTileCounter> blob_consumer_tcs;
+        for (int bit = 0; bit < 16; bit++) {
+            if (!(dfb->risc_mask & (1 << bit))) {
+                continue;
+            }
+            const DFBRiscConfig* rc = nullptr;
+            for (const auto& c : hw_risc_configs) {
+                if (c.risc_id == static_cast<uint8_t>(bit)) {
+                    rc = &c;
+                    break;
+                }
+            }
+            if (rc == nullptr) {
+                continue;
+            }
+            for (uint8_t j = 0; j < rc->config.num_tcs_to_rr; j++) {
+                if (rc->is_producer) {
+                    blob_producer_tcs.push_back(rc->config.packed_tile_counter[j]);
+                } else {
+                    blob_consumer_tcs.push_back(rc->config.packed_tile_counter[j]);
+                }
+            }
+        }
+
+        const uint8_t num_prod_tcs = static_cast<uint8_t>(blob_producer_tcs.size());
+        const uint8_t num_cons_tcs = static_cast<uint8_t>(blob_consumer_tcs.size());
+        const auto prod_desc = build_dm0_txn_descriptor_image(
+            num_prod_tcs, blob_producer_tcs, dfb->producer_txn_descriptor.num_entries_per_txn_id_per_tc);
+        const auto cons_desc = build_dm0_txn_descriptor_image(
+            num_cons_tcs, blob_consumer_tcs, dfb->consumer_txn_descriptor.num_entries_per_txn_id_per_tc);
+
+        for (uint8_t i = 0; i < dfb->producer_txn_descriptor.num_txn_ids; i++) {
+            const uint8_t txn_id = dfb->producer_txn_descriptor.txn_ids[i];
+            std::memcpy(pool.data() + static_cast<uint32_t>(txn_id) * 32u, &prod_desc, sizeof(prod_desc));
+        }
+        for (uint8_t i = 0; i < dfb->consumer_txn_descriptor.num_txn_ids; i++) {
+            const uint8_t txn_id = dfb->consumer_txn_descriptor.txn_ids[i];
+            std::memcpy(pool.data() + static_cast<uint32_t>(txn_id) * 32u, &cons_desc, sizeof(cons_desc));
+        }
+    }
+    return pool;
+}
+
 }  // namespace
+
+std::pair<uint32_t, uint32_t> compute_dm0_isr_blob_core_masks(
+    const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
+    uint32_t producer_mask = 0;
+    uint32_t consumer_mask = 0;
+    for (const auto& dfb : dfbs_on_core) {
+        for (uint8_t i = 0; i < dfb->producer_txn_descriptor.num_txn_ids; ++i) {
+            producer_mask |= 1u << dfb->producer_txn_descriptor.txn_ids[i];
+        }
+        for (uint8_t i = 0; i < dfb->consumer_txn_descriptor.num_txn_ids; ++i) {
+            consumer_mask |= 1u << dfb->consumer_txn_descriptor.txn_ids[i];
+        }
+    }
+    return {producer_mask, consumer_mask};
+}
+
+uint32_t dm0_isr_blob_region_size(const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
+    uint32_t per_dfb_bytes = 0;
+    for (const auto& dfb : dfbs_on_core) {
+        per_dfb_bytes += dfb->dm0_isr_blob_serialized_size();
+    }
+    if (per_dfb_bytes == 0) {
+        return 0;
+    }
+    const auto [producer_mask, consumer_mask] = compute_dm0_isr_blob_core_masks(dfbs_on_core);
+    const uint32_t pool_bytes = compute_dm0_isr_txn_desc_pool_byte_size(producer_mask, consumer_mask);
+    return per_dfb_bytes + static_cast<uint32_t>(sizeof(dfb_dm0_isr_blob_core_header_t)) + pool_bytes;
+}
 
 uint32_t compute_dfb_config_serialized_size(
     const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
@@ -46,9 +159,9 @@ uint32_t compute_dfb_config_serialized_size(
 
     uint32_t payload_bytes = dfb_config_prefix_size(static_cast<uint8_t>(dfbs_on_core.size()));
     for (const auto& dfb : dfbs_on_core) {
-        payload_bytes += dfb->serialized_size() + dfb->dm1_remapper_blob_serialized_size() +
-                         dfb->dm0_isr_blob_serialized_size();
+        payload_bytes += dfb->serialized_size() + dfb->dm1_remapper_blob_serialized_size();
     }
+    payload_bytes += dm0_isr_blob_region_size(dfbs_on_core);
     return align_dfb_config_transfer_size(payload_bytes);
 }
 
@@ -172,11 +285,10 @@ size_t serialize_dfb_config_for_core(
     TT_FATAL(hal.has_tile_counter_registers(), "serialize_dfb_config_for_core requires Quasar");
 
     uint32_t total_dm1_blob_size = 0;
-    uint32_t total_dm0_isr_blob_size = 0;
     for (const auto& dfb : dfbs_on_core) {
         total_dm1_blob_size += dfb->dm1_remapper_blob_serialized_size();
-        total_dm0_isr_blob_size += dfb->dm0_isr_blob_serialized_size();
     }
+    const uint32_t total_dm0_isr_blob_size = dm0_isr_blob_region_size(dfbs_on_core);
 
     dfb_global_header_t ghdr = {};
     populate_dfb_global_header_participation(ghdr, dfbs_on_core);
@@ -208,11 +320,31 @@ size_t serialize_dfb_config_for_core(
         std::memcpy(out.data() + offset, blob.data(), blob.size());
         offset += blob.size();
     }
+    if (total_dm0_isr_blob_size > 0) {
+        const auto [producer_mask, consumer_mask] = compute_dm0_isr_blob_core_masks(dfbs_on_core);
+        dfb_dm0_isr_blob_core_header_t core_hdr = {
+            .producer_txn_id_mask = producer_mask,
+            .consumer_txn_id_mask = consumer_mask,
+        };
+        TT_FATAL(
+            offset + sizeof(core_hdr) <= out.size(), "DFB config buffer overflow (DM0 ISR core header)");
+        std::memcpy(out.data() + offset, &core_hdr, sizeof(core_hdr));
+        offset += sizeof(core_hdr);
+    }
     for (const auto& dfb : dfbs_on_core) {
         auto blob = dfb->serialize_dm0_isr_blob_for_core(core);
         TT_FATAL(offset + blob.size() <= out.size(), "DFB config buffer overflow (DM0 blob)");
         std::memcpy(out.data() + offset, blob.data(), blob.size());
         offset += blob.size();
+    }
+    if (total_dm0_isr_blob_size > 0) {
+        const auto [producer_mask, consumer_mask] = compute_dm0_isr_blob_core_masks(dfbs_on_core);
+        auto pool = serialize_dm0_isr_txn_desc_pool_for_core(core, dfbs_on_core, producer_mask, consumer_mask);
+        TT_FATAL(offset + pool.size() <= out.size(), "DFB config buffer overflow (DM0 ISR txn desc pool)");
+        if (!pool.empty()) {
+            std::memcpy(out.data() + offset, pool.data(), pool.size());
+            offset += pool.size();
+        }
     }
 
     TT_FATAL(
@@ -374,12 +506,12 @@ void log_dfb_config_vec_dump(const CoreCoord& core, std::string_view label, std:
     log_info(
         tt::LogMetal,
         "  dfb_global_header_t: dm1_remapper_blob_offset={} dm0_isr_blob_offset={} per_dfb_layout_offset={} "
-        "num_dfbs={} _pad={}",
+        "num_dfbs={} dm0_isr_ready={}",
         ghdr->dm1_remapper_blob_offset,
         ghdr->dm0_isr_blob_offset,
         ghdr->per_dfb_layout_offset,
         ghdr->num_dfbs,
-        ghdr->_pad);
+        ghdr->dm0_isr_ready);
 
     for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; ++h) {
         log_info(tt::LogMetal, "  participation_mask[{}]=0x{:x}", h, ghdr->participation_mask[h]);
@@ -421,6 +553,24 @@ void log_dfb_config_vec_dump(const CoreCoord& core, std::string_view label, std:
     }
 
     uint32_t dm0_off = ghdr->dm0_isr_blob_offset;
+    uint32_t dm0_producer_txn_mask = 0;
+    uint32_t dm0_consumer_txn_mask = 0;
+    if (dm0_off + sizeof(dfb_dm0_isr_blob_core_header_t) <= config_bytes.size()) {
+        const auto* core_hdr =
+            reinterpret_cast<const dfb_dm0_isr_blob_core_header_t*>(config_bytes.data() + dm0_off);
+        dm0_producer_txn_mask = core_hdr->producer_txn_id_mask;
+        dm0_consumer_txn_mask = core_hdr->consumer_txn_id_mask;
+        log_info(
+            tt::LogMetal,
+            "  dfb_dm0_isr_blob_core_header_t @{}: producer_mask=0x{:x} consumer_mask=0x{:x}",
+            dm0_off,
+            dm0_producer_txn_mask,
+            dm0_consumer_txn_mask);
+        dm0_off += sizeof(dfb_dm0_isr_blob_core_header_t);
+    }
+    const uint32_t dm0_pool_bytes =
+        compute_dm0_isr_txn_desc_pool_byte_size(dm0_producer_txn_mask, dm0_consumer_txn_mask);
+    const uint32_t dm0_pool_off = ghdr->per_dfb_layout_offset - dm0_pool_bytes;
     for (uint8_t dfb_id = 0; dfb_id < num_dfbs; ++dfb_id) {
         TT_FATAL(dm0_off + sizeof(dfb_dm0_isr_entry_header_t) <= config_bytes.size(), "DM0 blob truncated");
         const auto* dm0_hdr = reinterpret_cast<const dfb_dm0_isr_entry_header_t*>(config_bytes.data() + dm0_off);
@@ -434,27 +584,30 @@ void log_dfb_config_vec_dump(const CoreCoord& core, std::string_view label, std:
         dm0_off += sizeof(dfb_dm0_isr_entry_header_t);
         const uint8_t num_txns = dm0_hdr->num_producer_txns + dm0_hdr->num_consumer_txns;
         for (uint8_t t = 0; t < num_txns; ++t) {
-            TT_FATAL(dm0_off + sizeof(dfb_dm0_txn_entry_t) <= config_bytes.size(), "DM0 txn truncated");
-            const auto* txn = reinterpret_cast<const dfb_dm0_txn_entry_t*>(config_bytes.data() + dm0_off);
+            TT_FATAL(dm0_off + sizeof(dfb_dm0_isr_hw_slot_t) <= config_bytes.size(), "DM0 txn hw slot truncated");
+            const auto* slot = reinterpret_cast<const dfb_dm0_isr_hw_slot_t*>(config_bytes.data() + dm0_off);
+            const auto* desc = reinterpret_cast<const dfb_dm0_txn_descriptor_image_t*>(
+                config_bytes.data() + dm0_pool_off + static_cast<uint32_t>(slot->hw.txn_id) * 32u);
             log_info(
                 tt::LogMetal,
-                "    txn[{}] dfb_dm0_txn_entry_t @{}: id={} tiles={} thr={} num_tcs={} ptc=[{:02x},{:02x},{:02x},{:02x},"
-                "{:02x},{:02x},{:02x},{:02x}]",
+                "    txn[{}] dfb_dm0_isr_hw_slot_t @{}: id={} tiles={} thr={} prod={} num_tcs={} ptc=[{:02x},{:02x},"
+                "{:02x},{:02x},{:02x},{:02x},{:02x},{:02x}]",
                 t,
                 dm0_off,
-                txn->txn_id,
-                txn->tiles_to_post_or_ack,
-                txn->threshold,
-                txn->num_tcs,
-                txn->tile_counters[0],
-                txn->tile_counters[1],
-                txn->tile_counters[2],
-                txn->tile_counters[3],
-                txn->tile_counters[4],
-                txn->tile_counters[5],
-                txn->tile_counters[6],
-                txn->tile_counters[7]);
-            dm0_off += sizeof(dfb_dm0_txn_entry_t);
+                slot->hw.txn_id,
+                desc->tiles_to_post_or_ack,
+                slot->hw.threshold,
+                slot->hw.is_producer,
+                desc->num_counters,
+                desc->tile_counters[0],
+                desc->tile_counters[1],
+                desc->tile_counters[2],
+                desc->tile_counters[3],
+                desc->tile_counters[4],
+                desc->tile_counters[5],
+                desc->tile_counters[6],
+                desc->tile_counters[7]);
+            dm0_off += sizeof(dfb_dm0_isr_hw_slot_t);
         }
     }
 
@@ -521,8 +674,15 @@ void log_dfb_config_readback(
         log_info(tt::LogMetal, "  dm1_blob[0].num_remapper_slots={}", dm1_hdr->num_remapper_slots);
     }
     if (ghdr->dm0_isr_blob_offset < readback_bytes.size()) {
-        const auto* dm0_hdr = reinterpret_cast<const dfb_dm0_isr_entry_header_t*>(
+        const auto* core_hdr = reinterpret_cast<const dfb_dm0_isr_blob_core_header_t*>(
             readback_bytes.data() + ghdr->dm0_isr_blob_offset);
+        log_info(
+            tt::LogMetal,
+            "  dm0_core_hdr: producer_mask=0x{:x} consumer_mask=0x{:x}",
+            core_hdr->producer_txn_id_mask,
+            core_hdr->consumer_txn_id_mask);
+        const auto* dm0_hdr = reinterpret_cast<const dfb_dm0_isr_entry_header_t*>(
+            readback_bytes.data() + ghdr->dm0_isr_blob_offset + sizeof(dfb_dm0_isr_blob_core_header_t));
         log_info(
             tt::LogMetal,
             "  dm0_blob[0].num_prod={} num_cons={}",
@@ -903,7 +1063,7 @@ uint32_t DataflowBufferImpl::dm0_isr_blob_serialized_size() const {
     uint8_t num_cons = consumer_txn_descriptor.num_txn_ids;
     return static_cast<uint32_t>(
         sizeof(dfb_dm0_isr_entry_header_t) +
-        (num_prod + num_cons) * sizeof(dfb_dm0_txn_entry_t));
+        (num_prod + num_cons) * sizeof(dfb_dm0_isr_hw_slot_t));
 }
 
 std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& core) const {
@@ -1226,26 +1386,7 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_dm1_remapper_blob_for_core(co
 std::vector<uint8_t> DataflowBufferImpl::serialize_dm0_isr_blob_for_core(const CoreCoord& core) const {
     TT_FATAL(this->configs_finalized, "DFB {} configs not finalized before serialization", this->id);
     if (!MetalContext::instance().hal().has_tile_counter_registers()) return {};
-
-    auto it = this->core_lookup_.find(core);
-    TT_FATAL(it != this->core_lookup_.end(), "DFB {} has no config for core ({}, {})", this->id, core.x, core.y);
-    const auto& [group_idx, alloc_addr] = it->second;
-    const auto& hw_risc_configs = this->groups[group_idx].hw_risc_configs;
-
-    // Collect producer/consumer TCs in risc_mask bit order for txn entries.
-    std::vector<::dfb::PackedTileCounter> blob_producer_tcs;
-    std::vector<::dfb::PackedTileCounter> blob_consumer_tcs;
-    for (int bit = 0; bit < 16; bit++) {
-        if (!(this->risc_mask & (1 << bit))) continue;
-        const DFBRiscConfig* rc = nullptr;
-        for (const auto& c : hw_risc_configs) {
-            if (c.risc_id == static_cast<uint8_t>(bit)) { rc = &c; break; }
-        }
-        for (uint8_t j = 0; j < rc->config.num_tcs_to_rr; j++) {
-            if (rc->is_producer) blob_producer_tcs.push_back(rc->config.packed_tile_counter[j]);
-            else blob_consumer_tcs.push_back(rc->config.packed_tile_counter[j]);
-        }
-    }
+    (void)core;  // hw-only entries are core-invariant; txn desc images live in the trailing pool
 
     uint8_t num_prod = this->producer_txn_descriptor.num_txn_ids;
     uint8_t num_cons = this->consumer_txn_descriptor.num_txn_ids;
@@ -1260,32 +1401,22 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_dm0_isr_blob_for_core(const C
     const auto* hdr_bytes = reinterpret_cast<const uint8_t*>(&hdr);
     data.insert(data.end(), hdr_bytes, hdr_bytes + sizeof(hdr));
 
-    // Producer txn entries.
     for (uint8_t i = 0; i < num_prod; i++) {
-        dfb_dm0_txn_entry_t entry = {};
-        entry.txn_id               = this->producer_txn_descriptor.txn_ids[i];
-        entry.tiles_to_post_or_ack = this->producer_txn_descriptor.num_entries_per_txn_id_per_tc;
-        entry.threshold            = this->producer_txn_descriptor.num_entries_to_process_threshold;
-        entry.num_tcs              = static_cast<uint8_t>(blob_producer_tcs.size());
-        for (uint8_t j = 0; j < entry.num_tcs && j < ::dfb::MAX_TCS_PER_TXN; j++) {
-            entry.tile_counters[j] = blob_producer_tcs[j];
-        }
-        const auto* e_bytes = reinterpret_cast<const uint8_t*>(&entry);
-        data.insert(data.end(), e_bytes, e_bytes + sizeof(entry));
+        dfb_dm0_isr_hw_slot_t slot = {};
+        slot.hw.txn_id = this->producer_txn_descriptor.txn_ids[i];
+        slot.hw.threshold = this->producer_txn_descriptor.num_entries_to_process_threshold;
+        slot.hw.is_producer = 1;
+        const auto* slot_bytes = reinterpret_cast<const uint8_t*>(&slot);
+        data.insert(data.end(), slot_bytes, slot_bytes + sizeof(slot));
     }
 
-    // Consumer txn entries.
     for (uint8_t i = 0; i < num_cons; i++) {
-        dfb_dm0_txn_entry_t entry = {};
-        entry.txn_id               = this->consumer_txn_descriptor.txn_ids[i];
-        entry.tiles_to_post_or_ack = this->consumer_txn_descriptor.num_entries_per_txn_id_per_tc;
-        entry.threshold            = this->consumer_txn_descriptor.num_entries_to_process_threshold;
-        entry.num_tcs              = static_cast<uint8_t>(blob_consumer_tcs.size());
-        for (uint8_t j = 0; j < entry.num_tcs && j < ::dfb::MAX_TCS_PER_TXN; j++) {
-            entry.tile_counters[j] = blob_consumer_tcs[j];
-        }
-        const auto* e_bytes = reinterpret_cast<const uint8_t*>(&entry);
-        data.insert(data.end(), e_bytes, e_bytes + sizeof(entry));
+        dfb_dm0_isr_hw_slot_t slot = {};
+        slot.hw.txn_id = this->consumer_txn_descriptor.txn_ids[i];
+        slot.hw.threshold = this->consumer_txn_descriptor.num_entries_to_process_threshold;
+        slot.hw.is_producer = 0;
+        const auto* slot_bytes = reinterpret_cast<const uint8_t*>(&slot);
+        data.insert(data.end(), slot_bytes, slot_bytes + sizeof(slot));
     }
     return data;
 }
@@ -1314,16 +1445,19 @@ uint32_t finalize_dfbs(
         const uint8_t num_dfbs = static_cast<uint8_t>(dataflow_buffers.size());
         uint32_t kg_dfb_size =
             hal.has_tile_counter_registers() ? dfb_config_prefix_size(num_dfbs) : 0;
+        bool kg_has_dfb = false;
         for (const auto& dfb : dataflow_buffers) {
             TT_ASSERT(dfb->configs_finalized, "DFB {} configs not finalized before serialization", dfb->id);
             for (const CoreRange& kg_range : kg->core_ranges.ranges()) {
                 if (dfb->core_ranges.intersects(kg_range)) {
-                    kg_dfb_size += dfb->serialized_size()
-                                 + dfb->dm1_remapper_blob_serialized_size()
-                                 + dfb->dm0_isr_blob_serialized_size();
+                    kg_dfb_size += dfb->serialized_size() + dfb->dm1_remapper_blob_serialized_size();
+                    kg_has_dfb = true;
                     break;
                 }
             }
+        }
+        if (kg_has_dfb && hal.has_tile_counter_registers()) {
+            kg_dfb_size += dm0_isr_blob_region_size(dataflow_buffers);
         }
 
         if (hal.has_tile_counter_registers() && kg_dfb_size > 0) {
