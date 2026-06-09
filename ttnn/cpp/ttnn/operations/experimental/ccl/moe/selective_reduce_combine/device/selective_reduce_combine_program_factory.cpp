@@ -87,8 +87,6 @@ tt::tt_fabric::FabricMuxConfig get_fabric_mux_config(
         l1_unreserved_base_address);
 
     if (occupied_l1_tensor_addr.has_value() && config.get_memory_map_end_address() >= *occupied_l1_tensor_addr) {
-        std::cout << "Reducing mux channels num_buffers_full_size_channels:" << num_buffers_full_size_channels - 1
-                  << " num_buffers_header_only_channels: " << num_buffers_header_only_channels - 1 << std::endl;
         return get_fabric_mux_config(
             num_full_size_channels,
             num_header_only_channels,
