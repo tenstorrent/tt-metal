@@ -109,6 +109,9 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
 
         Keyword Args:
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional)
+            global_semaphore (ttnn._ttnn.global_semaphore.global_semaphore, optional):
+                Reserved for overlapping the routed expert with the combine. Currently
+                only propagated as an argument; not yet consumed by the device programs.
 
         Returns:
             ttnn.Tensor: expert outputs, same shape as dispatched_buffer.
@@ -123,7 +126,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("down_projs").noconvert(),
         nb::arg("max_dispatched_tokens_per_expert"),
         nb::kw_only(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("global_semaphore") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::detail

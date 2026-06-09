@@ -371,6 +371,17 @@ class TtMoe(LightweightModule):
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
 
+        # Global semaphore reserved for overlapping the routed expert with the combine.
+        # For now it is created here and propagated to the routed_expert op as an
+        # argument, but is not yet consumed by the device kernels.
+        _grid = mesh_device.compute_with_storage_grid_size()
+        _routed_expert_sem_cores = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_grid.x - 1, _grid.y - 1))}
+        )
+        self.routed_expert_global_semaphore = ttnn.create_global_semaphore(
+            mesh_device, _routed_expert_sem_cores, initial_value=0, buffer_type=ttnn.BufferType.L1_SMALL
+        )
+
         # Initialize routed expert
         self.routed_expert = TtRoutedExpert(
             mesh_device=mesh_device,
@@ -609,8 +620,23 @@ class TtMoe(LightweightModule):
         # combine_module call would raise "Tensor is not allocated".
         # expert_outputs keeps the dispatch buffer's (1, 1, max_dispatch_buffer_token_size,
         # emb_dim) rank, which is exactly what combine expects — no unsqueeze needed.
-        expert_outputs = self.routed_expert(dispatched_buffer_tiled, tt_expert_token_counts, tt_expert_region_offsets)
+        expert_outputs = self.routed_expert(
+            dispatched_buffer_tiled,
+            tt_expert_token_counts,
+            tt_expert_region_offsets,
+            global_semaphore=self.routed_expert_global_semaphore,
+        )
         logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape} {expert_outputs.dtype=}")
+
+        # The routed_expert op bumps this semaphore once per local expert, so after the
+        # call it should read `experts_per_chip` on every core. Log the distinct values,
+        # then reset it to zero for the next forward.
+        _sem_values = ttnn.read_global_semaphore_value(self.routed_expert_global_semaphore)
+        logger.debug(
+            f"[TtMoe.forward] routed_expert semaphore (expect {self.experts_per_chip}): "
+            f"distinct={sorted(set(_sem_values))}, count={len(_sem_values)}"
+        )
+        ttnn.reset_global_semaphore_value(self.routed_expert_global_semaphore, 0)
 
         # ========================================
         # Step 4: Combine (enabled)

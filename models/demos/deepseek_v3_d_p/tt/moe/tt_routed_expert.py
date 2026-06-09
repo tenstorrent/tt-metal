@@ -18,6 +18,7 @@ from typing import Optional
 import torch
 from loguru import logger
 from tracy import signpost
+from ttnn._ttnn.global_semaphore import global_semaphore as GlobalSemaphore
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -372,6 +373,7 @@ class TtRoutedExpert(LightweightModule):
         dispatched_buffer: ttnn.Tensor,
         expert_token_counts: ttnn.Tensor,
         expert_region_offsets: ttnn.Tensor,
+        global_semaphore: GlobalSemaphore | None = None,
     ) -> ttnn.Tensor:
         """
         On Blackhole, delegates the per-local-expert work to the
@@ -391,6 +393,9 @@ class TtRoutedExpert(LightweightModule):
             expert_region_offsets: Expert region start offsets per expert
                 (shared across source devices in a dispatch group). Produced by
                 offset_cumsum. Shape per device: (1, num_routed_experts).
+            global_semaphore: Optional global semaphore reserved for overlapping the
+                routed expert with the combine. For now it is only propagated to the
+                unified_routed_expert_moe op; it is not yet consumed by the kernels.
 
         Returns:
             expert_outputs: Expert output tensor, same shape as dispatched_buffer
@@ -414,6 +419,7 @@ class TtRoutedExpert(LightweightModule):
                 self.down_projs,
                 max_dispatched_tokens_per_expert=self.max_tokens,
                 compute_kernel_config=self.compute_kernel_config,
+                global_semaphore=global_semaphore,
             )
             logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
             return expert_outputs
