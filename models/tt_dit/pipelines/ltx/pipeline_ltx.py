@@ -1608,13 +1608,18 @@ class LTXPipeline:
                 ccl_manager=audio_ccl,
             )
 
-        # BWE stays single-axis: its channel-TP diverges in the full pipeline (the
-        # main vocoder's channel-TP is exact). Root cause open.
-        bwe_pc = (
-            audio_parallel_config.time_parallel
-            if isinstance(audio_parallel_config, AudioTCParallelConfig)
-            else audio_parallel_config
-        )
+        # BWE defaults to single-axis: its channel-TP was reported to diverge in the full
+        # pipeline (the main vocoder's is exact). LTX_BWE_CHANNEL_TP=1 opts into full channel-TP
+        # (a Galaxy win — it splits the compute-bound BWE generator across the channel axis;
+        # break-even on 2x4 where the gather tax offsets the split).
+        if os.environ.get("LTX_BWE_CHANNEL_TP", "0") == "1":
+            bwe_pc = audio_parallel_config
+        else:
+            bwe_pc = (
+                audio_parallel_config.time_parallel
+                if isinstance(audio_parallel_config, AudioTCParallelConfig)
+                else audio_parallel_config
+            )
         main_voc = _tt_vocoder(voc_cfg, apply_final_activation=True, parallel_config=audio_parallel_config)
         bwe_voc = _tt_vocoder(bwe_cfg, apply_final_activation=False, parallel_config=bwe_pc)
         mel_stft = MelSTFT(
