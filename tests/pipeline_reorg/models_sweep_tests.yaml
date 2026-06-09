@@ -41,7 +41,7 @@
 - name: Llama 3.1-8B seqlen sweep
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
-    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --num_layers 10 
+    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --num_layers 10
   model: llama3.1-8b
   skus:
     wh_n150:
@@ -65,7 +65,7 @@
 - name: Qwen3-32B seqlen sweep
   cmd: |
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B MESH_DEVICE=TG
-    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" 
+    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep"
   model: qwen3-32b
   skus:
     wh_galaxy_perf:
@@ -90,7 +90,7 @@
 - name: Llama 3.3-70B seqlen sweep (LoudBox)
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
-    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" 
+    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep"
   model: llama3.3-70b
   skus:
     wh_llmbox_perf:
@@ -102,7 +102,7 @@
 - name: Qwen3-32B seqlen sweep (LoudBox)
   cmd: |
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
-    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" 
+    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep"
   model: qwen3-32b
   skus:
     wh_llmbox_perf:
@@ -114,7 +114,7 @@
 - name: Qwen2.5-32B seqlen sweep
   cmd: |
     export HF_MODEL=Qwen/Qwen2.5-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-32B-Instruct
-    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" 
+    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep"
   model: qwen2.5-32b
   skus:
     wh_llmbox_perf:
@@ -126,7 +126,7 @@
 - name: Qwen2.5-Coder-32B seqlen sweep
   cmd: |
     export HF_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-Coder-32B-Instruct
-    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" 
+    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep"
   model: qwen2.5-coder-32b
   skus:
     wh_llmbox_perf:
@@ -138,7 +138,7 @@
 - name: Mixtral-8x7B seqlen sweep # Mixtral's native max context is 32k
   cmd: |
     export HF_MODEL=mistralai/Mixtral-8x7B-Instruct-v0.1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mixtral-8x7B-Instruct-v0.1
-    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --max_seq_len 32768 --page_params "{\"page_block_size\": 32, \"page_max_num_blocks_per_dp\": 1024}" 
+    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --max_seq_len 32768 --page_params "{\"page_block_size\": 32, \"page_max_num_blocks_per_dp\": 1024}"
   model: mixtral-8x7b
   skus:
     wh_llmbox_perf:
