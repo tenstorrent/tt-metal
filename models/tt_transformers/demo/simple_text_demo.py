@@ -783,7 +783,7 @@ def prepare_generator_args(
             1,  # batch_size
             32,  # max_generated_tokens (minimal decode to verify prefill works)
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params (fits N150; Galaxy overrides via --page_params)
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048}, # page_params (fits N150; Galaxy overrides via --page_params)
             {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             True,  # ci_only
@@ -1080,7 +1080,16 @@ def test_demo_text(
     if is_seqlen_sweep:
         # Seqlen sweep: load each prompt file separately, filtering by model's max context
         # Map each file to its minimum required seqlen (derived from filename label)
-        seqlen_labels = {"1k": 1024, "2k": 2048, "4k": 4096, "8k": 8192, "16k": 16384, "32k": 32768, "64k": 65536, "128k": 131072}
+        seqlen_labels = {
+            "1k": 1024,
+            "2k": 2048,
+            "4k": 4096,
+            "8k": 8192,
+            "16k": 16384,
+            "32k": 32768,
+            "64k": 65536,
+            "128k": 131072,
+        }
         filtered_files = []
         for f in sweep_prompt_files:
             fname = Path(f).name
@@ -1092,13 +1101,13 @@ def test_demo_text(
         if not filtered_files:
             pytest.skip(f"No sweep prompt files fit within model's max context length ({max_seq_len})")
         repeat_batches = len(filtered_files)
-        logger.info(f"Seqlen sweep: running {repeat_batches} steps with files: {[Path(f).name for f in filtered_files]}")
+        logger.info(
+            f"Seqlen sweep: running {repeat_batches} steps with files: {[Path(f).name for f in filtered_files]}"
+        )
         for f in filtered_files:
             batch_prompts, _ = load_inputs(f, global_batch_size, instruct)
             repeat_batch_prompts.append(
-                select_local_data_parallel_items(
-                    batch_prompts, batch_size, data_parallel, local_submesh_indices
-                )
+                select_local_data_parallel_items(batch_prompts, batch_size, data_parallel, local_submesh_indices)
             )
     else:
         for i in range(repeat_batches):

@@ -415,13 +415,13 @@ def prepare_gpt_oss_generator_args(
             32,  # max_generated_tokens (minimal decode to verify prefill works)
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params
-            True,   # enable_decode_trace
+            True,  # enable_decode_trace
             False,  # enable_prefill_trace (avoid trace memory issues at 128k)
             False,  # warmup_prefill
             False,  # users_row_sharded
             False,  # long_context_mode
-            True,   # stop_at_eos
-            True,   # run_in_ci
+            True,  # stop_at_eos
+            True,  # run_in_ci
         ),
     ],
     ids=[
