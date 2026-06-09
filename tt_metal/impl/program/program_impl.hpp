@@ -295,6 +295,10 @@ public:
 
     std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl> get_dataflow_buffer(uint32_t dfb_id) const;
 
+    // Override a DFB's entry_size and/or num_entries.
+    void apply_dfb_size_override(
+        uint32_t dfb_id, std::optional<uint32_t> entry_size, std::optional<uint32_t> num_entries);
+
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
     void validate_circular_buffer_region(const IDevice* device);
     void validate_dataflow_buffer_region(const IDevice* device);

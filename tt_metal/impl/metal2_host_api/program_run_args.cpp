@@ -305,10 +305,20 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
             inserted,
             "Duplicate DFB '{}' in ProgramRunArgs.dfb_run_overrides. Each DFB must appear at most once.",
             dfb_spec_name);
-        TT_FATAL(
-            !dfb_params.entry_size.has_value() && !dfb_params.num_entries.has_value(),
-            "DFB size overrides are not yet implemented for DFB '{}'.",
-            dfb_spec_name);
+        if (dfb_params.entry_size.has_value()) {
+            TT_FATAL(
+                dfb_params.entry_size.value() > 0,
+                "dfb_run_overrides entry for DFB '{}' has entry_size override = 0. entry_size must be set to a "
+                "non-zero value.",
+                dfb_spec_name);
+        }
+        if (dfb_params.num_entries.has_value()) {
+            TT_FATAL(
+                dfb_params.num_entries.value() > 0,
+                "dfb_run_overrides entry for DFB '{}' has num_entries override = 0. num_entries must be set to a "
+                "non-zero value.",
+                dfb_spec_name);
+        }
     }
 
     // Unlike kernels, DFBs don't require DFBRunOverrides.
@@ -710,8 +720,17 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     }
 
     // Process DFB runtime parameters:
+    //   - DFB size overrides (entry_size / num_entries)
     //   - Borrowed-memory DFB backing L1 Buffer*
-    //   - Later, add DFB size overrides (not yet implemented)
+    // Apply size overrides BEFORE attaching borrowed buffers so the borrowed per-bank fit check in
+    // AttachBorrowedDFBBuffers validates the NEW size.
+    for (const auto& dfb_params : params.dfb_run_overrides) {
+        if (!dfb_params.entry_size.has_value() && !dfb_params.num_entries.has_value()) {
+            continue;
+        }
+        program_impl.apply_dfb_size_override(
+            program_impl.get_dfb_handle(*dfb_params.dfb), dfb_params.entry_size, dfb_params.num_entries);
+    }
     AttachBorrowedDFBBuffers(program_impl, tensor_by_param);
 }
 
