@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
 """DEPRECATED: legacy unit-test scaffolding — production E2E uses ``dit_decoder_core``.
 
 ``AdaLNZeroTTNN`` / ``TransformerBlockTTNN`` do not match HF ``AceStepDiTLayer`` (wrong norm,

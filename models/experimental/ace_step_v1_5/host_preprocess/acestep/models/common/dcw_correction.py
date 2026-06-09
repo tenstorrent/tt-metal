@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
 """Differential Correction in Wavelet domain (DCW) for flow-matching sampling.
 
 Implements the sampler-side correction from:

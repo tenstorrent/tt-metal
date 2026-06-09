@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
 """Wavelet-domain DCW primitives — the actual ``dcw_low``/``high``/``double``/``pix`` math.
 
 Verbatim from the paper's reference implementation

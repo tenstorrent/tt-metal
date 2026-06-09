@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
 """Shared helpers for lyric alignment and scoring mixins."""
 
 from typing import Any, Dict, List, Optional, Sequence, Tuple

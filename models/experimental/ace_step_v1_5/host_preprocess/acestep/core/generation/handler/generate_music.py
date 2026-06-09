@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
 """VRAM preflight helpers for handler preprocessing (TTNN demo path)."""
 
 from typing import Any, Dict, List, Optional, Union

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
 """Paths for the demo-only ACE-Step host preprocess package."""
 
 from __future__ import annotations

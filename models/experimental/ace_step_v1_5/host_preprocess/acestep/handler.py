@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
 """
 Business Logic Handler
 Encapsulates all data processing and business logic as a bridge between model and UI

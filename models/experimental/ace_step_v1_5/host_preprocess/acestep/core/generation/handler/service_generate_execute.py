@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
 """Execution helpers for service generation preprocessing."""
 
 from typing import Any, Dict, Tuple

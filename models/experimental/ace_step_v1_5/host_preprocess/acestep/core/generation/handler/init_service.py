@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
 """Facade mixin that composes initialization helper modules."""
 
 from .init_service_catalog import InitServiceCatalogMixin

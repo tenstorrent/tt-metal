@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
 """Lazy loader for ``pytorch_wavelets`` DWT1D modules used by DCW.
 
 Splitting this out keeps :mod:`acestep.models.common.dcw_correction` under

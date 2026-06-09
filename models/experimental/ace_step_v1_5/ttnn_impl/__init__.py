@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
 from .config import AceConfigTTNN, AttentionImplTTNN
 
 # Legacy exports (deprecated — see modules.py module docstring).

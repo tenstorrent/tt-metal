@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
 """
 ACE-Step v1.5 demo: official-style host preprocessing + TTNN DiT sampler + VAE decode.
 

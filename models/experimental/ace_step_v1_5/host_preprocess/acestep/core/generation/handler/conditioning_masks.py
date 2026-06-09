@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
 """Chunk-mask and source-latent helpers for batch conditioning."""
 
 from typing import Dict, List, Optional, Tuple

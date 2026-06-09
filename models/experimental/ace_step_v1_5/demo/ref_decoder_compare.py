@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
 """
 Host-side ACE-Step decoder reference forward for parity checks against TTNN.
 
@@ -157,9 +160,9 @@ def hf_decoder_intermediates(
     if dtype is None:
         dtype = torch.bfloat16
     if device is None:
-        device = "cpu"
-
-    dec_dev = next(decoder.parameters()).device
+        dec_dev = next(decoder.parameters()).device
+    else:
+        dec_dev = torch.device(device)
     w_dtype = next(decoder.parameters()).dtype
 
     B = int(xt.shape[0])
@@ -266,16 +269,6 @@ def hf_decoder_intermediates(
                 # Compute the MLP AdaLN input from the reconstructed post-cross hidden state.
                 adaln_mlp_in = (layer.mlp_norm(hs_after_cross) * (1 + c_scale_msa) + c_shift_msa).type_as(hidden_states)
                 _save(f"layer{layer_idx}.adaln_mlp_in", adaln_mlp_in)
-
-        # AdaLN (mlp) input computed from post-cross hidden_states is not directly accessible without re-running.
-        # We approximate by recomputing it from the layer's internal sequence:
-        # - recompute self-attn output from captured self_attn_out if present, else skip.
-        if f"layer{layer_idx}.self_attn_out" in captured:
-            hs_after_self = (
-                hidden_states + captured[f"layer{layer_idx}.self_attn_out"].to(hidden_states.device) * gate_msa
-            ).type_as(hidden_states)
-        else:
-            hs_after_self = None
 
     hooks.append(layer.register_forward_hook(_layer_hook))
 

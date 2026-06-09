@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
 """Metadata formatting helpers for handler decomposition."""
 
 from typing import Any, Dict, List, Optional, Union

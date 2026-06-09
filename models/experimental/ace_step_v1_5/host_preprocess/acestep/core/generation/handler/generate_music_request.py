@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
 """Input and preflight helpers for ``generate_music`` orchestration."""
 
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union

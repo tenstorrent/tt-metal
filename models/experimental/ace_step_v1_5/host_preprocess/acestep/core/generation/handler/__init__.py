@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
 """Handler decomposition for TTNN demo preprocessing.
 
 TTNN demos call ``handler_prepare_condition_payload`` only. That path uses:

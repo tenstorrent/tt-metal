@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
 """Text-token and hint preparation helpers for batch conditioning."""
 
 from typing import List, Optional, Tuple
