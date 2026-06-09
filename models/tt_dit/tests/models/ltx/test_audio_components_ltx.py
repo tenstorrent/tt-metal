@@ -578,3 +578,73 @@ def test_stage_c_vocoder_with_bwe(
     assert tt_out.shape == ref_out.shape
     if pc is not None:
         _assert_sharded_matches_unsharded(tt_full_un(mel), tt_out, name="stage_c_full")
+
+
+# Localized audio regression: aggregate PCC over a full clip masks a brief burst, so this
+# drives the real ~6s length and gates each 0.5s window vs the unsharded eager baseline.
+_STATIC_SR = 24000  # main vocoder output rate
+_STATIC_WIN_S = 0.5
+
+
+def _window_error_rows(ref: torch.Tensor, tt: torch.Tensor, *, sr: int, win_s: float):
+    """Per-window (start_s, max|Δ|, rmse/σ_ref) over the time axis of (B, C, T)."""
+    T = ref.shape[-1]
+    n = max(1, int(win_s * sr))
+    rows = []
+    for start in range(0, T, n):
+        r = ref[..., start : start + n]
+        t = tt[..., start : start + n]
+        max_abs = (r - t).abs().max().item()
+        rmse = ((r - t) ** 2).mean().sqrt().item()
+        sigma = ((r**2).mean().sqrt().item()) + 1e-9
+        rows.append((start / sr, max_abs, rmse / sigma))
+    return rows
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 32768, "fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 300000000}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+def test_stage_c_audio_decode(mesh_device, device_params):
+    """End-to-end audio synthesis (VocoderWithBWE): channel-TP main vocoder + conv1d depthwise,
+    gated against the unsharded eager baseline per 0.5s window so a localized burst (the demo
+    static) can't hide behind an aggregate PCC. Drives the real ~6s clip length (601 mel
+    frames)."""
+    parent_mesh = mesh_device
+    mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(2, 4))
+    pc = AudioTCParallelConfig(
+        time_parallel=ParallelFactor(factor=4, mesh_axis=1),
+        channel_parallel=ParallelFactor(factor=2, mesh_axis=0),
+    )
+    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+
+    torch_full = _build_torch_stage_c(seed=42)
+    tt_full = _build_tt_stage_c(mesh_device, parallel_config=pc, ccl_manager=ccl)
+    tt_full.load_torch_state_dict(_diffusers_vocoder_with_bwe_state_to_tt(torch_full.state_dict()))
+    tt_un = _build_tt_stage_c(mesh_device, parallel_config=None, ccl_manager=None)
+    tt_un.load_torch_state_dict(_diffusers_vocoder_with_bwe_state_to_tt(torch_full.state_dict()))
+
+    torch.manual_seed(7)
+    _tf = int(os.environ.get("AUDIO_T_FRAMES", "601"))  # 601 mel frames ≈ the 6s girl clip
+    mel = torch.randn(1, 2, _tf, 64, dtype=torch.float32) * 0.5
+    tt = tt_full(mel)
+    out_un = tt_un(mel)
+
+    sr = tt_full.output_sampling_rate
+    logger.info(f"[audio] output {tuple(tt.shape)} = {tt.shape[-1]/sr:.2f}s @ {sr}Hz")
+    su = _window_error_rows(out_un, tt, sr=sr, win_s=_STATIC_WIN_S)
+    for s, su_max, su_rmse in su:
+        logger.info(f"[audio]  t={s:4.2f}s  shard-vs-un max|Δ|={su_max:.3e} rmse/σ={su_rmse:.3e}")
+    worst_su_max = max(r[1] for r in su)
+    worst_su_rmse = max(r[2] for r in su)
+    print(
+        f"\nAUDIO_DECODE shard-vs-un worst_max|Δ|={worst_su_max:.3e} worst_rmse/σ={worst_su_rmse:.3e}",
+        flush=True,
+    )
+    # Regression guard: channel-TP audio must match the unsharded eager TT baseline. Catches
+    # broken sharding (the actual risk); torch-vs-TT on the full muxed BWE output is inherently
+    # loose with random weights and is checked per-component in test_stage_c_vocoder_with_bwe.
+    assert worst_su_max < 5e-3, f"audio window shard-vs-un max|Δ| {worst_su_max:.3e} — divergence"
+    assert worst_su_rmse < 1e-2, f"audio window shard-vs-un rmse/σ {worst_su_rmse:.3e} — divergence"
