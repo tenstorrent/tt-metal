@@ -1,36 +1,54 @@
-"""Query allocated test time for a (team, test type, machine) and compare it to
-the budget declared in .github/time_budget.yaml.
+"""Report how much CI test time a (team, test type, machine[, tier]) uses, and
+compare it against the budget declared in .github/time_budget.yaml.
 
-The companion script verify_time_budget.py checks one tests file against the
-budget during CI. This tool answers the inverse question: "How much time does
-team X currently allocate for test type Y on machine Z?" by summing the
-per-SKU timeouts across the tests files covered by that budget key.
+verify_time_budget.py runs in CI to fail a pipeline whose timeouts exceed budget.
+This script is the interactive companion: it answers "how much time does team X
+allocate for test type Y on machine Z, how does that compare to budget, and how
+many machine-hours/week does it cost?"
 
-Notes on the data model (see tests/pipeline_reorg/*_tests.yaml):
-  * Each entry has a `team:` field. This field -- not the file name -- is the
-    authoritative owner. A single file (e.g. galaxy_unit_tests.yaml) mixes
-    entries from several teams, so we scan every file of the test type and
-    filter by `team:`.
-  * A file's test type is NOT its file name. It is the workflow_name argument
-    passed to verify_time_budget.py by the workflow that runs the file (the same
-    key used in time_budget.yaml). This is discovered live from .github/workflows,
-    because the file name can differ from the budget key -- e.g. release_tests.yaml
-    and galaxy_deepseek_prefill_tests.yaml both map to `demo`, and
-    demo_sp_multihost_tests.yaml maps to `e2e`.
-  * Per entry: skus: { <machine>: { timeout: <minutes>, tier: <n> } }.
-  * The models unit/e2e/sweep budgets are split. The plain keys cover non-tiered
-    pipelines; the unit_tier<n>/e2e_tier<n>/sweep_tier<n> keys cover
-    models_<testtype>_tests.yaml.
+How it works
+------------
+1. Allocated time: sum the per-SKU `timeout` values from the relevant
+   tests/pipeline_reorg/*_tests.yaml entries, filtered by team, machine and
+   (optionally) tier.
+2. Budget: look up budgets[team][test type][machine] in time_budget.yaml.
+3. Machine-hours/week: budget x (cron runs/week) / 60.
 
-It also estimates weekly machine-hours = budget x (cron runs/week) / 60. The
-cron frequency is discovered live by parsing .github/workflows at query time
-(so it tracks schedule changes): the workflow that runs each contributing test
-file is found via its TESTS_YAML_PATH, then the scheduled workflow(s) that
-trigger it are read for their cron schedules. Only cron triggers are counted;
-manual workflow_dispatch runs are intentionally excluded from the estimate.
+Key conventions
+---------------
+* Owner is the entry's `team:` field, not the file name. One file may hold
+  several teams' entries, so all files of a test type are scanned and filtered.
+* A file's "test type" is the workflow_name passed to verify_time_budget.py by
+  the workflow that runs it -- NOT the file name. It is read live from
+  .github/workflows, because names can differ: release_tests.yaml and
+  galaxy_deepseek_prefill_tests.yaml both map to `demo`, and
+  demo_sp_multihost_tests.yaml maps to `e2e`.
+* The models unit/e2e/sweep budgets are tier-split: the plain key covers the
+  non-tiered pipelines, while unit_tier<n>/e2e_tier<n>/sweep_tier<n> cover
+  models_<testtype>_tests.yaml. Pass --tier to target a tiered budget.
+* Cron frequency is parsed live from .github/workflows by following the test
+  file -> running workflow -> scheduled caller(s). Only cron schedules count;
+  manual workflow_dispatch runs are excluded from the estimate.
 
-Usage:
-  query_time_budget.py --team models --testtype unit --machine wh_n150 [--tier 1] [-v]
+Usage
+-----
+  query_time_budget.py --team <team> --testtype <type> --machine <sku> [--tier N] [-v]
+
+Example
+-------
+  $ query_time_budget.py --team models --testtype unit --machine wh_n150 --tier 1 -v
+  Team 'models' / test type 'unit' / machine 'wh_n150', tier 1
+    Files scanned: 1
+         30 min  models_unit_tests.yaml: Llama 3.1-8B unit tests (tier 1)
+         10 min  models_unit_tests.yaml: Whisper unit tests (tier 1)
+    Tests matched: 2
+    Allocated:     40 min
+    Budget:        47 min
+    Scheduled pipelines (cron):
+         14 runs/wk  models-t1-unit-tests.yaml
+    Est. machine-hours/week: 11.0 h  (47 min x 14 runs/wk / 60)
+    Note: estimate uses cron schedules only; manual workflow_dispatch runs are NOT counted.
+    [OK] Within budget (7 min headroom).
 """
 
 import argparse
