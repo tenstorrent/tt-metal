@@ -246,7 +246,7 @@ def test_ff_matmul_with_gelu_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 238419  # Measured: 238μs for FF Matmul SDXL with GELU
+    expected_duration_ns = 234801  # Measured: 235μs for FF Matmul SDXL with GELU
 
     # Log the performance result
     print(
