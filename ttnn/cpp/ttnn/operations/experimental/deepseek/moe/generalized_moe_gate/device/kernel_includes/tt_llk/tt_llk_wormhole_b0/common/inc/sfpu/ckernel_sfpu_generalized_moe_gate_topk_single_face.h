@@ -700,12 +700,49 @@ inline void _gmg_merge16_to_run() {
     TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + store_hi);
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, uint32_t topk = 8>
 inline void _generalized_moe_gate_finalize_ungrouped(uint32_t eps, uint32_t scale) {
-    // Final combine: merge the two runs at {0,2}+{4,6} -> global top-8, then normalize. (For 256 the
-    // two runs are topA/topB; for >256 they are the last two block/subtree runs of the combine tree.)
+    // Final combine: merge the two runs at {0,2}+{4,6} -> global top-8 (sorted DESCENDING), then normalize.
+    // (For 256 the two runs are topA/topB; for >256 they are the last two block/subtree runs of the tree.)
     _gmg_merge16_core<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
     bitonic_topk_store8_even_cols_split_indices_single_face<is_fp32_dest_acc_en>();
+
+    // TOP-N (n = topk <= 8): the sorted-8 are at scores/indices {0,4} — offset 0 = ranks 0-3, offset 4 =
+    // ranks 4-7 (descending). Zero the scores+idx of ranks >= topk BEFORE the normalize so the denominator
+    // is the sum of the top-n and the dropped slots output 0. topk==8 -> no-op (full top-8).
+    if constexpr (topk <= 4) {
+        // Drop the entire offset-4 half (ranks 4-7). (topk<4 would also need offset-0 lane masking.)
+        TTI_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_3, scores_offset + 4);
+        TTI_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_3, indices_offset + 4);
+    } else if constexpr (topk < 8) {
+        // TOP-5/6/7: the 4 sorted ranks 4-7 are spread every 8 lanes across the 32-lane offset-4 row
+        // (lanes 0,8,16,24), and vConstTileId = 2*lane, so rank (4+j) -> tileid 16*j: rank4@0, rank5@16,
+        // rank6@32, rank7@48 (pinned by dump: drop_thr 4/8/16 all keep only rank4, so the stride is 16).
+        // Drop ranks topk..7 = lanes with tileid >= drop_thr (drop_thr = 16*(topk-4)); keep ranks
+        // 4..topk-1. Use sfpi v_if for the per-lane predicate: it materializes vConstTileId
+        // correctly (raw SFPIADD/SFPMOV reads of the LTILEID const-reg did NOT yield per-lane values and
+        // zeroed the whole row). KEY: sfpi dst_reg[k] addresses TTI addr k*SFP_DESTREG_STRIDE (=k*2), and
+        // its default mod-0 (SrcB) load/store matches the normalize's mod-0 TTI_SFPLOAD of the scores --
+        // so scores+4 (TTI addr 4) is dst_reg[2], not dst_reg[4] (that earlier off-by-stride wrote to
+        // addr 8 and left scores+4 untouched -> full top-8). Reset Dst RWC first so the dst_reg base
+        // lines up with the TTI ADDR_MOD_3 base. Zero the dropped slots' idx too (matches the topk<=4
+        // path), same read-modify-write the scores use: load the row, zero the dropped lanes in-register,
+        // store all lanes back (kept lanes round-trip exactly). NOTE: the idx row must be read/written as
+        // vFloat (the default mod-0 SrcB raw-bit passthrough), NOT vUInt -- a vUInt dst_reg store here
+        // simply did not land. The mod-0 passthrough preserves the kept ids (e.g. 337/75) bit-for-bit.
+        constexpr int drop_thr = 16 * (static_cast<int>(topk) - 4);  // tileid >= drop_thr -> rank >= topk
+        constexpr int sc4_dreg = (scores_offset + 4) / 2;            // scores+4 (TTI addr 4)  -> dst_reg 2
+        constexpr int ix4_dreg = (indices_offset + 4) / 2;           // indices+4 (TTI addr 68) -> dst_reg 34
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+        sfpi::vFloat sc = sfpi::dst_reg[sc4_dreg];
+        v_if(sfpi::vConstTileId >= drop_thr) { sc = 0.0f; }
+        v_endif;
+        sfpi::dst_reg[sc4_dreg] = sc;
+        sfpi::vFloat ix = sfpi::dst_reg[ix4_dreg];
+        v_if(sfpi::vConstTileId >= drop_thr) { ix = 0.0f; }
+        v_endif;
+        sfpi::dst_reg[ix4_dreg] = ix;
+    }
 
     // ---- normalization tail (same as _generalized_moe_gate_top8) ----
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, scores_offset + 0);

@@ -171,6 +171,7 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
         {"moe_gate_eps", float_bits_u32(operation_attrs.eps)},
         {"moe_gate_scaling_factor", float_bits_u32(operation_attrs.scaling_factor)},
         {"moe_gate_enable_sigmoid", operation_attrs.enable_sigmoid ? 1u : 0u},
+        {"moe_gate_topk", operation_attrs.topk},
         {"moe_gate_num_blocks", num_blocks},
         {"moe_gate_run_scores_cb", run_scores_cb},
         {"moe_gate_run_idx_cb", run_idx_cb},

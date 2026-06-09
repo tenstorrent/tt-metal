@@ -97,11 +97,11 @@ inline void llk_math_sfpu_generalized_moe_gate_place_field_from_interm(
         vector_mode);
 }
 
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en, uint32_t topk = 8>
 inline void llk_math_sfpu_generalized_moe_gate_finalize_ungrouped(
     uint dst_index, uint32_t eps, uint32_t scale, VectorMode vector_mode = VectorMode::RC_custom) {
     _llk_math_eltwise_unary_sfpu_params_(
-        ckernel::sfpu::generalized_moe_gate_finalize_ungrouped<APPROXIMATE, is_fp32_dest_acc_en>,
+        ckernel::sfpu::generalized_moe_gate_finalize_ungrouped<APPROXIMATE, is_fp32_dest_acc_en, topk>,
         dst_index,
         vector_mode,
         eps,

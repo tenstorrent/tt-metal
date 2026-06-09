@@ -127,7 +127,7 @@ num_blocks == 2(combine 路径):
 
 1. **Kimi 384**:`num_blocks=2`,block1 = 256-383(+128 padding)。多半只是 op.py/test 的事 —— 把 padding expert
    的 key 设得很低,让它们永不被选中;kernel 的 combine 应该不用改。
-2. **Top-n(k = 4/6/10)**:目前 k=8 写死在 `merge16_to_run`/`finalize`/bitonic 排序里,需要把 k 参数化。
+2. **Top-n**:✅ k = 4/6/8 已完成(256 + 512),见 `TOPN_NOTES.zh.md`。k>8(top-10)和 k<4 仍待办。
 3. **Softmax / sqrt-softplus** 归一化变体(见 `SOFTMAX_NOTES.md`)。
 4. **>512**:需要 combine **树**(现在是单次 2-run merge)。
 5. **性能。**

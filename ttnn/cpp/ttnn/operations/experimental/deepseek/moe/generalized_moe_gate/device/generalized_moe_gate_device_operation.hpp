@@ -43,7 +43,8 @@ struct GeneralizedMoeGateDeviceOperation {
         const Tensor& output_indices_tensor,
         float eps,
         float scaling_factor,
-        bool enable_sigmoid);
+        bool enable_sigmoid,
+        uint32_t topk);
 };
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::generalized_moe_gate
