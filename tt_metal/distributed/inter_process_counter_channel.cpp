@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/experimental/inter_process_counter_channel.hpp>
+#include <internal/service/inter_process_counter_channel.hpp>
 
 #include "inter_process_counter_layout.hpp"
 
