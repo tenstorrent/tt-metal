@@ -121,7 +121,10 @@ private:
 
     // FIFO depth — how many in-flight requests a single socket can hold before
     // back-pressuring. kSocketFifoPages × align_up(kRequestPageBytes, pcie) per socket.
-    static constexpr uint32_t kSocketFifoPages = 16;
+    // Scaled inversely with kRequestPageBytes (128 × 128 B == the previous 16 × 1024 B) so
+    // shrinking the page to one-matmul granularity keeps the per-socket DRISC L1 FIFO at the
+    // same footprint while allowing 8× more small in-flight requests.
+    static constexpr uint32_t kSocketFifoPages = 128;
 
     struct Request {
         std::vector<uint8_t> page;  // one socket page; identical bytes for every target
