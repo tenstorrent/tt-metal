@@ -189,7 +189,7 @@ def _patch_transformer_forward_i2s_guard(tt_model: Any) -> None:
 
 def ace_step_apply_lm_head_sharded_norm(tt_model: Any, model_args: Any) -> None:
     """Patch final ``lm_head`` RMSNorm to width-sharded output (prefill + ``_apply_norm_and_lm_head``)."""
-    del model_args
+    _ = model_args
     if not ace_step_lm_head_sharded_norm_enabled():
         return
     if hasattr(tt_model, "norm"):

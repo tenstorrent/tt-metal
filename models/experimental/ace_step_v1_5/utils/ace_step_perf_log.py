@@ -763,9 +763,9 @@ def make_denoise_progress_fn(
     num_steps: int,
 ) -> Optional[Any]:
     """Reserved for optional per-step denoise logging (disabled)."""
-    del recorder, num_steps
+    _ = recorder, num_steps
     return None
 
 
 def log_denoise_step_summary(step_times_ms: List[float]) -> None:
-    del step_times_ms
+    _ = step_times_ms

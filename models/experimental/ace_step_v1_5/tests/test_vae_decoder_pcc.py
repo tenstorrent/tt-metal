@@ -24,7 +24,6 @@ the ``ttnn.linear`` path.
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 
 import pytest
@@ -32,7 +31,6 @@ import torch
 
 import ttnn
 
-logger = logging.getLogger(__name__)
 from models.experimental.ace_step_v1_5.tests._dit_decoder_pcc_common import assert_pcc_print
 from models.experimental.ace_step_v1_5.torch_ref.vae.oobleck_decoder import (
     OobleckDecoder,

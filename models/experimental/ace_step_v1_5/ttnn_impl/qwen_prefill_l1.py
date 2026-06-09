@@ -628,7 +628,7 @@ def _rehome_mcast_matmul_weights_to_dram_interleaved(tt_model: Any) -> None:
     :func:`ace_step_promote_attention_wqkv_to_dram_interleaved` and
     :func:`ace_step_promote_mlp_prefill_dram_interleaved` with prefill-only forward swaps.
     """
-    del tt_model  # reserved for future prefill-only rehome if needed
+    _ = tt_model  # reserved for future prefill-only rehome if needed
 
 
 def ace_step_apply_qwen_prefill_matmul_configs(model_args: Any) -> None:

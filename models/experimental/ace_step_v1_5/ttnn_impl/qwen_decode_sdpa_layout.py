@@ -20,7 +20,7 @@ from typing import Any
 
 def ace_step_patch_model_args_sdpa_gather_unified(model_args: Any) -> None:
     """No-op: keep stock ``get_attn_gather_users_mem_config(DECODE)`` shard spec."""
-    del model_args
+    _ = model_args
 
 
 __all__ = ["ace_step_patch_model_args_sdpa_gather_unified"]

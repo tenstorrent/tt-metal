@@ -58,7 +58,7 @@ from .math_perf_env import ace_step_qwen3_optimizations
 from .qwen3_embedding_encoder import Qwen3EmbeddingEncoderConfig, TtQwen3EmbeddingEncoder
 from .qwen_prefill_l1 import ace_step_apply_qwen_prefill_l1, ace_step_qwen_prefill_l1_op_context
 
-logger = logging.getLogger(__name__)
+_ = logging.getLogger(__name__)
 
 
 def _qwen_debug(msg: str, *args) -> None:

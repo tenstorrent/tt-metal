@@ -109,7 +109,7 @@ class AceStepFiveHzExperimentalTtnnCausalLM(nn.Module):
         use_cache: bool = True,
         **kwargs: Any,
     ) -> SimpleNamespace:
-        del attention_mask, kwargs  # API parity with HF; mask handled implicitly in experimental model
+        _ = attention_mask, kwargs  # API parity with HF; mask handled implicitly in experimental model
         if input_ids is None:
             raise ValueError("AceStepFiveHzExperimentalTtnnCausalLM.forward requires input_ids")
         if int(input_ids.shape[0]) != 1:

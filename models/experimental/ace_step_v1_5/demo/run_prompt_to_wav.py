@@ -565,7 +565,7 @@ def _run_pytorch_dit_denoise_mesh(
         vt_cond: torch.Tensor,
         vt_uncond: torch.Tensor,
     ) -> torch.Tensor:
-        del step_idx
+        _ = step_idx
         if not (cfg_lo <= t_curr <= cfg_hi):
             return vt_cond
         if use_adg:

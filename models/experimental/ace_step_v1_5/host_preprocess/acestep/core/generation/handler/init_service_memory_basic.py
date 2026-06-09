@@ -18,7 +18,6 @@ from loguru import logger
 
 # Cached libc handle for mallopt/malloc_trim calls (Linux only).
 _LIBC = None
-_MALLOPT_APPLIED = False
 
 
 def _get_libc():
@@ -41,16 +40,14 @@ def _apply_malloc_mmap_threshold() -> None:
     PyTorch tensor storage freed during CPU-offload is returned to the OS
     promptly instead of being retained in the glibc arena.
     """
-    global _MALLOPT_APPLIED
-    if _MALLOPT_APPLIED or platform.system() != "Linux":
+    if platform.system() != "Linux":
         return
     libc = _get_libc()
     if libc is None:
         return
     try:
         # M_MMAP_THRESHOLD = -3; 128 KB threshold
-        libc.mallopt(-3, 131072)
-        _MALLOPT_APPLIED = True
+        _ = libc.mallopt(-3, 131072)
         logger.debug("[memory] Set M_MMAP_THRESHOLD=131072 for immediate OS reclaim of large frees")
     except Exception as exc:
         logger.debug("[memory] mallopt not available: {}", exc)
