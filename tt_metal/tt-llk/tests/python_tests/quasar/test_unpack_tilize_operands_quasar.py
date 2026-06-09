@@ -41,11 +41,11 @@ from helpers.test_variant_parameters import (
 from helpers.utils import passed_test
 
 
-def generate_unpack_tilize_binary_combinations(
+def generate_unpack_tilize_operands_combinations(
     formats_list: List[FormatConfig],
 ):
     """
-    Generate unpack_tilize_binary_operands test combinations for Quasar.
+    Generate unpack_tilize_operands test combinations for Quasar.
 
     Args:
         formats_list: List of input/output format pairs
@@ -81,7 +81,7 @@ def generate_unpack_tilize_binary_combinations(
     # Targeted dimensions per (dest_sync, dest_acc) that cover key corner cases:
     # 1 tile (minimum), max-wide (stresses block_ct), max-tall (stresses block_rt),
     # and max-square (both loops at capacity).
-    tilize_binary_dims = {
+    tilize_operands_dims = {
         (DestSync.Half, DestAccumulation.No): [
             [32, 32],
             [32, 256],
@@ -123,7 +123,7 @@ def generate_unpack_tilize_binary_combinations(
                         TilizeUnpackerSel.UnpB,
                         TilizeUnpackerSel.UnpAB,
                     ):
-                        for dimensions in tilize_binary_dims[(dest_sync, acc)]:
+                        for dimensions in tilize_operands_dims[(dest_sync, acc)]:
                             combinations.append(
                                 (fmt, acc, dest_sync, unp_tilize_sel, dimensions)
                             )
@@ -131,7 +131,7 @@ def generate_unpack_tilize_binary_combinations(
     return combinations
 
 
-UNPACK_TILIZE_BINARY_FORMATS = input_output_formats(
+UNPACK_TILIZE_OPERANDS_FORMATS = input_output_formats(
     [
         DataFormat.MxFp8P,
         DataFormat.MxFp8R,
@@ -144,16 +144,16 @@ UNPACK_TILIZE_BINARY_FORMATS = input_output_formats(
         DataFormat.Int32,
     ],
 )
-ALL_UNPACK_TILIZE_BINARY_OPERANDS_COMBINATIONS = (
-    generate_unpack_tilize_binary_combinations(UNPACK_TILIZE_BINARY_FORMATS)
+ALL_UNPACK_TILIZE_OPERANDS_COMBINATIONS = generate_unpack_tilize_operands_combinations(
+    UNPACK_TILIZE_OPERANDS_FORMATS
 )
 
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_tilize_sel_dims=ALL_UNPACK_TILIZE_BINARY_OPERANDS_COMBINATIONS,
+    formats_dest_acc_sync_tilize_sel_dims=ALL_UNPACK_TILIZE_OPERANDS_COMBINATIONS,
 )
-def test_unpack_tilize_binary_operands_quasar(
+def test_unpack_tilize_operands_quasar(
     formats_dest_acc_sync_tilize_sel_dims, boot_mode=BootMode.DEFAULT
 ):
     (formats, dest_acc, dest_sync_mode, unp_tilize_sel, input_dimensions) = (
@@ -207,7 +207,7 @@ def test_unpack_tilize_binary_operands_quasar(
     )
 
     configuration = TestConfig(
-        "sources/quasar/unpack_tilize_binary_operands_quasar_test.cpp",
+        "sources/quasar/unpack_tilize_operands_quasar_test.cpp",
         formats,
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),

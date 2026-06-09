@@ -19,7 +19,7 @@
  * @param buf_desc_id_0/1: Buffer descriptor ID for each operand
  */
 template <TilizeUnpackerSel TILIZE_UNP_SEL>
-inline void _llk_unpack_tilize_binary_operands_mop_config_(const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1)
+inline void _llk_unpack_tilize_operands_mop_config_(const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1)
 {
     static_assert(
         (TILIZE_UNP_SEL == TilizeUnpackerSel::UnpA) || (TILIZE_UNP_SEL == TilizeUnpackerSel::UnpB) || (TILIZE_UNP_SEL == TilizeUnpackerSel::UnpAB),
@@ -66,7 +66,7 @@ inline void _llk_unpack_tilize_binary_operands_mop_config_(const std::uint32_t b
  * @param tensor_shape: Contains all the information of the tile shape for the input: num faces, face row/col dim, etc
  */
 template <TilizeUnpackerSel TILIZE_UNP_SEL>
-inline void _llk_unpack_tilize_binary_operands_init_(
+inline void _llk_unpack_tilize_operands_init_(
     const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const std::uint32_t full_ct_dim, const TensorShape& tensor_shape)
 {
     static_assert(
@@ -102,7 +102,7 @@ inline void _llk_unpack_tilize_binary_operands_init_(
         cfg[THCON_UNPACKER1_REG2_UNPACK_STRIDE_OFFSET_0_ADDR32]     = unpk_cfg.val[2];
     }
 
-    _llk_unpack_tilize_binary_operands_mop_config_<TILIZE_UNP_SEL>(buf_desc_id_0, buf_desc_id_1);
+    _llk_unpack_tilize_operands_mop_config_<TILIZE_UNP_SEL>(buf_desc_id_0, buf_desc_id_1);
 }
 
 /**
@@ -114,7 +114,7 @@ inline void _llk_unpack_tilize_binary_operands_init_(
  * @param start_l1_tile_idx_1: L1 index for UNPACKER1, unpacks to SrcB
  */
 template <TilizeUnpackerSel TILIZE_UNP_SEL>
-inline void _llk_unpack_tilize_binary_operands_(const std::uint32_t start_l1_tile_idx_0, const std::uint32_t start_l1_tile_idx_1)
+inline void _llk_unpack_tilize_operands_(const std::uint32_t start_l1_tile_idx_0, const std::uint32_t start_l1_tile_idx_1)
 {
     static_assert(
         (TILIZE_UNP_SEL == TilizeUnpackerSel::UnpA) || (TILIZE_UNP_SEL == TilizeUnpackerSel::UnpB) || (TILIZE_UNP_SEL == TilizeUnpackerSel::UnpAB),
