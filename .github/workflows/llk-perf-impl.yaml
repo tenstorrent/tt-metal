@@ -123,7 +123,13 @@ jobs:
         if: always()
         with:
           name: perf-junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
-          path: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}.xml
+          # Match the merged report, the compile report, and the per-file
+          # `-<tname>-run` reports so that BH per-test reports are still
+          # uploaded even when a timeout prevents the final merge step.
+          path: |
+            ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}.xml
+            ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-*-run.xml
+            ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-compile.xml
 
       - name: Publish Test Results
         uses: mikepenz/action-junit-report@v5
