@@ -29,7 +29,11 @@ class StateTensor:
     """
 
     def __init__(self) -> None:
-        self._value: ttnn.Tensor | None = None
+        self._data: ttnn.Tensor | None = None
+
+    @property
+    def data(self) -> ttnn.Tensor | None:
+        return self._data
 
     def update(
         self,
@@ -52,10 +56,10 @@ class StateTensor:
         if torch.is_tensor(value):
             assert device is not None, "device must be provided if using torch tensor"
             value = tensor.from_torch(value, device=device, mesh_axes=mesh_axes, dtype=dtype)
-        if self._value is None or not traced:
-            self._value = value
+        if self._data is None or not traced:
+            self._data = value
         else:
-            ttnn.copy(value, self._value)
+            ttnn.copy(value, self._data)
 
 
 class Tracer:
