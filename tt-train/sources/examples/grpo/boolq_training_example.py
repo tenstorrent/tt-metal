@@ -20,14 +20,8 @@ from utils.llama_completer import LlamaCompletionCtx
 from utils.llama_completer import LlamaGRPOCompleter
 
 
-# Fixed seed so generation (token sampling uses np.random) and any other RNG
-# are reproducible across runs, which is required for a controlled A/B
-# comparison of the advantage paths (host vs GRPO_LEGACY_ADVANTAGES). Token
-# sampling is otherwise unseeded, so two launches would diverge from the first
-# generated token regardless of code changes.
-SEED = 42
-
-
+# Seed can be specified via --seed (defaults to 42). Seeding all RNGs (Python/NumPy/torch) makes a
+# run reproducible across launches, which is required for reproducibility.
 def seed_everything(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
@@ -83,6 +77,12 @@ def parse_args():
             "Its device_config section (enable_ddp, mesh_shape) selects single-device vs DDP."
         ),
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="RNG seed for reproducible runs. If omitted, no seed is set and runs are nondeterministic.",
+    )
     # Accept (and ignore) extra flags passed by launch scripts (e.g. --model,
     # --wandb*) so they don't crash argument parsing.
     args, _ = parser.parse_known_args()
@@ -91,7 +91,9 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    seed_everything(SEED)
+    if args.seed is None:
+        args.seed = 42
+    seed_everything(args.seed)
 
     model_id = "meta-llama/Llama-3.2-1B-Instruct"
     tokenizer = AutoTokenizer.from_pretrained(model_id)
