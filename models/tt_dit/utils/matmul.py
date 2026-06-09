@@ -263,12 +263,27 @@ grid_12_9_configs = {
     # M_t=256; 256%8=0 ✓. Subblocks mirror M=16384 entries.
     (8192, 6144, 4608): (8, 2, 8, (1, 4)),  # 128 tiles — ff1 spatial   [UNSWEPT ESTIMATE]
     (8192, 6144, 2304): (8, 2, 8, (4, 1)),  # 128 tiles — ff1 chunk/ff2 [UNSWEPT ESTIMATE]
+    (8192, 6144, 1536): (8, 2, 8, (1, 4)),  # 128 tiles — attn/proj     [UNSWEPT ESTIMATE]
     (8192, 6144, 768): (8, 4, 4, (1, 4)),  # 112 tiles — to_out        [UNSWEPT ESTIMATE]
     (8192, 4608, 768): (8, 4, 4, (1, 4)),  # 112 tiles — ff2 spatial   [UNSWEPT ESTIMATE]
+    # M=16384 companion for N=1536 (K=6144, M_b=16): overhead~1069 KB, max 233 tiles; (16,2,8)→224✓
+    (16384, 6144, 1536): (16, 2, 8, (1, 4)),  # 224 tiles — attn/proj   [UNSWEPT ESTIMATE]
     # x_c_merged for M=8192+128=8320 → M_tiles=260; 260%4=0 (260%8≠0), use M_block=4
     (8320, 6144, 4608): (4, 2, 8, (1, 4)),  #  64 tiles — ff1 merged    [UNSWEPT ESTIMATE]
     (8320, 6144, 2304): (4, 2, 8, (4, 1)),  #  64 tiles  [UNSWEPT ESTIMATE]
     (8320, 4608, 768): (4, 4, 4, (1, 4)),  #  48 tiles — ff2 merged    [UNSWEPT ESTIMATE]
+    # x_c_merged for M=8192+64=8256 → M_tiles=258; 258%6=0 (258%16≠0 → M_block snaps to 6).
+    # total_CBs ≈ (63/32)×matmul_CBs + 158 KB (empirical from compile-time arg analysis).
+    # N=9216: use N_block=8 (not 16) — N_block=16 with (16,8,16) crashes at 3,256,832 B.
+    # N_t=288; 288%8=0 ✓.
+    (8256, 6144, 9216): (6, 2, 8, (1, 4)),  # 104 tiles — ff1/qkv merged [UNSWEPT ESTIMATE]
+    (8256, 6144, 4608): (6, 2, 8, (1, 4)),  # 104 tiles — ff1 merged     [UNSWEPT ESTIMATE]
+    (8256, 6144, 2304): (6, 2, 8, (4, 1)),  # 104 tiles  [UNSWEPT ESTIMATE]
+    (8256, 6144, 768): (6, 4, 4, (1, 4)),  #  88 tiles — to_out merged  [UNSWEPT ESTIMATE]
+    # Spatial-only M=8192 with N=9216 — same N_block=8 constraint applies
+    (8192, 6144, 9216): (8, 2, 8, (1, 4)),  # 128 tiles — ff1/qkv spatial [UNSWEPT ESTIMATE]
+    # M=16384 with N=9216 (K=6144, M_b=16, formula: (63/32)×224t×2048+158KB≈1.06MB ✓)
+    (16384, 6144, 9216): (16, 2, 8, (1, 4)),  # 224 tiles               [UNSWEPT ESTIMATE]
 }
 
 
