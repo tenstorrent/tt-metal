@@ -192,7 +192,6 @@ class TestConfig:
             "#include <utility>",
             '#include "ckernel.h"',
             '#include "ckernel_defs.h"',
-            '#include "ckernel_globals.h"',
             '#include "ckernel_ops.h"',
             '#include "ckernel_sfpu.h"',
             '#include "ckernel_template.h"',
