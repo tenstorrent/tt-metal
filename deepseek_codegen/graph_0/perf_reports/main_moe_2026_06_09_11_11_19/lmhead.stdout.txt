@@ -1,0 +1,99 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 120
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'lm_head_start'.
+Using operations until 'lm_head_end'.
+Detected data from 32 devices. Merging device data...
+
+🚀 Performance Report 🚀
+========================
+
+ID      Total %  Bound  OP Code                                  Device   Device Time  Op-to-Op Gap  Cores  DRAM      DRAM %  FLOPs        FLOPs %  Math Fidelity
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 21710    0.0 %         LayerNormPreAllGatherDeviceOperation           0        15 μs                    1                                                       FP32 => FP32
+ 21744    0.0 %         SliceDeviceOperation                           2         1 μs        156 μs      1                                                       FP32 => FP32
+ 21794    0.1 %         AllGatherDeviceOperation                       0        44 μs        632 μs     12                                                       FP32 => FP32
+ 21806    0.0 %         FillPadDeviceOperation                         0         8 μs        114 μs      8                                                       FP32 => FP32
+ 21841    0.0 %         TransposeDeviceOperation                       3         3 μs        179 μs    120                                                       FP32 => FP32
+ 21896    0.0 %         ReduceDeviceOperation                         26         2 μs        149 μs     32                                                       FP32 => FP32
+ 21904    0.0 %         TransposeDeviceOperation                       2         1 μs        182 μs    120                                                       FP32 => FP32
+ 21943    0.0 %         BinaryNgDeviceOperation                        5         4 μs        243 μs    120                                                 FP32, FP32 => FP32
+ 21987    0.0 %         BinaryNgDeviceOperation                       22         4 μs        224 μs    120                                                 FP32, FP32 => FP32
+ 21999    0.0 %         UnaryDeviceOperation                           1         2 μs        223 μs    120                                                       FP32 => FP32
+ 22037    0.0 %         BinaryNgDeviceOperation                        8         9 μs        234 μs    120                                                 FP32, FP32 => FP32
+ 22090    9.2 %         BinaryNgDeviceOperation                       19        13 μs    123,425 μs    120                                                 FP32, FP32 => FP32
+ 22110    8.9 %   SLOW  MatmulDeviceOperation 32 x 896 x 129280       28       445 μs    119,312 μs    119  298 GB/s  58.1 %  16.7 TFLOPs   10.1 %  HiFi4 FP32 x BFP8 => FP32
+ 22146   13.5 %         ReduceScatterDeviceOperation                   0       279 μs    180,674 μs     20                                                       FP32 => FP32
+ 22178   12.7 %         AllGatherDeviceOperation                       0       227 μs    170,691 μs     20                                                       FP32 => FP32
+ 22215   10.3 %         UntilizeDeviceOperation                       25       103 μs    137,762 μs    119                                                       FP32 => FP32
+ 22225    8.9 %         ArgMaxDeviceOperation                          3     1,267 μs    117,616 μs    120                                                     FP32 => UINT32
+ 22261    8.0 %         TilizeWithValPaddingDeviceOperation            8         4 μs    107,695 μs      1                                                   UINT32 => UINT32
+ 22307    9.0 %         TypecastDeviceOperation                       22         1 μs    120,969 μs      1                                                    UINT32 => INT32
+ 22338    9.7 %         AllGatherDeviceOperation                       0        28 μs    130,231 μs      4                                                     INT32 => INT32
+ 22365    9.6 %         BinaryNgDeviceOperation                       12         2 μs    129,357 μs    120                                              INT32, INT32 => INT32
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+        100.0 %         21 device ops, 0 host ops, 0 signposts               2,462 μs  1,340,069 μs
+
+💡 Advice 💡
+============
+
+High Op-to-Op Gap
+----------------
+ 21744    0.0 %         SliceDeviceOperation                           2         1 μs        156 μs      1                                                       FP32 => FP32
+ 21794    0.1 %         AllGatherDeviceOperation                       0        44 μs        632 μs     12                                                       FP32 => FP32
+ 21806    0.0 %         FillPadDeviceOperation                         0         8 μs        114 μs      8                                                       FP32 => FP32
+ 21841    0.0 %         TransposeDeviceOperation                       3         3 μs        179 μs    120                                                       FP32 => FP32
+ 21896    0.0 %         ReduceDeviceOperation                         26         2 μs        149 μs     32                                                       FP32 => FP32
+ 21904    0.0 %         TransposeDeviceOperation                       2         1 μs        182 μs    120                                                       FP32 => FP32
+ 21943    0.0 %         BinaryNgDeviceOperation                        5         4 μs        243 μs    120                                                 FP32, FP32 => FP32
+ 21987    0.0 %         BinaryNgDeviceOperation                       22         4 μs        224 μs    120                                                 FP32, FP32 => FP32
+ 21999    0.0 %         UnaryDeviceOperation                           1         2 μs        223 μs    120                                                       FP32 => FP32
+ 22037    0.0 %         BinaryNgDeviceOperation                        8         9 μs        234 μs    120                                                 FP32, FP32 => FP32
+ 22090    9.2 %         BinaryNgDeviceOperation                       19        13 μs    123,425 μs    120                                                 FP32, FP32 => FP32
+ 22110    8.9 %   SLOW  MatmulDeviceOperation 32 x 896 x 129280       28       445 μs    119,312 μs    119  298 GB/s  58.1 %  16.7 TFLOPs   10.1 %  HiFi4 FP32 x BFP8 => FP32
+ 22146   13.5 %         ReduceScatterDeviceOperation                   0       279 μs    180,674 μs     20                                                       FP32 => FP32
+ 22178   12.7 %         AllGatherDeviceOperation                       0       227 μs    170,691 μs     20                                                       FP32 => FP32
+ 22215   10.3 %         UntilizeDeviceOperation                       25       103 μs    137,762 μs    119                                                       FP32 => FP32
+ 22225    8.9 %         ArgMaxDeviceOperation                          3     1,267 μs    117,616 μs    120                                                     FP32 => UINT32
+ 22261    8.0 %         TilizeWithValPaddingDeviceOperation            8         4 μs    107,695 μs      1                                                   UINT32 => UINT32
+ 22307    9.0 %         TypecastDeviceOperation                       22         1 μs    120,969 μs      1                                                    UINT32 => INT32
+ 22338    9.7 %         AllGatherDeviceOperation                       0        28 μs    130,231 μs      4                                                     INT32 => INT32
+ 22365    9.6 %         BinaryNgDeviceOperation                       12         2 μs    129,357 μs    120                                              INT32, INT32 => INT32
+
+These ops have a >6 μs gap since the previous operation. Running with tracing could save 1339949 μs (99.8% of overall time)
+Alternatively ensure device is not waiting for the host. Experts can try moving runtime args in the kernels to compile-time args.
+
+Matmul Optimization
+-------------------
+ 22110    8.9 %   SLOW  MatmulDeviceOperation 32 x 896 x 129280       28       445 μs    119,312 μs    119  298 GB/s  58.1 %  16.7 TFLOPs   10.1 %  HiFi4 FP32 x BFP8 => FP32
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- in0_block_w=2 and output subblock 1x2 look good 🤷
+- HiFi2 is sufficient for BFP8 multiplication and has 2x the throughput of HiFi4
+
+Warning: Unclassified operation 'LayerNormPreAllGatherDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'AllGatherDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ArgMaxDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+
+📊 Stacked report 📊
+====================
+
+Total %  Op Code                                                      Device Time Sum  Op Count  Op Category  Min FLOPs  Max FLOPs  Mean FLOPs  Std FLOPs  Weighted Mean FLOPs
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+51.46 %  ArgMaxDeviceOperation (in0:dram_interleaved)                     1,266.72 μs         1        Other
+18.08 %  MatmulDeviceOperation (in0:dram_interleaved)                       445.06 μs         1      Compute    10.13 %    10.13 %     10.13 %                         10.13 %
+12.10 %  AllGatherDeviceOperation (in0:dram_interleaved)                    297.85 μs         3        Other
+11.32 %  ReduceScatterDeviceOperation (in0:dram_interleaved)                278.74 μs         1           DM
+ 4.17 %  UntilizeDeviceOperation (in0:dram_interleaved)                     102.73 μs         1           TM
+ 1.32 %  BinaryNgDeviceOperation (in0:dram_interleaved)                      32.41 μs         5      Compute
+ 0.61 %  LayerNormPreAllGatherDeviceOperation (in0:dram_interleaved)         14.98 μs         1        Other
+ 0.33 %  FillPadDeviceOperation (in0:dram_interleaved)                        8.04 μs         1           TM
+ 0.19 %  TransposeDeviceOperation (in0:dram_interleaved)                      4.69 μs         2           TM
+ 0.18 %  TilizeWithValPaddingDeviceOperation (in0:dram_interleaved)           4.31 μs         1           TM
+ 0.09 %  ReduceDeviceOperation (in0:dram_interleaved)                         2.24 μs         1      Compute
+ 0.08 %  UnaryDeviceOperation (in0:dram_interleaved)                          1.99 μs         1      Compute
+ 0.04 %  TypecastDeviceOperation (in0:dram_interleaved)                       1.10 μs         1           TM
+ 0.03 %  SliceDeviceOperation (in0:dram_interleaved)                          0.85 μs         1           TM
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Writing CSV stacked report to /home/ubuntu/tt-metal/deepseek_codegen/graph_0/perf_reports/main_moe_2026_06_09_11_11_19/lmhead.summary.csv.csv
+Plotting PNG stacked report to /home/ubuntu/tt-metal/deepseek_codegen/graph_0/perf_reports/main_moe_2026_06_09_11_11_19/lmhead.summary.csv.png

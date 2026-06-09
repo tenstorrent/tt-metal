@@ -1,0 +1,54 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 120
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'prologue_start'.
+Using operations until 'layer_0_start'.
+Detected data from 32 devices. Merging device data...
+
+🚀 Performance Report 🚀
+========================
+
+ID      Total %  Bound  OP Code                               Device   Device Time  Op-to-Op Gap  Cores  DRAM  DRAM %  FLOPs  FLOPs %  Math Fidelity
+-----------------------------------------------------------------------------------------------------------------------------------------------------------
+ 11669    0.0 %         TilizeWithValPaddingDeviceOperation        29         3 μs                    1                                      INT32 => INT32
+ 11699   30.0 %         BinaryNgDeviceOperation                    12         2 μs     17,875 μs    120                                INT32, INT32 => BF16
+ 11744   23.6 %         TypecastDeviceOperation                    19         1 μs     14,059 μs      1                                     INT32 => UINT32
+ 11751   12.8 %         ReshapeViewDeviceOperation                  3         4 μs      7,631 μs      1                                    UINT32 => UINT32
+ 11791    9.1 %         UntilizeWithUnpaddingDeviceOperation        7         1 μs      5,397 μs      1                                    UINT32 => UINT32
+ 11832   22.7 %         EmbeddingsDeviceOperation                  23         6 μs     13,541 μs      1                                UINT32, BF16 => BF16
+ 11857    1.8 %         TypecastDeviceOperation                    14         2 μs      1,071 μs     28                                        BF16 => FP32
+-----------------------------------------------------------------------------------------------------------------------------------------------------------
+        100.0 %         7 device ops, 0 host ops, 0 signposts                 19 μs     59,573 μs
+
+💡 Advice 💡
+============
+
+High Op-to-Op Gap
+----------------
+ 11699   30.0 %         BinaryNgDeviceOperation                    12         2 μs     17,875 μs    120                                INT32, INT32 => BF16
+ 11744   23.6 %         TypecastDeviceOperation                    19         1 μs     14,059 μs      1                                     INT32 => UINT32
+ 11751   12.8 %         ReshapeViewDeviceOperation                  3         4 μs      7,631 μs      1                                    UINT32 => UINT32
+ 11791    9.1 %         UntilizeWithUnpaddingDeviceOperation        7         1 μs      5,397 μs      1                                    UINT32 => UINT32
+ 11832   22.7 %         EmbeddingsDeviceOperation                  23         6 μs     13,541 μs      1                                UINT32, BF16 => BF16
+ 11857    1.8 %         TypecastDeviceOperation                    14         2 μs      1,071 μs     28                                        BF16 => FP32
+
+These ops have a >6 μs gap since the previous operation. Running with tracing could save 59537 μs (99.9% of overall time)
+Alternatively ensure device is not waiting for the host. Experts can try moving runtime args in the kernels to compile-time args.
+
+Warning: Unclassified operation 'ReshapeViewDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+
+📊 Stacked report 📊
+====================
+
+Total %  Op Code                                                      Device Time Sum  Op Count  Op Category  Min FLOPs  Max FLOPs  Mean FLOPs  Std FLOPs  Weighted Mean FLOPs
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+30.23 %  EmbeddingsDeviceOperation (in0:dram_interleaved)                     5.70 μs         1      Compute
+20.94 %  ReshapeViewDeviceOperation (in0:dram_interleaved)                    3.95 μs         1        Other
+16.43 %  TilizeWithValPaddingDeviceOperation (in0:dram_interleaved)           3.10 μs         1           TM
+14.68 %  TypecastDeviceOperation (in0:dram_interleaved)                       2.77 μs         2           TM
+10.73 %  BinaryNgDeviceOperation (in0:dram_interleaved)                       2.02 μs         1      Compute
+ 6.98 %  UntilizeWithUnpaddingDeviceOperation (in0:dram_interleaved)          1.32 μs         1           TM
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Writing CSV stacked report to /home/ubuntu/tt-metal/deepseek_codegen/graph_0/perf_reports/main_moe_2026_06_09_11_11_19/prologue.summary.csv.csv
+Plotting PNG stacked report to /home/ubuntu/tt-metal/deepseek_codegen/graph_0/perf_reports/main_moe_2026_06_09_11_11_19/prologue.summary.csv.png

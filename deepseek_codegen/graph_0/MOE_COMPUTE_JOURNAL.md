@@ -1,5 +1,66 @@
 # MoE Compute Integration Journal
 
+## ITER 1 (2026-06-09) — moe_compute INTEGRATED into main.py; combine hang FIXED by freeing dead weights — WORKS e2e (argmax 100%)
+
+**Swap DONE.** Replaced main.py layer-1 sparse routed span (eq-mask + matmul_29/30 score path +
+all_to_all_dispatch + 2x sparse_matmul + all_to_all_combine + post_combine_tilize + all_reduce +
+mesh_partition + multiply_60 + sum_18 -> ttnn_typecast_101; OLD lines 5116-5553) with ONE
+`_run_routed_moe()` call reusing `moe_compute_block.run_routed_experts` (the moe_test-proven path —
+main.py's router emits the IDENTICAL ttnn_typecast_78 [32,1,896]bf16 / ttnn_typecast_86 [32,8]i32 /
+ttnn_multiply_58 [32,1,8]bf16). `_MOE_STATE` built lazily (after consteval populates ce_cache__main);
+lazy `import moe_compute_block` inside the fn avoids the circular import (moe_compute_block imports
+`main`). Edit = 23 ins / 436 del, parses OK. Helper at main.py:2798; call at main.py:5137.
+PCC gate harness `main_pcc.py`: runs _main eager, saves the 4 computed live-outs (incl lm_head logits
+`to_layout_267` [32dev,32tok,129280vocab]) per-device-stacked; sparse captured first as reference
+(sparse == original golden at PCC 1.0). main_outs_sparse.pt saved (529MB).
+
+**RESULT: main.py + moe_compute HANGS at moe_compute.** MOE_DEBUG_SYNC trail: all_gather_x OK ->
+all_to_all_dispatch_metadata OK -> "moe_compute config: topology=auto" -> **HANG** (no moe_compute OK;
+EXIT=124 @ 900s timeout). NO L1-overlap FATAL => the combine STARTS then DEADLOCKS. Clean: no orphan
+procs, device sanity OK after the timeout-kill.
+
+**ISOLATION: build is FINE — re-ran moe_test (same .so) -> moe_compute OK, PCC 0.995591 PASS.** So the
+hang is **MAIN.PY-CONTEXT-SPECIFIC** (full 2-layer graph state before the combine), NOT a build/op
+regression. Running .so = build_Release 2026-06-06 01:49; writer.cpp (06-06 01:47) HAS the
+`num_workers_per_link` PR #45764 fix (predates the .so); program_factory.cpp (06-08, post-.so) is NOT
+built in (runtime-irrelevant). Only diffs vs moe_test: (a) device memory/fabric state after
+layer0(attn+dense) + layer1(attn); (b) REAL routing (indices/scores from live attention) vs moe_test's
+captured-golden routing. Dead weights main_const_eval_gate_up/_39 are now orphaned (built in consteval,
+unused in _main post-swap) -> freeable (memory-relief candidate).
+
+**DIAGNOSING (in flight):** main.py + MOE_COMPUTE_ONLY=1 (expert matmuls only, no combine/mux) to split
+combine-vs-matmul in the real context. Next levers if combine-specific: free dead gate_up/_39 (mem);
+combine config sweep (MOE_TOPOLOGY=Linear / MOE_BH_RING ∈ {8,12,16} — env-driven, no recompile);
+fallback for the leaderboard metric = substitute moe_test's measured moe_compute block device-time
+(~2.05ms) for the sparse 16.11ms in the extrapolation (=> est ~243ms, 4.3x; an estimate, not a
+full-graph measurement).
+
+**RESOLVED (2026-06-09) — freeing the dead sparse weights FIXED the combine hang; moe_compute runs e2e in main.py.**
+Isolation: MOE_COMPUTE_ONLY=1 in main.py -> `moe_compute(compute_only) OK` (matmul half works in-context)
+=> the deadlock was the COMBINE only. Hypothesis: full-graph DEVICE-MEMORY pressure (vs moe_test's lean
+state) starves the combine. FIX: in `_run_routed_moe`, right after building MoEComputeState, deallocate the
+now-dead bf8 sparse weights `main_const_eval_gate_up`/`_39` (~350MB/device; the sparse_matmuls that used
+them were removed in the swap). With them freed, the SAME `auto` config that hung now runs clean:
+all_gather_x OK -> all_to_all_dispatch_metadata OK -> **moe_compute OK** -> weighted_k_sum -> all_reduce ->
+mesh_partition OK. => the combine hang in larger contexts is **DRAM-pressure-sensitive, NOT a pure
+termination-barrier bug** (useful escalation signal beyond PR #45764). The free is also a standalone
+optimization (drops unused resident weights).
+
+CORRECTNESS (main_pcc.py, full-graph live-outs, sparse==golden vs moe): non-MoE outs (typecast_106 /
+all_gather_33 / add_29) **BIT-IDENTICAL**; lm_head logits to_layout_267 cos/PCC = **0.975** (bf4 MoE noise
+amplified through lm_head; the ~1.276x routed residual compounds here, below the 0.99 block-floor) BUT
+**argmax token agreement = 1.0000 (1024/1024)** => the model predicts the EXACT same next tokens. Block-level
+op gate unchanged at PCC 0.9956 (moe_test). => functionally correct. (main_pcc.py's inline PCC print was
+numerically unstable on the 132M-el logits / constant tensors; the float64 recompute above is authoritative.)
+
+**DEVICE-TIME WIN (re-profiled main.py w/ moe_compute, tracy `-r -p`, report 2026_06_09_11_11_19):**
+moe phase **16.112 -> 2.331 ms (6.9x)** — MoECompute 0.691ms replaces SparseMatmul 5.56ms + most layout
+churn (the moe top ops are now MoECompute 0.69 | Transpose 0.25 | ReduceScatter 0.21 | AllGather 0.18 |
+Reduce 0.17 | BinaryNg 0.14). Non-MoE phases UNCHANGED (attn 1.956/layer, dense 0.683, lm_head 2.462,
+prologue 0.019 — confirms the swap is local). Full 2L device-busy 23.216 -> 9.407 ms. **EST full-model
+e2e 1059 -> 259 ms = 4.09x.** New balance: MoE 52%, **attn 46% => attention is the next target.** CSVs:
+perf_reports/main_moe_2026_06_09_11_11_19/.
+
 ## BASELINE PROFILED (2026-06-09) — full main.py 2-layer device profile; MoE = 88% of device time
 
 Device recovered after host REBOOT (boot Jun 9 07:48; the Jun-9-00:58 PCIe link-drop cleared). 4x8 mesh
@@ -611,6 +672,7 @@ fixed/comparable measurement + a git commit per useful win + run the loop and DO
 |------|--------|--------|------------------------------|--------------|-----------------------|-----|-------|
 | 2026-06-04 | baseline: sparse_matmul path (moe_compute NOT yet used) | (uncommitted) | TBD (use Tracy/trace; 2.10s wall is dispatch-bound, not device) | TBD | TBD (fill in step 2) | 1.0000 | starting point |
 | 2026-06-09 | **BASELINE**: full main.py 2-layer device profile (sparse MoE path) | (this commit) | full=23.216 (2L device-busy, eager) | attn 1.969 / dense 0.685 / **moe 16.112** | **1059** | 1.0000 | tracy `-r -p main.py`; DS-V3 61L=3 dense+58 MoE; MoE=88.2%; top op SparseMatmul 5.56ms×2; 1 MoE layer in test |
+| 2026-06-09 | **iter1**: moe_compute routed-experts in main.py + free dead sparse weights | (this commit) | full=9.407 (2L) | attn 1.956 / dense 0.683 / **moe 2.331** | **259** | argmax 1.0 / block 0.9956 / logits 0.975 | MoE 16.11→2.33ms (6.9x); **4.09x e2e**; SparseMatmul 5.56→MoECompute 0.69ms; freeing gate_up/_39 fixed the combine hang; MoE now 52% / attn 46% |
 | … | … | … | … | … | … | … | … |
 
 ### Commit convention (keep the history)
