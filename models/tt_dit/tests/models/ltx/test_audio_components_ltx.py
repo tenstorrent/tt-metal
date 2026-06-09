@@ -324,6 +324,36 @@ def _build_torch_stage_c(seed: int = 42):
     return full.eval()
 
 
+def _build_torch_stage_c_real(checkpoint_name: str):
+    """diffusers ``LTX2VocoderWithBWE`` with the *real* checkpoint weights — the torch oracle
+    for the vocoder+BWE. The checkpoint uses the original BigVGAN key names; invert the
+    diffusers→ltx_core rename (see ``_diffusers_vocoder_state_to_tt``) to load them."""
+    from safetensors import safe_open
+
+    full = _build_torch_stage_c(seed=0)  # correct architecture; weights overwritten below
+
+    def ckpt_to_diffusers(s: str) -> str:
+        return (
+            s.replace("conv_pre.", "conv_in.")
+            .replace("conv_post.", "conv_out.")
+            .replace("act_post.", "act_out.")
+            .replace("ups.", "upsamplers.")
+            .replace("resblocks.", "resnets.")
+            .replace("downsample.lowpass.filter", "downsample.filter")
+        )
+
+    state: dict[str, torch.Tensor] = {}
+    with safe_open(checkpoint_name, framework="pt") as f:
+        for k in f.keys():
+            if k.startswith("vocoder."):
+                state[ckpt_to_diffusers(k[len("vocoder.") :])] = f.get_tensor(k).float()
+    res = full.load_state_dict(state, strict=False)
+    assert not res.missing_keys and not res.unexpected_keys, (
+        f"torch oracle weight load mismatch: {len(res.missing_keys)} missing, {len(res.unexpected_keys)} unexpected"
+    )
+    return full.eval()
+
+
 def _build_tt_stage_c(
     mesh_device: ttnn.MeshDevice, *, parallel_config, ccl_manager: CCLManager | None
 ) -> VocoderWithBWE:
