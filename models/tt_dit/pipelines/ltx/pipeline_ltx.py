@@ -1496,18 +1496,17 @@ class LTXPipeline:
                 ccl_manager=audio_ccl,
             )
 
-        # BWE defaults to single-axis. LTX_BWE_CHANNEL_TP=1 opts into full channel-TP: it splits
-        # the compute-bound BWE generator across the channel axis — a Galaxy win, but +135ms on
-        # 2x4 (gather tax > the split), so off by default. Validated bit-identical to single-axis
-        # on real weights (the previously-reported full-pipeline divergence is stale).
-        if os.environ.get("LTX_BWE_CHANNEL_TP", "0") == "1":
-            bwe_pc = audio_parallel_config
+        # Channel-TP the compute-bound BWE generator on meshes whose channel axis is wide enough
+        # to pay for the per-conv all-gather: at channel factor 2 (2x4) the gather tax loses
+        # (+135ms), so stay single-axis there; factor >= 4 (Galaxy 4x8/4x32) is the intended win.
+        # Bit-identical to single-axis on real weights. LTX_BWE_CHANNEL_TP overrides (0/1) for the
+        # Galaxy validation that confirms the factor-4 crossover (#46423).
+        if isinstance(audio_parallel_config, AudioTCParallelConfig):
+            override = os.environ.get("LTX_BWE_CHANNEL_TP")
+            use_bwe_ctp = override == "1" if override is not None else audio_parallel_config.channel_parallel.factor > 2
+            bwe_pc = audio_parallel_config if use_bwe_ctp else audio_parallel_config.time_parallel
         else:
-            bwe_pc = (
-                audio_parallel_config.time_parallel
-                if isinstance(audio_parallel_config, AudioTCParallelConfig)
-                else audio_parallel_config
-            )
+            bwe_pc = audio_parallel_config
         main_voc = _tt_vocoder(voc_cfg, apply_final_activation=True, parallel_config=audio_parallel_config)
         bwe_voc = _tt_vocoder(bwe_cfg, apply_final_activation=False, parallel_config=bwe_pc)
         mel_stft = MelSTFT(
