@@ -1261,13 +1261,17 @@ class Pi0_5OptionCExpertSliceParent:
             ttnn.deallocate(cos_slice)
             ttnn.deallocate(sin_slice)
 
-            # 6. SDPA (self-attention over the 64-token suffix; no past_kv yet).
-            #    is_causal=False because the suffix attends bidirectionally
-            #    over itself in the expert (matches the paired slice's path
-            #    when an explicit attention_mask is provided).
+            # 6. SDPA. Pass is_causal=False explicitly when an attn_mask is
+            #    given — the kernel defaults is_causal=True and TT_FATALs if
+            #    both are supplied.
             if attention_mask is not None:
                 attn_out = ttnn.transformer.scaled_dot_product_attention(
-                    q_rope, k_rope, v, attn_mask=attention_mask, memory_config=ttnn.L1_MEMORY_CONFIG
+                    q_rope,
+                    k_rope,
+                    v,
+                    attn_mask=attention_mask,
+                    is_causal=False,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
             else:
                 attn_out = ttnn.transformer.scaled_dot_product_attention(
@@ -1433,7 +1437,12 @@ class Pi0_5OptionCExpertSliceParent:
 
             if attention_mask is not None:
                 attn_out = ttnn.transformer.scaled_dot_product_attention(
-                    q_rope, k_rope, v, attn_mask=attention_mask, memory_config=ttnn.L1_MEMORY_CONFIG
+                    q_rope,
+                    k_rope,
+                    v,
+                    attn_mask=attention_mask,
+                    is_causal=False,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
             else:
                 attn_out = ttnn.transformer.scaled_dot_product_attention(
