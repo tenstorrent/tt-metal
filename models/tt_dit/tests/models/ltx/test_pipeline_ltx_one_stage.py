@@ -85,10 +85,10 @@ def test_euler_step():
 @pytest.mark.parametrize(
     "width, height",
     [
-        (768, 512),
+        (1920, 1088),
     ],
     ids=[
-        "resolution_512p",
+        "resolution_1080p",
     ],
 )
 def test_pipeline_one_stage(
@@ -112,7 +112,7 @@ def test_pipeline_one_stage(
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
-    num_frames = int(os.environ.get("NUM_FRAMES", "121"))
+    num_frames = int(os.environ.get("NUM_FRAMES", "145"))
     num_inference_steps = int(os.environ.get("NUM_STEPS", "30"))
     width = int(os.environ.get("WIDTH", width))
     height = int(os.environ.get("HEIGHT", height))
