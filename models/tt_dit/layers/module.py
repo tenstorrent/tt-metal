@@ -201,7 +201,6 @@ class Module(ABC):
         for _, parameter in self.named_parameters():
             parameter.deallocate()
 
-        self.release_traces()
         self._is_loaded = False
 
     def is_loaded(self) -> bool:
@@ -230,9 +229,6 @@ class Module(ABC):
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
         return self.forward(*args, **kwargs)
-
-    def release_traces(self):
-        pass
 
 
 class ModuleList(Module):
