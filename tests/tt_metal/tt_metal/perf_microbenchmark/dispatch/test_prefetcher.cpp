@@ -68,6 +68,7 @@ constexpr uint32_t DEFAULT_ITERATIONS = 5;
 constexpr uint32_t DEFAULT_ITERATIONS_SMOKE_RANDOM = 1000;
 constexpr uint32_t DEVICE_DATA_SIZE = 768 * 1024;
 constexpr uint32_t DEVICE_DATA_SIZE_LARGE = 20 * 1024 * 1024;
+constexpr uint32_t QUASAR_SIMULATION_DEVICE_DATA_SIZE = 96 * 1024;
 constexpr uint32_t DRAM_PAGE_SIZE_DEFAULT = 1024;
 constexpr uint32_t DRAM_PAGES_TO_READ_DEFAULT = 16;
 constexpr uint32_t DEFAULT_SCRATCH_DB_SIZE = 16 * 1024;
@@ -771,7 +772,7 @@ public:
         std::vector<HostMemDeviceCommand> commands_per_iteration;
         uint32_t absolute_start_page = 0;
         const uint32_t page_size_words = page_size_bytes / sizeof(uint32_t);
-        uint32_t remaining_bytes = DEVICE_DATA_SIZE;
+        uint32_t remaining_bytes = Common::is_quasar_sim() ? QUASAR_SIMULATION_DEVICE_DATA_SIZE : DEVICE_DATA_SIZE;
         const auto first_worker = worker_range.start_coord;
 
         // Compute NOC encoding once
@@ -832,7 +833,7 @@ public:
         const uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
         std::vector<HostMemDeviceCommand> commands_per_iteration;
 
-        uint32_t remaining_bytes = DEVICE_DATA_SIZE;
+        uint32_t remaining_bytes = Common::is_quasar_sim() ? QUASAR_SIMULATION_DEVICE_DATA_SIZE : DEVICE_DATA_SIZE;
         uint32_t absolute_start_page = 0;
 
         while (remaining_bytes > 0) {
@@ -1209,7 +1210,8 @@ protected:
         uint32_t max_limit = max_data_size_words / 100;
 
         // Vary host write sizes up to 1% - 100% of max_data_size_words
-        for (uint32_t count = 1; count < 100; count++) {
+        const uint32_t max_count = Common::is_quasar_sim() ? 10 : 100;
+        for (uint32_t count = 1; count < max_count; count++) {
             uint32_t data_size_words = payload_generator_->get_rand<uint32_t>(0, max_limit - 1) * count + 1;
             uint32_t data_size_bytes = data_size_words * sizeof(uint32_t);
 
@@ -1236,7 +1238,7 @@ public:
     // Note: Since we're writing into completion queue, we skip distributed::Finish
     void run_host_test() {
         // Scale down data size on the Quasar simulator to avoid exceeding the 64 MB DRAM window.
-        const uint32_t max_data_size = Common::is_quasar_sim() ? (DEVICE_DATA_SIZE / 25) : DEVICE_DATA_SIZE;
+        const uint32_t max_data_size = Common::is_quasar_sim() ? QUASAR_SIMULATION_DEVICE_DATA_SIZE : DEVICE_DATA_SIZE;
         const uint32_t max_data_size_words = max_data_size / sizeof(uint32_t);
         const uint32_t dram_data_size_words = this->get_dram_data_size_words();
         const uint32_t num_iterations = this->get_num_iterations();
@@ -1405,14 +1407,18 @@ protected:
 
         std::vector<HostMemDeviceCommand> commands_per_iteration;
 
-        uint32_t remaining_bytes = DEVICE_DATA_SIZE;
+        const uint32_t device_data_size_bytes =
+            Common::is_quasar_sim() ? QUASAR_SIMULATION_DEVICE_DATA_SIZE : DEVICE_DATA_SIZE;
+        uint32_t remaining_bytes = device_data_size_bytes;
 
         constexpr uint32_t max_size128b = (DEFAULT_SCRATCH_DB_SIZE / 2) >> 7;
         while (remaining_bytes > 0) {
             uint32_t packed_read_page_size =
                 payload_generator_->get_rand<uint32_t>(0, 2) + 9;  // log2 values. i.e., 512, 1024, 2048
-            uint32_t n_sub_cmds = relay_max_packed_paged_submcds ? CQ_PREFETCH_CMD_RELAY_PAGED_PACKED_MAX_SUB_CMDS
-                                                                 : payload_generator_->get_rand<uint32_t>(0, 6) + 1;
+            const uint32_t max_n_sub_cmds =
+                Common::is_quasar_sim() ? 10 : CQ_PREFETCH_CMD_RELAY_PAGED_PACKED_MAX_SUB_CMDS;
+            uint32_t n_sub_cmds =
+                relay_max_packed_paged_submcds ? max_n_sub_cmds : payload_generator_->get_rand<uint32_t>(0, 6) + 1;
             uint32_t max_read_size = std::min((1 << packed_read_page_size) * num_banks_, remaining_bytes);
 
             std::vector<uint32_t> lengths;
@@ -1428,7 +1434,7 @@ protected:
             }
 
             // If we're about to exceed DEVICE_DATA_SIZE, then exit
-            if (device_data.size() * sizeof(uint32_t) + total_length > DEVICE_DATA_SIZE) {
+            if (device_data.size() * sizeof(uint32_t) + total_length > device_data_size_bytes) {
                 break;
             }
 
@@ -1653,8 +1659,9 @@ protected:
             device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, dest_dram_physical_core);
         const CoreCoord dest_dram_logical = device_->logical_core_from_dram_channel(dest_dram_channel);
 
-        // On Quasar, scale down from 20 MB to DEVICE_DATA_SIZE (768 KB) so the simulator finishes.
-        uint32_t remaining_bytes = Common::is_quasar_sim() ? DEVICE_DATA_SIZE : DEVICE_DATA_SIZE_LARGE;
+        const uint32_t device_data_size_bytes =
+            Common::is_quasar_sim() ? QUASAR_SIMULATION_DEVICE_DATA_SIZE : DEVICE_DATA_SIZE_LARGE;
+        uint32_t remaining_bytes = device_data_size_bytes;
         const uint32_t MAX_SUB_CMD_SIZE = tt::align(DEVICE_DATA_SIZE, l1_alignment);
 
         while (remaining_bytes >= MIN_READ_SIZE) {
@@ -1686,7 +1693,7 @@ protected:
             }
             EXPECT_GT(lengths.size(), 0u);
 
-            EXPECT_LE(total_length + (device_data.size() * sizeof(uint32_t)), DEVICE_DATA_SIZE_LARGE);
+            EXPECT_LE(total_length + (device_data.size() * sizeof(uint32_t)), device_data_size_bytes);
 
             const uint32_t dram_dest_addr = device_data.get_result_data_addr(dest_dram_logical, dest_bank_id);
 
@@ -1839,12 +1846,15 @@ public:
         const uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
         std::vector<HostMemDeviceCommand> commands_per_iteration;
 
-        uint32_t remaining_bytes = DEVICE_DATA_SIZE;
+        const uint32_t device_data_size_bytes =
+            Common::is_quasar_sim() ? QUASAR_SIMULATION_DEVICE_DATA_SIZE : DEVICE_DATA_SIZE;
+        uint32_t remaining_bytes = device_data_size_bytes;
 
         while (remaining_bytes > 0) {
             uint32_t ringbuffer_read_page_size_log2 =
                 payload_generator_->get_rand<uint32_t>(0, 2) + 9;  // log2 values. i.e., 512, 1024, 2048
-            uint32_t n_sub_cmds = payload_generator_->get_rand<uint32_t>(0, 6) + 1;
+            const uint32_t max_n_sub_cmds = Common::is_quasar_sim() ? 3 : 7;
+            uint32_t n_sub_cmds = payload_generator_->get_rand<uint32_t>(1, max_n_sub_cmds);
             uint32_t max_read_size = std::min((1 << ringbuffer_read_page_size_log2) * num_banks_, remaining_bytes);
 
             std::vector<uint32_t> lengths;
@@ -1861,7 +1871,7 @@ public:
             }
 
             // If we're about to exceed DEVICE_DATA_SIZE, then exit
-            if (device_data.size() * sizeof(uint32_t) + total_length > DEVICE_DATA_SIZE) {
+            if (device_data.size() * sizeof(uint32_t) + total_length > device_data_size_bytes) {
                 break;
             }
 
@@ -2496,7 +2506,7 @@ public:
         // PHASE 1: Generate random command metadata
         std::vector<HostMemDeviceCommand> commands_per_iteration;
 
-        uint32_t remaining_bytes = DEVICE_DATA_SIZE;
+        uint32_t remaining_bytes = Common::is_quasar_sim() ? QUASAR_SIMULATION_DEVICE_DATA_SIZE : DEVICE_DATA_SIZE;
 
         while (remaining_bytes > 0) {
             // Assumes terminate is the last command...
