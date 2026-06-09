@@ -76,7 +76,17 @@ def _gather_tp_hidden_if_needed(tensor, device, hidden_size: int):
 
 
 def _col_parallel_rmsnorm_mode() -> str:
-    return os.environ.get("DOTS_OCR_COL_PARALLEL_RMSNORM_MODE", "distributed").lower()
+    # Default to the known-correct full-hidden sharded RMSNorm path. Local
+    # shard-only RMSNorm is intentionally unsupported because it normalizes over
+    # H/TP instead of full H and can corrupt long OCR/table decode output.
+    mode = os.environ.get("DOTS_OCR_COL_PARALLEL_RMSNORM_MODE", "full_multicore").lower()
+    if mode not in {"full_multicore", "full_single", "distributed"}:
+        raise ValueError(
+            "DOTS_OCR_COL_PARALLEL_RMSNORM_MODE must be one of "
+            "{'full_multicore', 'full_single', 'distributed'}; "
+            f"got {mode!r}"
+        )
+    return mode
 
 
 def _partition_tp_hidden(tensor, device):
@@ -88,25 +98,6 @@ def _partition_tp_hidden(tensor, device):
         cluster_axis=1,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-
-
-def _local_tp_shard_rmsnorm(norm, tensor):
-    original_shape = tensor.shape
-    eps = getattr(norm.torch_layer, "variance_epsilon", getattr(norm.torch_layer, "eps", 1e-6))
-    if len(original_shape) == 3:
-        tensor = ttnn.unsqueeze(tensor, 1)
-    if tensor.layout != ttnn.TILE_LAYOUT:
-        tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-    out = ttnn.rms_norm(
-        tensor,
-        epsilon=eps,
-        weight=norm.weight_distributed,
-        compute_kernel_config=norm.compute_kernel_config,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-    if len(original_shape) == 3 and len(out.shape) == 4:
-        out = ttnn.reshape(out, [out.shape[0], out.shape[2], out.shape[3]])
-    return out
 
 
 def _full_hidden_rmsnorm_then_maybe_partition(
@@ -434,10 +425,6 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
                 partition_output=not getattr(self, "_col_parallel_use_n_parallel_attn", False),
                 use_multicore=False,
             )
-        elif is_col_parallel and is_decode and rmsnorm_mode == "local_shard":
-            hs = _local_tp_shard_rmsnorm(self.input_layernorm, hs)
-            if getattr(self, "_col_parallel_use_n_parallel_attn", False):
-                hs = _gather_tp_hidden_if_needed(hs, self.device, hidden_dim)
         else:
             hs = self.input_layernorm(hs)
         if is_col_parallel and is_decode and getattr(self, "_col_parallel_use_n_parallel_attn", False):
@@ -514,9 +501,6 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
                 partition_output=False,
                 use_multicore=False,
             )
-        elif is_col_parallel and is_decode and rmsnorm_mode == "local_shard":
-            hs = _local_tp_shard_rmsnorm(self.post_attention_layernorm, hs)
-            hs = _gather_tp_hidden_if_needed(hs, self.device, hidden_dim)
         else:
             hs = self.post_attention_layernorm(hs)
         if is_col_parallel and is_decode and rmsnorm_mode == "distributed":

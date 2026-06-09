@@ -97,11 +97,11 @@ def _deep_sync_profile_enabled() -> bool:
 def _decode_tp_scheme_from_env() -> str:
     """Tensor-parallel decode scheme for full dots.ocr pipeline construction.
 
-    ``row`` is the production/default hidden-sharded TP path. ``col_parallel``
-    is an opt-in comparison path using replicated full-hidden inputs with
-    column-parallel QKV and gate/up projections.
+    ``col_parallel`` is the default fast TP4 decode path. Set
+    ``DOTS_OCR_TP_DECODE_SCHEME=row`` explicitly to compare against the older
+    hidden-sharded row-parallel path.
     """
-    scheme = os.environ.get("DOTS_OCR_TP_DECODE_SCHEME", "row").strip()
+    scheme = os.environ.get("DOTS_OCR_TP_DECODE_SCHEME", "col_parallel").strip()
     if scheme not in {"row", "col_parallel"}:
         raise ValueError("DOTS_OCR_TP_DECODE_SCHEME must be one of {'row', 'col_parallel'}, " f"got {scheme!r}")
     return scheme

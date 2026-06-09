@@ -81,19 +81,19 @@ def _dots_ocr_device_params():
 def _dots_ocr_decode_one_layer_tp_schemes():
     """Decoder-layer TP scheme(s) for the L1-boundary unit test.
 
-    ``row`` is the production TP contract: hidden dim is sharded across TP
-    (1536/4 = 384 on a 1x4 mesh). ``col_parallel`` is an opt-in comparison path
-    that keeps the same hidden-sharded input/output (distributed TP4 RMSNorm)
-    but routes the QKV/gate-up as N-dim column-parallel matmuls (one all-gather
-    of the normed shard per block; o_proj/down emit hidden-sharded output).
+    ``col_parallel`` is the default production TP contract for decode: hidden
+    dim is sharded across TP (1536/4 = 384 on a 1x4 mesh), QKV/gate-up use
+    N-dim column-parallel matmuls, and RMSNorm follows
+    ``DOTS_OCR_COL_PARALLEL_RMSNORM_MODE`` (default ``full_multicore``). Set
+    ``row`` explicitly to compare the older row-parallel path.
     Set ``DOTS_OCR_DECODE_ONE_LAYER_TP_SCHEMES=both`` or a comma-separated list
     to compare schemes.
     """
-    env = os.environ.get("DOTS_OCR_DECODE_ONE_LAYER_TP_SCHEMES", "row").strip()
+    env = os.environ.get("DOTS_OCR_DECODE_ONE_LAYER_TP_SCHEMES", "col_parallel").strip()
     if env.lower() == "both":
         return ["row", "col_parallel"]
     schemes = [s.strip() for s in env.split(",") if s.strip()]
-    return schemes or ["row"]
+    return schemes or ["col_parallel"]
 
 
 def _dots_ocr_decode_full_decoder_tp_schemes():
@@ -467,10 +467,10 @@ def test_dots_ocr_decode_one_layer_l1_boundaries(mesh_device, tp_decode_scheme):
     hidden_states_torch = torch.randn(1, 1, model_config.hidden_size, dtype=torch.bfloat16)
     num_devices = int(mesh_device.get_num_devices()) if hasattr(mesh_device, "get_num_devices") else 1
     is_tp_mesh = num_devices > 1 and hasattr(mesh_device, "shape") and list(mesh_device.shape)[-1] > 1
-    # Both ``row`` and ``col_parallel`` now keep the decode hidden/residual
-    # TP-sharded end to end (distributed TP4 RMSNorm + N-dim matmuls), so both
-    # shard the stack input along hidden on a TP mesh and concat (dim=-1) the
-    # sharded output back for PCC.
+    # Both ``row`` and ``col_parallel`` keep the decode hidden/residual
+    # TP-sharded end to end. ``col_parallel`` uses the model's RMSNorm mode
+    # default (full_multicore unless explicitly overridden), so both shard the
+    # stack input along hidden on a TP mesh and concat (dim=-1) for PCC.
     uses_tp_shard = is_tp_mesh and tp_decode_scheme in ("row", "col_parallel")
     if uses_tp_shard:
         input_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
