@@ -760,9 +760,15 @@ class TTNNDotsOCRPipeline(TTNNModule):
             # ``num_kv_heads=1`` paged cache); the symbiote pipeline's per-token
             # decode machinery (trace / on-device argmax / on-device feedback) is
             # reused unchanged. Requires a tensor-parallel mesh and batch 1.
-            from models.experimental.dots_ocr_tp4.tt.common import DotsOCRConfig
+            from models.experimental.dots_ocr_tp4.tt.common import DotsOCRConfig, tp4_lossy_matmul_dtype
             from models.experimental.dots_ocr_tp4.tt.model import DotsOCRPrefillModelTP4
             from models.experimental.dots_ocr_tp4.tt.rmsnorm import DotsOCRRMSNormTP4
+
+            print(
+                f"[dots_ocr] tp4 body lossy-matmul weight dtype (gate/up early + down + o_proj): "
+                f"{tp4_lossy_matmul_dtype()} "
+                f"(DOTS_OCR_TP4_HI_PRECISION={os.environ.get('DOTS_OCR_TP4_HI_PRECISION', '<unset>')!r})"
+            )
 
             num_devices = int(device.get_num_devices()) if hasattr(device, "get_num_devices") else 1
             if int(batch_size) != 1:

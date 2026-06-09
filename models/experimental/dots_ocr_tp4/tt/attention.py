@@ -66,8 +66,10 @@ class DotsOCRAttentionTP4(TTNNModule):
         #   qkv : BF16 x BFP8 -> BF16 @ HiFi2
         #   o   : BF16 x BFP4 -> BFP8 @ LoFi
         #   sdpa: BF16 @ LoFi (math_approx)
+        from models.experimental.dots_ocr_tp4.tt.common import tp4_lossy_matmul_dtype
+
         self.qkv_weight_dtype = ttnn.bfloat8_b
-        self.o_weight_dtype = ttnn.bfloat4_b
+        self.o_weight_dtype = tp4_lossy_matmul_dtype()
         self.qkv_compute = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
