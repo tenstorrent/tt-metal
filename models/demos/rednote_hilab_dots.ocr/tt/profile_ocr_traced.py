@@ -35,10 +35,46 @@ import importlib.util
 import os
 import statistics
 import time
+from collections import defaultdict
 
 import torch
 
 import ttnn
+
+# ---------------------------------------------------------------------------
+# Named timing zones — accumulate wall time flushed by device sync on both
+# sides so the numbers reflect true device execution time.
+# ---------------------------------------------------------------------------
+_ZONES: dict = defaultdict(float)
+_ZONE_COUNTS: dict = defaultdict(int)
+_ZONE_DEVICE = None  # set to the open device after ttnn.open_device()
+
+
+class zone:
+    """Context manager that bookends a named region with device syncs and
+    accumulates total wall time in ``_ZONES[name]``."""
+
+    def __init__(self, name: str):
+        self.name = name
+
+    def __enter__(self):
+        if _ZONE_DEVICE is not None:
+            try:
+                ttnn.synchronize_device(_ZONE_DEVICE)
+            except Exception:
+                pass
+        self.t = time.perf_counter()
+        return self
+
+    def __exit__(self, *a):
+        if _ZONE_DEVICE is not None:
+            try:
+                ttnn.synchronize_device(_ZONE_DEVICE)
+            except Exception:
+                pass
+        _ZONES[self.name] += time.perf_counter() - self.t
+        _ZONE_COUNTS[self.name] += 1
+
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _DEMO_DIR = os.path.normpath(os.path.join(_HERE, "..", "demo"))
@@ -81,6 +117,8 @@ def main():
     vis_sd = loader.load_vision_tower_weights(CHECKPOINT_PATH, num_layers=args.vision_layers)
 
     device = ttnn.open_device(device_id=args.device_id, l1_small_size=32768, trace_region_size=args.trace_region_size)
+    global _ZONE_DEVICE
+    _ZONE_DEVICE = device
     try:
         model = ocrm.TtOcrModel(
             device=device,
@@ -110,7 +148,8 @@ def main():
         # trace is captured (the active-trace allocation-safety rule).    #
         # ============================================================== #
         # Vision input: [num_patches, embed_dim] post host patch_embed.
-        patch_tokens = model.vision_tower.patch_embed(pixel_values)
+        with zone("TTNNDotsVisionPatchEmbed"):
+            patch_tokens = model.vision_tower.patch_embed(pixel_values)
         num_patches = patch_tokens.shape[0]
         vision_in = ttnn.from_torch(
             patch_tokens.to(torch.float32),
@@ -251,30 +290,34 @@ def main():
         e2e_vision_ms = (time.perf_counter() - t0) * 1000.0
         vision_embeds = ttnn.to_torch(vision_out).to(torch.float32).reshape(-1, model.hidden_size)
 
-        inputs_embeds = model.build_inputs_embeds(torch.tensor(ids, dtype=torch.int64), vision_embeds)
-        write_prefill_in(inputs_embeds)
+        with zone("TTNNDotsOCRPipelinePrefill"):
+            inputs_embeds = model.build_inputs_embeds(torch.tensor(ids, dtype=torch.int64), vision_embeds)
+            write_prefill_in(inputs_embeds)
 
-        t0 = time.perf_counter()
-        ttnn.execute_trace(device, prefill_tid, cq_id=0, blocking=False)
-        ttnn.synchronize_device(device)
-        e2e_prefill_ms = (time.perf_counter() - t0) * 1000.0
+            t0 = time.perf_counter()
+            with zone("TTNNDotsOCRPrefillGraph"):
+                ttnn.execute_trace(device, prefill_tid, cq_id=0, blocking=False)
+                ttnn.synchronize_device(device)
+            e2e_prefill_ms = (time.perf_counter() - t0) * 1000.0
         next_id = int(torch.argmax(ttnn.to_torch(prefill_logits).to(torch.float32).reshape(-1)).item())
 
         gen_tokens = [next_id]
         decode_ms = []
         cur_id = next_id
-        for step in range(1, args.max_new_tokens):
-            pos = prompt_len + step - 1
-            write_embed(cur_id)
-            lm.write_decode_pos(pos, cache)
-            t0 = time.perf_counter()
-            ttnn.execute_trace(device, decode_tid, cq_id=0, blocking=False)
-            ttnn.synchronize_device(device)
-            decode_ms.append((time.perf_counter() - t0) * 1000.0)
-            cur_id = int(torch.argmax(ttnn.to_torch(decode_logits).to(torch.float32).reshape(-1)).item())
-            gen_tokens.append(cur_id)
-            if cur_id in EOS:
-                break
+        with zone("TTNNDotsOCRPipelineDecode"):
+            for step in range(1, args.max_new_tokens):
+                pos = prompt_len + step - 1
+                write_embed(cur_id)
+                lm.write_decode_pos(pos, cache)
+                t0 = time.perf_counter()
+                with zone("TTNNDotsOCRDecodeGraph"):
+                    ttnn.execute_trace(device, decode_tid, cq_id=0, blocking=False)
+                    ttnn.synchronize_device(device)
+                decode_ms.append((time.perf_counter() - t0) * 1000.0)
+                cur_id = int(torch.argmax(ttnn.to_torch(decode_logits).to(torch.float32).reshape(-1)).item())
+                gen_tokens.append(cur_id)
+                if cur_id in EOS:
+                    break
 
         decode_p50 = statistics.median(decode_ms) if decode_ms else float("nan")
         text = tok.decode(gen_tokens, skip_special_tokens=True)
@@ -310,6 +353,27 @@ def main():
             f"e2e_baseline_ms={baseline_e2e:.2f} e2e_traced_ms={traced_e2e:.2f} "
             f"e2e_speedup={baseline_e2e/traced_e2e:.2f} ntok={len(gen_tokens)} text={text!r}"
         )
+
+        # ============================================================== #
+        # SIGNPOST ZONES table                                            #
+        # ============================================================== #
+        ntok = max(len(gen_tokens) - 1, 1)  # decode steps that were actually measured
+        niters = 1  # prefill/vision zones ran exactly once in the e2e section
+        print()
+        print("=== signpost zones (total over run / per-iter) ===")
+        print(f"{'zone':<40}{'total_ms':>12}{'per_iter_ms':>16}")
+        print("-" * 68)
+        for zname, per_label, divisor in [
+            ("TTNNDotsOCRPipelineDecode", "per_tok", ntok),
+            ("TTNNDotsOCRPipelinePrefill", "per_iter", niters),
+            ("TTNNDotsVisionPatchEmbed", "per_iter", niters),
+            ("TTNNDotsOCRPrefillGraph", "per_iter", niters),
+            ("TTNNDotsOCRDecodeGraph", "per_tok", ntok),
+        ]:
+            total_ms = _ZONES.get(zname, float("nan")) * 1000.0
+            per_ms = total_ms / divisor if divisor else float("nan")
+            print(f"{zname:<40}{total_ms:>12.2f}{per_ms:>14.2f}  [{per_label}]")
+        print("=" * 68)
     finally:
         ttnn.close_device(device)
 
