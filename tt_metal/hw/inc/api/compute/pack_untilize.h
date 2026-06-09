@@ -285,9 +285,9 @@ ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __
 // clang-format off
 /**
  * Same as `pack_untilize_init`, but does not (re)configure BH DEST remap. Use this when the caller has
- * already configured BH DEST remap (and no intervening operation requires a different DEST remap state), or
- * when the caller simply does not want to toggle DEST remap. On non-Blackhole architectures this behaves the
- * same as `pack_untilize_init`. See `pack_untilize_init` for the full description and parameter list.
+ * already configured BH DEST remap (and no intervening operation requires a different DEST remap state).
+ * On non-Blackhole architectures this behaves the same as `pack_untilize_init`. See `pack_untilize_init`
+ * for the full description and parameter list.
  *
  * Return value: None
  *
