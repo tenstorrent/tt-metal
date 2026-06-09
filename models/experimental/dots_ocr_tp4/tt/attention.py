@@ -66,8 +66,10 @@ class DotsOCRAttentionTP4(TTNNModule):
         #   qkv : BF16 x BFP8 -> BF16 @ HiFi2
         #   o   : BF16 x BFP4 -> BFP8 @ LoFi
         #   sdpa: BF16 @ LoFi (math_approx)
+        from models.experimental.dots_ocr_tp4.tt.common import tp4_lossy_matmul_dtype
+
         self.qkv_weight_dtype = ttnn.bfloat8_b
-        self.o_weight_dtype = ttnn.bfloat4_b
+        self.o_weight_dtype = tp4_lossy_matmul_dtype()
         self.qkv_compute = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
@@ -258,6 +260,16 @@ class DotsOCRAttentionTP4(TTNNModule):
         cos, sin = self._rotary_setup.get_cos_sin_for_prefill(seq_len)
         q = ttnn.experimental.rotary_embedding(q, cos, sin)
         k = ttnn.experimental.rotary_embedding(k, cos, sin)
+
+        # ``rotary_embedding`` materializes the tile-padded seq dim, so for a
+        # non-tile-multiple ``seq_len`` (e.g. 2814) Q/K come back padded to 2816
+        # while V (no rotary) stays at ``seq_len`` -- SDPA then rejects the K/V
+        # length mismatch. Slice Q/K back to the real ``seq_len``. No-op when the
+        # input was already tile-aligned (the standalone TP4 model pads on host).
+        if int(q.shape[2]) != seq_len:
+            q = q[:, :, :seq_len, :]
+        if int(k.shape[2]) != seq_len:
+            k = k[:, :, :seq_len, :]
 
         # Populate the paged KV cache (per chip: this chip's 1 KV head, rotated K
         # + raw V, bf16 as paged_fill_cache requires) so decode can read it.

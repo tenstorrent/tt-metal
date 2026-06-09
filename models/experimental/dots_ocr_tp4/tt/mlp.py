@@ -22,6 +22,7 @@ from models.experimental.dots_ocr_tp4.tt.common import (
     mesh_num_devices,
     prefill_matmul_2d_config,
     shard_to_mesh,
+    tp4_lossy_matmul_dtype,
 )
 from models.experimental.tt_symbiote.core.module import TTNNModule
 
@@ -80,8 +81,8 @@ class DotsOCRMLPTP4(TTNNModule):
         #   gate/up : BF16 x BFP4 -> BFP8 @ HiFi2
         #   silu*mul: BFP8 x BFP8 -> BFP8
         #   down    : BFP8 x BFP4 -> BFP8 @ LoFi
-        self.gate_up_weight_dtype = ttnn.bfloat4_b
-        self.down_weight_dtype = ttnn.bfloat4_b
+        self.gate_up_weight_dtype = tp4_lossy_matmul_dtype()
+        self.down_weight_dtype = tp4_lossy_matmul_dtype()
         self.gate_up_compute = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,

@@ -29,7 +29,9 @@ def _gate_up_dtype_for_layer(layer_idx) -> "ttnn.DataType":
     # Pure BFP4 everywhere over-degrades the 28-layer real-weight PCC.
     if layer_idx is not None and int(layer_idx) >= 7:
         return ttnn.bfloat8_b
-    return ttnn.bfloat4_b
+    from models.experimental.dots_ocr_tp4.tt.common import tp4_lossy_matmul_dtype
+
+    return tp4_lossy_matmul_dtype()
 
 
 class DotsOCRDecoderBlockTP4(TTNNModule):

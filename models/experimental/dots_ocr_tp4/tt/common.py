@@ -9,10 +9,31 @@ sublayers, so RMSNorm is a local (per-chip) exact op and the only collectives
 are the two all-reduces after ``o_proj`` and ``down_proj``.
 """
 
+import os
 from dataclasses import dataclass
 
 import torch
 import ttnn
+
+
+def tp4_lossy_matmul_dtype() -> "ttnn.DataType":
+    """Weight dtype for the matmuls that use BFP4 in the production recipe.
+
+    Default is the production ``bfloat4_b`` (fastest). Opt-in
+    ``DOTS_OCR_TP4_HI_PRECISION`` raises them to recover accuracy on low-confidence
+    tokens (e.g. page running-headers that drift flips out of the greedy decode)
+    at a matmul-bandwidth / speed cost. Affects gate/up (early layers), down, and
+    o_proj; qkv is already BFP8. Values:
+        unset / "0"        -> bfloat4_b (production, fastest)
+        "1" / "bf8"        -> bfloat8_b
+        "bf16"             -> bfloat16  (max accuracy diagnostic, slowest)
+    """
+    v = os.environ.get("DOTS_OCR_TP4_HI_PRECISION", "0").strip().lower()
+    if v in {"bf16", "bfloat16"}:
+        return ttnn.bfloat16
+    if v in {"1", "true", "yes", "on", "bf8", "bfloat8", "bfloat8_b"}:
+        return ttnn.bfloat8_b
+    return ttnn.bfloat4_b
 
 
 @dataclass

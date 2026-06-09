@@ -45,7 +45,7 @@ from models.experimental.tt_symbiote.modules.normalization import TTNNDistribute
 from models.experimental.tt_symbiote.utils.device_management import timed_call
 
 
-def _argmax_token_on_device(logits: ttnn.Tensor) -> ttnn.Tensor:
+def _argmax_token_on_device(logits: ttnn.Tensor, use_multicore: bool = True) -> ttnn.Tensor:
     """Greedy token from logits.
 
     Note on the reduce-axis-sharding rule: literally that rule says never
@@ -66,7 +66,7 @@ def _argmax_token_on_device(logits: ttnn.Tensor) -> ttnn.Tensor:
         logits_rm,
         dim=-1,
         keepdim=True,
-        use_multicore=True,
+        use_multicore=use_multicore,
     )
     b = int(token.shape[0])
     return ttnn.reshape(token, (b, 1))
@@ -105,6 +105,70 @@ def _decode_tp_scheme_from_env() -> str:
     if scheme not in {"row", "col_parallel"}:
         raise ValueError("DOTS_OCR_TP_DECODE_SCHEME must be one of {'row', 'col_parallel'}, " f"got {scheme!r}")
     return scheme
+
+
+def _text_body_from_env() -> str:
+    """Which text-decoder body the pipeline builds.
+
+    ``symbiote`` is the existing hidden-sharded ``TTNNDotsOCRLayerStack``
+    (``row`` / ``col_parallel`` schemes). ``tp4`` swaps in the head-local
+    replicated-hidden Megatron body from ``models.experimental.dots_ocr_tp4`` --
+    its prefill is ~4x lighter on SDPA (3 Q-heads / 1 KV-head per chip, no
+    QKV gather) so the prefill is much faster. Both prefill and decode run on
+    that body (they must share one KV-cache layout: ``num_kv_heads=1`` per chip),
+    but the per-token decode machinery (traced graph, on-device argmax, on-device
+    token feedback) is the unchanged symbiote pipeline path.
+
+    The TP4 body consumes a *replicated full-H* hidden stream; the existing
+    embedding/vision/scatter still produce the ``H/num_devices`` column shard, so
+    the graphs all-gather to full-H at the body boundary (one CCL, see
+    ``_all_gather_hidden_to_full``).
+    ``tp4_prefill`` uses the TP4 body only for prefill, fills a decode-compatible
+    two-KV-head cache, and keeps the existing symbiote decode stack. It remains
+    explicit because it is faster but currently drops heading tokens on the
+    vision sample.
+    """
+    body_env = os.environ.get("DOTS_OCR_TEXT_BODY")
+    body = body_env.strip().lower() if body_env is not None else "symbiote"
+    if body not in {"symbiote", "tp4", "tp4_prefill"}:
+        raise ValueError(f"DOTS_OCR_TEXT_BODY must be one of {{'symbiote', 'tp4', 'tp4_prefill'}}, got {body!r}")
+    return body
+
+
+def _tp_cluster_axis(device) -> int:
+    """Mesh axis the TP shards live on (the >1 dim of a 1xN / Nx1 mesh)."""
+    shape = [int(x) for x in device.shape]
+    return 0 if (len(shape) == 2 and shape[0] > 1 and shape[1] == 1) else 1
+
+
+def _all_gather_hidden_to_full(t: ttnn.Tensor, device, hidden_size: int) -> ttnn.Tensor:
+    """All-gather an ``[.., H/ndev]`` column-sharded hidden -> replicated ``[.., H]``.
+
+    Bridges the symbiote column-sharded hidden stream (embedding / vision scatter
+    emit ``H/num_devices`` per chip) to the replicated full-H stream the TP4 body
+    consumes. No-op when the tensor is already full-width or the mesh is single
+    device. Mirrors ``dots_ocr_tp4.tt.common.all_gather_last_dim`` (plain
+    ``ttnn.all_gather``, no worker kwargs -- proven trace-capturable in the TP4
+    graphs).
+    """
+    if int(t.shape[-1]) >= int(hidden_size):
+        return t
+    nd = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
+    if nd <= 1:
+        return t
+    orig_shape = list(t.shape)
+    work = t if len(orig_shape) == 4 else ttnn.reshape(t, [1] * (4 - len(orig_shape)) + orig_shape)
+    gathered = ttnn.all_gather(
+        work,
+        dim=3,
+        num_links=1,
+        cluster_axis=_tp_cluster_axis(device),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        topology=ttnn.Topology.Linear,
+    )
+    if len(orig_shape) < 4:
+        gathered = ttnn.reshape(gathered, orig_shape[:-1] + [int(gathered.shape[-1])])
+    return gathered
 
 
 def _dots_ocr_signpost(header: str) -> None:
@@ -222,6 +286,7 @@ class TTNNDotsOCRPrefillGraph(TTNNModule):
         image_token_id: int = 151665,
         hidden_size: int = 1536,
         scatter_uses_dp_batch_mapper: bool = False,
+        gather_hidden_for_full_body: bool = False,
     ):
         super().__init__()
         self._p_stack = decoder_stack
@@ -232,6 +297,9 @@ class TTNNDotsOCRPrefillGraph(TTNNModule):
         self._image_token_id = int(image_token_id)
         self._hidden_size = int(hidden_size)
         self._scatter_uses_dp_batch_mapper = bool(scatter_uses_dp_batch_mapper)
+        # TP4 body consumes replicated full-H; gather the column-sharded hidden
+        # to full width at the body boundary (see _all_gather_hidden_to_full).
+        self._gather_hidden_for_full_body = bool(gather_hidden_for_full_body)
         self._scatter_cache_input_ids: Optional[torch.Tensor] = None
         self._scatter_cache_key: Optional[tuple] = None
         self._scatter_cache_idx: Optional[ttnn.Tensor] = None
@@ -410,7 +478,23 @@ class TTNNDotsOCRPrefillGraph(TTNNModule):
             )
             text_e = self._scatter_fuse_text_and_vision(text_e, vision_tt, tt_idx, tt_mask)
 
+        if self._gather_hidden_for_full_body:
+            text_e = _all_gather_hidden_to_full(text_e, self.device, self._hidden_size)
+
         h = self._p_stack.forward(text_e, past_key_value=past_key_value, cache_position=cache_position)
+        if self._gather_hidden_for_full_body:
+            # TP4 path: return the post-body hidden; final norm + lm_head + argmax
+            # run EAGER outside this captured trace. The in-trace full-vocab
+            # all_gather + argmax corrupts its output buffer when sharing a trace
+            # with the heavy TP4 body (proven: eager works, traced does not).
+            # Slice the real last token now (trace-safe) so the eager tail only
+            # processes [B, 1, H], and its tile-broadcast RMSNorm gamma is valid.
+            sl = int(h.shape[-2])
+            if sl > 1:
+                b = int(h.shape[0])
+                hd = int(h.shape[-1])
+                h = ttnn.slice(h, [0, sl - 1, 0], [b, sl, hd])
+            return h
         h = self._p_norm.forward(h)
         sl = int(h.shape[-2])
         if sl > 1:
@@ -444,22 +528,35 @@ class TTNNDotsOCRDecodeGraph(TTNNModule):
     def move_weights_to_device_impl(self):
         return self
 
-    def __init__(self, decoder_stack, final_norm, lm_head, embedding=None):
+    def __init__(
+        self, decoder_stack, final_norm, lm_head, embedding=None, gather_hidden_for_full_body=False, hidden_size=1536
+    ):
         super().__init__()
         self._d_stack = decoder_stack
         self._d_norm = final_norm
         self._d_lm = lm_head
         self._d_embedding = embedding
+        # TP4 body consumes replicated full-H; gather the column-sharded
+        # per-token embedding to full width at the body boundary.
+        self._gather_hidden_for_full_body = bool(gather_hidden_for_full_body)
+        self._hidden_size = int(hidden_size)
+
+    def _embed_and_gather(self, decode_input):
+        hidden_states = self._d_embedding.forward(decode_input) if self._d_embedding is not None else decode_input
+        if self._gather_hidden_for_full_body:
+            hidden_states = _all_gather_hidden_to_full(hidden_states, self.device, self._hidden_size)
+        return hidden_states
 
     def forward(self, decode_input, cache_position, past_key_value):
         dev = self.device
         if _deep_sync_profile_enabled():
             with _profile_graph_stage(dev, "decode.graph.embedding"):
-                hidden_states = (
-                    self._d_embedding.forward(decode_input) if self._d_embedding is not None else decode_input
-                )
+                hidden_states = self._embed_and_gather(decode_input)
             with _profile_graph_stage(dev, "decode.graph.layer_stack"):
                 h = self._d_stack.forward(hidden_states, past_key_value=past_key_value, cache_position=cache_position)
+            if self._gather_hidden_for_full_body:
+                # TP4 path: norm + lm_head + argmax run eager outside the trace.
+                return h
             with _profile_graph_stage(dev, "decode.graph.final_norm"):
                 h = self._d_norm.forward(h)
             with _profile_graph_stage(dev, "decode.graph.lm_head"):
@@ -468,8 +565,12 @@ class TTNNDotsOCRDecodeGraph(TTNNModule):
                 return _argmax_token_on_device(logits)
 
         # Default: one straight-line forward when deep graph profiling is off.
-        hidden_states = self._d_embedding.forward(decode_input) if self._d_embedding is not None else decode_input
+        hidden_states = self._embed_and_gather(decode_input)
         h = self._d_stack.forward(hidden_states, past_key_value=past_key_value, cache_position=cache_position)
+        if self._gather_hidden_for_full_body:
+            # TP4 path: norm + lm_head + argmax run eager outside the trace
+            # (see TTNNDotsOCRPrefillGraph for why).
+            return h
         h = self._d_norm.forward(h)
         logits = self._d_lm.forward(h)
         return _argmax_token_on_device(logits)
@@ -540,6 +641,92 @@ def _create_paged_kv_cache(model_config, device, batch_size: int = 1):
     ).to_device(device)
 
 
+class _TP4PrefillDecodeCacheAdapter(TTNNPagedAttentionKVCache):
+    """Fill TP4 prefill cache and symbiote decode cache from TP4 K/V states.
+
+    TP4 attention computes one KV head per chip. The existing fast
+    ``col_parallel`` decode path expects both KV heads on each chip. During
+    prefill, gather the per-chip TP4 KV head across the TP axis, drop duplicate
+    KV replicas, and fill the decode cache with the resulting two-head tensor.
+    Decode operations delegate to the decode cache unchanged.
+    """
+
+    def __init__(self, tp4_cache: TTNNPagedAttentionKVCache, decode_cache: TTNNPagedAttentionKVCache, device):
+        self.tp4_cache = tp4_cache
+        self.decode_cache = decode_cache
+        self.device = device
+        self.num_layers = decode_cache.num_layers
+        self.num_kv_heads = decode_cache.num_kv_heads
+        self.head_dim = decode_cache.head_dim
+        self.config = decode_cache.config
+
+    def __getattr__(self, name):
+        return getattr(self.decode_cache, name)
+
+    def _tp4_kv_to_decode_kv(self, kv: ttnn.Tensor) -> ttnn.Tensor:
+        nd = self.device.get_num_devices() if hasattr(self.device, "get_num_devices") else 1
+        target_heads = int(self.decode_cache.num_kv_heads)
+        if nd <= 1 or int(kv.shape[1]) == target_heads:
+            return kv
+        gathered = ttnn.all_gather(
+            kv,
+            dim=1,
+            num_links=1,
+            cluster_axis=_tp_cluster_axis(self.device),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+        )
+        if int(gathered.shape[1]) == target_heads:
+            return gathered
+
+        group = max(1, int(gathered.shape[1]) // target_heads)
+        selected = []
+        for head_idx in range(target_heads):
+            src_idx = min(head_idx * group, int(gathered.shape[1]) - 1)
+            selected.append(
+                ttnn.slice(
+                    gathered,
+                    [0, src_idx, 0, 0],
+                    [int(gathered.shape[0]), src_idx + 1, int(gathered.shape[2]), int(gathered.shape[3])],
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+            )
+        decode_kv = ttnn.concat(selected, dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        for part in selected:
+            ttnn.deallocate(part)
+        ttnn.deallocate(gathered)
+        return decode_kv
+
+    def paged_fill_on_device(
+        self, key_states: ttnn.Tensor, value_states: ttnn.Tensor, layer_idx: int, batch_idx: int = 0
+    ):
+        self.tp4_cache.paged_fill_on_device(key_states, value_states, layer_idx=layer_idx, batch_idx=batch_idx)
+        decode_k = self._tp4_kv_to_decode_kv(key_states)
+        decode_v = self._tp4_kv_to_decode_kv(value_states)
+        self.decode_cache.paged_fill_on_device(decode_k, decode_v, layer_idx=layer_idx, batch_idx=batch_idx)
+        if decode_k is not key_states:
+            ttnn.deallocate(decode_k)
+        if decode_v is not value_states:
+            ttnn.deallocate(decode_v)
+
+    def paged_update_on_device(self, *args, **kwargs):
+        return self.decode_cache.paged_update_on_device(*args, **kwargs)
+
+    def paged_sdpa_decode(self, *args, **kwargs):
+        return self.decode_cache.paged_sdpa_decode(*args, **kwargs)
+
+    def update_seq_length(self, layer_idx: int, seq_len: int = 1) -> None:
+        self.tp4_cache.update_seq_length(layer_idx=layer_idx, seq_len=seq_len)
+        self.decode_cache.update_seq_length(layer_idx=layer_idx, seq_len=seq_len)
+
+    def get_seq_length(self, layer_idx: int = 0) -> int:
+        return self.decode_cache.get_seq_length(layer_idx=layer_idx)
+
+    def reset(self) -> None:
+        self.tp4_cache.reset()
+        self.decode_cache.reset()
+
+
 # ---------------------------------------------------------------------------
 # Pipeline
 # ---------------------------------------------------------------------------
@@ -582,6 +769,10 @@ class TTNNDotsOCRPipeline(TTNNModule):
         self.vision_tower = vision_tower
         self.decoder_stack = decoder_stack
         self.final_norm = final_norm
+        self.prefill_decoder_stack = None
+        self.decode_decoder_stack = None
+        self.prefill_final_norm = None
+        self.decode_final_norm = None
         self.lm_head = lm_head
         self.graph_prefill = graph_prefill
         self.graph_decode = graph_decode
@@ -599,6 +790,24 @@ class TTNNDotsOCRPipeline(TTNNModule):
         self._decode_seq_counter: int = 0
         self._dp_readback_ring: Optional[List[ttnn.Tensor]] = None
         self._dp_readback_ring_n: int = 0
+
+        # TP4-body paths can return post-body hidden from prefill and/or decode;
+        # the final norm + lm_head + argmax then run eager via ``_eager_head``.
+        self._external_prefill_head: bool = False
+        self._external_decode_head: bool = False
+
+    def _eager_head(self, hidden: ttnn.Tensor) -> ttnn.Tensor:
+        """Final norm + lm_head + on-device argmax, run EAGER (outside any trace).
+
+        Used by the TP4-body path: the full-vocab all_gather + argmax cannot share
+        one captured trace with the heavy TP4 body (corrupts the argmax output
+        buffer), so the graphs stop at the post-body hidden and this tail runs
+        eager. ``hidden`` is the replicated full-H ``[B, 1, H]`` last-token state;
+        the returned token tensor stays on device so decode feedback is unchanged.
+        """
+        h = self.final_norm.forward(hidden)
+        logits = self.lm_head.forward(h)
+        return _argmax_token_on_device(logits)
 
     # ------------------------------------------------------------------
     # Factory
@@ -637,20 +846,81 @@ class TTNNDotsOCRPipeline(TTNNModule):
         vision_tower._unique_name = "vision_tower"
         vision_tower.override_children_module_names()
 
+        text_body = _text_body_from_env()
         tp_decode_scheme = _decode_tp_scheme_from_env()
-        print(f"[dots_ocr] decoder TP decode scheme: {tp_decode_scheme}")
-        decoder_layers = []
-        for i, hf_layer in enumerate(hf_model.model.layers):
-            layer = TTNNDotsOCRDecoderLayer.from_torch(hf_layer, tp_decode_scheme=tp_decode_scheme)
-            layer._unique_name = f"model.layers.{i}"
-            layer.override_children_module_names()
-            decoder_layers.append(layer)
-        decoder_stack = TTNNDotsOCRLayerStack(decoder_layers)
-        decoder_stack._unique_name = "model.layer_stack"
 
-        final_norm_cls = TTNNDotsOCRLocalShardRMSNorm if tp_decode_scheme == "col_parallel" else TTNNDistributedRMSNorm
-        final_norm = final_norm_cls.from_torch(hf_model.model.norm)
-        final_norm._unique_name = "model.norm"
+        def _build_symbiote_stack(norm_name: str = "model.norm"):
+            decoder_layers = []
+            for i, hf_layer in enumerate(hf_model.model.layers):
+                layer = TTNNDotsOCRDecoderLayer.from_torch(hf_layer, tp_decode_scheme=tp_decode_scheme)
+                layer._unique_name = f"model.layers.{i}"
+                layer.override_children_module_names()
+                decoder_layers.append(layer)
+            stack = TTNNDotsOCRLayerStack(decoder_layers)
+            stack._unique_name = "model.layer_stack"
+            norm_cls = TTNNDotsOCRLocalShardRMSNorm if tp_decode_scheme == "col_parallel" else TTNNDistributedRMSNorm
+            norm = norm_cls.from_torch(hf_model.model.norm)
+            norm._unique_name = norm_name
+            return stack, norm
+
+        dots_cfg = None
+        prefill_stack = None
+        prefill_norm = None
+        decode_stack = None
+        decode_norm = None
+        use_tp4_prefill = text_body in {"tp4", "tp4_prefill"}
+        use_tp4_decode = text_body == "tp4"
+
+        if use_tp4_prefill:
+            # Head-local replicated-hidden Megatron body from dots_ocr_tp4: fast
+            # prefill (3 Q-heads / 1 KV-head per chip, no QKV gather). In
+            # ``tp4_prefill`` mode only prefill uses this stack; decode stays on
+            # the existing symbiote stack and consumes the adapter-filled cache.
+            from models.experimental.dots_ocr_tp4.tt.common import DotsOCRConfig, tp4_lossy_matmul_dtype
+            from models.experimental.dots_ocr_tp4.tt.model import DotsOCRPrefillModelTP4
+            from models.experimental.dots_ocr_tp4.tt.rmsnorm import DotsOCRRMSNormTP4
+
+            print(
+                f"[dots_ocr] tp4 body lossy-matmul weight dtype (gate/up early + down + o_proj): "
+                f"{tp4_lossy_matmul_dtype()} "
+                f"(DOTS_OCR_TP4_HI_PRECISION={os.environ.get('DOTS_OCR_TP4_HI_PRECISION', '<unset>')!r})"
+            )
+
+            num_devices = int(device.get_num_devices()) if hasattr(device, "get_num_devices") else 1
+            if int(batch_size) != 1:
+                raise ValueError(
+                    f"DOTS_OCR_TEXT_BODY={text_body} requires batch_size=1 (TP, no DP batch sharding); got {batch_size}"
+                )
+            if num_devices > 1 and (hf_model.config.num_attention_heads % num_devices) != 0:
+                raise ValueError(
+                    f"DOTS_OCR_TEXT_BODY={text_body} needs num_attention_heads "
+                    f"({hf_model.config.num_attention_heads}) divisible by num_devices ({num_devices})"
+                )
+            print(f"[dots_ocr] text body: {text_body} (tp4 prefill, num_devices={num_devices})")
+            dots_cfg = DotsOCRConfig.from_hf(hf_model.config)
+            prefill_stack = DotsOCRPrefillModelTP4.from_torch(
+                device,
+                dots_cfg,
+                hf_model.model.layers,
+                weight_dtype=ttnn.bfloat16,
+            )
+            prefill_stack._unique_name = "model.layer_stack_tp4_prefill"
+            prefill_norm = DotsOCRRMSNormTP4.from_torch(device, hf_model.model.norm, eps=dots_cfg.rms_norm_eps)
+            prefill_norm._unique_name = "model.norm_tp4_prefill"
+
+        if use_tp4_decode:
+            decode_stack = prefill_stack
+            decode_norm = prefill_norm
+            decoder_stack = prefill_stack
+            final_norm = prefill_norm
+        else:
+            print(f"[dots_ocr] decode body: symbiote; decoder TP decode scheme: {tp_decode_scheme}")
+            decode_stack, decode_norm = _build_symbiote_stack()
+            decoder_stack = prefill_stack if use_tp4_prefill else decode_stack
+            final_norm = prefill_norm if use_tp4_prefill else decode_norm
+            if not use_tp4_prefill:
+                prefill_stack = decode_stack
+                prefill_norm = decode_norm
 
         # ``TTNNDotsOCRDRAMShardedLMHead`` lays the lm_head weight out
         # WIDTH_SHARDED across all 12 DRAM banks per chip and runs the matmul
@@ -672,8 +942,21 @@ class TTNNDotsOCRPipeline(TTNNModule):
         lm_head = TTNNDotsOCRDRAMShardedLMHead.from_torch(hf_model.lm_head)
         lm_head._unique_name = "lm_head"
 
-        # Paged KV cache
-        paged_cache = _create_paged_kv_cache(hf_model.config, device, batch_size)
+        # Paged KV cache. The TP4 body stores exactly its one assigned KV head per
+        # chip (head-sharded across the mesh). Hybrid prefill fills both that
+        # cache and the symbiote two-KV-head decode cache.
+        if use_tp4_decode:
+            from models.experimental.dots_ocr_tp4.tt.kv_cache import create_paged_kv_cache as _create_tp4_paged_kv_cache
+
+            paged_cache = _create_tp4_paged_kv_cache(dots_cfg, device, batch_size=batch_size)
+        elif use_tp4_prefill:
+            from models.experimental.dots_ocr_tp4.tt.kv_cache import create_paged_kv_cache as _create_tp4_paged_kv_cache
+
+            tp4_paged_cache = _create_tp4_paged_kv_cache(dots_cfg, device, batch_size=batch_size)
+            decode_paged_cache = _create_paged_kv_cache(hf_model.config, device, batch_size)
+            paged_cache = _TP4PrefillDecodeCacheAdapter(tp4_paged_cache, decode_paged_cache, device)
+        else:
+            paged_cache = _create_paged_kv_cache(hf_model.config, device, batch_size)
 
         # Pipeline config (before graphs)
         eos_token_ids = [151643, 151673]
@@ -692,15 +975,21 @@ class TTNNDotsOCRPipeline(TTNNModule):
         )
 
         _bim = dp_batch_shard_tensor_mapper(device, batch_size)
+        # The TP4 prefill body consumes a replicated full-H stream; the embedding
+        # / vision scatter still emit the H/num_devices column shard, so prefill
+        # all-gathers to full-H at the body boundary.
+        prefill_gather_hidden_for_full_body = use_tp4_prefill
+        decode_gather_hidden_for_full_body = use_tp4_decode
         graph_prefill = TTNNDotsOCRPrefillGraph(
-            decoder_stack,
-            final_norm,
+            prefill_stack,
+            prefill_norm,
             lm_head,
             embedding=embedding,
             vision_tower=vision_tower,
             image_token_id=config.image_token_id,
             hidden_size=config.hidden_size,
             scatter_uses_dp_batch_mapper=_bim is not None,
+            gather_hidden_for_full_body=prefill_gather_hidden_for_full_body,
         )
         graph_prefill._unique_name = "dots_ocr_graph_prefill"
         # Prefill text-only: token ids in ``graph_prefill`` embed inside one trace.
@@ -713,7 +1002,14 @@ class TTNNDotsOCRPipeline(TTNNModule):
         # trace is capturing (``_TRACE_RUNNING`` in ``run_config.TracedRun``).
         # Per-chip decode token input is ``[1,1]`` uint32 ROW_MAJOR; embedding
         # in the graph avoids ``_dp_repack_batch_sharded_hidden`` on decode_input.
-        graph_decode = TTNNDotsOCRDecodeGraph(decoder_stack, final_norm, lm_head, embedding=embedding)
+        graph_decode = TTNNDotsOCRDecodeGraph(
+            decode_stack,
+            decode_norm,
+            lm_head,
+            embedding=embedding,
+            gather_hidden_for_full_body=decode_gather_hidden_for_full_body,
+            hidden_size=config.hidden_size,
+        )
         graph_decode._unique_name = "dots_ocr_graph_decode"
 
         pipeline = cls(
@@ -729,6 +1025,14 @@ class TTNNDotsOCRPipeline(TTNNModule):
             config=config,
         )
         pipeline._unique_name = "dots_ocr_pipeline"
+        pipeline.prefill_decoder_stack = prefill_stack
+        pipeline.decode_decoder_stack = decode_stack
+        pipeline.prefill_final_norm = prefill_norm
+        pipeline.decode_final_norm = decode_norm
+        # TP4 graph paths return the post-body hidden; run the head eager only
+        # for the graph(s) that use the TP4 body.
+        pipeline._external_prefill_head = use_tp4_prefill
+        pipeline._external_decode_head = use_tp4_decode
 
         # Set device and preprocess weights
         pipeline._set_device_and_preprocess(device)
@@ -793,12 +1097,17 @@ class TTNNDotsOCRPipeline(TTNNModule):
             self.embedding,
             self.vision_tower,
             self.decoder_stack,
+            self.prefill_decoder_stack,
+            self.decode_decoder_stack,
             self.final_norm,
+            self.prefill_final_norm,
+            self.decode_final_norm,
             self.lm_head,
             self.graph_prefill,
             self.graph_decode,
         ]:
-            _recurse(component)
+            if component is not None:
+                _recurse(component)
         return found
 
     def _mesh_dp_dual_stream(self) -> bool:
@@ -964,6 +1273,10 @@ class TTNNDotsOCRPipeline(TTNNModule):
                 )
             else:
                 token_id_tt = self.graph_prefill(hidden_states, tt_cache_position, past_key_value=self.paged_cache)
+
+        # TP4 prefill body: the graph returned the post-body hidden; run the head eager.
+        if self._external_prefill_head:
+            token_id_tt = self._eager_head(token_id_tt)
 
         # --- Read to host ---
         with _profile_stage(self.device, "prefill.first_token_readback"):
@@ -1133,6 +1446,11 @@ class TTNNDotsOCRPipeline(TTNNModule):
 
         with _profile_stage(self.device, "decode.graph_decode_sync"):
             token_id_tt = self.graph_decode(decode_input, self._decode_cache_position, past_key_value=self.paged_cache)
+            # TP4 decode body: graph returned the post-body hidden; run the head eager
+            # (norm + lm_head + argmax). Token stays on device, so the on-device
+            # feedback copy below is unchanged.
+            if self._external_decode_head:
+                token_id_tt = self._eager_head(token_id_tt)
         # On-device token feedback. Skip the per-iter ``ttnn.from_torch +
         # ttnn.copy_host_to_device_tensor`` host upload by writing the
         # next-iter input directly on device.
