@@ -9,6 +9,7 @@
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "/home/maxim-artemov/workspace/debug_include.hpp"
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -46,6 +47,11 @@ inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryCo
     }
 
     if (mem_config) {
+        py_log_cout(
+            "tensor diff:\n> old layout result {}\n> new layout result {}",
+            output_tensor_spec.tensor_layout().with_memory_config(*mem_config),
+            TensorLayout(output_tensor_spec.data_type(), output_tensor_spec.page_config(), *mem_config)  //
+        );
         output_tensor_spec = TensorSpec(
             output_tensor_spec.logical_shape(),
             TensorLayout(output_tensor_spec.data_type(), output_tensor_spec.page_config(), *mem_config));
@@ -135,6 +141,11 @@ inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<Memor
     if (mem_config) {
         TT_FATAL(mem_config->is_sharded(), "Expected output tensor memory config to be sharded");
         auto output_mem_config = MemoryConfig(mem_config->memory_layout(), mem_config->buffer_type(), shard_spec);
+        py_log_cout(
+            "tensor diff:\n> old layout result {}\n> new layout result {}",
+            output_tensor_spec.tensor_layout().with_memory_config(output_mem_config),
+            TensorLayout(output_tensor_spec.data_type(), output_tensor_spec.page_config(), output_mem_config)  //
+        );
         output_tensor_spec = TensorSpec(
             output_tensor_spec.logical_shape(),
             TensorLayout(output_tensor_spec.data_type(), output_tensor_spec.page_config(), output_mem_config));

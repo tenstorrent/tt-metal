@@ -5,6 +5,7 @@
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
+#include "/home/maxim-artemov/workspace/debug_include.hpp"
 
 namespace tt::tt_metal {
 
@@ -239,6 +240,16 @@ TensorSpec TensorSpec::sharded(
 void TensorSpec::populate_sharding_specs() {
     if (memory_config().created_with_nd_shard_spec()) {
         if (auto upd_mem_config = populate_legacy_shard_spec_from_nd()) {
+            py_log_cout(
+                "tensor diff:\n> old layout result {}\n> new layout result {}",
+                tensor_layout_.with_memory_config(std::move(*upd_mem_config)),
+                TensorLayout(
+                    tensor_layout_.get_data_type(),
+                    tensor_layout_.get_page_config(),
+                    *upd_mem_config,
+                    tensor_layout_.get_alignment())  //
+            );
+
             tensor_layout_ = TensorLayout(
                 tensor_layout_.get_data_type(),
                 tensor_layout_.get_page_config(),
@@ -246,11 +257,22 @@ void TensorSpec::populate_sharding_specs() {
                 tensor_layout_.get_alignment());
         }
     } else if (memory_config().shard_spec()) {
-        tensor_layout_ = TensorLayout(
-            tensor_layout_.get_data_type(),
-            tensor_layout_.get_page_config(),
-            populate_nd_shard_spec_from_legacy(),
-            tensor_layout_.get_alignment());
+        py_log_cout(
+            "tensor diff:\n> old layout result {}\n> new layout result {}",
+            tensor_layout_.with_memory_config(populate_nd_shard_spec_from_legacy()),
+            TensorLayout(
+                tensor_layout_.get_data_type(),
+                tensor_layout_.get_page_config(),
+                populate_nd_shard_spec_from_legacy(),
+                tensor_layout_.get_alignment())  //
+        );
+
+        tensor_layout_ = tensor_layout_.with_memory_config(populate_nd_shard_spec_from_legacy());
+        // tensor_layout_ = TensorLayout(
+        //     tensor_layout_.get_data_type(),
+        //     tensor_layout_.get_page_config(),
+        //     populate_nd_shard_spec_from_legacy(),
+        //     tensor_layout_.get_alignment());
     }
 }
 

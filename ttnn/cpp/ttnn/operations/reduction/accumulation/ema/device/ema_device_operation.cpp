@@ -5,6 +5,7 @@
 #include "ttnn/operations/reduction/reduce_op_validation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
+#include "/home/maxim-artemov/workspace/debug_include.hpp"
 
 #include <cmath>
 
@@ -79,6 +80,11 @@ TensorSpec EmaDeviceOperation::compute_output_specs(
         return tensor_args.optional_output_tensor->tensor_spec();
     }
     const auto& old_spec = tensor_args.input.tensor_spec();
+    py_log_cout(
+        "tensor diff:\n> old layout result {}\n> new layout result {}",
+        old_spec.tensor_layout().with_memory_config(operation_attributes.output_mem_config),
+        TensorLayout(old_spec.data_type(), old_spec.page_config(), operation_attributes.output_mem_config)  //
+    );
     return TensorSpec(
         old_spec.logical_shape(),
         TensorLayout(old_spec.data_type(), old_spec.page_config(), operation_attributes.output_mem_config));

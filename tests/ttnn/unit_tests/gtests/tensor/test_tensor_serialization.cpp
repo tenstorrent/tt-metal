@@ -13,6 +13,7 @@
 #include "ttnn/operations/functions.hpp"
 #include "ttnn_test_fixtures.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
+#include "/home/maxim-artemov/workspace/debug_include.hpp"
 
 #include <filesystem>
 #include <vector>
@@ -90,6 +91,14 @@ TEST_F(TensorSerializationFlatbufferTest, WithMemoryConfig) {
     TemporaryFile test_file("flatbuffer.tensorbin");
     std::vector<float> test_data{1.0f, 2.5f, -3.7f, 42.0f, -0.5f, 100.0f};
 
+    py_log_cout(
+        "tensor diff:\n> old layout result {}\n> new layout result {}",
+        get_tensor_spec(ttnn::Shape{1, 2, 3, 1}, DataType::FLOAT32)
+            .tensor_layout()
+            .with_memory_config(MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1}),
+        TensorLayout(
+            DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1})  //
+    );
     Tensor original_tensor = Tensor::from_vector(
         test_data,
         TensorSpec(
