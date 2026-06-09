@@ -80,11 +80,17 @@ void kernel_main() {
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
     // Lightweight mask: generate template tiles once, leave permanently fronted.
-    // Layout: [neginf(0)] [causal_diag?(1)] [k_partial?].
+    // Sliding layout: [neginf, trailing_primary, leading_prev, leading_current, trailing_next, k_partial?].
+    // Non-sliding layout: [neginf, causal_diag?, k_partial?].
     if constexpr (use_lightweight_mask) {
         // is_causal handles K-partial via causal stamp; skip emitting partial tile in causal mode.
         constexpr uint32_t writer_partial_col = is_causal ? 0u : k_partial_col;
-        generate_lightweight_mask_tiles<writer_partial_col, /*joint_l*/ 0u, cb_mask_in, is_causal>();
+        generate_lightweight_mask_tiles<
+            writer_partial_col,
+            /*joint_l*/ 0u,
+            cb_mask_in,
+            is_causal,
+            sliding_window_size>();
     }
 
     if constexpr (is_chunked) {

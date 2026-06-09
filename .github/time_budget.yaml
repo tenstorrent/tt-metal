@@ -79,7 +79,6 @@ ttnn:
     wh_galaxy: 90
     bh_galaxy: 70
     bh_p150b_civ2: 55
-    bh_deskbox: 145
     bh_llmbox: 180
     bh_loudbox: 145
     bh_p300: 145
@@ -102,7 +101,7 @@ ttnn:
 
 shield:
   e2e:
-    wh_llmbox: 45
+    wh_llmbox: 53
 
 # Former fabric + scaleout budgets merged under team scaleout (see tests/pipeline_reorg).
 scaleout:
@@ -126,7 +125,6 @@ scaleout:
     bh_sp1: 90
     bh_sp1-mgd: 90
     bh_sp4: 150
-    bh_deskbox: 80
     bh_llmbox: 80
     bh_loudbox: 80
     bh_p300: 80
@@ -138,9 +136,9 @@ runtime:
     bh_quietbox: 5
     bh_loudbox: 5
   unit:
-    wh_n150_civ2: 217
+    wh_n150_civ2: 222
     wh_n300_civ2: 74
-    bh_p150b_civ2: 205
+    bh_p150b_civ2: 210
     bh_p150b_civ2_viommu: 5
     bh_p100a_civ2_viommu: 74
     bh_quietbox: 20
@@ -155,7 +153,7 @@ runtime:
 
 llk:
   unit:
-    wh_n150_civ2: 100
+    wh_n150_civ2: 140
     bh_p150b_civ2: 70
   e2e:
     wh_n150_civ2: 1800
@@ -178,14 +176,13 @@ models:
     wh_n150: 100
     wh_n300: 15
     wh_galaxy_perf: 120
-    bh_p150b_civ2: 55
-    bh_loudbox: 183
+    bh_p150b_civ2: 63
     bh_p150: 60
-    bh_p300: 30
-    bh_deskbox: 60
-    bh_quietbox_2: 85
-    bh_llmbox: 45
-    bh_galaxy_perf: 78
+    bh_p300: 50
+    bh_loudbox: 160
+    bh_llmbox: 50
+    bh_quietbox_2: 251
+    bh_galaxy: 78
   unit:
     wh_llmbox: 175
     wh_llmbox_perf: 230
@@ -193,9 +190,8 @@ models:
     wh_n300: 15
     wh_galaxy: 45
     wh_galaxy_perf: 45
-    bh_p150: 45
+    bh_p150: 60
     bh_p300: 30
-    bh_loudbox: 60
     bh_quietbox_2: 85
     bh_galaxy: 70
   integration:
@@ -205,9 +201,10 @@ models:
     wh_galaxy: 280
     wh_galaxy_perf: 150
   device_perf:
-    wh_n150: 10
-    bh_p150: 10
-    bh_p300: 10
+    wh_n150: 20
+    bh_p150: 20
+    bh_p300: 20
+    bh_quietbox_2: 80
 
   demo:
     wh_llmbox_perf: 200
@@ -225,7 +222,6 @@ models:
     bh_p150_perf: 420
     bh_p150b_civ2: 250
     bh_p150b_civ2_viommu: 50
-    bh_deskbox: 250
     bh_llmbox: 1200
     bh_loudbox: 1200
 

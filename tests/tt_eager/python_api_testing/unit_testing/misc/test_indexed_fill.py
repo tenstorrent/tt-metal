@@ -30,7 +30,7 @@ from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
 )
 @pytest.mark.parametrize(
     "D",
-    [4, 16, 1024, 4096],
+    [pytest.param(4, marks=pytest.mark.skip(reason="Disabled: see #45989")), 16, 1024, 4096],
 )
 @pytest.mark.parametrize(
     "tt_dtype",

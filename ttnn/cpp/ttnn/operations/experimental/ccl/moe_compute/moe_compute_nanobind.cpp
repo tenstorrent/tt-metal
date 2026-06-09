@@ -183,7 +183,8 @@ void bind_moe_compute_utils(nb::module_& mod) {
         &ttnn::experimental::get_weight_core_shard_maps,
         nb::arg("mesh_device"),
         nb::arg("hidden_size"),
-        nb::arg("intermediate_size"));
+        nb::arg("intermediate_size"),
+        nb::arg("bh_ring_size") = 12);
 
     nb::class_<ttnn::experimental::WeightMemoryConfigs>(mod, "WeightMemoryConfigs")
         .def_ro("w0_w1", &ttnn::experimental::WeightMemoryConfigs::w0_w1)
@@ -208,7 +209,8 @@ void bind_moe_compute_utils(nb::module_& mod) {
         nb::arg("experts_per_device"),
         nb::arg("hidden_size"),
         nb::arg("intermediate_size"),
-        nb::arg("has_bias") = false);
+        nb::arg("has_bias") = false,
+        nb::arg("bh_ring_size") = 12);
 
     ttnn::bind_function<"add_shared_expert_weights", "ttnn.experimental.">(
         mod,
@@ -250,7 +252,8 @@ void bind_moe_compute_utils(nb::module_& mod) {
         nb::arg("L"),
         nb::arg("E"),
         nb::arg("K"),
-        nb::arg("N"));
+        nb::arg("N"),
+        nb::arg("bh_ring_size") = 12);
 
     ttnn::bind_function<"prepare_w2_tensor_for_moe_compute", "ttnn.experimental.">(
         mod,
@@ -268,7 +271,8 @@ void bind_moe_compute_utils(nb::module_& mod) {
         nb::arg("L"),
         nb::arg("E"),
         nb::arg("N"),
-        nb::arg("K"));
+        nb::arg("K"),
+        nb::arg("bh_ring_size") = 12);
 
     ttnn::bind_function<"prepare_w0_w1_tensor_with_bias", "ttnn.experimental.">(
         mod,
@@ -289,7 +293,8 @@ void bind_moe_compute_utils(nb::module_& mod) {
         nb::arg("L"),
         nb::arg("E"),
         nb::arg("K"),
-        nb::arg("N"));
+        nb::arg("N"),
+        nb::arg("bh_ring_size") = 12);
 
     ttnn::bind_function<"prepare_w2_tensor_with_bias", "ttnn.experimental.">(
         mod,
@@ -308,7 +313,8 @@ void bind_moe_compute_utils(nb::module_& mod) {
         nb::arg("L"),
         nb::arg("E"),
         nb::arg("N"),
-        nb::arg("K"));
+        nb::arg("K"),
+        nb::arg("bh_ring_size") = 12);
 
     ttnn::bind_function<"quantize_weights_via_host", "ttnn.experimental.">(
         mod,

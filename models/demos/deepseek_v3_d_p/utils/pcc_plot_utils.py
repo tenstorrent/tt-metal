@@ -354,7 +354,11 @@ def write_pcc_summary(result: dict, threshold: float = 0.99, output_dir: str = N
         Path to the written file.
     """
     if output_dir is None:
-        output_dir = os.getenv("PCC_SUMMARY_DIR", "/tmp/pcc_summaries")
+        # Per-user default dir: a shared hardcoded /tmp/pcc_summaries is owned by
+        # whoever created it first and raises PermissionError for everyone else.
+        import getpass
+
+        output_dir = os.getenv("PCC_SUMMARY_DIR", f"/tmp/pcc_summaries_{getpass.getuser()}")
 
     out = Path(output_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)

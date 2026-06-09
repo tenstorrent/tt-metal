@@ -441,23 +441,28 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages, bool
     }
 
     // 2b. Entry/exit fabric nodes chosen for the pipeline are not reused across stages.
+    // Skip the last stage's exit when !initialize_loopback — it has no downstream exit
+    // (exit_node_coord is a placeholder == entry_node_coord), matching checks 1 and 2.
     std::unordered_set<FabricNodeId> used_fabric_nodes;
     used_fabric_nodes.reserve(stages.size() * 2);
     for (std::size_t i = 0; i < stages.size(); i++) {
         const auto& s = stages[i];
+        const bool skip_exit = !initialize_loopback && (i == stages.size() - 1);
         auto mesh_id = MeshId{static_cast<uint32_t>(s.stage_index)};
         FabricNodeId entry_fn(mesh_id, mesh_graph.coordinate_to_chip(mesh_id, s.entry_node_coord));
-        FabricNodeId exit_fn(mesh_id, mesh_graph.coordinate_to_chip(mesh_id, s.exit_node_coord));
         TT_FATAL(
             used_fabric_nodes.insert(entry_fn).second,
             "Stage [{}] entry fabric node {} is reused across stages",
             i,
             entry_fn);
-        TT_FATAL(
-            used_fabric_nodes.insert(exit_fn).second,
-            "Stage [{}] exit fabric node {} is reused across stages",
-            i,
-            exit_fn);
+        if (!skip_exit) {
+            FabricNodeId exit_fn(mesh_id, mesh_graph.coordinate_to_chip(mesh_id, s.exit_node_coord));
+            TT_FATAL(
+                used_fabric_nodes.insert(exit_fn).second,
+                "Stage [{}] exit fabric node {} is reused across stages",
+                i,
+                exit_fn);
+        }
     }
 
     // 3a. Each stage entry and exit must have at least one active fabric ethernet channel (none empty).
@@ -535,6 +540,11 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages, bool
         const auto& stage = stages[i];
         const std::size_t next_i = (i + 1) % stages.size();
         const auto& next_stage = stages[next_i];
+
+        // Linear (host-loopback) pipeline has no last-stage -> stage 0 fabric hop.
+        if (!initialize_loopback && i == stages.size() - 1) {
+            continue;
+        }
 
         auto mesh_id = MeshId{static_cast<uint32_t>(stage.stage_index)};
         auto next_mesh_id = MeshId{static_cast<uint32_t>(next_stage.stage_index)};
@@ -616,6 +626,11 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages, bool
         const auto& stage = stages[i];
         const std::size_t next_i = (i + 1) % stages.size();
         const auto& next_stage = stages[next_i];
+
+        // Linear (host-loopback) pipeline has no last-stage -> stage 0 fabric hop.
+        if (!initialize_loopback && i == stages.size() - 1) {
+            continue;
+        }
 
         auto curr_mesh_id = MeshId{static_cast<uint32_t>(stage.stage_index)};
         auto next_mesh_id = MeshId{static_cast<uint32_t>(next_stage.stage_index)};

@@ -343,13 +343,13 @@ void kernel_main() {
             bool has_non_local = false;
 
             for (uint32_t t = 0; t < batch_count; t++) {
-                tt_l1_ptr int32_t* indices_t =
-                    reinterpret_cast<tt_l1_ptr int32_t*>(indices_base + t * aligned_indices_page_size);
+                tt_l1_ptr uint16_t* indices_t =
+                    reinterpret_cast<tt_l1_ptr uint16_t*>(indices_base + t * aligned_indices_page_size);
                 tt_l1_ptr uint16_t* weights_t =
                     reinterpret_cast<tt_l1_ptr uint16_t*>(weights_base + t * aligned_weights_page_size);
                 for (uint32_t k = 0; k < num_experts_per_tok; k++) {
-                    auto routed_expert = indices_t[k];
-                    if (((uint32_t)routed_expert & core_mask) != dispatch_core_idx) {
+                    uint32_t routed_expert = (uint32_t)indices_t[k];
+                    if ((routed_expert & core_mask) != dispatch_core_idx) {
                         continue;
                     }
                     auto expert_chip_og = expert_dispatch_table[routed_expert];
@@ -447,13 +447,13 @@ void kernel_main() {
 #else
             uint32_t token_input_addr = input_base + t * aligned_input_page_size;
 #endif
-            tt_l1_ptr int32_t* indices =
-                reinterpret_cast<tt_l1_ptr int32_t*>(indices_base + t * aligned_indices_page_size);
+            tt_l1_ptr uint16_t* indices =
+                reinterpret_cast<tt_l1_ptr uint16_t*>(indices_base + t * aligned_indices_page_size);
             tt_l1_ptr uint16_t* weights =
                 reinterpret_cast<tt_l1_ptr uint16_t*>(weights_base + t * aligned_weights_page_size);
 
             for (uint32_t k = 0; k < num_experts_per_tok; ++k) {
-                auto routed_expert = indices[k];
+                uint32_t routed_expert = (uint32_t)indices[k];
 
                 if (((uint32_t)routed_expert & core_mask) != dispatch_core_idx) {
                     continue;
@@ -499,13 +499,17 @@ void kernel_main() {
                         uint32_t distance =
                             manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
 
+                        // route_info layout: [0]=route, [1]=distance, [2]=page_idx, [3]=expert_chip.
+                        // route + distance are consumed by the 1D writer; under FABRIC_2D the writer
+                        // recomputes the EDM direction from route_info[3] and ignores slots [0..1].
+                        // All four slots are written unconditionally
                         cb_reserve_back(cb_route_info_id, 1);
                         volatile tt_l1_ptr uint32_t* route_info =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_route_info_id));
                         route_info[0] = route;
                         route_info[1] = distance;
                         route_info[2] = page_idx;
-                        route_info[3] = 0;
+                        route_info[3] = expert_chip;
                         cb_push_back(cb_route_info_id, 1);
 
                         cb_reserve_back(cb_payload_for_writer_id, 1);

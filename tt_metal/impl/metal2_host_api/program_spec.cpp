@@ -59,11 +59,11 @@ struct CollectedSpecData {
     std::unordered_map<DFBSpecName, const DataflowBufferSpec*> dfb_by_name;
     std::unordered_map<DFBSpecName, const RemoteDataflowBufferSpec*> remote_dfb_by_name;
     std::unordered_map<SemaphoreSpecName, const SemaphoreSpec*> semaphore_by_name;
-    std::unordered_map<TensorParameterName, const TensorParameter*> tensor_parameter_by_name;
+    std::unordered_map<TensorParamName, const TensorParameter*> tensor_parameter_by_name;
 
     // Tensor parameter usage (derived from kernel tensor bindings).
     // Tracks which kernels bind a given tensor parameter.
-    std::unordered_map<TensorParameterName, std::vector<const KernelSpec*>> tensor_parameter_users;
+    std::unordered_map<TensorParamName, std::vector<const KernelSpec*>> tensor_parameter_users;
 
     // DFB endpoint info (derived from kernel bindings).
     // Populated for both local and remote DFBs.
@@ -155,6 +155,31 @@ inline bool is_gen1_arch() {
     return arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE;
 }
 
+// Resolve the effective Gen1 hardware knobs (processor, NOC, NOC mode) for a DM kernel.
+// When the user supplies a READER/WRITER role hint, the runtime fills in the conventional
+// triple, mirroring the legacy ReaderDataMovementConfig / WriterDataMovementConfig
+// convention (see kernel_types.cpp):
+//   READER -> NCRISC (RISCV_1) on NOC_0
+//   WRITER -> BRISC  (RISCV_0) on NOC_1
+// NOC mode is always DM_DEDICATED_NOC; DM_DYNAMIC_NOC is a power-user knob reached only
+// via RoleHint::UNSPECIFIED + an explicit gen1_config, which is returned verbatim.
+//
+// Precondition (guaranteed by validation on Gen1): exactly one of {a READER/WRITER role,
+// an explicit gen1_config} is present.
+DataMovementHardwareConfig::Gen1Config ResolveGen1Config(const DataMovementHardwareConfig& dm_config) {
+    using Gen1Config = DataMovementHardwareConfig::Gen1Config;
+    switch (dm_config.role) {
+        case DataMovementRoleHint::READER:
+            return Gen1Config{
+                .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_0, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
+        case DataMovementRoleHint::WRITER:
+            return Gen1Config{
+                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_1, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
+        case DataMovementRoleHint::UNSPECIFIED: return dm_config.gen1_config.value();
+    }
+    TT_THROW("Unhandled RoleHint in ResolveGen1Config");
+}
+
 NodeRangeSet to_node_range_set(const Nodes& nodes) {
     return std::visit(
         [](const auto& n) -> NodeRangeSet {
@@ -182,8 +207,8 @@ const std::vector<DFBSpecName>& dfb_alias_with(const DataflowBufferSpec& dfb) {
     return dfb.advanced_options.alias_with;
 }
 
-// Helper: return a kernel's dfb-compute-self-loop-scopes list.
-const std::vector<DFBSelfLoopConnectivity>& kernel_self_loop_scopes(const KernelSpec& kernel) {
+// Helper: return a kernel's dfb-compute-self-loop-scopes map.
+const Table<DFBSpecName, DFBSelfLoopConnectivity>& kernel_self_loop_scopes(const KernelSpec& kernel) {
     return kernel.advanced_options.dfb_self_loop_connectivities;
 }
 
@@ -551,7 +576,7 @@ void ValidateNodeBounds(const ProgramSpec& spec) {
         check_target_nodes(work_unit.target_nodes, "WorkUnitSpec", work_unit.name);
     }
     for (const auto& sem : spec.semaphores) {
-        check_target_nodes(sem.target_nodes, "SemaphoreSpec", sem.unique_id);
+        check_target_nodes(sem.target_nodes, "SemaphoreSpec", sem.unique_id.get());
     }
 }
 
@@ -673,20 +698,26 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         if (kernel.is_data_movement_kernel()) {
             const auto& data_movement_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
 
-            // Both Gen1 and Gen2 configs are optional. But at least one must be specified.
+            // A role hint and an explicit Gen1 config are mutually exclusive: a READER/WRITER
+            // hint already fills in the Gen1 config, so also supplying one is contradictory.
             TT_FATAL(
-                data_movement_config.gen1_config.has_value() ||
-                    data_movement_config.gen2_config.has_value(),
-                "KernelSpec '{}' must specify a DM config for Gen1, Gen2, or both.",
+                data_movement_config.role == DataMovementRoleHint::UNSPECIFIED ||
+                    !data_movement_config.gen1_config.has_value(),
+                "KernelSpec '{}' sets both a READER/WRITER role hint and an explicit Gen1 config. "
+                "A role hint fills the Gen1 config for you; either drop the explicit config, or use "
+                "RoleHint::UNSPECIFIED to take manual control.",
                 kernel.unique_id);
 
-            // Gen1 builds still require an explicit Gen1 config (its fields — processor, NOC,
-            // NOC mode — have no universally-safe defaults). Gen2 is fully optional even on
-            // Gen2 builds: absence is treated as "use defaults" (empty disable_implicit_sync_for).
+            // On Gen1 (WH/BH), the kernel must declare its placement: either a READER/WRITER role
+            // hint (the runtime fills in processor/NOC/NOC-mode), or an explicit Gen1 config. There
+            // is no safe default for reader-vs-writer — it is op-specific. Gen2 is fully optional:
+            // absence is treated as "use defaults" (empty disable_implicit_sync_for).
             if (is_gen1_arch()) {
                 TT_FATAL(
-                    data_movement_config.gen1_config.has_value(),
-                    "KernelSpec '{}' must specify a Gen1 DM config when targeting WH or BH.",
+                    data_movement_config.role != DataMovementRoleHint::UNSPECIFIED ||
+                        data_movement_config.gen1_config.has_value(),
+                    "KernelSpec '{}' targets Gen1 (WH/BH) but specifies neither a role hint "
+                    "(READER/WRITER) nor an explicit Gen1 config. One is required.",
                     kernel.unique_id);
             }
         }
@@ -702,7 +733,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 continue;
             }
             const auto& dm_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
-            const auto& gen1 = dm_config.gen1_config.value();
+            const auto gen1 = ResolveGen1Config(dm_config);
             const NodeRangeSet& nodes = collected.kernel_node_set.at(kernel.unique_id);
             for (const auto& range : nodes.ranges()) {
                 for (const auto& node : range) {
@@ -754,17 +785,16 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             }
         }
 
-        // Validate each user-supplied entry.
+        // Validate each user-supplied entry, tracking which DFBs got an explicit
+        // entry (used below to require one where the FP32 choice is real).
+        // Duplicate DFB entries are impossible now that unpack_to_dest_mode is a
+        // Table with unique keys: a repeated DFB overwrites the prior value.
         std::unordered_set<DFBSpecName> entries_seen;
         for (const auto& [dfb_name, mode] : compute_config.unpack_to_dest_mode) {
+            entries_seen.insert(dfb_name);
             TT_FATAL(
                 bound_dfbs.contains(dfb_name),
                 "Kernel '{}' unpack_to_dest_mode entry references DFB '{}', which the kernel does not bind",
-                kernel.unique_id,
-                dfb_name);
-            TT_FATAL(
-                entries_seen.insert(dfb_name).second,
-                "Kernel '{}' has duplicate unpack_to_dest_mode entries for DFB '{}'",
                 kernel.unique_id,
                 dfb_name);
 
@@ -1115,12 +1145,8 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             // unordered_set), so iteration order — and any resulting error message — is
             // deterministic across runs.
             auto scope_for_kernel = [&](const KernelSpec* k) {
-                for (const auto& entry : kernel_self_loop_scopes(*k)) {
-                    if (entry.dfb_spec_name == dfb.unique_id) {
-                        return entry.scope;
-                    }
-                }
-                return DFBSelfLoopScope::INTRA;
+                auto conn = kernel_self_loop_scopes(*k).get(dfb.unique_id);
+                return conn ? *conn : DFBSelfLoopConnectivity::INTRA;
             };
             const KernelSpec* first_kernel = endpoints.producers.front().kernel;
             const auto first_scope = scope_for_kernel(first_kernel);
@@ -1132,7 +1158,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 TT_FATAL(
                     scope_for_kernel(rec.kernel) == first_scope,
                     "DFB '{}' is self-looped; all self-loop participants must agree on "
-                    "DFBSelfLoopScope, but kernel '{}' specifies a different scope "
+                    "DFBSelfLoopConnectivity, but kernel '{}' specifies a different scope "
                     "than kernel '{}'.",
                     dfb.unique_id,
                     rec.kernel->unique_id,
@@ -1168,7 +1194,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         if (!dfb.borrowed_from.has_value()) {
             continue;
         }
-        const TensorParameterName& tp_name = *dfb.borrowed_from;
+        const TensorParamName& tp_name = *dfb.borrowed_from;
         auto it = collected.tensor_parameter_by_name.find(tp_name);
         TT_FATAL(
             it != collected.tensor_parameter_by_name.end(),
@@ -1319,24 +1345,17 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             "This option applies only to compute kernels.",
             kernel.unique_id);
 
-        std::unordered_set<DFBSpecName> seen_dfb_names;
-        for (const auto& entry : kernel_self_loop_scopes(kernel)) {
+        for (const auto& [dfb_spec_name, scope] : kernel_self_loop_scopes(kernel)) {
             TT_FATAL(
-                seen_dfb_names.insert(entry.dfb_spec_name).second,
-                "KernelSpec '{}' has duplicate dfb_self_loop_connectivities entries for DFB '{}'.",
-                kernel.unique_id,
-                entry.dfb_spec_name);
-
-            TT_FATAL(
-                collected.dfb_by_name.contains(entry.dfb_spec_name),
+                collected.dfb_by_name.contains(dfb_spec_name),
                 "KernelSpec '{}' has a dfb_self_loop_connectivities entry referencing unknown DFB '{}'.",
                 kernel.unique_id,
-                entry.dfb_spec_name);
+                dfb_spec_name);
 
             bool has_producer_binding = false;
             bool has_consumer_binding = false;
             for (const auto& binding : kernel.dfb_bindings) {
-                if (binding.dfb_spec_name != entry.dfb_spec_name) {
+                if (binding.dfb_spec_name != dfb_spec_name) {
                     continue;
                 }
                 if (binding.endpoint_type == DFBEndpointType::PRODUCER) {
@@ -1351,14 +1370,14 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 "kernel does not self-loop this DFB (does not bind it as BOTH producer and "
                 "consumer). This option applies only to self-looped DFBs.",
                 kernel.unique_id,
-                entry.dfb_spec_name);
+                dfb_spec_name);
 
             TT_FATAL(
-                entry.scope != DFBSelfLoopScope::INTER,
+                scope != DFBSelfLoopConnectivity::INTER,
                 "KernelSpec '{}' specifies INTER scope for self-looped DFB '{}'. INTER scope is "
                 "not yet supported by the runtime.",
                 kernel.unique_id,
-                entry.dfb_spec_name);
+                dfb_spec_name);
         }
     }
 
@@ -1517,7 +1536,7 @@ std::pair<DMProcessorMask, DMProcessorMask> ReserveDMProcessors(
     const KernelSpec* kernel_spec,
     std::optional<DMProcessorMask> existing_mask,
     DMProcessorMask cumulative_mask,
-    const WorkUnitSpecName& work_unit_id) {
+    const std::string& work_unit_id) {
     // Was this kernel already assigned a mask from a previous WorkUnitSpec?
     if (existing_mask.has_value()) {
         DMProcessorMask existing = existing_mask.value();
@@ -1659,7 +1678,7 @@ int ConstraintScore(const KernelCouplingGroup* g) {
 
 // Deterministic tiebreaker: sort by the lexicographically-smallest member unique_id.
 // Group::members is canonicalized at construction time so members.front() is the sort key.
-const std::string& group_sort_key(const KernelCouplingGroup* g) { return g->members.front()->unique_id; }
+const std::string& group_sort_key(const KernelCouplingGroup* g) { return g->members.front()->unique_id.get(); }
 
 void SortByConstraint(std::vector<const KernelCouplingGroup*>& groups) {
     std::sort(groups.begin(), groups.end(), [](const KernelCouplingGroup* a, const KernelCouplingGroup* b) {
@@ -1873,8 +1892,9 @@ KernelRiscMaskMap SolveGen2KernelRiscMasks(const ProgramSpec& spec, const Collec
     return result;
 }
 
-// Gen1 (WH/BH) processor assignment: just read the explicit processor from Gen1Config
-// and returns a KernelRiscMaskMap using the Gen1 bit encoding (RISCV_0: bit 0, RISCV_1: bit 1, compute: bit 2).
+// Gen1 (WH/BH) processor assignment: read the effective processor (explicit, or derived
+// from the role hint via ResolveGen1Config) and return a KernelRiscMaskMap using the Gen1
+// bit encoding (RISCV_0: bit 0, RISCV_1: bit 1, compute: bit 2).
 KernelRiscMaskMap BuildGen1KernelRiscMasks(const ProgramSpec& spec) {
     static constexpr uint8_t GEN1_COMPUTE_RISC_BIT = 2;
 
@@ -1882,7 +1902,7 @@ KernelRiscMaskMap BuildGen1KernelRiscMasks(const ProgramSpec& spec) {
     for (const KernelSpec& kernel : spec.kernels) {
         if (kernel.is_data_movement_kernel()) {
             const auto& dm_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
-            const auto& gen1 = dm_config.gen1_config.value();
+            const auto gen1 = ResolveGen1Config(dm_config);
             result[&kernel] = static_cast<uint16_t>(1u << static_cast<uint8_t>(gen1.processor));
         } else {
             result[&kernel] = static_cast<uint16_t>(1u << GEN1_COMPUTE_RISC_BIT);
@@ -1940,7 +1960,7 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
     // tensors the CTA payload never carried tensor_shape in the first place (and
     // the device-side accessor doesn't read it), so the flag is a pure host-side
     // validation loosening and has no effect on the CTA/CRTA layout.
-    const bool dyn_shape = tensor_parameter.advanced_options.dynamic_tensor_shape && is_sharded;
+    const bool dyn_shape = tensor_parameter.relaxations.dynamic_tensor_shape && is_sharded;
 
     tensor_accessor::ArgsConfig args_config;
     if (is_sharded) {
@@ -2058,7 +2078,7 @@ struct TensorBindingsForKernel {
 // time, extracting info from the TensorArgs.)
 TensorBindingsForKernel ResolveTensorBindingsForKernel(
     const KernelSpec& kernel,
-    const std::unordered_map<TensorParameterName, ResolvedTensorParameter>& resolved_tensor_parameters,
+    const std::unordered_map<TensorParamName, ResolvedTensorParameter>& resolved_tensor_parameters,
     size_t base_named_crta_count) {
     TensorBindingsForKernel out;
     out.handles.reserve(kernel.tensor_bindings.size());
@@ -2072,7 +2092,7 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
 
         TensorBindingHandle handle;
         handle.accessor_name = binding.accessor_name;
-        handle.tensor_parameter_name = binding.tensor_parameter_name;
+        handle.tensor_parameter_name = binding.tensor_parameter_name.get();
         handle.cta_offset = cta_word_offset;
         handle.addr_crta_offset = static_cast<uint32_t>(crta_word_index * sizeof(uint32_t));
         handle.num_runtime_field_crta_words = resolved.extra_crta_words;
@@ -2183,14 +2203,9 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     }();
     std::optional<experimental::dfb::TensixScope> tensix_scope;
     if (is_self_loop && producer->is_compute_kernel()) {
-        auto user_scope = DFBSelfLoopScope::INTRA;
-        for (const auto& entry : kernel_self_loop_scopes(*producer)) {
-            if (entry.dfb_spec_name == dfb_spec->unique_id) {
-                user_scope = entry.scope;
-                break;
-            }
-        }
-        tensix_scope = (user_scope == DFBSelfLoopScope::INTRA)
+        auto user_conn = kernel_self_loop_scopes(*producer).get(dfb_spec->unique_id);
+        const auto user_scope = user_conn ? *user_conn : DFBSelfLoopConnectivity::INTRA;
+        tensix_scope = (user_scope == DFBSelfLoopConnectivity::INTRA)
                            ? experimental::dfb::TensixScope::INTRA
                            : experimental::dfb::TensixScope::INTER;  // currently blocked in validation
     }
@@ -2231,6 +2246,7 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .enable_consumer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.consumers),
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
         .tile = dfb_spec->tile_format_metadata,
+        .unpack_face_geometry = dfb_spec->unpack_face_geometry_metadata,
         .tensix_scope = tensix_scope,
         // DFB borrowed memory mode is declared at program creation time.
         // The actual backing memory L1 address is attached at runtime.
@@ -2278,7 +2294,7 @@ std::map<std::string, std::string> to_defines_map(const KernelSpec::CompilerOpti
 DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
     TT_FATAL(kernel_spec.is_data_movement_kernel(), "Expected a DM kernel");
     const auto& dm_config = std::get<DataMovementHardwareConfig>(kernel_spec.hw_config);
-    const auto& gen1 = dm_config.gen1_config.value();
+    const auto gen1 = ResolveGen1Config(dm_config);
 
     return DataMovementConfig{
         .processor = gen1.processor,
@@ -2314,7 +2330,7 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
 // ----------------------------------------------------------------------------
 
 std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
-    const std::vector<ComputeHardwareConfig::DFBUnpackToDestMode>& user_modes, const DFBNameToIdMap& dfb_name_to_id) {
+    const ComputeHardwareConfig::UnpackToDestModes& user_modes, const DFBNameToIdMap& dfb_name_to_id) {
     const uint32_t max_cbs = tt::tt_metal::hal::get_arch_num_circular_buffers();
     std::vector<UnpackToDestMode> unpack_modes(max_cbs, UnpackToDestMode::Default);
     for (const auto& [dfb_name, mode] : user_modes) {
@@ -2536,7 +2552,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
     //     corresponding TensorArgument entry. TensorParameters that opt into a dynamic accessor
     //     field (currently: dynamic_tensor_shape, sharded only) carry additional CRTA words
     //     immediately after the address slot, also filled at enqueue time.
-    std::unordered_map<TensorParameterName, ResolvedTensorParameter> resolved_tensor_parameters;
+    std::unordered_map<TensorParamName, ResolvedTensorParameter> resolved_tensor_parameters;
     resolved_tensor_parameters.reserve(spec.tensor_parameters.size());
     for (const auto& tensor_parameter : spec.tensor_parameters) {
         resolved_tensor_parameters.emplace(
@@ -2548,10 +2564,10 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
 
     // Register TensorParameters with the program for ValidateProgramRunArgs to consult at enqueue.
     for (const auto& tensor_parameter : spec.tensor_parameters) {
-        const bool dyn_shape = tensor_parameter.advanced_options.dynamic_tensor_shape;
-        const bool match_padded_only = tensor_parameter.advanced_options.match_padded_shape_only;
+        const bool dyn_shape = tensor_parameter.relaxations.dynamic_tensor_shape;
+        const bool match_padded_only = tensor_parameter.relaxations.match_padded_shape_only;
         program_impl->register_tensor_parameter(
-            tensor_parameter.unique_id, tensor_parameter.spec, dyn_shape, match_padded_only);
+            tensor_parameter.unique_id.get(), tensor_parameter.spec, dyn_shape, match_padded_only);
     }
 
     // Create DataflowBuffers and build name -> ID map.
@@ -2569,14 +2585,14 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         // (For borrowed-memory DFBs, config.borrows_memory was set in MakeDataflowBufferConfig;
         // the device-side runtime uses that to skip regular L1 allocation.)
         uint32_t dfb_id = program_impl->add_dataflow_buffer(collected.dfb_node_set.at(dfb_name), config);
-        program_impl->register_dfb_spec_name(dfb_name, dfb_id);
+        program_impl->register_dfb_spec_name(dfb_name.get(), dfb_id);
         dfb_name_to_id[dfb_name] = dfb_id;
 
-        // Borrowed-memory DFB: record the dfb_id ↔ TensorParameterName binding so that
+        // Borrowed-memory DFB: record the dfb_id ↔ TensorParamName binding so that
         // SetProgramRunArgs / UpdateTensorArgs can resolve and attach the actual L1 Buffer
         // at runtime (analog of dynamic CB's UpdateDynamicCircularBufferAddress).
         if (dfb_spec.borrowed_from.has_value()) {
-            program_impl->register_dfb_borrowed_binding(dfb_id, *dfb_spec.borrowed_from);
+            program_impl->register_dfb_borrowed_binding(dfb_id, dfb_spec.borrowed_from->get());
         }
     }
 
@@ -2615,7 +2631,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         const uint32_t init_value = semaphore_spec.advanced_options.initial_value;
         uint32_t sem_id = program_impl->create_semaphore(
             to_node_range_set(semaphore_spec.target_nodes), init_value, CoreType::WORKER);
-        program_impl->register_semaphore_spec_name(semaphore_name, sem_id);
+        program_impl->register_semaphore_spec_name(semaphore_name.get(), sem_id);
         semaphore_name_to_id[semaphore_name] = sem_id;
     }
 
@@ -2721,7 +2737,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
 
         // Add the kernel to the ProgramImpl and register the name -> handle mapping
         KernelHandle handle = program_impl->add_kernel(kernel, HalProgrammableCoreType::TENSIX);
-        program_impl->register_kernel_spec_name(kernel_spec.unique_id, handle);
+        program_impl->register_kernel_spec_name(kernel_spec.unique_id.get(), handle);
 
         // Register the RTA+CRTA schema (named lists + vararg counts) with the ProgramImpl.
         // Used by ValidateProgramRunArgs and SetProgramRunArgs to validate and serialize
@@ -2783,7 +2799,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
             }
         }
         runtime_schema.num_common_runtime_varargs = num_common_runtime_varargs;
-        program_impl->register_kernel_rta_schema(kernel_spec.unique_id, runtime_schema);
+        program_impl->register_kernel_rta_schema(kernel_spec.unique_id.get(), runtime_schema);
     }
 
     return Program(std::move(program_impl));

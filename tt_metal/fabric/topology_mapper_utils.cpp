@@ -1475,6 +1475,23 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
             tt::LogFabric,
             "Inter-mesh host alignment: failed to set same-rank groups constraint; falling back to preferred globals");
     }
+
+    // Ask the solver to minimize the number of distinct host partitions the mapping uses. The SAT backend turns
+    // this into an at-most-K host budget walked up from the capacity lower bound (finding the true minimum host
+    // count); the DFS backend approximates it via a host-affinity value-ordering bias. Both rely on the host
+    // partitions being registered as same-rank global groups (below).
+    inter_mesh_constraints.set_minimize_same_rank_groups_used(true);
+
+    // Register the host partitions as same-rank GLOBAL groups with NO target groups. This imposes no hard
+    // grouping (the same-rank constraint is inert when no target is bound to a group), but it exposes per-mesh
+    // host membership to the solver so the SAT host-budget loop / DFS host-affinity term can pack connected
+    // meshes onto the fewest hosts.
+    if (!inter_mesh_constraints.set_same_rank_groups_constraint(
+            /*target_groups=*/{}, global_mesh_groups)) {
+        log_warning(
+            tt::LogFabric, "Inter-mesh host alignment: failed to register host partitions as same-rank global groups");
+    }
+
     if (!preferred_globals.empty()) {
         if (!single_group_fits) {
             log_debug(

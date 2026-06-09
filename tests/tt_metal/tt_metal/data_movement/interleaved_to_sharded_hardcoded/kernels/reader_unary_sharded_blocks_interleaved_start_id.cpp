@@ -45,7 +45,7 @@ void kernel_main() {
         for (uint32_t h = 0; h < block_height_tiles; h++) {
             uint32_t tile_id = curr_tile_id;
             for (uint32_t w = 0; w < block_width_tiles; w++) {
-                noc_async_read_page(tile_id, s, l1_write_addr);
+                noc_async_read_tile(tile_id, s, l1_write_addr);
                 tile_id++;
                 l1_write_addr += tile_bytes;
                 if (++barrier_count == barrier_threshold) {

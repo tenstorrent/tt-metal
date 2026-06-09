@@ -17,6 +17,13 @@ namespace ckernel {
 // clang-format off
 // This is a custom version that doesn't configure MATH, as this assumes it's already been configured before
 /**
+ * @deprecated Face geometry (face_r_dim, num_faces) is now derived from the output circular buffer metadata
+ * configured on the host via CircularBufferConfig::set_unpack_face_geometry / CBFormatDescriptor::face_geometry.
+ * Use the standard `pack_untilize_dest_init(ocb)` overload (which takes face geometry from the output CB) once
+ * tt-metal#22820 is addressed. This custom explicit-face-geometry helper is retained only as a temporary
+ * workaround and will be removed alongside the deprecated `llk_pack_untilize_hw_configure_disaggregated` /
+ * `llk_pack_untilize_init(ocb, face_r_dim, num_faces)` LLK APIs it relies on.
+ *
  * Performs the necessary hardware and software initialization for the pack untilize operation. This initialization
  * function should be used when the desired PACK input is already in DEST register - therefore, it doesn't
  * configure UNPACK and MATH threads for transferring data from circular buffers to DEST register (this is done with
@@ -61,13 +68,23 @@ template <
     bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM,
     bool dense = false>
-ALWI void custom_pack_untilize_dest_init(
+[[deprecated(
+    "Face geometry is now derived from the output CB metadata; this custom explicit-face-geometry helper is a "
+    "temporary workaround for tt-metal#22820 and will be removed alongside the deprecated "
+    "llk_pack_untilize_hw_configure_disaggregated / llk_pack_untilize_init(ocb, face_r_dim, num_faces) LLK APIs "
+    "it relies on.")]] ALWI void
+custom_pack_untilize_dest_init(
     uint32_t ocb, uint32_t face_r_dim = 16, uint32_t num_faces = 4, uint32_t call_line = __builtin_LINE()) {
     state_configure<Operand::PACK>(ocb, call_line);
-    // TODO NC: A workaround for tt-metal#17132. Should be addressed more systematically in tt-llk#989
+// These calls intentionally use the deprecated explicit-face-geometry LLK APIs to preserve the
+// original behavior of this compatibility helper.
+// TODO NC: A workaround for tt-metal#17132. Should be addressed more systematically in tt-llk#989
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     PACK((llk_pack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE, PackMode::Default>(ocb, face_r_dim, num_faces)));
     PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, false, narrow_row, row_num_datums, dense>(
         ocb, face_r_dim, num_faces)));
+#pragma GCC diagnostic pop
     PACK((llk_init_packer_dest_offset_registers<PackMode::Untilize, false>()));
 }
 
