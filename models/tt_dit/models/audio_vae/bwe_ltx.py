@@ -238,7 +238,7 @@ class VocoderWithBWE(Module):
         self.resampler = UpSample1d(ratio=ratio, window="hann", mesh_device=mesh_device, dtype=dtype)
 
         # When set, the main vocoder runs via capture-once/replay (forward_traced); ~3x on
-        # its device graph. BWE stays eager (single-axis, known channel-TP divergence).
+        # its device graph. The BWE generator, mel-STFT, and resampler stay eager.
         self.use_trace = False
 
     def release_trace(self) -> None:
@@ -311,7 +311,9 @@ class VocoderWithBWE(Module):
 
         mel = self._compute_mel_device(x)
 
-        # bwe_generator expects (B, C, T_frames, n_mels).
+        # bwe_generator expects (B, C, T_frames, n_mels). Eager (not trace): it is
+        # compute-bound, so trace barely helps, and a second resident trace would need
+        # pre-allocated I/O to not collide with the main vocoder's on replay.
         mel_for_bwe = mel.transpose(2, 3).contiguous()
         residual = self.bwe_generator(mel_for_bwe)
 

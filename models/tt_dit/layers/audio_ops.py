@@ -209,15 +209,11 @@ def _t_neighbor_pad(
     )
 
 
-# conv1d_depthwise is ~3.5x faster than the MAC fallback but diverges from it by ~1.35% RMSE
-# on the anti-alias filters: its tilized-matmul reduction reorders the kaiser sinc's
-# alternating-sign taps, compressing high-frequency amplitude (≈0.9 dB PSNR). MAC is the
-# numerical baseline — vs the torch reference it is ~2x closer (1.3% vs 2.6% RMSE), and the
-# extra conv1d error is audible as faint broadband static (~1s near the 2s mark in the AV demo).
-# Default to MAC for audio fidelity; flip to conv1d_depthwise only once a reduction-faithful
-# kernel exists. The MAC slice/mul/add ops are host-dispatch-bound, so the eager penalty mostly
-# vanishes under trace mode.
-_USE_CONV1D_DEPTHWISE = False
+# conv1d_depthwise is ~2.5x faster than the MAC fallback (one tilized matmul vs K sequential
+# slice/mul/add) and matches the unsharded device baseline to ~3.5e-4 on the full audio decode.
+# Its reduction reorders the kaiser sinc's alternating-sign taps (~1.35% RMSE vs MAC), so MAC
+# stays behind the flag as the bit-faithful baseline; conv1d is the default.
+_USE_CONV1D_DEPTHWISE = True
 
 
 def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):

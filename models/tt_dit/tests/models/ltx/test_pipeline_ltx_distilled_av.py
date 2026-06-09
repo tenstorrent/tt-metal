@@ -4,12 +4,15 @@
 
 import itertools
 import os
+import time
 
 import pytest
+import torch
 from loguru import logger
 
 import ttnn
 from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import LTXDistilledPipeline
+from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
 from models.tt_dit.utils.test import line_params, ring_params
 
 # Trace region for LTX_TRACED=1. Holds both stage traces' command streams (s1 + larger-seq
@@ -167,3 +170,88 @@ def test_pipeline_av_fast(
 
     if traced:
         pipeline.release_traces()
+
+
+@pytest.mark.skipif(
+    not os.path.exists(_default_checkpoint()),
+    reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
+)
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
+    [
+        [(2, 4), (2, 4), 1, 0, 2, True, ring_trace_params, ttnn.Topology.Linear, False],
+    ],
+    ids=["bh_2x4sp1tp0"],
+    indirect=["mesh_device", "device_params"],
+)
+def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp):
+    """Just the audio section of the AV pipeline: real checkpoint weights, real girl-clip
+    latent shape (num_frames -> als.frames), no transformer/gemma (decode_audio never
+    encodes prompts). Profiles cold (weight load + compile) vs warm (steady-state per-gen)
+    decode wall. LTX_TRACED=1 traces the main vocoder."""
+    parent_mesh = mesh_device
+    mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+
+    num_frames = int(os.environ.get("NUM_FRAMES", "145"))  # ~6.04s @ 24fps
+    height = int(os.environ.get("HEIGHT", "1088"))
+    width = int(os.environ.get("WIDTH", "1920"))
+    traced = os.environ.get("LTX_TRACED", "0") in ("1", "true", "True")
+
+    # AUDIO_DEPTHWISE=mac reproduces the pre-conv1d (main) audio path for A/B profiling.
+    import models.tt_dit.layers.audio_ops as _ao
+
+    _ao._USE_CONV1D_DEPTHWISE = os.environ.get("AUDIO_DEPTHWISE", "conv1d") != "mac"
+
+    pipeline = LTXDistilledPipeline.create_pipeline(
+        mesh_device=mesh_device,
+        checkpoint_name=_default_checkpoint(),
+        gemma_path=_default_gemma(),  # built as a lazy shell only; never loaded here
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
+        dynamic_load=dynamic_load,
+        topology=topology,
+        is_fsdp=is_fsdp,
+        run_warmup=False,
+        traced=traced,
+        num_frames=num_frames,
+        height=height,
+        width=width,
+    )
+
+    vps = VideoPixelShape(batch=1, frames=num_frames, height=height, width=width, fps=24)
+    als = AudioLatentShape.from_video_pixel_shape(vps)
+    torch.manual_seed(0)
+    latent = torch.randn(1, als.frames, pipeline.in_channels, dtype=torch.float32) * 0.5
+
+    t0 = time.perf_counter()
+    audio = pipeline.decode_audio(latent, num_frames, fps=24.0)  # cold: weight load + compile (+ capture)
+    cold_ms = (time.perf_counter() - t0) * 1000
+
+    N = 5
+    t0 = time.perf_counter()
+    for _ in range(N):
+        audio = pipeline.decode_audio(latent, num_frames, fps=24.0)
+    warm_ms = (time.perf_counter() - t0) * 1000 / N
+    wav = audio.waveform
+
+    # Does trace replay the same audio it computes eager? (the main-vocoder trace shares the
+    # device with the interleaved eager BWE.) Compare on the real weights + real shape.
+    if os.environ.get("AUDIO_COMPARE_TRACE", "0") == "1" and not traced:
+        eager_wav = wav.clone()
+        pipeline.tt_vocoder_with_bwe.use_trace = True
+        _ = pipeline.decode_audio(latent, num_frames, fps=24.0)  # capture
+        traced_wav = pipeline.decode_audio(latent, num_frames, fps=24.0).waveform  # replay
+        d = (eager_wav - traced_wav).abs().max().item()
+        rms = ((eager_wav - traced_wav) ** 2).mean().sqrt().item() / (eager_wav.pow(2).mean().sqrt().item() + 1e-9)
+        print(f"\nAUDIO_GIRL traced-vs-eager max|Δ|={d:.3e} rmse/σ={rms:.3e}", flush=True)
+    pipeline.release_traces()
+    dur = wav.shape[-1] / audio.sampling_rate
+    print(
+        f"\nAUDIO_GIRL depthwise={'conv1d' if _ao._USE_CONV1D_DEPTHWISE else 'mac'} traced={traced} "
+        f"latent_frames={als.frames} out={tuple(wav.shape)} "
+        f"{dur:.2f}s@{audio.sampling_rate}Hz cold={cold_ms:.1f}ms warm={warm_ms:.1f}ms",
+        flush=True,
+    )
+    assert torch.isfinite(wav).all(), "decoded waveform has non-finite samples"
+    assert abs(dur - num_frames / 24.0) < 0.2, f"duration {dur:.2f}s != ~{num_frames/24.0:.2f}s"
