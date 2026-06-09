@@ -3706,13 +3706,33 @@ def _print_bringup_summary(model_id: str, *, box: str, sep: str = "=" * 72) -> N
     for line in _format_op_split(model_id, label="operations", indent="  ", show_per_component=True):
         print(line)
     if fallback:
-        print()
-        print("  components still on CPU fallback (torch reference):")
-        for n in fallback:
-            print(f"    - {n}")
-        print()
-        print("  to promote these to native TTNN, run:")
-        print(f"    python -m scripts.tt_hw_planner promote {model_id} --box {box} --auto")
+        from .overlay_manager import load_locked_modules, load_no_emit_tests
+
+        _locked = set(load_locked_modules(model_id).keys())
+        _no_emit = set(load_no_emit_tests(model_id).keys())
+        recompose_pending = [n for n in fallback if n in _locked]
+        decomposed_pending = [n for n in fallback if n in _no_emit and n not in _locked]
+        true_fallback = [n for n in fallback if n not in _locked and n not in _no_emit]
+
+        if recompose_pending:
+            print()
+            print("  PENDING — recompose in progress (locked; re-iterating the whole module):")
+            for n in recompose_pending:
+                print(f"    - {n}")
+        if decomposed_pending:
+            print()
+            print("  PENDING — decomposed (recomposes once all its children are on device):")
+            for n in decomposed_pending:
+                print(f"    - {n}")
+        if true_fallback:
+            print()
+            print("  components still on CPU fallback (torch reference):")
+            for n in true_fallback:
+                print(f"    - {n}")
+        if recompose_pending or true_fallback:
+            print()
+            print("  to promote these to native TTNN, run:")
+            print(f"    python -m scripts.tt_hw_planner promote {model_id} --box {box} --auto")
 
 
 def _prompt_for_api_key(provider: str) -> Optional[str]:
