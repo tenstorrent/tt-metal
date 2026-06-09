@@ -454,104 +454,78 @@ void kernel_main() {
                     for (uint32_t g = min_group; g < num_groups; ++g) {
                         cb_xmm.reserve_back(2);
 
-                        // a. x - u -> cb_xmm slot 0. cb_in0 held (wait at nt-top, pop at nt-end) ->
-                        //   CallerManaged + Scalar idx0; cb_ex_global held -> CallerManaged + Scalar +
-                        //   TileOffset::Set{g<<1}. CallerManaged output packs sequentially into the
-                        //   reserve_back(2) window. sub_bcast_scalar_init + reconfig_srcb -> Input; pack -> None.
-                        compute_kernel_lib::eltwise_chain(
-                            1,
-                            compute_kernel_lib::BinaryFpu<
-                                cb_in0_id,
-                                cb_ex_global_id,
-                                compute_kernel_lib::BinaryFpuOp::Sub,
-                                compute_kernel_lib::BroadcastDim::Scalar,
-                                compute_kernel_lib::InputLifecycle::CallerManaged,
-                                compute_kernel_lib::InputLifecycle::CallerManaged,
-                                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                                compute_kernel_lib::Dst::D0,
-                                compute_kernel_lib::OperandKind::Scalar,
-                                compute_kernel_lib::OperandKind::Scalar,
-                                compute_kernel_lib::TileOffset::Unset,
-                                compute_kernel_lib::TileOffset::Set>{0u, 0u + (g << 1)},
-                            compute_kernel_lib::PackTile<
-                                cb_xmm_id,
-                                compute_kernel_lib::OutputLifecycle::CallerManaged,
-                                compute_kernel_lib::PackTileReconfig::None>{});
+                        // // Now let us do the actual computation for the current group here
+                        // // a. x-u
+                        sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
+                        reconfig_data_format_srcb(cb_eps_id, cb_ex_global_id);
 
-                        // b. (1/sqrt(Var+eps)) * mask -> cb_xmm slot 1 (sequential pack advances).
+                        tile_regs_acquire();
+                        sub_tiles_bcast_scalar(cb_in0_id, cb_ex_global_id, 0, 0 + (g << 1), dst0);
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        pack_tile(dst0, cb_xmm_id);
+                        tile_regs_release();
+
+                        // // b. 1/[sqrt(Var + eps)] * mask
                         const uint32_t mask_offset = g * block_w;
                         const uint32_t mask_index = mask_offset + block_w_index;
-                        compute_kernel_lib::eltwise_chain(
-                            1,
-                            compute_kernel_lib::BinaryFpu<
-                                cb_input_mask_id,
-                                cb_ex2pe_id,
-                                compute_kernel_lib::BinaryFpuOp::Mul,
-                                compute_kernel_lib::BroadcastDim::Scalar,
-                                compute_kernel_lib::InputLifecycle::CallerManaged,
-                                compute_kernel_lib::InputLifecycle::CallerManaged,
-                                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                                compute_kernel_lib::Dst::D0,
-                                compute_kernel_lib::OperandKind::Scalar,
-                                compute_kernel_lib::OperandKind::Scalar,
-                                compute_kernel_lib::TileOffset::Set,
-                                compute_kernel_lib::TileOffset::Set>{mask_index, g},
-                            compute_kernel_lib::PackTile<
-                                cb_xmm_id,
-                                compute_kernel_lib::OutputLifecycle::CallerManaged,
-                                compute_kernel_lib::PackTileReconfig::None>{});
+
+                        mul_tiles_bcast_scalar_init_short(cb_input_mask_id, cb_ex2pe_id);
+                        reconfig_data_format_srcb(cb_ex_global_id, cb_ex2pe_id);
+                        tile_regs_acquire();
+                        mul_tiles_bcast_scalar(cb_input_mask_id, cb_ex2pe_id, mask_index, g, dst0);
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        pack_tile(dst0, cb_xmm_id);
+                        tile_regs_release();
                         cb_xmm.push_back(2);
 
-                        // c. a * b (in-place): read cb_xmm[0],[1] (CallerManaged), write 1 tile back via
-                        //   Streaming reserve+push into slot 2 of the 3-tile cb_xmm; external wait(2)/pop(2)
-                        //   bracket the pair. mul_tiles_init + reconfig_srcb -> Input; plain pack -> None.
+                        // // c. a * b
                         cb_xmm.wait_front(2);
-                        compute_kernel_lib::eltwise_chain(
-                            1,
-                            compute_kernel_lib::BinaryFpu<
-                                cb_xmm_id,
-                                cb_xmm_id,
-                                compute_kernel_lib::BinaryFpuOp::Mul,
-                                compute_kernel_lib::BroadcastDim::None,
-                                compute_kernel_lib::InputLifecycle::CallerManaged,
-                                compute_kernel_lib::InputLifecycle::CallerManaged,
-                                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                                compute_kernel_lib::Dst::D0,
-                                compute_kernel_lib::OperandKind::Scalar,
-                                compute_kernel_lib::OperandKind::Scalar,
-                                compute_kernel_lib::TileOffset::Unset,
-                                compute_kernel_lib::TileOffset::Set>{0u, 1u},
-                            compute_kernel_lib::PackTile<
-                                cb_xmm_id,
-                                compute_kernel_lib::OutputLifecycle::Streaming,
-                                compute_kernel_lib::PackTileReconfig::None>{});
+                        mul_tiles_init(cb_xmm_id, cb_xmm_id);
+                        reconfig_data_format_srcb(cb_ex2pe_id, cb_xmm_id);
+                        tile_regs_acquire();
+                        mul_tiles(cb_xmm_id, cb_xmm_id, 0, 1, dst0);
+                        tile_regs_commit();
                         cb_xmm.pop_front(2);
+                        cb_xmm.reserve_back(1);
+                        tile_regs_wait();
+                        pack_tile(dst0, cb_xmm_id);
+                        tile_regs_release();
+                        cb_xmm.push_back(1);
 
-                        // // d. Accumulate cb_xmm into cb_x_id
-                        // First group for this tile -> copy; later groups -> add.
-                        // Reconfig: original used init_short (not _with_dt) and no manual
-                        // reconfig -> CopyTileReconfig::None / BinaryDataFormatReconfig::None.
-                        // pack_tile (no _with_dt) -> PackTileReconfig::None.
+                        // // d. Add to cb_xmm_id (accumulate results)
+                        // // First we get the result in dst0
                         if (group_offset == 0) {
-                            compute_kernel_lib::copy<
-                                cb_xmm_id,
-                                cb_x_id,
-                                compute_kernel_lib::InputLifecycle::Streaming,
-                                compute_kernel_lib::OutputLifecycle::Streaming,
-                                compute_kernel_lib::CopyTileReconfig::None,
-                                compute_kernel_lib::PackTileReconfig::None>(1u);
+                            // When group_offset is 0, this is the first group for this tile,
+                            // so we can copy the results to cb_x_id without needing to add them
+                            copy_tile_init(cb_xmm_id);
+
+                            cb_xmm.wait_front(1);
+                            tile_regs_acquire();
+                            copy_tile(cb_xmm_id, 0, dst0);
+                            tile_regs_commit();
+                            cb_xmm.pop_front(1);
                         } else {
-                            compute_kernel_lib::add<
-                                cb_x_id,
-                                cb_xmm_id,
-                                cb_x_id,
-                                compute_kernel_lib::BroadcastDim::None,
-                                compute_kernel_lib::InputLifecycle::Streaming,
-                                compute_kernel_lib::InputLifecycle::Streaming,
-                                compute_kernel_lib::OutputLifecycle::Streaming,
-                                compute_kernel_lib::BinaryDataFormatReconfig::None,
-                                compute_kernel_lib::PackTileReconfig::None>(1u);
+                            // This is not the first group for this tile, so we need to add
+                            // the results over what is already in cb_x_id
+                            add_tiles_init(cb_x_id, cb_xmm_id);
+
+                            cb_xmm.wait_front(1);
+                            cb_x.wait_front(1);
+                            tile_regs_acquire();
+                            add_tiles(cb_x_id, cb_xmm_id, 0, 0, dst0);
+                            tile_regs_commit();
+                            cb_xmm.pop_front(1);
+                            cb_x.pop_front(1);
                         }
+
+                        // Then we pack the result into cb_x_id
+                        cb_x.reserve_back(1);
+                        tile_regs_wait();
+                        pack_tile(dst0, cb_x_id);
+                        tile_regs_release();
+                        cb_x.push_back(1);
 
                         uint32_t cols_available = tile_width - group_offset;
                         uint32_t cols_consumed = std::min(cols_available, channels_left);
