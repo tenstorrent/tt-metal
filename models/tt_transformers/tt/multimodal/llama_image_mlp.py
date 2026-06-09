@@ -28,7 +28,7 @@ class TtLlamaImageFeedForward(LightweightModule):
         torch_weight = lambda name, suffix: torch.transpose(state_dict[f"{state_dict_prefix}{name}.{suffix}"], -2, -1)
         torch_bias = lambda name, suffix: state_dict[f"{state_dict_prefix}{name}.{suffix}"]
 
-        if args.dummy_weights:
+        if args.dummy_weights or args.disable_disk_cache:
             cache_name = lambda *_: None
         else:
             cache_name = lambda name, suffix: weight_cache_path / (state_dict_prefix + f"{name}.{suffix}")

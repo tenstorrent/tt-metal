@@ -50,7 +50,7 @@ class TtLlamaCrossAttention(LightweightModule):
         self.model_config = configuration.get_model_config()
         self.is_multichip = configuration.is_multichip
 
-        if configuration.dummy_weights or (weight_cache_path is None):
+        if configuration.dummy_weights or configuration.disable_disk_cache or (weight_cache_path is None):
             cache_name = lambda _: None
         else:
             cache_name = lambda name: weight_cache_path / (f"{state_dict_prefix}.{name}")
@@ -112,7 +112,9 @@ class TtLlamaCrossAttention(LightweightModule):
             dim=self.head_dim,
             state_dict=state_dict,
             state_dict_prefix=f"{state_dict_prefix}",
-            weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
+            weight_cache_path=None
+            if (configuration.dummy_weights or configuration.disable_disk_cache)
+            else weight_cache_path,
             weight_key="q_norm",
             eps=self.norm_eps,
             tt_ccl=self.tt_ccl,
@@ -123,7 +125,9 @@ class TtLlamaCrossAttention(LightweightModule):
             dim=self.head_dim,
             state_dict=state_dict,
             state_dict_prefix=f"{state_dict_prefix}",
-            weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
+            weight_cache_path=None
+            if (configuration.dummy_weights or configuration.disable_disk_cache)
+            else weight_cache_path,
             weight_key="k_norm",
             eps=self.norm_eps,
             tt_ccl=self.tt_ccl,

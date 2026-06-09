@@ -58,7 +58,7 @@ class LMHead(LightweightModule):
         torch_output_weights = state_dict[f"{state_dict_prefix}output.weight"]
 
         def _dram_sharded_cache_fn(i: int, n_cols: int):
-            if args.dummy_weights:
+            if args.dummy_weights or args.disable_disk_cache:
                 return None
             return (
                 weight_cache_path
@@ -86,7 +86,7 @@ class LMHead(LightweightModule):
 
                 cache_file_name = (
                     None
-                    if args.dummy_weights
+                    if (args.dummy_weights or args.disable_disk_cache)
                     else weight_cache_path
                     / f"output_lm_head_{len(self.split_sizes_ring_mm)}_split_shard_{i}_{combined_split.shape[-1]}_mode_1"
                 )

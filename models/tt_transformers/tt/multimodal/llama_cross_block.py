@@ -58,7 +58,9 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
                 dim=self.hidden_size,
                 state_dict=state_dict,
                 state_dict_prefix=state_dict_prefix,
-                weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
+                weight_cache_path=None
+                if (configuration.dummy_weights or configuration.disable_disk_cache)
+                else weight_cache_path,
                 weight_key="attention_norm",
                 is_distributed=configuration.is_distributed_norm,
                 tt_ccl=self.tt_ccl,
@@ -94,7 +96,9 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
                 dim=self.hidden_size,
                 state_dict=state_dict,
                 state_dict_prefix=state_dict_prefix,
-                weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
+                weight_cache_path=None
+                if (configuration.dummy_weights or configuration.disable_disk_cache)
+                else weight_cache_path,
                 weight_key="ffn_norm",
                 is_distributed=configuration.is_distributed_norm,
                 tt_ccl=self.tt_ccl,

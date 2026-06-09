@@ -498,6 +498,7 @@ class ModelArgs:
         cache_hf=False,  # Set to False to reduce memory usage by not caching HF model
         prefetcher=None,
         use_hf_rope=False,  # Choose HF or mllama RoPE (default: mllama, previously, only that one was used). mllama will be removed, only HF will remain (Issue #37605).
+        disable_disk_cache=False,  # Skip the on-disk ttnn tensor cache (no reads, no writes). Real weights still load from HF.
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
@@ -532,6 +533,7 @@ class ModelArgs:
         self.trust_remote_code_hf = False
         self.prefill_len_cutoff = 512 if is_blackhole() else 1024
         self.dummy_weights = dummy_weights
+        self.disable_disk_cache = disable_disk_cache
         self.cache_hf_flag = cache_hf  # Whether to cache HF model to avoid multiple loads (uses extra memory)
         self.cached_hf_model = None  # Save any HF model object to avoid loading it multiple times for reference methods
 

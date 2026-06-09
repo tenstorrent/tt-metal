@@ -145,7 +145,7 @@ class Attention(LightweightModule):
         )
 
         layer_name = configuration.get_state_dict_prefix(self.__class__.__name__, layer_num)
-        if configuration.dummy_weights or (weight_cache_path is None):
+        if configuration.dummy_weights or configuration.disable_disk_cache or (weight_cache_path is None):
             cache_name = lambda _: None
         else:
             cache_name = lambda name: weight_cache_path / (f"{layer_name}.{name}")
@@ -287,7 +287,9 @@ class Attention(LightweightModule):
                 eps=configuration.norm_eps,
                 state_dict=state_dict,
                 state_dict_prefix=None,  # we already prefix q_norm_str
-                weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
+                weight_cache_path=None
+                if (configuration.dummy_weights or configuration.disable_disk_cache)
+                else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
                 weight_key=q_norm_str,
                 add_unit_offset=self.rms_norm_add_unit_offset,
@@ -305,7 +307,9 @@ class Attention(LightweightModule):
                 eps=configuration.norm_eps,
                 state_dict=state_dict,
                 state_dict_prefix=None,  # we already prefix k_norm_str
-                weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
+                weight_cache_path=None
+                if (configuration.dummy_weights or configuration.disable_disk_cache)
+                else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
                 weight_key=k_norm_str,
                 add_unit_offset=self.rms_norm_add_unit_offset,
@@ -429,7 +433,7 @@ class Attention(LightweightModule):
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 cache_file_name=(
                     f"{weight_cache_path}/kvcache_{k_or_v.shape}"
-                    if weight_cache_path and not configuration.dummy_weights
+                    if weight_cache_path and not configuration.dummy_weights and not configuration.disable_disk_cache
                     else None
                 ),
             )

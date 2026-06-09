@@ -125,7 +125,7 @@ class Transformer(LightweightModule):
                 eps=args.norm_eps,
                 state_dict=state_dict,
                 state_dict_prefix=args.get_state_dict_prefix("", None),
-                weight_cache_path=None if args.dummy_weights else weight_cache_path,
+                weight_cache_path=None if (args.dummy_weights or args.disable_disk_cache) else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
                 weight_key="norm",
                 add_unit_offset=self.args.rms_norm_add_unit_offset,

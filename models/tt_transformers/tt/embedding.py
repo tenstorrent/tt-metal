@@ -24,7 +24,7 @@ class Embedding(LightweightModule):
         self.padded_vocab_size = args.padded_vocab_size
         base_name = args.get_state_dict_prefix("", None) + "tok_embeddings.weight"
         torch_weight = state_dict[base_name].unsqueeze(0).unsqueeze(0)
-        cache_name = None if args.dummy_weights else weight_cache_path / base_name
+        cache_name = None if (args.dummy_weights or args.disable_disk_cache) else weight_cache_path / base_name
         self.weights = ttnn.as_tensor(
             torch_weight,
             dtype=self._dtype,
