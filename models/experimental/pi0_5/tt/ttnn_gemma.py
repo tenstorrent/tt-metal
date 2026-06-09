@@ -1378,12 +1378,17 @@ class GemmaBlockTTNN:
             # denoise expert case). The sharded path at M_tiles=1 runs on 8 cores
             # but adds an I2S+S2I round-trip (~1.15 µs/LN); the interleaved op may
             # win net on this shape. Toggle for perf A/B testing.
+            # PI0_LN_INTERLEAVED=1 forces interleaved LN at ALL shapes (any m_tiles).
+            # Needed on prefill L1-resident layouts at S=1024 where the sharded
+            # input alloc (~4 MB on an 8×8 grid) can't find 64 KB contiguous per bank
+            # in the bank-fragmented heap.
             import os as _os
 
+            force_interleaved = _os.environ.get("PI0_LN_INTERLEAVED", "").lower() in ("1", "true", "yes", "on")
             disable_small_m_sharded = (
                 _os.environ.get("PI0_LN_INTERLEAVED_SMALL_M", "").lower() in ("1", "true", "yes", "on") and m_tiles == 1
             )
-            if disable_small_m_sharded:
+            if force_interleaved or disable_small_m_sharded:
                 norm_cfg = None
             else:
                 norm_cfg = build_sharded_norm_pcfg(

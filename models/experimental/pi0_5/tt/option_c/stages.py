@@ -39,6 +39,7 @@ chips and 6 denoise chips, denoise chip d receives KV from prefill chips
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import List, Tuple
 
@@ -48,8 +49,24 @@ from typing import List, Tuple
 # Parent mesh — Blackhole Galaxy.
 GALAXY_PARENT_SHAPE: Tuple[int, int] = (8, 4)
 
-# (shape, offset) for each submesh.
-VISION_SUBMESH_SHAPE: Tuple[int, int] = (2, 4)
+
+def _parse_shape(raw: str, default: Tuple[int, int]) -> Tuple[int, int]:
+    """Parse an `R,C` env override (e.g. "1,4") to a (rows, cols) tuple."""
+    raw = (raw or "").strip()
+    if not raw:
+        return default
+    try:
+        r, c = [int(x) for x in raw.split(",")]
+        return (r, c)
+    except Exception:
+        return default
+
+
+# Vision submesh shape — env-overridable so we can experiment with tighter
+# 4-chip (1,4) layouts that free row 1 of the galaxy for other use (vocab
+# shard, pre-stage VLM layer 0, spare). Default keeps the validated 8-chip
+# (2,4) production layout.
+VISION_SUBMESH_SHAPE: Tuple[int, int] = _parse_shape(os.environ.get("PI0_OC_VISION_SHAPE"), (2, 4))
 VISION_SUBMESH_OFFSET: Tuple[int, int] = (0, 0)
 # Spare submesh is no longer carved (vision now owns rows 0–1 in full).
 # Constants retained as degenerate (0,0) for backward-compat with any

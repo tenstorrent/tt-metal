@@ -14,7 +14,7 @@ hidden_states on the vision submesh ready to be transported to stage 1.
 
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import torch
 import ttnn
@@ -38,6 +38,8 @@ class StageVision:
         embed_on_host: bool = True,
         device_siglip: bool = False,
         vision_weights_l1: bool = False,
+        vision_layers_per_chip: Optional[List[int]] = None,
+        vision_keep_pos_embed_dram: bool = False,
     ) -> None:
         if spec.stage_idx != 0:
             raise AssertionError(f"StageVision must be stage 0, got {spec.stage_idx}")
@@ -56,6 +58,8 @@ class StageVision:
         self.embed_on_host = embed_on_host
         self.device_siglip = device_siglip
         self.vision_weights_l1 = vision_weights_l1
+        self.vision_layers_per_chip = vision_layers_per_chip
+        self.vision_keep_pos_embed_dram = vision_keep_pos_embed_dram
         # Populated in initialize() when device_siglip=True.
         self.micro_submeshes: Optional[list] = None
         self.slice = None  # Pi0_5OptionCVisionSlice or Pi0_5OptionCVisionSliceSplit
@@ -83,6 +87,8 @@ class StageVision:
                 weights=self.weights,
                 micro_submeshes=self.micro_submeshes,
                 weights_in_l1=self.vision_weights_l1,
+                layers_per_chip=self.vision_layers_per_chip,
+                keep_pos_embed_dram=self.vision_keep_pos_embed_dram,
             )
         else:
             self.slice = Pi0_5OptionCVisionSlice(

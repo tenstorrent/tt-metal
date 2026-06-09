@@ -295,13 +295,18 @@ class Pi0_5OptionCVisionSlice:
     ) -> "ttnn.Tensor":
         """Concat image and language embeddings along the seq dim.
 
-        Returns: [B, num_patches + S_lang, vlm_W] on the vision submesh.
+        pixel_values: [N_cams, 3, H, W] — cameras stack along openpi's image-slot
+        axis. Per-camera SigLIP outputs are flattened into the seq dim so the
+        prefix is [1, N_cams*256 + S_lang, vlm_W].
 
         Note: the openpi prefix path also appends a robot-state slot. Like
         Option B's vision slice, we leave that to the orchestrator so the
         bring-up dry run can be exercised with image+text only.
         """
-        image_hidden = self.embed_images(pixel_values)
+        image_hidden = self.embed_images(pixel_values)  # [N_cams, 256, W]
+        n_cams, n_patches, width = image_hidden.shape
+        if n_cams != 1:
+            image_hidden = ttnn.reshape(image_hidden, (1, n_cams * n_patches, width))
         lang_hidden = self.embed_language_tokens(language_token_ids)
         return ttnn.concat([image_hidden, lang_hidden], dim=1)
 
@@ -378,21 +383,26 @@ class Pi0_5OptionCVisionSliceSplit:
         layers_per_chip: Optional[List[int]] = None,
         siglip_depth: int = 27,
         weights_in_l1: bool = False,
+        keep_pos_embed_dram: bool = False,
     ) -> None:
-        if len(micro_submeshes) != 8:
-            raise ValueError(f"Pi0_5OptionCVisionSliceSplit needs 8 micro-submeshes; got {len(micro_submeshes)}")
+        if len(micro_submeshes) not in (4, 8):
+            raise ValueError(f"Pi0_5OptionCVisionSliceSplit needs 4 or 8 micro-submeshes; got {len(micro_submeshes)}")
         for i, sm in enumerate(micro_submeshes):
             if sm.get_num_devices() != 1:
                 raise ValueError(f"micro_submeshes[{i}] must be a 1-chip submesh " f"({sm.get_num_devices()} devices)")
 
-        # Default split: 4+4+4+4+3+3+3+2 across all 8 chips of the (2,4)
-        # vision submesh. Busiest chip carries 4 SigLIP layers — keeps
-        # per-chip L1 well below the cap so ALL weight categories
-        # (LN/patch_embed/pos_embed/post_ln/attn/MLP) can migrate to L1.
-        # The mm_projector co-locates with the last SigLIP chunk (chip 7
-        # by default) so the SigLIP → projector handoff is in-L1.
+        # Default split:
+        #   8 chips: 4+4+4+4+3+3+3+2 (production layout — busiest chip 4 layers)
+        #   4 chips: 7+7+7+6           (4-chip "tile" — busiest chip 7 layers,
+        #                               mm_projector co-locates with the 6-layer
+        #                               chip so per-chip L1 stays comfortable)
+        # The mm_projector co-locates with the last SigLIP chunk so the
+        # SigLIP → projector handoff is in-L1.
         if layers_per_chip is None:
-            layers_per_chip = [4, 4, 4, 4, 3, 3, 3, 2]
+            if len(micro_submeshes) == 8:
+                layers_per_chip = [4, 4, 4, 4, 3, 3, 3, 2]
+            else:
+                layers_per_chip = [7, 7, 7, 6]
         if len(layers_per_chip) != len(micro_submeshes):
             raise ValueError(
                 f"layers_per_chip length ({len(layers_per_chip)}) must equal "
@@ -437,7 +447,11 @@ class Pi0_5OptionCVisionSliceSplit:
                 holds_post_ln=is_last,
             )
             if weights_in_l1:
-                _migrate_tower_weights_to_l1(tower)
+                # Keeping pos_embed in DRAM avoids the ttnn.embedding op's
+                # static CB region clashing with adjacent L1 weight buffers
+                # on tight per-chip layouts (e.g. 4-chip vision with 7
+                # SigLIP layers + patch_embed on chip 0).
+                _migrate_tower_weights_to_l1(tower, migrate_pos_embed=not keep_pos_embed_dram)
             self.siglip_chunks.append(tower)
             lo = hi
 
@@ -540,8 +554,11 @@ class Pi0_5OptionCVisionSliceSplit:
         pixel_values: torch.Tensor,
         language_token_ids: torch.Tensor,
     ) -> "ttnn.Tensor":
-        """[B, num_patches + S_lang, vlm_W] on micro_submeshes[projector_chip_idx]."""
-        image_hidden = self.embed_images(pixel_values)
+        """[1, N_cams*num_patches + S_lang, vlm_W] on micro_submeshes[projector_chip_idx]."""
+        image_hidden = self.embed_images(pixel_values)  # [N_cams, 256, W]
+        n_cams, n_patches, width = image_hidden.shape
+        if n_cams != 1:
+            image_hidden = ttnn.reshape(image_hidden, (1, n_cams * n_patches, width))
         lang_hidden = self.embed_language_tokens(language_token_ids)
         return ttnn.concat([image_hidden, lang_hidden], dim=1)
 

@@ -61,13 +61,25 @@ NUM_CAMERAS = int(os.environ.get("PI0_NUM_CAMERAS", "1"))
 WARMUP = int(os.environ.get("PI0_OC_BENCH_WARMUP", "2"))
 ITERS = int(os.environ.get("PI0_OC_BENCH_ITERS", "5"))
 
+# Device SigLIP — runs SigLIP-27 across the 8 vision chips (vs the default
+# host-torch path). Set PI0_OC_BENCH_DEVICE_SIGLIP=1 to enable. First forward
+# is JIT-compile heavy (~3 sec); subsequent iters are fast.
+DEVICE_SIGLIP = os.environ.get("PI0_OC_BENCH_DEVICE_SIGLIP") == "1"
+
 # Shape constants — mirror `test_option_b_benchmark.py` so the two
 # benchmarks compare apples-to-apples.
 LANG_SEQ_LEN = 256
-PREFIX_LEN = 256 + LANG_SEQ_LEN  # 512 — VLM prefill sequence length
+PREFIX_LEN = 256 * NUM_CAMERAS + LANG_SEQ_LEN  # 1024 at NUM_CAMERAS=3 (matches PI0_VLM_CHUNK_SIZE prod)
 ACTION_HORIZON = 10  # LIBERO upstream
 ACTION_HORIZON_PADDED = 32  # ceil(10 / 32) * 32
 NUM_DENOISE_STEPS = int(os.environ.get("PI0_OC_DENOISE_STEPS", "10"))
+# Layout depth knobs — default to the shrunk-bench scaffolding (vlm_depth=2,
+# expert_depth=1) so the replicated upload fits, override to (18, 18) for
+# full-depth perf measurement. Replicated mode at full depth needs every
+# chip to hold all 18 layers' worth of weights; only viable when those
+# weights are bf8 and DRAM-resident (the default placement).
+VLM_DEPTH_BENCH = int(os.environ.get("PI0_OC_BENCH_VLM_DEPTH", "2"))
+EXPERT_DEPTH_BENCH = int(os.environ.get("PI0_OC_BENCH_EXPERT_DEPTH", "1"))
 
 # pi0.5 upstream-openpi LIBERO finetune.
 _REAL_CKPT = os.environ.get("PI0_OC_CHECKPOINT", "/home/tt-admin/pi05_cache/pi05_libero_upstream")
@@ -130,7 +142,10 @@ def test_oc_bench_e2e_staged_breakdown():
     """
     cfg = PaliGemmaConfig()
     weights = _load_real_weights(cfg)
-    shrunk = build_shrunk_layout(vlm_depth=2, expert_depth=1)
+    shrunk = build_shrunk_layout(vlm_depth=VLM_DEPTH_BENCH, expert_depth=EXPERT_DEPTH_BENCH)
+    print(
+        f"\n[bench layout] vlm_depth={VLM_DEPTH_BENCH}  expert_depth={EXPERT_DEPTH_BENCH}  device_siglip={DEVICE_SIGLIP}"
+    )
 
     with open_galaxy_mesh(shrunk) as (_parent, submeshes):
         pipe = Pi0_5PipelineC(
@@ -139,6 +154,7 @@ def test_oc_bench_e2e_staged_breakdown():
             config=cfg,
             weights=weights,
             denoise_steps=NUM_DENOISE_STEPS,
+            device_siglip=DEVICE_SIGLIP,
         )
         pipe.initialize()
 

@@ -52,7 +52,50 @@ def _to_l1(t: Optional["ttnn.Tensor"]) -> Optional["ttnn.Tensor"]:
     return new_t
 
 
-def _migrate_tp_gemma_block_to_l1(block, mlp_only: bool = False, skip_kv: bool = False) -> None:
+def _to_l1_width_sharded(t: Optional["ttnn.Tensor"], grid_x: int, grid_y: int) -> Optional["ttnn.Tensor"]:
+    """Move a 2D weight tensor to L1 with WIDTH_SHARDED layout on a grid_x×grid_y grid.
+
+    Like `_to_l1` but the target memcfg is L1 width-sharded — each core owns
+    a [K, N / (grid_x*grid_y)] slice at high-L1 instead of bank-interleaved.
+    Used by the TP MLP path to dodge the kernel's static-CB clash that bites
+    interleaved L1 weights at scale.
+
+    The tensor's shape must be 2D (or have a leading-1 dim) with N divisible
+    by tile×num_cores; otherwise raises. Idempotent on already-L1 tensors
+    via the same buffer_type check `_to_l1` uses.
+    """
+    if t is None:
+        return None
+    if t.memory_config().buffer_type == ttnn.BufferType.L1:
+        return t
+    # Extract per-chip K, N from the tensor shape. For a 4D tensor the
+    # weight typically arrives as [1, 1, K, N]; collapse leading 1s.
+    shape = list(t.shape)
+    while len(shape) > 2 and shape[0] == 1:
+        shape = shape[1:]
+    if len(shape) != 2:
+        raise ValueError(f"_to_l1_width_sharded: expected 2D weight, got shape {list(t.shape)}")
+    k, n = shape
+    num_cores = grid_x * grid_y
+    if n % (32 * num_cores) != 0:
+        raise ValueError(
+            f"_to_l1_width_sharded: N={n} not divisible by tile*cores={32 * num_cores} "
+            f"(K={k}, grid={grid_x}x{grid_y})"
+        )
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))})
+    shard_spec = ttnn.ShardSpec(grid, (k, n // num_cores), ttnn.ShardOrientation.ROW_MAJOR)
+    memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+    new_t = ttnn.to_memory_config(t, memcfg)
+    ttnn.deallocate(t)
+    return new_t
+
+
+def _migrate_tp_gemma_block_to_l1(
+    block,
+    mlp_only: bool = False,
+    skip_kv: bool = False,
+    mlp_width_sharded_grid: Optional[tuple] = None,
+) -> None:
     """Pi0_5OptionCSubmeshTPGemmaBlock: VLM transformer block attrs.
 
     Attribute names match those in `tp_block.py`. Keep norms in DRAM (small
@@ -72,25 +115,53 @@ def _migrate_tp_gemma_block_to_l1(block, mlp_only: bool = False, skip_kv: bool =
     doesn't shard) — that replication is the only thing on the bf16-defaulting
     `_replicate` path that lands in DRAM by default; skipping its migration
     keeps it there. ~2 MB / chip saved.
+
+    When `mlp_width_sharded_grid=(gx, gy)`, the MLP weights are migrated to
+    WIDTH_SHARDED L1 on the specified core grid (e.g. (8, 8) for a 64-core
+    grid). Each core owns a deterministic [K, N/num_cores] slice at high-L1;
+    the matmul kernel's static CB region at low-L1 doesn't compete with the
+    weight allocations. Combined with TP=2, this is the path to all-MLP-L1
+    at S=1024 on Gemma-2B without the bank-fragmentation issue.
     """
     if not mlp_only:
         block.q_proj = _to_l1(block.q_proj)
         if not skip_kv:
             block.kv_proj = _to_l1(block.kv_proj)
         block.o_proj = _to_l1(block.o_proj)
-    block.gate_proj = _to_l1(block.gate_proj)
-    block.up_proj = _to_l1(block.up_proj)
-    block.down_proj = _to_l1(block.down_proj)
+    if mlp_width_sharded_grid is not None:
+        gx, gy = mlp_width_sharded_grid
+        block.gate_proj = _to_l1_width_sharded(block.gate_proj, gx, gy)
+        block.up_proj = _to_l1_width_sharded(block.up_proj, gx, gy)
+        block.down_proj = _to_l1_width_sharded(block.down_proj, gx, gy)
+    else:
+        block.gate_proj = _to_l1(block.gate_proj)
+        block.up_proj = _to_l1(block.up_proj)
+        block.down_proj = _to_l1(block.down_proj)
 
 
-def _migrate_vlm_tp_slice_to_l1(slice_obj, mlp_only: bool = False, skip_kv: bool = False) -> None:
+def _migrate_vlm_tp_slice_to_l1(
+    slice_obj,
+    mlp_only: bool = False,
+    skip_kv: bool = False,
+    mlp_width_sharded_grid: Optional[tuple] = None,
+) -> None:
     """Pi0_5OptionCVLMSliceTP: walk vlm_blocks. Final norm stays in DRAM
     (already DRAM-bounced on entry/exit of the rms_norm call site)."""
     for block in slice_obj.vlm_blocks:
-        _migrate_tp_gemma_block_to_l1(block, mlp_only=mlp_only, skip_kv=skip_kv)
+        _migrate_tp_gemma_block_to_l1(
+            block,
+            mlp_only=mlp_only,
+            skip_kv=skip_kv,
+            mlp_width_sharded_grid=mlp_width_sharded_grid,
+        )
 
 
-def migrate_prefill_weights_to_l1(pipe: "Pi0_5PipelineC", mlp_only: bool = False, skip_kv: bool = False) -> None:
+def migrate_prefill_weights_to_l1(
+    pipe: "Pi0_5PipelineC",
+    mlp_only: bool = False,
+    skip_kv: bool = False,
+    mlp_width_sharded_grid: Optional[tuple] = None,
+) -> None:
     """Walk the prefill stage's TP slice and migrate matmul weights to L1.
 
     No-op when prefill_tp_size == 1 or when the slice isn't TP type. Safe
@@ -101,6 +172,10 @@ def migrate_prefill_weights_to_l1(pipe: "Pi0_5PipelineC", mlp_only: bool = False
     `mlp_only=True` migrates only the (large) MLP weights to L1, keeping
     Q/K/V/O in DRAM. Use this when full migration would push past the L1
     headroom above the matmul kernel's static CB region.
+
+    `mlp_width_sharded_grid=(gx, gy)` switches MLP migration to L1
+    WIDTH_SHARDED on the given core grid (typically (8, 8) for 64-core
+    width-shard on Gemma-2B's mlp_dim=16384 with TP=2 = 8192 per chip).
     """
     if pipe.stage_1 is None or pipe.stage_1.slice is None:
         return
@@ -109,7 +184,12 @@ def migrate_prefill_weights_to_l1(pipe: "Pi0_5PipelineC", mlp_only: bool = False
 
     if not isinstance(pipe.stage_1.slice, Pi0_5OptionCVLMSliceTP):
         return
-    _migrate_vlm_tp_slice_to_l1(pipe.stage_1.slice, mlp_only=mlp_only, skip_kv=skip_kv)
+    _migrate_vlm_tp_slice_to_l1(
+        pipe.stage_1.slice,
+        mlp_only=mlp_only,
+        skip_kv=skip_kv,
+        mlp_width_sharded_grid=mlp_width_sharded_grid,
+    )
 
 
 # ---------------------------------------------------------------------------- #

@@ -128,6 +128,18 @@ class Pi0_5PipelineC:
     # the deployment plan §3.1 placement (~140-160 MB L1 / vision chip).
     # Ignored when device_siglip is False (host path has no on-chip weights).
     vision_weights_l1: bool = False
+    # Override the per-chip SigLIP layer split (sum must equal 27). When None
+    # (default), `Pi0_5OptionCVisionSliceSplit` uses its hardcoded default
+    # (4+4+4+4+3+3+3+2 on the 8-chip submesh). Set to `[7, 7, 7, 6]` for the
+    # 4-chip vision submesh (PI0_OC_VISION_SHAPE="1,4"). Only consulted when
+    # `device_siglip=True`.
+    vision_layers_per_chip: Optional[List[int]] = None
+    # Keep SigLIP pos_embed weight in DRAM even when `vision_weights_l1=True`.
+    # pos_embed is fed to ttnn.embedding whose static CB region (~400 KB / core)
+    # collides with adjacent L1 weight buffers on tight per-chip layouts (e.g.
+    # 4-chip vision with 7 SigLIP layers + patch_embed on chip 0). Cost of
+    # keeping it in DRAM is ~0.6 MB read once per inference — negligible.
+    vision_keep_pos_embed_dram: bool = False
     # Tensor-parallel factor INSIDE stage 1 (prefill). When > 1, the (6,3)
     # prefill submesh is carved into (prefill_tp_size, 1) col-pair sub-meshes
     # and each sub-mesh runs N VLM layers with TP=prefill_tp_size sharding.
@@ -154,6 +166,22 @@ class Pi0_5PipelineC:
     # depth=18 × 2 layers/sub-mesh. Skipping it frees high-address L1 the
     # allocator otherwise spills into the matmul kernel's static CB region.
     prefill_weights_l1_skip_kv: bool = False
+    # Non-TP layer-paired counterpart to `prefill_weights_l1_mlp_only`. When True
+    # AND `layer_paired_l1=True`, the layer-paired loader keeps `o_proj` in DRAM
+    # alongside the already-DRAM fused `wqkv`. Frees ~4.5 MB / chip — the
+    # fragmentation slack the Tilize transient needs on the prefill forward path
+    # at S=1024 with no TP. Has no effect when TP > 1 or layer_paired_l1=False.
+    prefill_attn_dram: bool = False
+    # When True (and `prefill_weights_l1=True` and `prefill_tp_size > 1`),
+    # migrate MLP weights to L1 WIDTH_SHARDED instead of interleaved L1. Each
+    # core owns a deterministic [K, N_per_chip / num_cores] slice at high-L1;
+    # avoids the bank-fragmentation + kernel CB clash interleaved L1 hits.
+    # Combined with TP=2 + `prefill_weights_l1_mlp_only=1`, this is the path
+    # to fitting Gemma-2B MLP weights on L1 at S=1024. Default off.
+    prefill_mlp_l1_width_sharded: bool = False
+    # Grid (gx, gy) for the MLP width-shard. Default (8, 8) = 64 cores; with
+    # TP=2 (per-chip N=8192) that's per-core [K, 128] = 272 KB at bf8.
+    prefill_mlp_l1_width_sharded_grid: tuple = (8, 8)
     # When True, post-initialize walk the denoise stage's expert + suffix
     # slices and migrate every matmul weight + LN/mod weight from DRAM to L1.
     # Default False = today's behavior (uploads land in DRAM via the default
@@ -211,6 +239,8 @@ class Pi0_5PipelineC:
             embed_on_host=self.embed_on_host,
             device_siglip=self.device_siglip,
             vision_weights_l1=self.vision_weights_l1,
+            vision_layers_per_chip=self.vision_layers_per_chip,
+            vision_keep_pos_embed_dram=self.vision_keep_pos_embed_dram,
         )
         # Prefill paired is suppressed by TP mode (mutually exclusive in StagePrefill).
         # Denoise paired follows the explicit override when set, otherwise the master.
@@ -226,6 +256,7 @@ class Pi0_5PipelineC:
             self.weights,
             layer_paired_l1=prefill_paired,
             prefill_tp_size=self.prefill_tp_size,
+            attn_dram=self.prefill_attn_dram,
         )
         self.stage_2 = StageDenoise(
             s[2],
@@ -255,6 +286,9 @@ class Pi0_5PipelineC:
                 self,
                 mlp_only=self.prefill_weights_l1_mlp_only,
                 skip_kv=self.prefill_weights_l1_skip_kv,
+                mlp_width_sharded_grid=(
+                    self.prefill_mlp_l1_width_sharded_grid if self.prefill_mlp_l1_width_sharded else None
+                ),
             )
 
         # Opt-in L1 migration for the denoise (expert + suffix) path.

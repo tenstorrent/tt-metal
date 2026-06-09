@@ -49,6 +49,7 @@ class StagePrefill:
         weights: Dict[str, Dict[str, torch.Tensor]],
         layer_paired_l1: bool = False,
         prefill_tp_size: int = 1,
+        attn_dram: bool = False,
     ) -> None:
         if spec.stage_idx != 1:
             raise AssertionError(f"StagePrefill must be stage 1, got {spec.stage_idx}")
@@ -73,6 +74,7 @@ class StagePrefill:
         self.num_layers = self.layer_hi - self.layer_lo
         self.layer_paired_l1 = layer_paired_l1
         self.prefill_tp_size = prefill_tp_size
+        self.attn_dram = attn_dram
         # Populated in initialize() when layer_paired_l1=True or TP > 1.
         self.micro_submeshes: Optional[List] = None
         self.tp_submeshes: Optional[List] = None
@@ -120,6 +122,7 @@ class StagePrefill:
                 layer_range=(self.layer_lo, self.layer_hi),
                 holds_embed_tokens=self.spec.holds_embed_tokens,
                 holds_vlm_final_norm=self.spec.holds_vlm_final_norm,
+                attn_dram=self.attn_dram,
             )
         else:
             self.slice = Pi0_5OptionCVLMSlice(

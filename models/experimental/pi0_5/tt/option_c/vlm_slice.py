@@ -345,12 +345,18 @@ def _load_vlm_block_weights_single_chip_l1(
     full_weights: Dict[str, torch.Tensor],
     layer_idx: int,
     micro_submesh,
+    attn_dram: bool = False,
 ) -> Dict[str, "ttnn.Tensor"]:
     """Upload one VLM layer's weights onto a single-chip micro-submesh, L1-resident.
 
     Identical key mapping to `_load_vlm_block_weights_l1` but every upload
     is single-chip + L1. With only one layer's weights per chip we sit well
     inside the 180 MB L1 budget (~110 MB weights bf8 + headroom).
+
+    `attn_dram`: when True, keep `o_proj` in DRAM alongside the already-DRAM
+    fused `wqkv`. Frees the ~4.5 MB / chip that o_proj occupies on L1 — buys
+    fragmentation headroom for the Tilize transient on the prefill forward
+    path at S=1024 + no-TP + bf8.
     """
     prefix = f"model.layers.{layer_idx}."
     block_weights: Dict[str, "ttnn.Tensor"] = {}
@@ -378,6 +384,7 @@ def _load_vlm_block_weights_single_chip_l1(
             continue
 
         is_norm = "layernorm" in new_key or "norm" in new_key
+        is_o_proj = new_key == "self_attn.o_proj.weight"
         if "weight" in new_key and not is_norm:
             value = value.T
         if is_norm:
@@ -387,7 +394,10 @@ def _load_vlm_block_weights_single_chip_l1(
             block_weights[new_key] = tensor_1d_to_2d_ttnn(value, micro_submesh, dtype=ttnn.bfloat16)
         else:
             weight_dtype = ttnn.bfloat16 if is_norm else ttnn.bfloat8_b
-            block_weights[new_key] = _upload_single_chip_l1(value.contiguous(), micro_submesh, weight_dtype)
+            mem_cfg = ttnn.DRAM_MEMORY_CONFIG if (attn_dram and is_o_proj) else None
+            block_weights[new_key] = _upload_single_chip_l1(
+                value.contiguous(), micro_submesh, weight_dtype, memory_config=mem_cfg
+            )
     return block_weights
 
 
@@ -430,6 +440,7 @@ class Pi0_5OptionCVLMSlicePaired:
         layer_range: Tuple[int, int],
         holds_embed_tokens: bool = False,
         holds_vlm_final_norm: bool = False,
+        attn_dram: bool = False,
     ) -> None:
         if not (0 <= layer_range[0] < layer_range[1] <= config.vlm_config.depth):
             raise ValueError(
@@ -475,7 +486,7 @@ class Pi0_5OptionCVLMSlicePaired:
         for local_i in range(self.num_layers):
             global_i = self.layer_lo + local_i
             sm = micro_submeshes[local_i]
-            block_weights = _load_vlm_block_weights_single_chip_l1(lang, global_i, sm)
+            block_weights = _load_vlm_block_weights_single_chip_l1(lang, global_i, sm, attn_dram=attn_dram)
             self.vlm_blocks.append(
                 GemmaBlockTTNN(
                     config.vlm_config,

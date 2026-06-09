@@ -104,6 +104,36 @@ def get_sdpa_compute_kernel_config(seq_len_kv: Optional[int] = None) -> "ttnn.Wo
     )
 
 
+def build_l1_width_sharded_memcfg(
+    k: int,
+    n: int,
+    grid_x: int,
+    grid_y: int,
+    tile_size: int = 32,
+) -> "ttnn.MemoryConfig":
+    """Build an L1 width-sharded memory config for a weight of shape (K, N).
+
+    Each of `grid_x * grid_y` cores owns a [K, N / num_cores] slice of the
+    weight at high-L1. The matmul kernel's static CB region on each core
+    lives at low-L1; there's no allocator interaction between the two —
+    fixes the bank-fragmentation / CB-clash mode the interleaved L1 upload
+    hits at scale.
+
+    N must be divisible by `tile_size * num_cores`. Caller is responsible
+    for picking a grid that satisfies this; otherwise raises ValueError.
+
+    For pi0.5 Gemma-2B MLP gate/up: K=2048, N=16384; 8×8 = 64 cores →
+    per-core (2048, 256) = 555 KB at bf8.
+    """
+
+    num_cores = grid_x * grid_y
+    if n % (tile_size * num_cores) != 0:
+        raise ValueError(f"build_l1_width_sharded_memcfg: N={n} not divisible by tile*cores={tile_size * num_cores}")
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))})
+    shard_spec = ttnn.ShardSpec(grid, (k, n // num_cores), ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+
 def build_dram_width_sharded_memcfg(device, k: int, n: int, tile_size: int = 32, dram_cores: Optional[int] = None):
     """Build a DRAM width-sharded memory config for a weight tensor of shape (K, N).
 

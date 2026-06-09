@@ -97,7 +97,12 @@ pytestmark = pytest.mark.skipif(
 
 LANG_SEQ_LEN = 256
 NUM_IMAGE_TOKENS = 256
-PREFIX_LEN = NUM_IMAGE_TOKENS + LANG_SEQ_LEN  # 512
+# PI0_NUM_CAMERAS: image slots stacked along openpi's batch axis (prod = 3).
+# Cameras flatten into the seq dim inside vision_slice.build_prefix_hidden,
+# so PREFIX_LEN = N_cams * 256 + 256 (= 1024 at 3 cams, matching
+# PI0_VLM_CHUNK_SIZE for single-pass prefill).
+NUM_CAMERAS = int(os.environ.get("PI0_NUM_CAMERAS", "1"))
+PREFIX_LEN = NUM_CAMERAS * NUM_IMAGE_TOKENS + LANG_SEQ_LEN
 ACTION_DIM = 32
 ACTION_HORIZON = 10  # libero_upstream checkpoint
 ACTION_HORIZON_PADDED = 32  # tile-aligned
@@ -129,6 +134,15 @@ DEVICE_SIGLIP = os.environ.get("PI0_OC_L1_PROBE_DEVICE_SIGLIP") == "1"
 # When DEVICE_SIGLIP=1, migrate every SigLIP / mm_projector weight to L1.
 # Ignored when DEVICE_SIGLIP=0 (host path has no on-chip weights to move).
 VISION_WEIGHTS_L1 = os.environ.get("PI0_OC_L1_PROBE_VISION_WEIGHTS_L1") == "1"
+# Override per-chip SigLIP layer split. Comma-separated counts that must sum
+# to 27. Default = None → Pi0_5OptionCVisionSliceSplit picks the hardcoded
+# 4+4+4+4+3+3+3+2 for the 8-chip submesh. Set to "7,7,7,6" for the 4-chip
+# vision submesh (PI0_OC_VISION_SHAPE="1,4").
+_vlpc_raw = os.environ.get("PI0_OC_L1_PROBE_VISION_LAYERS_PER_CHIP", "")
+VISION_LAYERS_PER_CHIP: Optional[List[int]] = [int(x) for x in _vlpc_raw.split(",")] if _vlpc_raw.strip() else None
+# Keep SigLIP pos_embed in DRAM even when VISION_WEIGHTS_L1=1, to dodge the
+# ttnn.embedding static CB region clash on tight 4-chip vision layouts.
+VISION_KEEP_POS_EMBED_DRAM = os.environ.get("PI0_OC_L1_PROBE_VISION_KEEP_POS_EMBED_DRAM") == "1"
 EXPERT_LAYERS_PER_CHIP = int(os.environ.get("PI0_OC_L1_PROBE_EXPERT_LAYERS_PER_CHIP", "3"))
 # Prefill TP within stage (carve (6,3) submesh into N (tp,1) sub-meshes).
 # When > 1, also opt into L1-resident matmul weights via the L1 migration
@@ -148,6 +162,12 @@ PREFILL_WEIGHTS_L1_MLP_ONLY = os.environ.get("PI0_OC_L1_PROBE_WEIGHTS_L1_MLP_ONL
 # its migration frees high-address L1 the allocator otherwise spills into the
 # matmul kernel's static CB region.
 PREFILL_WEIGHTS_L1_SKIP_KV = os.environ.get("PI0_OC_L1_PROBE_WEIGHTS_L1_SKIP_KV") == "1"
+# Non-TP layer-paired knob: keep o_proj in DRAM alongside the already-DRAM
+# fused wqkv. ~4.5 MB / chip — buys the fragmentation slack for Tilize.
+PREFILL_ATTN_DRAM = os.environ.get("PI0_OC_L1_PROBE_PREFILL_ATTN_DRAM") == "1"
+# TP + width-sharded L1 MLP weights. Only applies when PREFILL_TP > 1 and
+# PREFILL_WEIGHTS_L1 = 1. Default grid 8×8 = 64 cores.
+PREFILL_MLP_L1_WIDTH_SHARDED = os.environ.get("PI0_OC_L1_PROBE_PREFILL_MLP_L1_WS") == "1"
 # Denoise full-L1 walk: post-init migrate every expert + suffix matmul / mod /
 # LN weight from DRAM to L1 via `migrate_pipeline_denoise_to_l1`. Mirrors the
 # prefill_weights_l1 knob but scoped to stage 2. NO DRAM fallback once on.
@@ -238,14 +258,15 @@ def _print_phase(phase: str, snapshots: List[Dict[str, float]]) -> None:
 
 
 def _trace_matched_inputs(seed: int = 0) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """One 224x224 image, LANG_SEQ_LEN lang tokens, padded noisy actions.
+    """NUM_CAMERAS 224x224 images, LANG_SEQ_LEN lang tokens, padded noisy actions.
 
     Mirrors `_build_inputs` in test_perf_ttnn_full_e2e_trace.py for
     shape/dtype. The pi0.5 pipeline's vision stage handles the image →
-    256-token mapping internally.
+    256-token mapping internally and flattens cameras into the seq dim
+    so the prefill sees [1, N_cams*256 + S_lang, vlm_W].
     """
     gen = torch.Generator().manual_seed(seed)
-    pixel_values = torch.randn(BATCH_SIZE, 3, 224, 224, generator=gen, dtype=torch.float32)
+    pixel_values = torch.randn(NUM_CAMERAS, 3, 224, 224, generator=gen, dtype=torch.float32)
     lang_tokens = torch.randint(0, 256000, (BATCH_SIZE, LANG_SEQ_LEN), generator=gen, dtype=torch.int32)
     # Match ttnn_pi0_5_model.sample_actions: zero-pad to action_horizon_padded
     # and only fill the first action_horizon rows with N(0,1). The padding
@@ -300,11 +321,15 @@ def _echo_env() -> None:
     print(f"  PI0_OC_L1_PROBE_DENOISE_LAYER_PAIRED   = {DENOISE_LAYER_PAIRED_L1}")
     print(f"  PI0_OC_L1_PROBE_DEVICE_SIGLIP          = {DEVICE_SIGLIP}")
     print(f"  PI0_OC_L1_PROBE_VISION_WEIGHTS_L1      = {VISION_WEIGHTS_L1}")
+    print(f"  PI0_OC_L1_PROBE_VISION_LAYERS_PER_CHIP = {VISION_LAYERS_PER_CHIP}")
+    print(f"  PI0_OC_L1_PROBE_VISION_KEEP_POS_EMBED_DRAM = {VISION_KEEP_POS_EMBED_DRAM}")
     print(f"  PI0_OC_L1_PROBE_EXPERT_LAYERS_PER_CHIP = {EXPERT_LAYERS_PER_CHIP}")
     print(f"  PI0_OC_L1_PROBE_PREFILL_TP             = {PREFILL_TP_SIZE}")
     print(f"  PI0_OC_L1_PROBE_WEIGHTS_L1             = {PREFILL_WEIGHTS_L1}")
     print(f"  PI0_OC_L1_PROBE_WEIGHTS_L1_MLP_ONLY    = {PREFILL_WEIGHTS_L1_MLP_ONLY}")
     print(f"  PI0_OC_L1_PROBE_WEIGHTS_L1_SKIP_KV     = {PREFILL_WEIGHTS_L1_SKIP_KV}")
+    print(f"  PI0_OC_L1_PROBE_PREFILL_ATTN_DRAM      = {PREFILL_ATTN_DRAM}")
+    print(f"  PI0_OC_L1_PROBE_PREFILL_MLP_L1_WS      = {PREFILL_MLP_L1_WIDTH_SHARDED}")
     print(f"  PI0_OC_L1_PROBE_DENOISE_WEIGHTS_L1     = {DENOISE_WEIGHTS_L1}")
     print(f"  PI0_OC_L1_PROBE_DENOISE_MOD_SHARDED    = {DENOISE_MOD_SHARDED}")
 
@@ -406,11 +431,15 @@ def test_oc_l1_footprint_probe_full_depth():
             denoise_layer_paired_l1=DENOISE_LAYER_PAIRED_L1,
             device_siglip=DEVICE_SIGLIP,
             vision_weights_l1=VISION_WEIGHTS_L1,
+            vision_layers_per_chip=VISION_LAYERS_PER_CHIP,
+            vision_keep_pos_embed_dram=VISION_KEEP_POS_EMBED_DRAM,
             expert_layers_per_chip=EXPERT_LAYERS_PER_CHIP,
             prefill_tp_size=PREFILL_TP_SIZE,
             prefill_weights_l1=PREFILL_WEIGHTS_L1,
             prefill_weights_l1_mlp_only=PREFILL_WEIGHTS_L1_MLP_ONLY,
             prefill_weights_l1_skip_kv=PREFILL_WEIGHTS_L1_SKIP_KV,
+            prefill_attn_dram=PREFILL_ATTN_DRAM,
+            prefill_mlp_l1_width_sharded=PREFILL_MLP_L1_WIDTH_SHARDED,
             denoise_weights_l1=DENOISE_WEIGHTS_L1,
             denoise_mod_sharded=DENOISE_MOD_SHARDED,
         )
