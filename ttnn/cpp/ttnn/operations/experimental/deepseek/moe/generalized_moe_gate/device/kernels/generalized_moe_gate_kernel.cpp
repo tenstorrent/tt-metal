@@ -80,7 +80,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("moe_gate_run_bias_cb"),
         get_named_compile_time_arg_val("moe_gate_cb_tilize"),
         get_named_compile_time_arg_val("moe_gate_cb_tilize_idx"),
-        get_named_compile_time_arg_val("moe_gate_topk")>;
+        get_named_compile_time_arg_val("moe_gate_topk"),
+        get_named_compile_time_arg_val("moe_gate_softmax")>;
     deepseek_compute_kernel_init();
 #endif
 

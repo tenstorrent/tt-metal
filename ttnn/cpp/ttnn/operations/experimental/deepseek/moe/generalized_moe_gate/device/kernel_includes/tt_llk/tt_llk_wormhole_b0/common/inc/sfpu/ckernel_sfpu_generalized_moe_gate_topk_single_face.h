@@ -12,6 +12,7 @@
 #include "lltt.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_exp.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -700,12 +701,26 @@ inline void _gmg_merge16_to_run() {
     TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + store_hi);
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, uint32_t topk = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, uint32_t topk = 8, bool output_softmax = false>
 inline void _generalized_moe_gate_finalize_ungrouped(uint32_t eps, uint32_t scale) {
     // Final combine: merge the two runs at {0,2}+{4,6} -> global top-8 (sorted DESCENDING), then normalize.
     // (For 256 the two runs are topA/topB; for >256 they are the last two block/subtree runs of the tree.)
     _gmg_merge16_core<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
     bitonic_topk_store8_even_cols_split_indices_single_face<is_fp32_dest_acc_en>();
+
+    // SOFTMAX OUTPUT (over the selected top-k): exp the sorted scores in place, BEFORE the top-n mask and
+    // the normalize. linear-normalize(exp(s)) = exp(s_i)/Σexp(s) = softmax, so the existing sum+recip+mul
+    // tail then yields softmax(selected) * scale. Must precede the mask so the dropped ranks (zeroed by the
+    // mask afterwards) contribute 0 to Σexp, not exp(0)=1. Scores are in [0,1] -> exp in [1,e] (no overflow),
+    // and softmax is shift-invariant so no max-subtraction is needed. dst_reg[k] = TTI addr 2k (scores+0 ->
+    // dst_reg[0], scores+4 -> dst_reg[2]); reset Dst RWC so the base lines up with the normalize's TTI loads.
+    if constexpr (output_softmax) {
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+        sfpi::vFloat e0 = sfpi::dst_reg[(scores_offset + 0) / 2];
+        sfpi::dst_reg[(scores_offset + 0) / 2] = _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(e0);
+        sfpi::vFloat e4 = sfpi::dst_reg[(scores_offset + 4) / 2];
+        sfpi::dst_reg[(scores_offset + 4) / 2] = _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(e4);
+    }
 
     // TOP-N (n = topk <= 8): the sorted-8 are at scores/indices {0,4} — offset 0 = ranks 0-3, offset 4 =
     // ranks 4-7 (descending). Zero the scores+idx of ranks >= topk BEFORE the normalize so the denominator

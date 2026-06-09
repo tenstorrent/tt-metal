@@ -17,7 +17,9 @@ class GeneralizedMoeGateOp:
     """
 
     @staticmethod
-    def golden(input_tensor, bias_tensor, eps=1e-20, scaling_factor=2.5, enable_sigmoid=False, topk=8):
+    def golden(
+        input_tensor, bias_tensor, eps=1e-20, scaling_factor=2.5, enable_sigmoid=False, topk=8, output_softmax=False
+    ):
         """
         PyTorch reference for the *ungrouped* generalized MoE gate.
 
@@ -50,8 +52,11 @@ class GeneralizedMoeGateOp:
         _, topk_indices = torch.topk(bias_flat, topk, dim=-1, sorted=True)
         topk_scores = torch.gather(scores_flat, dim=-1, index=topk_indices)
 
-        denominator = torch.sum(topk_scores, dim=-1, keepdim=True) + eps
-        normalized_scores = topk_scores / denominator * scaling_factor
+        # output_softmax: weights = softmax over the selected top-k (exp(s_i)/Σ_sel exp(s_j)); otherwise the
+        # linear renormalization (s_i/Σ_sel s_j). Both scaled by scaling_factor.
+        weights = torch.exp(topk_scores) if output_softmax else topk_scores
+        denominator = torch.sum(weights, dim=-1, keepdim=True) + eps
+        normalized_scores = weights / denominator * scaling_factor
         return normalized_scores, topk_indices
 
     @staticmethod
@@ -65,6 +70,7 @@ class GeneralizedMoeGateOp:
         scaling_factor=2.5,
         enable_sigmoid=True,
         topk=8,
+        output_softmax=False,
     ):
         """
         Execute the generalized MoE gate on device.
@@ -83,4 +89,5 @@ class GeneralizedMoeGateOp:
             scaling_factor=scaling_factor,
             enable_sigmoid=enable_sigmoid,
             topk=topk,
+            output_softmax=output_softmax,
         )

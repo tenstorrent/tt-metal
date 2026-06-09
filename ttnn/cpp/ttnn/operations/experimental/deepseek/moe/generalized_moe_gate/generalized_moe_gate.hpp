@@ -21,6 +21,7 @@ std::tuple<tt::tt_metal::Tensor, tt::tt_metal::Tensor> generalized_moe_gate(
     float eps,
     float scaling_factor,
     bool enable_sigmoid,
-    uint32_t topk = 8);
+    uint32_t topk = 8,
+    bool output_softmax = false);
 
 }  // namespace ttnn::experimental::deepseek::moe

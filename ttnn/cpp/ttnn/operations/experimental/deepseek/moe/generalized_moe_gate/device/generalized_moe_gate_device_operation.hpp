@@ -44,7 +44,8 @@ struct GeneralizedMoeGateDeviceOperation {
         float eps,
         float scaling_factor,
         bool enable_sigmoid,
-        uint32_t topk);
+        uint32_t topk,
+        bool output_softmax);
 };
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::generalized_moe_gate
