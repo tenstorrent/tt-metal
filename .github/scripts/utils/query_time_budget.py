@@ -19,6 +19,13 @@ Notes on the data model (see tests/pipeline_reorg/*_tests.yaml):
     pipelines; the unit_tier<n>/e2e_tier<n>/sweep_tier<n> keys cover
     models_<testtype>_tests.yaml.
 
+It also estimates weekly machine-hours = budget x (cron runs/week) / 60. The
+cron frequency is discovered live by parsing .github/workflows at query time
+(so it tracks schedule changes): the workflow that runs each contributing test
+file is found via its TESTS_YAML_PATH, then the scheduled workflow(s) that
+trigger it are read for their cron schedules. Only cron triggers are counted;
+manual workflow_dispatch runs are intentionally excluded from the estimate.
+
 Usage:
   query_time_budget.py --team models --testtype unit --machine wh_n150 [--tier 1] [-v]
 """
@@ -34,6 +41,7 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", 
 TESTS_DIR = os.path.join(REPO_ROOT, "tests", "pipeline_reorg")
 DEFAULT_BUDGET_FILE = os.path.join(REPO_ROOT, ".github", "time_budget.yaml")
 TIERED_MODEL_TESTTYPES = {"unit", "e2e", "sweep"}
+WORKFLOWS_DIR = os.path.join(REPO_ROOT, ".github", "workflows")
 
 
 def testtype_of_file(filename):
@@ -116,13 +124,131 @@ def lookup_budget(budget_file, team, testtype, machine, tier=None):
         budgets = yaml.safe_load(f) or {}
     try:
         team_budgets = budgets[team]
-        if tier is not None and uses_tiered_model_budget(team, testtype):
-            return team_budgets[f"{testtype}_tier{tier}"][machine]
-        if tier is not None and f"{testtype}_tier{tier}" in team_budgets:
-            return team_budgets[f"{testtype}_tier{tier}"][machine]
+        tiered_key = f"{testtype}_tier{tier}"
+        if tier is not None and tiered_key in team_budgets:
+            return team_budgets[tiered_key][machine]
         return team_budgets[testtype][machine]
     except (KeyError, TypeError):
         return None
+
+
+def _expand_cron_field(field, lo, hi):
+    """Expand a single cron field, supporting '*', comma lists, ranges and steps."""
+    values = set()
+    for part in field.split(","):
+        step = 1
+        token = part
+        if "/" in token:
+            token, step_str = token.split("/", 1)
+            step = int(step_str)
+        if token == "*":
+            start, end = lo, hi
+        elif "-" in token:
+            a, b = token.split("-", 1)
+            start, end = int(a), int(b)
+        else:
+            start = end = int(token)
+        values.update(range(start, end + 1, step))
+    return values
+
+
+def cron_runs_per_week(cron):
+    """Approximate how many times a 5-field cron expression fires per week.
+
+    Handles '*', comma lists, ranges and steps in the minute, hour and
+    day-of-week fields. Day-of-month / month restrictions are not modelled
+    (assumed '*'); such schedules are rare for these pipelines.
+    """
+    fields = cron.split()
+    if len(fields) != 5:
+        return 0
+    minute, hour, _dom, _month, dow = fields
+    per_day = len(_expand_cron_field(minute, 0, 59)) * len(_expand_cron_field(hour, 0, 23))
+    if dow.strip() == "*":
+        days = 7
+    else:
+        # cron allows 7 as Sunday; normalise to 0-6 before counting distinct days.
+        days = len({0 if d == 7 else d for d in _expand_cron_field(dow, 0, 7)})
+    return per_day * days
+
+
+def _workflow_call(job):
+    """Return (impl_basename, tier_value) for a reusable-workflow job, else None."""
+    uses = job.get("uses")
+    if not isinstance(uses, str) or ".github/workflows/" not in uses:
+        return None
+    impl = uses.split(".github/workflows/", 1)[1].split("@", 1)[0].strip()
+    tier = (job.get("with") or {}).get("tier")
+    return os.path.basename(impl), tier
+
+
+def build_workflow_index(workflows_dir):
+    """Parse every workflow once, capturing schedule / test-file / reuse metadata.
+
+    Returns a list of dicts: {name, crons, tests_yaml (set), calls [(impl, tier)]}.
+    """
+    index = []
+    for path in sorted(glob.glob(os.path.join(workflows_dir, "*.y*ml"))):
+        try:
+            with open(path, "r") as f:
+                data = yaml.safe_load(f)
+        except (yaml.YAMLError, OSError):
+            continue
+        if not isinstance(data, dict):
+            continue
+
+        # PyYAML parses the `on:` trigger key as the boolean True (YAML 1.1).
+        triggers = data.get("on", data.get(True)) or {}
+        crons = []
+        if isinstance(triggers, dict) and isinstance(triggers.get("schedule"), list):
+            crons = [s["cron"] for s in triggers["schedule"] if isinstance(s, dict) and "cron" in s]
+
+        jobs = data.get("jobs") or {}
+        env_dicts = [data["env"]] if isinstance(data.get("env"), dict) else []
+        calls = []
+        for job in jobs.values():
+            if not isinstance(job, dict):
+                continue
+            if isinstance(job.get("env"), dict):
+                env_dicts.append(job["env"])
+            call = _workflow_call(job)
+            if call:
+                calls.append(call)
+
+        tests_yaml = set()
+        for env in env_dicts:
+            value = env.get("TESTS_YAML_PATH")
+            if isinstance(value, str) and value.endswith("_tests.yaml"):
+                tests_yaml.add(os.path.basename(value))
+
+        index.append({"name": os.path.basename(path), "crons": crons, "tests_yaml": tests_yaml, "calls": calls})
+    return index
+
+
+def discover_scheduled_runs(workflow_index, test_file, tier):
+    """Map a test file to {scheduled_workflow_basename: runs_per_week}.
+
+    Walks the reuse graph: a test file is run by the impl whose TESTS_YAML_PATH
+    references it, and that impl is triggered by scheduled caller workflows. When
+    a tier is queried, callers that pass a non-matching `tier:` input are skipped.
+    """
+    runner_names = {w["name"] for w in workflow_index if test_file in w["tests_yaml"]}
+    runs = {}
+    for w in workflow_index:
+        if not w["crons"]:
+            continue
+        weekly = sum(cron_runs_per_week(c) for c in w["crons"])
+        # A workflow that directly declares the test file and is itself scheduled.
+        if w["name"] in runner_names:
+            runs[w["name"]] = weekly
+        # A scheduled workflow that calls the impl which runs the test file.
+        for impl, tier_val in w["calls"]:
+            if impl not in runner_names:
+                continue
+            if tier is not None and tier_val is not None and str(tier_val) != str(tier):
+                continue
+            runs[w["name"]] = weekly
+    return runs
 
 
 def main():
@@ -135,6 +261,9 @@ def main():
     )
     parser.add_argument("--tests-dir", default=TESTS_DIR, help="Directory of *_tests.yaml files")
     parser.add_argument("--budget-file", default=DEFAULT_BUDGET_FILE, help="Path to time_budget.yaml")
+    parser.add_argument(
+        "--workflows-dir", default=WORKFLOWS_DIR, help="Directory of workflow YAMLs (for cron frequency)"
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="Print per-test breakdown")
     args = parser.parse_args()
 
@@ -160,11 +289,36 @@ def main():
 
     if budget is None:
         print(f"  Budget:        (not declared in {os.path.basename(args.budget_file)})")
+    else:
+        print(f"  Budget:        {budget} min")
+
+    # --- Estimated weekly machine-hours (cron-scheduled runs only) ---
+    workflow_index = build_workflow_index(args.workflows_dir)
+    contributing_files = sorted({fname for fname, _, _, _ in breakdown})
+    runs_by_workflow = {}
+    for fname in contributing_files:
+        for workflow, weekly in discover_scheduled_runs(workflow_index, fname, args.tier).items():
+            runs_by_workflow[workflow] = weekly
+    total_runs = sum(runs_by_workflow.values())
+
+    print("  Scheduled pipelines (cron):")
+    if runs_by_workflow:
+        for workflow in sorted(runs_by_workflow):
+            print(f"      {runs_by_workflow[workflow]:>3} runs/wk  {workflow}")
+    else:
+        print("      (none found -- manual workflow_dispatch only)")
+
+    if budget is not None:
+        machine_hours = budget * total_runs / 60.0
+        print(f"  Est. machine-hours/week: {machine_hours:.1f} h  ({budget} min x {total_runs} runs/wk / 60)")
+    else:
+        print("  Est. machine-hours/week: n/a (no budget declared)")
+    print("  Note: estimate uses cron schedules only; manual workflow_dispatch runs are NOT counted.")
+
+    if budget is None:
         # No budget to compare against; allocation is informational only.
         return 0
-
     headroom = budget - total
-    print(f"  Budget:        {budget} min")
     if headroom >= 0:
         print(f"  [OK] Within budget ({headroom} min headroom).")
         return 0
