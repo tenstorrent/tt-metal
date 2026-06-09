@@ -1,32 +1,39 @@
 # Maps MPI ranks to mesh ids declared in mgd.textproto, and pins each rank
-# to a disjoint set of physical N300 boards via TT_VISIBLE_DEVICES.
+# to a disjoint physical N300 board via TT_VISIBLE_DEVICES.
 #
 # Rank 0 = TTML rank (WeightBridge sender, hosts the ttml LlamaCompositeKV).
 # Rank 1 = TTT  rank (WeightBridge receiver, hosts the tt-transformers Transformer).
 #
 # Hardware: T3K = 4x N300 boards = 8 wormhole chips. UMD's TT_VISIBLE_DEVICES
 # enumerates *PCIe boards* (valid IDs 0..3), not chips -- each board has 2
-# chips (chip 0 reachable over PCIe, chip 1 reachable from chip 0 via the
-# on-board eth link).
+# chips connected by an internal eth link, both visible to UMD.
 #
-# Layout: each rank owns 2 boards = 4 chips, declared as a [1, 4] line mesh
-# in mgd.textproto. The line snakes through the 4 chips:
-#   board0-chip0 -- board1-chip0 -- board1-chip1 -- board0-chip1   (rank 0)
-#   board2-chip0 -- board3-chip0 -- board3-chip1 -- board2-chip1   (rank 1)
-# DDP-only: the parallelism axis is the non-trivial dim (length 4) per ttml's
-# auto_context.cpp `is_line_topology` branch. The bridge asserts every
-# transferred tensor is fully replicated across this axis.
+# Declared layout (in mgd.textproto): each rank owns a [1, 2] mesh covering
+# both chips of one board. This must match what UMD discovers physically;
+# declaring fewer chips trips
+# `TopologyMapper: Fabric node ID not yet assigned for ASIC id ...`.
+#
+# Used layout: the application opens a [1, 1] sub-mesh at offset (0, 0),
+# so only chip 0 of each board does any work. The reason we under-use the
+# board is that the tt-transformers multi-device weight-update path
+# (Attention/MLP/Embedding/LMHead for num_devices_per_group > 1) is not yet
+# implemented, so Transformer.update_weights only works on a single-chip
+# mesh today. Once the multi-device update paths land, this can move back
+# to [1, 4] or [2, 4].
+#
+#   board0-chip0   (rank 0, TTML)   [board0-chip1 declared but idle]
+#   board1-chip0   (rank 1, TTT )   [board1-chip1 declared but idle]
 
 rank_bindings:
   - rank: 0
     mesh_id: 0
     mesh_host_rank: 0
     env_overrides:
-      TT_VISIBLE_DEVICES: "0,1"
+      TT_VISIBLE_DEVICES: "0"
   - rank: 1
     mesh_id: 1
     mesh_host_rank: 0
     env_overrides:
-      TT_VISIBLE_DEVICES: "2,3"
+      TT_VISIBLE_DEVICES: "1"
 
 mesh_graph_desc_path: "configurations/local2/mgd.textproto"
