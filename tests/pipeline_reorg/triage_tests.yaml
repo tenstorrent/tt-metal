@@ -27,7 +27,7 @@
       timeout: 11
     bh_p150b_civ2_viommu_prio:
       timeout: 11
-  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  owner_id: U09UX6JLA3U # Ognjen Nenezic
   team: runtime
 
 # --- Hang report generation test (opt-in only) ---
@@ -42,5 +42,6 @@
       timeout: 5
     bh_p150b_civ2_viommu_prio:
       timeout: 5
-  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  owner_id: U09UX6JLA3U # Ognjen Nenezic
+
   team: runtime
