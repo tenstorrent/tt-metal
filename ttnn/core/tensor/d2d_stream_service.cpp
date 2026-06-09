@@ -4,7 +4,9 @@
 
 #include "tensor/d2d_stream_service.hpp"
 
+#include <limits>
 #include <map>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -615,6 +617,10 @@ D2DStreamService::create_pair(
     auto sender_service_cores = CMAKE_UNIQUE_NAMESPACE::claim_service_cores(sender_mesh, coords, "sender");
     auto receiver_service_cores = CMAKE_UNIQUE_NAMESPACE::claim_service_cores(receiver_mesh, coords, "receiver");
 
+    log_info(tt::LogMetal, "D2DStreamService: claimed service cores");
+    log_info(tt::LogMetal, "D2DStreamService: sender service cores: {}", sender_service_cores);
+    log_info(tt::LogMetal, "D2DStreamService: receiver service cores: {}", receiver_service_cores);
+
     // If create_pair throws before the handles take ownership, release the
     // claimed service cores (and the L1 they back) so a later create_pair on the
     // same process can re-claim them — the claims live in a process-global
@@ -715,6 +721,40 @@ D2DStreamService::create_pair(
     // --- (h) allocate the per-side worker-sync resources ----------------------
     const uint32_t sender_num_workers = CMAKE_UNIQUE_NAMESPACE::core_range_size(cfg.sender_worker_cores);
     const uint32_t receiver_num_workers = CMAKE_UNIQUE_NAMESPACE::core_range_size(cfg.receiver_worker_cores);
+
+    // Reserve the MeshSocket L1 buffers' footprint in each service core's ServiceCoreManager
+    // allocator BEFORE allocating any counter/termination words. The socket config buffer (both
+    // sides) and the receiver-side data FIFO were placed by the device's L1 allocator, which grows
+    // top-down from L1_END; the ServiceCoreManager per-core allocator also grows top-down from
+    // L1_END with no awareness of them. Without this reservation the counter/termination words
+    // alias the socket buffers and get clobbered by inbound payload — the receiver's
+    // consumed_counter in particular lands inside the data FIFO and hangs the handshake. See
+    // notes/d2d_reuse_hang_investigation.md.
+    {
+        auto& svc = tt::tt_metal::internal::ServiceCoreManager::get();
+        // Lowest L1 address occupied by any of the given socket buffers (they all sit at the top of
+        // the service core's L1); reserving from there to the top covers them all in one shot.
+        const auto lowest_socket_addr = [](std::initializer_list<std::shared_ptr<distributed::MeshBuffer>> bufs) {
+            DeviceAddr lo = std::numeric_limits<DeviceAddr>::max();
+            for (const auto& b : bufs) {
+                if (b != nullptr) {
+                    lo = std::min(lo, b->address());
+                }
+            }
+            return lo;
+        };
+        // Only the receiver socket owns a data FIFO; get_data_buffer() TT_FATALs on the sender.
+        for (const auto& coord : coords) {
+            svc.reserve_l1_to_top(
+                sender_mesh->get_device(coord),
+                sender_service_cores.at(coord),
+                lowest_socket_addr({sender_socket.get_config_buffer()}));
+            svc.reserve_l1_to_top(
+                receiver_mesh->get_device(coord),
+                receiver_service_cores.at(coord),
+                lowest_socket_addr({receiver_socket.get_config_buffer(), receiver_socket.get_data_buffer()}));
+        }
+    }
 
     auto sender_termination_addrs =
         CMAKE_UNIQUE_NAMESPACE::allocate_service_core_words(sender_mesh, sender_service_cores);

@@ -99,6 +99,12 @@ public:
     // Each service core owns a completely independent L1 range - no interaction with
     // the worker-grid BankManager.
     DeviceAddr allocate_l1(IDevice* device, CoreCoord core, size_t size);
+    // Reserve [addr, L1_top) in this core's allocator so a later allocate_l1() won't hand out an
+    // address overlapping externally-owned L1 at the top of the core (e.g. MeshSocket config /
+    // data-FIFO buffers the device allocator placed there; both allocators grow top-down from
+    // L1_END independently and would otherwise collide). Must be called before any allocate_l1()
+    // on this core. TT_FATALs if addr is at/above the range top or the span is already allocated.
+    void reserve_l1_to_top(IDevice* device, CoreCoord core, DeviceAddr addr);
     void deallocate_l1(IDevice* device, CoreCoord core, DeviceAddr addr);
     size_t bytes_available(IDevice* device, CoreCoord core) const;
 

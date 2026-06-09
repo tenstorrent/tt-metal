@@ -170,6 +170,40 @@ DeviceAddr ServiceCoreManager::allocate_l1(IDevice* device, CoreCoord core, size
     return *addr;
 }
 
+void ServiceCoreManager::reserve_l1_to_top(IDevice* device, CoreCoord core, DeviceAddr addr) {
+    auto dit = impl_->devices.find(device->id());
+    TT_FATAL(
+        dit != impl_->devices.end() && dit->second.cores.contains(core),
+        "internal::ServiceCoreManager::reserve_l1_to_top called on unclaimed core {}",
+        core);
+    // Carve out [addr, L1_top) so subsequent allocate_l1() calls don't hand out an address that
+    // overlaps externally-owned L1 sitting at the top of this core (e.g. MeshSocket config buffer
+    // / data FIFO that the device allocator placed there). The device allocator and this per-core
+    // allocator both grow top-down from L1_END with no mutual awareness, so without this
+    // reservation they collide. Reserving to the top (rather than each buffer's exact size) covers
+    // the whole socket region in one allocation regardless of individual buffer footprints, and
+    // must be called before any allocate_l1() on this core so the top range is still free.
+    auto& alloc = dit->second.cores.at(core).alloc;
+    DeviceAddr top = addr;
+    for (const auto& [start, end] : alloc->available_addresses(0)) {
+        top = std::max(top, end);
+    }
+    TT_FATAL(
+        top > addr,
+        "internal::ServiceCoreManager::reserve_l1_to_top: addr {:#x} is at/above L1 range top {:#x} on core {}",
+        static_cast<uint64_t>(addr),
+        static_cast<uint64_t>(top),
+        core);
+    auto reserved = alloc->allocate_at_address(addr, top - addr);
+    TT_FATAL(
+        reserved.has_value(),
+        "internal::ServiceCoreManager::reserve_l1_to_top: could not reserve [{:#x}, {:#x}) on core {} "
+        "(out of range or already allocated)",
+        static_cast<uint64_t>(addr),
+        static_cast<uint64_t>(top),
+        core);
+}
+
 void ServiceCoreManager::deallocate_l1(IDevice* device, CoreCoord core, DeviceAddr addr) {
     auto dit = impl_->devices.find(device->id());
     TT_FATAL(
