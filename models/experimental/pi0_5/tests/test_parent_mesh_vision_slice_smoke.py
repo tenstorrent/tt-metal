@@ -213,3 +213,77 @@ def test_parent_vision_slice_forward_chunk0():
     finally:
         ttnn.close_mesh_device(parent)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
+
+def test_parent_vision_slice_forward_all_chunks():
+    """Run all 8 SigLIP chunks (27 encoder layers total) + 7 P2P transitions
+    on the vision submesh. The 7 transitions: 6 same-row hops + 1 diagonal
+    multihop (chunk 3 → 4, (0,3) → (1,0), routed via (0,0)). Validates the
+    full SigLIP encoder D2D chain end-to-end on real weights, with the
+    final activation landing at chunk 7's chip coord (1, 3)."""
+    import torch as _torch
+
+    cfg = PaliGemmaConfig()
+    weights = _load_real_weights()
+
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    parent = ttnn.open_mesh_device(GALAXY_SHAPE)
+    try:
+        vision_submesh = parent.create_submesh(
+            ttnn.MeshShape(*VISION_SUBMESH_SHAPE),
+            ttnn.MeshCoordinate(*VISION_SUBMESH_OFFSET),
+        )
+        slice_ = Pi0_5OptionCVisionSliceSplitParent(
+            config=cfg,
+            weights=weights,
+            vision_submesh=vision_submesh,
+        )
+
+        num_chips = VISION_SUBMESH_SHAPE[0] * VISION_SUBMESH_SHAPE[1]
+        B, M, H = 1, 256, slice_.hidden_size
+        h_torch = _torch.zeros(num_chips, B, M, H, dtype=_torch.bfloat16)
+        c0 = slice_.chunk_coord(0)
+        lin0 = c0[0] * VISION_SUBMESH_SHAPE[1] + c0[1]
+        h_torch[lin0, 0, :, :] = _torch.randn(M, H, dtype=_torch.bfloat16) * 0.02
+        hidden = ttnn.from_torch(
+            h_torch.contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=vision_submesh,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(vision_submesh, dim=0),
+        )
+        print(f"\n[input] hidden shape={list(hidden.shape)} live at chunk 0 coord {c0}")
+
+        print("\n[chain] running forward_all_chunks — 27 SigLIP layers + 7 P2P transitions...")
+        out = slice_.forward_all_chunks(hidden)
+        ttnn.synchronize_device(vision_submesh)
+
+        # Final live data should be at chunk 7's chip coord (1, 3).
+        c_last = slice_.chunk_coord(slice_.num_chunks - 1)
+        lin_last = c_last[0] * VISION_SUBMESH_SHAPE[1] + c_last[1]
+        shards = ttnn.get_device_tensors(out)
+        out_last = ttnn.to_torch(shards[lin_last])
+        non_zero = (out_last.abs() > 1e-6).sum().item()
+        nan_count = _torch.isnan(out_last).sum().item()
+        finite_count = _torch.isfinite(out_last).sum().item()
+        total = out_last.numel()
+        print(
+            f"\n[output @ chunk 7 coord {c_last}] shape={list(out_last.shape)} "
+            f"non_zero={non_zero}/{total} nan={nan_count} finite={finite_count}/{total}"
+        )
+        print(f"  first 5 values: {out_last.flatten()[:5].tolist()}")
+        if finite_count > 0:
+            finite_t = out_last[_torch.isfinite(out_last)]
+            print(f"  finite range: [{finite_t.min().item():.4e}, {finite_t.max().item():.4e}]")
+
+        assert nan_count == 0, "Output contains NaN — chunk chain broke somewhere"
+        assert non_zero > 0, "Output all zeros — P2P chain did not deliver live shard to chunk 7"
+        print(
+            "\n[PASS] parent-mesh vision slice: 27 SigLIP layers + 7 P2P transitions ran end-to-end "
+            "on the vision submesh, final activation landed at chunk 7's coord"
+        )
+        ttnn.deallocate(out)
+    finally:
+        ttnn.close_mesh_device(parent)
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)

@@ -1191,3 +1191,35 @@ class Pi0_5OptionCVisionSliceSplitParent:
             h = h_new
 
         return h
+
+    def forward_all_chunks(self, hidden_states: "ttnn.Tensor") -> "ttnn.Tensor":
+        """Run ALL 8 SigLIP chunks in sequence, P2P-advancing the live shard
+        between consecutive chunks.
+
+        Per-chunk: forward_chunk(hidden, chunk_idx). At the boundary, P2P
+        the live shard from chunk i's chip to chunk i+1's chip. Most hops
+        are same-row (chunks 0→1, 1→2, 2→3 on row 0; 4→5, 5→6, 6→7 on row 1)
+        — single fabric hop. The (0,3) → (1,0) transition (chunk 3 → 4) is
+        diagonal; send_shard_via_p2p_multihop handles it via two single-hop
+        fabric transfers (routes via (0,0) per the multihop helper's rule).
+
+        Input: vision-submesh tensor [1, B=1, M, H=1152] live at chunk 0's
+        chip coord (0, 0).
+
+        Returns: vision-submesh tensor with live data at chunk 7's chip
+        coord (1, 3) — ready for post_ln + mm_projector (next sub-commit).
+        """
+        from .transport import send_shard_via_p2p_multihop
+
+        h = hidden_states
+        for chunk_idx in range(self.num_chunks):
+            h = self.forward_chunk(h, chunk_idx)
+            # P2P advance to the next chunk's chip (skip after the last chunk).
+            if chunk_idx + 1 < self.num_chunks:
+                cur = self.chunk_coord(chunk_idx)
+                nxt = self.chunk_coord(chunk_idx + 1)
+                h_advanced = send_shard_via_p2p_multihop(h, cur, nxt)
+                if h_advanced is not h:
+                    ttnn.deallocate(h)
+                h = h_advanced
+        return h
