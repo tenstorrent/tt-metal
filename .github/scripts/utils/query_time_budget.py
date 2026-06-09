@@ -11,9 +11,12 @@ Notes on the data model (see tests/pipeline_reorg/*_tests.yaml):
     authoritative owner. A single file (e.g. galaxy_unit_tests.yaml) mixes
     entries from several teams, so we scan every file of the test type and
     filter by `team:`.
-  * A file's test type is the underscore-delimited token before `_tests.yaml`
-    (unit, e2e, sanity, stress, perf, integration, l2, device_perf, smoke,
-    profiler, sweep, health, demo). `device_perf` and `perf` are distinct.
+  * A file's test type is NOT its file name. It is the workflow_name argument
+    passed to verify_time_budget.py by the workflow that runs the file (the same
+    key used in time_budget.yaml). This is discovered live from .github/workflows,
+    because the file name can differ from the budget key -- e.g. release_tests.yaml
+    and galaxy_deepseek_prefill_tests.yaml both map to `demo`, and
+    demo_sp_multihost_tests.yaml maps to `e2e`.
   * Per entry: skus: { <machine>: { timeout: <minutes>, tier: <n> } }.
   * The models unit/e2e/sweep budgets are split. The plain keys cover non-tiered
     pipelines; the unit_tier<n>/e2e_tier<n>/sweep_tier<n> keys cover
@@ -33,6 +36,7 @@ Usage:
 import argparse
 import glob
 import os
+import re
 import sys
 
 import yaml
@@ -44,30 +48,61 @@ TIERED_MODEL_TESTTYPES = {"unit", "e2e", "sweep"}
 WORKFLOWS_DIR = os.path.join(REPO_ROOT, ".github", "workflows")
 
 
-def testtype_of_file(filename):
-    """Return the test-type token of a `*_tests.yaml` file, or None.
+_TESTS_YAML_RE = re.compile(r"TESTS_YAML_PATH:\s*\S*?([A-Za-z0-9_]+_tests\.yaml)")
 
-    e.g. models_unit_tests.yaml      -> "unit"
-         models_device_perf_tests.yaml -> "device_perf"
-         galaxy_perf_tests.yaml      -> "perf"
+
+def build_testtype_map(workflows_dir):
+    """Map each tests YAML (basename) to its budget test type, parsed from workflows.
+
+    The authoritative test type for a tests YAML is the workflow_name argument
+    passed to verify_time_budget.py in the workflow that runs it -- NOT the file
+    name. We read it live so the mapping tracks pipeline changes (and handles
+    cases where the file name differs from the budget key, e.g. release_tests.yaml
+    -> 'demo', demo_sp_multihost_tests.yaml -> 'e2e').
     """
-    base = os.path.basename(filename)
-    if not base.endswith("_tests.yaml"):
-        return None
-    stem = base[: -len("_tests.yaml")]  # e.g. "models_device_perf"
-    parts = stem.split("_")
-    if len(parts) < 2:
-        return None
-    # The test type is the trailing token(s). Treat "device_perf" specially so it
-    # is not confused with "perf"; everything else is the single last token.
-    if len(parts) >= 2 and parts[-2] == "device" and parts[-1] == "perf":
-        return "device_perf"
-    return parts[-1]
+    mapping = {}
+    for path in glob.glob(os.path.join(workflows_dir, "*.y*ml")):
+        try:
+            lines = open(path, "r").read().splitlines()
+        except OSError:
+            continue
+
+        test_files = {m.group(1) for line in lines for m in [_TESTS_YAML_RE.search(line)] if m}
+        if not test_files:
+            continue
+
+        # The workflow_name is the 3rd positional arg to verify_time_budget.py:
+        # the first literal token following the time_budget.yaml path argument.
+        workflow_name = None
+        for i, line in enumerate(lines):
+            if "verify_time_budget.py" not in line:
+                continue
+            for j in range(i + 1, min(i + 8, len(lines))):
+                if "time_budget.yaml" not in lines[j]:
+                    continue
+                for k in range(j + 1, min(j + 4, len(lines))):
+                    arg = lines[k].strip().rstrip("\\").strip().strip("\"'")
+                    if arg and not arg.startswith("${{"):
+                        workflow_name = arg
+                        break
+                break
+            if workflow_name:
+                break
+        if not workflow_name:
+            continue
+
+        for test_file in test_files:
+            mapping[test_file] = workflow_name
+    return mapping
 
 
-def find_test_files(tests_dir, testtype):
-    """All *_tests.yaml files in tests_dir whose test type equals `testtype`."""
-    return sorted(f for f in glob.glob(os.path.join(tests_dir, "*_tests.yaml")) if testtype_of_file(f) == testtype)
+def find_test_files(tests_dir, testtype, testtype_map):
+    """Tests YAML paths in tests_dir whose budget test type equals `testtype`."""
+    return sorted(
+        path
+        for path in glob.glob(os.path.join(tests_dir, "*_tests.yaml"))
+        if testtype_map.get(os.path.basename(path)) == testtype
+    )
 
 
 def uses_tiered_model_budget(team, testtype):
@@ -267,12 +302,13 @@ def main():
     parser.add_argument("-v", "--verbose", action="store_true", help="Print per-test breakdown")
     args = parser.parse_args()
 
-    matching_files = find_test_files(args.tests_dir, args.testtype)
+    testtype_map = build_testtype_map(args.workflows_dir)
+    matching_files = find_test_files(args.tests_dir, args.testtype, testtype_map)
     files = select_files_for_budget(matching_files, args.team, args.testtype, args.tier)
     if not matching_files:
-        print(f"[WARN] No '*_{args.testtype}_tests.yaml' files found in {args.tests_dir}")
+        print(f"[WARN] No tests files map to budget test type '{args.testtype}' (checked {args.workflows_dir})")
     elif not files:
-        print(f"[WARN] No files correspond to this budget key after applying model tier split rules")
+        print("[WARN] No files correspond to this budget key after applying model tier split rules")
 
     total, breakdown = collect_allocations(files, args.team, args.machine, args.tier)
     budget = lookup_budget(args.budget_file, args.team, args.testtype, args.machine, args.tier)
