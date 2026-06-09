@@ -47,33 +47,15 @@
 
 - name: "Demo Test with Perf Metrics (DeepSeek V3 B1 Supercluster 4 aka Superpod 1)"
   cmd: |
-    echo "============= SP1 superpod: allocation hostfile + generated rank bindings ============="
-    # /ci/ttrun/hostfile and /ci/ttrun/rankfile come from ttop-get-allocation-data +
-    # ttop-configure-tt-run (MGD allocation). Rank bindings are generated from that hostfile
-    # so no hardcoded hostnames in rev_c rank files.
+    echo "============= SP1 superpod: using allocation ttrun config ============="
     TTRUN_DIR=/ci/ttrun
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
-    PIPELINE_DIR="${TT_METAL_HOME}/generated/sp1_pipeline_dir"
-    PIPELINE_CONFIG="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_single_pod_ci.yaml"
-    GENERATOR="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py"
+    HOSTS=$(paste -sd, "${TTRUN_DIR}/hostfile")
 
-    mkdir -p "${PIPELINE_DIR}"
-    python3 "${GENERATOR}" "${PIPELINE_CONFIG}" \
-      --hostfile "${TTRUN_DIR}/hostfile" \
-      --worker-tt-metal-home "${TT_METAL_HOME}" \
-      --output-dir "${PIPELINE_DIR}"
-
-    RANK_BINDING="${PIPELINE_DIR}/blitz_decode_pipeline_rank_binding_single_pod_ci.yaml"
-    RANK_FILE="${PIPELINE_DIR}/blitz_decode_pipeline_rank_file_single_pod_ci"
-    # OpenMPI 5 rejects rankfile paths containing hyphens (e.g. under tt-metal).
-    RANK_FILE_FOR_MPI=/var/tmp/sp1_rankfile
-    cp -f "${RANK_FILE}" "${RANK_FILE_FOR_MPI}"
-
-    PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
     LOGURU_LEVEL=DEBUG TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
-      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=${RANK_FILE_FOR_MPI} --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
-      --rank-binding "${RANK_BINDING}" \
+      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
+      --mpi-args "--host ${HOSTS} --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 4096 \
         --no-stop-at-eos \
@@ -90,17 +72,15 @@
 
 - name: "Stress Test (DeepSeek V3 B1 Supercluster 4 aka Superpod 1)"
   cmd: |
-    echo "============= SP1 superpod: using branch ttrun.py and rank files ============="
+    echo "============= SP1 superpod: using allocation ttrun config ============="
+    TTRUN_DIR=/ci/ttrun
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
-    SCALEOUT_CONFIG_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/rev_c"
-    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_binding_single_pod.yaml" .
-    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_file_single_pod" .
+    HOSTS=$(paste -sd, "${TTRUN_DIR}/hostfile")
 
-    PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
-      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=rev_c_rank_file_single_pod --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
-      --rank-binding rev_c_rank_binding_single_pod.yaml \
+      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
+      --mpi-args "--host ${HOSTS} --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 128000 \
         --repeat-generations 2 \
@@ -110,11 +90,11 @@
         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
   skus:
-    bh_sp1:
+    bh_sp1-mgd:
       timeout: 60
   owner_id: U08E1JCMAJF
   team: scaleout
-  sp_config: sp1
+  sp_config: sp1-mgd
 
 # ============================================================================
 # BH SP4 Multihost Pipeline Tests (4 connected SP1 = 16 galaxies)
