@@ -49,7 +49,7 @@ class Flux2TransformerState:
         self._tt_sigma_difference = StateTensor()
 
     def __getattr__(self, name: str) -> ttnn.Tensor | None:
-        return object.__getattribute__(self, f"_{name}")._value
+        return object.__getattribute__(self, f"_{name}").data
 
 
 class Flux2Pipeline:
