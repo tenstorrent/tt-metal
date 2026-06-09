@@ -40,28 +40,12 @@ struct TensorShape2D {
  * `shape` carries the matmul-coordinate effective sizes (logical_d0=effective_M for
  * non-transpose / logical_d0=K for transpose, logical_d1=K_tiles or effective_M).
  */
-template <
-    uint32_t M_block_tiles,
-    uint32_t K_block_tiles,
-    bool TransposeA,
-    bool UseOffset,
-    typename TensorAccessorType
-#ifdef READ_FROM_LOCAL_INPUT
-    ,
-    typename LocalTensorAccessorType
-#endif
-    >
+template <uint32_t M_block_tiles, uint32_t K_block_tiles, bool TransposeA, bool UseOffset, typename TensorAccessorType>
 void read_in0_block_sync(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
     uint32_t write_ptr,
     uint32_t tile_size_bytes,
-#ifdef READ_FROM_LOCAL_INPUT
-    const LocalTensorAccessorType& in3_accessor,
-    uint32_t local_k_start,
-    uint32_t local_k_end,
-    uint32_t input_tensor_Wt,
-#endif
     uint32_t d0_start,
     uint32_t d0_end,
     uint32_t d1_start,
@@ -82,36 +66,25 @@ void read_in0_block_sync(
         }
         for (uint32_t j = d1_start; j < d1_end; j++) {
             if (j < k_bound) {
-#ifdef READ_FROM_LOCAL_INPUT
-                if (local_k_start <= j && j <= local_k_end) {
-                    // read from self_tensor_accessor
-                    uint32_t local_i = UseOffset ? (i + in0_row_offset_tiles) : i;
-                    uint32_t tile_id = local_i * input_tensor_Wt + (j - local_k_start);
-                    noc_async_read_tile(tile_id, in3_accessor, write_ptr);
-                } else {
-#endif
-                    uint32_t tile_id;
-                    if constexpr (TransposeA) {
-                        if constexpr (UseOffset) {
-                            // [K_parent, M_parent] storage:
-                            // (K-row + k_offset) * M_parent_tiles + (M-col + m_offset)
-                            tile_id = (j + in0_k_offset_tiles) * parent_M_tiles_stride + (i + in0_row_offset_tiles);
-                        } else {
-                            tile_id = j * shape.logical_d1 + i;
-                        }
+                uint32_t tile_id;
+                if constexpr (TransposeA) {
+                    if constexpr (UseOffset) {
+                        // [K_parent, M_parent] storage:
+                        // (K-row + k_offset) * M_parent_tiles + (M-col + m_offset)
+                        tile_id = (j + in0_k_offset_tiles) * parent_M_tiles_stride + (i + in0_row_offset_tiles);
                     } else {
-                        if constexpr (UseOffset) {
-                            // [M_parent, K_parent] storage:
-                            // (M-row + m_offset) * K_parent_tiles + (K-col + k_offset)
-                            tile_id = (i + in0_row_offset_tiles) * parent_K_tiles_stride + (j + in0_k_offset_tiles);
-                        } else {
-                            tile_id = i * shape.logical_d1 + j;
-                        }
+                        tile_id = j * shape.logical_d1 + i;
                     }
-                    noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
-#ifdef READ_FROM_LOCAL_INPUT
+                } else {
+                    if constexpr (UseOffset) {
+                        // [M_parent, K_parent] storage:
+                        // (M-row + m_offset) * K_parent_tiles + (K-col + k_offset)
+                        tile_id = (i + in0_row_offset_tiles) * parent_K_tiles_stride + (j + in0_k_offset_tiles);
+                    } else {
+                        tile_id = i * shape.logical_d1 + j;
+                    }
                 }
-#endif
+                noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
             } else {
                 fill_zeros_async(write_ptr, tile_size_bytes);
             }

@@ -8,7 +8,8 @@
 #include "matmul_dataflow_common.hpp"
 
 void kernel_main() {
-    // M_tiles, padded_M_tiles, M_blocks_per_core, K_tiles, padded_K_tiles come from runtime args.
+    // M_tiles, padded_M_tiles, M_blocks_per_core, K_tiles come from runtime args (padded_K_tiles
+    // is derived locally below).
     constexpr uint32_t N_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t padded_N_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t M_block_tiles = get_compile_time_arg_val(2);
@@ -72,15 +73,16 @@ void kernel_main() {
     // OFFSET_IN0_K / OFFSET_IN1_K overrides K_tiles from on-device offsets[start..start+2].
     uint32_t K_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 6);
 
-    // Read on-device offsets and override the matching host-derived values. Each flag
-    // is independent; they compose freely.
+    // Read on-device offsets and override the matching host-derived values. The flags come in
+    // two sets, one per OffsetsRole. InputAndOutputRow sets OFFSET_M_AXIS + OFFSET_IN0_ROW +
+    // OFFSET_OUT_ROW together; InputAndWeightK sets OFFSET_IN0_K + OFFSET_IN1_K together.
     //   OFFSET_M_AXIS:   offsets[start..start+2] → M_tiles + per-core M; publishes M on cb_ctrl.
     //   OFFSET_IN0_ROW:  also sets in0_row_offset_tiles from offsets[start].
     //   OFFSET_OUT_ROW:  also sets out_row_offset_tiles from offsets[start] when this kernel
     //                    is the writer (non-transpose_core_grid).
     //   OFFSET_IN0_K:    in0 K-slice — sets in0_k_offset_tiles + K_tiles; publishes K on cb_ctrl.
-    //   OFFSET_IN1_K:    in1 K-slice — only sets K_tiles locally here; dm_in1 owns the offset
-    //                    and (when OFFSET_IN0_K is not set) the cb_ctrl publish.
+    //   OFFSET_IN1_K:    in1 K-slice owned by dm_in1; here it only affects the local K_tiles
+    //                    override (which always co-occurs with OFFSET_IN0_K above).
     {
         const uint32_t offsets_addr = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 7);
         const uint32_t offsets_start_index = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 8);
@@ -142,11 +144,7 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(tt::CBIndex::c_8));
         ctrl_l1[3] = K_tiles;
         cb_push_back(tt::CBIndex::c_8, 1U);
-#elif defined(OFFSET_IN1_K)
-        // OFFSET_IN1_K without OFFSET_IN0_K: K_tiles still needs the local override (used for
-        // padded_K_tiles below) but dm_in1 owns the cb_ctrl publish for compute.
-        K_tiles = (row_end - row_start) / 32U;
-#endif  // OFFSET_IN0_K / OFFSET_IN1_K
+#endif  // OFFSET_IN0_K
     }
     const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
 

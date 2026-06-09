@@ -32,12 +32,6 @@ struct VariableMatmulDeviceOperation {
 
     static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& weight_tensor,
-        const VariableMatmulConfig& config,
-        ttnn::DeviceComputeKernelConfig compute_kernel_config);
 };
 
 }  // namespace ttml::metal::ops::variable_matmul::device

@@ -66,8 +66,8 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
     const uint32_t M = (effective_M_tiles > 0) ? (effective_M_tiles * TILE_HEIGHT) : M_parent;
 
     // K-axis: when K_w > K_in the weight is the parent and matmul-K = K_in; otherwise the
-    // input is the parent (or both match) and matmul-K = K_w. The EP path's
-    // InputK/WeightK/InputAndWeightK roles override the K-offset within the parent at runtime.
+    // input is the parent (or both match) and matmul-K = K_w. The InputAndWeightK role
+    // overrides the K-offset within the parent at runtime.
     const bool in1_parent_mode = K_w_tiles > K_in_tiles;
     if (in1_parent_mode) {
         TT_FATAL(

@@ -106,7 +106,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     const bool transpose_a = operation_attributes.transpose_a;
     const bool transpose_b = operation_attributes.transpose_b;
     // Matmul-K source depends on which side is the parent buffer:
-    //   - in1_k_offset > 0 (or K_w > K_in): weight is the parent, matmul-K = K_in
+    //   - K_w > K_in: weight is the parent, matmul-K = K_in
     //   - else: in0 may be the parent (or both match), matmul-K = K_w
     const uint32_t K_w = transpose_b ? in1_tensor_shape[-1] : in1_tensor_shape[-2];
     const uint32_t N = transpose_b ? in1_tensor_shape[-2] : in1_tensor_shape[-1];
@@ -230,9 +230,9 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
             in0_transposed_cb_id, program, core_grid, in0_tile_size, in0_cb_num_tiles, in0_data_format);
     }
 
-    // Control CB used by OutputRow / InputRow / InputK / WeightK: a dm kernel publishes
-    // (M values for OutputRow/InputRow, K_tiles for InputK/WeightK) — derived from on-device
-    // offsets — and compute cb_wait_fronts on it before overriding its RT-arg-derived values.
+    // Control CB used by both roles: a dm kernel publishes (M values for InputAndOutputRow,
+    // K_tiles for InputAndWeightK) — derived from on-device offsets — and compute cb_wait_fronts
+    // on it before overriding its RT-arg-derived values.
     // 4×uint32 page so both layouts (M values at [0..2], K at [3]) share one CB.
     constexpr uint32_t cb_ctrl_id = tt::CBIndex::c_8;
     constexpr uint32_t cb_ctrl_bytes = 16U;
@@ -252,7 +252,9 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     // Dataflow kernels always read offsets_tensor[start..start+2] and use the values to
     // override the RT-derived offsets. For InputAndOutputRow the compute kernel also needs
     // M values; dm_in0_sender publishes them via cb_ctrl.
-    // Orthogonal offset flags derived from the role — kernel branches key off these.
+    // Offset flags derived from the role — kernel branches key off these. The two roles each
+    // map to a fixed flag set: InputAndOutputRow → m_axis/in0_row/out_row; InputAndWeightK →
+    // in0_k/in1_k.
     const auto role = operation_attributes.offsets_role;
     const bool offset_m_axis = role == OffsetsRole::InputAndOutputRow;
     const bool offset_in0_row = role == OffsetsRole::InputAndOutputRow;
@@ -576,9 +578,9 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         };
 
         // On-device offsets RT args for dm_in0_sender:
-        //   OutputRow / InputRow: (offsets_addr, offsets_start_index, in0_idx) — kernel reads
-        //                         the M range and derives per-core M from in0_idx.
-        //   InputK / WeightK:     (offsets_addr, offsets_start_index)         — K-range only.
+        //   InputAndOutputRow: (offsets_addr, offsets_start_index, in0_idx) — kernel reads the
+        //                      M range and derives per-core M from in0_idx.
+        //   InputAndWeightK:   (offsets_addr, offsets_start_index)          — K-range only.
         if (in0_needs_offsets) {
             in0_args.push_back(tensor_args.offsets_tensor.value().buffer()->address());
             in0_args.push_back(operation_attributes.offsets_start_index);
@@ -632,8 +634,8 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         };
 
         // On-device offsets RT args for dm_in1_sender_out:
-        //   InputK / WeightK:     (offsets_addr, offsets_start_index)         — K-range only.
-        //   OutputRow / InputRow: also append in0_idx (kernel derives per-core M).
+        //   InputAndWeightK:   (offsets_addr, offsets_start_index) — K-range only.
+        //   InputAndOutputRow: also append in0_idx (kernel derives per-core M).
         if (in1_needs_offsets) {
             in1_args.push_back(tensor_args.offsets_tensor.value().buffer()->address());
             in1_args.push_back(operation_attributes.offsets_start_index);
@@ -749,7 +751,7 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
     constexpr uint32_t COMPUTE_K_TILES_IDX = 5;
 
     // Recompute matmul-K. Mirror the create() derivation: in1 is parent when its K extent
-    // exceeds in0's or in1_k_offset > 0; otherwise in0/weight K match (weight provides K_w).
+    // exceeds in0's; otherwise in0/weight K match (weight provides K_w).
     const bool in1_parent_k = parent_K_tiles_in1 > parent_K_tiles_in0;
     const uint32_t K_tiles_rt = in1_parent_k ? parent_K_tiles_in0 : parent_K_tiles_in1;
 
