@@ -20,7 +20,6 @@ namespace tt::tt_metal {
 namespace {
 
 constexpr CoreCoord WORKER_CORE = {0, 0};
-constexpr uint32_t RESULT_L1_ADDR = 1000 * 1024;
 
 using DataT = std::uint32_t;
 constexpr auto DATA_FORMAT = DataFormat::UInt32;
@@ -85,16 +84,21 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarCbL1ReadApi) {
     ring[words_per_entry + 1] = VAL3;
     detail::WriteToDeviceL1(device, WORKER_CORE, dfb_l1_addr, ring);
 
-    std::vector<DataT> result_init(EXPECTED_RESULT.size(), 0);
-    detail::WriteToDeviceL1(device, WORKER_CORE, RESULT_L1_ADDR, result_init);
+    // Kernel writes its reads here; host reads this spot back after the run.
+    const uint32_t result_size_bytes = EXPECTED_RESULT.size() * sizeof(DataT);
+    const uint32_t l1_alignment = device->allocator()->get_alignment(BufferType::L1);
+    const uint32_t aligned_result_size = (result_size_bytes + l1_alignment - 1) / l1_alignment * l1_alignment;
+    const uint32_t result_l1_addr = static_cast<uint32_t>(device->l1_size_per_core()) - aligned_result_size;
 
-    SetRuntimeArgs(program_, compute_kernel, WORKER_CORE, {RESULT_L1_ADDR});
+    std::vector<DataT> result_init(EXPECTED_RESULT.size(), 0);
+    detail::WriteToDeviceL1(device, WORKER_CORE, result_l1_addr, result_init);
+
+    SetRuntimeArgs(program_, compute_kernel, WORKER_CORE, {result_l1_addr});
 
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
 
     std::vector<DataT> host_buffer;
-    const auto expected_result_size = EXPECTED_RESULT.size() * sizeof(DataT);
-    detail::ReadFromDeviceL1(device, WORKER_CORE, RESULT_L1_ADDR, expected_result_size, host_buffer);
+    detail::ReadFromDeviceL1(device, WORKER_CORE, result_l1_addr, result_size_bytes, host_buffer);
 
     EXPECT_EQ(host_buffer, EXPECTED_RESULT);
 }
