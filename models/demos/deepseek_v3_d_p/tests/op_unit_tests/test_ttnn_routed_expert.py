@@ -17,7 +17,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import profiler
-from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
@@ -103,21 +103,21 @@ def run_torch_routed_experts(
     [
         # fmt: off
         #(320, 1024, 512, 64, 2, 9, True),
-        # GLM 5.1 MoE shape (emb 6144, MoE hidden 2048, 256 routed experts, top-8).
+        # MiniMax M2.7 MoE shape (emb 3072, MoE hidden 1536, 256 routed experts, top-8).
         # capacity factor 8 mirrors test_prefill_combine.py for the same routed-expert load.
-        (3200, GLM51Config.EMB_SIZE, GLM51Config.MOE_INTERMEDIATE_SIZE, GLM51Config.NUM_ROUTED_EXPERTS, GLM51Config.NUM_EXPERTS_PER_TOKEN, 8, True),
-        (640, GLM51Config.EMB_SIZE, GLM51Config.MOE_INTERMEDIATE_SIZE, GLM51Config.NUM_ROUTED_EXPERTS, GLM51Config.NUM_EXPERTS_PER_TOKEN, 8, True),
-        (3200, GLM51Config.EMB_SIZE, GLM51Config.MOE_INTERMEDIATE_SIZE, 64, GLM51Config.NUM_EXPERTS_PER_TOKEN, 8, True),
-        (640, GLM51Config.EMB_SIZE, GLM51Config.MOE_INTERMEDIATE_SIZE, 64, GLM51Config.NUM_EXPERTS_PER_TOKEN, 8, True),
-        # (640, 7168, GLM51Config.MOE_INTERMEDIATE_SIZE, 64, 8, 8, True),
+        (3200, MiniMaxM27Config.EMB_SIZE, MiniMaxM27Config.MOE_INTERMEDIATE_SIZE, MiniMaxM27Config.NUM_ROUTED_EXPERTS, MiniMaxM27Config.NUM_EXPERTS_PER_TOKEN, 8, True),
+        (640, MiniMaxM27Config.EMB_SIZE, MiniMaxM27Config.MOE_INTERMEDIATE_SIZE, MiniMaxM27Config.NUM_ROUTED_EXPERTS, MiniMaxM27Config.NUM_EXPERTS_PER_TOKEN, 8, True),
+        (3200, MiniMaxM27Config.EMB_SIZE, MiniMaxM27Config.MOE_INTERMEDIATE_SIZE, 64, MiniMaxM27Config.NUM_EXPERTS_PER_TOKEN, 8, True),
+        (640, MiniMaxM27Config.EMB_SIZE, MiniMaxM27Config.MOE_INTERMEDIATE_SIZE, 64, MiniMaxM27Config.NUM_EXPERTS_PER_TOKEN, 8, True),
+        # (640, 7168, MiniMaxM27Config.MOE_INTERMEDIATE_SIZE, 64, 8, 8, True),
         # fmt: on
     ],
     ids=[
-        # s"small-dims-validate-pcc",
-        "glm5.1-dims-validate-pcc",
-        "glm5.1-dims-small-seq-validate-pcc",
-        "glm5.1-dims-64-experts-validate-pcc",
-        "glm5.1-dims-small-seq-64-experts-validate-pcc",
+        # "small-dims-validate-pcc",
+        "minimax-dims-validate-pcc",
+        "minimax-dims-small-seq-validate-pcc",
+        "minimax-dims-64-experts-validate-pcc",
+        "minimax-dims-small-seq-64-experts-validate-pcc",
     ],
 )
 @pytest.mark.parametrize(
@@ -174,7 +174,7 @@ def test_ttnn_routed_expert(
     use_predictable_data,
 ):
     """
-    Test TtRoutedExpert with GLM 5.1 dimensions on various mesh configurations.
+    Test TtRoutedExpert with MiniMax M2.7 dimensions on various mesh configurations.
 
     Validates that the TTNN routed expert FFN computation matches torch reference.
     Each device processes its local experts independently (no CCL needed).
