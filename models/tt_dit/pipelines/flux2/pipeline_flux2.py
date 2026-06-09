@@ -24,37 +24,16 @@ from ...models.transformers.transformer_flux2 import Flux2Transformer
 from ...models.vae.vae_flux2 import Flux2VaeDecoder
 from ...parallel.config import DiTGParallelConfigNoCFG, EncoderParallelConfig, Flux2VaeParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
-from ...utils import cache, tensor
+from ...utils import cache
 from ...utils.padding import PaddingConfig
 from ...utils.tensor import fast_device_to_host, float_to_uint8
-from ...utils.tracing import traced_function
+from ...utils.tracing import StateTensor, traced_function
 from .prompt_encoder import PromptEncoder
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from PIL import Image
-
-
-class StateTensor:
-    def __init__(self) -> None:
-        self._value: ttnn.Tensor | None = None
-
-    def update(
-        self,
-        value: torch.Tensor | ttnn.Tensor,
-        traced: bool,
-        dtype: ttnn.DataType = ttnn.bfloat16,
-        mesh_axes: list[int] | None = None,
-        device: ttnn.Device | None = None,
-    ) -> None:
-        if torch.is_tensor(value):
-            assert device is not None, "device must be provided if using torch tensor"
-            value = tensor.from_torch(value, device=device, mesh_axes=mesh_axes, dtype=dtype)
-        if self._value is None or not traced:
-            self._value = value
-        else:
-            ttnn.copy(value, self._value)
 
 
 class Flux2TransformerState:
