@@ -139,3 +139,97 @@ def test_parent_expert_slice_qo_chain():
     finally:
         ttnn.close_mesh_device(parent)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
+
+def test_parent_expert_slice_attn_sublayer_chain():
+    """Full attention sublayer (mod + adaRMS norm + wqkv + RoPE + SDPA + O +
+    gated residual) chained across 18 layers + 5 same-column P2P transitions
+    on real action-expert weights. Self-attention only (no past_kv yet —
+    cross-attention with migrated VLM prefix KV lands in the next commit)."""
+    cfg = PaliGemmaConfig()
+    weights = _load_real_weights()
+
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    parent = ttnn.open_mesh_device(GALAXY_SHAPE)
+    try:
+        slice_ = Pi0_5OptionCExpertSliceParent(
+            config=cfg,
+            weights=weights,
+            parent_mesh=parent,
+            denoise_offset=DENOISE_SUBMESH_OFFSET,
+            denoise_shape=DENOISE_SUBMESH_SHAPE,
+            expert_layer_range=(0, cfg.expert_config.depth),
+            layers_per_chip=EXPERT_LAYERS_PER_DENOISE_CHIP,
+        )
+        print(f"\n[init] {len(slice_.weights_on_parent)} weight categories uploaded")
+
+        # Activation [1, 1, M=64, W=1024], live at the first denoise chip's coord.
+        devices_total = GALAXY_SHAPE[0] * GALAXY_SHAPE[1]
+        M = 64
+        W = cfg.expert_config.width  # 1024
+        act_torch = torch.zeros(devices_total, 1, M, W, dtype=torch.bfloat16)
+        coord0 = slice_.denoise_coord_for_layer(0)
+        lin0 = coord0[0] * GALAXY_SHAPE[1] + coord0[1]
+        act_torch[lin0, 0, :, :] = torch.randn(M, W, dtype=torch.bfloat16) * 0.05
+        act = ttnn.from_torch(
+            act_torch,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=parent,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(parent, dim=0),
+        )
+
+        # adarms_cond [B=1, 1, W=1024], replicated across all chips (same data
+        # per shard). Per the AdaRMSGemmaBlockTTNN forward, this is the
+        # output of the suffix slice's time/state embedding.
+        cond_data = torch.randn(1, 1, W, dtype=torch.bfloat16) * 0.1
+        cond_torch = cond_data.unsqueeze(0).expand(devices_total, -1, -1, -1).contiguous()
+        adarms_cond = ttnn.from_torch(
+            cond_torch,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=parent,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(parent, dim=0),
+        )
+        print(f"[inputs] act shape={list(act.shape)} adarms_cond shape={list(adarms_cond.shape)}")
+
+        # Run the full attention-sublayer chain (18 layers).
+        print("\n[chain] running 18-layer attn sublayer chain + 5 same-column P2P transitions...")
+        out = slice_.forward_attn_sublayer_chain(act, adarms_cond, attention_mask=None)
+        ttnn.synchronize_device(parent)
+
+        coord_last = slice_.denoise_coord_for_layer(slice_.num_layers - 1)
+        lin_last = coord_last[0] * GALAXY_SHAPE[1] + coord_last[1]
+        shards = ttnn.get_device_tensors(out)
+        out_last = ttnn.to_torch(shards[lin_last])
+        non_zero_count = (out_last.abs() > 1e-6).sum().item()
+        nan_count = torch.isnan(out_last).sum().item()
+        inf_count = torch.isinf(out_last).sum().item()
+        finite_count = torch.isfinite(out_last).sum().item()
+        total = out_last.numel()
+        print(
+            f"\n[output @ last chip coord {coord_last}] shape={list(out_last.shape)} "
+            f"non_zero={non_zero_count}/{total} nan={nan_count} inf={inf_count} finite={finite_count}/{total}"
+        )
+        print(f"  first 5 values: {out_last.flatten()[:5].tolist()}")
+        if finite_count > 0:
+            finite_t = out_last[torch.isfinite(out_last)]
+            print(f"  finite range: [{finite_t.min().item():.4e}, {finite_t.max().item():.4e}]")
+
+        # adaRMS norm + gated residual is a partial bound on the residual stream,
+        # so we EXPECT mostly-finite values here (the gated structure damps the
+        # explosion that pure matmul-chain hits). Numerical PCC vs the paired
+        # slice comes when KV-cache cross-attention lands.
+        assert nan_count == 0, "Output contains NaN (sublayer failure)"
+        assert non_zero_count > 0, "Output is all zeros — live shard did not propagate"
+        # The gated residual normally keeps things bounded; report if it didn't.
+        if finite_count < total:
+            print(f"  [warn] {total - finite_count} non-finite values — gated residual may need adarms_cond tuning")
+        print("\n[PASS] parent-mesh expert attn-sublayer chain runs end-to-end on real weights")
+        ttnn.deallocate(out)
+        ttnn.deallocate(adarms_cond)
+    finally:
+        ttnn.close_mesh_device(parent)
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)

@@ -1129,3 +1129,183 @@ class Pi0_5OptionCExpertSliceParent:
                     ttnn.deallocate(h)
                 h = h_advanced
         return h
+
+    def _ensure_rope_tables(self) -> None:
+        """Lazy-init cos/sin tables on the parent mesh (replicated to all chips).
+
+        RoPE rotations are position-dependent but layer-agnostic. We build
+        them once on the parent mesh; every chip applies the same rotation
+        to its own Q,K shards independently.
+        """
+        if getattr(self, "_cos_meta", None) is not None:
+            return
+        from models.experimental.pi0_5.tt.ttnn_gemma import precompute_freqs_cis_meta_format
+
+        head_dim = self.config.expert_config.head_dim
+        max_seq = self.config.max_seq_len
+        cos, sin = precompute_freqs_cis_meta_format(head_dim, max_seq, self.parent_mesh)
+        self._cos_meta = cos
+        self._sin_meta = sin
+
+    def forward_attn_sublayer_chain(
+        self,
+        activation: "ttnn.Tensor",
+        adarms_cond: "ttnn.Tensor",
+        attention_mask: Optional["ttnn.Tensor"] = None,
+    ) -> "ttnn.Tensor":
+        """Full attention SUBLAYER chain across all expert layers — adaRMS
+        modulation + modulated RMSNorm + fused wqkv + heads split + RoPE +
+        SDPA (no past_kv, self-attention only) + O projection + gated residual.
+
+        Per layer:
+            1. mod = linear(adarms_cond, mod_weight, mod_bias)  → [B, 6W]
+            2. (sa1, ta, ga, _, _, _) = split_modulation_6(mod)
+            3. normed = modulated_rms_norm(h, sa1, ta)
+            4. xqkv = linear(normed, wqkv)
+            5. (q, k, v) = nlp_create_qkv_heads(xqkv, num_heads, num_kv_heads)
+            6. q_rope = rotary(q, cos, sin) ; k_rope = rotary(k, cos, sin)
+            7. attn_out = SDPA(q_rope, k_rope, v, attn_mask=mask)
+            8. attn_concat = nlp_concat_heads(attn_out)
+            9. o_out = linear(attn_concat, o_proj)
+           10. gated = o_out * ga
+           11. h = h + gated
+           12. at chip boundary: P2P advance (same column → single hop)
+
+        No KV cache support yet — `past_kv = None` (self-attention over the
+        64-token suffix). KV cache integration + cross-attention with the
+        migrated VLM prefix lands in the next sub-commit.
+
+        Args:
+            activation: parent-mesh tensor [1, 1, M_padded, W=1024] with live
+                data at the first denoise chip's parent coord.
+            adarms_cond: parent-mesh tensor [B, 1, W] (replicated across all
+                chips). The conditioning vector from the suffix slice's
+                time/state embedding.
+            attention_mask: optional parent-mesh mask for SDPA. None →
+                is_causal=True self-attention.
+
+        Returns: final activation at the last denoise chip's parent coord.
+        """
+        from .transport import send_shard_via_p2p
+        from models.experimental.pi0_5.tt.ttnn_gemma import (
+            _modulated_rms_norm,
+            _split_modulation_6,
+        )
+
+        for r in ("wqkv", "o_proj", "adarms_mod_weight"):
+            if r not in self.weights_on_parent:
+                raise RuntimeError(f"{r} weights not loaded; check _load_expert_weights_stacked_sharded")
+        self._ensure_rope_tables()
+
+        wqkv_per_pos = self.weights_on_parent["wqkv"]
+        o_proj_per_pos = self.weights_on_parent["o_proj"]
+        mod_w_per_pos = self.weights_on_parent["adarms_mod_weight"]
+        mod_b_per_pos = self.weights_on_parent.get("adarms_mod_bias", [None] * self.layers_per_chip)
+        eps = self.config.expert_config.rms_norm_eps
+        num_heads = self.config.expert_config.num_heads
+        num_kv_heads = self.config.expert_config.num_kv_heads
+        head_dim = self.config.expert_config.head_dim
+
+        h = activation
+        for local_i in range(self.num_layers):
+            j = self.position_in_chip(local_i)
+            seq_len = h.shape[-2]
+
+            # 1. Modulation Dense. adarms_cond [B, 1, W] @ mod_w [1, W, 6W] (+ bias)
+            #    → mod [B, 1, 6W]. Each chip computes its own mod with its
+            #    position-j weight slot.
+            mod_b = mod_b_per_pos[j] if j < len(mod_b_per_pos) else None
+            mod = ttnn.linear(
+                adarms_cond,
+                mod_w_per_pos[j],
+                bias=mod_b,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            sa1, ta, ga, _sf1, _tf, _gf = _split_modulation_6(mod)
+            ttnn.deallocate(mod)
+            ttnn.deallocate(_sf1)
+            ttnn.deallocate(_tf)
+            ttnn.deallocate(_gf)
+
+            # 2. Modulated RMSNorm: normed = (rms_norm(h) * (1+sa1)) + ta.
+            normed = _modulated_rms_norm(h, sa1, ta, eps, pre_added=False)
+            ttnn.deallocate(sa1)
+            ttnn.deallocate(ta)
+
+            # 3. Fused wqkv matmul. wqkv was uploaded as the concat of
+            #    [wq, wk, wv] along the output axis, so xqkv has shape
+            #    [B, 1, M, num_heads*head_dim + 2*num_kv_heads*head_dim].
+            xqkv = ttnn.linear(
+                normed,
+                wqkv_per_pos[j],
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(normed)
+
+            # 4. Split into per-head Q, K, V. Same op the paired path uses.
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+                xqkv,
+                num_heads=num_heads,
+                num_kv_heads=num_kv_heads,
+                transpose_k_heads=False,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            # NOTE: do NOT deallocate xqkv — nlp_create_qkv_heads may view-alias.
+
+            # 5. RoPE on Q, K. Slice the precomputed cos/sin tables to current seq_len.
+            cos_slice = ttnn.slice(self._cos_meta, [0, 0, 0, 0], [1, 1, seq_len, head_dim])
+            sin_slice = ttnn.slice(self._sin_meta, [0, 0, 0, 0], [1, 1, seq_len, head_dim])
+            q_rope = ttnn.experimental.rotary_embedding(q, cos_slice, sin_slice)
+            k_rope = ttnn.experimental.rotary_embedding(k, cos_slice, sin_slice)
+            ttnn.deallocate(cos_slice)
+            ttnn.deallocate(sin_slice)
+
+            # 6. SDPA (self-attention over the 64-token suffix; no past_kv yet).
+            #    is_causal=False because the suffix attends bidirectionally
+            #    over itself in the expert (matches the paired slice's path
+            #    when an explicit attention_mask is provided).
+            if attention_mask is not None:
+                attn_out = ttnn.transformer.scaled_dot_product_attention(
+                    q_rope, k_rope, v, attn_mask=attention_mask, memory_config=ttnn.L1_MEMORY_CONFIG
+                )
+            else:
+                attn_out = ttnn.transformer.scaled_dot_product_attention(
+                    q_rope, k_rope, v, is_causal=True, memory_config=ttnn.L1_MEMORY_CONFIG
+                )
+            ttnn.deallocate(q_rope)
+            ttnn.deallocate(k_rope)
+            ttnn.deallocate(v)
+
+            # 7. Concat heads back to flat [B, 1, M, num_heads*head_dim].
+            attn_flat = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(attn_out)
+
+            # 8. O projection brings the activation back to width = 1024.
+            o_out = ttnn.linear(
+                attn_flat,
+                o_proj_per_pos[j],
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(attn_flat)
+
+            # 9. Gated residual: h = h + (o_out * ga).
+            gated = ttnn.multiply(o_out, ga, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(o_out)
+            ttnn.deallocate(ga)
+            h_new = ttnn.add(h, gated, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(gated)
+            ttnn.deallocate(h)
+            h = h_new
+
+            # 10. Inter-chip P2P advance (same column → single hop).
+            at_chip_boundary = (j == self.layers_per_chip - 1) and (local_i + 1 < self.num_layers)
+            if at_chip_boundary:
+                cur = self.denoise_coord_for_layer(local_i)
+                nxt = self.denoise_coord_for_layer(local_i + 1)
+                h_advanced = send_shard_via_p2p(h, cur, nxt)
+                if h_advanced is not h:
+                    ttnn.deallocate(h)
+                h = h_advanced
+        return h
