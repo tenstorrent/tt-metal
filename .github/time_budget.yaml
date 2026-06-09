@@ -290,7 +290,7 @@ umd:
 
 syseng:
   unit:
-    wh_n150: 27
-    wh_n300: 27
+    wh_n150_civ2: 27
+    wh_n300_civ2: 27
     bh_p100a_civ2_viommu: 18
     bh_p150b_civ2: 18
