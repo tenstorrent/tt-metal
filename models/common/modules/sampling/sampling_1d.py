@@ -22,7 +22,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_buffer import LazyBuffer, resolve_lazy_buffer
-from models.common.modules.tt_ccl import get_tt_ccl
+from models.common.modules.tt_ccl import default_topology, get_tt_ccl
 
 # ---------------------------------------------------------------------------
 # Power-of-2 helpers (local copies; keep this TTTv2 module self-contained)
@@ -287,8 +287,35 @@ class Sampling1D(LightweightModule):
         return max(1, num_links), topology
 
     def _argmax_all_gather(self, logits):
-        """Multi-device: all-gather logits before argmax."""
+        """Multi-device: all-gather logits before argmax.
+
+        On ring-capable meshes (e.g. T3K 1×8) use the same trace-capture-safe configuration as a
+        model's own logits gather: Ring topology, no ``cluster_axis``, and crucially **no barrier
+        semaphore**. The Linear+barrier configuration cannot be captured — trace aborts with
+        "TT_FATAL: Event Synchronization / Writes are not supported during trace capture". The
+        likely cause (hypothesis: Ring+barrier was not isolated in testing, so the blocker is only
+        confirmed for Linear+barrier) is that the Linear all-gather's barrier issues a host-assisted
+        event-sync + per-device semaphore writes that are illegal inside capture; Ring is
+        self-synchronising and needs no barrier. This matches the model's own
+        ``gather_and_untilize_logits`` (Ring, no barrier), which captures cleanly — and is what
+        unblocks on-device greedy sampling under the traced executor. Below 8 devices (no ring) fall
+        back to the clamped Linear+barrier path (correct eagerly, but not trace-capture safe —
+        N150/N300 sampling stays on the eager executor).
+        """
         cfg = self.config
+        if default_topology(cfg.mesh_device) == ttnn.Topology.Ring:
+            return ttnn.experimental.all_gather_async(
+                logits,
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=cfg.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                num_links=1,
+                memory_config=logits.memory_config(),
+                topology=ttnn.Topology.Ring,
+                chunks_per_sync=24,
+                num_workers_per_link=4,
+                num_buffers_per_channel=2,
+            )
         cluster_axis = 1
         num_links, topology = self._get_argmax_all_gather_config(cluster_axis)
         return ttnn.experimental.all_gather_async(
