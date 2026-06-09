@@ -14,14 +14,16 @@ import ttnn
 
 @dataclass
 class ExpertConfig:
-    """Core expert configuration - model agnostic"""
+    """Core expert configuration - model agnostic.
+
+    MiniMax-M2 uses plain SiLU SwiGLU (no clamp limit, no alpha scaling), so the
+    gpt-oss swiglu_limit/alpha fields are gone.
+    """
 
     intermediate_size: int
     num_experts: int
     hidden_size: int
     num_experts_per_tok: int
-    swiglu_limit: float
-    alpha: float = 1.702
 
 
 @dataclass
