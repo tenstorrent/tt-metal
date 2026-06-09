@@ -14,7 +14,7 @@ CLI:
         --hf-model meta-llama/Llama-3.1-8B-Instruct \\
         --prompt-source aime24 \\
         --chat-template \\
-        --gen-len 32 \\
+        --gen-len 100 \\
         --output llama31_8b.refpt
 
 Python:
@@ -23,7 +23,7 @@ Python:
         hf_model_id="meta-llama/Llama-3.1-8B-Instruct",
         prompt_source="aime24",
         chat_template=True,
-        gen_len=32,
+        gen_len=100,
         output_path="llama31_8b.refpt",
     )
 """
@@ -49,7 +49,7 @@ from models.common.readiness_check.schema import Reference, ReferenceEntry, save
 
 DEFAULT_K = 100
 DEFAULT_PROMPT_LEN = 128
-DEFAULT_GEN_LEN = 256
+DEFAULT_GEN_LEN = 100
 DEFAULT_PROMPT_SOURCE = "book"
 DEFAULT_AIME24_PROMPTS_FILE = (
     Path(__file__).resolve().parents[2] / "demos" / "deepseek_v3" / "demo" / "aime_under_8k_prompts.json"

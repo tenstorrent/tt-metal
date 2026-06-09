@@ -1,6 +1,6 @@
 /goal Use $vllm-integration and $optimize for the HF_MODEL vLLM serving path in the current tt-metal checkout.
 
-This goal creates the optimized-vLLM state. Start from completed vLLM integration and optimize the serving path in place; do not restart decoder or full-model bringup unless serving evidence proves a concrete bug there.
+This goal creates the optimized-vLLM state. Start from completed vLLM integration and the selected datatype-sweep config, then optimize the serving path in place; do not restart decoder, full-model bringup, or datatype selection unless serving evidence proves a concrete bug there.
 
 Goal completion requirements:
 - The measured path is real vLLM TT plugin serving through models/autoports/<model>/tt/generator_vllm.py, not a standalone generator benchmark or eager fallback.

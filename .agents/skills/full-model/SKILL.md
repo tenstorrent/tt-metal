@@ -78,7 +78,7 @@ python -m models.common.readiness_check.generate \
   --hf-model <hf-model-id> \
   --prompt-source aime24 \
   --chat-template \
-  --gen-len 32 \
+  --gen-len 100 \
   --top-k 100 \
   --output <model_dir>/readiness_aime24_chat.refpt
 ```

@@ -5,14 +5,16 @@ This goal creates the optimized-full-model state for the repo-local TTNN autopor
 Goal completion requirements:
 - The full model is parallelized appropriately across the target mesh, not merely built from a multichip decoder while embeddings, norms, LM head, logits, sampling, cache management, or generator boundaries remain accidental bottlenecks.
 - Full-model prefill, teacher-forcing decode, and autoregressive readiness still pass after optimization, with top-1/top-5/top-100 and qualitative generation evidence refreshed. For instruction/chat models, refresh the main readiness result against the DeepSeek AIME24 prompt rendered through the HF tokenizer chat template; raw Tale-of-Two-Cities book references are only supplemental or fallback evidence.
+- The main AIME24 chat-template readiness reference uses 100 generated tokens unless a concrete model-specific limit prevents it.
 - Warmed full-model prefill and decode performance are measured before and after this optimization pass.
 - tt-perf-report human-readable tables and CSV/provenance logs exist for the full-model path (with a minimal number of internal layers) where the profiler can capture it; any profiler limitation is documented with exact failure evidence and a fallback timing method.
 - The report audits and optimizes embeddings, all decoder layers, final norm, LM head/tied embeddings, logits movement, sampling, paged KV-cache allocation/update, trace capture/replay, collectives, residual layouts, and host boundaries.
-- It is not valid to leave potential optimizations untried to "functional risk". Optimziation opportunities MUST be tried and debugged using $autofix if they cause functional regressions.
-- Multichip and optimize guidance is applied to full-model-only pieces, including sharding/replication decisions, async CCLs, fused matmul-CCL opportunities, DRAM-sharded matmuls, program configs, compute-kernel configs, and precision/fidelity trials.
+- It is not valid to leave potential optimizations untried to "functional risk". Optimization opportunities MUST be tried and debugged using $autofix if they cause functional regressions.
+- Multichip and optimize guidance is applied to full-model-only pieces, including sharding/replication decisions, async CCLs, fused matmul-CCL opportunities, DRAM-sharded matmuls, program configs, and compute-kernel configs.
+- Do not run the full-model BFP4 datatype frontier search in this goal; the following $datatype-sweep stage owns BFP4 weight, BFP8 activation, BFP8 CCL, and KV-cache datatype selection against top-1/top-5 accuracy.
 - Runtime fallback audit is clean for the measured full-model/generator path, or every remaining host boundary is named as an explicit production compromise with evidence.
 - models/autoports/<model>/doc/optimized_full_model/README.md and work_log.md summarize commands, before/after accuracy and perf, mesh/optimization decisions, tt-perf-report conclusions, limitations, and exact artifacts.
-- The checklist in the $optimize skill has been completed with evidence
+- The relevant checklist items in the $optimize skill have been completed with evidence, excluding final full-model datatype frontier selection that belongs to $datatype-sweep.
 - Fully-traced decode path from token in to token out including on-device sampling (via models.common.sampling) that supports top-k/top-p as well as greedy sampling
 - run_prefill_check and run_teacher_forcing report top-1, top-5, and top-100 for prefill and decode using the AIME24 chat-template reference; expected bar is top-5 >= 98% and top-100 = 100% unless a model-specific issue or evidence justifies otherwise.
 - Prefill TTFT and decode t/s/u reported for batch 1 inference reported at the top of README.md
