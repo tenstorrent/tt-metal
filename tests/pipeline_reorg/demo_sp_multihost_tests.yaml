@@ -48,16 +48,20 @@
 - name: "Demo Test with Perf Metrics (DeepSeek V3 B1 Supercluster 4 aka Superpod 1)"
   cmd: |
     echo "============= SP1 superpod: allocation hostfile + generated rank bindings ============="
-    # /ci/ttrun/hostfile comes from ttop-get-allocation-data + ttop-configure-tt-run.
-    # Bootstrap mirrors the pipeline dir to all workers and runs PCIe discovery there.
+    # /ci/ttrun/hostfile and /ci/ttrun/rankfile come from ttop-get-allocation-data +
+    # ttop-configure-tt-run (MGD allocation). Rank bindings are generated from that hostfile
+    # so no hardcoded hostnames in rev_c rank files.
     TTRUN_DIR=/ci/ttrun
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
     PIPELINE_DIR="${TT_METAL_HOME}/generated/sp1_pipeline_dir"
-    BOOTSTRAP="${TT_METAL_HOME}/tests/ttnn/unit_tests/operations/ccl/blackhole_CI/exabox/deepseek_pipeline_tests/scripts/bootstrap_pipeline_dir.sh"
+    PIPELINE_CONFIG="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_single_pod_ci.yaml"
+    GENERATOR="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py"
 
-    export HOSTS=$(awk '{print $1}' "${TTRUN_DIR}/hostfile" | xargs)
-    export SINGLE_POD_PIPELINE_DIR="${PIPELINE_DIR}"
-    BOOTSTRAP_SKIP_RESET=1 bash "${BOOTSTRAP}"
+    mkdir -p "${PIPELINE_DIR}"
+    python3 "${GENERATOR}" "${PIPELINE_CONFIG}" \
+      --hostfile "${TTRUN_DIR}/hostfile" \
+      --worker-tt-metal-home "${TT_METAL_HOME}" \
+      --output-dir "${PIPELINE_DIR}"
 
     RANK_BINDING="${PIPELINE_DIR}/blitz_decode_pipeline_rank_binding_single_pod_ci.yaml"
     RANK_FILE="${PIPELINE_DIR}/blitz_decode_pipeline_rank_file_single_pod_ci"
