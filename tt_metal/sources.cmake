@@ -1,4 +1,5 @@
 set(TT_METAL_PUBLIC_API
+    api/internal/service/inter_process_counter_channel.hpp
     api/tt-metalium/allocator.hpp
     api/tt-metalium/base_types.hpp
     api/tt-metalium/bfloat16.hpp
@@ -82,7 +83,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/pinned_memory.hpp
     api/tt-metalium/experimental/profiler.hpp
     api/tt-metalium/experimental/program_descriptor_patching.hpp
-    api/tt-metalium/experimental/inter_process_counter_channel.hpp
     api/tt-metalium/experimental/sockets/d2h_socket.hpp
     api/tt-metalium/experimental/sockets/h2d_socket.hpp
     api/tt-metalium/experimental/sockets/mesh_socket.hpp
