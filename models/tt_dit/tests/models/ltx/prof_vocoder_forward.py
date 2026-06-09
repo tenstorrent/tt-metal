@@ -1,3 +1,4 @@
+import os
 import time
 
 import pytest
@@ -13,7 +14,10 @@ from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.tests.models.ltx.test_audio_components_ltx import (
     _MAIN_VOCODER_CFG,
     _build_torch_stage_b,
+    _build_torch_stage_c,
+    _build_tt_stage_c,
     _diffusers_vocoder_state_to_tt,
+    _diffusers_vocoder_with_bwe_state_to_tt,
     _tt_vocoder_cfg,
     _vocoder_mel,
 )
@@ -268,7 +272,7 @@ def test_prof_vocoder_trace(mesh_device, device_params):
     )
     tt_voc.load_torch_state_dict(_diffusers_vocoder_state_to_tt(torch_voc.state_dict()))
 
-    mel = _vocoder_mel()
+    mel = _vocoder_mel(int(os.environ.get("T_FRAMES", "120")))
 
     # Eager reference (full path) — populates lazy caches (snake shards, CCL buffers, tpad masks).
     host_ref = tt_voc(mel)
@@ -521,3 +525,42 @@ def test_forward_traced_multishape(mesh_device, device_params):
     assert len(tt_voc._traces) == 1, f"max_traces=1 should evict; got {len(tt_voc._traces)}"
     print(f"MULTITRACE max_traces=1 -> resident={len(tt_voc._traces)} (A evicted)", flush=True)
     tt_voc.release_trace()
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 32768, "fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 300000000}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+def test_stage_c_wall(mesh_device, device_params):
+    # Full audio decode tail (VocoderWithBWE) wall at the real 6s length, warm, eager vs traced.
+    # Only the main vocoder is trace-captured (bwe_ltx.py:331); the BWE generator + mel-STFT +
+    # resampler always run eager, so this isolates how much trace actually buys on real audio.
+    parent = mesh_device
+    mesh = parent.create_submesh(ttnn.MeshShape(2, 4))
+    pc = AudioTCParallelConfig(
+        time_parallel=ParallelFactor(factor=4, mesh_axis=1),
+        channel_parallel=ParallelFactor(factor=2, mesh_axis=0),
+    )
+    ccl = CCLManager(mesh, num_links=1, topology=ttnn.Topology.Linear)
+    torch_full = _build_torch_stage_c(seed=42)
+    tt_full = _build_tt_stage_c(mesh, parallel_config=pc, ccl_manager=ccl)
+    tt_full.load_torch_state_dict(_diffusers_vocoder_with_bwe_state_to_tt(torch_full.state_dict()))
+
+    mel = _vocoder_mel(int(os.environ.get("T_FRAMES", "601")))
+
+    def wall(n=5):
+        t0 = time.perf_counter()
+        for _ in range(n):
+            _ = tt_full(mel)
+        return (time.perf_counter() - t0) * 1000 / n
+
+    for use_trace in (False, True):
+        tt_full.use_trace = use_trace
+        _ = tt_full(mel)  # compile / capture
+        if use_trace:
+            _ = tt_full(mel)  # first replay
+        ms = wall()
+        print(f"\nSTAGE_C_WALL use_trace={use_trace} mel_frames={int(mel.shape[2])} wall={ms:.1f}ms", flush=True)
+    tt_full.release_trace()
