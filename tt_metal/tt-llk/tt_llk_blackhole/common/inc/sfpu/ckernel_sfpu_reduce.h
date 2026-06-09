@@ -66,19 +66,6 @@ inline void TTI_SFPLOAD_EXT(const std::uint32_t lreg_ind, const std::uint32_t in
 // ============================================================================
 // Helper Functions
 // ============================================================================
-/**
- * @brief Apply sign magnitude conversion to four LREGs
- * Assume you loaded 4 LREGs into p_sfpu::LREG0-3 and want to convert them to sign magnitude and store in p_sfpu::LREG4-7.
- * @tparam INSTR_MOD_CAST The instruction mode for cast operations
- */
-template <InstrModCast INSTR_MOD_CAST>
-inline void convert_to_sign_magnitude_x4_lregs()
-{
-    apply_sign_magnitude_conversion(p_sfpu::LREG0, p_sfpu::LREG4, INSTR_MOD_CAST);
-    apply_sign_magnitude_conversion(p_sfpu::LREG1, p_sfpu::LREG5, INSTR_MOD_CAST);
-    apply_sign_magnitude_conversion(p_sfpu::LREG2, p_sfpu::LREG6, INSTR_MOD_CAST);
-    apply_sign_magnitude_conversion(p_sfpu::LREG3, p_sfpu::LREG7, INSTR_MOD_CAST);
-}
 
 // Int32 SUM/AVG keep their data in dest as sign-magnitude (matching the MAX/MIN path and the packer),
 // but SFPIADD is a two's-complement adder. Wormhole bridges this with the INT32_2S_COMP load/store mode,
@@ -1112,74 +1099,6 @@ inline void init_reduce_sum_avg()
 // ============================================================================
 // Calculate Functions
 // ============================================================================
-
-/**
- * @brief Column-wise maximum/minimum reduction kernel for SFPU reduce MAX/MIN operation on 32x32 tile for Int32 format. Due to RTL bug INT32_2S_COMP LOAD/STORE
- * has no effect. Must cast to INT_SIGN_MAGN_TO_INT32_2S_COMP before swapping. Since CAST and SWAP are both SIMPLE instructions, cannot be integrated together
- * in SAME LOADMACRO sequence. Therefore, we need to calculate the kernel with manual loads and stores in order to perform the CAST and SWAP operations after
- * loads.
- * @tparam INSTRUCTION_MODE The instruction mode (INT32_2S_COMP for Int32 with MAX/MIN)
- * @tparam pool_type The pool type (MAX or MIN) to determine swap direction
- * @tparam reduce_dim The reduction dimension (currently only REDUCE_COL is supported)
- */
-template <InstrModLoadStore INSTRUCTION_MODE, PoolType pool_type, ReduceDim reduce_dim, bool clear_high_bits = false>
-inline void calculate_reduce_max_min_int32()
-{
-    constexpr auto INSTR_MOD_CAST             = InstrModCast::INT_SIGN_MAGN_TO_INT32_2S_COMP;
-    constexpr std::uint32_t ODD_COLUMNS       = 2;
-    constexpr std::uint32_t COLUMN_OFFSETS[4] = {0, 2, 0, 2}; // even, odd, even, odd
-    constexpr std::uint32_t FACE_ADDRS[2][4]  = {
-        {0, 0, 32, 32},  // j=0: Face 0 and Face 2
-        {16, 16, 48, 48} // j=1: Face 1 and Face 3
-    };
-    constexpr std::uint32_t FINAL_REDUCE_ADDRS[2][2] = {
-        {0, 32}, // j=0: Face 0 and Face 2
-        {16, 48} // j=1: Face 1 and Face 3
-    };
-
-    for (std::uint32_t j = 0; j < 2; j++)
-    {
-        std::uint32_t top_face_addr    = FINAL_REDUCE_ADDRS[j][0]; // face 0 & 1 dst indices
-        std::uint32_t bottom_face_addr = FINAL_REDUCE_ADDRS[j][1]; // face 2 & 3 dst indices
-
-        // After this loop executes vertically adjacent faces (f0 & f2 first iteration of outer loop, f1 & f3 second iteration) are processed and store max/min
-        // values in top 4 rows of their faces
-        for (std::uint32_t i = 0; i < NUM_FACES; i++)
-        {
-            load_face_data<INSTRUCTION_MODE, clear_high_bits>(FACE_ADDRS[j][i], COLUMN_OFFSETS[i]);
-            convert_to_sign_magnitude_x4_lregs<INSTR_MOD_CAST>();
-            lltt::replay(0, 3);
-
-            apply_sign_magnitude_conversion(
-                p_sfpu::LREG4, p_sfpu::LREG0, INSTR_MOD_CAST); // Convert back from two's complement to sign-magnitude before storing
-            TT_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, FACE_ADDRS[j][i] + COLUMN_OFFSETS[i]);
-        }
-
-        // Load data from top 4 rows of processed vertically adjacent faces into LREG0-3
-        TT_SFPLOAD(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, top_face_addr);
-        TT_SFPLOAD(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, bottom_face_addr);
-        TT_SFPLOAD(p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, top_face_addr + ODD_COLUMNS);
-        TT_SFPLOAD(p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, bottom_face_addr + ODD_COLUMNS);
-
-        convert_to_sign_magnitude_x4_lregs<INSTR_MOD_CAST>(); // Store lregs 0-3 in sign-magnitude format in lregs 4-7
-
-        // Transpose to find absolutes max/min of top 4 rows of each face
-        TTI_SFPTRANSP(0, 0, 0, 0);
-        lltt::replay(0, 3);
-        TTI_SFPTRANSP(0, 0, 0, 0);
-
-        // Swap to find max/min of vertically adjacent faces
-        TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG6, 1); // Max/Min of odd columns of face 0 and 2 (first iteration) or face 1 and 3 (second iteration)
-        TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG4, 1); // Max/Min of even columns of face 0 and 2 (first iteration) or face 1 and 3 (second iteration)
-
-        // Convert back from two's complement to sign-magnitude before storing
-        apply_sign_magnitude_conversion(p_sfpu::LREG4, p_sfpu::LREG0, INSTR_MOD_CAST);
-        apply_sign_magnitude_conversion(p_sfpu::LREG6, p_sfpu::LREG1, INSTR_MOD_CAST);
-
-        TT_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, top_face_addr);
-        TT_SFPSTORE(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, top_face_addr + ODD_COLUMNS);
-    }
-}
 
 /**
  * @brief Column-wise maximum/minimum reduction kernel for UInt16 stored in a 32-bit (fp32 dest acc) dest.
