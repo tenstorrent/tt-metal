@@ -138,7 +138,7 @@ If the build or test hangs (>15 min with no log progress), kill it, return TIMEO
 **Output**: write the **Legacy Inventory** section of `METAL2_PORT_PLAN.md` to the op's directory. Record:
 
 - **Legacy factory shape**: which `ttnn::device_operation` concept the legacy factory currently satisfies (`ProgramFactoryConcept` / `ProgramDescriptorFactoryConcept` / `MeshWorkloadFactoryConcept`). For each variant (if the device-operation is multi-variant), record separately. *(The Metal 2.0 factory concept the port lands on was chosen during the audit — see the audit report's TTNN ProgramFactory section. The recipe inherits that decision; carry it forward to the [TTNN ProgramFactory port-plan section](#ttnn-programfactory) below.)*
-- **Custom `compute_program_hash`**: does the device-operation define a custom `compute_program_hash` (overriding the default reflection-based hash)? If yes, record file:line. **This matters at verification time:** custom hashes that don't fold `TensorSpec` into the key will trigger `UpdateTensorArgs` legality failures on fast-path cache hits. The fix when that happens is to revert the op to the default hash — see [Verification → Run tests](#run-tests) and the [migration guide's troubleshooting table](metal2_migration_guide.md#cryptic-error--likely-cause).
+- **Custom `compute_program_hash`**: does the device-operation define a custom `compute_program_hash` (overriding the default reflection-based hash)? If yes, record file:line — **the port deletes it**, reverting to the default hash. This is a sanctioned exception to the device-op-class off-limits rule (see [Host-side: stay in the lane](#host-side-stay-in-the-lane)): no Metal 2.0 concept reads the custom hash, PD-ported custom hashes are frequently incorrect now (omitting `TensorSpec` trips `UpdateTensorArgs` legality failures on fast-path cache hits), and the default is correct-by-construction. Don't patch it to add `TensorSpec`; delete it and record the deletion in the port report. (See also the [migration guide's troubleshooting table](metal2_migration_guide.md#cryptic-error--likely-cause) for the failure signature if a custom hash is ever missed.)
 - **Kernels**: every `KernelDescriptor` (one row per descriptor):
   - `kernel_source` (file path; flag any path outside the op's own directory — cross-op kernels are a Caution case).
   - `core_ranges` (verbatim).
@@ -215,7 +215,7 @@ If the legacy code has no multi-`KernelDescriptor` work split, this section read
 For each legacy RTA or CTA that should *not* survive the port, list it with the replacement primitive:
 
 - **Buffer-address RTAs** (`tensor.buffer()` / `tensor.buffer()->address()` in legacy RTA values; `get_arg_val<uint32_t>(N)` in kernel passed to `TensorAccessor`): replaced by `TensorBinding`. List each kernel's affected RTA slot.
-  - *Exotic-case exception.* If the audit flagged a binding as Step 0.5 YELLOW **and** its access pattern is confirmed exotic (Step 0.1 Check 3 user override — *not* auditor self-classification), it still flows through the typed channel as a `TensorBinding`; the base pointer is pulled kernel-side via the sanctioned `get_bank_base_address` bridge (see [kernel-side whitelist rule 5](#kernel-side-whitelist) for the mechanics). List each affected binding here for traceability.
+  - *Case 2 (bridge) exception.* If the audit classified a binding as **Case 2** (TensorAccessor handling — access pattern confirmed exotic via user override, *not* auditor self-classification), it still flows through the typed channel as a `TensorBinding`; the base pointer is pulled kernel-side via the sanctioned `get_bank_base_address` bridge (see [kernel-side whitelist rule 5](#kernel-side-whitelist) for the mechanics). List each affected binding here for traceability. (Case 1 bindings — the common case — simply re-express via `TensorBinding`, no bridge, no special note.)
 - **Magic CB indices in CTAs**: replaced by `DFBBinding`. List each kernel's affected CTA slot.
 - **`TensorAccessorArgs` plumbing**: replaced by the binding mechanism end-to-end. List each `TensorAccessorArgs(buffer).append_to(cta)` site and its kernel-side `TensorAccessorArgs<N>()` / `next_compile_time_args_offset()` chain.
 - **Semaphore-ID RTAs**: replaced by `SemaphoreBinding`. List each kernel's affected RTA slot.
@@ -274,7 +274,11 @@ The host-side discipline divides cleanly along a line between *the program facto
 
 - **The op-level host code outside the factory is off-limits.** The device-operation class itself (`validate`, `invoke`, `compute_output_specs`, attribute parsing, the `OpInputs` / `OpParams` definitions, runtime-arg validation, tensor-dtype checks, etc.) is *not* part of the Metal 2.0 port. Do not edit it. Even if the change seems trivial, even if it seems correct, even if you can see exactly what it should say. If you encounter something here that wants changing — a too-tight validation, a stale comment, a `TT_FATAL` whose message is wrong, a missing check — write it up in the port report under findings. Do not change the file.
 
-The one *documented* exception to the off-limits rule: **pybind lines that reference legacy factory entry points the port causes to vanish** (`create_program_descriptor` is the canonical case). Leaving the pybind line in place would break the post-port build, so deletion is mandatory — but it's also a user-visible API surface change that downstream Python consumers may notice, so it must be recorded prominently in the port report. See [Pattern: Removing pybound legacy factory entry points](metal2_port_patterns.md#pattern-removing-pybound-legacy-factory-entry-points) for the full procedure. The exception is narrow: it applies *only* to the disappearing factory entry point, not to other pybind lines on the same op.
+There are two *documented* exceptions to the off-limits rule — both deletions the port forces, both recorded prominently in the port report:
+
+1. **Pybind lines that reference legacy factory entry points the port causes to vanish** (`create_program_descriptor` is the canonical case). Leaving the pybind line in place would break the post-port build, so deletion is mandatory — but it's also a user-visible API surface change that downstream Python consumers may notice. See [Pattern: Removing pybound legacy factory entry points](metal2_port_patterns.md#pattern-removing-pybound-legacy-factory-entry-points) for the full procedure. The exception is narrow: it applies *only* to the disappearing factory entry point, not to other pybind lines on the same op.
+
+2. **A custom `compute_program_hash` — delete it and revert to the default TTNN hash.** When the audit flagged a custom `compute_program_hash`, the port removes it. This is sanctioned (not a freelance device-op-class edit) because: no Metal 2.0 factory concept reads the custom hash; PD-ported custom hashes are frequently incorrect now (they silently omit `TensorSpec` and trip `UpdateTensorArgs` legality failures on fast-path cache hits); and the default is correct-by-construction (`MaximizeCacheReuse` hashes the generated `ProgramSpec`, `MinimizeCacheHitCost` hashes the op args). Delete it as part of the port — do **not** patch it to add `TensorSpec` (that path leads to subtle bugs), and do **not** defer it to "see if it bites at verification." This is proactive port work, surfaced by the audit's Custom-program-hash subject.
 
 Concrete example of what *not* to do, drawn from a prior porting attempt:
 
@@ -371,7 +375,7 @@ const auto bank_id       = get_arg(args::bank_id);    // CRTA
 
 Varargs (`get_vararg(i)`) only when a subset of arguments is *genuinely dynamic in kernel code* — i.e. retrieved in a loop where `i` is a runtime variable (the canonical case: an N-dimensional shape gated on a CTA-bound `rank`). When each argument is referenced by a constant index, the named form is clearer on both sides. **Report any retained varargs use in the port report.**
 
-**5. No raw pointers in arguments.** Raw pointers — typically buffer base addresses — must not be passed as compile-time, runtime, common runtime, or vararg arguments. The binding mechanism handles base addresses for tensors automatically; if a kernel *genuinely* needs a raw pointer for an exotic case (legacy code that performed explicit address arithmetic), get it from a `TensorAccessor` (zero overhead):
+**5. No raw pointers in arguments.** Raw pointers — typically buffer base addresses — must not be passed as compile-time, runtime, common runtime, or vararg arguments. The binding mechanism handles base addresses for tensors automatically; if a kernel *genuinely* needs a raw pointer (a **Case 2** binding — exotic access the audit confirmed, legacy code that performed explicit address arithmetic), get it from a `TensorAccessor` (zero overhead):
 
 ```cpp
 // Legacy:
@@ -383,7 +387,7 @@ auto input = TensorAccessor(ta::input);
 uint32_t input_addr = input.get_bank_base_address(bank_id);  // when truly needed
 ```
 
-Most ports don't reach for the raw pointer at all — `TensorAccessor`'s normal page-access methods are the standard path. `get_bank_base_address` is the escape hatch for explicit address-arithmetic cases only (landed 2026-05-24 via PR #45091). This is the sanctioned bridge for a Step 0.5 YELLOW binding whose access pattern the audit confirmed exotic — the binding still flows through the typed channel; only the base pointer is extracted here.
+Most ports don't reach for the raw pointer at all — `TensorAccessor`'s normal page-access methods are the standard path (this is how **Case 1** bindings re-express; they never touch the bridge). `get_bank_base_address` is the escape hatch for explicit address-arithmetic cases only (landed 2026-05-24 via PR #45091). This is the sanctioned bridge for a **Case 2** binding whose access pattern the audit confirmed exotic — the binding still flows through the typed channel; only the base pointer is extracted here.
 
 > *Sanctioned exception — host-computed offset.* When the legacy host pre-composed a base pointer with a host-side-computed offset (`tensor.buffer()->address() + compute_offset(attrs)`) and passed the result through an RTA, the standard `TensorBinding` fix isn't enough on its own — the offset arithmetic has to cross the host/kernel boundary. Apply [Pattern: Host-computed base-pointer offset](metal2_port_patterns.md#pattern-host-computed-base-pointer-offset--cta-offset--kernel-side-addition): pass the tensor as a binding, pass the offset as a *named CTA*, and add the single `+ offset` line on the kernel side after the accessor's base-address retrieval. This is the only documented kernel-side modification beyond the whitelist above.
 
@@ -476,7 +480,7 @@ After all resources are built, assemble the `ProgramSpec` (collecting `kernels`,
 
 If any of these appear in your draft, **stop and report**. The likely cause is a structural decision during planning that should be revisited.
 
-**Exception — exotic-case bindings.** If the audit flagged a `TensorParameter` as Step 0.5 YELLOW *and* its access pattern is confirmed exotic (Step 0.1 Check 3 user override), the binding still flows through the typed channel; only the *base pointer* is extracted kernel-side via the sanctioned `get_bank_base_address` bridge (see [kernel-side whitelist rule 5](#kernel-side-whitelist)), never threaded through an RTA. This is the one carve-out from the "buffer address through an RTA" stop signal above.
+**Exception — Case 2 (bridge) bindings.** If the audit classified a `TensorParameter` as **Case 2** (TensorAccessor handling — access pattern confirmed exotic via user override), the binding still flows through the typed channel; only the *base pointer* is extracted kernel-side via the sanctioned `get_bank_base_address` bridge (see [kernel-side whitelist rule 5](#kernel-side-whitelist)), never threaded through an RTA. This is the one carve-out from the "buffer address through an RTA" stop signal above.
 
 ---
 
@@ -522,7 +526,7 @@ If compilation passes but the test fails with a `TT_FATAL` from `program_spec.cp
 
 For symptom-organized lookup (errors whose fix isn't obvious from the message text), see the [migration guide's troubleshooting table](metal2_migration_guide.md#cryptic-error--likely-cause).
 
-**Custom `compute_program_hash` failure mode.** If the [legacy inventory](#legacy-inventory) flagged a custom `compute_program_hash`, watch specifically for `UpdateTensorArgs` `TensorSpec` legality failures on the *second and later* test invocations (when the program cache is hot). This is the signature of a custom hash that doesn't fold `TensorSpec` into the key, causing a cache hit on a `ProgramSpec` built for different inputs. **The fix is to revert the op to the default TTNN hash** (remove the custom `compute_program_hash` override). Do not try to patch the custom hash to include `TensorSpec` — that path leads to subtle bugs. Note the revert in `METAL2_PORT_REPORT.md` under "Open items" so the op author can revisit later if they want a corrected custom hash.
+**Custom `compute_program_hash` failure mode.** The port should already have deleted any custom `compute_program_hash` (reverting to the default) per [Host-side: stay in the lane](#host-side-stay-in-the-lane) — it's proactive port work, not a wait-and-see. If you nonetheless see `UpdateTensorArgs` `TensorSpec` legality failures on the *second and later* test invocations (program cache hot), that's the signature of a custom hash that survived the port: find it and delete it, reverting to the default TTNN hash. Do not patch the custom hash to include `TensorSpec` — that path leads to subtle bugs. Confirm the deletion is recorded in `METAL2_PORT_REPORT.md`.
 
 ### Anti-pattern self-audit
 
@@ -628,7 +632,7 @@ Written during the inventory and planning steps; committed alongside the port fo
 ### Legacy factory shape
 - Concept: <ProgramFactoryConcept | ProgramDescriptorFactoryConcept | MeshWorkloadFactoryConcept>
 - Variants: <list, or "single">
-- Custom `compute_program_hash`: <yes — file:line | no, uses default reflection-based hash>
+- Custom `compute_program_hash`: <deleted → default (sanctioned exception), was at file:line | none — already default reflection-based hash>
 
 *(The Metal 2.0 factory concept the port targets was chosen during the audit — see the audit report's TTNN ProgramFactory section. Carried forward in the [TTNN ProgramFactory](#ttnn-programfactory) section below.)*
 
