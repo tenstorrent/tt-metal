@@ -705,11 +705,21 @@ def _load_vlm_weights_stacked_sharded(
         # For matmul weights, .T to match nn.Linear's [out, in] convention.
         is_matmul = suffix in matmul_suffixes
         ref_t = ref.T.contiguous() if is_matmul else ref
-        # Norm weights need the +1 Gemma offset baked in.
         is_norm = "layernorm" in suffix
-        # Build a [devices_total, *ref_t.shape] stacked tensor with zeros
-        # at non-prefill slots and layer-i weight at prefill chip i's slot.
-        stacked_shape = (devices_total,) + tuple(ref_t.shape)
+        # ttnn.rms_norm with ROW_MAJOR gamma requires:
+        #   gamma.padded_shape()[-1] == tile_width (32)
+        #   gamma.physical_volume() / 32 == input.padded_shape()[-1] / 32
+        # For Gemma's 1D [hidden_dim] norm weight, we reshape to
+        # [hidden_dim / 32, 32] so the last dim is exactly 32 tiles wide.
+        if is_norm and ref_t.ndim == 1:
+            assert ref_t.shape[0] % 32 == 0, f"norm weight dim {ref_t.shape[0]} must be multiple of 32"
+            target_shape = (ref_t.shape[0] // 32, 32)
+        else:
+            target_shape = tuple(ref_t.shape)
+        # Build [devices_total, *target_shape] stacked tensor with zeros at
+        # non-prefill slots and per-layer weight (reshaped if norm) at the
+        # prefill chip i's slot.
+        stacked_shape = (devices_total,) + target_shape
         stacked = torch.zeros(stacked_shape, dtype=ref_t.dtype)
         for i in range(n_layers):
             global_i = lo + i
@@ -720,14 +730,15 @@ def _load_vlm_weights_stacked_sharded(
             if is_matmul:
                 w = w.T.contiguous()
             if is_norm:
-                w = w + 1.0
+                w = (w + 1.0).reshape(target_shape).contiguous()
             lin = _prefill_lin(i)
             stacked[lin] = w
 
+        layout = ttnn.ROW_MAJOR_LAYOUT if is_norm else ttnn.TILE_LAYOUT
         return ttnn.from_torch(
             stacked,
             dtype=weight_dtype,
-            layout=ttnn.TILE_LAYOUT if (is_matmul or is_norm and len(ref_t.shape) >= 2) else ttnn.ROW_MAJOR_LAYOUT,
+            layout=layout,
             device=parent_mesh,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensorToMesh(parent_mesh, dim=0),
@@ -922,45 +933,45 @@ class Pi0_5OptionCVLMSliceParent:
         return h
 
     def forward_attention_sublayer_chain(self, activation: "ttnn.Tensor") -> "ttnn.Tensor":
-        """Run a STUBBED attention sublayer chain (no RMSNorm, no real SDPA).
+        """Run the attention sublayer chain (RMSNorm + Q + O + residual).
 
-        Per-layer ops (validates parent-mesh model with 2 matmuls + add):
-            1. Q matmul: each chip applies its layer's q_proj
-            2. O matmul: simulated attention output projection on Q (stub —
+        Per-layer ops (validates the full attn sublayer shape):
+            1. RMSNorm with input_layernorm weight (ROW_MAJOR gamma)
+            2. Q matmul: each chip applies its layer's q_proj
+            3. O matmul: simulated attention output projection on Q (stub —
                real path would be: SDPA(Q, K, V) → O matmul)
-            3. Residual add (hidden + attn_output)
-            4. P2P-multihop the live shard to the next layer's chip
+            4. Residual add (hidden + attn_output)
+            5. P2P-multihop the live shard to the next layer's chip
 
-        Returns the final activation after 18 stubbed attention sublayers.
-
-        NOTE: RMSNorm is skipped here because ttnn.rms_norm's gamma format
-        requires a specific tile-aligned shape that's different from what
-        ShardTensorToMesh on a 2D [1, dim] tensor produces. The proper fix
-        is to upload norm weights with a custom tile-padded shape; deferred
-        for a follow-up iteration. The matmul chain itself is unaffected.
+        Returns the final activation after 18 attention sublayers.
         """
         from .transport import send_shard_via_p2p_multihop
 
-        required = ["q_proj", "o_proj"]
+        required = ["input_layernorm", "q_proj", "o_proj"]
         for r in required:
             if r not in self.weights_on_parent:
                 raise RuntimeError(f"{r} weight not loaded")
 
+        input_ln = self.weights_on_parent["input_layernorm"]
         q_proj = self.weights_on_parent["q_proj"]
         o_proj = self.weights_on_parent["o_proj"]
+        eps = self.config.vlm_config.rms_norm_eps
 
         h = activation
         for i in range(self.num_layers):
-            # 1. Q matmul (per-chip, layer-specific weights)
-            q = ttnn.linear(h, q_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
-            # 2. O matmul on Q (stubbed attention output)
+            # 1. RMSNorm (per-chip, each chip's layer's gamma)
+            normed = ttnn.rms_norm(h, weight=input_ln, epsilon=eps, memory_config=ttnn.L1_MEMORY_CONFIG)
+            # 2. Q matmul
+            q = ttnn.linear(normed, q_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(normed)
+            # 3. O matmul on Q (stubbed attention output)
             attn_out = ttnn.linear(q, o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(q)
-            # 3. Residual add
+            # 4. Residual add
             h_new = ttnn.add(h, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(attn_out)
             ttnn.deallocate(h)
-            # 4. P2P advance to next chip
+            # 5. P2P advance to next chip
             if i + 1 < self.num_layers:
                 cur = self.prefill_coord_for_layer(i)
                 nxt = self.prefill_coord_for_layer(i + 1)
