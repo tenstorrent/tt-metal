@@ -29,7 +29,7 @@ on:
         type: boolean
         default: false
       run-hang-report-test:
-        description: "Run hang report generation test"
+        description: "Run ONLY the hang report generation test (skips the core triage tests)"
         required: false
         type: boolean
         default: false
