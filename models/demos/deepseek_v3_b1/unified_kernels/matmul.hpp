@@ -176,7 +176,7 @@ struct Matmul {
                             calculate_sigmoid,
                             (CTArgs::fused_activation_approx_mode, false /*is_fp32_dest_acc_en*/, 2 /*ITERATIONS*/),
                             R,
-                            0));
+                            0 /*dst_index*/));
                     } else {
                         PACK(SFPU_CALL_MODE(
                             DST_SYNC_MODE,
@@ -184,7 +184,7 @@ struct Matmul {
                             calculate_silu,
                             (false /*is_fp32_dest_acc_en*/, 2 /*ITERATIONS*/),
                             R,
-                            0));
+                            0 /*dst_index*/));
                     }
 
                     PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
