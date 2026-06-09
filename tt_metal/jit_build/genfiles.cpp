@@ -334,17 +334,13 @@ void jit_build_genfiles_kernel_include(
     if (sig) {
         const std::string source_desc =
             kernel_src.source_type_ == KernelSource::FILE_PATH ? kernel_src.path_.string() : std::string("<inline>");
-        log_info(
+        log_debug(
             tt::LogBuildKernels,
-            "TT_KERNEL entry parsed\n"
-            "  source          : {}\n"
-            "  function name   : {}\n"
-            "  CTAs (template) : [{}]\n"
-            "  runtime (fn)    : [{}]",
-            source_desc,
+            "TT_KERNEL entry '{}': CTAs=[{}] runtime=[{}] (source: {})",
             sig->name,
             fmt::join(sig->template_param_names, ", "),
-            fmt::join(sig->fn_param_names, ", "));
+            fmt::join(sig->fn_param_names, ", "),
+            source_desc);
         if (is_metal2) {
             kernel_header_content += generate_kernel_main_shim(*sig);
         } else {
