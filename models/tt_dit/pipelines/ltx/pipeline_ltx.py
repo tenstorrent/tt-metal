@@ -1496,13 +1496,18 @@ class LTXPipeline:
                 ccl_manager=audio_ccl,
             )
 
-        # BWE stays single-axis: its channel-TP diverges in the full pipeline (the
-        # main vocoder's channel-TP is exact). Root cause open.
-        bwe_pc = (
-            audio_parallel_config.time_parallel
-            if isinstance(audio_parallel_config, AudioTCParallelConfig)
-            else audio_parallel_config
-        )
+        # BWE defaults to single-axis. LTX_BWE_CHANNEL_TP=1 opts into full channel-TP: it splits
+        # the compute-bound BWE generator across the channel axis — a Galaxy win, but +135ms on
+        # 2x4 (gather tax > the split), so off by default. Validated bit-identical to single-axis
+        # on real weights (the previously-reported full-pipeline divergence is stale).
+        if os.environ.get("LTX_BWE_CHANNEL_TP", "0") == "1":
+            bwe_pc = audio_parallel_config
+        else:
+            bwe_pc = (
+                audio_parallel_config.time_parallel
+                if isinstance(audio_parallel_config, AudioTCParallelConfig)
+                else audio_parallel_config
+            )
         main_voc = _tt_vocoder(voc_cfg, apply_final_activation=True, parallel_config=audio_parallel_config)
         bwe_voc = _tt_vocoder(bwe_cfg, apply_final_activation=False, parallel_config=bwe_pc)
         mel_stft = MelSTFT(
@@ -1614,6 +1619,11 @@ class LTXPipeline:
         ``num_frames``/``fps`` trim the output to the clip duration.
         """
         assert self.checkpoint_name is not None, "checkpoint_name must be set before decode_audio"
+
+        _dump = os.environ.get("LTX_DUMP_AUDIO_LATENT")
+        if _dump and float(audio_latent.abs().max()) > 0:  # skip the all-zero warmup latent
+            torch.save(audio_latent.cpu(), _dump)
+            logger.info(f"dumped audio latent {tuple(audio_latent.shape)} -> {_dump}")
 
         # VAE and audio modules can't be L1-coresident on BH-LB. With
         # dynamic_load the audio (re)load below evicts the VAE via the
