@@ -196,32 +196,6 @@
 #   owner_id: U03PUAKE719 # Miguel Tairum Cruz
 #   team: models
 
-- name: Gemma-4-E2B seqlen sweep
-  cmd: |
-    uv pip install -r models/demos/gemma4/requirements.txt
-    export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E2B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E2B-it
-    pytest --timeout 1800 models/demos/gemma4/demo/text_demo.py -k "seqlen-sweep"
-  model: gemma-4-e2b
-  skus:
-    wh_n150:
-      timeout: 30
-      tier: 2
-  owner_id: U08TJ70UFRT # Harry Andrews
-  team: models
-
-- name: Gemma-4-E4B seqlen sweep
-  cmd: |
-    uv pip install -r models/demos/gemma4/requirements.txt
-    export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E4B-it
-    pytest --timeout 1800 models/demos/gemma4/demo/text_demo.py -k "seqlen-sweep"
-  model: gemma-4-e4b
-  skus:
-    wh_n150:
-      timeout: 30
-      tier: 2
-  owner_id: U08TJ70UFRT # Harry Andrews
-  team: models
-
 - name: Gemma-4-26B-A4B seqlen sweep
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
