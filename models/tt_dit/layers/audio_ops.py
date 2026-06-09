@@ -201,10 +201,46 @@ def _t_neighbor_pad(
     )
 
 
+# conv1d_depthwise is ~2.5x faster than the MAC fallback (one tilized matmul vs K sequential
+# slice/mul/add) and matches the unsharded device baseline to ~3.5e-4 on the full audio decode.
+# Its reduction reorders the kaiser sinc's alternating-sign taps (~1.35% RMSE vs MAC), so MAC
+# stays behind the flag as the bit-faithful baseline; conv1d is the default.
+_USE_CONV1D_DEPTHWISE = True
+
+
 def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
-    """K-tap depthwise valid conv on padded (B, T_pad, C) ROW_MAJOR input."""
-    del mesh_device, cache
-    return ttnn.experimental.conv1d_depthwise(x_BTC, taps=taps, stride=stride, dtype=dtype)
+    """Valid depthwise filter (same K taps on every channel):
+    ``y[b, t, c] = sum_{j<K} taps[j] * x[b, t*stride + j, c]`` on an
+    already-padded ``(B, T_pad, C)`` ROW_MAJOR FLOAT32 input. Returns
+    ``(B, T_out, C)`` with ``T_out = (T_pad - K) / stride + 1``.
+
+    ``cache`` is accepted for API compatibility but unused.
+    """
+    del cache
+    if _USE_CONV1D_DEPTHWISE:
+        del mesh_device
+        return ttnn.experimental.conv1d_depthwise(x_BTC, taps=taps, stride=stride, dtype=dtype)
+    del mesh_device
+    B, T_pad, C = int(x_BTC.shape[0]), int(x_BTC.shape[1]), int(x_BTC.shape[2])
+    K = len(taps)
+    T_out = (T_pad - K) // stride + 1
+    y = None
+    for j in range(K):
+        w = float(taps[j])
+        if stride == 1:
+            slice_j = ttnn.slice(x_BTC, [0, j, 0], [B, j + T_out, C])
+        else:
+            slice_j = ttnn.slice(x_BTC, [0, j, 0], [B, j + (T_out - 1) * stride + 1, C], [1, stride, 1])
+        scaled = ttnn.multiply(slice_j, w)
+        ttnn.deallocate(slice_j)
+        if y is None:
+            y = scaled
+        else:
+            y_new = ttnn.add(y, scaled)
+            ttnn.deallocate(y)
+            ttnn.deallocate(scaled)
+            y = y_new
+    return y
 
 
 def _all_gather_t(ccl_manager, x: "ttnn.Tensor", parallel_config) -> "ttnn.Tensor":
