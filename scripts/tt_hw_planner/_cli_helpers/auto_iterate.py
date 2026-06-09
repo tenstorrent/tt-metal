@@ -737,6 +737,20 @@ def _run_auto_iterate_loop(
             f"  [decomposition-consume] non-fatal error: {type(_decomp_exc).__name__}: {_decomp_exc}", file=sys.stderr
         )
 
+    try:
+        from ..decomposition_consumer import reinject_missing_decomposition_children
+
+        _reinj_added, _reinj_notes = reinject_missing_decomposition_children(model_id=MODEL, demo_dir=demo_dir)
+        for _line in _reinj_notes:
+            print(f"  {_line}")
+        if _reinj_added:
+            banner(
+                f"DECOMPOSITION SELF-HEAL: re-added {_reinj_added} child component(s) wiped from "
+                f"bringup_status (so their decomposed parent can recompose)"
+            )
+    except Exception as _reinj_exc:
+        print(f"  [reinject] non-fatal error: {type(_reinj_exc).__name__}: {_reinj_exc}", file=sys.stderr)
+
     _persistent_skips = load_persistent_skips(MODEL)
     if _persistent_skips:
         # Only KERNEL_MISSING entries are persisted now. They stay

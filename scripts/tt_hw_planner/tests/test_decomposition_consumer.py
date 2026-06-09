@@ -15,7 +15,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from scripts.tt_hw_planner.decomposition_consumer import consume_decomposition_plan  # noqa: E402
+from scripts.tt_hw_planner.decomposition_consumer import (  # noqa: E402
+    consume_decomposition_plan,
+    reinject_missing_decomposition_children,
+)
 
 
 def _make_demo(tmp_path: Path, components: list) -> Path:
@@ -193,3 +196,78 @@ def test_consumer_skips_parent_already_passing(tmp_path: Path, monkeypatch) -> N
     added, _ = consume_decomposition_plan(model_id="test/m", demo_dir=demo_dir, passed_components={"parent_a"})
     assert added == 0  # passing parent is not decomposed
     assert "parent_a" not in om.load_no_emit_tests("test/m")  # and not un-graduated
+
+
+def test_reinject_re_adds_wiped_child_from_archived_plan(tmp_path: Path, monkeypatch) -> None:
+    """A decomposition child wiped from bringup_status (e.g. by a re-scaffold)
+    is re-added from the archived plan so its parent can recompose."""
+    from scripts.tt_hw_planner import overlay_manager as om
+
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+
+    demo_dir = _make_demo(tmp_path, [{"name": "parent_a", "status": "NEW", "submodule_path": "t2u_model.model"}])
+    arch = demo_dir / "decomposition_plan.applied"
+    arch.mkdir(parents=True)
+    (arch / "plan_20260101_000000.json").write_text(
+        json.dumps(
+            [
+                {
+                    "parent_name": "parent_a",
+                    "children": [
+                        {"name": "encoder", "submodule_path": "t2u_model.model.encoder", "class_name": "Encoder"},
+                        {"name": "decoder", "submodule_path": "t2u_model.model.decoder", "class_name": "Decoder"},
+                    ],
+                }
+            ]
+        )
+    )
+
+    added, notes = reinject_missing_decomposition_children(model_id="test/m", demo_dir=demo_dir)
+    assert added == 2
+    status = json.loads((demo_dir / "bringup_status.json").read_text())
+    by_path = {c.get("submodule_path"): c for c in status["components"]}
+    assert "t2u_model.model.encoder" in by_path
+    assert by_path["t2u_model.model.encoder"]["name"] == "t2u_model_model_encoder"
+    assert by_path["t2u_model.model.encoder"]["_added_by_decomposition_of"] == "parent_a"
+
+    # Idempotent: a second pass re-adds nothing.
+    again, _ = reinject_missing_decomposition_children(model_id="test/m", demo_dir=demo_dir)
+    assert again == 0
+
+
+def test_reinject_skips_intermediate_and_no_emit(tmp_path: Path, monkeypatch) -> None:
+    """Reinject must skip a child that was itself further decomposed (a
+    descendant child path exists) and a child on the no_emit list."""
+    from scripts.tt_hw_planner import overlay_manager as om
+
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+
+    demo_dir = _make_demo(tmp_path, [{"name": "parent_a", "status": "NEW", "submodule_path": "blk"}])
+    arch = demo_dir / "decomposition_plan.applied"
+    arch.mkdir(parents=True)
+    (arch / "plan_20260101_000000.json").write_text(
+        json.dumps(
+            [
+                {
+                    "parent_name": "parent_a",
+                    "children": [
+                        {"name": "mid", "submodule_path": "blk.mid", "class_name": "Mid"},
+                        {"name": "leaf", "submodule_path": "blk.leaf", "class_name": "Leaf"},
+                    ],
+                },
+                {
+                    "parent_name": "mid",
+                    "children": [{"name": "g", "submodule_path": "blk.mid.g", "class_name": "G"}],
+                },
+            ]
+        )
+    )
+    om.persist_no_emit_test("test/m", "blk_leaf", reason="ModuleList drop")
+
+    added, _ = reinject_missing_decomposition_children(model_id="test/m", demo_dir=demo_dir)
+    status = json.loads((demo_dir / "bringup_status.json").read_text())
+    paths = {c.get("submodule_path") for c in status["components"]}
+    assert "blk.mid.g" in paths  # leaf grandchild re-added
+    assert "blk.mid" not in paths  # intermediate (has descendant) skipped
+    assert "blk.leaf" not in paths  # no_emit child skipped
+    assert added == 1

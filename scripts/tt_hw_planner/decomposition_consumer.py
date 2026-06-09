@@ -263,6 +263,139 @@ def consume_decomposition_plan(
     return children_added, notes
 
 
+def reinject_missing_decomposition_children(
+    *,
+    model_id: str,
+    demo_dir: Path,
+) -> Tuple[int, List[str]]:
+    """Re-add decomposition children named in the (live or archived) plans
+    that are missing from ``bringup_status.json``.
+
+    A re-scaffold regenerates bringup_status from canonical discovery, which
+    does not include decomposition-added children — so a child like
+    ``t2u_model.model.encoder`` silently vanishes and its decomposed parent
+    can never satisfy "all children on device", never recomposing. This
+    self-heals that: any plan child whose submodule_path has no component is
+    re-added as a NEW component and its PCC test re-emitted.
+
+    Skips children that already exist, are on the no_emit list, or are
+    intermediate nodes that were themselves further decomposed (a descendant
+    child path exists). Returns ``(children_added, notes)``.
+    """
+    status_path = demo_dir / "bringup_status.json"
+    if not status_path.is_file():
+        return 0, []
+    try:
+        status = json.loads(status_path.read_text())
+    except Exception:
+        return 0, []
+
+    components: List[Dict[str, Any]] = list(status.get("components", []) or [])
+    existing_paths = {c.get("submodule_path") for c in components if c.get("submodule_path")}
+    existing_names = {c.get("name") for c in components if c.get("name")}
+
+    plan_paths: List[Path] = []
+    live = demo_dir / "decomposition_plan.json"
+    if live.is_file():
+        plan_paths.append(live)
+    arch = demo_dir / "decomposition_plan.applied"
+    if arch.is_dir():
+        plan_paths.extend(sorted(arch.glob("plan_*.json")))
+
+    children: Dict[str, Tuple[Optional[str], str, str]] = {}
+    for p in plan_paths:
+        try:
+            data = json.loads(p.read_text())
+        except Exception:
+            continue
+        if not isinstance(data, list):
+            continue
+        for entry in data:
+            if not isinstance(entry, dict):
+                continue
+            parent = entry.get("parent_name") or ""
+            for c in entry.get("children") or []:
+                if not isinstance(c, dict):
+                    continue
+                sp = c.get("submodule_path")
+                if sp:
+                    children.setdefault(sp, (c.get("name"), c.get("class_name") or "", parent))
+
+    if not children:
+        return 0, []
+
+    all_child_paths = set(children.keys())
+    try:
+        from .overlay_manager import load_no_emit_tests
+
+        no_emit = set(load_no_emit_tests(model_id).keys())
+    except Exception:
+        no_emit = set()
+
+    added = 0
+    notes: List[str] = []
+    to_emit: List[Dict[str, Any]] = []
+    for sp, (raw_name, class_name, parent) in sorted(children.items()):
+        if sp in existing_paths:
+            continue
+        if any(other != sp and other.startswith(sp + ".") for other in all_child_paths):
+            continue
+        slug = re.sub(r"[^A-Za-z0-9]+", "_", sp).strip("_").lower() or str(raw_name)
+        if slug in existing_names or slug in no_emit:
+            continue
+        new_entry = {
+            "name": slug,
+            "status": "NEW",
+            "submodule_path": sp,
+            "class_name": class_name,
+            "_added_by_decomposition_of": parent,
+            "_child_short_name": str(raw_name or slug),
+        }
+        components.append(new_entry)
+        existing_paths.add(sp)
+        existing_names.add(slug)
+        to_emit.append(new_entry)
+        added += 1
+        notes.append(
+            f"[reinject] re-added decomposition child `{slug}` ({sp}) of `{parent}` — was missing from bringup_status"
+        )
+
+    if not added:
+        return 0, []
+
+    status["components"] = components
+    status_path.write_text(json.dumps(status, indent=2))
+
+    try:
+        from .bringup_loop import _emit_pcc_template
+
+        _hf_ref = (
+            f"transformers/src/transformers/models/{(status.get('new_model_type') or 'unknown')}"
+            f"/modeling_{(status.get('new_model_type') or 'unknown')}.py"
+        )
+        for _child in to_emit:
+            try:
+                _emit_pcc_template(
+                    demo_dir=demo_dir,
+                    component_name=_child["name"],
+                    model_id=model_id,
+                    hf_reference=_hf_ref,
+                    new_shape={},
+                    repo_root=demo_dir.parent.parent.parent,
+                    overwrite=False,
+                    discovered_submodule_path=_child.get("submodule_path"),
+                )
+            except Exception as _emit_exc:
+                notes.append(
+                    f"[reinject] failed to emit PCC test for `{_child['name']}`: "
+                    f"{type(_emit_exc).__name__}: {_emit_exc}"
+                )
+    except Exception as _import_exc:
+        notes.append(f"[reinject] could not import _emit_pcc_template: {_import_exc}")
+
+    return added, notes
+
+
 def _archive_plan(plan_path: Path, demo_dir: Path) -> None:
     """Move the applied plan to ``decomposition_plan.applied.<ts>.json``
     so subsequent runs don't re-apply it."""
