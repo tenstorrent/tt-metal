@@ -40,6 +40,7 @@ from models.common.modules.lm_head.lm_head_1d import LMHead1D, LMHead1DConfig, _
 from models.common.modules.mlp.mlp_1d import MLP1D, MLP1DConfig, _dram_shard_core_grid_k_n
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1D, RMSNorm1DConfig, _create_sharded_norm_program_config
 from models.common.modules.rope.rope_1d import Rope1DConfig, RotarySetup1D, prepare_rot_idxs
+from models.common.modules.sampling.sampling_1d import Sampling1D
 from models.common.modules.tt_ccl import default_topology, get_tt_ccl
 from models.common.tensor_utils import TILE_SIZE, get_padded_hidden_dim
 
@@ -579,13 +580,38 @@ class Qwen25Coder32B(LightweightModule):
         self.norm = norm
         self.lm_head = lm_head
         self.mesh_device = mesh_device
-        self.sampling = None
         self.model_args: Qwen25Coder32BExecutorRuntimeConfig | None = None
 
         self.vocab_size = cfg.vocab_size
         self.n_layers = cfg.num_hidden_layers
         self.num_devices = mesh_device.get_num_devices()
         self.tt_ccl = get_tt_ccl(mesh_device) if self.num_devices > 1 else None
+
+        # On-device sampling. The model owns its sampler (callers only pick behavior per request
+        # via ``sampling_params``); the executor routes greedy/argmax vs the top-k op path. It is
+        # trace-capture-safe only on a ring-capable mesh (>=8 devices), where Sampling1D's
+        # all-gather uses a barrier-free Ring; below 8 devices it would fall back to a
+        # Linear+barrier gather that is correct eagerly but NOT capturable in a trace, so leave
+        # sampling off there and let those SKUs stay on the host/eager path.
+        #
+        # Config is top-k capable AND argmax capable: ``allow_force_argmax`` keeps greedy
+        # (temp=0,k=1,p=0) on the full-vocab argmax path, while ``pad_to_power_of_2`` + a
+        # tile-padded 32-row ``max_batch_size`` keep the top-k op path (the PERF.md parity path)
+        # on its fast ``ttnn.topk``. The per-request ``sampling_params`` selects which runs.
+        # Buffers are lazy — nothing materializes until the first on-device sampled decode.
+        self.supports_on_device_sampling = self.num_devices >= 8
+        self.sampling = (
+            Sampling1D(
+                vocab_size=self.vocab_size,
+                mesh_device=mesh_device,
+                tt_ccl=self.tt_ccl,
+                max_batch_size=_nearest_32(cfg.max_batch_size),
+                allow_force_argmax=True,
+                pad_to_power_of_2=True,
+            )
+            if self.supports_on_device_sampling
+            else None
+        )
 
     @property
     def n_kv_heads(self) -> int:

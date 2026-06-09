@@ -44,6 +44,7 @@ from models.common.models.qwen25_coder_32b.model import (
     QWEN25_CODER_32B_PERFORMANCE,
     Qwen25Coder32B,
 )
+from models.common.sampling.sampling_params import SamplingParams
 from models.common.tests.demos.cleanup_utils import cleanup_model_case
 from models.tt_transformers.tt.common import encode_prompt_hf
 
@@ -513,6 +514,16 @@ def _run_perf_benchmark(model, mesh_device, expected, batch_size, case_name):
             prompts, tokenizer, max_seq_len=max_seq_len, reserve_decode_tokens=128
         )
 
+        # On-device sampling: the model owns its Sampling1D module (constructed in __init__ on
+        # ring-capable meshes); the demo only picks behavior per request. The PERF.md recipe
+        # (temp=0 => greedy via the top-k op path) closes the T3K decode gap; None keeps the
+        # host-argmax path on meshes that can't trace-capture sampling (<8 devices).
+        sampling_params = (
+            SamplingParams(temperature=0.0, top_k=32, top_p=0.08)
+            if batch_size == 1 and getattr(model, "supports_on_device_sampling", False)
+            else None
+        )
+
         result = run_perf_benchmark(
             traced_executor,
             tokens=input_tokens,
@@ -521,6 +532,7 @@ def _run_perf_benchmark(model, mesh_device, expected, batch_size, case_name):
             num_decode_tokens=128,
             max_batch_size=max_batch_size,
             prompt_lens=prompt_lens,
+            sampling_params=sampling_params,
         )
 
         logger.info(
