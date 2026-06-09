@@ -107,10 +107,27 @@ inline void _llk_unpack_A_rmsnorm_mop_config_(
         TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 2, 0b0001);  // set srcB ch0_z = 2
     static constexpr std::uint32_t srcb_clear_z =
         TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001);  // set srcB ch0_z = 0
+
     if (num_faces == 1) {
         constexpr std::uint32_t outerloop = 1;
         constexpr std::uint32_t innerloop = num_tiles;
         ckernel_template tmp(outerloop, innerloop, unpack_srca);
+        tmp.set_start_op(unpack_srcb_set_dvalid);
+        tmp.program();
+    } else if (transpose_of_faces) {
+        LLK_ASSERT(num_tiles == 1, "rmsnorm-style transpose path supports num_tiles==1 only");
+        LLK_ASSERT(num_faces == 4, "rmsnorm-style transpose path supports num_faces==4 only");
+        constexpr std::uint32_t replay_buf_len = 5;
+        load_replay_buf(0, replay_buf_len, [] {
+            TTI_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);  // face 0 (z=0->2)
+            TTI_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);  // face 2 (z=2->4)
+            TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001);                                // srcA ch0_z = 1
+            TTI_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);  // face 1 (z=1->3)
+            TTI_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);  // face 3 (z=3->5)
+        });
+        constexpr std::uint32_t outerloop = 1;
+        constexpr std::uint32_t innerloop = 1;
+        ckernel_template tmp(outerloop, innerloop, lltt::replay_insn(0, replay_buf_len));
         tmp.set_start_op(unpack_srcb_set_dvalid);
         tmp.program();
     } else {

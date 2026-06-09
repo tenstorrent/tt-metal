@@ -50,15 +50,15 @@ class TTSampling(LightweightModule):
     def _is_force_argmax_sampling(self, k, p, temp):
         """Detect whether all users request deterministic greedy decoding.
 
-        When every user in the batch has k=1 (top-1), p=1.0 (no top-p filter),
+        When every user in the batch has k=1 (top-1), p=0.0 or p=1.0 (no top-p filter),
         and temp=1.0 (no temperature scaling), we can skip the full top-k / top-p /
         temperature / RNG pipeline and use a single all-gather + argmax instead.
         This is significantly faster because argmax needs only one all-gather of the
         full logits tensor vs. three gathers (values, indices, sampled tokens) in the
         normal path.
 
-        Note: p=1.0 here is the *caller's* convention ("keep all tokens"), distinct
-        from the internal device default of p=0 which also means "no filtering."
+        Note: callers may represent greedy rows with p=1.0, while the
+        device argmax-style representation uses p=0.0.
         The model config must also set allow_force_argmax=True for this to activate.
 
         Changing this state between decode steps invalidates captured traces, so
@@ -67,7 +67,7 @@ class TTSampling(LightweightModule):
         return (
             self._allow_force_argmax_sampling
             and is_default_value(k, 1)
-            and is_default_value(p, 1.0)
+            and (is_default_value(p, 1.0) or is_default_value(p, 0.0))
             and is_default_value(temp, 1.0)
         )
 
@@ -130,6 +130,13 @@ class TTSampling(LightweightModule):
         self.sub_core_grids = getattr(args, "sub_core_grids", None)
         self.sub_core_grid_topk = getattr(args, "sub_core_grid_topk", None)
         self.start_core = getattr(args, "start_core", ttnn.CoreCoord(0, 0))
+        self._sampling_sub_core_grids = (
+            ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                self.start_core, self.max_batch_size, self.sub_core_grids, row_wise=True
+            )
+            if self.sub_core_grids is not None
+            else None
+        )
 
         # sampling_dp > 1 when multiple mesh groups each sample users independently
         # (e.g. GPT-OSS on [4,8]: 4 rows × 32 users; Llama Galaxy on [8,4]: 4 cols × 8 users)
@@ -588,7 +595,7 @@ class TTSampling(LightweightModule):
         ttnn.manual_seed(
             seeds=self.seeds_tt_tensor,
             user_ids=self.user_ids_tt_tensor,
-            sub_core_grids=self.sub_core_grids,
+            sub_core_grids=self._sampling_sub_core_grids,
         )
         # Perform the actual sampling with top-k, top-p, and temperature
         tt_out_tok = ttnn.sampling(
@@ -597,11 +604,7 @@ class TTSampling(LightweightModule):
             k=self.k_tensor,
             p=self.p_tensor,
             temp=self.temp_tensor,
-            sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
-                self.start_core, self.max_batch_size, self.sub_core_grids, row_wise=True
-            )
-            if self.sub_core_grids is not None
-            else None,
+            sub_core_grids=self._sampling_sub_core_grids,
             output_tensor=tt_out_tok,
         )
 

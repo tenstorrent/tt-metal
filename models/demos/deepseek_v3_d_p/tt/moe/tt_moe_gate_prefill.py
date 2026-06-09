@@ -87,6 +87,20 @@ class TtMoEGateConfig:
     def num_cores(self):
         return self.core_grid.num_cores()
 
+    @classmethod
+    def from_model_cfg(cls, model_cfg: type, **overrides) -> "TtMoEGateConfig":
+        """Build from a TestVariant.model_config class. Extra kwargs override per-instance."""
+        return cls(
+            dim=model_cfg.EMB_SIZE,
+            n_routed_experts=model_cfg.NUM_ROUTED_EXPERTS,
+            n_shared_experts=model_cfg.NUM_SHARED_EXPERTS,
+            n_activated_experts=model_cfg.NUM_EXPERTS_PER_TOKEN,
+            n_expert_groups=model_cfg.NUM_EXPERT_GROUPS,
+            n_limited_groups=model_cfg.NUM_LIMITED_GROUPS,
+            route_scale=model_cfg.ROUTE_SCALE,
+            **overrides,
+        )
+
 
 class TtMoEGatePrefill(LightweightModule):
     """MoE gate module from DeepSeek-R1."""

@@ -294,7 +294,7 @@ class VECTOR_MODE(TemplateParameter):
     vector_mode: VectorMode = VectorMode.RC
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr int VECTOR_MODE = static_cast<int>({self.vector_mode.cpp_enum_value});"
+        return f"constexpr auto VECTOR_MODE = {self.vector_mode.cpp_enum_value};"
 
 
 @dataclass

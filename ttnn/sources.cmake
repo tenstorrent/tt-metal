@@ -41,6 +41,7 @@ set(TTNN_CORE_SRCS
     core/tensor/tensor_attributes.cpp
     core/tensor/tensor_impl.cpp
     core/tensor/tensor_ops.cpp
+    core/tensor/socket_services.cpp
     cpp/ttnn/operations/experimental/core_subset_write/copy_to_device_filtered.cpp
     core/tensor/tensor_utils.cpp
     core/tensor/unit_mesh/unit_mesh_utils.cpp
@@ -159,6 +160,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/examples/example_multiple_return/example_multiple_return_nanobind.cpp
     cpp/ttnn/operations/examples/examples_nanobind.cpp
     cpp/ttnn/operations/experimental/bcast_to/bcast_to_nanobind.cpp
+    cpp/ttnn/operations/experimental/multi_scale_deformable_attn/multi_scale_deformable_attn_nanobind.cpp
     cpp/ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_nanobind.cpp
     cpp/ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_nanobind.cpp
     cpp/ttnn/operations/experimental/conv3d/conv3d_nanobind.cpp
@@ -189,6 +191,8 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/extract/extract_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/insert/insert_nanobind.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/update_padded_kv_cache_nanobind.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/rotary_embedding_indexed_nanobind.cpp
     cpp/ttnn/operations/experimental/plusone/plusone_nanobind.cpp
     cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp
     cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp
@@ -327,6 +331,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/global_circular_buffer.cpp
     cpp/ttnn-nanobind/global_semaphore.cpp
     cpp/ttnn-nanobind/hd_socket.cpp
+    cpp/ttnn-nanobind/h2d_stream_service.cpp
     cpp/ttnn-nanobind/mesh_socket.cpp
     cpp/ttnn-nanobind/profiler.cpp
     cpp/ttnn-nanobind/program_descriptors.cpp
