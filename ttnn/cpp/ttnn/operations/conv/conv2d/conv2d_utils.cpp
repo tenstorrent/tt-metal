@@ -416,10 +416,13 @@ Conv2dBenchMode conv2d_bench_mode() {
         if (v == "helper_trm") {
             return Conv2dBenchMode::HelperRowMajor;
         }
+        if (v == "helper_trm_pin") {
+            return Conv2dBenchMode::HelperRowMajorPin;
+        }
         TT_FATAL(
             false,
-            "TT_CONV_BENCH_MODE='{}' is not recognized. Use one of: main | helper_sbm | helper_trm (or leave it "
-            "unset for normal conv).",
+            "TT_CONV_BENCH_MODE='{}' is not recognized. Use one of: main | helper_sbm | helper_trm | "
+            "helper_trm_pin (or leave it unset for normal conv).",
             env);
         return Conv2dBenchMode::None;
     }();
@@ -431,6 +434,7 @@ const char* conv2d_bench_mode_name(Conv2dBenchMode mode) {
         case Conv2dBenchMode::Main: return "main";
         case Conv2dBenchMode::HelperSubblock: return "helper_sbm";
         case Conv2dBenchMode::HelperRowMajor: return "helper_trm";
+        case Conv2dBenchMode::HelperRowMajorPin: return "helper_trm_pin";
         default: return "none";
     }
 }
@@ -481,8 +485,8 @@ static std::pair<uint32_t, uint32_t> determine_largest_subblock_size(
         return {choice.out_subblock_h, choice.out_subblock_w};
     }
 
-    // ── bench mode: only helper_trm (TileRowMajor) may relax subblock_w == per_core_N ──
-    const bool relax = (mode == Conv2dBenchMode::HelperRowMajor);
+    // ── bench mode: helper_trm / helper_trm_pin (TileRowMajor) may relax subblock_w == per_core_N ──
+    const bool relax = (mode == Conv2dBenchMode::HelperRowMajor || mode == Conv2dBenchMode::HelperRowMajorPin);
     const auto tuner_sbm = pick(true);   // what main / helper_sbm would use
     const auto tuner_trm = pick(false);  // what helper_trm would use
     const auto tuner_choice = relax ? tuner_trm : tuner_sbm;

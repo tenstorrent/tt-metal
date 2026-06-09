@@ -12,10 +12,13 @@
 # ║   TT_CONV_BENCH_MODE=main       bash scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/conv/test_conv_bench.py   ║
 # ║   TT_CONV_BENCH_MODE=helper_sbm bash scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/conv/test_conv_bench.py   ║
 # ║   TT_CONV_BENCH_MODE=helper_trm bash scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/conv/test_conv_bench.py   ║
+# ║   TT_CONV_BENCH_MODE=helper_trm_pin bash scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/conv/test_conv_bench.py   ║
 # ║                                                                                            ║
-# ║   main       = main's verbatim no-helper conv kernel (SubblockMajor, hand-written matmul).  ║
-# ║   helper_sbm = matmul-helper kernel, SubblockMajor (subblock_w == per_core_N enforced).     ║
-# ║   helper_trm = matmul-helper kernel, TileRowMajor (subblock_w == per_core_N relaxed).       ║
+# ║   main          = main's verbatim no-helper conv kernel (SubblockMajor, hand-written).      ║
+# ║   helper_sbm    = matmul-helper kernel, SubblockMajor (subblock_w == per_core_N), pin ON.   ║
+# ║   helper_trm    = matmul-helper kernel, TileRowMajor (subblock_w == per_core_N relaxed).    ║
+# ║   helper_trm_pin = matmul-helper, TileRowMajor + pin ON + l1_acc (keeps pin win + bigger    ║
+# ║                    subblock). Needs CB_OUT_LAYOUT=row_major + CB_L1_ACC=true + CB_BIAS=false.║
 # ║                                                                                            ║
 # ║ Optional manual subblock (overrides the auto-tuner; validated with TT_FATAL):               ║
 # ║   TT_CONV_BENCH_SUBBLOCK_H=2 TT_CONV_BENCH_SUBBLOCK_W=2 TT_CONV_BENCH_MODE=helper_trm ...    ║
@@ -23,7 +26,8 @@
 # ║ IDIOT-PROOFING (the harness TT_FATALs loudly rather than let you misread a result):         ║
 # ║   • output_layout / packer_l1_acc / weights_dtype are REAL per-conv via CB_* env (defaults:  ║
 # ║     tile out, l1_acc on) so main/helper_sbm baselines match how models run the conv. The     ║
-# ║     ROW_MAJOR subblock-relaxation study (helper_trm) = CB_OUT_LAYOUT=row_major CB_L1_ACC=false║
+# ║     subblock-relaxation study needs CB_OUT_LAYOUT=row_major: helper_trm pairs it with        ║
+# ║     CB_L1_ACC=false; helper_trm_pin KEEPS CB_L1_ACC=true (pin + L1 accumulate, no reload).    ║
 # ║   • helper_trm on a shape where out_subblock_w == per_core_N (weight_num_subblocks==1)       ║
 # ║     fatals: TileRowMajor would be identical to SubblockMajor (no-op). To make helper_trm     ║
 # ║     actually differ, the tuner must pick out_subblock_w < per_core_N — that needs            ║

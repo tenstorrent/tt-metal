@@ -111,11 +111,13 @@ void Conv2dDeviceOperation::validate_on_program_cache_miss(
             compute_output_specs(args, tensor_args).padded_shape()[-1] / tt::constants::TILE_WIDTH;
         // The "out_subblock_w == out_width || out_subblock_h == 1" gate exists for SubblockMajor output:
         // reblock_and_untilize (the SubblockMajor untilize gather) is only correct under it. The conv_bench
-        // helper_trm (HelperRowMajor) path packs the output interm in TileRowMajor (tile-row) order and
-        // untilizes via the plain, non-reblock path, which is correct for any out_subblock_h — so the gate
-        // does not apply there. Relax it only for that path; every other conv keeps the constraint.
-        const bool relax_subblock =
-            ttnn::operations::conv::conv2d_bench_mode() == ttnn::operations::conv::Conv2dBenchMode::HelperRowMajor;
+        // helper_trm / helper_trm_pin (HelperRowMajor / HelperRowMajorPin) paths pack the output interm in
+        // TileRowMajor (tile-row) order and untilize via the plain, non-reblock path, which is correct for
+        // any out_subblock_h — so the gate does not apply there. Relax it only for those paths; every other
+        // conv keeps the constraint.
+        const auto bench_mode = ttnn::operations::conv::conv2d_bench_mode();
+        const bool relax_subblock = bench_mode == ttnn::operations::conv::Conv2dBenchMode::HelperRowMajor ||
+                                    bench_mode == ttnn::operations::conv::Conv2dBenchMode::HelperRowMajorPin;
         if (args.memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
             TT_FATAL(
                 per_core_out_matrix_width_ntiles == out_width_ntiles,

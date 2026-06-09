@@ -961,6 +961,34 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                 "TT_CONV_BENCH_SUBBLOCK_W < per_core_N (per_core_N here = {}).",
                 weight_block_w_ntiles);
             compute_defines["CONV_TILE_PACK_ROW_MAJOR"] = "1";
+        } else if (conv_bench_mode == ttnn::operations::conv::Conv2dBenchMode::HelperRowMajorPin) {
+            // helper_trm_pin = TileRowMajor + pin + packer_l1_acc (the row-strided pin path). Keeps
+            // helper_sbm's pin/CB-overhead win AND the relaxed (bigger) subblock. Same ROW_MAJOR-output +
+            // relaxation-engages guards as helper_trm, plus: no bias (the TileRowMajor+bias workaround
+            // degrades to SubblockMajor, which would silently measure helper_sbm+pin instead), and
+            // packer_l1_acc ON (the TileRowMajor pin path accumulates in L1 with no software reload —
+            // matmul_block_helpers.inl static_asserts packer_l1_acc + Interm for TileRowMajor+pin).
+            TT_FATAL(
+                untilize_out,
+                "conv_bench helper_trm_pin (TileRowMajor + pin + l1_acc) only applies to ROW_MAJOR output "
+                "(untilize_out=true); got tiled output. Set CB_OUT_LAYOUT=row_major.");
+            TT_FATAL(
+                weight_num_subblocks > 1,
+                "conv_bench helper_trm_pin is a NO-OP for this shape: out_subblock_w == per_core_N "
+                "(weight_num_subblocks==1), so TileRowMajor packs IDENTICALLY to SubblockMajor — it equals "
+                "helper_sbm. Pick a config where per_core_N > DST capacity so out_subblock_w < per_core_N "
+                "(per_core_N here = {}).",
+                weight_block_w_ntiles);
+            TT_FATAL(
+                !has_bias,
+                "conv_bench helper_trm_pin requires no bias: the TileRowMajor+bias deadlock workaround forces "
+                "SubblockMajor (degrading to helper_sbm+pin), which would not measure the TileRowMajor+pin "
+                "path. Use a bias-free conv (CB_BIAS=false).");
+            TT_FATAL(
+                packer_l1_acc_en,
+                "conv_bench helper_trm_pin requires packer_l1_acc (CB_L1_ACC=true): the TileRowMajor pin path "
+                "accumulates partials in L1 with no software reload. Set CB_L1_ACC=true.");
+            compute_defines["CONV_TILE_PACK_ROW_MAJOR_PIN"] = "1";
         }
         log_info(
             tt::LogOp,

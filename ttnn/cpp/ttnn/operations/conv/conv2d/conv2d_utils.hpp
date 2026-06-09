@@ -37,15 +37,19 @@ uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num1, uint32_t n
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // Conv kernel profiling harness (conv_bench branch — pure test scaffolding). Selected by env
 // TT_CONV_BENCH_MODE:
-//   main         → main's verbatim no-helper conv kernel (SubblockMajor, hand-written matmul).
-//   helper_sbm   → matmul-helper kernel, SubblockMajor (subblock_w == per_core_N enforced).
-//   helper_trm   → matmul-helper kernel, TileRowMajor (subblock_w == per_core_N relaxed).
-//   (unset)      → normal conv, completely untouched.
-// ALL bench modes force ROW_MAJOR output and packer_l1_acc=OFF so the three are a fair, bug-free
-// 3-way comparison (l1_acc-late-disable was the source of the prior CB-format/spill bugs; off-from-
-// the-start avoids them). Optional TT_CONV_BENCH_SUBBLOCK_H / _W force a specific out_subblock,
-// overriding the tuner (validated with TT_FATAL). The factory adds the remaining TT_FATAL guards.
-enum class Conv2dBenchMode : uint8_t { None, Main, HelperSubblock, HelperRowMajor };
+//   main           → main's verbatim no-helper conv kernel (SubblockMajor, hand-written matmul).
+//   helper_sbm     → matmul-helper kernel, SubblockMajor (subblock_w == per_core_N enforced), pin ON.
+//   helper_trm     → matmul-helper kernel, TileRowMajor (subblock_w == per_core_N relaxed), pin OFF.
+//   helper_trm_pin → matmul-helper kernel, TileRowMajor + pin ON + packer_l1_acc (row-strided pin path):
+//                    keeps helper_sbm's CB-overhead/pin win AND the relaxed (bigger) subblock. Requires
+//                    ROW_MAJOR out + l1_acc ON + no bias (see the factory TT_FATAL guards).
+//   (unset)        → normal conv, completely untouched.
+// Modes pass each conv's REAL output_layout / packer_l1_acc / weights_dtype (via the harness CB_* env) so
+// main-vs-helper_sbm baselines match how the model runs the conv. The TileRowMajor relaxation (helper_trm /
+// helper_trm_pin) needs ROW_MAJOR output; reproduce it with CB_OUT_LAYOUT=row_major. Optional
+// TT_CONV_BENCH_SUBBLOCK_H / _W force a specific out_subblock, overriding the tuner (validated with
+// TT_FATAL). The factory adds the remaining TT_FATAL guards.
+enum class Conv2dBenchMode : uint8_t { None, Main, HelperSubblock, HelperRowMajor, HelperRowMajorPin };
 
 // Reads TT_CONV_BENCH_MODE once per process; TT_FATALs on an unrecognized value.
 Conv2dBenchMode conv2d_bench_mode();
