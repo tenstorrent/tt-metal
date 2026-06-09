@@ -74,9 +74,9 @@ def _all_gather_hw(ctx: VaeContext, x: ttnn.Tensor) -> ttnn.Tensor:
     if x.layout != ttnn.TILE_LAYOUT:
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
     if ctx.h_factor > 1:
-        x = ctx.ccl_manager.all_gather_persistent_buffer(x, dim=1, mesh_axis=ctx.h_mesh_axis)
+        x = ctx.ccl_manager.all_gather(x, dim=1, mesh_axis=ctx.h_mesh_axis, use_hyperparams=True)
     if ctx.w_factor > 1:
-        x = ctx.ccl_manager.all_gather_persistent_buffer(x, dim=2, mesh_axis=ctx.w_mesh_axis)
+        x = ctx.ccl_manager.all_gather(x, dim=2, mesh_axis=ctx.w_mesh_axis, use_hyperparams=True)
     return x
 
 
@@ -416,11 +416,11 @@ class VaeResnetBlock(Module):
         h = x
 
         h = self.norm1.forward(h)
-        h = ttnn.silu(h)
+        h = ttnn.silu(h, output_tensor=h)
         h = self.conv1.forward(h)
 
         h = self.norm2.forward(h)
-        h = ttnn.silu(h)
+        h = ttnn.silu(h, output_tensor=h)
         h = self.conv2.forward(h)
 
         if self.conv_shortcut is not None:
