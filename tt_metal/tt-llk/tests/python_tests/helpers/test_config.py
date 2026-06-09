@@ -440,7 +440,7 @@ class TestConfig:
             "-Wfloat-equal -Wpointer-arith -Wnull-dereference -Wredundant-decls "
             "-Wuninitialized -Wmaybe-uninitialized "
             f"{no_wh_ebreak_fixup}"
-            f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DENABLE_LLK_ASSERT {TestConfig.ARCH_DEFINE} "
+            f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DKERNEL_BUILD -DENABLE_LLK_ASSERT {TestConfig.ARCH_DEFINE} "
             f"{'-DSPEED_OF_LIGHT' if TestConfig.SPEED_OF_LIGHT else ''}"
         )
         TestConfig.INCLUDES = [

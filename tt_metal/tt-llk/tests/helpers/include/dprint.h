@@ -58,6 +58,9 @@ static_assert(
     "adjust TestConfig.DEVICE_PRINT_BUFFER_BASE / DEVICE_PRINT_PER_THREAD_SIZE "
     "in tests/python_tests/helpers/test_config.py.");
 
+// A single #include "dprint.h" exposes every device print facility.
+#include "api/debug/dprint_tile.h"
+#include "dprint_tensix.h"
 #else
 
 #define DEVICE_PRINT(fmt, ...)

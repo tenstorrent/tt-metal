@@ -3,16 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*  UNPACK emits two tile_slice records in sequence:
-    1. tile_slice<64> over the 16-cell hw0_32_8 slice, which fits in 64 bytes.
-    2. tile_slice<64> over the 64-cell hw0_32_4 slice, which gets truncated.
+    1. tile_slice_from_l1<64> over the 16-cell hw0_32_8 slice, which fits in 64 bytes.
+    2. tile_slice_from_l1<64> over the 64-cell hw0_32_4 slice, which gets truncated.
 */
-
-#include "dprint_tile.h"
 
 #include <cstdint>
 
 #include "build.h"
 #include "ckernel.h"
+#include "dprint.h"
 
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
@@ -27,8 +26,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     const DataFormat src_fmt = static_cast<DataFormat>(formats.unpack_A_src);
-    DEVICE_PRINT("{}", tile_slice<64>(params.buffer_A[0], src_fmt, SliceRange::hw0_32_8()));
-    DEVICE_PRINT("{}", tile_slice<64>(params.buffer_A[0], src_fmt, SliceRange::hw0_32_4()));
+    DEVICE_PRINT("{}", tile_slice_from_l1<64>(params.buffer_A[0], src_fmt, SliceRange::hw0_32_8()));
+    DEVICE_PRINT("{}", tile_slice_from_l1<64>(params.buffer_A[0], src_fmt, SliceRange::hw0_32_4()));
 }
 
 #endif

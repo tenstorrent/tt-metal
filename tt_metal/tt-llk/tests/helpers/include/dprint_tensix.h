@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Wrapper for Metal's dprint_tensix.h.
-// LLK needs its own dprint_tensix_dest_reg. It diverges from Metal in two ways:
-//   - Skips dbg_halt<MathThreadId>, as it would hang.
-//   - On Blackhole, reads DEST through 0xFFBD8000 for all formats. Metal does that
-//     only for fp32/int32 and reads with dbg_read_dest_acc_row for other formats,
-//     but that is unreliable on BH from here.
+// Wrapper for Metal's dprint_tensix.h. We have our own dprint_tensix_dest_reg because the
+// original can't run in LLK infra. It relies on dbg_halt on BH, which is a choreography across
+// the TRISCs that would simply hang when run on Math, as we do here. We can't read DEST through
+// the debug bus; we read 0xFFBD8000 instead, which requires some hardware state programming.
+//
+// The Wormhole path, and Blackhole fp32/int32, are shared.
 //
 // Quasar is currently unsupported here; Metal device print doesn't support arrays for Quasar.
 
@@ -33,7 +33,7 @@ inline void dprint_tensix_dest_reg(int tile_id = 0)
     {
         data_format = DataFormat::Float32;
 #if defined(ARCH_WORMHOLE)
-        DEVICE_PRINT("WARNING: Float32 on Wormhole omits lower 16 bits of DEST");
+        DEVICE_PRINT("WARNING: Float32 on Wormhole displays limited precision - lower 16 mantissa bits are not shown\n");
 #endif
     }
 
@@ -63,22 +63,16 @@ inline void dprint_tensix_dest_reg(int tile_id = 0)
     const uint32_t tile_elt_base   = tile_id * NUM_ROWS_PER_TILE * ELT_PER_ROW;
     for (uint32_t r = 0; r < NUM_ROWS_PER_TILE; ++r)
     {
+        const uint32_t logical_row  = tile_id * NUM_ROWS_PER_TILE + r;
         const uint32_t row_elt_base = tile_elt_base + r * ELT_PER_ROW;
         switch (data_format)
         {
             case DataFormat::Float32:
-            case DataFormat::Int32:
-            case DataFormat::UInt32:
-            {
-                uint32_t rd[16];
-                volatile uint32_t* addr = reinterpret_cast<volatile uint32_t*>(0xFFBD8000);
-                for (int i = 0; i < 16; ++i)
-                {
-                    rd[i] = addr[row_elt_base + i];
-                }
-                DEVICE_PRINT("{}", dp_typed_array_t<16>(static_cast<uint16_t>(data_format), rd));
+                dprint_tensix_dest_reg_row_float32(logical_row);
                 break;
-            }
+            case DataFormat::Int32:
+                dprint_tensix_dest_reg_row_int32(logical_row);
+                break;
             case DataFormat::Float16:
             case DataFormat::Float16_b:
             case DataFormat::UInt16:
@@ -112,36 +106,28 @@ inline void dprint_tensix_dest_reg(int tile_id = 0)
         }
     }
 #else
+    // Wormhole (reuse Metal helpers)
     uint32_t row = tile_id * NUM_ROWS_PER_TILE;
     for (uint32_t r = 0; r < NUM_ROWS_PER_TILE; ++r, ++row)
     {
         switch (data_format)
         {
             case DataFormat::Float32:
-            {
-                const uint16_t dr = get_dest_row_id(row, true);
-                uint32_t tmp[16];
-                uint32_t rd[16];
-                ckernel::dbg_get_array_row(ckernel::dbg_array_id::DEST, dr, tmp);
-                ckernel::dbg_get_array_row(ckernel::dbg_array_id::DEST, dr + 8, tmp + 8);
-                for (int i = 0; i < 8; ++i)
-                {
-                    rd[2 * i]     = reconstruct_float32(lo_word(tmp[i]), lo_word(tmp[i + 8]));
-                    rd[2 * i + 1] = reconstruct_float32(hi_word(tmp[i]), hi_word(tmp[i + 8]));
-                }
-                DEVICE_PRINT("{}", dp_typed_array_t<16>(static_cast<uint16_t>(DataFormat::Float32), rd));
+                dprint_tensix_dest_reg_row_float32(row);
                 break;
-            }
             case DataFormat::UInt16:
-            case DataFormat::Float16_b:
-            case DataFormat::UInt8:
-            case DataFormat::Int8:
-            {
-                uint32_t rd[8];
-                ckernel::dbg_get_array_row(ckernel::dbg_array_id::DEST, get_dest_row_id(row, false), rd);
-                DEVICE_PRINT("{}", dp_typed_array_t<8>(static_cast<uint16_t>(data_format), rd));
+                dprint_tensix_dest_reg_row_uint16(static_cast<uint32_t>(data_format), row);
                 break;
-            }
+            case DataFormat::Float16:
+            case DataFormat::Float16_b:
+                dprint_tensix_dest_reg_row_float16(static_cast<uint32_t>(data_format), row);
+                break;
+            case DataFormat::UInt8:
+                dprint_tensix_dest_reg_row_uint8(static_cast<uint32_t>(data_format), row);
+                break;
+            case DataFormat::Int8:
+                dprint_tensix_dest_reg_row_int8(static_cast<uint32_t>(data_format), row);
+                break;
             default:
                 DEVICE_PRINT("Unsupported data format: {}", static_cast<uint32_t>(data_format));
                 break;

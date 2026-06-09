@@ -8,11 +8,8 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "dprint.h"
 #include "llk_defs.h"
-
-#if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
-#include "dprint_tensix.h"
-#endif
 
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;

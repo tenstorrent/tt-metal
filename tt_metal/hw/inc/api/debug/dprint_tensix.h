@@ -10,6 +10,10 @@
 #if !defined(ENV_LLK_INFRA)
 #include "api/compute/compute_kernel_api.h"
 #include "dprint.h"
+#else
+inline void dbg_read_dest_acc_row(int row_addr, uint32_t* rd_data) {
+    ckernel::dbg_get_array_row(ckernel::dbg_array_id::DEST, row_addr, rd_data);
+}
 #endif
 #include "tensix_types.h"
 
@@ -135,7 +139,6 @@ inline uint32_t reconstruct_float32(uint32_t float16, uint32_t mantissa16) {
     return sign | exponent | mantissa;
 }
 
-#if !defined(ENV_LLK_INFRA)
 // Helper function that prints one row from dest when dest is configured for storing float32 values.
 // This function should be used only from dprint_tensix_dest_reg.
 // Float32 in dest = [Float16, Mantissa16]
@@ -219,6 +222,7 @@ inline void dprint_tensix_dest_reg_row_int8(uint32_t data_format, uint16_t row) 
     dprint_array_with_data_type<ARRAY_LEN>(data_format, rd_data);
 }
 
+#if !defined(ENV_LLK_INFRA)
 // Print the contents of tile with index tile_id within the destination register
 template <bool print_by_face = false>
 void dprint_tensix_dest_reg(int tile_id = 0) {
@@ -246,6 +250,7 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
                     case (uint32_t)DataFormat::UInt16:
                         dprint_tensix_dest_reg_row_uint16(data_format_reg_field_value, row);
                         break;
+                    case (uint32_t)DataFormat::Float16:
                     case (uint32_t)DataFormat::Float16_b:
                         dprint_tensix_dest_reg_row_float16(data_format_reg_field_value, row);
                         break;

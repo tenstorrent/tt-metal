@@ -81,13 +81,13 @@ The template parameter is the buffer length in `uint32_t` words; pack narrower e
 
 ### Tile slices
 
-Defined in [dprint_tile.h](helpers/include/dprint_tile.h). The`tile_slice<MAX_BYTES>(l1_addr, fmt, sr, ...)` helper fills a tile straight from an L1 address, decoding it as `fmt` over the cells picked by `SliceRange sr`. Tile and face dimensions default to the standard layout but can be passed explicitly as trailing arguments.
+Defined in [api/debug/dprint_tile.h](../../hw/inc/api/debug/dprint_tile.h). The `tile_slice_from_l1<MAX_BYTES>(l1_addr, fmt, sr, ...)` helper fills a tile straight from an L1 address, decoding it as `fmt` over the cells picked by `SliceRange sr`. Tile and face dimensions default to the standard 32x32 layout but can be passed explicitly as trailing arguments.
 
 ```cpp
-#include "dprint_tile.h"
+#include "dprint.h"
 
 const DataFormat fmt = static_cast<DataFormat>(formats.unpack_A_src);
-DEVICE_PRINT("{}", tile_slice<64>(params.buffer_A[0], fmt, SliceRange::hw0_32_8()));
+DEVICE_PRINT("{}", tile_slice_from_l1<64>(params.buffer_A[0], fmt, SliceRange::hw0_32_8()));
 ```
 
 - `SliceRange` (e.g. `hw0_32_8()`, `hw0_32_4()`) selects which cells of the tile to sample.
@@ -98,7 +98,7 @@ DEVICE_PRINT("{}", tile_slice<64>(params.buffer_A[0], fmt, SliceRange::hw0_32_8(
 Defined in [dprint_tensix.h](helpers/include/dprint_tensix.h). Dumps the Tensix DEST register, one row per DEST row, decoded against the configured DEST data format. (Wormhole and Blackhole only, Quasar is currently unsupported.) Call it from the **MATH** thread, after filling DEST and before `dest_section_done`:
 
 ```cpp
-#include "dprint_tensix.h"
+#include "dprint.h"
 
 // ... Operations on DEST ...
 dprint_tensix_dest_reg(params.DST_INDEX);   // prints "Tile ID = N" + one row per DEST row

@@ -165,11 +165,11 @@ class _RenderPlan:
     Iteration mode: append literals[i], render placeholders[i]
     from args_blob, repeat; finally append literals[-1].
 
-    Literals are pre-cooked (fmtlib uses double braces
+    Literals are pre-unescaped (fmtlib uses double braces
     for escaping: swap {{ for {, and }} for })
     so `_render` doesn't redo that on every record.
 
-    When there are no placeholders, literals = [cooked_fmt] and
+    When there are no placeholders, literals = [unescaped_fmt] and
     `placeholders` is empty.
     """
 
@@ -177,7 +177,7 @@ class _RenderPlan:
     placeholders: list[_Placeholder] = field(default_factory=list)
 
 
-def _cook(literal: str) -> str:
+def _unescape_fmtlib_braces(literal: str) -> str:
     """Undo fmtlib brace-escaping ({{ -> {, }} -> }) for a format-string literal."""
     return literal.replace("{{", "{").replace("}}", "}")
 
@@ -189,7 +189,7 @@ def _build_render_plan(
 
     placeholders = list(PLACEHOLDER_RE.finditer(fmt))
     if not placeholders:
-        return _RenderPlan(literals=[_cook(fmt)])
+        return _RenderPlan(literals=[_unescape_fmtlib_braces(fmt)])
 
     # Determine type per reordered-slot index, then compute offsets in
     # ascending slot order; matches size-descending packing on device.
@@ -217,9 +217,9 @@ def _build_render_plan(
         literals = []
         last_end = 0
         for m in placeholders:
-            literals.append(_cook(fmt[last_end : m.start()]))
+            literals.append(_unescape_fmtlib_braces(fmt[last_end : m.start()]))
             last_end = m.end()
-        literals.append(_cook(fmt[last_end:]))
+        literals.append(_unescape_fmtlib_braces(fmt[last_end:]))
         return _RenderPlan(literals=literals, placeholders=[err] * len(placeholders))
 
     # The guard above guarantees a variable-size arg ('A'/'t') is the sole
@@ -236,7 +236,7 @@ def _build_render_plan(
     compiled: list[_Placeholder] = []
     last_end = 0
     for m in placeholders:
-        literals.append(_cook(fmt[last_end : m.start()]))
+        literals.append(_unescape_fmtlib_braces(fmt[last_end : m.start()]))
         ridx = int(m.group(1))
         type_token = m.group(2)
         base_char = _base(type_token)
@@ -305,7 +305,7 @@ def _build_render_plan(
                 )
         last_end = m.end()
 
-    literals.append(_cook(fmt[last_end:]))
+    literals.append(_unescape_fmtlib_braces(fmt[last_end:]))
     return _RenderPlan(literals=literals, placeholders=compiled)
 
 

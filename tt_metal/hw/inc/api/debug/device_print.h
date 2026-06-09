@@ -22,7 +22,7 @@
 #include "risc_common.h"
 #endif
 
-#if defined(KERNEL_BUILD) || defined(ENV_LLK_INFRA)
+#if defined(KERNEL_BUILD)
 #include "dprint_tile.h"
 #endif
 
@@ -122,7 +122,7 @@ struct dp_typed_array_t {
 #define DEVICE_PRINT_DATA1(format, ...)
 #endif
 
-#if defined(KERNEL_BUILD)
+#if defined(KERNEL_BUILD) && !defined(ENV_LLK_INFRA)
 #define DEVICE_PRINT_IS_KERNEL 1
 #else
 #define DEVICE_PRINT_IS_KERNEL 0
@@ -879,7 +879,7 @@ struct device_print_type<const char[N]> {
     static constexpr device_print_type_info value = {'s', sizeof(const char*)};
 };
 
-#if defined(KERNEL_BUILD) || defined(ENV_LLK_INFRA)
+#if defined(KERNEL_BUILD)
 // TileSlice types
 template <uint32_t MAX_BYTES>
 struct device_print_type<TileSlice<MAX_BYTES>> {
@@ -931,7 +931,7 @@ struct device_print_type<TileSlice<128>> {
         }
     }
 };
-#endif  // defined(KERNEL_BUILD) || defined(ENV_LLK_INFRA)
+#endif  // defined(KERNEL_BUILD)
 
 // dp_typed_array_t: serialized as (len + 1) uint32_t elements: [(len << 16) | type, data[0..len-1]]
 template <uint16_t len>
@@ -1396,7 +1396,7 @@ void acquire_lock() {
     // After acquiring the lock, invalidate our L1 cache to ensure we see the most up-to-date data in the buffer
     invalidate_l1_cache();
 
-#if defined(KERNEL_BUILD)
+#if defined(KERNEL_BUILD) && !defined(ENV_LLK_INFRA)
     // Check if we should print kernel id
     volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer = get_device_print_buffer();
     if (device_print_buffer->aux.wpos != DEBUG_PRINT_SERVER_DISABLED_MAGIC) {

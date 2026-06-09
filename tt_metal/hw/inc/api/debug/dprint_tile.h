@@ -364,3 +364,69 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
 } ATTR_PACK;
 
 using TSLICE = TileSlice<64>;
+
+#if defined(DEBUG_PRINT_ENABLED)
+// Build a TileSlice by reading tile data directly from an L1 address.
+// Tile geometry is passed explicitly (defaults to the standard 32x32 tile).
+template <int MAX_BYTES = 64>
+inline TileSlice<MAX_BYTES> tile_slice_from_l1(
+    uint32_t l1_addr,
+    DataFormat fmt,
+    const SliceRange& sr,
+    uint32_t tile_dim_r = 32,
+    uint32_t tile_dim_c = 32,
+    uint32_t face_dim_r = 16,
+    uint32_t face_dim_c = 16,
+    uint32_t num_faces = 4,
+    bool endl_rows = true) {
+    TileSlice<MAX_BYTES> ts{};
+    ts.slice_range = sr;
+    ts.cb_ptr = l1_addr;
+    ts.data_format = static_cast<uint8_t>(fmt);
+    ts.endl_rows = endl_rows;
+    ts.return_code = DPrintOK;
+
+    if (!is_supported_format(static_cast<CommonDataFormat>(fmt))) {
+        ts.return_code = DPrintErrorUnsupportedFormat;
+        return ts;
+    }
+
+    tile_info_t info{};
+    info.tile_dim_r = tile_dim_r;
+    info.tile_dim_c = tile_dim_c;
+    info.face_dim_r = face_dim_r;
+    info.face_dim_c = face_dim_c;
+    info.num_faces = num_faces;
+
+    volatile tt_l1_ptr uint8_t* base = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(l1_addr);
+    const bool bfp = is_bfp(static_cast<CommonDataFormat>(fmt));
+    // Bfp L1 layout: face_dim_r * num_faces shared-exponent bytes at offset 0
+    // (one per (face, row-within-face)), then mantissa bytes packed per
+    // dprint_datum_size(fmt) (Bfp8: 1 elt per byte, Bfp4: 2 elts/byte). We
+    // emit one (exp, mantissa) byte pair per element. Other formats walk
+    // dprint_datum_size(fmt) raw bytes per element.
+    const uint32_t bytes_per_datum = bfp ? 2 : dprint_datum_size(static_cast<CommonDataFormat>(fmt));
+    const uint32_t mantissa_offset = info.face_dim_r * info.num_faces;
+
+    uint32_t byte_idx = 0;
+    for (uint32_t h = sr.h0; h < sr.h1; h += sr.hs) {
+        for (uint32_t w = sr.w0; w < sr.w1; w += sr.ws) {
+            if (byte_idx + bytes_per_datum > MAX_BYTES) {
+                return ts;
+            }
+            if (bfp) {
+                ts.data[byte_idx++] = base[TileSlice<MAX_BYTES>::get_exponent_index(info, h, w, /*untilize=*/true)];
+                ts.data[byte_idx++] = get_datum(
+                    fmt, base + mantissa_offset, TileSlice<MAX_BYTES>::get_data_index(info, h, w, /*untilize=*/true));
+            } else {
+                const uint32_t i = TileSlice<MAX_BYTES>::get_data_index(info, h, w, /*untilize=*/true);
+                for (uint32_t b = 0; b < bytes_per_datum; ++b) {
+                    ts.data[byte_idx++] = base[i * bytes_per_datum + b];
+                }
+            }
+            ++ts.data_count;
+        }
+    }
+    return ts;
+}
+#endif  // defined(DEBUG_PRINT_ENABLED)
