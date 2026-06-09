@@ -225,10 +225,19 @@ def _log_duration_preprocess_health(
     expected_codes = max(1, int(round(float(duration_sec) * 5.0)))
     n_codes = len(parse_audio_code_string(str(audio_code_string or "")))
     hints = payload.get("precomputed_lm_hints_25Hz")
-    hint_t = int(hints.shape[1]) if hints is not None and hasattr(hints, "shape") else 0
+    hints_tt = payload.get("precomputed_lm_hints_25Hz_tt")
+    if hints_tt is not None and hasattr(hints_tt, "shape"):
+        hint_t = int(hints_tt.shape[1])
+        hint_src = "device"
+    elif hints is not None and hasattr(hints, "shape"):
+        hint_t = int(hints.shape[1])
+        hint_src = "torch"
+    else:
+        hint_t = 0
+        hint_src = "none"
     print(
         f"[ace_step_v1_5] duration health: {float(duration_sec):g}s latent_frames={int(frames)} "
-        f"lm_audio_codes={n_codes} (expect~{expected_codes}) lm_hint_T={hint_t}",
+        f"lm_audio_codes={n_codes} (expect~{expected_codes}) lm_hint_T={hint_t} ({hint_src})",
         flush=True,
     )
     if n_codes > 0 and n_codes + 2 < expected_codes:
@@ -1533,7 +1542,13 @@ def main() -> None:
                 audio_code_string=str(filtered.get("audio_code_string") or ""),
             )
             _hints = payload.get("precomputed_lm_hints_25Hz")
-            _hint_t = int(_hints.shape[1]) if _hints is not None and hasattr(_hints, "shape") else 0
+            _hints_tt = payload.get("precomputed_lm_hints_25Hz_tt")
+            if _hints_tt is not None and hasattr(_hints_tt, "shape"):
+                _hint_t = int(_hints_tt.shape[1])
+            elif _hints is not None and hasattr(_hints, "shape"):
+                _hint_t = int(_hints.shape[1])
+            else:
+                _hint_t = 0
             _mesh_audio_cover_strength = _mesh_effective_audio_cover_strength(
                 split_device=bool(split_device),
                 duration_sec=float(args.duration_sec),
@@ -1598,6 +1613,11 @@ def main() -> None:
                 )
 
                 if defer_condition_to_dit_mesh:
+                    from models.experimental.ace_step_v1_5.utils.device_lm_hints import (
+                        ace_step_materialize_payload_lm_hints_for_handoff,
+                    )
+
+                    ace_step_materialize_payload_lm_hints_for_handoff(payload)
                     payload_for_mesh_condition = payload
                     print(
                         "[condition] backend=ttnn deferred to DiT mesh "

@@ -147,7 +147,7 @@ The denoise loop runs DiT forwards on TTNN; on BH_QB the per-step CFG (APG/ADG) 
 | 5 Hz LM forward | **TTNN** | 1×1 preprocess chip; `--pytorch-lm` or `ACE_STEP_MESH_HOST_PREPROCESS=1` → host PyTorch |
 | LM tokenize / constrained FSM | **Host** | HF `AutoTokenizer` + metadata FSM (not the causal LM matmuls) |
 | Qwen3 caption + lyric embed | **TTNN** | 1×1 preprocess chip (host PyTorch if `ACE_STEP_MESH_HOST_PREPROCESS=1`) |
-| Audio-code → 25 Hz hints | **TTNN** (chunked) | **≤200 codes/forward** (`ACE_STEP_DETOK_CHUNK_CODES`); longer streams use multiple TTNN forwards. Opt-in HF: `ACE_STEP_PYTORCH_DETOK=1` |
+| Audio-code → 25 Hz hints | **TTNN** (chunked) | Device-native by default (`precomputed_lm_hints_25Hz_tt`); opt-in torch: `ACE_STEP_TORCH_DETOK_HINTS=1`. HF detok: `ACE_STEP_PYTORCH_DETOK=1` |
 | Condition encoder | **TTNN** | 1×1 preprocess for **<30 s** (<750 latent frames); **deferred to 2×2 DiT mesh** at **≥30 s** (avoids 1×1 readback drift) |
 | DiT denoise forward | **TTNN** | Opt-in HF DiT: `ACE_STEP_PYTORCH_DIT=1` |
 | Latent noise init | **On mesh** (short) / **Host CPU** (long) | With default `--use-trace`, latents stay on device for **≤15 s**; trace is forced off at **≥30 s** → host latent init |
@@ -253,6 +253,7 @@ python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
 | `ACE_STEP_MAX_AUDIO_CODES` | LM audio-code planning cap (auto **350** for 60s via demo) |
 | `ACE_STEP_DETOK_CHUNK_CODES` | Max codes per TTNN detokenizer forward (default **200**, L1 limit; longer streams use multiple chunked TTNN forwards) |
 | `ACE_STEP_PYTORCH_DETOK=1` | HF PyTorch detokenizer instead of TTNN (A/B debug) |
+| `ACE_STEP_TORCH_DETOK_HINTS=1` | Round-trip detok hints through host torch (`ttnn.to_torch`) instead of device-native path |
 | `ACE_STEP_VAE_QUALITY=1` | Force BF16 VAE decode on mesh |
 | `ACE_STEP_DEMO_PERF_LOG=0` | Disable `[ace_step_v1_5][perf]` timing tables (on by default; set `=1` to force on) |
 | `ACE_STEP_DISABLE_WEIGHT_CACHE=1` | Disable in-memory weight reuse |
@@ -276,7 +277,7 @@ With trace on, the device opens with **`num_command_queues=2`** and a **128 MiB*
 | **Timbre transformer (4L)** | **Yes** | Same |
 | Condition payload (`forward_payload_traced`) | **Yes** | Lyric + timbre + text + concat on CQ0; CQ1 input refresh |
 | Context latents + chunk mask (`ctx_concat_traced`) | **Yes** | ``concat([src_latents, chunk_mask], dim=-1)`` |
-| Cover / LM hints for `src_latents` | **Host only** | Host branch; chosen array staged into ctx trace inputs |
+| Cover / LM hints for `src_latents` | **Device-native (default)** | TTNN detok → `precomputed_lm_hints_25Hz_tt`; torch fallback via `ACE_STEP_TORCH_DETOK_HINTS=1` |
 | Condition `enc_mask` | **Host + device** | NumPy for handler; ``upload_enc_mask_dev`` mirrors mask on device |
 | DiT CFG batch concat (pre-loop) | **No (eager)** | One-shot ``enc``/``ctx``/null setup; traced replay caused audible noise |
 | DiT ``compute_temb_tp`` | **No (eager)** | Precomputed per step; **streamed** into body trace via ``ttnn.copy`` on ``temb_buf``/``tp_buf`` |

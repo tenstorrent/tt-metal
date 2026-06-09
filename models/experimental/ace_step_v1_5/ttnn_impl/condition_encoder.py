@@ -45,7 +45,7 @@ from .math_perf_env import (
     ace_step_to_layout_kwargs,
     ace_step_upload_f32_np_as_bf16_tile,
 )
-from .dit_sampling_ttnn import bf16_tile_l1_from_numpy_bc
+from .dit_sampling_ttnn import bf16_tile_l1_from_numpy_bc, fp32_tile_to_bf16_tile_l1
 from .qwen3_embedding_encoder import Qwen3EmbeddingEncoderConfig, _TtQwen3EncoderLayer
 from .text_projector import TtAceStepTextProjector, load_text_projector_weight_numpy
 
@@ -128,6 +128,27 @@ def _ctx_src_from_payload(payload: dict) -> np.ndarray:
     if hints is not None and bool(is_covers_np[0]):
         src_np = _to_numpy_f32(hints)[:, : src_np.shape[1], :]
     return np.ascontiguousarray(src_np.astype(np.float32))
+
+
+def _payload_is_cover(payload: dict) -> bool:
+    is_covers_np = _to_numpy_mask(payload["is_covers"]).reshape(-1) > 0
+    return bool(is_covers_np[0])
+
+
+def _ctx_frame_count(payload: dict) -> int:
+    return int(_to_numpy_f32(payload["src_latents"]).shape[1])
+
+
+def _ctx_src_tt_from_payload(payload: dict) -> Optional[ttnn.Tensor]:
+    """Device LM hints for ctx ``src_latents`` when present (cover mode)."""
+    hints_tt = payload.get("precomputed_lm_hints_25Hz_tt")
+    if hints_tt is None or not _payload_is_cover(payload):
+        return None
+    frames = _ctx_frame_count(payload)
+    t = int(hints_tt.shape[1])
+    if t > frames:
+        return ttnn.slice(hints_tt, (0, 0, 0), (1, frames, 64))
+    return hints_tt
 
 
 def _cond_seq_for_concat(t: ttnn.Tensor) -> ttnn.Tensor:
@@ -854,21 +875,55 @@ class TtAceStepInstrumentalConditionEncoder:
         return np.concatenate(mask_parts, axis=1).astype(np.float32)
 
     @staticmethod
-    def _ctx_arrays_from_payload(payload: dict) -> tuple[np.ndarray, np.ndarray]:
+    def _ctx_chunk_from_payload(payload: dict) -> np.ndarray:
         chunk_np = _to_numpy_mask(payload["chunk_mask"]).astype(np.float32)
+        return np.ascontiguousarray(chunk_np.astype(np.float32))
+
+    @staticmethod
+    def _ctx_arrays_from_payload(payload: dict) -> tuple[np.ndarray, np.ndarray]:
+        chunk_np = TtAceStepInstrumentalConditionEncoder._ctx_chunk_from_payload(payload)
         src_np = _ctx_src_from_payload(payload)
-        return src_np, np.ascontiguousarray(chunk_np.astype(np.float32))
+        return src_np, chunk_np
+
+    def _as_ctx_row_major_tensor_from_tt(self, src_tt: ttnn.Tensor) -> ttnn.Tensor:
+        """Match :meth:`_as_ctx_row_major_tensor` dtype/layout for ctx trace staging."""
+        if src_tt.layout != ttnn.ROW_MAJOR_LAYOUT:
+            src_tt = ace_step_ensure_row_major_layout(ttnn, src_tt)
+        if src_tt.dtype != self.dtype:
+            src_tt = ttnn.typecast(src_tt, self.dtype, memory_config=self.mem)
+        return src_tt
+
+    def _ctx_src_row_as_bf16_tile(self, src_tt: ttnn.Tensor) -> ttnn.Tensor:
+        src_rm = self._as_ctx_row_major_tensor_from_tt(src_tt)
+        src_tile = ace_step_ensure_tile_layout(ttnn, src_rm, out_memory_config=self.mem)
+        if src_tile.dtype == ttnn.bfloat16:
+            return src_tile
+        return fp32_tile_to_bf16_tile_l1(src_tile, dram=self.mem)
+
+    def _official_ctx_tile_from_device_src(self, src_tt: ttnn.Tensor, chunk_np: np.ndarray) -> ttnn.Tensor:
+        src_tile = self._ctx_src_row_as_bf16_tile(src_tt)
+        chunk_tile = bf16_tile_l1_from_numpy_bc(chunk_np, device=self.device, dram=self.mem)
+        _ck = ace_step_concat_kwargs(ttnn)
+        return ttnn.concat([src_tile, chunk_tile], dim=-1, **_ck)
 
     def _official_ctx_tile_from_payload(self, payload: dict) -> ttnn.Tensor:
         """Upload ctx latents as TILE BF16 L1 (long-clip quality path for >=750 frames)."""
-        src_np, chunk_np = self._ctx_arrays_from_payload(payload)
+        src_tt = _ctx_src_tt_from_payload(payload)
+        chunk_np = self._ctx_chunk_from_payload(payload)
+        if src_tt is not None:
+            return self._official_ctx_tile_from_device_src(src_tt, chunk_np)
+        src_np, _ = self._ctx_arrays_from_payload(payload)
         ctx_np = np.concatenate([src_np, chunk_np], axis=-1)
         return bf16_tile_l1_from_numpy_bc(ctx_np, device=self.device, dram=self.mem)
 
     def _official_ctx_from_payload(self, payload: dict) -> ttnn.Tensor:
         if ace_step_cond_long_clip_quality_active():
             return self._official_ctx_tile_from_payload(payload)
-        src_np, chunk_np = self._ctx_arrays_from_payload(payload)
+        src_tt = _ctx_src_tt_from_payload(payload)
+        chunk_np = self._ctx_chunk_from_payload(payload)
+        if src_tt is not None:
+            return self.ctx_concat_traced(None, chunk_np, src_latents_tt=src_tt, use_trace=False)
+        src_np, _ = self._ctx_arrays_from_payload(payload)
         return self.ctx_concat_traced(src_np, chunk_np, use_trace=False)
 
     def _as_ctx_row_major_tensor(self, arr_np: np.ndarray) -> ttnn.Tensor:
@@ -946,9 +1001,10 @@ class TtAceStepInstrumentalConditionEncoder:
 
     def ctx_concat_traced(
         self,
-        src_latents_np: np.ndarray,
+        src_latents_np: np.ndarray | None,
         chunk_mask_np: np.ndarray,
         *,
+        src_latents_tt: ttnn.Tensor | None = None,
         use_trace: bool = True,
     ) -> ttnn.Tensor:
         """Build ``[B, T, 128]`` context latents (64 src + 64 chunk) on device.
@@ -956,24 +1012,41 @@ class TtAceStepInstrumentalConditionEncoder:
         When ``use_trace`` and trace APIs exist, captures ``ttnn.concat`` on CQ0 with CQ1 input
         refresh. Otherwise uploads a pre-concatenated host tensor (legacy eager path).
         """
-        src_np = np.ascontiguousarray(src_latents_np.astype(np.float32))
         chunk_np = np.ascontiguousarray(chunk_mask_np.astype(np.float32))
-        if int(src_np.shape[0]) != 1 or int(chunk_np.shape[0]) != 1:
+        if src_latents_tt is not None:
+            frames = int(src_latents_tt.shape[1])
+        else:
+            if src_latents_np is None:
+                raise ValueError("ctx_concat_traced requires src_latents_np or src_latents_tt")
+            src_np = np.ascontiguousarray(src_latents_np.astype(np.float32))
+            frames = int(src_np.shape[1])
+        if int(chunk_np.shape[0]) != 1:
             raise ValueError("ctx_concat_traced supports batch size B=1 only.")
-        frames = int(src_np.shape[1])
         if int(chunk_np.shape[1]) != frames:
             raise ValueError(f"src_latents T={frames} != chunk_mask T={int(chunk_np.shape[1])}")
-        if int(src_np.shape[2]) != 64 or int(chunk_np.shape[2]) != 64:
-            raise ValueError("ctx_concat_traced expects src/chunk last dim 64.")
+        if int(chunk_np.shape[2]) != 64:
+            raise ValueError("ctx_concat_traced expects chunk last dim 64.")
+        if src_latents_tt is None:
+            src_np = np.ascontiguousarray(src_latents_np.astype(np.float32))
+            if int(src_np.shape[2]) != 64:
+                raise ValueError("ctx_concat_traced expects src last dim 64.")
 
         if not use_trace or not hasattr(ttnn, "begin_trace_capture") or not hasattr(ttnn, "execute_trace"):
+            if src_latents_tt is not None:
+                src_rm = self._as_ctx_row_major_tensor_from_tt(src_latents_tt)
+                chunk_rm = self._as_ctx_row_major_tensor(chunk_np)
+                _ck = ace_step_concat_kwargs(ttnn)
+                return ttnn.concat([src_rm, chunk_rm], dim=-1, **_ck)
             ctx_np = np.concatenate([src_np, chunk_np], axis=-1)
             return self._as_ctx_row_major_tensor(ctx_np)
 
         if self._ctx_frames_key is not None and self._ctx_frames_key != frames:
             self._release_ctx_trace()
 
-        src_new = self._as_ctx_row_major_tensor(src_np)
+        if src_latents_tt is not None:
+            src_new = self._as_ctx_row_major_tensor_from_tt(src_latents_tt)
+        else:
+            src_new = self._as_ctx_row_major_tensor(src_np)
         chunk_new = self._as_ctx_row_major_tensor(chunk_np)
 
         if self._ctx_persistent_src is None or self._ctx_frames_key != frames:
@@ -993,7 +1066,11 @@ class TtAceStepInstrumentalConditionEncoder:
     def _official_ctx_traced_from_payload(self, payload: dict) -> ttnn.Tensor:
         if ace_step_cond_long_clip_quality_active():
             return self._official_ctx_tile_from_payload(payload)
-        src_np, chunk_np = self._ctx_arrays_from_payload(payload)
+        src_tt = _ctx_src_tt_from_payload(payload)
+        chunk_np = self._ctx_chunk_from_payload(payload)
+        if src_tt is not None:
+            return self.ctx_concat_traced(None, chunk_np, src_latents_tt=src_tt, use_trace=True)
+        src_np, _ = self._ctx_arrays_from_payload(payload)
         return self.ctx_concat_traced(src_np, chunk_np, use_trace=True)
 
     def _payload_shape_key_from_payload(self, payload: dict) -> tuple[int, ...]:
@@ -1386,19 +1463,29 @@ class TtAceStepInstrumentalConditionEncoder:
         )
         enc_mask = np.concatenate(mask_parts, axis=1).astype(np.float32)
 
-        src_np = _ctx_src_from_payload(payload)
-        chunk_np = _to_numpy_mask(payload["chunk_mask"]).astype(np.float32)
-        ctx_np = np.concatenate([src_np.astype(np.float32), chunk_np.astype(np.float32)], axis=-1)
-        if ace_step_cond_long_clip_quality_active():
-            ctx = bf16_tile_l1_from_numpy_bc(ctx_np, device=self.device, dram=self.mem)
+        src_tt = _ctx_src_tt_from_payload(payload)
+        chunk_np = self._ctx_chunk_from_payload(payload)
+        if src_tt is not None:
+            if ace_step_cond_long_clip_quality_active():
+                ctx = self._official_ctx_tile_from_device_src(src_tt, chunk_np)
+            else:
+                src_rm = self._as_ctx_row_major_tensor_from_tt(src_tt)
+                chunk_rm = self._as_ctx_row_major_tensor(chunk_np)
+                _ck = ace_step_concat_kwargs(ttnn)
+                ctx = ttnn.concat([src_rm, chunk_rm], dim=-1, **_ck)
         else:
-            ctx = ttnn.as_tensor(
-                ctx_np,
-                device=self.device,
-                dtype=self.dtype,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=self.mem,
-            )
+            src_np = _ctx_src_from_payload(payload)
+            ctx_np = np.concatenate([src_np.astype(np.float32), chunk_np.astype(np.float32)], axis=-1)
+            if ace_step_cond_long_clip_quality_active():
+                ctx = bf16_tile_l1_from_numpy_bc(ctx_np, device=self.device, dram=self.mem)
+            else:
+                ctx = ttnn.as_tensor(
+                    ctx_np,
+                    device=self.device,
+                    dtype=self.dtype,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=self.mem,
+                )
         return enc, enc_mask, ctx, self.null_condition_emb
 
 
