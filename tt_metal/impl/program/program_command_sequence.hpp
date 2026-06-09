@@ -49,10 +49,11 @@ struct ProgramCommandSequence {
     HostMemDeviceCommand stall_command_sequences[2];
     std::vector<HostMemDeviceCommand> runtime_args_command_sequences;
     HostMemDeviceCommand program_config_buffer_command_sequence;
+    std::vector<HostMemDeviceCommand> program_config_buffer_command_sequences;
     HostMemDeviceCommand program_binary_setup_prefetcher_cache_command;
     HostMemDeviceCommand program_binary_command_sequence;
     // When the program_binary_command_sequence is skipped, this command sequence is used to wait for the writes for
-    // the runtime_args_command_sequences and program_config_buffer_command_sequence to complete, to ensure that all
+    // the runtime_args_command_sequences and program_config_buffer_command_sequences to complete, to ensure that all
     // writes have landed before the launch message is sent and the worker starts loading data. This isn't needed when
     // writing program binaries, because writing binaries always barriers (as a workaround for an mcast hang).
     HostMemDeviceCommand wait_barrier_command_sequence;
@@ -84,11 +85,21 @@ struct ProgramCommandSequence {
             [](int acc, const HostMemDeviceCommand& cmd) { return cmd.size_bytes() + acc; });
     }
 
+    uint32_t get_program_config_buffer_size() const {
+        if (program_config_buffer_command_sequences.empty()) {
+            return program_config_buffer_command_sequence.size_bytes();
+        }
+        return std::accumulate(
+            program_config_buffer_command_sequences.begin(),
+            program_config_buffer_command_sequences.end(),
+            0,
+            [](int acc, const HostMemDeviceCommand& cmd) { return cmd.size_bytes() + acc; });
+    }
+
     uint32_t get_one_shot_fetch_size(bool stall_first, bool stall_before_program, bool send_binary) const {
         uint32_t one_shot_fetch_size =
             ((stall_before_program || stall_first) ? stall_command_sequences[current_stall_seq_idx].size_bytes() : 0) +
-            preamble_command_sequence.size_bytes() + program_config_buffer_command_sequence.size_bytes() +
-            get_rt_args_size() +
+            preamble_command_sequence.size_bytes() + get_program_config_buffer_size() + get_rt_args_size() +
             (send_binary ? program_binary_command_sequence.size_bytes() +
                                program_binary_setup_prefetcher_cache_command.size_bytes()
                          : wait_barrier_command_sequence.size_bytes()) +

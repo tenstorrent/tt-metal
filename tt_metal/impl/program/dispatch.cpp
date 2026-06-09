@@ -1582,6 +1582,37 @@ public:
     // Assemble the batched transfer commands into the device command sequence.
     void assemble_commands(
         ProgramCommandSequence& program_command_sequence, HostMemDeviceCommand& device_command_sequence) {
+        for (uint32_t i = 0; i < batched_dispatch_subcmds.size(); ++i) {
+            assemble_command(i, program_command_sequence, device_command_sequence);
+        }
+    }
+
+    void assemble_commands(
+        ProgramCommandSequence& program_command_sequence, std::vector<HostMemDeviceCommand>& device_command_sequences) {
+        device_command_sequences.reserve(device_command_sequences.size() + batched_dispatch_subcmds.size());
+        for (uint32_t i = 0; i < batched_dispatch_subcmds.size(); ++i) {
+            device_command_sequences.emplace_back(command_size_bytes(i));
+            assemble_command(i, program_command_sequence, device_command_sequences.back());
+            TT_ASSERT(
+                device_command_sequences.back().size_bytes() == device_command_sequences.back().write_offset_bytes());
+        }
+    }
+
+    uint32_t command_count() const { return batched_dispatch_subcmds.size(); }
+
+    uint32_t command_size_bytes(uint32_t command_idx) const {
+        DeviceCommandCalculator calculator;
+        const auto& cmd_data = batched_cmd_data[command_idx];
+        calculator.add_dispatch_write_packed_large(
+            batched_dispatch_subcmds[command_idx].size(), cmd_data.back().end() - cmd_data.front().start);
+        return calculator.write_offset_bytes();
+    }
+
+private:
+    void assemble_command(
+        uint32_t command_idx,
+        ProgramCommandSequence& program_command_sequence,
+        HostMemDeviceCommand& device_command_sequence) {
         const auto& hal = MetalContext::instance().hal();
         uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
         const std::vector<uint8_t> fill_data(l1_alignment, 0);
@@ -1590,92 +1621,89 @@ public:
         // because transfer.data and data_collection_location are byte pointers (uint8_t*)
         uint32_t count_word_byte_offset = is_watcher_assert_enabled() ? sizeof(uint32_t) : 0;
         // Write out batched semaphore + CB multicast transfers.
-        for (uint32_t i = 0; i < batched_dispatch_subcmds.size(); ++i) {
-            auto& cmd_data = batched_cmd_data[i];
-            size_t last_end = cmd_data.front().start;
-            std::vector<tt::stl::Span<const uint8_t>> batched_data;
-            for (const Transfer& transfer : cmd_data) {
-                if (last_end != transfer.start) {
-                    TT_ASSERT(transfer.start - last_end <= fill_data.size());
-                    TT_ASSERT(last_end < transfer.start);
-                    batched_data.emplace_back(fill_data.data(), transfer.start - last_end);
-                }
-                batched_data.emplace_back(transfer.data);
-                last_end = transfer.end();
+        auto& cmd_data = batched_cmd_data[command_idx];
+        size_t last_end = cmd_data.front().start;
+        std::vector<tt::stl::Span<const uint8_t>> batched_data;
+        for (const Transfer& transfer : cmd_data) {
+            if (last_end != transfer.start) {
+                TT_ASSERT(transfer.start - last_end <= fill_data.size());
+                TT_ASSERT(last_end < transfer.start);
+                batched_data.emplace_back(fill_data.data(), transfer.start - last_end);
             }
-            std::vector<uint8_t*> data_collection_location;
-            if (tt::LoggerRegistry::instance().get(tt::LogDispatch)->should_log(spdlog::level::trace)) {
+            batched_data.emplace_back(transfer.data);
+            last_end = transfer.end();
+        }
+        std::vector<uint8_t*> data_collection_location;
+        if (tt::LoggerRegistry::instance().get(tt::LogDispatch)->should_log(spdlog::level::trace)) {
+            log_trace(
+                tt::LogDispatch,
+                "Assembling Batched Transfer Command: num_sub_cmds={}",
+                batched_dispatch_subcmds[command_idx].size());
+            for (size_t subcmd_idx = 0; subcmd_idx < batched_dispatch_subcmds[command_idx].size(); ++subcmd_idx) {
+                const auto& subcmd = batched_dispatch_subcmds[command_idx][subcmd_idx];
+                bool is_unlinked = (subcmd.flags & CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK) != 0;
                 log_trace(
                     tt::LogDispatch,
-                    "Assembling Batched Transfer Command: num_sub_cmds={}",
-                    batched_dispatch_subcmds[i].size());
-                for (size_t subcmd_idx = 0; subcmd_idx < batched_dispatch_subcmds[i].size(); ++subcmd_idx) {
-                    const auto& subcmd = batched_dispatch_subcmds[i][subcmd_idx];
-                    bool is_unlinked = (subcmd.flags & CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK) != 0;
-                    log_trace(
-                        tt::LogDispatch,
-                        "  SubCmd[{}]: noc_xy_addr=0x{:x}, addr=0x{:x}, size={} bytes, num_mcast_dests={}, "
-                        "flags=0x{:x} {}",
-                        subcmd_idx,
-                        subcmd.noc_xy_addr,
-                        subcmd.addr,
-                        subcmd.length_minus1 + 1,
-                        subcmd.num_mcast_dests,
-                        subcmd.flags,
-                        is_unlinked ? "(UNLINK)" : "");
-                }
+                    "  SubCmd[{}]: noc_xy_addr=0x{:x}, addr=0x{:x}, size={} bytes, num_mcast_dests={}, "
+                    "flags=0x{:x} {}",
+                    subcmd_idx,
+                    subcmd.noc_xy_addr,
+                    subcmd.addr,
+                    subcmd.length_minus1 + 1,
+                    subcmd.num_mcast_dests,
+                    subcmd.flags,
+                    is_unlinked ? "(UNLINK)" : "");
             }
+        }
 
-            device_command_sequence.add_dispatch_write_packed_large(
-                CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_CBS_SEMS_CRTAS,
-                l1_alignment,
-                batched_dispatch_subcmds[i].size(),
-                batched_dispatch_subcmds[i],
-                batched_data,
-                &data_collection_location,
-                0,
-                DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE);
+        device_command_sequence.add_dispatch_write_packed_large(
+            CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_CBS_SEMS_CRTAS,
+            l1_alignment,
+            batched_dispatch_subcmds[command_idx].size(),
+            batched_dispatch_subcmds[command_idx],
+            batched_data,
+            &data_collection_location,
+            0,
+            DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE);
 
-            last_end = cmd_data.front().start;
-            size_t j = 0;
-            for (Transfer& transfer : cmd_data) {
-                if (last_end != transfer.start) {
-                    j++;
-                }
-                if (!transfer.cbs.empty()) {
-                    program_command_sequence.circular_buffers_on_core_ranges.push_back(std::move(transfer.cbs));
-                    program_command_sequence.cb_configs_payloads.push_back(
-                        reinterpret_cast<uint32_t*>(data_collection_location[j]));
-                }
-                if (!transfer.dfbs.empty()) {
-                    program_command_sequence.dataflow_buffers_on_core_ranges.push_back(std::move(transfer.dfbs));
-                    program_command_sequence.dfb_configs_payloads.push_back(data_collection_location[j]);
-                }
-                if (transfer.rta_data) {
-                    // When watcher enabled, transfer.data contains [count | args...]
-                    // rt_args_data points to args location (data + offset)
-                    // rta_updates only copy args (count already written during initial copy)
-                    if (reinterpret_cast<uint8_t*>(transfer.rta_data->rt_args_data) ==
-                        (transfer.data.data() + count_word_byte_offset)) {
-                        // rt_args_data points to the original vector. Update it so later modifications directly modify
-                        // the command stream.
-                        transfer.rta_data->rt_args_data =
-                            reinterpret_cast<uint32_t*>(data_collection_location[j] + count_word_byte_offset);
-                    } else {
-                        // rt_args_data points into the command stream. Setup a copy from that other location.
-                        program_command_sequence.rta_updates.push_back(ProgramCommandSequence::RtaUpdate{
-                            transfer.rta_data->rt_args_data,
-                            data_collection_location[j] + count_word_byte_offset,
-                            static_cast<uint32_t>(transfer.data.size() - count_word_byte_offset)});
-                    }
-                }
+        last_end = cmd_data.front().start;
+        size_t j = 0;
+        for (Transfer& transfer : cmd_data) {
+            if (last_end != transfer.start) {
                 j++;
-                last_end = transfer.end();
             }
+            if (!transfer.cbs.empty()) {
+                program_command_sequence.circular_buffers_on_core_ranges.push_back(std::move(transfer.cbs));
+                program_command_sequence.cb_configs_payloads.push_back(
+                    reinterpret_cast<uint32_t*>(data_collection_location[j]));
+            }
+            if (!transfer.dfbs.empty()) {
+                program_command_sequence.dataflow_buffers_on_core_ranges.push_back(std::move(transfer.dfbs));
+                program_command_sequence.dfb_configs_payloads.push_back(data_collection_location[j]);
+            }
+            if (transfer.rta_data) {
+                // When watcher enabled, transfer.data contains [count | args...]
+                // rt_args_data points to args location (data + offset)
+                // rta_updates only copy args (count already written during initial copy)
+                if (reinterpret_cast<uint8_t*>(transfer.rta_data->rt_args_data) ==
+                    (transfer.data.data() + count_word_byte_offset)) {
+                    // rt_args_data points to the original vector. Update it so later modifications directly modify
+                    // the command stream.
+                    transfer.rta_data->rt_args_data =
+                        reinterpret_cast<uint32_t*>(data_collection_location[j] + count_word_byte_offset);
+                } else {
+                    // rt_args_data points into the command stream. Setup a copy from that other location.
+                    program_command_sequence.rta_updates.push_back(ProgramCommandSequence::RtaUpdate{
+                        transfer.rta_data->rt_args_data,
+                        data_collection_location[j] + count_word_byte_offset,
+                        static_cast<uint32_t>(transfer.data.size() - count_word_byte_offset)});
+                }
+            }
+            j++;
+            last_end = transfer.end();
         }
     }
 
-private:
     std::vector<std::vector<Transfer>> batched_cmd_data;
     std::vector<std::vector<CQDispatchWritePackedLargeSubCmd>> batched_dispatch_subcmds;
 };
@@ -2043,16 +2071,27 @@ void assemble_device_commands(
     BatchedTransferGenerator batched_transfer_generator;
     batched_transfer_generator.construct_commands(batched_transfers, program_config_buffer_calculator);
 
-    program_command_sequence.program_config_buffer_command_sequence =
-        HostMemDeviceCommand(program_config_buffer_calculator.write_offset_bytes());
+    program_command_sequence.program_config_buffer_command_sequences.clear();
+    program_command_sequence.program_config_buffer_command_sequences.reserve(
+        batched_transfer_generator.command_count() + 1);
     batched_transfer_generator.assemble_commands(
-        program_command_sequence, program_command_sequence.program_config_buffer_command_sequence);
-    semaphore_command_generator.assemble_unicast_commands(
-        program_command_sequence.program_config_buffer_command_sequence, program, constants);
+        program_command_sequence, program_command_sequence.program_config_buffer_command_sequences);
+    uint32_t program_config_buffer_sizeB = program_command_sequence.get_program_config_buffer_size();
+    TT_ASSERT(program_config_buffer_sizeB <= program_config_buffer_calculator.write_offset_bytes());
+    uint32_t unicast_semaphore_command_sizeB =
+        program_config_buffer_calculator.write_offset_bytes() - program_config_buffer_sizeB;
+    if (unicast_semaphore_command_sizeB != 0) {
+        program_command_sequence.program_config_buffer_command_sequences.emplace_back(unicast_semaphore_command_sizeB);
+        semaphore_command_generator.assemble_unicast_commands(
+            program_command_sequence.program_config_buffer_command_sequences.back(), program, constants);
+        TT_ASSERT(
+            program_command_sequence.program_config_buffer_command_sequences.back().size_bytes() ==
+            program_command_sequence.program_config_buffer_command_sequences.back().write_offset_bytes());
+    }
     // Ensure that we use the correct amount of space for each command sequence
     TT_ASSERT(
-        program_command_sequence.program_config_buffer_command_sequence.size_bytes() ==
-        program_command_sequence.program_config_buffer_command_sequence.write_offset_bytes());
+        program_command_sequence.get_program_config_buffer_size() ==
+        program_config_buffer_calculator.write_offset_bytes());
 
     // Assemble binary
     const auto& program_transfer_info = program.get_program_transfer_info();
@@ -2141,7 +2180,11 @@ void assemble_device_commands(
         log_trace(
             tt::LogDispatch,
             "Program Config Buffer:    {} bytes",
-            program_command_sequence.program_config_buffer_command_sequence.size_bytes());
+            program_command_sequence.get_program_config_buffer_size());
+        log_trace(
+            tt::LogDispatch,
+            "Program Config Commands:  {} commands",
+            program_command_sequence.program_config_buffer_command_sequences.size());
         log_trace(
             tt::LogDispatch,
             "Program Binary:           {} bytes",
@@ -2155,7 +2198,7 @@ void assemble_device_commands(
             "Go Signal:                {} bytes",
             program_command_sequence.go_msg_command_sequence.size_bytes());
         uint32_t total_size = program_command_sequence.preamble_command_sequence.size_bytes() + total_rta_size +
-                              program_command_sequence.program_config_buffer_command_sequence.size_bytes() +
+                              program_command_sequence.get_program_config_buffer_size() +
                               program_command_sequence.program_binary_command_sequence.size_bytes() +
                               program_command_sequence.launch_msg_command_sequence.size_bytes() +
                               program_command_sequence.go_msg_command_sequence.size_bytes();
@@ -2714,9 +2757,15 @@ void write_program_command_sequence(
     }
 
     // Write the program config buffer
-    write_data_to_cq(
-        program_command_sequence.program_config_buffer_command_sequence.data(),
-        program_command_sequence.program_config_buffer_command_sequence.size_bytes());
+    if (!program_command_sequence.program_config_buffer_command_sequences.empty()) {
+        for (const auto& cmds : program_command_sequence.program_config_buffer_command_sequences) {
+            write_data_to_cq(cmds.data(), cmds.size_bytes());
+        }
+    } else {
+        write_data_to_cq(
+            program_command_sequence.program_config_buffer_command_sequence.data(),
+            program_command_sequence.program_config_buffer_command_sequence.size_bytes());
+    }
 
     // Need to stall before writing the program binary?
     if (stall_before_program) {
