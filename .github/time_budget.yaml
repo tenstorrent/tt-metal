@@ -287,3 +287,10 @@ models:
 umd:
   unit:
     wh_galaxy_perf: 35
+
+syseng:
+  unit:
+    wh_n150: 27
+    wh_n300: 27
+    bh_p100a_civ2_viommu: 18
+    bh_p150b_civ2: 18
