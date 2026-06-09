@@ -195,19 +195,16 @@ models:
     wh_n150: 90
     wh_n300: 115
     bh_p150b_civ2: 70
+  # Plain `e2e` budget for the non-tiered pipelines that share the models team
+  # (blackhole-e2e, t3000-e2e). SKUs that are only exercised by the tiered model
+  # pipeline have moved to the e2e_tier* keys below.
   e2e:
     wh_llmbox: 198
-    wh_llmbox_perf: 330
-    wh_n150: 100
-    wh_n300: 15
-    wh_galaxy_perf: 120
     bh_p150b_civ2: 63
-    bh_p150: 60
     bh_p300: 50
     bh_loudbox: 160
     bh_llmbox: 50
     bh_quietbox_2: 251
-    bh_galaxy: 78
   # Per-tier e2e budgets, consumed by the tiered model pipelines
   # (all-model-tests.yaml + models-t{1,2,3}-e2e-tests.yaml via
   # models-e2e-tests-impl.yaml, which passes the leg's tier to
@@ -234,17 +231,12 @@ models:
     bh_p150: 7
     bh_p300: 8
     bh_quietbox_2: 30
+  # Plain `unit` budget for the non-tiered pipelines that share the models team
+  # (galaxy-unit, t3000-unit). SKUs that are only exercised by the tiered model
+  # pipeline have moved to the unit_tier* keys below.
   unit:
     wh_llmbox: 175
-    wh_llmbox_perf: 230
-    wh_n150: 135
-    wh_n300: 15
-    wh_galaxy: 45
     wh_galaxy_perf: 45
-    bh_p150: 60
-    bh_p300: 30
-    bh_quietbox_2: 85
-    bh_galaxy: 70
   # Per-tier unit budgets — split of the plain `unit` budget above (see the
   # e2e_tier* note). Consumed by the tiered model pipelines; the plain `unit`
   # key is kept for the non-tiered pipelines (galaxy-unit, t3000-unit).
@@ -301,12 +293,8 @@ models:
     bh_loudbox: 1200
     bh_p300: 800
     bh_quietbox_2: 280
-  sweep:
-    wh_n150: 10
-    wh_llmbox_perf: 30
-    wh_galaxy: 30
-  # Per-tier sweep budgets — split of the plain `sweep` budget above (see the
-  # e2e_tier* note). Consumed by the tiered model pipelines. No tier 3 sweep
+  # No plain `sweep` key: sweep tests run only through the tiered model pipeline,
+  # so the budget lives entirely in the sweep_tier* keys below. No tier 3 sweep
   # tests exist today, so there is no sweep_tier3 key.
   sweep_tier1:
     wh_n150: 10
