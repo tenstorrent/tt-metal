@@ -1309,3 +1309,184 @@ class Pi0_5OptionCExpertSliceParent:
                     ttnn.deallocate(h)
                 h = h_advanced
         return h
+
+    def forward_real_block_chain(
+        self,
+        activation: "ttnn.Tensor",
+        adarms_cond: "ttnn.Tensor",
+        attention_mask: Optional["ttnn.Tensor"] = None,
+        prefix_kv_cache: Optional[List[Optional[Tuple["ttnn.Tensor", "ttnn.Tensor"]]]] = None,
+    ) -> "ttnn.Tensor":
+        """Complete Gemma expert block forward on parent mesh — REAL attention +
+        MLP sublayers + gated residuals + adaRMS modulation, chained across
+        18 layers with 5 same-column P2P advances.
+
+        Per layer:
+          Attention sublayer (same as forward_attn_sublayer_chain):
+            1. mod = linear(adarms_cond, mod_w[j], mod_b[j])
+            2. (sa1, ta, ga, sf1, tf, gf) = split_modulation_6(mod)
+            3. normed = modulated_rms_norm(h, sa1, ta)
+            4. xqkv = linear(normed, wqkv[j])
+            5. (q, k, v) = nlp_create_qkv_heads(xqkv, num_heads, num_kv_heads)
+            6. RoPE on q, k
+            7. SDPA (optionally cross-attention with prefix_kv_cache[layer])
+            8. attn_flat = nlp_concat_heads
+            9. o_out = linear(attn_flat, o_proj[j])
+           10. h = h + (o_out * ga)
+          MLP sublayer:
+           11. normed_mlp = modulated_rms_norm(h, sf1, tf)
+           12. g_mlp = linear(normed_mlp, gate_proj[j])
+           13. u_mlp = linear(normed_mlp, up_proj[j])
+           14. mid = g_mlp * silu(u_mlp)
+           15. d = linear(mid, down_proj[j])
+           16. h = h + (d * gf)
+          Transport:
+           17. at chip boundary: P2P advance (single-hop, same column)
+
+        When `prefix_kv_cache` is provided, the entry at layer i (global
+        index) must be a parent-mesh (K, V) tuple whose live shard resides
+        at the same denoise chip that owns expert layer i — i.e. the
+        post-`migrate_layer_paired_d2d` layout. This enables cross-attention
+        with the migrated VLM prefix.
+
+        Args:
+            activation: [1, 1, M_padded, W] parent-mesh tensor, live at the
+                first denoise chip's coord.
+            adarms_cond: [B, 1, W] parent-mesh tensor (replicated).
+            attention_mask: optional joint mask (parent-mesh tensor).
+            prefix_kv_cache: optional depth-indexed list of (K, V); each
+                entry None or a parent-mesh tensor with its live shard at
+                the denoise chip owning the matching expert layer.
+
+        Returns: final activation at the last denoise chip's parent coord.
+        """
+        from .transport import send_shard_via_p2p
+        from models.experimental.pi0_5.tt.ttnn_gemma import (
+            _modulated_rms_norm,
+            _split_modulation_6,
+        )
+
+        required = (
+            "wqkv",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+            "adarms_mod_weight",
+        )
+        for r in required:
+            if r not in self.weights_on_parent:
+                raise RuntimeError(f"{r} weights not loaded; check _load_expert_weights_stacked_sharded")
+        self._ensure_rope_tables()
+
+        wqkv_per_pos = self.weights_on_parent["wqkv"]
+        o_proj_per_pos = self.weights_on_parent["o_proj"]
+        gate_per_pos = self.weights_on_parent["gate_proj"]
+        up_per_pos = self.weights_on_parent["up_proj"]
+        down_per_pos = self.weights_on_parent["down_proj"]
+        mod_w_per_pos = self.weights_on_parent["adarms_mod_weight"]
+        mod_b_per_pos = self.weights_on_parent.get("adarms_mod_bias", [None] * self.layers_per_chip)
+        eps = self.config.expert_config.rms_norm_eps
+        num_heads = self.config.expert_config.num_heads
+        num_kv_heads = self.config.expert_config.num_kv_heads
+        head_dim = self.config.expert_config.head_dim
+
+        h = activation
+        for local_i in range(self.num_layers):
+            j = self.position_in_chip(local_i)
+            global_i = self.layer_lo + local_i
+            seq_len = h.shape[-2]
+
+            # ===== Modulation =====
+            mod_b = mod_b_per_pos[j] if j < len(mod_b_per_pos) else None
+            mod = ttnn.linear(adarms_cond, mod_w_per_pos[j], bias=mod_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+            sa1, ta, ga, sf1, tf, gf = _split_modulation_6(mod)
+            ttnn.deallocate(mod)
+
+            # ===== Attention sublayer =====
+            normed = _modulated_rms_norm(h, sa1, ta, eps, pre_added=False)
+            ttnn.deallocate(sa1)
+            ttnn.deallocate(ta)
+
+            xqkv = ttnn.linear(normed, wqkv_per_pos[j], dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(normed)
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+                xqkv,
+                num_heads=num_heads,
+                num_kv_heads=num_kv_heads,
+                transpose_k_heads=False,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            cos_slice = ttnn.slice(self._cos_meta, [0, 0, 0, 0], [1, 1, seq_len, head_dim])
+            sin_slice = ttnn.slice(self._sin_meta, [0, 0, 0, 0], [1, 1, seq_len, head_dim])
+            q_rope = ttnn.experimental.rotary_embedding(q, cos_slice, sin_slice)
+            k_rope = ttnn.experimental.rotary_embedding(k, cos_slice, sin_slice)
+            ttnn.deallocate(cos_slice)
+            ttnn.deallocate(sin_slice)
+
+            # Cross-attention: concat the migrated VLM prefix KV when provided.
+            past_kv = prefix_kv_cache[global_i] if prefix_kv_cache is not None else None
+            if past_kv is not None:
+                past_k, past_v = past_kv
+                k_rope = ttnn.concat([past_k, k_rope], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
+                v = ttnn.concat([past_v, v], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+            if attention_mask is not None:
+                attn_out = ttnn.transformer.scaled_dot_product_attention(
+                    q_rope, k_rope, v, attn_mask=attention_mask, memory_config=ttnn.L1_MEMORY_CONFIG
+                )
+            else:
+                attn_out = ttnn.transformer.scaled_dot_product_attention(
+                    q_rope, k_rope, v, is_causal=True, memory_config=ttnn.L1_MEMORY_CONFIG
+                )
+            ttnn.deallocate(q_rope)
+            ttnn.deallocate(k_rope)
+            ttnn.deallocate(v)
+
+            attn_flat = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(attn_out)
+
+            o_out = ttnn.linear(attn_flat, o_proj_per_pos[j], dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(attn_flat)
+
+            gated_attn = ttnn.multiply(o_out, ga, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(o_out)
+            ttnn.deallocate(ga)
+            h_post_attn = ttnn.add(h, gated_attn, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(gated_attn)
+            ttnn.deallocate(h)
+
+            # ===== MLP sublayer =====
+            normed_mlp = _modulated_rms_norm(h_post_attn, sf1, tf, eps, pre_added=False)
+            ttnn.deallocate(sf1)
+            ttnn.deallocate(tf)
+
+            g_mlp = ttnn.linear(normed_mlp, gate_per_pos[j], dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            u_mlp = ttnn.linear(normed_mlp, up_per_pos[j], dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(normed_mlp)
+            u_act = ttnn.silu(u_mlp, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(u_mlp)
+            mid = ttnn.multiply(g_mlp, u_act, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(g_mlp)
+            ttnn.deallocate(u_act)
+            d = ttnn.linear(mid, down_per_pos[j], dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(mid)
+
+            gated_mlp = ttnn.multiply(d, gf, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(d)
+            ttnn.deallocate(gf)
+            h_new = ttnn.add(h_post_attn, gated_mlp, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(gated_mlp)
+            ttnn.deallocate(h_post_attn)
+            h = h_new
+
+            # ===== P2P advance =====
+            at_chip_boundary = (j == self.layers_per_chip - 1) and (local_i + 1 < self.num_layers)
+            if at_chip_boundary:
+                cur = self.denoise_coord_for_layer(local_i)
+                nxt = self.denoise_coord_for_layer(local_i + 1)
+                h_advanced = send_shard_via_p2p(h, cur, nxt)
+                if h_advanced is not h:
+                    ttnn.deallocate(h)
+                h = h_advanced
+        return h
