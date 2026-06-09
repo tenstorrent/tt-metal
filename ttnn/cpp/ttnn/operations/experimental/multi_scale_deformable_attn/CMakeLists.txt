@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_experimental_multi_scale_deformable_attn ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::MultiScaleDeformableAttn ALIAS ttnn_op_experimental_multi_scale_deformable_attn)
 
-tt_reuse_precompile_headers(ttnn_op_experimental_multi_scale_deformable_attn TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_multi_scale_deformable_attn TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_multi_scale_deformable_attn)
 set_target_properties(
     ttnn_op_experimental_multi_scale_deformable_attn
