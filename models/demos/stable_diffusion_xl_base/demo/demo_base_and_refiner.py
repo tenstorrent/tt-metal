@@ -10,7 +10,7 @@ import torch
 from diffusers import DiffusionPipeline, StableDiffusionXLImg2ImgPipeline
 from loguru import logger
 
-from models.common.utility_functions import is_blackhole, profiler
+from models.common.utility_functions import is_blackhole, is_wormhole_b0, profiler
 from models.demos.stable_diffusion_xl_base.conftest import is_galaxy
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
     SDXL_FABRIC_CONFIG,
@@ -323,6 +323,8 @@ def test_demo_base_and_refiner(
     timesteps,
     sigmas,
 ):
+    if encoders_on_device and capture_trace and not use_cfg_parallel and is_wormhole_b0():
+        pytest.skip("Disabled on wormhole_b0: see #46424")
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
         mesh_device,
@@ -353,3 +355,4 @@ def test_demo_base_and_refiner(
         timesteps,
         sigmas,
     )
+
