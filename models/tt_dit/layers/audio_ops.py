@@ -83,15 +83,7 @@ def gather_channel_to_full(ccl_manager, x_BTC: ttnn.Tensor, parallel_config) -> 
 
 
 def _pick_c_out_block_shard(*, full: int, shard: int, dst_size: int = 4, tile: int = 32) -> int:
-    """Pick the largest legal C_out_block ≤ ``full`` for a column-parallel conv3d shard.
-
-    Constraints from the conv3d device-op:
-      - shard % block == 0  (C_out_num_blocks * C_out_block == padded_C_out)
-      - matmul_N_t = ceil(block / TILE) must be ≤ dst_size OR a multiple of dst_size
-        (matmul_N_t % out_subblock_w == 0 where out_subblock_w = min(matmul_N_t, dst_size))
-
-    Walk N_t from min(ceil(full/tile), shard/tile) downward; return block = N_t*tile.
-    """
+    """Largest C_out_block ≤ full that divides shard and satisfies conv3d matmul_N_t rules."""
     max_nt = min(full, shard) // tile
     for nt in range(max_nt, 0, -1):
         block = nt * tile
@@ -205,13 +197,7 @@ def _t_neighbor_pad(
 
 
 def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
-    """Valid depthwise filter (same K taps on every channel):
-    ``y[b, t, c] = sum_{j<K} taps[j] * x[b, t*stride + j, c]`` on an
-    already-padded ``(B, T_pad, C)`` ROW_MAJOR FLOAT32 input. Returns
-    ``(B, T_out, C)`` with ``T_out = (T_pad - K) / stride + 1``.
-
-    ``cache`` is accepted for API compatibility but unused.
-    """
+    """K-tap depthwise valid conv on padded (B, T_pad, C) ROW_MAJOR input."""
     del mesh_device, cache
     return ttnn.experimental.conv1d_depthwise(x_BTC, taps=taps, stride=stride, dtype=dtype)
 
@@ -630,12 +616,6 @@ class Conv1dViaConv3d(Module):
         # channels (the weight is sharded on C_out at load); C_in stays full (gathered).
         self.out_channels_shard = self.out_channels // channel_factor(parallel_config)
         if channel_factor(parallel_config) > 1:
-            # Reuse the full config's C_in_block: the weight is prepared once with it
-            # and C_in stays full, so only C_out_block shrinks to the per-chip slice.
-            # C_out_block_shard must (a) divide out_channels_shard so num_blocks*block
-            # == shard, and (b) yield matmul_N_t = ceil(block / 32) that is either
-            # ≤ dst_size or a multiple of dst_size (dst_size=4 on BH fp32+fp32_dest).
-            # Pick the largest tile-multiple satisfying both.
             self.conv_config_shard = ttnn.Conv3dConfig(
                 weights_dtype=self.conv_config.weights_dtype,
                 output_layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -1014,8 +994,6 @@ class SnakeBeta(Module):
                 if real < self._aligned_channels:
                     t = torch.nn.functional.pad(t, (0, self._aligned_channels - real))
                 if name == "beta":
-                    # Fold ε in for real channels and use 1 on the channel-pad slots so
-                    # ``ttnn.snake_beta``'s in-op divide stays finite on every tile.
                     t = t.clone()
                     t[..., :real] = t[..., :real] + self.eps
                     if real < self._aligned_channels:
@@ -1023,10 +1001,7 @@ class SnakeBeta(Module):
                 state[name] = t.contiguous()
 
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
-        # α, β are per-channel; slice to the activation's C-shard when channel-TP.
-        # ``ttnn.snake_beta`` is a fused eltwise op (input + sin²(α·x)/β) that
-        # requires TILE layout and a non-zero β; ε is pre-folded into β and pad
-        # slots are set to 1 in _prepare_torch_state so no divide-by-zero.
+        # α, β per-channel; C-shard when channel-TP.
         if self._ab_shard is None:
             self._ab_shard = (
                 partition_channel(self.alpha.data, self.parallel_config, dim=2),
