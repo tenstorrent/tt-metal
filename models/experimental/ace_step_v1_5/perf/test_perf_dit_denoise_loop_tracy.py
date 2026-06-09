@@ -44,7 +44,6 @@ Optional environment variables:
 - ``ACE_STEP_DIT_PERF_ENC_SEQ`` (default ``128``): synthetic encoder sequence length.
 - ``ACE_STEP_PERF_SEED`` (default ``0``): latent noise seed.
 - ``ACE_STEP_TRACY_EACH_DENOISE_STEP``: set to ``1`` for one Tracy signpost per Euler step.
-- ``ACE_STEP_PROFILER_FLUSH_EVERY``: flush device profiler every N perf iterations (default ``1``).
 - ``ACE_STEP_PERF_MAX_SECONDS``: optional wall-time budget on the timed perf pass.
 """
 
@@ -210,10 +209,6 @@ def _run_denoise_loop_tracy_harness(
     profiler.clear()
     is_ci = _is_ci()
     trace_each_step = os.environ.get("ACE_STEP_TRACY_EACH_DENOISE_STEP", "").lower() in ("1", "true", "yes")
-    try:
-        flush_every = int(os.environ.get("ACE_STEP_PROFILER_FLUSH_EVERY", "1"))
-    except ValueError:
-        flush_every = 1
 
     # --- INIT -------------------------------------------------------------------------
     profiler.disable()

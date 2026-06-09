@@ -331,16 +331,20 @@ class AceStepModelRegistry:
         prompt = kw["prompt"]
         duration_sec = float(kw["duration_sec"])
         seed = int(kw["seed"])
-        variant = kw["variant"]
+        _ = kw["variant"]
+        _ = kw["lm_variant"]
         t_schedule = kw["t_schedule"]
         gs = float(kw["guidance_scale"])
         use_adg = bool(kw["use_adg"])
         cfg_lo = float(kw["cfg_interval_start"])
         cfg_hi = float(kw["cfg_interval_end"])
+        _ = kw["use_trace"]
+        _ = kw["use_torch_vae"]
         vae_chunk_latents = int(kw["vae_chunk_latents"])
         vae_overlap_latents = int(kw["vae_overlap_latents"])
         out_path = Path(kw["out_path"])
         exp_ttnn_lm = bool(kw["exp_ttnn_lm"])
+        _ = kw["ckpt_dir"]
 
         ttnn = self.ttnn
         dev = self.dev
