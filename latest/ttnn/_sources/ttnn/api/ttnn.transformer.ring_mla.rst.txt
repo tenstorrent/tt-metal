@@ -1,0 +1,8 @@
+﻿ttnn.transformer.ring\_mla
+==========================
+
+.. currentmodule:: ttnn.transformer
+
+.. _ttnn.transformer.ring_mla:
+
+.. autooperation:: ttnn.transformer.ring_mla
