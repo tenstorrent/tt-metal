@@ -630,6 +630,243 @@ class Pi0_5OptionCVLMSlicePaired:
 # ---------------------------------------------------------------------------- #
 
 
+# ---------------------------------------------------------------------------- #
+# Parent-mesh slice (D2D Option A) — 18 layers via per-chip-sharded weights + #
+# P2P transitions. Replaces the host-bouncing layer-paired path.               #
+# ---------------------------------------------------------------------------- #
+
+
+def _load_vlm_weights_stacked_sharded(
+    full_weights: Dict[str, torch.Tensor],
+    layer_range: Tuple[int, int],
+    parent_mesh,
+    parent_shape: Tuple[int, int],
+    prefill_offset: Tuple[int, int],
+    prefill_shape: Tuple[int, int],
+    dtype=ttnn.bfloat8_b,
+) -> Dict[str, "ttnn.Tensor"]:
+    """Upload all VLM layer weights as parent-mesh sharded tensors.
+
+    For each weight category (q_proj, k_proj, v_proj, o_proj, gate_proj,
+    up_proj, down_proj, layernorm weights), build a stacked tensor over the
+    parent mesh (8×4 = 32 slots) where:
+      - Slot at parent linear-idx for prefill chip i holds layer i's weight.
+      - Other slots (non-prefill chips) hold zero tensors of matching shape.
+    Then upload with `ShardTensorToMesh(parent_mesh, dim=0)`.
+
+    This is the foundation for the parent-mesh D2D model: chip i has layer
+    i's weights, ttnn.linear on the parent mesh runs the matmul on every
+    chip with each chip's own weight slice in parallel. Only chip i's output
+    is "live" at step i; others run but discard.
+
+    Returns a dict of parent-mesh sharded weight tensors keyed by weight
+    name (e.g. "q_proj", "gate_proj", "input_layernorm").
+    """
+    lo, hi = layer_range
+    n_layers = hi - lo
+    if n_layers != prefill_shape[0] * prefill_shape[1]:
+        raise ValueError(
+            f"layer_range span {n_layers} must equal prefill chip count " f"{prefill_shape[0] * prefill_shape[1]}"
+        )
+    devices_total = parent_shape[0] * parent_shape[1]
+
+    def _prefill_lin(layer_idx: int) -> int:
+        sub_row = layer_idx // prefill_shape[1]
+        sub_col = layer_idx % prefill_shape[1]
+        return (prefill_offset[0] + sub_row) * parent_shape[1] + (prefill_offset[1] + sub_col)
+
+    # Discover the shape of one layer's weights by inspecting layer `lo`.
+    def _key(layer_idx: int, suffix: str) -> str:
+        return f"model.layers.{layer_idx}.{suffix}"
+
+    # Weights to upload (matmul weights at `dtype`, norms at bf16).
+    matmul_suffixes = [
+        "self_attn.q_proj.weight",
+        "self_attn.k_proj.weight",
+        "self_attn.v_proj.weight",
+        "self_attn.o_proj.weight",
+        "mlp.gate_proj.weight",
+        "mlp.up_proj.weight",
+        "mlp.down_proj.weight",
+    ]
+    norm_suffixes = [
+        "input_layernorm.weight",
+        "post_attention_layernorm.weight",
+    ]
+
+    out: Dict[str, "ttnn.Tensor"] = {}
+
+    def _stack_and_upload(suffix: str, weight_dtype) -> Optional["ttnn.Tensor"]:
+        # Check first layer's weight exists; if not, skip silently.
+        k0 = _key(lo, suffix)
+        if k0 not in full_weights:
+            return None
+        ref = full_weights[k0]
+        # For matmul weights, .T to match nn.Linear's [out, in] convention.
+        is_matmul = suffix in matmul_suffixes
+        ref_t = ref.T.contiguous() if is_matmul else ref
+        # Norm weights need the +1 Gemma offset baked in.
+        is_norm = "layernorm" in suffix
+        # Build a [devices_total, *ref_t.shape] stacked tensor with zeros
+        # at non-prefill slots and layer-i weight at prefill chip i's slot.
+        stacked_shape = (devices_total,) + tuple(ref_t.shape)
+        stacked = torch.zeros(stacked_shape, dtype=ref_t.dtype)
+        for i in range(n_layers):
+            global_i = lo + i
+            wk = _key(global_i, suffix)
+            if wk not in full_weights:
+                continue
+            w = full_weights[wk]
+            if is_matmul:
+                w = w.T.contiguous()
+            if is_norm:
+                w = w + 1.0
+            lin = _prefill_lin(i)
+            stacked[lin] = w
+
+        return ttnn.from_torch(
+            stacked,
+            dtype=weight_dtype,
+            layout=ttnn.TILE_LAYOUT if (is_matmul or is_norm and len(ref_t.shape) >= 2) else ttnn.ROW_MAJOR_LAYOUT,
+            device=parent_mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(parent_mesh, dim=0),
+        )
+
+    for s in matmul_suffixes:
+        key = s.replace(".weight", "").replace("self_attn.", "").replace("mlp.", "")
+        t = _stack_and_upload(s, dtype)
+        if t is not None:
+            out[key] = t
+    for s in norm_suffixes:
+        key = s.replace(".weight", "")
+        # Norms are 1D; stacked is [devices_total, dim] = 2D. Upload as bf16.
+        t = _stack_and_upload(s, ttnn.bfloat16)
+        if t is not None:
+            out[key] = t
+
+    return out
+
+
+class Pi0_5OptionCVLMSliceParent:
+    """Parent-mesh VLM slice — 18 layers on the prefill submesh via per-chip
+    sharded weights + D2D P2P transitions between layers.
+
+    STATUS: scaffolding / minimal-viable. The full integration with the
+    real GemmaBlockTTNN (attention + RMSNorm + MLP + RoPE + KV cache) is the
+    follow-up. This class lays the architectural pattern:
+
+    - Open the prefill submesh as a multi-chip mesh (no carving).
+    - Upload all 18 layers' weights as parent-mesh sharded tensors via
+      `_load_vlm_weights_stacked_sharded` — chip i has layer i's weights.
+    - Activation lives on the parent mesh as a sharded tensor; the "live"
+      shard moves chip-to-chip via `send_shard_via_p2p_multihop`.
+    - Each layer step: run the per-chip matmuls (all 18 chips in parallel,
+      each computing its own layer), then advance the live shard.
+
+    For pi0.5 Option C this replaces the host-bouncing layer-paired path —
+    estimated ~85 ms saved across 17 inter-layer transitions at full depth.
+
+    Args:
+        config:        full PaliGemma config.
+        weights:       full categorized weights dict (we slice by layer index).
+        parent_mesh:   the galaxy parent mesh (8, 4). Required because P2P
+                       multi-hop needs to route across the parent.
+        prefill_offset: (row, col) origin of the prefill submesh in the parent.
+        prefill_shape:  (rows, cols) of the prefill submesh.
+        layer_range:    half-open (lo, hi). hi - lo must equal num prefill chips.
+
+    NOT YET IMPLEMENTED in this class:
+        - Full GemmaBlockTTNN forward semantics (attention + KV cache + RoPE
+          + RMSNorm + MLP). Currently only the matmul chain is wired.
+        - KV cache emission as parent-mesh tensors for downstream D2D KV
+          migration (the `KVMigration.migrate_layer_paired_d2d` entry point
+          is ready and will consume parent-mesh K/V tensors).
+        - Final VLM RMSNorm on last chip.
+    """
+
+    def __init__(
+        self,
+        config: PaliGemmaConfig,
+        weights: Dict[str, Dict[str, torch.Tensor]],
+        parent_mesh,
+        prefill_offset: Tuple[int, int],
+        prefill_shape: Tuple[int, int],
+        layer_range: Tuple[int, int],
+    ) -> None:
+        if not (0 <= layer_range[0] < layer_range[1] <= config.vlm_config.depth):
+            raise ValueError(f"layer_range {layer_range} out of bounds for depth={config.vlm_config.depth}")
+        n_prefill_chips = prefill_shape[0] * prefill_shape[1]
+        if layer_range[1] - layer_range[0] != n_prefill_chips:
+            raise ValueError(
+                f"layer_range span {layer_range[1] - layer_range[0]} must equal "
+                f"prefill chip count {n_prefill_chips}"
+            )
+
+        self.config = config
+        self.parent_mesh = parent_mesh
+        self.prefill_offset = prefill_offset
+        self.prefill_shape = prefill_shape
+        self.parent_shape = (parent_mesh.shape[0], parent_mesh.shape[1])
+        self.layer_lo, self.layer_hi = layer_range
+        self.num_layers = self.layer_hi - self.layer_lo
+
+        # Upload all weights as parent-mesh sharded tensors.
+        self.weights_on_parent = _load_vlm_weights_stacked_sharded(
+            weights["vlm_language"],
+            layer_range,
+            parent_mesh,
+            self.parent_shape,
+            prefill_offset,
+            prefill_shape,
+        )
+
+    def prefill_coord_for_layer(self, layer_idx: int) -> Tuple[int, int]:
+        """Galaxy-parent coord of the prefill chip owning the given layer."""
+        sub_row = layer_idx // self.prefill_shape[1]
+        sub_col = layer_idx % self.prefill_shape[1]
+        return (self.prefill_offset[0] + sub_row, self.prefill_offset[1] + sub_col)
+
+    def forward_qkv_chain(self, activation: "ttnn.Tensor") -> "ttnn.Tensor":
+        """Simplified forward that runs ONLY the q_proj matmul chain.
+
+        For each layer i:
+            1. Run ttnn.linear(activation, q_proj) — all 18 chips compute
+               their layer's Q projection.
+            2. P2P-multihop the live shard from chip i to chip i+1.
+
+        Returns the final activation (= layer 17's Q projection output at
+        chip 17's parent coord).
+
+        This is a stepping-stone implementation: it does NOT include the
+        full block forward (attention, KV cache, RMSNorm, MLP). It validates
+        the architectural pattern at production weight + activation scale.
+        """
+        from .transport import send_shard_via_p2p_multihop
+
+        if "q_proj" not in self.weights_on_parent:
+            raise RuntimeError("q_proj weight not loaded; check _load_vlm_weights_stacked_sharded")
+
+        q_proj = self.weights_on_parent["q_proj"]
+        act = activation
+        for i in range(self.num_layers):
+            # Per-chip matmul on the parent mesh. Each chip uses its own
+            # q_proj slice and its own activation shard.
+            out = ttnn.linear(act, q_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            if i + 1 < self.num_layers:
+                cur = self.prefill_coord_for_layer(i)
+                nxt = self.prefill_coord_for_layer(i + 1)
+                act_new = send_shard_via_p2p_multihop(out, cur, nxt)
+                if act_new is not out:
+                    ttnn.deallocate(out)
+                ttnn.deallocate(act)
+                act = act_new
+            else:
+                ttnn.deallocate(act)
+                act = out
+        return act
+
+
 class Pi0_5OptionCVLMSliceTP:
     """TP=tp_size VLM slice carved across multiple (tp_size, 1) sub-meshes.
 
