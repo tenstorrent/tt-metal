@@ -22,8 +22,6 @@ shards and assert byte-exact equality. This keeps the verification logic
 placement-agnostic — same code handles replicate, shard, and mixed cases.
 """
 
-import math
-
 import pytest
 import torch
 

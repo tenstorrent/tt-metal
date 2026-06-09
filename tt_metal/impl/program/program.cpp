@@ -90,7 +90,6 @@
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 #include "impl/allocator/allocator.hpp"
-#include <tt-metalium/internal/service/service_core_manager.hpp>
 
 namespace tt {
 class tt_hlk_desc;

@@ -31,7 +31,7 @@ def _unlink_if_exists(shm_name: str) -> None:
     try:
         os.unlink(path)
     except FileNotFoundError:
-        pass
+        pass  # File does not exist — expected on a clean machine, nothing to unlink.
 
 
 # ---------------------------------------------------------------------------

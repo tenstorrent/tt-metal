@@ -9,8 +9,10 @@
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <ranges>
+#include <set>
 
 #include <tt-metalium/bfloat16.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"

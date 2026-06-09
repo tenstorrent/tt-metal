@@ -181,10 +181,10 @@ void H2DStreamServiceDescriptor::write_to_file(const std::string& path) const {
 
 H2DStreamServiceDescriptor H2DStreamServiceDescriptor::wait_and_read(
     const std::string& path, uint32_t timeout_ms) {
-    auto start_time = std::chrono::high_resolution_clock::now();
+    auto start_time = std::chrono::steady_clock::now();
     while (!std::filesystem::exists(path)) {
         auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                              std::chrono::high_resolution_clock::now() - start_time)
+                              std::chrono::steady_clock::now() - start_time)
                               .count();
         if (static_cast<uint32_t>(elapsed_ms) > timeout_ms) {
             TT_THROW("Timeout waiting for service descriptor file: {}", path);
