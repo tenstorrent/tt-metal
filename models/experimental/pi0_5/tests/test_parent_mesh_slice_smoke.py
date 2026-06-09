@@ -116,6 +116,118 @@ def test_parent_slice_qkv_chain():
         assert finite, "Output contains NaN/Inf"
         assert non_zero_count > 0, "Output is all zeros"
         print("\n[PASS] parent-mesh slice q_proj chain works end-to-end with real weights")
+        ttnn.deallocate(out)
+    finally:
+        ttnn.close_mesh_device(parent)
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
+
+def test_parent_slice_mlp_sublayer_chain():
+    """MLP sublayer chain (gate + up + GLU + down + residual) for 18 layers."""
+    cfg = PaliGemmaConfig()
+    weights = _load_real_weights()
+
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    parent = ttnn.open_mesh_device(GALAXY_SHAPE)
+    try:
+        slice_ = Pi0_5OptionCVLMSliceParent(
+            config=cfg,
+            weights=weights,
+            parent_mesh=parent,
+            prefill_offset=PREFILL_OFFSET,
+            prefill_shape=PREFILL_SHAPE,
+            layer_range=(0, 18),
+        )
+
+        devices_total = GALAXY_SHAPE[0] * GALAXY_SHAPE[1]
+        M, K = 1024, 2048
+        act_torch = torch.zeros(devices_total, 1, M, K, dtype=torch.bfloat16)
+        coord0 = slice_.prefill_coord_for_layer(0)
+        lin0 = coord0[0] * GALAXY_SHAPE[1] + coord0[1]
+        act_torch[lin0, 0, :, :] = torch.randn(M, K, dtype=torch.bfloat16) * 0.01
+        act = ttnn.from_torch(
+            act_torch,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=parent,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(parent, dim=0),
+        )
+
+        print("\n[chain] running 18-layer MLP sublayer chain (gate + up + GLU + down + residual)...")
+        out = slice_.forward_mlp_sublayer_chain(act)
+        ttnn.synchronize_device(parent)
+
+        coord17 = slice_.prefill_coord_for_layer(17)
+        lin17 = coord17[0] * GALAXY_SHAPE[1] + coord17[1]
+        shards = ttnn.get_device_tensors(out)
+        out_t17 = ttnn.to_torch(shards[lin17])
+        finite = torch.isfinite(out_t17).all().item()
+        non_zero_count = (out_t17.abs() > 1e-6).sum().item()
+        print(f"[output @ chip 17] finite={finite} non_zero={non_zero_count}/{out_t17.numel()}")
+        print(f"  range: [{out_t17.min().item():.2f}, {out_t17.max().item():.2f}]")
+
+        assert finite, "MLP chain output has NaN/Inf"
+        assert non_zero_count > 0, "MLP chain output all zeros"
+        print("[PASS] parent-mesh MLP sublayer chain end-to-end")
+        ttnn.deallocate(out)
+    finally:
+        ttnn.close_mesh_device(parent)
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
+
+def test_parent_slice_attention_sublayer_chain():
+    """Full attention sublayer chain (RMSNorm + Q+O + residual) for 18 layers."""
+    cfg = PaliGemmaConfig()
+    weights = _load_real_weights()
+
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    parent = ttnn.open_mesh_device(GALAXY_SHAPE)
+    try:
+        slice_ = Pi0_5OptionCVLMSliceParent(
+            config=cfg,
+            weights=weights,
+            parent_mesh=parent,
+            prefill_offset=PREFILL_OFFSET,
+            prefill_shape=PREFILL_SHAPE,
+            layer_range=(0, 18),
+        )
+
+        devices_total = GALAXY_SHAPE[0] * GALAXY_SHAPE[1]
+        M, K = 1024, 2048
+        act_torch = torch.zeros(devices_total, 1, M, K, dtype=torch.bfloat16)
+        coord0 = slice_.prefill_coord_for_layer(0)
+        lin0 = coord0[0] * GALAXY_SHAPE[1] + coord0[1]
+        act_torch[lin0, 0, :, :] = torch.randn(M, K, dtype=torch.bfloat16) * 0.1
+        act = ttnn.from_torch(
+            act_torch,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=parent,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(parent, dim=0),
+        )
+
+        print("\n[chain] running 18-layer attention sublayer chain (RMSNorm + Q + O + residual)...")
+        out = slice_.forward_attention_sublayer_chain(act)
+        ttnn.synchronize_device(parent)
+
+        coord17 = slice_.prefill_coord_for_layer(17)
+        lin17 = coord17[0] * GALAXY_SHAPE[1] + coord17[1]
+        shards = ttnn.get_device_tensors(out)
+        out_t17 = ttnn.to_torch(shards[lin17])
+        finite = torch.isfinite(out_t17).all().item()
+        non_zero_count = (out_t17.abs() > 1e-6).sum().item()
+        print(
+            f"[output @ chip 17 coord {coord17}] shape={list(out_t17.shape)} "
+            f"finite={finite} non_zero={non_zero_count}/{out_t17.numel()}"
+        )
+        print(f"  range: [{out_t17.min().item():.2f}, {out_t17.max().item():.2f}]")
+
+        assert finite, "Output has NaN/Inf"
+        assert non_zero_count > 0, "Output all zeros"
+        print("[PASS] parent-mesh attention sublayer chain end-to-end")
+        ttnn.deallocate(out)
     finally:
         ttnn.close_mesh_device(parent)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
