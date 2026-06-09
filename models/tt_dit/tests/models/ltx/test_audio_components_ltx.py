@@ -351,9 +351,9 @@ def _build_torch_stage_c_real(checkpoint_name: str):
             if k.startswith("vocoder."):
                 state[ckpt_to_diffusers(k[len("vocoder.") :])] = f.get_tensor(k).float()
     res = full.load_state_dict(state, strict=False)
-    assert not res.missing_keys and not res.unexpected_keys, (
-        f"torch oracle weight load mismatch: {len(res.missing_keys)} missing, {len(res.unexpected_keys)} unexpected"
-    )
+    assert (
+        not res.missing_keys and not res.unexpected_keys
+    ), f"torch oracle weight load mismatch: {len(res.missing_keys)} missing, {len(res.unexpected_keys)} unexpected"
     return full.eval()
 
 
@@ -620,7 +620,6 @@ def test_stage_c_vocoder_with_bwe(
 
 # Localized audio regression: aggregate PCC over a full clip masks a brief burst, so this
 # drives the real ~6s length and gates each 0.5s window vs the unsharded eager baseline.
-_STATIC_SR = 24000  # main vocoder output rate
 _STATIC_WIN_S = 0.5
 
 
