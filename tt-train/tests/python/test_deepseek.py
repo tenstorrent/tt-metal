@@ -287,14 +287,8 @@ def _build_models_at_seed(seed: int):
     """Seed RNGs, build both models in bf16, copy torch weights to ttml, set
     eval mode. Returns ``(torch_model, ttml_model, cfg)``.
 
-    Shared by the diagnostic tests (``test_logits_seed_sweep``,
-    ``test_logits_debug_seed``) — the ``models`` fixture is fine for the
-    primary tests but doesn't parametrize on the seed.
-
-    ``ttml.init`` has its own private RNG (see ttml/init.py); seeding it
-    matters for reproducibility of any param not overwritten by
-    ``copy_torch_to_ttml`` (currently every LinearLayer weight, but easy
-    to regress on).
+    Like the ``models`` fixture but parametrized on the seed, for the
+    diagnostic tests below.
     """
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -314,13 +308,54 @@ def _build_models_at_seed(seed: int):
 
 
 def _ttml_topk_indices_to_numpy(topk_ttnn) -> np.ndarray:
-    """Convert a ttnn.topk indices tensor ``[B, 1, S, k]`` (UINT16 storage,
-    which ttml's ``to_numpy`` doesn't bind directly) to an int64 numpy
-    array of shape ``[B, S, k]``."""
+    """Convert a ttnn.topk indices tensor ``[B, 1, S, k]`` to an int64 numpy
+    array ``[B, S, k]``. topk returns UINT16, which to_numpy can't bind."""
     topk_u32 = ttnn.typecast(topk_ttnn, ttnn.DataType.UINT32)
     arr = ttml.autograd.create_tensor(topk_u32, requires_grad=False).to_numpy(ttnn.DataType.UINT32)
-    # Drop the singleton dim that ttml uses for its [B, 1, S, k] layout.
     return arr.reshape(arr.shape[0], arr.shape[2], arr.shape[3]).astype(np.int64)
+
+
+def _capture_moe_input_hidden(torch_model, ttml_model, cfg, batch_size: int):
+    """Run one forward on both models and capture the hidden state flowing
+    into the first MoE layer. Returns ``(torch_hidden [B,S,dim] bf16,
+    ttml_hidden [B,1,S,dim])``."""
+    moe_layer_idx = cfg.n_dense_layers
+    assert moe_layer_idx < cfg.n_layers, "config has no MoE layer"
+
+    torch_moe = torch_model.layers[moe_layer_idx].ffn
+    ttml_moe = ttml_model.blocks[moe_layer_idx].ffn
+    assert isinstance(torch_moe, TorchMoE)
+    assert isinstance(ttml_moe, TtmlMoE)
+
+    torch_inputs: list = []
+
+    def torch_pre_hook(_module, args):
+        torch_inputs.append(args[0].detach().clone())
+
+    torch_handle = torch_moe.register_forward_pre_hook(torch_pre_hook)
+
+    ttml_inputs: list = []
+    orig_ttml_forward = ttml_moe.forward
+
+    def ttml_capture_forward(x):
+        ttml_inputs.append(x)
+        return orig_ttml_forward(x)
+
+    ttml_moe.forward = ttml_capture_forward
+
+    try:
+        torch_tokens, ttml_input, ttml_mask = _make_inputs(cfg, batch_size)
+        with torch.no_grad():
+            torch_model(torch_tokens)
+        ttml_model(ttml_input, ttml_mask)
+    finally:
+        torch_handle.remove()
+        ttml_moe.forward = orig_ttml_forward
+
+    assert (
+        len(torch_inputs) == 1 and len(ttml_inputs) == 1
+    ), f"expected exactly one MoE invocation, got torch={len(torch_inputs)} ttml={len(ttml_inputs)}"
+    return torch_inputs[0], ttml_inputs[0]
 
 
 # =============================================================================
@@ -367,28 +402,8 @@ class TestDeepSeekVsTorchBaseline:
         assert metrics["abs_mean"] < 5e-2, (
             f"logits mean abs diff too high: {metrics['abs_mean']:.4f} " f"(expected < 5e-2)"
         )
-        # No abs_max bound: grouped MoE routing is non-Lipschitz at the
-        # group-topk decision, so an arbitrarily small perturbation in the
-        # gate input can flip which experts a token gets routed to. Two
-        # sources of perturbation contribute, only one of which we can fix:
-        #
-        # 1. Same-platform bf16 sum ties — fixed. moe.py::compute_routing
-        #    sums the per-group top-2 in fp32 and mean-centers before the
-        #    bf16 cast that feeds ttnn.topk; torch_baseline.Gate.forward
-        #    casts `biased` to fp32 inside the group block. This keeps
-        #    fp32-distinguishable group sums from collapsing to identical
-        #    bf16 values and routing to a tie-break.
-        # 2. Cross-platform input divergence — inherent. Attention/MLA run
-        #    bf16, so the hidden state going into the MoE differs by
-        #    ~bf16 ULP between CPU baseline and WH. On tokens whose group
-        #    sums are within that noise band the routing flips, and one
-        #    element of the logits ends up far above the noise floor.
-        #
-        # cos_sim and abs_mean catch real regressions; abs_max on
-        # individual elements is dominated by inherent routing flips
-        # from (2) and is not a meaningful parity check at bf16. See
-        # test_logits_seed_sweep / test_logits_debug_seed below for
-        # diagnostics when investigating a regression.
+        # No abs_max bound: a bf16-level difference in the MoE input can flip a
+        # token's routing and spike one logit, so abs_max isn't meaningful here.
 
     @pytest.mark.skipif(
         not os.environ.get("TT_DEEPSEEK_SEED_SWEEP"),
@@ -396,12 +411,8 @@ class TestDeepSeekVsTorchBaseline:
     )
     @pytest.mark.parametrize("seed", [SEED + i for i in range(20)])
     def test_logits_seed_sweep(self, seed):
-        """Diagnostic: sweep seeds to characterize abs_max vs max(|logit|).
-
-        Prints per-seed metrics without asserting on abs_max so the bound in
-        ``test_logits_match`` can be validated against the empirical bf16
-        noise distribution. Compare WH and BH runs of this sweep to tell
-        precision noise apart from a real numerical divergence.
+        """Diagnostic: sweep seeds and print per-seed metrics (no asserts) to
+        characterize abs_max vs max(|logit|) over the bf16 noise distribution.
         """
         torch_model, ttml_model, ttml_cfg = _build_models_at_seed(seed)
 
@@ -449,14 +460,9 @@ class TestDeepSeekVsTorchBaseline:
         print(f"  top-{top_n} per-token max-diff: " + ", ".join(rows))
 
         # --- Gate sanity check on a fresh hidden state -----------------------
-        # Sanity check only: feeds torch and ttml gates a fresh random hidden
-        # state (not the runtime MoE input) and compares top-k expert indices.
-        # A widespread disagreement here suggests a gate-weight-layout or
-        # topk-plumbing bug; tight agreement does NOT prove the runtime
-        # routing matches on the actual MoE inputs — use test_logits_debug_seed
-        # for that. The cross-reference at the end flags whether the worst
-        # logit-error tokens happen to be tokens where this synthetic check
-        # also disagrees.
+        # Feed both gates a fresh random hidden (not the runtime MoE input) and
+        # compare top-k indices. Widespread disagreement points to a
+        # gate-layout or topk bug.
         moe_layer_idx = ttml_cfg.n_dense_layers
         if moe_layer_idx < ttml_cfg.n_layers:
             torch_moe = torch_model.layers[moe_layer_idx].ffn
@@ -497,14 +503,9 @@ class TestDeepSeekVsTorchBaseline:
         reason="MoE-input debug; run with TT_DEEPSEEK_DEBUG_SEED=<int>",
     )
     def test_logits_debug_seed(self):
-        """Debug a single bad seed: capture the actual hidden state flowing
-        into the MoE layer on both torch and ttml, then re-run each side's
-        gate on that captured hidden and print routing weights/indices
-        side-by-side for the worst-error token.
-
-        This is the strongest available correlation check between the
-        logits divergence and MoE routing — it uses the runtime hidden
-        state, not a fresh random one.
+        """Debug a single bad seed: capture the runtime hidden state into the
+        MoE layer on both sides, re-run each gate on it, and print routing
+        indices/weights side-by-side for the worst-error token.
         """
         seed = int(os.environ["TT_DEEPSEEK_DEBUG_SEED"])
         torch_model, ttml_model, ttml_cfg = _build_models_at_seed(seed)
@@ -521,9 +522,7 @@ class TestDeepSeekVsTorchBaseline:
         torch_inputs: list[torch.Tensor] = []
 
         def torch_pre_hook(_module, args):
-            # torch_baseline MoE.forward receives x of shape [B, S, dim] (or
-            # the post-norm hidden); clone so the captured copy doesn't get
-            # mutated downstream.
+            # Clone so the captured copy isn't mutated downstream.
             torch_inputs.append(args[0].detach().clone())
 
         torch_handle = torch_moe.register_forward_pre_hook(torch_pre_hook)
@@ -709,13 +708,10 @@ class TestDeepSeekVsTorchBaseline:
         assert mean_rel < 0.20, f"mean grad relative diff too high: {mean_rel:.4f} " f"(expected < 0.20)"
 
     def test_moe_routing_indices_match(self, models):
-        """Top-k expert indices from the MoE router should agree between torch
-        and ttml when both are fed the same hidden state and have identical
-        gate weights.
-
-        Calls ttml's ``MoE.compute_routing`` helper directly (bypassing the
-        rest of the MoE forward) so a failure here points squarely at the
-        gate weight layout, sigmoid, or top-k / group-mask plumbing.
+        """Top-k expert indices should agree between torch and ttml fed the
+        same hidden state. Feeds the same captured runtime MoE input to both
+        gates, so any disagreement isolates a gate-weight layout, sigmoid, or
+        top-k / group-mask bug.
         """
         torch_model, ttml_model, cfg = models
         torch_model.eval()
@@ -732,34 +728,33 @@ class TestDeepSeekVsTorchBaseline:
             "the routing logic to be exposed as a standalone method"
         )
 
-        # Deterministic hidden state. Run both gates in bf16 so the comparison
-        # is limited to device-vs-cpu bf16 rounding noise, not fp32-vs-bf16.
-        B, S = 1, cfg.max_seq_len
-        hidden_np = (np.random.randn(B, S, cfg.dim) * 0.1).astype(np.float32)
+        # Capture the hidden states actually flowing into the MoE layer.
+        batch_size = 2
+        torch_h_t, ttml_h_t = _capture_moe_input_hidden(torch_model, ttml_model, cfg, batch_size)
+        B, S = batch_size, cfg.max_seq_len
 
-        # Torch side: bf16 gate on flattened hidden
-        hidden_torch = torch.from_numpy(hidden_np).to(torch.bfloat16)
+        # Reference routing: torch gate on its runtime hidden (bf16).
         with torch.no_grad():
-            flat = hidden_torch.view(-1, cfg.dim)
-            _w, torch_indices = torch_moe.gate(flat)
-        # shape [B*S, n_activated]
+            _w, torch_indices = torch_moe.gate(torch_h_t.reshape(-1, cfg.dim).to(torch.bfloat16))
         torch_indices_sorted = np.sort(torch_indices.cpu().numpy(), axis=-1)
 
-        # ttml side: feed the same hidden into compute_routing
-        hidden_bf16 = hidden_np.reshape(B, 1, S, cfg.dim).astype(ml_dtypes.bfloat16)
-        ttml_hidden = ttml.autograd.Tensor.from_numpy(hidden_bf16, layout=ttnn.Layout.TILE)
-        _scores, _topk_values, topk_indices_ttnn = ttml_moe.compute_routing(ttml_hidden)
+        def _ttml_routing(hidden_ttml):
+            _scores, _topk_values, topk_idx = ttml_moe.compute_routing(hidden_ttml)
+            idx = _ttml_topk_indices_to_numpy(topk_idx).reshape(B * S, cfg.n_activated_experts)
+            return np.sort(idx, axis=-1)
 
-        ttml_idx_np = _ttml_topk_indices_to_numpy(topk_indices_ttnn).reshape(B * S, cfg.n_activated_experts)
-        ttml_indices_sorted = np.sort(ttml_idx_np, axis=-1)
+        # --- Hard check: same input to both gates --------------------------
+        # Feed torch's runtime hidden to ttml's gate too, so the only
+        # difference is the gate computation (device vs cpu bf16), not the input.
+        torch_h_np = torch_h_t.to(torch.float32).cpu().numpy().reshape(B, 1, S, cfg.dim)
+        shared_hidden = ttml.autograd.Tensor.from_numpy(torch_h_np.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE)
+        ttml_indices_sorted = _ttml_routing(shared_hidden)
 
-        # Diagnostics: how often do the two disagree, and is the disagreement
-        # localized (suggests precision tie-breaking) or widespread (layout bug)?
         per_token_equal = np.all(torch_indices_sorted == ttml_indices_sorted, axis=-1)
         num_agree = int(per_token_equal.sum())
         num_total = int(per_token_equal.size)
         print(
-            f"\n[test_moe_routing_indices_match] tokens matching: "
+            f"\n[test_moe_routing_indices_match] same-input tokens matching: "
             f"{num_agree}/{num_total} ({100 * num_agree / num_total:.1f}%)"
         )
         if num_agree < num_total:
@@ -770,17 +765,22 @@ class TestDeepSeekVsTorchBaseline:
                 f"ttml={ttml_indices_sorted[bad].tolist()}"
             )
 
-        # With identical bf16 weights and bf16 activations on both sides, the
-        # vast majority of tokens should route identically. Residual noise is
-        # allowed because ttnn's bf16 topk/sum on device can break near-ties
-        # differently from torch's CPU bf16, but a layout bug would make the
-        # two disagree for essentially every token.
+        # --- Diagnostic: each side on its own runtime hidden ---------------
+        # Routing-flip rate when the two sides' inputs differ at bf16 level.
+        # Not asserted — it's input divergence, not a gate bug.
+        ttml_own_sorted = _ttml_routing(ttml_h_t)
+        own_agree = float(np.all(torch_indices_sorted == ttml_own_sorted, axis=-1).mean())
+        print(f"  own-input (runtime) agreement: {own_agree:.2%} — inherent bf16 input flips")
+
+        # With identical bf16 weights and the same input, nearly all tokens
+        # should route identically; residual flips are device-vs-cpu bf16
+        # tie-breaks, but a layout bug would disagree on essentially every token.
         agreement = num_agree / max(num_total, 1)
         assert agreement >= 0.95, (
             f"torch and ttml routed to different experts for {num_total - num_agree} "
-            f"out of {num_total} tokens (agreement {agreement:.2%}). This is far "
-            f"above bf16 tie-break noise and almost certainly a gate-weight "
-            f"layout or top-k plumbing bug."
+            f"out of {num_total} tokens (agreement {agreement:.2%}) on identical input. "
+            f"This is far above bf16 tie-break noise and almost certainly a "
+            f"gate-weight layout or top-k plumbing bug."
         )
 
 
