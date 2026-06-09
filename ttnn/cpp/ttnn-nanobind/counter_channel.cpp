@@ -12,7 +12,7 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unique_ptr.h>
 
-#include <tt-metalium/experimental/inter_process_counter_channel.hpp>
+#include <internal/service/inter_process_counter_channel.hpp>
 
 namespace ttnn::counter_channel {
 
