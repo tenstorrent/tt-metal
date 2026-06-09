@@ -10,7 +10,7 @@ import os
 from loguru import logger
 
 import ttnn
-from conftest import bh_2d_mesh_device_context
+from conftest import bh_2d_mesh_device_context, get_updated_device_params, reset_fabric, set_fabric
 from models.demos.deepseek_v3_b1.demo.pipeline import create_fabric_router_config
 
 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS_DEFAULT = "30000"
@@ -66,6 +66,29 @@ def _worker_l1_size_for_rank(num_procs: int, *, enable_speculative_decode: bool 
 
 
 @contextlib.contextmanager
+def _galaxy_4rank_mesh_device_context(device_params):
+    updated_device_params = get_updated_device_params(device_params)
+    fabric_config = updated_device_params.pop("fabric_config", None)
+    fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
+    reliability_mode = updated_device_params.pop("reliability_mode", None)
+    fabric_manager = updated_device_params.pop("fabric_manager", None)
+    fabric_router_config = updated_device_params.pop("fabric_router_config", None)
+    set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
+    mesh_device = ttnn.open_mesh_device(
+        mesh_shape=ttnn.MeshShape(8, 4),
+        **updated_device_params,
+    )
+    try:
+        yield mesh_device
+    finally:
+        for submesh in mesh_device.get_submeshes():
+            ttnn.close_mesh_device(submesh)
+        ttnn.close_mesh_device(mesh_device)
+        reset_fabric(fabric_config)
+        del mesh_device
+
+
+@contextlib.contextmanager
 def open_mesh_device(*, enable_speculative_decode: bool = True):
     """Open mesh device for pod demos with shared fabric and worker L1 settings."""
     if not os.environ.get("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"):
@@ -78,12 +101,14 @@ def open_mesh_device(*, enable_speculative_decode: bool = True):
     )
     device_params = {
         "fabric_config": _fabric_config_for_num_procs(num_procs),
+        "fabric_manager": ttnn.FabricManagerMode.ENABLED,
         "fabric_router_config": create_fabric_router_config(FABRIC_PACKET_SIZE_BYTES),
         "worker_l1_size": worker_l1_size,
     }
 
     logger.info("Opening mesh device...")
-    with bh_2d_mesh_device_context(device_params) as mesh_device:
+    mesh_context = _galaxy_4rank_mesh_device_context if num_procs == 4 else bh_2d_mesh_device_context
+    with mesh_context(device_params) as mesh_device:
         logger.info(
             "Mesh device opened (id={}, shape={})",
             mesh_device.get_system_mesh_id(),

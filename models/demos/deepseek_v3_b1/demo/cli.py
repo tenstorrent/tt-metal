@@ -40,6 +40,23 @@ def create_parser() -> argparse.ArgumentParser:
         help="Number of pipeline token iterations",
     )
     parser.add_argument(
+        "--decode-only",
+        action="store_true",
+        help="Run one decode step directly instead of running prompt prefill first",
+    )
+    parser.add_argument(
+        "--decode-token",
+        type=int,
+        default=0,
+        help="Input token id for --decode-only",
+    )
+    parser.add_argument(
+        "--decode-position",
+        type=int,
+        default=0,
+        help="Position id for --decode-only",
+    )
+    parser.add_argument(
         "--tokenizer",
         type=str,
         default=DEFAULT_TOKENIZER,
@@ -203,6 +220,9 @@ def run_demo(
     sram_hot_experts_ceiling: int = 64,
     bspm_dir: Path | None = None,
     bspm_budget: float = 3.5,
+    decode_only: bool = False,
+    decode_token: int = 0,
+    decode_position: int = 0,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
     configure_runtime_env(enable_sram_hot_experts=enable_sram_hot_experts)
@@ -238,35 +258,44 @@ def run_demo(
 
         my_mesh_id = mesh_device.get_system_mesh_id()
         if my_mesh_id == 0 and not launch_only:
-            tokenizer = load_tokenizer(tokenizer_name_or_path)
-            messages = [{"role": "user", "content": prompt}]
-            prompt = tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True,
-            )
-            logger.debug("Prompt with chat template: {}", prompt)
+            if decode_only:
+                logger.info(
+                    "Running decode-only step with token id {} at position {}",
+                    decode_token,
+                    decode_position,
+                )
+                output_token = model_pipeline.decode_forward(decode_token, position_id=decode_position)
+                logger.info("Decode-only output token: {}", output_token)
+            else:
+                tokenizer = load_tokenizer(tokenizer_name_or_path)
+                messages = [{"role": "user", "content": prompt}]
+                prompt = tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+                logger.debug("Prompt with chat template: {}", prompt)
 
-            prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
-            think_open_id = tokenizer.encode("<think>", add_special_tokens=False)
-            think_close_id = tokenizer.encode("</think>", add_special_tokens=False)
-            if len(think_open_id) != 1 or len(think_close_id) != 1:
-                raise RuntimeError("Thinking token IDs must be single tokens")
-            if not prompt_ids:
-                raise RuntimeError("Chat template produced an empty prompt")
-            logger.debug(f"Encoded prompt: {prompt_ids}")
+                prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
+                think_open_id = tokenizer.encode("<think>", add_special_tokens=False)
+                think_close_id = tokenizer.encode("</think>", add_special_tokens=False)
+                if len(think_open_id) != 1 or len(think_close_id) != 1:
+                    raise RuntimeError("Thinking token IDs must be single tokens")
+                if not prompt_ids:
+                    raise RuntimeError("Chat template produced an empty prompt")
+                logger.debug(f"Encoded prompt: {prompt_ids}")
 
-            logger.info("Running inference on prompt with {} tokens", len(prompt_ids))
-            generated_tokens = model_pipeline.run_inference(
-                prompt_token_ids=prompt_ids,
-                max_new_tokens=iterations,
-                eos_token_id=tokenizer.eos_token_id,
-                think_token_ids=[think_open_id[0], think_close_id[0]],
-                return_generated_tokens=True,
-            )
-            assert generated_tokens is not None
-            generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
-            logger.info("Output ({} tokens): {}", len(generated_tokens), generated_text)
+                logger.info("Running inference on prompt with {} tokens", len(prompt_ids))
+                generated_tokens = model_pipeline.run_inference(
+                    prompt_token_ids=prompt_ids,
+                    max_new_tokens=iterations,
+                    eos_token_id=tokenizer.eos_token_id,
+                    think_token_ids=[think_open_id[0], think_close_id[0]],
+                    return_generated_tokens=True,
+                )
+                assert generated_tokens is not None
+                generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
+                logger.info("Output ({} tokens): {}", len(generated_tokens), generated_text)
 
         if launch_only and my_mesh_id == 0:
             # Keep process/pipeline alive until user interrupts
@@ -333,6 +362,9 @@ def main(argv: list[str] | None = None) -> int:
         sram_hot_experts_ceiling=args.sram_hot_experts_ceiling,
         bspm_dir=args.bspm_dir,
         bspm_budget=args.bspm_budget,
+        decode_only=args.decode_only,
+        decode_token=args.decode_token,
+        decode_position=args.decode_position,
     )
     print(end="", file=sys.stdout, flush=True)
     return 0

@@ -220,14 +220,17 @@ class ModelPipeline:
         logger.debug(f"Done prefilling with {len(tokens)} tokens.")
         return results
 
-    def decode_forward(self, input_token: int) -> int:
+    def decode_forward(self, input_token: int, *, position_id: int | None = None) -> int:
         """Run 1 decode step and return the next token id."""
         if self.pipeline.my_stage_idx != 0:
             raise RuntimeError("decode_forward() should only be called on mesh id 0")
         assert self.model is not None
+        if position_id is not None:
+            self.position_id = position_id
         if self.position_id is None:
             raise RuntimeError("decode_forward() requires prefill_forward() to be called first")
 
+        logger.info("Decode step input token {} at position {}", input_token, self.position_id)
         self.model.write_input(
             input_token,
             -1,
@@ -240,6 +243,7 @@ class ModelPipeline:
         )
         result = self.model.read_result()
         self.position_id += 1
+        logger.info("Decode step output token {}", result.token_0)
         return result.token_0
 
     def check_acceptance(self, prev_spec_token_id: int, result: DecodeResult) -> bool:
