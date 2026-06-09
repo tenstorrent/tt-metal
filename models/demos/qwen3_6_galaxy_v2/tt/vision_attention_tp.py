@@ -355,6 +355,111 @@ def build_vision_rope_tensors(
     return upload(cos), upload(sin)
 
 
+def seq_parallel_padded_len(seq_len: int, cols: int, tile: int = 32) -> int:
+    """Smallest length >= seq_len that splits evenly across `cols` columns with
+    each column's shard a multiple of `tile` (TILE_LAYOUT requirement for
+    sharding the sequence axis). i.e. a multiple of cols*tile."""
+    block = cols * tile
+    return -(-seq_len // block) * block
+
+
+def build_vision_seq_parallel_tensors(
+    *,
+    seq_len: int,
+    grid_thw: torch.Tensor,
+    head_dim: int,
+    padded_head_dim: int,
+    spatial_merge_size: int,
+    mesh_device: ttnn.MeshDevice,
+    col_mesh_axis: int = 1,
+    tile: int = 32,
+) -> tuple[ttnn.Tensor, ttnn.Tensor, "ttnn.Tensor | None", int]:
+    """Sequence-parallel rotary tables + cu_seqlens attention mask.
+
+    The patch sequence is sharded across the col axis (`col_mesh_axis`). Because
+    TILE_LAYOUT sharding on the seq axis needs each shard tile-aligned, the
+    sequence is padded to `S_pad = ceil(seq_len / (cols*tile)) * (cols*tile)`.
+
+    Returns `(cos_tt, sin_tt, attn_mask_tt, S_pad)`:
+      - cos_tt, sin_tt: `[1, 1, S_pad, padded_head_dim]` sharded on dim=2 across
+        the col axis, replicated across rows (identity rotation on the pad tail).
+      - attn_mask_tt: `[1, 1, S_pad, S_pad]` additive mask sharded on the query
+        (dim=2) axis across cols → per-col `[1,1,S_pad/cols,S_pad]`. Blocks
+        cross-segment attention (cu_seqlens) and attention to padded keys.
+        `None` only when there is a single segment and no padding (full attn).
+    """
+    from models.demos.qwen3_vl.reference.functional import qwen3_vision_transformer_preprocess
+
+    cols = mesh_device.shape[col_mesh_axis]
+    S_pad = seq_parallel_padded_len(seq_len, cols, tile)
+
+    cu_seqlens, (cos, sin) = qwen3_vision_transformer_preprocess(
+        seq_len=seq_len,
+        grid_thw=grid_thw,
+        head_dim=head_dim,
+        spatial_merge_size=spatial_merge_size,
+    )
+    assert cos.shape == (seq_len, head_dim), f"unexpected cos shape {cos.shape}"
+
+    # HF rotate-half -> Meta interleaved (matches build_vision_rope_tensors).
+    cos = _apply_interleaved_rope_perm(cos, head_dim_axis=-1, head_dim=head_dim, padded_head_dim=head_dim)
+    sin = _apply_interleaved_rope_perm(sin, head_dim_axis=-1, head_dim=head_dim, padded_head_dim=head_dim)
+    if padded_head_dim != head_dim:
+        cos = torch.cat([cos, torch.ones(seq_len, padded_head_dim - head_dim, dtype=cos.dtype)], dim=-1)
+        sin = torch.cat([sin, torch.zeros(seq_len, padded_head_dim - head_dim, dtype=sin.dtype)], dim=-1)
+    # Pad sequence to S_pad with identity rotation (cos=1, sin=0).
+    if S_pad != seq_len:
+        cos = torch.cat([cos, torch.ones(S_pad - seq_len, padded_head_dim, dtype=cos.dtype)], dim=0)
+        sin = torch.cat([sin, torch.zeros(S_pad - seq_len, padded_head_dim, dtype=sin.dtype)], dim=0)
+
+    def upload_seq_sharded(t: torch.Tensor) -> ttnn.Tensor:
+        # dims=(None, col_mesh_axis-target): replicate rows (axis0), shard dim=2 across cols (axis1)
+        shard_dims = [None, None]
+        shard_dims[col_mesh_axis] = 2
+        return ttnn.from_torch(
+            t.unsqueeze(0).unsqueeze(0).to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, dims=tuple(shard_dims), mesh_shape=tuple(mesh_device.shape)
+            ),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    cos_tt = upload_seq_sharded(cos)
+    sin_tt = upload_seq_sharded(sin)
+
+    # Build the additive cu_seqlens block-diagonal mask over the PADDED length.
+    seg_bounds = cu_seqlens.to(torch.int64).tolist()  # e.g. [0, n0, n0+n1, ...]
+    single_segment = len(seg_bounds) == 2 and seg_bounds[0] == 0 and seg_bounds[-1] == seq_len
+    if single_segment and S_pad == seq_len:
+        return cos_tt, sin_tt, None, S_pad
+
+    neg = -1e9
+    mask = torch.full((S_pad, S_pad), neg, dtype=torch.float32)
+    # Allow attention within each real segment.
+    for a, b in zip(seg_bounds[:-1], seg_bounds[1:]):
+        mask[a:b, a:b] = 0.0
+    # Padded query rows (>= seq_len) have no valid segment → would be an all-(-inf)
+    # row and softmax-NaN. Their output is discarded downstream, so let them attend
+    # the first real key to keep softmax finite.
+    if S_pad > seq_len:
+        mask[seq_len:, :] = neg
+        mask[seq_len:, 0] = 0.0
+    mask_tt = ttnn.from_torch(
+        mask.unsqueeze(0).unsqueeze(0).to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device, dims=(None, 2) if col_mesh_axis == 1 else (2, None), mesh_shape=tuple(mesh_device.shape)
+        ),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    return cos_tt, sin_tt, mask_tt, S_pad
+
+
 class Qwen36VisionAttentionTP(Module):
     """qwen3.6 vision attention with TP=8 across cluster_axis=0.
 
@@ -476,14 +581,18 @@ class Qwen36VisionAttentionTP(Module):
             out["o_proj.bias"] = out.pop("proj.bias")
         return out
 
-    def _sdpa_program_config(self, seq_len: int) -> ttnn.SDPAProgramConfig:
+    def _sdpa_program_config(self, q_seq_len: int, k_seq_len: int | None = None) -> ttnn.SDPAProgramConfig:
         grid_size = self.mesh_device.compute_with_storage_grid_size()
-        seq_len = -(-seq_len // 32) * 32  # round up to tile
-        chunk_size = min(seq_len, 128)
+        if k_seq_len is None:
+            k_seq_len = q_seq_len
+        q_seq_len = -(-q_seq_len // 32) * 32  # round up to tile
+        k_seq_len = -(-k_seq_len // 32) * 32  # round up to tile
+        # In seq-parallel mode q_seq_len (S/cols) != k_seq_len (full S): chunk
+        # each dimension independently so the chunk never exceeds its axis.
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
-            q_chunk_size=chunk_size,
-            k_chunk_size=chunk_size,
+            q_chunk_size=min(q_seq_len, 128),
+            k_chunk_size=min(k_seq_len, 128),
             exp_approx_mode=False,
         )
 
@@ -493,16 +602,33 @@ class Qwen36VisionAttentionTP(Module):
         cos: ttnn.Tensor,
         sin: ttnn.Tensor,
         *,
+        attn_mask: ttnn.Tensor | None = None,
+        seq_parallel: bool = False,
         cos_hf_cpu: torch.Tensor | None = None,
         sin_hf_cpu: torch.Tensor | None = None,
     ) -> ttnn.Tensor:
-        """Run attention. Input + output are replicated across the TP axis.
+        """Run attention.
+
+        Two layouts, selected by `seq_parallel`:
+          - `seq_parallel=False` (default): input/output replicated across the
+            col axis; each chip holds the full sequence (TP=8 heads on rows).
+          - `seq_parallel=True`: the sequence is sharded across the col axis
+            (`cluster_axis=1`); `x`, `cos`, `sin` carry only this chip's `S/cols`
+            shard. Q stays local; K/V are all-gathered across cols to the full
+            sequence so each query attends to all keys. `attn_mask` is the
+            per-shard additive `cu_seqlens` block-diagonal mask `[1,1,S/cols,S]`
+            (or `None` for a single image/video segment = full attention).
 
         If `QWEN36_VISION_CPU_ROPE=1` and cos_hf_cpu/sin_hf_cpu are provided,
         applies RoPE on CPU in fp32 using HF's exact rotate_half — recovers
         the bf16 RoPE precision floor at the cost of a per-layer D2H+H2D
-        round-trip. Used to validate the precision hypothesis.
+        round-trip. Used to validate the precision hypothesis. (CPU-RoPE assumes
+        the replicated layout; not supported with seq_parallel.)
         """
+        if seq_parallel and (cos_hf_cpu is not None or sin_hf_cpu is not None):
+            # CPU-RoPE gathers on dim=0 assuming cols replicate; incompatible
+            # with col-sharded sequence. Fall back to on-device RoPE.
+            cos_hf_cpu = sin_hf_cpu = None
         # qkv projection → per-chip [B, 1, S, 3 * num_local_heads * padded_head_dim]
         xqkv = self.qkv_proj.forward(x)
 
@@ -560,17 +686,29 @@ class Qwen36VisionAttentionTP(Module):
             )
             ttnn.deallocate(k)
 
+        # Seq-parallel: each col holds S/cols queries but must attend to ALL keys.
+        # RoPE is positionwise so it's already applied to this col's K shard with
+        # the matching col-local cos/sin; all-gather the rotated K and V across the
+        # col axis to reconstruct the full-sequence K/V on every col.
+        k_seq_len = k_rot.shape[2]
+        if seq_parallel:
+            k_rot = self.ccl_manager.all_gather(k_rot, dim=2, mesh_axis=1, use_hyperparams=False)
+            v = self.ccl_manager.all_gather(v, dim=2, mesh_axis=1, use_hyperparams=False)
+            k_seq_len = k_rot.shape[2]
+
         # Non-causal SDPA with dynamic grid. Pass scale = 1/sqrt(head_dim) explicitly
         # using the UNPADDED head_dim so SDPA's internal scaling matches the reference
         # (otherwise it would divide by sqrt(padded_head_dim=96) instead of sqrt(72)).
+        # attn_mask is None for a single segment (full attention); for multi-image it
+        # is the per-shard cu_seqlens block-diagonal additive mask.
         x = ttnn.transformer.scaled_dot_product_attention(
             q_rot,
             k_rot,
             v,
-            attn_mask=None,
+            attn_mask=attn_mask,
             is_causal=False,
             scale=self.head_dim**-0.5,
-            program_config=self._sdpa_program_config(q_rot.shape[2]),
+            program_config=self._sdpa_program_config(q_rot.shape[2], k_seq_len),
             compute_kernel_config=self._sdpa_compute_kernel_config,
         )
         ttnn.deallocate(q_rot)

@@ -112,10 +112,18 @@ class Qwen36VisionBlockTP(Module):
         cos: ttnn.Tensor,
         sin: ttnn.Tensor,
         *,
+        attn_mask: ttnn.Tensor | None = None,
+        seq_parallel: bool = False,
         cos_hf_cpu: torch.Tensor | None = None,
         sin_hf_cpu: torch.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Forward pass: norm + attn + residual + norm + mlp + residual.
+
+        When `seq_parallel=True` the sequence is sharded across the col axis:
+        norm/mlp are positionwise so they run unchanged on this chip's S/cols
+        shard; only attention all-gathers K/V across cols (see
+        `Qwen36VisionAttentionTP.forward`). `attn_mask` is the per-shard
+        cu_seqlens block-diagonal additive mask (or None for a single segment).
 
         cos_hf_cpu / sin_hf_cpu are optional torch tensors [S, head_dim] used by
         the attention's CPU-RoPE precision path (env QWEN36_VISION_CPU_ROPE=1).
@@ -128,7 +136,15 @@ class Qwen36VisionBlockTP(Module):
 
         # Attention sub-block
         x_norm = self.norm1.forward(x)
-        attn_out = self.attn.forward(x_norm, cos, sin, cos_hf_cpu=cos_hf_cpu, sin_hf_cpu=sin_hf_cpu)
+        attn_out = self.attn.forward(
+            x_norm,
+            cos,
+            sin,
+            attn_mask=attn_mask,
+            seq_parallel=seq_parallel,
+            cos_hf_cpu=cos_hf_cpu,
+            sin_hf_cpu=sin_hf_cpu,
+        )
         ttnn.deallocate(x_norm)
         # attn returns 3D; restore 4D for residual add
         if len(attn_out.shape) == 3:
