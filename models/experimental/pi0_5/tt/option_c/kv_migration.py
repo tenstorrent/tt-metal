@@ -12,10 +12,17 @@ Option C uses LAYER-PAIRED routing (deployment plan §3.3.a):
 
 Total bytes: 18 × ~500 KB = 9 MB across the mesh, sent in parallel by 18
 source chips to 6 destinations. With direct D2D sockets this is ~1-2 ms; via
-host bounce (the current default) it's ~10-30 ms depending on PCIe rates.
+host bounce (the current default) it's ~120-150 ms at full depth.
 
-This module currently implements host-bounce as the working fallback. The
-direct-D2D path lands once tt-blaze sockets are available.
+Two transport paths:
+  - `migrate_layer_paired` (host-bounce) — works for any KV layout. Default.
+  - `migrate_layer_paired_d2d` (point_to_point) — requires K/V allocated on
+    the galaxy PARENT mesh. Source/dest are on the same row (prefill cols
+    0-2, denoise col 3) so 1D linear topology suffices.
+
+The denoise stage's `Pi0_5OptionCExpertSlice.forward` consumes the migrated
+KV via the existing `past_key_value` kwarg in AdaRMSGemmaBlockTTNN — no new
+op needed on the denoise side.
 
 The denoise stage's `Pi0_5OptionCExpertSlice.forward` consumes the migrated
 KV via the existing `past_key_value` kwarg in AdaRMSGemmaBlockTTNN — no new
@@ -28,8 +35,14 @@ from typing import Dict, List, Optional, Tuple
 
 import ttnn
 
-from .transport import send_per_chip_activation_via_host
-from .stages import EXPERT_LAYERS_PER_DENOISE_CHIP, NUM_PREFILL_CHIPS
+from .stages import (
+    DENOISE_SUBMESH_OFFSET,
+    EXPERT_LAYERS_PER_DENOISE_CHIP,
+    NUM_PREFILL_CHIPS,
+    PREFILL_SUBMESH_OFFSET,
+    PREFILL_SUBMESH_SHAPE,
+)
+from .transport import send_per_chip_activation_via_host, send_shard_via_p2p
 
 
 class KVMigration:
@@ -127,6 +140,65 @@ class KVMigration:
             k_on_denoise = send_per_chip_activation_via_host(k_src, src_chip_idx, dst)
             v_on_denoise = send_per_chip_activation_via_host(v_src, src_chip_idx, dst)
             self.migrated_kv[layer_idx] = (k_on_denoise, v_on_denoise)
+
+    # ------------------------------------------------------------------ #
+    # D2D path via ttnn.point_to_point                                    #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _prefill_parent_coord(layer_idx: int) -> Tuple[int, int]:
+        """Galaxy-parent coord of the prefill chip that owns VLM layer `layer_idx`.
+
+        Layer i is placed at prefill submesh's (i // 3, i % 3); the prefill
+        submesh sits at parent offset (2, 0). So parent coord =
+        (2 + i // 3, i % 3).
+        """
+        sub_row = layer_idx // PREFILL_SUBMESH_SHAPE[1]
+        sub_col = layer_idx % PREFILL_SUBMESH_SHAPE[1]
+        return (PREFILL_SUBMESH_OFFSET[0] + sub_row, PREFILL_SUBMESH_OFFSET[1] + sub_col)
+
+    @classmethod
+    def _denoise_parent_coord(cls, layer_idx: int) -> Tuple[int, int]:
+        """Galaxy-parent coord of the denoise chip that receives layer `layer_idx`'s KV.
+
+        Denoise chip d = layer_idx // EXPERT_LAYERS_PER_DENOISE_CHIP. The denoise
+        submesh is (6, 1) at parent offset (2, 3), so chip d sits at parent
+        coord (2 + d, 3).
+        """
+        denoise_chip = cls.denoise_chip_for_vlm_layer(layer_idx)
+        return (DENOISE_SUBMESH_OFFSET[0] + denoise_chip, DENOISE_SUBMESH_OFFSET[1])
+
+    def migrate_layer_paired_d2d(
+        self,
+        prefill_kv_per_layer_on_parent: List[Tuple["ttnn.Tensor", "ttnn.Tensor"]],
+    ) -> None:
+        """D2D variant of `migrate_layer_paired` using `ttnn.point_to_point`.
+
+        PRECONDITION: each (K, V) tensor in `prefill_kv_per_layer_on_parent`
+        MUST be allocated on the galaxy PARENT mesh (full (8,4) shape), with
+        the per-layer data residing at the sender's parent coord. The current
+        prefill slice (`Pi0_5OptionCVLMSlicePaired`) allocates K/V on 1-chip
+        micro-submeshes carved from the prefill submesh — those tensors need
+        to be migrated up to the parent before this method can be called.
+        See `transport.py` docstring for the integration plan.
+
+        Routing: for VLM layer i, source = prefill chip at parent coord
+        (2 + i//3, i%3), destination = denoise chip at parent coord
+        (2 + i//3, 3). Same row → 1D linear topology routes via fabric.
+
+        Requires `set_fabric_config(FABRIC_1D)` before parent mesh open.
+
+        Estimated runtime vs the host-bounce path: ~1-2 ms vs ~120-150 ms.
+        """
+        for layer_idx, kv in enumerate(prefill_kv_per_layer_on_parent):
+            if kv is None:
+                continue
+            k_parent, v_parent = kv
+            src_coord = self._prefill_parent_coord(layer_idx)
+            dst_coord = self._denoise_parent_coord(layer_idx)
+            k_migrated = send_shard_via_p2p(k_parent, src_coord, dst_coord)
+            v_migrated = send_shard_via_p2p(v_parent, src_coord, dst_coord)
+            self.migrated_kv[layer_idx] = (k_migrated, v_migrated)
 
     def get(self, layer_idx: int) -> Tuple["ttnn.Tensor", "ttnn.Tensor"]:
         return self.migrated_kv[layer_idx]
