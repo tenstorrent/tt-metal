@@ -34,8 +34,8 @@ from helpers.test_config import BootMode, InputOutputFormat, TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     DEST_SYNC,
+    ENABLE_2X_FORMAT,
     ENABLE_DIRECT_INDEXING,
-    ENABLE_SRC_2X,
     IMPLIED_MATH_FORMAT,
     MATH_FIDELITY,
     NUM_FACES,
@@ -232,7 +232,7 @@ def test_matmul(
         templates=[
             MATH_FIDELITY(math_fidelity),
             IMPLIED_MATH_FORMAT(implied_math_format),
-            ENABLE_SRC_2X(
+            ENABLE_2X_FORMAT(
                 format.register_format_hint
                 in (DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B)
             ),

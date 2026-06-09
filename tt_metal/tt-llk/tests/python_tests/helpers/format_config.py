@@ -77,6 +77,13 @@ class DataFormat(Enum):
     MxFp4_2x_B = DataFormatInfo(
         "MxFp4_2x_B", Fraction(1, 2)
     )  # QSR specific - 2x-packed FP4 in Src Reg, 8-bit exp (FP16_b family) - 10 bits per element in one double-datumed element in src reg.
+    MxInt8 = DataFormatInfo("MxInt8", 1)  # QSR specific - S1.6, 8 bits per element
+    MxInt4 = DataFormatInfo(
+        "MxInt4", Fraction(1, 2)
+    )  # QSR specific - S1.2, 4 bits (0.5 bytes) per element
+    MxInt2 = DataFormatInfo(
+        "MxInt2", Fraction(1, 4)
+    )  # QSR specific - S1.0, 2 bits (0.25 bytes) per element
     Fp8_e4m3 = DataFormatInfo("Fp8_e4m3", 1)
 
     @property

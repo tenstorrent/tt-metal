@@ -11,6 +11,7 @@ from helpers.golden_generators import (
     DataCopyGolden,
     PackGolden,
     get_golden_generator,
+    quantize_mx_tensor_chunked,
 )
 from helpers.llk_params import (
     DestAccumulation,

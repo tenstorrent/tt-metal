@@ -283,11 +283,13 @@ class IMPLIED_MATH_FORMAT(TemplateParameter):
 
 
 @dataclass
-class ENABLE_SRC_2X(TemplateParameter):
-    enable_src_2x: bool = False
+class ENABLE_2X_FORMAT(TemplateParameter):
+    enable_2x_format: bool = False
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr bool ENABLE_SRC_2X = {str(self.enable_src_2x).lower()};"
+        return (
+            f"constexpr bool ENABLE_2X_FORMAT = {str(self.enable_2x_format).lower()};"
+        )
 
 
 @dataclass

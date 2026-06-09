@@ -16,19 +16,19 @@ using namespace ckernel::math;
  *
  * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
  * values = <LoFi/HiFi2/HiFi3/HiFi4>
- * @tparam EN_X2: When true, programs addr_mods for the MXFP4_2x non-DI MOP variant (8 MVMULs covering only A0/A1 and B0/B1; SrcA in MxFp4_2x_A/B drives the 2x
- * sub-element expansion).
+ * @tparam ENABLE_2X_FORMAT: When true, programs addr_mods for the MXFP4_2x non-DI MOP variant (8 MVMULs covering only A0/A1 and B0/B1; SrcA in MxFp4_2x_A/B
+ * drives the 2x sub-element expansion).
  * @param ct_dim: Number of tiles in the column dimension for a matrix multiply
  * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
  */
-template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool EN_X2 = false>
+template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_2X_FORMAT = false>
 inline void _llk_math_matmul_addrmod_(std::uint8_t ct_dim, std::uint8_t rt_dim)
 {
     constexpr bool high_fidelity      = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
     constexpr int FIDELITY_INCREMENT  = high_fidelity ? 1 : 0;
     const std::uint16_t num_tile_incr = (ct_dim >= rt_dim) ? 64 : ct_dim * 64;
 
-    if constexpr (EN_X2)
+    if constexpr (ENABLE_2X_FORMAT)
     {
         // Non-DI MXFP4_2x traversal (mirrors the DI X2 (srca,srcb,dest) sequence):
         //   #0 (0, 0, 0)     #1 (0, 8, 8)
@@ -200,12 +200,12 @@ inline void _llk_math_matmul_di_addrmod_(std::uint8_t ct_dim, std::uint8_t rt_di
  *
  * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
  * values = <LoFi/HiFi2/HiFi3/HiFi4>
- * @tparam EN_X2: When true, emits the non-DI MXFP4_2x variant (7-MVMUL replay traversing only A0/A1 and B0/B1; relies on SrcA being unpacked as MxFp4_2x_A/B
- * for the 2x sub-element expansion).
+ * @tparam ENABLE_2X_FORMAT: When true, emits the non-DI MXFP4_2x variant (7-MVMUL replay traversing only A0/A1 and B0/B1; relies on SrcA being unpacked as
+ * MxFp4_2x_A/B for the 2x sub-element expansion).
  * @param ct_dim: Number of tiles in the column dimension for a matrix multiply
  * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
  */
-template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool EN_X2 = false>
+template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_2X_FORMAT = false>
 inline void _llk_math_matmul_mop_config_(std::uint8_t ct_dim, std::uint8_t rt_dim)
 {
     // in0 - loaded to SrcB
@@ -217,9 +217,9 @@ inline void _llk_math_matmul_mop_config_(std::uint8_t ct_dim, std::uint8_t rt_di
 
     const bool reuse_a = ct_dim >= rt_dim;
 
-    constexpr std::uint32_t replay_buf_len = EN_X2 ? (8 - 1) : (16 - 1);
+    constexpr std::uint32_t replay_buf_len = ENABLE_2X_FORMAT ? (8 - 1) : (16 - 1);
 
-    if constexpr (EN_X2)
+    if constexpr (ENABLE_2X_FORMAT)
     {
         // Non-DI MXFP4_2x: 7-MVMUL replay + matmul_op = 8 MVMULs per tile (vs 16 in plain non-DI).
         // (srca,srcb,dest) sequence mirrors the DI X2 path:
@@ -270,8 +270,8 @@ inline void _llk_math_matmul_mop_config_(std::uint8_t ct_dim, std::uint8_t rt_di
             });
     }
 
-    constexpr std::uint32_t matmul_op_addr_mod      = EN_X2 ? ADDR_MOD_4 : ADDR_MOD_5;
-    constexpr std::uint32_t matmul_op_last_addr_mod = EN_X2 ? ADDR_MOD_5 : ADDR_MOD_3;
+    constexpr std::uint32_t matmul_op_addr_mod      = ENABLE_2X_FORMAT ? ADDR_MOD_4 : ADDR_MOD_5;
+    constexpr std::uint32_t matmul_op_last_addr_mod = ENABLE_2X_FORMAT ? ADDR_MOD_5 : ADDR_MOD_3;
     constexpr static std::uint32_t matmul_op        = TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, matmul_op_addr_mod, 0);
     const std::uint32_t matmul_op_last =
         reuse_a ? TT_OP_MVMUL(p_setrwc::CLR_A, 0, matmul_op_last_addr_mod, 0) : TT_OP_MVMUL(p_setrwc::CLR_B, 0, matmul_op_last_addr_mod, 0);
@@ -289,11 +289,11 @@ inline void _llk_math_matmul_mop_config_(std::uint8_t ct_dim, std::uint8_t rt_di
  *
  * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
  * values = <LoFi/HiFi2/HiFi3/HiFi4>
- * @tparam EN_X2: Enable matrix multiplication with MXFP_2X mode (double the performance)
+ * @tparam ENABLE_2X_FORMAT: Enable matrix multiplication with MXFP_2X mode (double the performance)
  * @param ct_dim: Number of tiles in the column dimension for a matrix multiply
  * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
  */
-template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool EN_X2>
+template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_2X_FORMAT>
 inline void _llk_math_matmul_di_mop_config_(std::uint8_t ct_dim, std::uint8_t rt_dim)
 {
     // in0 - loaded to SrcB
@@ -304,8 +304,9 @@ inline void _llk_math_matmul_di_mop_config_(std::uint8_t ct_dim, std::uint8_t rt
     constexpr std::uint32_t FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : to_underlying(MATH_FIDELITY_TYPE);
     const bool reuse_a                      = ct_dim >= rt_dim;
 
-    constexpr std::uint32_t replay_buf_len = EN_X2 ? 8 - 1 : 16 - 1; // -1 since the last instruction for the Tile * Tile operation will come out of the MOP
-    if constexpr (EN_X2)
+    constexpr std::uint32_t replay_buf_len =
+        ENABLE_2X_FORMAT ? 8 - 1 : 16 - 1; // -1 since the last instruction for the Tile * Tile operation will come out of the MOP
+    if constexpr (ENABLE_2X_FORMAT)
     {
         load_replay_buf<0, replay_buf_len>(
             // Lambda function to load reply buffer
@@ -363,10 +364,11 @@ inline void _llk_math_matmul_di_mop_config_(std::uint8_t ct_dim, std::uint8_t rt
 
     /* Just choose what is more readable*/
     constexpr static std::uint32_t matmul_op =
-        EN_X2 ? TT_OP_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x6, 0x4, ADDR_MOD_1, 0xE) : // B1[8:15]*A1 srcb=0x6<<2='d24, srca=0x4<<2='d16, dest=0xE<<2='d56
-            TT_OP_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xE, 0xC, ADDR_MOD_1, 0xE);      // B3[8:15]*A3 srcb=0xE<<2='d56, srca=0xC<<2='d48, dest=0xE<<2='d56
+        ENABLE_2X_FORMAT ? TT_OP_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x6, 0x4, ADDR_MOD_1, 0xE)
+                         :                                                     // B1[8:15]*A1 srcb=0x6<<2='d24, srca=0x4<<2='d16, dest=0xE<<2='d56
+            TT_OP_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xE, 0xC, ADDR_MOD_1, 0xE); // B3[8:15]*A3 srcb=0xE<<2='d56, srca=0xC<<2='d48, dest=0xE<<2='d56
     std::uint32_t matmul_op_last;
-    if constexpr (EN_X2)
+    if constexpr (ENABLE_2X_FORMAT)
     {
         matmul_op_last =
             reuse_a ? TT_OP_MVMULDI(p_setrwc::CLR_A, 0x0, 0x6, 0x4, ADDR_MOD_2, 0xE) : TT_OP_MVMULDI(p_setrwc::CLR_B, 0x0, 0x6, 0x4, ADDR_MOD_2, 0xE);
@@ -391,28 +393,28 @@ inline void _llk_math_matmul_di_mop_config_(std::uint8_t ct_dim, std::uint8_t rt
  *
  * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
  * values = <LoFi/HiFi2/HiFi3/HiFi4>
- * @tparam EN_DI: Enable direct indexing matrix multiplication
- * @tparam EN_X2: Enable matrix multiplication with MXFP_2X mode (double the performance)
+ * @tparam ENABLE_DIRECT_INDEXING: Enable direct indexing matrix multiplication
+ * @tparam ENABLE_2X_FORMAT: Enable matrix multiplication with MXFP_2X mode (double the performance)
  * @param ct_dim: Number of tiles in the column dimension for a matrix multiply
  * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
  * @note On the unpack thread, pair with @ref _llk_unpack_matmul_init_ (T0); on the pack thread, pair with @ref _llk_pack_init_ (T2).
  * @note @ref _llk_math_matmul_tile_ or @ref _llk_math_matmul_block_ runs the configured matmul with matching template args.
  */
 
-template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool EN_DI = false, bool EN_X2 = false>
+template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_DIRECT_INDEXING = false, bool ENABLE_2X_FORMAT = false>
 inline void _llk_math_matmul_init_(std::uint8_t ct_dim, std::uint8_t rt_dim)
 {
-    if constexpr (EN_DI)
+    if constexpr (ENABLE_DIRECT_INDEXING)
     {
         // Direct-indexing path. Supports plain DI and DI+X2 (DI+X2 is the original
         // MXFP4_2x matmul implementation).
         _llk_math_matmul_di_addrmod_<MATH_FIDELITY_TYPE>(ct_dim, rt_dim);
-        _llk_math_matmul_di_mop_config_<MATH_FIDELITY_TYPE, EN_X2>(ct_dim, rt_dim);
+        _llk_math_matmul_di_mop_config_<MATH_FIDELITY_TYPE, ENABLE_2X_FORMAT>(ct_dim, rt_dim);
     }
     else
     {
-        _llk_math_matmul_addrmod_<MATH_FIDELITY_TYPE, EN_X2>(ct_dim, rt_dim);
-        _llk_math_matmul_mop_config_<MATH_FIDELITY_TYPE, EN_X2>(ct_dim, rt_dim);
+        _llk_math_matmul_addrmod_<MATH_FIDELITY_TYPE, ENABLE_2X_FORMAT>(ct_dim, rt_dim);
+        _llk_math_matmul_mop_config_<MATH_FIDELITY_TYPE, ENABLE_2X_FORMAT>(ct_dim, rt_dim);
     }
 
     _reset_counters_<p_setrwc::SET_ABD_F>();

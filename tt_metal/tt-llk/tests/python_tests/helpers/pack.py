@@ -759,6 +759,7 @@ def _quantize_fp4_storage_model(scaled_blocks: np.ndarray) -> np.ndarray:
 
     return out
 
+
 def _mxint_block_scale_and_quantize(
     tensor, num_faces, face_r_dim, *, elem_scale: int, elem_max: int, fmt_name: str
 ):
