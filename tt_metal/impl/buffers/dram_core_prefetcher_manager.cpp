@@ -521,7 +521,7 @@ void DramCorePrefetcherManager::enqueue_cq_signal_and_wait(
     for (const auto& range : effective_subset.ranges()) {
         for (const auto& coord : range) {
             TT_FATAL(
-                device_index_by_coord_.find(coord) != device_index_by_coord_.end(),
+                device_index_by_coord_.contains(coord),
                 "WaitForCqOnDramCorePrefetcher target MeshCoordinate {} is not in the mesh this prefetcher was "
                 "started on",
                 coord);
