@@ -26,9 +26,17 @@ std::map<ChipId, std::vector<std::vector<ChipId>>> discover_tunnels_from_mmio_de
     std::map<ChipId, std::vector<std::vector<tt::ChipId>>> tunnels_from_mmio_device = {};
 
     for (const auto& mmio_chip_id : cluster.get_target_mmio_device_ids()) {
+        // In simulation every chip is created as a directly-addressable SimulationChip,
+        // so UMD reports all of them as "target MMIO devices" even when the cluster
+        // descriptor models some chips as topologically remote (e.g. the remote chip of
+        // an N300, which is reached over an ethernet tunnel on real hardware). Tunnel
+        // discovery must only root tunnels at chips that are genuinely MMIO-capable per
+        // the cluster descriptor; remote chips are discovered as tunnel stops below.
+        if (!cluster.get_cluster_description()->is_chip_mmio_capable(mmio_chip_id)) {
+            continue;
+        }
         std::vector<std::vector<ChipId>> tunnels_from_mmio = {};
         const auto& all_eth_connections = cluster.get_cluster_description()->get_ethernet_connections();
-        TT_ASSERT(cluster.get_cluster_description()->is_chip_mmio_capable(mmio_chip_id));
 
         if (!all_eth_connections.contains(mmio_chip_id)) {
             tunnels_from_mmio_device.insert({mmio_chip_id, {}});
