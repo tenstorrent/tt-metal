@@ -58,11 +58,13 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
  * @tparam is_fp32_dest_acc_en: enables FP32 DEST accumulation (skips bf16 RNE for DIV)
  * @tparam ITERATIONS: number of sfpi rows to process (one call per face)
  */
-template <[[maybe_unused]] bool APPROXIMATION_MODE, BinaryOp BINOP, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+template <
+    [[maybe_unused]] bool APPROXIMATION_MODE,
+    BinaryOp BINOP,
+    bool is_fp32_dest_acc_en = false,
+    int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_sfpu_binary(
-    const std::uint32_t dst_index_in0,
-    const std::uint32_t dst_index_in1,
-    const std::uint32_t dst_index_out) {
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(BINOP == BinaryOp::MUL || BINOP == BinaryOp::DIV, "calculate_sfpu_binary only supports MUL and DIV");
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr std::uint32_t dst_tile_size_sfpi = 32;

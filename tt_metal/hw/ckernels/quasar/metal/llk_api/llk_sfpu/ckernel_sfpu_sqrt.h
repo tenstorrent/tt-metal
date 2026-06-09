@@ -13,7 +13,7 @@ namespace sfpu {
 
 template <
     bool APPROXIMATION_MODE,
-    int ITERATIONS = 8,
+    int ITERATIONS = SFPU_ITERATIONS,
     [[maybe_unused]] bool EN_32BIT_DEST,
     [[maybe_unused]] bool FAST_APPROX = false>
 inline void calculate_sqrt() {

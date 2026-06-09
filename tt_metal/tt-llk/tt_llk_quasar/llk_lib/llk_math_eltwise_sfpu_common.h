@@ -13,37 +13,71 @@
 using namespace ckernel;
 using namespace ckernel::math;
 
+/** @brief Configure the SFPU address modes for elementwise ops. */
 inline void _eltwise_sfpu_configure_addrmod_()
 {
     _sfpu_configure_addrmod_();
 }
 
+/**
+ * @brief Begin an SFPU elementwise op on the math thread for the given dest tile.
+ *
+ * @param tile_index: Tile index into the destination register to operate on.
+ * @note Pair with @ref _llk_math_eltwise_sfpu_done_ once the op has run.
+ */
 inline void _llk_math_eltwise_sfpu_start_(const std::uint32_t tile_index)
 {
     _llk_math_sfpu_start_(tile_index);
 }
 
+/**
+ * @brief Finish the current SFPU elementwise op on the math thread.
+ *
+ * @note Call after the @ref _llk_math_eltwise_sfpu_start_ that opened the op.
+ */
 inline void _llk_math_eltwise_sfpu_done_()
 {
     _llk_math_sfpu_done_();
 }
 
+/**
+ * @brief Clear the SrcA/SrcB valid flags after the SFPU has consumed them.
+ *
+ * @tparam SRCS_RD_DONE: Clear the read-valid flags
+ * @tparam SRCS_WR_DONE: Clear the write-valid flags
+ */
 template <bool SRCS_RD_DONE, bool SRCS_WR_DONE>
 inline void _llk_math_eltwise_sfpu_srcs_clear_vlds_()
 {
     _llk_math_sfpu_srcs_clear_vlds_<SRCS_RD_DONE, SRCS_WR_DONE>();
 }
 
+/** @brief Advance the SFPU destination address by one face. */
 inline void _llk_math_eltwise_sfpu_inc_dst_face_addr_()
 {
     _llk_math_sfpu_inc_dst_face_addr_();
 }
 
+/** @brief Initialize the math thread for SFPU elementwise operations. */
 inline void _llk_math_eltwise_sfpu_init_()
 {
     _llk_math_sfpu_init_();
 }
 
+/**
+ * @brief Apply an SFPU op across the dest faces selected by the vector mode.
+ *
+ * Invokes sfpu_func once per active face and advances the dest face address, walking only the
+ * faces the mode covers: RC = all 4 faces, R = faces 0/1 (row vector), C = faces 0/2 (column
+ * vector), None = a single call on the current face.
+ *
+ * @tparam Callable: Type of the per-face SFPU functor
+ * @tparam Args: Argument types forwarded to the functor
+ * @param sfpu_func: SFPU op to run on each selected face
+ * @param vector_mode: Faces to cover, values = <RC/R/C/None>
+ * @param args: Arguments forwarded to sfpu_func
+ * @todo Revisit vector mode handling — tracked in tt-metal issue #36281.
+ */
 template <typename Callable, typename... Args>
 inline __attribute__((always_inline)) void _llk_math_eltwise_sfpu_apply_vector_mode_(Callable&& sfpu_func, VectorMode vector_mode, Args&&... args)
 {
@@ -88,7 +122,11 @@ inline __attribute__((always_inline)) void _llk_math_eltwise_sfpu_apply_vector_m
 }
 
 /**
- * @brief Determines the stochround conversion type based on source and cast data formats
+ * @brief Determine the stochastic-rounding conversion mode for a source -> cast format pair.
+ *
+ * @tparam SRC_FMT: Source data format
+ * @tparam CAST_FMT: Target (cast) data format
+ * @return sfp_stochrnd_mod selector for the conversion.
  */
 template <DataFormat SRC_FMT, DataFormat CAST_FMT>
 inline constexpr std::uint32_t _sfpu_stochround_conversion_()
@@ -130,8 +168,11 @@ inline constexpr std::uint32_t _sfpu_stochround_conversion_()
 }
 
 /**
- * @brief Compile-time sfpmem type parameter from DataFormat.
- * @see _sfpu_sfpmem_type_(DataFormat) for the runtime equivalent.
+ * @brief Compile-time sfpmem type selector from a DataFormat.
+ *
+ * @tparam FMT: Data format to map
+ * @return sfpmem type parameter for FMT.
+ * @note Runtime equivalent: @ref _sfpu_sfpmem_type_. Keep both in sync when adding a format.
  */
 template <DataFormat FMT>
 inline constexpr std::uint32_t _sfpu_sfpmem_type_()
@@ -174,6 +215,9 @@ inline constexpr std::uint32_t _sfpu_sfpmem_type_()
  * Use for any DataFormat-driven path (unpack dst, pack src, reg_data_format, etc.). Unknown
  * values return sfpmem::DEFAULT (ISA: HW may derive format from ALU_FORMAT_SPEC_REG / ACC_CTRL).
  * When adding a format, update this switch and the template above together.
+ *
+ * @param fmt: Data format to map
+ * @return sfpmem type parameter, or sfpmem::DEFAULT for unknown formats.
  */
 inline std::uint32_t _sfpu_sfpmem_type_(DataFormat fmt)
 {
@@ -197,7 +241,12 @@ inline std::uint32_t _sfpu_sfpmem_type_(DataFormat fmt)
     }
 }
 
-/** @brief Same as _sfpu_sfpmem_type_(DataFormat) for raw enum underlying values (e.g. UInt16 = 130). */
+/**
+ * @brief Same as _sfpu_sfpmem_type_(DataFormat) for raw enum underlying values (e.g. UInt16 = 130).
+ *
+ * @param data_format_raw: Underlying integer value of a DataFormat enumerator
+ * @return sfpmem type parameter, or sfpmem::DEFAULT for unknown formats.
+ */
 inline std::uint32_t _sfpu_sfpmem_type_(std::uint32_t data_format_raw)
 {
     return _sfpu_sfpmem_type_(static_cast<DataFormat>(data_format_raw));

@@ -38,7 +38,11 @@ inline void llk_math_eltwise_binary_sfpu_gt_int_init() {
  * @param odst: The index of the tile in DST register buffer to use as output
  * @param vector_mode: Vector mode (must be VectorMode::RC)
  */
-template <bool APPROXIMATE, DataFormat DATA_FORMAT, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false>
+template <
+    bool APPROXIMATE,
+    DataFormat DATA_FORMAT,
+    int ITERATIONS = SFPU_ITERATIONS,
+    bool SIGN_MAGNITUDE_FORMAT = false>
 inline void llk_math_eltwise_binary_sfpu_gt_int(
     std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     static_assert(DATA_FORMAT == DataFormat::Int32, "Quasar SFPU gt_int currently supports Int32 only");
