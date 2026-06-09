@@ -189,8 +189,23 @@ class Qwen35Model:
         for layer in self.layers:
             x = layer.forward(x, cos=cos, sin=sin, mode="prefill", chunk_size=128, valid_len=valid_len)
 
-        x = self.norm(x, mode=Mode.PREFILL)  # DistributedNorm → full [1,1,T,dim]
-        x_last = x[:, :, valid_len - 1 : valid_len, :]
+        # Select the last real position (valid_len-1) via a one-hot matmul BEFORE the norm. A bare
+        # slice `x[:, :, valid_len-1, :]` of the full [1,1,T,dim] tensor returns a GARBAGE logit at
+        # long T (>=~49k) — a non-tile-aligned single-row slice of a very long tensor. The one-hot
+        # matmul mirrors the robust _masked_bucket_logits_tp path (and norms only the selected row).
+        sel = torch.zeros(1, 1, 1, T, dtype=torch.float32)
+        sel[0, 0, 0, valid_len - 1] = 1.0
+        sel_tt = ttnn.from_torch(
+            sel,
+            dtype=x.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+        )
+        x_last = ttnn.matmul(sel_tt, x)  # [1,1,1,dim_frac]
+        ttnn.deallocate(sel_tt)
+        x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
+        x_last = self.norm(x_last, mode=Mode.PREFILL)  # DistributedNorm on the single selected row
         logits = ttnn.linear(x_last, self.lm_head_weight)  # replicated lm_head → full vocab (same on all devices)
         # Logits are replicated across the mesh; take one replica → torch [vocab_size].
         lt = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
@@ -858,8 +873,13 @@ class Qwen35Model:
             x = x_new
         return x
 
-    def _forward_prefill_chunk_masked_tp(self, token_buf, valid_len, chunk_start, page_table, bucket):
+    def _forward_prefill_chunk_masked_tp(self, token_buf, valid_len, chunk_start, page_table, bucket, flex_sdpa=True):
         """TP (num_devices>1) masked fixed-bucket single-chunk prefill forward.
+
+        flex_sdpa=True (default, the serving path) drives the full-attention SDPA via the FLEXIBLE
+        chunked path (device chunk_start_idx tensor, qk_chunk=64). flex_sdpa=False uses the INT
+        chunk_start path (host scalar, qk_chunk=256 — the reference 27B's path); a debug/oracle lever
+        to isolate the flexible-SDPA kernel at chunk_start>=32768 (see test_tp_chunked_prefill_pcc_sweep).
 
         Mirrors the single-device _forward_prefill_chunk_masked but: (a) builds cos/sin in
         rope_tp format ([1,1,bucket,rope_dim], replicated) for positions
@@ -903,11 +923,15 @@ class Qwen35Model:
         chunk_pt = ttnn.from_torch(
             page_table[:, blk0:blkN].contiguous(), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
         )
-        csi_tensor = ttnn.from_torch(
-            torch.tensor([chunk_start], dtype=torch.int32),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
+        csi_tensor = (
+            ttnn.from_torch(
+                torch.tensor([chunk_start], dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+            )
+            if flex_sdpa
+            else None
         )
         for layer in self.layers:
             if layer.is_full_attention:
@@ -1165,7 +1189,9 @@ class Qwen35Model:
         logits = ttnn.linear(x_last, self.lm_head_weight)
         return logits.cpu()
 
-    def _prefill_chunked_eager_tp(self, token_ids, page_table, actual_len, num_full, chunk_size, tail_real):
+    def _prefill_chunked_eager_tp(
+        self, token_ids, page_table, actual_len, num_full, chunk_size, tail_real, flex_sdpa=True
+    ):
         """TP long-prompt prefill (>chunk_size). Processes each full chunk_size-token chunk
         EAGERLY through the masked path at bucket=chunk_size (valid_len=chunk_size → no mask),
         carrying the GDN recurrent + conv state across chunks in the persistent buffers, then
@@ -1186,7 +1212,7 @@ class Qwen35Model:
                 ttnn.deallocate(last_hidden)
             # Full chunk: valid_len == bucket == chunk_size (no padding/masking).
             last_hidden = self._forward_prefill_chunk_masked_tp(
-                token_ids[:, cs : cs + chunk_size], chunk_size, cs, page_table, chunk_size
+                token_ids[:, cs : cs + chunk_size], chunk_size, cs, page_table, chunk_size, flex_sdpa=flex_sdpa
             )
             ttnn.synchronize_device(self.device)
         if tail_real > 0:
@@ -1280,8 +1306,10 @@ class Qwen35Model:
             ttnn.copy_host_to_device_tensor(sin_host, self._chunk_sin_buf)
 
             ttnn.execute_trace(self.device, self._chunked_trace_id, cq_id=0, blocking=False)
+            self._dbg_gdn_stats(f"prefill chunk={c} endpos={cs + chunk_size}")
 
         ttnn.synchronize_device(self.device)
+        self._dbg_gdn_stats("prefill after-full-chunks")
 
         # ---- Final partial chunk via the masked fixed-bucket path (rounds the tail to a warmed
         #      bucket + masks the GDN; chunk_start = cs skips the state reset so the carried
@@ -1307,6 +1335,44 @@ class Qwen35Model:
                 layer.attention.reset_cache()
             else:
                 layer.attention.reset_state(batch_size)
+
+    def _dbg_gdn_stats(self, tag, layers="sample"):
+        """Env-gated (QWEN35_DEBUG_LAYERS) systematic probe of GDN recurrent-state health.
+
+        Logs |rec_state|, abs-max, NaN count (and the last conv-state norm) for sampled GDN
+        layers so we can SEE where a long-context run goes wrong instead of guessing:
+          * across prefill chunks, a CORRECT carry accumulates then plateaus; a BROKEN carry
+            (each chunk rebuilt from zero) is roughly flat from chunk 0;
+          * a NaN / abs-max explosion pinpoints the exact chunk/step and layer that breaks.
+        Does a device sync + small host readback only when enabled (debug-only cost).
+        """
+        import os
+
+        if not os.environ.get("QWEN35_DEBUG_LAYERS"):
+            return
+        gdn = [(i, l.attention) for i, l in enumerate(self.layers) if not l.is_full_attention]
+        if not gdn:
+            return
+        if layers == "all":
+            sel = list(range(len(gdn)))
+        else:
+            sel = sorted(set([0, len(gdn) // 2, len(gdn) - 1]))
+        ttnn.synchronize_device(self.device)
+        comp = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0) if self.num_devices > 1 else None
+        msgs = []
+        for si in sel:
+            lnum, dn = gdn[si]
+            if getattr(dn, "rec_state", None) is None:
+                continue
+            rec = ttnn.to_torch(dn.rec_state, mesh_composer=comp).float()
+            conv_n = ""
+            if getattr(dn, "conv_states", None):
+                c = ttnn.to_torch(dn.conv_states[-1], mesh_composer=comp).float()
+                conv_n = f" |conv|={c.norm():.2f}"
+            msgs.append(
+                f"L{lnum} |rec|={rec.norm():.3f} amax={rec.abs().max():.3f} nan={int(rec.isnan().sum())}{conv_n}"
+            )
+        logger.info(f"[GDNDBG {tag}] " + " || ".join(msgs))
 
     def _reset_gdn_state_for_new_sequence(self):
         """Zero the GDN recurrent + conv state at the start of every new sequence.

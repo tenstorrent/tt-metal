@@ -2,10 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tensor-parallel (TP>1) full-attention path for Qwen3.5.
 
-Ported from models/demos/qwen35_27b/tt/attention.py forward_decode, with two
-corrections vs that reference:
-  - q_norm/k_norm are zero-centered (HF Qwen3_5RMSNorm = output*(1+weight)); the
-    27B omitted the +1.
+Ported from models/demos/qwen35_27b/tt/attention.py forward_decode.
+  - q_norm/k_norm: loaded WITHOUT a +1 offset (see load_attention_weights_tp). HF
+    Qwen3_5RMSNorm is zero-centered (output*(1+weight)), but the Qwen3.5-27B-FP8
+    checkpoint stores q_norm/k_norm as the already-effective (1+w) scale, so adding
+    +1 double-counts and over-scales Q/K, collapsing 64k retrieval. Matches the
+    reference (which also omits it). An earlier version wrongly "corrected" this by
+    adding +1 — that was the 64k long-context degeneration bug.
   - weights are kept INTERLEAVED per device (no DRAM-width-sharding) and matmuls
     use ttnn's auto program config — same robust pattern validated for the MLP.
 
@@ -26,9 +29,9 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     state_dict keys (from the FP8 loader / 9B substate): q_proj/k_proj/v_proj/
     o_proj/q_norm/k_norm. q_proj is the fused per-head [Q,gate] projection.
     """
-    if cache_dir is not None:
-        import os
+    import os
 
+    if cache_dir is not None:
         os.makedirs(cache_dir, exist_ok=True)
 
     def c(n):
@@ -70,8 +73,17 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         dtype=ttnn.bfloat8_b,
     )
     # Zero-centered (+1) per-head QK norms, replicated
-    tw["q_norm"] = tpc.replicate(state_dict["q_norm.weight"].to(torch.float32) + 1.0, mesh, c("q_norm"))
-    tw["k_norm"] = tpc.replicate(state_dict["k_norm.weight"].to(torch.float32) + 1.0, mesh, c("k_norm"))
+    # Load q_norm/k_norm WITHOUT a +1 offset. The Qwen3.5-27B-FP8 checkpoint stores these as the
+    # already-effective (1+w) scale (weight mean ~+0.75, NOT the raw zero-centered ~0), so adding
+    # another +1 double-counts and over-scales Q/K by ~2.3x -> attention scores ~5x too large ->
+    # softmax over-sharpens -> long-context (64k) retrieval collapses into repetition (length-
+    # dependent; tolerable at short ctx). The working reference omits the +1 (qwen35_27b
+    # model_config.py:854); the 9B's bf16 checkpoint stores raw zero-centered weights, so its
+    # separate single-device path (attention/weights.py) correctly DOES add +1. Don't cache: the
+    # tiny [1,1,128] tensors recompute for free and the checkpoint cache dir is read-only (and may
+    # hold a stale +1 copy).
+    tw["q_norm"] = tpc.replicate(state_dict["q_norm.weight"].to(torch.float32), mesh, None)
+    tw["k_norm"] = tpc.replicate(state_dict["k_norm.weight"].to(torch.float32), mesh, None)
     return tw
 
 
@@ -391,8 +403,15 @@ class TPAttention:
         else:
             cap = 256 if S >= 2048 else 64
             qk_chunk = cap if not chunk_start_idx else min(cap, chunk_start_idx & -chunk_start_idx)
+        # Use the FULL Blackhole worker grid (13x10=130 on P150) to match the reference 27B and
+        # avoid the WH-era (8,8)=64-core cap (~49% SDPA utilization on BH). NOTE: this is a PERF
+        # alignment only — verified bit-identical to (8,8) at long context (flash attention is
+        # grid-invariant), so it does NOT affect correctness. See test_tp_chunked_prefill_pcc_sweep.
         sdpa_cfg = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=qk_chunk, k_chunk_size=qk_chunk
+            compute_with_storage_grid_size=self.mesh.compute_with_storage_grid_size(),
+            exp_approx_mode=False,
+            q_chunk_size=qk_chunk,
+            k_chunk_size=qk_chunk,
         )
 
         # Pad the SDPA page table with zero blocks so (a) K covers a padded/short Q
