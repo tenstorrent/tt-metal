@@ -1,21 +1,21 @@
 # Kernel Arguments as Function & Template Parameters
 
-**Status:** Phase 1 — design + working prototype.
-**Goal:** let a kernel declare its arguments as ordinary C++ parameters, with no `kernel_main`, no `get_arg`, and no hand-tracked L1 indices.
-
 ## Args in Metal 2.0 today
 
-Metal 2.0 gives kernel arguments **names**. The host registers them — compile-time args
-(`named_compile_args`), per-core runtime args (`runtime_arg_names`), and common runtime args
-(`common_runtime_arg_names`) — and the JIT emits a per-kernel `kernel_args_generated.h` with
-one `args::<name>` accessor each. The kernel reads them through a single overloaded
-`get_arg(args::<name>)`, which covers all three kinds: **CTA** (compile-time, `constexpr`),
-**RTA** (per-core runtime), **CRTA** (common runtime). What's left is boilerplate: the kernel
-still hand-writes `kernel_main()` and one `get_arg` call per argument, by name.
+Metal 2.0 gives kernel arguments **names**:
+
+- **Host registers** them by kind — compile-time, per-core runtime, common runtime.
+- **JIT emits** a per-kernel `kernel_args_generated.h` declaring an `args::<name>` accessor for
+  every registered argument (e.g. `args::src_addr`), typed by its kind.
+- **Kernel reads** them via a single overloaded `get_arg(args::<name>)`, covering all three
+  kinds: **CTA** (compile-time, `constexpr`), **RTA** (per-core runtime), **CRTA** (common runtime).
+
+What's left is boilerplate: the kernel still hand-writes `kernel_main()` and one `get_arg` call
+per argument, by name.
 
 ## Proposal
 
-Remove that last step. The user writes a plain typed function whose **parameters are the
+Remove the hand-written part. The user writes a plain typed function whose **parameters are the
 arguments**; the `kernel_main()` that fetches them is generated.
 
 ## C++ syntax carries the argument kinds
