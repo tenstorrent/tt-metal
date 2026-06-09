@@ -58,6 +58,12 @@ def ttnn_group_norm(*args, **kwargs):
     return _run_twice(ttnn.group_norm, *args, **kwargs)
 
 
+def ttnn_group_norm_in_place(input_tensor, *args, **kwargs):
+    # ``ttnn.group_norm`` defaults to ``inplace=True``, which mutates ``input_tensor``; clone
+    # the input before each run so both runs see identical (unmutated) inputs.
+    return _run_twice_in_place(ttnn.group_norm, input_tensor, *args, **kwargs)
+
+
 def ttnn_layer_norm_pre_all_gather(*args, **kwargs):
     return _run_twice(ttnn.layer_norm_pre_all_gather, *args, **kwargs)
 

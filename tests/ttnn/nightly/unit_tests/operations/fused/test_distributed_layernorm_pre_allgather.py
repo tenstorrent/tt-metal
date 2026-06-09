@@ -16,7 +16,6 @@ from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import (
     ttnn_layer_norm_pre_all_gather,
     ttnn_rms_norm_pre_all_gather,
     ttnn_layer_norm_post_all_gather,
-    ttnn_layer_norm,
 )
 
 

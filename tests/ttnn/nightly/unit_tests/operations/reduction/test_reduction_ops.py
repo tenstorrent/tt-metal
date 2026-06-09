@@ -19,7 +19,12 @@ from tests.ttnn.nightly.unit_tests.operations.reduction.utility_functions import
     ttnn_argmax,
     ttnn_moe,
     ttnn_sampling,
+    ttnn_topk_preallocated,
+    ttnn_argmax_preallocated,
+    ttnn_moe_preallocated,
+    ttnn_sampling_preallocated,
     TTNN_REDUCTION_WRAPPERS,
+    TTNN_REDUCTION_PREALLOCATED_WRAPPERS,
 )
 from loguru import logger
 
@@ -46,7 +51,7 @@ def _run_topk_with_preallocated(input_tensor, k, dim, device, ttnn_result):
         device=device,
         memory_config=ttnn_result[1].memory_config(),
     )
-    ttnn_topk(input_tensor, k, dim=dim, output_tensor=(prealloc_values, prealloc_indices))
+    ttnn_topk_preallocated((prealloc_values, prealloc_indices), input_tensor, k, dim=dim)
     return (
         ttnn.to_torch(ttnn.from_device(prealloc_values)),
         ttnn.to_torch(ttnn.from_device(prealloc_indices)),
@@ -66,11 +71,11 @@ def _run_argmax_with_preallocated(input_tensor, dim, keepdim, device, ttnn_resul
         device=device,
         memory_config=ttnn_result.memory_config(),
     )
-    ttnn_argmax(input_tensor, dim=dim, keepdim=keepdim, output_tensor=prealloc_output)
+    ttnn_argmax_preallocated(prealloc_output, input_tensor, dim=dim, keepdim=keepdim)
     return ttnn.to_torch(ttnn.from_device(prealloc_output))
 
 
-def _run_accumulation_with_preallocated(ttnn_op, input_tensor, dim, device, ttnn_result_tensor):
+def _run_accumulation_with_preallocated(prealloc_op, input_tensor, dim, device, ttnn_result_tensor):
     """
     Helper function that calls a cumulative op (cumsum/cumprod) with preallocated output tensor,
     whose shape is determined by the ttnn_result obtained from a previous run without
@@ -83,7 +88,7 @@ def _run_accumulation_with_preallocated(ttnn_op, input_tensor, dim, device, ttnn
         device=device,
         memory_config=ttnn_result_tensor.memory_config(),
     )
-    ttnn_op(input_tensor, dim, out=prealloc_output)
+    prealloc_op(prealloc_output, input_tensor, dim)
     return ttnn.to_torch(ttnn.from_device(prealloc_output))
 
 
@@ -99,7 +104,7 @@ def _run_moe_with_preallocated(input_tensor, expert_mask_tensor, topk_mask_tenso
         device=device,
         memory_config=ttnn_result.memory_config(),
     )
-    ttnn_moe(input_tensor, expert_mask_tensor, topk_mask_tensor, k, output_tensor=prealloc_output)
+    ttnn_moe_preallocated(prealloc_output, input_tensor, expert_mask_tensor, topk_mask_tensor, k)
     return ttnn.to_torch(ttnn.from_device(prealloc_output))
 
 
@@ -117,14 +122,14 @@ def _run_sampling_with_preallocated(
         device=device,
         memory_config=ttnn_result.memory_config(),
     )
-    ttnn_sampling(
+    ttnn_sampling_preallocated(
+        prealloc_output,
         input_values,
         input_indices,
         k=k_tensor,
         p=p_tensor,
         temp=temp_tensor,
         seed=seed,
-        output_tensor=prealloc_output,
     )
     return ttnn.to_torch(ttnn.from_device(prealloc_output))
 
@@ -1097,7 +1102,9 @@ def test_accumulation(device, tensor_shape, dim, dtype, layout, op):
         ), f"Shape mismatch on 0-volume result: torch: {torch_result.shape}, ttnn: {ttnn_result_in_torch.shape}"
 
         # Repeat the test with preallocated output tensor.
-        prealloc_result = _run_accumulation_with_preallocated(ttnn_op, ttnn_tensor, dim, device, ttnn_result)
+        prealloc_result = _run_accumulation_with_preallocated(
+            TTNN_REDUCTION_PREALLOCATED_WRAPPERS[op], ttnn_tensor, dim, device, ttnn_result
+        )
         # The two methods should produce identical results.
         assert (
             torch_result.shape == prealloc_result.shape
@@ -1113,7 +1120,9 @@ def test_accumulation(device, tensor_shape, dim, dtype, layout, op):
     assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result_in_torch}"
 
     # Repeat the test with preallocated output tensor.
-    prealloc_result = _run_accumulation_with_preallocated(ttnn_op, ttnn_tensor, dim, device, ttnn_result)
+    prealloc_result = _run_accumulation_with_preallocated(
+        TTNN_REDUCTION_PREALLOCATED_WRAPPERS[op], ttnn_tensor, dim, device, ttnn_result
+    )
     # The two methods should produce identical results.
     assert torch.equal(
         prealloc_result, ttnn_result_in_torch

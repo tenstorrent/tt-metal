@@ -440,7 +440,7 @@ def run_test_matmul_in1_dram_sharded_mm_chain(
         compute_kernel_config=compute_kernel_config,
     )
 
-    for _ in range(200):
+    for _ in range(100):
         output_t = ttnn_matmul(
             in0_t,
             in1_t,

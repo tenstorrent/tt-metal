@@ -9,7 +9,6 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.nightly.unit_tests.operations.matmul.utility_functions import ttnn_attn_matmul, ttnn_group_attn_matmul
-import ttnn
 
 
 def generate_input_shapes():

@@ -31,8 +31,8 @@ def _assert_outputs_equal(output1, output2):
         for a, b in zip(output1, output2):
             _assert_outputs_equal(a, b)
         return
-    a = ttnn.to_torch(output1)
-    b = ttnn.to_torch(output2)
+    a = output1 if isinstance(output1, torch.Tensor) else ttnn.to_torch(output1)
+    b = output2 if isinstance(output2, torch.Tensor) else ttnn.to_torch(output2)
     assert a.shape == b.shape, f"shape mismatch between the two runs: {a.shape} vs {b.shape}"
     if a.is_floating_point():
         both_nan = a.isnan() & b.isnan()
@@ -41,11 +41,41 @@ def _assert_outputs_equal(output1, output2):
         assert torch.equal(a, b), "the two runs produced different outputs"
 
 
+def _snapshot(output):
+    """Deep-copy ``output`` to host so it survives a later in-place overwrite.
+
+    Returns ``None`` for ``None``, recurses into tuples/lists, and otherwise converts the
+    (ttnn) tensor to a cloned torch tensor.
+    """
+    if output is None:
+        return None
+    if isinstance(output, (tuple, list)):
+        return type(output)(_snapshot(x) for x in output)
+    return ttnn.to_torch(output).clone()
+
+
 def _run_twice(op, *args, **kwargs):
     output1 = op(*args, **kwargs)
     output2 = op(*args, **kwargs)
     _assert_outputs_equal(output1, output2)
     return output1
+
+
+def _run_twice_into(op, prealloc, out_kwarg, *args, **kwargs):
+    """Run ``op`` twice writing into the preallocated buffer(s) ``prealloc`` (passed via the
+    ``out_kwarg`` keyword, e.g. ``output_tensor`` or ``out``), asserting both runs leave
+    identical contents in the buffer.
+
+    Both runs target the same memory, so comparing the live buffer to itself (or comparing
+    return values that alias it) would be vacuous. Instead the buffer is snapshotted to host
+    after the first run, before the second run overwrites it, and the snapshot is compared
+    against the buffer's contents after the second run.
+    """
+    op(*args, **{out_kwarg: prealloc}, **kwargs)
+    snapshot1 = _snapshot(prealloc)
+    op(*args, **{out_kwarg: prealloc}, **kwargs)
+    _assert_outputs_equal(snapshot1, prealloc)
+    return prealloc
 
 
 def ttnn_sum(*args, **kwargs):
@@ -104,6 +134,33 @@ def ttnn_deepseek_grouped_gate(*args, **kwargs):
     return _run_twice(ttnn.experimental.deepseek_grouped_gate, *args, **kwargs)
 
 
+# Preallocated-output variants: each runs the op twice into the same preallocated buffer and
+# asserts determinism by snapshotting the buffer between runs. ``prealloc`` is the buffer (or
+# tuple of buffers, e.g. ``ttnn.topk`` -> (values, indices)) and is returned after both runs.
+def ttnn_topk_preallocated(prealloc, *args, **kwargs):
+    return _run_twice_into(ttnn.topk, prealloc, "output_tensor", *args, **kwargs)
+
+
+def ttnn_argmax_preallocated(prealloc, *args, **kwargs):
+    return _run_twice_into(ttnn.argmax, prealloc, "output_tensor", *args, **kwargs)
+
+
+def ttnn_cumsum_preallocated(prealloc, *args, **kwargs):
+    return _run_twice_into(ttnn.cumsum, prealloc, "out", *args, **kwargs)
+
+
+def ttnn_cumprod_preallocated(prealloc, *args, **kwargs):
+    return _run_twice_into(ttnn.cumprod, prealloc, "out", *args, **kwargs)
+
+
+def ttnn_moe_preallocated(prealloc, *args, **kwargs):
+    return _run_twice_into(ttnn.moe, prealloc, "output_tensor", *args, **kwargs)
+
+
+def ttnn_sampling_preallocated(prealloc, *args, **kwargs):
+    return _run_twice_into(ttnn.sampling, prealloc, "output_tensor", *args, **kwargs)
+
+
 # Maps the parametrized ``op`` name to its determinism wrapper, for tests that
 # dispatch dynamically (previously via ``getattr(ttnn, op)``).
 TTNN_REDUCTION_WRAPPERS = {
@@ -116,4 +173,10 @@ TTNN_REDUCTION_WRAPPERS = {
     "var": ttnn_var,
     "cumsum": ttnn_cumsum,
     "cumprod": ttnn_cumprod,
+}
+
+# Same mapping for the preallocated-output (``out=``) accumulation variants.
+TTNN_REDUCTION_PREALLOCATED_WRAPPERS = {
+    "cumsum": ttnn_cumsum_preallocated,
+    "cumprod": ttnn_cumprod_preallocated,
 }
