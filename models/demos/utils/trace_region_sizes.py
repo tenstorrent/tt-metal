@@ -30,6 +30,26 @@ def load_trace_region_sizes() -> dict[str, Any]:
     return data
 
 
+def is_trace_region_size_placeholder(trace_region_size: int | None) -> bool:
+    """Return True when a test did not set a custom trace region size."""
+    return trace_region_size is None or trace_region_size == DEFAULT_TRACE_REGION_SIZE
+
+
+def should_apply_trace_region_override(device_params: dict, override_trace_region_size: int | None) -> bool:
+    """Return True when centralized YAML should replace the test's trace region size."""
+    if not override_trace_region_size:
+        return False
+    return is_trace_region_size_placeholder(device_params.get("trace_region_size"))
+
+
+def apply_trace_region_override(device_params: dict, override_trace_region_size: int | None) -> int | None:
+    """Apply centralized trace region size unless the test set a custom value."""
+    if should_apply_trace_region_override(device_params, override_trace_region_size):
+        device_params["trace_region_size"] = override_trace_region_size
+        return override_trace_region_size
+    return device_params.get("trace_region_size")
+
+
 def resolve_trace_region_size(model_name: str | None, sku: str | None) -> int | None:
     """Resolve trace region size in bytes for a model/SKU pair, or None if not configured."""
     if not model_name or not sku:

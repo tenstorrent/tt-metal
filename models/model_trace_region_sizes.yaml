@@ -16,6 +16,8 @@ sizes:
         trace_region_size: 52000000
       bh_p300:
         trace_region_size: 52000000
+      p300x2:
+        trace_region_size: 52000000
 
   llama3.1-70b:
     aliases: ["Llama-3.1-70B", "meta-llama/Llama-3.1-70B-Instruct"]
