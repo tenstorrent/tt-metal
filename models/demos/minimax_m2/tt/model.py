@@ -57,7 +57,10 @@ def create_rope_setup(
         RotarySetup: Configured rotary setup instance with cos/sin matrices
     """
     max_seq_len = getattr(hf_config, "max_position_embeddings", 131072)
-    rope_scaling = rope_scaling_model_factory(getattr(hf_config, "rope_scaling", None))
+    # MiniMax-M2 has no rope_scaling; rope_scaling_model_factory requires a dict,
+    # so only build it when params are present, else pass None (plain RoPE).
+    rope_scaling_params = getattr(hf_config, "rope_scaling", None)
+    rope_scaling = rope_scaling_model_factory(rope_scaling_params) if rope_scaling_params else None
     batch_size = max_local_batch_size * mesh_device.shape[0] if users_row_sharded else max_local_batch_size
 
     # MiniMax-M2 uses PARTIAL rotary: only the first `rotary_dim` (64) of each
