@@ -1022,17 +1022,28 @@ class Pi0_5OptionCVLMSliceParent:
             k_rope = ttnn.experimental.rotary_embedding(k, cos_slice, sin_slice)
             ttnn.deallocate(cos_slice)
             ttnn.deallocate(sin_slice)
-            # Q, K now have RoPE applied. (Real attention would now do SDPA;
-            # we still stub it with Q→O for this validation.)
-            # Reshape Q back to [1, 1, M, num_heads*head_dim] for the O matmul.
-            q_rope_flat = ttnn.permute(q_rope, (0, 2, 1, 3))
-            q_rope_flat = ttnn.reshape(q_rope_flat, (1, 1, seq_len, num_heads * head_dim))
+            # Reshape V to heads layout for SDPA: [1, num_kv_heads, M, head_dim]
+            v = ttnn.reshape(v_flat, (1, seq_len, num_kv_heads, head_dim))
+            v = ttnn.permute(v, (0, 2, 1, 3))
+            ttnn.deallocate(v_flat)
+            # 4c. Real SDPA: causal attention over Q, K_rope, V
+            attn = ttnn.transformer.scaled_dot_product_attention(
+                q_rope,
+                k_rope,
+                v,
+                is_causal=True,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
             ttnn.deallocate(q_rope)
             ttnn.deallocate(k_rope)
-            ttnn.deallocate(v_flat)
-            # 5. O matmul on Q-with-RoPE
-            attn_out = ttnn.linear(q_rope_flat, o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(q_rope_flat)
+            ttnn.deallocate(v)
+            # 4d. Reshape attention output back to flat: [1, 1, M, num_heads*head_dim]
+            attn_flat = ttnn.permute(attn, (0, 2, 1, 3))
+            attn_flat = ttnn.reshape(attn_flat, (1, 1, seq_len, num_heads * head_dim))
+            ttnn.deallocate(attn)
+            # 5. O matmul on SDPA output
+            attn_out = ttnn.linear(attn_flat, o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(attn_flat)
             # 6. Residual
             h_new = ttnn.add(h, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(attn_out)
