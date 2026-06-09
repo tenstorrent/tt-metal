@@ -113,7 +113,10 @@ def is_format_combination_outlier(
     )
 
 
-_SRCAB_ONLY_FORMATS = {DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B}
+_SRCAB_ONLY_FORMATS = {
+    DataFormat.MxFp4_2x_A: ChipArchitecture.QUASAR,
+    DataFormat.MxFp4_2x_B: ChipArchitecture.QUASAR,
+}
 
 
 def infer_unpack_out(
@@ -159,7 +162,12 @@ def infer_unpack_out(
         if register_format_hint not in _SRCAB_ONLY_FORMATS:
             raise ValueError(
                 f"register_format_hint={register_format_hint.name} is not a supported "
-                f"SrcA/SrcB-only register format. Expected MxFp4_2x_A or MxFp4_2x_B."
+                f"SrcA/SrcB-only register format."
+            )
+        if _SRCAB_ONLY_FORMATS[register_format_hint] != get_chip_architecture():
+            raise ValueError(
+                f"{register_format_hint.name} is only valid on "
+                f"{_SRCAB_ONLY_FORMATS[register_format_hint].value}"
             )
         if input_format == DataFormat.MxFp4 and register_format_hint not in [
             DataFormat.MxFp4_2x_A,
