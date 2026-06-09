@@ -28,7 +28,7 @@ FORCE_INLINE void transpose_and_pack(
     // Pack using the DESTINATION CB format: input_cb may be bf16 (higher-precision
     // intermediate) while dest_cb is the original bfp8/bfp4 output format.
     reconfig_data_format_srca(input_cb_index);
-    transpose_wh_init_short(input_cb_index);
+    transpose_init(input_cb_index);
     pack_reconfig_data_format(dest_cb_index);
 
     // Wait for all tiles to be available (double-buffered, hence 2 * total_tiles)
@@ -38,7 +38,7 @@ FORCE_INLINE void transpose_and_pack(
         dest_cb.reserve_back(1);
 
         // Transpose tile from WH to HW format
-        transpose_wh_tile(input_cb_index, i, 0);
+        transpose_tile(input_cb_index, i, 0);
 
         // Pack transposed tile to destination
         tile_regs_commit();
@@ -82,10 +82,10 @@ FORCE_INLINE void pack_results(const uint32_t cb0, const uint32_t cb1, const uin
  */
 FORCE_INLINE void read_cb_and_transpose(const uint32_t cb, const uint32_t base_offset) {
     reconfig_data_format_srca(cb);
-    transpose_wh_init_short(cb);
+    transpose_init(cb);
 
     // Transpose first tile to destination register
-    transpose_wh_tile(cb, 0, base_offset);
+    transpose_tile(cb, 0, base_offset);
 }
 
 /**

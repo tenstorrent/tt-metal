@@ -230,14 +230,14 @@ void top_k() {
             index_cb.wait_front(2);
 
             reconfig_data_format_srca(input_cb_index);
-            transpose_wh_init_short(input_cb_index);
-            transpose_wh_tile(input_cb_index, 0, 0);
-            transpose_wh_tile(input_cb_index, 1, 1);
+            transpose_init(input_cb_index);
+            transpose_tile(input_cb_index, 0, 0);
+            transpose_tile(input_cb_index, 1, 1);
 
             reconfig_data_format_srca(index_cb_index);
-            transpose_wh_init_short(index_cb_index);
-            transpose_wh_tile(index_cb_index, 0, 2);
-            transpose_wh_tile(index_cb_index, 1, 3);
+            transpose_init(index_cb_index);
+            transpose_tile(index_cb_index, 0, 2);
+            transpose_tile(index_cb_index, 1, 3);
 
             // llk_topk_sort -> inplace
             ckernel::topk_local_sort(0, (int)ascending, logk - 1);
@@ -318,13 +318,13 @@ void top_k() {
 
         // transpose value tiles and pack into output buffer
         reconfig_data_format_srca(input_transposed_cb_index);
-        transpose_wh_init_short(input_transposed_cb_index);
+        transpose_init(input_transposed_cb_index);
         pack_reconfig_data_format(input_transposed_cb_index);
         input_transposed_cb.wait_front(Wt);
         for (uint32_t i = 0; i < Kt; ++i) {
             tile_regs_acquire();
             values_cb.reserve_back(1);
-            transpose_wh_tile(input_transposed_cb_index, i, 0);
+            transpose_tile(input_transposed_cb_index, i, 0);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(0, values_cb_index);
@@ -335,13 +335,13 @@ void top_k() {
 
         // transpose index tiles and pack into output buffer
         reconfig_data_format_srca(index_transposed_cb_index);
-        transpose_wh_init_short(index_transposed_cb_index);
+        transpose_init(index_transposed_cb_index);
         pack_reconfig_data_format(index_transposed_cb_index);
         index_transposed_cb.wait_front(Wt);
         for (uint32_t i = 0; i < Kt; ++i) {
             tile_regs_acquire();
             output_ind_cb.reserve_back(1);
-            transpose_wh_tile(index_transposed_cb_index, i, 0);
+            transpose_tile(index_transposed_cb_index, i, 0);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(0, output_ind_cb_index);

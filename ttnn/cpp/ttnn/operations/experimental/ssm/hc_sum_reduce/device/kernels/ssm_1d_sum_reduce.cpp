@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/reduce.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 constexpr uint32_t ONE_TILE = 1;
@@ -16,8 +16,8 @@ FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
     tile_regs_acquire();
     tile_regs_wait();
 
-    transpose_wh_init_short(cb_in);
-    transpose_wh_tile(cb_in, 0, 0);
+    transpose_init(cb_in);
+    transpose_tile(cb_in, 0, 0);
 
     cb_reserve_back(cb_out, ONE_TILE);
     pack_tile(0, cb_out);

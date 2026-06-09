@@ -4,7 +4,7 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
@@ -67,7 +67,9 @@ void kernel_main() {
         binary_op_init_common(input_tensor_cb_index, index_tensor_cb_index, input_tensor_transposed_cb_index);
     }
     ckernel::topk_tile_init();
-    transpose_wh_init(input_tensor_cb_index, input_tensor_transposed_cb_index);
+    // compute_kernel_hw_startup above already armed the LLK; transpose_init
+    // reconfigures the unpacker for input_tensor_cb_index.
+    transpose_init(input_tensor_cb_index);
 
     for (uint32_t h = 0; h < Ht; h++) {
         if constexpr (is_row_major) {
