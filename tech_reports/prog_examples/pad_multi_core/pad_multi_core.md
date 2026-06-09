@@ -263,7 +263,7 @@ In the reader kernel, we specify the DRAM buffer address generators for the inpu
         for (uint32_t i = 0; i < num_sticks_per_barrier && iter < num_sticks_per_core; ++i, ++iter) {
             bool read_stick = (curr_h >= front_pad_h and curr_h < H) and (curr_c >= front_pad_c and curr_c < C) and
                               (curr_n >= front_pad_n and curr_n < N);
-            uint64_t read_noc_addr = get_noc_addr(i_stick, s);
+            uint64_t read_noc_addr = s.get_noc_addr(i_stick);
             // Seed pad value in first word to guarantee padding when writer writes only stick_size_bytes
             *((volatile tt_l1_ptr uint32_t*)l1_write_addr) = packed_pad_value;
             if (read_stick) {
@@ -309,7 +309,7 @@ Using the start and end index, the kernel reads the pad value into the circular 
         cb_wait_front(cb_out0, num_sticks_per_barrier);
         uint32_t l1_read_addr = get_read_ptr(cb_out0);
         for (uint32_t i = 0; i < num_sticks_per_barrier && iter < num_sticks_per_core; ++i, ++iter) {
-            uint64_t write_noc_addr = get_noc_addr(i_stick, s);
+            uint64_t write_noc_addr = s.get_noc_addr(i_stick);
             noc_async_write(l1_read_addr, write_noc_addr, stick_size_bytes);
             l1_read_addr += stick_size_padded_aligned;
             i_stick += 1;

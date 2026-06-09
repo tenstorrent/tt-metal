@@ -45,26 +45,10 @@ void print_tile_rows(
     uint16_t end_row = 32,
     uint8_t start_col = 0,
     uint8_t end_col = 32) {
-    DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
-    DEVICE_PRINT("cb_idx: {} tile_idx: {}\n", cb_idx, tile_idx);
-    DPRINT << "======" << ENDL();
-    DEVICE_PRINT("======\n");
+    DPRINT("cb_idx: {} tile_idx: {}\n", cb_idx, tile_idx);
+    DPRINT("======\n");
     for (uint16_t r = start_row; r < end_row; ++r) {
-        DPRINT << (uint)r << " : "
-               << TileSlice(
-                      cb_idx,
-                      tile_idx,
-                      SliceRange{
-                          .h0 = (uint8_t)r,
-                          .h1 = (uint8_t)(r + 1),
-                          .hs = (uint8_t)1,
-                          .w0 = (uint8_t)start_col,
-                          .w1 = (uint8_t)end_col,
-                          .ws = (uint8_t)1},
-                      true,
-                      untilize)
-               << ENDL();
-        DEVICE_PRINT(
+        DPRINT(
             "{} : {}\n",
             r,
             TileSlice(
@@ -80,8 +64,7 @@ void print_tile_rows(
                 true,
                 untilize));
     }
-    DPRINT << "++++++" << ENDL();
-    DEVICE_PRINT("++++++\n");
+    DPRINT("++++++\n");
 }
 
 template <
@@ -139,6 +122,8 @@ void kernel_main() {
     constexpr uint32_t tokens = get_named_compile_time_arg_val("tokens");
     constexpr uint32_t hidden_size = get_named_compile_time_arg_val("hidden_size");
     constexpr uint32_t experts = get_named_compile_time_arg_val("experts");
+    constexpr uint32_t experts_per_device = get_named_compile_time_arg_val("experts_per_device");
+
     constexpr uint32_t selected_experts_k = get_named_compile_time_arg_val("selected_experts_k");
 
     // Chunk info
@@ -223,7 +208,6 @@ void kernel_main() {
     constexpr uint32_t one_page = 1;
     constexpr uint32_t TILE_HEIGHT = 32;
     constexpr uint32_t TILE_WIDTH = 32;
-    constexpr uint32_t experts_per_device = (experts + num_devices - 1) / num_devices;
     constexpr uint32_t element_size = tilize_output_page_size / (TILE_HEIGHT * TILE_WIDTH);
     constexpr uint32_t tile_width_bytes = TILE_WIDTH * element_size;
 

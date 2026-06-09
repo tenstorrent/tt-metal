@@ -26,15 +26,15 @@ using namespace tt::tt_metal;
 
 namespace {
 
-constexpr const char* SRC0_DFB = "src0_dfb";
-constexpr const char* SRC1_DFB = "src1_dfb";
-constexpr const char* DST_DFB = "dst_dfb";
-constexpr const char* SRC0_T = "src0";
-constexpr const char* SRC1_T = "src1";
-constexpr const char* DST_T = "dst";
-constexpr const char* READER = "reader";
-constexpr const char* WRITER = "writer";
-constexpr const char* COMPUTE = "compute";
+const experimental::DFBSpecName SRC0_DFB{"src0_dfb"};
+const experimental::DFBSpecName SRC1_DFB{"src1_dfb"};
+const experimental::DFBSpecName DST_DFB{"dst_dfb"};
+const experimental::TensorParamName SRC0_T{"src0"};
+const experimental::TensorParamName SRC1_T{"src1"};
+const experimental::TensorParamName DST_T{"dst"};
+const experimental::KernelSpecName READER{"reader"};
+const experimental::KernelSpecName WRITER{"writer"};
+const experimental::KernelSpecName COMPUTE{"compute"};
 
 struct BmmParams {
     uint32_t Mt, Kt, Nt;
@@ -78,7 +78,7 @@ BmmTensors create_bmm_tensors(distributed::MeshDevice& mesh_device, const BmmPar
 }
 
 template <typename TargetNodes>
-experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
+experimental::ProgramSpec build_bmm_program_spec(
     const BmmParams& p, const BmmTensors& tensors, const TargetNodes& target_nodes, bool use_implicit_sync) {
     // Both kernels expose Gen1 + Gen2 data movement configs so the same spec runs on WH/BH and
     // Quasar; the runtime picks the right one per arch. The kernel sources use the unified
@@ -86,117 +86,87 @@ experimental::metal2_host_api::ProgramSpec build_bmm_program_spec(
     // On Quasar we also enable implicit sync on each DFB so the reader/writer kernels can drop
     // explicit reserve_back/wait_front/push_back/pop_front; on WH/BH implicit sync is unsupported
     // and must be disabled to match the explicit-sync kernel branch.
-    experimental::metal2_host_api::DataMovementConfiguration reader_config{
-        .gen1_data_movement_config =
-            experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+    experimental::DataMovementHardwareConfig reader_config{
+        .gen1_config =
+            experimental::DataMovementHardwareConfig::Gen1Config{
                 .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default},
-        .gen2_data_movement_config =
-            experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}};
-    experimental::metal2_host_api::DataMovementConfiguration writer_config{
-        .gen1_data_movement_config =
-            experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}};
+    experimental::DataMovementHardwareConfig writer_config{
+        .gen1_config =
+            experimental::DataMovementHardwareConfig::Gen1Config{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
-        .gen2_data_movement_config =
-            experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}};
+        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}};
     if (!use_implicit_sync) {
-        reader_config.gen2_data_movement_config->disable_implicit_sync_for = {SRC0_DFB, SRC1_DFB};
-        writer_config.gen2_data_movement_config->disable_implicit_sync_for = {DST_DFB};
+        reader_config.gen2_config->disable_implicit_sync_for = {SRC0_DFB, SRC1_DFB};
+        writer_config.gen2_config->disable_implicit_sync_for = {DST_DFB};
     }
 
-    experimental::metal2_host_api::DataflowBufferSpec src0_dfb_spec{
+    experimental::DataflowBufferSpec src0_dfb_spec{
         .unique_id = SRC0_DFB,
         .entry_size = p.single_tile_size,
         .num_entries = p.num_input_tiles,
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
-    experimental::metal2_host_api::DataflowBufferSpec src1_dfb_spec{
+    experimental::DataflowBufferSpec src1_dfb_spec{
         .unique_id = SRC1_DFB,
         .entry_size = p.single_tile_size,
         .num_entries = p.num_input_tiles,
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
-    experimental::metal2_host_api::DataflowBufferSpec dst_dfb_spec{
+    experimental::DataflowBufferSpec dst_dfb_spec{
         .unique_id = DST_DFB,
         .entry_size = p.single_tile_size,
         .num_entries = p.num_output_tiles,
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
 
-    experimental::metal2_host_api::KernelSpec reader_spec{
+    experimental::KernelSpec reader_spec{
         .unique_id = READER,
-        .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bmm_8bank.cpp"},
-        .num_threads = static_cast<uint8_t>(p.num_threads),
-        .dfb_bindings =
-            {{.dfb_spec_name = SRC0_DFB,
-              .local_accessor_name = "src0",
-              .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-              .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED},
-             {.dfb_spec_name = SRC1_DFB,
-              .local_accessor_name = "src1",
-              .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-              .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED}},
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bmm_8bank.cpp",
+        .num_threads = p.num_threads,
+        .dfb_bindings = {experimental::ProducerOf(SRC0_DFB, "src0"), experimental::ProducerOf(SRC1_DFB, "src1")},
         .tensor_bindings =
             {{.tensor_parameter_name = SRC0_T, .accessor_name = "src0"},
              {.tensor_parameter_name = SRC1_T, .accessor_name = "src1"}},
         // Only batch_start varies per node; everything else is identical across nodes and
         // lives in CRTAs for better dispatch efficiency.
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"batch_start"},
-             .named_common_runtime_args = {"Mt", "Kt", "Nt", "MtKt", "KtNt", "batch", "do_bcast"}},
-        .config_spec = reader_config,
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"batch_start"},
+             .common_runtime_arg_names = {"Mt", "Kt", "Nt", "MtKt", "KtNt", "batch", "do_bcast"}},
+        .hw_config = reader_config,
     };
 
-    experimental::metal2_host_api::KernelSpec writer_spec{
+    experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
-        .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_bmm_8bank.cpp"},
-        .num_threads = static_cast<uint8_t>(p.num_threads),
-        .dfb_bindings =
-            {{.dfb_spec_name = DST_DFB,
-              .local_accessor_name = "dst",
-              .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-              .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED}},
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_bmm_8bank.cpp",
+        .num_threads = p.num_threads,
+        .dfb_bindings = {experimental::ConsumerOf(DST_DFB, "dst")},
         .tensor_bindings = {{.tensor_parameter_name = DST_T, .accessor_name = "dst"}},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"batch_start"}, .named_common_runtime_args = {"Mt", "Nt", "batch"}},
-        .config_spec = writer_config,
+        .runtime_arg_schema = {.runtime_arg_names = {"batch_start"}, .common_runtime_arg_names = {"Mt", "Nt", "batch"}},
+        .hw_config = writer_config,
     };
 
-    experimental::metal2_host_api::KernelSpec compute_spec{
+    experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
-        .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/compute/bmm.cpp"},
-        .num_threads = static_cast<uint8_t>(p.num_threads),
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/bmm.cpp",
+        .num_threads = p.num_threads,
         .dfb_bindings =
-            {{.dfb_spec_name = SRC0_DFB,
-              .local_accessor_name = "src0",
-              .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-              .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED},
-             {.dfb_spec_name = SRC1_DFB,
-              .local_accessor_name = "src1",
-              .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-              .access_pattern = experimental::metal2_host_api::DFBAccessPattern::ALL},
-             {.dfb_spec_name = DST_DFB,
-              .local_accessor_name = "dst",
-              .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-              .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED}},
-        .compile_time_arg_bindings = {{"batch", p.B_per_core}, {"Mt", p.Mt}, {"Kt", p.Kt}, {"Nt", p.Nt}},
-        .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+            {experimental::ConsumerOf(SRC0_DFB, "src0"),
+             experimental::AllConsumerOf(SRC1_DFB, "src1"),
+             experimental::ProducerOf(DST_DFB, "dst")},
+        .compile_time_args = {{"batch", p.B_per_core}, {"Mt", p.Mt}, {"Kt", p.Kt}, {"Nt", p.Nt}},
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
-    return experimental::metal2_host_api::ProgramSpec{
-        .program_id = "bmm",
+    return experimental::ProgramSpec{
+        .name = "bmm",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {src0_dfb_spec, src1_dfb_spec, dst_dfb_spec},
         .tensor_parameters =
             {{.unique_id = SRC0_T, .spec = tensors.src0.tensor_spec()},
              {.unique_id = SRC1_T, .spec = tensors.src1.tensor_spec()},
              {.unique_id = DST_T, .spec = tensors.dst.tensor_spec()}},
-        .work_units = {{.unique_id = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = target_nodes}},
+        .work_units = {{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = target_nodes}},
     };
 }
 
@@ -250,18 +220,18 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
     const uint32_t bytesA = p.single_tile_size * p.Mt * p.Kt * p.B_total;
     const uint32_t bytesB = p.single_tile_size * p.Kt * p.Nt * p.B_total;
 
-    const experimental::metal2_host_api::NodeCoord node{0, 0};
+    const experimental::NodeCoord node{0, 0};
     const bool use_implicit_sync = (dev->arch() == ARCH::QUASAR);
     auto spec = build_bmm_program_spec(p, tensors, node, use_implicit_sync);
-    auto program = experimental::metal2_host_api::MakeProgramFromSpec(mesh_device, spec);
+    auto program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     constexpr uint32_t do_bcast = 0;
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
-            .kernel_spec_name = READER,
-            .named_runtime_args = {{.node = node, .args = {{"batch_start", 0u}}}},
-            .named_common_runtime_args =
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = READER,
+            .runtime_arg_values = {{node, {{"batch_start", 0u}}}},
+            .common_runtime_arg_values =
                 {{"Mt", p.Mt},
                  {"Kt", p.Kt},
                  {"Nt", p.Nt},
@@ -270,19 +240,19 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
                  {"batch", p.B_per_core},
                  {"do_bcast", do_bcast}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
-            .kernel_spec_name = WRITER,
-            .named_runtime_args = {{.node = node, .args = {{"batch_start", 0u}}}},
-            .named_common_runtime_args = {{"Mt", p.Mt}, {"Nt", p.Nt}, {"batch", p.B_per_core}},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER,
+            .runtime_arg_values = {{node, {{"batch_start", 0u}}}},
+            .common_runtime_arg_values = {{"Mt", p.Mt}, {"Nt", p.Nt}, {"batch", p.B_per_core}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{.kernel_spec_name = COMPUTE},
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     params.tensor_args = {
-        {.tensor_parameter_name = SRC0_T, .tensor = tensors.src0},
-        {.tensor_parameter_name = SRC1_T, .tensor = tensors.src1},
-        {.tensor_parameter_name = DST_T, .tensor = tensors.dst},
+        {SRC0_T, experimental::TensorArgument{tensors.src0}},
+        {SRC1_T, experimental::TensorArgument{tensors.src1}},
+        {DST_T, experimental::TensorArgument{tensors.dst}},
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     auto src0_vec = create_random_vector_of_bfloat16(bytesA, 1.0f, 0x1234);
     auto src1_vec = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f);
@@ -317,23 +287,22 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
     const uint32_t bytesA = p.single_tile_size * p.Mt * p.Kt * p.B_total;
     const uint32_t bytesB = p.single_tile_size * p.Kt * p.Nt * p.B_total;
 
-    const experimental::metal2_host_api::NodeCoord node0{0, 0};
-    const experimental::metal2_host_api::NodeCoord node1{1, 0};
-    const experimental::metal2_host_api::NodeRange node_range{node0, node1};
+    const experimental::NodeCoord node0{0, 0};
+    const experimental::NodeCoord node1{1, 0};
+    const experimental::NodeRange node_range{node0, node1};
 
     // QuasarMeshDeviceSingleCardFixture only opens Quasar devices, so implicit sync is always on.
     auto spec = build_bmm_program_spec(p, tensors, node_range, /*use_implicit_sync=*/true);
-    auto program = experimental::metal2_host_api::MakeProgramFromSpec(mesh_device, spec);
+    auto program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     constexpr uint32_t do_bcast = 0;
     // node0 handles batch 0, node1 handles batch 1 (batch_start = node index)
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
-            .kernel_spec_name = READER,
-            .named_runtime_args =
-                {{.node = node0, .args = {{"batch_start", 0u}}}, {.node = node1, .args = {{"batch_start", 1u}}}},
-            .named_common_runtime_args =
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = READER,
+            .runtime_arg_values = {{node0, {{"batch_start", 0u}}}, {node1, {{"batch_start", 1u}}}},
+            .common_runtime_arg_values =
                 {{"Mt", p.Mt},
                  {"Kt", p.Kt},
                  {"Nt", p.Nt},
@@ -342,20 +311,19 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
                  {"batch", p.B_per_core},
                  {"do_bcast", do_bcast}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
-            .kernel_spec_name = WRITER,
-            .named_runtime_args =
-                {{.node = node0, .args = {{"batch_start", 0u}}}, {.node = node1, .args = {{"batch_start", 1u}}}},
-            .named_common_runtime_args = {{"Mt", p.Mt}, {"Nt", p.Nt}, {"batch", p.B_per_core}},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER,
+            .runtime_arg_values = {{node0, {{"batch_start", 0u}}}, {node1, {{"batch_start", 1u}}}},
+            .common_runtime_arg_values = {{"Mt", p.Mt}, {"Nt", p.Nt}, {"batch", p.B_per_core}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{.kernel_spec_name = COMPUTE},
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     params.tensor_args = {
-        {.tensor_parameter_name = SRC0_T, .tensor = tensors.src0},
-        {.tensor_parameter_name = SRC1_T, .tensor = tensors.src1},
-        {.tensor_parameter_name = DST_T, .tensor = tensors.dst},
+        {SRC0_T, experimental::TensorArgument{tensors.src0}},
+        {SRC1_T, experimental::TensorArgument{tensors.src1}},
+        {DST_T, experimental::TensorArgument{tensors.dst}},
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     auto src0_vec = create_random_vector_of_bfloat16(bytesA, 1.0f, 0x1234);
     auto src1_vec = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f);

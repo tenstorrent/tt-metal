@@ -122,13 +122,17 @@ runs:
     # - Build ccache: Large binaries, infrequent changes, high retention
     # - Kernel ccache: Smaller JIT objects, frequent compilations, different eviction policies
     - name: Set up kernel ccache
-      if: ${{ inputs.enable-kernel-ccache == 'true' }}
+      if: ${{ inputs.enable-kernel-ccache == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
       working-directory: ${{ inputs.path }}
       run: |
         echo "Enabling TT Metal kernel ccache"
         echo "CCACHE_COMPILERCHECK=content" >> $GITHUB_ENV
         echo "CCACHE_REMOTE_ONLY=true" >> $GITHUB_ENV
         echo "CCACHE_NOHASHDIR=true" >> $GITHUB_ENV
+        echo "CCACHE_COMPRESS=true" >> $GITHUB_ENV
+        echo "CCACHE_COMPRESSLEVEL=3" >> $GITHUB_ENV
+        echo "CCACHE_LOGFILE=/tmp/ccache.log" >> $GITHUB_ENV
+        echo "CCACHE_BASEDIR=/work" >> $GITHUB_ENV
         echo "TT_METAL_CCACHE_KERNEL_SUPPORT=1" >> $GITHUB_ENV
         echo "CCACHE_TEMPDIR=/tmp/ccache" >> $GITHUB_ENV
 

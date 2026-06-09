@@ -10,15 +10,15 @@
 using namespace ckernel;
 
 /**
- * @brief MOP configuration for unpack of binary operations with broadcasts, uses SrcA & SrcB
- * @details Sets up MOP for unpacking binary operands tile by tile
- * @tparam BROADCAST_TYPE: Sets the broadcast type, values = [NONE, COL, ROW, SCALAR]
- * BROADCAST only operates on SRCB register
- * buf_desc_id_0 will be used for UNPACKER0 -> SRCA
- * buf_desc_id_1 will be used for UNPACKER1 -> SRCB
+ * @brief Builds the MOP for unpacking binary operands with broadcast (SrcA and SrcB), tile by tile.
+ *
+ * Broadcast only operates on the SrcB register. buf_desc_id_0 feeds UNPACKER0 -> SRCA,
+ * buf_desc_id_1 feeds UNPACKER1 -> SRCB.
+ *
+ * @tparam BROADCAST_TYPE: Broadcast type for SrcB, values = <COL/ROW/SCALAR>
  * @param buf_desc_id_0/1: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 16
- * @param num_tiles: number of tiles to unpack at a time for both inputs
+ *        stored in the buffer descriptor table, values = 0 - 16
+ * @param num_tiles: Number of tiles to unpack at a time for both inputs.
  */
 template <BroadcastType BROADCAST_TYPE>
 inline void _llk_unpack_binary_broadcast_operands_mop_config_(
@@ -64,15 +64,18 @@ inline void _llk_unpack_binary_broadcast_operands_mop_config_(
 }
 
 /**
- * @brief Initialization for unpack of binary broadcast operations, uses SrcA & SrcB
- * @details Sets up MOP for unpacking binary operands
- * @tparam BROADCAST_TYPE: Sets the broadcast type, values = [NONE, COL, ROW, SCALAR]
- * BROADCAST only operates on SRCB register
- * buf_desc_id_0 will be used for UNPACKER0 -> SRCA
- * buf_desc_id_1 will be used for UNPACKER1 -> SRCB
+ * @brief Initializes the unpacker for binary broadcast operations (SrcA and SrcB).
+ *
+ * Programs the MOP for unpacking binary operands with broadcast. Broadcast only operates on the SrcB
+ * register. buf_desc_id_0 feeds UNPACKER0 -> SRCA, buf_desc_id_1 feeds UNPACKER1 -> SRCB.
+ *
+ * @tparam BROADCAST_TYPE: Broadcast type for SrcB, values = <COL/ROW/SCALAR>
  * @param buf_desc_id_0/1: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 16
- * @param num_tiles: number of tiles to unpack at a time for both inputs
+ *        stored in the buffer descriptor table, values = 0 - 16
+ * @param num_tiles: Number of tiles to unpack at a time for both inputs.
+ * @note On the math thread, pair with @ref _llk_math_eltwise_binary_broadcast_init_ (T1) with matching BROADCAST_TYPE; on the pack thread, pair with
+ *       @ref _llk_pack_init_ (T2).
+ * @note @ref _llk_unpack_binary_broadcast_operands_ is the matching execute call on this thread.
  */
 template <BroadcastType BROADCAST_TYPE>
 inline void _llk_unpack_binary_broadcast_operands_init_(
@@ -82,10 +85,11 @@ inline void _llk_unpack_binary_broadcast_operands_init_(
 }
 
 /**
- * @brief Unpacks binary operands for SrcA & SrcB
- * @param start_l1_tile_idx_0/1: Start tile index into the L1 buffer
- * start_l1_tile_idx_0 -> UNPACKER0 -> SRCA
- * start_l1_tile_idx_1 -> UNPACKER1 -> SRCB
+ * @brief Unpacks binary broadcast operands into SrcA and SrcB.
+ *
+ * @param start_l1_tile_idx_0/1: Start tile index into the L1 buffer;
+ *        start_l1_tile_idx_0 -> UNPACKER0 -> SRCA, start_l1_tile_idx_1 -> UNPACKER1 -> SRCB.
+ * @note Call @ref _llk_unpack_binary_broadcast_operands_init_ with matching template args before this function.
  */
 inline void _llk_unpack_binary_broadcast_operands_(const std::uint32_t start_l1_tile_idx_0, const std::uint32_t start_l1_tile_idx_1)
 {

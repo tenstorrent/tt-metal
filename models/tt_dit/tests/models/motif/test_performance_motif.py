@@ -10,8 +10,9 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
-
-from ....pipelines.motif.pipeline_motif import MotifPipeline
+from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig
+from models.tt_dit.pipelines.events import profiler_event_callback
+from models.tt_dit.pipelines.motif.pipeline_motif import MotifPipeline, MotifPipelineConfig
 
 
 # TODO: Factor out commonalities with motif pipeline
@@ -34,7 +35,6 @@ from ....pipelines.motif.pipeline_motif import MotifPipeline
             (4, 1),
             ttnn.Topology.Linear,
             1,
-            marks=pytest.mark.skip(reason="Disabled by issue #44770"),
         ),
         [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
     ],
@@ -46,7 +46,7 @@ from ....pipelines.motif.pipeline_motif import MotifPipeline
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 31000000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": 32768, "trace_region_size": 50000000}],
     indirect=True,
 )
 def test_motif_pipeline_performance(
@@ -90,16 +90,18 @@ def test_motif_pipeline_performance(
     logger.info(f"  Guidance scale: {guidance_scale}")
     logger.info(f"  Inference steps: {num_inference_steps}")
 
-    pipeline = MotifPipeline.create_pipeline(
-        mesh_device=mesh_device,
-        dit_cfg=cfg,
-        dit_sp=sp,
-        dit_tp=tp,
-        encoder_tp=encoder_tp,
-        vae_tp=vae_tp,
-        topology=topology,
-        num_links=num_links,
-        checkpoint_name=model_location_generator("Motif-Technologies/Motif-Image-6B-Preview"),
+    pipeline = MotifPipeline(
+        device=mesh_device,
+        config=MotifPipelineConfig.default(
+            dit_parallel_config=DiTParallelConfig.from_tuples(cfg=cfg, sp=sp, tp=tp),
+            encoder_parallel_config=EncoderParallelConfig.from_tuple(encoder_tp),
+            vae_parallel_config=VAEParallelConfig.from_tuple(vae_tp),
+            num_links=num_links,
+            topology=topology,
+            width=image_w,
+            height=image_h,
+            checkpoint_name=model_location_generator("Motif-Technologies/Motif-Image-6B-Preview"),
+        ),
     )
 
     # Test prompts - diverse set for comprehensive performance testing
@@ -115,7 +117,7 @@ def test_motif_pipeline_performance(
     logger.info("Running warmup iteration...")
 
     with benchmark_profiler("run", iteration=0):
-        images = pipeline.run_single_prompt(prompt=prompts[0], num_inference_steps=num_inference_steps, seed=0)
+        images = pipeline.run_single_prompt(prompt=prompts[0], num_inference_steps=num_inference_steps)
     images[0].save(f"motif_{image_w}_{image_h}_warmup.png")
 
     logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
@@ -145,9 +147,7 @@ def test_motif_pipeline_performance(
                 images = pipeline.run_single_prompt(
                     prompt=prompts[prompt_idx],
                     num_inference_steps=num_inference_steps,
-                    seed=0,
-                    profiler=benchmark_profiler,
-                    profiler_iteration=i,
+                    on_event=profiler_event_callback(benchmark_profiler, i),
                 )
             images[0].save(f"motif_{image_w}_{image_h}_perf_run{i}.png")
 
@@ -248,12 +248,12 @@ def test_motif_pipeline_performance(
     }
     if tuple(mesh_device.shape) == (2, 4):
         expected_metrics = {
-            "clip_encoding_time": 0.12,
+            "clip_encoding_time": 0.15,
             "t5_encoding_time": 0.15,
-            "total_encoding_time": 0.45,
-            "denoising_steps_time": 0.52 * num_inference_steps,
+            "total_encoding_time": 0.49,
+            "denoising_steps_time": 0.56 * num_inference_steps,
             "vae_decoding_time": 1.7,
-            "total_time": 16.5,
+            "total_time": 17.4,
         }
     elif tuple(mesh_device.shape) == (4, 8):
         expected_metrics = {

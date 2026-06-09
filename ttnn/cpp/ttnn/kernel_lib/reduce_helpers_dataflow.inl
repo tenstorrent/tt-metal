@@ -251,7 +251,9 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_di
     dfb.reserve_back(1);
     uint32_t write_addr = dfb.get_write_ptr();
 
-    zero_tile<dfb_id>(write_addr);
+    Noc noc;
+    noc.async_write_zeros(dfb, get_tile_size(dfb_id));
+    noc.write_zeros_l1_barrier();
 
     if constexpr (use_matmul) {
         uint32_t scaler = float_to_col0_scaler_bits<data_format>(scaler_f);
@@ -279,6 +281,25 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_di
         }
     }
 
+    // Quasar DM cores have a write-back L1 D-cache (4KB, per-core) + L2 cache
+    // (128KB, shared between DM cores). RISC stores flow Core -> L1 D$ -> L2 -> TL1
+    // (Tensix L1, the SRAM that other RISCs read). The volatile fills above land
+    // in DM-private caches; without an explicit flush, TRISC-side unpack reads
+    // stale TL1 contents (zeros) even though the DM observes its own writes via
+    // L1 D$ hits. This is consistent with the runtime evidence:
+    //   DM:    PRS:after_fill @0xbb780 : 0x3f803f80 ...
+    //   UNPACK U:scaler sh@0xbb780     : 0x0 0x0 ...
+    // For NoC-written input tiles the NoC engine writes directly to TL1 and
+    // bypasses DM caches, which is why those are visible to TRISC.
+    // flush_l2_cache_range probes L1 D$ for dirty data and writes through to TL1,
+    // so TRISC sees the freshly-filled scaler tile once we signal push_back.
+    // On non-Quasar (or non-DM) builds this is a no-op.
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    {
+        constexpr uint32_t tile_size_bytes = get_tile_size(cb_id);
+        flush_l2_cache_range(write_addr, tile_size_bytes);
+    }
+#endif
     dfb.push_back(1);
 }
 

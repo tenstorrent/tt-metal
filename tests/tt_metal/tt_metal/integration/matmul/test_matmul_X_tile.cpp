@@ -223,53 +223,53 @@ static void matmul_tile_block(
     vector<bfloat16> tensor_vals) {
     auto ctx = setup_matmul_tile_context(mesh_device, cfg);
 
-    const experimental::metal2_host_api::NodeCoord node{0, 0};
+    const experimental::NodeCoord node{0, 0};
 
-    constexpr const char* SRC0_DFB = "src0_dfb";
-    constexpr const char* SRC1_DFB = "src1_dfb";
-    constexpr const char* DST_DFB = "dst_dfb";
-    constexpr const char* READER = "reader";
-    constexpr const char* WRITER = "writer";
-    constexpr const char* COMPUTE = "compute";
+    const experimental::DFBSpecName SRC0_DFB{"src0_dfb"};
+    const experimental::DFBSpecName SRC1_DFB{"src1_dfb"};
+    const experimental::DFBSpecName DST_DFB{"dst_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
 
-    experimental::metal2_host_api::DataflowBufferSpec src0_dfb_spec{
+    experimental::DataflowBufferSpec src0_dfb_spec{
         .unique_id = SRC0_DFB,
         .entry_size = ctx.single_tile_size_bfp16b,
         .num_entries = ctx.num_input_tiles,
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
-    experimental::metal2_host_api::DataflowBufferSpec src1_dfb_spec{
+    experimental::DataflowBufferSpec src1_dfb_spec{
         .unique_id = SRC1_DFB,
         .entry_size = ctx.single_tile_size_bfp16b,
         .num_entries = ctx.num_input_tiles,
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
-    experimental::metal2_host_api::DataflowBufferSpec dst_dfb_spec{
+    experimental::DataflowBufferSpec dst_dfb_spec{
         .unique_id = DST_DFB,
         .entry_size = ctx.single_tile_size_out0,
         .num_entries = ctx.num_tiles,
         .data_format_metadata = cfg.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b,
     };
 
-    experimental::metal2_host_api::KernelSpec reader_spec{
+    experimental::KernelSpec reader_spec{
         .unique_id = READER,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{cfg.reader_kernel},
+        .source = cfg.reader_kernel,
         .num_threads = 1,
         .dfb_bindings =
             {{
                  .dfb_spec_name = SRC0_DFB,
-                 .local_accessor_name = "in0",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .accessor_name = "in0",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = SRC1_DFB,
-                 .local_accessor_name = "in1",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .accessor_name = "in1",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
-        .runtime_arguments_schema =
-            {.named_runtime_args =
+        .runtime_arg_schema =
+            {.runtime_arg_names =
                  {"src0_addr",
                   "src0_dram_bank_id",
                   "src1_addr",
@@ -279,37 +279,31 @@ static void matmul_tile_block(
                   "in1_block_tile_cnt",
                   "in0_block_size_bytes",
                   "in1_block_size_bytes"}},
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen1_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen1_config =
+                    experimental::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+                .gen2_config =
+                    experimental::DataMovementHardwareConfig::Gen2Config{
                         .disable_implicit_sync_for = {SRC0_DFB, SRC1_DFB}}},
     };
 
-    experimental::metal2_host_api::KernelSpec writer_spec{
+    experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {{
-            .dfb_spec_name = DST_DFB,
-            .local_accessor_name = "in",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-        }},
-        .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "bank_id", "num_tiles"}},
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen1_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+        .dfb_bindings = {experimental::ConsumerOf(DST_DFB, "in")},
+        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen1_config =
+                    experimental::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
-                        .disable_implicit_sync_for = {DST_DFB}}},
+                .gen2_config =
+                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {DST_DFB}}},
     };
 
     // matmul_block.cpp uses named CTAs. Map cfg.compute_kernel_args (positional) to the
@@ -319,7 +313,7 @@ static void matmul_tile_block(
         cfg.compute_kernel_args.size() == 7,
         "matmul_block expects 7 compile-time args but got {}",
         cfg.compute_kernel_args.size());
-    experimental::metal2_host_api::KernelSpec::CompileTimeArgBindings compute_cta_bindings{
+    experimental::KernelSpec::CompileTimeArgs compute_cta_bindings{
         {"block_tile_dim", cfg.compute_kernel_args[0]},
         {"dst_tile_rows", cfg.compute_kernel_args[1]},
         {"dst_tile_cols", cfg.compute_kernel_args[2]},
@@ -329,61 +323,61 @@ static void matmul_tile_block(
         {"out_block_tile_cnt", cfg.compute_kernel_args[6]},
     };
 
-    experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines compute_defines = {
+    experimental::KernelSpec::CompilerOptions::Defines compute_defines = {
         {"WITH_DT", cfg.with_dt ? "1" : "0"},
         {"TEST_INIT_SHORT", cfg.test_init_short ? "1" : "0"},
     };
     if (cfg.fp32_dest_acc_en) {
-        compute_defines.emplace_back("DST_ACCUM_MODE", "1");
+        compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
 
-    experimental::metal2_host_api::KernelSpec compute_spec{
+    experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{cfg.compute_kernel},
+        .source = cfg.compute_kernel,
         .num_threads = 1,
         .compiler_options = {.defines = compute_defines},
         .dfb_bindings =
             {{
                  .dfb_spec_name = SRC0_DFB,
-                 .local_accessor_name = "in0",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .accessor_name = "in0",
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = SRC1_DFB,
-                 .local_accessor_name = "in1",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .accessor_name = "in1",
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = DST_DFB,
-                 .local_accessor_name = "out",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .accessor_name = "out",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
-        .compile_time_arg_bindings = compute_cta_bindings,
-        .config_spec =
-            experimental::metal2_host_api::ComputeConfiguration{
+        .compile_time_args = compute_cta_bindings,
+        .hw_config =
+            experimental::ComputeHardwareConfig{
                 .math_fidelity = cfg.math_fidelity,
                 .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
                 .dst_full_sync_en = cfg.dst_full_sync_en,
             },
     };
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+    experimental::WorkUnitSpec wu{
+        .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "matmul_X_tile",
+    experimental::ProgramSpec spec{
+        .name = "matmul_X_tile",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {src0_dfb_spec, src1_dfb_spec, dst_dfb_spec},
         .work_units = {wu},
     };
 
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -401,35 +395,30 @@ static void matmul_tile_block(
     const uint32_t in0_block_size_bytes = static_cast<uint32_t>(ctx.M * ctx.single_tile_size_bfp16b);
     const uint32_t in1_block_size_bytes = static_cast<uint32_t>(ctx.N * ctx.single_tile_size_bfp16b);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
-            .kernel_spec_name = READER,
-            .named_runtime_args =
-                {{.node = node,
-                  .args =
-                      {{"src0_addr", ctx.src0_dram_buffer->address()},
-                       {"src0_dram_bank_id", 0u},
-                       {"src1_addr", ctx.src1_dram_buffer->address()},
-                       {"src1_dram_bank_id", 0u},
-                       {"num_blocks", num_blocks},
-                       {"in0_block_tile_cnt", in0_block_tile_cnt},
-                       {"in1_block_tile_cnt", in1_block_tile_cnt},
-                       {"in0_block_size_bytes", in0_block_size_bytes},
-                       {"in1_block_size_bytes", in1_block_size_bytes}}}},
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = READER,
+            .runtime_arg_values =
+                {{node,
+                  {{"src0_addr", ctx.src0_dram_buffer->address()},
+                   {"src0_dram_bank_id", 0u},
+                   {"src1_addr", ctx.src1_dram_buffer->address()},
+                   {"src1_dram_bank_id", 0u},
+                   {"num_blocks", num_blocks},
+                   {"in0_block_tile_cnt", in0_block_tile_cnt},
+                   {"in1_block_tile_cnt", in1_block_tile_cnt},
+                   {"in0_block_size_bytes", in0_block_size_bytes},
+                   {"in1_block_size_bytes", in1_block_size_bytes}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
-            .kernel_spec_name = WRITER,
-            .named_runtime_args =
-                {{.node = node,
-                  .args =
-                      {{"dst_addr", ctx.dst_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", ctx.num_tiles}}}},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER,
+            .runtime_arg_values =
+                {{node, {{"dst_addr", ctx.dst_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", ctx.num_tiles}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
-            .kernel_spec_name = COMPUTE,
-        },
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program_run, params);
+    experimental::SetProgramRunArgs(program_run, params);
 
     fixture->RunProgram(mesh_device, workload);
 

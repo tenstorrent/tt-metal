@@ -4,7 +4,7 @@
 
 #include <fmt/ranges.h>
 #include <tt_stl/fmt.hpp>
-#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
+#include "impl/dataflow_buffer/dataflow_buffer.hpp"
 
 #include <algorithm>
 
@@ -1535,11 +1535,15 @@ std::vector<CoreRange> ProgramImpl::dataflow_buffers_unique_coreranges() const {
 
 void ProgramImpl::set_dfb_data_fmt_and_tile(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const {
     // ZoneScoped;
+    // Match detail::ProgramImpl::set_cb_data_fmt_and_tile: DFB logical ids map to CBIndex slots for HLK unpack/pack.
     for (const auto& logical_cr : crs) {
         const auto& dfbs_on_core = this->dataflow_buffers_on_corerange(logical_cr);
         for (const auto& dfb : dfbs_on_core) {
-            build_options.set_cb_data_fmt_and_tile(
-                static_cast<CBIndex>(dfb->id), dfb->config.data_format, dfb->config.tile);
+            const CBIndex cb_index = static_cast<CBIndex>(dfb->id);
+            const DataFormat data_format = dfb->config.data_format;
+            const auto& tile_opt = dfb->config.tile;
+            const auto& unpack_geom = dfb->config.unpack_face_geometry;
+            build_options.set_cb_data_fmt_tile_and_face_geometry(cb_index, data_format, tile_opt, unpack_geom);
         }
     }
 }

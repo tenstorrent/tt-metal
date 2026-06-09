@@ -34,7 +34,9 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensorAssigner
+from models.demos.deepseek_v3_b1.compressed_tensor import COMPRESSED_FORMATS, CompressedTensorAssigner
+from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_layer
+from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert as _RoutedExpert
 from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     DOWN_PROJ_SINGLE_DEVICE_SPEC,
     GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
@@ -88,133 +90,15 @@ class SramExpertCoreGrids:
         Uses :data:`GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC` for gate/up and
         :meth:`DOWN_PROJ_SINGLE_DEVICE_SPEC.build_matmul_core_grid` for down —
         the same canonical ``CoreRangeSet`` objects ``prepare_compressed_sram_slots``
-        assumes under TP>1 (HEIGHT_SHARDED gate/up after ``preprocess_gate_up``,
-        WIDTH_SHARDED down after ``shared_down_torch_for_cache``).  Call sites
-        (tests, demos) should prefer this over re-stitching CRS from overlap_configs.
+        passes to :func:`build_sram_routed_proj_ct` under TP>1 (HEIGHT_SHARDED
+        gate/up, WIDTH_SHARDED down).  Call sites (tests, demos) should prefer
+        this over re-stitching CRS from overlap_configs.
         """
         return cls(
             gate=GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.gate_core_range_set,
             up=GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.up_core_range_set,
             down=DOWN_PROJ_SINGLE_DEVICE_SPEC.build_matmul_core_grid(),
         )
-
-
-# Shared-expert down projection per-device shard dimensions, mirrored from
-# :func:`shared_down_torch_for_cache` in ``weights/transforms/moe.py``.  The
-# function hardcodes ``K_down_per_device=256`` and ``N_per_core=64`` for the
-# shared expert's ``DOWN_PROJ_SINGLE_DEVICE_SPEC`` (112 matmul cores → total
-# per-device N = 7168).  SRAM hot experts reuse this layout verbatim under
-# TP>1 so the kernel can share shared expert's data-movement code.  Update
-# these constants only if the shared-expert down spec changes.
-_SHARED_EXPERT_DOWN_K_PER_DEV = 256
-_SHARED_EXPERT_DOWN_N_PER_CORE = 64
-
-
-@dataclass(frozen=True)
-class _MemoryConfigSpec:
-    """Per-projection L1 memory layout spec for SRAM hot experts.
-
-    Captures the ``(layout, core_range_set, shard_shape)`` triple needed to
-    construct a ``ttnn.MemoryConfig``.  Single source of truth shared between
-    the cost predictor (:func:`compute_expert_l1_bytes_per_core`) and the
-    on-device allocator (``_expert_build_plans`` /
-    :func:`_build_l1_compressed_tensor` in
-    :mod:`models.demos.deepseek_v3_b1.weights.sram_slots`); per-projection
-    instances are produced by :func:`sram_projection_specs`.
-
-    Fields:
-      layout: ``WIDTH_SHARDED`` (gate/up/down under TP=1; shared-down under
-        TP>1) or ``HEIGHT_SHARDED`` (shared-gate/up under TP>1).
-      core_range_set: ``CoreRangeSet`` to bind the shard to.
-      shard_shape: Per-core ``(sh, sw)`` shard shape, or ``None`` for the
-        WIDTH_SHARDED auto-derive path used by the TP=1 fallback (computes
-        ``(K, N // num_cores)`` from the weight's shape).  Auto-derive is
-        only valid for ``WIDTH_SHARDED``; explicit shapes are required
-        everywhere else (HEIGHT_SHARDED, or the shared-down WIDTH_SHARDED
-        whose 2D weight dims already encode the mesh split, see
-        :func:`shared_down_torch_for_cache`).
-    """
-
-    layout: ttnn.TensorMemoryLayout
-    core_range_set: ttnn.CoreRangeSet
-    shard_shape: tuple[int, int] | None = None
-
-    def materialize(self, weight: torch.Tensor, *, tile_hw: int) -> ttnn.MemoryConfig:
-        """Resolve the spec against *weight* into a concrete ``ttnn.MemoryConfig``.
-
-        For ``shard_shape=None`` (TP=1 WIDTH_SHARDED auto-derive only) the
-        per-core shape is ``(K, N // num_cores)`` taken from ``weight.shape``;
-        ``weight.ndim==4`` is supported for the mesh-pre-sharded
-        ``(mesh_rows, mesh_cols, K_per_device, N_per_device)`` carrier.
-        Otherwise the explicit ``shard_shape`` is used verbatim.
-        """
-        if self.shard_shape is None:
-            assert (
-                self.layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
-            ), f"auto-derived shard shape only supported for WIDTH_SHARDED; got {self.layout}"
-            num_cores = self.core_range_set.num_cores()
-            if weight.ndim == 4:
-                K, N = weight.shape[2], weight.shape[3]
-            else:
-                K, N = weight.shape[0], weight.shape[1]
-            assert N % num_cores == 0, f"N ({N}) must be divisible by num_cores ({num_cores})"
-            per_core_N = N // num_cores
-            assert per_core_N % tile_hw == 0, (
-                f"per_core_N ({per_core_N}) must be a multiple of tile_hw ({tile_hw}); "
-                f"got N={N} on {num_cores} cores. Shrink the per-device core grid or "
-                f"pick a mesh mapper whose per-device N stays tile-aligned."
-            )
-            assert K % tile_hw == 0, f"K ({K}) must be a multiple of tile_hw ({tile_hw})"
-            sh, sw = K, per_core_N
-        else:
-            sh, sw = self.shard_shape
-            assert sh % tile_hw == 0, f"shard height ({sh}) must be a multiple of tile_hw ({tile_hw})"
-            assert sw % tile_hw == 0, f"shard width ({sw}) must be a multiple of tile_hw ({tile_hw})"
-        shard_spec = ttnn.ShardSpec(self.core_range_set, [sh, sw], ttnn.ShardOrientation.ROW_MAJOR)
-        return ttnn.MemoryConfig(self.layout, ttnn.BufferType.L1, shard_spec)
-
-
-def sram_projection_specs(
-    core_grids: SramExpertCoreGrids,
-    mesh_shape: tuple[int, int],
-) -> dict[str, _MemoryConfigSpec]:
-    """Return one :class:`_MemoryConfigSpec` per projection (gate / up / down).
-
-    Single source of truth for the SRAM hot expert TP-layout decision shared
-    between cost prediction (:func:`compute_expert_l1_bytes_per_core`) and
-    on-device allocation (``prepare_compressed_sram_slots``).
-
-    Under TP>1: HEIGHT_SHARDED gate/up via :func:`preprocess_gate_up`'s
-    reshuffle output, WIDTH_SHARDED shared-down via
-    :func:`shared_down_torch_for_cache`'s K-reshape output.  Under TP=1:
-    WIDTH_SHARDED everything with auto-derived ``(K, N // num_cores)`` shards
-    from the per-projection ``core_grids``.
-    """
-    moe_tp = mesh_shape[0] * mesh_shape[1]
-    if moe_tp > 1:
-        cfg = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
-        return {
-            "gate": _MemoryConfigSpec(
-                layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                core_range_set=cfg.gate_core_range_set,
-                shard_shape=cfg.shard_shape,
-            ),
-            "up": _MemoryConfigSpec(
-                layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                core_range_set=cfg.up_core_range_set,
-                shard_shape=cfg.shard_shape,
-            ),
-            "down": _MemoryConfigSpec(
-                layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                core_range_set=core_grids.down,
-                shard_shape=(_SHARED_EXPERT_DOWN_K_PER_DEV, _SHARED_EXPERT_DOWN_N_PER_CORE),
-            ),
-        }
-    return {
-        "gate": _MemoryConfigSpec(layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED, core_range_set=core_grids.gate),
-        "up": _MemoryConfigSpec(layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED, core_range_set=core_grids.up),
-        "down": _MemoryConfigSpec(layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED, core_range_set=core_grids.down),
-    }
 
 
 def _quantize_dequantize_bfp_fn(x, fmt_str):
@@ -258,19 +142,87 @@ def _expert_assignments_and_shapes(
     return assignments, shapes
 
 
+_BFP4_FMT_IDX = COMPRESSED_FORMATS.index("bfp4")
+# (K, N) full-tensor shapes per projection (0=gate, 1=up, 2=down) in routed
+# expert compute layout.  Drives the assignment_provider's full-tile-grid sizing.
+_PROJ_SHAPES = (
+    (_RoutedExpert.K, _RoutedExpert.GATE_PROJ_N),  # gate
+    (_RoutedExpert.K, _RoutedExpert.GATE_PROJ_N),  # up
+    (_RoutedExpert.GATE_PROJ_N, _RoutedExpert.K),  # down
+)
+
+
+def _proj_tile_shape(proj_idx: int, num_banks: int, tile_w: int) -> tuple[int, int]:
+    """``(tiles_h_full, tiles_w_full_padded)`` for one projection.
+
+    Padding rounds the N axis up to a full ``num_banks * tile_w`` row so the
+    BSPM tile grid matches the DRAM-side padded layout (see CompressedTensor
+    bank-aligned packing).
+    """
+    K_full, N_full = _PROJ_SHAPES[proj_idx]
+    pad_step = num_banks * tile_w
+    N_padded_full = ((N_full + pad_step - 1) // pad_step) * pad_step
+    return K_full // tile_w, N_padded_full // tile_w
+
+
+def make_sram_assignment_provider(
+    *,
+    bspm_path: Path | None,
+    num_banks: int,
+    layer_idx: int,
+    tile_w: int = 32,
+) -> Callable[[int, int], np.ndarray]:
+    """Build the ``(expert_idx, proj_idx) -> assignment`` closure consumed by
+    :func:`prepare_compressed_sram_slots`.
+
+    Two modes, same allocator path:
+
+    * **With BSPM** (``bspm_path`` set): load codes from the .bspm file once,
+      then slice per (expert, projection).  Per-tile precision varies per
+      expert/projection.
+    * **Without BSPM**: return a constant array of BFP4 format indices
+      sized to the projection's full padded tile grid.  Every tile is
+      uniform BFP4.
+
+    Both modes return a 2D ``(tiles_h_full, tiles_w_full_padded)`` int array
+    matching the projection's bank-aligned layout.
+    """
+    if bspm_path is not None:
+        logger.info("Loading BSPM for SRAM auto-fit at layer {}: {}", layer_idx, bspm_path)
+        bspm_data = load_bspm_for_layer(str(bspm_path))
+
+        def _provider(expert_idx: int, proj_idx: int) -> np.ndarray:
+            tiles_h_full, tiles_w_full_padded = _proj_tile_shape(proj_idx, num_banks, tile_w)
+            assert (
+                expert_idx < bspm_data["n_experts"]
+            ), f"SRAM expert {expert_idx} out of range for BSPM (n_experts={bspm_data['n_experts']})"
+            return np.ascontiguousarray(
+                bspm_data["codes"][expert_idx, proj_idx].reshape(tiles_w_full_padded, tiles_h_full).T
+            )
+
+        return _provider
+
+    def _uniform_bfp4_provider(expert_idx: int, proj_idx: int) -> np.ndarray:
+        tiles_h_full, tiles_w_full_padded = _proj_tile_shape(proj_idx, num_banks, tile_w)
+        return np.full((tiles_h_full, tiles_w_full_padded), _BFP4_FMT_IDX, dtype=np.int8)
+
+    return _uniform_bfp4_provider
+
+
 def _predict_expert_per_core_bytes(
     expert_idx: int,
     gate_full: torch.Tensor,
     up_full: torch.Tensor,
     down_full: torch.Tensor,
     core_grids: SramExpertCoreGrids,
+    n_parallel_per_proj: tuple[int, int, int],
     *,
     assigner: CompressedTensorAssigner | None,
     assignment_provider: Callable[[int, int], np.ndarray] | None,
     tile_hw: int = 32,
     mesh_shape: tuple[int, int] = (1, 1),
-) -> dict[tuple[int, int], int]:
-    """Predict per-core L1 byte cost of a single expert (host-side lookahead).
+) -> dict[tuple[int, int], dict[tuple[int, int], int]]:
+    """Predict per-device, per-core L1 byte cost of a single expert.
 
     Wraps :func:`_expert_assignments_and_shapes` +
     :func:`compute_expert_l1_bytes_per_core` so the trim loop in
@@ -279,6 +231,14 @@ def _predict_expert_per_core_bytes(
     ``CompressedTensor.from_torch`` during the actual allocation -- worth
     the duplicated CPU work since predicting and allocating live in
     different code paths today.
+
+    See :func:`compute_expert_l1_bytes_per_core` for ``n_parallel_per_proj``
+    semantics — production callers should pass the same triple they pass to
+    :func:`build_sram_routed_proj_ct` so the two stay in lock-step.
+
+    Returns ``dict[(mesh_row, mesh_col) -> dict[(x, y) -> bytes]]``; under
+    uniform BFP4 all devices match, under BSPM they diverge and callers
+    must reduce via max-over-devices for a uniform-across-devices placement.
     """
     assignments, shapes = _expert_assignments_and_shapes(
         expert_idx,
@@ -288,24 +248,65 @@ def _predict_expert_per_core_bytes(
         assigner=assigner,
         assignment_provider=assignment_provider,
     )
-    return compute_expert_l1_bytes_per_core(assignments, shapes, core_grids, tile_hw=tile_hw, mesh_shape=mesh_shape)
+    return compute_expert_l1_bytes_per_core(
+        assignments,
+        shapes,
+        core_grids,
+        n_parallel_per_proj,
+        tile_hw=tile_hw,
+        mesh_shape=mesh_shape,
+    )
+
+
+def reduce_per_device_max(
+    per_device_totals: dict[tuple[int, int], dict[tuple[int, int], int]],
+) -> dict[tuple[int, int], int]:
+    """Reduce per-device per-core bytes via max-over-devices.
+
+    Picks the worst-case (largest) byte total for each core across all
+    mesh coordinates -- the right reduction for a uniform-across-devices
+    SRAM trim budget under BSPM, where different devices receive different
+    tile-format slabs and would otherwise diverge on expert count.
+    """
+    out: dict[tuple[int, int], int] = {}
+    for dev_totals in per_device_totals.values():
+        for core_xy, byte_cnt in dev_totals.items():
+            prev = out.get(core_xy, 0)
+            if byte_cnt > prev:
+                out[core_xy] = byte_cnt
+    return out
 
 
 def compute_expert_l1_bytes_per_core(
     assignments: list[np.ndarray],
     tensor_shapes: list[tuple[int, int]],
     core_grids: SramExpertCoreGrids,
+    n_parallel_per_proj: tuple[int, int, int],
     tile_hw: int = 32,
     mesh_shape: tuple[int, int] = (1, 1),
-) -> dict[tuple[int, int], int]:
-    """Per-core L1 byte cost for one expert across all projections.
+) -> dict[tuple[int, int], dict[tuple[int, int], int]]:
+    """Per-device, per-core L1 byte cost for one expert across all projections.
 
-    Each projection's shard-to-core tile mapping is computed via
-    ``compute_shard_page_mapping``, then per-tile byte sizes (determined by
-    the assignment codes) are summed per ``(core.x, core.y)``.  The per-core
-    totals are accumulated across all projections and returned keyed by
-    ``(x, y)``.  Cores that hold no shard for a given projection simply
-    contribute zero bytes for that projection.
+    Mirrors :func:`build_sram_routed_proj_ct`'s geometry exactly so the trim
+    loop can stop *before* an over-budget allocation.  Per-projection layout
+    is driven by ``n_parallel_per_proj`` (same triple the caller passes to
+    :func:`build_sram_routed_proj_ct`):
+
+      * ``k_par = num_cores // n_par`` ⇒ HEIGHT_SHARDED block stack when
+        ``k_par > 1``, WIDTH_SHARDED single-row when ``k_par == 1``.
+      * Per-core block is ``(K_per_dev/k_par, N_per_dev/n_par)`` in tiles,
+        indexed as ``(k_idx, n_idx) = (i // n_par, i % n_par)`` for the
+        i-th core in row-major ``corerange_to_cores`` order — identical to
+        the allocator's per-core slab assignment.
+
+    Per-device shard axis:
+      * gate / up — column-shard ``N`` across ``moe_tp`` devices.
+      * down — row-shard ``K`` across ``moe_tp`` devices.
+
+    Under uniform BFP4 every device's per-core dict is identical.  Under
+    BSPM the format-code distribution differs per device, so the trim loop
+    must reduce via :func:`reduce_per_device_max` for a uniform-across-
+    devices placement.
 
     Args:
         assignments: 3 projection assignment arrays in order
@@ -317,17 +318,19 @@ def compute_expert_l1_bytes_per_core(
         core_grids: :class:`SramExpertCoreGrids` giving one grid per
             projection.  Use :meth:`SramExpertCoreGrids.uniform` for symmetric
             unit-test weights.  The grids refer to **per-device** cores.
+        n_parallel_per_proj: ``(gate, up, down)`` triple of ``n_parallel``
+            values — same values the caller passes to
+            :func:`build_sram_routed_proj_ct`.
         tile_hw: Tile dimension (default 32).
         mesh_shape: ``(mesh_rows, mesh_cols)`` for TP-sharded SRAM slots
-            mirroring the shared-expert TP8 layout (dim-0 split along
-            mesh_rows, dim-1 split along mesh_cols).  Defaults to ``(1, 1)``
-            (no TP).
+            (dim-0 split along mesh_rows, dim-1 split along mesh_cols).
+            Defaults to ``(1, 1)`` (no TP).
 
     Returns:
-        ``dict[(core.x, core.y) -> bytes]`` summed across all projections.
-        Use :func:`compute_expert_l1_bytes` for the scalar max-per-core cost.
+        ``dict[(mesh_row, mesh_col) -> dict[(core.x, core.y) -> bytes]]``
+        summed across all projections.  Use :func:`compute_expert_l1_bytes`
+        for the scalar worst-case cost across all devices and cores.
     """
-    from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import compute_shard_page_mapping
     from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import bfp_tile_packed_size
 
     _MANT_BITS = {0: 7, 1: 3, 2: 1, 3: 0}
@@ -340,135 +343,100 @@ def compute_expert_l1_bytes_per_core(
         "compute_expert_l1_bytes expects exactly 3 projections in order [gate, up, down], "
         f"got {len(assignments)} assignments / {len(tensor_shapes)} shapes"
     )
-    projection_names = ("gate", "up", "down")
     mesh_rows, mesh_cols = mesh_shape
     moe_tp = mesh_rows * mesh_cols
-    # Single-source TP-layout decision: ``sram_projection_specs`` returns the
-    # same per-projection ``_MemoryConfigSpec`` triple consumed by the
-    # on-device allocator in ``prepare_compressed_sram_slots``.  Branching
-    # below is driven entirely by ``spec.layout`` / ``spec.shard_shape`` so
-    # the predictor and allocator cannot disagree on layout policy.
-    specs = sram_projection_specs(core_grids, mesh_shape)
+    per_proj_grids = (core_grids.gate, core_grids.up, core_grids.down)
+    per_proj_is_down = (False, False, True)
 
-    per_core_totals: dict[tuple[int, int], int] = {}
+    per_device_totals: dict[tuple[int, int], dict[tuple[int, int], int]] = {
+        (r, c): {} for r in range(mesh_rows) for c in range(mesh_cols)
+    }
 
-    for assignment, (K, N), proj_name in zip(assignments, tensor_shapes, projection_names):
-        spec = specs[proj_name]
-        if spec.layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
-            # Shared-expert HEIGHT_SHARDED gate/up (TP>1 only).  Each device
-            # holds ONE tp slab of the logical (K, N): full K, per_device_n =
-            # N/moe_tp columns.  Within the slab,
-            # ``reshuffle_block_to_height_sharded`` splits into k_par * n_par
-            # blocks, permutes by ``_crs_shard_permutation`` to match CRS
-            # iteration order, and stacks along height.  We approximate
-            # max-per-core bytes using tp_idx=0's slab (device (0, 0));
-            # different tp slabs can differ slightly in tile-format
-            # distribution but the per-core block structure is identical.
-            cfg = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
-            sh, sw = spec.shard_shape
-            k_par, n_par = cfg.k_parallel, cfg.n_parallel
-            sh_tiles = sh // tile_hw
-            sw_tiles = sw // tile_hw
-            core_range_set = spec.core_range_set
-            num_cores = core_range_set.num_cores()
-            assert (
-                num_cores == k_par * n_par
-            ), f"shared-expert {proj_name} grid must have {k_par * n_par} cores; got {num_cores}"
-            assert (
-                K == cfg.gate_proj_shape[0]
-            ), f"shared-expert {proj_name} requires K == {cfg.gate_proj_shape[0]}; got {K}"
-            per_device_n = cfg.gate_proj_shape[1]
-            assert N == per_device_n * moe_tp, (
-                f"shared-expert {proj_name} requires N == {per_device_n * moe_tp} "
-                f"(per_device_n={per_device_n} * moe_tp={moe_tp}); got {N}"
-            )
+    for proj_idx, (assignment, (K, N), grid, is_down) in enumerate(
+        zip(assignments, tensor_shapes, per_proj_grids, per_proj_is_down)
+    ):
+        cores = ttnn.corerange_to_cores(grid, row_wise=True)
+        num_cores = len(cores)
+        n_par = n_parallel_per_proj[proj_idx]
+        assert (
+            n_par > 0 and num_cores % n_par == 0
+        ), f"n_parallel ({n_par}) must divide num_cores ({num_cores}) for projection {proj_idx}"
+        k_par = num_cores // n_par
 
-            # Extract tp_idx=0 slab (first per_device_n cols) and apply the
-            # reshuffle permutation to obtain the per-core block order that
-            # matches the on-device HEIGHT_SHARDED memory config.
-            per_device_n_tiles = n_par * sw_tiles
-            assignment_dev = assignment[:, :per_device_n_tiles]
-            a = assignment_dev.reshape(k_par, sh_tiles, n_par, sw_tiles).transpose(0, 2, 1, 3).copy()
-            block_shards = a.reshape(k_par * n_par, sh_tiles, sw_tiles)
-            perm = cfg._crs_shard_permutation(core_range_set)
-            reshuffled_flat = block_shards[list(perm)].reshape(-1, sw_tiles).ravel()
-
-            shard_spec = ttnn.ShardSpec(core_range_set, [sh, sw], ttnn.ShardOrientation.ROW_MAJOR)
-            mem_config = ttnn.MemoryConfig(spec.layout, ttnn.BufferType.L1, shard_spec)
-            stacked_h = num_cores * sh
-            shard_mapping = compute_shard_page_mapping([stacked_h, sw], mem_config, tile_hw)
-
-            for core, page_indices in shard_mapping:
-                shard_bytes = int(tile_byte_lut[reshuffled_flat[list(page_indices)]].sum())
-                key = (core.x, core.y)
-                per_core_totals[key] = per_core_totals.get(key, 0) + shard_bytes
-            continue
-
-        # WIDTH_SHARDED path.  Covers:
-        #   (a) shared-expert down under TP>1 (``spec.shard_shape`` is the
-        #       explicit (K_per_dev=256, N_per_core=64) pair): per-device
-        #       slab = assignment[0:8, 0:224] (tp_idx=0, device (0, 0) in
-        #       logical tile coords -- strided across mesh rows/cols but
-        #       the per-core max-bytes is identical on all devices).
-        #   (b) single-device (TP=1) gate/up/down (``spec.shard_shape`` is
-        #       None): top-left (K, N) slab with per_core_N = N / num_cores.
-        num_cores = spec.core_range_set.num_cores()
-        if spec.shard_shape is not None:
-            K_dev, per_core_N = spec.shard_shape
-            N_dev = per_core_N * num_cores
-            expected_down_shape = (K_dev * moe_tp, per_core_N * num_cores)
-            assert (K, N) == expected_down_shape, (
-                f"shared-expert down requires logical (K, N) == {expected_down_shape} "
-                f"(K_per_dev * moe_tp, N_per_core * num_cores); got ({K}, {N})"
-            )
+        # Allocator (``prepare_compressed_sram_slots``) slices linearly by
+        # ``moe_tp`` (= mesh_rows * mesh_cols), assigning the d-th N-slab
+        # (gate/up) or K-slab (down) to linear device d.  Predictor MUST
+        # divide by ``moe_tp`` — dividing by ``mesh_cols`` / ``mesh_rows``
+        # would under-slice on a 4×2 mesh and overestimate per-core bytes.
+        if is_down:
+            assert K % moe_tp == 0, f"down K ({K}) must be divisible by moe_tp ({moe_tp})"
+            K_per_dev = K // moe_tp
+            N_per_dev = N
         else:
-            assert K % mesh_rows == 0, f"K ({K}) must be divisible by mesh_rows ({mesh_rows})"
-            assert N % mesh_cols == 0, f"N ({N}) must be divisible by mesh_cols ({mesh_cols})"
-            K_dev = K // mesh_rows
-            N_dev = N // mesh_cols
-            per_core_N = N_dev // num_cores
+            K_per_dev = K
+            assert N % moe_tp == 0, f"gate/up N ({N}) must be divisible by moe_tp ({moe_tp})"
+            N_per_dev = N // moe_tp
 
-        shard_spec = ttnn.ShardSpec(spec.core_range_set, [K_dev, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
-        mem_config = ttnn.MemoryConfig(spec.layout, ttnn.BufferType.L1, shard_spec)
-        shard_mapping = compute_shard_page_mapping([K_dev, N_dev], mem_config, tile_hw)
+        K_per_dev_tiles = K_per_dev // tile_hw
+        N_per_dev_tiles = N_per_dev // tile_hw
+        assert K_per_dev_tiles % k_par == 0, f"K_per_dev_tiles ({K_per_dev_tiles}) not divisible by k_par ({k_par})"
+        assert N_per_dev_tiles % n_par == 0, f"N_per_dev_tiles ({N_per_dev_tiles}) not divisible by n_par ({n_par})"
+        K_block_tiles = K_per_dev_tiles // k_par
+        N_block_tiles = N_per_dev_tiles // n_par
 
-        # Per-device assignment slab in logical tile coords.  For device
-        # (0, 0) both the legacy and shared-expert-down paths reduce to the
-        # top-left ``(K_dev_tiles, N_dev_tiles)`` block (the shared-expert
-        # K-reshape trick strides K-rows across devices but device (0, 0)
-        # always lands on logical tile rows [0, K_per_dev/tile_hw)).
-        K_dev_tiles = K_dev // tile_hw
-        N_dev_tiles = N_dev // tile_hw
-        assignment_dev = assignment[:K_dev_tiles, :N_dev_tiles]
-        assignment_flat = assignment_dev.ravel()
+        for tp_idx in range(moe_tp):
+            tp_coord = (tp_idx // mesh_cols, tp_idx % mesh_cols)
+            if is_down:
+                # Row-shard K across devices.
+                assignment_dev = assignment[tp_idx * K_per_dev_tiles : (tp_idx + 1) * K_per_dev_tiles, :N_per_dev_tiles]
+            else:
+                # Column-shard N across devices.
+                assignment_dev = assignment[:K_per_dev_tiles, tp_idx * N_per_dev_tiles : (tp_idx + 1) * N_per_dev_tiles]
 
-        for core, page_indices in shard_mapping:
-            shard_bytes = int(tile_byte_lut[assignment_flat[list(page_indices)]].sum())
-            key = (core.x, core.y)
-            per_core_totals[key] = per_core_totals.get(key, 0) + shard_bytes
+            dev_totals = per_device_totals[tp_coord]
+            for i, core in enumerate(cores):
+                k_idx = i // n_par
+                n_idx = i % n_par
+                block = assignment_dev[
+                    k_idx * K_block_tiles : (k_idx + 1) * K_block_tiles,
+                    n_idx * N_block_tiles : (n_idx + 1) * N_block_tiles,
+                ]
+                shard_bytes = int(tile_byte_lut[block.ravel()].sum())
+                key = (core.x, core.y)
+                dev_totals[key] = dev_totals.get(key, 0) + shard_bytes
 
-    return per_core_totals
+    return per_device_totals
 
 
 def compute_expert_l1_bytes(
     assignments: list[np.ndarray],
     tensor_shapes: list[tuple[int, int]],
     core_grids: SramExpertCoreGrids,
+    n_parallel_per_proj: tuple[int, int, int],
     tile_hw: int = 32,
     mesh_shape: tuple[int, int] = (1, 1),
 ) -> int:
-    """Max per-core L1 byte cost for one expert across all projections.
+    """Max per-core L1 byte cost for one expert across all devices and projections.
 
     Scalar wrapper around :func:`compute_expert_l1_bytes_per_core`; returns
-    the byte total on the most loaded core (or 0 when no projection lands on
-    any core).  Retained as a diagnostic/summary helper; the per-core dict
-    form is what ``prepare_compressed_sram_slots`` uses for
-    attention-plus-SRAM budget accounting against real allocator addresses.
+    the worst-case byte total across every (device, core) (or 0 when no
+    projection lands on any core).  Retained as a diagnostic/summary helper;
+    the per-device per-core dict form is what ``prepare_compressed_sram_slots``
+    uses for attention-plus-SRAM budget accounting against real allocator
+    addresses.
     """
-    per_core = compute_expert_l1_bytes_per_core(
-        assignments, tensor_shapes, core_grids, tile_hw=tile_hw, mesh_shape=mesh_shape
+    per_device = compute_expert_l1_bytes_per_core(
+        assignments,
+        tensor_shapes,
+        core_grids,
+        tile_hw=tile_hw,
+        mesh_shape=mesh_shape,
+        n_parallel_per_proj=n_parallel_per_proj,
     )
-    return max(per_core.values()) if per_core else 0
+    return max(
+        (b for per_core in per_device.values() for b in per_core.values()),
+        default=0,
+    )
 
 
 def _load_routing_frequencies(path: Path | None = None) -> dict[int, list[int]]:

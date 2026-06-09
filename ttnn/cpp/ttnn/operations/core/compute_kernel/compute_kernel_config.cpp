@@ -5,6 +5,7 @@
 #include <atomic>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "compute_kernel_config.hpp"
 #include "ttnn/device.hpp"
@@ -103,6 +104,15 @@ std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kerne
         compute_kernel_config.fp32_dest_acc_en,
         compute_kernel_config.packer_l1_acc,
         compute_kernel_config.dst_full_sync_en);
+}
+
+tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(const ComputeKernelConfig& config) {
+    return tt::tt_metal::experimental::ComputeHardwareConfig{
+        .math_fidelity = config.math_fidelity,
+        .fp32_dest_acc_en = config.fp32_dest_acc_en,
+        .dst_full_sync_en = config.dst_full_sync_en,
+        .math_approx_mode = config.math_approx_mode,
+    };
 }
 
 uint32_t get_dest_reg_count(

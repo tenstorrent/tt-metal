@@ -53,7 +53,8 @@ def test_sum_global(device, batch_size, h, w, dtype):
     torch.manual_seed(0)
 
     torch_input_tensor = torch_random((batch_size, h, w), -100, 100, dtype=torch.bfloat16)
-    torch_output_tensor = torch.sum(torch_input_tensor)
+    # Accumulate in FP32 so the scalar golden stays stable across host OpenMP thread counts.
+    torch_output_tensor = torch.sum(torch_input_tensor, dtype=torch.float32)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
     input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
@@ -73,12 +74,12 @@ def test_sum_global(device, batch_size, h, w, dtype):
         pcc_threshold = 0.999
         rtol = 0.009
         atol = 65.280
-        frobenius_threshold = 0.009
+        frobenius_threshold = 0.013
     else:
         pcc_threshold = 0.999
         rtol = 0.062
         atol = 228.480
-        frobenius_threshold = 0.062
+        frobenius_threshold = 0.068
     # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,

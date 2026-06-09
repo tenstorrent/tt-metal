@@ -38,14 +38,14 @@ void kernel_main() {
         for (uint32_t j = 0; j < half_row_size; j++) {
             cb_reserve_back(cb_id_in_no_mul, onetile);
             uint32_t in_no_mul_l1_write_addr = get_write_ptr(cb_id_in_no_mul);
-            noc_async_read_tile(in_no_mul_curr_id, s, in_no_mul_l1_write_addr);
+            noc_async_read_page(in_no_mul_curr_id, s, in_no_mul_l1_write_addr);
             noc_async_read_barrier();
             cb_push_back(cb_id_in_no_mul, onetile);
             in_no_mul_curr_id++;
 
             cb_reserve_back(cb_id_in_mul, onetile);
             uint32_t in1_l1_write_addr = get_write_ptr(cb_id_in_mul);
-            noc_async_read_tile(in_mul_curr_id, s, in1_l1_write_addr);
+            noc_async_read_page(in_mul_curr_id, s, in1_l1_write_addr);
             noc_async_read_barrier();
             cb_push_back(cb_id_in_mul, onetile);
             in_mul_curr_id++;

@@ -288,17 +288,19 @@ ProgramDescriptor RingDistributedSdpaDeviceOperation::RingDistributedSdpaProgram
         static_cast<uint32_t>(is_chunked),  //(uint32_t)is_chunked,
         block_size_t,
         page_table_stick_size,
-        0,                 // use_attention_sink
-        0,                 // use_mla
-        0,                 // mla_kv_overlap
-        qk_out_subblock_h  // qk_subblock_h
+        0,                  // use_attention_sink
+        0,                  // use_mla
+        0,                  // mla_kv_overlap
+        qk_out_subblock_h,  // qk_subblock_h
+        0,                  // sliding_window_size (ring uses no sliding window)
+        0                   // use_streaming_compute (ring uses legacy compute)
     };
-    // Semaphore placeholders (not used in ring, but kernel expects them at indices 27-30)
+    // Semaphore placeholders (not used in ring, but kernel expects them at indices 29-32)
     reader_compile_time_args.push_back(0);  // sender_semaphore_id
     reader_compile_time_args.push_back(0);  // receiver_semaphore_id
     reader_compile_time_args.push_back(0);  // valid_semaphore_id
     reader_compile_time_args.push_back(0);  // mcast_enabled
-    reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 31
+    reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 33
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -358,11 +360,10 @@ ProgramDescriptor RingDistributedSdpaDeviceOperation::RingDistributedSdpaProgram
         scale_packed,
         0,          //(uint32_t)sliding_window_size,
         0,          //(std::uint32_t)use_attention_sink,
-        0,          //(std::uint32_t)use_streaming_compute — always false for ring distributed (causal)
+        0,          //(std::uint32_t)use_streaming_compute - always false for ring distributed (causal)
         valid_Skt,  // arg 31: unpadded K tiles for streaming padded_k_tiles
-        0,          // arg 32: uniform_dataformat — unused when streaming is off
-        0,          // arg 33: k_partial_col — non-streaming, no partial mask emitted
-        static_cast<uint32_t>(use_zigzag_balancing),  // arg 34
+        0u,         // arg 32: k_partial_col - unused on ring's non-streaming path
+        static_cast<uint32_t>(use_zigzag_balancing),  // arg 33: unified zigzag remap
     };
     std::map<std::string, std::string> defines_map;
     defines_map["STATS_GRANULARITY"] = std::to_string(stats_granularity);

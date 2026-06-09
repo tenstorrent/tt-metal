@@ -8,25 +8,11 @@
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include <ttnn/operations/experimental/conv3d/device/kernels/conv3d_gather_tuning.hpp>
 
-// Pre-zero CB pages via NOC DMA from MEM_ZEROS so tile-alignment padding is zero.
-// Uses MEM_ZEROS_SIZE-aligned transactions (same pattern as zero_out_tiles in conv_reader_common.hpp).
-// padded_page_bytes must be a multiple of 16 to guarantee remainder alignment.
+// Pre-zero CB pages so tile-alignment padding is zero.
 template <uint32_t padded_page_bytes, typename Dst>
 FORCE_INLINE void pre_zero_pages(Noc noc, const Dst& dst, uint32_t offset, uint32_t num_pages) {
-    static_assert(padded_page_bytes % 16 == 0, "CB page size must be 16-byte aligned for NOC transactions");
-    uint32_t total = num_pages * padded_page_bytes;
-    experimental::set_read_state<MEM_ZEROS_SIZE>(noc, MEM_ZEROS_BASE);
-    while (total >= MEM_ZEROS_SIZE) {
-        experimental::read_with_state(noc, dst, MEM_ZEROS_BASE, {.offset_bytes = offset});
-        offset += MEM_ZEROS_SIZE;
-        total -= MEM_ZEROS_SIZE;
-    }
-    if (total > 0) {
-        UnicastEndpoint self_ep;
-        noc.async_read(
-            self_ep, dst, total, experimental::local_addr(MEM_ZEROS_BASE, noc.get_noc_id()), {.offset_bytes = offset});
-    }
-    noc.async_read_barrier();
+    noc.async_write_zeros(dst, num_pages * padded_page_bytes, {.offset_bytes = offset});
+    noc.write_zeros_l1_barrier();
 }
 
 inline int32_t clampIndex(int32_t idx, int32_t lower_bound, int32_t upper_bound) {
@@ -42,20 +28,7 @@ inline int32_t clampIndex(int32_t idx, int32_t lower_bound, int32_t upper_bound)
 
 template <uint32_t in_row_size_bytes, typename Dst>
 inline void zeroPad(Noc noc, const Dst& dst, uint32_t offset) {
-    // Zero-fill from MEM_ZEROS
-    constexpr uint32_t num_full_reads = in_row_size_bytes / MEM_ZEROS_SIZE;
-    constexpr uint32_t partial_read_size = in_row_size_bytes % MEM_ZEROS_SIZE;
-
-    UnicastEndpoint self_ep;
-    const auto zeros_src = experimental::local_addr(MEM_ZEROS_BASE, noc.get_noc_id());
-
-    for (uint32_t i = 0; i < num_full_reads; ++i) {
-        noc.async_read(self_ep, dst, MEM_ZEROS_SIZE, zeros_src, {.offset_bytes = offset});
-        offset += MEM_ZEROS_SIZE;
-    }
-    if (partial_read_size > 0) {
-        noc.async_read(self_ep, dst, partial_read_size, zeros_src, {.offset_bytes = offset});
-    }
+    noc.async_write_zeros(dst, in_row_size_bytes, {.offset_bytes = offset});
 }
 
 template <typename Reader>
@@ -193,6 +166,7 @@ struct ChunkWriter {
         in_chunk++;
         if (in_chunk == chunk_size) {
             noc.async_read_barrier();
+            noc.write_zeros_l1_barrier();
             cb.push_back(chunk_size);
             remaining -= chunk_size;
             in_chunk = 0;
@@ -213,6 +187,7 @@ struct ChunkWriter {
         if (remaining > 0) {
             if (in_chunk > 0) {
                 noc.async_read_barrier();
+                noc.write_zeros_l1_barrier();
                 cb.push_back(chunk_size);
                 remaining -= chunk_size;
             }
@@ -497,6 +472,7 @@ void gather_rows_to_shard(
         // Host-disabled: ring code is fully constexpr-elided, trid was never touched.
         noc.async_read_barrier();
     }
+    noc.write_zeros_l1_barrier();
 }
 
 // Coalesced shard gather reads each logical row into scratch in bank-major chunks, then
