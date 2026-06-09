@@ -179,6 +179,27 @@ def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT
         if tuple(tile_dimensions) not in ((32, 32), (16, 16)):
             pytest.skip("MxFp4 only supported for num_faces = 1, 4")
 
+    if (
+        formats.output_format == DataFormat.MxInt8
+        or formats.input_format == DataFormat.MxInt8
+    ):
+        if tuple(tile_dimensions) not in ((32, 32), (16, 16)):
+            pytest.skip("MxInt8 only supported for num_faces = 1, 4")
+
+    if (
+        formats.output_format == DataFormat.MxInt4
+        or formats.input_format == DataFormat.MxInt4
+    ):
+        if tuple(tile_dimensions) not in ((32, 32), (16, 16)):
+            pytest.skip("MxInt4 only supported for num_faces = 1, 4")
+
+    if (
+        formats.output_format == DataFormat.MxInt2
+        or formats.input_format == DataFormat.MxInt2
+    ):
+        if tuple(tile_dimensions) not in ((32, 32), (16, 16)):
+            pytest.skip("MxInt2 only supported for num_faces = 1, 4")
+
     tile_shape = construct_tile_shape(tile_dimensions)
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
@@ -190,17 +211,6 @@ def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT
     )
 
     num_faces = tile_shape.total_num_faces()
-
-    generate_golden = get_golden_generator(DataCopyGolden)
-    golden_tensor = generate_golden(
-        src_A,
-        formats.output_format,
-        num_faces=num_faces,
-        face_r_dim=tile_shape.face_r_dim,
-        input_dimensions=input_dimensions,
-        input_format=formats.input_format,
-        tile_shape=tile_shape,
-    )
 
     # Same method as test_pack.py for original ReLu testing and threshold tolerance issue
     unpack_to_dest = (
@@ -222,7 +232,7 @@ def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT
     # MxFp4 -> MxInt4 + MaxThresholdRelu). For MX outputs we route through
     # pack_src instead and apply the single output MX quantization ourselves
     # after relu. Non-MX outputs keep the existing path (saturate_integer etc.).
-    num_faces = 4
+
     generate_golden = get_golden_generator(DataCopyGolden)
     datacopy_out_format = (
         data_formats.pack_src
@@ -233,8 +243,10 @@ def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT
         src_A,
         datacopy_out_format,
         num_faces=num_faces,
+        face_r_dim=tile_shape.face_r_dim,
         input_dimensions=input_dimensions,
         input_format=formats.input_format,
+        tile_shape=tile_shape,
     )
 
     tensor_average = (
