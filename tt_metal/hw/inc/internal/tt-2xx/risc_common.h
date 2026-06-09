@@ -290,7 +290,8 @@ inline void invalidate_l2_cache(uint32_t hartid) {
 // No-op for Quasar DM cores. The data movement cores are completely coherent with each other.
 // Most cases that previous architectures invalidated the l1 cache either do not need
 // invalidation for Quasar or should invalidate the l2 cache instead.
-inline void invalidate_l1_cache() {}
+inline __attribute__((always_inline)) void invalidate_l1_cache() {
+}
 
 // Invalidate entire cache hierarchy: L2 + L1 D$ + L1 I$.
 // Must be called from all DM cores for proper synchronization.
