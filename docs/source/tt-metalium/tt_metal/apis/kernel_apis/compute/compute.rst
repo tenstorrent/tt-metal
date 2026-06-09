@@ -43,7 +43,7 @@ Compute (FPU/matrix engine)
   matmul_tiles
   matmul_block
   reduce_tile
-  transpose_wh_tile
+  transpose_tile
 
   tilize
   untilize
