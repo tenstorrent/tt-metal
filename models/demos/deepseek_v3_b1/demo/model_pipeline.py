@@ -4,6 +4,11 @@
 
 from __future__ import annotations
 
+# _migration_client is the nanobind extension built in tt-llm-engine, not on the
+# default path. Allow override via TT_MIGRATION_PYTHON_DIR; otherwise fall back to
+# the standard build output dir. Done before import so it works under mpirun ranks.
+import os as _os
+import sys as _sys
 import time
 from collections import deque
 from collections.abc import Callable
@@ -31,6 +36,17 @@ from models.demos.deepseek_v3_b1.model import (
     page_size_bytes,
     to_spec_input,
 )
+
+_migration_py_dirs = [
+    _os.environ.get("TT_MIGRATION_PYTHON_DIR"),
+    "/data/nolenzhao/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python",
+    "/data/nolenzhao/tt-llm-engine/disaggregation/migration/build/python",
+]
+for _d in _migration_py_dirs:
+    if _d and _os.path.isdir(_d) and _d not in _sys.path:
+        _sys.path.insert(0, _d)
+
+from _migration_client import MigrationLayerClient
 
 
 class ModelPipeline:
@@ -310,6 +326,18 @@ class ModelPipeline:
 
         # --- Prefill --------------------------------------------------------
         prefill_results = self.prefill_forward(prompt_token_ids)
+
+        ep0 = MigrationLayerClient("/ep0_cmd", "/ep0_table", "/ep0_resp")
+        ep0.start_poll_thread()
+
+        ep0.send_kv_chunk_table("/tmp/migration_test_table_620087.pb")
+        # ep0.connect_to(remote_endpoint_id=1, role="publisher", service_name="migration-0-1")
+        ep0.wait_ready()
+
+        tokens = [ep0.migrate(0, slot, slot, 0, 2, 0, 3) for slot in range(1)]
+        for t in tokens:
+            ep0.wait_complete(t)
+        ep0.shutdown(drain=True)
 
         # Seed the state machine with both pages from the last prefill write,
         # then read from the pipeline for all subsequent results.
