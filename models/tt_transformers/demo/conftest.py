@@ -21,8 +21,12 @@ def pytest_addoption(parser):
     parser.addoption(
         "--paged_attention", action="store", type=bool, help="Whether to use paged attention or default attention"
     )
-    parser.addoption("--page_params", action="store", type=json.loads, help="Page parameters for paged attention (JSON dict)")
-    parser.addoption("--sampling_params", action="store", type=json.loads, help="Sampling parameters for decoding (JSON dict)")
+    parser.addoption(
+        "--page_params", action="store", type=json.loads, help="Page parameters for paged attention (JSON dict)"
+    )
+    parser.addoption(
+        "--sampling_params", action="store", type=json.loads, help="Sampling parameters for decoding (JSON dict)"
+    )
     parser.addoption(
         "--stop_at_eos", action="store", type=int, help="Whether to stop decoding when the model generates an EoS token"
     )

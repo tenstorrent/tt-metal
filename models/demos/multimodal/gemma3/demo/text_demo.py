@@ -922,7 +922,9 @@ def test_demo_text(
     is_seqlen_sweep = isinstance(input_prompts, list) and len(input_prompts) > 1 and isinstance(input_prompts[0], str)
     if is_seqlen_sweep:  # seqlen-sweep: list of file paths, loaded per step in repeat_batch_prompts
         seqlen_sweep_files = input_prompts
-        logger.info(f"Seqlen sweep: running {len(seqlen_sweep_files)} steps: {[f.split('_')[-1] for f in seqlen_sweep_files]}")
+        logger.info(
+            f"Seqlen sweep: running {len(seqlen_sweep_files)} steps: {[f.split('_')[-1] for f in seqlen_sweep_files]}"
+        )
     elif len(input_prompts) == 1:  # Manual input
         input_prompts = input_prompts * global_batch_size
     else:  # Inputs from file
@@ -995,10 +997,18 @@ def test_demo_text(
 
     repeat_batch_prompts = []
     if is_seqlen_sweep:
-        label_to_len = {"1k": 1024, "2k": 2048, "4k": 4096, "8k": 8192, "16k": 16384, "32k": 32768, "64k": 65536, "128k": 131072}
+        label_to_len = {
+            "1k": 1024,
+            "2k": 2048,
+            "4k": 4096,
+            "8k": 8192,
+            "16k": 16384,
+            "32k": 32768,
+            "64k": 65536,
+            "128k": 131072,
+        }
         filtered_files = [
-            f for f in seqlen_sweep_files
-            if label_to_len.get(Path(f).stem.split("_")[-1], 0) <= max_seq_len
+            f for f in seqlen_sweep_files if label_to_len.get(Path(f).stem.split("_")[-1], 0) <= max_seq_len
         ]
         if not filtered_files:
             pytest.skip(f"No sweep prompt files fit within max_seq_len={max_seq_len}")

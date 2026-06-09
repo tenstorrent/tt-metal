@@ -783,7 +783,10 @@ def prepare_generator_args(
             1,  # batch_size
             32,  # max_generated_tokens (minimal decode to verify prefill works)
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048}, # page_params (fits N150; Galaxy overrides via --page_params)
+            {
+                "page_block_size": 64,
+                "page_max_num_blocks_per_dp": 2048,
+            },  # page_params (fits N150; Galaxy overrides via --page_params)
             {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             True,  # ci_only
