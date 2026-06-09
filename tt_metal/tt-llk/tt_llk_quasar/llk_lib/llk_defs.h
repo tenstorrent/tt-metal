@@ -73,10 +73,9 @@ enum class Transpose : std::uint8_t
 
 enum class TilizeUnpackerSel : std::uint8_t
 {
-    None  = 0,
-    UnpA  = 1,
-    UnpB  = 2,
-    UnpAB = 3,
+    UnpA  = 0,
+    UnpB  = 1,
+    UnpAB = 2,
 };
 
 enum class SfpuType : std::uint32_t
