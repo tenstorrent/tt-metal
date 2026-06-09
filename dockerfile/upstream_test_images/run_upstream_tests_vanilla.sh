@@ -86,20 +86,12 @@ test_suite_bh_single_pcie_llama_demo_tests() {
 test_suite_bh_multi_pcie_metal_unit_tests() {
     echo "[upstream-tests] Running BH LLMBox metal unit tests"
 
-    # Sim HW deskbox has 8 connections so we need to pass in the min-connections arg
-    # This changes the connection count assert == 4 to assert >= 4
-    if [[ "$hw_topology" == "blackhole_deskbox" ]]; then
-        local min_connections_arg="--min-connections 4"
-    else
-        local min_connections_arg=""
-    fi
-
     # Health check loop. Needed due to the following issues:
     # https://tenstorrent.atlassian.net/browse/SYS-1634
     # https://tenstorrent.atlassian.net/browse/BH-84
     for i in {1..10}; do
         echo "Health check attempt $i"
-        if tt-smi -r >/dev/null 2>&1 && ./build/test/tt_metal/tt_fabric/test_system_health $min_connections_arg; then
+        if tt-smi -r >/dev/null 2>&1 && ./build/test/tt_metal/tt_fabric/test_system_health; then
             echo "Health checks passed"
             break
         fi
@@ -128,7 +120,7 @@ test_suite_bh_multi_pcie_metal_unit_tests() {
 test_suite_bh_multi_pcie_llama_demo_tests() {
     echo "[upstream-tests] Running BH multi-pcie upstream Llama demo model tests for topology: $hw_topology"
 
-    if [[ "$hw_topology" == "blackhole_deskbox" ]] || [[ "$hw_topology" == "blackhole_p300" ]]; then
+    if [[ "$hw_topology" == "blackhole_p300" ]]; then
         local data_parallel_devices="2"
     elif [[ "$hw_topology" == "blackhole_llmbox" ]] || [[ "$hw_topology" == "blackhole_qb_ge" ]]; then
         local data_parallel_devices="4"
@@ -147,7 +139,7 @@ test_suite_bh_multi_pcie_llama_demo_tests() {
 test_suite_bh_multi_pcie_llama_stress_tests() {
     echo "[upstream-tests] Running BH multi-pcie upstream Llama stress model tests for topology: $hw_topology"
 
-    if [[ "$hw_topology" == "blackhole_deskbox" ]] || [[ "$hw_topology" == "blackhole_p300" ]]; then
+    if [[ "$hw_topology" == "blackhole_p300" ]]; then
         local data_parallel_devices="2"
     elif [[ "$hw_topology" == "blackhole_llmbox" ]] || [[ "$hw_topology" == "blackhole_qb_ge" ]]; then
         local data_parallel_devices="4"
@@ -288,11 +280,6 @@ test_suite_bh_single_pcie_python_unit_tests
 test_suite_bh_single_pcie_metal_unit_tests"
 
 hw_topology_test_suites["blackhole_llmbox"]="
-test_suite_bh_multi_pcie_metal_unit_tests
-test_suite_bh_pcie_didt_tests
-test_suite_bh_multi_pcie_llama_demo_tests"
-
-hw_topology_test_suites["blackhole_deskbox"]="
 test_suite_bh_multi_pcie_metal_unit_tests
 test_suite_bh_pcie_didt_tests
 test_suite_bh_multi_pcie_llama_demo_tests"
