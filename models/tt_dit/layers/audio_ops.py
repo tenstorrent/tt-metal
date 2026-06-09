@@ -209,6 +209,17 @@ def _t_neighbor_pad(
     )
 
 
+# conv1d_depthwise is ~3.5x faster than the MAC fallback but diverges from it by ~1.35% RMSE
+# on the anti-alias filters: its tilized-matmul reduction reorders the kaiser sinc's
+# alternating-sign taps, compressing high-frequency amplitude (≈0.9 dB PSNR). MAC is the
+# numerical baseline — vs the torch reference it is ~2x closer (1.3% vs 2.6% RMSE), and the
+# extra conv1d error is audible as faint broadband static (~1s near the 2s mark in the AV demo).
+# Default to MAC for audio fidelity; flip to conv1d_depthwise only once a reduction-faithful
+# kernel exists. The MAC slice/mul/add ops are host-dispatch-bound, so the eager penalty mostly
+# vanishes under trace mode.
+_USE_CONV1D_DEPTHWISE = False
+
+
 def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
     """Valid depthwise filter (same K taps on every channel):
     ``y[b, t, c] = sum_{j<K} taps[j] * x[b, t*stride + j, c]`` on an
@@ -217,8 +228,31 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
 
     ``cache`` is accepted for API compatibility but unused.
     """
-    del mesh_device, cache
-    return ttnn.experimental.conv1d_depthwise(x_BTC, taps=taps, stride=stride, dtype=dtype)
+    del cache
+    if _USE_CONV1D_DEPTHWISE:
+        del mesh_device
+        return ttnn.experimental.conv1d_depthwise(x_BTC, taps=taps, stride=stride, dtype=dtype)
+    del mesh_device
+    B, T_pad, C = int(x_BTC.shape[0]), int(x_BTC.shape[1]), int(x_BTC.shape[2])
+    K = len(taps)
+    T_out = (T_pad - K) // stride + 1
+    y = None
+    for j in range(K):
+        w = float(taps[j])
+        if stride == 1:
+            slice_j = ttnn.slice(x_BTC, [0, j, 0], [B, j + T_out, C])
+        else:
+            slice_j = ttnn.slice(x_BTC, [0, j, 0], [B, j + (T_out - 1) * stride + 1, C], [1, stride, 1])
+        scaled = ttnn.multiply(slice_j, w)
+        ttnn.deallocate(slice_j)
+        if y is None:
+            y = scaled
+        else:
+            y_new = ttnn.add(y, scaled)
+            ttnn.deallocate(y)
+            ttnn.deallocate(scaled)
+            y = y_new
+    return y
 
 
 def _all_gather_t(ccl_manager, x: "ttnn.Tensor", parallel_config) -> "ttnn.Tensor":

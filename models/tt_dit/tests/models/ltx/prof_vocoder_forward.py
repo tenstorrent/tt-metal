@@ -307,8 +307,11 @@ def test_prof_vocoder_trace(mesh_device, device_params):
 
     max_abs = (host_ref - host_tr).abs().max().item()
 
+    import models.tt_dit.layers.audio_ops as _ao
+
     print(
-        f"\nTRACE eager_device={eager_ms:.2f}ms trace_replay={trace_ms:.2f}ms "
+        f"\nTRACE depthwise={'conv1d' if _ao._USE_CONV1D_DEPTHWISE else 'MAC'} "
+        f"eager_device={eager_ms:.2f}ms trace_replay={trace_ms:.2f}ms "
         f"speedup={eager_ms/trace_ms:.2f}x max|Δ|(trace vs eager)={max_abs:.3e}",
         flush=True,
     )
