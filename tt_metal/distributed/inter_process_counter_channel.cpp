@@ -99,7 +99,7 @@ InterProcessCounterChannel::InterProcessCounterChannel(const std::string& shm_na
 // Connector-side factory.
 //
 // Polls shm_open until the owner has exported the segment or
-// connect_timeout_ms elapses. On attach, atomically reads
+// connect_timeout_ms elapses. On attach, reads
 // prior_clean_shutdown and resets it to 0 (so this connector's own
 // dtor write is the only bit the NEXT connector sees).
 // =============================================================================
