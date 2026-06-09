@@ -33,9 +33,11 @@
   "gemma-4-26B-A4B-it": {
     "1x4": {
       "test_attention_prefill[blackhole-seq4096-global-1x4]": 0.97,
+      "test_attention_prefill[blackhole-seq8192-global-1x4]": 0.97,
       "test_layer_forward[blackhole-prefill_128-sliding-1x4]": 0.97,
       "test_layer_forward[blackhole-prefill_1024-sliding-1x4]": 0.97,
-      "test_layer_forward[blackhole-prefill_4096-sliding-1x4]": 0.97
+      "test_layer_forward[blackhole-prefill_4096-sliding-1x4]": 0.97,
+      "test_layer_forward[blackhole-prefill_8192-sliding-1x4]": 0.97
     },
     "1x8": {
       "test_attention_prefill[wormhole_b0-seq1024-global-1x8]": 0.98,
