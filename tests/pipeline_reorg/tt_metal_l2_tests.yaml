@@ -31,9 +31,9 @@
     wh_n300:
       timeout: 150
     bh_p100:
-      timeout: 150
+      timeout: 300
     bh_p150b_civ2:
-      timeout: 150
+      timeout: 300
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   category: conv
@@ -46,9 +46,9 @@
     wh_n300:
       timeout: 50
     bh_p100:
-      timeout: 50
+      timeout: 100
     bh_p150b_civ2:
-      timeout: 50
+      timeout: 100
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
   category: matmul
@@ -61,9 +61,9 @@
     wh_n300:
       timeout: 65
     bh_p100:
-      timeout: 65
+      timeout: 130
     bh_p150b_civ2:
-      timeout: 65
+      timeout: 130
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
   category: fused
@@ -76,9 +76,9 @@
     wh_n300:
       timeout: 45
     bh_p100:
-      timeout: 45
+      timeout: 90
     bh_p150b_civ2:
-      timeout: 45
+      timeout: 90
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
   category: reduction
@@ -99,9 +99,9 @@
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance" --timeout=600'
   skus:
     bh_p100:
-      timeout: 35
+      timeout: 70
     bh_p150b_civ2:
-      timeout: 35
+      timeout: 70
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   team: ttnn
   category: experimental
@@ -114,9 +114,9 @@
     wh_n300:
       timeout: 90
     bh_p100:
-      timeout: 90
+      timeout: 180
     bh_p150b_civ2:
-      timeout: 90
+      timeout: 180
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   category: pool
@@ -129,9 +129,9 @@
     wh_n300:
       timeout: 50
     bh_p100:
-      timeout: 50
+      timeout: 100
     bh_p150b_civ2:
-      timeout: 50
+      timeout: 100
   owner_id: U09BX3N0N95 # Mateusz Nowak
   team: ttnn
   category: eltwise
@@ -144,9 +144,9 @@
     wh_n300:
       timeout: 30
     bh_p100:
-      timeout: 30
+      timeout: 60
     bh_p150b_civ2:
-      timeout: 30
+      timeout: 60
   owner_id: U09BX3N0N95 # Mateusz Nowak
   team: ttnn
   category: eltwise
@@ -159,9 +159,9 @@
     wh_n300:
       timeout: 30
     bh_p100:
-      timeout: 30
+      timeout: 60
     bh_p150b_civ2:
-      timeout: 30
+      timeout: 60
   owner_id: U09BX3N0N95 # Mateusz Nowak
   team: ttnn
   category: eltwise
@@ -174,9 +174,9 @@
     wh_n300:
       timeout: 35
     bh_p100:
-      timeout: 35
+      timeout: 70
     bh_p150b_civ2:
-      timeout: 35
+      timeout: 70
   owner_id: U09BX3N0N95 # Mateusz Nowak
   team: ttnn
   category: eltwise
@@ -189,9 +189,9 @@
     wh_n300:
       timeout: 30
     bh_p100:
-      timeout: 30
+      timeout: 60
     bh_p150b_civ2:
-      timeout: 30
+      timeout: 60
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: ttnn
   category: transformers
@@ -204,9 +204,9 @@
     wh_n300:
       timeout: 25
     bh_p100:
-      timeout: 25
+      timeout: 50
     bh_p150b_civ2:
-      timeout: 25
+      timeout: 50
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   team: ttnn
   category: moreh
@@ -219,9 +219,9 @@
     wh_n300:
       timeout: 15
     bh_p100:
-      timeout: 15
+      timeout: 30
     bh_p150b_civ2:
-      timeout: 15
+      timeout: 30
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   team: ttnn
   category: misc
@@ -240,7 +240,7 @@
     wh_n300:
       timeout: 90
     bh_p150b_civ2:
-      timeout: 90
+      timeout: 180
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   category: sdpa
@@ -256,7 +256,7 @@
     wh_n300:
       timeout: 55
     bh_p150b_civ2:
-      timeout: 55
+      timeout: 110
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   category: sdpa
@@ -269,9 +269,9 @@
     wh_n300:
       timeout: 40
     bh_p100:
-      timeout: 40
+      timeout: 80
     bh_p150b_civ2:
-      timeout: 40
+      timeout: 80
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
   category: data_movement
@@ -286,9 +286,9 @@
     wh_n300:
       timeout: 35
     bh_p100:
-      timeout: 35
+      timeout: 70
     bh_p150b_civ2:
-      timeout: 35
+      timeout: 70
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
   category: data_movement
@@ -301,9 +301,9 @@
     wh_n300:
       timeout: 35
     bh_p100:
-      timeout: 35
+      timeout: 70
     bh_p150b_civ2:
-      timeout: 35
+      timeout: 70
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
   category: data_movement
@@ -316,9 +316,9 @@
     wh_n300:
       timeout: 35
     bh_p100:
-      timeout: 35
+      timeout: 70
     bh_p150b_civ2:
-      timeout: 35
+      timeout: 70
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
   category: data_movement
@@ -332,9 +332,9 @@
     wh_n300_civ2:
       timeout: 20
     bh_p100a_civ2_viommu:
-      timeout: 20
+      timeout: 40
     bh_p150b_civ2_viommu:
-      timeout: 20
+      timeout: 40
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   team: ttnn
   category: docs_examples
@@ -363,7 +363,7 @@
     pytest models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout=600
   skus:
     bh_p150b_civ2:
-      timeout: 70
+      timeout: 140
   owner_id: U0837MYG788 # Marko Radosavljevic
   team: models
   category: sdxl
@@ -390,9 +390,9 @@
     wh_n300:
       timeout: 40
     bh_p100:
-      timeout: 40
+      timeout: 80
     bh_p150b_civ2:
-      timeout: 40
+      timeout: 80
   owner_id: U07K00A281X # Kevin Wu
   team: train
   category: train

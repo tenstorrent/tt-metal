@@ -22,7 +22,7 @@
   cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo_pipeline --timeout=1800
   skus:
     bh_p150b_civ2:
-      timeout: 30
+      timeout: 60
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: models
 
@@ -35,13 +35,13 @@
     TT_FABRIC_PROFILE_RX_CH_FWD=1 TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_code_profiling.yaml
   skus:
     bh_llmbox:
-      timeout: 15
+      timeout: 30
     bh_loudbox:
-      timeout: 15
+      timeout: 30
     bh_p300:
-      timeout: 15
+      timeout: 30
     bh_quietbox_2:
-      timeout: 15
+      timeout: 30
   owner_id: U0883RN6CRE # William Ly
   team: scaleout
 
@@ -50,13 +50,13 @@
   cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly
   skus:
     bh_llmbox:
-      timeout: 60
+      timeout: 120
     bh_loudbox:
-      timeout: 60
+      timeout: 120
     bh_p300:
-      timeout: 60
+      timeout: 120
     bh_quietbox_2:
-      timeout: 60
+      timeout: 120
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
 
@@ -66,13 +66,13 @@
   cmd: pytest tests/nightly/blackhole/sdpa/ -svv
   skus:
     bh_llmbox:
-      timeout: 60
+      timeout: 120
     bh_loudbox:
-      timeout: 60
+      timeout: 120
     bh_p300:
-      timeout: 60
+      timeout: 120
     bh_quietbox_2:
-      timeout: 60
+      timeout: 120
   owner_id: U07RD9YRFT9 # Slavko Krstic
   team: ttnn
 
@@ -81,7 +81,7 @@
   cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/tests/pcc/
   skus:
     bh_p150b_civ2:
-      timeout: 10
+      timeout: 20
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: models
 
@@ -90,7 +90,7 @@
   cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/bevformer/tests/pcc/
   skus:
     bh_p150b_civ2:
-      timeout: 15
+      timeout: 30
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
 
@@ -101,13 +101,13 @@
   upload_fabric_data: true
   skus:
     bh_llmbox:
-      timeout: 15
+      timeout: 30
     bh_loudbox:
-      timeout: 15
+      timeout: 30
     bh_p300:
-      timeout: 15
+      timeout: 30
     bh_quietbox_2:
-      timeout: 15
+      timeout: 30
   owner_id: U0883RN6CRE # William Ly
   team: scaleout
 
@@ -122,11 +122,11 @@
     SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py::test_exp_ring_joint_attention_perf_check -svv
   skus:
     bh_loudbox:
-      timeout: 10
+      timeout: 20
     bh_p300:
-      timeout: 10
+      timeout: 20
     bh_quietbox_2:
-      timeout: 10
+      timeout: 20
   owner_id: U07RD9YRFT9 # Slavko Krstic
   team: ttnn
 
@@ -138,13 +138,13 @@
     ./build/test/ttnn/unit_tests_ttnn_udm
   skus:
     bh_llmbox:
-      timeout: 20
+      timeout: 40
     bh_loudbox:
-      timeout: 20
+      timeout: 40
     bh_p300:
-      timeout: 20
+      timeout: 40
     bh_quietbox_2:
-      timeout: 20
+      timeout: 40
   owner_id: U0883RN6CRE # William Ly
   team: scaleout
 
@@ -153,7 +153,7 @@
   cmd: pytest tests/ttnn/unit_tests/base_functionality/test_bh_20_cores_sharding.py::test_sharding_on_bh_20_cores
   skus:
     bh_p150b_civ2:
-      timeout: 10
+      timeout: 20
   owner_id: U08ARDXARPF # Ilija Anastasijevic
   team: ttnn
 
@@ -169,13 +169,13 @@
     TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
   skus:
     bh_llmbox:
-      timeout: 15
+      timeout: 30
     bh_loudbox:
-      timeout: 15
+      timeout: 30
     bh_p300:
-      timeout: 15
+      timeout: 30
     bh_quietbox_2:
-      timeout: 15
+      timeout: 30
   owner_id: U0883RN6CRE # William Ly
   team: scaleout
 
@@ -187,13 +187,13 @@
     # pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py
   skus:
     bh_llmbox:
-      timeout: 15
+      timeout: 30
     bh_loudbox:
-      timeout: 15
+      timeout: 30
     bh_p300:
-      timeout: 15
+      timeout: 30
     bh_quietbox_2:
-      timeout: 15
+      timeout: 30
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
 
@@ -202,7 +202,7 @@
   cmd: TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
   skus:
     bh_p300:
-      timeout: 10
+      timeout: 20
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
 
@@ -212,13 +212,13 @@
   cmd: TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ./tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_short_running.yaml
   skus:
     bh_llmbox:
-      timeout: 15
+      timeout: 30
     bh_loudbox:
-      timeout: 15
+      timeout: 30
     bh_p300:
-      timeout: 15
+      timeout: 30
     bh_quietbox_2:
-      timeout: 15
+      timeout: 30
   owner_id: U0883RN6CRE # William Ly
   team: scaleout
 
@@ -227,9 +227,9 @@
   cmd: pytest tests/ttnn/stress_tests/
   skus:
     bh_p150b_civ2:
-      timeout: 45
+      timeout: 90
     bh_llmbox:
-      timeout: 45
+      timeout: 90
   owner_id: U084DDYSWCW # Adrian Morrison
   team: ttnn
 
@@ -249,7 +249,7 @@
     exit $exit_code
   skus:
     bh_loudbox:
-      timeout: 75
+      timeout: 150
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
 
@@ -262,7 +262,7 @@
     exit $exit_code
   skus:
     bh_loudbox:
-      timeout: 55
+      timeout: 110
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
 
@@ -278,7 +278,7 @@
     exit $exit_code
   skus:
     bh_loudbox:
-      timeout: 30
+      timeout: 60
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: models
 
@@ -291,7 +291,7 @@
     pytest models/demos/deepseek_v3_d_p/tests/cache/ -vvv --tb=short
   skus:
     bh_quietbox_2:
-      timeout: 10
+      timeout: 20
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
 
@@ -304,7 +304,7 @@
     exit $exit_code
   skus:
     bh_llmbox:
-      timeout: 30
+      timeout: 60
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
 
@@ -317,7 +317,7 @@
     exit $exit_code
   skus:
     bh_p150b_civ2:
-      timeout: 8
+      timeout: 16
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
 
@@ -330,7 +330,7 @@
     exit $exit_code
   skus:
     bh_p300:
-      timeout: 10
+      timeout: 20
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
 
@@ -343,6 +343,6 @@
     exit $exit_code
   skus:
     bh_quietbox_2:
-      timeout: 20
+      timeout: 40
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models

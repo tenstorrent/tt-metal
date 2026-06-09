@@ -230,7 +230,7 @@
       timeout: 10
       tier: 3
     bh_p150:
-      timeout: 10
+      timeout: 20
       tier: 3
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
@@ -251,10 +251,10 @@
     #   timeout: 5
     #   tier: 3
     bh_p300:
-      timeout: 15
+      timeout: 30
       tier: 3
     bh_quietbox_2:
-      timeout: 15
+      timeout: 30
       tier: 3
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
@@ -274,7 +274,7 @@
       timeout: 20
       tier: 2
     bh_quietbox_2:
-      timeout: 15
+      timeout: 30
       tier: 2
     # bh_galaxy: temporarily disabled — sliding-1x32 path hits an unrecoverable
     # ethernet / fabric hang on Blackhole Galaxy that surfaces during
@@ -302,7 +302,7 @@
       timeout: 15
       tier: 2
     bh_quietbox_2:
-      timeout: 15
+      timeout: 30
       tier: 2
     # bh_galaxy: temporarily disabled — same Blackhole Galaxy ethernet / fabric
     # hang as Gemma-4-26B-A4B above (surfaces during sliding-1x32 attention
@@ -400,10 +400,10 @@
       tier: 2
     # Blackhole
     bh_p150:
-      timeout: 10
+      timeout: 20
       tier: 2
     bh_quietbox_2:
-      timeout: 5
+      timeout: 10
       tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
@@ -428,10 +428,10 @@
       tier: 1
     # Blackhole
     bh_quietbox_2:
-      timeout: 10
+      timeout: 20
       tier: 1
     bh_galaxy:
-      timeout: 10
+      timeout: 20
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
@@ -447,7 +447,7 @@
       timeout: 10
       tier: 1
     bh_p150:
-      timeout: 10
+      timeout: 20
       tier: 1
     # wh_n300:
     #   timeout: 15

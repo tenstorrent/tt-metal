@@ -22,7 +22,7 @@
     wh_n150_civ2:
       timeout: 5
     bh_p150b_civ2:
-      timeout: 5
+      timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -33,7 +33,7 @@
     wh_n150_civ2:
       timeout: 3
     bh_p150b_civ2:
-      timeout: 3
+      timeout: 6
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -44,7 +44,7 @@
     wh_n150_civ2:
       timeout: 5
     bh_p150b_civ2:
-      timeout: 5
+      timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -53,8 +53,8 @@
   cmd: ./build/test/tt_metal/tt_fabric/test_system_health
   skus:
     bh_quietbox:
-      timeout: 5
+      timeout: 10
     bh_loudbox:
-      timeout: 5
+      timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime

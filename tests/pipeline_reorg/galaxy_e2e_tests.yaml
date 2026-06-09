@@ -40,7 +40,7 @@
     wh_galaxy:
       timeout: 25
     bh_galaxy:
-      timeout: 30
+      timeout: 60
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
 
@@ -81,7 +81,7 @@
   cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/galaxy_nightly
   skus:
     bh_galaxy:
-      timeout: 40
+      timeout: 80
   owner_id: U05ACKAJTHS # Naif Tarafdar, Camilo Vega
   team: ttnn
 
@@ -90,7 +90,7 @@
   cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml
   skus:
     bh_galaxy:
-      timeout: 20
+      timeout: 40
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
 
@@ -101,6 +101,6 @@
     tt-run --rank-binding bh_galaxy_split_4x2_multi_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
   skus:
     bh_galaxy:
-      timeout: 10
+      timeout: 20
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout

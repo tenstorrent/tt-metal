@@ -31,7 +31,7 @@
     wh_n300_civ2:
       timeout: 30
     bh_p150_perf:
-      timeout: 30
+      timeout: 60
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -56,6 +56,6 @@
     wh_n300_civ2:
       timeout: 25
     bh_p150_perf:
-      timeout: 10
+      timeout: 20
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime

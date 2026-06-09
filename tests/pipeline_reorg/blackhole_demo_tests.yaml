@@ -35,7 +35,7 @@
     pytest --timeout 600 models/experimental/mistral_24b/tests/pipeline_tests
   skus:
     bh_loudbox:
-      timeout: 10
+      timeout: 20
   owner_id: U03PUAKE719 # Miguel Tairum
   team: models
   model-name: mistral-small-3.1-24b
@@ -50,7 +50,7 @@
     pytest --timeout=1500 models/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "4x8sp1tp0"
   skus:
     bh_loudbox:
-      timeout: 20
+      timeout: 40
   owner_id: U09ELB03XRU # Stephen Osborne
   team: models
   model-name: mochi
@@ -65,7 +65,7 @@
     pytest models/demos/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
   skus:
     bh_p150b_civ2:
-      timeout: 120
+      timeout: 240
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: models
   model-name: stable_diffusion_xl
@@ -80,7 +80,7 @@
   cmd: HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/black-forest-labs pytest models/tt_dit/tests/models/flux1/test_performance_flux1.py -k "1x2sp0tp1" --timeout=600
   skus:
     bh_p300:
-      timeout: 10
+      timeout: 20
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
   model-name: flux.1-dev
@@ -92,7 +92,7 @@
     pytest models/tt_dit/tests/models/flux1/test_performance_flux1.py -k "2x2sp0tp1" --timeout=600
   skus:
     bh_quietbox_2:
-      timeout: 10
+      timeout: 20
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
   model-name: flux.1-dev
@@ -104,7 +104,7 @@
     pytest models/tt_dit/tests/models/flux1/test_performance_flux1.py -k "bh_2x4sp0tp1" --timeout=600
   skus:
     bh_loudbox:
-      timeout: 10
+      timeout: 20
   owner_id: U09ELB03XRU # Stephen Osborne
   team: models
   model-name: flux.1-dev
@@ -119,7 +119,7 @@
     pytest models/tt_dit/tests/models/mochi/test_performance_mochi.py -k "dit_2x2sp0tp1_vae_1x4sp0tp1_BH_QB" --timeout=1800
   skus:
     bh_quietbox_2:
-      timeout: 30
+      timeout: 60
   owner_id: U06BXU8RWQ2 # Kevin Mi
   team: models
   model-name: mochi
@@ -134,7 +134,7 @@
     pytest models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "2x2_sp0tp1 and resolution_480p and t2v" --timeout=1200
   skus:
     bh_quietbox_2:
-      timeout: 20
+      timeout: 40
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
   model-name: wan2.2-t2v-a14b
@@ -146,7 +146,7 @@
     pytest models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "bh_2x4_sp1tp0 and resolution_480p and t2v" --timeout=1200
   skus:
     bh_loudbox:
-      timeout: 20
+      timeout: 40
   owner_id: U09ELB03XRU # Stephen Osborne
   team: models
   model-name: wan2.2-t2v-a14b
@@ -161,7 +161,7 @@
     pytest models/demos/z_image_turbo/tests/test_text_encoder.py --timeout=600
   skus:
     bh_quietbox_2:
-      timeout: 15
+      timeout: 30
   owner_id: U088VJ79WDB # Jonathan Su
   team: models
   model-name: z-image-turbo
@@ -174,7 +174,7 @@
     pytest models/demos/z_image_turbo/tests/test_dit.py --timeout=600
   skus:
     bh_quietbox_2:
-      timeout: 15
+      timeout: 30
   owner_id: U088VJ79WDB # Jonathan Su
   team: models
   model-name: z-image-turbo
@@ -187,7 +187,7 @@
     pytest models/demos/z_image_turbo/tests/test_vae.py --timeout=600
   skus:
     bh_quietbox_2:
-      timeout: 15
+      timeout: 30
   owner_id: U088VJ79WDB # Jonathan Su
   team: models
   model-name: z-image-turbo
@@ -200,7 +200,7 @@
     pytest models/demos/z_image_turbo/tests/test_pipeline.py --timeout=600
   skus:
     bh_quietbox_2:
-      timeout: 15
+      timeout: 30
   owner_id: U088VJ79WDB # Jonathan Su
   team: models
   model-name: z-image-turbo

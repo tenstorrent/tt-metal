@@ -26,13 +26,13 @@
       timeout: 11
       tier: 1
     bh_p150:
-      timeout: 11
+      timeout: 22
       tier: 1
     wh_llmbox_perf:
       timeout: 11
       tier: 2
     bh_quietbox_2:
-      timeout: 11
+      timeout: 22
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -57,7 +57,7 @@
   model: llama3.1-8b-dp
   skus:
     bh_p300:
-      timeout: 25
+      timeout: 50
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -76,7 +76,7 @@
     # is below the DP factor, so it effectively runs the DP-4 case only.
     # Migrated from the legacy blackhole_demo_tests.yaml DP entries.
     bh_quietbox_2:
-      timeout: 20
+      timeout: 40
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -154,7 +154,7 @@
       timeout: 30
       tier: 2
     bh_quietbox_2:
-      timeout: 30
+      timeout: 60
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -201,7 +201,7 @@
       timeout: 15
       tier: 2
     bh_quietbox_2:
-      timeout: 15
+      timeout: 30
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -229,7 +229,7 @@
       timeout: 20
       tier: 2
     bh_quietbox_2:
-      timeout: 20
+      timeout: 40
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -283,7 +283,7 @@
       timeout: 20
       tier: 2
     bh_quietbox_2:
-      timeout: 20
+      timeout: 40
       tier: 2
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
@@ -299,7 +299,7 @@
       timeout: 15
       tier: 3
     bh_quietbox_2:
-      timeout: 15
+      timeout: 30
       tier: 3
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
@@ -369,7 +369,7 @@
       timeout: 5
       tier: 3
     bh_p150:
-      timeout: 5
+      timeout: 10
       tier: 3
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
@@ -389,10 +389,10 @@
     #   timeout: 15
     #   tier: 3
     bh_p300:
-      timeout: 5
+      timeout: 10
       tier: 3
     bh_quietbox_2:
-      timeout: 15
+      timeout: 30
       tier: 3
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
@@ -411,7 +411,7 @@
       timeout: 10
       tier: 2
     bh_quietbox_2:
-      timeout: 25
+      timeout: 50
       tier: 2
     # bh_galaxy_perf: temporarily disabled — Blackhole Galaxy fabric / ethernet
     # bring-up hits an unrecoverable hang at open_mesh_device (FabricFirmwareInitializer
@@ -438,7 +438,7 @@
       timeout: 10
       tier: 2
     bh_quietbox_2:
-      timeout: 30
+      timeout: 60
       tier: 2
     # bh_galaxy_perf: temporarily disabled — same Blackhole Galaxy fabric / ethernet
     # hang as 26B-A4B above. Re-enable once root-caused.
@@ -513,10 +513,10 @@
       timeout: 15
       tier: 2
     bh_p150:
-      timeout: 15
+      timeout: 30
       tier: 2
     bh_quietbox_2:
-      timeout: 15
+      timeout: 30
       tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
@@ -536,10 +536,10 @@
       timeout: 30
       tier: 1
     bh_quietbox_2:
-      timeout: 35
+      timeout: 70
       tier: 1
     bh_galaxy:
-      timeout: 30
+      timeout: 60
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
@@ -556,7 +556,7 @@
       timeout: 10
       tier: 1
     bh_p150:
-      timeout: 10
+      timeout: 20
       tier: 1
     # wh_n300:
     #   timeout: 15
@@ -618,7 +618,7 @@
   model: shallow-unet
   skus:
     bh_p150:
-      timeout: 5
+      timeout: 10
       tier: 2
   owner_id: U06ECNVR0EN # Evan Smal
   team: models

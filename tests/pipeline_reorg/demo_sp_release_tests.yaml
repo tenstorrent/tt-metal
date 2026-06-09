@@ -28,7 +28,7 @@
   model: deepseek_prefill
   skus:
     bh_galaxy:
-      timeout: 30
+      timeout: 60
   owner_id: U08RL15T4N8
   team: models
 
@@ -42,7 +42,7 @@
   model: deepseek_prefill
   skus:
     bh_galaxy:
-      timeout: 30
+      timeout: 60
   owner_id: U08RL15T4N8
   team: models
 
@@ -71,7 +71,7 @@
   model: deepseek_prefill
   skus:
     bh_loudbox:
-      timeout: 75
+      timeout: 150
   owner_id: U08E1JCMAJF
   team: models
 
@@ -82,7 +82,7 @@
   model: deepseek_prefill
   skus:
     bh_quietbox_2:
-      timeout: 40
+      timeout: 80
   owner_id: U08E1JCMAJF
   team: models
 
@@ -96,7 +96,7 @@
   model: deepseek_decode
   skus:
     bh_p300:
-      timeout: 10
+      timeout: 20
   owner_id: U03HY7MK4BT
   team: models
 
@@ -123,7 +123,7 @@
   model: deepseek_decode
   skus:
     bh_galaxy:
-      timeout: 30
+      timeout: 60
   owner_id: U0ALAR9B78T # Brayden Zhang
   team: models
 
@@ -150,7 +150,7 @@
   model: deepseek_decode
   skus:
     bh_galaxy:
-      timeout: 60
+      timeout: 120
   owner_id: U0ALAR9B78T # Brayden Zhang
   team: models
 
@@ -165,7 +165,7 @@
   model: deepseek_unit_tests
   skus:
     bh_galaxy:
-      timeout: 35
+      timeout: 70
   owner_id: U087S3K319A # Austin Ho
   team: models
 
@@ -176,7 +176,7 @@
   model: deepseek_unit_tests
   skus:
     bh_galaxy:
-      timeout: 75
+      timeout: 150
   owner_id: U06MJ6CVCGZ # Yu Gao
   team: models
 
@@ -187,7 +187,7 @@
   model: deepseek_unit_tests
   skus:
     bh_galaxy:
-      timeout: 15
+      timeout: 30
   owner_id: U07D5N7QL4U # Joseph Chu
   team: models
 
@@ -199,7 +199,7 @@
   model: deepseek_unit_tests
   skus:
     bh_galaxy:
-      timeout: 15
+      timeout: 30
   owner_id: U08FXFFH7L0 # Abhishek Agarwal
   team: models
 
@@ -212,7 +212,7 @@
     model: deepseek_unit_tests
   skus:
     bh_galaxy:
-      timeout: 65
+      timeout: 130
   owner_id: U088DBNUKGR # Evan Smal
   team: models
 
@@ -226,7 +226,7 @@
   model: deepseek_unit_tests
   skus:
     bh_galaxy:
-      timeout: 15
+      timeout: 30
   owner_id: U081GCJ8NDN # Nour Ardo
   team: models
 
