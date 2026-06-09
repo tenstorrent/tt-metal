@@ -12,27 +12,6 @@ from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.common import Mode
 
 
-def _repeat_kv_ttnn(
-    kv: ttnn.Tensor,
-    repeats: int,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-) -> ttnn.Tensor:
-    """Repeat-interleave KV heads on TT: [B, Kv, S, D] -> [B, Kv*repeats, S, D]."""
-    if repeats == 1:
-        return kv
-    b, kv_heads, s, d = tuple(kv.shape)
-    repeated = []
-    for h in range(kv_heads):
-        head = ttnn.slice(kv, [0, h, 0, 0], [b, h + 1, s, d])
-        head_rep = ttnn.repeat(head, (1, repeats, 1, 1))
-        ttnn.deallocate(head)
-        repeated.append(head_rep)
-    out = ttnn.concat(repeated, dim=1, memory_config=memory_config)
-    for t in repeated:
-        ttnn.deallocate(t)
-    return out
-
-
 class VoxtralTTAttention:
     """GQA attention: fused QKV linear, optional RoPE, SDPA, output proj. Audio tokenizer: ``is_causal``, ``use_qk_norm``, ``attn_mask``."""
 
@@ -269,12 +248,10 @@ class VoxtralTTAttention:
             else:
                 k = k_rot
 
-        n_rep = self.num_attention_heads // self.num_key_value_heads
-        k_rep = _repeat_kv_ttnn(k, n_rep, memory_config=act_mem)
-        v_rep = _repeat_kv_ttnn(v, n_rep, memory_config=act_mem)
-        if n_rep > 1:
-            ttnn.deallocate(k)
-            ttnn.deallocate(v)
+        # GQA is handled natively by ttnn SDPA (requires only nqh % nkv == 0), so K/V are
+        # passed at num_key_value_heads directly. Materializing repeated KV heads here was
+        # responsible for a large slice/repeat/tilize/untilize op cluster (~15% of device
+        # time) with no functional benefit.
         _sdpa_kw = {
             "attn_mask": mask_tt,
             "is_causal": self.is_causal if mask_tt is None else False,
@@ -282,14 +259,14 @@ class VoxtralTTAttention:
         }
         if self.sdpa_compute_kernel_config is not None:
             _sdpa_kw["compute_kernel_config"] = self.sdpa_compute_kernel_config
-        attn_out = ttnn.transformer.scaled_dot_product_attention(q, k_rep, v_rep, **_sdpa_kw)
+        attn_out = ttnn.transformer.scaled_dot_product_attention(q, k, v, **_sdpa_kw)
         # SDPA defaults to DRAM output; move to L1 so nlp_concat_heads reads from L1.
         attn_out = ttnn.to_memory_config(attn_out, act_mem)
         if mask_owned and mask_tt is not None:
             ttnn.deallocate(mask_tt)
         ttnn.deallocate(q)
-        ttnn.deallocate(k_rep)
-        ttnn.deallocate(v_rep)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
 
         attn_out = ttnn.experimental.nlp_concat_heads(
             attn_out,
