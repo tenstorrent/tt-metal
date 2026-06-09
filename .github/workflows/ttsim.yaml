@@ -382,7 +382,7 @@ jobs:
         timeout-minutes: 10
         run: |
           if [[ "${{ matrix.arch }}" == "quasar" ]]; then
-            ./build/test/tt_metal/unit_tests_legacy --gtest_filter="QuasarMeshDeviceSingleCardFixture.QuasarComputeKernel*:QuasarMeshDeviceSingleCardFixture.QuasarCreateMultiple*:QuasarMeshDeviceSingleCardFixture.QuasarMultiSemaphore*:QuasarMeshDeviceSingleCardFixture.QuasarMultipleClusters*"
+            ./build/test/tt_metal/unit_tests_legacy --gtest_filter="QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelMultipleThreads:QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelSingleThread:QuasarMeshDeviceSingleCardFixture.QuasarCreateMultipleComputeKernelsSingleCluster:QuasarMeshDeviceSingleCardFixture.QuasarMultiSemaphorePipeline:QuasarMeshDeviceSingleCardFixture.QuasarMultipleClustersMultiSemaphorePipeline"
           else
             ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.IdleEthTestNocStreamRegs"
             ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDispatchFixture.IdleEthDRAMLoopbackSingleCore"
