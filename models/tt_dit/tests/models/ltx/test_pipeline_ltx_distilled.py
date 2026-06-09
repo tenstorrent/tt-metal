@@ -179,7 +179,8 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
     """Just the audio section of the AV pipeline: real checkpoint weights, real girl-clip
     latent shape (num_frames -> als.frames), no transformer/gemma (decode_audio never
     encodes prompts). Profiles cold (weight load + compile) vs warm (steady-state per-gen)
-    decode wall. LTX_TRACED=1 traces the main vocoder."""
+    decode wall. LTX_TRACED=1 traces the main vocoder (cold/warm timing only — the eager
+    torch-oracle quality block is skipped under trace; run LTX_TRACED=0 for the stats)."""
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
@@ -248,55 +249,60 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
 
     _save(wav, f"girl_audio_{'conv1d' if _ao._USE_CONV1D_DEPTHWISE else 'mac'}{'_traced' if traced else ''}.wav")
 
-    # vs the torch oracle: the diffusers vocoder+BWE on CPU with the real checkpoint weights is
-    # the ground truth (MAC is only an in-tree approximation, and conv1d-vs-MAC cancels any
-    # error common to both — e.g. a localized pipeline spike — so MAC alone is blind to it).
-    # Feed both depthwise paths the same TT mel; report per-1s-interval error-to-signal
-    # (rmse/σ + dB) + overall PCC vs torch. The absolute level (~−18 dB conv1d, ~−23 dB MAC) is
-    # the fp32/bf16 pipeline floor, reported but not gated; gate only a gross localized spike.
-    from models.tt_dit.tests.models.ltx.test_audio_components_ltx import _build_torch_stage_c_real
+    # The torch-oracle quality comparison runs eager only: on one pipeline the shape-keyed
+    # trace cache aliases the depthwise toggle, and traced->eager corrupts. Trace is
+    # bit-identical to eager (standalone eager-vs-traced isolation: max|Δ|=0), so run
+    # LTX_TRACED=0 for the stats; the cold/warm timing above already reflects LTX_TRACED.
+    if not traced:
+        # vs the torch oracle: the diffusers vocoder+BWE on CPU with the real checkpoint weights is
+        # the ground truth (MAC is only an in-tree approximation, and conv1d-vs-MAC cancels any
+        # error common to both — e.g. a localized pipeline spike — so MAC alone is blind to it).
+        # Feed both depthwise paths the same TT mel; report per-1s-interval error-to-signal
+        # (rmse/σ + dB) + overall PCC vs torch. The absolute level (~−18 dB conv1d, ~−23 dB MAC) is
+        # the fp32/bf16 pipeline floor, reported but not gated; gate only a gross localized spike.
+        from models.tt_dit.tests.models.ltx.test_audio_components_ltx import _build_torch_stage_c_real
 
-    z = pipeline.tt_audio_decoder.z_channels
-    audio_spatial = latent.reshape(1, latent.shape[1], z, latent.shape[2] // z).permute(0, 2, 1, 3).float()
-    mel = pipeline.tt_audio_decoder(audio_spatial)  # TT mel, fed to both TT and torch
-    _ao._USE_CONV1D_DEPTHWISE = True
-    w_conv = pipeline.tt_vocoder_with_bwe(mel).squeeze(0).float()
-    _ao._USE_CONV1D_DEPTHWISE = False
-    w_mac = pipeline.tt_vocoder_with_bwe(mel).squeeze(0).float()
-    with torch.no_grad():
-        w_torch = _build_torch_stage_c_real(default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors"))(mel.float()).squeeze(0).float()
-    _save(w_conv, "girl_audio_conv1d.wav")
-    _save(w_mac, "girl_audio_mac.wav")
-    _save(w_torch, "girl_audio_torch.wav")
+        z = pipeline.tt_audio_decoder.z_channels
+        audio_spatial = latent.reshape(1, latent.shape[1], z, latent.shape[2] // z).permute(0, 2, 1, 3).float()
+        mel = pipeline.tt_audio_decoder(audio_spatial)  # TT mel, fed to both TT and torch
+        _ao._USE_CONV1D_DEPTHWISE = True
+        w_conv = pipeline.tt_vocoder_with_bwe(mel).squeeze(0).float()
+        _ao._USE_CONV1D_DEPTHWISE = False
+        w_mac = pipeline.tt_vocoder_with_bwe(mel).squeeze(0).float()
+        with torch.no_grad():
+            w_torch = _build_torch_stage_c_real(default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors"))(mel.float()).squeeze(0).float()
+        _save(w_conv, "girl_audio_conv1d.wav")
+        _save(w_mac, "girl_audio_mac.wav")
+        _save(w_torch, "girl_audio_torch.wav")
 
-    nn = min(w_torch.shape[-1], w_conv.shape[-1], w_mac.shape[-1])
+        nn = min(w_torch.shape[-1], w_conv.shape[-1], w_mac.shape[-1])
 
-    def _vs_torch(test, name):
-        rows = []
-        for start in range(0, nn, sr):
-            r, t = w_torch[..., start : start + sr], test[..., start : start + sr]
-            sig = r.pow(2).mean().sqrt().item() + 1e-9
-            rr = ((r - t) ** 2).mean().sqrt().item() / sig
-            rows.append(rr)
-            logger.info(
-                f"[oracle] t={start//sr}s {name}-vs-torch rmse/σ={rr:.3e} ({20*math.log10(rr+1e-12):+.1f} dB) "
-                f"max|Δ|={(r - t).abs().max().item():.3e}"
+        def _vs_torch(test, name):
+            rows = []
+            for start in range(0, nn, sr):
+                r, t = w_torch[..., start : start + sr], test[..., start : start + sr]
+                sig = r.pow(2).mean().sqrt().item() + 1e-9
+                rr = ((r - t) ** 2).mean().sqrt().item() / sig
+                rows.append(rr)
+                logger.info(
+                    f"[oracle] t={start//sr}s {name}-vs-torch rmse/σ={rr:.3e} ({20*math.log10(rr+1e-12):+.1f} dB) "
+                    f"max|Δ|={(r - t).abs().max().item():.3e}"
+                )
+            pcc = torch.corrcoef(torch.stack([w_torch[..., :nn].flatten(), test[..., :nn].flatten()]))[0, 1].item()
+            worst_, med_ = max(rows), sorted(rows)[len(rows) // 2]
+            print(
+                f"\nAUDIO_GIRL {name}-vs-torch worst_rmse/σ={worst_:.3e} ({20*math.log10(worst_+1e-12):+.1f} dB) "
+                f"median={med_:.3e} ratio={worst_/(med_+1e-9):.2f} PCC={pcc:.5f}",
+                flush=True,
             )
-        pcc = torch.corrcoef(torch.stack([w_torch[..., :nn].flatten(), test[..., :nn].flatten()]))[0, 1].item()
-        worst_, med_ = max(rows), sorted(rows)[len(rows) // 2]
-        print(
-            f"\nAUDIO_GIRL {name}-vs-torch worst_rmse/σ={worst_:.3e} ({20*math.log10(worst_+1e-12):+.1f} dB) "
-            f"median={med_:.3e} ratio={worst_/(med_+1e-9):.2f} PCC={pcc:.5f}",
-            flush=True,
-        )
-        return worst_, med_
+            return worst_, med_
 
-    cw, cm = _vs_torch(w_conv, "conv1d")
-    _vs_torch(w_mac, "mac")
-    # Gross localized spike only: an interval >4x the median AND past a clearly-audible floor
-    # (rmse/σ 0.5 = −6 dB). The uniform conv1d level and content-driven variation pass; static
-    # (a burst far above the rest) fails.
-    assert cw < 0.5 and cw < 4 * cm + 1e-6, f"conv1d-vs-torch localized spike: worst {cw:.3e} vs median {cm:.3e}"
+        cw, cm = _vs_torch(w_conv, "conv1d")
+        _vs_torch(w_mac, "mac")
+        # Gross localized spike only: an interval >4x the median AND past a clearly-audible floor
+        # (rmse/σ 0.5 = −6 dB). The uniform conv1d level and content-driven variation pass; static
+        # (a burst far above the rest) fails.
+        assert cw < 0.5 and cw < 4 * cm + 1e-6, f"conv1d-vs-torch localized spike: worst {cw:.3e} vs median {cm:.3e}"
 
     pipeline.release_traces()
     dur = wav.shape[-1] / sr
