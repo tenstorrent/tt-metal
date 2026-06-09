@@ -252,22 +252,20 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     // Dataflow kernels always read offsets_tensor[start..start+2] and use the values to
     // override the RT-derived offsets. For InputAndOutputRow the compute kernel also needs
     // M values; dm_in0_sender publishes them via cb_ctrl.
-    // Offset flags derived from the role — kernel branches key off these. The two roles each
-    // map to a fixed flag set: InputAndOutputRow → m_axis/in0_row/out_row; InputAndWeightK →
-    // in0_k/in1_k.
+    // One offset mode per role — kernel branches key off these. OFFSET_ROW_MODE drives the
+    // input-row + output-row offsetting and the per-core M re-derivation; OFFSET_K_MODE drives
+    // the in0/in1 K-slice. (These replace the former 5 orthogonal flags, which only ever
+    // appeared in these two fixed combinations.)
     const auto role = operation_attributes.offsets_role;
-    const bool offset_m_axis = role == OffsetsRole::InputAndOutputRow;
-    const bool offset_in0_row = role == OffsetsRole::InputAndOutputRow;
-    const bool offset_out_row = role == OffsetsRole::InputAndOutputRow;
-    const bool offset_in0_k = role == OffsetsRole::InputAndWeightK;
-    const bool offset_in1_k = role == OffsetsRole::InputAndWeightK;
+    const bool offset_row_mode = role == OffsetsRole::InputAndOutputRow;
+    const bool offset_k_mode = role == OffsetsRole::InputAndWeightK;
     // `use_offset` / `use_offset_in1` — when true, the dm kernel adds the row/K offset to
     // the per-tile address. Computed once and shared across all four dm kernel CTA lists
     // (in0 sender + in0 receiver, in1 sender + in1 receiver). Sender and receiver MUST
     // agree on this flag — a mismatch makes one side read different runtime args than the other.
     const bool use_offset_in0 =
-        operation_attributes.effective_M_tiles > 0 || parent_K_tiles_in0 > K_tiles || offset_in0_k;
-    const bool use_offset_in1 = parent_K_tiles_in1 > K_tiles || offset_in1_k;
+        operation_attributes.effective_M_tiles > 0 || parent_K_tiles_in0 > K_tiles || offset_k_mode;
+    const bool use_offset_in1 = parent_K_tiles_in1 > K_tiles || offset_k_mode;
     // Both dm kernels always read the offsets tensor (each one derives its own slice).
     // Compute reads its override values from cb_ctrl, not directly from offsets.
     constexpr bool in0_needs_offsets = true;
@@ -281,16 +279,13 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         }
     };
     for (auto* m : {&in0_defines, &in1_defines, &compute_offsets_defines}) {
-        set_flag(*m, "OFFSET_M_AXIS", offset_m_axis);
-        set_flag(*m, "OFFSET_IN0_ROW", offset_in0_row);
-        set_flag(*m, "OFFSET_OUT_ROW", offset_out_row);
-        set_flag(*m, "OFFSET_IN0_K", offset_in0_k);
-        set_flag(*m, "OFFSET_IN1_K", offset_in1_k);
+        set_flag(*m, "OFFSET_ROW_MODE", offset_row_mode);
+        set_flag(*m, "OFFSET_K_MODE", offset_k_mode);
     }
-    // CT args used by the M-axis per-core M computation. Compile-time constant so the
+    // CT args used by the row-mode per-core M computation. Compile-time constant so the
     // kernel can specialize.
     const uint32_t in0_axis_cores_ct = transpose_core_grid ? grid_size.x : grid_size.y;
-    if (offset_m_axis) {
+    if (offset_row_mode) {
         in0_defines["IN0_AXIS_CORES"] = std::to_string(in0_axis_cores_ct);
         in1_defines["IN0_AXIS_CORES"] = std::to_string(in0_axis_cores_ct);
         compute_offsets_defines["IN0_AXIS_CORES"] = std::to_string(in0_axis_cores_ct);
@@ -584,7 +579,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         if (in0_needs_offsets) {
             in0_args.push_back(tensor_args.offsets_tensor.value().buffer()->address());
             in0_args.push_back(operation_attributes.offsets_start_index);
-            if (offset_m_axis) {
+            if (offset_row_mode) {
                 in0_args.push_back(in0_idx);
             }
         }
@@ -639,7 +634,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         if (in1_needs_offsets) {
             in1_args.push_back(tensor_args.offsets_tensor.value().buffer()->address());
             in1_args.push_back(operation_attributes.offsets_start_index);
-            if (offset_m_axis) {
+            if (offset_row_mode) {
                 in1_args.push_back(in0_idx);
             }
         }

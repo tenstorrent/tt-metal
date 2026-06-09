@@ -35,7 +35,7 @@ void kernel_main() {
     const uint32_t in1_dest_noc_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t in1_sender_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t in1_sender_noc_y = get_arg_val<uint32_t>(argidx++);
-    // OFFSET_M_AXIS + OFFSET_IN0_ROW override these from on-device offsets (per-core M re-derived).
+    // OFFSET_ROW_MODE overrides these from on-device offsets (per-core M re-derived).
     uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
     uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
@@ -53,7 +53,7 @@ void kernel_main() {
     const auto out_accessor = TensorAccessor(out_args, get_arg_val<uint32_t>(out_addr_rt_arg_idx), out_tile_size);
 
     // Variable-M: read actual M values from runtime args (after output address).
-    // OFFSET_M_AXIS overrides M_tiles and M_blocks_per_core from on-device offsets.
+    // OFFSET_ROW_MODE overrides M_tiles and M_blocks_per_core from on-device offsets.
     uint32_t M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 1);
     const uint32_t padded_M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 2);
     uint32_t M_blocks_per_core = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 3);
@@ -64,18 +64,15 @@ void kernel_main() {
     if constexpr (use_offset_in1) {
         parent_K_tiles_stride_in1 = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 4);
     }
-    // OFFSET_IN0_K / OFFSET_IN1_K overrides K_tiles from on-device offsets[start..start+2].
+    // OFFSET_K_MODE overrides K_tiles from on-device offsets[start..start+2].
     uint32_t K_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 5);
 
-    // Read offsets from a 1-D UINT32 ROW_MAJOR device tensor. The flags come in two sets, one
-    // per OffsetsRole: InputAndOutputRow sets OFFSET_M_AXIS + OFFSET_OUT_ROW; InputAndWeightK
-    // sets OFFSET_IN0_K + OFFSET_IN1_K.
-    //   OFFSET_M_AXIS:   re-derives per-core M_start / M_end / M_blocks_per_core locally
-    //                    (matches dm_in0_sender's compute so both kernels agree).
-    //   OFFSET_OUT_ROW:  when this kernel is the writer (transpose_core_grid), sets
-    //                    out_row_offset_tiles from offsets[start].
-    //   OFFSET_IN0_K:    in0 owns the K offset and the cb_ctrl publish — nothing to do here.
-    //   OFFSET_IN1_K:    sets in1_k_offset_tiles + K_tiles locally (dm_in0 does the cb_ctrl publish).
+    // Read offsets from a 1-D UINT32 ROW_MAJOR device tensor. One mode per role:
+    //   OFFSET_ROW_MODE (InputAndOutputRow): re-derives per-core M_start / M_end / M_blocks_per_core
+    //                    locally (matches dm_in0_sender so both kernels agree) and, on the writer
+    //                    kernel (transpose_core_grid), sets out_row_offset_tiles from offsets[start].
+    //   OFFSET_K_MODE   (InputAndWeightK):    sets in1_k_offset_tiles + K_tiles locally (dm_in0
+    //                    owns the K offset's cb_ctrl publish).
     {
         const uint32_t offsets_addr = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 6);
         const uint32_t offsets_start_index = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 7);
@@ -95,21 +92,19 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* offsets_stage = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(offsets_l1_addr);
         const uint32_t row_start = offsets_stage[offsets_start_index];
         const uint32_t row_end = offsets_stage[offsets_start_index + 1U];
-#ifdef OFFSET_M_AXIS
+#ifdef OFFSET_ROW_MODE
         {
             const uint32_t in0_idx = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 8);
             const uint32_t actual_eff_M = (row_end - row_start) / 32U;
             // Empty-expert (actual=0) → M_blocks_per_core=0 (loop skipped). Still clamp
             // M_tiles to >=1 for shape construction (TensorShape2D asserts d0>0).
             M_tiles = actual_eff_M > 0U ? actual_eff_M : 1U;
-#ifdef OFFSET_OUT_ROW
-            // OFFSET_OUT_ROW + this kernel is the writer (transpose_core_grid) → override
-            // out_row_offset_tiles. dm_in0_sender publishes M values to cb_ctrl; we re-derive
-            // them locally here (both kernels read the same offsets).
+            // On the writer kernel (transpose_core_grid) override out_row_offset_tiles.
+            // dm_in0_sender publishes M values to cb_ctrl; we re-derive them locally here
+            // (both kernels read the same offsets).
             if constexpr (is_output_writer) {
                 out_row_offset_tiles = row_start / 32U;
             }
-#endif
             constexpr uint32_t kAxisCores = IN0_AXIS_CORES;
             const uint32_t per_core = (actual_eff_M + kAxisCores - 1U) / kAxisCores;
             // Uniform M_blocks_per_core across cores — matches dm_in0_sender; bounds checks
@@ -118,12 +113,12 @@ void kernel_main() {
             M_end_tile = per_core * (in0_idx + 1U);
             M_blocks_per_core = (per_core + M_block_tiles - 1U) / M_block_tiles;
         }
-#endif  // OFFSET_M_AXIS
-#ifdef OFFSET_IN1_K
-        // in1 owns the K offset; dm_in0 (OFFSET_IN0_K, always co-set) owns the cb_ctrl publish.
+#endif  // OFFSET_ROW_MODE
+#ifdef OFFSET_K_MODE
+        // in1 owns its K offset; dm_in0 owns the cb_ctrl publish for compute.
         in1_k_offset_tiles = row_start / 32U;
         K_tiles = (row_end - row_start) / 32U;
-#endif  // OFFSET_IN1_K
+#endif  // OFFSET_K_MODE
     }
     const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
 

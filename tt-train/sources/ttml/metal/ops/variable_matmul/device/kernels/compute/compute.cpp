@@ -184,24 +184,24 @@ void kernel_main() {
     constexpr bool transpose_a = static_cast<bool>(get_compile_time_arg_val(7));
 
     uint32_t argidx = 0;
-    // OFFSET_M_AXIS overrides M_start/M_end/M_blocks_per_core via cb_ctrl below.
+    // OFFSET_ROW_MODE overrides M_start/M_end/M_blocks_per_core via cb_ctrl below.
     uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
     uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     uint32_t M_blocks_per_core = get_arg_val<uint32_t>(argidx++);
-    // OFFSET_IN0_K / OFFSET_IN1_K overrides K_tiles from cb_ctrl[3].
+    // OFFSET_K_MODE overrides K_tiles from cb_ctrl[3].
     uint32_t K_tiles = get_arg_val<uint32_t>(argidx++);
 
     // cb_ctrl payload, packed by whichever dm kernel owns the publish (see dataflow kernels):
-    //   OFFSET_M_AXIS:                       ctrl[0..2] = (M_start, M_end, M_blocks_per_core)
-    //   OFFSET_IN0_K or OFFSET_IN1_K:        ctrl[3]    = K_tiles
-    // M-axis and K-axis are not currently combined in a single role, so exactly one of the
-    // two payloads is written per invocation.
+    //   OFFSET_ROW_MODE: ctrl[0..2] = (M_start, M_end, M_blocks_per_core)
+    //   OFFSET_K_MODE:   ctrl[3]    = K_tiles
+    // The two modes are mutually exclusive (one per role), so exactly one payload is written
+    // per invocation.
     {
         constexpr uint32_t cb_ctrl_id = tt::CBIndex::c_8;
         cb_wait_front(cb_ctrl_id, 1U);
-#ifdef OFFSET_M_AXIS
+#ifdef OFFSET_ROW_MODE
         M_start_tile = read_tile_value(cb_ctrl_id, 0U, 0U);
         M_end_tile = read_tile_value(cb_ctrl_id, 0U, 1U);
         M_blocks_per_core = read_tile_value(cb_ctrl_id, 0U, 2U);
