@@ -38,6 +38,7 @@
 #include "dfb_implicit_read_helper.h"
 
 void kernel_main() {
+    DPRINT("in the kernel\n");
     uint32_t dm_id;
     asm volatile("csrr %0, mhartid" : "=r"(dm_id));
 

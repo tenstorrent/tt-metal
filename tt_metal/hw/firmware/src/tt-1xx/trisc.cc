@@ -131,7 +131,7 @@ int main(int argc, char* argv[]) {
 
     DeviceProfilerInit();
     while (1) {
-        WAYPOINT("W");
+        // WAYPOINT("W");
         while (*trisc_run != RUN_SYNC_MSG_GO) {
             if constexpr (COMPILE_FOR_TRISC == 0) {
                 if (*trisc_run == RUN_SYNC_MSG_INIT_SYNC_REGISTERS) {
