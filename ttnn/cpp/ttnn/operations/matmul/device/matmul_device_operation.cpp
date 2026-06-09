@@ -298,9 +298,19 @@ void validate_matmul_sharded_operand_grids_within_program_compute_grid(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
-                const auto& grid = program_config.compute_with_storage_grid_size;
-                check_tensor_in_grid(input_tensor_a, grid);
-                check_tensor_in_grid(input_tensor_b, grid);
+                // When an input is sharded, the factory uses shard_spec.grid directly as all_cores
+                // and ignores compute_with_storage_grid_size entirely. Validating the shard grid
+                // against the origin-anchored compute_with_storage_grid_size rectangle incorrectly
+                // rejects grids that don't start at (0,0) (e.g. column 1 in a multi-chain fused op).
+                // The only physical constraint is that the shard grid fits within the device grid.
+                // For non-sharded inputs the config grid drives split_work_to_cores, so the
+                // origin-anchored check is still correct there.
+                const auto& config_grid = program_config.compute_with_storage_grid_size;
+                const auto device_grid = input_tensor_a.device()->compute_with_storage_grid_size();
+                auto effective_grid_a = input_tensor_a.memory_config().is_sharded() ? device_grid : config_grid;
+                auto effective_grid_b = input_tensor_b.memory_config().is_sharded() ? device_grid : config_grid;
+                check_tensor_in_grid(input_tensor_a, effective_grid_a);
+                check_tensor_in_grid(input_tensor_b, effective_grid_b);
             }
         },
         chosen_program_config);
@@ -407,10 +417,15 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
+                // When input is sharded the factory places output on the input shard grid, not on
+                // an origin-anchored compute_with_storage_grid_size rectangle. Use the device grid
+                // as the extent so offset grids (e.g. column 1) are not incorrectly rejected.
+                const auto device_extent = input_tensor_a.device()->compute_with_storage_grid_size();
+                const auto effective_extent = input_tensor_a.memory_config().is_sharded()
+                                                  ? device_extent
+                                                  : program_config.compute_with_storage_grid_size;
                 check_output_shard_grid_within_extent(
-                    output_mem_config,
-                    program_config.compute_with_storage_grid_size,
-                    "MatmulMultiCoreReuseProgramConfig");
+                    output_mem_config, effective_extent, "MatmulMultiCoreReuseProgramConfig");
             } else {
                 (void)transpose_a;
                 (void)transpose_b;

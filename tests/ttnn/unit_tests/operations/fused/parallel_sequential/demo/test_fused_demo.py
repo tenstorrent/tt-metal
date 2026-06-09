@@ -777,6 +777,7 @@ class TestPerfDemos:
             tB,
         )
 
+    @pytest.mark.requires_grid_size((2, 8))
     @pytest.mark.parametrize(
         "perf_mode", ["none"]
     )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
