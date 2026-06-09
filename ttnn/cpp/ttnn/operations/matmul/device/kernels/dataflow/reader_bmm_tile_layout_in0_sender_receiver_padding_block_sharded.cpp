@@ -267,7 +267,7 @@ void kernel_main() {
                                 } else {
                                     // multicast to every core in receiver grid
                                     MulticastEndpoint mcast_dst;
-                                    noc.async_write_multicast<Noc::McastMode::INCLUDE_SRC>(
+                                    noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
                                         CoreLocalMem<uint32_t>(in0_tensor_read_addr),
                                         mcast_dst,
                                         in0_block_size_bytes,
@@ -285,7 +285,7 @@ void kernel_main() {
                             // We should also multicast the flag to destinations
                             receiver_sem.set(VALID);
                             if constexpr (in0_mcast_num_cores > 1) {
-                                receiver_sem.set_multicast<Noc::McastMode::INCLUDE_SRC>(
+                                receiver_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
                                     noc,
                                     in0_mcast_dest_noc_start_x,
                                     in0_mcast_dest_noc_start_y,

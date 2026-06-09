@@ -401,6 +401,10 @@ std::vector<std::string> PhysicalSystemDescriptor::get_all_hostnames() const {
     for (const auto& [host, _] : system_graph_.asic_connectivity_graph) {
         hostnames.push_back(host);
     }
+    // Sort hostnames to ensure deterministic topology-solver behavior across machines.
+    // Without sorting, unordered_map iteration order (hash of hostname strings) differs
+    // between machines, causing different mesh-ID assignments in mock mode.
+    std::sort(hostnames.begin(), hostnames.end());
     return hostnames;
 }
 

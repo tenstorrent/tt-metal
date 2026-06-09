@@ -6,7 +6,8 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_threshold.h"
+#include "sfpu/ckernel_sfpu_threshold.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -27,12 +28,21 @@ namespace ckernel {
 */
 // clang-format on
 ALWI void threshold_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
-    MATH((llk_math_eltwise_unary_sfpu_threshold<APPROX>(idst, param0, param1)));
+    MATH(SFPU_CALL_CAST(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _calculate_threshold_,
+        (APPROX, 8 /* ITERATIONS */),
+        (void (*)(uint32_t, uint32_t)),
+        idst,
+        VectorMode::RC,
+        param0,
+        param1));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void threshold_tile_init() { MATH((llk_math_eltwise_unary_sfpu_threshold_init())); }
+ALWI void threshold_tile_init() { MATH(SFPU_INIT(threshold)); }
 
 }  // namespace ckernel

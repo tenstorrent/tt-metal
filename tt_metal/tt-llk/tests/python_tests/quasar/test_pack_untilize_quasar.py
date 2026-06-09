@@ -19,7 +19,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator_v2 import generate_stimuli_v2
+from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
@@ -94,6 +94,9 @@ PACK_UNTILIZE_FORMATS = input_output_formats(
         DataFormat.Int16,
         DataFormat.Int32,
         DataFormat.MxFp4,
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
     ],
 )
 ALL_PACK_UNTILIZE_COMBINATIONS = generate_pack_untilize_combinations(
@@ -113,7 +116,7 @@ def test_pack_untilize_quasar(formats_dest_acc_sync_dimensions):
     if formats.output_format.is_mx_format():
         pytest.skip("MX as output format produces flaky results.")
 
-    src_A, tile_cnt_A, src_B, _ = generate_stimuli_v2(
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -172,5 +175,7 @@ def test_pack_untilize_quasar(formats_dest_acc_sync_dimensions):
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format, print_errors=False
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
     ), "Assert against golden failed"

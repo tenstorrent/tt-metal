@@ -241,7 +241,8 @@ class ModelOptimizations:
             + self._names["OpFidelity"]
             + "}"
         )
-        # NOTE: self.__name__ is used as section header in PERF.md; It is also used by, for example test_llama_accuracy.py to look for comparative results in PERF.md
+        # NOTE: self.__name__ is used by test/demo flows to distinguish performance vs accuracy
+        # mode when selecting centralized targets from models/model_targets.yaml.
         self.__name__ = self._full_name
 
         # TODO: maybe we could warn about some unwanted settings here
@@ -2924,7 +2925,6 @@ class ModelArgs:
         This function is used to determine if trace should be enabled for the prefill.
         Tracing is used only for certain sequence lengths, because for bigger sequence lengths, op2op gaps are already small, so we don't need tracing.
         # TODO: Support chunked prefill with tracing - https://github.com/tenstorrent/tt-metal/issues/32056
-        # TODO: Support prefix caching with tracing
         """
 
         allowed_seq_lens = self.trace_prefill_supported_seq_lens
@@ -2933,7 +2933,6 @@ class ModelArgs:
             prefill_seq_len in allowed_seq_lens
             and prefill_seq_len <= self.max_prefill_chunk_size
             and prefill_seq_len <= self.max_seq_len
-            and num_cached_tokens == 0
         )
 
     def is_llama_vision(self):

@@ -110,7 +110,7 @@ void kernel_main() {
         cb_wait_front(cb_tile, batch);
         uint32_t l1_read_addr = get_read_ptr(cb_tile);
         for (uint32_t i = 0; i < batch; ++i) {
-            noc_async_write_tile(my_dst_start + offset + i, global_accessor, l1_read_addr);
+            noc_async_write_page(my_dst_start + offset + i, global_accessor, l1_read_addr);
             l1_read_addr += tile_bytes;
         }
         noc_async_write_barrier();

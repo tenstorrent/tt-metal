@@ -423,7 +423,7 @@ SDPA_PERF_MARGIN = 0.007
 SDPA_PERF_CHECK_CONFIGS = [
     # (shape_id, q_chunk_size, k_chunk_size, expected_util)
     ("wan2_2_1xGLX_analog", 288, 512, 70.0),
-    ("wan2_2_4xGLX_analog", 224, 512, 57.0),
+    ("wan2_2_4xGLX_analog", 224, 512, 57.5),
 ]
 
 

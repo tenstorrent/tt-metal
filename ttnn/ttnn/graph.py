@@ -50,6 +50,7 @@ from ttnn.graph_report import (
 _python_io_data: list = []
 _python_io_recording_enabled: bool = False
 _python_stack_traces_enabled: bool = False
+_python_stack_traces_auto_for_session: bool = False
 
 # Glob patterns for frames to strip from stack traces (pathlib-style).
 # Matches ttnn internals (decorators/graph), pytest, pluggy, and the pytest entry script.
@@ -91,8 +92,38 @@ def is_python_io_recording_enabled() -> bool:
     return _python_io_recording_enabled
 
 
+def _configure_python_stack_traces_for_outer_graph_capture(ttnn_mod) -> None:
+    """Outermost ``begin_graph_capture`` only: turn on Python stacks if ``CONFIG`` allows.
+
+    Stack traces are enabled when either ``enable_graph_python_stack_traces`` or
+    ``enable_detailed_tensor_report`` on ``ttnn_mod.CONFIG`` is true (each defaults to
+    false if missing on older ``_ttnn`` builds).  The latter is required for
+    ``tensor_lifetime`` source file/line columns in :mod:`ttnn.graph_report`.
+    Sets ``_python_stack_traces_auto_for_session`` so the matching
+    ``end_graph_capture`` / ``end_graph_capture_to_file`` can disable traces again
+    when this path enabled them.
+    """
+    global _python_stack_traces_auto_for_session
+    if _python_stack_traces_enabled:
+        _python_stack_traces_auto_for_session = False
+        return
+    enable_traces = getattr(ttnn_mod.CONFIG, "enable_graph_python_stack_traces", False) or getattr(
+        ttnn_mod.CONFIG, "enable_detailed_tensor_report", False
+    )
+    if enable_traces:
+        enable_python_stack_traces()
+        _python_stack_traces_auto_for_session = True
+    else:
+        _python_stack_traces_auto_for_session = False
+
+
 def enable_python_stack_traces():
-    """Enable capturing Python call stacks in graph trace records."""
+    """Enable capturing Python call stacks in graph trace records.
+
+    Ignores ``ttnn.CONFIG.enable_graph_python_stack_traces`` (use for tests, for
+    :func:`full_graph_capture`, or explicit ``record_python_operation`` use
+    outside graph capture).
+    """
     global _python_stack_traces_enabled
     _python_stack_traces_enabled = True
 
@@ -157,17 +188,34 @@ def begin_graph_capture(run_mode=None):
 
     Automatically enables Python I/O recording so that
     ``end_graph_capture_to_file`` can embed operation arguments,
-    tensor IDs, and (if enabled) stack traces in the JSON report.
+    tensor IDs, and (when enabled) Python stack traces in the JSON report / sidecar.
+
+    On the outermost Python-started capture only, Python stack traces may be
+    turned on by ``_configure_python_stack_traces_for_outer_graph_capture`` when
+    ``ttnn.CONFIG.enable_graph_python_stack_traces`` or
+    ``ttnn.CONFIG.enable_detailed_tensor_report`` is true (set via
+    ``TTNN_CONFIG_OVERRIDES``).  Detailed tensor reporting enables traces for
+    ``tensor_lifetime`` source file/line columns in :mod:`ttnn.graph_report`.
+
+    If traces were already enabled before that configure step (for example
+    after :func:`enable_python_stack_traces` or from :func:`full_graph_capture`),
+    the outer session does not auto-disable them on end.
+
+    When the outermost session ends, :func:`end_graph_capture` /
+    :func:`end_graph_capture_to_file` turn traces off again only if this
+    outer begin turned them on (internal ``_python_stack_traces_auto_for_session``).
 
     When graph capture is started from C++ (e.g. ``MemoryUsageTracker``),
     this wrapper is bypassed and Python I/O recording stays disabled,
     avoiding the associated overhead.
     """
-    global _python_io_data, _python_io_recording_enabled
+    global _python_io_data, _python_io_recording_enabled, _python_stack_traces_auto_for_session
     if not is_graph_capture_active():
+        import ttnn
+
         _python_io_data = []
         _python_io_recording_enabled = True
-        import ttnn
+        _configure_python_stack_traces_for_outer_graph_capture(ttnn)
 
         if ttnn.CONFIG.enable_fast_runtime_mode:
             logger.warning(
@@ -186,23 +234,29 @@ def end_graph_capture():
     """End graph capture and return the captured graph.
 
     Automatically disables Python I/O recording when the outermost
-    capture session ends.
+    capture session ends.  If Python stack traces were enabled by auto-capture they are disabled again.
     """
-    global _python_io_recording_enabled
+    global _python_io_recording_enabled, _python_stack_traces_auto_for_session
     result = _cpp_end_graph_capture()
     if not is_graph_capture_active():
         _python_io_recording_enabled = False
+        if _python_stack_traces_auto_for_session:
+            disable_python_stack_traces()
+            _python_stack_traces_auto_for_session = False
     return result
 
 
 def end_graph_capture_to_file(report_path):
     """Wrapper that appends Python I/O data to the JSON report."""
-    global _python_io_recording_enabled
+    global _python_io_recording_enabled, _python_stack_traces_auto_for_session
     result_str = _cpp_end_graph_capture_to_file(report_path)
     if _python_io_data:
         _write_python_io_sidecar(report_path)
     if not is_graph_capture_active():
         _python_io_recording_enabled = False
+        if _python_stack_traces_auto_for_session:
+            disable_python_stack_traces()
+            _python_stack_traces_auto_for_session = False
     return json.loads(result_str)
 
 

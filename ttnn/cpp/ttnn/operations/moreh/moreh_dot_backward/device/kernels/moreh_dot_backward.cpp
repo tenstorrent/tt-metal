@@ -5,8 +5,14 @@
 #include "api/compute/bcast.h"
 #include "api/dataflow/circular_buffer.h"
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
+ALWI void ACQ() {
+    tile_regs_acquire();
+    tile_regs_wait();
+}
+ALWI void REL() {
+    tile_regs_commit();
+    tile_regs_release();
+}
 
 void kernel_main() {
     constexpr int onetile = 1;
@@ -20,7 +26,7 @@ void kernel_main() {
     CircularBuffer cb_c16(tt::CBIndex::c_16);
     CircularBuffer cb_c17(tt::CBIndex::c_17);
 
-    init_bcast<ELWMUL, BroadcastType::SCALAR>(tt::CBIndex::c_2, tt::CBIndex::c_0, tt::CBIndex::c_16);
+    init_bcast<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR>(tt::CBIndex::c_2, tt::CBIndex::c_0, tt::CBIndex::c_16);
     cb_c0.wait_front(onetile);
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
         if (has_input_grad) {

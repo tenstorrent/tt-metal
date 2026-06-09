@@ -15,7 +15,7 @@ void kernel_main() {
 
     for (uint32_t iter_idx = 0; iter_idx < num_iterations; iter_idx++) {
         for (uint32_t page_id = 0; page_id < num_pages_to_read; page_id++) {
-            noc_async_read_tile(page_id, s, dst_l1_addr);
+            noc_async_read_page(page_id, s, dst_l1_addr);
         }
     }
 

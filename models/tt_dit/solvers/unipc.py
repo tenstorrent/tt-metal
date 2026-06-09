@@ -9,8 +9,6 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from diffusers.schedulers import UniPCMultistepScheduler
-
 import ttnn
 
 from .base import Solver
@@ -37,31 +35,19 @@ class UniPCVariant(Enum):
 
 
 class UniPCSolver(Solver):
-    def __init__(self, scheduler: UniPCMultistepScheduler | None = None) -> None:
-        """Wrap a diffusers scheduler for on-device UniPC stepping."""
-        if scheduler is None:
-            scheduler = UniPCMultistepScheduler(use_flow_sigmas=True, prediction_type="flow_prediction")
+    def __init__(self, *, order: int, variant: UniPCVariant) -> None:
+        super().__init__()
 
-        if not isinstance(scheduler, UniPCMultistepScheduler):
-            msg = f"scheduler must be a UniPCMultistepScheduler, got {type(scheduler).__name__}"
-            raise ValueError(msg)
-
-        if not scheduler.config.use_flow_sigmas:
-            msg = "Only UniPCMultistepScheduler configured with use_flow_sigmas=True is supported"
-            raise ValueError(msg)
-
-        order = scheduler.config.solver_order
         if order not in (1, 2):
             msg = f"only order 1 and 2 are supported, got {order}"
             raise ValueError(msg)
 
-        super().__init__(scheduler)
         self.order = order
-        self.variant = UniPCVariant(scheduler.config.solver_type)
+        self.variant = variant
         self._state = None
 
-    def set_schedule(self, num_inference_steps: int | None = None, *, device: object = None, **kwargs: object) -> None:
-        super().set_schedule(num_inference_steps, device=device, **kwargs)
+    def set_schedule(self, sigmas: Sequence[float], alphas: Sequence[float] | None = None) -> None:
+        super().set_schedule(sigmas, alphas)
         if self._state is not None:
             self._state = _State(self._state.clean_preds, self._state.corrected, 0)
 

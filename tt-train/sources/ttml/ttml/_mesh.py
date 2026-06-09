@@ -138,15 +138,6 @@ def _validate_mgd(mesh: Mesh) -> None:
                 f"but dims has {len(mgd_dims)}.\n"
                 f"  MGD file: {mgd_path}"
             )
-        if mesh.has_axis("dp"):
-            dp_axis = mesh.axis_index("dp")
-            if dp_axis < len(dim_types) and dim_types[dp_axis] != "RING":
-                raise RuntimeError(
-                    f"DDP axis (axis {dp_axis}) expected RING topology, "
-                    f"but MGD has '{dim_types[dp_axis]}'.\n"
-                    f"  MGD dim_types: {dim_types}\n"
-                    f"  MGD file: {mgd_path}"
-                )
 
     print(f"MGD validated: dims={mgd_dims}, file={mgd_path}")
 
@@ -160,17 +151,36 @@ def open_device_mesh(mesh: tuple[int, ...] | Mesh, device_ids: tuple[int, ...] |
     When more than one device is requested the MGD file is validated and the
     TT-Fabric interconnect is enabled.  A plain tuple is accepted for backward
     compatibility and converted into a ``Mesh`` with anonymous axis names.
+
+    If ``enable_fabric`` succeeds but the subsequent ``open_device`` raises
+    (e.g. the bundled MGD doesn't match the physical topology, the fabric
+    topology mapper can't satisfy pinnings, etc.), we roll back the
+    process-global fabric config before re-raising. Otherwise a fixture that
+    catches the exception and ``pytest.skip``s would leave fabric armed for
+    the rest of the process and poison every subsequent implicit single-device
+    open.
     """
     if not isinstance(mesh, Mesh):
         mesh = Mesh(mesh, tuple(f"_{i}" for i in range(len(mesh))))
     if device_ids is None:
         device_ids = ()
 
+    fabric_enabled = False
     if mesh.num_devices() > 1:
         _validate_mgd(mesh)
         ttml.core.distributed.enable_fabric(mesh.num_devices())
+        fabric_enabled = True
 
-    ttml.autograd.AutoContext.get_instance().open_device(list(mesh.shape), list(device_ids))
+    try:
+        ttml.autograd.AutoContext.get_instance().open_device(list(mesh.shape), list(device_ids))
+    except BaseException:
+        if fabric_enabled:
+            try:
+                ttml.core.distributed.disable_fabric()
+            except Exception:
+                # Best-effort cleanup; never mask the original exception.
+                pass
+        raise
 
     global _mesh
     _mesh = mesh
@@ -210,6 +220,10 @@ def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",)):
     parameters see identical inputs on every TP rank so their grads match
     without a reduce.
 
+    FSDP interaction: parameters sharded by ``ttml.fsdp.fully_shard`` on a
+    mesh axis listed in ``axis_names`` are skipped for that axis — the FSDP
+    backward hook already reduce-scattered the grad into shard shape.
+
     Args:
         parameters: A ``NamedParameters`` mapping (e.g. ``model.parameters()``).
         axis_names: Tuple of mesh axis names to reduce over.
@@ -222,16 +236,29 @@ def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",)):
     if not axes:
         return
 
-    scaler = prod(m.shape[axis] for axis in axes)
-    if scaler == 1:
-        return
-    inv_scaler = 1.0 / float(scaler)
-
     for _, param in parameters.items():
         if not param.is_grad_initialized():
             continue
+
+        # Drop axes on which this particular parameter is FSDP-sharded
+        axes_for_param = tuple(a for a in axes if not _param_is_fsdp_sharded(param, a))
+        if not axes_for_param:
+            continue
+
+        scaler = prod(m.shape[axis] for axis in axes_for_param)
+        if scaler == 1:
+            continue
+        inv_scaler = 1.0 / float(scaler)
+
         grad = param.get_grad()
-        for axis in axes:
-            grad = ttnn.all_reduce(grad, cluster_axis=axis)
+        for axis in axes_for_param:
+            grad = ttml.core.distributed.all_reduce(grad, cluster_axis=axis)
         grad = ttnn.multiply(grad, inv_scaler)
         param.set_grad(grad)
+
+
+def _param_is_fsdp_sharded(param, axis_index: int) -> bool:
+    """True if ``param`` is FSDP-sharded on the given mesh axis."""
+    if getattr(param, "_fsdp_managed", False) and getattr(param, "_fsdp_axis", None) == axis_index:
+        return True
+    return False

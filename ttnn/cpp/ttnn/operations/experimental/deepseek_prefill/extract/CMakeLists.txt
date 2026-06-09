@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_deepseek_prefill_extract ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::DeepSeekPrefill::Extract ALIAS ttnn_op_experimental_deepseek_prefill_extract)
 
@@ -19,7 +21,7 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
+        FILES ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_EXTRACT_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -30,13 +32,7 @@ target_sources(
         extract.cpp
 )
 
-target_include_directories(ttnn_op_experimental_deepseek_prefill_extract PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_experimental_deepseek_prefill_extract
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_experimental_deepseek_prefill_extract PRIVATE TT::Metalium PUBLIC TTNN::Core)
 
 install(
     TARGETS
@@ -48,4 +44,4 @@ install(
         COMPONENT ttnn-runtime
 )
 
-install(TARGETS ttnn_op_experimental_deepseek_prefill_extract LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_experimental_deepseek_prefill_extract FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)

@@ -1,39 +1,81 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Wan2.2 I2V pipeline with LoRA hot-swap.
+"""Wan2.2 I2V pipeline with LoRA adapters fused into the base weights.
 
-Subclass of :class:`WanPipelineI2V` that fuses a pair of LoRA adapters
-(high-noise + low-noise expert) into the base PyTorch transformer state dict
-before TT conversion. Output behaves like a vanilla Wan2.2 I2V model with the
-LoRA permanently applied -- no per-step LoRA evaluation on device.
-
-LoRA keys are detected and fused into the base PyTorch weights, then handed
-to ``cache.load_model``. The rank-r delta is computed manually
-(``W_fused = W + scale * B @ A``) producing a single fused weight matrix
-per linear with no LoRA-specific runtime cost.
-
-Cache keying: each (high_path, low_path, scale) combination produces a
-distinct namespace via :func:`_lora_cache_namespace`, so the TT cache for one
-LoRA never aliases another.
+Each expert (high/low noise) takes an ordered LoRA stack; stacks are fused
+on CPU before TT conversion so inference has no LoRA-specific runtime cost.
+See ``experimental/models/Wan2_2_LoRA.md`` for the adapter-key formats
+detected by ``fuse_lora_state_dict`` and the supported namespaces.
 """
-from __future__ import annotations
-
 import hashlib
-import os
+import re
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import torch
 from loguru import logger
 from safetensors.torch import load_file
 
+import ttnn
 from models.tt_dit.experimental.utils.lightx2v_loader import wan_lightx2v_to_diffusers_key
-from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
+from models.tt_dit.pipelines.wan.pipeline_wan import WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
 from models.tt_dit.utils import cache
 
+
+@dataclass(frozen=True)
+class LoRASpec:
+    """A single LoRA adapter file and its blend strength."""
+
+    path: str
+    scale: float = 1.0
+
+
+LoRAArg = LoRASpec | str | Sequence[LoRASpec | str] | None
+
+
+@dataclass(frozen=True)
+class _FusionStats:
+    applied_pairs: int = 0
+    applied_direct: int = 0
+    skipped_unknown: int = 0
+    skipped_unmapped: int = 0
+    skipped_shape_mismatch: int = 0
+
+    @property
+    def applied(self) -> int:
+        return self.applied_pairs + self.applied_direct
+
+
+def _normalize_lora_arg(arg: LoRAArg) -> list[LoRASpec]:
+    """Coerce None / path / LoRASpec / sequence-of-either into LoRASpecs."""
+    if arg is None:
+        return []
+    if isinstance(arg, LoRASpec):
+        return [arg]
+    if isinstance(arg, str):
+        return [LoRASpec(arg)]
+    if not isinstance(arg, Sequence):
+        raise TypeError(f"Expected LoRASpec, str, sequence, or None; got {type(arg).__name__}")
+    out: list[LoRASpec] = []
+    for item in arg:
+        if isinstance(item, LoRASpec):
+            out.append(item)
+        elif isinstance(item, str):
+            out.append(LoRASpec(item))
+        else:
+            raise TypeError(f"Expected LoRASpec or str in LoRA list, got {type(item).__name__}")
+    return out
+
+
 _STRIP_PREFIXES = ("diffusion_model.", "transformer.", "unet.", "model.")
+
+# PEFT may insert an adapter name before ``.weight``, e.g. ``lora_A.default.weight``.
+_LOW_RANK_RE = re.compile(r"^(?P<base>.*)\.lora_(?P<slot>A|B|down|up)(?:\.[^.]+)?\.weight$")
+_SLOT_MAP = {"A": "A", "down": "A", "B": "B", "up": "B"}
 
 
 def _strip_known_prefixes(key: str) -> str:
@@ -48,21 +90,13 @@ def _kohya_to_lightx2v(key: str) -> str:
 
     ``lora_unet_blocks_0_cross_attn_k.lora_down.weight``
     → ``blocks.0.cross_attn.k.lora_down.weight``
-
-    Also handles ``.alpha`` keys.
     """
-    import re
-
     if not key.startswith("lora_unet_"):
         return key
     parts = key.split(".", 1)
-    module_path = parts[0]  # e.g. "lora_unet_blocks_0_cross_attn_k"
+    module_path = parts[0][len("lora_unet_") :]
     suffix = f".{parts[1]}" if len(parts) > 1 else ""
 
-    module_path = module_path[len("lora_unet_") :]
-
-    # Wan2.2 kohya keys follow: blocks_{N}_{attn_type}_{param} or blocks_{N}_ffn_{idx}
-    # attn_type: cross_attn or self_attn, param: q/k/v/o
     m = re.match(r"blocks_(\d+)_(cross_attn|self_attn)_([a-z]+)", module_path)
     if m:
         return f"blocks.{m.group(1)}.{m.group(2)}.{m.group(3)}{suffix}"
@@ -76,16 +110,21 @@ def _kohya_to_lightx2v(key: str) -> str:
 
 
 def _diffusers_target(lightx2v_base_path: str, suffix: str) -> str:
-    """Map a lightx2v base path + suffix (.weight/.bias) to the diffusers key.
-
-    The lightx2v-to-diffusers map operates on full parameter names ending in
-    ``.weight``, so we feed it ``<base>.weight``, swap to the requested suffix
-    afterwards.
-    """
+    """Map ``<lightx2v_base>.weight``/``.bias`` to the diffusers parameter key."""
     weight_key = wan_lightx2v_to_diffusers_key(f"{lightx2v_base_path}.weight")
     if suffix == ".weight":
         return weight_key
     return weight_key[: -len(".weight")] + suffix
+
+
+def _is_lora_key(raw_key: str) -> bool:
+    key = _kohya_to_lightx2v(_strip_known_prefixes(raw_key))
+    return bool(_LOW_RANK_RE.match(key)) or key.endswith((".diff", ".diff_b"))
+
+
+def _has_lora_keys(state_dict: dict[str, torch.Tensor]) -> bool:
+    """Return True iff the safetensors file contains at least one LoRA-style key."""
+    return any(_is_lora_key(k) for k in state_dict)
 
 
 def fuse_lora_state_dict(
@@ -93,67 +132,38 @@ def fuse_lora_state_dict(
     lora_state_dict: dict[str, torch.Tensor],
     *,
     scale: float = 1.0,
-) -> dict[str, torch.Tensor]:
-    """Return a new state dict with LoRA deltas fused into ``base_state_dict``.
+    return_stats: bool = False,
+) -> dict[str, torch.Tensor] | tuple[dict[str, torch.Tensor], _FusionStats]:
+    """Return a fused state dict, optionally with stats describing what applied.
 
-    Supports three lightx2v-style adapter conventions, all keyed under a
-    ``diffusion_model.`` prefix that is stripped before mapping:
-
-    1. **Low-rank pairs** at ``<base>.lora_A.weight``/``<base>.lora_B.weight``
-       OR ``<base>.lora_down.weight``/``<base>.lora_up.weight``. Adds
-       ``scale * B @ A`` to the base ``.weight``.
-    2. **Bias deltas** at ``<base>.diff_b``: adds the tensor to the base
-       ``.bias`` directly.
-    3. **Full param deltas** at ``<base>.diff``: adds to the base ``.weight``.
-       Used for params without a low-rank factorization (e.g. RMSNorm gammas).
-
-    Keys whose remapped target is absent from ``base_state_dict`` are skipped
-    with a warning -- this happens for adapter modules that don't exist in
-    the diffusers Wan2.2 I2V architecture (e.g. ``cross_attn.k_img`` from a
-    Wan2.1 I2V-trained adapter; Wan2.2 I2V uses channel-concat conditioning
-    instead). ``base_state_dict`` is not mutated.
-
-    Raises:
-        KeyError: a LoRA low-rank pair is missing one half (lora_A without
-            lora_B or vice versa).
+    The base dict is not mutated; entries that were touched are fresh tensors
+    so the caller can chain fusions across a stack safely. See
+    ``experimental/models/Wan2_2_LoRA.md`` for the supported adapter key
+    formats. Raises ``KeyError`` when a low-rank pair is missing one half.
     """
-    LOW_RANK_SUFFIXES = {
-        ".lora_A.weight": "A",
-        ".lora_B.weight": "B",
-        ".lora_down.weight": "A",
-        ".lora_up.weight": "B",
-    }
     pairs: dict[str, dict[str, torch.Tensor]] = {}
     direct_deltas: list[tuple[str, str, torch.Tensor]] = []  # (base_path, suffix, tensor)
+    alphas: dict[str, float] = {}
     skipped_unknown: list[str] = []
 
-    alphas: dict[str, float] = {}
-
     for raw_key, tensor in lora_state_dict.items():
-        key = _strip_known_prefixes(raw_key)
-        key = _kohya_to_lightx2v(key)
-        matched = False
-        for suffix, slot in LOW_RANK_SUFFIXES.items():
-            if key.endswith(suffix):
-                base_path = key[: -len(suffix)]
-                pairs.setdefault(base_path, {})[slot] = tensor
-                matched = True
-                break
-        if matched:
+        key = _kohya_to_lightx2v(_strip_known_prefixes(raw_key))
+        m = _LOW_RANK_RE.match(key)
+        if m:
+            pairs.setdefault(m.group("base"), {})[_SLOT_MAP[m.group("slot")]] = tensor
             continue
         if key.endswith(".diff_b"):
             direct_deltas.append((key[: -len(".diff_b")], ".bias", tensor))
         elif key.endswith(".diff"):
             direct_deltas.append((key[: -len(".diff")], ".weight", tensor))
         elif key.endswith(".alpha"):
-            base_path = key[: -len(".alpha")]
-            alphas[base_path] = tensor.item()
+            alphas[key[: -len(".alpha")]] = tensor.item()
         else:
             skipped_unknown.append(raw_key)
 
     if skipped_unknown:
         logger.warning(
-            f"LoRA fusion: {len(skipped_unknown)} unrecognized key suffixes ignored (first: {skipped_unknown[0]})"
+            f"LoRA fusion: {len(skipped_unknown)} unrecognized keys ignored. Examples: {skipped_unknown[:5]}"
         )
 
     fused = dict(base_state_dict)
@@ -168,15 +178,18 @@ def fuse_lora_state_dict(
             skipped_unmapped.append(diffusers_key)
             continue
         base_weight = fused[diffusers_key]
-        # Per-module alpha scaling: effective_scale = scale * (alpha / rank)
         rank = ab["A"].shape[0]
         alpha = alphas.get(base_path, float(rank))
         effective_scale = scale * (alpha / rank)
         delta = effective_scale * (ab["B"].to(torch.float32) @ ab["A"].to(torch.float32))
-        fused[diffusers_key] = (base_weight.to(torch.float32) + delta).to(base_weight.dtype)
+        # ``+`` always allocates a new tensor; avoids the .to(fp32)+.add_()
+        # alias trap when base_weight is already fp32 (would mutate the
+        # caller's dict on a subsequent stacked-fusion pass).
+        fused[diffusers_key] = (base_weight.float() + delta).to(base_weight.dtype)
         applied_pairs += 1
 
     applied_direct = 0
+    skipped_shape_mismatch = 0
     for base_path, suffix, tensor in direct_deltas:
         diffusers_key = _diffusers_target(base_path, suffix)
         if diffusers_key not in fused:
@@ -185,35 +198,46 @@ def fuse_lora_state_dict(
         base = fused[diffusers_key]
         if base.shape != tensor.shape:
             logger.warning(
-                f"LoRA direct delta shape mismatch for '{diffusers_key}': base {tuple(base.shape)} vs delta {tuple(tensor.shape)}; skipping."
+                f"LoRA direct delta shape mismatch for '{diffusers_key}': "
+                f"base {tuple(base.shape)} vs delta {tuple(tensor.shape)}; skipping."
             )
+            skipped_shape_mismatch += 1
             continue
-        fused[diffusers_key] = (base.to(torch.float32) + scale * tensor.to(torch.float32)).to(base.dtype)
+        fused[diffusers_key] = (base.float() + scale * tensor.to(torch.float32)).to(base.dtype)
         applied_direct += 1
 
     if skipped_unmapped:
-        sample = skipped_unmapped[:5]
         logger.warning(
-            f"LoRA fusion: {len(skipped_unmapped)} adapter targets not present in base model; skipped. "
-            f"Examples: {sample}"
+            f"LoRA fusion: {len(skipped_unmapped)} adapter targets not present in base; skipped. "
+            f"Examples: {skipped_unmapped[:5]}"
         )
 
     logger.info(f"Fused {applied_pairs} low-rank pairs and {applied_direct} direct deltas (scale={scale})")
-    return fused
+    stats = _FusionStats(
+        applied_pairs=applied_pairs,
+        applied_direct=applied_direct,
+        skipped_unknown=len(skipped_unknown),
+        skipped_unmapped=len(skipped_unmapped),
+        skipped_shape_mismatch=skipped_shape_mismatch,
+    )
+    return (fused, stats) if return_stats else fused
 
 
-def _verify_fusion_changed_weights(
+def verify_fusion_changed_weights(
     base_sd: dict[str, torch.Tensor],
     fused_sd: dict[str, torch.Tensor],
     *,
     min_changed: int = 3,
     label: str,
 ) -> None:
-    """Sanity check: at least ``min_changed`` weights must differ post-fusion.
+    """Sanity check that at least ``min_changed`` weights actually differ post-fusion.
 
-    Logs the L2 norm of the diff for the first few changed tensors. Raises
-    ``RuntimeError`` if no weights changed at all -- the canonical "LoRA
-    silently failed to apply" failure mode.
+    Catches the canonical "LoRA silently failed to apply" failure mode where
+    a key-mapping bug leaves every fused target absent from the base. Logs a
+    sample of changed tensors with their L2 diff for visibility.
+
+    Raises ``RuntimeError`` if no weights changed at all, or if fewer than
+    ``min_changed`` weights changed (likely a partial load).
     """
     changed: list[tuple[str, float]] = []
     max_diff = 0.0
@@ -222,15 +246,11 @@ def _verify_fusion_changed_weights(
         if fused is None or fused.shape != base.shape:
             continue
         if fused.data_ptr() == base.data_ptr():
-            continue  # untouched (same tensor object)
+            continue
         diff = (fused.to(torch.float32) - base.to(torch.float32)).norm().item()
         if diff > 0.0:
             changed.append((k, diff))
             max_diff = max(max_diff, diff)
-            if len(changed) >= min_changed:
-                # Keep scanning past min to surface the max accurately, but
-                # stop logging beyond a small sample.
-                pass
 
     if max_diff == 0.0:
         raise RuntimeError(
@@ -238,7 +258,7 @@ def _verify_fusion_changed_weights(
             f"Verified {len(base_sd)} keys against fused dict; max L2 diff is 0.0."
         )
 
-    sample = changed[: max(min_changed, 5)]
+    sample = changed[:5]
     logger.info(
         f"LoRA fusion verified for '{label}': {len(changed)} tensors changed, "
         f"max L2 diff={max_diff:.4f}. Sample diffs:"
@@ -248,122 +268,98 @@ def _verify_fusion_changed_weights(
 
     if len(changed) < min_changed:
         raise RuntimeError(
-            f"LoRA fusion changed only {len(changed)} weights for '{label}' (require >= {min_changed}). "
-            f"Likely indicates partial LoRA load."
+            f"LoRA fusion changed only {len(changed)} weights for '{label}' "
+            f"(require >= {min_changed}). Likely indicates partial LoRA load."
         )
 
 
-def _lora_cache_namespace(high_path: str, low_path: str | None, scale: float) -> str:
-    """Stable short hash so distinct (paths, scale) combos cache separately."""
+def _lora_stack_cache_namespace(specs_by_expert: dict[int, list[LoRASpec]]) -> str:
+    """Hash ordered ``(resolved_path, scale)`` per expert so distinct stacks cache separately."""
     h = hashlib.sha1()
-    h.update(str(Path(high_path).resolve()).encode())
-    h.update(b"\x00")
-    h.update(str(Path(low_path).resolve()).encode() if low_path else b"none")
-    h.update(b"\x00")
-    h.update(f"{scale:.6f}".encode())
+    for idx in sorted(specs_by_expert.keys()):
+        h.update(f"expert_{idx}\x00".encode())
+        for spec in specs_by_expert[idx]:
+            h.update(str(Path(spec.path).resolve()).encode())
+            h.update(b"\x00")
+            h.update(f"{spec.scale:.6f}".encode())
+            h.update(b"\x00")
     return f"Wan2.2-I2V-LoRA-{h.hexdigest()[:12]}"
 
 
-class WanLoraPipelineI2V(WanPipelineI2V):
-    """Wan2.2 I2V with LoRA adapters fused into the base PyTorch weights.
+class WanPipelineI2VLora(WanPipelineI2V):
+    """Wan2.2 I2V with LoRA stacks fused into the base PyTorch weights."""
 
-    Each expert transformer can get its own LoRA file, or a single LoRA
-    can be applied to the high-noise expert only. Inference parameters
-    (steps, CFG, boundary_ratio) are left to the caller.
-
-    Args:
-        lora_high_path: Path to ``.safetensors`` LoRA for the high-noise
-            expert (``transformer``). May also be passed via the
-            ``LORA_HIGH_PATH`` env var.
-        lora_low_path: Path to ``.safetensors`` LoRA for the low-noise
-            expert (``transformer_2``). May also be passed via
-            ``LORA_LOW_PATH``.
-        lora_scale: Scalar multiplier applied to the fused delta
-            ``W' = W + scale * B @ A``. Default 1.0.
-    """
+    BASE_DIFFUSERS_REPO = "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
 
     def __init__(
         self,
-        *args,
-        lora_high_path: str | None = None,
-        lora_low_path: str | None = None,
-        lora_scale: float = 1.0,
-        **kwargs,
-    ):
-        # Resolve LoRA paths/scale and (optional) boundary_ratio from env.
-        # NOTE: WanPipeline.create_pipeline drops unknown kwargs and hardcodes
-        # boundary_ratio=0.875, so the test funnels per-run overrides through
-        # env vars (LORA_HIGH_PATH/LORA_LOW_PATH/LORA_SCALE/BOUNDARY_RATIO).
-        lora_high_path = lora_high_path or os.environ.get("LORA_HIGH_PATH")
-        lora_low_path = lora_low_path or os.environ.get("LORA_LOW_PATH") or None
-        if "LORA_SCALE" in os.environ:
-            lora_scale = float(os.environ["LORA_SCALE"])
-        if "BOUNDARY_RATIO" in os.environ:
-            kwargs["boundary_ratio"] = float(os.environ["BOUNDARY_RATIO"])
-        if not lora_high_path:
-            raise ValueError(
-                "WanLoraPipelineI2V requires at least lora_high_path "
-                "(or LORA_HIGH_PATH env var). LORA_LOW_PATH is optional — "
-                "if omitted, the low-noise expert uses unmodified base weights."
-            )
-        for p, name in [(lora_high_path, "lora_high_path")] + (
-            [(lora_low_path, "lora_low_path")] if lora_low_path else []
-        ):
-            if not Path(p).is_file():
-                raise FileNotFoundError(f"{name}: file does not exist: {p}")
+        *,
+        device: ttnn.MeshDevice,
+        config: WanPipelineConfig,
+        lora_high: LoRAArg = None,
+        lora_low: LoRAArg = None,
+    ) -> None:
+        high_specs = _normalize_lora_arg(lora_high)
+        low_specs = _normalize_lora_arg(lora_low)
 
-        self._lora_paths = (lora_high_path, lora_low_path)
-        self._lora_scale = float(lora_scale)
-        self._cache_namespace = _lora_cache_namespace(lora_high_path, lora_low_path, self._lora_scale)
-        # Lazily-built fused state dicts keyed by transformer index. Cleared
-        # after handoff to TT cache to free CPU memory.
+        if not high_specs and not low_specs:
+            raise ValueError(
+                "WanPipelineI2VLora requires at least one LoRA. "
+                "Pass lora_high and/or lora_low as a path, LoRASpec, or list."
+            )
+
+        for label, specs in [("lora_high", high_specs), ("lora_low", low_specs)]:
+            for spec in specs:
+                if not Path(spec.path).is_file():
+                    raise FileNotFoundError(f"{label}: file does not exist: {spec.path}")
+
+        self._lora_specs: dict[int, list[LoRASpec]] = {0: high_specs, 1: low_specs}
+        self._cache_namespace = _lora_stack_cache_namespace(self._lora_specs)
+        # Cleared after TT cache handoff (see _prepare_transformer) to free CPU memory.
         self._fused_state_dicts: dict[int, dict[str, torch.Tensor] | None] = {0: None, 1: None}
 
-        super().__init__(*args, **kwargs)
+        super().__init__(device=device, config=config)
 
     def prepare_text_conditioning(self, tt_model, prompt_embeds, buffer, traced=False):
-        # When guidance_scale=1.0, encode_prompt returns negative_prompt_embeds=None.
-        # The base loop still calls this for the negative buffer; forwarding None
-        # would hit NoneType in Linear. Safe to skip since combined_step
-        # short-circuits on do_classifier_free_guidance=False.
+        # guidance_scale=1.0 → encoder returns None for negative embeds; combined_step
+        # skips CFG so the untouched buffer is fine.
         if prompt_embeds is None:
             return buffer
         return super().prepare_text_conditioning(tt_model, prompt_embeds, buffer, traced)
 
     def _build_fused_state_dict(self, idx: int) -> dict[str, torch.Tensor] | None:
+        specs = self._lora_specs[idx]
         state = self.transformer_states[idx]
-        lora_path = self._lora_paths[idx]
-        if lora_path is None:
-            logger.info(f"No LoRA for expert idx={idx} ('{state.subfolder}') — using base weights")
+        subfolder = state.checkpoint.subfolder
+        if not specs:
+            logger.info(f"No LoRA for expert idx={idx} ('{subfolder}') -- using base weights")
             return None
-        label = state.subfolder
-        logger.info(f"Loading LoRA for '{label}' from {lora_path}")
-        lora_sd = load_file(str(lora_path))
-        has_lora = any(
-            ("lora_A" in k)
-            or ("lora_B" in k)
-            or ("lora_down" in k)
-            or ("lora_up" in k)
-            or k.endswith(".diff")
-            or k.endswith(".diff_b")
-            or k.startswith("lora_unet_")
-            for k in lora_sd
-        )
-        if not has_lora:
-            raise RuntimeError(
-                f"No LoRA-style keys (lora_A/lora_B, lora_down/lora_up, diff/diff_b) found in {lora_path}"
-            )
 
-        base_sd = state.torch_model.state_dict()
-        fused_sd = fuse_lora_state_dict(base_sd, lora_sd, scale=self._lora_scale)
-        _verify_fusion_changed_weights(base_sd, fused_sd, label=label)
+        base_sd = state.checkpoint.state_dict()
+        fused_sd = base_sd
+        for spec in specs:
+            logger.info(f"Loading LoRA for '{subfolder}' from {spec.path} (scale={spec.scale})")
+            lora_sd = load_file(str(spec.path))
+            if not _has_lora_keys(lora_sd):
+                raise RuntimeError(
+                    f"No LoRA-style keys (lora_A/lora_B, lora_down/lora_up, diff/diff_b) found in {spec.path}"
+                )
+            previous_sd = fused_sd
+            fused_sd, stats = fuse_lora_state_dict(previous_sd, lora_sd, scale=spec.scale, return_stats=True)
+            label = f"{subfolder}: {Path(spec.path).name}"
+            if stats.applied == 0:
+                raise RuntimeError(
+                    f"LoRA fusion applied no tensors for '{label}'. "
+                    f"Skipped unmapped={stats.skipped_unmapped}, unknown={stats.skipped_unknown}, "
+                    f"shape_mismatch={stats.skipped_shape_mismatch}."
+                )
+            verify_fusion_changed_weights(previous_sd, fused_sd, label=label)
         return fused_sd
 
     def _prepare_transformer(self, idx: int):
         state = self.transformer_states[idx]
 
-        if self._lora_paths[idx] is None:
-            # No LoRA for this expert — use the base class path (vanilla weights).
+        if not self._lora_specs[idx]:
             super()._prepare_transformer(idx)
             return
 
@@ -378,7 +374,7 @@ class WanLoraPipelineI2V(WanPipelineI2V):
         cache.load_model(
             state.model,
             model_name=self._cache_namespace,
-            subfolder=state.subfolder,
+            subfolder=state.checkpoint.subfolder,
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             is_fsdp=self.is_fsdp,
@@ -386,7 +382,38 @@ class WanLoraPipelineI2V(WanPipelineI2V):
         )
         self._fused_state_dicts[idx] = None
 
-    @staticmethod
-    def create_pipeline(*args, **kwargs):
-        kwargs["checkpoint_name"] = kwargs.get("checkpoint_name") or "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
-        return WanPipeline.create_pipeline(*args, pipeline_class=WanLoraPipelineI2V, **kwargs)
+    @classmethod
+    def create_pipeline(
+        cls,
+        *,
+        mesh_device: ttnn.MeshDevice,
+        height: int = 480,
+        width: int = 832,
+        num_frames: int = 81,
+        num_links: int | None = None,
+        dynamic_load: bool | None = None,
+        topology: ttnn.Topology | None = None,
+        is_fsdp: bool | None = None,
+        boundary_ratio: float | None = 0.875,
+        lora_high: LoRAArg = None,
+        lora_low: LoRAArg = None,
+    ) -> WanPipelineI2VLora:
+        config = WanPipelineConfig.default(
+            mesh_shape=mesh_device.shape,
+            checkpoint_name=cls.BASE_DIFFUSERS_REPO,
+            height=height,
+            width=width,
+            num_frames=num_frames,
+            num_links=num_links,
+            topology=topology,
+            dynamic_load=dynamic_load,
+            is_fsdp=is_fsdp,
+            boundary_ratio=boundary_ratio,
+            model_type="i2v",
+        )
+        return cls(
+            device=mesh_device,
+            config=config,
+            lora_high=lora_high,
+            lora_low=lora_low,
+        )

@@ -25,8 +25,8 @@ void kernel_main() {
     // The first argument is the page index, which is 0 in this case as we are reading the first page of the buffer.
     // The second argument is the address generator for the buffer.
     // "Page" simply means a unit of data.
-    uint64_t src0_dram_noc_addr = get_noc_addr(0, src0);
-    uint64_t src1_dram_noc_addr = get_noc_addr(0, src1);
+    uint64_t src0_dram_noc_addr = src0.get_noc_addr(0);
+    uint64_t src1_dram_noc_addr = src1.get_noc_addr(0);
     noc_async_read(src0_dram_noc_addr, src0_l1, sizeof(uint32_t));
     noc_async_read(src1_dram_noc_addr, src1_l1, sizeof(uint32_t));
     noc_async_read_barrier();
@@ -36,14 +36,14 @@ void kernel_main() {
     uint32_t* dat1 = (uint32_t*)src1_l1;
     uint32_t* out0 = (uint32_t*)dst_l1;
 
-    DEVICE_PRINT("Adding integers: {} + {}\n", *dat0, *dat1);
+    DPRINT("Adding integers: {} + {}\n", *dat0, *dat1);
 
     (*out0) = (*dat0) + (*dat1);
 
     // Write data from L1 -> DRAM. Again this is a non-blocking operation.
     // Thus we need to use noc_async_write_barrier() to wait until the data is
     // is written to DRAM before we can continue.
-    uint64_t dst_dram_noc_addr = get_noc_addr(0, dst);
+    uint64_t dst_dram_noc_addr = dst.get_noc_addr(0);
     noc_async_write(dst_l1, dst_dram_noc_addr, sizeof(uint32_t));
     noc_async_write_barrier();
 }

@@ -95,7 +95,7 @@ inline void _llk_math_eltwise_unary_datacopy_wrapper_(
 template <bool is_fp32_dest_acc_en, bool transpose_of_faces = true, bool is_32bit = false>
 inline void _llk_math_transpose_dest_wrapper_(const std::uint32_t dst_index)
 {
-    _llk_math_transpose_dest_<is_fp32_dest_acc_en, transpose_of_faces, is_32bit>(dst_index);
+    _llk_math_transpose_dest_<transpose_of_faces, is_32bit>(dst_index);
 }
 
 inline void _llk_math_reconfig_remap_wrapper_(const bool remap_enable)

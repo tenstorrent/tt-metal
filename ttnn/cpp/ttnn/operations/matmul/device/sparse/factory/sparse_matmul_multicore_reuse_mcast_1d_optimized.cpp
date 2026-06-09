@@ -314,6 +314,10 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     };
     tt::tt_metal::TensorAccessorArgs(*in0_buffer).append_to(in0_sender_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*sparsity_buffer).append_to(in0_sender_compile_time_args);
+    // num_batch_compute (== nnz when supplied). The sender uses this to validate, on-device, that
+    // count_nonzero(sparsity) matches the loop count baked into the receiver/compute kernels, failing
+    // loudly instead of deadlocking. See https://github.com/tenstorrent/tt-metal/issues/45943.
+    in0_sender_compile_time_args.push_back((std::uint32_t)num_batch_compute);
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // READER
@@ -399,7 +403,11 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
         device->arch(), num_cores, mm_kernel_defines);
-    ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(),
+        num_cores,
+        mm_kernel_defines,
+        ttnn::get_throttle_level(operation_attributes.compute_kernel_config));
 
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
 
@@ -536,6 +544,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
             .defines = mm_kernel_defines,

@@ -22,7 +22,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator_v2 import generate_stimuli_v2
+from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import BootMode, TestConfig
 from helpers.test_variant_parameters import (
     ACC_TO_DEST,
@@ -58,6 +58,9 @@ def get_num_tiles_per_accumulation(acc_to_dest: bool) -> int:
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
             DataFormat.MxFp4,
+            DataFormat.MxInt8,
+            DataFormat.MxInt4,
+            DataFormat.MxInt2,
             DataFormat.Float16_b,
             DataFormat.Float16,
         ],
@@ -73,10 +76,14 @@ def get_num_tiles_per_accumulation(acc_to_dest: bool) -> int:
         MathFidelity.HiFi3,
         MathFidelity.HiFi4,
     ],
-    implied_math_format=[
-        ImpliedMathFormat.No,
-        ImpliedMathFormat.Yes,
-    ],
+    implied_math_format=lambda formats: (
+        [
+            ImpliedMathFormat.No,
+            ImpliedMathFormat.Yes,
+        ]
+        if not formats.input_format.is_mx_format()
+        else [ImpliedMathFormat.Yes]
+    ),
     dest_sync_dims_dest_acc=ELTWISE_DIMENSIONS,
     acc_to_dest=[False, True],
     num_faces=[4],
@@ -101,13 +108,6 @@ def test_eltwise_binary(
     ):
         pytest.skip("Math fidelity only affects multiplication operations")
 
-    # MX formats REQUIRE implied_math_format=Yes on Quasar (bypass format inference pipeline)
-    if (
-        formats.input_format.is_mx_format()
-        and implied_math_format == ImpliedMathFormat.No
-    ):
-        pytest.skip("MX formats require implied_math_format=Yes on Quasar")
-
     num_tiles_per_accumulation = get_num_tiles_per_accumulation(acc_to_dest)
     total_tiles = (
         input_dimensions[0] * input_dimensions[1]
@@ -118,7 +118,7 @@ def test_eltwise_binary(
     ) or total_tiles % num_tiles_per_accumulation != 0:
         pytest.skip("Not enough tiles for dest accumulation")
 
-    src_A, tile_cnt_A, src_B, _ = generate_stimuli_v2(
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -196,6 +196,4 @@ def test_eltwise_binary(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        print_errors=True,
-        print_pcc=True,
     ), "Assert against golden failed"

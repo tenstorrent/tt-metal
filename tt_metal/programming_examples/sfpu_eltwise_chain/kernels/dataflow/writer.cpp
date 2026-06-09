@@ -23,7 +23,7 @@ void kernel_main() {
     // Save output data
     cb_wait_front(result_cb_index, one_tile);
     const uint32_t l1_read_addr = get_read_ptr(result_cb_index);
-    noc_async_write_tile(0, interleaved_accessor, l1_read_addr);
+    noc_async_write_page(0, interleaved_accessor, l1_read_addr);
     noc_async_write_barrier();
     cb_pop_front(result_cb_index, one_tile);
 }
