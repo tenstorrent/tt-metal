@@ -47,22 +47,33 @@
 
 - name: "Demo Test with Perf Metrics (DeepSeek V3 B1 Supercluster 4 aka Superpod 1)"
   cmd: |
-    echo "============= SP1 superpod: using ttrun.py new mode with MGD ============="
-    # Hostfile, rankfile, rank_bindings.yaml, and mgd.textproto are generated under /ci/ttrun
-    # by ttop-get-allocation-data + ttop-configure-tt-run from the MGD allocation.
-    SHARED_TT_METAL_HOME=/ci/tt-metal
+    echo "============= SP1 superpod: allocation hostfile + generated rank bindings ============="
+    # /ci/ttrun/hostfile and /ci/ttrun/rankfile come from ttop-get-allocation-data +
+    # ttop-configure-tt-run (MGD allocation). Rank bindings are generated from that hostfile
+    # so no hardcoded hostnames in rev_c rank files.
     TTRUN_DIR=/ci/ttrun
-    TTRUN_PY="${SHARED_TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
-    MGD_FILE="${TTRUN_DIR}/mgd.textproto"
-    RANKFILE="${TTRUN_DIR}/rankfile"
-    cd "${SHARED_TT_METAL_HOME}"
+    TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
+    PIPELINE_DIR="${TT_METAL_HOME}/generated/sp1_pipeline_dir"
+    PIPELINE_CONFIG="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_single_pod_ci.yaml"
+    GENERATOR="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py"
 
-    HOSTS=$(awk '{print $1}' "${TTRUN_DIR}/hostfile" | paste -sd,)
+    mkdir -p "${PIPELINE_DIR}"
+    python3 "${GENERATOR}" "${PIPELINE_CONFIG}" \
+      --hostfile "${TTRUN_DIR}/hostfile" \
+      --worker-tt-metal-home "${TT_METAL_HOME}" \
+      --output-dir "${PIPELINE_DIR}"
+
+    RANK_BINDING="${PIPELINE_DIR}/blitz_decode_pipeline_rank_binding_single_pod_ci.yaml"
+    RANK_FILE="${PIPELINE_DIR}/blitz_decode_pipeline_rank_file_single_pod_ci"
+    # OpenMPI 5 rejects rankfile paths containing hyphens (e.g. under tt-metal).
+    RANK_FILE_FOR_MPI=/var/tmp/sp1_rankfile
+    cp -f "${RANK_FILE}" "${RANK_FILE_FOR_MPI}"
+
+    PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
     LOGURU_LEVEL=DEBUG TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
-      --mesh-graph-descriptor "${MGD_FILE}" \
-      --hosts "${HOSTS}" \
-      --mpi-args "--map-by rankfile:file=${RANKFILE} --bind-to hwt:overload-allowed --tag-output --wdir ${SHARED_TT_METAL_HOME}" \
+      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=${RANK_FILE_FOR_MPI} --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
+      --rank-binding "${RANK_BINDING}" \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 4096 \
         --no-stop-at-eos \
