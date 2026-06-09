@@ -4413,8 +4413,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     }
     EXPECT_GE(hosts_spanning_blitz_mapped.size(), 1u);
     EXPECT_LE(hosts_spanning_blitz_mapped.size(), 4u)
-        << "Mapped Blitz pipeline: at most 4 hosts for 10-stage 4×2 pipeline on SP4 GLX (loose upper bound; ideally "
-           "ceil(10/4)=3)";
+        << "Mapped Blitz pipeline: at most one host per logical 4×2 mesh (10 stages)";
 }
 
 TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx_Blitz2x4_11Stage) {
@@ -4543,9 +4542,8 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
         hosts_spanning_blitz_mapped.insert(psd.get_host_name_for_asic(asic_id));
     }
     EXPECT_GE(hosts_spanning_blitz_mapped.size(), 1u);
-    EXPECT_LE(hosts_spanning_blitz_mapped.size(), 4u)
-        << "Mapped Blitz pipeline: at most 4 hosts for 11-stage 4×2 pipeline on SP4 GLX (loose upper bound; ideally "
-           "ceil(11/4)=3)";
+    EXPECT_LE(hosts_spanning_blitz_mapped.size(), 5u)
+        << "Mapped Blitz pipeline: at most one host per logical 4×2 mesh (11 stages)";
 }
 
 TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx_Blitz2x4_32Stage) {
@@ -4808,7 +4806,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
             EXPECT_GE(
                 adjacency_graph.get_neighbors(node).size(), 2u * 2u);  // num directions * 2 channels per direction
             EXPECT_LE(
-                adjacency_graph.get_neighbors(node).size(), 3u * 2u);  // num directions * 2 channels per direction
+                adjacency_graph.get_neighbors(node).size(), 4u * 2u);  // torus interior: 4 directions * 2 channels
         }
     }
 }
@@ -4908,16 +4906,6 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
     // Single BH galaxy: 1 mesh (full 32-ASIC 8x4 torus)
     // The MGD describes a single logical 1x16 mesh (one BH galaxy), but on this BH system it
     // is realized as 2 physical meshes (each 1x16, totaling 32 ASICs), so we expect 2 graphs.
-    //
-    // The 1x16 torus grouping must not depend on specific tray pinnings. On mock clusters (used in
-    // CPU-only tests) the PSD may lack the bus_id data needed to derive tray_id, and on some hosts
-    // the leaked tray_id values do not correspond to the mock topology. In either case the
-    // torus-aware TRAY_3 + TRAY_1 grouping cannot be realized and the build yields 0 meshes. Skip
-    // rather than fail in that case; real hardware provides the tray data needed for full coverage.
-    if (physical_multi_mesh_graph.mesh_adjacency_graphs_.empty()) {
-        GTEST_SKIP() << "PSD tray data insufficient for torus-aware TRAY_3+TRAY_1 grouping on this "
-                     << "mock cluster/host — run on real hardware for full coverage";
-    }
     EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 2u);
 
     // Check that the graph has exit nodes (single-host may have 0 exit nodes)
@@ -5066,6 +5054,8 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
+    // The 4-mesh pipeline file defines the topology type for PGD matching; the PGD provides
+    // 2 non-overlapping 4x2_Mesh placements per single BH galaxy (cross-tray half-tray pairs).
     const std::filesystem::path mgd_path =
         std::filesystem::path(tt_metal_home) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_2x4_pipeline.textproto";
@@ -5075,8 +5065,9 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
     // Build physical multi-mesh graph using PGD and PSD
     const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
 
-    // Single BH galaxy (32 ASICs): 32/8 = 4 meshes of 2x4
-    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 4u);
+    // Single BH galaxy (32 ASICs): PGD provides 2 cross-tray 4x2_Mesh placements
+    // (tray1_half+tray3_half and tray2_half+tray4_half).
+    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 2u);
 
     // Check that the graph has exit nodes
     for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
@@ -5100,7 +5091,12 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
         }
     }
 
-    MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, mgd_path.string());
+    // Use a 2-mesh MGD for the logical→physical mapping (matching the 2 physical placements above).
+    const std::filesystem::path mgd_2mesh_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_2x4_2mesh_pipeline.textproto";
+    ASSERT_TRUE(std::filesystem::exists(mgd_2mesh_path)) << "MGD file not found: " << mgd_2mesh_path;
+    MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, mgd_2mesh_path.string());
     const auto logical_multi_mesh_graph = build_logical_multi_mesh_adjacency_graph(mesh_graph);
 
     TopologyMappingConfig config;

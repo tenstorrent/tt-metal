@@ -222,6 +222,11 @@ GroupingInfo finalize_mesh_grouping_with_device_topology(
     GroupingInfo result = grouping;
     result.adjacency_graph =
         build_row_major_mesh_graph(node_ids, device_topo.dims, grouping.name, 1, device_topo.ring_dims);
+    // The finalized grouping represents exactly the device-topology nodes. When the source PGD grouping is
+    // larger than the MGD mesh (node_diff > 0, e.g. a 4x8 PGD candidate matched to a 4x4 mesh), it carries a
+    // larger asic_count; reset it to the node count so the grouping stays self-consistent (is_flattened()
+    // stays true and downstream PSD placement does not try to re-flatten an already-flattened mesh).
+    result.asic_count = static_cast<uint32_t>(num_nodes);
     return result;
 }
 
@@ -877,12 +882,29 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                 continue;
             }
 
+            // Build the grouping that will actually be committed for this MGD mesh: the flattened PGD
+            // candidate rebuilt with the MGD device topology (adds RING wrap edges). The PSD-placement
+            // check below validates this exact grouping so that validation and the later find_all_in_psd
+            // placement use the same graph (previously validation used the LINE-only candidate while
+            // placement used the RING grouping, so a torus that the slot-pinned PGD candidate cannot host
+            // was silently accepted). Keeping the PGD (tray_id, asic_location) slot labels is intentional:
+            // when an MGD mesh requests a topology the PGD grouping cannot physically host at its pinned
+            // slots (e.g. a 4x4 RING/RING sub-torus whose wrap edges land on non-adjacent tray slots), the
+            // pinned validation correctly fails, leaving committed_pgd_matches false so we fall back to the
+            // MGD mesh grouping (placed by topology only, see below).
+            auto make_committed_grouping = [&](const MeshTopologyMatch& match) -> GroupingInfo {
+                const GroupingInfo& flattened_grouping = mesh_flat_groupings.at(match.name)[match.idx];
+                return device_topo.has_value() ? finalize_mesh_grouping_with_device_topology(
+                                                     flattened_grouping, *device_topo, &match.mapping.target_to_global)
+                                               : flattened_grouping;
+            };
+
             if (physical_system_descriptor != nullptr) {
                 for (const auto& match : best_matches_topology) {
-                    const GroupingInfo& flattened_candidate = mesh_flat_groupings.at(match.name)[match.idx];
+                    const GroupingInfo committed_candidate = make_committed_grouping(match);
                     std::vector<std::string> psd_errors;
                     const auto mapped_asics =
-                        find_any_in_psd(flattened_candidate, *physical_system_descriptor, psd_errors);
+                        find_any_in_psd(committed_candidate, *physical_system_descriptor, psd_errors);
                     if (!mapped_asics.empty()) {
                         best_matches_psd_placed.push_back(match);
                     } else if (!psd_errors.empty()) {
@@ -890,7 +912,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                             tt::LogFabric,
                             "PGD '{}' matched MGD '{}' topologically but could not be placed on PSD under current "
                             "constraints: {}",
-                            flattened_candidate.name,
+                            committed_candidate.name,
                             mgd_grouping_info.name,
                             psd_errors.front());
                     } else {
@@ -898,7 +920,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                             tt::LogFabric,
                             "PGD '{}' matched MGD '{}' topologically but could not be placed on PSD (no ASIC embedding "
                             "found)",
-                            flattened_candidate.name,
+                            committed_candidate.name,
                             mgd_grouping_info.name);
                     }
                 }
@@ -910,13 +932,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                 for (const auto& match : best_matches_psd_placed) {
                     auto lookup_it = mesh_flat_groupings.find(match.name);
                     if (lookup_it != mesh_flat_groupings.end() && match.idx < lookup_it->second.size()) {
-                        const GroupingInfo& flattened_grouping = lookup_it->second[match.idx];
-                        if (device_topo.has_value()) {
-                            result[instance_type][instance_name].push_back(finalize_mesh_grouping_with_device_topology(
-                                flattened_grouping, *device_topo, &match.mapping.target_to_global));
-                        } else {
-                            result[instance_type][instance_name].push_back(flattened_grouping);
-                        }
+                        result[instance_type][instance_name].push_back(make_committed_grouping(match));
                     }
                 }
                 committed_pgd_matches = true;
@@ -1679,23 +1695,20 @@ std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor
     }
 
     std::vector<std::unordered_set<tt::tt_metal::AsicID>> all_asic_id_sets;
-    if (!flat_meshes.empty()) {
-        auto heterogeneous_results =
-            solve_for_many_groupings_to_psd_heterogeneous(flat_meshes, physical_graph, physical_system_descriptor);
-
-        for (const auto& grouping : flat_meshes) {
-            auto it = heterogeneous_results.find(&grouping);
-            if (it == heterogeneous_results.end()) {
+    std::set<std::set<tt::tt_metal::AsicID>> seen_asic_sets;
+    for (const auto& flat_mesh : flat_meshes) {
+        for (const auto& result :
+             solve_for_many_groupings_to_psd(flat_mesh, physical_graph, physical_system_descriptor)) {
+            if (!result.success) {
                 continue;
             }
-            for (const auto& result : it->second) {
-                if (result.success) {
-                    std::unordered_set<tt::tt_metal::AsicID> asic_set;
-                    for (const auto& [target_node, asic_id] : result.target_to_global) {
-                        asic_set.insert(asic_id);
-                    }
-                    all_asic_id_sets.push_back(std::move(asic_set));
-                }
+            std::unordered_set<tt::tt_metal::AsicID> asic_set;
+            for (const auto& [target_node, asic_id] : result.target_to_global) {
+                asic_set.insert(asic_id);
+            }
+            std::set<tt::tt_metal::AsicID> asic_set_key(asic_set.begin(), asic_set.end());
+            if (seen_asic_sets.insert(std::move(asic_set_key)).second) {
+                all_asic_id_sets.push_back(std::move(asic_set));
             }
         }
     }
