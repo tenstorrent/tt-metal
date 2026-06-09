@@ -6,6 +6,8 @@
 Uses HuggingFace Gemma4 classes as reference for PCC comparison.
 """
 
+from pathlib import Path
+
 import pytest
 import torch
 from loguru import logger
@@ -21,6 +23,22 @@ from ...tests.test_factory import (
     num_layers_for_full_attention_group,
     parametrize_mesh_with_fabric,
 )
+
+
+def _skip_if_config_only_model(model_path):
+    """Skip real-weight smoke tests when HF_MODEL points at bundled configs."""
+    path = Path(model_path)
+    if not path.is_dir():
+        return
+    has_weights = (
+        any(path.glob("*.safetensors"))
+        or (path / "model.safetensors").exists()
+        or (path / "pytorch_model.bin").exists()
+        or (path / "pytorch_model.bin.index.json").exists()
+    )
+    if not has_weights:
+        pytest.skip(f"{model_path} contains only config files; real model weights are required")
+
 
 # ── Config Tests ───────────────────────────────────────────────────────────
 
@@ -140,6 +158,7 @@ def _create_hf_model(hf_text_config):
             for layer_type in set(self.config.layer_types[: self.config.num_hidden_layers]):
                 rope_cache[layer_type] = rope(x_dummy, pos_ids, layer_type=layer_type)
 
+            shared_kv_states = {}
             for i, layer in enumerate(self.layers):
                 layer_type = self.config.layer_types[i]
                 x = layer(
@@ -147,6 +166,7 @@ def _create_hf_model(hf_text_config):
                     per_layer_input=pli,
                     position_embeddings=rope_cache[layer_type],
                     attention_mask=attention_mask,
+                    shared_kv_states=shared_kv_states,
                 )
             x = self.norm(x)
             logits = self.lm_head(x)
@@ -681,6 +701,7 @@ def test_single_decode_perf(mesh_device, reset_seeds, request):
     model_path = os.getenv("HF_MODEL") or os.getenv(
         "GEMMA4_MODEL_PATH", "/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it"
     )
+    _skip_if_config_only_model(model_path)
 
     tp = mesh_device.shape[1]
     decode_pos = 256
@@ -761,6 +782,7 @@ def test_single_prefill_perf(mesh_device, reset_seeds, request):
     model_path = os.getenv("HF_MODEL") or os.getenv(
         "GEMMA4_MODEL_PATH", "/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it"
     )
+    _skip_if_config_only_model(model_path)
 
     tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
     hf_config_check = TestFactory.create_hf_config()
@@ -883,6 +905,7 @@ def test_single_decode(mesh_device, reset_seeds, request):
     model_path = os.getenv("HF_MODEL") or os.getenv(
         "GEMMA4_MODEL_PATH", "/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it"
     )
+    _skip_if_config_only_model(model_path)
 
     # Skip combos where the model doesn't fit (same gating as test_full_model).
     tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
