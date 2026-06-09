@@ -135,6 +135,10 @@ def _text_body_from_env() -> str:
     return body
 
 
+def _tp4_prefill_body_enabled() -> bool:
+    return os.environ.get("DOTS_OCR_TEXT_BODY", "").strip().lower() == "tp4_prefill"
+
+
 def _tp_cluster_axis(device) -> int:
     """Mesh axis the TP shards live on (the >1 dim of a 1xN / Nx1 mesh)."""
     shape = [int(x) for x in device.shape]
@@ -1140,6 +1144,8 @@ class TTNNDotsOCRPipeline(TTNNModule):
             First predicted token ID (int), or a list of ``B`` IDs when
             ``_mesh_dp_dual_stream()`` is active.
         """
+        if _tp4_prefill_body_enabled():
+            _dots_ocr_signpost("dots_ocr.prefill_start")
         dual = self._mesh_dp_dual_stream()
         if dual and int(input_ids.shape[0]) != int(self.config.batch_size):
             raise ValueError(
@@ -1528,16 +1534,13 @@ class TTNNDotsOCRPipeline(TTNNModule):
             appending on EOS unless ``stop_on_eos`` is disabled).
         """
         _dots_ocr_signpost("dots_ocr.model_start")
-        try:
-            return self._generate_impl(
-                input_ids,
-                pixel_values,
-                image_grid_thw,
-                max_new_tokens,
-                stop_on_eos,
-            )
-        finally:
-            _dots_ocr_signpost("dots_ocr.decode_end")
+        return self._generate_impl(
+            input_ids,
+            pixel_values,
+            image_grid_thw,
+            max_new_tokens,
+            stop_on_eos,
+        )
 
     def _generate_impl(
         self,
@@ -1556,6 +1559,29 @@ class TTNNDotsOCRPipeline(TTNNModule):
         self._dp_readback_ring = None
         first_out = self.prefill(input_ids, pixel_values, image_grid_thw)
 
+        if max_new_tokens <= 1:
+            if self._mesh_dp_dual_stream():
+                if not isinstance(first_out, list):
+                    raise RuntimeError("prefill must return a list of first tokens in DP dual-stream mode")
+                return [[t] for t in first_out]
+            if not isinstance(first_out, int):
+                raise RuntimeError("prefill must return a single int in non-DP mode")
+            return [first_out]
+
+        if _tp4_prefill_body_enabled():
+            _dots_ocr_signpost("dots_ocr.decode_start")
+        try:
+            return self._decode_after_prefill(first_out, max_new_tokens, stop_on_eos)
+        finally:
+            _dots_ocr_signpost("dots_ocr.decode_end")
+
+    def _decode_after_prefill(
+        self,
+        first_out: Union[int, List[int]],
+        max_new_tokens: int,
+        stop_on_eos: bool,
+    ) -> Union[List[int], List[List[int]]]:
+        """Autoregressive decode loop (``max_new_tokens > 1``; prefill already ran)."""
         if self._mesh_dp_dual_stream():
             if not isinstance(first_out, list):
                 raise RuntimeError("prefill must return a list of first tokens in DP dual-stream mode")

@@ -60,6 +60,11 @@ def _vision_tower_signpost(header: str) -> None:
     signpost(header)
 
 
+def _tp4_prefill_vision_enabled() -> bool:
+    """True when experimental TP4-prefill-only vision optimizations are enabled."""
+    return os.environ.get("DOTS_OCR_TEXT_BODY", "").strip().lower() == "tp4_prefill"
+
+
 def _vision_tensor_mem_tag(t: ttnn.Tensor) -> str:
     """Compact memory-config label: buffer (L1/DRAM) + interleaved vs sharded layout."""
     mem = t.memory_config()
@@ -1121,6 +1126,43 @@ class TTNNDotsVisionMLP(TTNNModule):
         self.tt_fc2_weight = _shard_w(self._fc2_weight, row_mapper)
         self.tt_fc2_bias = _repl_b(self._fc2_bias)
 
+        self._tp_down_pc = None
+        self._tp_down_k = None
+        if _tp4_prefill_vision_enabled():
+            from models.experimental.tt_symbiote.modules.vision_tp4_bh import bh_tp4_mlp_down_pc
+
+            num_tp = self._mlp_tp_num_devices()
+            itp = int(self._fc1_weight.shape[0]) // num_tp
+            self._tp_down_pc = bh_tp4_mlp_down_pc(self.device, itp=itp)
+            self._tp_down_k = itp
+
+    def _tp_mlp_down_program_config(self, m_dim: int, k_dim: int, n_dim: int):
+        """Program config for TP row-parallel down matmul (``M×I/TP×H``).
+
+        ``_vision_matmul_program_config`` returns ``None`` on BH 11×10 for
+        M=11264 (352 m-tiles does not divide grid_y=10), which leaves the
+        auto-config path at ~3.6 ms / 6% TFLOPs.  Prefer the hardware-swept
+        BH TP4 config (``bh_tp4_mlp_down_pc``) with BFP8 output.
+        """
+        if not _tp4_prefill_vision_enabled():
+            return _vision_matmul_program_config(self.device, m_dim, k_dim, n_dim)
+        cached = getattr(self, "_tp_down_pc", None)
+        if cached is not None and m_dim == 11264 and k_dim == int(getattr(self, "_tp_down_k", k_dim)):
+            return cached
+        from models.experimental.tt_symbiote.modules.vision_tp4_bh import bh_tp4_mlp_down_pc, bh_tp4_matmul_pc
+
+        pc = bh_tp4_mlp_down_pc(self.device, seq_len=m_dim, itp=k_dim)
+        if pc is not None:
+            return pc
+        return bh_tp4_matmul_pc(
+            self.device,
+            m_dim,
+            k_dim,
+            n_dim,
+            in0_dtype=ttnn.bfloat8_b,
+            out_dtype=ttnn.bfloat8_b,
+        ) or _vision_matmul_program_config(self.device, m_dim, k_dim, n_dim)
+
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -1281,19 +1323,22 @@ class TTNNDotsVisionMLP(TTNNModule):
         ttnn.deallocate(up)
 
         # Row-parallel down-projection: each device contracts its intermediate shard
-        # into a full-width partial sum. The hand-tuned ``_vision_mlp_down_l1_pc`` is
-        # pinned to the unsharded K=intermediate shape, so derive the config from the
-        # sharded shapes instead. Output stays DRAM-interleaved for the reduce_scatter.
+        # into a full-width partial sum. The tp4_prefill experiment uses BFP8 L1
+        # out + explicit 2D-mcast PC; default keeps the prior DRAM/BF16 path.
+        use_tp4_prefill_vision = _tp4_prefill_vision_enabled()
+        out_mem = ttnn.L1_MEMORY_CONFIG if use_tp4_prefill_vision else mem
+        out_dtype = ttnn.bfloat8_b if use_tp4_prefill_vision else ttnn.bfloat16
         down_m = int(gate_up_mul.shape[0]) * int(gate_up_mul.shape[1]) * int(gate_up_mul.shape[2])
         down_k = int(self.tt_fc2_weight.shape[-2])  # intermediate / num_tp (contraction shard)
         down_n = int(self.tt_fc2_weight.shape[-1])  # full hidden
-        down_pc = _vision_matmul_program_config(dev, down_m, down_k, down_n)
+        self._tp_down_k = down_k
+        down_pc = self._tp_mlp_down_program_config(down_m, down_k, down_n)
         partial = ttnn.linear(
             gate_up_mul,
             self.tt_fc2_weight,
             bias=None,
-            dtype=ttnn.bfloat16,
-            memory_config=mem,
+            dtype=out_dtype,
+            memory_config=out_mem,
             compute_kernel_config=self.compute_kernel_config,
             program_config=down_pc,
         )
@@ -1313,17 +1358,19 @@ class TTNNDotsVisionMLP(TTNNModule):
             dim=3,
             num_links=num_links,
             cluster_axis=1,
-            memory_config=mem,
+            memory_config=out_mem,
             topology=ttnn.Topology.Linear,
         )
+        ttnn.deallocate(partial)
         output = ttnn.all_gather(
             reduced,
             dim=3,
             num_links=num_links,
             cluster_axis=1,
-            memory_config=mem,
+            memory_config=out_mem,
             topology=ttnn.Topology.Linear,
         )
+        ttnn.deallocate(reduced)
         # fc2 bias is replicated (full hidden) and added once, after the reduce, so it
         # is not summed num_tp times.
         if self.tt_fc2_bias is not None:
@@ -1446,6 +1493,8 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
         grid_thw: torch.Tensor = None,
         activation_memory_config: ttnn.MemoryConfig | None = None,
     ) -> ttnn.Tensor:
+        if _tp4_prefill_vision_enabled():
+            _vision_tower_signpost("vision_tower.start")
         mem = activation_memory_config or ttnn.DRAM_MEMORY_CONFIG
         mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
 
@@ -1773,6 +1822,14 @@ class TTNNDotsVisionAttention(TTNNModule):
                 if self._o_proj_bias_tp is not None
                 else None
             )
+            self._tp_o_ctx_dim = None
+            self._tp_o_proj_pc = None
+            if _tp4_prefill_vision_enabled():
+                from models.experimental.tt_symbiote.modules.vision_tp4_bh import bh_tp4_o_proj_pc
+
+                heads_per_tp = self.num_heads // self._tp_ndev
+                self._tp_o_ctx_dim = heads_per_tp * self.head_dim
+                self._tp_o_proj_pc = bh_tp4_o_proj_pc(self.device, ctx_dim=self._tp_o_ctx_dim)
         else:
             self.tt_qkv_weight = _to_dev(self.tt_qkv_weight)
             self.tt_qkv_bias = _to_dev(self.tt_qkv_bias)
@@ -1782,6 +1839,32 @@ class TTNNDotsVisionAttention(TTNNModule):
         self.sdpa_compute_kernel_config = _vision_sdpa_compute_config(
             self.device, math_fidelity=VISION_SDPA_MATH_FIDELITY
         )
+
+    def _tp_o_proj_program_config(self, m_dim: int, k_dim: int, n_dim: int):
+        """Program config for TP row-parallel o_proj (``M×ctx/TP×H``).
+
+        ``_vision_matmul_program_config`` returns ``None`` on BH 11×10 for
+        M=11264; without an explicit PC the auto-config path lands at ~1.3 ms.
+        """
+        if not _tp4_prefill_vision_enabled():
+            return _vision_matmul_program_config(self.device, m_dim, k_dim, n_dim)
+        cached = getattr(self, "_tp_o_proj_pc", None)
+        cached_k = getattr(self, "_tp_o_ctx_dim", None)
+        if cached is not None and m_dim == 11264 and k_dim == cached_k:
+            return cached
+        from models.experimental.tt_symbiote.modules.vision_tp4_bh import bh_tp4_matmul_pc, bh_tp4_o_proj_pc
+
+        pc = bh_tp4_o_proj_pc(self.device, seq_len=m_dim, ctx_dim=k_dim)
+        if pc is not None:
+            return pc
+        return bh_tp4_matmul_pc(
+            self.device,
+            m_dim,
+            k_dim,
+            n_dim,
+            in0_dtype=ttnn.bfloat8_b,
+            out_dtype=ttnn.bfloat8_b,
+        ) or _vision_matmul_program_config(self.device, m_dim, k_dim, n_dim)
 
     def _concat_heads(self, ctx: ttnn.Tensor) -> ttnn.Tensor:
         # Output L1 interleaved so o_proj reads activation from L1 instead of DRAM.
@@ -1998,13 +2081,21 @@ class TTNNDotsVisionAttention(TTNNModule):
         # matmul_device_operation.cpp:841 constrains out_subblock_w/h when output is sharded.
         o_k = int(self.tt_o_proj_weight.shape[-2])
         o_n = int(self.tt_o_proj_weight.shape[-1])
-        o_pc = _vision_matmul_program_config(self.device, qkv_m, o_k, o_n)
+        use_tp4_prefill_vision = ndev > 1 and _tp4_prefill_vision_enabled()
+        o_pc = (
+            self._tp_o_proj_program_config(qkv_m, o_k, o_n)
+            if use_tp4_prefill_vision
+            else _vision_matmul_program_config(self.device, qkv_m, o_k, o_n)
+        )
         # The block-sharded o_proj fast path is for the single-device replicated
         # case only. In TP the o_proj is row-parallel (in0 holds this rank's
         # heads, weight is contraction-sharded) and the partial sums must be
-        # all-reduced, so use the DRAM-interleaved path + reduce_scatter/all_gather.
+        # all-reduced. The tp4_prefill experiment uses L1/BFP8; default keeps
+        # the prior DRAM/BF16 path.
         out_bs = None if ndev > 1 else _vision_block_sharded_mem(self.device, qkv_m, o_n)
         o_bs_pc = None if ndev > 1 else _vision_o_proj_bs_program_config(self.device)
+        tp_out_mem = ttnn.L1_MEMORY_CONFIG if use_tp4_prefill_vision else mem
+        tp_out_dtype = ttnn.bfloat8_b if use_tp4_prefill_vision else ttnn.bfloat16
 
         def _run_o_proj(ctx: ttnn.Tensor) -> ttnn.Tensor:
             ctx = self._concat_heads(ctx)
@@ -2018,30 +2109,33 @@ class TTNNDotsVisionAttention(TTNNModule):
                     ctx,
                     self.tt_o_proj_weight,
                     bias=None,
-                    dtype=ttnn.bfloat16,
-                    memory_config=mem,
+                    dtype=tp_out_dtype,
+                    memory_config=tp_out_mem,
                     compute_kernel_config=self.compute_kernel_config,
                     program_config=o_pc,
                 )
+                ttnn.deallocate(ctx)
                 num_links = _ccl_num_links(self.device)
-                partial = ttnn.reduce_scatter(
+                scattered = ttnn.reduce_scatter(
                     partial,
                     dim=3,
                     num_links=num_links,
                     cluster_axis=1,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    memory_config=tp_out_mem,
                     topology=ttnn.Topology.Linear,
                 )
+                ttnn.deallocate(partial)
                 out = ttnn.all_gather(
-                    partial,
+                    scattered,
                     dim=3,
                     num_links=num_links,
                     cluster_axis=1,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    memory_config=tp_out_mem,
                     topology=ttnn.Topology.Linear,
                 )
+                ttnn.deallocate(scattered)
                 if self.tt_o_proj_bias is not None:
-                    out = ttnn.add(out, self.tt_o_proj_bias)
+                    out = ttnn.add(out, self.tt_o_proj_bias, memory_config=tp_out_mem)
                 return out
             # BFP8 output keeps the post-attn residual on the BFP8 stream.
             if out_bs is not None and o_bs_pc is not None:
@@ -3008,6 +3102,8 @@ class TTNNDotsOCRVisionTower(TTNNModule):
         attention_mask: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Vision blocks + post-trunk norm + patch merger (``patch_embed`` already applied)."""
+        if _tp4_prefill_vision_enabled() and isinstance(x, torch.Tensor):
+            _vision_tower_signpost("vision_tower.start")
         if grid_thw is None:
             raise ValueError("grid_thw is required for Dots vision")
         if grid_thw.dim() == 1:

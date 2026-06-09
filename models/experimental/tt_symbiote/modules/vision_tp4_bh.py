@@ -196,6 +196,108 @@ def bh_tp4_matmul_pc(
     return best_pc
 
 
+def enumerate_bh_tp4_matmul_pc_candidates(
+    device,
+    m_dim: int,
+    k_dim: int,
+    n_dim: int,
+    *,
+    in0_dtype: ttnn.DataType = ttnn.bfloat8_b,
+    out_dtype: ttnn.DataType = ttnn.bfloat8_b,
+    l1_resident_bytes_per_core: int = 0,
+):
+    """Yield ``(label, program_config, score)`` for hardware matmul sweeps."""
+    grid = device.compute_with_storage_grid_size()
+    grid_x, grid_y = int(grid.x), int(grid.y)
+    tile = 32
+
+    if m_dim % tile or k_dim % tile or n_dim % tile:
+        return
+
+    m_tiles = m_dim // tile
+    k_tiles = k_dim // tile
+    n_tiles = n_dim // tile
+
+    in0_tile_b = _DTYPE_TILE_BYTES[in0_dtype]
+    out_tile_b = _DTYPE_TILE_BYTES[out_dtype]
+    in0_block_w = _largest_divisor_le(k_tiles, 8)
+    cb_budget_bytes = max(256 * 1024, _L1_PER_CORE_BYTES - l1_resident_bytes_per_core)
+
+    def _per_core_n_candidates(n_max: int) -> list[int]:
+        cands = {n for n in range(1, min(n_tiles, 24) + 1) if n_tiles % n == 0}
+        cands.add((n_tiles + n_max - 1) // n_max)
+        return sorted(cands)
+
+    for transpose_mcast in (True, False):
+        m_grid_max = grid_x if transpose_mcast else grid_y
+        n_grid_max = grid_y if transpose_mcast else grid_x
+        tm = "T" if transpose_mcast else "F"
+
+        for eff_mg in range(min(m_tiles, m_grid_max), 0, -1):
+            if m_tiles % eff_mg != 0:
+                continue
+            per_core_m = m_tiles // eff_mg
+            if per_core_m > 64:
+                continue
+
+            for per_core_n in _per_core_n_candidates(n_grid_max):
+                if per_core_n > 24:
+                    continue
+                actual_ng = (n_tiles + per_core_n - 1) // per_core_n
+                if actual_ng > n_grid_max:
+                    continue
+
+                in1_fixed = 2 * in0_block_w * per_core_n * 1088
+                partial_fixed = per_core_m * per_core_n * 2048
+                fixed_cb_bytes = in1_fixed + partial_fixed
+                if fixed_cb_bytes >= cb_budget_bytes:
+                    continue
+
+                remaining_bytes = cb_budget_bytes - fixed_cb_bytes
+                best_ob_h = 0
+                best_sub = (1, 1, 0)
+
+                for ob_h in range(per_core_m, 0, -1):
+                    if per_core_m % ob_h != 0:
+                        continue
+                    in0_bytes = 2 * ob_h * in0_block_w * in0_tile_b
+                    interm_bytes = ob_h * per_core_n * 2048
+                    out_bytes = 2 * ob_h * per_core_n * out_tile_b
+                    if in0_bytes + interm_bytes + out_bytes > remaining_bytes:
+                        continue
+                    sub = _best_dst_subblock(ob_h, per_core_n)
+                    if sub[2] > best_sub[2] or (sub[2] == best_sub[2] and ob_h < best_ob_h):
+                        best_ob_h = ob_h
+                        best_sub = sub
+
+                if best_ob_h == 0:
+                    continue
+
+                sub_h, sub_w, dst_area = best_sub
+                total_cores = eff_mg * actual_ng
+                score = (dst_area, int(not transpose_mcast), -best_ob_h, -total_cores)
+                gx = eff_mg if transpose_mcast else actual_ng
+                gy = actual_ng if transpose_mcast else eff_mg
+                label = (
+                    f"search_tm{tm}_g{gx}x{gy}_M{per_core_m}_N{per_core_n}"
+                    f"_obh{best_ob_h}_ibw{in0_block_w}_sub{sub_h}x{sub_w}"
+                )
+                pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(gx, gy),
+                    in0_block_w=in0_block_w,
+                    out_subblock_h=sub_h,
+                    out_subblock_w=sub_w,
+                    out_block_h=best_ob_h,
+                    out_block_w=per_core_n,
+                    per_core_M=per_core_m,
+                    per_core_N=per_core_n,
+                    transpose_mcast=transpose_mcast,
+                    fused_activation=None,
+                    fuse_batch=False,
+                )
+                yield label, pc, score
+
+
 def _l1_shard_bytes_per_core(device, m_dim: int, n_dim: int, dtype: ttnn.DataType) -> int:
     grid = device.compute_with_storage_grid_size()
     nc = int(grid.x) * int(grid.y)
@@ -230,9 +332,9 @@ def bh_tp4_qkv_pc(device):
 
 
 def bh_tp4_o_proj_pc(device, *, seq_len: int = _VISION_TP4_SEQ_LEN, ctx_dim: int = 384):
-    """Hardware-swept o_proj for 11264×384×1536, BFP8×BFP8→BFP8 L1 (~80 μs).
+    """Hardware-swept o_proj for 11264×384×1536, BFP8×BFP8→BFP8 L1 (~77 μs).
 
-    Silicon sweep 2026-06-07: grid=(8,8) tm=False M=44 N=6 obh=22 ibw=6 sub=(2,3).
+    Silicon sweep 2026-06-09: grid=(8,8) tm=False M=44 N=6 obh=22 ibw=6 sub=(2,3); ~77 μs (11264x384x1536).
     BFP8 matmul out removes the TypecastDeviceOperation before the bf8 residual add.
     """
     grid = device.compute_with_storage_grid_size()
@@ -287,9 +389,9 @@ def bh_tp4_mlp_gate_up_pc(device):
 
 
 def bh_tp4_mlp_down_pc(device, *, seq_len: int = _VISION_TP4_SEQ_LEN, itp: int = 1056):
-    """Down matmul for 11264×1056×1536 on BH P150 11×10 (~166 μs).
+    """Down matmul for 11264×1056×1536 on BH P150 11×10 (~159 μs).
 
-    Silicon sweep 2026-06-07: grid=(8,8) tm=False M=44 N=6 obh=22 ibw=3 sub=(2,3).
+    Silicon sweep 2026-06-09: grid=(8,8) tm=False M=44 N=6 obh=22 ibw=3 sub=(2,3); ~159 μs (11264x1056x1536).
     """
     grid = device.compute_with_storage_grid_size()
     gum_resident = _l1_shard_bytes_per_core(device, seq_len, itp, ttnn.bfloat8_b)
@@ -780,6 +882,9 @@ def vision_patch_embed_tp4_bh_forward(
     """Patch embed with BFP8 L1 activations and swept projection matmul PC."""
     import torch.nn.functional as F
 
+    from models.experimental.tt_symbiote.modules.dots_ocr_vision import _vision_tower_signpost
+
+    _vision_tower_signpost("vision_tower.start")
     l1 = ttnn.L1_MEMORY_CONFIG
     proj_pc = getattr(patch_embed, "_bh_tp4_proj_pc", None)
     mapper = ttnn.ReplicateTensorToMesh(patch_embed.device) if patch_embed.device.get_num_devices() > 1 else None
@@ -959,6 +1064,10 @@ def vision_tower_post_patch_embed_tp4_bh(
     """Vision trunk: TP4 BH blocks + post-trunk norm + merger, all L1 activations."""
     import torch
 
+    from models.experimental.tt_symbiote.modules.dots_ocr_vision import _vision_tower_signpost
+
+    if isinstance(x, torch.Tensor):
+        _vision_tower_signpost("vision_tower.start")
     l1 = ttnn.L1_MEMORY_CONFIG
     if grid_thw is None:
         raise ValueError("grid_thw is required for Dots vision")
@@ -997,4 +1106,5 @@ def vision_tower_post_patch_embed_tp4_bh(
     if tower.patch_merger is not None:
         x = vision_patch_merger_tp4_bh_forward(tower.patch_merger, x)
 
+    _vision_tower_signpost("vision_tower.end")
     return ensure_l1_tensor(x)
