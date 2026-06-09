@@ -685,6 +685,7 @@ def main(argv: list[str] | None = None) -> None:
     try:
         original_default = ttnn.GetDefaultDevice()
     except Exception:
+        # Default device may be unset before the first perf sweep task opens a mesh.
         original_default = None
 
     session_kw = dict(

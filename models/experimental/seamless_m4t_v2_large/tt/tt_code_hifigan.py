@@ -916,8 +916,6 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 accept_sharded_input=accept_sharded_input,
             )
 
-        timeline_chunked = seq > _HIFIGAN_MAX_CONV1D_TLEN
-
         # Below this length one conv1d fits BH l1_small (double-buffer off). Only chunk above it.
         if seq <= _HIFIGAN_MAX_CONV1D_TLEN:
             out, out_len = self._conv1d_run(

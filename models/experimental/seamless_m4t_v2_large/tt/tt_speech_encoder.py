@@ -1862,7 +1862,6 @@ class TTSeamlessM4Tv2SpeechEncoder:
         input_sharded: bool = False,
     ) -> Tuple[ttnn.Tensor, bool]:
         hsz = self.hidden_size
-        token_m = batch * seq_len
         # Long-audio path: residual / hidden state lives in DRAM so kernel CBs always fit in L1.
         # Without this, conv1d / matmul kernels at seq ≳ 1100 clash with persistent L1 buffers.
         res_mc = self._mc_act(seq_len=seq_len)
@@ -2241,7 +2240,6 @@ class TTSeamlessM4Tv2SpeechEncoder:
 
         if h_sharded:
             h = ttnn.sharded_to_interleaved(h, self._mc_act(seq_len=seq), output_dtype=ttnn.bfloat16)
-            h_sharded = False
 
         h = self._layer_norm(
             h,

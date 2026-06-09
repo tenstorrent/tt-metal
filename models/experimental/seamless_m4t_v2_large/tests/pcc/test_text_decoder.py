@@ -59,9 +59,9 @@ def _weights_dir_or_skip() -> str:
     try:
         return ensure_seamless_m4t_v2_large_weights()
     except ImportError as e:
-        pytest.skip(str(e))
+        raise pytest.skip.Exception(str(e))
     except Exception as e:
-        pytest.skip(f"Could not prepare seamless-m4t-v2-large weights: {e}")
+        raise pytest.skip.Exception(f"Could not prepare seamless-m4t-v2-large weights: {e}")
 
 
 def _run_decoder_pcc(

@@ -40,9 +40,9 @@ def test_seamless_m4t_v2_code_hifigan_max_unit_seq_pcc(mesh_device, device_param
     try:
         weights_dir = ensure_seamless_m4t_v2_large_weights()
     except ImportError as e:
-        pytest.skip(str(e))
+        raise pytest.skip.Exception(str(e))
     except Exception as e:
-        pytest.skip(f"Could not prepare seamless-m4t-v2-large weights: {e}")
+        raise pytest.skip.Exception(f"Could not prepare seamless-m4t-v2-large weights: {e}")
 
     with mesh_default_device(mesh_device):
         vocoder, cfg = load_pretrained_code_hifigan(weights_dir, dtype=torch.bfloat16)
@@ -88,6 +88,6 @@ def test_seamless_m4t_v2_code_hifigan_max_unit_seq_pcc(mesh_device, device_param
         assert ok, msg
         try:
             mesh_device.clear_program_cache()
-        except Exception:
+        except Exception as clear_err:
             # Program-cache clear is optional post-test cleanup.
-            pass
+            logger.warning("clear_program_cache failed (ignored): %s", clear_err)
