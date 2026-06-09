@@ -147,17 +147,28 @@ def main():
         # Pre-allocate EVERY persistent host-facing buffer BEFORE any     #
         # trace is captured (the active-trace allocation-safety rule).    #
         # ============================================================== #
-        # Vision input: [num_patches, embed_dim] post host patch_embed.
-        with zone("TTNNDotsVisionPatchEmbed"):
-            patch_tokens = model.vision_tower.patch_embed(pixel_values)
-        num_patches = patch_tokens.shape[0]
+        # Vision input: [num_patches, embed_dim] post device_patch_embed.
+        # We need to know num_patches before allocating vision_in, so run a
+        # cheap host-only shape probe (no device work) to get the patch count,
+        # then pre-allocate vision_in with zeros before ANY trace is captured.
+        # The TTNNDotsVisionPatchEmbed zone below then runs device_patch_embed
+        # and copies the result into vision_in via ttnn.copy.
+        _probe = model.vision_tower.patch_embed(pixel_values)  # host-only, not timed
+        num_patches = _probe.shape[0]
         vision_in = ttnn.from_torch(
-            patch_tokens.to(torch.float32),
+            torch.zeros(num_patches, model.vision_tower.embed_dim, dtype=torch.float32),
             device=device,
             dtype=model.dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+        # Time device patch-embed: runs the matmul+RMSNorm on device, copies
+        # result into the persistent vision_in buffer the trace will consume.
+        with zone("TTNNDotsVisionPatchEmbed"):
+            pe_tt = model.vision_tower.device_patch_embed(pixel_values)
+            ttnn.copy(pe_tt, vision_in)
+            ttnn.deallocate(pe_tt)
         # Prefill input: [prompt_len, hidden] (post vision->text scatter).
         prefill_in = ttnn.from_torch(
             torch.zeros(prompt_len, model.hidden_size, dtype=torch.float32),
