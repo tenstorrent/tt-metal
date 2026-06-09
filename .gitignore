@@ -170,3 +170,4 @@ models/experimental/petr/resources/*.pth
 tray_to_pcie_device_mapping.yaml
 
 .DS_Store
+CLAUDE.md
