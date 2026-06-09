@@ -341,6 +341,38 @@ void kernel_main() {
     constexpr uint32_t tilized_cb_second_reader_offset = get_compile_time_arg_val(37);
     constexpr bool split_reader_cb_shared = get_compile_time_arg_val(38) == 1;
 
+    // TileRowMajor + pin path. The factory (conv2d_op_sharded_program_factory.cpp) emits
+    // CONV_TILE_PACK_ROW_MAJOR_PIN for eligible HEIGHT_SHARDED ROW_MAJOR convs (no bias, packer_l1_acc,
+    // weights bf16/fp32) and folds a LARGER (relaxed) out_subblock into the compile args. With the define:
+    //   • the matmul helper packs the interm row-major (TileRowMajor) instead of subblock-major, with the
+    //     pin scheme KEPT ON (one reserve + one push, per-K-block packs to fixed ROW-STRIDED L1 offsets,
+    //     L1_ACC accumulating per-address). matmul_block_helpers.inl allows TileRowMajor + pin only with
+    //     packer_l1_acc + Interm target, which this path satisfies (untilize_out, no bias, packer_l1_acc).
+    //   • the untilize phase reads the row-major interm via plain `untilize` (the row strip is already
+    //     contiguous tile-row order), NOT reblock_and_untilize (which is SubblockMajor-only).
+    // Without the define this is byte-identical to the legacy conv: SubblockMajor + pin + reblock_and_untilize.
+    //
+    // TileRowMajor + fuse_bias would deadlock: the bias add would call wait_front(row_group_tiles) AND
+    // reserve_back(row_group_tiles) on the SAME matmul_partials_cb, blocking forever when row_group_tiles ==
+    // CB capacity. The factory's eligibility forbids bias on this path, so conv_output_layout below degrades
+    // to SubblockMajor whenever fuse_bias is set (defensive — never reached with the production define).
+#ifdef CONV_TILE_PACK_ROW_MAJOR_PIN
+    constexpr bool tile_pack_row_major = true;
+    constexpr bool tile_row_major_pin = true;
+#else
+    constexpr bool tile_pack_row_major = false;
+    constexpr bool tile_row_major_pin = false;
+#endif
+    // TileRowMajor for the non-bias path (plain untilize — row strip already contiguous); SubblockMajor for
+    // fuse_bias (deadlock workaround) and for the legacy define-absent path. SubblockMajor is always correct.
+    constexpr auto conv_output_layout = (tile_pack_row_major && !fuse_bias)
+                                            ? compute_kernel_lib::OutputCBLayout::TileRowMajor
+                                            : compute_kernel_lib::OutputCBLayout::SubblockMajor;
+    // pin_partials drives the manual matmul_partials_cb pointer management (the pin scheme). It stays ON for
+    // both the legacy SubblockMajor path and the TileRowMajor+pin path — only a (never-reached) plain
+    // TileRowMajor-without-pin variant would turn it off. Equivalent to true today; named for clarity.
+    constexpr bool pin_partials = !tile_pack_row_major || tile_row_major_pin;
+
     constexpr uint32_t out_block_w = in1_block_w;
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? matmul_partials_cb : out_cb_id;
@@ -449,19 +481,24 @@ void kernel_main() {
                 // for each output block we start we relu disabled so that intermediate results are not relu'd
                 PACK((llk_pack_relu_config(ReluConfig::none())));
             }
-            if constexpr (partials_cb_uses_output) {
-                // Re-capture per outer iter: matmul_partials_cb shares L1 with out_cb, so its
-                // rd/wr ptrs advance with each outer iter. The helper's pin uses this fresh
-                // capture as the per-iter pinned base.
-                UNPACK(partials_cb_read_ptr = get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr;)
-                PACK(partials_cb_write_ptr = get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr;)
-            } else {
-                // !partials_cb_uses_output: matmul_partials_cb has its own L1 region. Force its
-                // rd/wr ptrs back to the kernel-entry base each outer iter so the helper's
-                // per-K-block pin operates on the same fixed L1 cell. The helper's pin keeps
-                // ptrs steady within a K-loop; this reset keeps them steady across outer iters.
-                UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr;)
-                PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr;)
+            // Manual matmul_partials_cb pointer management is the pin scheme (kept ON for both the legacy
+            // SubblockMajor path and TileRowMajor+pin — pin_partials is true in both). A hypothetical plain
+            // TileRowMajor-without-pin variant (helper owns partials reserve/push) would skip this entirely.
+            if constexpr (pin_partials) {
+                if constexpr (partials_cb_uses_output) {
+                    // Re-capture per outer iter: matmul_partials_cb shares L1 with out_cb, so its
+                    // rd/wr ptrs advance with each outer iter. The helper's pin uses this fresh
+                    // capture as the per-iter pinned base.
+                    UNPACK(partials_cb_read_ptr = get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr;)
+                    PACK(partials_cb_write_ptr = get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr;)
+                } else {
+                    // !partials_cb_uses_output: matmul_partials_cb has its own L1 region. Force its
+                    // rd/wr ptrs back to the kernel-entry base each outer iter so the helper's
+                    // per-K-block pin operates on the same fixed L1 cell. The helper's pin keeps
+                    // ptrs steady within a K-loop; this reset keeps them steady across outer iters.
+                    UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr;)
+                    PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr;)
+                }
             }
 
             // ── skip-compute fast path: tilize each K-block, drop the activation, skip the
@@ -527,13 +564,13 @@ void kernel_main() {
                 /*transpose=*/false,
                 packer_l1_acc,
                 last_block_target,
-                compute_kernel_lib::OutputCBLayout::SubblockMajor,
+                conv_output_layout,
                 compute_kernel_lib::matmul_config::InitMode::ShortAfterPreKBlock,
                 compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,
                 compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,
                 MatmulPostFn,
                 PreKBlockFn,
-                /*pin_interm_to_captured_base=*/true>(
+                /*pin_interm_to_captured_base=*/pin_partials>(
                 cb_mm_in0,
                 cb_in1,
                 matmul_out_buf,
@@ -549,7 +586,7 @@ void kernel_main() {
                 /*in1_base_offset_fn=*/{},
                 pin_base_tile_offset);
 
-            if constexpr (!partials_cb_uses_output) {
+            if constexpr (!partials_cb_uses_output && pin_partials) {
                 // Helper's pin path now keeps matmul_partials_cb's CB pointers
                 // at the captured base throughout the K-loop (one-shot reserve at
                 // entry, per-K-block packs at fixed tile offsets, one push_back at
@@ -588,10 +625,12 @@ void kernel_main() {
                     out_subblock_h,
                     out_subblock_w,
                     /*out_row_width=*/0);  // 0 => derive from out_subblock_w * in1_num_subblocks
+                // conv_output_layout is SubblockMajor whenever fuse_bias is set (the TileRowMajor+bias
+                // deadlock workaround), so this is byte-identical to the legacy bias path.
 #ifdef SFPU_OP_INIT_ACTIVATION
                 compute_kernel_lib::add_bias_bcast_rows<
                     compute_kernel_lib::BiasBroadcast::RowBroadcast,
-                    compute_kernel_lib::OutputCBLayout::SubblockMajor,
+                    conv_output_layout,
                     ConvSFPUPostCompute>(
                     cb_matmul_partials,
                     cb_bias,
@@ -600,13 +639,14 @@ void kernel_main() {
                     ConvSFPUPostCompute{},
                     bias_block_offset);
 #else
-                compute_kernel_lib::add_bias_bcast_rows<
-                    compute_kernel_lib::BiasBroadcast::RowBroadcast,
-                    compute_kernel_lib::OutputCBLayout::SubblockMajor>(
-                    cb_matmul_partials, cb_bias, cb_untilize_mode_out, bias_shape, {}, bias_block_offset);
+                compute_kernel_lib::
+                    add_bias_bcast_rows<compute_kernel_lib::BiasBroadcast::RowBroadcast, conv_output_layout>(
+                        cb_matmul_partials, cb_bias, cb_untilize_mode_out, bias_shape, {}, bias_block_offset);
 #endif
 
-                if constexpr (untilize_out) {
+                // Pin-era rewind so the untilize below reads partials from the captured base. Skipped on a
+                // (never-reached) plain-TileRowMajor-without-pin path; with pin ON this is always taken.
+                if constexpr (untilize_out && pin_partials) {
                     UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
                     PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr);
                 }
@@ -619,11 +659,25 @@ void kernel_main() {
                 if constexpr (pack_relu) {
                     PACK((llk_pack_relu_config(ReluConfig::none())));
                 }
-                if constexpr (packer_untilize) {
-                    // Narrow output block: gather subblock-major matmul output into row-major
-                    // and untilize via pack_untilize_dest. One call — reblock_and_untilize loops
-                    // over all in0_num_subblocks internally and owns the data-format reconfig
-                    // (srcA=matmul_partials, pack=out) + the pack_untilize init/uninit.
+                if constexpr (packer_untilize && !tile_pack_row_major) {
+                    // Narrow SubblockMajor output (legacy define-absent path): gather subblock-major matmul
+                    // output into row-major and untilize via pack_untilize_dest. One call —
+                    // reblock_and_untilize loops over all in0_num_subblocks internally and owns the
+                    // data-format reconfig (srcA=matmul_partials, pack=out) + the pack_untilize init/uninit.
+                    compute_kernel_lib::reblock_and_untilize<out_subblock_w, out_block_w>(
+                        in0_num_subblocks,
+                        in1_num_subblocks,
+                        out_subblock_num_tiles,
+                        out_subblock_h,
+                        cb_matmul_partials,
+                        cb_out);
+                } else if constexpr (tile_pack_row_major && fuse_bias) {
+                    // TileRowMajor + fuse_bias: conv_output_layout degraded to SubblockMajor (deadlock
+                    // workaround), so the bias add left SubblockMajor data in matmul_partials_cb. Use
+                    // reblock_and_untilize — the legacy path — to reorder SubblockMajor tiles into row-major
+                    // bytes. The packer_untilize gate is not needed: pack_untilize_dest is called with
+                    // block_ct_dim=out_subblock_w (<= DST limit), not the full out_block_w. Defensive — the
+                    // factory's eligibility forbids bias on this path, so it is never reached in production.
                     compute_kernel_lib::reblock_and_untilize<out_subblock_w, out_block_w>(
                         in0_num_subblocks,
                         in1_num_subblocks,
@@ -632,10 +686,13 @@ void kernel_main() {
                         cb_matmul_partials,
                         cb_out);
                 } else {
-                    // Wide output: plain untilize. srcA reconfig to matmul_partials is handled
-                    // externally here because untilize is invoked with NoReconfigure (the pack
-                    // format came from the packer_l1_acc reconfig above). The reblock branch no
-                    // longer shares this reconfig — it self-reconfigs via reblock_and_untilize_init.
+                    // Wide SubblockMajor output (packer_untilize=false, !tile_pack_row_major): plain untilize.
+                    // ALSO the tile_pack_row_major && !fuse_bias path: TileRowMajor interm is already
+                    // contiguous tile-row order, so no reblock gather is needed — plain untilize reads the
+                    // row strip sequentially and converts to row-major. srcA reconfig to matmul_partials is
+                    // handled externally here because untilize is invoked with NoReconfigure (the pack format
+                    // came from the packer_l1_acc reconfig above). The reblock branch self-reconfigs via
+                    // reblock_and_untilize_init.
                     if constexpr (!fuse_bias) {
                         reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
                     }

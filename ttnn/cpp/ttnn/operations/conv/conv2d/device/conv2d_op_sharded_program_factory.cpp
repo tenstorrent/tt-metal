@@ -17,6 +17,7 @@
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_auto_tuner.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -234,8 +235,11 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     const uint32_t act_block_w_ntiles = block_config.act_block_w_ntiles;
     const uint32_t weight_block_w_ntiles = parallelization_config.per_core_out_matrix_width_ntile;
     const uint32_t out_block_h_ntiles = parallelization_config.per_core_out_matrix_height_ntile;
-    const uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
-    const uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
+    // Non-const: an eligible HEIGHT_SHARDED ROW_MAJOR conv may override these with a larger (relaxed)
+    // subblock for the TileRowMajor + pin path — see the CONV_TILE_PACK_ROW_MAJOR_PIN eligibility block
+    // below (after packer_l1_acc_en is known). The override re-derives all subblock-dependent quantities.
+    uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
+    uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
 
     const SkipMcast skip_mcast = conv_skip_mcast(parallelization_config, a.memory_config().memory_layout());
     const bool skip_activation_mcast = skip_mcast.skip_activation_mcast;
@@ -507,10 +511,11 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         act_block_h_ntiles,
         out_subblock_h_ntiles);
 
-    const uint32_t act_num_subblocks = act_block_h_ntiles / out_subblock_h_ntiles;
+    // Non-const: re-derived by the CONV_TILE_PACK_ROW_MAJOR_PIN override below if the conv is eligible.
+    uint32_t act_num_subblocks = act_block_h_ntiles / out_subblock_h_ntiles;
     const uint32_t act_block_num_tiles = act_block_h_ntiles * act_block_w_ntiles;
-    const uint32_t act_subblock_h_ntiles = out_subblock_h_ntiles;
-    const uint32_t act_subblock_num_tiles = act_subblock_h_ntiles * act_block_w_ntiles;
+    uint32_t act_subblock_h_ntiles = out_subblock_h_ntiles;
+    uint32_t act_subblock_num_tiles = act_subblock_h_ntiles * act_block_w_ntiles;
 
     const uint32_t in0_num_blocks_w = conv_act_c_blocks * num_blocks_act_w;
 
@@ -638,6 +643,84 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     // does a spill and reload, so need more than 2 blocks to use l1 acc for packer
     // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
     const bool packer_l1_acc_en = determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
+
+    // ── TileRowMajor + pin eligibility (ROW_MAJOR output, production auto-select) ──────────────────────
+    // The matmul helper supports packing the interm row-major (TileRowMajor) + pinned to fixed row-strided
+    // L1 offsets when packer_l1_acc accumulates per-address (matmul_block_helpers.inl static_asserts
+    // TileRowMajor + pin only with packer_l1_acc + Interm target). TileRowMajor lifts the SubblockMajor
+    // constraint out_subblock_w == per_core_N, letting the tuner pick a LARGER (relaxed) subblock when
+    // per_core_N exceeds DST capacity (so SubblockMajor was stranded at out_subblock_h == 1). A larger
+    // subblock means fewer matmul_block_init / pack passes per output block. The non-bias ROW_MAJOR path
+    // then untilizes the row-major interm with plain `untilize` (the row strip is already contiguous
+    // tile-row order — no reblock gather). The kernel keys all of this off the CONV_TILE_PACK_ROW_MAJOR_PIN
+    // compute define (see conv_bmm_tilize.cpp). When ineligible we emit byte-identical SubblockMajor + pin.
+    //
+    // Eligible iff ALL hold:
+    //   • HEIGHT_SHARDED                 (the pinned-partials scheme this kernel implements)
+    //   • untilize_out (ROW_MAJOR out)   (TILE output is a separate, later task)
+    //   • !has_bias                      (TileRowMajor + bias deadlocks the partials CB — see kernel note)
+    //   • packer_l1_acc_en               (per-address L1 accumulation; required by the helper static_assert)
+    //   • weights bf16 or fp32           (the lever is inert on bf8 — same packed-tile layout either way)
+    //   • the relaxed subblock differs from the SBM subblock AND is larger: relaxed.out_subblock_h > 1
+    //     (captures "per_core_N stranded" — SBM fell back to h==1,w==per_core_N) AND act_block_h_ntiles
+    //     (per_core_M) divisible by relaxed.out_subblock_h.
+    bool conv_tile_pack_row_major_pin = false;
+    {
+        const tt::DataFormat weights_df = tt::tt_metal::datatype_to_dataformat_converter(b.dtype());
+        const bool weights_df_supported =
+            (weights_df == tt::DataFormat::Float16_b || weights_df == tt::DataFormat::Float32);
+        if (height_sharded && untilize_out && !has_bias && packer_l1_acc_en && weights_df_supported &&
+            !is_conv_1d_depthwise_conv) {
+            // Recompute the tuner's choice both ways: SBM (subblock_w_eq_per_core_n_required=true, what the
+            // host block_config already used) vs relaxed (=false, what TileRowMajor permits). Synthesize the
+            // compute config from fp32_dest_acc_en so DST capacity matches the kernel (dst_full_sync_en=false
+            // is the conv2d default). per_core_M = act_block_h_ntiles, per_core_N = weight_block_w_ntiles.
+            ttnn::DeviceComputeKernelConfig synth_config{};
+            synth_config.fp32_dest_acc_en = fp32_dest_acc_en;
+            synth_config.dst_full_sync_en = false;
+            namespace auto_tune = ttnn::operations::matmul::auto_tune;
+            const auto pick = [&](bool eq_required) {
+                return auto_tune::determine_largest_subblock({
+                    .per_core_M = act_block_h_ntiles,
+                    .per_core_N = weight_block_w_ntiles,
+                    .compute_kernel_config = synth_config,
+                    .subblock_w_eq_per_core_n_required = eq_required,
+                    .prefer_fast_path = true,
+                });
+            };
+            const auto sbm = pick(true);
+            const auto relaxed = pick(false);
+            const bool larger_volume =
+                (relaxed.out_subblock_h * relaxed.out_subblock_w) > (sbm.out_subblock_h * sbm.out_subblock_w);
+            if (relaxed.out_subblock_h > 1 && larger_volume && act_block_h_ntiles % relaxed.out_subblock_h == 0) {
+                conv_tile_pack_row_major_pin = true;
+                out_subblock_h_ntiles = relaxed.out_subblock_h;
+                out_subblock_w_ntiles = relaxed.out_subblock_w;
+                // Re-derive every subblock-dependent quantity from the relaxed shape. These were computed
+                // from the SBM shape above; the relaxed shape satisfies the same TT_FATALs (vol <= DST cap
+                // via the tuner, weight_block_w % w == 0 via the tuner's divisibility, act_block_h % h == 0
+                // checked just above), so the SBM-shape validations remain correct for the relaxed shape.
+                weight_num_subblocks = weight_block_w_ntiles / out_subblock_w_ntiles;
+                out_subblock_num_tiles = out_subblock_h_ntiles * out_subblock_w_ntiles;
+                act_num_subblocks = act_block_h_ntiles / out_subblock_h_ntiles;
+                act_subblock_h_ntiles = out_subblock_h_ntiles;
+                act_subblock_num_tiles = act_subblock_h_ntiles * act_block_w_ntiles;
+                log_info(
+                    tt::LogOp,
+                    "conv2d TileRowMajor+pin ELIGIBLE: per_core_M={} per_core_N={} fp32_accum={} | SBM "
+                    "subblock={}x{} relaxed subblock={}x{} (auto-selected TileRowMajor; ROW_MAJOR out, no bias, "
+                    "packer_l1_acc, weights bf16/fp32)",
+                    act_block_h_ntiles,
+                    weight_block_w_ntiles,
+                    fp32_dest_acc_en,
+                    sbm.out_subblock_h,
+                    sbm.out_subblock_w,
+                    relaxed.out_subblock_h,
+                    relaxed.out_subblock_w);
+            }
+        }
+    }
+
     const uint32_t batch = sliding_window_config.get_output_shape()[0];
     const uint32_t output_image_width = sliding_window_config.get_output_shape()[2];
     const uint32_t output_image_height = sliding_window_config.get_output_shape()[1];
@@ -934,6 +1017,13 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         reader_defines["ACTIVATION_REUSE"] = "1";
         writer_mcast_sender_defines["ACTIVATION_REUSE"] = "1";
         writer_defines["ACTIVATION_REUSE"] = "1";
+    }
+
+    // TileRowMajor + pin path: the compute kernel packs the interm row-major (pinned, per-address L1 acc)
+    // and untilizes it with plain `untilize` instead of reblock_and_untilize. Eligibility decided above;
+    // the relaxed out_subblock_{h,w} were already folded into the compute compile args.
+    if (conv_tile_pack_row_major_pin) {
+        compute_defines["CONV_TILE_PACK_ROW_MAJOR_PIN"] = "1";
     }
 
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
