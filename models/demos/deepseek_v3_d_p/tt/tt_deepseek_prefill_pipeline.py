@@ -50,6 +50,10 @@ class TtPrefillPipelineConfig:
     shared_expert_activations_dtype: ttnn.DataType = ttnn.bfloat16
     shared_expert_weights_dtype: ttnn.DataType = ttnn.bfloat8_b
     weight_cache_path: Optional[Path] = None
+    # Static model-dimension constants for the variant being built
+    # (DeepSeekV3Config | KimiK26Config). Drives expert counts, dense-layer
+    # count, route groups, etc. in the TT layer code.
+    model_cfg: type = DeepSeekV3Config
 
     @property
     def sp_factor(self) -> int:
@@ -87,11 +91,15 @@ class TtDeepSeekPrefillPipeline:
             f"num_layers={self.config.num_layers}, max_seq_len={self.config.max_seq_len}, "
             f"mesh_shape={self.config.mesh_shape}, is_balanced={self.config.is_balanced}"
         )
+        model_cfg = self.config.model_cfg
         if self.config.weight_cache_path:
             num_devices = self.config.mesh_shape[0] * self.config.mesh_shape[1]
-            experts_per_chip = 256 // num_devices
+            experts_per_chip = model_cfg.NUM_ROUTED_EXPERTS // num_devices
             if TtPrefillTransformer.check_cache_complete(
-                self.config.weight_cache_path, self.config.num_layers, experts_per_chip
+                self.config.weight_cache_path,
+                self.config.num_layers,
+                experts_per_chip,
+                first_k_dense=model_cfg.NUM_DENSE_LAYERS,
             ):
                 logger.info(f"TTNN weight cache complete at {self.config.weight_cache_path}; loading from disk")
             else:
@@ -103,7 +111,7 @@ class TtDeepSeekPrefillPipeline:
         self.model = TtPrefillTransformer(
             mesh_device=self.mesh_device,
             config=self.hf_config,
-            model_cfg=DeepSeekV3Config,
+            model_cfg=model_cfg,
             state_dict=state_dict,
             num_layers=self.config.num_layers,
             seq_len=self.config.max_seq_len,
