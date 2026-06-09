@@ -57,6 +57,13 @@ def generate_unpack_tilize_operands_combinations(
     Returns:
         List of (format, dest_acc, dest_sync, tilize_unpacker_sel, input_dimensions) tuples
     """
+
+    def _requires_dest_acc_for_eltwise_binary(in_fmt, out_fmt):
+        """Int8->Int8 and UInt8->UInt8 eltwise binary ops need 32-bit dest.
+        This is in addition to the base constraints which are true for every operation.
+        """
+        return in_fmt in (DataFormat.Int8, DataFormat.UInt8) and in_fmt == out_fmt
+
     # Targeted dimensions per (dest_sync, dest_acc) that cover key corner cases:
     # 1 tile (minimum), max-wide (stresses block_ct), max-tall (stresses block_rt),
     # and max-square (both loops at capacity).
@@ -104,6 +111,11 @@ def generate_unpack_tilize_operands_combinations(
         ):
             continue
         for acc in get_valid_dest_accumulation_modes(fmt):
+            if (
+                _requires_dest_acc_for_eltwise_binary(in_fmt, out_fmt)
+                and acc == DestAccumulation.No
+            ):
+                continue
             for dest_sync in (DestSync.Half, DestSync.Full):
                 for unp_tilize_sel in (
                     TilizeUnpackerSel.UnpA,
