@@ -118,7 +118,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "experimental/ckernel_sfpu_binary_max_min.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
-#include "llk_math_eltwise_unary_sfpu_common.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "params.h"
 
 using namespace ckernel;
@@ -186,21 +186,29 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // formats use the DEFAULT path (sfpmem::DEFAULT, HW derives the mode from ACC_CTRL).
     if (math_format == DataFormat::Int32)
     {
-        _llk_math_eltwise_unary_sfpu_params_(
-            ckernel::sfpu::calculate_binary_max_min<DataFormat::Int32, IS_MAX_OP, 8 /*ITERATIONS*/>,
+        SFPU_CALL_MODE(
+            dest_sync,
+            is_fp32_dest_acc_en,
+            calculate_binary_max_min,
+            (DataFormat::Int32 /*FMT*/, IS_MAX_OP, 8 /*ITERATIONS*/),
+            RC,
             params.DST_INDEX,
-            /* dst_index_in0 */ 0U,
-            /* dst_index_in1 */ 1U,
-            /* dst_index_out */ 2U);
+            0U /*dst_index_in0*/,
+            1U /*dst_index_in1*/,
+            2U /*dst_index_out*/);
     }
     else
     {
-        _llk_math_eltwise_unary_sfpu_params_(
-            ckernel::sfpu::calculate_binary_max_min<DataFormat::Float32, IS_MAX_OP, 8 /*ITERATIONS*/>,
+        SFPU_CALL_MODE(
+            dest_sync,
+            is_fp32_dest_acc_en,
+            calculate_binary_max_min,
+            (DataFormat::Float32 /*FMT*/, IS_MAX_OP, 8 /*ITERATIONS*/),
+            RC,
             params.DST_INDEX,
-            /* dst_index_in0 */ 0U,
-            /* dst_index_in1 */ 1U,
-            /* dst_index_out */ 2U);
+            0U /*dst_index_in0*/,
+            1U /*dst_index_in1*/,
+            2U /*dst_index_out*/);
     }
 
     // Hand Dest off to PACK.

@@ -65,7 +65,7 @@ ALWI void erfc_tile_init() { MATH(SFPU_INIT_CB(erfc, sfpu::erfc_init, (true /*AP
  */
 // clang-format on
 ALWI void erfc_tile(uint32_t idst) {
-    MATH(_llk_math_eltwise_unary_sfpu_params_(sfpu::calculate_erfc<>, idst, VectorMode::RC));
+    MATH(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfc, (), RC, idst));
 }
 
 #endif

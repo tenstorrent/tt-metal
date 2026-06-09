@@ -117,7 +117,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "cfg_defines.h"
 #include "cmath_common.h"
 #include "llk_math_common.h"
-#include "llk_math_eltwise_unary_sfpu_common.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "params.h"
 #include "sfpu/ckernel_sfpu_square.h"
 
@@ -142,7 +142,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_square_, params.DST_INDEX + i, num_sfpu_iterations);
+        SFPU_CALL_FN(dest_sync, is_fp32_dest_acc_en, _calculate_square_, params.DST_INDEX + i, VectorMode::RC, num_sfpu_iterations);
     }
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
