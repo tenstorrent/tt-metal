@@ -19,6 +19,19 @@ import argparse
 from pathlib import Path
 
 import ttnn
+from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tests.perf.matmul_perf_bh_program_configs import (
+    BHProgramConfig1DFirstTwoMatmuls,
+    BHProgramConfig1DThirdMatmul,
+    BHProgramConfig2DFirstTwoMatmuls,
+    BHProgramConfig2DThirdMatmul,
+)
+from models.demos.deepseek_v3_d_p.tests.perf.matmul_perf_wh_program_configs import (
+    WHProgramConfig1DFirstTwoMatmuls,
+    WHProgramConfig1DThirdMatmul,
+    WHProgramConfig2DFirstTwoMatmuls,
+    WHProgramConfig2DThirdMatmul,
+)
 
 K, N = 7168, 2048
 ISL_VALUES = [32, 64, 128, 192, 256, 384, 512, 768]
@@ -31,357 +44,6 @@ COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
     fp32_dest_acc_en=False,
     packer_l1_acc=True,
 )
-
-ProgramConfig1DFirstTwoMatmuls = {
-    32: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
-        in0_block_w=16,
-        per_core_M=1,
-        per_core_N=1,
-        out_subblock_h=1,
-        out_subblock_w=1,
-        mcast_in0=True,
-        fuse_batch=False,
-        fused_activation=None,
-    ),
-    64: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
-        in0_block_w=14,
-        per_core_M=2,
-        per_core_N=1,
-        out_subblock_h=2,
-        out_subblock_w=1,
-        mcast_in0=True,
-        fuse_batch=False,
-        fused_activation=None,
-    ),
-    128: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
-        in0_block_w=16,
-        per_core_M=4,
-        per_core_N=1,
-        out_subblock_h=4,
-        out_subblock_w=1,
-        mcast_in0=True,
-        fuse_batch=False,
-        fused_activation=None,
-    ),
-    192: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
-        in0_block_w=16,
-        per_core_M=6,
-        per_core_N=1,
-        out_subblock_h=6,
-        out_subblock_w=1,
-        mcast_in0=True,
-        fuse_batch=False,
-        fused_activation=None,
-    ),
-    256: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
-        in0_block_w=16,
-        per_core_M=8,
-        per_core_N=1,
-        out_subblock_h=8,
-        out_subblock_w=1,
-        mcast_in0=True,
-        fuse_batch=False,
-        fused_activation=None,
-    ),
-    384: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
-        in0_block_w=16,
-        per_core_M=12,
-        per_core_N=1,
-        out_subblock_h=6,
-        out_subblock_w=1,
-        mcast_in0=True,
-        fuse_batch=False,
-        fused_activation=None,
-    ),
-    512: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
-        in0_block_w=14,
-        per_core_M=16,
-        per_core_N=1,
-        out_subblock_h=8,
-        out_subblock_w=1,
-        mcast_in0=True,
-        fuse_batch=False,
-        fused_activation=None,
-    ),
-    768: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
-        in0_block_w=16,
-        per_core_M=24,
-        per_core_N=1,
-        out_subblock_h=8,
-        out_subblock_w=1,
-        mcast_in0=True,
-        fuse_batch=False,
-        fused_activation=None,
-    ),
-}
-
-
-ProgramConfig1DThirdMatmul = {
-    32: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 7),
-        in0_block_w=4,
-        per_core_M=1,
-        per_core_N=4,
-        out_subblock_h=1,
-        out_subblock_w=2,
-        mcast_in0=True,
-        fuse_batch=False,
-        fused_activation=None,
-    ),
-    64: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 7),
-        in0_block_w=4,
-        per_core_M=2,
-        per_core_N=4,
-        out_subblock_h=2,
-        out_subblock_w=4,
-        mcast_in0=True,
-        fuse_batch=False,
-        fused_activation=None,
-    ),
-    128: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 7),
-        in0_block_w=8,
-        per_core_M=4,
-        per_core_N=4,
-        out_subblock_h=2,
-        out_subblock_w=4,
-        mcast_in0=True,
-        fuse_batch=False,
-        fused_activation=None,
-    ),
-    192: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 7),
-        in0_block_w=16,
-        per_core_M=6,
-        per_core_N=4,
-        out_subblock_h=2,
-        out_subblock_w=4,
-        mcast_in0=True,
-        fuse_batch=False,
-        fused_activation=None,
-    ),
-    256: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 7),
-        in0_block_w=16,
-        per_core_M=8,
-        per_core_N=4,
-        out_subblock_h=2,
-        out_subblock_w=4,
-        mcast_in0=True,
-        fuse_batch=False,
-        fused_activation=None,
-    ),
-    384: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 7),
-        in0_block_w=16,
-        per_core_M=12,
-        per_core_N=4,
-        out_subblock_h=2,
-        out_subblock_w=4,
-        mcast_in0=True,
-        fuse_batch=False,
-        fused_activation=None,
-    ),
-    512: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 7),
-        in0_block_w=16,
-        per_core_M=16,
-        per_core_N=4,
-        out_subblock_h=2,
-        out_subblock_w=4,
-        mcast_in0=True,
-        fuse_batch=False,
-        fused_activation=None,
-    ),
-    768: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 7),
-        in0_block_w=16,
-        per_core_M=24,
-        per_core_N=4,
-        out_subblock_h=2,
-        out_subblock_w=4,
-        mcast_in0=True,
-        fuse_batch=False,
-        fused_activation=None,
-    ),
-}
-
-
-ProgramConfig2DFirstTwoMatmuls = {
-    32: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
-        in0_block_w=16,
-        per_core_M=1,
-        per_core_N=8,
-        out_subblock_h=1,
-        out_subblock_w=8,
-        transpose_mcast=False,
-        fused_activation=None,
-    ),
-    64: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
-        in0_block_w=16,
-        per_core_M=1,
-        per_core_N=8,
-        out_subblock_h=1,
-        out_subblock_w=8,
-        transpose_mcast=False,
-        fused_activation=None,
-    ),
-    128: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
-        in0_block_w=16,
-        per_core_M=1,
-        per_core_N=8,
-        out_subblock_h=1,
-        out_subblock_w=8,
-        transpose_mcast=False,
-        fused_activation=None,
-    ),
-    192: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
-        in0_block_w=16,
-        per_core_M=1,
-        per_core_N=8,
-        out_subblock_h=1,
-        out_subblock_w=8,
-        transpose_mcast=False,
-        fused_activation=None,
-    ),
-    256: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
-        in0_block_w=16,
-        per_core_M=1,
-        per_core_N=8,
-        out_subblock_h=1,
-        out_subblock_w=8,
-        transpose_mcast=False,
-        fused_activation=None,
-    ),
-    384: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
-        in0_block_w=16,
-        per_core_M=2,
-        per_core_N=8,
-        out_subblock_h=1,
-        out_subblock_w=8,
-        transpose_mcast=False,
-        fused_activation=None,
-    ),
-    512: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
-        in0_block_w=16,
-        per_core_M=2,
-        per_core_N=8,
-        out_subblock_h=1,
-        out_subblock_w=8,
-        transpose_mcast=False,
-        fused_activation=None,
-    ),
-    768: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
-        in0_block_w=16,
-        per_core_M=3,
-        per_core_N=8,
-        out_subblock_h=1,
-        out_subblock_w=8,
-        transpose_mcast=False,
-        fused_activation=None,
-    ),
-}
-
-
-ProgramConfig2DThirdMatmul = {
-    32: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
-        in0_block_w=8,
-        per_core_M=1,
-        per_core_N=28,
-        out_subblock_h=1,
-        out_subblock_w=4,
-        transpose_mcast=False,
-        fused_activation=None,
-    ),
-    64: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
-        in0_block_w=16,
-        per_core_M=1,
-        per_core_N=28,
-        out_subblock_h=1,
-        out_subblock_w=2,
-        transpose_mcast=False,
-        fused_activation=None,
-    ),
-    128: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
-        in0_block_w=16,
-        per_core_M=1,
-        per_core_N=28,
-        out_subblock_h=1,
-        out_subblock_w=4,
-        transpose_mcast=False,
-        fused_activation=None,
-    ),
-    192: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
-        in0_block_w=16,
-        per_core_M=1,
-        per_core_N=28,
-        out_subblock_h=1,
-        out_subblock_w=4,
-        transpose_mcast=False,
-        fused_activation=None,
-    ),
-    256: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
-        in0_block_w=16,
-        per_core_M=1,
-        per_core_N=28,
-        out_subblock_h=1,
-        out_subblock_w=4,
-        transpose_mcast=False,
-        fused_activation=None,
-    ),
-    384: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
-        in0_block_w=16,
-        per_core_M=2,
-        per_core_N=28,
-        out_subblock_h=2,
-        out_subblock_w=4,
-        transpose_mcast=False,
-        fused_activation=None,
-    ),
-    512: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
-        in0_block_w=16,
-        per_core_M=2,
-        per_core_N=28,
-        out_subblock_h=2,
-        out_subblock_w=4,
-        transpose_mcast=False,
-        fused_activation=None,
-    ),
-    768: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
-        in0_block_w=16,
-        per_core_M=3,
-        per_core_N=28,
-        out_subblock_h=1,
-        out_subblock_w=4,
-        transpose_mcast=False,
-        fused_activation=None,
-    ),
-}
 
 
 def run_worker(program_configs):
@@ -509,13 +171,13 @@ if __name__ == "__main__":
         K, N = 2048, 7168
 
     if args.dim == "1d" and not args.third_matmul:
-        program_configs = ProgramConfig1DFirstTwoMatmuls
+        program_configs = BHProgramConfig1DFirstTwoMatmuls if is_blackhole() else WHProgramConfig1DFirstTwoMatmuls
     elif args.dim == "1d" and args.third_matmul:
-        program_configs = ProgramConfig1DThirdMatmul
+        program_configs = BHProgramConfig1DThirdMatmul if is_blackhole() else WHProgramConfig1DThirdMatmul
     elif args.dim == "2d" and not args.third_matmul:
-        program_configs = ProgramConfig2DFirstTwoMatmuls
+        program_configs = BHProgramConfig2DFirstTwoMatmuls if is_blackhole() else WHProgramConfig2DFirstTwoMatmuls
     else:
-        program_configs = ProgramConfig2DThirdMatmul
+        program_configs = BHProgramConfig2DThirdMatmul if is_blackhole() else WHProgramConfig2DThirdMatmul
 
     if args.worker:
         run_worker(program_configs)

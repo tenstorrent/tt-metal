@@ -335,11 +335,11 @@ def test_matmul_2d_in0_block_w(device, in0_block_w):
 )
 @pytest.mark.parametrize(
     "out_subblock_h",
-    [1, 2, 4, 6, 8],
+    [1, 2, 3, 4, 6, 8],
 )
 @pytest.mark.parametrize(
     "out_subblock_w",
-    [1, 2, 4, 6, 8],
+    [1, 2, 3, 4, 6, 8],
 )
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 def test_matmul_subblocks(mesh_device, in0_block_w, out_subblock_h, out_subblock_w):
@@ -377,9 +377,9 @@ def test_matmul_subblocks(mesh_device, in0_block_w, out_subblock_h, out_subblock
         packer_l1_acc=True,
     )
 
-    # grid_size = (8, 7)
+    # grid_size = (11, 8)
     # per_core_M = (in0_shape[2] // 32) // 1
-    # per_core_N = (in1_shape[3] // 32) // (grid_size[0] * grid_size[1])
+    # per_core_N = (in1_shape[3] // 32 + grid_size[0] * grid_size[1] - 1) // (grid_size[0] * grid_size[1])
     # print(f"per_core_M: {per_core_M}, per_core_N: {per_core_N}")
     # program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
     #     compute_with_storage_grid_size=grid_size,
@@ -393,12 +393,12 @@ def test_matmul_subblocks(mesh_device, in0_block_w, out_subblock_h, out_subblock
     #     fused_activation=None,
     # )
 
-    grid_size = (8, 8)
+    grid_size = (11, 8)
     per_core_M = (in0_shape[2] // 32 + grid_size[1] - 1) // grid_size[1]
     per_core_N = (in1_shape[3] // 32 + grid_size[0] - 1) // grid_size[0]
     print(f"per_core_M: {per_core_M}, per_core_N: {per_core_N}")
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        compute_with_storage_grid_size=grid_size,
         in0_block_w=in0_block_w,
         per_core_M=per_core_M,
         per_core_N=per_core_N,
