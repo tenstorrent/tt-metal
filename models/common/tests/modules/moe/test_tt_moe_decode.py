@@ -252,17 +252,14 @@ def _create_shared_expert_weights(
     c_n = 0.5  # (81.0 / n) ** 0.5
     shared_w0 = {
         sid: ((torch.rand((num_layers, 1, h, n), dtype=torch.float32) - 0.5) * (2.0 * c_h)).to(torch.bfloat16)
-        # sid: torch.ones((num_layers, 1, h, n), dtype=torch.bfloat16)
         for sid in shared_expert_ids
     }
     shared_w1 = {
         sid: ((torch.rand((num_layers, 1, h, n), dtype=torch.float32) - 0.5) * (2.0 * c_h)).to(torch.bfloat16)
-        # sid: torch.ones((num_layers, 1, h, n), dtype=torch.bfloat16)
         for sid in shared_expert_ids
     }
     shared_w2 = {
         sid: ((torch.rand((num_layers, 1, n, h2), dtype=torch.float32) - 0.5) * (2.0 * c_n)).to(torch.bfloat16)
-        # sid: torch.ones((num_layers, 1, n, h2), dtype=torch.bfloat16)
         for sid in shared_expert_ids
     }
     return shared_w0, shared_w1, shared_w2

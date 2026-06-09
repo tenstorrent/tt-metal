@@ -186,6 +186,13 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     const uint32_t tiles_per_step = (tiles_per_step_raw + 1) & ~1u;
     TT_FATAL(
         tiles_per_step >= 2 && tiles_per_step % 2 == 0, "tiles_per_step ({}) must be even and >= 2", tiles_per_step);
+
+    const uint32_t experts_per_device = tensor_args.matmul_w0_w1_tensor.logical_shape()[2];
+    TT_FATAL(
+        args.num_shared_experts <= experts_per_device,
+        "num_shared_experts ({}) must be <= experts_per_device ({})",
+        args.num_shared_experts,
+        experts_per_device);
 }
 
 MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::compute_output_specs(

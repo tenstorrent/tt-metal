@@ -242,12 +242,9 @@ void bind_moe_compute_utils(nb::module_& mod) {
         pre-arranged ``shared_w*`` tensors.
 
         The shared experts are tensor-parallel split on the intermediate dim across
-        ``1 - cluster_axis`` (via ``mesh_partition``). For W0/W1 the per-device real
-        columns are interleaved with zero padding in ``num_cores`` equal chunks so
-        each matmul core sees ``tp_n / num_cores`` real columns then zeros; W2 keeps
-        its real rows front-packed (the kernel reads fewer row blocks for shared
-        experts). ``num_cores`` is the matmul core count the W0/W1 intermediate dim
-        is sharded across (``len(get_weight_core_shard_maps(...).w0_w1_shard_map)``).
+        ``1 - cluster_axis`` (via ``mesh_partition``). All three weight sets keep
+        real rows front-packed ( but only the W2 part of the kernel reads fewer row
+        blocks for shared experts).
 
         Returns ``(output_w0, output_w1, output_w2)``, each the result of
         concatenating routed + shared along dim 1.
