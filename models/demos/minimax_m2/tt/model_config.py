@@ -16,12 +16,12 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.demos.minimax_m2.utils.weight_conversion import convert_hf_qkv_to_meta_format_partial
 from models.tt_transformers.tt.common import (
     calculate_prefill_warmup_seq_lens,
     cap_seq_lens_to_max_prefill_chunk_size,
     get_base_model_name,
 )
-from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 
 
 class ModelArgs:
@@ -238,10 +238,14 @@ class ModelArgs:
                 # unnecessary cast.
             )
             state_dict = model.state_dict()
-            # Convert HF QKV weights to Meta format for RoPE compatibility (if requested)
+            # Convert HF QKV weights to Meta format for RoPE compatibility (if requested).
+            # MiniMax-M2 uses PARTIAL rotary (rotary_dim < head_dim), so only the rotary
+            # slice of each head is interleaved; the shared full-head permute would be
+            # wrong (drops attention PCC vs HF from ~0.999 to ~0.926).
             if convert_to_meta_format:
-                logger.info("Converting QKV weights from HuggingFace to Meta format for RoPE")
-                state_dict = convert_hf_qkv_to_meta_format(state_dict, model.config.head_dim)
+                logger.info("Converting QKV weights from HuggingFace to Meta format for RoPE (partial rotary)")
+                rotary_dim = getattr(model.config, "rotary_dim", model.config.head_dim)
+                state_dict = convert_hf_qkv_to_meta_format_partial(state_dict, model.config.head_dim, rotary_dim)
             if state_dict["model.norm.weight"].dtype != torch.bfloat16:
                 # Convert to bfloat16 if needed
                 state_dict = {
