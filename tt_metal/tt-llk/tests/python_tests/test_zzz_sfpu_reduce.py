@@ -1,9 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-from datetime import datetime
-
 import pytest
 import torch
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -25,7 +22,6 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
-    input_output_formats,
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
@@ -42,38 +38,6 @@ from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
 max_tiles = 4
-
-FAILURE_DUMP_DIR = os.path.join(os.path.dirname(__file__), "failure_dumps")
-
-
-def dump_failure(name_parts, params, inputs, outputs):
-    """Dump input/output data to a file. Called only when a test case fails."""
-    os.makedirs(FAILURE_DUMP_DIR, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    safe_name = "_".join(str(p) for p in name_parts).replace("/", "-").replace(" ", "")
-    dump_path = os.path.join(FAILURE_DUMP_DIR, f"{safe_name}_{timestamp}.txt")
-
-    with open(dump_path, "w") as f:
-        f.write("=" * 100 + "\n")
-        f.write("TEST PARAMETERS\n")
-        f.write("=" * 100 + "\n")
-        for key, value in params.items():
-            f.write(f"{key:<22}: {value}\n")
-
-        f.write("\n" + "-" * 100 + "\n")
-        f.write("INPUT DATA\n")
-        f.write("-" * 100 + "\n")
-        for key, value in inputs.items():
-            f.write(f"{key}:\n{value}\n\n")
-
-        f.write("-" * 100 + "\n")
-        f.write("OUTPUT DATA\n")
-        f.write("-" * 100 + "\n")
-        for key, value in outputs.items():
-            f.write(f"{key}:\n{value}\n\n")
-
-    return dump_path
-
 
 dimension_combinations = [
     [m, n]
@@ -96,6 +60,36 @@ def get_supported_reduce_axioms(reduce_pool: ReducePool) -> list[MathOperation]:
     if reduce_pool == ReducePool.Sum:
         return [MathOperation.ReduceRow, MathOperation.ReduceColumn]
     return [MathOperation.ReduceColumn]
+
+
+# Base data formats exercised by the reduce suite.
+REDUCE_BASE_FORMATS = [
+    DataFormat.Float32,
+    DataFormat.Int32,
+    DataFormat.UInt32,
+    DataFormat.UInt16,
+    DataFormat.Float16_b,
+]
+
+
+def get_reduce_formats(reduce_pool: ReducePool) -> list[InputOutputFormat]:
+    """Input/output format pairs for the reduce suite.
+
+    A UInt16 Sum/Average reduction can exceed the UInt16 range: a single 32-wide tile row/column
+    sums up to 32 values, and a multi-tile row reduction sums even more (e.g. 128 columns of up to
+    1000 reaches ~128000 >> 65535). To avoid output overflow we widen the OUTPUT to UInt32 for those
+    cases; the SFPU already accumulates in 32-bit and stores the full word into a 32-bit (fp32) dest.
+    Every other case keeps input == output.
+    """
+    widening = reduce_pool in (ReducePool.Sum, ReducePool.Average)
+    return [
+        (
+            InputOutputFormat(fmt, DataFormat.UInt32)
+            if (widening and fmt == DataFormat.UInt16)
+            else InputOutputFormat(fmt, fmt)
+        )
+        for fmt in REDUCE_BASE_FORMATS
+    ]
 
 
 # Relative precision (unit roundoff) of the floating-point dest/output formats.
@@ -165,16 +159,7 @@ def is_valid_reduce_dimension(mathop, dest_acc, formats, dim):
 
 
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float32,
-            DataFormat.Int32,
-            DataFormat.UInt32,
-            DataFormat.UInt16,
-            DataFormat.Float16_b,
-        ],
-        same=True,
-    ),
+    formats=lambda reduce_pool: get_reduce_formats(reduce_pool),
     mathop=lambda reduce_pool: get_supported_reduce_axioms(reduce_pool),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     input_bounds=lambda formats: get_format_input_bounds(formats),
@@ -200,6 +185,16 @@ def test_sfpu_reduce(
     if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
         pytest.skip(
             reason="32-bit formats require DestAccumulation.Yes (HW cannot unpack into SrcA/SrcB)"
+        )
+
+    if (
+        formats.input_format == DataFormat.UInt16
+        and formats.output_format.is_32_bit()
+        and dest_acc == DestAccumulation.No
+    ):
+        pytest.skip(
+            reason="UInt16 Sum/Average widens the output to UInt32, which needs a 32-bit (fp32) dest; "
+            "DestAccumulation.No has no room to store/pack the widened result"
         )
 
     min_value, max_value = input_bounds
@@ -301,51 +296,6 @@ def test_sfpu_reduce(
         formats.output_format, reduce_pool, mathop, input_dimensions, input_bounds
     )
 
-    if passed_test(
+    assert passed_test(
         golden_slice, res_slice, formats.output_format, custom_atol=reduce_atol
-    ):
-        return
-
-    # On failure, dump all input/output data to a file for debugging.
-    diff_idx = (golden_slice != res_slice).nonzero(as_tuple=True)[0].tolist()
-    mismatches = "\n".join(
-        f"  idx {i:>4}: golden={golden_slice[i].item()} != res={res_slice[i].item()}"
-        for i in diff_idx
     )
-    dump_path = dump_failure(
-        name_parts=[
-            formats.input_format,
-            mathop,
-            reduce_pool,
-            dest_acc,
-            f"{input_dimensions[0]}x{input_dimensions[1]}",
-        ],
-        params={
-            "formats": formats,
-            "input_format": formats.input_format,
-            "output_format": formats.output_format,
-            "mathop": mathop,
-            "reduce_pool": reduce_pool,
-            "dest_acc": dest_acc,
-            "input_bounds": input_bounds,
-            "input_dimensions": input_dimensions,
-            "torch_format": torch_format,
-            "tile_cnt": tile_cnt,
-            "num_blocks": num_blocks,
-            "num_tiles_in_block": num_tiles_in_block,
-            "dst_dim": dst_dim,
-        },
-        inputs={
-            "src_A_untilized": src_A_untilized,
-        },
-        outputs={
-            "golden_tensor": golden_tensor,
-            "res_tensor": res_tensor,
-            "golden_slice": golden_slice.tolist(),
-            "res_slice": res_slice.tolist(),
-            f"mismatch indices ({len(diff_idx)})": diff_idx,
-            "mismatches": mismatches,
-        },
-    )
-
-    pytest.fail(f"Reduce test failed. Input/output data dumped to: {dump_path}")
