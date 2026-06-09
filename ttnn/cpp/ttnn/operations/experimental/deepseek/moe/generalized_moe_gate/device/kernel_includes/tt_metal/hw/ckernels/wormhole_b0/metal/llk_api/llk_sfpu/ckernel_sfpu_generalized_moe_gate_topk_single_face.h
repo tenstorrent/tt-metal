@@ -61,9 +61,9 @@ inline void generalized_moe_gate_place_field_from_interm() {
     _gmg_place_field_from_interm<field, src_lo, src_hi, dst_lo, dst_hi>();
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, uint32_t topk = 8>
 inline void generalized_moe_gate_finalize_ungrouped(uint32_t eps, uint32_t scale) {
-    _generalized_moe_gate_finalize_ungrouped<APPROXIMATION_MODE, is_fp32_dest_acc_en>(eps, scale);
+    _generalized_moe_gate_finalize_ungrouped<APPROXIMATION_MODE, is_fp32_dest_acc_en, topk>(eps, scale);
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>

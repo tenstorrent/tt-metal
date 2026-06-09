@@ -14,6 +14,7 @@ struct operation_attributes_t {
     float eps{};
     float scaling_factor{};
     bool enable_sigmoid{};
+    uint32_t topk{8};  // number of experts to keep (k). <=8 supported (single block); 8 = full top-8.
 };
 
 struct tensor_args_t {

@@ -61,9 +61,9 @@ ALWI void generalized_moe_gate_place_field_from_interm() {
 
 // Finalize the combine: the two block runs sit at scores/idx/bias {0,2} and {4,6}; bitonically sort
 // the 16 candidates -> global top-8 + normalize, then transpose-dest step2 to the output layout.
-template <bool is_32bit = false>
+template <bool is_32bit = false, uint32_t topk = 8>
 ALWI void generalized_moe_gate_combine_finalize(uint32_t eps, uint32_t scale) {
-    MATH((llk_math_sfpu_generalized_moe_gate_finalize_ungrouped<APPROX, DST_ACCUM_MODE>(0, eps, scale)));
+    MATH((llk_math_sfpu_generalized_moe_gate_finalize_ungrouped<APPROX, DST_ACCUM_MODE, topk>(0, eps, scale)));
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init<is_32bit>()));
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step2<DST_ACCUM_MODE, is_32bit>()));
 }
@@ -103,7 +103,8 @@ template <
     bool produce_run = false,
     uint32_t run_store_lo = 0,
     uint32_t run_store_hi = 2,
-    uint32_t idx_offset = 0>
+    uint32_t idx_offset = 0,
+    uint32_t topk = 8>
 ALWI void generalized_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t scale) {
     if constexpr (enable_sigmoid) {
         // Transpose wh (FPU)
@@ -194,8 +195,9 @@ ALWI void generalized_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint3
               run_store_hi,
               idx_offset>(0)));
     } else {
-        // Single 256 block: full bitonic sort of topA{0,2}+topB{4,6} -> global top-8 + normalize.
-        MATH((llk_math_sfpu_generalized_moe_gate_finalize_ungrouped<APPROX, DST_ACCUM_MODE>(0, eps, scale)));
+        // Single ≤256 block: full bitonic sort of topA{0,2}+topB{4,6} -> global top-8, then keep top-`topk`
+        // (zero ranks >= topk before normalize) + normalize over those.
+        MATH((llk_math_sfpu_generalized_moe_gate_finalize_ungrouped<APPROX, DST_ACCUM_MODE, topk>(0, eps, scale)));
     }
 #endif
 #else

@@ -19,10 +19,11 @@ from models.demos.deepseek_v3.tt.generalized_moe_gate.op import GeneralizedMoeGa
 
 
 @pytest.mark.parametrize("batch_size", [1, 2])
+@pytest.mark.parametrize("topk", [8, 6, 4])
 @pytest.mark.parametrize("enable_sigmoid", [True, False])
 @pytest.mark.parametrize("seed", [42, 201, 512])
-def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed):
-    """Test the generalized MoE gate C++ op on a 32x32 tile against the golden reference."""
+def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed, topk):
+    """Test the generalized MoE gate C++ op on a 32x32 tile against the golden reference (top-`topk`)."""
 
     # Tensor dimensions — full 32x32 tile, logical 32x32 per shard.
     input_shape = (batch_size, 8, 32)
@@ -46,7 +47,7 @@ def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed):
 
     # Reference output.
     top8_scores, top8_indices = GeneralizedMoeGateOp.golden(
-        torch_input, torch_bias, eps, scaling_factor, enable_sigmoid
+        torch_input, torch_bias, eps, scaling_factor, enable_sigmoid, topk
     )
 
     grid = device.compute_with_storage_grid_size()
@@ -133,11 +134,13 @@ def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed):
         eps,
         scaling_factor,
         enable_sigmoid,
+        topk,
     )
 
-    # Convert back to torch and keep the top-8 slots.
-    output_torch = ttnn.to_torch(ttnn_result)[:, 0, :8]
-    output_indices_torch = ttnn.to_torch(ttnn_result_indices)[:, 0, :8]
+    # Convert back to torch and keep the top-`topk` slots (ranks 0..topk-1 sit in the first topk cols;
+    # the dropped ranks topk..7 are zeroed by the kernel).
+    output_torch = ttnn.to_torch(ttnn_result)[:, 0, :topk]
+    output_indices_torch = ttnn.to_torch(ttnn_result_indices)[:, 0, :topk]
 
     # The op does not guarantee a stable order across ties, so sort both by index
     # before comparing (same approach as the reference unit test).
@@ -332,9 +335,10 @@ def test_generalized_moe_gate_512_per_block(device, diag_block, enable_sigmoid, 
     )
 
 
+@pytest.mark.parametrize("topk", [8, 6, 4])
 @pytest.mark.parametrize("enable_sigmoid", [True, False])
 @pytest.mark.parametrize("seed", [42, 201, 512])
-def test_generalized_moe_gate_512_global(device, enable_sigmoid, seed):
+def test_generalized_moe_gate_512_global(device, enable_sigmoid, seed, topk):
     """512-expert true GLOBAL top-8 (A2 combine). Each of the 2 blocks produces a re-mergeable top-8
     RUN (idx made global via +b*256), stashed to L1; the combine places run0 at {0,2} and run1 at
     {4,6} and finalizes -> the global top-8 over all 512 experts (indices 0-511). GMG_DIAG_BLOCK must
@@ -351,8 +355,10 @@ def test_generalized_moe_gate_512_global(device, enable_sigmoid, seed):
         torch_input = torch.sigmoid(torch_input)
     torch_bias = (2 * torch.rand((batch_size, num_experts), dtype=torch.bfloat16)) - 1
 
-    # Golden: flatten (batch, 512) -> true global top-8 (indices 0-511), normalized scores.
-    gold_scores, gold_idx = GeneralizedMoeGateOp.golden(torch_input, torch_bias, eps, scaling_factor, enable_sigmoid)
+    # Golden: flatten (batch, 512) -> true global top-`topk` (indices 0-511), normalized scores.
+    gold_scores, gold_idx = GeneralizedMoeGateOp.golden(
+        torch_input, torch_bias, eps, scaling_factor, enable_sigmoid, topk
+    )
     scores_all = (torch.sigmoid(torch_input) if enable_sigmoid else torch_input).float()
     bias_key = scores_all + torch_bias.float()  # bias-corrected ranking key, (batch, 512)
 
@@ -404,18 +410,26 @@ def test_generalized_moe_gate_512_global(device, enable_sigmoid, seed):
     )
 
     res_scores, res_idx = GeneralizedMoeGateOp.op(
-        ttnn_input, ttnn_bias, ttnn_output, ttnn_input_indices, ttnn_output_indices, eps, scaling_factor, enable_sigmoid
+        ttnn_input,
+        ttnn_bias,
+        ttnn_output,
+        ttnn_input_indices,
+        ttnn_output_indices,
+        eps,
+        scaling_factor,
+        enable_sigmoid,
+        topk,
     )
 
-    dev_idx = ttnn.to_torch(res_idx)[:, 0, :8].to(torch.int64)
-    dev_scores = ttnn.to_torch(res_scores)[:, 0, :8].float()
-    logger.info(f"512 global: dev_idx={dev_idx}  gold_idx={gold_idx}")
+    dev_idx = ttnn.to_torch(res_idx)[:, 0, :topk].to(torch.int64)
+    dev_scores = ttnn.to_torch(res_scores)[:, 0, :topk].float()
+    logger.info(f"512 global (topk={topk}): dev_idx={dev_idx}  gold_idx={gold_idx}")
 
-    # Indices: dev must be a valid GLOBAL top-8 (tie-robust: compare the gathered bias-keys, sorted).
+    # Indices: dev must be a valid GLOBAL top-`topk` (tie-robust: compare the gathered bias-keys, sorted).
     dev_key = torch.gather(bias_key, -1, dev_idx).sort(-1).values
     gold_key = torch.gather(bias_key, -1, gold_idx.to(torch.int64)).sort(-1).values
     assert torch.allclose(dev_key, gold_key, atol=1e-2), (
-        f"512 global not a valid top-8.\n dev_idx={dev_idx}\n gold_idx={gold_idx}\n"
+        f"512 global not a valid top-{topk}.\n dev_idx={dev_idx}\n gold_idx={gold_idx}\n"
         f" dev_key={dev_key}\n gold_key={gold_key}"
     )
 
@@ -423,80 +437,6 @@ def test_generalized_moe_gate_512_global(device, enable_sigmoid, seed):
     assert torch.allclose(
         dev_scores.sort(-1).values, gold_scores.float().sort(-1).values, atol=2e-2
     ), f"512 normalized scores mismatch.\n dev={dev_scores}\n gold={gold_scores}"
-
-
-def test_dump_combine_run(device):
-    """DEBUG PROBE (combine bring-up): with GMG_COMBINE_DIAG set, the kernel unpacks run0 from the L1
-    stash into the indices region and packs it RAW (no relocate/normalize/step2). This reads the full
-    16x16 idx face so we can see where the run's columns land after the pack/unpack round-trip
-    (expected: the run's idx at cols {0,2}). 512 input so num_blocks==2 (combine path)."""
-    num_experts = 512
-    num_blocks = num_experts // 256
-    batch_size = 1
-    tile = ttnn.Tile((32, 32))
-
-    torch.manual_seed(42)
-    torch_input = (2 * torch.rand((batch_size, num_experts), dtype=torch.bfloat16)) - 1
-    torch_bias = (2 * torch.rand((batch_size, num_experts), dtype=torch.bfloat16)) - 1
-    scores = torch.sigmoid(torch_input).float()
-    key = scores + torch_bias.float()
-    _, i0 = torch.topk(key[:, :256], 8, dim=-1, sorted=True)
-    logger.info(f"block0 golden top8 (sorted): {sorted(i0[0].tolist())}")
-
-    logits_blocks = torch_input.reshape(batch_size, num_blocks, 16, 16)
-    bias_blocks = torch.transpose(torch_bias.reshape(batch_size, num_blocks, 16, 16), -2, -1).contiguous()
-
-    grid = device.compute_with_storage_grid_size()
-    core_grid = ttnn.num_cores_to_corerangeset(batch_size, ttnn.CoreCoord(grid.x, grid.y), row_wise=True)
-
-    def mem(shard):
-        return ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(core_grid, shard, ttnn.ShardOrientation.ROW_MAJOR),
-        )
-
-    multi, one = (num_blocks * 32, 32), (32, 32)
-    ttnn_input = ttnn.from_torch(
-        logits_blocks, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem(multi), tile=tile
-    )
-    ttnn_bias = ttnn.from_torch(
-        bias_blocks, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem(multi), tile=tile
-    )
-    idx = torch.transpose(torch.arange(256, dtype=torch.int32).reshape(batch_size, 16, 16), -2, -1).to(torch.uint16)
-    ttnn_input_indices = ttnn.from_torch(
-        idx, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem(one), tile=tile
-    )
-    # FULL 32x32 output so the raw idx region (all columns/rows) is visible.
-    out32 = (batch_size, 32, 32)
-    ttnn_output = ttnn.from_torch(
-        torch.zeros(out32, dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=mem(one),
-        tile=tile,
-    )
-    ttnn_output_indices = ttnn.from_torch(
-        torch.zeros(out32, dtype=torch.uint16),
-        dtype=ttnn.uint16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=mem(one),
-        tile=tile,
-    )
-
-    GeneralizedMoeGateOp.op(
-        ttnn_input, ttnn_bias, ttnn_output, ttnn_input_indices, ttnn_output_indices, 1e-20, 2.5, True
-    )
-
-    ids = ttnn.to_torch(ttnn_output_indices)[0].to(torch.int32)
-    torch.set_printoptions(linewidth=200)
-    logger.info(f"idx region (raw, after unpack) full 16x16 face:\n{ids[:16, :16]}")
-    for c in range(16):
-        col = ids[:16, c].tolist()
-        if any(v != 0 for v in col):
-            logger.info(f"  col {c}: {col}")
 
 
 def test_dump_stash_run(device):
@@ -514,8 +454,10 @@ def test_dump_stash_run(device):
     torch_bias = (2 * torch.rand((batch_size, 256), dtype=torch.bfloat16)) - 1
     scores = torch.sigmoid(torch_input).float()
     key = scores + torch_bias.float()
-    _, gold = torch.topk(key, 8, dim=-1, sorted=True)
+    gk, gold = torch.topk(key, 8, dim=-1, sorted=True)
     logger.info(f"256 golden top8 (sorted): {sorted(gold[0].tolist())}")
+    logger.info(f"256 golden top8 by DESC key (rank0..7): {gold[0].tolist()}")
+    logger.info(f"  their keys (rank0..7): {[round(v, 4) for v in gk[0].tolist()]}")
 
     grid = device.compute_with_storage_grid_size()
     core_grid = ttnn.num_cores_to_corerangeset(batch_size, ttnn.CoreCoord(grid.x, grid.y), row_wise=True)

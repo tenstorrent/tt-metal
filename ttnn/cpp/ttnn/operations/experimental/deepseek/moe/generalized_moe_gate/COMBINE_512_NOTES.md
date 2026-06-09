@@ -130,7 +130,7 @@ tool that finally localized the bias bug by reading the whole 32×32 face).
 
 1. **Kimi 384:** `num_blocks=2` with block1 = 256-383 (+128 padding). Likely just an op.py/test concern — set the
    padding experts' keys very low so they're never selected; the kernel combine should be unchanged.
-2. **Top-n (k = 4/6/10):** currently k=8 is baked into `merge16_to_run`/`finalize`/the bitonic sort. Parameterize k.
+2. **Top-n:** ✅ k = 4/6/8 done (256 + 512), see `TOPN_NOTES.md`. k>8 (top-10) and k<4 still TODO.
 3. **Softmax / sqrt-softplus** normalization variants (see `SOFTMAX_NOTES.md`).
 4. **>512:** needs a combine **tree** (the current path is a single 2-run merge).
 5. **Perf.**

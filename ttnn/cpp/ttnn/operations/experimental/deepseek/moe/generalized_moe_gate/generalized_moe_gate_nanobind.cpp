@@ -39,7 +39,8 @@ void bind_generalized_moe_gate(nb::module_& mod) {
         nb::arg("output_indices_tensor"),
         nb::arg("eps") = 1e-20f,
         nb::arg("scaling_factor") = 2.5f,
-        nb::arg("enable_sigmoid") = false);
+        nb::arg("enable_sigmoid") = false,
+        nb::arg("topk") = 8);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::generalized_moe_gate::detail

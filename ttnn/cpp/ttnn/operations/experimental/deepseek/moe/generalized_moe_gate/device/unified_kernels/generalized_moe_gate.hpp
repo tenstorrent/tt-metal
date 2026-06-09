@@ -73,7 +73,8 @@ struct GeneralizedMoeGate {
         uint32_t run_idx_cb_ = 6,
         uint32_t run_bias_cb_ = 7,
         uint32_t cb_tilize_ = 8,
-        uint32_t cb_tilize_idx_ = 9>
+        uint32_t cb_tilize_idx_ = 9,
+        uint32_t topk_ = 8>
     struct ComputeCTArgs {
         static constexpr uint32_t input_cb = input_cb_;
         static constexpr uint32_t bias_cb = bias_cb_;
@@ -89,6 +90,7 @@ struct GeneralizedMoeGate {
         static constexpr uint32_t run_bias_cb = run_bias_cb_;
         static constexpr uint32_t cb_tilize = cb_tilize_;
         static constexpr uint32_t cb_tilize_idx = cb_tilize_idx_;
+        static constexpr uint32_t topk = topk_;
     };
 
     // ========================================================================
@@ -203,7 +205,7 @@ struct GeneralizedMoeGate {
                 reconfig_data_format_srca(CTArgs::input_cb);
                 generalized_moe_gate_init<CTArgs::enable_sigmoid>(CTArgs::input_cb, CTArgs::bias_cb);
                 cb_wait_front(CTArgs::input_cb, 1);
-                generalized_moe_gate<CTArgs::enable_sigmoid>(
+                generalized_moe_gate<CTArgs::enable_sigmoid, false, false, 0, 2, 0, CTArgs::topk>(
                     CTArgs::input_cb, CTArgs::bias_cb, CTArgs::eps, CTArgs::scaling_factor);
                 cb_pop_front(CTArgs::input_cb, 1);
                 tile_regs_commit();
@@ -297,7 +299,7 @@ struct GeneralizedMoeGate {
                 // merge {0,2}+{4,6} -> global top-8 + normalize + step2. srcb dummy-valid AFTER the transposes.
                 generalized_moe_gate_combine_init<false>();
                 UNPACK((llk_unpack_set_srcb_dummy_valid()));
-                generalized_moe_gate_combine_finalize<false>(CTArgs::eps, CTArgs::scaling_factor);
+                generalized_moe_gate_combine_finalize<false, CTArgs::topk>(CTArgs::eps, CTArgs::scaling_factor);
                 tile_regs_commit();
                 cb_pop_front(CTArgs::cb_tilize, 2 * CTArgs::num_blocks);
                 cb_pop_front(CTArgs::cb_tilize_idx, CTArgs::num_blocks);

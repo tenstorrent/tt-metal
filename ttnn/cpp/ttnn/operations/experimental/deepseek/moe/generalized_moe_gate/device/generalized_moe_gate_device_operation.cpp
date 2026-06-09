@@ -139,9 +139,11 @@ GeneralizedMoeGateDeviceOperation::invoke(
     const Tensor& output_indices_tensor,
     float eps,
     float scaling_factor,
-    bool enable_sigmoid) {
+    bool enable_sigmoid,
+    uint32_t topk) {
     return {
-        operation_attributes_t{.eps = eps, .scaling_factor = scaling_factor, .enable_sigmoid = enable_sigmoid},
+        operation_attributes_t{
+            .eps = eps, .scaling_factor = scaling_factor, .enable_sigmoid = enable_sigmoid, .topk = topk},
         tensor_args_t{
             .input_tensor = input_tensor,
             .bias_tensor = bias_tensor,

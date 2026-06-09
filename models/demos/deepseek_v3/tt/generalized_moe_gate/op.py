@@ -17,7 +17,7 @@ class GeneralizedMoeGateOp:
     """
 
     @staticmethod
-    def golden(input_tensor, bias_tensor, eps=1e-20, scaling_factor=2.5, enable_sigmoid=False):
+    def golden(input_tensor, bias_tensor, eps=1e-20, scaling_factor=2.5, enable_sigmoid=False, topk=8):
         """
         PyTorch reference for the *ungrouped* generalized MoE gate.
 
@@ -47,12 +47,12 @@ class GeneralizedMoeGateOp:
         # True GLOBAL top-8 over all 256 experts (ungrouped), ranked by the bias-corrected score.
         bias_flat = bias_scores.reshape(batch, -1)
         scores_flat = scores.reshape(batch, -1)
-        _, top8_indices = torch.topk(bias_flat, 8, dim=-1, sorted=True)
-        top8_scores = torch.gather(scores_flat, dim=-1, index=top8_indices)
+        _, topk_indices = torch.topk(bias_flat, topk, dim=-1, sorted=True)
+        topk_scores = torch.gather(scores_flat, dim=-1, index=topk_indices)
 
-        denominator = torch.sum(top8_scores, dim=-1, keepdim=True) + eps
-        normalized_scores = top8_scores / denominator * scaling_factor
-        return normalized_scores, top8_indices
+        denominator = torch.sum(topk_scores, dim=-1, keepdim=True) + eps
+        normalized_scores = topk_scores / denominator * scaling_factor
+        return normalized_scores, topk_indices
 
     @staticmethod
     def op(
@@ -64,6 +64,7 @@ class GeneralizedMoeGateOp:
         eps=1e-20,
         scaling_factor=2.5,
         enable_sigmoid=True,
+        topk=8,
     ):
         """
         Execute the generalized MoE gate on device.
@@ -81,4 +82,5 @@ class GeneralizedMoeGateOp:
             eps=eps,
             scaling_factor=scaling_factor,
             enable_sigmoid=enable_sigmoid,
+            topk=topk,
         )
