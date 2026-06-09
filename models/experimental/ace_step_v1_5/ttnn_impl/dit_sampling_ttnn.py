@@ -337,6 +337,71 @@ def bf16_row_from_numpy_bc(arr_f32_np: np.ndarray, *, device: Any, dram: Any) ->
     return bf16_tile_l1_from_numpy_bc(arr_f32_np, device=device, dram=dram)
 
 
+def _restage_one_condition_tensor_for_dit(
+    tt: ttnn.Tensor,
+    *,
+    mesh_device: Any,
+    dram: Any,
+) -> tuple[ttnn.Tensor, np.ndarray]:
+    """Single tensor: mesh-safe f32 readback → BF16 TILE L1 (DiT staging contract)."""
+    from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_ttnn_to_torch
+
+    arr = np.asarray(
+        ace_step_ttnn_to_torch(tt, mesh_device=mesh_device, dtype=torch.float32).detach().cpu().numpy(),
+        dtype=np.float32,
+    )
+    try:
+        ttnn.deallocate(tt)
+    except Exception:
+        pass
+    return bf16_tile_l1_from_numpy_bc(arr, device=mesh_device, dram=dram), arr
+
+
+def restage_condition_tensors_for_dit_mesh(
+    enc_tt: ttnn.Tensor,
+    ctx_tt: ttnn.Tensor,
+    null_emb_tt: ttnn.Tensor | None,
+    *,
+    mesh_device: Any,
+    dram: Any,
+    also_return_torch: bool = False,
+) -> (
+    tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor | None]
+    | tuple[
+        ttnn.Tensor,
+        ttnn.Tensor,
+        ttnn.Tensor | None,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor | None,
+    ]
+):
+    """Re-upload condition encoder outputs through the validated DiT staging path.
+
+    The eager denoise loop uploads host f32 enc/ctx via :func:`bf16_tile_l1_from_numpy_bc`.
+    Raw condition-encoder device tensors can differ in layout/memory and caused audible 60s
+    drift when passed directly to DiT (first P4 attempt). This helper performs the same
+    f32 normalization once, keeps BF16 TILE L1 device tensors for denoise, and optionally
+    returns CPU torch sidecars (e.g. PyTorch DiT path) without a second readback.
+    """
+    from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_device_num_chips, ace_step_synchronize_device
+
+    enc_staged, enc_np = _restage_one_condition_tensor_for_dit(enc_tt, mesh_device=mesh_device, dram=dram)
+    ctx_staged, ctx_np = _restage_one_condition_tensor_for_dit(ctx_tt, mesh_device=mesh_device, dram=dram)
+    null_staged: ttnn.Tensor | None = None
+    null_np: np.ndarray | None = None
+    if null_emb_tt is not None:
+        null_staged, null_np = _restage_one_condition_tensor_for_dit(null_emb_tt, mesh_device=mesh_device, dram=dram)
+    if ace_step_device_num_chips(mesh_device) > 1:
+        ace_step_synchronize_device(ttnn, mesh_device)
+    if not also_return_torch:
+        return enc_staged, ctx_staged, null_staged
+    enc_hs = torch.from_numpy(enc_np)
+    ctx_lat = torch.from_numpy(ctx_np)
+    null_emb = torch.from_numpy(null_np) if null_np is not None else None
+    return enc_staged, ctx_staged, null_staged, enc_hs, ctx_lat, null_emb
+
+
 def typecast_bf16_any_to_fp32_tile(tt_bf16: ttnn.Tensor, *, dram: Any) -> ttnn.Tensor:
     # Place the intermediate tile in L1 so the TilizeWithValPadding kernel reads/writes
     # L1 rather than DRAM (eliminates TypecastDeviceOperation + TilizeWithValPadding
