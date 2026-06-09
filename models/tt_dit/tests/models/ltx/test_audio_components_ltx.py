@@ -366,7 +366,12 @@ def _build_tt_stage_c(
         ccl_manager=ccl_manager,
         **_tt_vocoder_cfg(_MAIN_VOCODER_CFG),
     )
-    bwe_pc = parallel_config.time_parallel if isinstance(parallel_config, AudioTCParallelConfig) else parallel_config
+    # Mirror the pipeline (pipeline_ltx._new_audio_decoder): channel-TP the BWE generator only
+    # where the channel axis pays for the gather (factor > 2); single-axis on 2x4 (factor 2).
+    if isinstance(parallel_config, AudioTCParallelConfig):
+        bwe_pc = parallel_config if parallel_config.channel_parallel.factor > 2 else parallel_config.time_parallel
+    else:
+        bwe_pc = parallel_config
     bwe_voc = Vocoder(
         mesh_device=mesh_device,
         dtype=ttnn.float32,
