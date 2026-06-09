@@ -10,7 +10,7 @@ Validates correctness against:
 - Old implementation from tt_moe.py (to_layout + mul + sum)
 
 Tests structured data, random data, sparse weights, and non-local expert skipping.
-Shape: [1, 3200, 8, 6144] - GLM 5.1 dimensions.
+Shape: [1, 3200, 8, 3072] - MiniMax M2.7 dimensions.
 """
 
 import pytest
@@ -18,14 +18,14 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 
 NUM_TOKENS = 3200
-NUM_EXPERTS = GLM51Config.NUM_EXPERTS_PER_TOKEN
-EMB_DIM = GLM51Config.EMB_SIZE
+NUM_EXPERTS = MiniMaxM27Config.NUM_EXPERTS_PER_TOKEN
+EMB_DIM = MiniMaxM27Config.EMB_SIZE
 EXPERT_DIM = 2
 PCC_THRESHOLD = 0.999
-NUM_ROUTED_EXPERTS = GLM51Config.NUM_ROUTED_EXPERTS
+NUM_ROUTED_EXPERTS = MiniMaxM27Config.NUM_ROUTED_EXPERTS
 
 
 def pytorch_reference(combine, weights):

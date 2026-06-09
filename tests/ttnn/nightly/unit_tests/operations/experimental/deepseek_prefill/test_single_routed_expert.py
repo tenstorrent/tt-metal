@@ -15,6 +15,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from tests.ttnn.utils_for_testing import comp_pcc
@@ -23,22 +24,22 @@ from tests.ttnn.utils_for_testing import comp_pcc
 @pytest.mark.parametrize(
     "num_tokens, emb_dim, hidden_dim",
     [
-        (1024, 7168, 2048),  # DeepSeek V3 dims, 1K tokens
-        (2048, 7168, 2048),  # DeepSeek V3 dims, 2K tokens
-        (4096, 7168, 2048),  # DeepSeek V3 dims, 4K tokens
-        (5120, 7168, 2048),  # DeepSeek V3 dims, 5K tokens
-        (6144, 7168, 2048),  # DeepSeek V3 dims, 6K tokens
-        (8192, 7168, 2048),  # DeepSeek V3 dims, 8K tokens
-        (25600, 7168, 2048),  # DeepSeek V3 dims, 25K tokens
+        (1024, MiniMaxM27Config.EMB_SIZE, MiniMaxM27Config.MOE_INTERMEDIATE_SIZE),  # MiniMax M2.7 dims, 1K tokens
+        (2048, MiniMaxM27Config.EMB_SIZE, MiniMaxM27Config.MOE_INTERMEDIATE_SIZE),  # MiniMax M2.7 dims, 2K tokens
+        (4096, MiniMaxM27Config.EMB_SIZE, MiniMaxM27Config.MOE_INTERMEDIATE_SIZE),  # MiniMax M2.7 dims, 4K tokens
+        (5120, MiniMaxM27Config.EMB_SIZE, MiniMaxM27Config.MOE_INTERMEDIATE_SIZE),  # MiniMax M2.7 dims, 5K tokens
+        (6144, MiniMaxM27Config.EMB_SIZE, MiniMaxM27Config.MOE_INTERMEDIATE_SIZE),  # MiniMax M2.7 dims, 6K tokens
+        (8192, MiniMaxM27Config.EMB_SIZE, MiniMaxM27Config.MOE_INTERMEDIATE_SIZE),  # MiniMax M2.7 dims, 8K tokens
+        (25600, MiniMaxM27Config.EMB_SIZE, MiniMaxM27Config.MOE_INTERMEDIATE_SIZE),  # MiniMax M2.7 dims, 25K tokens
     ],
     ids=[
-        "ds-v3-1k",
-        "ds-v3-2k",
-        "ds-v3-4k",
-        "ds-v3-5k",
-        "ds-v3-6k",
-        "ds-v3-8k",
-        "ds-v3-25k",
+        "minimax-1k",
+        "minimax-2k",
+        "minimax-4k",
+        "minimax-5k",
+        "minimax-6k",
+        "minimax-8k",
+        "minimax-25k",
     ],
 )
 @pytest.mark.parametrize(
@@ -161,18 +162,18 @@ def test_single_routed_expert(
 @pytest.mark.parametrize(
     "allocated_tokens, active_tokens, emb_dim, hidden_dim",
     [
-        (4096, 2048, 7168, 2048),
-        (25 * 1024, 2048, 7168, 2048),
-        (25 * 1024, 4096, 7168, 2048),
-        (16384, 2048, 7168, 2048),
-        (16384, 4096, 7168, 2048),
+        (4096, 2048, MiniMaxM27Config.EMB_SIZE, MiniMaxM27Config.MOE_INTERMEDIATE_SIZE),
+        (25 * 1024, 2048, MiniMaxM27Config.EMB_SIZE, MiniMaxM27Config.MOE_INTERMEDIATE_SIZE),
+        (25 * 1024, 4096, MiniMaxM27Config.EMB_SIZE, MiniMaxM27Config.MOE_INTERMEDIATE_SIZE),
+        (16384, 2048, MiniMaxM27Config.EMB_SIZE, MiniMaxM27Config.MOE_INTERMEDIATE_SIZE),
+        (16384, 4096, MiniMaxM27Config.EMB_SIZE, MiniMaxM27Config.MOE_INTERMEDIATE_SIZE),
     ],
     ids=[
-        "ds-v3-4k-alloc-2k-active",
-        "ds-v3-25k-alloc-2k-active",
-        "ds-v3-25k-alloc-4k-active",
-        "ds-v3-16k-alloc-2k-active",
-        "ds-v3-16k-alloc-4k-active",
+        "minimax-4k-alloc-2k-active",
+        "minimax-25k-alloc-2k-active",
+        "minimax-25k-alloc-4k-active",
+        "minimax-16k-alloc-2k-active",
+        "minimax-16k-alloc-4k-active",
     ],
 )
 @pytest.mark.parametrize(

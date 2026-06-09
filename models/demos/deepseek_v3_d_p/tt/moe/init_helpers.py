@@ -501,7 +501,9 @@ def initialize_test_inputs(
     weights_shape = (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
     indices_shape = (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
 
-    weights = torch.randn(weights_shape, dtype=torch.bfloat16)
+    # Absolute value so weights are strictly non-negative: signed randn can sum to ~0 across
+    # the topk dim, making the normalization divide by ~0 and produce NaNs.
+    weights = torch.randn(weights_shape, dtype=torch.bfloat16).abs()
     weights = weights / weights.sum(dim=-1, keepdim=True)  # Normalize so topk sums to 1
     indices = torch.randint(0, num_routed_experts, indices_shape, dtype=torch.int32)
 

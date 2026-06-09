@@ -14,7 +14,7 @@ import pytest
 import torch
 import ttnn
 
-from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -111,7 +111,9 @@ def test_valid_inputs_2d_index_first_dim_one(device):
 
 
 def test_global_tensor_wrong_dtype(device):
-    g = _make_global(device, dtype=ttnn.bfloat16)
+    # The op accepts BFLOAT8_B or BFLOAT16 (byte-level tile copy works for either);
+    # use float32 to exercise the rejected-dtype path.
+    g = _make_global(device, dtype=ttnn.float32)
     s = _make_index(device)
     c = _make_index(device)
     with pytest.raises(RuntimeError):
@@ -384,7 +386,7 @@ def test_extract_2d_indices_matches_torch_slice(device):
 # ---------------------------------------------------------------------------
 # Stress test: DRAM utilization with a large global tensor.
 #
-# Global tensor is shaped (2 * 25k, GLM51Config.EMB_SIZE) with 1k = 1024.
+# Global tensor is shaped (2 * 25k, MiniMaxM27Config.EMB_SIZE) with 1k = 1024.
 # max_dispatched_tokens per expert is 25k. Scenarios cover uniform extraction
 # (every expert gets the same slice) and non-uniform extraction (one expert
 # dominates, tail-heavy, irregular tile-unaligned counts).
@@ -393,7 +395,7 @@ def test_extract_2d_indices_matches_torch_slice(device):
 
 K = 1024
 STRESS_GLOBAL_ROWS = 2 * 25 * K  # 51200
-STRESS_HIDDEN_DIM = GLM51Config.EMB_SIZE  # 6144 (GLM 5.1 embedding dim)
+STRESS_HIDDEN_DIM = MiniMaxM27Config.EMB_SIZE  # 3072 (MiniMax M2.7 embedding dim)
 STRESS_MAX_TOKENS = 25 * K  # 25600
 
 

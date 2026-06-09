@@ -17,7 +17,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.reduce import TorchReduceModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     create_sparse_combine_output,
@@ -33,12 +33,12 @@ from tests.ttnn.utils_for_testing import comp_pcc
 @pytest.mark.parametrize(
     "seq_len, emb_dim, topk, num_routed_experts",
     [
-        (32, 2048, GLM51Config.NUM_EXPERTS_PER_TOKEN, GLM51Config.NUM_ROUTED_EXPERTS),
-        # GLM 5.1 MoE shape (emb 6144, top-8, 256 routed experts); seq 3200 ≈ 25k tokens / 8-chip SP group.
-        (3200, GLM51Config.EMB_SIZE, GLM51Config.NUM_EXPERTS_PER_TOKEN, GLM51Config.NUM_ROUTED_EXPERTS),
-        (640, GLM51Config.EMB_SIZE, GLM51Config.NUM_EXPERTS_PER_TOKEN, GLM51Config.NUM_ROUTED_EXPERTS),
-        (3200, GLM51Config.EMB_SIZE, GLM51Config.NUM_EXPERTS_PER_TOKEN, 64),
-        (640, GLM51Config.EMB_SIZE, GLM51Config.NUM_EXPERTS_PER_TOKEN, 64),
+        (32, 2048, MiniMaxM27Config.NUM_EXPERTS_PER_TOKEN, MiniMaxM27Config.NUM_ROUTED_EXPERTS),
+        # MiniMax M2.7 MoE shape (emb 3072, top-8, 256 routed experts); seq 3200 ≈ 25k tokens / 8-chip SP group.
+        (3200, MiniMaxM27Config.EMB_SIZE, MiniMaxM27Config.NUM_EXPERTS_PER_TOKEN, MiniMaxM27Config.NUM_ROUTED_EXPERTS),
+        (640, MiniMaxM27Config.EMB_SIZE, MiniMaxM27Config.NUM_EXPERTS_PER_TOKEN, MiniMaxM27Config.NUM_ROUTED_EXPERTS),
+        (3200, MiniMaxM27Config.EMB_SIZE, MiniMaxM27Config.NUM_EXPERTS_PER_TOKEN, 64),
+        (640, MiniMaxM27Config.EMB_SIZE, MiniMaxM27Config.NUM_EXPERTS_PER_TOKEN, 64),
     ],
 )
 @pytest.mark.parametrize(
