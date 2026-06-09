@@ -42,7 +42,7 @@ Prefer this structure:
 1. Build all weights, caches, page tables, semaphores, persistent CCL buffers, and lazy module state before capture.
 2. Create host-side input tensors with `device=None` if useful.
 3. Copy or allocate stable device input tensors before capture.
-4. Run one warm compile call with the same shapes and mode.
+4. Run one warm compile call with the same shapes and mode so every op is compiled (see Program-Cache Warmup).
 5. Begin trace capture.
 6. Call a device-only forward method that consumes the stable device tensors.
 7. End trace capture.
@@ -72,6 +72,14 @@ for batch in batches:
     ttnn.copy_host_to_device_tensor(batch_host, trace_input)
     ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
 ```
+
+## Program-Cache Warmup
+
+Trace capture cannot compile programs. A program-cache miss inside capture forces a new kernel build, which issues a host->device write and aborts with `Writes are not supported during trace capture`. So every op in the traced region must already be compiled (warmed) with the *exact* program-cache signature it will have during capture.
+
+- Warm with the same shapes, dtypes, layouts, memory configs, and mode as capture; the warm call must drive the identical op sequence and code path so every op variant is compiled.
+- The signature can include arguments you would not expect. For example, the integer `begins`/`ends`/`step` passed to `ttnn.slice` are compile-time constants baked into the program hash, so slicing at a different offset, length, or start-tile alignment is a different program that needs its own warm-up. (There is a version which tensor-valued arguments that avoids this.) When in doubt, warm with the same argument *values*, not just the same tensor shapes.
+- If you still hit an unexpected program-cache miss during capture, warm up again immediately before `begin_trace_capture` (re-run the exact forward once more, then capture with nothing else in between). In rare cases an op's program-cache signature depends on transient device state such as free L1, so a warm-up done earlier no longer matches by the time capture runs. See https://github.com/tenstorrent/tt-metal/issues/46533.
 
 ## Generator Pattern
 
@@ -132,7 +140,7 @@ print("TRACE_MODEL_DONE", flush=True)
 ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
 ```
 
-If the fatal is a write, first check for host input creation, lazy weights, cache loads, page table refresh, sampling-state updates, semaphore resets, first-use persistent CCL buffers, or `copy_host_to_device_tensor` hidden in helper APIs.
+If the fatal is a write, first check for host input creation, lazy weights, cache loads, page table refresh, sampling-state updates, semaphore resets, first-use persistent CCL buffers, or `copy_host_to_device_tensor` hidden in helper APIs. Also suspect a program-cache miss: an op compiling a new variant mid-capture issues that write. Confirm by setting `device.set_program_cache_misses_allowed(False)` around capture (a miss then fails as `"<Op>: program cache miss occurred, but cache misses are forbidden"`, naming the offending op), then fix it via warm-up (see Program-Cache Warmup).
 
 If replay uses stale inputs, compare the tensors captured by the model to the tensors refreshed before `execute_trace`. `tt_transformers` solves this by binding model-side trace inputs before capture and only refreshing those exact buffers before replay.
 
