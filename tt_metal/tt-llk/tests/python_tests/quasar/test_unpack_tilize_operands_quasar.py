@@ -5,6 +5,10 @@ from typing import List
 
 import pytest
 import torch
+from helpers.constraints import (
+    get_valid_data_format_conversions,
+    get_valid_dest_accumulation_modes,
+)
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     EltwiseBinaryGolden,
@@ -53,31 +57,6 @@ def generate_unpack_tilize_operands_combinations(
     Returns:
         List of (format, dest_acc, dest_sync, tilize_unpacker_sel, input_dimensions) tuples
     """
-
-    def is_supported_format_conversion(in_fmt, out_fmt):
-        """Check if the format conversion is supported by packer. These format conversions are NOT dependent on the dest register mode."""
-        # Skip if mixing integer and non-integer formats
-        if in_fmt.is_integer() ^ out_fmt.is_integer():
-            return False
-        # Unpack to dest is not supported for unpack tilize binary, there input cannot be Int32
-        if in_fmt == DataFormat.Int32:
-            return False
-        return True
-
-    def get_dest_acc_modes(in_fmt):
-        """Determine valid dest register modes depending on the input format."""
-        # Int8, UInt8 require 32bit mode dest register for Eltwise binary operations
-        if in_fmt == DataFormat.Int8 or in_fmt == DataFormat.UInt8:
-            return (DestAccumulation.Yes,)
-        return (DestAccumulation.No, DestAccumulation.Yes)
-
-    def is_supported_dest_mode_dependent_conversion(out_fmt, dest_acc):
-        """Check if the format conversion is supported by packer. These format conversions are dependent on the dest register mode."""
-        # Upcasting to Float32/Int32 requires dest_acc enabled
-        if out_fmt.is_32_bit() and dest_acc == DestAccumulation.No:
-            return False
-        return True
-
     # Targeted dimensions per (dest_sync, dest_acc) that cover key corner cases:
     # 1 tile (minimum), max-wide (stresses block_ct), max-tall (stresses block_rt),
     # and max-square (both loops at capacity).
@@ -110,23 +89,31 @@ def generate_unpack_tilize_operands_combinations(
 
     combinations = []
 
-    for fmt in formats_list:
+    for fmt in get_valid_data_format_conversions(formats_list):
         in_fmt, out_fmt = fmt.input_format, fmt.output_format
 
-        if not is_supported_format_conversion(in_fmt, out_fmt):
+        # Unpack to dest is not supported for unpack tilize operands, so the input cannot be Int32
+        if in_fmt == DataFormat.Int32:
             continue
-        for acc in get_dest_acc_modes(in_fmt):
-            if is_supported_dest_mode_dependent_conversion(out_fmt, acc):
-                for dest_sync in (DestSync.Half, DestSync.Full):
-                    for unp_tilize_sel in (
-                        TilizeUnpackerSel.UnpA,
-                        TilizeUnpackerSel.UnpB,
-                        TilizeUnpackerSel.UnpAB,
-                    ):
-                        for dimensions in tilize_operands_dims[(dest_sync, acc)]:
-                            combinations.append(
-                                (fmt, acc, dest_sync, unp_tilize_sel, dimensions)
-                            )
+        # MxFp4 to Float32/Float16_b/Float16/MxFp8P conversion has rounding errors
+        if in_fmt == DataFormat.MxFp4 and out_fmt in (
+            DataFormat.Float32,
+            DataFormat.Float16_b,
+            DataFormat.Float16,
+            DataFormat.MxFp8P,
+        ):
+            continue
+        for acc in get_valid_dest_accumulation_modes(fmt):
+            for dest_sync in (DestSync.Half, DestSync.Full):
+                for unp_tilize_sel in (
+                    TilizeUnpackerSel.UnpA,
+                    TilizeUnpackerSel.UnpB,
+                    TilizeUnpackerSel.UnpAB,
+                ):
+                    for dimensions in tilize_operands_dims[(dest_sync, acc)]:
+                        combinations.append(
+                            (fmt, acc, dest_sync, unp_tilize_sel, dimensions)
+                        )
 
     return combinations
 
@@ -159,16 +146,6 @@ def test_unpack_tilize_operands_quasar(
     (formats, dest_acc, dest_sync_mode, unp_tilize_sel, input_dimensions) = (
         formats_dest_acc_sync_tilize_sel_dims[0]
     )
-
-    if formats.input_format == DataFormat.MxFp4 and (
-        formats.output_format == DataFormat.Float32
-        or formats.output_format == DataFormat.Float16_b
-        or formats.output_format == DataFormat.Float16
-        or formats.output_format == DataFormat.MxFp8P
-    ):
-        pytest.skip(
-            "MxFp4 to Float32/Float16_b/Float16/MxFp8P conversion has rounding errors"
-        )
 
     num_faces = 4
 
