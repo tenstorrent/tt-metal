@@ -2740,12 +2740,8 @@ class ModelArgs:
         # Sliding window attention
         self.sliding_window = text_config.get("sliding_window", None)
 
-        # RoPE params (transformers 5.x stores theta in rope_parameters)
-        rope_parameters = text_config.get("rope_parameters") or {}
-        if isinstance(rope_parameters, dict) and rope_parameters.get("rope_theta") is not None:
-            self.rope_theta = float(rope_parameters["rope_theta"])
-        else:
-            self.rope_theta = text_config.get("rope_theta")
+        # RoPE params
+        self.rope_theta = text_config.get("rope_theta")
         self.rope_theta_local = text_config.get("rope_local_base_freq", None)
         self.use_sliding_window = text_config.get("use_sliding_window", None)
         if (
@@ -2755,9 +2751,8 @@ class ModelArgs:
         ):  # For interleaved attention
             self.rope_theta_local = self.rope_theta
 
-        rope_scaling_params = text_config.get("rope_scaling", None) or (
-            rope_parameters if isinstance(rope_parameters, dict) and rope_parameters else None
-            self.original_max_context_len = text_config.get("original_max_position_embeddings", None)
+        rope_scaling_params = text_config.get("rope_scaling", None)
+        self.original_max_context_len = text_config.get("original_max_position_embeddings", None)
         self.rope_scaling = (
             rope_scaling_model_factory(rope_scaling_params, original_max_context_len=self.original_max_context_len)
             if rope_scaling_params
@@ -2832,11 +2827,7 @@ class ModelArgs:
         # Common vision parameters for all models
         intermediate_size = vision_config.get("intermediate_size", self.vision_dim * 4)
         self.vision_image_size = vision_config.get("image_size", 1540)
-        vision_rope_parameters = vision_config.get("rope_parameters") or {}
-        if isinstance(vision_rope_parameters, dict) and vision_rope_parameters.get("rope_theta") is not None:
-            self.vision_rope_theta = float(vision_rope_parameters["rope_theta"])
-        else:
-            self.vision_rope_theta = vision_config.get("rope_theta", 10000.0)
+        self.vision_rope_theta = vision_config.get("rope_theta", 10000.0)
         self.image_token_index = vision_config.get("image_token_index", 10)
 
         self.vision_mlp_ratio = intermediate_size // self.vision_dim
@@ -3021,13 +3012,14 @@ class ModelArgs:
         return self.model_config
 
     def get_hf_model_cls(self):
-        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
+        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoModelForVision2Seq
 
         if not self.is_multimodal:
             return AutoModelForCausalLM
 
-        if type(self.hf_config) in AutoModelForImageTextToText._model_mapping:
-            return AutoModelForImageTextToText
+        for model_cls in (AutoModelForVision2Seq, AutoModelForImageTextToText):
+            if type(self.hf_config) in model_cls._model_mapping:
+                return model_cls
 
         raise ValueError(f"Unknown model for config {type(self.hf_config)}")
 

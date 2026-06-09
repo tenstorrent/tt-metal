@@ -56,13 +56,70 @@ def resolve_rope_parameters(config, *, default_theta: float = _DEFAULT_ROPE_THET
     return rp
 
 
+def _inject_flat_rope_params(config_dict: dict) -> None:
+    """In-place restore the flat RoPE keys the shared ``ModelArgs`` reads from a transformers-5.x
+    config dict. 5.x nests RoPE under ``rope_parameters`` and drops the deprecated ``rope_scaling``
+    on serialization, so we re-derive ``rope_theta`` / ``rope_scaling`` / ``original_max_position_embeddings``
+    on the text config and ``rope_theta`` on the vision config. Operates on the ``to_dict()`` output
+    (not config attributes) so the values survive serialization. Lets the unmodified tt_transformers
+    ``ModelArgs`` consume a 5.x Devstral config without editing ``model_config.py``."""
+    if not isinstance(config_dict, dict):
+        return
+    text = config_dict.get("text_config")
+    text = text if isinstance(text, dict) else config_dict
+    trp = text.get("rope_parameters")
+    if isinstance(trp, dict) and trp:
+        if trp.get("rope_theta") is not None and text.get("rope_theta") is None:
+            text["rope_theta"] = float(trp["rope_theta"])
+        if not text.get("rope_scaling"):
+            text["rope_scaling"] = dict(trp)
+        if (
+            trp.get("original_max_position_embeddings") is not None
+            and text.get("original_max_position_embeddings") is None
+        ):
+            text["original_max_position_embeddings"] = trp["original_max_position_embeddings"]
+    vis = config_dict.get("vision_config")
+    if isinstance(vis, dict):
+        vrp = vis.get("rope_parameters")
+        if isinstance(vrp, dict) and vrp.get("rope_theta") is not None and vis.get("rope_theta") is None:
+            vis["rope_theta"] = float(vrp["rope_theta"])
+
+
 def text_model_root(multimodal_inner: Mistral3Model):
     lm = multimodal_inner.language_model
     return lm.model if hasattr(lm, "model") else lm
 
 
 def apply_devstral_hf_trust_patches():
+    import transformers
+
     from models.tt_transformers.tt import model_config as mc
+
+    # transformers 5.x compat: back-fill flat RoPE keys from the nested ``rope_parameters`` dict
+    # so the unmodified shared ModelArgs (which reads flat keys) loads a 5.x Devstral config.
+    # ModelArgs reads RoPE via ``self.hf_config.to_dict()``, so we wrap the returned config's
+    # ``to_dict`` and inject into its output (attribute-level back-fill does not survive 5.x
+    # serialization). Keeps this compat shim in the experimental package, not model_config.py.
+    if not getattr(transformers.AutoConfig, "_devstral_rope_normalized", False):
+        _orig_autoconfig_from_pretrained = transformers.AutoConfig.from_pretrained
+
+        def _from_pretrained_rope_norm(*args, **kwargs):
+            cfg = _orig_autoconfig_from_pretrained(*args, **kwargs)
+            try:
+                _orig_to_dict = cfg.to_dict
+
+                def _to_dict_rope_norm(*a, **k):
+                    d = _orig_to_dict(*a, **k)
+                    _inject_flat_rope_params(d)
+                    return d
+
+                cfg.to_dict = _to_dict_rope_norm
+            except Exception:  # never let normalization break config loading
+                pass
+            return cfg
+
+        transformers.AutoConfig.from_pretrained = _from_pretrained_rope_norm
+        transformers.AutoConfig._devstral_rope_normalized = True
 
     if hasattr(mc.ModelArgs, "_devstral_orig_set_hf_params") and hasattr(
         mc.ModelArgs, "_devstral_orig_get_hf_model_cls"
