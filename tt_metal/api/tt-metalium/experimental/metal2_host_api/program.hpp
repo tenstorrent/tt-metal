@@ -48,18 +48,22 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params);
 // is in the tensor args (i.e. which specific MeshTensors are operated on by the Program).
 void UpdateTensorArgs(Program& program, std::span<const ProgramRunArgs::TensorArgument> tensor_args);
 
-// Fast-path partial update: re-apply ONLY the dynamic (hash-excluded) named runtime args of an
-// existing Program — the named-scalar analog of UpdateTensorArgs. For each KernelRunArgs entry,
-// the named RTAs in runtime_arg_values (per node) and the named CRTAs in common_runtime_arg_values
-// are written in place into the cached program's dispatch buffers; everything else is left as the
-// most recent SetProgramRunArgs call set it. Unnamed/vararg args and DFB params are ignored.
+// Partial in-place update of a cached Program: re-applies ONLY the named RTAs (per node) and named
+// CRTAs passed here, writing them straight into the dispatch buffers SetProgramRunArgs already laid
+// out. Everything else is left as-is. PRE-CONDITION: SetProgramRunArgs ran once on this Program.
 //
-// PRE-CONDITION: SetProgramRunArgs must have been called previously.
-//
-// USE CASE: cache-hit re-application of values an op deliberately excluded from the program hash
-// (e.g. an RNG seed, an [from,to) range, an optimizer lr/step) so that two calls differing only in
-// those values cache-hit yet still run with the current values. This is the Metal 2.0 replacement
-// for the descriptor-era apply_dynamic_runtime_args shim.
+// Why this exists (it is not a convenience wrapper around SetProgramRunArgs):
+// The only other way to refresh args on a cached Program is SetProgramRunArgs, which is
+// all-or-nothing — it re-serializes the COMPLETE arg set for every node the program runs on. An op
+// that legitimately caches across calls but varies a few hash-excluded scalars per dispatch (an RNG
+// seed, a sampling [from,to), an optimizer lr/step) would then rebuild and rewrite every per-core
+// work-split arg on every cache hit, none of which changed. On a multi-core op that re-serialization
+// dominates the steady-state cost: measured on rand (WH B0, 512x512 bf16, 500 warm trials), the full
+// SetProgramRunArgs re-apply is ~132us/dispatch versus ~40us for the descriptor op it replaces — a
+// 3.3x regression against main on the cache-hit path, i.e. every dispatch after the first. Writing
+// only the handful of changed scalars in place brings it back to ~39us, at parity with descriptor.
+// Without a partial-update primitive, any multi-core op with per-dispatch dynamic scalars regresses
+// against descriptor the moment its program is cached.
 void ApplyDynamicArgs(Program& program, const ProgramRunArgs& dynamic_args);
 
 // Power-user API for updating the mutable parameters of a Program in-place.
