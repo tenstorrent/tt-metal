@@ -112,7 +112,10 @@ _LLK_TEST_SEED = os.environ.get("LLK_TEST_SEED")
 try:
     _DEFAULT_TORCH_SEED = int(_LLK_TEST_SEED, 0) if _LLK_TEST_SEED is not None else 42
 except ValueError as e:
-    raise pytest.UsageError(f"LLK_TEST_SEED must be an integer, got {_LLK_TEST_SEED!r}") from e
+    raise pytest.UsageError(
+        f"LLK_TEST_SEED must be an integer, got {_LLK_TEST_SEED!r}"
+    ) from e
+
 
 @pytest.fixture(autouse=True)
 def _seed_torch_rng():
