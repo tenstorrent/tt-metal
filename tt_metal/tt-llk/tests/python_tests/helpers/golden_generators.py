@@ -1596,12 +1596,14 @@ class DataCopyGolden:
             tile_size = tile_shape.total_tile_size()
             tile_cnt = (height // tile_r) * (width // tile_c)
 
+        elements_per_tile = face_r_dim * FACE_DIM * num_faces
+
         # Convert input to tensor if needed
         if not isinstance(operand1, torch.Tensor):
             operand1 = torch.tensor(operand1, dtype=torch_format)
 
         reshaped = operand1.view(tile_cnt, tile_size)
-        selected = reshaped[:, :tile_size]
+        selected = reshaped[:, :elements_per_tile]
         result = selected.flatten()
 
         # Ensure result is in correct format if not already
