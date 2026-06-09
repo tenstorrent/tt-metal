@@ -10,6 +10,22 @@
  * LLK MATMUL
  *************************************************************************/
 
+/**
+ * @brief Configure the math (FPU/matrix engine) thread for a matmul: programs address mods and the MVMUL MOP.
+ *
+ * Derives the in0/in1 tile dimensions and partial-face flag from the operands' circular buffers.
+ *
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam THROTTLE_LEVEL: Compute-throughput throttle level; 0 disables throttling, valid throttled range is
+ * {1,2,3,4,5}.
+ * @param operandA: Circular-buffer index of operand A (in0).
+ * @param operandB: Circular-buffer index of operand B (in1).
+ * @param transpose: Non-zero to transpose in1 faces during the multiply.
+ * @param ct_dim: Number of column tiles in the output block.
+ * @param rt_dim: Number of row tiles in the output block.
+ * @note On the unpack thread, pair with @ref llk_unpack_AB_matmul_init which feeds SrcA/SrcB.
+ * @note @ref llk_math_matmul runs the configured matmul with matching template args.
+ */
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void llk_math_matmul_init(
     const std::uint32_t operandA,
@@ -31,6 +47,17 @@ inline void llk_math_matmul_init(
         in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
 }
 
+/**
+ * @brief Perform a matmul block, accumulating in0 * in1 into the destination register.
+ *
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam THROTTLE_LEVEL: Compute-throughput throttle level; must match the value used at init.
+ * @param dst_index: Base tile index into the destination register for the output block.
+ * @param ct_dim: Number of column tiles in the output block.
+ * @param rt_dim: Number of row tiles in the output block.
+ * @note Call @ref llk_math_matmul_init with matching template args before this function.
+ * @note On the unpack thread, @ref llk_unpack_AB_matmul must feed the operand tiles into SrcA/SrcB.
+ */
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, uint32_t num_faces = 4 /*not used*/>
 inline void llk_math_matmul(const uint dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1) {
     static_assert(num_faces == 4, "num_faces other than 4 is not supported in llk_math_matmul");

@@ -15,21 +15,20 @@
  *************************************************************************/
 
 /**
- * Enable or disable FP32 accumulation in the packer destination register.
+ * @brief Enable or disable reading the destination register as 32-bit (FP32) data for the packer.
  *
- * @param enable When true, the packer treats the destination register as FP32 accumulated.
+ * @param enable: True to read dest as 32-bit (FP32) data, false otherwise.
  */
 inline void llk_pack_set_fp32_dest_acc(bool enable) { _llk_pack_set_fp32_dest_acc_(enable); }
 
 /**
- * Configure the packer hardware for the given output operand.
+ * @brief One-time hardware configuration of the packer for the given output operand.
  *
- * Face geometry (face_r_dim, num_faces), tile column dimension, partial-face flag and tile
- * size are derived from the output CB metadata associated with the operand id. Relu is left
- * disabled here.
+ * Face geometry (face_r_dim, num_faces), tile column dimension, partial-face flag and tile size are
+ * derived from the output CB metadata associated with the operand id. Relu is left disabled here.
  *
- * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
- * @param  pack_output         Output circular buffer / operand index.
+ * @tparam is_fp32_dest_acc_en: Whether the dest register accumulates in FP32.
+ * @param pack_output: Output circular buffer / operand index.
  */
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_hw_configure(std::uint32_t pack_output) {
@@ -53,17 +52,17 @@ inline void llk_pack_hw_configure(std::uint32_t pack_output) {
 }
 
 /**
- * Compute the L1 write address for a packer output tile.
+ * @brief Compute the L1 write address for a packer output tile.
  *
  * For out-of-order output, the address is derived from the explicit tile index. For in-order
  * output, the running fifo write-tile pointer is used and then advanced by one page. Only
  * PackMode::Default and PackMode::Untilize are accepted; pack-untilize must use the dedicated
  * llk_pack_untilize APIs.
  *
- * @tparam out_of_order_output When true, address by output_tile_index; otherwise use the running fifo pointer.
- * @tparam pack_addr_mode      Packer addressing mode (Default or Untilize).
- * @param  output_id           Resolved output operand id.
- * @param  output_tile_index   Tile index within the output (used only for out-of-order output).
+ * @tparam out_of_order_output: When true, address by output_tile_index; otherwise use the running fifo pointer.
+ * @tparam pack_addr_mode: Packer addressing mode (Default or Untilize).
+ * @param output_id: Resolved output operand id.
+ * @param output_tile_index: Tile index within the output (used only for out-of-order output).
  * @return L1 write address for the requested output tile.
  */
 template <bool out_of_order_output, PackMode pack_addr_mode = PackMode::Default>
@@ -89,15 +88,17 @@ inline std::uint32_t get_output_tile_address(std::uint8_t output_id, std::uint32
 }
 
 /**
- * Block the packer until the math thread signals that the destination register is ready to pack.
+ * @brief Stall the packer until the math thread has produced data to pack.
  */
 inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_(); }
 
 /**
- * Signal that the packer has finished its current destination-register section, releasing it
- * back to the math thread.
+ * @brief Finish a destination-register section: wait for pack, clear dest, and release math.
  *
- * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
+ * Signals that the packer has finished its current destination-register section, releasing it back
+ * to the math thread.
+ *
+ * @tparam is_fp32_dest_acc_en: Whether the dest register accumulates in FP32.
  */
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_dest_section_done() {
@@ -105,11 +106,11 @@ inline void llk_pack_dest_section_done() {
 }
 
 /**
- * Initialize the packer destination-offset registers for the given pack mode.
+ * @brief Initialize the packer destination-offset registers and select the dest registers.
  *
- * @tparam pack_mode   Packer program mode (Default or Untilize; Tilize is not used on this path).
- * @tparam diagonal    Diagonal packing flag (unused on Blackhole).
- * @param  pack_output Output circular buffer / operand index (defaults to 16).
+ * @tparam pack_mode: Packer program mode (Default or Untilize; Tilize is not used on this path).
+ * @tparam diagonal: Diagonal packing flag (unused on Blackhole).
+ * @param pack_output: Output circular buffer / operand index (defaults to 16).
  */
 template <PackMode pack_mode = PackMode::Default, bool diagonal = false>
 inline void llk_init_packer_dest_offset_registers([[maybe_unused]] const std::uint32_t pack_output = 16) {
@@ -121,11 +122,11 @@ inline void llk_init_packer_dest_offset_registers([[maybe_unused]] const std::ui
 }
 
 /**
- * Initialize the packer destination register for the given pack mode.
+ * @brief Initialize packer destination state at the start of a kernel.
  *
- * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
- * @tparam pack_mode           Packer program mode (Default or Untilize; Tilize is not used on this path).
- * @param  pack_output         Output circular buffer / operand index (defaults to 16).
+ * @tparam is_fp32_dest_acc_en: Whether the dest register accumulates in FP32.
+ * @tparam pack_mode: Packer program mode (Default or Untilize; Tilize is not used on this path).
+ * @param pack_output: Output circular buffer / operand index (defaults to 16).
  */
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void llk_pack_dest_init([[maybe_unused]] const std::uint32_t pack_output = 16) {
@@ -136,13 +137,13 @@ inline void llk_pack_dest_init([[maybe_unused]] const std::uint32_t pack_output 
 }
 
 /**
- * Reconfigure the packer for a new output operand's data format.
+ * @brief Reconfigure the packer for a new output operand's data format.
  *
- * Face geometry (face_r_dim, num_faces), tile column dimension and tile size are derived from
- * the new output's CB metadata.
+ * Face geometry (face_r_dim, num_faces), tile column dimension and tile size are derived from the
+ * new output's CB metadata.
  *
- * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
- * @param  new_output          New output circular buffer / operand index to configure for.
+ * @tparam is_fp32_dest_acc_en: Whether the dest register accumulates in FP32.
+ * @param new_output: New output circular buffer / operand index to configure for.
  */
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
@@ -188,12 +189,14 @@ llk_pack_reconfig_data_format_disaggregated(
 }
 
 /**
- * Conditionally reconfigure the packer when switching output operands: only reprograms the data
- * format when the new output's destination format differs from the old one and neither is Invalid.
+ * @brief Conditionally reconfigure the packer when switching output operands.
  *
- * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
- * @param  old_output          Currently configured output operand index.
- * @param  new_output          New output operand index to switch to.
+ * Only reprograms the data format when the new output's destination format differs from the old one
+ * and neither is Invalid.
+ *
+ * @tparam is_fp32_dest_acc_en: Whether the dest register accumulates in FP32.
+ * @param old_output: Currently configured output operand index.
+ * @param new_output: New output operand index to switch to.
  */
 // TODO NC: Clean up as the part of tt-metal#34499
 template <bool is_fp32_dest_acc_en>
@@ -209,17 +212,17 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const 
 }
 
 /**
- * Program the packer relu configuration register.
+ * @brief Configure the packer relu mode and threshold.
  *
- * @param relu_config Relu mode/threshold configuration.
+ * @param relu_config: Relu configuration supplying the hardware mode and threshold to apply.
  */
 TT_ALWAYS_INLINE void llk_pack_relu_config(const ckernel::ReluConfig& relu_config) {
     _llk_pack_relu_config_(relu_config);
 }
 
 /**
- * Enable or disable packer L1 accumulation.
+ * @brief Enable or disable packer L1 accumulation.
  *
- * @param enable Non-zero to enable L1 accumulation, zero to disable.
+ * @param enable: Non-zero to accumulate packed output into existing L1 data, zero to overwrite.
  */
 inline void llk_pack_reconfig_l1_acc(const std::uint32_t enable) { _llk_pack_reconfig_l1_acc_(enable); }

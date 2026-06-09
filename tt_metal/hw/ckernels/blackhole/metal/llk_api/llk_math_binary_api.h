@@ -40,6 +40,22 @@ inline void llk_math_eltwise_binary_init(
         tensor_shape, acc_to_dest);
 }
 
+/**
+ * @brief Perform an elementwise binary operation where Output = SrcA [+, -, *] SrcB.
+ *
+ * Dispatches to the standard or dest-reuse implementation based on the binary_reuse_dest template
+ * parameter. This overload uses the default tile shape.
+ *
+ * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
+ * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @tparam is_fp32_dest_acc_en: Enable FP32 mode in destination register
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam binary_reuse_dest: Reuse destination as source type, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
+ * @param dst_index: Tile index into the destination register.
+ * @param clear_fp32_dst_acc: Clears index in destination register when float32 mode is enabled.
+ * @note Call @ref llk_math_eltwise_binary_init with matching template args before this function.
+ * @note On the unpack thread, @ref llk_unpack_AB must feed the operand tiles into SrcA/SrcB.
+ */
 template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,
@@ -66,6 +82,24 @@ inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_ac
         binary_reuse_dest>(ckernel::DEFAULT_TENSOR_SHAPE, dst_index, clear_fp32_dst_acc);
 }
 
+/**
+ * @brief Perform an elementwise binary operation where Output = SrcA [+, -, *] SrcB.
+ *
+ * Dispatches to the standard or dest-reuse implementation based on the binary_reuse_dest template
+ * parameter. Derives the tile shape from operand_A.
+ *
+ * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
+ * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @tparam is_fp32_dest_acc_en: Enable FP32 mode in destination register
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam binary_reuse_dest: Reuse destination as source type, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
+ * @param operand_A: Logical dataflow buffer id for input A, used to derive the tile shape.
+ * @param operand_B: Unused.
+ * @param dst_index: Tile index into the destination register.
+ * @param clear_fp32_dst_acc: Clears index in destination register when float32 mode is enabled.
+ * @note Call @ref llk_math_eltwise_binary_init with matching template args before this function.
+ * @note On the unpack thread, @ref llk_unpack_AB must feed the operand tiles into SrcA/SrcB.
+ */
 template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,

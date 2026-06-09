@@ -10,6 +10,22 @@
  * LLK UNPACK AB REDUCE
  *************************************************************************/
 
+/**
+ * @brief Initialize the unpacker for reduce operations.
+ *
+ * Configures the unpacker hardware registers and MOP for reduction, including haloize mode for
+ * row reductions and the unpacker X-dimension endpoints. Derives the tile geometry from
+ * operand A's circular buffer.
+ *
+ * @tparam pool_type: Type of pooling operation, values = <SUM/AVG/MAX>
+ * @tparam reduce_dim: Dimension along which to reduce, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @tparam enforce_fp32_accumulation: Configure the ALU for FP32 accumulation (MOVB2D hi16/lo16 path).
+ * @param operandA: Circular-buffer index of source operand A.
+ * @param operandB: Circular-buffer index of the scaler operand B.
+ * @note For REDUCE_ROW operations, the face is transposed using haloize mode.
+ * @note Call @ref llk_unpack_AB_reduce with matching template args after this.
+ * @ref llk_math_reduce_init is the matching init on the math thread (this is the scaler-operand unpack pairing).
+ */
 template <PoolType pool_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation = false>
 inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::uint32_t operandB) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
@@ -23,6 +39,20 @@ inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::u
     _llk_unpack_AB_reduce_init_<pool_type, reduce_dim, enforce_fp32_accumulation>(tensor_shape);
 }
 
+/**
+ * @brief Execute the unpacker for reduction operations.
+ *
+ * Resolves each tile's L1 address from its operand's circular buffer, programs the source A and
+ * B base addresses, synchronizes with Trisc via semaphores, and runs the configured MOP.
+ *
+ * @tparam pool_type: Type of pooling operation, values = <SUM/AVG/MAX>
+ * @tparam reduce_dim: Dimension along which to reduce, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @param operandA: Circular-buffer index of source operand A.
+ * @param operandB: Circular-buffer index of the scaler operand B.
+ * @param tile_index_a: Index of the tile to unpack within operand A's buffer.
+ * @param tile_index_b: Index of the tile to unpack within operand B's buffer.
+ * @note Call @ref llk_unpack_AB_reduce_init with matching template args before this function.
+ */
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void llk_unpack_AB_reduce(
     const std::uint32_t operandA,
