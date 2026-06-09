@@ -58,7 +58,7 @@ ttnn::Tensor permute_impl(
             if (!final_mc.shard_spec().has_value()) {
                 auto shard_spec =
                     transpose::generate_transpose_shard_spec(result, result.padded_shape(), final_mc.memory_layout());
-                final_mc = final_mc.with_shard_spec(shard_spec);
+                final_mc = MemoryConfig(final_mc.memory_layout(), final_mc.buffer_type(), shard_spec);
             }
             result = ttnn::to_memory_config(result, final_mc, std::nullopt);
         }
