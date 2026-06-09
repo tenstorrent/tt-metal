@@ -176,6 +176,95 @@ def test_parent_slice_mlp_sublayer_chain():
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
+def test_parent_slice_real_block_with_d2d_kv_migration():
+    """End-to-end: REAL Gemma block forward emits KV cache, D2D-migrated to denoise."""
+    cfg = PaliGemmaConfig()
+    weights = _load_real_weights()
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    parent = ttnn.open_mesh_device(GALAXY_SHAPE)
+    try:
+        slice_ = Pi0_5OptionCVLMSliceParent(
+            config=cfg,
+            weights=weights,
+            parent_mesh=parent,
+            prefill_offset=PREFILL_OFFSET,
+            prefill_shape=PREFILL_SHAPE,
+            layer_range=(0, 18),
+        )
+        devices_total = GALAXY_SHAPE[0] * GALAXY_SHAPE[1]
+        M, K = 1024, 2048
+        act_torch = torch.zeros(devices_total, 1, M, K, dtype=torch.bfloat16)
+        coord0 = slice_.prefill_coord_for_layer(0)
+        lin0 = coord0[0] * GALAXY_SHAPE[1] + coord0[1]
+        act_torch[lin0, 0, :, :] = torch.randn(M, K, dtype=torch.bfloat16) * 0.01
+        act = ttnn.from_torch(
+            act_torch,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=parent,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(parent, dim=0),
+        )
+
+        print("\n[chain] running REAL Gemma block + KV cache emission...")
+        out, kv_cache = slice_.forward_real_block_chain(act, return_kv_cache=True)
+        ttnn.synchronize_device(parent)
+        print(f"[kv_cache] {len(kv_cache)} layers captured")
+
+        # Verify each layer's K, V at the corresponding prefill chip coord
+        # has non-zero data (proves the forward populated them).
+        for i, (k_tens, v_tens) in enumerate(kv_cache):
+            lin = slice_.prefill_coord_for_layer(i)[0] * GALAXY_SHAPE[1] + slice_.prefill_coord_for_layer(i)[1]
+            k_shards = ttnn.get_device_tensors(k_tens)
+            v_shards = ttnn.get_device_tensors(v_tens)
+            k_at_chip = ttnn.to_torch(k_shards[lin])
+            v_at_chip = ttnn.to_torch(v_shards[lin])
+            k_nonzero = (k_at_chip.abs() > 1e-6).sum().item()
+            v_nonzero = (v_at_chip.abs() > 1e-6).sum().item()
+            if i < 3 or i == 17:
+                print(
+                    f"  layer {i:2d} (chip coord {slice_.prefill_coord_for_layer(i)}): "
+                    f"K non_zero={k_nonzero}/{k_at_chip.numel()}  V non_zero={v_nonzero}/{v_at_chip.numel()}"
+                )
+
+        # Now feed kv_cache through KVMigration.migrate_layer_paired_d2d
+        from models.experimental.pi0_5.tt.option_c.kv_migration import KVMigration
+
+        denoise_submesh = parent.create_submesh(ttnn.MeshShape(6, 1), ttnn.MeshCoordinate(2, 3))
+        migrator = KVMigration(denoise_submesh=denoise_submesh)
+        print("\n[d2d] running migrate_layer_paired_d2d on emitted KV cache...")
+        migrator.migrate_layer_paired_d2d(kv_cache)
+        ttnn.synchronize_device(parent)
+
+        # Verify migration: each denoise chip should now have its layer's KV.
+        print(f"[d2d] migrated {len(migrator.migrated_kv)} layer KVs to denoise chips")
+        for layer_idx in [0, 17]:
+            denoise_chip = layer_idx // 3
+            dst_coord = (2 + denoise_chip, 3)
+            dst_lin = dst_coord[0] * GALAXY_SHAPE[1] + dst_coord[1]
+            k_mig, v_mig = migrator.get(layer_idx)
+            k_shards = ttnn.get_device_tensors(k_mig)
+            v_shards = ttnn.get_device_tensors(v_mig)
+            k_at_denoise = ttnn.to_torch(k_shards[dst_lin])
+            v_at_denoise = ttnn.to_torch(v_shards[dst_lin])
+            k_nz = (k_at_denoise.abs() > 1e-6).sum().item()
+            v_nz = (v_at_denoise.abs() > 1e-6).sum().item()
+            print(
+                f"  layer {layer_idx:2d} -> denoise chip {denoise_chip} (coord {dst_coord}): "
+                f"K_nz={k_nz}/{k_at_denoise.numel()}  V_nz={v_nz}/{v_at_denoise.numel()}"
+            )
+            assert k_nz > 0 and v_nz > 0, f"D2D migration failed for layer {layer_idx}"
+
+        print("\n[PASS] full prefill forward + D2D KV migration end-to-end on parent mesh")
+        ttnn.deallocate(out)
+        for k_t, v_t in kv_cache:
+            ttnn.deallocate(k_t)
+            ttnn.deallocate(v_t)
+    finally:
+        ttnn.close_mesh_device(parent)
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
+
 def test_parent_slice_real_block_chain():
     """Complete Gemma block (REAL attention + MLP) for 18 layers on parent mesh."""
     cfg = PaliGemmaConfig()

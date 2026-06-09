@@ -932,7 +932,7 @@ class Pi0_5OptionCVLMSliceParent:
                 h = h_new
         return h
 
-    def forward_real_block_chain(self, activation: "ttnn.Tensor") -> "ttnn.Tensor":
+    def forward_real_block_chain(self, activation: "ttnn.Tensor", return_kv_cache: bool = False):
         """Complete Gemma block forward on parent mesh — REAL attention + MLP.
 
         Per layer:
@@ -951,7 +951,16 @@ class Pi0_5OptionCVLMSliceParent:
           # Transport
          11. P2P-multihop to next layer's chip
 
-        Returns the final activation after 18 complete Gemma blocks.
+        When `return_kv_cache=True`, also returns the list of (K_rope, V)
+        parent-mesh tensors per layer. Layer i's K, V live at chip i's
+        coord (their respective parent-mesh tensor's shard at chip i has
+        the real values; other shards are garbage). This is exactly the
+        format `KVMigration.migrate_layer_paired_d2d` expects — the D2D
+        KV transport from prefill to denoise can consume them directly.
+
+        Returns:
+          - if return_kv_cache=False: final activation tensor
+          - if return_kv_cache=True:  (final_activation, list of (K, V))
         """
         from .transport import send_shard_via_p2p_multihop
 
@@ -985,6 +994,8 @@ class Pi0_5OptionCVLMSliceParent:
         num_kv_heads = self.config.vlm_config.num_kv_heads
         head_dim = self.config.vlm_config.head_dim
 
+        kv_cache: List[Tuple["ttnn.Tensor", "ttnn.Tensor"]] = [] if return_kv_cache else None
+
         h = activation
         for i in range(self.num_layers):
             seq_len = h.shape[-2]
@@ -1011,8 +1022,14 @@ class Pi0_5OptionCVLMSliceParent:
                 q_rope, k_rope, v, is_causal=True, memory_config=ttnn.L1_MEMORY_CONFIG
             )
             ttnn.deallocate(q_rope)
-            ttnn.deallocate(k_rope)
-            ttnn.deallocate(v)
+            # Capture K, V for KV cache emission when requested. Each chip's
+            # shard of k_rope, v holds layer-i's K, V (where chip = layer).
+            # These tensors are exactly what migrate_layer_paired_d2d wants.
+            if return_kv_cache:
+                kv_cache.append((k_rope, v))
+            else:
+                ttnn.deallocate(k_rope)
+                ttnn.deallocate(v)
             attn_flat = ttnn.reshape(ttnn.permute(attn, (0, 2, 1, 3)), (1, 1, seq_len, num_heads * head_dim))
             ttnn.deallocate(attn)
             attn_out = ttnn.linear(attn_flat, o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -1046,6 +1063,8 @@ class Pi0_5OptionCVLMSliceParent:
                     ttnn.deallocate(h_new)
             else:
                 h = h_new
+        if return_kv_cache:
+            return h, kv_cache
         return h
 
     def _ensure_rope_tables(self):
