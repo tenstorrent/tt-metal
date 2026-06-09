@@ -319,10 +319,13 @@ def test_sfpu_swiglu_quasar(formats_dest_acc_implied_math, distribution):
     # Rebuild the combined input tensor with our crafted (gate, up) values.
     combined_input = torch.cat([gate, up]).to(format_dict[formats.input_format])
 
-    # Compute the golden on CPU: element-wise swiglu of (gate, up).
-    golden_tile = _swiglu_golden(gate, up, formats.output_format)
-    # Golden is a single tile's worth of elements.
-    golden_tensor = golden_tile.flatten().to(format_dict[formats.output_format])
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
+    def _golden():
+        # Compute the golden on CPU: element-wise swiglu of (gate, up).
+        golden_tile = _swiglu_golden(gate, up, formats.output_format)
+        # Golden is a single tile's worth of elements.
+        return golden_tile.flatten().to(format_dict[formats.output_format])
 
     # SFPU tests: unpack_to_dest only when format bit-width matches Dest mode.
     unpack_to_dest = formats.input_format.is_32_bit() == (
@@ -363,7 +366,9 @@ def test_sfpu_swiglu_quasar(formats_dest_acc_implied_math, distribution):
         dest_acc=dest_acc,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(golden_tensor), (
         f"Result length {len(res_from_L1)} does not match golden length "
@@ -457,9 +462,12 @@ def test_sfpu_swiglu_nan_inf_quasar():
     up_f = up.to(format_dict[formats.input_format])
     combined_input = torch.cat([gate_f, up_f]).to(format_dict[formats.input_format])
 
-    # Golden: torch swiglu propagates NaN naturally.
-    golden_tile = _swiglu_golden(gate_f, up_f, formats.output_format)
-    golden_tensor = golden_tile.flatten().to(format_dict[formats.output_format])
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
+    def _golden():
+        # Golden: torch swiglu propagates NaN naturally.
+        golden_tile = _swiglu_golden(gate_f, up_f, formats.output_format)
+        return golden_tile.flatten().to(format_dict[formats.output_format])
 
     unpack_to_dest = formats.input_format.is_32_bit() == (
         dest_acc == DestAccumulation.Yes
@@ -498,7 +506,9 @@ def test_sfpu_swiglu_nan_inf_quasar():
         dest_acc=dest_acc,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(golden_tensor), (
         f"Result length {len(res_from_L1)} does not match golden length "

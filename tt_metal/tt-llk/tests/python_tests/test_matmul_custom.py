@@ -104,18 +104,20 @@ def test_matmul_custom(
     matmul_dims = generate_tile_dims((input_A_dimensions, input_B_dimensions))
 
     generate_golden = get_golden_generator(MatmulGolden)
-    golden_tensor = generate_golden(
-        src_A,
-        src_B,
-        formats.output_format,
-        math_fidelity,
-        input_A_dimensions=input_A_dimensions,
-        input_B_dimensions=input_B_dimensions,
-        # Golden cannot model FPU strided for tilized data computation, so we tilize output after computation
-        tilize=True,
-        input_A_format=formats.input_format,
-        input_B_format=formats.input_format,
-    )
+
+    def _golden():
+        return generate_golden(
+            src_A,
+            src_B,
+            formats.output_format,
+            math_fidelity,
+            input_A_dimensions=input_A_dimensions,
+            input_B_dimensions=input_B_dimensions,
+            # Golden cannot model FPU strided for tilized data computation, so we tilize output after computation
+            tilize=True,
+            input_A_format=formats.input_format,
+            input_B_format=formats.input_format,
+        )
 
     if formats.input_format != DataFormat.Bfp8_b:
         tilized_A = tilize_block(
@@ -152,7 +154,9 @@ def test_matmul_custom(
         boot_mode=boot_mode,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

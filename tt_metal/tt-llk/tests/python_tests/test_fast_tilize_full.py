@@ -77,7 +77,9 @@ def test_fast_tilize_full(formats, dest_acc, dimensions):
 
     # Standard tilize golden: row-major → tile format
     generate_golden = get_golden_generator(TilizeGolden)
-    golden_tensor = generate_golden(src_A, input_dimensions, formats.output_format)
+
+    def _golden():
+        return generate_golden(src_A, input_dimensions, formats.output_format)
 
     configuration = TestConfig(
         "sources/fast_tilize_bh_test.cpp",
@@ -104,7 +106,9 @@ def test_fast_tilize_full(formats, dest_acc, dimensions):
         compile_time_formats=True,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor
@@ -186,7 +190,9 @@ def test_fast_tilize_large(formats, dest_acc, dimensions):
     )
 
     generate_golden = get_golden_generator(TilizeGolden)
-    golden_tensor = generate_golden(src_A, input_dimensions, formats.output_format)
+
+    def _golden():
+        return generate_golden(src_A, input_dimensions, formats.output_format)
 
     configuration = TestConfig(
         "sources/fast_tilize_bh_test.cpp",
@@ -213,7 +219,9 @@ def test_fast_tilize_large(formats, dest_acc, dimensions):
         compile_time_formats=True,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
     assert len(res_from_L1) == len(
         golden_tensor
     ), f"Result length {len(res_from_L1)} != golden length {len(golden_tensor)}"

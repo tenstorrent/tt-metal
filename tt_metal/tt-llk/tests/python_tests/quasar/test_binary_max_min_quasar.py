@@ -263,37 +263,42 @@ def test_binary_max_min_float_quasar(formats_dest_acc_implied_math_is_max_input_
 
     num_faces = 4
 
-    # MX formats use a 32-element shared block exponent. Quantizing both inputs
-    # through the same pack→unpack roundtrip the hardware applies makes the
-    # golden compare against what the kernel actually sees in Dest, not the
-    # higher-precision bfloat16 source values.
-    if formats.input_format.is_mx_format():
-        in0_for_golden = quantize_mx_stimuli(
-            in0.flatten(), formats.input_format, num_faces
-        ).reshape(in0.shape)
-        in1_for_golden = quantize_mx_stimuli(
-            in1.flatten(), formats.input_format, num_faces
-        ).reshape(in1.shape)
-    else:
-        in0_for_golden = in0
-        in1_for_golden = in1
-
-    in0_f32 = in0_for_golden.to(torch.float32)
-    in1_f32 = in1_for_golden.to(torch.float32)
-    if is_max_op:
-        golden_f32 = torch.maximum(in0_f32, in1_f32)
-    else:
-        golden_f32 = torch.minimum(in0_f32, in1_f32)
-
     output_torch_fmt = format_dict[formats.output_format]
-    golden_tensor = golden_f32.to(output_torch_fmt)
 
-    # Mirror the output-side MX pack quantization: the kernel re-quantizes the
-    # max/min result with a fresh per-block exponent on the way back to L1.
-    if formats.output_format.is_mx_format():
-        golden_tensor = quantize_mx_stimuli(
-            golden_tensor.flatten(), formats.output_format, num_faces
-        ).reshape(golden_tensor.shape)
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
+    def _golden():
+        # MX formats use a 32-element shared block exponent. Quantizing both inputs
+        # through the same pack→unpack roundtrip the hardware applies makes the
+        # golden compare against what the kernel actually sees in Dest, not the
+        # higher-precision bfloat16 source values.
+        if formats.input_format.is_mx_format():
+            in0_for_golden = quantize_mx_stimuli(
+                in0.flatten(), formats.input_format, num_faces
+            ).reshape(in0.shape)
+            in1_for_golden = quantize_mx_stimuli(
+                in1.flatten(), formats.input_format, num_faces
+            ).reshape(in1.shape)
+        else:
+            in0_for_golden = in0
+            in1_for_golden = in1
+
+        in0_f32 = in0_for_golden.to(torch.float32)
+        in1_f32 = in1_for_golden.to(torch.float32)
+        if is_max_op:
+            golden_f32 = torch.maximum(in0_f32, in1_f32)
+        else:
+            golden_f32 = torch.minimum(in0_f32, in1_f32)
+
+        golden_tensor = golden_f32.to(output_torch_fmt)
+
+        # Mirror the output-side MX pack quantization: the kernel re-quantizes the
+        # max/min result with a fresh per-block exponent on the way back to L1.
+        if formats.output_format.is_mx_format():
+            golden_tensor = quantize_mx_stimuli(
+                golden_tensor.flatten(), formats.output_format, num_faces
+            ).reshape(golden_tensor.shape)
+        return golden_tensor
 
     # buffer_A has 2 tiles: tile 0 = in0, tile 1 = in1, concatenated.
     # StimuliConfig with tile_count_A=2 reads buffer_A[0:1024] as tile 0
@@ -356,7 +361,9 @@ def test_binary_max_min_float_quasar(formats_dest_acc_implied_math_is_max_input_
         disable_format_inference=formats.input_format.is_mx_format(),
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor
@@ -421,14 +428,16 @@ def test_binary_max_min_int32_quasar(formats_dest_acc_is_max_input_dims):
     in0_int = in0_f.to(torch.int32)
     in1_int = in1_f.to(torch.int32)
 
-    # Golden: element-wise signed max or min in two's-complement int32
-    # (the hardware kernel corrects sign-magnitude to two's-complement ordering)
-    if is_max_op:
-        golden_int = torch.maximum(in0_int, in1_int)
-    else:
-        golden_int = torch.minimum(in0_int, in1_int)
-
-    golden_tensor = golden_int.to(torch.float32)
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
+    def _golden():
+        # Golden: element-wise signed max or min in two's-complement int32
+        # (the hardware kernel corrects sign-magnitude to two's-complement ordering)
+        if is_max_op:
+            golden_int = torch.maximum(in0_int, in1_int)
+        else:
+            golden_int = torch.minimum(in0_int, in1_int)
+        return golden_int.to(torch.float32)
 
     num_faces = 4
 
@@ -488,7 +497,9 @@ def test_binary_max_min_int32_quasar(formats_dest_acc_is_max_input_dims):
         dest_acc=dest_acc,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

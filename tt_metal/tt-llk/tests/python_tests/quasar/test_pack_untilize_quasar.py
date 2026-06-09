@@ -120,13 +120,17 @@ def test_pack_untilize_quasar(formats_dest_acc_sync_dimensions):
         input_dimensions_B=input_dimensions,
     )
 
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
     generate_golden = get_golden_generator(UntilizeGolden)
-    golden_tensor = generate_golden(
-        src_A,
-        formats.output_format,
-        input_dimensions,
-        input_format=formats.input_format,
-    )
+
+    def _golden():
+        return generate_golden(
+            src_A,
+            formats.output_format,
+            input_dimensions,
+            input_format=formats.input_format,
+        )
 
     num_faces = 4
     configuration = TestConfig(
@@ -163,7 +167,9 @@ def test_pack_untilize_quasar(formats_dest_acc_sync_dimensions):
         ),
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

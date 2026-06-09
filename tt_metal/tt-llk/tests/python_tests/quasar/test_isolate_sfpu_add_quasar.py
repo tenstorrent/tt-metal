@@ -105,21 +105,25 @@ def test_isolate_sfpu_add_quasar(formats_dest_acc_implied_math_input_dims):
     # Golden: use BinarySFPUGolden so we can swap ops for future binary kernels.
     # SrcS path is untilized, so skip_tilize=True. Concatenate full tensors:
     # [all A tiles | all B tiles], then index by tile count offset.
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
     generate_golden = get_golden_generator(BinarySFPUGolden)
-    golden_tensor = generate_golden(
-        MathOperation.SfpuElwadd,
-        torch.cat([src_A, src_B]),
-        0,  # src1_idx: first tile of A
-        tile_cnt_A,  # src2_idx: first tile of B
-        0,  # dst_idx: write result starting at tile 0
-        tile_cnt_A * 32,  # num_iterations: 32 rows per tile
-        [input_dimensions[0] * 2, input_dimensions[1]],
-        formats.output_format,
-        skip_tilize=True,
-        input_format=formats.input_format,
-    )[
-        : src_A.numel()
-    ]  # Extract only the result region (A's tiles)
+
+    def _golden():
+        return generate_golden(
+            MathOperation.SfpuElwadd,
+            torch.cat([src_A, src_B]),
+            0,  # src1_idx: first tile of A
+            tile_cnt_A,  # src2_idx: first tile of B
+            0,  # dst_idx: write result starting at tile 0
+            tile_cnt_A * 32,  # num_iterations: 32 rows per tile
+            [input_dimensions[0] * 2, input_dimensions[1]],
+            formats.output_format,
+            skip_tilize=True,
+            input_format=formats.input_format,
+        )[
+            : src_A.numel()
+        ]  # Extract only the result region (A's tiles)
 
     configuration = TestConfig(
         "sources/quasar/isolate_sfpu_add_quasar_test.cpp",
@@ -149,7 +153,9 @@ def test_isolate_sfpu_add_quasar(formats_dest_acc_implied_math_input_dims):
         disable_format_inference=formats.input_format.is_mx_format(),
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(golden_tensor)
     torch_format = format_dict[formats.output_format]

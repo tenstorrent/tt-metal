@@ -114,15 +114,19 @@ def test_unary_broadcast_quasar(
     torch_format = format_dict[formats.input_format]
     src_B = torch.randn(num_elements, dtype=torch_format)
 
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
     generate_broadcast_golden = get_golden_generator(BroadcastGolden)
-    golden_tensor = generate_broadcast_golden(
-        broadcast_type,
-        src_B,
-        formats.output_format,
-        num_faces=num_faces,
-        tile_cnt=tile_cnt,
-        face_r_dim=face_r_dim,
-    )
+
+    def _golden():
+        return generate_broadcast_golden(
+            broadcast_type,
+            src_B,
+            formats.output_format,
+            num_faces=num_faces,
+            tile_cnt=tile_cnt,
+            face_r_dim=face_r_dim,
+        )
 
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
@@ -174,7 +178,9 @@ def test_unary_broadcast_quasar(
         disable_format_inference=(implied_math_format == ImpliedMathFormat.Yes),
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

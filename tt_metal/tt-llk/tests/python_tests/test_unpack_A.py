@@ -398,60 +398,117 @@ def test_unpack_comprehensive(
 
     # generate golden tensor with proper broadcast and transpose handling
     # PRIORITY: Broadcast types take precedence over transpose operations
-    if broadcast_type in (
-        BroadcastType.Scalar,
-        BroadcastType.Column,
-        BroadcastType.Row,
-    ):
-        # Broadcast: replicate values according to broadcast type
-        generate_broadcast_golden = get_golden_generator(BroadcastGolden)
-        golden_tensor = generate_broadcast_golden(
-            broadcast_type,
-            src_A,
-            formats.output_format,
-            num_faces=num_faces,
-            face_r_dim=face_r_dim,
-            tile_cnt=tile_cnt_A,
-        )
-    elif (
-        transpose_of_faces == Transpose.Yes
-        and TestConfig.BUILD_MODE != BuildMode.PRODUCE
-    ):
-        # Both transpose flags are ALWAYS on together (mutually inclusive constraint)
-        transpose_golden = get_golden_generator(TransposeGolden)
-        # First apply within-face transpose, then face transpose
-        if tile_cnt_A > 1:
-            tiles = torch.tensor(src_A, dtype=format_dict[formats.input_format]).view(
-                tile_cnt_A, ELEMENTS_PER_TILE
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
+    def _golden():
+        if broadcast_type in (
+            BroadcastType.Scalar,
+            BroadcastType.Column,
+            BroadcastType.Row,
+        ):
+            # Broadcast: replicate values according to broadcast type
+            generate_broadcast_golden = get_golden_generator(BroadcastGolden)
+            golden_tensor = generate_broadcast_golden(
+                broadcast_type,
+                src_A,
+                formats.output_format,
+                num_faces=num_faces,
+                face_r_dim=face_r_dim,
+                tile_cnt=tile_cnt_A,
             )
-            processed_tiles = []
-            for tile in tiles:
-                temp_tensor = transpose_golden.transpose_within_faces(
-                    tile, formats.output_format, input_dimensions, num_faces
-                )
-                processed_tiles.append(
-                    transpose_golden.transpose_faces(
-                        temp_tensor, formats.output_format, input_dimensions, num_faces
+        elif (
+            transpose_of_faces == Transpose.Yes
+            and TestConfig.BUILD_MODE != BuildMode.PRODUCE
+        ):
+            # Both transpose flags are ALWAYS on together (mutually inclusive constraint)
+            transpose_golden = get_golden_generator(TransposeGolden)
+            # First apply within-face transpose, then face transpose
+            if tile_cnt_A > 1:
+                tiles = torch.tensor(
+                    src_A, dtype=format_dict[formats.input_format]
+                ).view(tile_cnt_A, ELEMENTS_PER_TILE)
+                processed_tiles = []
+                for tile in tiles:
+                    temp_tensor = transpose_golden.transpose_within_faces(
+                        tile, formats.output_format, input_dimensions, num_faces
                     )
+                    processed_tiles.append(
+                        transpose_golden.transpose_faces(
+                            temp_tensor,
+                            formats.output_format,
+                            input_dimensions,
+                            num_faces,
+                        )
+                    )
+                golden_tensor = torch.cat(processed_tiles)
+            else:
+                temp_tensor = transpose_golden.transpose_within_faces(
+                    src_A, formats.output_format, input_dimensions, num_faces
                 )
-            golden_tensor = torch.cat(processed_tiles)
+                golden_tensor = transpose_golden.transpose_faces(
+                    temp_tensor, formats.output_format, input_dimensions, num_faces
+                )
         else:
-            temp_tensor = transpose_golden.transpose_within_faces(
-                src_A, formats.output_format, input_dimensions, num_faces
-            )
-            golden_tensor = transpose_golden.transpose_faces(
-                temp_tensor, formats.output_format, input_dimensions, num_faces
-            )
-    else:
-        # No transpose - handle based on reuse_dest behavior
-        if reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA and acc_to_dest:
-            # DEST_TO_SRCA: destination registers get moved to srcA for reuse
-            # This creates a feedback loop where processed data gets reused as source
+            # No transpose - handle based on reuse_dest behavior
+            if reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA and acc_to_dest:
+                # DEST_TO_SRCA: destination registers get moved to srcA for reuse
+                # This creates a feedback loop where processed data gets reused as source
 
-            # For partial faces, DEST_TO_SRCA behavior may be different or unsupported
-            if face_r_dim < 16:
-                # For partial faces, fall back to regular data copy
-                # DEST_TO_SRCA duplication logic may not apply to partial faces
+                # For partial faces, DEST_TO_SRCA behavior may be different or unsupported
+                if face_r_dim < 16:
+                    # For partial faces, fall back to regular data copy
+                    # DEST_TO_SRCA duplication logic may not apply to partial faces
+                    generate_golden = get_golden_generator(DataCopyGolden)
+                    golden_tensor = generate_golden(
+                        src_A,
+                        formats.output_format,
+                        num_faces,
+                        input_dimensions,
+                        face_r_dim,
+                    )
+                else:
+                    # Full faces: apply DEST_TO_SRCA duplication logic
+                    input_tensor = torch.tensor(
+                        src_A, dtype=format_dict[formats.input_format]
+                    )
+                    face_size = face_r_dim * 16  # face_r_dim x 16 face
+
+                    def _dest_to_srca_tile(
+                        tile_tensor: torch.Tensor,
+                    ) -> torch.Tensor:
+                        if num_faces == 1:
+                            input_face = tile_tensor[:face_size].to(
+                                format_dict[formats.output_format]
+                            )
+                            half_face = face_size // 2
+                            first_half = input_face[:half_face]
+                            return torch.cat([first_half, first_half])
+
+                        result = torch.zeros(
+                            face_size * num_faces,
+                            dtype=format_dict[formats.output_format],
+                        )
+                        for face_idx in range(num_faces):
+                            face_start = face_idx * face_size
+                            face_end = face_start + face_size
+                            input_face = tile_tensor[face_start:face_end].to(
+                                format_dict[formats.output_format]
+                            )
+                            half_face = face_size // 2
+                            first_half = input_face[:half_face]
+                            face_output = torch.cat([first_half, first_half])
+                            result[face_start:face_end] = face_output
+                        return result
+
+                    if tile_cnt_A > 1:
+                        tiles = input_tensor.view(tile_cnt_A, ELEMENTS_PER_TILE)
+                        golden_tensor = torch.cat(
+                            [_dest_to_srca_tile(tile) for tile in tiles]
+                        )
+                    else:
+                        golden_tensor = _dest_to_srca_tile(input_tensor)
+            else:
+                # Regular data copy for other reuse types or no acc_to_dest
                 generate_golden = get_golden_generator(DataCopyGolden)
                 golden_tensor = generate_golden(
                     src_A,
@@ -460,50 +517,7 @@ def test_unpack_comprehensive(
                     input_dimensions,
                     face_r_dim,
                 )
-            else:
-                # Full faces: apply DEST_TO_SRCA duplication logic
-                input_tensor = torch.tensor(
-                    src_A, dtype=format_dict[formats.input_format]
-                )
-                face_size = face_r_dim * 16  # face_r_dim x 16 face
-
-                def _dest_to_srca_tile(tile_tensor: torch.Tensor) -> torch.Tensor:
-                    if num_faces == 1:
-                        input_face = tile_tensor[:face_size].to(
-                            format_dict[formats.output_format]
-                        )
-                        half_face = face_size // 2
-                        first_half = input_face[:half_face]
-                        return torch.cat([first_half, first_half])
-
-                    result = torch.zeros(
-                        face_size * num_faces, dtype=format_dict[formats.output_format]
-                    )
-                    for face_idx in range(num_faces):
-                        face_start = face_idx * face_size
-                        face_end = face_start + face_size
-                        input_face = tile_tensor[face_start:face_end].to(
-                            format_dict[formats.output_format]
-                        )
-                        half_face = face_size // 2
-                        first_half = input_face[:half_face]
-                        face_output = torch.cat([first_half, first_half])
-                        result[face_start:face_end] = face_output
-                    return result
-
-                if tile_cnt_A > 1:
-                    tiles = input_tensor.view(tile_cnt_A, ELEMENTS_PER_TILE)
-                    golden_tensor = torch.cat(
-                        [_dest_to_srca_tile(tile) for tile in tiles]
-                    )
-                else:
-                    golden_tensor = _dest_to_srca_tile(input_tensor)
-        else:
-            # Regular data copy for other reuse types or no acc_to_dest
-            generate_golden = get_golden_generator(DataCopyGolden)
-            golden_tensor = generate_golden(
-                src_A, formats.output_format, num_faces, input_dimensions, face_r_dim
-            )
+        return golden_tensor
 
     # We use raw dimensions because we calculate num_blocks and num_tiles_in_block without dense tile processing in dest.
     raw_dimensions = [
@@ -568,7 +582,9 @@ def test_unpack_comprehensive(
         unpack_to_dest=(formats.input_format.is_32_bit() and acc_to_dest),
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

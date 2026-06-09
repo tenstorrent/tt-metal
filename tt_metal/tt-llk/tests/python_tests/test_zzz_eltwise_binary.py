@@ -249,15 +249,19 @@ def test_eltwise_binary(
     golden_input_format_B = (
         None if broadcast_type != BroadcastType.None_ else formats.input_format
     )
-    golden_tensor = binary_golden(
-        math_op,
-        golden_src_A,
-        golden_src_B,
-        formats.output_format,
-        math_fidelity,
-        input_format=golden_input_format_A,
-        input_format_B=golden_input_format_B,
-    )
+
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
+    def _golden():
+        return binary_golden(
+            math_op,
+            golden_src_A,
+            golden_src_B,
+            formats.output_format,
+            math_fidelity,
+            input_format=golden_input_format_A,
+            input_format_B=golden_input_format_B,
+        )
 
     configuration = TestConfig(
         "sources/eltwise_binary_test.cpp",
@@ -295,7 +299,9 @@ def test_eltwise_binary(
         unpack_to_dest=False,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor
@@ -447,15 +453,17 @@ def test_eltwise_binary_bfp4_b(
             face_r_dim=face_r_dim,
         )
 
-    # Compute golden on tilized data
-    golden_tensor = binary_golden(
-        math_op,
-        golden_src_A,
-        golden_src_B,
-        formats.output_format,
-        math_fidelity,
-        input_format=formats.input_format,
-    )
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
+    def _golden():
+        return binary_golden(
+            math_op,
+            golden_src_A,
+            golden_src_B,
+            formats.output_format,
+            math_fidelity,
+            input_format=formats.input_format,
+        )
 
     configuration = TestConfig(
         "sources/eltwise_binary_test.cpp",
@@ -493,7 +501,9 @@ def test_eltwise_binary_bfp4_b(
         unpack_to_dest=False,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor
@@ -605,39 +615,44 @@ def test_eltwise_binary_dest_reuse(
     # ELWMUL:        new_dest = old_dest + srcA * srcB  (always accumulates)
     tile_elements = num_faces * face_r_dim * FACE_C_DIM
     torch_format = format_dict[formats.output_format]
-    golden_tensor = torch.zeros(tile_cnt_output * tile_elements, dtype=torch_format)
 
-    for out_t in range(tile_cnt_output):
-        block_idx = out_t // output_tiles_in_block
-        tile_in_block = out_t % output_tiles_in_block
-        dest = torch.zeros(tile_elements, dtype=torch_format)
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
+    def _golden():
+        golden_tensor = torch.zeros(tile_cnt_output * tile_elements, dtype=torch_format)
 
-        for i in range(inner_dim):
-            input_tile_idx = (
-                block_idx * input_tiles_in_block
-                + i * output_tiles_in_block
-                + tile_in_block
-            )
-            start = input_tile_idx * tile_elements
-            end = start + tile_elements
+        for out_t in range(tile_cnt_output):
+            block_idx = out_t // output_tiles_in_block
+            tile_in_block = out_t % output_tiles_in_block
+            dest = torch.zeros(tile_elements, dtype=torch_format)
 
-            a_tile = src_A_tilized_flat[start:end].to(torch_format)
-            b_tile = src_B_tilized_flat[start:end].to(torch_format)
+            for i in range(inner_dim):
+                input_tile_idx = (
+                    block_idx * input_tiles_in_block
+                    + i * output_tiles_in_block
+                    + tile_in_block
+                )
+                start = input_tile_idx * tile_elements
+                end = start + tile_elements
 
-            if reuse_dest_type == EltwiseBinaryReuseDestType.DEST_TO_SRCA:
-                srcA, srcB = dest.clone(), b_tile
-            else:
-                srcA, srcB = a_tile, dest.clone()
+                a_tile = src_A_tilized_flat[start:end].to(torch_format)
+                b_tile = src_B_tilized_flat[start:end].to(torch_format)
 
-            if math_op == MathOperation.Elwadd:
-                dest = srcA + srcB
-            elif math_op == MathOperation.Elwsub:
-                dest = srcA - srcB
-            elif math_op == MathOperation.Elwmul:
-                dest = dest + srcA * srcB
+                if reuse_dest_type == EltwiseBinaryReuseDestType.DEST_TO_SRCA:
+                    srcA, srcB = dest.clone(), b_tile
+                else:
+                    srcA, srcB = a_tile, dest.clone()
 
-        out_start = out_t * tile_elements
-        golden_tensor[out_start : out_start + tile_elements] = dest
+                if math_op == MathOperation.Elwadd:
+                    dest = srcA + srcB
+                elif math_op == MathOperation.Elwsub:
+                    dest = srcA - srcB
+                elif math_op == MathOperation.Elwmul:
+                    dest = dest + srcA * srcB
+
+            out_start = out_t * tile_elements
+            golden_tensor[out_start : out_start + tile_elements] = dest
+        return golden_tensor
 
     configuration = TestConfig(
         "sources/eltwise_binary_test.cpp",
@@ -685,7 +700,9 @@ def test_eltwise_binary_dest_reuse(
         unpack_to_dest=False,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor
@@ -792,15 +809,17 @@ def test_eltwise_binary_int8_format(
     # Prepare golden src_B: apply broadcast if enabled
     golden_src_B = src_B_tilized_flat
 
-    # Compute golden on tilized data
-    golden_tensor = binary_golden(
-        math_op,
-        golden_src_A,
-        golden_src_B,
-        formats.output_format,
-        math_fidelity,
-        input_format=formats.input_format,
-    )
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
+    def _golden():
+        return binary_golden(
+            math_op,
+            golden_src_A,
+            golden_src_B,
+            formats.output_format,
+            math_fidelity,
+            input_format=formats.input_format,
+        )
 
     configuration = TestConfig(
         "sources/eltwise_binary_test.cpp",
@@ -838,7 +857,9 @@ def test_eltwise_binary_int8_format(
         unpack_to_dest=False,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

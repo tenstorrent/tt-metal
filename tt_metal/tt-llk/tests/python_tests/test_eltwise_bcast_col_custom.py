@@ -120,9 +120,11 @@ def test_eltwise_bcast_col_custom(
     src_B_golden_expanded = src_B_expanded.flatten()
 
     generate_golden = get_golden_generator(EltwiseBinaryGolden)
-    golden_tensor = generate_golden(
-        mathop, src_A, src_B_golden_expanded, formats.output_format, math_fidelity
-    )
+
+    def _golden():
+        return generate_golden(
+            mathop, src_A, src_B_golden_expanded, formats.output_format, math_fidelity
+        )
 
     configuration = TestConfig(
         cpp_source,
@@ -147,7 +149,9 @@ def test_eltwise_bcast_col_custom(
         ),
         dest_acc=dest_acc,
     )
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     res_from_L1 = untilize_block(
         res_from_L1, formats.output_format, input_dimensions_A

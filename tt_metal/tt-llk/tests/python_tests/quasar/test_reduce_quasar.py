@@ -118,19 +118,21 @@ def test_reduce_quasar(
         # reduce average divides by length of elements in array we reduce
         src_B = torch.full((1024,), 1 / 32)
 
-    if pool_type == ReducePool.Max:
-        generate_golden = get_golden_generator(ReduceGolden)
-        golden_tensor = generate_golden(
-            src_A,
-            reduce_dim,
-            pool_type,
-            formats.output_format,
-            tile_cnt,
-            input_format=formats.input_format,
-        )
-    else:
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
+    def _golden():
+        if pool_type == ReducePool.Max:
+            generate_golden = get_golden_generator(ReduceGolden)
+            return generate_golden(
+                src_A,
+                reduce_dim,
+                pool_type,
+                formats.output_format,
+                tile_cnt,
+                input_format=formats.input_format,
+            )
         generate_golden = get_golden_generator(ReduceGapoolGolden)
-        golden_tensor = generate_golden(
+        return generate_golden(
             src_A,
             src_B,
             formats.output_format,
@@ -178,7 +180,9 @@ def test_reduce_quasar(
         ),
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

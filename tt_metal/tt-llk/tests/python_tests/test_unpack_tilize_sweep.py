@@ -106,13 +106,15 @@ def test_unpack_tilize_comprehensive(
 
     # Generate golden reference using TilizeGolden model
     tilize_function = get_golden_generator(TilizeGolden)
-    golden_tensor = tilize_function(
-        src_A,
-        input_dimensions,
-        formats.output_format,
-        num_faces,
-    )
-    golden_tensor = golden_tensor.to(torch_format)
+
+    def _golden():
+        golden_tensor = tilize_function(
+            src_A,
+            input_dimensions,
+            formats.output_format,
+            num_faces,
+        )
+        return golden_tensor.to(torch_format)
 
     configuration = TestConfig(
         "sources/unpack_tilize_sweep_test.cpp",
@@ -144,7 +146,9 @@ def test_unpack_tilize_comprehensive(
         dest_acc=dest_acc,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

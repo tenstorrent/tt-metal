@@ -140,18 +140,20 @@ def test_unpack_bcast(
     # --- Golden model ----------------------------------------------------
     # Broadcast types use BroadcastGolden which handles all face geometries.
     # Datacopy (None_) golden is just the input cast to the output format.
-    if broadcast_type != BroadcastType.None_:
-        generate_broadcast_golden = get_golden_generator(BroadcastGolden)
-        golden_tensor = generate_broadcast_golden(
-            broadcast_type,
-            src_A,
-            formats.output_format,
-            num_faces=num_faces,
-            tile_cnt=tile_cnt_A,
-            face_r_dim=face_r_dim,
-        )
-    else:
-        golden_tensor = src_A.to(format_dict[formats.output_format])
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
+    def _golden():
+        if broadcast_type != BroadcastType.None_:
+            generate_broadcast_golden = get_golden_generator(BroadcastGolden)
+            return generate_broadcast_golden(
+                broadcast_type,
+                src_A,
+                formats.output_format,
+                num_faces=num_faces,
+                tile_cnt=tile_cnt_A,
+                face_r_dim=face_r_dim,
+            )
+        return src_A.to(format_dict[formats.output_format])
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
@@ -207,7 +209,9 @@ def test_unpack_bcast(
         and dest_acc == DestAccumulation.Yes,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     # --- Assertions ------------------------------------------------------
     assert len(res_from_L1) == len(

@@ -108,15 +108,19 @@ def test_isolate_sfpu_square_quasar(formats_dest_acc_implied_math_input_dims):
 
     num_faces = 4
 
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
     generate_golden = get_golden_generator(UnarySFPUGolden)
-    golden_tensor = generate_golden(
-        MathOperation.Square,
-        src_A,
-        formats.output_format,
-        dest_acc,
-        formats.input_format,
-        input_dimensions,
-    )
+
+    def _golden():
+        return generate_golden(
+            MathOperation.Square,
+            src_A,
+            formats.output_format,
+            dest_acc,
+            formats.input_format,
+            input_dimensions,
+        )
 
     configuration = TestConfig(
         "sources/quasar/isolate_sfpu_square_quasar_test.cpp",
@@ -147,7 +151,9 @@ def test_isolate_sfpu_square_quasar(formats_dest_acc_implied_math_input_dims):
         disable_format_inference=formats.input_format.is_mx_format(),
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(golden_tensor)
     torch_format = format_dict[formats.output_format]

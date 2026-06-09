@@ -49,9 +49,10 @@ def test_fast_tilize_metal_api(formats, dest_acc, dimensions):
         input_dimensions_B=input_dimensions,
     )
 
-    golden = get_golden_generator(TilizeGolden)(
-        src_A, input_dimensions, formats.output_format
-    )
+    def _golden():
+        return get_golden_generator(TilizeGolden)(
+            src_A, input_dimensions, formats.output_format
+        )
 
     cfg = TestConfig(
         "sources/fast_tilize_metal_api_test.cpp",
@@ -78,7 +79,9 @@ def test_fast_tilize_metal_api(formats, dest_acc, dimensions):
         compile_time_formats=True,
     )
 
-    res = cfg.run().result
+    outcome = cfg.run(golden_fn=_golden)
+    res = outcome.result
+    golden = outcome.golden
     assert len(res) == len(golden)
     res_tensor = torch.tensor(res, dtype=format_dict[formats.output_format])
     assert passed_test(golden, res_tensor, formats.output_format)

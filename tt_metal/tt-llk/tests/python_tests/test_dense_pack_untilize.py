@@ -96,9 +96,11 @@ def test_pack_untilize(
     )
 
     # src_A = generate_specific_stimuli(input_dimensions, r_dim, formats.input_format)
-    golden_tensor = generate_golden_output(
-        src_A, input_dimensions, r_dim, formats.input_format
-    )
+    def _golden():
+        return generate_golden_output(
+            src_A, input_dimensions, r_dim, formats.input_format
+        )
+
     # print_stimuli_and_golden(src_A, golden_tensor, input_dimensions, r_dim)
 
     configuration = TestConfig(
@@ -127,7 +129,9 @@ def test_pack_untilize(
         unpack_to_dest=False,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
     # Since input and output shapes are identical we always specify r_dim of 16 for stimulus
     # because stimulus must have 4 faces and 16 is only valid r_dim for 4 faces
     # In output for smaller actual r_dims lower portion is unused and therefore truncated

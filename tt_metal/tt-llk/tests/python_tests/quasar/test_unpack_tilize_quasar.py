@@ -126,13 +126,17 @@ def test_unpack_tilize_quasar(
         input_dimensions_B=input_dimensions,
     )
 
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
     generate_golden = get_golden_generator(TilizeGolden)
-    golden_src = src_B if unpacker_sel == UnpackerEngine.UnpB else src_A
-    if formats.input_format.is_mx_format():
-        golden_src = quantize_mx_tensor_chunked(golden_src, formats.input_format)
-    golden_tensor = generate_golden(
-        golden_src, input_dimensions, formats.output_format, num_faces=4
-    )
+
+    def _golden():
+        golden_src = src_B if unpacker_sel == UnpackerEngine.UnpB else src_A
+        if formats.input_format.is_mx_format():
+            golden_src = quantize_mx_tensor_chunked(golden_src, formats.input_format)
+        return generate_golden(
+            golden_src, input_dimensions, formats.output_format, num_faces=4
+        )
 
     configuration = TestConfig(
         "sources/quasar/unpack_tilize_quasar_test.cpp",
@@ -172,7 +176,9 @@ def test_unpack_tilize_quasar(
         disable_format_inference=(formats.input_format.is_mx_format()),
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

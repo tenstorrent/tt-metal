@@ -54,16 +54,18 @@ def test_matmul_pack_untilize(
     )
 
     generate_golden = get_golden_generator(MatmulGolden)
-    golden_tensor = generate_golden(
-        src_A,
-        src_B,
-        formats.output_format,
-        math_fidelity,
-        input_A_dimensions=input_dimensions,
-        input_B_dimensions=input_dimensions,
-        input_A_format=formats.input_format,
-        input_B_format=formats.input_format,
-    )
+
+    def _golden():
+        return generate_golden(
+            src_A,
+            src_B,
+            formats.output_format,
+            math_fidelity,
+            input_A_dimensions=input_dimensions,
+            input_B_dimensions=input_dimensions,
+            input_A_format=formats.input_format,
+            input_B_format=formats.input_format,
+        )
 
     configuration = TestConfig(
         "sources/matmul_pack_untilize_test.cpp",
@@ -86,7 +88,9 @@ def test_matmul_pack_untilize(
         dest_acc=dest_acc,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
     assert len(res_from_L1) == len(
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"

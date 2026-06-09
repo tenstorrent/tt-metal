@@ -111,6 +111,9 @@ class TestOutcome:
     # Lines emitted by DEVICE_PRINT() during this run.
     # Empty if it's disabled.
     device_print_lines: list = field(default_factory=list)
+    # Golden tensor produced by the optional golden_fn passed to run().
+    # None when run() was called without a golden_fn.
+    golden: Any = None
 
 
 class TestConfig:
@@ -1467,7 +1470,22 @@ class TestConfig:
             self.build_elfs()
         self._prepared = True
 
-    def run(self, poll_callback=None):
+    def run(self, poll_callback=None, golden_fn=None):
+        """Run the variant on device.
+
+        Args:
+            poll_callback: Optional callable invoked each wait iteration.
+            golden_fn: Optional zero-arg callable that produces the golden
+                tensor. It is invoked after the tensixes are launched but
+                before we wait on them, so golden generation (host/torch work)
+                overlaps the tensix execution window. In stimuli GENERATE_ONLY
+                (cache) mode it is invoked before caching so the golden is
+                still persisted. In compile-producer mode (BUILD_MODE.PRODUCE)
+                it is never invoked: run() skips before reaching it, so passing
+                golden via golden_fn means golden generation is fully elided
+                when only building artefacts. The result is returned in
+                TestOutcome.golden.
+        """
         self.prepare()
 
         logger.debug(
@@ -1481,6 +1499,13 @@ class TestConfig:
             TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf",
         )
 
+        # Compile-producer mode only builds artefacts; skip before touching the
+        # device. Crucially this returns before golden_fn is ever invoked, so
+        # golden generation never runs in --compile-producer (the deferred
+        # closure is dropped). Tests that must compute golden eagerly (it feeds
+        # a runtime param) rely on the dummy_golden_generator swap in
+        # setup_mode() to keep that cheap. Keep this skip ahead of any golden_fn
+        # call.
         if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
             pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
 
@@ -1488,6 +1513,11 @@ class TestConfig:
 
         if self.variant_stimuli:
             if TestConfig.STIMULI_MODE == StimuliMode.GENERATE_ONLY:
+                # Compute the golden before caching so the proxied generator
+                # populates GeneratorProxy.TEMP_RESULT, which save_to_cache()
+                # persists. Execution is skipped in this mode.
+                if golden_fn is not None:
+                    golden_fn()
                 self.variant_stimuli.save_to_cache()
                 pytest.skip(TestConfig.SKIP_JUST_FOR_STIMULI_MARKER)
             elif TestConfig.STIMULI_MODE == StimuliMode.LOAD_CACHED:
@@ -1516,6 +1546,11 @@ class TestConfig:
             wrapped_poll_callback = _drain
 
         self.run_elf_files()
+
+        # Generate the golden while the tensixes are busy: this host/torch work
+        # overlaps the tensix execution window, hiding the wait below.
+        golden_result = golden_fn() if golden_fn is not None else None
+
         self.wait_for_tensix_operations_finished(poll_callback=wrapped_poll_callback)
 
         if dprint_parser is not None:
@@ -1534,6 +1569,7 @@ class TestConfig:
                 else None
             ),
             device_print_lines=dprint_lines,
+            golden=golden_result,
         )
 
 

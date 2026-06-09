@@ -51,19 +51,21 @@ def test_matmul_unpack_tilize(
     )
 
     generate_golden = get_golden_generator(MatmulGolden)
-    golden_tensor = tilize(
-        generate_golden(
-            src_A,
-            src_B,
-            formats.output_format,
-            math_fidelity,
-            input_A_dimensions=input_dimensions,
-            input_B_dimensions=input_dimensions,
-            input_A_format=formats.input_format,
-            input_B_format=formats.input_format,
+
+    def _golden():
+        golden_tensor = tilize(
+            generate_golden(
+                src_A,
+                src_B,
+                formats.output_format,
+                math_fidelity,
+                input_A_dimensions=input_dimensions,
+                input_B_dimensions=input_dimensions,
+                input_A_format=formats.input_format,
+                input_B_format=formats.input_format,
+            )
         )
-    )
-    golden_tensor = golden_tensor.to(torch_format)
+        return golden_tensor.to(torch_format)
 
     L1_to_L1_iterations = 2
     configuration = TestConfig(
@@ -88,7 +90,9 @@ def test_matmul_unpack_tilize(
         L1_to_L1_iterations=L1_to_L1_iterations,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

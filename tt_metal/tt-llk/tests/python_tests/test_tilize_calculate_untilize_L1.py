@@ -58,9 +58,11 @@ def test_tilize_calculate_untilize_L1(
     )
 
     generate_golden = get_golden_generator(EltwiseBinaryGolden)
-    golden_tensor = generate_golden(
-        mathop, tilize(src_A), tilize(src_B), formats.output_format, math_fidelity
-    )
+
+    def _golden():
+        return generate_golden(
+            mathop, tilize(src_A), tilize(src_B), formats.output_format, math_fidelity
+        )
 
     configuration = TestConfig(
         "sources/tilize_calculate_untilize_L1.cpp",
@@ -85,7 +87,9 @@ def test_tilize_calculate_untilize_L1(
         L1_to_L1_iterations=2,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(golden_tensor)
 

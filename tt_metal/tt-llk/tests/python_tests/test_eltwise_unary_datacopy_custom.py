@@ -39,9 +39,11 @@ def test_unary_datacopy_custom(
     )
 
     generate_golden = get_golden_generator(DataCopyGolden)
-    golden_tensor = generate_golden(
-        src_A, formats.output_format, num_faces, input_dimensions
-    )
+
+    def _golden():
+        return generate_golden(
+            src_A, formats.output_format, num_faces, input_dimensions
+        )
 
     configuration = TestConfig(
         "sources/eltwise_unary_datacopy_custom_test.cpp",
@@ -65,8 +67,9 @@ def test_unary_datacopy_custom(
         unpack_to_dest=False,
     )
 
-    outcome = configuration.run()
+    outcome = configuration.run(golden_fn=_golden)
     res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(golden_tensor)
 

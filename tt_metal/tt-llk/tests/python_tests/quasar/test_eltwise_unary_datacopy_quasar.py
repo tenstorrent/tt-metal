@@ -145,15 +145,19 @@ def test_eltwise_unary_datacopy_quasar(
 
     num_faces = 4
 
-    golden_src = src_B if data_copy_type == DataCopyType.B2D else src_A
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
     generate_golden = get_golden_generator(DataCopyGolden)
-    golden_tensor = generate_golden(
-        golden_src,
-        formats.output_format,
-        num_faces=num_faces,
-        input_dimensions=input_dimensions,
-        input_format=formats.input_format,
-    )
+
+    def _golden():
+        golden_src = src_B if data_copy_type == DataCopyType.B2D else src_A
+        return generate_golden(
+            golden_src,
+            formats.output_format,
+            num_faces=num_faces,
+            input_dimensions=input_dimensions,
+            input_format=formats.input_format,
+        )
 
     configuration = TestConfig(
         "sources/quasar/eltwise_unary_datacopy_quasar_test.cpp",
@@ -194,7 +198,9 @@ def test_eltwise_unary_datacopy_quasar(
         ),
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

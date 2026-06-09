@@ -65,17 +65,18 @@ def test_fast_tilize_tiny_tiles(
         tile_dimensions=TILE_DIMENSIONS,
     )
 
-    golden_tensor = (
-        tilize_block(
-            src_A,
-            input_dimensions,
-            formats.output,
-            num_faces=num_faces,
-            tile_dimensions=TILE_DIMENSIONS,
+    def _golden():
+        return (
+            tilize_block(
+                src_A,
+                input_dimensions,
+                formats.output,
+                num_faces=num_faces,
+                tile_dimensions=TILE_DIMENSIONS,
+            )
+            .flatten()
+            .to(format_dict[formats.output])
         )
-        .flatten()
-        .to(format_dict[formats.output])
-    )
 
     configuration = TestConfig(
         "sources/fast_tilize_test.cpp",
@@ -111,7 +112,9 @@ def test_fast_tilize_tiny_tiles(
         compile_time_formats=True,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     # Verify the kernel wrote a contiguous block of tiles to L1 (no gaps
     # from incorrect bank-switch addressing). This confirms the packer's
