@@ -1643,21 +1643,31 @@ class DataCopyGolden:
         elif face_r_dim < 16:
             tile_cnt = 1
         else:
-            if tile_shape is None:
-                tile_shape = construct_tile_shape()
-            tile_r = tile_shape.total_row_dim()
-            tile_c = tile_shape.total_col_dim()
-            tile_size = tile_shape.total_tile_size()
-            tile_cnt = (height // tile_r) * (width // tile_c)
+            tile_cnt = (height // 32) * (width // 32)
 
-        elements_per_tile = face_r_dim * FACE_DIM * num_faces
+        # Calculate elements based on variable face dimensions
+        # Each face is face_r_dim × 16, and we have num_faces
+        elements_per_tile_needed = face_r_dim * FACE_DIM * num_faces
 
         # Convert input to tensor if needed
         if not isinstance(operand1, torch.Tensor):
             operand1 = torch.tensor(operand1, dtype=torch_format)
 
+        # Determine actual tile size from input:
+        # If input is sized for partial faces (num_faces < 4), use elements_per_tile_needed
+        # Otherwise use full tile size
+        total_elements = operand1.numel()
+        expected_partial_size = tile_cnt * elements_per_tile_needed
+
+        if total_elements == expected_partial_size:
+            # Input is already sized for num_faces, just pass through
+            tile_size = elements_per_tile_needed
+        else:
+            # Input has full tiles, need to select elements
+            tile_size = height * width // tile_cnt if tile_cnt > 0 else height * width
+
         reshaped = operand1.view(tile_cnt, tile_size)
-        selected = reshaped[:, :elements_per_tile]
+        selected = reshaped[:, :elements_per_tile_needed]
         result = selected.flatten()
 
         # Ensure result is in correct format if not already
