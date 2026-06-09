@@ -994,6 +994,7 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self,
         logits: ttnn.Tensor,
         enable_trace: bool = False,
+        slot_remap: list[int] | None = None,
         user_slots: list[int] | None = None,
         skip_precompile: bool = False,
     ) -> ttnn.Tensor:
@@ -1043,6 +1044,8 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
             else:
                 sampling_logits = padded_logits
 
+        if slot_remap is not None:
+            self.sampling_generator.seed_manager.apply_slot_remap(slot_remap)
         self.sampling_generator.seed_manager.get_new_values(self._sampling_device_slots(user_slots))
         try:
             tt_out = self.sampling_generator.sample(
@@ -1087,15 +1090,17 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
           param change — not unconditionally per step. Passing ``sampling_params``
           here refreshes that state (idempotent when unchanged); the vLLM bridge
           already initialises it before the forward, so it passes ``None``.
-        - ``prompt_tokens`` / ``output_tokens`` / ``slot_remap`` are not yet
-          threaded into deepseek's penalty/seed state (see
-          :meth:`_reset_sampling_state` TODO); accepted for signature
-          compatibility and currently ignored.
+        - ``prompt_tokens`` / ``output_tokens`` are not yet threaded into
+          deepseek's penalty state (see :meth:`_reset_sampling_state` TODO).
         """
         if sampling_params is not None:
             self._validate_and_initialize_sampling(sampling_params, sample_on_device=True, enable_trace=enable_trace)
         return self._sample_tokens_device(
-            tt_logits, enable_trace=enable_trace, user_slots=user_slots, skip_precompile=True
+            tt_logits,
+            enable_trace=enable_trace,
+            slot_remap=slot_remap,
+            user_slots=user_slots,
+            skip_precompile=True,
         )
 
     def _tokens_from_device(self, tt_out_tok, mesh_device, batch_size_per_row: int) -> torch.Tensor:

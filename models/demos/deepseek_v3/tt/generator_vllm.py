@@ -225,6 +225,7 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
 
         page_tables = kwargs.get("page_table", None)
         kv_cache = kwargs.get("kv_cache", None)
+        slot_remap = kwargs.get("slot_remap", None)
         enable_trace = kwargs.get("enable_trace", False)
         read_from_device = kwargs.get("read_from_device", True)
         sampling_params = kwargs.get("sampling_params", None)
@@ -258,6 +259,7 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
             decode_output = self.sample_decode_on_device(
                 decode_step_output,
                 enable_trace=enable_trace,
+                slot_remap=slot_remap,
             )
             if read_from_device:
                 decode_output = self._tokens_from_device(
