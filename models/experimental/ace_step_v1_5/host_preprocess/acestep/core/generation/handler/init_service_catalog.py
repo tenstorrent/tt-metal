@@ -67,12 +67,7 @@ class InitServiceCatalogMixin:
         except Exception:
             return False
 
-        try:
-            pass
-
-            return True
-        except ImportError:
-            return False
+        return True
 
     def is_turbo_model(self) -> bool:
         """Check whether the currently loaded model is a turbo variant."""

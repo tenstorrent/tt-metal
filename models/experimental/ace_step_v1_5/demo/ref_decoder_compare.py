@@ -382,8 +382,6 @@ def tensor_stats(name: str, x: "torch.Tensor") -> str:
 
 
 def pearson_pcc(a: "torch.Tensor", b: "torch.Tensor") -> float:
-    pass
-
     a = a.detach().float().reshape(-1)
     b = b.detach().float().reshape(-1)
     if a.numel() != b.numel():
@@ -395,6 +393,4 @@ def pearson_pcc(a: "torch.Tensor", b: "torch.Tensor") -> float:
 
 
 def max_abs_diff(a: "torch.Tensor", b: "torch.Tensor") -> float:
-    pass
-
     return float((a.detach().float() - b.detach().float()).abs().max().item())

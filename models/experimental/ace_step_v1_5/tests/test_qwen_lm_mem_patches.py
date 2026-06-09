@@ -146,7 +146,7 @@ def test_lm_head_sharded_norm_patches_distributed_norm_and_apply():
     ):
         ace_step_apply_lm_head_sharded_norm(tt_model, dnorm.args)
 
-        out = dnorm(hidden, Mode.PREFILL, norm_config=lm_head_cfg)
+        out = dnorm.forward(hidden, Mode.PREFILL, norm_config=lm_head_cfg)
         assert out is sharded_hidden
         to_mem.assert_called()
         i2s.assert_called()

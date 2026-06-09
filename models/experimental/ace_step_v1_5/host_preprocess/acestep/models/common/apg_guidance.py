@@ -140,7 +140,6 @@ def adg_forward(
         latents = latents.repeat_interleave(repeats, dim=1)
 
     # Get batch size
-    n = noise_pred_cond.shape[0]
     noise_pred_text = noise_pred_cond
     n, t, c = noise_pred_text.shape
 

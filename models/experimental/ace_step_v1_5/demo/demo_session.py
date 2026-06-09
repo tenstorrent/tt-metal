@@ -6,8 +6,11 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -93,7 +96,8 @@ class AceStepDemoSession:
             try:
                 close_ace_step_device(ttnn_mod, self.preprocess_dev)
             except Exception:
-                pass
+                # Device close is best-effort during teardown; keep shutdown flowing.
+                logger.debug("Ignoring preprocess device close failure.", exc_info=True)
         self.preprocess_dev = None
         self.qwen_tt_encoder = None
         self.audio_code_detokenizer = None
@@ -108,7 +112,8 @@ class AceStepDemoSession:
                 try:
                     self.trace_state.release(dev)
                 except Exception:
-                    pass
+                    # Best-effort teardown: ignore release errors so session cleanup can continue.
+                    logger.debug("Ignoring trace release failure.", exc_info=True)
             self.trace_state = None
 
         for dev in (self.dit_dev, self.preprocess_dev):
@@ -116,7 +121,8 @@ class AceStepDemoSession:
                 try:
                     close_ace_step_device(ttnn_mod, dev)
                 except Exception:
-                    pass
+                    # Best-effort teardown: ignore device close errors so session cleanup can continue.
+                    logger.debug("Ignoring device close failure.", exc_info=True)
         self.dit_dev = None
         self.preprocess_dev = None
         self.pipe = None

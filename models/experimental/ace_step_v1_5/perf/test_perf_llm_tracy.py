@@ -281,14 +281,12 @@ def _run_causal_lm_tracy_harness(
         with torch.inference_mode():
             out = causal_lm.forward(input_ids=prefill_ids.clone(), past_key_values=None, use_cache=True)
             past = out.past_key_values
-            cur = prefill_ids[:, -1:]
             for step_idx in range(decode_steps):
                 if trace_each_decode and not is_ci:
                     _tracy_signpost(f"LLM_DECODE_STEP_{step_idx}")
                 nxt = torch.randint(4, min(8192, vocab - 1), (1, 1), dtype=torch.long)
                 out = causal_lm.forward(input_ids=nxt, past_key_values=past, use_cache=True)
                 past = out.past_key_values
-                cur = nxt
 
     run_once = _run_prefill_once if perf_mode == "prefill" else _run_prefill_decode_once
 
