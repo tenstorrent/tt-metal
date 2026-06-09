@@ -494,7 +494,7 @@ def run_generation(
 
     # Paged attention config
     if page_params is None:
-        page_params = {"page_block_size": 64, "page_max_num_blocks": max_seq_len // 64}
+        page_params = {"page_block_size": 64, "page_max_num_blocks": (max_seq_len + 63) // 64}
     paged_attention_config = PagedAttentionConfig(
         block_size=page_params["page_block_size"],
         max_num_blocks=page_params["page_max_num_blocks"],
@@ -1063,7 +1063,7 @@ def test_demo(mesh_device, model_path, prefill_len, request):
             sweep_page_block_size = 64
             sweep_page_params = {
                 "page_block_size": sweep_page_block_size,
-                "page_max_num_blocks": sweep_max_seq_len // sweep_page_block_size,
+                "page_max_num_blocks": (sweep_max_seq_len + sweep_page_block_size - 1) // sweep_page_block_size,
             }
             prompt_file = f"{_TT_TRANSFORMERS_PROMPTS_DIR}/input_data_long_{pl // 1024}k.json"
             with open(prompt_file) as f:
@@ -1095,7 +1095,7 @@ def test_demo(mesh_device, model_path, prefill_len, request):
     page_block_size = 64
     page_params = {
         "page_block_size": page_block_size,
-        "page_max_num_blocks": max_seq_len // page_block_size,
+        "page_max_num_blocks": (max_seq_len + page_block_size - 1) // page_block_size,
     }
 
     results = run_generation(
