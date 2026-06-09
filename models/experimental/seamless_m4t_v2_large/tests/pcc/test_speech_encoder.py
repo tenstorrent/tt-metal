@@ -41,9 +41,9 @@ def test_seamless_m4t_v2_speech_encoder_max_seq_pcc(mesh_device, device_params, 
     try:
         weights_dir = ensure_seamless_m4t_v2_large_weights()
     except ImportError as e:
-        pytest.skip(str(e))
+        raise pytest.skip.Exception(str(e))
     except Exception as e:
-        pytest.skip(f"Could not prepare seamless-m4t-v2-large weights: {e}")
+        raise pytest.skip.Exception(f"Could not prepare seamless-m4t-v2-large weights: {e}")
 
     with mesh_default_device(mesh_device):
         torch.manual_seed(0)
