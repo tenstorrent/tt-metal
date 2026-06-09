@@ -71,6 +71,27 @@ struct D2DStreamConfig {
     // service multicasts it into every receiver worker core's L1. 0 = disabled.
     // Mirrors H2DStreamService::Config::metadata_size_bytes.
     uint32_t metadata_size_bytes = 0;
+
+    // Fabric-link sharing (lease) mode. The persistent service kernels and the
+    // model-graph ops (CCLs, etc.) both need tt-fabric, but the EDM allows only one
+    // connected client per sender channel, so they must take turns.
+    //
+    //   true  (default): LEASE mode. The service holds NO fabric connection until
+    //     the model graph grants it a turn via release_fabric_links(); it then does
+    //     exactly one transfer and releases the link. The atomic unit is one
+    //     transfer (a transfer is uninterruptible). The model graph calls
+    //     wait_for_fabric_links() before a fabric op (block until the service is off
+    //     the link) and release_fabric_links() after, once per transfer it wants.
+    //   false: OWN mode. The service opens its fabric connection at start and never
+    //     relinquishes it (standalone use with no competing fabric ops); the lease
+    //     API and the per-transfer handshake are compiled out. This is the original
+    //     V0 behavior.
+    //
+    // FOOTGUN: in lease mode a service that is never granted a turn hangs waiting
+    // for its first transfer — correct for the model graph (it always grants), a
+    // trap for a naive standalone caller. Set false when there are no competing
+    // fabric ops.
+    bool share_fabric_links = true;
 };
 
 // Sender-side handle. Owns: the sender backing tensor, one claimed service core
@@ -117,6 +138,27 @@ public:
     // drain. Per-coord because each device's service core is independent.
     // TT_FATALs if metadata was not configured (Config::metadata_size_bytes == 0).
     DeviceAddr get_metadata_addr(const distributed::MeshCoordinate& coord) const;
+
+    // Fabric-link lease (only meaningful when Config::share_fabric_links == true;
+    // TT_FATALs otherwise). The two halves of a per-transfer handshake over fabric-
+    // link ownership between this service and the model-graph ops on the same links:
+    //
+    //   wait_for_fabric_links() — BLOCK until every sender service core is off the
+    //     fabric link (its last granted transfer, if any, has completed and the
+    //     connection is closed). Call before launching a fabric op. Returns
+    //     immediately if the service hasn't been granted a turn.
+    //   release_fabric_links()  — grant every sender service core ONE transfer
+    //     (it will open the link, do its next transfer when its workers are ready,
+    //     then close). Call after the fabric op is done.
+    //
+    // A device hosting both an inbound receiver and an outbound sender must drive
+    // both handles' leases (a middle-stage Galaxy is the receiver of the upstream
+    // pair and the sender of the downstream pair). release_fabric_links() must be
+    // called only AFTER the fabric op's mesh CQ has been Finish()-ed — it is an
+    // unordered host L1 write, and granting earlier lets the service re-acquire the
+    // link while the op still owns the channel.
+    void wait_for_fabric_links();
+    void release_fabric_links();
 
 private:
     friend class D2DStreamService;
@@ -169,6 +211,16 @@ public:
     // after each transfer lands. Same address across the mesh. TT_FATALs if
     // metadata was not configured (Config::metadata_size_bytes == 0).
     DeviceAddr get_metadata_addr() const;
+
+    // Fabric-link lease — receiver-side mirror of the sender's (only meaningful when
+    // Config::share_fabric_links == true; TT_FATALs otherwise). The receiver kernel
+    // holds a fabric connection too (to return socket credits via
+    // fabric_socket_notify_sender), so it leases the links the same way:
+    // wait_for_fabric_links() blocks until every receiver service core is off the
+    // link; release_fabric_links() grants each one its next drain. See the sender-
+    // side doc for the pairing / ordering contract.
+    void wait_for_fabric_links();
+    void release_fabric_links();
 
 private:
     friend class D2DStreamService;

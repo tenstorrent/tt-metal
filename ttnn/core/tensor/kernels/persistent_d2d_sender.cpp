@@ -57,7 +57,16 @@ constexpr uint32_t num_workers = get_compile_time_arg_val(17);
 constexpr uint32_t metadata_enabled = get_compile_time_arg_val(18);
 constexpr uint32_t metadata_size_bytes = get_compile_time_arg_val(19);
 constexpr uint32_t sender_metadata_l1_addr = get_compile_time_arg_val(20);
-constexpr auto input_tensor_accessor_args = TensorAccessorArgs<21>();
+// Fabric-link lease (indices 21..22). share_fabric_links: 0 = OWN mode (open the
+// fabric connection once at entry, never release it — original V0 behavior); 1 =
+// LEASE mode (hold no connection until granted a turn). link_grant is the single
+// host<->kernel ping-pong word: 0 = idle/done (no connection, links free for the
+// model graph), 1 = granted (the kernel's turn for exactly one transfer). The host
+// writes 1 (release_fabric_links); the kernel writes 0 after its transfer; the host
+// polls for 0 (wait_for_fabric_links). Writers never overlap → race-free.
+constexpr uint32_t share_fabric_links = get_compile_time_arg_val(21);
+constexpr uint32_t link_grant_addr = get_compile_time_arg_val(22);
+constexpr auto input_tensor_accessor_args = TensorAccessorArgs<23>();
 
 // Emit one socket page (socket_page_size bytes) from a contiguous L1 source to
 // the downstream FIFO over fabric, split into <= fabric_max_payload_size
@@ -87,16 +96,14 @@ void kernel_main() {
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
-    DEVICE_PRINT("D2DStreamService sender opening fabric connection\n");
-
-    // Two fabric headers in the packet-header CB: one for the data writes, one
-    // for the socket control-flow notify.
+    // Two fabric headers in the packet-header CB: one for the data writes, one for
+    // the socket control-flow notify. Set up before any open — all L1 writes, no
+    // connection needed.
     volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr =
         reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_index));
     volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr =
         reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             get_write_ptr(fabric_packet_header_cb_index) + sizeof(PACKET_HEADER_TYPE));
-    fabric_connection.open();
 
     SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
     set_sender_socket_page_size(sender_socket, socket_page_size);
@@ -105,7 +112,9 @@ void kernel_main() {
     // receiver's NoC coords, so the FIFO write target is built directly from the
     // downstream encoding (no allocator bank-id lookup — service cores on the FD
     // column have no L1 bank registered). Mirrors the canonical fabric socket
-    // sender (tests/.../misc/socket/fabric_sender.cpp).
+    // sender (tests/.../misc/socket/fabric_sender.cpp). The unicast route is written
+    // into the packet-header CB once here and reused across every (re-)open of the
+    // fabric connection — no fabric connection is required to set it.
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
     fabric_set_unicast_route(data_packet_header_addr, downstream_enc);
     const uint32_t receiver_noc_x = downstream_enc.d2d.downstream_noc_x;
@@ -118,6 +127,16 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
     volatile tt_l1_ptr uint32_t* data_ready_counter =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(data_ready_counter_addr);
+    volatile tt_l1_ptr uint32_t* link_grant = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(link_grant_addr);
+
+    // OWN mode: hold the fabric connection for the kernel's whole life (open now).
+    // LEASE mode: hold nothing until granted a turn — opened per transfer below.
+    bool fabric_open = false;
+    if constexpr (share_fabric_links == 0) {
+        DEVICE_PRINT("D2DStreamService sender opening fabric connection (own mode)\n");
+        fabric_connection.open();
+        fabric_open = true;
+    }
 
     uint64_t consumed_mcast_addr = 0;
     if constexpr (worker_sync_enabled) {
@@ -132,19 +151,30 @@ void kernel_main() {
     uint32_t last_data_ready = 0;
     bool terminated = false;
     while (!terminated) {
-        // 1. Wait for the whole sender worker grid to mark this iteration's
-        //    backing tensor ready (num_workers more increments), or for the
-        //    host to signal termination.
-        while (true) {
+        // 1. Idle wait. Gate on (a) the fabric-link grant (LEASE mode only) and
+        //    (b) the sender worker grid (num_workers more data_ready increments),
+        //    or break on host termination. Both are checked here at the iteration
+        //    boundary — no transfer is in flight and the kernel holds no connection
+        //    (LEASE mode) — so the lease is honoured at a clean point. While not
+        //    granted the kernel holds no link; while granted-but-waiting-for-data it
+        //    holds the turn but still no connection (opened only once data is ready).
+        bool ready = false;
+        while (!ready) {
             invalidate_l1_cache();
             if (termination_semaphore[0] == 1) {
                 terminated = true;
                 break;
             }
+            if constexpr (share_fabric_links) {
+                if (link_grant[0] != 1) {
+                    // Not our turn — links belong to the model graph; keep waiting.
+                    continue;
+                }
+            }
             const uint32_t cur = *data_ready_counter;
             if ((cur - last_data_ready) == num_workers) {
                 last_data_ready = cur;
-                break;
+                ready = true;
             }
         }
 
@@ -153,7 +183,15 @@ void kernel_main() {
             break;
         }
 
-        // 2. Drain one full tensor's worth of data to the receiver via fabric.
+        // 2. LEASE mode: acquire the link for exactly this transfer. The unicast
+        //    route + packet headers were set up once at entry and persist in L1, so
+        //    open() is all that is needed.
+        if constexpr (share_fabric_links) {
+            fabric_connection.open();
+            fabric_open = true;
+        }
+
+        // 3. Drain one full tensor's worth of data to the receiver via fabric.
         for (uint32_t chunk = 0; chunk < num_socket_pages; ++chunk) {
             socket_reserve_pages(sender_socket, 1);
 
@@ -194,15 +232,30 @@ void kernel_main() {
             fabric_socket_notify_receiver(sender_socket, fabric_connection, socket_packet_header_addr);
         }
 
-        // 3. Release the sender worker grid (consumed_sem) so it can overwrite
+        // 4. Release the sender worker grid (consumed_sem) so it can overwrite
         //    the backing tensor with the next iteration's slice.
         if constexpr (worker_sync_enabled) {
             noc_semaphore_inc_multicast(consumed_mcast_addr, /*incr=*/1, /*num_dests=*/num_workers);
+        }
+
+        // 5. LEASE mode: this transfer is done — drop the fabric connection and hand
+        //    the links back to the model graph (link_grant = 0). The host polls for
+        //    0 in wait_for_fabric_links(); it only writes 1 again after seeing 0, so
+        //    the two never write concurrently.
+        if constexpr (share_fabric_links) {
+            fabric_connection.close();
+            fabric_open = false;
+            link_grant[0] = 0;
         }
     }
 
     update_socket_config(sender_socket);
 
     DEVICE_PRINT("D2DStreamService sender closing fabric connection\n");
-    fabric_connection.close();
+    // In LEASE mode the connection is already closed between transfers (and on the
+    // termination path, which only fires from the idle wait); in OWN mode it is held
+    // open for the kernel's life and closed here.
+    if (fabric_open) {
+        fabric_connection.close();
+    }
 }

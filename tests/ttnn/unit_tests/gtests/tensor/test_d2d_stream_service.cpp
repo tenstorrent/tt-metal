@@ -127,8 +127,11 @@ uint32_t core_range_volume(const CoreRange& cr) {
 
 // Standard config: UINT32 ROW_MAJOR DRAM-interleaved, replicated on every
 // device, L1 socket FIFO. The mapper is built fresh per call (create_pair
-// moves it out).
-D2DStreamConfig make_config(const std::shared_ptr<MeshDevice>& sender_mesh, const ttnn::Shape& global_shape) {
+// moves it out). share_fabric_links defaults to false (OWN mode) so the
+// functional tests stream without needing per-transfer grants; the lease tests
+// pass true and drive the grant/release handshake explicitly.
+D2DStreamConfig make_config(
+    const std::shared_ptr<MeshDevice>& sender_mesh, const ttnn::Shape& global_shape, bool share_fabric_links = false) {
     const auto tensor_layout = TensorLayout(
         DataType::UINT32,
         PageConfig(Layout::ROW_MAJOR),
@@ -139,6 +142,7 @@ D2DStreamConfig make_config(const std::shared_ptr<MeshDevice>& sender_mesh, cons
         .socket_mem_config = SocketMemoryConfig{BufferType::L1, /*fifo_size=*/4096},
         .sender_worker_cores = kWorkerCores,
         .receiver_worker_cores = kWorkerCores,
+        .share_fabric_links = share_fabric_links,
     };
 }
 
@@ -495,6 +499,86 @@ void verify_reuse(
     }
 }
 
+// Fabric-link lease round-trip (share_fabric_links == true). With lease mode the
+// service holds no fabric connection and does NOTHING until granted a turn, so each
+// round must drive the full ping-pong: enqueue the worker workloads (which block on
+// the service), grant both sides one transfer via release_fabric_links(), Finish,
+// then wait_for_fabric_links() to confirm both services released the links again.
+// Two rounds with distinct seeds prove the service re-acquires + releases the link
+// per transfer and keeps streaming. A service that never re-acquired would hang the
+// Finish; one that never released would hang wait_for_fabric_links.
+void verify_fabric_lease(
+    const std::shared_ptr<MeshDevice>& sender_mesh,
+    const std::shared_ptr<MeshDevice>& receiver_mesh,
+    const ttnn::Shape& global_shape) {
+    auto [sender, receiver] = D2DStreamService::create_pair(
+        sender_mesh, receiver_mesh, make_config(sender_mesh, global_shape, /*share_fabric_links=*/true));
+
+    auto run_round = [&](uint32_t seed) {
+        auto receiver_workload = make_receiver_worker_workload(receiver.get(), receiver_mesh, /*num_iters=*/1);
+        auto sender_workload =
+            make_sender_worker_workload(sender.get(), sender_mesh, /*num_iters=*/1, /*fill_base=*/seed);
+        EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), receiver_workload, /*blocking=*/false);
+        EnqueueMeshWorkload(sender_mesh->mesh_command_queue(), sender_workload, /*blocking=*/false);
+
+        // Nothing moves until granted: lease the links to each service for one
+        // transfer (a device hosting both an inbound receiver and an outbound sender
+        // must grant both). Grant before Finish, else the workers block forever.
+        receiver->release_fabric_links();
+        sender->release_fabric_links();
+
+        Finish(sender_mesh->mesh_command_queue());
+        Finish(receiver_mesh->mesh_command_queue());
+
+        // Both services must hand the links back (link_grant == 0) before the next
+        // round — in production this is the point a fabric op would launch.
+        sender->wait_for_fabric_links();
+        receiver->wait_for_fabric_links();
+
+        expect_receiver_backing_equals(receiver.get(), receiver_mesh, seed);
+    };
+
+    run_round(0x1234u);
+    run_round(0x5678u);
+}
+
+// Fabric-link lease stress. Build the pair once, launch sender + receiver dummy
+// worker programs that each loop num_iters INTERNALLY, then drive num_iters
+// grant/release cycles interleaved with those worker iterations. The workers only
+// advance an iteration when their service is granted the link, so the host loop
+// paces every transfer — exercising the open/close + link_grant ping-pong many
+// times against a single long-running workload. Catches state drift a 2-round test
+// would miss: a stuck grant word, a failed connection re-open, or monotonic-counter
+// desync would hang a wait_for_fabric_links() / Finish() mid-loop. The sender writes
+// values 1..num_iters, so the receiver backing tensor must hold num_iters at the end.
+void verify_fabric_lease_stress(
+    const std::shared_ptr<MeshDevice>& sender_mesh,
+    const std::shared_ptr<MeshDevice>& receiver_mesh,
+    const ttnn::Shape& global_shape,
+    uint32_t num_iters) {
+    auto [sender, receiver] = D2DStreamService::create_pair(
+        sender_mesh, receiver_mesh, make_config(sender_mesh, global_shape, /*share_fabric_links=*/true));
+
+    auto receiver_workload = make_receiver_worker_workload(receiver.get(), receiver_mesh, num_iters);
+    auto sender_workload = make_sender_worker_workload(sender.get(), sender_mesh, num_iters, /*fill_base=*/1);
+    EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), receiver_workload, /*blocking=*/false);
+    EnqueueMeshWorkload(sender_mesh->mesh_command_queue(), sender_workload, /*blocking=*/false);
+
+    // One grant per transfer. Grant both services (receiver first so it's ready to
+    // drain), then wait for both to hand the links back before the next grant.
+    for (uint32_t i = 0; i < num_iters; ++i) {
+        receiver->release_fabric_links();
+        sender->release_fabric_links();
+        sender->wait_for_fabric_links();
+        receiver->wait_for_fabric_links();
+    }
+
+    Finish(sender_mesh->mesh_command_queue());
+    Finish(receiver_mesh->mesh_command_queue());
+
+    expect_receiver_backing_equals(receiver.get(), receiver_mesh, num_iters);
+}
+
 // Assert the metadata blob equals `expected` on BOTH the sender service core L1
 // (where the designated worker wrote it) and every receiver worker core's L1
 // (where the receiver service multicast it).
@@ -749,6 +833,61 @@ TEST_F(D2DStreamServiceTest, ReuseRowPair) {
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(1, 0));
 
     verify_reuse(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), /*num_rounds=*/4);
+}
+
+// Fabric-link lease round-trip on a single chip pair: grant a transfer, run it,
+// confirm the links are released, repeat.
+TEST_F(D2DStreamServiceTest, FabricLeaseSingleChipPair) {
+    if (!service_cores_supported()) {
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
+    }
+    const auto shape = this->mesh_device_->shape();
+    if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {
+        GTEST_SKIP() << "Need a 2D mesh with >= 2 devices to carve distinct submeshes; got " << shape;
+    }
+
+    const auto coord0 = MeshCoordinate(0, 0);
+    const auto coord1 = (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0);
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
+
+    verify_fabric_lease(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}));
+}
+
+// Fabric-link lease across a 1x2 row pair (the lease covers every coord on both
+// meshes).
+TEST_F(D2DStreamServiceTest, FabricLeaseRowPair) {
+    if (!service_cores_supported()) {
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
+    }
+    const auto shape = this->mesh_device_->shape();
+    if (shape.dims() != 2 || shape[0] < 2 || shape[1] < 2) {
+        GTEST_SKIP() << "Need a >= 2x2 mesh to carve 1x2 <-> 1x2 submeshes; got " << shape;
+    }
+
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(0, 0));
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(1, 0));
+
+    verify_fabric_lease(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}));
+}
+
+// Fabric-link lease stress: 100 interleaved grant/release cycles against a single
+// pair of long-running dummy worker programs.
+TEST_F(D2DStreamServiceTest, FabricLeaseStressSingleChipPair) {
+    if (!service_cores_supported()) {
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
+    }
+    const auto shape = this->mesh_device_->shape();
+    if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {
+        GTEST_SKIP() << "Need a 2D mesh with >= 2 devices to carve distinct submeshes; got " << shape;
+    }
+
+    const auto coord0 = MeshCoordinate(0, 0);
+    const auto coord1 = (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0);
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
+
+    verify_fabric_lease_stress(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), /*num_iters=*/100);
 }
 
 // Per-handle teardown must release service cores / L1 / sockets so a fresh pair

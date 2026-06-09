@@ -56,20 +56,24 @@ constexpr uint32_t num_workers = get_compile_time_arg_val(15);
 constexpr uint32_t metadata_enabled = get_compile_time_arg_val(16);
 constexpr uint32_t metadata_size_bytes = get_compile_time_arg_val(17);
 constexpr uint32_t metadata_l1_addr = get_compile_time_arg_val(18);
-constexpr auto output_tensor_accessor_args = TensorAccessorArgs<19>();
+// Fabric-link lease (indices 19..20), mirror of the sender. share_fabric_links: 0 =
+// OWN mode (open the credit-return connection at entry, never release); 1 = LEASE
+// mode (hold no connection until granted a turn). link_grant is the single ping-pong
+// word (0 = idle/done, 1 = granted one drain). See
+// D2DStreamServiceReceiver::wait_for_fabric_links() / release_fabric_links().
+constexpr uint32_t share_fabric_links = get_compile_time_arg_val(19);
+constexpr uint32_t link_grant_addr = get_compile_time_arg_val(20);
+constexpr auto output_tensor_accessor_args = TensorAccessorArgs<21>();
 
 void kernel_main() {
     size_t rt_args_idx = 0;
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
-    DEVICE_PRINT("D2DStreamService receiver opening fabric connection\n");
-
     // The socket packet header lives in the fabric packet-header CB; it's used
     // only by fabric_socket_notify_sender for the credit return.
     volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr =
         reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_index));
-    fabric_connection.open();
 
     auto output_tensor_accessor = TensorAccessor(output_tensor_accessor_args, output_tensor_addr);
 
@@ -78,6 +82,16 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* termination_semaphore =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
+    volatile tt_l1_ptr uint32_t* link_grant = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(link_grant_addr);
+
+    // OWN mode: hold the (credit-return) fabric connection for the kernel's whole
+    // life. LEASE mode: hold nothing until granted a turn — opened per drain below.
+    bool fabric_open = false;
+    if constexpr (share_fabric_links == 0) {
+        DEVICE_PRINT("D2DStreamService receiver opening fabric connection (own mode)\n");
+        fabric_connection.open();
+        fabric_open = true;
+    }
 
     // Worker-sync state. Allocated unconditionally for readability; the
     // `if constexpr` gates dead-code-eliminate it when worker_sync_enabled == 0.
@@ -108,6 +122,32 @@ void kernel_main() {
 
     bool terminated = false;
     while (!terminated) {
+        // LEASE mode: wait for a grant before draining a transfer (the drain returns
+        // socket credits over fabric, so it needs the link). Termination-aware. While
+        // not granted the kernel holds no connection — the links are the model
+        // graph's. Granted at the iteration boundary only (no transfer in flight), so
+        // the lease is honoured cleanly.
+        if constexpr (share_fabric_links) {
+            bool granted = false;
+            while (!granted) {
+                invalidate_l1_cache();
+                if (termination_semaphore[0] == 1) {
+                    terminated = true;
+                    break;
+                }
+                if (link_grant[0] == 1) {
+                    granted = true;
+                }
+            }
+            if (terminated) {
+                DEVICE_PRINT("D2DStreamService receiver terminated\n");
+                break;
+            }
+            // Acquire the credit-return connection for exactly this drain.
+            fabric_connection.open();
+            fabric_open = true;
+        }
+
         // Drain exactly one full tensor's worth of data: num_socket_pages chunks.
         for (uint32_t chunk = 0; chunk < num_socket_pages; ++chunk) {
             // Termination-aware socket wait: poll for one page with a bounded
@@ -217,11 +257,26 @@ void kernel_main() {
                 break;
             }
         }
+
+        // LEASE mode: this drain (+ worker handshake) is done — drop the credit-
+        // return connection and hand the links back to the model graph
+        // (link_grant = 0). The host polls for 0 in wait_for_fabric_links() and only
+        // writes 1 again after seeing 0, so the two never write concurrently.
+        if constexpr (share_fabric_links) {
+            fabric_connection.close();
+            fabric_open = false;
+            link_grant[0] = 0;
+        }
     }
 
     noc_async_write_barrier();
     noc_async_atomic_barrier();
     update_socket_config(receiver_socket);
     DEVICE_PRINT("D2DStreamService receiver closing fabric connection\n");
-    fabric_connection.close();
+    // In LEASE mode the connection is already closed between transfers (and on the
+    // termination path, which only fires from an idle wait); in OWN mode it is held
+    // open for the kernel's life and closed here.
+    if (fabric_open) {
+        fabric_connection.close();
+    }
 }

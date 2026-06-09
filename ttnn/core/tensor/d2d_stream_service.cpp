@@ -175,6 +175,17 @@ struct D2DStreamServiceSender::Impl {
     // Per-coord service-core L1 words (service cores differ per device).
     std::map<distributed::MeshCoordinate, DeviceAddr> data_ready_counter_addrs;
     std::map<distributed::MeshCoordinate, DeviceAddr> termination_addrs;
+    // Fabric-link lease. share_fabric_links mirrors Config; when true the kernel
+    // holds no fabric connection until granted a turn. link_grant is a single per-
+    // coord service-core L1 word forming a strict host<->kernel ping-pong:
+    //   0 = service idle/done (holds no connection, links free for the model graph)
+    //   1 = granted (the service's turn for exactly one transfer)
+    // release_fabric_links() writes 1; the kernel writes 0 after its transfer;
+    // wait_for_fabric_links() polls for 0. Reader/writer roles flip at the transfer
+    // boundary, so one word is race-free (writers never overlap). Always set from
+    // Config in create_pair (this member default never takes effect).
+    bool share_fabric_links = true;
+    std::map<distributed::MeshCoordinate, DeviceAddr> link_grant_addrs;
     // Mesh-wide GlobalSemaphore on sender_worker_cores; the service kernel
     // multicast-incs it once per drained iteration.
     std::optional<GlobalSemaphore> consumed_sem;
@@ -208,6 +219,11 @@ struct D2DStreamServiceReceiver::Impl {
     // Per-coord service-core L1 words (service cores differ per device).
     std::map<distributed::MeshCoordinate, DeviceAddr> consumed_counter_addrs;
     std::map<distributed::MeshCoordinate, DeviceAddr> termination_addrs;
+    // Fabric-link lease — mirror of the sender. Single per-coord link_grant word
+    // (0 = idle/done, 1 = granted one drain); same ping-pong protocol. Always set
+    // from Config in create_pair (this member default never takes effect).
+    bool share_fabric_links = true;
+    std::map<distributed::MeshCoordinate, DeviceAddr> link_grant_addrs;
     // Mesh-wide GlobalSemaphore on receiver_worker_cores; the service kernel
     // multicast-incs it after the transfer has landed.
     std::optional<GlobalSemaphore> data_ready_sem;
@@ -266,6 +282,9 @@ D2DStreamServiceSender::~D2DStreamServiceSender() {
                 svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
             }
             for (const auto& [coord, addr] : impl_->data_ready_counter_addrs) {
+                svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
+            }
+            for (const auto& [coord, addr] : impl_->link_grant_addrs) {
                 svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
             }
             for (const auto& [coord, addr] : impl_->metadata_addrs) {
@@ -330,6 +349,44 @@ DeviceAddr D2DStreamServiceSender::get_metadata_addr(const distributed::MeshCoor
     return it->second;
 }
 
+void D2DStreamServiceSender::wait_for_fabric_links() {
+    TT_FATAL(
+        impl_->share_fabric_links,
+        "D2DStreamServiceSender::wait_for_fabric_links: service was created with share_fabric_links == false "
+        "(it owns the link for its lifetime); the lease API is a no-op in that mode");
+    auto* mesh = impl_->mesh_device.get();
+    TT_FATAL(mesh != nullptr, "D2DStreamServiceSender::wait_for_fabric_links: mesh device is null");
+    // Block until every sender service core is off the link, i.e. link_grant == 0
+    // (idle/done — any granted transfer has completed and the connection closed).
+    // The kernel is the only writer of 0, so this is the read half of the ping-pong.
+    std::vector<uint32_t> rb;
+    for (const auto& [coord, addr] : impl_->link_grant_addrs) {
+        auto* d = mesh->get_device(coord);
+        const CoreCoord core = impl_->service_cores.at(coord);
+        do {
+            rb.clear();
+            tt::tt_metal::detail::ReadFromDeviceL1(d, core, static_cast<uint32_t>(addr), sizeof(uint32_t), rb);
+        } while (rb.empty() || rb[0] != 0u);
+    }
+}
+
+void D2DStreamServiceSender::release_fabric_links() {
+    TT_FATAL(
+        impl_->share_fabric_links,
+        "D2DStreamServiceSender::release_fabric_links: service was created with share_fabric_links == false");
+    auto* mesh = impl_->mesh_device.get();
+    TT_FATAL(mesh != nullptr, "D2DStreamServiceSender::release_fabric_links: mesh device is null");
+    // Grant every sender service core ONE transfer: link_grant = 1. The host is the
+    // only writer of 1, and only writes it after wait_for_fabric_links() observed 0,
+    // so writers never overlap. Must be called only AFTER the fabric op's CQ has
+    // been Finish()-ed (unordered host write).
+    std::vector<uint32_t> one_word{1};
+    for (const auto& [coord, addr] : impl_->link_grant_addrs) {
+        tt::tt_metal::detail::WriteToDeviceL1(
+            mesh->get_device(coord), impl_->service_cores.at(coord), static_cast<uint32_t>(addr), one_word);
+    }
+}
+
 // ===========================================================================
 // Receiver handle
 // ===========================================================================
@@ -367,6 +424,9 @@ D2DStreamServiceReceiver::~D2DStreamServiceReceiver() {
                 svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
             }
             for (const auto& [coord, addr] : impl_->consumed_counter_addrs) {
+                svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
+            }
+            for (const auto& [coord, addr] : impl_->link_grant_addrs) {
                 svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
             }
         }
@@ -423,6 +483,41 @@ DeviceAddr D2DStreamServiceReceiver::get_metadata_addr() const {
         impl_->metadata_size_bytes > 0,
         "D2DStreamServiceReceiver::get_metadata_addr: metadata not configured (Config::metadata_size_bytes == 0)");
     return impl_->metadata_l1_addr;
+}
+
+void D2DStreamServiceReceiver::wait_for_fabric_links() {
+    TT_FATAL(
+        impl_->share_fabric_links,
+        "D2DStreamServiceReceiver::wait_for_fabric_links: service was created with share_fabric_links == false");
+    auto* mesh = impl_->mesh_device.get();
+    TT_FATAL(mesh != nullptr, "D2DStreamServiceReceiver::wait_for_fabric_links: mesh device is null");
+    // Mirror of the sender: block until every receiver service core is off the link
+    // (link_grant == 0 — its granted drain, if any, completed and the credit-return
+    // connection closed).
+    std::vector<uint32_t> rb;
+    for (const auto& [coord, addr] : impl_->link_grant_addrs) {
+        auto* d = mesh->get_device(coord);
+        const CoreCoord core = impl_->service_cores.at(coord);
+        do {
+            rb.clear();
+            tt::tt_metal::detail::ReadFromDeviceL1(d, core, static_cast<uint32_t>(addr), sizeof(uint32_t), rb);
+        } while (rb.empty() || rb[0] != 0u);
+    }
+}
+
+void D2DStreamServiceReceiver::release_fabric_links() {
+    TT_FATAL(
+        impl_->share_fabric_links,
+        "D2DStreamServiceReceiver::release_fabric_links: service was created with share_fabric_links == false");
+    auto* mesh = impl_->mesh_device.get();
+    TT_FATAL(mesh != nullptr, "D2DStreamServiceReceiver::release_fabric_links: mesh device is null");
+    // Grant every receiver service core ONE drain (link_grant = 1). Must be called
+    // only AFTER the fabric op's CQ has been Finish()-ed (unordered host write).
+    std::vector<uint32_t> one_word{1};
+    for (const auto& [coord, addr] : impl_->link_grant_addrs) {
+        tt::tt_metal::detail::WriteToDeviceL1(
+            mesh->get_device(coord), impl_->service_cores.at(coord), static_cast<uint32_t>(addr), one_word);
+    }
 }
 
 // ===========================================================================
@@ -490,6 +585,8 @@ Program build_receiver_program(
     bool metadata_enabled,
     uint32_t metadata_size_bytes,
     uint32_t metadata_l1_addr,
+    bool share_fabric_links,
+    uint32_t link_grant_addr,
     const tt::tt_fabric::FabricNodeId& receiver_node,
     const tt::tt_fabric::FabricNodeId& sender_node,
     uint32_t link_index) {
@@ -521,9 +618,11 @@ Program build_receiver_program(
         ws.mcast_noc_x_end,
         ws.mcast_noc_y_end,
         ws.num_workers,
-        metadata_enabled ? 1u : 0u,  // [16]
-        metadata_size_bytes,         // [17]
-        metadata_l1_addr,            // [18] receiver worker-grid L1 (uniform)
+        metadata_enabled ? 1u : 0u,    // [16]
+        metadata_size_bytes,           // [17]
+        metadata_l1_addr,              // [18] receiver worker-grid L1 (uniform)
+        share_fabric_links ? 1u : 0u,  // [19] fabric-link lease mode
+        link_grant_addr,               // [20] service-core L1 (lease ping-pong word)
     };
     ct_args.insert(ct_args.end(), accessor_ct.begin(), accessor_ct.end());
 
@@ -560,6 +659,8 @@ Program build_sender_program(
     bool metadata_enabled,
     uint32_t metadata_size_bytes,
     uint32_t sender_metadata_l1_addr,
+    bool share_fabric_links,
+    uint32_t link_grant_addr,
     const tt::tt_fabric::FabricNodeId& sender_node,
     const tt::tt_fabric::FabricNodeId& receiver_node,
     uint32_t link_index) {
@@ -597,9 +698,11 @@ Program build_sender_program(
         ws.mcast_noc_x_end,
         ws.mcast_noc_y_end,
         ws.num_workers,
-        metadata_enabled ? 1u : 0u,  // [18]
-        metadata_size_bytes,         // [19]
-        sender_metadata_l1_addr,     // [20] sender service-core L1 (per-coord)
+        metadata_enabled ? 1u : 0u,    // [18]
+        metadata_size_bytes,           // [19]
+        sender_metadata_l1_addr,       // [20] sender service-core L1 (per-coord)
+        share_fabric_links ? 1u : 0u,  // [21] fabric-link lease mode
+        link_grant_addr,               // [22] service-core L1 (lease ping-pong word)
     };
     ct_args.insert(ct_args.end(), accessor_ct.begin(), accessor_ct.end());
 
@@ -823,6 +926,14 @@ D2DStreamService::create_pair(
     auto receiver_consumed_counter_addrs =
         CMAKE_UNIQUE_NAMESPACE::allocate_service_core_words(receiver_mesh, receiver_service_cores);
 
+    // Fabric-link lease word (one per coord, zero-initialised = idle/done, allocated
+    // AFTER the socket reservation so it can't alias the FIFO). Always allocated; the
+    // kernel only consults it when share_fabric_links is on, so OWN mode is unchanged.
+    auto sender_link_grant_addrs =
+        CMAKE_UNIQUE_NAMESPACE::allocate_service_core_words(sender_mesh, sender_service_cores);
+    auto receiver_link_grant_addrs =
+        CMAKE_UNIQUE_NAMESPACE::allocate_service_core_words(receiver_mesh, receiver_service_cores);
+
     // Optional sender-side inline-metadata buffer: a per-coord L1 region on the
     // SENDER service core (not the worker grid — the service is agnostic to which
     // worker produced the blob). Allocated via ServiceCoreManager AFTER the socket
@@ -933,6 +1044,8 @@ D2DStreamService::create_pair(
                 metadata_enabled,
                 metadata_size_bytes,
                 static_cast<uint32_t>(receiver_metadata_l1_addr),
+                cfg.share_fabric_links,
+                static_cast<uint32_t>(receiver_link_grant_addrs.at(coord)),
                 receiver_node,
                 recv_upstream_sender_node,
                 recv_links.front()));
@@ -972,6 +1085,8 @@ D2DStreamService::create_pair(
                 metadata_enabled,
                 metadata_size_bytes,
                 metadata_enabled ? static_cast<uint32_t>(sender_metadata_addrs.at(coord)) : 0u,
+                cfg.share_fabric_links,
+                static_cast<uint32_t>(sender_link_grant_addrs.at(coord)),
                 sender_node,
                 send_downstream_receiver_node,
                 send_links.front()));
@@ -993,6 +1108,8 @@ D2DStreamService::create_pair(
         .num_workers = sender_num_workers,
         .data_ready_counter_addrs = std::move(sender_data_ready_counter_addrs),
         .termination_addrs = std::move(sender_termination_addrs),
+        .share_fabric_links = cfg.share_fabric_links,
+        .link_grant_addrs = std::move(sender_link_grant_addrs),
         .consumed_sem = std::move(consumed_sem),
         .metadata_size_bytes = metadata_size_bytes,
         .metadata_addrs = std::move(sender_metadata_addrs),
@@ -1013,6 +1130,8 @@ D2DStreamService::create_pair(
         .num_workers = receiver_num_workers,
         .consumed_counter_addrs = std::move(receiver_consumed_counter_addrs),
         .termination_addrs = std::move(receiver_termination_addrs),
+        .share_fabric_links = cfg.share_fabric_links,
+        .link_grant_addrs = std::move(receiver_link_grant_addrs),
         .data_ready_sem = std::move(data_ready_sem),
         .metadata_size_bytes = metadata_size_bytes,
         .metadata_buffer = std::move(receiver_metadata_buffer),
