@@ -3,31 +3,33 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-
-import ttnn
-import torch
-from loguru import logger
-from typing import List
-
 from collections import defaultdict
 from dataclasses import fields, replace
+from typing import List
 
-from models.tt_transformers.tt.common import (
-    copy_host_to_device,
-    num_blocks_in_seq,
-    get_block_size,
-    InterleavedTextMedia,
-)
+import torch
+from loguru import logger
 
+import ttnn
 from models.common.llama_models import (
-    StopReason,
     ChatPrediction,
     CompletionPrediction,
+    StopReason,
 )
-
 from models.common.sampling import SamplingParams, broadcast_sampling_params, format_sampling_params
+from models.common.sampling._utils import (
+    compact_debug_list as _compact_debug_list,
+    is_llama33_70b_model,
+    log_sampling_debug as _log_sampling_debug,
+)
 from models.common.warmup import WarmupForwardMixin
 from models.demos.llama3_70b_galaxy.tt.model_config import SDPA_CHUNK_ALIGN
+from models.tt_transformers.tt.common import (
+    InterleavedTextMedia,
+    copy_host_to_device,
+    get_block_size,
+    num_blocks_in_seq,
+)
 
 
 # Position of the page table within the decode input tuple produced by
@@ -45,6 +47,8 @@ def _as_list(value):
         return []
     if isinstance(value, torch.Tensor):
         return value.reshape(-1).tolist()
+    if isinstance(value, tuple):
+        return list(value)
     return value if isinstance(value, list) else [value]
 
 
@@ -70,6 +74,63 @@ def _fill_inactive_params_from_active(params, active_slots, max_batch):
                 values[idx] = fill_value
         updates[f.name] = values
     return replace(params, **updates)
+
+
+def _tensor_debug_summary(value):
+    if value is None:
+        return None
+    if isinstance(value, torch.Tensor):
+        summary = {"shape": list(value.shape), "dtype": str(value.dtype)}
+        if value.numel() <= 64:
+            summary["values"] = value.reshape(-1).tolist()
+        else:
+            summary["head"] = value.reshape(-1)[:8].tolist()
+        return summary
+    return value
+
+
+def _sampling_params_debug_summary(params):
+    if params is None:
+        return None
+    fields_to_log = (
+        "temperature",
+        "top_k",
+        "top_p",
+        "presence_penalty",
+        "frequency_penalty",
+        "repetition_penalty",
+        "seed",
+        "enable_log_probs",
+        "num_logprobs",
+    )
+    return {name: _compact_debug_list(getattr(params, name, None)) for name in fields_to_log if hasattr(params, name)}
+
+
+def _slot_remap_debug_summary(slot_remap, max_items=12):
+    if slot_remap is None:
+        return None
+    values = _as_list(slot_remap)
+    moves = [(idx, int(old)) for idx, old in enumerate(values) if int(old) != idx]
+    if len(moves) <= max_items:
+        return moves
+    half = max(1, max_items // 2)
+    return {"len": len(moves), "head": moves[:half], "tail": moves[-half:]}
+
+
+def _seed_manager_debug_summary(seed_manager, slots=None):
+    if seed_manager is None:
+        return None
+    if slots is None:
+        slots = range(seed_manager.max_batch_size)
+    summary = []
+    for slot in slots:
+        slot = int(slot)
+        if slot < 0 or slot >= seed_manager.max_batch_size:
+            continue
+        seed = seed_manager.seeds[slot]
+        if seed is not None:
+            summary.append((slot, seed))
+    return _compact_debug_list(summary)
 
 
 def get_prefill_warmup_sequence_lengths(max_seq_len: int) -> list[int]:
@@ -190,6 +251,7 @@ class Generator(WarmupForwardMixin):
             self.model_args = self.model_args[0]
         if isinstance(self.model, List):
             self.model = self.model[0]
+        self._sampling_debug_enabled = is_llama33_70b_model(self.model_args)
         self.tokenizer = self.model_args.tokenizer
         self.trace_id_prefill = defaultdict(lambda: None)
         self.trace_inputs_prefill = defaultdict(lambda: None)
@@ -527,6 +589,25 @@ class Generator(WarmupForwardMixin):
             and 128 in prefill_seq_lens
             and len(set(prefill_seq_lens)) > 1
         )
+        _log_sampling_debug(
+            self._sampling_debug_enabled,
+            "Galaxy prefill plan",
+            batch=batch,
+            batch_seq_len=batch_seq_len,
+            empty_slots=_compact_debug_list(empty_slots),
+            prompt_lens=_compact_debug_list(prompt_lens),
+            start_pos=_compact_debug_list(start_pos),
+            num_cached_tokens=_compact_debug_list(num_cached_tokens_list),
+            prefill_seq_lens=_compact_debug_list(prefill_seq_lens),
+            return_logits=return_logits,
+            save_logits_to_host=save_logits_to_host,
+            do_device_sampling=do_device_sampling,
+            use_batched_prefill=use_batched_prefill,
+            group_mixed_128_prefill=group_mixed_128_prefill,
+            tokens=_tensor_debug_summary(tokens),
+            page_table=_tensor_debug_summary(page_table),
+            sampling_params=_sampling_params_debug_summary(sampling_params),
+        )
 
         prefill_work_items = []
         if use_batched_prefill:
@@ -552,6 +633,19 @@ class Generator(WarmupForwardMixin):
             prefill_work_items.extend(
                 (False, [request_idx], [empty_slots[request_idx]]) for request_idx in range(batch)
             )
+        _log_sampling_debug(
+            self._sampling_debug_enabled,
+            "Galaxy prefill work items",
+            num_items=len(prefill_work_items),
+            items=[
+                {
+                    "batched": work_use_batched,
+                    "request_indices": request_indices,
+                    "request_slots": request_slots,
+                }
+                for work_use_batched, request_indices, request_slots in prefill_work_items
+            ],
+        )
 
         if do_device_sampling and use_batched_prefill:
             self.tt_logits_accumulated_batched = []
@@ -715,6 +809,15 @@ class Generator(WarmupForwardMixin):
             # Use batched list for batched prefill, persistent buffer for non-batched
             logits_source = self.tt_logits_accumulated_batched if use_batched_prefill else self.tt_logits_accumulated
             concat_sub_core_grids = getattr(self.model_args, "sub_core_grids", None)
+            _log_sampling_debug(
+                self._sampling_debug_enabled,
+                "Galaxy prefill sampling start",
+                max_batch=max_batch,
+                empty_slots=_compact_debug_list(empty_slots),
+                use_batched_prefill=use_batched_prefill,
+                logits_source_len=len(logits_source),
+                sampling_params=_sampling_params_debug_summary(sampling_params),
+            )
 
             if not explicit_seeded_prefill:
                 # Build the slot batch while the prefill sub-device manager is
@@ -806,6 +909,13 @@ class Generator(WarmupForwardMixin):
                     ttnn.deallocate(single_logits_batch)
 
                 output_toks = torch.stack(sampled_values).to(torch.int32)
+                _log_sampling_debug(
+                    self._sampling_debug_enabled,
+                    "Galaxy prefill sampled",
+                    sampled_slots=_compact_debug_list(empty_slots),
+                    sampled_by_slot=_compact_debug_list(slot_output_tokens.reshape(-1).tolist()),
+                    output_toks=_tensor_debug_summary(output_toks),
+                )
                 if log_prob_values:
                     prefill_log_probs = torch.stack(log_prob_values)
 
@@ -840,6 +950,13 @@ class Generator(WarmupForwardMixin):
                 # sampled_tokens has 32 entries ordered by slot.
                 sampled_tensor = sampled_tokens[0, 0, 0, :]  # Shape: [32]
                 output_toks = sampled_tensor[empty_slots]
+                _log_sampling_debug(
+                    self._sampling_debug_enabled,
+                    "Galaxy prefill sampled",
+                    sampled_slots=_compact_debug_list(empty_slots),
+                    sampled_by_slot=_compact_debug_list(sampled_tensor.tolist()),
+                    output_toks=_tensor_debug_summary(output_toks),
+                )
 
                 if tt_log_probs is not None:
                     tt_lp = tt_log_probs
@@ -857,6 +974,9 @@ class Generator(WarmupForwardMixin):
             return tt_out_logits_all_users
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens.")
+        _log_sampling_debug(
+            self._sampling_debug_enabled, "Galaxy prefill complete", output_toks=_tensor_debug_summary(output_toks)
+        )
         if prefill_log_probs is not None:
             return output_toks, prefill_log_probs
         return output_toks
@@ -1258,9 +1378,11 @@ class Generator(WarmupForwardMixin):
         if getattr(self, "_disable_decode_tracing", False):
             enable_trace = False
 
+        reset_reasons = []
         if sampling_params is None:
             return_logits = True
             reset_inputs = True  # We didn't sample on device, so we need to load inputs.
+            reset_reasons.append("host_sampling")
         else:
             return_logits = False
 
@@ -1271,8 +1393,10 @@ class Generator(WarmupForwardMixin):
         self._prev_sampling_on_device = sampling_on_device
         if prev_sampling_on_device is not None and prev_sampling_on_device != sampling_on_device:
             reset_inputs = True
+            reset_reasons.append("sampling_mode_changed")
         if self._decode_inputs_need_reset:
             reset_inputs = True
+            reset_reasons.append("decode_inputs_need_reset")
             self._decode_inputs_need_reset = False
         if sampling_params is not None:
             temperature_values = getattr(sampling_params, "temperature", None)
@@ -1293,19 +1417,25 @@ class Generator(WarmupForwardMixin):
             has_random = any(float(temp) != 0.0 for temp in temperature_values if temp is not None)
             if has_greedy and has_random:
                 reset_inputs = True
-        page_table_changed = page_table is not None and (
-            self.prev_page_table is None or torch.any(self.prev_page_table != page_table).item()
-        )
+                reset_reasons.append("mixed_greedy_random_sampling")
+        page_table_changed = False
+        if page_table is not None:
+            page_table_changed = self.prev_page_table is None or torch.any(self.prev_page_table != page_table).item()
+            if page_table_changed:
+                reset_inputs = True
+                reset_reasons.append("page_table_changed")
 
         if self.model.is_decode_setup is False:
             self.model.switch_mode("decode")
             reset_inputs = True  # Last step wasn't decode, so we definitely need to load inputs.
+            reset_reasons.append("mode_switch_to_decode")
 
         if reset_batch:
             # A new batch layout (real reset or slot remap) leaves the device
             # token/current_pos buffers holding the previous batch's values, so
             # host inputs are authoritative again and must be fully reloaded.
             reset_inputs = True
+            reset_reasons.append("reset_batch")
 
         kv_cache = kv_cache[0]
         active_seed_slots = None
@@ -1325,7 +1455,18 @@ class Generator(WarmupForwardMixin):
         if slot_remap is not None:
             sm_bs = self.model.sampling.seed_manager.max_batch_size
             rank_remap = slot_remap[0:sm_bs]
+            _log_sampling_debug(
+                self._sampling_debug_enabled,
+                "Galaxy decode slot remap",
+                slot_remap=_slot_remap_debug_summary(rank_remap),
+                seed_state_before=_seed_manager_debug_summary(self.model.sampling.seed_manager),
+            )
             self.model.sampling.seed_manager.apply_slot_remap(rank_remap)
+            _log_sampling_debug(
+                self._sampling_debug_enabled,
+                "Galaxy decode slot remap applied",
+                seed_state_after=_seed_manager_debug_summary(self.model.sampling.seed_manager),
+            )
         if reset_inputs and sampling_params is not None:
             # If we have new inputs, we need to set up the sampling module again
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
@@ -1344,6 +1485,14 @@ class Generator(WarmupForwardMixin):
             if reset_batch:
                 sampling_module.reset_prompt_tokens(prompt_tokens)
                 sampling_module.reset_output_state(output_tokens)
+            _log_sampling_debug(
+                self._sampling_debug_enabled,
+                "Galaxy decode sampling params reset",
+                sampling_params=_sampling_params_debug_summary(sampling_params),
+                prompt_tokens=_tensor_debug_summary(prompt_tokens),
+                output_tokens=_tensor_debug_summary(output_tokens),
+            )
+
         seed_manager = self.model.sampling.seed_manager
         if sampling_params is not None and (active_seed_slots is None or active_seed_slots):
             seed_values = getattr(sampling_params, "seed", None)
@@ -1372,6 +1521,21 @@ class Generator(WarmupForwardMixin):
         # Advance seeds after parameter copies so seeded sampling observes
         # one ordered params/seed state for this token.
         seed_manager.get_new_values(active_seed_slots)
+        _log_sampling_debug(
+            self._sampling_debug_enabled,
+            "Galaxy decode plan",
+            reset_inputs=reset_inputs,
+            reset_batch=reset_batch,
+            reset_reasons=reset_reasons,
+            return_logits=return_logits,
+            sampling_on_device=sampling_on_device,
+            active_slots=_compact_debug_list(active_seed_slots),
+            start_pos=_compact_debug_list(start_pos),
+            tokens=_tensor_debug_summary(tokens),
+            page_table=_tensor_debug_summary(page_table),
+            sampling_params=_sampling_params_debug_summary(sampling_params),
+            seed_state=_seed_manager_debug_summary(self.model.sampling.seed_manager, active_seed_slots),
+        )
 
         if tt_out_logits_saved is not None:
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
