@@ -192,11 +192,63 @@ def _device_params():
         (  # long-context-4k — single user, long prompt
             "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",
             True,
-            8192,
+            4096,
             1,
             200,
             True,
             {"page_block_size": 64, "page_max_num_blocks": 2048},
+            {"temperature": 0, "top_p": 0.08},
+            True,
+            False,
+            True,
+        ),
+        (  # long-context-64k — single user, ~64k prompt. max_seq_len is a power
+            # of 2 so the prompt prefills in a single chunk (see the note below).
+            "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",
+            True,
+            64 * 1024,
+            1,
+            200,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 1024},
+            {"temperature": 0, "top_p": 0.08},
+            True,
+            False,
+            True,
+        ),
+        # NOTE on the 128k/256k entries below:
+        #   KV memory fits on QB2 (4x P300) via bounded sliding + right-sized paging,
+        #   and single-chunk prefill runs at 128k without OOM. Long context is now
+        #   coherent end-to-end (validated at 100k-token prompts) after fixing two
+        #   bugs: (1) prefill ignored the Generator's chunk_start_idx -> forced a
+        #   single prefill chunk + in-call chunked SDPA (full-attn via chunked SDPA
+        #   over the paged cache, sliding via overlapping-window SDPA); (2) the
+        #   bounded sliding cache wrote the prompt's padding tail over its real
+        #   window -> capped the bounded-cache fill to the unpadded prompt length.
+        #
+        #   max_seq_len should be a power of 2: single-chunk prefill pads the prompt
+        #   up to the next power of 2, which must fit the RoPE/KV caches.
+        (  # long-context-128k — single user, 128k prompt (bounded sliding auto-on)
+            "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",
+            True,
+            128 * 1024,
+            1,
+            200,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 2048},
+            {"temperature": 0, "top_p": 0.08},
+            True,
+            False,
+            True,
+        ),
+        (  # long-context-256k — single user, max context (uses the 128k prompt; KV pool sized for 256k)
+            "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",
+            True,
+            256 * 1024,
+            1,
+            200,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 4096},
             {"temperature": 0, "top_p": 0.08},
             True,
             False,
@@ -216,7 +268,16 @@ def _device_params():
             True,
         ),
     ],
-    ids=["batch-1", "batch-8", "batch-32", "long-context-4k", "ci-1"],
+    ids=[
+        "batch-1",
+        "batch-8",
+        "batch-32",
+        "long-context-4k",
+        "long-context-64k",
+        "long-context-128k",
+        "long-context-256k",
+        "ci-1",
+    ],
 )
 @pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
 @pytest.mark.parametrize(
@@ -258,7 +319,10 @@ def test_demo_text(
     # Env overrides (Gemma4's conftest doesn't register the tt_transformers CLI
     # flags, so we keep overrides env-based). GEMMA4_NUM_LAYERS is a smoke-test
     # hook to build a few-layer model for a fast end-to-end wiring check.
+    import math
+
     max_generated_tokens = int(os.environ.get("GEMMA4_MAX_NEW_TOKENS", max_generated_tokens))
+    max_seq_len = int(os.environ.get("GEMMA4_MAX_SEQ_LEN", max_seq_len))
     num_layers = os.environ.get("GEMMA4_NUM_LAYERS")
     num_layers = int(num_layers) if num_layers else None
     # Batch sweep hook: GEMMA4_BATCH overrides the config's batch_size so the
@@ -277,17 +341,30 @@ def test_demo_text(
     prompts = load_inputs(input_prompts, batch_size, instruct)
     profiler.end("loading_inputs")
 
+    # Right-size the paged KV pool to the actual context. The configs carried a
+    # fixed page_max_num_blocks (e.g. 2048 = 131072 tokens) that over-allocates
+    # KV ~16x vs max_seq_len and OOMs on long contexts; size it to exactly the
+    # blocks needed (batch * ceil(max_seq_len / block_size)).
+    block_size = page_params["page_block_size"]
+    page_max_num_blocks = batch_size * math.ceil(max_seq_len / block_size)
     paged_attention_config = (
-        PagedAttentionConfig(
-            block_size=page_params["page_block_size"],
-            max_num_blocks=page_params["page_max_num_blocks"],
-        )
-        if paged_attention
-        else None
+        PagedAttentionConfig(block_size=block_size, max_num_blocks=page_max_num_blocks) if paged_attention else None
     )
 
+    # Bounded sliding KV cache: required for long context (>~64k). Without it,
+    # the 50 sliding layers each allocate the *full* context KV (~25 GB at 128k)
+    # and OOM; bounded mode caps them at the 1024-token sliding window so only
+    # the 10 full-attention layers grow with context. Auto-enable for long
+    # contexts; override with GEMMA4_BOUNDED_SLIDING=0/1.
+    _bs_env = os.environ.get("GEMMA4_BOUNDED_SLIDING")
+    bounded_sliding = (max_seq_len > 16384) if _bs_env is None else _bs_env.lower() in ("1", "true", "yes")
+    bounded_sliding = bounded_sliding and paged_attention
+
     # ── Model (all optimizations applied inside create_tt_model) ───────────
-    logger.info(f"Loading Gemma4 from {model_path} (layers={num_layers or 'all'}, max_seq_len={max_seq_len})...")
+    logger.info(
+        f"Loading Gemma4 from {model_path} (layers={num_layers or 'all'}, max_seq_len={max_seq_len}, "
+        f"bounded_sliding={bounded_sliding})..."
+    )
     generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
         mesh_device=mesh_device,
         model_path=model_path,
@@ -295,11 +372,31 @@ def test_demo_text(
         max_seq_len=max_seq_len,
         num_layers=num_layers,
         paged_attention_config=paged_attention_config,
+        bounded_sliding_kv_cache=bounded_sliding,
     )
     model_args_list = generator.model_args  # preprocess_inputs_prefill iterates this
     model_args = model_args_list[0]
 
     page_table = create_tt_page_table(batch_size, paged_attention_config)
+
+    # Bounded sliding needs per-layer page tables (sliding layers index their
+    # small bounded pool, full layers the full pool). Build them once and stash
+    # on the model so prefill/decode pick them up via _active_page_tables_per_layer.
+    if bounded_sliding:
+        from models.demos.gemma4.tt.attention.kv_cache_hybrid import build_hybrid_page_tables
+
+        n_layers = num_layers or model_args.num_hidden_layers
+        sliding_mask = [model_args.layer_types[i] == "sliding_attention" for i in range(n_layers)]
+        per_layer_pts = build_hybrid_page_tables(
+            n_layers,
+            sliding_mask,
+            num_users=batch_size,
+            block_size=block_size,
+            max_seq_len=max_seq_len,
+            sliding_window=model_args.sliding_window,
+        )
+        generator.model[0]._active_page_tables_per_layer = per_layer_pts
+        logger.info(f"Bounded sliding: installed {len(per_layer_pts)} per-layer page tables")
 
     # ── Warmup (prefill compile + optional trace) ──────────────────────────
     logger.info("Warming up prefill...")
@@ -385,11 +482,15 @@ def test_demo_text(
     profiler.end("run")
 
     # ── Final outputs ────────────────────────────────────────────────────────
+    # Print the GENERATED tokens separately from the prompt: all_outputs holds
+    # the full prompt followed by generated tokens, so decoding the whole thing
+    # is dominated by the prompt (misleading for long context — the model may be
+    # echoing the prompt). Slice off the prompt to judge generation quality.
     logger.info("Finished decoding. Final outputs:")
     for i, (output, prompt) in enumerate(zip(all_outputs, prompts)):
-        text = tokenizer.decode(output)
+        gen_text = tokenizer.decode(output[prefill_lens[i] :])
         short_prompt = (prompt[:100] + "\n<...>\n" + prompt[-100:]) if len(prompt) > 200 else prompt
-        logger.info(f"\n==USER {i} - PROMPT\n{short_prompt}\n==USER {i} - OUTPUT\n{text.strip()}\n")
+        logger.info(f"\n==USER {i} - PROMPT\n{short_prompt}\n==USER {i} - GENERATION ONLY\n{gen_text.strip()}\n")
 
     # ── Performance metrics ───────────────────────────────────────────────────
     total_prefill = profiler.get_duration("inference_prefill")

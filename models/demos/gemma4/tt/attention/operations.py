@@ -15,10 +15,29 @@ Handles:
 - scaling=1.0 (no 1/sqrt(d_k))
 """
 
+import os
+
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
 
 from .weights import AttentionWeights
+
+# Non-chunked prefill SDPA silently returns WRONG results once the Q sequence
+# exceeds 32768 (2^15) — generation degrades to garbage. Above this length we
+# fall back to chunked SDPA (chunk Q, attend the full K prefix from the paged
+# cache). Overridable via env for validation (e.g. force chunking at small seq).
+PREFILL_SDPA_MAX_SEQ = int(os.environ.get("GEMMA4_PREFILL_SDPA_MAX_SEQ", "32768"))
+# Q chunk size for chunked prefill. Must be <= 32768 and a multiple of the SDPA
+# q/k_chunk_size (128) and the page block size. 8192 keeps L1 bounded for the
+# global layers' head_dim=512.
+PREFILL_CHUNK_SIZE = int(os.environ.get("GEMMA4_PREFILL_CHUNK_SIZE", "8192"))
+# Sliding-layer chunked prefill stride. The chunked SDPA op is causal-only (no
+# sliding window), and the non-chunked op requires Q.s == K.s, so sliding layers
+# are chunked with an OVERLAPPING window: each chunk runs SDPA over a slice of
+# (stride + sliding_window) positions and keeps only the last ``stride`` rows.
+# slice length = stride + sliding_window must stay <= 32768, so 30720 + 1024 =
+# 31744 < 32768. Must be a multiple of TILE (32).
+PREFILL_SLIDING_CHUNK_SIZE = int(os.environ.get("GEMMA4_PREFILL_SLIDING_CHUNK_SIZE", "30720"))
 
 
 def apply_qkv_projection(hidden_states, weights: AttentionWeights):
@@ -149,6 +168,129 @@ def apply_rope_decode_peruser(tensor, cos_b, sin_b):
         cos_b = ttnn.repeat(cos_b, ttnn.Shape([1, 1, heads, 1]))
         sin_b = ttnn.repeat(sin_b, ttnn.Shape([1, 1, heads, 1]))
     return ttnn.add(ttnn.mul(tensor, cos_b), ttnn.mul(_rotate_half(tensor), sin_b))
+
+
+def chunked_prefill_sdpa(tt_q, k_cache, v_cache, page_table, user_id, head_dim, scale=1.0):
+    """Chunked causal prefill SDPA over a paged KV cache.
+
+    Splits the Q sequence into chunks of ``PREFILL_CHUNK_SIZE`` (<=32768) and runs
+    ``chunked_scaled_dot_product_attention`` per chunk against the full paged K/V
+    (already filled with this user's prompt). This avoids the non-chunked SDPA's
+    32768-token Q correctness cliff. Causal-only (no sliding window): use for
+    full-attention layers.
+
+    Args:
+        tt_q: [1, num_local_heads, seq_len, head_dim] (TILE layout), RoPE'd.
+        k_cache, v_cache: paged caches [max_blocks, num_local_kv_heads, block, head_dim].
+        page_table: int32 [batch, num_pages] (row ``user_id`` is this user's blocks).
+        user_id: which page_table row maps this user's logical->physical blocks.
+        head_dim: layer head_dim (512 for global layers; sizes the SDPA grid).
+    Returns:
+        [1, num_local_heads, seq_len, head_dim] attention output (TILE layout).
+    """
+    seq_len = tt_q.shape[-2]
+    nh = tt_q.shape[1]
+    # head_dim=512 needs more L1/core, so use a smaller grid + 128 chunks (the
+    # validated config); sliding-size head_dim uses the full grid.
+    if head_dim >= 512:
+        grid = ttnn.CoreCoord(8, 4)
+    else:
+        grid = ttnn.CoreCoord(8, 8)
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=grid,
+        q_chunk_size=128,
+        k_chunk_size=128,
+        exp_approx_mode=False,
+    )
+
+    # Page table row for this user: [1, num_pages], int32, ROW_MAJOR.
+    num_pages = page_table.shape[-1]
+    if page_table.shape[0] > 1:
+        user_pt = ttnn.slice(page_table, [user_id, 0], [user_id + 1, num_pages])
+    else:
+        user_pt = page_table
+
+    outs = []
+    start = 0
+    while start < seq_len:
+        clen = min(PREFILL_CHUNK_SIZE, seq_len - start)
+        q_chunk = ttnn.slice(tt_q, [0, 0, start, 0], [1, nh, start + clen, head_dim])
+        # chunked SDPA q_chunk_size=128 needs the Q chunk length to be a multiple
+        # of 128; pad the (tile-aligned) tail chunk up and slice the result back.
+        pad = (-clen) % 128
+        if pad:
+            q_chunk = ttnn.pad(q_chunk, [(0, 0), (0, 0), (0, pad), (0, 0)], value=0.0)
+        out_chunk = ttnn.transformer.chunked_scaled_dot_product_attention(
+            q_chunk,
+            k_cache,
+            v_cache,
+            user_pt,
+            chunk_start_idx=start,
+            scale=scale,
+            program_config=program_config,
+        )
+        if pad:
+            out_chunk = ttnn.slice(out_chunk, [0, 0, 0, 0], [1, nh, clen, head_dim])
+        outs.append(out_chunk)
+        start += clen
+
+    return outs[0] if len(outs) == 1 else ttnn.concat(outs, dim=2)
+
+
+def chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, head_dim, scale=1.0):
+    """Chunked causal+sliding-window prefill SDPA for sliding-window layers.
+
+    The chunked SDPA op is causal-only and the non-chunked op requires Q.s==K.s
+    (square mask) with the 32768 cliff on that shared length. A sliding-window
+    query at position p only depends on K/V in (p - window, p], so we process Q
+    in strides of ``PREFILL_SLIDING_CHUNK_SIZE`` and, for each stride, run the
+    normal causal+sliding SDPA over an OVERLAPPING slice that also covers the
+    preceding ``sliding_window`` positions (Q and K both = that slice, so it's a
+    square ≤32768 case). Only the last ``stride`` output rows are kept — their
+    full window lies inside the slice; the leading ``window`` rows were already
+    emitted by the previous stride.
+
+    Args:
+        tt_q, tt_k, tt_v: [1, heads/kv_heads, seq_len, head_dim] (TILE), RoPE'd.
+        sliding_window: window size W (Gemma4 sliding layers: 1024, tile-aligned).
+        head_dim: layer head_dim (256 for sliding layers).
+    Returns:
+        [1, num_heads, seq_len, head_dim] attention output (TILE layout).
+    """
+    seq_len = tt_q.shape[-2]
+    nh = tt_q.shape[1]
+    nkv = tt_k.shape[1]
+    # History must be tile-aligned for ttnn.slice on TILE layout. Gemma4's window
+    # (1024) is already a multiple of 32; round up otherwise. Including one extra
+    # older key is harmless — sliding_window_size masks it out.
+    hist = ((sliding_window + 31) // 32) * 32
+    stride = PREFILL_SLIDING_CHUNK_SIZE
+
+    outs = []
+    start = 0
+    while start < seq_len:
+        out_len = min(stride, seq_len - start)
+        slice_start = max(0, start - hist)
+        slice_end = start + out_len
+        q_slice = ttnn.slice(tt_q, [0, 0, slice_start, 0], [1, nh, slice_end, head_dim])
+        k_slice = ttnn.slice(tt_k, [0, 0, slice_start, 0], [1, nkv, slice_end, head_dim])
+        v_slice = ttnn.slice(tt_v, [0, 0, slice_start, 0], [1, nkv, slice_end, head_dim])
+        o = ttnn.transformer.scaled_dot_product_attention(
+            q_slice,
+            k_slice,
+            v_slice,
+            is_causal=True,
+            scale=scale,
+            sliding_window_size=sliding_window,
+        )
+        # Keep only the queries [start, slice_end); drop the leading history rows.
+        drop = start - slice_start
+        if drop:
+            o = ttnn.slice(o, [0, 0, drop, 0], [1, nh, slice_end - slice_start, head_dim])
+        outs.append(o)
+        start += out_len
+
+    return outs[0] if len(outs) == 1 else ttnn.concat(outs, dim=2)
 
 
 def concat_heads(tensor, is_decode_mode: bool, num_heads: int = None, head_dim: int = None, mesh_device=None):

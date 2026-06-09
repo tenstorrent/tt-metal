@@ -15,6 +15,7 @@ Supports both prefill and decode modes with paged attention.
 Compatible with tt_transformers Generator interface.
 """
 
+
 import torch
 from loguru import logger
 
@@ -511,6 +512,15 @@ class Gemma4Model:
         seq_len = hidden_states.shape[2]
         caches = kv_caches or self.tt_kv_cache
 
+        # Real (unpadded) prefill length: the prompt is padded up to a power of 2
+        # for the single prefill chunk, and bounded sliding layers must NOT write
+        # the padding tail into their circular KV cache (it would overwrite the
+        # real recent window and corrupt decode). get_last_token is the last real
+        # token index in non-traced long-context prefill; +1 gives the real length.
+        prefill_valid_len = None
+        if not is_decode and get_last_token is not None and get_last_token >= 0:
+            prefill_valid_len = get_last_token + 1
+
         if page_tables_per_layer is not None and len(page_tables_per_layer) != len(self.layers):
             raise ValueError(
                 f"page_tables_per_layer has {len(page_tables_per_layer)} entries "
@@ -595,6 +605,7 @@ class Gemma4Model:
                 keep_kv=keep_kv,
                 is_kv_shared=is_kv_shared,
                 position_idx_cache=position_idx_cache,
+                valid_seq_len=prefill_valid_len,
             )
 
             # For KV source layers during prefill, capture the K/V from the attention

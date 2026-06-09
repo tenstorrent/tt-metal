@@ -15,7 +15,16 @@ def _patch_model_args(model_args, mesh_device, max_batch_size, max_seq_len, mode
     model_args.max_batch_size = max_batch_size
     model_args.max_seq_len = max_seq_len
     model_args.max_context_len = max_seq_len
-    model_args.max_prefill_chunk_size = max_seq_len
+    # Gemma4's prefill doesn't yet honor the Generator's per-chunk offset
+    # (chunk_start_idx/chunk_page_table are discarded), so multi-chunk prefill
+    # mis-handles every chunk after the first (wrong RoPE positions + no
+    # cross-chunk attention) — this is the real cause of the >32k garbage. To
+    # keep prefill correct we force a SINGLE chunk by making max_prefill_chunk_size
+    # a power of 2 >= the padded prompt; the in-call SDPA then chunks internally
+    # (correct past 32768). NOTE: a single chunk uses prefill memory proportional
+    # to the full prompt, so very long contexts (>~64k) can OOM — proper
+    # chunk_start_idx support is the follow-up for bounded-memory long prefill.
+    model_args.max_prefill_chunk_size = 1 << max(int(max_seq_len - 1).bit_length(), 11)
     # Gemma4 prefill is single-user (attention head-split asserts seq batch == 1),
     # so force the Generator's per-user sequential prefill instead of its batched
     # prefill path. Decode is batched separately.
@@ -95,6 +104,7 @@ class Gemma4Generator(Generator):
         max_seq_len=4096,
         num_layers=None,
         paged_attention_config=None,
+        bounded_sliding_kv_cache=False,
     ):
         tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
         if not hasattr(tokenizer, "stop_tokens"):
@@ -108,6 +118,7 @@ class Gemma4Generator(Generator):
             model_path=model_path,
             create_kv_cache=True,
             paged_attention_config=paged_attention_config,
+            bounded_sliding_kv_cache=bounded_sliding_kv_cache,
         )
         _patch_model_args(
             model_args,
