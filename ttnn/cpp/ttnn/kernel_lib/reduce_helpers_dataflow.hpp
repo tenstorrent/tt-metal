@@ -84,6 +84,70 @@ template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t re
 FORCE_INLINE void calculate_and_prepare_reduce_scaler(
     uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH);
 
+// =============================================================================
+// Partial-scaler convenience: emit a full + partial scaler tile pair
+//
+// When the reduce dimension is not tile-aligned, the compute kernel needs the
+// full scaler for all but the last reduce-dim iteration, and a partial scaler
+// (only `partial_positions` elements filled, the rest zeroed) for the last.
+//
+// These helpers emit two scaler tiles into the CB in that order:
+//   tile 0 → full scaler
+//   tile 1 → partial scaler
+//
+// Pair with compute_kernel_lib::ReducePartialScaler::last_tile_at(1) on the
+// compute side. REDUCE_SCALAR is not supported (scaler is applied twice).
+// =============================================================================
+
+/**
+ * @brief Emit two scaler tiles for non-tile-aligned reduce dimensions
+ *
+ * Writes a full-fill scaler tile followed by a partial-fill scaler tile to
+ * `cb_id`. Each tile is computed with the same caller-provided float scaler;
+ * only the number of valid positions differs.
+ *
+ * @tparam cb_id Circular buffer ID to write the tiles to (must be constexpr)
+ * @tparam pool_type Type of pooling operation (SUM, AVG, MAX)
+ * @tparam reduce_dim Reduction dimension. REDUCE_SCALAR is rejected at compile time.
+ * @tparam partial_positions Number of valid elements along the reduce axis in the
+ *         partial tile. Must be in [1, tile_dim - 1]; if you'd pass tile_dim use
+ *         prepare_reduce_scaler with the single-tile path instead.
+ * @tparam compute_uses_reduce_tile When true, forces row-0 fill (reduce LLK layout)
+ *         even for SUM/AVG + REDUCE_ROW combinations that would normally use col-0
+ *         fill (matmul layout). See prepare_reduce_scaler for full description.
+ * @param scaler_f Float scaler value to fill both tiles with
+ */
+template <
+    uint32_t cb_id,
+    PoolType pool_type,
+    ReduceDim reduce_dim,
+    uint32_t partial_positions,
+    bool compute_uses_reduce_tile = false>
+FORCE_INLINE void prepare_partial_reduce_scalers(float scaler_f);
+
+/**
+ * @brief calculate-and-fill variant of prepare_partial_reduce_scalers
+ *
+ * Computes the standard reduce scaler from pool type, reduce dimension, and
+ * reduce factor (1/N for AVG REDUCE_ROW/REDUCE_COL; 1.0 for SUM/MAX), then
+ * emits the full + partial scaler tile pair via prepare_partial_reduce_scalers.
+ *
+ * @tparam cb_id Circular buffer ID
+ * @tparam pool_type Pool type
+ * @tparam reduce_dim Reduction dimension (REDUCE_SCALAR is rejected)
+ * @tparam partial_positions Valid elements in the partial tile, in [1, tile_dim - 1]
+ * @tparam reduce_factor Number of elements being reduced (used by AVG only)
+ * @tparam compute_uses_reduce_tile See prepare_reduce_scaler for description
+ */
+template <
+    uint32_t cb_id,
+    PoolType pool_type,
+    ReduceDim reduce_dim,
+    uint32_t partial_positions,
+    uint32_t reduce_factor = SUM_AND_MAX_REDUCE_FACTOR,
+    bool compute_uses_reduce_tile = false>
+FORCE_INLINE void calculate_and_prepare_partial_reduce_scalers();
+
 }  // namespace dataflow_kernel_lib
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.inl"
