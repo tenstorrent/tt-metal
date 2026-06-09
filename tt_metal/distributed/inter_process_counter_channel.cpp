@@ -103,8 +103,11 @@ InterProcessCounterChannel::InterProcessCounterChannel(const std::string& shm_na
 // =============================================================================
 std::unique_ptr<InterProcessCounterChannel> InterProcessCounterChannel::connect(
     const std::string& shm_name, uint32_t connect_timeout_ms) {
+    if (shm_name.empty() || shm_name[0] != '/' || shm_name.find('/', 1) != std::string::npos) {
+        throw std::runtime_error(
+            "InterProcessCounterChannel::connect: shm_name must start with '/' and contain no other '/'");
+    }
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(connect_timeout_ms);
-
     int fd = -1;
     while (true) {
         fd = ::shm_open(shm_name.c_str(), O_RDWR, 0);
