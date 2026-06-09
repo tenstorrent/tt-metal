@@ -176,6 +176,7 @@ def test_perf_ace_step_e2e_model_tt_tracy_profile(device):
 
             signpost("COMPILE_RUN")
         except ImportError:
+            # Tracy Python bindings are optional for this test; continue without signposts.
             pass
 
     # Eager E2E only — TTNN trace + Tracy/device profiler cannot share the command queue safely.
@@ -192,6 +193,7 @@ def test_perf_ace_step_e2e_model_tt_tracy_profile(device):
 
             signpost("WARMUP_RUN")
         except ImportError:
+            # Tracy Python bindings are optional for this test; continue without signposts.
             pass
     for _ in range(warmup):
         _ = model.generate(prompt)
@@ -206,6 +208,7 @@ def test_perf_ace_step_e2e_model_tt_tracy_profile(device):
 
             signpost("PERF_RUN")
         except ImportError:
+            # Tracy Python bindings are optional for this test; continue without signposts.
             pass
 
     _ = model.generate(prompt)

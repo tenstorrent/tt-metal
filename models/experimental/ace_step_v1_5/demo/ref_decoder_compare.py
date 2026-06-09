@@ -86,8 +86,6 @@ def hf_decoder_velocity(
 
     if dtype is None:
         dtype = torch.bfloat16
-    if device is None:
-        device = "cpu"
     dec_dev = next(decoder.parameters()).device
     w_dtype = next(decoder.parameters()).dtype
     # Run reference on same device as decoder weights for speed (usually CPU).

@@ -1,5 +1,6 @@
 """Memory and device-check helpers for initialization/offload flows."""
 
+import ctypes
 import gc
 import os
 import platform
@@ -22,8 +23,6 @@ def _get_libc():
     global _LIBC
     if _LIBC is None and platform.system() == "Linux":
         try:
-            import ctypes
-
             _LIBC = ctypes.CDLL("libc.so.6")
         except Exception as exc:
             logger.debug("[memory] Failed to load libc.so.6: {}", exc)
@@ -185,13 +184,11 @@ class InitServiceMemoryBasicMixin:
 
         if platform.system() == "Windows":
             try:
-                import ctypes
-                from ctypes import wintypes
 
                 class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
                     _fields_ = [
-                        ("cb", wintypes.DWORD),
-                        ("PageFaultCount", wintypes.DWORD),
+                        ("cb", ctypes.wintypes.DWORD),
+                        ("PageFaultCount", ctypes.wintypes.DWORD),
                         ("PeakWorkingSetSize", ctypes.c_size_t),
                         ("WorkingSetSize", ctypes.c_size_t),
                         ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),

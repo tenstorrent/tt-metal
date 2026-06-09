@@ -389,7 +389,6 @@ class TorchAceStepDiTCoreRef:
         debug: Optional[dict[str, Any]] = None,
     ) -> torch.Tensor:
         b, s, d = x_patches.shape
-        eps = float(self.cfg.rms_norm_eps)
         h = int(self.cfg.num_attention_heads)
         dh = int(self.cfg.head_dim)
 
