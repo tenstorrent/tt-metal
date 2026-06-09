@@ -1,3 +1,4 @@
+import os
 import time
 
 import pytest
@@ -518,3 +519,75 @@ def test_forward_traced_multishape(mesh_device, device_params):
     assert len(tt_voc._traces) == 1, f"max_traces=1 should evict; got {len(tt_voc._traces)}"
     print(f"MULTITRACE max_traces=1 -> resident={len(tt_voc._traces)} (A evicted)", flush=True)
     tt_voc.release_trace()
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 32768, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
+)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+def test_prof_bwe_per_conv(mesh_device, device_params):
+    # Per-conv device time of the BWE generator at the real 6s length, with the T_out_block
+    # each conv got and whether its (Cin,Cout,K) is tuned in _FP32_BLOCKINGS.
+    from models.tt_dit.utils.conv3d import _FP32_BLOCKINGS
+
+    parent = mesh_device
+    mesh = parent.create_submesh(ttnn.MeshShape(2, 4))
+    pc = AudioTCParallelConfig(
+        time_parallel=ParallelFactor(factor=4, mesh_axis=1), channel_parallel=ParallelFactor(factor=2, mesh_axis=0)
+    )
+    ccl = CCLManager(mesh, num_links=1, topology=ttnn.Topology.Linear)
+    torch_full = _build_torch_stage_c(seed=42)
+    tt_full = _build_tt_stage_c(mesh, parallel_config=pc, ccl_manager=ccl)
+    tt_full.load_torch_state_dict(_diffusers_vocoder_with_bwe_state_to_tt(torch_full.state_dict()))
+
+    rows = {}
+
+    def wrap(mod):
+        orig = mod.forward
+        Cout = mod.unpadded_out_channels
+        K = mod.kernel_size[0]
+        tob = getattr(mod.conv_config, "T_out_block", None)
+
+        def timed(x, *a, **k):
+            ttnn.synchronize_device(mod.mesh_device)
+            Cin, T_pad = int(x.shape[2]), int(x.shape[1])
+            t = time.perf_counter()
+            r = orig(x, *a, **k)
+            ttnn.synchronize_device(mod.mesh_device)
+            dt = (time.perf_counter() - t) * 1000
+            rows.setdefault((Cin, Cout, K, T_pad, tob), []).append(dt)
+            return r
+
+        mod.forward = timed
+
+    def walk(m):
+        yield m
+        for _, c in m.named_children():
+            yield from walk(c)
+
+    for mod in walk(tt_full.bwe_generator):
+        if isinstance(mod, (Conv1dViaConv3d, _AlignedOutConv1d)):
+            wrap(mod)
+
+    mel = _vocoder_mel(int(os.environ.get("T_FRAMES", "601")))
+    _ = tt_full(mel)
+    ttnn.synchronize_device(mesh)
+    rows.clear()
+    for _ in range(3):
+        _ = tt_full(mel)
+    ttnn.synchronize_device(mesh)
+
+    print("\n===== BWE generator per-conv (avg/fwd) =====", flush=True)
+    print(f"{'ms/fwd':>8} {'Cin':>5} {'Cout':>5} {'K':>3} {'T_pad':>6} {'Tblk':>5} {'tuned?':>7}", flush=True)
+    agg = []
+    for (Cin, Cout, K, T_pad, tob), v in rows.items():
+        ms = sum(v) / 3
+        tuned = (aligned := None) or ((Cin, _round32(Cout), (K, 1, 1)) in _FP32_BLOCKINGS) or ((Cin, Cout, (K, 1, 1)) in _FP32_BLOCKINGS)
+        agg.append((ms, Cin, Cout, K, T_pad, tob, tuned))
+    for ms, Cin, Cout, K, T_pad, tob, tuned in sorted(agg, reverse=True):
+        print(f"{ms:8.2f} {Cin:5} {Cout:5} {K:3} {T_pad:6} {str(tob):>5} {'yes' if tuned else 'NO':>7}", flush=True)
+    print(f"\nBWE conv total: {sum(r[0] for r in agg):.1f} ms/fwd", flush=True)
+
+
+def _round32(c):
+    return ((c + 31) // 32) * 32
