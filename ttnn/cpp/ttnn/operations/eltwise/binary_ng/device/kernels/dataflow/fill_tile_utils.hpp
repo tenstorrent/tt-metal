@@ -30,7 +30,7 @@ FORCE_INLINE void fill_with_val(uint32_t l1_write_ptr, ScalarT scalar) {
 FORCE_INLINE void fill_tile_with_first_element_bfloat16(uint32_t l1_write_ptr) {
     auto* read_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_ptr);
     const uint16_t first_elem = read_ptr[0];
-    const uint32_t packed_first_elem = first_elem << 16 | first_elem;
+    const uint32_t packed_first_elem = (static_cast<uint32_t>(first_elem) << 16) | static_cast<uint32_t>(first_elem);
 
     // Since all elements in the tile are the same, we can ignore the faces and assume the entire
     // tile is contiguous in memory.
