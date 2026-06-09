@@ -3,18 +3,26 @@
 """Tensor-parallel (TP>1) full-attention path for Qwen3.5.
 
 Ported from models/demos/qwen35_27b/tt/attention.py forward_decode.
+
+Two long-context (64k+) correctness choices, both confirmed by A/B on bf16 Qwen3.5-27B
+(thinking-off, greedy) and required for coherent 256k generation:
   - q_norm/k_norm: loaded WITHOUT a +1 offset (see load_attention_weights_tp). HF
-    Qwen3_5RMSNorm is zero-centered (output*(1+weight)), but the Qwen3.5-27B-FP8
-    checkpoint stores q_norm/k_norm as the already-effective (1+w) scale, so adding
-    +1 double-counts and over-scales Q/K, collapsing 64k retrieval. Matches the
-    reference (which also omits it). An earlier version wrongly "corrected" this by
-    adding +1 — that was the 64k long-context degeneration bug.
+    Qwen3_5RMSNorm applies (1+weight) and the bf16 checkpoints store raw zero-centered
+    q/k-norm (~0.3), but EMPIRICALLY the +1 (sharp attention) collapses long-context
+    generation while no-+1 (flat) is robust. NOT the FP8-(1+w) story an earlier comment
+    claimed — it's a scale/sharpness effect.
+  - Q stays bf16 into the chunked SDPA (forward_prefill), NOT bf8. Casting Q to bf8 was
+    the real long-context degeneration cause (bf16-Q → coherent 64k/256k summary; bf8-Q →
+    loops/gibberish), matching the 9B's deliberately-bf16 path (ttnn_gated_attention.py:277).
+    env QWEN_SDPA_BF8_Q=1 restores the old bf8 cast for comparison.
   - weights are kept INTERLEAVED per device (no DRAM-width-sharding) and matmuls
     use ttnn's auto program config — same robust pattern validated for the MLP.
 
 Decode input/output use the framework layout: x [1,1,B,dim] replicated in; output
 fractured along dim=3 (reduce-scatter). Column-parallel q/k/v, row-parallel wo.
 """
+import os
+
 import torch
 
 import ttnn
@@ -72,16 +80,16 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         cache_path=c("wo"),
         dtype=ttnn.bfloat8_b,
     )
-    # Zero-centered (+1) per-head QK norms, replicated
-    # Load q_norm/k_norm WITHOUT a +1 offset. The Qwen3.5-27B-FP8 checkpoint stores these as the
-    # already-effective (1+w) scale (weight mean ~+0.75, NOT the raw zero-centered ~0), so adding
-    # another +1 double-counts and over-scales Q/K by ~2.3x -> attention scores ~5x too large ->
-    # softmax over-sharpens -> long-context (64k) retrieval collapses into repetition (length-
-    # dependent; tolerable at short ctx). The working reference omits the +1 (qwen35_27b
-    # model_config.py:854); the 9B's bf16 checkpoint stores raw zero-centered weights, so its
-    # separate single-device path (attention/weights.py) correctly DOES add +1. Don't cache: the
-    # tiny [1,1,128] tensors recompute for free and the checkpoint cache dir is read-only (and may
-    # hold a stale +1 copy).
+    # Per-head QK norms, replicated, loaded WITHOUT the +1 zero-centered offset — even though HF
+    # Qwen3_5RMSNorm applies (1.0 + weight) and the bf16 checkpoints store the raw zero-centered
+    # weight (measured q_norm means: 9B ~+0.58, Qwen3.5-27B ~+0.32, Qwen3.6-27B ~+0.35). This is an
+    # EMPIRICAL choice, confirmed by A/B on bf16 Qwen3.5-27B at 64k (thinking-off, greedy): adding
+    # +1 (0.32 -> 1.32) collapses long-context generation into numeric gibberish, while no-+1 stays
+    # on-topic (mildly repetitive). The +1 over-sharpens attention at length; the raw scale is the
+    # better operating point on this TT path — most likely compensating for a separate scaling
+    # error in the long-context attention numerics (bf8-Q into chunked SDPA), which is the real
+    # remaining long-context-quality bug (no-+1 still loops, not a clean summary). The single-device
+    # 9B keeps its own +1 path (attention/weights.py); don't cache (tiny tensors, read-only dir).
     tw["q_norm"] = tpc.replicate(state_dict["q_norm.weight"].to(torch.float32), mesh, None)
     tw["k_norm"] = tpc.replicate(state_dict["k_norm.weight"].to(torch.float32), mesh, None)
     return tw
@@ -390,8 +398,17 @@ class TPAttention:
         ttnn.deallocate(v)
 
         # Chunked SDPA over the paged cache (attends to prior chunks via page_table).
-        q8 = ttnn.typecast(q, dtype=ttnn.bfloat8_b)
-        ttnn.deallocate(q)
+        # Keep Q in bf16 (matching the 9B's working chunked-SDPA path, ttnn_gated_attention.py:277
+        # "Q/K/V stay bfloat16"). Casting Q to bf8 was the long-context degeneration cause: at 64k
+        # the bf8-Q output collapsed (looping/gibberish) while bf16-Q produced a coherent themed
+        # summary — confirmed by A/B on bf16 Qwen3.5-27B (thinking-off, greedy). Q is per-chunk
+        # (small), so bf16 costs negligible L1/DRAM and showed no perf delta. QWEN_SDPA_BF8_Q=1
+        # restores the old bf8 cast for comparison. When bf16, q IS q8 (freed once at deallocate(q8)).
+        if os.environ.get("QWEN_SDPA_BF8_Q") == "1":
+            q8 = ttnn.typecast(q, dtype=ttnn.bfloat8_b)
+            ttnn.deallocate(q)
+        else:
+            q8 = q
 
         # chunked SDPA requires chunk_start_idx % q_chunk_size == 0. The FLEXIBLE path
         # (device-tensor offset) fixes q/k_chunk=64 so ONE program serves every chunk
