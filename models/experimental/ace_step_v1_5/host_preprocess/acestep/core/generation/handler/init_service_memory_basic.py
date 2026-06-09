@@ -25,8 +25,8 @@ def _get_libc():
             import ctypes
 
             _LIBC = ctypes.CDLL("libc.so.6")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[memory] Failed to load libc.so.6: {}", exc)
     return _LIBC
 
 
@@ -180,8 +180,8 @@ class InitServiceMemoryBasicMixin:
                 except (AttributeError, ValueError):
                     page_size = resource.getpagesize() if resource else 4096
                 return rss_pages * page_size / (1024 * 1024)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to read RSS from /proc/self/statm; falling back to other methods: {e}")
 
         if platform.system() == "Windows":
             try:
@@ -208,8 +208,8 @@ class InitServiceMemoryBasicMixin:
                 counters.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS)
                 if GetProcessMemoryInfo(GetCurrentProcess(), ctypes.byref(counters), ctypes.sizeof(counters)):
                     return counters.WorkingSetSize / (1024 * 1024)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[memory] Windows RSS query failed: {}", exc)
             return 0.0
 
         if resource:
@@ -237,8 +237,8 @@ class InitServiceMemoryBasicMixin:
         if libc is not None:
             try:
                 libc.malloc_trim(0)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[memory] malloc_trim not available or failed: {}", exc)
 
     def _move_module_recursive(self, module, target_device, dtype=None, visited=None):
         """Recursively move a module and all submodules to the target device."""
@@ -303,8 +303,12 @@ class InitServiceMemoryBasicMixin:
 
         try:
             self._move_module_recursive(model, target_device, dtype)
-        except NotImplementedError:
-            pass
+        except NotImplementedError as exc:
+            logger.debug(
+                "[_recursive_to_device] _move_module_recursive is not fully supported for this model; "
+                "continuing with fallback device placement checks: {}",
+                exc,
+            )
 
         if device != "cpu":
             wrong_device_params = []

@@ -134,8 +134,9 @@ def _tracy_signpost(label: str) -> None:
         return
     try:
         signpost(label)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Best-effort: non-fatal if already released or unavailable.
+        logger.debug("Best-effort cleanup ignored: {}", exc)
 
 
 def _resolve_latent_frames(*, tiny: bool) -> int:
@@ -283,8 +284,9 @@ def _run_vae_tracy_harness(
     wav_tt = _decode_once(lat_tt)
     try:
         ttnn.deallocate(wav_tt)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Best-effort: non-fatal if already released or unavailable.
+        logger.debug("Best-effort cleanup ignored: {}", exc)
     profiler.end("ace_step_vae_compile_pass", force_enable=True)
     ttnn.synchronize_device(device)
     ace_step_flush_device_profiler(device)
@@ -296,8 +298,9 @@ def _run_vae_tracy_harness(
         wav_tt = _decode_once(lat_tt)
         try:
             ttnn.deallocate(wav_tt)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            logger.debug("Best-effort cleanup ignored: {}", exc)
     profiler.end("ace_step_vae_warmup", force_enable=True)
     ttnn.synchronize_device(device)
     ace_step_flush_device_profiler(device)
@@ -313,8 +316,9 @@ def _run_vae_tracy_harness(
         wav_tt = _decode_once(lat_tt)
         try:
             ttnn.deallocate(wav_tt)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            logger.debug("Best-effort cleanup ignored: {}", exc)
         if flush_every > 0 and (iter_idx + 1) % flush_every == 0:
             ace_step_flush_device_profiler(device)
 
@@ -324,8 +328,9 @@ def _run_vae_tracy_harness(
 
     try:
         ttnn.deallocate(lat_tt)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Best-effort: non-fatal if already released or unavailable.
+        logger.debug("Best-effort cleanup ignored: {}", exc)
 
     profiler.print()
     init_wall = profiler.get("ace_step_vae_init")

@@ -429,15 +429,17 @@ class AceStepModelRegistry:
             for _t in (enc_hs_tt_one, null_4d, null_rep_4d, null_rep, ctx_tt_one, null_emb_tt):
                 try:
                     ttnn.deallocate(_t)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Best-effort: non-fatal if already released or unavailable.
+                    log.debug("Best-effort cleanup ignored: {}", exc)
         else:
             enc_tt_pipe = enc_hs_tt_one
             ctx_tt_pipe = ctx_tt_one
             try:
                 ttnn.deallocate(null_emb_tt)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                log.debug("Best-effort cleanup ignored: {}", exc)
 
         # ── DiT denoising loop ─────────────────────────────────────
         log.info("  Running DiT denoise loop (%d steps, cfg=%s) …", num_steps, do_cfg)
@@ -487,8 +489,9 @@ class AceStepModelRegistry:
             try:
                 ttnn.deallocate(wav_tt)
                 ttnn.deallocate(_trace_result)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                log.debug("Best-effort cleanup ignored: {}", exc)
             wav = wav_ntc.permute(0, 2, 1).detach().cpu().float()
             log.info("  VAE TTNN done in {%.2fs}", time.perf_counter() - t0)
         else:

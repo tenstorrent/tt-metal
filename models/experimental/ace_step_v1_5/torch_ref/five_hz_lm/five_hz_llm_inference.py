@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
 # Vendored from ACE-Step (MIT). Original: ACE-Step-1.5/acestep/llm_inference.py
 # Copyright (c) 2026 ACEStep — see https://github.com/ACE-Step/ACE-Step-1.5/blob/main/LICENSE
 

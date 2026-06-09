@@ -114,8 +114,9 @@ def _tracy_signpost(label: str) -> None:
         return
     try:
         signpost(label)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Best-effort: non-fatal if already released or unavailable.
+        logger.debug("Best-effort cleanup ignored: {}", exc)
 
 
 def _make_tiny_checkpoint(tmp_dir: Path) -> Path:
@@ -153,15 +154,17 @@ def _prepare_dit_inputs(
     xt_row = fp32_tile_to_bf16_tile_l1(xt_tt, dram=mem)
     try:
         ttnn.deallocate(xt_tt)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Best-effort: non-fatal if already released or unavailable.
+        logger.debug("Best-effort cleanup ignored: {}", exc)
 
     if batch > 1:
         xt_pipe = concat_duplicate_batch(xt_row)
         try:
             ttnn.deallocate(xt_row)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            logger.debug("Best-effort cleanup ignored: {}", exc)
     else:
         xt_pipe = xt_row
 
@@ -174,8 +177,9 @@ def _prepare_dit_inputs(
     )
     try:
         ttnn.deallocate(xt_pipe)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Best-effort: non-fatal if already released or unavailable.
+        logger.debug("Best-effort cleanup ignored: {}", exc)
     return enc_tt, ctx_tt, enc_mask_b1qk, enc_mask_np
 
 
@@ -265,8 +269,9 @@ def _run_denoise_loop_tracy_harness(
             if ctx_tt is not None:
                 try:
                     ttnn.deallocate(ctx_tt)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Best-effort: non-fatal if already released or unavailable.
+                    logger.debug("Best-effort cleanup ignored: {}", exc)
 
     # --- COMPILE PASS -----------------------------------------------------------------
     profiler.start("ace_step_dit_denoise_compile_pass", force_enable=True)
@@ -275,8 +280,9 @@ def _run_denoise_loop_tracy_harness(
     if lat_tt is not None:
         try:
             ttnn.deallocate(lat_tt)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            logger.debug("Best-effort cleanup ignored: {}", exc)
     profiler.end("ace_step_dit_denoise_compile_pass", force_enable=True)
     ttnn.synchronize_device(device)
     ace_step_flush_device_profiler(device)
@@ -289,8 +295,9 @@ def _run_denoise_loop_tracy_harness(
         if lat_tt is not None:
             try:
                 ttnn.deallocate(lat_tt)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                logger.debug("Best-effort cleanup ignored: {}", exc)
     profiler.end("ace_step_dit_denoise_warmup", force_enable=True)
     ttnn.synchronize_device(device)
     ace_step_flush_device_profiler(device)
@@ -304,8 +311,9 @@ def _run_denoise_loop_tracy_harness(
     if lat_tt is not None:
         try:
             ttnn.deallocate(lat_tt)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            logger.debug("Best-effort cleanup ignored: {}", exc)
 
     ttnn.synchronize_device(device)
     profiler.end("ace_step_dit_denoise_perf_pass")

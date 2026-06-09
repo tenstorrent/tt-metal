@@ -50,8 +50,9 @@ class ProgressMixin:
             os.makedirs(os.path.dirname(self._progress_estimates_path), exist_ok=True)
             with open(self._progress_estimates_path, "w", encoding="utf-8") as f:
                 json.dump(self._progress_estimates, f)
-        except Exception:
-            pass
+        except Exception as e:
+            # Best-effort cache persistence: failures must not interrupt generation.
+            logger.debug(f"Failed to save progress estimates to {self._progress_estimates_path}: {e}")
 
     def _duration_bucket(self, duration_sec: Optional[float]) -> str:
         if duration_sec is None or duration_sec <= 0:
@@ -198,8 +199,10 @@ class ProgressMixin:
                 value = start + (end - start) * frac
                 try:
                     progress(value, desc=desc)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Progress updates are best-effort; never fail generation due
+                    # to callback/UI errors from the consumer.
+                    logger.debug(f"[progress] progress callback failed: {exc}")
                 stop_event.wait(0.5)
 
         thread = threading.Thread(target=_runner, name="diffusion-progress", daemon=True)

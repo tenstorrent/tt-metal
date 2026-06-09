@@ -17,6 +17,10 @@ replaces the final Torch ``prepare_condition`` encoder/context assembly.
 
 from __future__ import annotations
 
+import logging
+
+_ace_step_log = logging.getLogger(__name__)
+
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -651,8 +655,9 @@ class TtAceStepInstrumentalConditionEncoder:
         ttnn.synchronize_device(self.device)
         try:
             ttnn.deallocate(enc_warm)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
 
         th = ttnn.to_torch(text_hidden_b1sd).contiguous()
         _l1_mc = ace_step_linear_l1_memory_config(ttnn) or self.mem
@@ -710,16 +715,18 @@ class TtAceStepInstrumentalConditionEncoder:
         if self._trace_id is not None:
             try:
                 ttnn.release_trace(self.device, self._trace_id)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
             self._trace_id = None
         for attr in ("_persistent_text_hidden", "_persistent_enc_output"):
             t = getattr(self, attr, None)
             if t is not None:
                 try:
                     ttnn.deallocate(t)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Best-effort: non-fatal if already released or unavailable.
+                    _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
                 setattr(self, attr, None)
         self._text_hidden_host = None
         self._trace_op_event = None
@@ -729,26 +736,30 @@ class TtAceStepInstrumentalConditionEncoder:
         if self._payload_trace_id is not None:
             try:
                 ttnn.release_trace(self.device, self._payload_trace_id)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
             self._payload_trace_id = None
         if self._payload_persistent_text is not None:
             try:
                 ttnn.deallocate(self._payload_persistent_text)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
             self._payload_persistent_text = None
         if self._payload_persistent_enc is not None:
             try:
                 ttnn.deallocate(self._payload_persistent_enc)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
             self._payload_persistent_enc = None
         for t in self._payload_parts_persist:
             try:
                 ttnn.deallocate(t)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         self._payload_parts_persist = []
         self._payload_part_hosts = []
         for attr in (
@@ -764,8 +775,9 @@ class TtAceStepInstrumentalConditionEncoder:
             if t is not None:
                 try:
                     ttnn.deallocate(t)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Best-effort: non-fatal if already released or unavailable.
+                    _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
                 setattr(self, attr, None)
         self._payload_lyric_host = None
         self._payload_timbre_host = None
@@ -784,16 +796,18 @@ class TtAceStepInstrumentalConditionEncoder:
         if self._ctx_trace_id is not None:
             try:
                 ttnn.release_trace(self.device, self._ctx_trace_id)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
             self._ctx_trace_id = None
         for attr in ("_ctx_persistent_src", "_ctx_persistent_chunk", "_ctx_persistent_out"):
             t = getattr(self, attr, None)
             if t is not None:
                 try:
                     ttnn.deallocate(t)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Best-effort: non-fatal if already released or unavailable.
+                    _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
                 setattr(self, attr, None)
         self._ctx_src_host = None
         self._ctx_chunk_host = None
@@ -884,8 +898,9 @@ class TtAceStepInstrumentalConditionEncoder:
         ttnn.synchronize_device(self.device)
         try:
             ttnn.deallocate(ctx_warm)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         old_ctx = self._ctx_persistent_out
         self._ctx_trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
         self._ctx_persistent_out = self._ctx_concat_device_body()
@@ -894,8 +909,9 @@ class TtAceStepInstrumentalConditionEncoder:
         if old_ctx is not None and old_ctx is not self._ctx_persistent_out:
             try:
                 ttnn.deallocate(old_ctx)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         self._ctx_trace_op_event = ttnn.record_event(self.device, 0)
 
     def _stage_ctx_inputs_cq1(
@@ -1031,8 +1047,9 @@ class TtAceStepInstrumentalConditionEncoder:
         if self._payload_enc_mask_dev is not None:
             try:
                 ttnn.deallocate(self._payload_enc_mask_dev)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         self._payload_enc_mask_dev = ttnn.as_tensor(
             arr,
             device=self.device,
@@ -1076,8 +1093,9 @@ class TtAceStepInstrumentalConditionEncoder:
                 continue
             try:
                 ttnn.deallocate(t)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
 
     def _text_hidden_b1sd_upload(self, payload: dict) -> ttnn.Tensor:
         text_np = _to_numpy_f32(payload["text_hidden_states"])
@@ -1200,8 +1218,9 @@ class TtAceStepInstrumentalConditionEncoder:
         ttnn.synchronize_device(self.device)
         try:
             ttnn.deallocate(enc_warm)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         old_enc = self._payload_persistent_enc
         self._payload_trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
         self._payload_persistent_enc = self._payload_trace_enc_body()
@@ -1210,8 +1229,9 @@ class TtAceStepInstrumentalConditionEncoder:
         if old_enc is not None and old_enc is not self._payload_persistent_enc:
             try:
                 ttnn.deallocate(old_enc)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         self._payload_trace_op_event = ttnn.record_event(self.device, 0)
 
     def _stage_payload_inputs_cq1(
@@ -1256,8 +1276,9 @@ class TtAceStepInstrumentalConditionEncoder:
             return
         try:
             ttnn.release_trace(self.device, self._payload_trace_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         self._payload_trace_id = None
 
     def forward_payload_traced(self, payload: dict) -> tuple[ttnn.Tensor, np.ndarray, ttnn.Tensor, ttnn.Tensor]:

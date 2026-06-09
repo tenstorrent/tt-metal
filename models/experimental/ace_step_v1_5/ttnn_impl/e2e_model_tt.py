@@ -43,6 +43,10 @@ Pass ``use_trace=False`` for a fully eager denoise loop. Requires 2 CQs + 128 MB
 
 from __future__ import annotations
 
+import logging
+
+_ace_step_log = logging.getLogger(__name__)
+
 import os
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -96,8 +100,9 @@ def _ace_step_prof_signpost(header: str, message: Optional[str] = None) -> None:
             _signpost(header)
         else:
             _signpost(header, message)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Best-effort: non-fatal if already released or unavailable.
+        _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
 
 
 _ACE_STEP_TRACE_SESSION: bool = False
@@ -122,8 +127,9 @@ def _ace_step_flush_device_profiler(device) -> None:
     try:
         ttnn.synchronize_device(device)
         ttnn.ReadDeviceProfiler(device)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Best-effort: non-fatal if already released or unavailable.
+        _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
 
 
 @dataclass
@@ -415,8 +421,9 @@ class _E2EDenoiseTrace:
         ttnn.synchronize_device(device)
         try:
             ttnn.deallocate(warm_out)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
 
         self.tid = ttnn.begin_trace_capture(device, cq_id=0)
         self.acoustic_buf = pipe.forward_with_temb_tp(
@@ -468,8 +475,9 @@ class _E2EDenoiseTrace:
             xt_in = concat_duplicate_batch(xt_row)
             try:
                 ttnn.deallocate(xt_row)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         else:
             xt_in = xt_row
         acoustic_warm = pipe.forward_with_temb_tp(
@@ -484,13 +492,15 @@ class _E2EDenoiseTrace:
         )
         try:
             ttnn.deallocate(xt_in)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         self.acoustic_buf = ttnn.clone(acoustic_warm)
         try:
             ttnn.deallocate(acoustic_warm)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
 
         warm = denoise_full_step_device(
             pipe=pipe,
@@ -616,8 +626,9 @@ class _E2EDenoiseTrace:
         if self.tid is not None:
             try:
                 ttnn.release_trace(device, self.tid)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
             self.tid = None
         self.output_addr = None
 
@@ -691,8 +702,9 @@ class _E2EDenoiseTrace:
         ttnn.synchronize_device(device)
         try:
             ttnn.deallocate(warm_out)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
 
         self.tid = ttnn.begin_trace_capture(device, cq_id=0)
         # Re-bind ``acoustic_buf`` to the freshly captured trace's output — the previous output
@@ -720,8 +732,9 @@ class _E2EDenoiseTrace:
         if self.tid is not None:
             try:
                 ttnn.release_trace(device, self.tid)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
             self.tid = None
         for attr in (
             "xt_buf",
@@ -738,8 +751,9 @@ class _E2EDenoiseTrace:
             if buf is not None:
                 try:
                     ttnn.deallocate(buf)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Best-effort: non-fatal if already released or unavailable.
+                    _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
                 setattr(self, attr, None)
         self.frames = None
         self.pipe_batch = None
@@ -875,8 +889,9 @@ def run_ttnn_denoise_loop(
             _clear_pc = getattr(device, "disable_and_clear_program_cache", None)
             if callable(_clear_pc):
                 _clear_pc()
-    except Exception:
-        pass
+    except Exception as exc:
+        # Best-effort: non-fatal if already released or unavailable.
+        _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
     cfg_lo = float(cfg_interval_start)
     cfg_hi = float(cfg_interval_end)
     gs = float(guidance_scale)
@@ -935,8 +950,9 @@ def run_ttnn_denoise_loop(
             xt_for_mask = concat_duplicate_batch(xt_row)
             try:
                 ttnn.deallocate(xt_row)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         else:
             xt_for_mask = xt_row
         encoder_attention_mask_b1qk = pipe.build_encoder_attention_mask_b1qk_optional(
@@ -947,8 +963,9 @@ def run_ttnn_denoise_loop(
         )
         try:
             ttnn.deallocate(xt_for_mask)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         if encoder_attention_mask_b1qk is not None:
             deallocate_encoder_mask = False
 
@@ -967,8 +984,9 @@ def run_ttnn_denoise_loop(
             ctx_tt_pipe = concat_duplicate_batch(ctx_row_one)
             try:
                 ttnn.deallocate(ctx_row_one)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         else:
             assert enc_hs is not None and ctx_lat is not None
             enc_tt_pipe = bf16_row_from_numpy_bc(to_numpy_f32(enc_hs), device=device, dram=mem)
@@ -1119,8 +1137,9 @@ def run_ttnn_denoise_loop(
             return
         try:
             ttnn.deallocate(t)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
 
     def _post_dit_host_cfg_euler(
         *,
@@ -1223,39 +1242,45 @@ def run_ttnn_denoise_loop(
                 if vpu_rm is not None:
                     try:
                         ttnn.deallocate(vpu_rm)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        # Best-effort: non-fatal if already released or unavailable.
+                        _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
                 vt_tt = typecast_bf16_any_to_fp32_tile(vpc_rm, dram=mem)
         else:
             vt_tt = typecast_bf16_any_to_fp32_tile(vpc_rm, dram=mem)
 
         try:
             ttnn.deallocate(xt_pipe_in)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         if do_cfg and (cfg_lo <= t_curr_f <= cfg_hi):
             try:
                 ttnn.deallocate(vpc_rm)
                 if vpu_rm is not None:
                     ttnn.deallocate(vpu_rm)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         elif not do_cfg:
             try:
                 ttnn.deallocate(vpc_rm)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
 
         xt_old = xt_tt
         xt_tt = euler_subtract_v_dt(xt=xt_tt, vt=vt_tt, dt=float(euler_dt), dram=mem)
         try:
             ttnn.deallocate(vt_tt)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         try:
             ttnn.deallocate(xt_old)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
 
         if progress_fn is not None:
             progress_fn(step_idx, num_steps, t_curr_f, float(euler_dt))
@@ -1324,35 +1349,40 @@ def run_ttnn_denoise_loop(
             else:
                 try:
                     ttnn.deallocate(vpu_rm)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Best-effort: non-fatal if already released or unavailable.
+                    _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
                 vt_tt = typecast_bf16_any_to_fp32_tile(vpc_rm, dram=mem)
         else:
             vt_tt = typecast_bf16_any_to_fp32_tile(acoustic, dram=mem)
 
         try:
             ttnn.deallocate(xt_pipe_in)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         # When ``acoustic`` is the trace's persistent output buffer, the replay overwrites it on
         # the next step — we MUST NOT free it here or the captured graph would write into freed
         # memory. The eager-path output is owned by this iterate and is safe to free.
         if not acoustic_is_persistent:
             try:
                 ttnn.deallocate(acoustic)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
 
         xt_old = xt_tt
         xt_tt = euler_subtract_v_dt(xt=xt_tt, vt=vt_tt, dt=float(euler_dt), dram=mem)
         try:
             ttnn.deallocate(vt_tt)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         try:
             ttnn.deallocate(xt_old)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
 
         if progress_fn is not None:
             progress_fn(step_idx, num_steps, t_curr_f, float(euler_dt))
@@ -1383,8 +1413,9 @@ def run_ttnn_denoise_loop(
             xt_pipe_in = concat_duplicate_batch(xt_row)
             try:
                 ttnn.deallocate(xt_row)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         else:
             xt_pipe_in = xt_row
 
@@ -1482,8 +1513,9 @@ def run_ttnn_denoise_loop(
             xt_pipe_in = concat_duplicate_batch(xt_row)
             try:
                 ttnn.deallocate(xt_row)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         else:
             xt_pipe_in = xt_row
 
@@ -1588,8 +1620,9 @@ def run_ttnn_denoise_loop(
             xt_pipe_in = concat_duplicate_batch(xt_row)
             try:
                 ttnn.deallocate(xt_row)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         else:
             xt_pipe_in = xt_row
 
@@ -1683,8 +1716,9 @@ def run_ttnn_denoise_loop(
             ttnn.deallocate(encoder_attention_mask_b1qk_non_cover)
         if encoder_attention_mask_b1qk is not None and deallocate_encoder_mask:
             ttnn.deallocate(encoder_attention_mask_b1qk)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Best-effort: non-fatal if already released or unavailable.
+        _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
     # Free the precomputed per-step time embeddings only when this call owned them. When the
     # caller (``AceStepE2EModel`` with ``temb_per_step`` / ``tp_per_step`` kwargs) owns the
     # tensors, they outlive the call and are reused across every ``generate()``.
@@ -1692,13 +1726,15 @@ def run_ttnn_denoise_loop(
         for _t in temb_per_step:
             try:
                 ttnn.deallocate(_t)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         for _t in tp_per_step:
             try:
                 ttnn.deallocate(_t)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
 
     if momentum_ttnn is not None:
         momentum_ttnn.reset()
@@ -1713,8 +1749,9 @@ def run_ttnn_denoise_loop(
     pred_latents = ace_step_ttnn_to_torch(xt_tt, dtype=torch.float32, mesh_device=device).contiguous()
     try:
         ttnn.deallocate(xt_tt)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Best-effort: non-fatal if already released or unavailable.
+        _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
     return pred_latents
 
 
@@ -1877,8 +1914,9 @@ class AceStepE2EModel:
         try:
             ttnn.deallocate(null_4d)
             ttnn.deallocate(null_rep_4d)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         self._null_rep_by_shape[key] = null_rep
         return null_rep
 
@@ -1945,8 +1983,9 @@ class AceStepE2EModel:
         try:
             ttnn.deallocate(src_latents_tt)
             ttnn.deallocate(chunk_masks_tt)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         return ctx_tt_one
 
     def decode_vae(
@@ -2000,8 +2039,9 @@ class AceStepE2EModel:
         try:
             if owns_lat_tt:
                 ttnn.deallocate(lat_tt)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         if return_waveform_ttnn:
             return wav_tt
         from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_ttnn_to_torch
@@ -2012,8 +2052,9 @@ class AceStepE2EModel:
         wav_np = np.clip(wav_bct / peak, -1.0, 1.0)
         try:
             ttnn.deallocate(wav_tt)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         return torch.from_numpy(wav_np)
 
     def generate(
@@ -2095,8 +2136,9 @@ class AceStepE2EModel:
                     enc_hs_tt_one, enc_mask_np, null_emb_tt = self._condition_encoder.forward(text_hs_tt, attn_mask_np)
                     try:
                         ttnn.deallocate(text_hs_tt)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        # Best-effort: non-fatal if already released or unavailable.
+                        _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
             _ace_step_flush_device_profiler(self.device)
 
             # Insert into cache, evicting the oldest entry if full. We only deallocate
@@ -2107,8 +2149,9 @@ class AceStepE2EModel:
                     _evicted_key, (_evicted_enc, _evicted_mask) = self._prompt_cache.popitem(last=False)
                     try:
                         ttnn.deallocate(_evicted_enc)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        # Best-effort: non-fatal if already released or unavailable.
+                        _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
                 if self._trace_state is not None and hasattr(ttnn, "clone"):
                     enc_to_cache = ttnn.clone(enc_hs_tt_one)
                 else:
@@ -2168,8 +2211,9 @@ class AceStepE2EModel:
                 ttnn.deallocate(xt_dummy)
                 if do_cfg:
                     ttnn.deallocate(ctx_for_mask)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
 
         # Refresh persistent trace buffers from this prompt's freshly-encoded enc/ctx/mask before
         # the loop replays the captured DiT body. ``prime_per_prompt`` runs device→device copies
@@ -2243,7 +2287,8 @@ class AceStepE2EModel:
         finally:
             try:
                 ttnn.deallocate(pred_latents)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         perf.emit_summary(label="generate_total")
         return wav

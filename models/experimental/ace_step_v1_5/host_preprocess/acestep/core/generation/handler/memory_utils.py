@@ -24,7 +24,8 @@ class MemoryUtilsMixin:
                 if value > 0:
                     return value
             except ValueError:
-                pass
+                # Ignore malformed override and use the conservative default.
+                return min(256, self.VAE_DECODE_MAX_CHUNK_SIZE)
         return min(256, self.VAE_DECODE_MAX_CHUNK_SIZE)
 
     def _should_offload_wav_to_cpu(self) -> bool:

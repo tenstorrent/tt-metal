@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+from loguru import logger
 
 if TYPE_CHECKING:
     pass
@@ -368,8 +369,9 @@ def _stage_non_cover_denoise_tensors(
             for _t in (null_4d, null_rep_4d, null_rep):
                 try:
                     ttnn.deallocate(_t)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Best-effort: non-fatal if already released or unavailable.
+                    logger.debug("Best-effort cleanup ignored: {}", exc)
         else:
             enc_pipe = enc_hs_tt_nc
             ctx_pipe = ctx_tt_nc
@@ -385,8 +387,9 @@ def _stage_non_cover_denoise_tensors(
         ctx_pipe = concat_duplicate_batch(ctx_row)
         try:
             ttnn.deallocate(ctx_row)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            logger.debug("Best-effort cleanup ignored: {}", exc)
     else:
         enc_pipe = bf16_row_from_numpy_bc(_as_host_numpy_f32(enc_hs_nc), device=dev, dram=mem)
         ctx_pipe = bf16_row_from_numpy_bc(_as_host_numpy_f32(ctx_lat_nc), device=dev, dram=mem)
@@ -1627,8 +1630,9 @@ def main() -> None:
                             if _maybe_tt is not None:
                                 try:
                                     ttnn.deallocate(_maybe_tt)
-                                except Exception:
-                                    pass
+                                except Exception as exc:
+                                    # Best-effort: non-fatal if already released or unavailable.
+                                    logger.debug("Best-effort cleanup ignored: {}", exc)
                         enc_hs_tt_one = None
                         ctx_tt_one = None
                         null_emb_tt = None
@@ -1673,8 +1677,9 @@ def main() -> None:
                                 for _t in (enc_hs_tt_nc, ctx_tt_nc):
                                     try:
                                         ttnn.deallocate(_t)
-                                    except Exception:
-                                        pass
+                                    except Exception as exc:
+                                        # Best-effort: non-fatal if already released or unavailable.
+                                        logger.debug("Best-effort cleanup ignored: {}", exc)
                                 enc_hs_tt_nc = None
                                 ctx_tt_nc = None
                             else:
@@ -1899,8 +1904,9 @@ def main() -> None:
                 for _t in (enc_hs_tt_nc, ctx_tt_nc):
                     try:
                         ttnn.deallocate(_t)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        # Best-effort: non-fatal if already released or unavailable.
+                        logger.debug("Best-effort cleanup ignored: {}", exc)
                 enc_hs_tt_nc = None
                 ctx_tt_nc = None
                 print("[condition] non-cover text2music ctx encoded on DiT mesh (ttnn)", flush=True)
@@ -2105,8 +2111,9 @@ def main() -> None:
                         ttnn.deallocate(null_rep)
                         ttnn.deallocate(ctx_tt_one)
                         ttnn.deallocate(null_emb_tt)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        # Best-effort: non-fatal if already released or unavailable.
+                        logger.debug("Best-effort cleanup ignored: {}", exc)
                     enc_hs_tt_one = None
                     ctx_tt_one = None
                     null_emb_tt = None
@@ -2121,8 +2128,9 @@ def main() -> None:
                     if null_emb_tt is not None:
                         try:
                             ttnn.deallocate(null_emb_tt)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            # Best-effort: non-fatal if already released or unavailable.
+                            logger.debug("Best-effort cleanup ignored: {}", exc)
                         null_emb_tt = None
             elif do_cfg:
                 print("[ace_step_v1_5] staging encoder hidden states …", flush=True)
@@ -2139,8 +2147,9 @@ def main() -> None:
                 ctx_tt_pipe = concat_duplicate_batch(ctx_row_one)
                 try:
                     ttnn.deallocate(ctx_row_one)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Best-effort: non-fatal if already released or unavailable.
+                    logger.debug("Best-effort cleanup ignored: {}", exc)
             else:
                 enc_tt_pipe = bf16_row_from_numpy_bc(_as_host_numpy_f32(enc_hs), device=dev, dram=mem)
                 ctx_tt_pipe = bf16_row_from_numpy_bc(_as_host_numpy_f32(ctx_lat), device=dev, dram=mem)
@@ -2190,8 +2199,9 @@ def main() -> None:
                     )
                     try:
                         ttnn.deallocate(xt_dummy_nc)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        # Best-effort: non-fatal if already released or unavailable.
+                        logger.debug("Best-effort cleanup ignored: {}", exc)
 
             print("[ace_step_v1_5] condition tensors ready; starting denoise loop …", flush=True)
 
@@ -2297,8 +2307,9 @@ def main() -> None:
                     )
                 try:
                     ttnn.deallocate(xt_dummy)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Best-effort: non-fatal if already released or unavailable.
+                    logger.debug("Best-effort cleanup ignored: {}", exc)
 
                 try:
                     with perf.timed("dit_denoise_loop", device=dev):
@@ -2403,8 +2414,9 @@ def main() -> None:
                         if xt_f32_tile is not _xt_tile_buf:
                             try:
                                 ttnn.deallocate(xt_f32_tile)
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                # Best-effort: non-fatal if already released or unavailable.
+                                logger.debug("Best-effort cleanup ignored: {}", exc)
 
                         if temb_on_host:
                             if step_idx == 0:
@@ -2434,14 +2446,16 @@ def main() -> None:
                             )
                             try:
                                 ttnn.deallocate(xt_row)
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                # Best-effort: non-fatal if already released or unavailable.
+                                logger.debug("Best-effort cleanup ignored: {}", exc)
                         elif do_cfg:
                             xt_pipe_in = concat_duplicate_batch(xt_row)
                             try:
                                 ttnn.deallocate(xt_row)
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                # Best-effort: non-fatal if already released or unavailable.
+                                logger.debug("Best-effort cleanup ignored: {}", exc)
                             acoustic = pipe.forward_with_temb_tp(
                                 xt_bt64=xt_pipe_in,
                                 context_latents_bt128=ctx_tt_pipe,
@@ -2457,8 +2471,9 @@ def main() -> None:
                             try:
                                 ttnn.deallocate(acoustic)
                                 ttnn.deallocate(xt_pipe_in)
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                # Best-effort: non-fatal if already released or unavailable.
+                                logger.debug("Best-effort cleanup ignored: {}", exc)
                         else:
                             acoustic = pipe.forward_with_temb_tp(
                                 xt_bt64=xt_row,
@@ -2471,8 +2486,9 @@ def main() -> None:
                             )
                             try:
                                 ttnn.deallocate(xt_row)
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                # Best-effort: non-fatal if already released or unavailable.
+                                logger.debug("Best-effort cleanup ignored: {}", exc)
                             vpc_rm = acoustic
                             vpu_rm = None
 
@@ -2480,8 +2496,9 @@ def main() -> None:
                             try:
                                 ttnn.deallocate(temb_tt)
                                 ttnn.deallocate(tp_tt)
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                # Best-effort: non-fatal if already released or unavailable.
+                                logger.debug("Best-effort cleanup ignored: {}", exc)
 
                         if do_cfg:
                             apply_cfg_now = cfg_lo <= t_curr_f <= cfg_hi
@@ -2491,8 +2508,9 @@ def main() -> None:
                                 ttnn.deallocate(vpc_rm)
                                 if vpu_rm is not None:
                                     ttnn.deallocate(vpu_rm)
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                # Best-effort: non-fatal if already released or unavailable.
+                                logger.debug("Best-effort cleanup ignored: {}", exc)
                             if apply_cfg_now:
                                 if use_adg:
                                     vt = adg_guidance_velocity_host(
@@ -2516,8 +2534,9 @@ def main() -> None:
                             vt = _readback_ttnn(vpc_rm)
                             try:
                                 ttnn.deallocate(vpc_rm)
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                # Best-effort: non-fatal if already released or unavailable.
+                                logger.debug("Best-effort cleanup ignored: {}", exc)
 
                         xt_host = euler_subtract_v_dt_host(xt=xt_host, vt=vt, dt=float(euler_dt))
                         print(log_line, flush=True)
@@ -2577,8 +2596,9 @@ def main() -> None:
                             xt_pipe_in = concat_duplicate_batch(xt_row)
                             try:
                                 ttnn.deallocate(xt_row)
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                # Best-effort: non-fatal if already released or unavailable.
+                                logger.debug("Best-effort cleanup ignored: {}", exc)
                         else:
                             xt_pipe_in = xt_row
 
@@ -2618,31 +2638,36 @@ def main() -> None:
                             else:
                                 try:
                                     ttnn.deallocate(vpu_rm)
-                                except Exception:
-                                    pass
+                                except Exception as exc:
+                                    # Best-effort: non-fatal if already released or unavailable.
+                                    logger.debug("Best-effort cleanup ignored: {}", exc)
                                 vt_tt = typecast_bf16_any_to_fp32_tile(vpc_rm, dram=mem)
                         else:
                             vt_tt = typecast_bf16_any_to_fp32_tile(acoustic, dram=mem)
 
                         try:
                             ttnn.deallocate(xt_pipe_in)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            # Best-effort: non-fatal if already released or unavailable.
+                            logger.debug("Best-effort cleanup ignored: {}", exc)
                         try:
                             ttnn.deallocate(acoustic)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            # Best-effort: non-fatal if already released or unavailable.
+                            logger.debug("Best-effort cleanup ignored: {}", exc)
 
                         xt_old = xt_tt
                         xt_tt = euler_subtract_v_dt(xt=xt_tt, vt=vt_tt, dt=float(euler_dt), dram=mem)
                         try:
                             ttnn.deallocate(vt_tt)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            # Best-effort: non-fatal if already released or unavailable.
+                            logger.debug("Best-effort cleanup ignored: {}", exc)
                         try:
                             ttnn.deallocate(xt_old)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            # Best-effort: non-fatal if already released or unavailable.
+                            logger.debug("Best-effort cleanup ignored: {}", exc)
                         print(log_line, flush=True)
 
                     with perf.timed("dit_denoise_loop", device=dev):
@@ -2735,8 +2760,9 @@ def main() -> None:
             if xt_vae_in is not xt_tt:
                 try:
                     ttnn.deallocate(xt_tt)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Best-effort: non-fatal if already released or unavailable.
+                    logger.debug("Best-effort cleanup ignored: {}", exc)
                 xt_tt = xt_vae_in
             use_vae_trace = bool(args.use_trace)
             if use_vae_trace:
@@ -2763,8 +2789,9 @@ def main() -> None:
             wav_ntc = _readback_ttnn(wav_tt)
             try:
                 ttnn.deallocate(wav_tt)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                logger.debug("Best-effort cleanup ignored: {}", exc)
             # VAE decode returns ``[B, T_audio, C]``; keep NTC (do not permute to BCT).
             wav_bct_cpu = wav_ntc.detach().cpu()
         elif pred_latents is None:
@@ -2779,8 +2806,9 @@ def main() -> None:
                 ttnn.deallocate(ctx_tt_pipe)
             if xt_tt is not None:
                 ttnn.deallocate(xt_tt)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            logger.debug("Best-effort cleanup ignored: {}", exc)
         # ``momentum_ttnn.reset()`` is already invoked inside the non-trace branch above;
         # the trace branch does not allocate a momentum buffer.
     finally:
@@ -2792,8 +2820,9 @@ def main() -> None:
             if _maybe_tt is not None:
                 try:
                     ttnn.deallocate(_maybe_tt)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Best-effort: non-fatal if already released or unavailable.
+                    logger.debug("Best-effort cleanup ignored: {}", exc)
         demo_session.release(ttnn)
 
     if wav_bct_cpu is not None:

@@ -10,6 +10,10 @@ ADG matches ``apply_norm=False`` (demo default); ``apply_norm=True`` raises.
 
 from __future__ import annotations
 
+import logging
+
+_ace_step_log = logging.getLogger(__name__)
+
 from typing import Any
 
 import numpy as np
@@ -38,8 +42,9 @@ class TtnnMomentumBufferApg:
             return
         try:
             ttnn.deallocate(self.running_tt)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         self.running_tt = None
 
 
@@ -392,14 +397,16 @@ def refresh_fp32_tile_from_host(
         ttnn.copy(fresh, buf)
         try:
             ttnn.deallocate(fresh)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         return buf, buf
     except Exception:
         try:
             ttnn.deallocate(buf)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
         return fresh, fresh
 
 

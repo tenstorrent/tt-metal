@@ -7,6 +7,10 @@ the same way as `transformers` `trust_remote_code` checkpoints.
 
 from __future__ import annotations
 
+import logging
+
+_ace_step_log = logging.getLogger(__name__)
+
 from pathlib import Path
 
 
@@ -240,8 +244,9 @@ def hf_decoder_intermediates(
                     q_rope, k_rope = apply_rope(q_states, k_states, cos, sin)
                     _save(f"layer{layer_idx}.self_q_rope", q_rope)
                     _save(f"layer{layer_idx}.self_k_rope", k_rope)
-        except Exception:
-            pass
+        except Exception as e:
+            # Best-effort debug capture: failures here must not affect the main forward path.
+            _save(f"layer{layer_idx}.self_attn_rope_capture_error", f"{type(e).__name__}: {e}")
 
         # After self-attn residual (gate)
         # outputs is the final layer output (after cross+mlp), but we can reconstruct
@@ -273,11 +278,6 @@ def hf_decoder_intermediates(
             ).type_as(hidden_states)
         else:
             hs_after_self = None
-        if hs_after_self is not None:
-            # Cross-attn residual is included in outputs already; we want mlp AdaLN input right before mlp.
-            # We can't easily separate cross-attn here, so compute mlp AdaLN based on final hidden before mlp if available.
-            # Best-effort: use layer.mlp_norm on (block_out - ff part) is not possible without ff.
-            pass
 
     hooks.append(layer.register_forward_hook(_layer_hook))
 
@@ -316,8 +316,9 @@ def hf_decoder_intermediates(
     for h in hooks:
         try:
             h.remove()
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            _ace_step_log.debug("Best-effort cleanup ignored: %s", exc)
 
     # Normalize key names to the ones the user cares about
     normalized: dict[str, torch.Tensor] = {}

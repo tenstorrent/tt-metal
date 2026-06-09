@@ -120,8 +120,9 @@ def _tracy_signpost(label: str) -> None:
         return
     try:
         signpost(label)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Best-effort: non-fatal if already released or unavailable.
+        logger.debug("Best-effort cleanup ignored: {}", exc)
 
 
 def _ace_step_flush_device_profiler(device) -> None:
@@ -132,8 +133,9 @@ def _ace_step_flush_device_profiler(device) -> None:
     try:
         ttnn.synchronize_device(device)
         ttnn.ReadDeviceProfiler(device)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Best-effort: non-fatal if already released or unavailable.
+        logger.debug("Best-effort cleanup ignored: {}", exc)
 
 
 def _make_tiny_checkpoint(tmp_dir: Path) -> Path:
@@ -173,15 +175,17 @@ def _prepare_dit_inputs(
     xt_row = fp32_tile_to_bf16_tile_l1(xt_tt, dram=mem)
     try:
         ttnn.deallocate(xt_tt)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Best-effort: non-fatal if already released or unavailable.
+        logger.debug("Best-effort cleanup ignored: {}", exc)
 
     if batch > 1:
         xt_pipe = concat_duplicate_batch(xt_row)
         try:
             ttnn.deallocate(xt_row)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            logger.debug("Best-effort cleanup ignored: {}", exc)
     else:
         xt_pipe = xt_row
 
@@ -351,8 +355,9 @@ def _run_dit_tracy_harness(device, *, checkpoint_path: Path, variant_label: str)
     )
     try:
         ttnn.deallocate(acoustic)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Best-effort: non-fatal if already released or unavailable.
+        logger.debug("Best-effort cleanup ignored: {}", exc)
 
     profiler.end("ace_step_dit_compile_pass", force_enable=True)
     ttnn.synchronize_device(device)
@@ -376,8 +381,9 @@ def _run_dit_tracy_harness(device, *, checkpoint_path: Path, variant_label: str)
         )
         try:
             ttnn.deallocate(out)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            logger.debug("Best-effort cleanup ignored: {}", exc)
 
     profiler.end("ace_step_dit_warmup", force_enable=True)
     ttnn.synchronize_device(device)
@@ -403,8 +409,9 @@ def _run_dit_tracy_harness(device, *, checkpoint_path: Path, variant_label: str)
         )
         try:
             ttnn.deallocate(out)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            logger.debug("Best-effort cleanup ignored: {}", exc)
         if flush_every > 0 and (step_idx + 1) % flush_every == 0:
             _ace_step_flush_device_profiler(device)
 
@@ -443,13 +450,15 @@ def _run_dit_tracy_harness(device, *, checkpoint_path: Path, variant_label: str)
     for t in (*temb_per_step, *tp_per_step):
         try:
             ttnn.deallocate(t)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            logger.debug("Best-effort cleanup ignored: {}", exc)
     for t in (xt_pipe, ctx_tt, enc_tt):
         try:
             ttnn.deallocate(t)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            logger.debug("Best-effort cleanup ignored: {}", exc)
 
 
 def _run_denoise_tracy_perf(
@@ -486,8 +495,9 @@ def _run_denoise_tracy_perf(
     )
     try:
         ttnn.deallocate(xt_pipe)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Best-effort: non-fatal if already released or unavailable.
+        logger.debug("Best-effort cleanup ignored: {}", exc)
     _ = enc_mask_np
 
     def _denoise_once() -> None:

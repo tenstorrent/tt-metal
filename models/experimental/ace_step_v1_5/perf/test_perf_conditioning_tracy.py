@@ -131,8 +131,9 @@ def _tracy_signpost(label: str) -> None:
         return
     try:
         signpost(label)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Best-effort: non-fatal if already released or unavailable.
+        logger.debug("Best-effort cleanup ignored: {}", exc)
 
 
 def _ace_step_flush_device_profiler(device) -> None:
@@ -143,8 +144,9 @@ def _ace_step_flush_device_profiler(device) -> None:
     try:
         ttnn.synchronize_device(device)
         ttnn.ReadDeviceProfiler(device)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Best-effort: non-fatal if already released or unavailable.
+        logger.debug("Best-effort cleanup ignored: {}", exc)
 
 
 def _tokenize_prompt(*, text_model_dir: Path, prompt: str, max_length: int) -> tuple[np.ndarray, np.ndarray]:
@@ -297,19 +299,22 @@ def _run_conditioning_tracy_harness(
             enc_hs = _run_condition_once(text_hs)
             try:
                 ttnn.deallocate(enc_hs)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Best-effort: non-fatal if already released or unavailable.
+                logger.debug("Best-effort cleanup ignored: {}", exc)
         try:
             ttnn.deallocate(text_hs)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            logger.debug("Best-effort cleanup ignored: {}", exc)
 
     def _run_qwen_only_once() -> None:
         text_hs = _run_qwen_once()
         try:
             ttnn.deallocate(text_hs)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            logger.debug("Best-effort cleanup ignored: {}", exc)
 
     def _run_cond_only_once() -> None:
         text_hs = _synthetic_text_hidden(device=device, seq_len=text_seq, seed=seed)
@@ -317,8 +322,9 @@ def _run_conditioning_tracy_harness(
         try:
             ttnn.deallocate(enc_hs)
             ttnn.deallocate(text_hs)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort: non-fatal if already released or unavailable.
+            logger.debug("Best-effort cleanup ignored: {}", exc)
 
     if perf_mode == "full":
         run_once = _run_full_once

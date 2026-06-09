@@ -56,8 +56,9 @@ def _tracy_signpost(label: str) -> None:
         return
     try:
         signpost(label)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Best-effort: non-fatal if already released or unavailable.
+        logger.debug("Best-effort cleanup ignored: {}", exc)
 
 
 def _run_attn_tracy_harness(device: ttnn.Device) -> None:

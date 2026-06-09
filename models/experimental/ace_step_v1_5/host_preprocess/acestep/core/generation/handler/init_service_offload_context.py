@@ -28,7 +28,8 @@ class InitServiceOffloadContextMixin:
                         if hasattr(self, "silence_latent"):
                             self.silence_latent = self.silence_latent.to(self.device).to(self.dtype)
                 except StopIteration:
-                    pass
+                    # Model has no parameters; skip device placement.
+                    logger.debug("[_load_model_context] {} has no parameters", model_name)
             yield
             return
 
