@@ -15,7 +15,6 @@ import torch
 import ttnn
 
 from models.common.utility_functions import comp_pcc
-from models.experimental.vibevoice.common.config import MODEL_PATH
 from models.experimental.vibevoice.tt.ttnn_dpm_scheduler import (
     TTDPMSolverMultistepScheduler,
 )
@@ -25,8 +24,6 @@ _REFERENCE_DIR = _VIBEVOICE_ROOT / "reference"
 for _p in (_REFERENCE_DIR, _VIBEVOICE_ROOT.parent.parent.parent):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
-
-pytestmark = pytest.mark.skipif(not Path(MODEL_PATH).is_dir(), reason="VIBEVOICE_MODEL_PATH weights missing")
 
 
 def _build_reference_scheduler():

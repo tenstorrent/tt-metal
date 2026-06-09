@@ -7,8 +7,6 @@ Short reference inference smoke test (PyTorch gold before TTNN PCC).
 Runs 1p_short.txt on CPU with SDPA; checks non-empty speech output.
 """
 
-from pathlib import Path
-
 import pytest
 import torch
 
@@ -19,12 +17,6 @@ from models.experimental.vibevoice.common.config import (
 )
 from vibevoice.modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
 from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
-
-
-pytestmark = pytest.mark.skipif(
-    not Path(MODEL_PATH).is_dir(),
-    reason=f"VibeVoice weights not found at {MODEL_PATH} (set VIBEVOICE_MODEL_PATH)",
-)
 
 
 @pytest.mark.timeout(600)
