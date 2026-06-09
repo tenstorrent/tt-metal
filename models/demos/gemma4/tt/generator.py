@@ -250,7 +250,7 @@ class Gemma4Generator(Generator):
         num_layers=None,
         paged_attention_config=None,
     ):
-        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, use_fast=False)
+        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
         if not hasattr(tokenizer, "stop_tokens"):
             tokenizer.stop_tokens = [tokenizer.eos_token_id]
 
