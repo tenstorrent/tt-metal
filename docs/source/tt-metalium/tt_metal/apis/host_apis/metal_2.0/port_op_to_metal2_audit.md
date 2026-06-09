@@ -6,7 +6,7 @@
 
 ## Read this first
 
-**Why this audit exists.** Metal 2.0 is incomplete. Past attempts to port ops that weren't ready have produced wasted human and agent time, broken code, and PRs that had to be rolled back. This audit is the safeguard: it determines whether a given op *can* be ported today, before any port work begins. When the audit's actual finding is "no, not yet," a clearly grounded refusal — with file references and reasons — is a complete, valid deliverable. Producing such a refusal is not a half-finished port; it *is* the work. Equally, when the actual finding is GREEN, that's the deliverable. Your job is to follow the evidence; no thumb on the scale either way.
+**Why this audit exists.** Past attempts to port ops that weren't ready have produced wasted human and agent time, broken code, and PRs that had to be rolled back. This audit is the safeguard: it determines whether a given op *can* be ported today, before any port work begins. When the audit's actual finding is "no, not yet," a clearly grounded refusal — with file references and reasons — is a complete, valid deliverable. Producing such a refusal is not a half-finished port; it *is* the work. Equally, when the actual finding is GREEN, that's the deliverable. Your job is to follow the evidence; no thumb on the scale either way.
 
 **Audience**: AI agents asked to determine whether a TTNN op can be ported from the **`ProgramDescriptor` API** to the Metal 2.0 host API. Humans looking for a conceptual map of API differences should read [`metal2_migration_guide.md`](metal2_migration_guide.md) instead.
 
@@ -39,10 +39,7 @@ If you are unsure whether your task fits the in-scope description, ask the user 
 
 **Operating principle**: Your job is to identify gaps, not to invent solutions for unimplemented features.
 
-Metal 2.0 is incomplete. Many features the legacy API supports are not yet available in Metal 2.0. When you encounter such a feature, the correct response is to **refuse the port and report the gap to the user.** Refusing is not a failure mode — it is the correct outcome when a gate fails.
-
-If you find yourself constructing a clever workaround for something that "doesn't quite fit" in Metal 2.0 — packing data into varargs to simulate a missing field, threading a buffer address through an RTA because the binding mechanism doesn't support what you need, hand-rolling a synchronization primitive because the spec doesn't expose one — **stop**. AI agents have done all of these in real port attempts; the resulting code looks plausible, compiles cleanly, and fails subtly in production or behaves correctly in tests but represents the wrong design. Whatever you are about to write is almost certainly wrong. Surface the problem; do not paper over it.
-
+Some features the legacy API supports are not yet available in Metal 2.0. When you encounter such a feature, the correct response is to **refuse the port and report the gap to the user.** Refusing is not a failure mode — it is the correct outcome when a gate fails.
 When in doubt about feature support, **ask the user.** Do not infer support from API surface — the absence of a compile error does not mean the construct is supported.
 
 **What happens to your report.** Each audit report becomes a direct input to a downstream effort — not just an entry in a tracking spreadsheet:
@@ -83,20 +80,31 @@ For the op in scope, run through six steps (Step 0.1 prereqs, Step 0.2 feature c
 - **Multiple device-operations in one op directory.** If the directory contains more than one `DeviceOperation` type sharing factories or kernels (e.g. `ReduceDeviceOperation` plus `WelfordReduceDeviceOperation`), audit them together and produce a single combined report. If the device-operations are independent, audit each separately. Ask the user if unsure whether to bundle. **When bundling, retain per-DeviceOperation attribution where findings differ** — name which DeviceOperation (or which of its factories) a given finding applies to, so a downstream consumer (per-op spreadsheet, ticket tracker, port planner) can extract per-DeviceOperation status from the bundled report when their accounting needs it. Bundling reflects the porting unit (shared code → shared port); downstream tools may legitimately operate at the DeviceOperation level (e.g. Tracy profiling, per-op leadership reporting).
 - **Routine runtime-arg setup is not a general audit signal — Step 0.5 handles the one specific case.** Most RTAs translate directly to `KernelSpec::runtime_arg_schema` and `ProgramRunArgs`; treat them as routine port work, not gates. The historical `tensor.buffer()->address()`-as-RTA pattern is the one exception: pre–Metal 2.0 it was style-yuck-but-correct, but under TTNN's recent fast-path-cache binding-injection changes it is now a per-binding correctness hazard. Step 0.5 catches and reports buffer-address RTAs specifically; routine runtime-arg setup outside that pattern remains non-signal.
 
-**Gating semantics.** Three of the six steps can block the port; the rest are informational or describe port-time work. This table is the single source of truth for what gates — the per-step sections below give the detail, not a different rule:
+**Finding roles and routing.** Every audit finding carries one of four roles, and the role decides which output document it lands in (see [Output: the two documents](#output-the-two-documents)). This table is the audit's backbone — the per-check sections below *produce* these findings; they are not a separate set of rules.
 
-| Step | Outcome that fires | Gates the port? |
+| Finding | Role | Routing |
 |---|---|---|
-| 0.1 Check 1 — ProgramDescriptor API | RED (op on imperative `host_api.hpp`) | **Yes** — until the ProgramDescriptor migration lands |
-| 0.1 Check 2 — Device 2.0 DM | GREEN / YELLOW / RED | **No** — op-team cleanup, informational; must *not* propagate to the Overall tier |
-| 0.1 Check 3 — TensorAccessor usage | GREEN / YELLOW | **No** — YELLOW is port-time work (convertible → re-express; exotic → `get_bank_base_address` bridge) |
-| 0.2 — Feature compatibility | RED (UNSUPPORTED match) | **Yes** — until the feature lands |
-| 0.3 — Port complexity signals | informational | **No** — scope / planning signal only |
-| 0.4 — Out-of-directory call surface | informational | **No** — but a pre-Device-2.0 donor is a *scheduling* block (⭐); surface for planning |
-| 0.5 — TensorAccessor bypass | YELLOW | **No** — per-binding port-time work; `get_bank_base_address` covers exotic cases |
-| 0.6 — TTNN ProgramFactory selection | RED (Advanced concept required) | **Yes** — blocked on framework (Advanced concepts stubbed) |
+| Op on ProgramDescriptor API | **GATE** | brief: cleared/blocked · team: detail → ProgramDescriptor team |
+| Device 2.0 compliance (own + donor kernels) | **GATE** | brief: cleared/blocked · team: exact violations → Device 2.0 team |
+| UNSUPPORTED feature in use (incl. CTA varargs) | **GATE** | brief: cleared/blocked · team: detail → wait-for-feature |
+| Advanced factory concept required | **GATE** | brief: blocked · team: detail |
+| Factory concept to implement | **PORT WORK** | brief (Plan) + team |
+| Per-binding TensorAccessor handling — Case 1 re-express / Case 2 bridge | **PORT WORK** | brief (Construct) + team |
+| Delete custom `compute_program_hash` (→ default) | **PORT WORK** | brief (Construct) + team |
+| Notable constructs — aliased CB / borrowed-mem DFB / dynamic TA (confusing); non-zero sem init (deprecated-but-fine) | **FYI-P** | brief (Watch-for) + team |
+| Cross-op / shared-kernel flags | **FYI-P** | brief (Watch-for) + team |
+| RTA varargs | **FYI-P** | brief (Watch-for) + team |
+| TensorAccessor convertibility (Case 2: convertible vs exotic) | **FYI-U** | team only |
+| Out-of-directory coupling & donor shape analysis | **FYI-U** | team only |
+| Tensor-parameter relaxation candidates (fallible) | **FYI-U** | team only |
 
-So: **do not port** an op with Check 1, Step 0.2, or Step 0.6 RED (modulo the scoped-subset case in the [report-output section](#output-the-audit-report)). The `get_bank_base_address` bridge landed 2026-05-24 via PR #45091. When Check 3 and Step 0.5 both fire, they roll up to a single TensorAccessor-concerns bullet in the Result section (see [Output](#output-the-audit-report)).
+**The four roles:**
+- **GATE** — blocks the port (an unmet prereq, an UNSUPPORTED feature, or a framework-stubbed factory concept). On PASS, the porter brief carries a one-line "cleared"; on FAIL, *no brief is issued* (there is no port) and the detail routes to the owning team. Always complete every check even after a GATE fails — the report captures everything the port will eventually need.
+- **PORT WORK** — the porter must *act* on it during the port.
+- **FYI-P** — informational, surfaced *to the porter* (and recorded for the team).
+- **FYI-U** — informational, *team-only* (feeds other workstreams; never reaches the porter).
+
+Findings flow to the two output documents by role: the **porter brief** carries GATE-cleared lines + all PORT WORK + all FYI-P; the **team findings** doc carries everything. See [Output: the two documents](#output-the-two-documents).
 
 ### Step 0.1 — Porting prerequisites
 
