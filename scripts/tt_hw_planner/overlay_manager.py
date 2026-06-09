@@ -283,6 +283,69 @@ def is_no_emit_test(model_id: str, comp_name: str) -> bool:
     return comp_name in load_no_emit_tests(model_id)
 
 
+def _locked_modules_path(model_id: str) -> Path:
+    return _model_dir(model_id) / "locked_modules.json"
+
+
+def load_locked_modules(model_id: str) -> Dict[str, dict]:
+    """Return the persistent ``{comp_name: {reason, locked_ts}}`` dict for
+    recomposed parents that must NEVER be decomposed again.
+
+    A parent is locked once its children have all graduated and it has been
+    restored as a whole-module target (recompose). From then on the only
+    path forward is re-iterating the whole module — re-decomposition is
+    forbidden. Durable in the overlay so the lock survives worktree
+    cleanup and is honored by up / auto-up / promote alike.
+
+    Empty dict if no file exists yet — never raises.
+    """
+    p = _locked_modules_path(model_id)
+    if not p.is_file():
+        return {}
+    try:
+        return json.loads(p.read_text())
+    except Exception:
+        return {}
+
+
+def persist_locked_module(model_id: str, comp_name: str, reason: str = "") -> None:
+    """Add ``comp_name`` to the persistent locked-modules list for ``model_id``.
+
+    Idempotent: re-locking an existing module preserves the original
+    locked_ts."""
+    listing = load_locked_modules(model_id)
+    if comp_name in listing:
+        return
+    listing[comp_name] = {
+        "reason": reason or "recomposed from graduated children; re-decomposition forbidden",
+        "locked_ts": time.time(),
+    }
+    p = _locked_modules_path(model_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(listing, indent=2, sort_keys=True))
+
+
+def remove_locked_module(model_id: str, comp_name: str) -> bool:
+    """Drop a single entry from the locked-modules list. Returns True if
+    the entry was present and removed."""
+    listing = load_locked_modules(model_id)
+    if comp_name not in listing:
+        return False
+    del listing[comp_name]
+    p = _locked_modules_path(model_id)
+    if listing:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(listing, indent=2, sort_keys=True))
+    elif p.is_file():
+        p.unlink()
+    return True
+
+
+def is_locked_module(model_id: str, comp_name: str) -> bool:
+    """Fast lookup: is this module locked against re-decomposition?"""
+    return comp_name in load_locked_modules(model_id)
+
+
 def _missing_kernels_path(model_id: str) -> Path:
     return _model_dir(model_id) / "missing_kernels.json"
 

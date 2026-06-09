@@ -784,6 +784,45 @@ def _run_auto_iterate_loop(
         if _new_no_emit:
             print(f"  [no-emit-tests] excluding {len(_new_no_emit)} of these from the " f"candidate pool for this run")
 
+    try:
+        from ..final_categorization import parents_ready_to_recompose
+        from ..overlay_manager import persist_locked_module, remove_no_emit_test
+        from ..agentic.stale_tests import restore_stale_test
+
+        _recompose_ready = parents_ready_to_recompose(
+            model_id=MODEL,
+            demo_dir=demo_dir,
+            graduated_set=set(seed_report.get("passed_components", []) or []),
+        )
+        _recomposed_now: List[str] = []
+        for _parent in _recompose_ready:
+            _restored = restore_stale_test(demo_dir=demo_dir, component=_parent, safe_id=_safe_id(_parent))
+            remove_no_emit_test(MODEL, _parent)
+            persist_locked_module(
+                MODEL,
+                _parent,
+                reason="children all on device; recomposed as whole-module target",
+            )
+            if _parent in retired_this_run:
+                retired_this_run[:] = [c for c in retired_this_run if c != _parent]
+            _recomposed_now.append(_parent)
+            print(
+                f"  [recompose] `{_parent}` ready — all children on device; restored as "
+                f"whole-module target, locked against re-decomposition"
+                + (f" (restored {_restored.name})" if _restored else " (live stub kept)")
+            )
+        if _recomposed_now:
+            banner(
+                f"RECOMPOSE: {len(_recomposed_now)} decomposed parent(s) ready — children all on "
+                f"device; re-running seed pytest to pull them into the candidate pool"
+            )
+            seed_report = _scope_report_to_demo(_parse_pytest_report(), demo_dir)
+    except Exception as _recompose_exc:
+        print(
+            f"  [recompose] non-fatal error: {type(_recompose_exc).__name__}: {_recompose_exc}",
+            file=sys.stderr,
+        )
+
     unverified_native_this_run: set = set()
     verified_fail: set = set()
 
@@ -1329,8 +1368,14 @@ def _run_auto_iterate_loop(
             # re-running the subprocess on every iter for the same
             # parent. Empty children (leaf module) is also "attempted."
             from ..component_decomposer import failure_class_warrants_decomposition
+            from ..overlay_manager import is_locked_module
 
-            if failure_class_warrants_decomposition(verdict.class_name) and comp not in decomposition_auto_attempted:
+            if is_locked_module(MODEL, comp):
+                print(
+                    f"  [decompose-auto] `{comp}` is locked (recomposed from graduated "
+                    f"children) — re-decomposition forbidden; re-iterating the whole module"
+                )
+            elif failure_class_warrants_decomposition(verdict.class_name) and comp not in decomposition_auto_attempted:
                 decomposition_auto_attempted.add(comp)
                 try:
                     _decomp_proc = subprocess.run(

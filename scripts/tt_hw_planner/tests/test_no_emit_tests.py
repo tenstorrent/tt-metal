@@ -97,6 +97,37 @@ def test_is_keyed_per_model(tmp_path, monkeypatch) -> None:
     assert om.is_no_emit_test("facebook/other-model", "multi_scale_block") is False
 
 
+def test_locked_modules_roundtrip(tmp_path, monkeypatch) -> None:
+    """Durable lock store: persist/load/is_locked/remove, keyed per model,
+    idempotent (preserves first locked_ts), and survives a fresh load."""
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path)
+    model_id = "facebook/test"
+
+    assert om.is_locked_module(model_id, "parent") is False
+    om.persist_locked_module(model_id, "parent", reason="recomposed")
+    assert om.is_locked_module(model_id, "parent") is True
+
+    ts_first = om.load_locked_modules(model_id)["parent"]["locked_ts"]
+    om.persist_locked_module(model_id, "parent", reason="ignored second time")
+    assert om.load_locked_modules(model_id)["parent"]["locked_ts"] == ts_first
+
+    assert om.is_locked_module("facebook/other", "parent") is False
+
+    assert om.remove_locked_module(model_id, "parent") is True
+    assert om.is_locked_module(model_id, "parent") is False
+    assert om.remove_locked_module(model_id, "parent") is False
+
+
+def test_locked_modules_malformed_file_returns_empty(tmp_path, monkeypatch) -> None:
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path)
+    p = om._locked_modules_path("facebook/test")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("{ not json")
+    assert om.load_locked_modules("facebook/test") == {}
+
+
 def test_malformed_file_returns_empty_not_raise(tmp_path, monkeypatch) -> None:
     """A malformed no-emit-tests.json must not crash the scaffold path."""
     om = _om()

@@ -151,6 +151,28 @@ def test_consumer_skips_already_added_children(tmp_path: Path, monkeypatch) -> N
     assert "encoder_layers_1" in names
 
 
+def test_consumer_skips_locked_parent(tmp_path: Path, monkeypatch) -> None:
+    """A locked (recomposed) parent must NEVER be re-decomposed, even if a
+    stale plan names it — its children stay frozen and it is not un-graduated."""
+    from scripts.tt_hw_planner import overlay_manager as om
+
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+
+    demo_dir = _make_demo(tmp_path, [{"name": "parent_a", "status": "NEW", "submodule_path": "encoder"}])
+    plan = [
+        {
+            "parent_name": "parent_a",
+            "children": [{"name": "child1", "submodule_path": "encoder.layers.0", "class_name": "Block"}],
+        }
+    ]
+    (demo_dir / "decomposition_plan.json").write_text(json.dumps(plan))
+    om.persist_locked_module("test/m", "parent_a", reason="recomposed")
+
+    added, _ = consume_decomposition_plan(model_id="test/m", demo_dir=demo_dir)
+    assert added == 0
+    assert "parent_a" not in om.load_no_emit_tests("test/m")
+
+
 def test_consumer_skips_parent_already_passing(tmp_path: Path, monkeypatch) -> None:
     """A stale plan must NOT decompose a parent that's already passing this
     run (per seed pytest) — otherwise it un-graduates working components and

@@ -5,9 +5,11 @@ Every NEW component lands in exactly one of:
   KERNEL_MISSING  — skip-list entry with verified missing TTNN op
   PENDING         — not yet graduated, retry next run
 
-A decomposed parent (no_emit list) has no standalone test; its placement
-rolls up from its children — ON_DEVICE once they all graduate, else
-PENDING. There is no separate "structural" bucket.
+A decomposed parent (no_emit list) earns ON_DEVICE only by passing its
+OWN test. While split it is PENDING — children graduating does not credit
+it; the recompose path restores it as a whole-module target once its
+children are on device. A parent blocked by a kernel-missing child rolls
+up as KERNEL_MISSING. There is no separate "structural" bucket.
 """
 
 from __future__ import annotations
@@ -141,7 +143,10 @@ def test_no_emit_parent_without_plan_is_pending(tmp_path, monkeypatch) -> None:
     assert report.on_device == []
 
 
-def test_no_emit_parent_on_device_when_all_intended_children_graduated(tmp_path, monkeypatch) -> None:
+def test_no_emit_parent_pending_even_when_all_children_graduated(tmp_path, monkeypatch) -> None:
+    """Children graduating does NOT credit the parent — it stays PENDING
+    until it passes its own recomposed test. But it IS reported ready to
+    recompose so the loop restores it as a whole-module target."""
     fc = _fc()
     om = _om()
     monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
@@ -158,8 +163,56 @@ def test_no_emit_parent_on_device_when_all_intended_children_graduated(tmp_path,
     om.persist_no_emit_test("test/m", "parent", reason="decomposition consumer split parent into children")
 
     report = fc.build_final_categorization(model_id="test/m", demo_dir=demo, graduated_set={"child_a", "child_b"})
-    assert sorted(report.on_device) == ["child_a", "child_b", "parent"]
-    assert report.pending == []
+    assert sorted(report.on_device) == ["child_a", "child_b"]
+    assert report.pending == ["parent"]
+
+    ready = fc.parents_ready_to_recompose(model_id="test/m", demo_dir=demo, graduated_set={"child_a", "child_b"})
+    assert ready == ["parent"]
+
+
+def test_parent_not_ready_to_recompose_when_a_child_pending(tmp_path, monkeypatch) -> None:
+    fc = _fc()
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+    demo = tmp_path / "demo"
+    _make_demo_with_raw_components(
+        demo,
+        [
+            {"name": "parent", "status": "NEW", "submodule_path": "blk"},
+            {"name": "child_a", "status": "NEW", "submodule_path": "blk.a"},
+            {"name": "child_b", "status": "NEW", "submodule_path": "blk.b"},
+        ],
+        plan=[{"parent_name": "parent", "children": [{"submodule_path": "blk.a"}, {"submodule_path": "blk.b"}]}],
+    )
+    om.persist_no_emit_test("test/m", "parent", reason="decomposition consumer split parent into children")
+
+    ready = fc.parents_ready_to_recompose(model_id="test/m", demo_dir=demo, graduated_set={"child_a"})
+    assert ready == []
+
+
+def test_no_emit_parent_kernel_missing_when_child_blocked(tmp_path, monkeypatch) -> None:
+    """A decomposed parent whose child is blocked by a missing TTNN op rolls
+    up as KERNEL_MISSING (not PENDING) — it cannot complete until the op lands."""
+    fc = _fc()
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+    demo = tmp_path / "demo"
+    _make_demo_with_raw_components(
+        demo,
+        [
+            {"name": "parent", "status": "NEW", "submodule_path": "blk"},
+            {"name": "child_a", "status": "NEW", "submodule_path": "blk.a"},
+            {"name": "child_b", "status": "NEW", "submodule_path": "blk.b"},
+        ],
+        plan=[{"parent_name": "parent", "children": [{"submodule_path": "blk.a"}, {"submodule_path": "blk.b"}]}],
+    )
+    om.persist_no_emit_test("test/m", "parent", reason="decomposition consumer split parent into children")
+    om.persist_skip("test/m", "child_b", reason="ttnn.foo missing", category="KERNEL_MISSING")
+
+    report = fc.build_final_categorization(model_id="test/m", demo_dir=demo, graduated_set={"child_a"})
+    assert "parent" in report.kernel_missing
+    assert "child_b" in report.kernel_missing
+    assert "child_a" in report.on_device
 
 
 def test_no_emit_parent_pending_when_a_child_not_graduated(tmp_path, monkeypatch) -> None:
@@ -248,8 +301,11 @@ def test_nested_no_emit_parents_roll_up_recursively(tmp_path, monkeypatch) -> No
     assert "inner" in report.pending
 
     report2 = fc.build_final_categorization(model_id="test/m", demo_dir=demo, graduated_set={"leaf_ffn", "leaf_attn"})
-    assert sorted(report2.on_device) == ["inner", "leaf_attn", "leaf_ffn", "outer"]
-    assert report2.pending == []
+    assert sorted(report2.on_device) == ["leaf_attn", "leaf_ffn"]
+    assert sorted(report2.pending) == ["inner", "outer"]
+
+    ready = fc.parents_ready_to_recompose(model_id="test/m", demo_dir=demo, graduated_set={"leaf_ffn", "leaf_attn"})
+    assert sorted(ready) == ["inner", "outer"]
 
 
 def test_summary_lists_three_placement_buckets() -> None:

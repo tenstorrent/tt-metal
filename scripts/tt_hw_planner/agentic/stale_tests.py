@@ -128,8 +128,29 @@ def archive_stale_test(*, demo_dir: Path, component: str, safe_id: str) -> Optio
     return stale_path
 
 
+def restore_stale_test(*, demo_dir: Path, component: str, safe_id: str) -> Optional[Path]:
+    """Restore a parent's ``.stale_after_decomposition`` test back to its
+    live ``test_<safe_id>.py`` path so the whole module is tested again.
+
+    The inverse of :func:`archive_stale_test`, used by the recompose path
+    once a decomposed parent's children have all graduated. Returns the
+    restored live path, or None if there was no archived test (or a live
+    test already exists).
+    """
+    tests_dir = demo_dir / "tests" / "pcc"
+    live = tests_dir / f"test_{safe_id}.py"
+    stale_path = live.with_suffix(".py.stale_after_decomposition")
+    if not stale_path.is_file():
+        return None
+    if live.exists():
+        return None
+    stale_path.rename(live)
+    return live
+
+
 __all__ = [
     "StaleVerdict",
     "archive_stale_test",
     "detect_stale_decomposed_test",
+    "restore_stale_test",
 ]

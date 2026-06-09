@@ -150,6 +150,51 @@ def test_archive_stale_test_idempotent_when_no_file(tmp_path: Path) -> None:
     assert archived is None
 
 
+def test_restore_stale_test_round_trips(tmp_path: Path) -> None:
+    """restore_stale_test is the inverse of archive_stale_test — it brings
+    the archived parent test back to its live path for recompose."""
+    from scripts.tt_hw_planner.agentic.stale_tests import restore_stale_test
+
+    demo_dir = tmp_path / "demo"
+    tests_dir = demo_dir / "tests" / "pcc"
+    tests_dir.mkdir(parents=True)
+    test_file = tests_dir / "test_foo_parent.py"
+    test_file.write_text("# parent whole-module test\n")
+
+    archived = archive_stale_test(demo_dir=demo_dir, component="foo_parent", safe_id="foo_parent")
+    assert archived is not None and not test_file.exists()
+
+    restored = restore_stale_test(demo_dir=demo_dir, component="foo_parent", safe_id="foo_parent")
+    assert restored is not None
+    assert restored == test_file
+    assert test_file.is_file()
+    assert not archived.exists()
+
+
+def test_restore_stale_test_none_when_nothing_archived(tmp_path: Path) -> None:
+    from scripts.tt_hw_planner.agentic.stale_tests import restore_stale_test
+
+    demo_dir = tmp_path / "demo"
+    (demo_dir / "tests" / "pcc").mkdir(parents=True)
+    assert restore_stale_test(demo_dir=demo_dir, component="nope", safe_id="nope") is None
+
+
+def test_restore_stale_test_does_not_clobber_live(tmp_path: Path) -> None:
+    """If a live test already exists, restore is a no-op (returns None)
+    rather than overwriting it."""
+    from scripts.tt_hw_planner.agentic.stale_tests import restore_stale_test
+
+    demo_dir = tmp_path / "demo"
+    tests_dir = demo_dir / "tests" / "pcc"
+    tests_dir.mkdir(parents=True)
+    live = tests_dir / "test_foo_parent.py"
+    live.write_text("# live\n")
+    (tests_dir / "test_foo_parent.py.stale_after_decomposition").write_text("# stale\n")
+
+    assert restore_stale_test(demo_dir=demo_dir, component="foo_parent", safe_id="foo_parent") is None
+    assert live.read_text() == "# live\n"
+
+
 # ---------------------------------------------------------------------------
 # Structural: auto_iterate wires the brain primitive into final-pytest path
 # ---------------------------------------------------------------------------

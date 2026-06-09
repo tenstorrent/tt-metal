@@ -48,6 +48,13 @@ def consume_decomposition_plan(
         return 0, []
 
     try:
+        from .overlay_manager import load_locked_modules
+
+        locked = set(load_locked_modules(model_id).keys())
+    except Exception:
+        locked = set()
+
+    try:
         plan = json.loads(plan_path.read_text())
     except Exception as exc:
         return 0, [f"[decomposition-consume] failed to read plan: {type(exc).__name__}: {exc}"]
@@ -86,6 +93,9 @@ def consume_decomposition_plan(
             continue
         if parent_name in passed:
             notes.append(f"[decompose] skip `{parent_name}`: already passing this run (stale plan)")
+            continue
+        if parent_name in locked:
+            notes.append(f"[decompose] skip `{parent_name}`: locked (recomposed) — re-decomposition forbidden")
             continue
         added_this_entry = 0
         for child in children:

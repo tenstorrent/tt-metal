@@ -17,11 +17,13 @@ No HOT/COLD: workload firing no longer gates placement. Components that
 never fire in a given workload are still device-targets — they just
 happen to be inert paths in that workload.
 
-A decomposed parent has no standalone test (it was split into children),
-so it is ON_DEVICE only when its whole module is proven done: either its
-own stub graduated, or every child it was decomposed into (per the
-decomposition plan — including children that were never realized) has
-graduated. Otherwise PENDING. There is no separate "structural" bucket —
+A decomposed parent earns ON_DEVICE only by passing its OWN test. While
+it is split (no_emit) it is PENDING — children all graduating does NOT
+credit the parent. The recompose path restores the parent as a whole-
+module target once its children are on device; when that recomposed
+module passes PCC its stub graduates and it lands ON_DEVICE the same as
+any other component. A no_emit parent blocked by a kernel-missing child
+rolls up as KERNEL_MISSING. There is no separate "structural" bucket —
 every NEW component lands in exactly one of the three placement buckets.
 """
 
@@ -79,10 +81,11 @@ def build_final_categorization(
     """Walk bringup_status.json + persistent state and bucket every NEW
     component:
 
-      1. decomposed parent (no-emit) → ON_DEVICE only if its own stub
-         graduated OR every intended child (decomposition plan) graduated,
-         else PENDING
-      2. graduated stub on disk → ON_DEVICE
+      1. graduated stub on disk → ON_DEVICE (parents earn this by passing
+         their own recomposed test, same as any component)
+      2. decomposed parent (no-emit) → KERNEL_MISSING if a child is blocked
+         by a missing TTNN op, else PENDING (children graduating does not
+         credit the parent; recompose must prove the whole module)
       3. on skip-list with category == KERNEL_MISSING → KERNEL_MISSING
       4. anything else → PENDING (retry next run; not a permanent state)
     """
@@ -112,53 +115,128 @@ def build_final_categorization(
     graduated_set = set(graduated_set or _infer_graduated_from_disk(demo_dir, new_components))
     graduated_set -= set(skipped.keys())
 
+    kernel_missing_set = {n for n, e in skipped.items() if (e.get("category") or "").upper() == _KERNEL_MISSING}
     decomp_children = _load_decomposition_children(demo_dir)
-    _covered_memo: Dict[str, bool] = {}
 
-    def _parent_covered(name: str, stack: frozenset) -> bool:
-        if name in _covered_memo:
-            return _covered_memo[name]
+    report = CategorizationReport()
+    for comp in new_components:
+        if comp in graduated_set:
+            report.on_device.append(comp)
+            continue
+        if comp in no_emit:
+            if _blocked_by_kernel(comp, decomp_children, sp_to_comp, kernel_missing_set, frozenset()):
+                report.kernel_missing.append(comp)
+            else:
+                report.pending.append(comp)
+            continue
+        if comp in kernel_missing_set:
+            report.kernel_missing.append(comp)
+            continue
+        report.pending.append(comp)
+    return report
+
+
+def _blocked_by_kernel(
+    name: str,
+    decomp_children: Dict[str, List[str]],
+    sp_to_comp: Dict[str, str],
+    kernel_missing_set: Set[str],
+    stack: frozenset,
+) -> bool:
+    if name in stack:
+        return False
+    kids = decomp_children.get(name)
+    if not kids:
+        return False
+    nxt = stack | {name}
+    for sp in kids:
+        comp = sp_to_comp.get(sp)
+        if comp is None:
+            continue
+        if comp in kernel_missing_set:
+            return True
+        if _blocked_by_kernel(comp, decomp_children, sp_to_comp, kernel_missing_set, nxt):
+            return True
+    return False
+
+
+def parents_ready_to_recompose(
+    *,
+    model_id: str,
+    demo_dir: Path,
+    graduated_set: Optional[Set[str]] = None,
+) -> List[str]:
+    """Return the decomposed (no_emit) parents whose every decomposition
+    child is on device — ready to be restored as a whole-module target and
+    recomposed.
+
+    A child counts as on device if its stub graduated, or it is itself a
+    decomposed parent whose children are all on device (recursive). A parent
+    with no recorded children, or with any child not yet on device, is NOT
+    ready (it stays PENDING).
+    """
+    from .overlay_manager import load_no_emit_tests, load_persistent_skips
+
+    status_path = demo_dir / "bringup_status.json"
+    if not status_path.is_file():
+        return []
+    try:
+        status = json.loads(status_path.read_text())
+    except Exception:
+        return []
+    components_list = status.get("components", []) or []
+    new_components = [c.get("name") for c in components_list if c.get("status") == "NEW" and c.get("name")]
+    if not new_components:
+        return []
+
+    sp_to_comp = {
+        (c.get("submodule_path") or ""): c.get("name")
+        for c in components_list
+        if c.get("name") and c.get("submodule_path")
+    }
+    no_emit = set(load_no_emit_tests(model_id).keys())
+    skipped = load_persistent_skips(model_id)
+    graduated_set = set(graduated_set or set()) | set(_infer_graduated_from_disk(demo_dir, new_components))
+    graduated_set -= set(skipped.keys())
+    decomp_children = _load_decomposition_children(demo_dir)
+    memo: Dict[str, bool] = {}
+
+    def _covered(name: str, stack: frozenset) -> bool:
+        if name in memo:
+            return memo[name]
         if name in stack:
             return False
         if name in graduated_set:
-            _covered_memo[name] = True
+            memo[name] = True
             return True
         kids = decomp_children.get(name)
         if not kids:
-            _covered_memo[name] = False
+            memo[name] = False
             return False
         nxt = stack | {name}
-        ok = all(_sp_covered(sp, nxt) for sp in kids)
-        _covered_memo[name] = ok
+        ok = all(_sp_cov(sp, nxt) for sp in kids)
+        memo[name] = ok
         return ok
 
-    def _sp_covered(submodule_path: str, stack: frozenset) -> bool:
+    def _sp_cov(submodule_path: str, stack: frozenset) -> bool:
         comp = sp_to_comp.get(submodule_path)
         if comp is None:
             return False
         if comp in graduated_set:
             return True
         if comp in no_emit:
-            return _parent_covered(comp, stack)
+            return _covered(comp, stack)
         return False
 
-    report = CategorizationReport()
-    for comp in new_components:
-        if comp in no_emit:
-            if _parent_covered(comp, frozenset()):
-                report.on_device.append(comp)
-            else:
-                report.pending.append(comp)
+    ready: List[str] = []
+    for parent in sorted(no_emit):
+        if parent in graduated_set:
             continue
-        if comp in graduated_set:
-            report.on_device.append(comp)
+        if parent not in decomp_children:
             continue
-        if comp in skipped and (skipped[comp].get("category") or "").upper() == _KERNEL_MISSING:
-            report.kernel_missing.append(comp)
-            continue
-        # Anything else is in-progress / queue for the next session.
-        report.pending.append(comp)
-    return report
+        if _covered(parent, frozenset()):
+            ready.append(parent)
+    return ready
 
 
 def _load_decomposition_children(demo_dir: Path) -> Dict[str, List[str]]:
