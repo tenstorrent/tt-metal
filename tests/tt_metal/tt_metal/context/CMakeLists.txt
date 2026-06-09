@@ -19,7 +19,6 @@ target_link_libraries(
         test_metal_common_libs
         TTNN::CPP
 )
-tt_reuse_precompile_headers(unit_tests_context_smoke TTNN::PCH)
 
 # Non-smoke tests
 add_executable(unit_tests_context)
@@ -43,4 +42,3 @@ target_link_libraries(
         test_metal_common_libs
         TTNN::CPP
 )
-tt_reuse_precompile_headers(unit_tests_context TTNN::PCH)
