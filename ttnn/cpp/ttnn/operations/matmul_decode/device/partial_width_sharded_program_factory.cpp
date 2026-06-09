@@ -435,9 +435,23 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         Kc_tiles,
         Nc_tiles,
         K_blocks);
+    // PRECISION (now OPT-IN, mirroring ttnn.matmul): fp32 DST accumulation for BOTH
+    // phases of the partial-width kernel -- phase-1 partial matmul (matmul_block K-slice
+    // reduction) and phase-2 cross-block reduction (add_tiles with acc_to_dest) -- keeps
+    // the K-reduction in fp32 instead of rounding each partial to bf16, recovering the
+    // ~0.007 reduction-order drift on the deep pi0.5 path. It is NO LONGER hardcoded -- it
+    // is now driven by the resolved compute_kernel_config threaded through the device op
+    // (default OFF; opt in via a DeviceComputeKernelConfig with fp32_dest_acc_en=true).
+    // BLACKHOLE DST-CAPACITY NOTE: both phases hold at most 1 DST tile per
+    // tile_regs_acquire block (pack slot 0), so the fp32-dest-acc DST-capacity halving
+    // (8->4) is satisfied with no tiling change.
+    auto [_mf, _approx, _fp32_acc, _l1_acc, _dst_full_sync] =
+        ttnn::get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
     compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = MathFidelity::HiFi4,
-        .math_approx_mode = false,
+        .math_fidelity = _mf,
+        .fp32_dest_acc_en = _fp32_acc,
+        .dst_full_sync_en = _dst_full_sync,
+        .math_approx_mode = _approx,
     };
     compute_kernel_desc.runtime_args.reserve(b_cores.size());
     for (uint32_t idx = 0; idx < b_cores.size(); idx++) {

@@ -173,7 +173,8 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     bool partial_width_sharded,
-    std::optional<const DataType> dtype) {
+    std::optional<const DataType> dtype,
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     using OperationType = ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation;
 
     // For the partial width-sharded layout the caller reshapes/permutes B, so its
@@ -196,6 +197,19 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
         K = input_tensor_a.logical_shape()[-1];
     }
     log_info(tt::LogOp, "matmul_decode partial_width_sharded={} with M={}, N={}, K={}", partial_width_sharded, M, N, K);
+    // Resolve the (optional) user compute kernel config into a concrete one, mirroring
+    // ttnn::matmul. Defaults: math_fidelity=HiFi4 (the op's established fidelity floor),
+    // math_approx_mode=false, and fp32_dest_acc_en=false (OPT-IN -- the precision boost is
+    // off unless the caller passes a config with fp32_dest_acc_en=true). packer_l1_acc /
+    // dst_full_sync default false; the ComputeConfigDescriptor used by the factories only
+    // consumes math_fidelity / fp32_dest_acc_en / math_approx_mode / dst_full_sync_en.
+    auto resolved_compute_kernel_config = ttnn::init_device_compute_kernel_config(
+        input_tensor_a.device()->arch(),
+        compute_kernel_config,
+        /*default_fidelity=*/MathFidelity::HiFi4,
+        /*default_approx_mode=*/false,
+        /*default_fp32_acc=*/false,
+        /*default_l1_acc=*/false);
     auto operation_attributes = OperationType::operation_attributes_t{
         M,
         N,
@@ -203,6 +217,7 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
         input_tensor_a.memory_config(),
         dtype.has_value() ? std::optional<DataType>(*dtype) : std::nullopt,
         partial_width_sharded,
+        resolved_compute_kernel_config,
     };
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

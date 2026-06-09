@@ -296,9 +296,22 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         last_out_block_h,
         num_blocks_h,
     };
+    // PRECISION (now OPT-IN, mirroring ttnn.matmul): fp32 DST accumulation keeps the
+    // K-reduction accumulating in fp32 DST instead of packing each matmul_block partial
+    // back to bf16 between K-blocks, recovering the ~0.007 bf16 reduction-order drift on
+    // the deep pi0.5 SigLIP-tower / Tier-4 path. It is NO LONGER hardcoded -- it is now
+    // driven by the resolved compute_kernel_config threaded through the device op
+    // (default OFF; opt in via a DeviceComputeKernelConfig with fp32_dest_acc_en=true).
+    // BLACKHOLE DST-CAPACITY NOTE: the compute kernel only ever holds 1 DST tile per
+    // tile_regs_acquire block (packs slot 0), so the fp32-dest-acc DST-capacity halving
+    // (8->4 tiles) is comfortably satisfied with no out_block tiling change.
+    auto [_mf, _approx, _fp32_acc, _l1_acc, _dst_full_sync] = ttnn::get_compute_kernel_config_args(
+        input_tensor_a.device()->arch(), operation_attributes.compute_kernel_config);
     compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = MathFidelity::HiFi4,
-        .math_approx_mode = false,
+        .math_fidelity = _mf,
+        .fp32_dest_acc_en = _fp32_acc,
+        .dst_full_sync_en = _dst_full_sync,
+        .math_approx_mode = _approx,
     };
     desc.kernels.push_back(std::move(compute_kernel_desc));
 
