@@ -237,6 +237,14 @@ class VocoderWithBWE(Module):
         ), "output_sampling_rate must be an integer multiple of input_sampling_rate"
         self.resampler = UpSample1d(ratio=ratio, window="hann", mesh_device=mesh_device, dtype=dtype)
 
+        # When set, the main vocoder runs via capture-once/replay (forward_traced); ~3x on
+        # its device graph. BWE stays eager (single-axis, known channel-TP divergence).
+        self.use_trace = False
+
+    def release_trace(self) -> None:
+        """Free the main vocoder's captured trace; safe to call when none is active."""
+        self.vocoder.release_trace()
+
     @property
     def conv_pre(self):
         return self.vocoder.conv_pre
@@ -320,7 +328,7 @@ class VocoderWithBWE(Module):
         """
         input_dtype = mel_spec.dtype
 
-        x = self.vocoder(mel_spec.float())
+        x = self.vocoder.forward_traced(mel_spec.float()) if self.use_trace else self.vocoder(mel_spec.float())
         B, C, length_low_rate = x.shape
         output_length = length_low_rate * self.output_sampling_rate // self.input_sampling_rate
 

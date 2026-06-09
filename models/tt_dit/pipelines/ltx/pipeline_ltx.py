@@ -332,6 +332,8 @@ class LTXPipeline:
         for tracer in self._tracers.values():
             tracer.release_trace()
         self._tracers.clear()
+        if self.tt_vocoder_with_bwe is not None:
+            self.tt_vocoder_with_bwe.release_trace()
         self._trace_consts.clear()
         self._trace_latents.clear()
         self._trace_prompt.clear()
@@ -1521,6 +1523,9 @@ class LTXPipeline:
             mesh_device=self.mesh_device,
             dtype=ttnn.float32,
         )
+        # Capture-once/replay the main vocoder device graph when the pipeline runs traced
+        # (warmup decode captures, real decode replays — ~3x on the vocoder forward).
+        self.tt_vocoder_with_bwe.use_trace = self._traced
         if isinstance(audio_parallel_config, AudioTCParallelConfig):
             cfg_desc = f"T-shard={t_factor} axis{t_axis} + channel-TP={c_factor} axis{c_axis}"
         elif audio_parallel_config is not None:
