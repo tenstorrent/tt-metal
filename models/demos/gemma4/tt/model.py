@@ -1004,45 +1004,49 @@ class Gemma4Model:
             ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh and self.mesh_device.get_num_devices() > 1 else None
         )
 
-        token_id = tokens[0].item()
-        pli = self.compute_host_pli(token_id)
+        tok_flat = tokens.reshape(-1)
+        pos_flat = current_pos.reshape(-1)
+        batch = tok_flat.shape[0]
 
+        # Stage token IDs (not embeddings): embed_tokens runs on device in
+        # ttnn_decode_forward. One device embedding op handles all B users —
+        # the host-embedding path was hardcoded single-token. [1, batch] uint32.
         tokens_tt = ttnn.from_torch(
-            torch.tensor([[token_id]], dtype=torch.int32),
+            tok_flat.to(torch.int32).reshape(1, batch),
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.uint32,
             mesh_mapper=replicate,
         )
 
-        # Position: [1, 32] uint32 padded (for RoPE embedding lookup)
-        pos = current_pos[0].item() if hasattr(current_pos, "item") else int(current_pos[0])
-        pos_padded = F.pad(torch.tensor([pos], dtype=torch.int32).reshape(1, 1), (0, 31), "constant", 0)
+        # Position: [1, 32] uint32 padded — per-user positions in the first
+        # `batch` entries. The decode RoPE embedding lookup gathers one cos/sin
+        # row per user, so different users can sit at different positions.
+        pos_i32 = pos_flat.to(torch.int32).reshape(1, batch)
+        pos_padded = F.pad(pos_i32, (0, 32 - batch), "constant", 0) if batch < 32 else pos_i32
         pos_tt = ttnn.from_torch(pos_padded, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=replicate)
 
-        # int32 position for KV cache update + SDPA
+        # int32 positions [batch] for KV cache update + SDPA (per user).
         pos_int32_tt = ttnn.from_torch(
-            torch.tensor([pos], dtype=torch.int32),
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.int32,
-            mesh_mapper=replicate,
+            pos_flat.to(torch.int32), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=replicate
         )
 
-        # Page table
+        # Page table [batch, max_blocks] — one row per user.
         page_table_tt = None
         if page_table is not None:
-            page_table_tt = ttnn.from_torch(
-                page_table[0:1] if page_table.dim() > 1 else page_table.unsqueeze(0),
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                dtype=ttnn.int32,
-                mesh_mapper=replicate,
-            )
+            pt = page_table if page_table.dim() > 1 else page_table.unsqueeze(0)
+            page_table_tt = ttnn.from_torch(pt, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=replicate)
 
-        # PLI
+        # PLI (E2B/E4B per-layer inputs). 31B has none. Batched PLI would need
+        # per-user stacking + model-side per-user slicing — not yet wired up.
         pli_tt = None
-        if pli is not None:
-            pli_tt = ttnn.from_torch(
-                pli.to(torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate
-            )
+        if self.hidden_size_per_layer_input and self.per_layer_input_weights:
+            if batch != 1:
+                raise NotImplementedError("Batched decode with per-layer inputs (E2B/E4B) is not yet supported")
+            _, pli = self.compute_host_embeddings(int(tok_flat[0].item()))
+            if pli is not None:
+                pli_tt = ttnn.from_torch(
+                    pli.to(torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate
+                )
 
         return (tokens_tt, pos_tt, pos_int32_tt, page_table_tt, pli_tt)
 
@@ -1103,10 +1107,18 @@ class Gemma4Model:
                 ``self._active_page_tables_per_layer`` (set by the vLLM hybrid bridge,
                 since ``Generator``'s decode path doesn't thread the kwarg).
         """
-        input_embeds = self.embed_tokens(x)
-        if len(input_embeds.shape) == 3:
-            input_embeds = ttnn.unsqueeze_to_4D(input_embeds)
-        input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
+        # Two input conventions are accepted:
+        #   * uint32/int32 token-id tensor → run embed_tokens on device. This is
+        #     the batched-decode path (one device embedding op handles all B
+        #     users; the host-embedding path is hardcoded single-token).
+        #   * bf16 pre-computed embedding → use directly (legacy / unit tests).
+        if x.dtype in (ttnn.uint32, ttnn.int32):
+            input_embeds = self.embed_tokens(x)
+            if len(input_embeds.shape) == 3:
+                input_embeds = ttnn.unsqueeze_to_4D(input_embeds)
+            input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
+        else:
+            input_embeds = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
         # RoPE: always use internal 2D caches with on-device embedding lookup
         token_index = None if self.rope_caches_2d else 0

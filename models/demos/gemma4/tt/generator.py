@@ -16,6 +16,10 @@ def _patch_model_args(model_args, mesh_device, max_batch_size, max_seq_len, mode
     model_args.max_seq_len = max_seq_len
     model_args.max_context_len = max_seq_len
     model_args.max_prefill_chunk_size = max_seq_len
+    # Gemma4 prefill is single-user (attention head-split asserts seq batch == 1),
+    # so force the Generator's per-user sequential prefill instead of its batched
+    # prefill path. Decode is batched separately.
+    model_args.disable_batched_prefill = True
     model_args.trace_prefill_supported_seq_lens = [128, 512]
     model_args.mesh_device = mesh_device
     model_args.device_name = determine_device_name(mesh_device)

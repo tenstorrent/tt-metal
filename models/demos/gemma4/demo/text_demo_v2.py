@@ -163,6 +163,32 @@ def _device_params():
             False,
             True,
         ),
+        (  # batch-8 (throughput) — 8 concurrent users, short prompt
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",
+            True,
+            1024,
+            8,
+            200,
+            True,
+            {"page_block_size": 32, "page_max_num_blocks": 1024},
+            {"temperature": 0, "top_p": 0.08},
+            True,
+            False,
+            True,
+        ),
+        (  # batch-32 (max throughput) — 32 concurrent users (decode batch ceiling)
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",
+            True,
+            1024,
+            32,
+            200,
+            True,
+            {"page_block_size": 32, "page_max_num_blocks": 1024},
+            {"temperature": 0, "top_p": 0.08},
+            True,
+            False,
+            True,
+        ),
         (  # long-context-4k — single user, long prompt
             "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",
             True,
@@ -190,7 +216,7 @@ def _device_params():
             True,
         ),
     ],
-    ids=["batch-1", "long-context-4k", "ci-1"],
+    ids=["batch-1", "batch-8", "batch-32", "long-context-4k", "ci-1"],
 )
 @pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
 @pytest.mark.parametrize(
@@ -235,6 +261,9 @@ def test_demo_text(
     max_generated_tokens = int(os.environ.get("GEMMA4_MAX_NEW_TOKENS", max_generated_tokens))
     num_layers = os.environ.get("GEMMA4_NUM_LAYERS")
     num_layers = int(num_layers) if num_layers else None
+    # Batch sweep hook: GEMMA4_BATCH overrides the config's batch_size so the
+    # same config can probe batch-1 / 8 / 32 to find the QB2 ceiling.
+    batch_size = int(os.environ.get("GEMMA4_BATCH", batch_size))
 
     model_path = _model_path()
     temperature = sampling_params.get("temperature", 0)
