@@ -162,6 +162,10 @@ class TTSampling(LightweightModule):
             # the actual CCL shape is resolved from the runtime mesh below.
             sampling_ag_config = args.model_config["SAMPLING_AG_CONFIG"]
             self._allow_force_argmax_sampling = sampling_ag_config["allow_force_argmax"]
+            logger.info(
+                f"SamplingGenerator: force_argmax_sampling={'ENABLED' if self._allow_force_argmax_sampling else 'DISABLED'} "
+                f"(allow_force_argmax={self._allow_force_argmax_sampling}, topology={sampling_ag_config['topology']})"
+            )
             self.num_argmax_gather_links = sampling_ag_config["num_links"]
             self.argmax_chunks_per_sync = sampling_ag_config.get("chunks_per_sync", 10)
             self.argmax_num_workers_per_link = 1

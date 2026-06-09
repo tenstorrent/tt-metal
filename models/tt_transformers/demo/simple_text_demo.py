@@ -16,7 +16,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.sampling import SamplingParams
+# from models.common.sampling import SamplingParams
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_accuracy, verify_perf
 from models.demos.utils.model_targets import resolve_accuracy_targets, resolve_perf_targets
@@ -27,7 +27,7 @@ from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     sample_host,
 )
-from models.tt_transformers.tt.generator import Generator, SamplingParams, create_submeshes
+from models.tt_transformers.tt.generator import Generator, SamplingParams, create_submeshes # NOTE: why is SamplingParams imported twice?
 from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
 from models.tt_transformers.tt.prefetcher import is_prefetcher_supported
 
@@ -167,8 +167,11 @@ def create_tt_page_table(global_batch_size, data_parallel, paged_attention_confi
     page_table = None
 
     if paged_attention_config:
-        # Implied shuffling of blocks
-        permutation = torch.randperm(paged_attention_config.max_num_blocks)
+        # Diagnostic: use sequential (identity) permutation to test whether randperm-based
+        # physical page assignment causes slot-dependent numerical differences.
+        # If ci-eval-32 passes with arange but fails with randperm, the root cause is
+        # physical DRAM page ordering affecting SDPA NOC read behavior.
+        permutation = torch.arange(paged_attention_config.max_num_blocks)
         # Page table which maps virtual blocks to physical
         reverse_permutation = torch.argsort(permutation).repeat(data_parallel)
         page_table = reverse_permutation.reshape(
@@ -731,7 +734,7 @@ _trace_region_size = (
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
-            True,  # enable_trace
+            False,  # enable_trace
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
@@ -1095,6 +1098,7 @@ def test_demo_text(
                     k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
                     v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
             generator.prev_page_table = None
+            ttnn.synchronize_device(mesh_device)
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
         # Use device sampling for all cases when supported (prefill + decode)
@@ -1228,6 +1232,20 @@ def test_demo_text(
                 prompt_tokens=input_tokens_prefill_pt,
                 output_tokens=out_tok,
             )
+
+            # Diagnostic: at decode step 0, log argmax tokens for all users to reveal
+            # if the same prompt at different batch slots produces different predictions.
+            # This narrows the root cause to a single forward pass vs accumulated state.
+            if iteration == 0 and "ci-eval-32" in test_id:
+                if device_sampling_params is not None:
+                    diag_toks = logits.view(-1).tolist()
+                else:
+                    diag_toks = torch.argmax(logits.view(global_batch_size, -1), dim=-1).tolist()
+                logger.info(f"[DIAG step-0 batch={batch_idx}] argmax tokens per slot: {diag_toks}")
+                # Check if same-prompt slots produce identical tokens
+                # In batch 0: prompts are [p0,p1,...,p31]; in batch 1: [p1,p2,...,p31,p0]
+                # So for batch>=1, slot i has the same prompt as slot i+1 in the previous batch.
+                # Within a single batch, prompts are all different so we just log the raw tokens.
 
             # Get the next token
             if device_sampling_params is not None:
