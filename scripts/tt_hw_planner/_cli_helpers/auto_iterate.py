@@ -1716,11 +1716,26 @@ def _run_auto_iterate_loop(
 
         _cap_status_path = demo_dir / "bringup_status.json"
         if _cap_status_path.is_file():
-            _cap_components = [
+            from ..bringup_loop import _stub_has_graduated_from_autofill
+
+            _cap_all = [
                 str(c.get("name", "")).strip()
                 for c in json.loads(_cap_status_path.read_text()).get("components", [])
                 if c.get("status") in ("NEW", "ADAPT") and str(c.get("name", "")).strip()
             ]
+            _cap_components = []
+            _cap_frozen = []
+            for _cn in _cap_all:
+                try:
+                    _cg = _stub_has_graduated_from_autofill(demo_dir / "_stubs" / f"{_safe_id(_cn)}.py")
+                except Exception:
+                    _cg = False
+                (_cap_frozen if _cg else _cap_components).append(_cn)
+            if _cap_frozen:
+                print(
+                    f"  [capture] freezing {len(_cap_frozen)} already-graduated component(s) — "
+                    f"NOT re-captured (graduated work is frozen so the loop converges)"
+                )
         else:
             _cap_components = []
         if _cap_components:
