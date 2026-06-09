@@ -433,8 +433,16 @@ class Prefetcher(LightweightModule):
                 self.prefetcher_sub_device.add_sub_device(self.all_worker_cores_range_set)
                 self.prefetcher_sub_device.init_sub_device_manager()
             case Mode.PREFILL:
+                # Prefill does not prefetch, so no sender columns are reserved — the sub-device is
+                # the full compute grid. (Was self.all_core_range_set, an attribute that is never
+                # assigned: a pre-existing typo/omission on main; all_worker_cores_range_set would
+                # exclude the sender columns and trip num_intersections != num_cores.)
+                grid = self.mesh_device.compute_with_storage_grid_size()
+                full_grid = ttnn.CoreRangeSet(
+                    [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]
+                )
                 self.prefetcher_sub_device = PrefetcherSubDevice(self.mesh_device)
-                self.prefetcher_sub_device.add_sub_device(self.all_core_range_set)
+                self.prefetcher_sub_device.add_sub_device(full_grid)
                 self.prefetcher_sub_device.init_sub_device_manager()
 
         self.worker_sub_device_id = self.prefetcher_sub_device.sub_devices_id[-1]
