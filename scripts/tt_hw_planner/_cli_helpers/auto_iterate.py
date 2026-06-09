@@ -837,6 +837,22 @@ def _run_auto_iterate_loop(
             file=sys.stderr,
         )
 
+    try:
+        from ..alias_dedup import reconcile_alias_duplicates
+
+        _alias_credited = reconcile_alias_duplicates(
+            model_id=MODEL,
+            demo_dir=demo_dir,
+            graduated_set=set(seed_report.get("passed_components", []) or []),
+        )
+        if _alias_credited:
+            banner(
+                f"ALIAS DEDUP: credited {len(_alias_credited)} duplicate-named component(s) on device "
+                f"(same module as a graduated twin): {', '.join(_alias_credited)}"
+            )
+    except Exception as _alias_exc:
+        print(f"  [alias-dedup] non-fatal error: {type(_alias_exc).__name__}: {_alias_exc}", file=sys.stderr)
+
     unverified_native_this_run: set = set()
     verified_fail: set = set()
 

@@ -346,6 +346,57 @@ def is_locked_module(model_id: str, comp_name: str) -> bool:
     return comp_name in load_locked_modules(model_id)
 
 
+def _alias_credits_path(model_id: str) -> Path:
+    return _model_dir(model_id) / "alias_credits.json"
+
+
+def load_alias_credits(model_id: str) -> Dict[str, dict]:
+    """Return the persistent ``{comp_name: {canonical_path, twin, credited_ts}}``
+    dict for components credited on-device because they are the SAME module as a
+    graduated component (proven by identical resolved submodule_path).
+
+    Empty dict if no file exists yet — never raises.
+    """
+    p = _alias_credits_path(model_id)
+    if not p.is_file():
+        return {}
+    try:
+        return json.loads(p.read_text())
+    except Exception:
+        return {}
+
+
+def persist_alias_credit(model_id: str, comp_name: str, canonical_path: str = "", twin: str = "") -> None:
+    """Credit ``comp_name`` as on-device because it resolves to the same module
+    (``canonical_path``) as a graduated component ``twin``. Idempotent."""
+    listing = load_alias_credits(model_id)
+    if comp_name in listing:
+        return
+    listing[comp_name] = {
+        "canonical_path": canonical_path,
+        "twin": twin,
+        "credited_ts": time.time(),
+    }
+    p = _alias_credits_path(model_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(listing, indent=2, sort_keys=True))
+
+
+def remove_alias_credit(model_id: str, comp_name: str) -> bool:
+    """Drop a single alias-credit entry. Returns True if present and removed."""
+    listing = load_alias_credits(model_id)
+    if comp_name not in listing:
+        return False
+    del listing[comp_name]
+    p = _alias_credits_path(model_id)
+    if listing:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(listing, indent=2, sort_keys=True))
+    elif p.is_file():
+        p.unlink()
+    return True
+
+
 def _missing_kernels_path(model_id: str) -> Path:
     return _model_dir(model_id) / "missing_kernels.json"
 

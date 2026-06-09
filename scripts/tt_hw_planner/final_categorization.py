@@ -90,6 +90,7 @@ def build_final_categorization(
       4. anything else → PENDING (retry next run; not a permanent state)
     """
     from .overlay_manager import (
+        load_alias_credits,
         load_no_emit_tests,
         load_persistent_skips,
     )
@@ -114,6 +115,7 @@ def build_final_categorization(
     skipped = load_persistent_skips(model_id)
     graduated_set = set(graduated_set or _infer_graduated_from_disk(demo_dir, new_components))
     graduated_set -= set(skipped.keys())
+    graduated_set |= set(load_alias_credits(model_id).keys())
 
     kernel_missing_set = {n for n, e in skipped.items() if (e.get("category") or "").upper() == _KERNEL_MISSING}
     decomp_children = _load_decomposition_children(demo_dir)
