@@ -19,11 +19,13 @@ from models.demos.deepseek_v3.tt.generalized_moe_gate.op import GeneralizedMoeGa
 
 
 @pytest.mark.parametrize("batch_size", [1, 2])
+@pytest.mark.parametrize("output_softmax", [False, True])
 @pytest.mark.parametrize("topk", [8, 6, 4])
 @pytest.mark.parametrize("enable_sigmoid", [True, False])
 @pytest.mark.parametrize("seed", [42, 201, 512])
-def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed, topk):
-    """Test the generalized MoE gate C++ op on a 32x32 tile against the golden reference (top-`topk`)."""
+def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed, topk, output_softmax):
+    """Test the generalized MoE gate C++ op on a 32x32 tile against the golden reference (top-`topk`,
+    linear-normalize or softmax-over-selected)."""
 
     # Tensor dimensions — full 32x32 tile, logical 32x32 per shard.
     input_shape = (batch_size, 8, 32)
@@ -47,7 +49,7 @@ def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed, topk):
 
     # Reference output.
     top8_scores, top8_indices = GeneralizedMoeGateOp.golden(
-        torch_input, torch_bias, eps, scaling_factor, enable_sigmoid, topk
+        torch_input, torch_bias, eps, scaling_factor, enable_sigmoid, topk, output_softmax
     )
 
     grid = device.compute_with_storage_grid_size()
@@ -135,6 +137,7 @@ def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed, topk):
         scaling_factor,
         enable_sigmoid,
         topk,
+        output_softmax,
     )
 
     # Convert back to torch and keep the top-`topk` slots (ranks 0..topk-1 sit in the first topk cols;
@@ -174,7 +177,9 @@ def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed, topk):
     )
 
     dev_sel = torch.gather(raw_scores, dim=-1, index=dev_idx)
-    expected_norm = dev_sel / (dev_sel.sum(dim=-1, keepdim=True) + eps) * scaling_factor
+    # Consistency check vs the device's OWN selection: softmax-over-selected when output_softmax, else linear.
+    weights = torch.exp(dev_sel) if output_softmax else dev_sel
+    expected_norm = weights / (weights.sum(dim=-1, keepdim=True) + eps) * scaling_factor
     assert torch.allclose(
         sorted_output_torch.float(), expected_norm, atol=1e-2, rtol=1e-4
     ), "Normalized scores are not consistent with the device's own top-8 selection"
@@ -335,10 +340,11 @@ def test_generalized_moe_gate_512_per_block(device, diag_block, enable_sigmoid, 
     )
 
 
+@pytest.mark.parametrize("output_softmax", [False, True])
 @pytest.mark.parametrize("topk", [8, 6, 4])
 @pytest.mark.parametrize("enable_sigmoid", [True, False])
 @pytest.mark.parametrize("seed", [42, 201, 512])
-def test_generalized_moe_gate_512_global(device, enable_sigmoid, seed, topk):
+def test_generalized_moe_gate_512_global(device, enable_sigmoid, seed, topk, output_softmax):
     """512-expert true GLOBAL top-8 (A2 combine). Each of the 2 blocks produces a re-mergeable top-8
     RUN (idx made global via +b*256), stashed to L1; the combine places run0 at {0,2} and run1 at
     {4,6} and finalizes -> the global top-8 over all 512 experts (indices 0-511). GMG_DIAG_BLOCK must
@@ -357,7 +363,7 @@ def test_generalized_moe_gate_512_global(device, enable_sigmoid, seed, topk):
 
     # Golden: flatten (batch, 512) -> true global top-`topk` (indices 0-511), normalized scores.
     gold_scores, gold_idx = GeneralizedMoeGateOp.golden(
-        torch_input, torch_bias, eps, scaling_factor, enable_sigmoid, topk
+        torch_input, torch_bias, eps, scaling_factor, enable_sigmoid, topk, output_softmax
     )
     scores_all = (torch.sigmoid(torch_input) if enable_sigmoid else torch_input).float()
     bias_key = scores_all + torch_bias.float()  # bias-corrected ranking key, (batch, 512)
@@ -419,6 +425,7 @@ def test_generalized_moe_gate_512_global(device, enable_sigmoid, seed, topk):
         scaling_factor,
         enable_sigmoid,
         topk,
+        output_softmax,
     )
 
     dev_idx = ttnn.to_torch(res_idx)[:, 0, :topk].to(torch.int64)

@@ -140,10 +140,15 @@ GeneralizedMoeGateDeviceOperation::invoke(
     float eps,
     float scaling_factor,
     bool enable_sigmoid,
-    uint32_t topk) {
+    uint32_t topk,
+    bool output_softmax) {
     return {
         operation_attributes_t{
-            .eps = eps, .scaling_factor = scaling_factor, .enable_sigmoid = enable_sigmoid, .topk = topk},
+            .eps = eps,
+            .scaling_factor = scaling_factor,
+            .enable_sigmoid = enable_sigmoid,
+            .topk = topk,
+            .output_softmax = output_softmax},
         tensor_args_t{
             .input_tensor = input_tensor,
             .bias_tensor = bias_tensor,

@@ -1,8 +1,13 @@
-# Softmax support for `generalized_moe_gate` — perf findings & decision (DEFERRED)
+# Scoring softmax for `generalized_moe_gate` (over ALL experts, at the front) — perf findings & decision (DEFERRED)
 
-**Status: deferred.** There is a workaround (do softmax *outside* the gate with `ttnn.softmax`, with
-the gate's in-op `sigmoid` turned off — semantically correct: softmax is at the very front of the
-gate). Revisit after 512-expert support lands.
+There are **two distinct softmaxes**; don't conflate them:
+
+1. **Output softmax — over the SELECTED top-k — ✅ DONE** (the `output_softmax` flag). Full writeup:
+   `OUTPUT_SOFTMAX_NOTES.md` (+ `.zh.md`). This note is **not** about that one.
+
+2. **Scoring softmax — over ALL experts, at the FRONT — DEFERRED (next task)** — the subject of the rest
+   of this note. Workaround for now: do softmax *outside* the gate with `ttnn.softmax`, gate `sigmoid`
+   off (semantically correct — softmax is at the very front).
 
 ## Goal (when we come back to it)
 Support softmax routing (over **all** experts) as the gate's scoring function, alongside the current
