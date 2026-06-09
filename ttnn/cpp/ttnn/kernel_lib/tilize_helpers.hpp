@@ -45,11 +45,29 @@ enum class WaitMode : uint8_t {
 };
 
 // Controls whether fast tilize is used for Float32 data.
-// Fast tilize truncates fp32 to tf32 precision during tilization (lossy).
-// Use Lossless when exact fp32 preservation is required.
+//
+// You almost never want Lossless, even in "max-precision" kernels. Fast tilize
+// truncates fp32 → tf32 on the way into Dest, but every FPU consumer downstream
+// (matmul, FPU reduce, FPU binary eltwise) re-reads the tiled output through
+// SrcA/SrcB, which is tf32-only. So the precision Lossless "preserves" is
+// destroyed by the very next FPU op, and the only cost is a slower tilize path.
+//
+// Lossless is correct ONLY when ALL of these hold:
+//   1. The tiled output is consumed exclusively by SFPU ops reading directly
+//      from Dest (e.g. SFPU eltwise via copy_tile / Dest-resident SFPU chains).
+//      Any FPU op anywhere in the consumer chain — even one matmul or one
+//      add_tiles — invalidates the use case.
+//   2. fp32_dest_acc_en = true in the ComputeConfig.
+//   3. The input CB is configured with UnpackToDestMode::UnpackToDestFp32.
+// If any one is missing, prefer Fast.
 enum class Fp32Mode : uint8_t {
-    Fast,     // Default — uses fast_tilize for fp32 (lossy, truncates to tf32 precision)
-    Lossless  // Forces standard tilize path for fp32 data (exact, no truncation)
+    Fast,     // Default — uses fast_tilize for fp32 (truncates to tf32 precision).
+              // This matches what FPU ops downstream would do anyway, so it is the
+              // right default even when the surrounding kernel is "max precision".
+    Lossless  // Forces standard tilize path for fp32 data. Rarely useful — see
+              // enum comment above. Do not pick this just because the kernel is
+              // "max precision"; pick it only when the SFPU-only consumer chain
+              // and the two CB/ComputeConfig prerequisites are actually in place.
 };
 
 // Controls whether BH fast tilize configures DEST remap during init.
@@ -83,8 +101,17 @@ enum class RemapMode : uint8_t {
  *   wait_mode        — How to synchronize on input data (default: WaitBlock).
  *   reconfig_mode     — Register datatype reconfiguration (default: UnpackAndPackReconfigure).
  *   fp32_mode        — Float32 precision control (default: Fast).
- *                       Fast: uses fast_tilize when possible (lossy for fp32 — truncates to tf32 precision).
- *                       Lossless: forces standard tilize path, preserving exact fp32 values.
+ *                       Fast: uses fast_tilize when possible (truncates fp32 → tf32 in Dest).
+ *                             This is the right default — every FPU op downstream
+ *                             (matmul, FPU reduce, FPU binary eltwise) re-reads through
+ *                             SrcA/SrcB and truncates to tf32 anyway. "Max precision"
+ *                             kernels still want Fast unless the tiled output flows
+ *                             exclusively to SFPU via Dest.
+ *                       Lossless: forces standard tilize path. RARELY USEFUL. Only helps
+ *                             when ALL of: (a) the tiled output is consumed exclusively
+ *                             by SFPU ops reading from Dest (any FPU consumer voids it),
+ *                             (b) fp32_dest_acc_en=true, (c) the input CB uses
+ *                             UnpackToDestFp32. See the Fp32Mode enum comment.
  *   remap_mode       — BH DEST remap setup control (default: Configure).
  *                       Configure: helper configures remap when the selected tilize path needs it.
  *                       AssumeConfigured: caller already enabled BH DEST remap and no intervening code changes it.
@@ -143,7 +170,14 @@ enum class RemapMode : uint8_t {
  *   compute_kernel_lib::tilize<w, dfb_in, dfb_out, tilize_config::InitUninitMode::Neither>(blocks);    // middle
  *   compute_kernel_lib::tilize<w, dfb_in, dfb_out, tilize_config::InitUninitMode::UninitOnly>(blocks); // last
  *
- *   // 7. Lossless fp32 tilize — exact fp32 preservation (no truncation to tf32)
+ *   // 7. Lossless fp32 tilize — RARELY USEFUL. Only correct when the tiled
+ *   //    output is consumed exclusively by SFPU ops reading from Dest, AND
+ *   //    fp32_dest_acc_en=true, AND the input CB uses UnpackToDestFp32. Any
+ *   //    FPU consumer (matmul, FPU reduce, FPU binary eltwise) re-truncates
+ *   //    fp32 → tf32 on the way back through SrcA/SrcB — so Lossless gains
+ *   //    nothing precision-wise and only costs you a slower tilize path.
+ *   //    Default (Fast) is the right choice for almost every kernel, including
+ *   //    ones prompted to use "max precision" defaults.
  *   compute_kernel_lib::tilize<block_w, dfb_in, dfb_out,
  *          tilize_config::InitUninitMode::InitAndUninit,
  *          tilize_config::WaitMode::WaitBlock,

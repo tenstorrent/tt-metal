@@ -241,4 +241,64 @@ FORCE_INLINE void calculate_and_prepare_reduce_scaler(uint32_t valid_reduce_dim_
     prepare_reduce_scaler<dfb_id, pool_type, reduce_dim>(scaler_f, valid_reduce_dim_elements_in_tile);
 }
 
+// =============================================================================
+// Partial-scaler tile pair: full scaler followed by partial scaler
+// =============================================================================
+
+template <
+    uint32_t cb_id,
+    PoolType pool_type,
+    ReduceDim reduce_dim,
+    uint32_t partial_positions,
+    bool compute_uses_reduce_tile>
+FORCE_INLINE void prepare_partial_reduce_scalers(float scaler_f) {
+    static_assert(
+        reduce_dim != ReduceDim::REDUCE_SCALAR,
+        "Partial scalers are not supported for REDUCE_SCALAR. "
+        "REDUCE_SCALAR applies the scaler twice (row then col) so a single partial tile cannot encode both axes.");
+
+    // Reduce-axis dim of the tile bound to cb_id.
+    constexpr uint32_t full_dim =
+        (reduce_dim == ReduceDim::REDUCE_COL) ? get_tile_r_dim<cb_id>() : get_tile_c_dim<cb_id>();
+    static_assert(
+        partial_positions > 0 && partial_positions < full_dim,
+        "partial_positions must be in [1, tile reduce-axis dim - 1]. "
+        "If the reduce dimension is tile-aligned, use prepare_reduce_scaler with "
+        "valid_reduce_dim_elements_in_tile = full_dim instead.");
+
+    // Tile 0: full fill (every position holds the scaler).
+    prepare_reduce_scaler<cb_id, pool_type, reduce_dim, compute_uses_reduce_tile>(scaler_f, full_dim);
+    // Tile 1: partial fill (only the first `partial_positions` of the reduce axis hold the scaler).
+    prepare_reduce_scaler<cb_id, pool_type, reduce_dim, compute_uses_reduce_tile>(scaler_f, partial_positions);
+}
+
+// =============================================================================
+// calculate-and-fill variant of prepare_partial_reduce_scalers
+// =============================================================================
+
+template <
+    uint32_t cb_id,
+    PoolType pool_type,
+    ReduceDim reduce_dim,
+    uint32_t partial_positions,
+    uint32_t reduce_factor,
+    bool compute_uses_reduce_tile>
+FORCE_INLINE void calculate_and_prepare_partial_reduce_scalers() {
+    static_assert(
+        reduce_dim != ReduceDim::REDUCE_SCALAR,
+        "Partial scalers are not supported for REDUCE_SCALAR.");
+
+    // Compute the standard reduce scaler value (1/N for AVG REDUCE_ROW/COL; 1.0 for SUM/MAX).
+    // REDUCE_SCALAR is rejected above, so the 1/sqrt(N) branch is unreachable here.
+    float scaler_f;
+    if constexpr (pool_type == PoolType::AVG) {
+        static_assert(reduce_factor > 0, "reduce_factor must be greater than 0");
+        scaler_f = 1.0f / static_cast<float>(reduce_factor);
+    } else {
+        scaler_f = 1.0f;
+    }
+
+    prepare_partial_reduce_scalers<cb_id, pool_type, reduce_dim, partial_positions, compute_uses_reduce_tile>(scaler_f);
+}
+
 }  // namespace dataflow_kernel_lib
