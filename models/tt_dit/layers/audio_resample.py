@@ -182,15 +182,8 @@ class UpSample1d(Module):
         else:
             raise ValueError(f"window must be kaiser or hann, got {window!r}")
         self._conv1d_cache: dict = {}
-        # Polyphase path: replace zero_stuff + length-K depthwise with ``ratio`` parallel
-        # length-(K/ratio) depthwise convs on the un-stuffed input, then interleave outputs.
-        # Equivalent to the zero-stuff form for the symmetric sinc kernel; eliminates the
-        # T → ratio*T expansion plus the ``zero_pad`` of K-1 each side and the trailing slice.
-        # Enabled when ratio divides kernel_size — true for both kaiser (K=6*ratio) and hann.
         self._use_polyphase = (self.kernel_size % ratio) == 0
         if self._use_polyphase:
-            # Per-phase sub-kernels: h_p[j] = h[ratio*j + p], j ∈ [0, K/ratio).
-            # taps are *ratio-scaled* at call time (matches the unsharded path).
             K_sub = self.kernel_size // ratio
             self._sub_taps_cpu: list[list[float]] = [
                 [self._taps_cpu[ratio * j + p] for j in range(K_sub)] for p in range(ratio)
@@ -208,8 +201,6 @@ class UpSample1d(Module):
         B, T, C = x_BTC.shape
         sharded = self.parallel_config is not None and self.parallel_config.factor > 1
 
-        # When sharded, halo brings ``pad`` samples from neighbors; replicate makes
-        # boundary chips replicate their own first/last sample.
         if sharded and self.pad > 0:
             x_pad = _t_neighbor_pad(
                 x_BTC,
@@ -221,18 +212,9 @@ class UpSample1d(Module):
             )
         else:
             x_pad = _replicate_pad_t(x_BTC, self.pad, self.pad, self.mesh_device)
-        # No intermediate deallocate: when sharded, x_pad is a CCL persistent buffer
-        # (from _t_neighbor_pad) that must outlive this call.
 
         if self._use_polyphase and self.ratio == 2:
-            # Polyphase: ratio sub-convs on x_pad, then interleave. Bit-equivalent to
-            # zero_stuff + length-K depthwise for the symmetric sinc kernel; avoids the
-            # T → 2T expansion + length-K conv + length-K trailing crop.
-            # Slice offsets derived from the unsharded reference (see __init__ docstring).
             B_, T_pad, C_ = x_pad.shape
-            # Phase 0 reads x_pad[n+j+2] for n ∈ [0, T_local), j ∈ [0, K_sub) — slice
-            # [2, T_pad-3); after K_sub=6 stride=1 conv that gives T_local outputs.
-            # Phase 1 reads x_pad[n+j+3] — slice [3, T_pad-2).
             in0 = ttnn.slice(x_pad, [0, 2, 0], [B_, T_pad - 3, C_])
             in1 = ttnn.slice(x_pad, [0, 3, 0], [B_, T_pad - 2, C_])
             scaled_taps = [t * self.ratio for t in self._taps_cpu]
@@ -246,7 +228,6 @@ class UpSample1d(Module):
             )
             ttnn.deallocate(in0)
             ttnn.deallocate(in1)
-            # Interleave: y[2n] = ph0[n], y[2n+1] = ph1[n].
             T_out = ph0.shape[1]
             ph0_b = ttnn.reshape(ph0, (B_, T_out, 1, C_))
             ph1_b = ttnn.reshape(ph1, (B_, T_out, 1, C_))
@@ -256,7 +237,6 @@ class UpSample1d(Module):
         x_zs = _zero_stuff_t(x_pad, stride=self.stride, mesh_device=self.mesh_device)
         x_padded = _zero_pad_t(x_zs, self.kernel_size - 1, self.kernel_size - 1, self.mesh_device)
 
-        # Fold the ratio scale into the kernel taps.
         y = depthwise_tap_filter(
             x_padded,
             [t * self.ratio for t in self._taps_cpu],

@@ -255,9 +255,6 @@ def _build_torch_stage_b(seed: int = 42):
 
 
 def _audio_parallel_config(mesh_shape: tuple[int, int]):
-    # T-shard on the larger axis; if both axes are >1, channel-TP on the other
-    # axis so every chip does work (vocoder t_frames=120 is too small to absorb
-    # large T-only factors without t_pad waste — channel-TP scales cleanly).
     t_axis = 0 if mesh_shape[0] >= mesh_shape[1] else 1
     t_factor = mesh_shape[t_axis]
     c_axis = 1 - t_axis
@@ -339,7 +336,6 @@ def _build_tt_stage_c(
         ccl_manager=ccl_manager,
         **_tt_vocoder_cfg(_MAIN_VOCODER_CFG),
     )
-    # BWE channel-TP has a known divergence in the full pipeline — keep single-axis.
     bwe_pc = parallel_config.time_parallel if isinstance(parallel_config, AudioTCParallelConfig) else parallel_config
     bwe_voc = Vocoder(
         mesh_device=mesh_device,
