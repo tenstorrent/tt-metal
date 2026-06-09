@@ -22,6 +22,7 @@ from typing import List, Optional, Tuple, Union
 
 import torch
 import ttnn
+from ttnn.device import is_wormhole_b0
 
 
 from models.experimental.tt_symbiote.core.module import TTNNModule
@@ -97,11 +98,12 @@ def _deep_sync_profile_enabled() -> bool:
 def _decode_tp_scheme_from_env() -> str:
     """Tensor-parallel decode scheme for full dots.ocr pipeline construction.
 
-    ``col_parallel`` is the default fast TP4 decode path. Set
-    ``DOTS_OCR_TP_DECODE_SCHEME=row`` explicitly to compare against the older
-    hidden-sharded row-parallel path.
+    ``col_parallel`` is the default fast TP4 decode path. Wormhole B0 defaults
+    to ``row`` because the TP4 column-parallel decode path can drift on greedy
+    OCR text. Set ``DOTS_OCR_TP_DECODE_SCHEME`` explicitly to override.
     """
-    scheme = os.environ.get("DOTS_OCR_TP_DECODE_SCHEME", "col_parallel").strip()
+    default_scheme = "row" if is_wormhole_b0() else "col_parallel"
+    scheme = os.environ.get("DOTS_OCR_TP_DECODE_SCHEME", default_scheme).strip()
     if scheme not in {"row", "col_parallel"}:
         raise ValueError("DOTS_OCR_TP_DECODE_SCHEME must be one of {'row', 'col_parallel'}, " f"got {scheme!r}")
     return scheme

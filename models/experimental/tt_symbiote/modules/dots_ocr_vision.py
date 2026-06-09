@@ -20,6 +20,7 @@ import os
 import torch
 import torch.nn.functional as F
 import ttnn
+from ttnn.device import is_wormhole_b0
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
 from models.experimental.tt_symbiote.core.module import TTNNModule, TTNNLayerStack
@@ -2285,12 +2286,10 @@ class TTNNDotsVisionBlock(TTNNModule):
         )
         _vision_debug_mem("after attn", attn_out)
         ttnn.deallocate(normed)
-        # Force BFP8 output on the residual stream. Without this, when one
-        # operand is BF16 (older path) and the other BFP8 the binary op
-        # promotes to BF16, doubling the residual tile footprint going into
-        # ``norm2``. Now both operands are BFP8 and so is the result, so the
-        # whole layer (and the next one's norm input) stays in BFP8.
-        hidden_states = ttnn.add(residual, attn_out, dtype=ttnn.bfloat8_b)
+        # Keep Wormhole's attention residual in BF16 for OCR heading stability;
+        # non-Wormhole keeps the faster BFP8 residual stream.
+        residual_dtype = ttnn.bfloat16 if is_wormhole_b0(self.device) else ttnn.bfloat8_b
+        hidden_states = ttnn.add(residual, attn_out, dtype=residual_dtype)
         _vision_debug_mem("after attn residual add", hidden_states)
         ttnn.deallocate(attn_out)
         ttnn.deallocate(residual)

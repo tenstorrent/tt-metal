@@ -192,7 +192,10 @@ def _dp_decode_matmul_program_config(device, input_shape, weight_shape):
     # N has 140 tiles, so per_core_N=2 uses exactly 70 active output cores.
     # Use a 10x7 grid instead of the full 11x10 device grid so the mcast
     # program does not carry unused rows for this shape.
+    is_wormhole_b0 = hasattr(device, "arch") and device.arch() == ttnn.Arch.WORMHOLE_B0
     if k_dim == 1536 and n_dim == 4480:
+        if is_wormhole_b0:
+            return None
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(10, 7),
             in0_block_w=4,
