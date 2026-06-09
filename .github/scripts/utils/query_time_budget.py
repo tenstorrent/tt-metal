@@ -92,7 +92,8 @@ def build_testtype_map(workflows_dir):
     mapping = {}
     for path in glob.glob(os.path.join(workflows_dir, "*.y*ml")):
         try:
-            lines = open(path, "r").read().splitlines()
+            with open(path, "r") as f:
+                lines = f.read().splitlines()
         except OSError:
             continue
 
