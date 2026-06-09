@@ -279,20 +279,15 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
 }
 
 /**
- * @brief Restore unpacker datum-count state after a matmul operation.
+ * @brief No-op after a matmul operation.
  *
- * Resets the X-dimension address counters for both SrcA and SrcB back to a single face worth of
- * datums.
+ * x-start/x-end is transient and reprogrammed by the next operation's init (see tt-llk#1036), so
+ * there is nothing to restore here.
  *
- * @param unpA_face_r_dim: Rows per face for operand A, used to compute the restored datum count.
- * @param unpB_face_r_dim: Rows per face for operand B, used to compute the restored datum count.
  * @note Call @ref _llk_unpack_AB_matmul_init_ before this function.
  */
-inline void _llk_unpack_AB_matmul_uninit_(const std::uint32_t unpA_face_r_dim, const std::uint32_t unpB_face_r_dim)
+inline void _llk_unpack_AB_matmul_uninit_()
 {
-    // TODO NC: Issue tt-llk#1036 will make this transient
-    TT_SETADCXX(p_setadc::UNP_A, unpA_face_r_dim * FACE_C_DIM - 1, 0x0);
-    TT_SETADCXX(p_setadc::UNP_B, unpB_face_r_dim * FACE_C_DIM - 1, 0x0);
 }
 
 /**
