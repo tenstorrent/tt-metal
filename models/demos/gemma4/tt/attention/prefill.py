@@ -185,9 +185,7 @@ def prefill_forward(
                 if config.cache_position_modulo is not None
                 else {}
             )
-            block_size = k_cache.padded_shape[2]
-            page_len = page_table.shape[1] * block_size
-
+            page_len = page_table.shape[1] * eff_bs
             valid_slots = user_id if isinstance(user_id, (list, tuple)) else list(range(batch_size))
             for slot_idx in valid_slots:
                 k_user = tt_k[slot_idx : slot_idx + 1, :, :, :]
