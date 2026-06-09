@@ -244,8 +244,32 @@ def repair_degenerate_lm_hint_tail(
     target_frames: int,
     *,
     min_good_codes: int = 50,
+    tt_audio_detokenizer: Any | None = None,
 ) -> None:
     """Silence-pad hint tail when LM fills to target with low-quality / repetitive codes."""
+    from models.experimental.ace_step_v1_5.utils.device_lm_hints import (
+        ace_step_device_native_detok_hints,
+        repair_degenerate_lm_hint_tail_tt,
+    )
+
+    if (
+        ace_step_device_native_detok_hints()
+        and payload.get("precomputed_lm_hints_25Hz_tt") is not None
+        and tt_audio_detokenizer is not None
+    ):
+        import ttnn
+
+        if repair_degenerate_lm_hint_tail_tt(
+            payload,
+            code_string,
+            target_frames,
+            device=tt_audio_detokenizer.device,
+            mem=getattr(tt_audio_detokenizer, "mem", None),
+            dtype=getattr(tt_audio_detokenizer, "dtype", ttnn.float32),
+            min_good_codes=min_good_codes,
+        ):
+            return
+
     from models.experimental.ace_step_v1_5.ttnn_impl.audio_code_detokenizer import parse_audio_code_string
 
     hints = payload.get("precomputed_lm_hints_25Hz")
@@ -310,6 +334,7 @@ def build_non_cover_condition_payload(payload: dict[str, Any]) -> dict[str, Any]
     nc_payload["src_latents"] = sil_exp
     nc_payload["is_covers"] = non_is_covers
     nc_payload["precomputed_lm_hints_25Hz"] = None
+    nc_payload["precomputed_lm_hints_25Hz_tt"] = None
     return nc_payload
 
 
@@ -407,9 +432,17 @@ def attach_payload_preprocess_ttnn(
 
     pad_id = getattr(dit_handler.text_tokenizer, "pad_token_id", None)
     dtype = getattr(dit_handler, "dtype", torch.float32)
+    from models.experimental.ace_step_v1_5.utils.device_lm_hints import (
+        ace_step_device_native_detok_hints,
+        pad_lm_hints_tt_to_frames,
+    )
+
     orig_text = dit_handler.infer_text_embeddings
     orig_lyric = dit_handler.infer_lyric_embeddings
     orig_decode = getattr(dit_handler, "_decode_audio_codes_to_latents", None)
+    orig_prepare_hints = getattr(dit_handler, "_prepare_precomputed_lm_hints", None)
+    dit_handler._ace_step_tt_audio_detokenizer = tt_audio_detokenizer
+    dit_handler._ace_step_lm_hints_tt_batch = None
 
     def _text_replacement(text_token_idss: torch.Tensor) -> torch.Tensor:
         ids = text_token_idss.detach()
@@ -497,22 +530,97 @@ def attach_payload_preprocess_ttnn(
             ) from exc
         if hid_tt is None:
             return None
+        dit_handler._ace_step_last_detok_hints_tt = hid_tt
+        if ace_step_device_native_detok_hints() and tt_audio_detokenizer is not None:
+            if use_trace and hasattr(tt_audio_detokenizer, "release_trace"):
+                ttnn.synchronize_device(tt_audio_detokenizer.device)
+                tt_audio_detokenizer.release_trace()
+            return None
         out = ttnn.to_torch(hid_tt).float()
         if use_trace and hasattr(tt_audio_detokenizer, "release_trace"):
             ttnn.synchronize_device(tt_audio_detokenizer.device)
             tt_audio_detokenizer.release_trace()
         return out.to(device=getattr(dit_handler, "device", torch.device("cpu")), dtype=dtype)
 
+    def _prepare_hints_replacement(
+        self,
+        batch_size: int,
+        audio_code_hints: list,
+        max_latent_length: int,
+        silence_latent_tiled: torch.Tensor,
+    ):
+        if not ace_step_device_native_detok_hints() or tt_audio_detokenizer is None or orig_prepare_hints is None:
+            return orig_prepare_hints(
+                self,
+                batch_size,
+                audio_code_hints,
+                max_latent_length,
+                silence_latent_tiled,
+            )
+
+        tt_dev = tt_audio_detokenizer.device
+        tt_mem = getattr(tt_audio_detokenizer, "mem", None)
+        tt_dtype = getattr(tt_audio_detokenizer, "dtype", ttnn.float32)
+        hints_tt_list: list[Any | None] = []
+        for i in range(batch_size):
+            if audio_code_hints[i] is None:
+                hints_tt_list.append(None)
+                continue
+            logger.info(f"[generate_music] Decoding audio codes for LM hints for item {i}...")
+            self._decode_audio_codes_to_latents(audio_code_hints[i])
+            hid_tt = getattr(self, "_ace_step_last_detok_hints_tt", None)
+            if hid_tt is None:
+                hints_tt_list.append(None)
+                continue
+            hid_tt = pad_lm_hints_tt_to_frames(
+                hid_tt,
+                max_frames=int(max_latent_length),
+                silence_latent=silence_latent_tiled,
+                device=tt_dev,
+                mem=tt_mem,
+                dtype=tt_dtype,
+            )
+            hints_tt_list.append(hid_tt)
+
+        if not any(h is not None for h in hints_tt_list):
+            self._ace_step_lm_hints_tt_batch = None
+            return None
+
+        if batch_size != 1:
+            logger.warning(
+                "[ace_step_v1_5] device-native LM hints support B=1 only; falling back to torch hints",
+            )
+            return orig_prepare_hints(
+                self,
+                batch_size,
+                audio_code_hints,
+                max_latent_length,
+                silence_latent_tiled,
+            )
+
+        self._ace_step_lm_hints_tt_batch = hints_tt_list[0]
+        return None
+
     dit_handler.infer_text_embeddings = _text_replacement
     dit_handler.infer_lyric_embeddings = _lyric_replacement
     if orig_decode is not None:
         dit_handler._decode_audio_codes_to_latents = _decode_replacement
+    if orig_prepare_hints is not None:
+        dit_handler._prepare_precomputed_lm_hints = _prepare_hints_replacement.__get__(dit_handler, type(dit_handler))
 
     def _restore() -> None:
         dit_handler.infer_text_embeddings = orig_text
         dit_handler.infer_lyric_embeddings = orig_lyric
         if orig_decode is not None:
             dit_handler._decode_audio_codes_to_latents = orig_decode
+        if orig_prepare_hints is not None:
+            dit_handler._prepare_precomputed_lm_hints = orig_prepare_hints
+        if hasattr(dit_handler, "_ace_step_tt_audio_detokenizer"):
+            delattr(dit_handler, "_ace_step_tt_audio_detokenizer")
+        if hasattr(dit_handler, "_ace_step_lm_hints_tt_batch"):
+            delattr(dit_handler, "_ace_step_lm_hints_tt_batch")
+        if hasattr(dit_handler, "_ace_step_last_detok_hints_tt"):
+            delattr(dit_handler, "_ace_step_last_detok_hints_tt")
 
     return _restore
 
@@ -1037,12 +1145,17 @@ def handler_prepare_condition_payload(
     processed = dit_handler.preprocess_batch(batch)
     payload = dit_handler._unpack_service_processed_data(processed)
     payload["silence_latent"] = dit_handler.silence_latent
+    hints_tt = getattr(dit_handler, "_ace_step_lm_hints_tt_batch", None)
+    if hints_tt is not None:
+        payload["precomputed_lm_hints_25Hz_tt"] = hints_tt
+        payload["precomputed_lm_hints_25Hz"] = None
 
     frames = int(payload["src_latents"].shape[1])
     repair_degenerate_lm_hint_tail(
         payload,
         str(filtered_generate_kwargs.get("audio_code_string") or ""),
         int(frames),
+        tt_audio_detokenizer=getattr(dit_handler, "_ace_step_tt_audio_detokenizer", None),
     )
     return payload, frames
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import time
+from typing import Any
 
 import numpy as np
 import pytest
@@ -245,6 +246,21 @@ def test_detok_chunk_n_default():
     assert ace_step_detok_chunk_n() == ACE_STEP_DETOK_L1_CHUNK_CODES
 
 
+def test_device_native_detok_hints_env(monkeypatch):
+    from models.experimental.ace_step_v1_5.utils.device_lm_hints import ace_step_device_native_detok_hints
+
+    monkeypatch.delenv("ACE_STEP_TORCH_DETOK_HINTS", raising=False)
+    monkeypatch.delenv("ACE_STEP_PYTORCH_DETOK", raising=False)
+    assert ace_step_device_native_detok_hints()
+
+    monkeypatch.setenv("ACE_STEP_TORCH_DETOK_HINTS", "1")
+    assert not ace_step_device_native_detok_hints()
+
+    monkeypatch.delenv("ACE_STEP_TORCH_DETOK_HINTS", raising=False)
+    monkeypatch.setenv("ACE_STEP_PYTORCH_DETOK", "1")
+    assert not ace_step_device_native_detok_hints()
+
+
 def test_preprocess_detok_shim_uses_ttnn_for_long_streams(monkeypatch):
     """Default shim must not call HF detok when n_codes > chunk (chunked TTNN instead)."""
     from unittest.mock import MagicMock
@@ -254,6 +270,63 @@ def test_preprocess_detok_shim_uses_ttnn_for_long_streams(monkeypatch):
     from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import attach_payload_preprocess_ttnn
 
     monkeypatch.delenv("ACE_STEP_PYTORCH_DETOK", raising=False)
+    monkeypatch.delenv("ACE_STEP_TORCH_DETOK_HINTS", raising=False)
+    ttnn_forward = MagicMock(return_value=MagicMock(name="hid_tt"))
+    import ttnn
+
+    to_torch_calls: list[Any] = []
+
+    def _track_to_torch(hid_tt):
+        to_torch_calls.append(hid_tt)
+        return torch.zeros(1, 1500, 64)
+
+    monkeypatch.setattr(ttnn, "to_torch", _track_to_torch)
+
+    class _Handler:
+        device = torch.device("cpu")
+        dtype = torch.float32
+        text_tokenizer = type("Tok", (), {"pad_token_id": 0})()
+
+        def infer_text_embeddings(self, x):
+            return x
+
+        def infer_lyric_embeddings(self, x):
+            return x
+
+        def _decode_audio_codes_to_latents(self, code_str: str):
+            raise AssertionError("HF detok must not run on default long-stream path")
+
+        def _prepare_precomputed_lm_hints(self, *args, **kwargs):
+            raise AssertionError("orig prepare hints must not run on device-native path")
+
+    handler = _Handler()
+    fake_detok = type("D", (), {"device": object(), "forward": ttnn_forward, "dtype": ttnn.float32, "mem": None})()
+    restore = attach_payload_preprocess_ttnn(
+        handler,
+        tt_qwen_encoder=type("Q", (), {"device": object()})(),
+        tt_audio_detokenizer=fake_detok,
+        use_trace=False,
+    )
+    try:
+        codes = "".join(f"<|audio_code_{i}|>" for i in range(300))
+        out = handler._decode_audio_codes_to_latents(codes)
+        assert out is None
+        assert not to_torch_calls
+        ttnn_forward.assert_called_once()
+    finally:
+        restore()
+
+
+def test_preprocess_detok_shim_torch_hints_opt_in(monkeypatch):
+    """ACE_STEP_TORCH_DETOK_HINTS=1 must round-trip detok via ttnn.to_torch."""
+    from unittest.mock import MagicMock
+
+    import torch
+
+    from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import attach_payload_preprocess_ttnn
+
+    monkeypatch.delenv("ACE_STEP_PYTORCH_DETOK", raising=False)
+    monkeypatch.setenv("ACE_STEP_TORCH_DETOK_HINTS", "1")
     ttnn_forward = MagicMock(return_value=MagicMock(name="hid_tt"))
     import ttnn
 
@@ -271,7 +344,7 @@ def test_preprocess_detok_shim_uses_ttnn_for_long_streams(monkeypatch):
             return x
 
         def _decode_audio_codes_to_latents(self, code_str: str):
-            raise AssertionError("HF detok must not run on default long-stream path")
+            raise AssertionError("HF detok must not run")
 
     handler = _Handler()
     fake_detok = type("D", (), {"device": object(), "forward": ttnn_forward})()
