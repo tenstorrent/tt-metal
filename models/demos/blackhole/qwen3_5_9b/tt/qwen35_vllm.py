@@ -51,6 +51,37 @@ class Qwen35ForCausalLM(Generator):
     model_capabilities = {"supports_prefix_caching": False, "supports_async_decode": False}
 
     @classmethod
+    def get_max_tokens_all_users(
+        cls,
+        model_name: str = "",
+        num_devices: int = 1,
+        tt_data_parallel: int = 1,
+        max_model_len: int | None = None,
+        max_num_seqs: int | None = None,
+        **kwargs,
+    ) -> int:
+        """All-user KV-cache token capacity = served context length (B=1).
+
+        Qwen3.5/3.6 serve one sequence at a time (max_concurrency=1), so the whole
+        paged KV cache belongs to a single user and its capacity is exactly the
+        served context length — max_model_len, i.e. the catalog's max_context.
+        Deriving from max_model_len, instead of the inherited 131072 fallback, lets
+        these models serve at the full requested ISL (e.g. 256K = 262144): the
+        chunk-outer prefill and the full-KV page-table sizing in
+        warmup_model_prefill already scale to whatever KV cache vLLM allocates.
+        The * max_num_seqs keeps the all-user semantics correct if B ever grows.
+        """
+        if max_model_len is not None:
+            return int(max_model_len) * int(max_num_seqs or 1)
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            max_num_seqs=max_num_seqs,
+            **kwargs,
+        )
+
+    @classmethod
     def initialize_vllm_model(
         cls,
         hf_config,
