@@ -50,8 +50,20 @@ def ttnn_layer_norm(*args, **kwargs):
     return _run_twice(ttnn.layer_norm, *args, **kwargs)
 
 
+def ttnn_layer_norm_in_place(input_tensor, *args, **kwargs):
+    # A sharded program_config with ``inplace=True`` makes ttnn.layer_norm write its result back
+    # into ``input_tensor``; clone the input before each run so both runs see identical inputs.
+    return _run_twice_in_place(ttnn.layer_norm, input_tensor, *args, **kwargs)
+
+
 def ttnn_rms_norm(*args, **kwargs):
     return _run_twice(ttnn.rms_norm, *args, **kwargs)
+
+
+def ttnn_rms_norm_in_place(input_tensor, *args, **kwargs):
+    # A sharded program_config with ``inplace=True`` makes ttnn.rms_norm write its result back
+    # into ``input_tensor``; clone the input before each run so both runs see identical inputs.
+    return _run_twice_in_place(ttnn.rms_norm, input_tensor, *args, **kwargs)
 
 
 def ttnn_group_norm(*args, **kwargs):
