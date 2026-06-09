@@ -111,7 +111,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     uint32_t num_datum_row_per_group_mod_tile_w =
         num_datum_row_per_group % tile_width == 0 ? tile_width : num_datum_row_per_group % tile_width;
     uint32_t group_size = W / num_groups;
-    auto all_cores = a.shard_spec().value().grid;
+    auto all_cores = a.shard_spec().value().grid.merge_ranges();
+    TT_FATAL(all_cores.ranges().size() == 1, "sharded groupnorm requires a rectangular shard grid");
     uint32_t num_cores = all_cores.num_cores();
     auto shard_orientation = a.shard_spec().value().orientation;
     const auto shard_bbox = all_cores.bounding_box();

@@ -322,22 +322,37 @@ def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_group
     )
 
 
+OFFSET_SHARD_GRID_SHAPE_CASES = [
+    # (N, C, H, W, num_groups), (core_grid_x, core_grid_y)
+    ((1, 1280, 16, 16, 32), (4, 4)),
+    ((1, 960, 1, 1024, 32), (8, 4)),
+]
+OFFSET_SHARD_GRID_OFFSETS = [
+    ttnn.CoreCoord(0, 0),
+    ttnn.CoreCoord(2, 0),
+    ttnn.CoreCoord(0, 2),
+    ttnn.CoreCoord(1, 1),
+    ttnn.CoreCoord(4, 4),
+]
+OFFSET_SHARD_GRID_ORIENTATIONS = [ttnn.ShardOrientation.COL_MAJOR, ttnn.ShardOrientation.ROW_MAJOR]
+
+
+def _offset_grid_fits_device(device, core_grid, offset):
+    dev = device.compute_with_storage_grid_size()
+    return offset.x + core_grid[0] <= dev.x and offset.y + core_grid[1] <= dev.y
+
+
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
-@pytest.mark.parametrize("N, C, H, W, num_groups", [(1, 1280, 16, 16, 32)])
+@pytest.mark.parametrize("shape, core_grid", OFFSET_SHARD_GRID_SHAPE_CASES)
+@pytest.mark.parametrize("grid_offset", OFFSET_SHARD_GRID_OFFSETS)
+@pytest.mark.parametrize("orientation", OFFSET_SHARD_GRID_ORIENTATIONS)
 @pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
-@pytest.mark.parametrize(
-    "core_grid, grid_offset, orientation",
-    [
-        ((4, 4), ttnn.CoreCoord(2, 0), ttnn.ShardOrientation.COL_MAJOR),
-        ((4, 4), ttnn.CoreCoord(0, 2), ttnn.ShardOrientation.COL_MAJOR),
-        ((4, 4), ttnn.CoreCoord(2, 0), ttnn.ShardOrientation.ROW_MAJOR),
-        ((4, 4), ttnn.CoreCoord(0, 2), ttnn.ShardOrientation.ROW_MAJOR),
-    ],
-)
-def test_group_norm_with_offset_shard_grid(
-    device, N, C, H, W, num_groups, use_welford, core_grid, grid_offset, orientation
-):
+def test_group_norm_with_offset_shard_grid(device, shape, core_grid, grid_offset, orientation, use_welford):
     """Sharded groupnorm must work when the shard grid does not start at core (0, 0), for both orientations."""
+    if not _offset_grid_fits_device(device, core_grid, grid_offset):
+        pytest.skip(f"core grid {core_grid} at offset ({grid_offset.x}, {grid_offset.y}) does not fit on this device")
+
+    N, C, H, W, num_groups = shape
     torch.manual_seed(0)
 
     grid_size = ttnn.CoreGrid(y=core_grid[1], x=core_grid[0])
@@ -413,23 +428,13 @@ def test_group_norm_with_offset_shard_grid(
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    if use_welford:
-        pcc_threshold = 0.99975
-        rtol = 0.14
-        atol = 0.085
-        frobenius_threshold = 0.02
-    else:
-        pcc_threshold = 0.9999
-        rtol = 0.065
-        atol = 0.065
-        frobenius_threshold = 0.015
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=pcc_threshold,
-        rtol=rtol,
-        atol=atol,
-        frobenius_threshold=frobenius_threshold,
+        pcc_threshold=0.9999,
+        rtol=0.05,
+        atol=0.065,
+        frobenius_threshold=0.015,
     )
 
 
