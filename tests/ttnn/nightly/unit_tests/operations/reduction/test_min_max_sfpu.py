@@ -2,18 +2,17 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""ttnn.max / ttnn.min vs torch.amax / torch.amin for int32 and float32 (SFPU reduce path)."""
+"""ttnn.max / ttnn.min vs torch.amax / torch.amin for int32 (SFPU reduce path)."""
 
 import pytest
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal
 
 pytestmark = pytest.mark.use_module_device
 
 
-@pytest.mark.parametrize("in_dtype", [ttnn.int32, ttnn.float32])
 @pytest.mark.parametrize(
     "input_shape",
     [
@@ -28,30 +27,22 @@ pytestmark = pytest.mark.use_module_device
 )
 @pytest.mark.parametrize("dim", [0, 1, -1, -2, (-1, -2), None])
 @pytest.mark.parametrize("op", ["max", "min"])
-def test_max_min(device, in_dtype, input_shape, dim, op):
+def test_max_min(device, input_shape, dim, op):
     torch.manual_seed(0)
-    if in_dtype == ttnn.int32:
-        torch_input_tensor = torch.randint(-50_000, 50_000, input_shape, dtype=torch.int32)
-    else:
-        torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
+    torch_input_tensor = torch.randint(-50_000, 50_000, input_shape, dtype=torch.int32)
 
     torch_op = torch.amax if op == "max" else torch.amin
     ttnn_op = ttnn.max if op == "max" else ttnn.min
 
     torch_output_tensor = torch_op(torch_input_tensor, dim=dim)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=in_dtype)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.int32)
     output_tensor = ttnn.to_torch(ttnn_op(input_tensor, dim=dim))
 
     assert output_tensor.dtype == torch_input_tensor.dtype
-
-    if in_dtype == ttnn.int32:
-        assert_equal(output_tensor, torch_output_tensor)
-    else:
-        assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999999)
+    assert_equal(output_tensor, torch_output_tensor)
 
 
-@pytest.mark.parametrize("in_dtype", [ttnn.int32, ttnn.float32])
 @pytest.mark.parametrize("scale", [2.0, 0.5, -3.0])
 @pytest.mark.parametrize(
     "input_shape, dim",
@@ -62,67 +53,19 @@ def test_max_min(device, in_dtype, input_shape, dim, op):
     ],
 )
 @pytest.mark.parametrize("op", ["max", "min"])
-def test_max_min_with_scaling(device, in_dtype, input_shape, dim, op, scale):
+def test_max_min_with_scaling(device, input_shape, dim, op, scale):
     torch.manual_seed(0)
-    if in_dtype == ttnn.int32:
-        torch_input_tensor = torch.randint(-50_000, 50_000, input_shape, dtype=torch.int32)
-    else:
-        torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
+    torch_input_tensor = torch.randint(-50_000, 50_000, input_shape, dtype=torch.int32)
 
     torch_op = torch.amax if op == "max" else torch.amin
     ttnn_op = ttnn.max if op == "max" else ttnn.min
 
-    if in_dtype == ttnn.int32:
-        torch_expected = torch_op(torch_input_tensor.float() * scale, dim=dim).to(torch.int32)
-    else:
-        torch_expected = torch_op(torch_input_tensor * scale, dim=dim)
+    torch_expected = torch_op(torch_input_tensor.float() * scale, dim=dim).to(torch.int32)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=in_dtype)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.int32)
     output_tensor = ttnn.to_torch(ttnn_op(input_tensor, dim=dim, scalar=scale))
 
     assert output_tensor.dtype == torch_input_tensor.dtype
-
-    if in_dtype == ttnn.int32:
-        assert_equal(output_tensor, torch_expected)
-    else:
-        assert_with_pcc(torch_expected, output_tensor, pcc=0.999999)
-
-
-# ---------------------------------------------------------------------------
-# FP32 precision retention: inputs all collapse to the same bf16 value but are
-# distinct in fp32 — verifies the SFPU path preserves fp32 mantissa bits.
-# ---------------------------------------------------------------------------
-@pytest.mark.parametrize(
-    "input_shape, dim",
-    [
-        ((1, 1, 32, 32), -1),  # W reduce, single tile
-        ((1, 1, 32, 32), -2),  # H reduce, single tile
-        ((1, 1, 64, 32), -1),  # W reduce, Ht=2
-        ((1, 1, 32, 64), -2),  # H reduce, Wt=2
-        ((1, 1, 32, 128), -1),
-        ((1, 1, 128, 32), -2),
-    ],
-)
-@pytest.mark.parametrize("op", ["max", "min"])
-def test_fp32_precision_beyond_bf16_resolution(device, input_shape, dim, op):
-    h, w = input_shape[-2], input_shape[-1]
-    fp32_ulp_at_one = 2.0**-23
-
-    n = h * w
-    values = torch.tensor([1.0 + (k + 1) * fp32_ulp_at_one for k in range(n)], dtype=torch.float32)
-    torch_input = values.reshape(input_shape)
-
-    collapsed = torch_input.to(torch.bfloat16).to(torch.float32)
-    assert torch.all(collapsed == 1.0).item(), "probe invariant broken: values are distinguishable in bf16"
-
-    torch_op = torch.amax if op == "max" else torch.amin
-    ttnn_op = ttnn.max if op == "max" else ttnn.min
-
-    torch_expected = torch_op(torch_input, dim=dim)
-
-    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
-    output_tensor = ttnn.to_torch(ttnn_op(input_tensor, dim=dim))
-
     assert_equal(output_tensor, torch_expected)
 
 

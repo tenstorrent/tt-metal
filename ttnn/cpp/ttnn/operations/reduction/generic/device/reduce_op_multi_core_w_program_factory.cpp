@@ -176,13 +176,10 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
     const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
     uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
 
-    // Int32 and Float32 max/min use the SFPU reduce path.
-    //  - Int32: GMPOOL has no Int32 support at all.
-    //  - Float32: GMPOOL feeds SrcA/SrcB which truncates to bf16, losing fp32 precision.
+    // Int32 max/min use the SFPU reduce path (GMPOOL has no Int32 support).
     // The host already lowers reduce_min to math_op=MAX + negate=true (see reduce_op.cpp::reduce_min),
     // so this single check covers both MAX and MIN.
-    const bool use_sfpu_reduce_path = (a.dtype() == DataType::INT32 || a.dtype() == DataType::FLOAT32) &&
-                                      operation_attributes.math_op == ReduceOpMath::MAX;
+    const bool use_sfpu_reduce_path = a.dtype() == DataType::INT32 && operation_attributes.math_op == ReduceOpMath::MAX;
     const bool use_fpu_negate = operation_attributes.negate && !use_sfpu_reduce_path;
 
     std::vector<uint32_t> reader_compile_time_args;
@@ -234,13 +231,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
         reduce_defines["REDUCE_POST_MUL"] = "1";
     }
 
-    // Float32 SFPU reduce must unpack source tiles straight into the fp32 DST register.
-    // Without this, the unpacker rounds Float32 -> Tf32/bf16 before SFPU sees the data,
-    // silently destroying mantissa precision.
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    if (use_sfpu_reduce_path && a.dtype() == DataType::FLOAT32) {
-        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    }
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -286,7 +277,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
         };
     }
 
-    // MIN on Int32/Float32 uses -MAX(-x) in reduce_w_neg.
+    // MIN on Int32 uses -MAX(-x) in reduce_w_neg.
     const std::string compute_kernel =
         rm_path ? std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_rm.cpp")
                 : std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce") +

@@ -292,8 +292,8 @@ struct NoOp {
  * @tparam scaler_dfb_id DataflowBuffer ID containing scaler tile (compile-time CB id)
  * @tparam output_dfb_id Output DataflowBuffer ID for reduced tiles (compile-time CB id)
  *                       The input/output formats are deduced from these CB ids
- *                       (unpack_src_format / pack_dst_format), so Int32/Float32 MAX is routed to the
- *                       SFPU path automatically (Int32 has no FPU support; Float32 for precision).
+ *                       (unpack_src_format / pack_dst_format), so Int32 MAX is routed to the
+ *                       SFPU path automatically (Int32 has no FPU support).
  *                       Other formats use FPU/GMPOOL. Only REDUCE_ROW/REDUCE_COL MAX on SFPU; MIN
  *                       dispatched via reduce_{h,w}_neg.cpp (SFPU vs FPU branch).
  * @tparam input_policy Input handling policy (default: WaitAndPopPerTile - streaming mode)

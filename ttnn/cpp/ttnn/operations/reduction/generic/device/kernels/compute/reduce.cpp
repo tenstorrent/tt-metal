@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Thin wrapper around compute_kernel_lib::reduce<>. The input data format is deduced from the input
-// CB id inside the helper, so Int32/Float32 MAX is routed to the SFPU path automatically; otherwise
-// FPU/GMPOOL. MIN on Int32/Float32 is dispatched separately via reduce_{h,w}_neg.
+// CB id inside the helper, so Int32 MAX is routed to the SFPU path automatically; otherwise
+// FPU/GMPOOL. MIN on Int32 is dispatched separately via reduce_{h,w}_neg.
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"

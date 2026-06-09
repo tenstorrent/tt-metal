@@ -30,7 +30,7 @@ void kernel_main() {
     // Welford must process one column at a time because the SFPU can only maintain
     // a single running mean/M2 state. DEST_AUTO_LIMIT interleaves multiple columns
     // per chunk, which would feed the Welford kernel tiles from the wrong columns.
-    // Int32/Float32 SFPU max keeps one acc DST per column plus one shared work DST (DEST_AUTO_LIMIT - 1).
+    // Int32 SFPU max keeps one acc DST per column plus one shared work DST (DEST_AUTO_LIMIT - 1).
     constexpr DataFormat reduce_format = get_dataformat(cb_id_in0);
     constexpr bool use_sfpu_reduce_path = is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, reduce_format>();
     constexpr uint32_t row_chunk = use_welford ? 1

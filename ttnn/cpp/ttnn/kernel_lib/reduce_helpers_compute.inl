@@ -27,24 +27,14 @@ namespace detail {
 // SFPU MAX fold (also used by reduce_{h,w}_neg for -MAX(-x) MIN).
 template <DataFormat format>
 ALWI void sfpu_reduce_max_fold_init() {
-    static_assert(
-        format == DataFormat::Int32 || format == DataFormat::Float32, "SFPU reduce MAX fold: Int32 or Float32 only");
-    if constexpr (format == DataFormat::Int32) {
-        binary_max_int32_tile_init();
-    } else {
-        binary_max_tile_init();
-    }
+    static_assert(format == DataFormat::Int32, "SFPU reduce MAX fold: Int32 only");
+    binary_max_int32_tile_init();
 }
 
 template <DataFormat format>
 ALWI void sfpu_reduce_max_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
-    static_assert(
-        format == DataFormat::Int32 || format == DataFormat::Float32, "SFPU reduce MAX fold: Int32 or Float32 only");
-    if constexpr (format == DataFormat::Int32) {
-        binary_max_int32_tile(a, b, out);
-    } else {
-        binary_max_tile(a, b, out);
-    }
+    static_assert(format == DataFormat::Int32, "SFPU reduce MAX fold: Int32 only");
+    binary_max_int32_tile(a, b, out);
 }
 
 // Copy one input tile into DST and fold into running MAX (first tile seeds dst_idx directly).
@@ -256,7 +246,7 @@ ALWI void reduce(
     ReduceInputMemoryLayout input_memory_layout,
     AccumulateT accumulate,
     PostReduceOp post_reduce_op) {
-    // Int32/Float32 MAX is routed to the SFPU path via is_sfpu_reduce_path<>(); all other formats use FPU/GMPOOL.
+    // Int32 MAX is routed to the SFPU path via is_sfpu_reduce_path<>(); all other formats use FPU/GMPOOL.
     constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[input_dfb_id]);
     // =============================================================================
     // Static Assertions (compile-time validation)
