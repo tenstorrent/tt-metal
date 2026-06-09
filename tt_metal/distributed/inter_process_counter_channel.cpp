@@ -6,6 +6,8 @@
 
 #include "inter_process_counter_layout.hpp"
 
+#include <tt-logger/tt-logger.hpp>
+
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -171,12 +173,15 @@ InterProcessCounterChannel::InterProcessCounterChannel(
 // Destructor — calls shutdown() if not already. Idempotent.
 // =============================================================================
 InterProcessCounterChannel::~InterProcessCounterChannel() {
+    // Dtors must not throw. If shutdown() fails (e.g. mmap is already gone for
+    // some external reason) we log and swallow — the OS will reclaim our
+    // handles on process exit anyway.
     try {
         shutdown();
+    } catch (const std::exception& e) {
+        log_warning(LogMetal, "InterProcessCounterChannel destructor: shutdown failed: {}", e.what());
     } catch (...) {
-        // Dtors must not throw. If shutdown() fails (e.g. mmap is
-        // already gone for some external reason) we have to swallow
-        // it — the OS will reclaim our handles on exit anyway.
+        log_warning(LogMetal, "InterProcessCounterChannel destructor: shutdown failed with unknown exception");
     }
 }
 
