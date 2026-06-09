@@ -609,6 +609,22 @@ def test_mesh_use_pytorch_condition_opt_in(monkeypatch):
     assert ace_step_mesh_use_pytorch_condition(mesh_sku="P150", duration_sec=15.0, latent_frames=375)
 
 
+def test_mesh_device_condition_handoff_policy(monkeypatch):
+    from models.experimental.ace_step_v1_5.utils.tt_device import (
+        ace_step_mesh_use_device_condition_handoff,
+        ace_step_torch_condition_handoff,
+    )
+
+    monkeypatch.delenv("ACE_STEP_TORCH_CONDITION_HANDOFF", raising=False)
+    assert not ace_step_torch_condition_handoff()
+    assert ace_step_mesh_use_device_condition_handoff(latent_frames=1500)
+    assert ace_step_mesh_use_device_condition_handoff(latent_frames=750)
+    assert not ace_step_mesh_use_device_condition_handoff(latent_frames=749)
+    monkeypatch.setenv("ACE_STEP_TORCH_CONDITION_HANDOFF", "1")
+    assert ace_step_torch_condition_handoff()
+    assert not ace_step_mesh_use_device_condition_handoff(latent_frames=1500)
+
+
 def test_merge_user_instruments_into_caption():
     from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import (
         instrument_mentioned_in_caption,

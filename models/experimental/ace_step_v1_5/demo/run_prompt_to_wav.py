@@ -913,6 +913,7 @@ def main() -> None:
         ace_step_mesh_use_host_temb_precompute,
         ace_step_mesh_use_pytorch_condition,
         ace_step_mesh_use_pytorch_dit,
+        ace_step_mesh_use_device_condition_handoff,
         ace_step_mesh_use_sequential_cfg,
         ace_step_mesh_use_split_ttnn_preprocess,
         ace_step_needs_split_device,
@@ -1201,6 +1202,10 @@ def main() -> None:
         return root
 
     condition_tensors_on_device = False
+    enc_hs: Any | None = None
+    enc_mask: Any | None = None
+    ctx_lat: Any | None = None
+    null_emb: Any | None = None
     enc_hs_nc: Any | None = None
     ctx_lat_nc: Any | None = None
     enc_mask_nc: Any | None = None
@@ -1222,6 +1227,12 @@ def main() -> None:
         print(
             "[ace_step_v1_5] defer TTNN condition encoder to DiT mesh "
             "(avoids 1x1 preprocess readback drift on long clips)",
+            flush=True,
+        )
+    elif ace_step_mesh_use_device_condition_handoff(latent_frames=int(_predicted_latent_frames)):
+        print(
+            "[ace_step_v1_5] long clip: device-native condition handoff after mesh encode "
+            "(restaged enc/ctx → DiT; opt-out ACE_STEP_TORCH_CONDITION_HANDOFF=1)",
             flush=True,
         )
 
@@ -1758,6 +1769,7 @@ def main() -> None:
         precompute_dit_temb_steps,
         prepare_latents_for_ttnn_vae,
         refresh_fp32_tile_from_host,
+        restage_condition_tensors_for_dit_mesh,
         slice_batch_btc,
         stage_host_temb_steps_to_device,
         stage_host_temb_tp_row,
@@ -1769,6 +1781,10 @@ def main() -> None:
 
     if hasattr(ttnn, "CONFIG") and hasattr(ttnn.CONFIG, "throw_exception_on_fallback"):
         ttnn.CONFIG.throw_exception_on_fallback = True
+
+    mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+    if mem is None:
+        raise RuntimeError("TTNN build missing DRAM_MEMORY_CONFIG.")
 
     dit_num_cqs = 2 if bool(args.use_trace) else 1
     if demo_session.dit_dev is not None:
@@ -1885,25 +1901,70 @@ def main() -> None:
             ctx_tt=ctx_tt_one,
         )
         enc_mask = torch.from_numpy(np.asarray(enc_mask_np, dtype=np.float32))
-        condition_tensors_on_device = True
-        with perf.timed("preprocess_readback", device=dev):
-            enc_hs = ace_step_ttnn_to_torch(enc_hs_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
-            ctx_lat = ace_step_ttnn_to_torch(ctx_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
-            null_emb = ace_step_ttnn_to_torch(null_emb_tt, mesh_device=dev, dtype=torch.float32).cpu()
-        demo_session.store_preprocess(
-            prompt=run_prompt,
-            duration_sec=float(args.duration_sec),
-            seed=int(args.seed),
-            frames=int(frames),
-            enc_hs=enc_hs,
-            enc_mask=enc_mask,
-            ctx_lat=ctx_lat,
-            null_emb=null_emb,
-        )
-        print(
-            "[condition] backend=ttnn on DiT mesh (lyric+timbre+text+ctx; device-native, no 1x1 round-trip)",
-            flush=True,
-        )
+        _use_device_cond_handoff = ace_step_mesh_use_device_condition_handoff(latent_frames=int(frames))
+        if _use_device_cond_handoff and not use_pytorch_dit:
+            with perf.timed("condition_restage_for_dit", device=dev):
+                enc_hs_tt_one, ctx_tt_one, null_emb_tt = restage_condition_tensors_for_dit_mesh(
+                    enc_hs_tt_one,
+                    ctx_tt_one,
+                    null_emb_tt,
+                    mesh_device=dev,
+                    dram=mem,
+                )
+            condition_tensors_on_device = True
+            print(
+                "[condition] backend=ttnn on DiT mesh "
+                "(restaged enc/ctx → DiT; device-native handoff, no torch denoise staging)",
+                flush=True,
+            )
+        elif use_pytorch_dit:
+            with perf.timed("condition_restage_for_dit", device=dev):
+                _restaged = restage_condition_tensors_for_dit_mesh(
+                    enc_hs_tt_one,
+                    ctx_tt_one,
+                    null_emb_tt,
+                    mesh_device=dev,
+                    dram=mem,
+                    also_return_torch=True,
+                )
+            enc_hs_tt_one = ctx_tt_one = null_emb_tt = None
+            enc_hs, ctx_lat, null_emb = _restaged[3], _restaged[4], _restaged[5]
+            condition_tensors_on_device = False
+            print(
+                "[condition] backend=ttnn on DiT mesh encode → PyTorch HF DiT denoise "
+                "(restaged f32 sidecars for torch path)",
+                flush=True,
+            )
+        else:
+            with perf.timed("preprocess_readback", device=dev):
+                enc_hs = ace_step_ttnn_to_torch(enc_hs_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
+                ctx_lat = ace_step_ttnn_to_torch(ctx_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
+                null_emb = ace_step_ttnn_to_torch(null_emb_tt, mesh_device=dev, dtype=torch.float32).cpu()
+            for _maybe_tt in (enc_hs_tt_one, ctx_tt_one, null_emb_tt):
+                if _maybe_tt is not None:
+                    try:
+                        ttnn.deallocate(_maybe_tt)
+                    except Exception:
+                        pass
+            enc_hs_tt_one = None
+            ctx_tt_one = None
+            null_emb_tt = None
+            condition_tensors_on_device = False
+            demo_session.store_preprocess(
+                prompt=run_prompt,
+                duration_sec=float(args.duration_sec),
+                seed=int(args.seed),
+                frames=int(frames),
+                enc_hs=enc_hs,
+                enc_mask=enc_mask,
+                ctx_lat=ctx_lat,
+                null_emb=null_emb,
+            )
+            print(
+                "[condition] backend=ttnn on DiT mesh "
+                "(host torch enc/ctx cache; ACE_STEP_TORCH_CONDITION_HANDOFF=1 or short clip)",
+                flush=True,
+            )
         if _mesh_audio_cover_strength < 1.0:
             from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import (
                 build_non_cover_condition_payload,
@@ -1918,22 +1979,28 @@ def main() -> None:
                         use_trace=False,
                     )
                 enc_mask_nc = torch.from_numpy(np.asarray(enc_mask_nc_np, dtype=np.float32))
-                with perf.timed("preprocess_readback_non_cover", device=dev):
-                    enc_hs_nc = ace_step_ttnn_to_torch(enc_hs_tt_nc, mesh_device=dev, dtype=torch.float32).cpu()
-                    ctx_lat_nc = ace_step_ttnn_to_torch(ctx_tt_nc, mesh_device=dev, dtype=torch.float32).cpu()
-                for _t in (enc_hs_tt_nc, ctx_tt_nc):
-                    try:
-                        ttnn.deallocate(_t)
-                    except Exception:
-                        pass
-                enc_hs_tt_nc = None
-                ctx_tt_nc = None
-                print("[condition] non-cover text2music ctx encoded on DiT mesh (ttnn)", flush=True)
+                if _use_device_cond_handoff and not use_pytorch_dit:
+                    enc_hs_tt_nc, ctx_tt_nc, _ = restage_condition_tensors_for_dit_mesh(
+                        enc_hs_tt_nc,
+                        ctx_tt_nc,
+                        None,
+                        mesh_device=dev,
+                        dram=mem,
+                    )
+                    print("[condition] non-cover text2music ctx encoded on DiT mesh (device-native)", flush=True)
+                else:
+                    with perf.timed("preprocess_readback_non_cover", device=dev):
+                        enc_hs_nc = ace_step_ttnn_to_torch(enc_hs_tt_nc, mesh_device=dev, dtype=torch.float32).cpu()
+                        ctx_lat_nc = ace_step_ttnn_to_torch(ctx_tt_nc, mesh_device=dev, dtype=torch.float32).cpu()
+                    for _t in (enc_hs_tt_nc, ctx_tt_nc):
+                        try:
+                            ttnn.deallocate(_t)
+                        except Exception:
+                            pass
+                    enc_hs_tt_nc = None
+                    ctx_tt_nc = None
+                    print("[condition] non-cover text2music ctx encoded on DiT mesh (ttnn)", flush=True)
         payload_for_mesh_condition = None
-
-    mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-    if mem is None:
-        raise RuntimeError("TTNN build missing DRAM_MEMORY_CONFIG.")
 
     act_dtype = getattr(ttnn, "bfloat16", None)
     if act_dtype is None:

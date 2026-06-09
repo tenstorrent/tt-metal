@@ -171,7 +171,7 @@ These are **production defaults**, not temporary debug flags. Each row is someth
 | **DiT Euler + APG/ADG** (mesh) | **Host CPU** between TTNN forwards | Per-step guidance math (`sigma`, APG/ADG) uses host control flow and FP32 staging; not fused into the DiT body trace. | Stable default. Forcing full-step DiT trace without eager post-step CFG was tried — **audible noise**. |
 | **DiT CFG batch setup** (enc/ctx concat before loop) | **Eager TTNN** (not traced) | Traced prep for CFG duplicate batches was **not bit-accurate** vs eager setup. | Noise / smear if traced CFG prep is re-enabled. |
 | **VAE decode** | **TTNN eager** `decode_tiled` | Traced VAE replay failed PCC / produced **hiss** on long multi-tile decode. | Tile-boundary hiss on long clips → try `--torch-vae` or `--clarity` (wider overlap). |
-| **Condition encode** (≥30 s mesh) | **TTNN on DiT mesh** (not 1×1 preprocess) | Encoding on 1×1 then readback for long clips added **numeric drift** at ≥750 latent frames. | Long-clip drift / wrong timbre if condition is forced back to 1×1 preprocess only. |
+| **Condition encode** (≥30 s mesh) | **TTNN on DiT mesh** (not 1×1 preprocess) | Encoding on 1×1 then readback for long clips added **numeric drift** at ≥750 latent frames. After mesh encode, enc/ctx are **restaged** (f32 readback → BF16 TILE L1) then fed to DiT on-device — raw encoder tensors are not used directly. | Long-clip drift / wrong timbre if condition is forced back to 1×1 preprocess only. |
 | **Latent noise init** (≥30 s mesh) | **Host CPU** | DiT body trace is forced off on long clips; host init matches the eager denoise path. | Minor vs detok/VAE issues; trace-on long clips was unstable. |
 | **LM constrained FSM + tokenize** | **Host** | Python metadata FSM and HF tokenizer — not LM matmuls. | N/A (orchestration only). |
 
@@ -180,7 +180,7 @@ These are **production defaults**, not temporary debug flags. Each row is someth
 | Idea | Status | Why dropped / not default | Demo impact if re-enabled |
 |------|--------|---------------------------|---------------------------|
 | TTNN **chunked** detok as default for >200 codes | **Off** (auto HF detok instead) | Chunks break bidirectional detok attention | Bad 60 s audio (especially 4B); use `ACE_STEP_PYTORCH_DETOK=0` only to reproduce the bug |
-| Skip condition **f32 readback** / all-device condition handoff | **Reverted** | Hurt **60 s accuracy** on golden WAV / stage PCCs | Long-clip quality regression |
+| Skip condition **f32 readback** / all-device condition handoff (P4 v1) | **Fixed (P4 v2)** | Raw encoder tensors → DiT caused **60 s drift**; v2 **restages** through validated f32→BF16 TILE L1 upload, then keeps device tensors for denoise | Default ≥750 frames; opt-out host cache: `ACE_STEP_TORCH_CONDITION_HANDOFF=1` |
 | Device-only Qwen caption / lyric (no host token path) | **Reverted** | Did not improve 60 s quality | No benefit on default path |
 | Device Euler / CFG on mesh as default | **Not default** | Host Euler + TTNN DiT body is the validated long-clip path | Unvalidated for 60 s golden audio |
 
@@ -195,13 +195,14 @@ These are **production defaults**, not temporary debug flags. Each row is someth
 | `ACE_STEP_MESH_HOST_PREPROCESS=1` | Skip TTNN Phase A — host PyTorch preprocess, Qwen, and 5 Hz LM |
 | `ACE_STEP_PYTORCH_DETOK=0` | Force TTNN chunked detok even when >200 codes (**debug only** — expect bad long-clip audio) |
 | `ACE_STEP_TORCH_DETOK_HINTS=1` | After TTNN detok (≤200 codes), round-trip hints via `ttnn.to_torch` instead of device-native `precomputed_lm_hints_25Hz_tt` |
+| `ACE_STEP_TORCH_CONDITION_HANDOFF=1` | After mesh condition encode, keep host torch enc/ctx cache + host denoise staging (legacy path; skips P4 device handoff) |
 
 ### 5. Long clips (≥30 s on mesh)
 
 Automatic behavior (no extra flags):
 
 - **DiT trace off** — `--use-trace` is forced off at ≥30 s (long-clip quality mode).
-- **Condition encode on DiT mesh** — avoids 1×1 readback drift at ≥750 latent frames.
+- **Condition encode on DiT mesh** — avoids 1×1 readback drift at ≥750 latent frames; enc/ctx are restaged on device for DiT (P4).
 - **Host latent sampler** — latent init on CPU when trace is off (forced at ≥30 s on mesh); Euler/APG/ADG always on CPU on multi-device mesh.
 - **Wider VAE overlap** — fewer tile-boundary artifacts on decode.
 - **HF detokenizer** — demo auto-enables `ACE_STEP_PYTORCH_DETOK=1` when expect **>200 audio codes** (>40 s @ 5 Hz). See [Host PyTorch fallbacks](#host-pytorch-fallbacks-why-not-full-ttnn).

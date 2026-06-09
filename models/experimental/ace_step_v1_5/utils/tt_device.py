@@ -336,6 +336,31 @@ def ace_step_mesh_use_pytorch_condition(
     return env.lower() in ("1", "true", "yes", "on")
 
 
+def ace_step_torch_condition_handoff() -> bool:
+    """Opt-in: keep host torch enc/ctx through re-exec and denoise staging (``ACE_STEP_TORCH_CONDITION_HANDOFF=1``)."""
+    import os
+
+    return os.environ.get("ACE_STEP_TORCH_CONDITION_HANDOFF", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def ace_step_mesh_use_device_condition_handoff(*, latent_frames: int) -> bool:
+    """Restage enc/ctx on device for DiT after mesh condition encode (default for long clips).
+
+    Skips keeping host torch enc/ctx for denoise staging. Tensors are still normalized through
+    the validated f32 readback → BF16 TILE L1 upload path inside
+    :func:`restage_condition_tensors_for_dit_mesh` — raw condition-encoder outputs are not fed
+    directly to DiT (that mismatch caused the first P4 60s regression).
+    """
+    if ace_step_torch_condition_handoff():
+        return False
+    return int(latent_frames) >= 750
+
+
 def ace_step_lm_hint_ctx_blend(*, latent_frames: int) -> float:
     """Deprecated: hint blending removed; use ``audio_cover_strength`` denoise switch instead."""
     del latent_frames
