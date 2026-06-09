@@ -52,13 +52,14 @@ from models.common.utility_functions import run_for_blackhole
 from tests.ttnn.unit_tests.operations.prefetcher_common import round_up as _round_up
 
 
-pytestmark = [
-    run_for_blackhole("DRAM-core prefetcher requires Blackhole"),
-    pytest.mark.skipif(
-        os.environ.get("TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES", "0") != "1",
-        reason="TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES not set",
-    ),
-]
+pytestmark = run_for_blackhole("DRAM-core prefetcher requires Blackhole")
+
+
+@pytest.fixture(autouse=True)
+def _require_dram_core_prefetcher(device):
+    """Skip unless programmable DRAM cores are available on this device."""
+    if not ttnn.experimental.is_dram_core_prefetcher_supported(device):
+        pytest.skip("programmable DRAM cores unavailable; set TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1")
 
 
 _NUM_DRAM_BANKS = 8
@@ -219,14 +220,9 @@ def test_bw_dram_core_prefetcher(device, op_name, shape):
     gcb_size = _gcb_size_bytes(page_size, pages_per_layer)
     gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
 
-    logger.info(
-        f"[dram_core_bw][{op_name}] K={_K_ORIG} K_padded={_K} N={_N_ORIG} N_padded={_N} "
-        f"ring={num_receivers} page_size={page_size} pages_per_layer={pages_per_layer} "
-        f"gcb_size={gcb_size} trace_repeats={trace_repeats} num_prefetch_layers={num_prefetch_layers}"
-    )
-
-    ttnn.experimental.start_dram_core_prefetcher(
-        device, [tt_weight, addrs], num_layers=num_prefetch_layers, global_cb=gcb
+    ttnn.experimental.start_dram_core_prefetcher(device)
+    ttnn.experimental.queue_dram_core_prefetcher_request(
+        device, [(tt_weight, num_receivers)] * num_prefetch_layers, global_cb=gcb
     )
 
     # Warmup: drain 1 layer's worth of pages — this also primes the cached MeshWorkload
@@ -351,12 +347,6 @@ def test_bw_workercore_prefetcher(device, op_name, shape):
             ttnn.ShardSpec(sender_core_range_set, [1, num_prefetch_layers], ttnn.ShardOrientation.ROW_MAJOR),
         ),
         layout=ttnn.ROW_MAJOR_LAYOUT,
-    )
-
-    logger.info(
-        f"[workercore_bw][{op_name}] K={_K_ORIG} K_padded={_K} N={_N_ORIG} N_padded={_N} "
-        f"ring={_RING_SIZE} page_size={page_size} pages_per_layer={pages_per_layer} "
-        f"gcb_size={gcb_size} trace_repeats={trace_repeats} num_prefetch_layers={num_prefetch_layers}"
     )
 
     # Launch the prefetcher exactly once for the whole bench (mirrors the DRAM-core

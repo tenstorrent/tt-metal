@@ -112,6 +112,14 @@ constexpr uint64_t RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_INIT = 0x40404040404040;
 constexpr uint8_t SHARED_GLOBALS_READY_WAIT = 0;
 constexpr uint8_t SHARED_GLOBALS_READY_GO = 1;
 
+// Packing of RemoteSenderCBInterface::num_receivers_and_remote_pages_sent_ptr (part of the
+// host<->device remote-CB config contract): L1 addresses fit in 24 bits (< 2 MB) and
+// num_receivers fits in 8 bits, so the two share a single 32-bit slot. The device pack/unpack
+// helpers live in circular_buffer_interface.h; host code packs the same field in
+// global_circular_buffer.cpp.
+constexpr static std::uint32_t REMOTE_CB_PACKED_ADDR_MASK = 0x00FFFFFFu;
+constexpr static std::uint32_t REMOTE_CB_PACKED_COUNT_SHIFT = 24;
+
 struct ncrisc_halt_msg_t {
     volatile uint32_t resume_addr;
     volatile uint32_t stack_save;
@@ -398,7 +406,7 @@ struct mailboxes_t {
     struct subordinate_sync_msg_t subordinate_sync;
     volatile uint32_t launch_msg_rd_ptr;  // Volatile so this can be manually reset by host. TODO: remove volatile when
                                           // dispatch init moves to one-shot.
-    struct launch_msg_t launch[launch_msg_buffer_num_entries];
+    alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT) struct launch_msg_t launch[launch_msg_buffer_num_entries];
     volatile struct go_msg_t go_messages[go_message_num_entries];
     uint64_t link_status_check_timestamp;  // Next timestamp to check link status (active erisc)
     volatile uint32_t go_message_index;    // Index into go_messages to use. Always 0 on unicast cores.

@@ -12,13 +12,14 @@
 using namespace ckernel;
 
 /**
- * @brief MOP configuration for pack of contiguous tiles
- * @details Sets up MOP for packing out tile by tile from the math destination register via Packer 0.
+ * @brief Builds the MOP for packing contiguous tiles from the math destination register via Packer 0.
+ *
  * Packer 1 (SrcS / PACR1) is not supported here: it requires autoloop programming; use
  * _llk_pack_srcs_config_ / _llk_pack_srcs_ in llk_srcs.h instead.
+ *
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 16-31
- * @param num_tiles: number of tiles to pack at a time
+ *        stored in the buffer descriptor table, values = 16 - 31
+ * @param num_tiles: Number of tiles to pack at a time.
  */
 inline void _llk_pack_mop_config_(const std::uint8_t buf_desc_id, const std::uint32_t num_tiles)
 {
@@ -34,15 +35,17 @@ inline void _llk_pack_mop_config_(const std::uint8_t buf_desc_id, const std::uin
 }
 
 /**
- * @brief Initialization for pack of contiguous tiles
- * @details Sets up MOP for packing out tile by tile via Packer 0.
- * Optionally programs packer ReLU (MODE and THRESHOLD) for Packer 0 via cfg_rmw.
- * @tparam EN_32B_DEST: Set to true when pack reads from dst register in Float32;
- * controls RELU_THRESHOLD register format (32-bit or 16-bit path).
+ * @brief Initializes the packer for packing contiguous tiles via Packer 0.
+ *
+ * Programs the pack MOP and optionally the packer ReLU (mode and threshold) for Packer 0 via cfg_rmw.
+ *
+ * @tparam EN_32B_DEST: Set to true when pack reads from the dst register in Float32; controls the
+ *         RELU_THRESHOLD register format (32-bit or 16-bit path), values = <true/false>
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 16-31
- * @param num_tiles: number of tiles to pack at a time
- * @param relu_config ReLU config (mode + threshold).
+ *        stored in the buffer descriptor table, values = 16 - 31
+ * @param num_tiles: Number of tiles to pack at a time.
+ * @param relu_config: ReLU config (mode + threshold).
+ * @note @ref _llk_pack_ is the matching execute call on this thread.
  */
 template <bool EN_32B_DEST = false>
 inline void _llk_pack_init_(
@@ -53,11 +56,11 @@ inline void _llk_pack_init_(
 }
 
 /**
- * @brief Packs out tiles from the math destination register via Packer 0
- * @param start_math_dest_tile_idx: The tile index into the math destination register
- * that packer can start packing from
- * @param start_l1_tile_idx: The tile index into the l1 output buffer
- * that packer can start packing into
+ * @brief Packs out tiles from the math destination register to L1 via Packer 0.
+ *
+ * @param start_math_dest_tile_idx: The tile index into the math destination register that the packer starts packing from.
+ * @param start_l1_tile_idx: The tile index into the L1 output buffer that the packer starts packing into.
+ * @note Call @ref _llk_pack_init_ with matching template args before this function.
  */
 inline void _llk_pack_(const std::uint32_t start_math_dest_tile_idx, const std::uint32_t start_l1_tile_idx)
 {

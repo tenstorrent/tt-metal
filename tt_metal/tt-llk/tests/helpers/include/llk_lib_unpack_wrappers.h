@@ -57,9 +57,9 @@ inline void _llk_unpack_tilize_wrapper_(
 }
 
 inline void _llk_unpack_tilize_uninit_wrapper_(
-    const std::uint32_t unpack_dst_format, [[maybe_unused]] const std::uint32_t num_faces = 4, const std::uint32_t face_r_dim = FACE_R_DIM)
+    const std::uint32_t unpack_dst_format, const std::uint32_t num_faces = 4, const std::uint32_t face_r_dim = FACE_R_DIM)
 {
-    _llk_unpack_tilize_uninit_(unpack_dst_format, face_r_dim);
+    _llk_unpack_tilize_uninit_(unpack_dst_format, num_faces, face_r_dim);
 }
 
 #elif defined(ARCH_BLACKHOLE)
