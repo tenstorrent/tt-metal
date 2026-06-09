@@ -14,6 +14,7 @@ from helpers.golden_generators import (
     EltwiseBinaryGolden,
     TilizeGolden,
     get_golden_generator,
+    quantize_mx_tensor_chunked,
 )
 from helpers.llk_params import (
     DestAccumulation,
@@ -102,14 +103,6 @@ def generate_unpack_tilize_operands_combinations(
         # Unpack to dest is not supported for unpack tilize operands, so the input cannot be Int32
         if in_fmt == DataFormat.Int32:
             continue
-        # MxFp4 to Float32/Float16_b/Float16/MxFp8P conversion has rounding errors
-        if in_fmt == DataFormat.MxFp4 and out_fmt in (
-            DataFormat.Float32,
-            DataFormat.Float16_b,
-            DataFormat.Float16,
-            DataFormat.MxFp8P,
-        ):
-            continue
         for acc in get_valid_dest_accumulation_modes(fmt):
             if (
                 _requires_dest_acc_for_eltwise_binary(in_fmt, out_fmt)
@@ -132,6 +125,9 @@ def generate_unpack_tilize_operands_combinations(
 
 UNPACK_TILIZE_OPERANDS_FORMATS = input_output_formats(
     [
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
         DataFormat.MxFp8P,
         DataFormat.MxFp8R,
         DataFormat.MxFp4,
@@ -174,15 +170,28 @@ def test_unpack_tilize_operands_quasar(
     tilize_gen = get_golden_generator(TilizeGolden)
     eltwise_binary_gen = get_golden_generator(EltwiseBinaryGolden)
 
+    golden_src_A = src_A
+    golden_src_B = src_B
+    input_fmt = formats.input_format
+
+    if formats.input_format.is_mx_format():
+        golden_src_A = quantize_mx_tensor_chunked(src_A, formats.input_format)
+        golden_src_B = quantize_mx_tensor_chunked(src_B, formats.input_format)
+        input_fmt = DataFormat.Float16_b
+
     golden_A = (
-        tilize_gen(src_A, input_dimensions, formats.input_format, num_faces=num_faces)
+        tilize_gen(
+            golden_src_A, input_dimensions, formats.input_format, num_faces=num_faces
+        )
         if tilize_a
-        else src_A
+        else golden_src_A
     )
     golden_B = (
-        tilize_gen(src_B, input_dimensions, formats.input_format, num_faces=num_faces)
+        tilize_gen(
+            golden_src_B, input_dimensions, formats.input_format, num_faces=num_faces
+        )
         if tilize_b
-        else src_B
+        else golden_src_B
     )
 
     golden_tensor = eltwise_binary_gen(
@@ -191,8 +200,8 @@ def test_unpack_tilize_operands_quasar(
         golden_B,
         formats.output_format,
         MathFidelity.LoFi,
-        input_format=formats.input_format,
-        input_format_B=formats.input_format,
+        input_format=input_fmt,
+        input_format_B=input_fmt,
     )
 
     configuration = TestConfig(
@@ -200,7 +209,7 @@ def test_unpack_tilize_operands_quasar(
         formats,
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
-            IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
+            IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
             TILIZE_UNPACKER_SEL(unp_tilize_sel),
             MATH_OP(mathop=MathOperation.Elwadd),
             MATH_FIDELITY(MathFidelity.LoFi),
