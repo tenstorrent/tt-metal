@@ -368,10 +368,12 @@ public:
         return this->target_type_ == tt::TargetDevice::Mock || this->target_type_ == tt::TargetDevice::Emule;
     }
 
+    bool is_base_routing_fw_enabled() const;
+
     void register_sim_fabric_endpoint_direction(
         ChipId chip_id, tt_fabric::chan_id_t eth_chan_id, tt_fabric::eth_chan_directions direction) const;
-
-    bool is_base_routing_fw_enabled() const;
+    void sim_arm_launch_watcher(ChipId chip_id, CoreCoord virtual_core, bool is_eth) const;
+    void advance_device_execution(ChipId chip_id) const;
 
     // Get all fabric ethernet cores
     std::set<tt_fabric::chan_id_t> get_fabric_ethernet_channels(

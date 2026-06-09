@@ -91,7 +91,8 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
     // Log trimming report after intermesh config is known (VC1 affects expected channel counts)
     if (rtoptions.has_fabric_trimming_profile()) {
         const auto& path = rtoptions.get_fabric_trimming_profile_path();
-        generate_and_log_channel_trimming_report(path, fabric_context.get_fabric_topology(), intermesh_vc_config_.requires_vc1);
+        generate_and_log_channel_trimming_report(
+            path, fabric_context.get_fabric_topology(), intermesh_vc_config_.requires_vc1);
     }
 
     // Compute max channel counts for this fabric instance
@@ -111,6 +112,10 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
     auto num_pcie_devices = tt::tt_metal::GetNumPCIeDevices();
     if (num_devices_ != 4 && num_pcie_devices == 4) {
         num_devices_ += num_pcie_devices;
+    }
+    // TT_METAL_NO_CHIP_ID_REMAP keeps original physical chip IDs (may be sparse).
+    for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
+        num_devices_ = std::max(num_devices_, static_cast<size_t>(id) + 1);
     }
     master_router_chans_.resize(num_devices_, UNINITIALIZED_MASTER_ROUTER_CHAN);
     num_initialized_routers_.resize(num_devices_, UNINITIALIZED_ROUTERS);
@@ -307,6 +312,5 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
 
     return config;
 }
-
 
 }  // namespace tt::tt_fabric

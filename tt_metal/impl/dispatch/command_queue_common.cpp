@@ -14,6 +14,8 @@
 #include <llrt/tt_cluster.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
+#include <cstdint>
+#include <llrt/hal.hpp>
 
 namespace tt::tt_metal {
 
@@ -159,6 +161,29 @@ uint32_t get_cq_dispatch_progress(ChipId chip_id, uint8_t cq_id) {
         &progress, sizeof(uint32_t), dispatcher_core_virtual, dev_dispatch_progress_ptr);
 
     return progress;
+}
+
+uint32_t get_cq_dispatch_go_signal(ChipId chip_id, uint8_t cq_id) {
+    uint32_t go_msg_word = 0;
+    uint16_t channel =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip_id);
+    auto& dispatch_core_manager = MetalContext::instance().get_dispatch_core_manager();
+    const tt_cxy_pair& dispatcher_core_logical =
+        dispatch_core_manager.is_dispatcher_d_core_allocated(chip_id, channel, cq_id)
+            ? dispatch_core_manager.dispatcher_d_core(chip_id, channel, cq_id)
+            : dispatch_core_manager.dispatcher_core(chip_id, channel, cq_id);
+    CoreType dispatch_core_type = dispatch_core_manager.get_dispatch_core_type();
+    tt_cxy_pair dispatcher_core_virtual =
+        MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+            dispatcher_core_logical, dispatch_core_type);
+    const auto programmable_core_type = dispatch_core_type == CoreType::ETH
+                                            ? tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH
+                                            : tt::tt_metal::HalProgrammableCoreType::TENSIX;
+    uint64_t go_msg_addr =
+        MetalContext::instance().hal().get_dev_noc_addr(programmable_core_type, tt::tt_metal::HalL1MemAddrType::GO_MSG);
+    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        &go_msg_word, sizeof(uint32_t), dispatcher_core_virtual, go_msg_addr);
+    return go_msg_word & 0xffu;
 }
 
 uint32_t calculate_expected_workers_to_finish(

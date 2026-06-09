@@ -15,11 +15,13 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
+#include <ctime>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <tuple>  // for get
+#include <unistd.h>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -345,6 +347,45 @@ void Cluster::initialize_device_drivers() {
             }
         }
     }
+    // #region agent log H_RANK_CHIP_COLLISION
+    {
+        std::FILE* f = std::fopen("/data/rsong/tt-metal-fork/.cursor/debug-ae7d0a.log", "a");
+        if (f) {
+            std::string driver_ids;
+            for (const auto& id : this->driver_->get_target_device_ids()) {
+                driver_ids += std::to_string(id) + ",";
+            }
+            std::string mmio_ids;
+            for (const auto& id : this->driver_->get_target_mmio_device_ids()) {
+                mmio_ids += std::to_string(id) + ",";
+            }
+            std::string desc_ids;
+            for (const auto& id : this->cluster_desc_->get_all_chips()) {
+                desc_ids += std::to_string(id) + ",";
+            }
+            const char* env_visible = std::getenv("TT_VISIBLE_DEVICES");
+            const char* env_mesh = std::getenv("TT_MESH_ID");
+            std::fprintf(
+                f,
+                "{\"sessionId\":\"ae7d0a\",\"hypothesisId\":\"H_RANK_CHIP_COLLISION\","
+                "\"location\":\"tt_cluster.cpp:initialize_device_drivers\","
+                "\"message\":\"CLUSTER_INIT_DONE\",\"data\":{\"pid\":%d,"
+                "\"target_type\":%d,\"driver_target_device_ids\":\"%s\","
+                "\"driver_target_mmio_device_ids\":\"%s\","
+                "\"cluster_desc_all_chips\":\"%s\","
+                "\"TT_VISIBLE_DEVICES\":\"%s\",\"TT_MESH_ID\":\"%s\"},\"timestamp\":%ld}\n",
+                (int)getpid(),
+                (int)this->target_type_,
+                driver_ids.c_str(),
+                mmio_ids.c_str(),
+                desc_ids.c_str(),
+                env_visible ? env_visible : "(unset)",
+                env_mesh ? env_mesh : "(unset)",
+                (long)std::time(nullptr));
+            std::fclose(f);
+        }
+    }
+    // #endregion
 }
 
 void Cluster::assert_risc_reset() { this->driver_->assert_risc_reset(); }
@@ -390,6 +431,21 @@ const std::unordered_map<CoreCoord, int32_t>& Cluster::get_virtual_routing_to_pr
 
 void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
     std::unique_ptr<tt::umd::Cluster> device_driver;
+    // Shared-daemon simulator/mock: skip chip-id remapping so each MPI rank keeps
+    // disjoint physical chip IDs from TT_VISIBLE_DEVICES (see cluster_descriptor.cpp).
+    const bool needs_no_remap =
+        (this->target_type_ == TargetDevice::Simulator || this->target_type_ == TargetDevice::Mock ||
+         this->target_type_ == TargetDevice::Emule) &&
+        rtoptions_.get_mock_enabled();
+    bool prev_no_remap_was_set = false;
+    std::string prev_no_remap_value;
+    if (needs_no_remap) {
+        if (const char* v = std::getenv("TT_METAL_NO_CHIP_ID_REMAP")) {
+            prev_no_remap_was_set = true;
+            prev_no_remap_value = v;
+        }
+        setenv("TT_METAL_NO_CHIP_ID_REMAP", "1", /*overwrite=*/1);
+    }
     if (this->target_type_ == TargetDevice::Silicon) {
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .num_host_mem_ch_per_mmio_device = std::nullopt,  // Automatically determine number of host mem channels.
@@ -439,6 +495,13 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
     }
 
     this->driver_ = std::move(device_driver);
+    if (needs_no_remap) {
+        if (prev_no_remap_was_set) {
+            setenv("TT_METAL_NO_CHIP_ID_REMAP", prev_no_remap_value.c_str(), /*overwrite=*/1);
+        } else {
+            unsetenv("TT_METAL_NO_CHIP_ID_REMAP");
+        }
+    }
 }
 
 void Cluster::set_hal(const tt_metal::Hal* hal) {
@@ -1565,6 +1628,12 @@ void Cluster::register_sim_fabric_endpoint_direction(
         chip_id, static_cast<uint32_t>(eth_chan_id), static_cast<uint32_t>(direction));
 #endif
 }
+
+void Cluster::sim_arm_launch_watcher(ChipId /*chip_id*/, CoreCoord /*virtual_core*/, bool /*is_eth*/) const {
+    // WIP debug hook for sim watcher; UMD/craq-sim do not expose this API on blaze-metal-main yet.
+}
+
+void Cluster::advance_device_execution(ChipId chip_id) const { this->get_driver()->advance_device_execution(chip_id); }
 
 }  // namespace tt
 

@@ -189,13 +189,19 @@ void read_completion_queue(
     uint32_t addr,
     const SystemMemoryManager& sysmem_manager) {
     if (sysmem_manager.is_dram_backed()) {
+        // Caller passes mmio_device_id (correct for the hugepage / read_sysmem
+        // path), but DRAM-backed CQs live in the dispatch chip's OWN DRAM, not
+        // the local MMIO chip's. Use the SystemMemoryManager's actual device_id
+        // so tunnel/remote-chip event completions read from the chip whose
+        // dispatch kernel produced them, not from chip 0.
+        const ChipId actual_device_id = sysmem_manager.get_device_id();
         const uint32_t dram_channel = tt::tt_metal::MetalContext::instance()
                                           .device_manager()
-                                          ->get_active_device(device_id)
+                                          ->get_active_device(actual_device_id)
                                           ->allocator_impl()
                                           ->get_dram_channel_from_bank_id(sysmem_manager.get_dram_region_bank_id());
         tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
-            dst, size_bytes, device_id, dram_channel, addr);
+            dst, size_bytes, actual_device_id, dram_channel, addr);
     } else {
         tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(dst, size_bytes, addr, device_id, channel);
     }
