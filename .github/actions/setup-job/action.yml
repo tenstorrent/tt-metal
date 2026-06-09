@@ -45,6 +45,10 @@ inputs:
     description: 'Timeout in seconds when dispatcher is not making progress before tt-triage is called automatically'
     default: 5.0
     type: float
+  private-submodule-token:
+    description: 'PAT (TT-OPS-CODE-GEN-CLONE secret) authenticating the clone of the private tt_ops_code_gen submodule. Leave empty to skip cloning it.'
+    required: false
+    default: ''
 runs:
   using: "composite"
   steps:
@@ -54,6 +58,22 @@ runs:
         command -v tar >/dev/null 2>&1 && tar --version || { echo "❌ tar not found"; exit 1; }
         command -v uv >/dev/null 2>&1 && uv --version || { echo "❌ uv not found"; exit 1; }
       shell: bash
+
+    # Clone the private tt_ops_code_gen submodule (LLK helper library). It is marked
+    # `update = none` in .gitmodules, so the workflow's `submodules: recursive` checkout
+    # skips it; we clone it here, after checkout, gated on the token being supplied.
+    - name: 🔑 Clone private tt_ops_code_gen submodule
+      if: ${{ inputs.private-submodule-token != '' }}
+      working-directory: ${{ inputs.path }}
+      shell: bash
+      env:
+        PRIVATE_TOKEN: ${{ inputs.private-submodule-token }}
+      run: |
+        git config --global --add safe.directory "$(pwd)"
+        git config --global url."https://oauth2:${PRIVATE_TOKEN}@github.com/tenstorrent/tt_ops_code_gen".insteadOf "https://github.com/tenstorrent/tt_ops_code_gen"
+        # --checkout overrides the `update = none` strategy in .gitmodules, which otherwise
+        # makes `git submodule update --init` silently skip this submodule.
+        git submodule update --init --checkout tt_metal/third_party/tt_ops_code_gen
 
     - name: 📦 Download Build Artifact
       if: ${{ inputs.build-artifact-name != '' && inputs.use-evaluation-image == 'false' }}

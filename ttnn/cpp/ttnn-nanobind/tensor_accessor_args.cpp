@@ -17,6 +17,12 @@ void py_module_types(nb::module_& mod) { nb::class_<tt::tt_metal::TensorAccessor
 void py_module(nb::module_& mod) {
     static_cast<nb::class_<tt::tt_metal::TensorAccessorArgs>>(mod.attr("TensorAccessorArgs"))
         .def(
+            nb::init<>(),
+            R"doc(
+                Create a placeholder TensorAccessorArgs with no buffer.
+                Use this for optional tensors that are absent.
+            )doc")
+        .def(
             "__init__",
             [](tt::tt_metal::TensorAccessorArgs* t, const ttnn::Tensor& tensor) {
                 new (t) tt::tt_metal::TensorAccessorArgs(*tensor.buffer());
