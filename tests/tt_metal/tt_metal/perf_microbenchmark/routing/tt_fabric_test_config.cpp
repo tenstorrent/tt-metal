@@ -548,7 +548,17 @@ static bool fine_grained_contains_string(
 }
 
 static bool check_topology_filter(const ParsedTestConfig& test_config, const std::optional<std::string>& filter_value) {
-    auto topo = tt::tt_fabric::Topology::Linear;  // Default value
+    if (filter_value == "TorusX") {
+        return test_config.fabric_setup.topology == tt::tt_fabric::Topology::Torus &&
+               test_config.fabric_setup.torus_config == "X";
+    } else if (filter_value == "TorusY") {
+        return test_config.fabric_setup.topology == tt::tt_fabric::Topology::Torus &&
+               test_config.fabric_setup.torus_config == "Y";
+    } else if (filter_value == "TorusXY") {
+        return test_config.fabric_setup.topology == tt::tt_fabric::Topology::Torus &&
+               test_config.fabric_setup.torus_config == "XY";
+    }
+    auto topo = tt::tt_fabric::Topology::Linear;
     if (filter_value == "Ring") {
         topo = tt::tt_fabric::Topology::Ring;
     } else if (filter_value == "Linear") {
@@ -560,7 +570,8 @@ static bool check_topology_filter(const ParsedTestConfig& test_config, const std
     } else {
         log_info(
             tt::LogTest,
-            "Unsupported topology filter value: '{}'. Supported values are: Ring, Linear, Mesh, Torus",
+            "Unsupported topology filter value: '{}'. Supported values are: Ring, Linear, Mesh, Torus, TorusX, TorusY, "
+            "TorusXY",
             filter_value);
         return false;
     }
