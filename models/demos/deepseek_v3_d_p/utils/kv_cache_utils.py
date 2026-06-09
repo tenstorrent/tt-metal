@@ -149,7 +149,7 @@ def create_kv_chunk_address_table(config, mesh_device, mesh_shape, seq_len, sp_a
 
 
 def create_kv_chunk_address_table_kimi(
-    config, mesh_device, mesh_shape, seq_len, sp_axis, tt_kvpe_cache, chunk_size_bytes
+    config, mesh_device, mesh_shape, seq_len, sp_axis, tt_kvpe_cache, chunk_size_bytes, num_users
 ):
     """
     Create and populate a KV chunk address table for disaggregation (Kimi K2.6 model - non-balanced).
@@ -200,7 +200,6 @@ def create_kv_chunk_address_table_kimi(
 
     seq_len_local = seq_len // mesh_shape[sp_axis]
 
-    slot = 0
     dram_bank_base_addr = tt_kvpe_cache.buffer_address()
     for local_idx, global_row in enumerate(range(rank_row_start, rank_row_end)):
         group_idx = device_group_idx_per_row[local_idx]
@@ -208,17 +207,18 @@ def create_kv_chunk_address_table_kimi(
         curr_bank_offset = 0
         device_token_start = global_row * seq_len_local
         device_token_end = device_token_start + seq_len_local
-        for layer in range(num_layers):
-            for position in range(device_token_start, device_token_end, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
-                location = ttnn.experimental.disaggregation.KvCacheLocation()
-                location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
-                location.size_bytes = chunk_size_bytes
-                location.device_group_index = group_idx
-                lookup_table.set(layer, position, slot, location)
+        for slot in range(num_users):
+            for layer in range(num_layers):
+                for position in range(device_token_start, device_token_end, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+                    location = ttnn.experimental.disaggregation.KvCacheLocation()
+                    location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
+                    location.size_bytes = chunk_size_bytes
+                    location.device_group_index = group_idx
+                    lookup_table.set(layer, position, slot, location)
 
-                curr_bank_id = (curr_bank_id + 1) % BH_NUM_DRAM_BANKS
-                if curr_bank_id == 0:
-                    curr_bank_offset += chunk_size_bytes
+                    curr_bank_id = (curr_bank_id + 1) % BH_NUM_DRAM_BANKS
+                    if curr_bank_id == 0:
+                        curr_bank_offset += chunk_size_bytes
 
     return lookup_table
 

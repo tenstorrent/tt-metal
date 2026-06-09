@@ -24,8 +24,12 @@ _sp = int(os.environ.get("PREFILL_SP", 8))
 _tp = int(os.environ.get("PREFILL_TP", 4))
 GLOBAL_MESH_SHAPE = (_sp, _tp)
 NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
-MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 3200 * _sp))
-IS_BALANCED = os.environ.get("PREFILL_IS_BALANCED", "1") == "1"
+# Chunked prefill: per-user KV-cache length (60*1024), streamed in CHUNK_SIZE chunks, NUM_USERS slots.
+MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 60 * 1024))
+CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
+NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
+# Chunked / indexed-RoPE path is non-balanced (block-cyclic).
+IS_BALANCED = os.environ.get("PREFILL_IS_BALANCED", "0") == "1"
 CAPACITY_FACTOR = int(os.environ.get("PREFILL_CAPACITY_FACTOR", 8))
 _gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", "DEVICE_FP32")
 PREFILL_DEBUG = os.environ.get("PREFILL_DEBUG", "0") == "1"
@@ -131,26 +135,38 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
         )
 
     actual_isl = len(token_ids)
-    if len(token_ids) < MAX_SEQ_LEN:
-        token_ids = token_ids + [1] * (MAX_SEQ_LEN - len(token_ids))
+    # Chunked prefill needs a whole number of chunks; pad the tail up to the next chunk boundary.
+    pad_to = ((len(token_ids) + CHUNK_SIZE - 1) // CHUNK_SIZE) * CHUNK_SIZE
+    if len(token_ids) < pad_to:
+        token_ids = token_ids + [1] * (pad_to - len(token_ids))
 
+    slot_id = int(data.get("slot_id", 0)) % NUM_USERS
+
+    n_chunks = len(token_ids) // CHUNK_SIZE
     num_iterations = int(os.environ.get("PREFILL_STANDALONE_ITERS", "1"))
     iter_times_ms = []
-    first_token = None
     for i in range(num_iterations):
         _t0 = _time.perf_counter()
-        first_token = pipeline.prefill(token_ids=token_ids, slot_id=0, actual_isl=actual_isl)
+        # prefill() is single-chunk; drive the chunk loop here, managing kv_actual externally.
+        for c in range(n_chunks):
+            kv_actual = c * CHUNK_SIZE
+            pipeline.prefill(
+                token_ids=token_ids[kv_actual : kv_actual + CHUNK_SIZE],
+                slot_id=slot_id,
+                kv_actual_isl=kv_actual,
+            )
         _dt_ms = (_time.perf_counter() - _t0) * 1000.0
         iter_times_ms.append(_dt_ms)
         logger.info(
             f"[prefill timing] task_id={task_id} iter={i} num_tokens={len(token_ids)} "
-            f"pipeline.prefill() = {_dt_ms:.2f} ms"
+            f"chunks={n_chunks} slot={slot_id} pipeline.prefill() = {_dt_ms:.2f} ms"
         )
     logger.info(f"[iter timing summary] per-iter ms = {[round(t,2) for t in iter_times_ms]}")
 
-    # stdout, not a log line: callers (tests / orchestrators) parse this.
-    print(f"[standalone] first_token={first_token}")
-    logger.info(f"Sent token {first_token} for task {task_id}")
+    # stdout, not a log line: callers (tests / orchestrators) parse this. Chunked prefill fills the
+    # KV cache and does not sample, so there is no first token to report.
+    print(f"[standalone] prefill_complete task_id={task_id} slot={slot_id} isl={actual_isl}")
+    logger.info(f"Prefill complete for task {task_id} (slot={slot_id}, isl={actual_isl})")
 
 
 def run_request_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
@@ -189,45 +205,44 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
             if msg is None:
                 break
 
+            # ONE chunk per request: the C++ side sends a chunk already padded to CHUNK_SIZE (in
+            # chip-major block-cyclic order), the actual non-padded token count in this chunk, and the
+            # KV-cache write offset (cumulative valid tokens before this chunk). We just run it.
             task_id = msg.task_id
             token_ids = list(msg.token_ids)
-            dst_slot = msg.slot_id
+            # slot_id designates the cache user slot to fill (chunked prefill is cache-filling only).
+            slot_id = 0 if msg.slot_id == INVALID_SLOT_ID else msg.slot_id % NUM_USERS
+            actual_isl = msg.actual_isl  # non-padded tokens in this chunk
+            kv_actual_isl = msg.kv_actual_isl  # cache write offset (valid KV before this chunk)
 
             logger.info(
-                f"Received task_id={task_id} num_tokens={len(token_ids)} "
-                f"first5={token_ids[:5]} last5={token_ids[-5:]} "
-                f"dst_slot={dst_slot if dst_slot != INVALID_SLOT_ID else 'INVALID(skip-migration)'}"
+                f"Received task_id={task_id} chunk_tokens={len(token_ids)} actual_isl={actual_isl} "
+                f"kv_actual_isl={kv_actual_isl} first5={token_ids[:5]} last5={token_ids[-5:]} slot={slot_id}"
             )
 
-            if len(token_ids) > MAX_SEQ_LEN:
-                tail_preview = token_ids[MAX_SEQ_LEN : MAX_SEQ_LEN + 10]
-                tail_suffix = "..." if len(token_ids) > MAX_SEQ_LEN + 10 else ""
-                raise ValueError(
-                    f"task_id={task_id} prompt has {len(token_ids)} tokens but "
-                    f"MAX_SEQ_LEN={MAX_SEQ_LEN}. Bump SEQ_LEN in the launcher. "
-                    f"Dropped tail tokens would have been: {tail_preview}{tail_suffix}"
-                )
-            actual_isl = len(token_ids)
-
-            if len(token_ids) < MAX_SEQ_LEN:
-                token_ids = token_ids + [1] * (MAX_SEQ_LEN - len(token_ids))
+            assert (
+                len(token_ids) == CHUNK_SIZE
+            ), f"task_id={task_id}: expected a chunk of {CHUNK_SIZE} tokens, got {len(token_ids)}"
 
             _t0 = _time.perf_counter()
-            first_token = pipeline.prefill(
+            pipeline.prefill(
                 token_ids=token_ids,
-                slot_id=0,
-                actual_isl=actual_isl,
-                dst_slot=dst_slot,
+                slot_id=slot_id,
+                kv_actual_isl=kv_actual_isl,
             )
             _dt_ms = (_time.perf_counter() - _t0) * 1000.0
             logger.info(
-                f"[prefill timing] task_id={task_id} num_tokens={len(token_ids)} "
-                f"dst_slot={dst_slot if dst_slot != INVALID_SLOT_ID else '-'} "
-                f"pipeline.prefill() = {_dt_ms:.2f} ms"
+                f"[prefill timing] task_id={task_id} chunk_tokens={len(token_ids)} actual_isl={actual_isl} "
+                f"kv_actual_isl={kv_actual_isl} slot={slot_id} pipeline.prefill() = {_dt_ms:.2f} ms"
             )
 
-            p2c.write_token(task_id, first_token)
-            logger.info(f"Sent token {first_token} for task {task_id}")
+            # Chunked prefill fills the KV cache and does not sample; ack the request (0 sentinel) so
+            # the SHM peer can advance. The decode stage reads the populated cache directly.
+            p2c.write_token(task_id, 0)
+            logger.info(
+                f"Prefill complete for task {task_id} (slot={slot_id}, actual_isl={actual_isl}, "
+                f"kv_actual_isl={kv_actual_isl})"
+            )
 
     logger.info("Request loop exited")
 
@@ -313,6 +328,8 @@ def main() -> None:
         max_seq_len=MAX_SEQ_LEN,
         mesh_shape=GLOBAL_MESH_SHAPE,
         is_balanced=IS_BALANCED,
+        chunk_size=CHUNK_SIZE,
+        num_users=NUM_USERS,
         num_links=2,
         capacity_factor=CAPACITY_FACTOR,
         gate_fallback_mode=GateComputeMode[_gate_mode_name],

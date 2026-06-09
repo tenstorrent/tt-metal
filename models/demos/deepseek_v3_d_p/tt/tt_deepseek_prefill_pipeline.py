@@ -15,7 +15,6 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
-from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reorder_tensor_chunks
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
@@ -37,9 +36,15 @@ class BoundMigrationEndpoint:
 @dataclass
 class TtPrefillPipelineConfig:
     num_layers: int
-    max_seq_len: int
+    max_seq_len: int  # per-user KV-cache length (tokens), e.g. 60 * 1024
     mesh_shape: tuple = (32, 4)
-    is_balanced: bool = True
+    # Chunked prefill is non-balanced (block-cyclic): the indexed RoPE path asserts is_balanced=False.
+    is_balanced: bool = False
+    # Chunked prefill: tokens are streamed in chunks of `chunk_size` and `num_users` independent
+    # cache slots are allocated (user-major batch). max_seq_len is the per-user cache length, so the
+    # full cache holds num_users * num_layers slots of max_seq_len each.
+    chunk_size: int = 5 * 1024
+    num_users: int = 2
     sp_axis: int = 0
     tp_axis: int = 1
     num_links: int = 1
@@ -75,12 +80,23 @@ class TtDeepSeekPrefillPipeline:
         self.config = config
         self.migration_layer = migration_layer
 
+        assert not config.is_balanced, "Chunked prefill requires is_balanced=False (block-cyclic + indexed RoPE)"
+        assert (
+            config.max_seq_len % config.chunk_size == 0
+        ), f"max_seq_len ({config.max_seq_len}) must be a multiple of chunk_size ({config.chunk_size})"
+
         self.model_built = False
         self.kv_cache_allocated = False
         self.compiled = False
 
         self._build_model(state_dict)
         self._allocate_kv_cache()
+        # Whole-cache cos/sin/trans for the KV-pad-aware indexed rotated path, built once and reused
+        # across every chunk (only the runtime kv_actual offset varies). Requires is_balanced=False.
+        self.indexed_rope = self.model.rope_setup.get_rope_tensors_indexed(
+            cache_seq_len_global=config.max_seq_len,
+            chunk_size_global=config.chunk_size,
+        )
 
     def _build_model(self, state_dict: dict) -> None:
         logger.info(
@@ -107,7 +123,8 @@ class TtDeepSeekPrefillPipeline:
             model_cfg=DeepSeekV3Config,
             state_dict=state_dict,
             num_layers=self.config.num_layers,
-            seq_len=self.config.max_seq_len,
+            seq_len=self.config.chunk_size,  # per-chunk size -> MoE/FFN dispatch buffers
+            mla_seq_len=self.config.max_seq_len,  # KV ring buffer = full per-user cache
             num_links=self.config.num_links,
             topology=self.config.topology,
             sp_axis=self.config.sp_axis,
@@ -121,11 +138,15 @@ class TtDeepSeekPrefillPipeline:
             shared_expert_weights_dtype=self.config.shared_expert_weights_dtype,
             weight_cache_path=self.config.weight_cache_path,
             lm_head_is_column_parallel=True,
+            is_chunked=True,
+            slot_num=self.config.num_users,
         )
         self.model_built = True
 
     def _allocate_kv_cache(self) -> None:
         kvpe_head_dim = self.hf_config.qk_rope_head_dim + self.hf_config.kv_lora_rank
+        # ONE shared cache holding num_users * num_layers slots (user-major batch); each user fills its
+        # own layers via cache_user_id + cache_layer_idx during chunked prefill.
         self.kvpe_cache = init_kvpe_cache(
             kvpe_cache_head_dim=kvpe_head_dim,
             mesh_device=self.mesh_device,
@@ -133,65 +154,79 @@ class TtDeepSeekPrefillPipeline:
             mesh_shape=list(self.config.mesh_shape),
             sp_axis=self.config.sp_axis,
             num_kvpe_cache_layers=self.config.num_layers,
+            num_users=self.config.num_users,
         )
         self.kv_cache_allocated = True
 
     def compile(self) -> None:
         assert self.model_built and self.kv_cache_allocated
-        max_seq_len = self.config.max_seq_len
-        logger.warning(
-            "TtDeepSeekPrefillPipeline: temperature is hardcoded to 0.0 (greedy argmax). "
-            "Sampling is not yet supported — every prefill() returns the argmax token."
-        )
-        logger.info(f"TtDeepSeekPrefillPipeline.compile() — warming up with {max_seq_len} tokens")
+        chunk = self.config.chunk_size
+        logger.info(f"TtDeepSeekPrefillPipeline.compile() — warming up one {chunk}-token chunk")
         t0 = time.perf_counter()
-        tt_token_ids = self._prepare_input_tensor([0] * max_seq_len)
-        self.model.forward(
-            tt_token_ids,
+        tt_tokens = self._prepare_chunk_tensor([0] * chunk)
+        h, _ = self.model.forward_chunk(
+            tt_tokens,
             self.kvpe_cache,
-            number_of_non_padded_tokens=max_seq_len,
-            temperature=0.0,
+            self.indexed_rope,
+            kv_actual_isl=0,
+            cache_user_id=0,
         )
+        ttnn.deallocate(tt_tokens)
+        ttnn.deallocate(h)
+        ttnn.synchronize_device(self.mesh_device)
         warmup_ms = (time.perf_counter() - t0) * 1000.0
-        logger.info(f"[prefill timing] task_id=WARMUP num_tokens={max_seq_len} pipeline.prefill() = {warmup_ms:.2f} ms")
+        logger.info(f"[prefill timing] task_id=WARMUP num_tokens={chunk} pipeline.prefill(chunk) = {warmup_ms:.2f} ms")
         self.compiled = True
 
     def prefill(
         self,
         token_ids: list[int],
         slot_id: int,
-        actual_isl: Optional[int] = None,
-        dst_slot: Optional[int] = None,
-    ) -> int:
+        kv_actual_isl: int,
+    ) -> None:
+        """Prefill ONE chunk: run the model over `token_ids` (a single chunk) and write its KV into
+        user `slot_id`'s cache at offset `kv_actual_isl`. Does NOT sample — the populated cache is the
+        output (read by the decode stage / migration consumer).
+
+        The caller drives chunked prefill by calling this once per chunk, in order, managing the
+        cumulative `kv_actual_isl` externally (e.g. += chunk_size per call). Each layer attends to the
+        [0, kv_actual_isl + chunk_size) prefix and writes this chunk at the kv_actual_isl offset, so a
+        chunk's KV must be populated before the next chunk reads it.
+
+        Args:
+            token_ids: exactly chunk_size tokens for this chunk, already in chip-major block-cyclic
+                order (the caller owns reformatting — see test_prefill_transformer_chunked's
+                rotated_chip_positions gather).
+            slot_id: cache user slot to fill, in [0, num_users).
+            kv_actual_isl: cumulative valid-KV count before this chunk (managed by the caller).
+        """
         assert self.compiled, "Call compile() before prefill()"
-        if actual_isl is None:
-            actual_isl = len(token_ids)
-        if dst_slot is None:
-            dst_slot = slot_id
+        assert 0 <= slot_id < self.config.num_users, f"slot_id {slot_id} out of range [0, {self.config.num_users})"
+        assert (
+            kv_actual_isl + self.config.chunk_size <= self.config.max_seq_len
+        ), f"chunk at kv_actual_isl={kv_actual_isl} exceeds per-user cache {self.config.max_seq_len}"
 
-        tt_token_ids = self._prepare_input_tensor(token_ids)
-        on_layer_complete = self._build_migration_callback(slot_id, actual_isl, dst_slot)
-
-        first_token_id, _first_token_prob, _ = self.model.forward(
-            tt_token_ids,
+        tt_tokens = self._prepare_chunk_tensor(token_ids)
+        h, _ = self.model.forward_chunk(
+            tt_tokens,
             self.kvpe_cache,
-            number_of_non_padded_tokens=actual_isl,
-            on_layer_complete=on_layer_complete,
-            temperature=0.0,
+            self.indexed_rope,
+            kv_actual_isl=kv_actual_isl,
+            cache_user_id=slot_id,
         )
-        return int(first_token_id)
+        ttnn.deallocate(tt_tokens)
+        ttnn.deallocate(h)
 
-    def _prepare_input_tensor(self, token_ids: list[int]) -> ttnn.Tensor:
+    def _prepare_chunk_tensor(self, chunk_token_ids: list[int]) -> ttnn.Tensor:
+        """One chunk's tokens -> [sp, 1, chunk_local] uint32, SP-sharded on dim 0.
+
+        The chunk is assumed to already be in chip-major block-cyclic order (chip c's chunk_local rows
+        are contiguous), so we only reshape + shard — no reordering is done here.
+        """
         sp_factor = self.config.sp_factor
-        isl_per_chip = len(token_ids) // sp_factor
-
-        if self.config.is_balanced:
-            chunk_order = create_balanced_chunk_order(sp_factor)
-            t = torch.tensor(token_ids, dtype=torch.int64).unsqueeze(0).unsqueeze(0).unsqueeze(-1)
-            t = reorder_tensor_chunks(t, chunk_order, seq_dim=2)
-            token_ids_sharded = t.squeeze(0).squeeze(-1).reshape(sp_factor, 1, isl_per_chip)
-        else:
-            token_ids_sharded = torch.tensor(token_ids, dtype=torch.int64).reshape(sp_factor, 1, isl_per_chip)
+        assert len(chunk_token_ids) == self.config.chunk_size
+        chunk_local = self.config.chunk_size // sp_factor
+        token_ids_sharded = torch.tensor(chunk_token_ids, dtype=torch.int64).reshape(sp_factor, 1, chunk_local)
 
         return ttnn.from_torch(
             token_ids_sharded,
