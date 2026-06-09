@@ -581,7 +581,6 @@ def _run_prompt_sweep(
                     f"token_id round-trip mismatch (got {actual_token_id})"
                 )
 
-
             collected_for_prompt[slot_id][p_local, :] = _extract_activation_from_d2h(output_tensor)
 
         if (p_local + 1) % log_every == 0 or p_local + 1 == L_p:
