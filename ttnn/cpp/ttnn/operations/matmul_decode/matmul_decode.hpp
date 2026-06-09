@@ -23,6 +23,8 @@ Tensor matmul_decode(
     const Tensor& input_tensor_b,
     bool partial_width_sharded = false,
     std::optional<const DataType> dtype = std::nullopt,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    bool stream_k = false,
+    uint32_t k_slice_tiles = 16);
 
 }  // namespace ttnn

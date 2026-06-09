@@ -11,6 +11,7 @@
 
 #include <map>
 #include <optional>
+#include <set>
 #include <vector>
 
 namespace ttnn::operations::matmul_decode {
@@ -90,6 +91,29 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         inputB_shard_shape[1] % tt::constants::TILE_WIDTH == 0,
         "Input tensor B must have a width that is divisible by the tile width");
     uint32_t inB_N_tiles_per_core = inputB_shard_shape[1] / tt::constants::TILE_WIDTH;
+
+    // K-STREAMING (plan_5 s3): full_in0 holds either the WHOLE gathered A (one-shot gather,
+    // M_tiles*K_tiles tiles) or -- when stream_k -- only ONE K-slice, CB-double-buffered (2 *
+    // M_tiles * K_slice_tiles tiles). K_slice_tiles is clamped to be <= inA_K_tiles_per_core (so
+    // each stream step is owned by a single sender) and to evenly divide K_tiles.
+    const bool stream_k = operation_attributes.stream_k;
+    uint32_t K_slice_tiles = operation_attributes.k_slice_tiles;
+    if (stream_k) {
+        if (K_slice_tiles > inA_K_tiles_per_core) {
+            K_slice_tiles = inA_K_tiles_per_core;
+        }
+        while (K_slice_tiles > 1 && (K_tiles % K_slice_tiles != 0 || inA_K_tiles_per_core % K_slice_tiles != 0)) {
+            K_slice_tiles -= 1;
+        }
+        TT_FATAL(
+            K_tiles % K_slice_tiles == 0 && inA_K_tiles_per_core % K_slice_tiles == 0,
+            "stream_k: K_slice_tiles {} must divide both K_tiles {} and inA_K_tiles_per_core {}",
+            K_slice_tiles,
+            K_tiles,
+            inA_K_tiles_per_core);
+    }
+    const uint32_t full_in0_num_tiles = stream_k ? (2u * M_tiles * K_slice_tiles) : (M_tiles * K_tiles);
+
     ProgramDescriptor desc;
 
     // ---- Circular buffers (allocated on every participating core) ----
@@ -131,7 +155,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         .buffer = output_tensor.buffer(),
     });
     desc.cbs.push_back(CBDescriptor{
-        .total_size = M_tiles * K_tiles * in0_tile_size,
+        .total_size = full_in0_num_tiles * in0_tile_size,
         .core_ranges = all_compute_cores_with_bbox,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = full_in0_cb_index,
@@ -176,7 +200,8 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     const uint32_t num_receivers = all_compute_cores_with_bbox.num_cores();
     const uint32_t shard_num_tiles = M_tiles * inA_K_tiles_per_core;
 
-    const KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
+    // The one-shot gather reader and the streaming reader take DIFFERENT CT-arg lists.
+    const KernelDescriptor::CompileTimeArgs gather_reader_compile_time_args = {
         in0_cb_index,
         full_in0_cb_index,
         shard_num_tiles,
@@ -196,6 +221,33 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         in1_cb_index,
         K_tiles * inB_N_tiles_per_core,
     };
+    const KernelDescriptor::CompileTimeArgs stream_reader_compile_time_args = {
+        in0_cb_index,
+        full_in0_cb_index,
+        in0_tile_size,
+        num_senders,
+        num_receivers,
+        static_cast<uint32_t>(mcast_start_phys.x),
+        static_cast<uint32_t>(mcast_start_phys.y),
+        static_cast<uint32_t>(mcast_end_phys.x),
+        static_cast<uint32_t>(mcast_end_phys.y),
+        gather_sem_id,
+        done_sem_id,
+        static_cast<uint32_t>(mcast_start_phys.x),
+        static_cast<uint32_t>(mcast_start_phys.y),
+        in1_cb_index,
+        K_tiles * inB_N_tiles_per_core,
+        M_tiles,
+        K_tiles,
+        K_slice_tiles,
+        inA_K_tiles_per_core,
+    };
+    const KernelDescriptor::CompileTimeArgs& reader_compile_time_args =
+        stream_k ? stream_reader_compile_time_args : gather_reader_compile_time_args;
+    const char* reader_kernel_source = stream_k ? "ttnn/cpp/ttnn/operations/matmul_decode/device/kernels/dataflow/"
+                                                  "reader_full_width_sharded_stream.cpp"
+                                                : "ttnn/cpp/ttnn/operations/matmul_decode/device/kernels/dataflow/"
+                                                  "reader_full_width_sharded.cpp";
 
     // Map each A-holding core to its K-slice index (== semaphore id).  Cores are
     // walked in row-major order so the slice ordering matches the width-sharded
@@ -205,6 +257,14 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     for (uint32_t id = 0; id < sender_cores.size(); id++) {
         sender_id_by_core[sender_cores[id]] = id;
     }
+
+    // The OUTPUT (compute-consumer) cores. In the streaming reader, only these cores have a
+    // compute kernel draining full_in0, so only they may run the per-step reserve_back/push_back
+    // loop -- "orphan" cores inside the mcast bbox that are neither senders nor output cores would
+    // otherwise block forever on the 3rd reserve_back (CB full, no consumer). is_consumer gates
+    // the CB loop for the streaming reader (ignored by the one-shot gather reader).
+    const std::vector<CoreCoord> output_cores_vec = corerange_to_cores(output_core_range_set, std::nullopt, true);
+    std::set<CoreCoord> output_core_set(output_cores_vec.begin(), output_cores_vec.end());
 
     // Balance the multicasting sender cores across both NoCs; all other cores
     // stay on the default NoC.
@@ -219,8 +279,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         }
 
         KernelDescriptor reader_kernel_desc;
-        reader_kernel_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/matmul_decode/device/kernels/dataflow/reader_full_width_sharded.cpp";
+        reader_kernel_desc.kernel_source = reader_kernel_source;
         reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         reader_kernel_desc.core_ranges = CoreRangeSet(ranges);
         reader_kernel_desc.compile_time_args = reader_compile_time_args;
@@ -235,10 +294,14 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
             const bool is_sender = it != sender_id_by_core.end();
             const uint32_t sender_id = is_sender ? it->second : 0;
             const bool is_coordinator = (core == coordinator_logical);
+            const bool is_consumer = output_core_set.count(core) > 0;
             reader_kernel_desc.runtime_args.emplace_back(
                 core,
                 KernelDescriptor::CoreRuntimeArgs{
-                    static_cast<uint32_t>(is_sender), sender_id, static_cast<uint32_t>(is_coordinator)});
+                    static_cast<uint32_t>(is_sender),
+                    sender_id,
+                    static_cast<uint32_t>(is_coordinator),
+                    static_cast<uint32_t>(is_consumer)});
         }
         return reader_kernel_desc;
     };
@@ -295,6 +358,8 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         inA_K_tiles_per_core,
         last_out_block_h,
         num_blocks_h,
+        static_cast<uint32_t>(stream_k ? 1u : 0u),
+        stream_k ? K_slice_tiles : 1u,
     };
     // PRECISION (now OPT-IN, mirroring ttnn.matmul): fp32 DST accumulation keeps the
     // K-reduction accumulating in fp32 DST instead of packing each matmul_block partial

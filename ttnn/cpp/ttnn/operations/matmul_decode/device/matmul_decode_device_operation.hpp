@@ -44,6 +44,14 @@ struct MatmulDecodeDeviceOperation {
         // resolves to fp32_dest_acc_en=false, math_fidelity=HiFi4 (the op's fidelity
         // floor). Pass a DeviceComputeKernelConfig with fp32_dest_acc_en=true to opt in.
         DeviceComputeKernelConfig compute_kernel_config;
+        // K-STREAMING (plan_5 s3): when true, the full-WS factory selects the temporal
+        // K-streaming reader + streamed compute branch (full_in0 holds one double-buffered
+        // K-slice instead of the whole A) and FORCES fp32 DST accumulation on the streamed
+        // reduction (the only internal force; non-streamed paths keep the opt-in resolution).
+        // k_slice_tiles is the number of K-tiles streamed per step. Only consulted by the
+        // FullWidthSharded factory; ignored by Partial/MultiCore.
+        bool stream_k = false;
+        uint32_t k_slice_tiles = 16;
     };
 
     // Tensors passed in/out of the operation.
@@ -112,5 +120,7 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
     const Tensor& input_tensor_b,
     bool partial_width_sharded = false,
     std::optional<const DataType> dtype = std::nullopt,
-    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    bool stream_k = false,
+    uint32_t k_slice_tiles = 16);
 }  // namespace ttnn::prim

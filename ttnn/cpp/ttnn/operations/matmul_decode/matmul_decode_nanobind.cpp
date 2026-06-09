@@ -46,7 +46,9 @@ void bind_matmul_decode_operation(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("partial_width_sharded") = false,
         nb::arg("dtype") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("stream_k") = false,
+        nb::arg("k_slice_tiles") = 16);
 }
 
 }  // namespace ttnn::operations::matmul_decode

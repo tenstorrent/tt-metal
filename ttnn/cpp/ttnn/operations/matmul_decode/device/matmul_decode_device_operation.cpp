@@ -146,10 +146,43 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
     output_shape[-1] = operation_attributes.N;
 
     const auto dtype = operation_attributes.output_dtype.value_or(input_tensor_a.dtype());
-    int output_num_cores = tt::div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
+    // WIDE-N CAP (plan_5 s1.1): the unconditional `output_num_cores = div_up(N,32)` placed one
+    // N-tile per core, which for wide-N (gate/up N=16384 -> 512 tiles) would need 512 output cores
+    // (FATALs the ~104-core P150 grid). We CONDITIONALLY cap the output-core count at CORE_CAP and
+    // pack multiple N-tiles per core. The cap engages ONLY when N_tiles_total > CORE_CAP; every
+    // smaller-N call (every partial call after the prim's K_ratio reduce; every externally-split
+    // QKV@M=S full call; O and all small-N full-WS calls) keeps the BYTE-IDENTICAL spec
+    // (output_num_cores == div_up(N,32), 1 N-tile/core) so the full factory's
+    // `inputB_core_range_set == output_core_range_set` FATAL is never tripped on those paths.
+    //
+    // When the cap engages we choose output_num_cores = the LARGEST DIVISOR of N_tiles_total that is
+    // <= CORE_CAP. This guarantees (a) an exactly-even N_tiles_per_core (no per-core ragged tile
+    // counts -> the compute kernel's single CT N-tile loop bound stays uniform), and (b) a
+    // deterministic rule the wrapper reproduces verbatim for the B shard so the lockstep-B invariant
+    // holds with NO N padding. The compute kernel already loops `bw` over N_tiles_per_core and packs
+    // row-major (mt*N_tiles_per_core + bw), and reads B with stride k*N_tiles_per_core + bw, so >1
+    // N-tile/core needs no kernel edit.
+    constexpr uint32_t CORE_CAP = 104;
+    const uint32_t N_tiles_total = tt::div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
+    uint32_t output_num_cores;
+    uint32_t per_core_output_width;
+    if (N_tiles_total <= CORE_CAP) {
+        // Identity spec: byte-for-byte the pre-cap behaviour (1 N-tile/core, div_up(N,32) cores).
+        output_num_cores = N_tiles_total;
+        per_core_output_width = tt::constants::TILE_WIDTH;
+    } else {
+        // Largest divisor of N_tiles_total that is <= CORE_CAP (even N-tiling, no pad).
+        uint32_t chosen = 1;
+        for (uint32_t c = 1; c <= CORE_CAP && c <= N_tiles_total; ++c) {
+            if (N_tiles_total % c == 0) {
+                chosen = c;
+            }
+        }
+        output_num_cores = chosen;
+        per_core_output_width = (N_tiles_total / output_num_cores) * tt::constants::TILE_WIDTH;
+    }
     CoreRangeSet output_core_range_set = tt::tt_metal::num_cores_to_corerangeset(
         output_num_cores, input_tensor_a.device()->compute_with_storage_grid_size(), true);
-    int per_core_output_width = tt::div_up(operation_attributes.N, output_num_cores);
     std::array<uint32_t, 2> shard_shape = {operation_attributes.M, per_core_output_width};
     auto shard_spec =
         tt::tt_metal::ShardSpec(output_core_range_set, shard_shape, tt::tt_metal::ShardOrientation::ROW_MAJOR);
@@ -174,7 +207,9 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
     const Tensor& input_tensor_b,
     bool partial_width_sharded,
     std::optional<const DataType> dtype,
-    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    bool stream_k,
+    uint32_t k_slice_tiles) {
     using OperationType = ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation;
 
     // For the partial width-sharded layout the caller reshapes/permutes B, so its
@@ -203,12 +238,16 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
     // off unless the caller passes a config with fp32_dest_acc_en=true). packer_l1_acc /
     // dst_full_sync default false; the ComputeConfigDescriptor used by the factories only
     // consumes math_fidelity / fp32_dest_acc_en / math_approx_mode / dst_full_sync_en.
+    // K-STREAMING forces fp32 DST accumulation (plan_5 s3.3): bf16 round-between-slices loses
+    // the large-K (K=16384) PCC. When stream_k the default_fp32_acc floor is raised to TRUE so a
+    // bare streamed call still accumulates in fp32. Non-streamed calls keep the opt-in default
+    // (fp32_dest_acc_en=false). A user config with fp32_dest_acc_en explicitly set still wins.
     auto resolved_compute_kernel_config = ttnn::init_device_compute_kernel_config(
         input_tensor_a.device()->arch(),
         compute_kernel_config,
         /*default_fidelity=*/MathFidelity::HiFi4,
         /*default_approx_mode=*/false,
-        /*default_fp32_acc=*/false,
+        /*default_fp32_acc=*/stream_k ? true : false,
         /*default_l1_acc=*/false);
     auto operation_attributes = OperationType::operation_attributes_t{
         M,
@@ -218,6 +257,8 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
         dtype.has_value() ? std::optional<DataType>(*dtype) : std::nullopt,
         partial_width_sharded,
         resolved_compute_kernel_config,
+        stream_k,
+        k_slice_tiles,
     };
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

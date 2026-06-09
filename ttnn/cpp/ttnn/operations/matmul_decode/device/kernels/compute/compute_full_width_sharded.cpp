@@ -48,53 +48,99 @@ void kernel_main() {
     constexpr uint32_t inA_K_tiles_per_core = get_compile_time_arg_val(3);
     constexpr uint32_t last_out_block_h = get_compile_time_arg_val(4);
     constexpr uint32_t num_blocks_h = get_compile_time_arg_val(5);
+    // K-STREAMING (plan_5 s3.5): when stream_k==1 A is delivered one K-slice at a time by
+    // reader_full_width_sharded_stream; full_in0 holds only one CB-double-buffered slice of
+    // K_slice_tiles columns, and the K-reduction accumulates across slices in DST (forced
+    // fp32). When 0, the byte-identical one-shot gather path below is used (gate/up, O, QKV).
+    constexpr uint32_t stream_k = get_compile_time_arg_val(6);
+    constexpr uint32_t K_slice_tiles = get_compile_time_arg_val(7);
 
     constexpr uint32_t in0_cb_id = tt::CBIndex::c_3;
     constexpr uint32_t in1_cb_id = tt::CBIndex::c_1;
     constexpr uint32_t out_cb_id = tt::CBIndex::c_2;
 
-    constexpr uint32_t in0_num_tiles = M_tiles * K_tiles;
-
     constexpr uint32_t num_K_blocks = K_tiles / in0_block_w;
     // tiles per sender slice in full_in0 (== reader's shard_num_tiles)
     constexpr uint32_t sender_slice_tiles = M_tiles * inA_K_tiles_per_core;
 
-    // Gathered A is a regular CB (reader publishes via push_back).
-    cb_wait_front(in0_cb_id, in0_num_tiles);
-    // in1/out are buffer-backed: data is already in L1 (see vecadd_sharding).
-
-    // mm_init(in0_cb_id, in1_cb_id, out_cb_id);
     mm_block_init(in0_cb_id, in1_cb_id, out_cb_id, false, out_block_w, out_block_h, in0_block_w);
 
-    // Reserve the whole output shard ([M_tiles x N_tiles_per_core] tiles, row-major).
-    cb_reserve_back(out_cb_id, M_tiles * N_tiles_per_core);
-    for (uint32_t mt = 0; mt < M_tiles; ++mt) {
-        for (uint32_t bw = 0; bw < N_tiles_per_core; ++bw) {
-            tile_regs_acquire();
-            for (uint32_t k = 0; k < num_K_blocks; ++k) {
-                // Translate global K-tile index k into its sender-major slot in full_in0.
-                const uint32_t sender = k / inA_K_tiles_per_core;
-                const uint32_t kc_local = k - sender * inA_K_tiles_per_core;
-                const uint32_t in0_tile = sender * sender_slice_tiles + mt * inA_K_tiles_per_core + kc_local;
-                matmul_block(
-                    in0_cb_id,
-                    in1_cb_id,
-                    in0_tile,
-                    k * N_tiles_per_core + bw,  // B is [K_tiles x N_tiles_per_core] row-major
-                    0,
-                    false,
-                    out_block_w,
-                    out_block_h,
-                    in0_block_w);
+    if constexpr (stream_k == 0) {
+        // ---- Non-streamed: one-shot gather (full_in0 holds the WHOLE A, sender-major). ----
+        constexpr uint32_t in0_num_tiles = M_tiles * K_tiles;
+        cb_wait_front(in0_cb_id, in0_num_tiles);
+        cb_reserve_back(out_cb_id, M_tiles * N_tiles_per_core);
+        for (uint32_t mt = 0; mt < M_tiles; ++mt) {
+            for (uint32_t bw = 0; bw < N_tiles_per_core; ++bw) {
+                tile_regs_acquire();
+                for (uint32_t k = 0; k < num_K_blocks; ++k) {
+                    const uint32_t sender = k / inA_K_tiles_per_core;
+                    const uint32_t kc_local = k - sender * inA_K_tiles_per_core;
+                    const uint32_t in0_tile = sender * sender_slice_tiles + mt * inA_K_tiles_per_core + kc_local;
+                    matmul_block(
+                        in0_cb_id,
+                        in1_cb_id,
+                        in0_tile,
+                        k * N_tiles_per_core + bw,
+                        0,
+                        false,
+                        out_block_w,
+                        out_block_h,
+                        in0_block_w);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile<true>(0, out_cb_id, mt * N_tiles_per_core + bw);
+                tile_regs_release();
             }
-            tile_regs_commit();
-            tile_regs_wait();
-            // Pack to the row-major output slot for (mt, bw).
-            pack_tile<true>(0, out_cb_id, mt * N_tiles_per_core + bw);
-            tile_regs_release();
         }
+        cb_push_back(out_cb_id, M_tiles * N_tiles_per_core);
+        cb_pop_front(in0_cb_id, in0_num_tiles);
+    } else {
+        // ---- Streamed-K: OUTER K-slice loop, DST accumulation across slices, single pack. ----
+        // The reader streams the full K sequence ONCE (slice s = [M_tiles, K_slice_tiles]
+        // contiguous, single sender => local index m*K_slice_tiles + kc). Each slice is
+        // consumed (wait_front/pop_front) exactly once, so the (mt,bw) accumulation must be the
+        // INNER loop and the K-slice the OUTER loop -- we hold ALL M_tiles*N_tiles_per_core
+        // output DST tiles live across the whole stream and pack once at the end. For down
+        // (N_tiles_per_core==1, M_tiles<=3) that is <=3 live DST tiles, within the fp32 DST
+        // capacity (4). B is the resident full-K weight, indexed GLOBAL.
+        constexpr uint32_t num_steps = K_tiles / K_slice_tiles;
+        constexpr uint32_t slice_tiles = M_tiles * K_slice_tiles;
+        constexpr uint32_t num_out_tiles = M_tiles * N_tiles_per_core;
+        cb_reserve_back(out_cb_id, num_out_tiles);
+        tile_regs_acquire();
+        for (uint32_t s = 0; s < num_steps; ++s) {
+            cb_wait_front(in0_cb_id, slice_tiles);
+            for (uint32_t mt = 0; mt < M_tiles; ++mt) {
+                for (uint32_t bw = 0; bw < N_tiles_per_core; ++bw) {
+                    const uint32_t dst_idx = mt * N_tiles_per_core + bw;
+                    for (uint32_t kc = 0; kc < K_slice_tiles; ++kc) {
+                        const uint32_t k_global = s * K_slice_tiles + kc;
+                        matmul_block(
+                            in0_cb_id,
+                            in1_cb_id,
+                            mt * K_slice_tiles + kc,           // local slice index (single sender)
+                            k_global * N_tiles_per_core + bw,  // resident full-K B (global)
+                            dst_idx,
+                            false,
+                            out_block_w,
+                            out_block_h,
+                            in0_block_w);
+                    }
+                }
+            }
+            cb_pop_front(in0_cb_id, slice_tiles);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t mt = 0; mt < M_tiles; ++mt) {
+            for (uint32_t bw = 0; bw < N_tiles_per_core; ++bw) {
+                const uint32_t dst_idx = mt * N_tiles_per_core + bw;
+                pack_tile<true>(dst_idx, out_cb_id, dst_idx);
+            }
+        }
+        tile_regs_release();
+        cb_push_back(out_cb_id, num_out_tiles);
     }
-    cb_push_back(out_cb_id, M_tiles * N_tiles_per_core);
-
-    cb_pop_front(in0_cb_id, in0_num_tiles);
 }
