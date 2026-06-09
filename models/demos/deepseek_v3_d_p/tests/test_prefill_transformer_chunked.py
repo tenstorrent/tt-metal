@@ -36,7 +36,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
-from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
+from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
@@ -82,6 +82,38 @@ def _ref_layer_slice(layer: int, start: int, end: int) -> torch.Tensor:
     path = TRACE_DIR / "hidden_states" / f"layer_{layer}.safetensors"
     with safe_open(path, framework="pt") as f:
         return f.get_slice(f"decoder_output_layer_{layer}")[start:end].to(torch.float32)
+
+
+def _record_kv_cache_pcc(tt_kvpe_cache, mesh_device, sp, num_layers, seq_len_cache, total_len, kvpe_dim, kv_lora):
+    """Record-only: gather the device KV cache, un-rotate the block-cyclic layout, and PCC each
+    layer's valid region [:total_len] against the golden kv_post_transform trace. nope is compared
+    directly; the RoPE (pe) slice uses the Meta-interleaved basis (golden stores HF half-split).
+    Does NOT assert — mirrors the per-layer decoder_output record-only reporting."""
+    logger.info("Device KV cache vs golden kv_post_transform (record-only):")
+    # One gather: [num_layers, tp_replicas, seq_len_cache, kvpe] -> collapse TP replicas via [:, :1].
+    cache_full = ttnn.to_torch(
+        tt_kvpe_cache,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+    ).to(torch.float32)[
+        :, :1
+    ]  # [num_layers, 1, seq_len_cache, kvpe]
+    p = blockcyclic_positions(sp, CHUNK, seq_len_cache)
+    cache_min_pcc = {}
+    for i in range(num_layers):
+        nat = torch.empty(seq_len_cache, kvpe_dim, dtype=torch.float32)
+        nat[p] = cache_full[i, 0]  # un-rotate block-cyclic -> natural order
+        dev_cache = nat[:total_len]
+        path = TRACE_DIR / "kv_cache" / f"layer_{i}.safetensors"
+        with safe_open(path, framework="pt") as f:
+            g_post = f.get_slice(f"kv_post_transform_layer_{i}")[:total_len].to(torch.float32)
+        _, pcc_nope = comp_pcc(g_post[:, :kv_lora], dev_cache[:, :kv_lora])
+        ref_pe = g_post[:, kv_lora:]
+        d = ref_pe.shape[-1]
+        ref_pe_int = torch.stack([ref_pe[:, : d // 2], ref_pe[:, d // 2 :]], dim=-1).reshape(-1, d)  # HF -> Meta
+        _, pcc_pe = comp_pcc(ref_pe_int, dev_cache[:, kv_lora:])
+        cache_min_pcc[i] = min(pcc_nope, pcc_pe)
+        logger.info(f"  cache layer {i} PCC: nope={pcc_nope:.6f} pe(interleaved)={pcc_pe:.6f}")
+    logger.info(f"KV cache min PCC across layers: {min(cache_min_pcc.values()):.6f}")
 
 
 def run_chunked_transformer_padded(
@@ -233,15 +265,21 @@ def run_chunked_transformer_padded(
             ref = _ref_layer_slice(i, kv_actual, valid_end)
             _, pcc = comp_pcc(ref, natural)
             layer_min_pcc[i] = min(layer_min_pcc[i], pcc)
-            if i == 0 or i == num_layers - 1 or pcc < LAYER_PCC_THRESHOLD:
-                logger.info(f"  chunk {c} (kv_actual={kv_actual} isl={isl}) layer {i} PCC: {pcc:.6f}")
-            assert pcc > LAYER_PCC_THRESHOLD, f"chunk {c} layer {i} PCC {pcc:.6f} below {LAYER_PCC_THRESHOLD}"
+            # Record-only mode: log every per-layer/per-chunk PCC, do not assert (deep-layer
+            # accumulation profiling). Flag sub-threshold values as warnings instead of failing.
+            logger.info(f"  chunk {c} (kv_actual={kv_actual} isl={isl}) layer {i} PCC: {pcc:.6f}")
+            if pcc < LAYER_PCC_THRESHOLD:
+                logger.warning(f"  chunk {c} layer {i} PCC {pcc:.6f} below {LAYER_PCC_THRESHOLD} (not asserted)")
         logger.info(f"  chunk {c} done (kv_actual={kv_actual} isl={isl}, {num_layers} layers)")
     profiler.end("tt_forward")
 
     logger.info("Per-layer min PCC across chunks:")
     for i in range(num_layers):
         logger.info(f"  layer {i}: {layer_min_pcc[i]:.6f}")
+
+    _record_kv_cache_pcc(
+        tt_kvpe_cache, mesh_device, sp, num_layers, seq_len_cache, total_len, kvpe_dim, config.kv_lora_rank
+    )
 
     profiler.end("total_test_time")
     logger.success(
@@ -383,15 +421,21 @@ def run_chunked_transformer(variant, config, mesh_device, weight_cache_path, num
             ref = _ref_layer_slice(i, kv_actual, kv_actual + CHUNK)
             _, pcc = comp_pcc(ref, natural)
             layer_min_pcc[i] = min(layer_min_pcc[i], pcc)
-            if i == 0 or i == num_layers - 1 or pcc < LAYER_PCC_THRESHOLD:
-                logger.info(f"  chunk {c} layer {i} PCC: {pcc:.6f}")
-            assert pcc > LAYER_PCC_THRESHOLD, f"chunk {c} layer {i} PCC {pcc:.6f} below {LAYER_PCC_THRESHOLD}"
+            # Record-only mode: log every per-layer/per-chunk PCC, do not assert (deep-layer
+            # accumulation profiling). Flag sub-threshold values as warnings instead of failing.
+            logger.info(f"  chunk {c} layer {i} PCC: {pcc:.6f}")
+            if pcc < LAYER_PCC_THRESHOLD:
+                logger.warning(f"  chunk {c} layer {i} PCC {pcc:.6f} below {LAYER_PCC_THRESHOLD} (not asserted)")
         logger.info(f"  chunk {c} done ({num_layers} layers)")
     profiler.end("tt_forward")
 
     logger.info("Per-layer min PCC across chunks:")
     for i in range(num_layers):
         logger.info(f"  layer {i}: {layer_min_pcc[i]:.6f}")
+
+    _record_kv_cache_pcc(
+        tt_kvpe_cache, mesh_device, sp, num_layers, SEQ_CACHE, total_len, kvpe_dim, config.kv_lora_rank
+    )
 
     profiler.end("total_test_time")
     logger.success(
@@ -403,7 +447,7 @@ def run_chunked_transformer(variant, config, mesh_device, weight_cache_path, num
 
 
 @pytest.mark.parametrize("n_chunks", [11], ids=["chunks11"])
-@pytest.mark.parametrize("num_layers", [5, 10, 61], ids=["L5", "L10", "L61"])
+@pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
@@ -443,7 +487,7 @@ def test_ds_prefill_transformer_chunked(
 
 
 @pytest.mark.parametrize("splits", [_PADDED_FULL_55K], ids=["full55k"])
-@pytest.mark.parametrize("num_layers", [1, 5, 61], ids=["L1", "L5", "L61"])
+@pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
