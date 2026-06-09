@@ -83,7 +83,7 @@ class DataArgs:
     # Upper bound on AR acoustic steps. The demo auto-raises this per-prompt when the
     # word count implies more tokens are needed (see _min_speech_tokens). Use a small
     # value like 64 for quick smoke tests; leave at 0 to always use the auto-estimate.
-    max_speech_tokens: int = 256
+    max_speech_tokens: int = 13000
     seed: int = 0
     default_voice: str = "casual_female"
     warmup_iters: int = 0
@@ -434,15 +434,20 @@ def run_text_mode(
     seed: int,
     sample_rate: int,
     out_path: Path,
+    text_max_seq_len: int = 4096,
 ) -> None:
     """Full TT TTS (device-resident AR loop): text → acoustic codes → waveform.
 
-    For texts longer than ``_CHUNK_THRESHOLD_WORDS`` words the input is split into
+    For texts longer than the chunk threshold words the input is split into
     sentence-aligned chunks and each chunk is generated independently.  This prevents the
     AR degeneration (semantic-code collapse) that occurs after ~200 acoustic tokens when
     running in free-run mode with PCC ≈ 0.79.
+
+    Chunking is only enabled when text_max_seq_len > 4096 (i.e. the paged KV cache is in
+    use).  At text_max_seq_len <= 4096 the context fits in a single pass without degeneration.
     """
-    if len(text.split()) > _CHUNK_THRESHOLD_WORDS:
+    chunk_threshold = _CHUNK_THRESHOLD_WORDS if text_max_seq_len > 4096 else 9999
+    if len(text.split()) > chunk_threshold:
         _run_chunked_text_mode(pipe, text, voice, seed, sample_rate, out_path)
         return
 
@@ -595,6 +600,7 @@ def run_demo(args: DemoArgs) -> None:
                         seed=args.data.seed,
                         sample_rate=sample_rate,
                         out_path=out_path,
+                        text_max_seq_len=args.tt.text_max_seq_len,
                     )
 
                 elif args.data.mode == "codes":
