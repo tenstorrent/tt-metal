@@ -146,13 +146,6 @@ ProgramDescriptor UniformDeviceOperation::create_descriptor(
     // -eps make sure that generated number is < operation_attributes.to
     const uint32_t f2u_to = std::bit_cast<uint32_t>(operation_attributes.to - eps);
 
-    // seed/from/to are DYNAMIC (excluded from compute_program_hash) and identical across cores, so
-    // they are BROADCAST common runtime args — not duplicated per core. Per-core seed distinctness is
-    // recovered in-kernel as seed_base + start_id. This drops the per-dispatch dynamic-arg work from
-    // 3*num_cores entries to 3 broadcast scalars. (Re-applied on cache hits via get_dynamic_runtime_args.)
-    const uint32_t seed_base = operation_attributes.seed != 0 ? operation_attributes.seed : get_random_seed();
-    compute_desc.emplace_common_runtime_args({seed_base, f2u_from, f2u_to});
-
     uint32_t tile_offset = 0;
     for (int i = 0; i < static_cast<int>(cores.size()); ++i) {
         const auto& core = cores[i];
@@ -165,8 +158,13 @@ ProgramDescriptor UniformDeviceOperation::create_descriptor(
             TT_THROW("Core not in specified core ranges");
         }
 
-        // Per-core args are now just the static work split (start_id, num_tiles).
-        compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{tile_offset, units_per_core});
+        // Each core has its own seed to increase the number of generated random numbers
+        uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
+
+        // seed/from/to are DYNAMIC (excluded from compute_program_hash): baked here for the
+        // cache-miss build, re-applied on every cache hit via get_dynamic_runtime_args().
+        compute_desc.runtime_args.emplace_back(
+            core, KernelDescriptor::CoreRuntimeArgs{seed, f2u_from, f2u_to, tile_offset, units_per_core});
 
         // Register the (in-place) output address as a Buffer* binding so uniform takes the fast
         // cache-hit path; the framework allows the input==output alias (see resolve_bindings).
@@ -184,25 +182,26 @@ ProgramDescriptor UniformDeviceOperation::create_descriptor(
 std::vector<tt::tt_metal::DynamicRuntimeArg> UniformDeviceOperation::get_dynamic_runtime_args(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
-    tensor_return_value_t& /*output*/,
+    tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // compute is kernel 1. seed/from/to are excluded from the hash and re-applied here as three
-    // broadcast (common) args; the per-core work-split args are static and stay baked.
+    // compute is kernel 1; its runtime args are {seed, f2u_from, f2u_to, tile_offset, units_per_core}.
+    // seed/from/to are excluded from the hash and re-applied here; the rest are static.
     constexpr uint32_t kComputeKernelIdx = 1;
+    auto cores = uniform_work_split(output).cores;
 
     const float eps = 1e-6f;
     const uint32_t f2u_from = std::bit_cast<uint32_t>(operation_attributes.from);
     const uint32_t f2u_to = std::bit_cast<uint32_t>(operation_attributes.to - eps);
-    const uint32_t seed_base = operation_attributes.seed != 0 ? operation_attributes.seed : get_random_seed();
 
-    // Three broadcast (common) args — indices 0..2 of the common section: seed_base, from, to.
-    // No per-core entries and no work split: the kernel derives its per-core seed as
-    // seed_base + start_id, so the cache-hit re-apply touches exactly three scalars.
-    return {
-        {kComputeKernelIdx, {}, 0, seed_base, /*is_common=*/true},
-        {kComputeKernelIdx, {}, 1, f2u_from, /*is_common=*/true},
-        {kComputeKernelIdx, {}, 2, f2u_to, /*is_common=*/true},
-    };
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    dynamic_args.reserve(cores.size() * 3);
+    for (int i = 0; i < static_cast<int>(cores.size()); ++i) {
+        const uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
+        dynamic_args.push_back({kComputeKernelIdx, cores[i], 0, seed});
+        dynamic_args.push_back({kComputeKernelIdx, cores[i], 1, f2u_from});
+        dynamic_args.push_back({kComputeKernelIdx, cores[i], 2, f2u_to});
+    }
+    return dynamic_args;
 }
 
 }  // namespace ttnn::operations::uniform
