@@ -7,6 +7,7 @@ import math
 import os
 import time
 
+import numpy as np
 import pytest
 import torch
 from loguru import logger
@@ -211,11 +212,12 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
 
     vps = VideoPixelShape(batch=1, frames=num_frames, height=height, width=width, fps=24)
     als = AudioLatentShape.from_video_pixel_shape(vps)
-    # AUDIO_LATENT=<path> replays a real generated latent (dumped via LTX_DUMP_AUDIO_LATENT) so
-    # the decoded audio is the actual clip, not vocoder noise on a random latent.
-    _lat = os.environ.get("AUDIO_LATENT")
-    if _lat:
-        latent = torch.load(_lat).float()
+    # Default to the committed real girl-clip latent (39 KB fp16 fixture, dumped from a real gen
+    # via LTX_DUMP_AUDIO_LATENT) so the decode runs on actual content with no transformer/gemma.
+    # AUDIO_LATENT overrides (.npy or .pt); a seeded-random latent is the fallback if neither.
+    _lat = os.environ.get("AUDIO_LATENT") or os.path.join(os.path.dirname(__file__), "data", "girl_audio_latent.npy")
+    if os.path.exists(_lat):
+        latent = (torch.from_numpy(np.load(_lat)) if _lat.endswith(".npy") else torch.load(_lat)).float()
     else:
         torch.manual_seed(0)
         latent = torch.randn(1, als.frames, pipeline.in_channels, dtype=torch.float32) * 0.5
