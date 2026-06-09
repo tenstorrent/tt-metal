@@ -131,6 +131,10 @@ class TT_CCL:
         # signature. One set for the whole model. See get_mla_ring_attention_buffers.
         self.mla_ring_attention_buffers: dict[tuple, dict] = {}
 
+        # Persistent chunked-prefill (ring_mla) gathered-KV scratch buffers shared by every layer's
+        # MLA, keyed by shape signature. See get_mla_chunked_kv_buffer.
+        self.mla_chunked_kv_buffers: dict[tuple, "ttnn.Tensor"] = {}
+
     def get_mla_ring_attention_buffers(
         self,
         *,
@@ -192,6 +196,29 @@ class TT_CCL:
         }
         self.mla_ring_attention_buffers[key] = buffers
         return buffers
+
+    def get_mla_chunked_kv_buffer(self, *, cache_batch, seq_len, kvpe_dim, dtype=ttnn.bfloat8_b):
+        """Lazily allocate (once per mesh) and return the combined gathered-KV scratch buffer used by
+        the chunked-prefill ring_mla op (persistent_output_buffer_kv). It's scratch -- each layer's
+        gather overwrites it, it holds no per-layer state -- and uniform across layers (cache_batch =
+        slot_num*layer_num, seq_len, mesh are all fixed for a model), so one buffer is shared by every
+        layer's MLA instead of re-allocating a full slot_num*layer_num buffer per layer. Replicated
+        across the mesh ([None, None]); cached by shape signature."""
+        import torch
+
+        key = (cache_batch, seq_len, kvpe_dim, dtype)
+        if key not in self.mla_chunked_kv_buffers:
+            self.mla_chunked_kv_buffers[key] = ttnn.from_torch(
+                torch.zeros(cache_batch, 1, seq_len, kvpe_dim),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=[None, None]
+                ),
+            )
+        return self.mla_chunked_kv_buffers[key]
 
     def get_shared_rs_intermediate(self, input_tensor):
         """Lazily allocate (once per mesh) and return the shared reduce_scatter intermediate

@@ -305,30 +305,19 @@ class ttMLA:
 
         # Ring-attention persistent buffers. Chunked prefill (ring_mla) and the standard ring
         # joint SDPA use disjoint buffer sets, so allocate only the one the configured mode needs --
-        # holding both would waste DRAM.
-        # TODO: the chunked _chunked_kv_buf is still allocated per-layer; hoist it into TT_CCL like the
-        # non-chunked branch below (it's a scratch gather buffer, uniform across layers).
+        # holding both would waste DRAM. Both sets are owned once per model by TT_CCL and shared by
+        # every layer's MLA (uniform across layers, scratch / no per-layer state) instead of
+        # re-allocated per layer.
         if self.is_chunked:
-            # Single combined gathered-KV buffer for ring_mla: K and V both come from the latent
-            # kvpe cache, so one (cache_batch, 1, seq_len, kvpe_dim) buffer replaces the separate
-            # per-K/per-V ring-SDPA buffers (and the dummy joint tensors) used in the other mode.
-            #
-            # TODO: reduce DRAM pressure -- ring_mla only ever gathers into the single
-            # kv_cache_batch_idx slot, but the op's TT_FATAL forces gathered-KV batch == cache
-            # batch (slot_num * layer_num). Allocating the full batch wastes DRAM for all but one
-            # slot; relaxing the op to index the gathered buffer independently (always slot 0)
-            # would let this be a batch-1 buffer.
-            cache_batch = self.slot_num * self.layer_num
-            kvpe_dim = self.kv_lora_rank + self.qk_rope_head_dim
-            self._chunked_kv_buf = ttnn.from_torch(
-                torch.zeros(cache_batch, 1, seq_len, kvpe_dim),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=[None, None]
-                ),
+            # Single combined gathered-KV scratch buffer for ring_mla: K and V both come from the
+            # latent kvpe cache, so one (cache_batch, 1, seq_len, kvpe_dim) buffer replaces the
+            # separate per-K/per-V ring-SDPA buffers (and the dummy joint tensors) used in the other
+            # mode. cache_batch = slot_num * layer_num is forced by the op's TT_FATAL (gathered-KV
+            # batch == cache batch) even though only the kv_cache_batch_idx slot is ever gathered.
+            self._chunked_kv_buf = self.tt_ccl.get_mla_chunked_kv_buffer(
+                cache_batch=self.slot_num * self.layer_num,
+                seq_len=seq_len,
+                kvpe_dim=self.kv_lora_rank + self.qk_rope_head_dim,
             )
         else:
             # All-gather K/V outputs + dummy joint_q/kv/v placeholders are uniform across layers
