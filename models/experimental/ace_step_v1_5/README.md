@@ -152,7 +152,7 @@ The denoise loop runs DiT forwards on TTNN; on BH_QB the per-step CFG (APG/ADG) 
 | 5 Hz LM forward | **TTNN** | 1×1 preprocess chip; `--pytorch-lm` or `ACE_STEP_MESH_HOST_PREPROCESS=1` → host PyTorch |
 | LM tokenize / constrained FSM | **Host** | HF `AutoTokenizer` + metadata FSM (not the causal LM matmuls) |
 | Qwen3 caption + lyric embed | **TTNN** | 1×1 preprocess chip (host PyTorch if `ACE_STEP_MESH_HOST_PREPROCESS=1`) |
-| Audio-code → 25 Hz hints | **TTNN** if **≤200** codes | **HF PyTorch detokenizer** when **>200** codes (global attention; e.g. ~41 s+ @ 5 Hz). Cap: `ACE_STEP_DETOK_CHUNK_CODES` (default 200) |
+| Audio-code → 25 Hz hints | **TTNN** (chunked) | **≤200 codes/forward** (`ACE_STEP_DETOK_CHUNK_CODES`); longer streams use multiple TTNN forwards. Opt-in HF: `ACE_STEP_PYTORCH_DETOK=1` |
 | Condition encoder | **TTNN** | 1×1 preprocess for **<30 s** (<750 latent frames); **deferred to 2×2 DiT mesh** at **≥30 s** (avoids 1×1 readback drift) |
 | DiT denoise forward | **TTNN** | Opt-in HF DiT: `ACE_STEP_PYTORCH_DIT=1` |
 | Latent noise init | **On mesh** (short) / **Host CPU** (long) | With default `--use-trace`, latents stay on device for **≤15 s**; trace is forced off at **≥30 s** → host latent init |
@@ -178,7 +178,7 @@ Automatic behavior (no extra flags):
 - **Condition encode on DiT mesh** — avoids 1×1 readback drift at ≥750 latent frames.
 - **Host latent sampler** — latent init on CPU when trace is off (forced at ≥30 s on mesh); Euler/APG/ADG always on CPU on multi-device mesh.
 - **Wider VAE overlap** — fewer tile-boundary artifacts on decode.
-- **Audio codes** — demo sets `ACE_STEP_MAX_AUDIO_CODES` from `--duration_sec`; streams >200 codes use the HF PyTorch detokenizer (see table above).
+- **Audio codes** — demo sets `ACE_STEP_MAX_AUDIO_CODES` from `--duration_sec`; long streams use chunked TTNN detokenizer forwards (200 codes/forward by default).
 
 ### Weight caching (avoid reloading from disk)
 
@@ -260,7 +260,8 @@ python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
 |----------|---------|
 | `ACE_STEP_MESH_DEVICE` / `MESH_DEVICE` | Default mesh SKU if `--mesh-device` omitted |
 | `ACE_STEP_MAX_AUDIO_CODES` | LM audio-code planning cap (auto **350** for 60s via demo) |
-| `ACE_STEP_DETOK_CHUNK_CODES` | Max codes per TTNN detokenizer forward (default **200**, L1 limit; longer streams use HF PyTorch detokenizer) |
+| `ACE_STEP_DETOK_CHUNK_CODES` | Max codes per TTNN detokenizer forward (default **200**, L1 limit; longer streams use multiple chunked TTNN forwards) |
+| `ACE_STEP_PYTORCH_DETOK=1` | HF PyTorch detokenizer instead of TTNN (A/B debug) |
 | `ACE_STEP_VAE_QUALITY=1` | Force BF16 VAE decode on mesh |
 | `ACE_STEP_DEMO_PERF_LOG=0` | Disable `[ace_step_v1_5][perf]` timing tables (on by default; set `=1` to force on) |
 | `ACE_STEP_DISABLE_WEIGHT_CACHE=1` | Disable in-memory weight reuse |

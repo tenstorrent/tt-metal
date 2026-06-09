@@ -1321,8 +1321,8 @@ def ace_step_configure_audio_code_limits(duration_sec: float) -> int:
     """Ensure ``ACE_STEP_MAX_AUDIO_CODES`` covers the LM stream for *duration_sec*.
 
     Only ``ACE_STEP_MAX_AUDIO_CODES`` is auto-set. ``ACE_STEP_DETOK_CHUNK_CODES`` stays at
-    the L1-safe default (200): raising it causes TTNN OOM on ~300-code 60 s forwards.
-    Streams longer than the chunk cap use the HF PyTorch detokenizer instead.
+    the L1-safe default (200): raising it causes TTNN OOM on ~300-code single forwards.
+    Longer streams use chunked TTNN detokenizer forwards (``ACE_STEP_PYTORCH_DETOK=1`` for HF).
     """
     limit = ace_step_audio_code_limit_for_duration(duration_sec)
     configured = False
@@ -1339,9 +1339,10 @@ def ace_step_configure_audio_code_limits(duration_sec: float) -> int:
             flush=True,
         )
         if expected > chunk:
+            n_forwards = (expected + chunk - 1) // chunk
             print(
-                f"[ace_step_v1_5] note: expect~{expected} audio codes → HF PyTorch detokenizer "
-                f"(TTNN chunk cap {chunk} for L1)",
+                f"[ace_step_v1_5] note: expect~{expected} audio codes → TTNN detokenizer "
+                f"({n_forwards} chunked forwards, {chunk} codes/forward)",
                 flush=True,
             )
     elif active < expected:

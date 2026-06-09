@@ -245,6 +245,89 @@ def test_detok_chunk_n_default():
     assert ace_step_detok_chunk_n() == ACE_STEP_DETOK_L1_CHUNK_CODES
 
 
+def test_preprocess_detok_shim_uses_ttnn_for_long_streams(monkeypatch):
+    """Default shim must not call HF detok when n_codes > chunk (chunked TTNN instead)."""
+    from unittest.mock import MagicMock
+
+    import torch
+
+    from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import attach_payload_preprocess_ttnn
+
+    monkeypatch.delenv("ACE_STEP_PYTORCH_DETOK", raising=False)
+    ttnn_forward = MagicMock(return_value=MagicMock(name="hid_tt"))
+    import ttnn
+
+    monkeypatch.setattr(ttnn, "to_torch", lambda hid_tt: torch.zeros(1, 1500, 64))
+
+    class _Handler:
+        device = torch.device("cpu")
+        dtype = torch.float32
+        text_tokenizer = type("Tok", (), {"pad_token_id": 0})()
+
+        def infer_text_embeddings(self, x):
+            return x
+
+        def infer_lyric_embeddings(self, x):
+            return x
+
+        def _decode_audio_codes_to_latents(self, code_str: str):
+            raise AssertionError("HF detok must not run on default long-stream path")
+
+    handler = _Handler()
+    fake_detok = type("D", (), {"device": object(), "forward": ttnn_forward})()
+    restore = attach_payload_preprocess_ttnn(
+        handler,
+        tt_qwen_encoder=type("Q", (), {"device": object()})(),
+        tt_audio_detokenizer=fake_detok,
+        use_trace=False,
+    )
+    try:
+        codes = "".join(f"<|audio_code_{i}|>" for i in range(300))
+        out = handler._decode_audio_codes_to_latents(codes)
+        assert out is not None
+        assert tuple(out.shape) == (1, 1500, 64)
+        ttnn_forward.assert_called_once()
+    finally:
+        restore()
+
+
+def test_preprocess_detok_shim_pytorch_opt_in(monkeypatch):
+    """ACE_STEP_PYTORCH_DETOK=1 must route to HF orig_decode."""
+    from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import attach_payload_preprocess_ttnn
+
+    monkeypatch.setenv("ACE_STEP_PYTORCH_DETOK", "1")
+
+    class _Handler:
+        device = __import__("torch").device("cpu")
+        dtype = __import__("torch").float32
+        text_tokenizer = type("Tok", (), {"pad_token_id": 0})()
+        hf_called = False
+
+        def infer_text_embeddings(self, x):
+            return x
+
+        def infer_lyric_embeddings(self, x):
+            return x
+
+        def _decode_audio_codes_to_latents(self, code_str: str):
+            self.hf_called = True
+            return __import__("torch").zeros(1, 1500, 64)
+
+    handler = _Handler()
+    restore = attach_payload_preprocess_ttnn(
+        handler,
+        tt_qwen_encoder=type("Q", (), {"device": object()})(),
+        tt_audio_detokenizer=type("D", (), {"forward": lambda self, s: None})(),
+        use_trace=False,
+    )
+    try:
+        codes = "".join(f"<|audio_code_{i}|>" for i in range(300))
+        handler._decode_audio_codes_to_latents(codes)
+        assert handler.hf_called
+    finally:
+        restore()
+
+
 def test_configure_audio_code_limits_respects_existing_env(monkeypatch):
     from models.experimental.ace_step_v1_5.ttnn_impl import math_perf_env as m
 

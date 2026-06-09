@@ -461,23 +461,40 @@ def attach_payload_preprocess_ttnn(
 
         n_codes = len(parse_audio_code_string(code_str or ""))
         chunk_n = ace_step_detok_chunk_n()
-        if n_codes > chunk_n and orig_decode is not None:
-            # TTNN detokenizer cannot fit >chunk_n codes in L1; chunked TTNN has no cross-chunk
-            # attention. HF PyTorch path preserves global attention for 60 s+ clips.
-            print(
-                f"[ace_step_v1_5] detokenizer: {n_codes} audio codes > TTNN L1 chunk {chunk_n} "
-                "→ HF PyTorch detokenizer",
-                flush=True,
+        use_pytorch_detok = os.environ.get("ACE_STEP_PYTORCH_DETOK", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        if use_pytorch_detok and orig_decode is not None:
+            logger.info(
+                "[detokenizer] ACE_STEP_PYTORCH_DETOK=1: HF PyTorch detokenizer for {} codes",
+                n_codes,
             )
             return orig_decode(code_str)
         if tt_audio_detokenizer is None:
             if orig_decode is None:
                 return None
             return orig_decode(code_str)
-        if use_trace and hasattr(tt_audio_detokenizer, "forward_traced"):
-            hid_tt = tt_audio_detokenizer.forward_traced(code_str)
-        else:
-            hid_tt = tt_audio_detokenizer.forward(code_str)
+        if n_codes > chunk_n:
+            n_forwards = (n_codes + chunk_n - 1) // chunk_n
+            logger.info(
+                "[detokenizer] {} audio codes → TTNN chunked detokenizer ({} forwards, {} codes/forward)",
+                n_codes,
+                n_forwards,
+                chunk_n,
+            )
+        try:
+            if use_trace and hasattr(tt_audio_detokenizer, "forward_traced"):
+                hid_tt = tt_audio_detokenizer.forward_traced(code_str)
+            else:
+                hid_tt = tt_audio_detokenizer.forward(code_str)
+        except Exception as exc:
+            raise RuntimeError(
+                f"TTNN detokenizer failed for {n_codes} audio codes "
+                f"(chunk={chunk_n}; set ACE_STEP_PYTORCH_DETOK=1 for HF fallback): {exc}"
+            ) from exc
         if hid_tt is None:
             return None
         out = ttnn.to_torch(hid_tt).float()
