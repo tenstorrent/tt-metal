@@ -138,6 +138,7 @@ void kernel_main() {
                 break;
             }
         }
+
         if (terminated) {
             break;
         }
@@ -162,6 +163,12 @@ void kernel_main() {
             socket_push_pages(sender_socket, 1);
             fabric_socket_notify_receiver(sender_socket, fabric_connection, socket_packet_header_addr);
         }
+
+        // TODO: Send metadata (1 page)
+        // if (metadata_enabled) {
+        //     1. Read metadata page (from DRAM)
+        //     2. Send page to socket
+        // }
 
         // 3. Release the sender worker grid (consumed_sem) so it can overwrite
         //    the backing tensor with the next iteration's slice.

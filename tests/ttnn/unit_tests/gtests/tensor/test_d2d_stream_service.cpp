@@ -18,8 +18,8 @@
 //   * Service cores: ServiceCoreManager only claims cores on Blackhole / UBB
 //     Galaxy clusters under Fast Dispatch (mirrors the precondition inside
 //     create_pair), so we skip on other clusters.
-//   * >= 2 devices in a 2D mesh: a sender/receiver pair needs two distinct
-//     submeshes (1x1<->1x1, and 1x4<->1x4 for the multi-socket cases).
+//   * >= 2x2 mesh: a sender/receiver pair needs two distinct submeshes
+//     (1x1<->1x1 for single-chip cases; 1x2<->1x2 for multi-socket cases).
 
 #include <chrono>
 #include <cstdint>
@@ -454,19 +454,19 @@ TEST_F(D2DStreamServiceTest, CreatableSingleChipPair) {
     verify_creatable(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}));
 }
 
-// 1x4 <-> 1x4 (exercises the per-coord SocketConnection list and the 1:1 coord
-// mapping with > 1 socket).
+// 1x2 <-> 1x2 (exercises the per-coord SocketConnection list and the 1:1 coord
+// mapping with > 1 socket). Row 0 is the sender, row 1 is the receiver.
 TEST_F(D2DStreamServiceTest, CreatableRowPair) {
     if (!service_cores_supported()) {
         GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
     }
     const auto shape = this->mesh_device_->shape();
-    if (shape.dims() != 2 || shape[0] < 2 || shape[1] < 4) {
-        GTEST_SKIP() << "Need a >= 2x4 mesh to carve 1x4 <-> 1x4 submeshes; got " << shape;
+    if (shape.dims() != 2 || shape[0] < 2 || shape[1] < 2) {
+        GTEST_SKIP() << "Need a >= 2x2 mesh to carve 1x2 <-> 1x2 submeshes; got " << shape;
     }
 
-    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 4), MeshCoordinate(0, 0));
-    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 4), MeshCoordinate(1, 0));
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(0, 0));
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(1, 0));
 
     verify_creatable(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}));
 }
@@ -510,18 +510,18 @@ TEST_F(D2DStreamServiceTest, TransferSingleChipPair) {
     verify_transfer(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}));
 }
 
-// Same single transfer across a 1x4 row pair (exercises > 1 socket / coord).
+// Same single transfer across a 1x2 row pair (exercises > 1 socket / coord).
 TEST_F(D2DStreamServiceTest, TransferRowPair) {
     if (!service_cores_supported()) {
         GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
     }
     const auto shape = this->mesh_device_->shape();
-    if (shape.dims() != 2 || shape[0] < 2 || shape[1] < 4) {
-        GTEST_SKIP() << "Need a >= 2x4 mesh to carve 1x4 <-> 1x4 submeshes; got " << shape;
+    if (shape.dims() != 2 || shape[0] < 2 || shape[1] < 2) {
+        GTEST_SKIP() << "Need a >= 2x2 mesh to carve 1x2 <-> 1x2 submeshes; got " << shape;
     }
 
-    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 4), MeshCoordinate(0, 0));
-    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 4), MeshCoordinate(1, 0));
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(0, 0));
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(1, 0));
 
     verify_transfer(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}));
 }
@@ -545,18 +545,18 @@ TEST_F(D2DStreamServiceTest, HandshakeSingleChipPair) {
     verify_handshake(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), /*num_iters=*/4);
 }
 
-// Worker handshake across a 1x4 row pair (multiple sockets / coords).
+// Worker handshake across a 1x2 row pair (multiple sockets / coords).
 TEST_F(D2DStreamServiceTest, HandshakeRowPair) {
     if (!service_cores_supported()) {
         GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
     }
     const auto shape = this->mesh_device_->shape();
-    if (shape.dims() != 2 || shape[0] < 2 || shape[1] < 4) {
-        GTEST_SKIP() << "Need a >= 2x4 mesh to carve 1x4 <-> 1x4 submeshes; got " << shape;
+    if (shape.dims() != 2 || shape[0] < 2 || shape[1] < 2) {
+        GTEST_SKIP() << "Need a >= 2x2 mesh to carve 1x2 <-> 1x2 submeshes; got " << shape;
     }
 
-    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 4), MeshCoordinate(0, 0));
-    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 4), MeshCoordinate(1, 0));
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(0, 0));
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(1, 0));
 
     verify_handshake(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), /*num_iters=*/4);
 }
@@ -580,18 +580,18 @@ TEST_F(D2DStreamServiceTest, ReuseSingleChipPair) {
     verify_reuse(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), /*num_rounds=*/4);
 }
 
-// Reuse across a 1x4 row pair.
+// Reuse across a 1x2 row pair.
 TEST_F(D2DStreamServiceTest, ReuseRowPair) {
     if (!service_cores_supported()) {
         GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
     }
     const auto shape = this->mesh_device_->shape();
-    if (shape.dims() != 2 || shape[0] < 2 || shape[1] < 4) {
-        GTEST_SKIP() << "Need a >= 2x4 mesh to carve 1x4 <-> 1x4 submeshes; got " << shape;
+    if (shape.dims() != 2 || shape[0] < 2 || shape[1] < 2) {
+        GTEST_SKIP() << "Need a >= 2x2 mesh to carve 1x2 <-> 1x2 submeshes; got " << shape;
     }
 
-    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 4), MeshCoordinate(0, 0));
-    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 4), MeshCoordinate(1, 0));
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(0, 0));
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(1, 0));
 
     verify_reuse(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), /*num_rounds=*/4);
 }
