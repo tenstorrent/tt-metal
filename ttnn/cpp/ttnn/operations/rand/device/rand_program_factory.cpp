@@ -31,7 +31,8 @@ constexpr const char* COMPUTE_KERNEL_PATH = "ttnn/cpp/ttnn/operations/rand/devic
 // kernels via the dfb:: / ta:: / args:: accessor namespaces.
 constexpr const char* COMPUTE_KERNEL = "compute";
 constexpr const char* WRITER_KERNEL = "writer";
-constexpr const char* RAND_DFB = "rand_tiles";  // compute (producer) -> writer (consumer)
+constexpr const char* RAND_DFB = "rand_tiles";    // compute (producer) -> writer (consumer), fp32 intermediate
+constexpr const char* RAND_OUT_DFB = "rand_out";  // writer-owned output-dtype scratch (the descriptor dst CB)
 constexpr const char* OUTPUT_TENSOR = "output";
 
 // One rand tile in flight is produced and consumed at a time; double-buffer the DFB.
@@ -124,17 +125,24 @@ m2::ProgramSpec RandDeviceOperation::create_program_spec(
     const immutable_info_t info = extract_immutable_info(operation_attributes, tensor_args);
     const auto ws = rand_work_split(info);
 
+    // Two DFBs mirror the descriptor-era two CBs: an fp32 intermediate the compute generator fills
+    // (fp32_dest_acc_en keeps values in [from,to)), and an output-dtype scratch the writer narrows
+    // into before the NoC write. fp32 output is written straight from the intermediate; bf16 output
+    // is truncated (high 16 bits) into the scratch. Keeping the intermediate fp32 + truncating —
+    // rather than packing to bf16 in compute — preserves the strict [from,to) bound; a hardware pack
+    // to bf16 rounds and can lift the top of the range up to `to`.
+    const auto fp32_format = tt::DataFormat::Float32;
     const auto out_data_format = datatype_to_dataformat_converter(info.output_spec.data_type());
-    const uint32_t out_tile_size = tile_size(out_data_format);
-
-    // One DFB carries rand tiles from the compute producer to the writer consumer. Unlike the
-    // descriptor era (a Float32 intermediate CB + a separate dst CB for the bf16 narrowing), the
-    // DFB holds the OUTPUT dtype directly: the compute kernel packs fp32 dest -> output format at
-    // pack time, so the writer is a trivial, dtype-agnostic DFB -> tensor copy (no scratch buffer).
     m2::DataflowBufferSpec rand_dfb{
         .unique_id = RAND_DFB,
-        .entry_size = out_tile_size,
+        .entry_size = tile_size(fp32_format),
         .num_entries = RAND_DFB_NUM_ENTRIES,
+        .data_format_metadata = fp32_format,
+    };
+    m2::DataflowBufferSpec rand_out_dfb{
+        .unique_id = RAND_OUT_DFB,
+        .entry_size = tile_size(out_data_format),
+        .num_entries = 1,  // fixed scratch slot, reserved once and reused (as the descriptor dst CB was)
         .data_format_metadata = out_data_format,
     };
 
@@ -146,11 +154,9 @@ m2::ProgramSpec RandDeviceOperation::create_program_spec(
         .dfb_bindings = {m2::ProducerOf(RAND_DFB, RAND_DFB)},
         .runtime_arg_schema =
             {
-                .runtime_arg_names = {"start_id", "num_tiles"},  // per-node (static work split)
-                // Broadcast: one base seed for the whole device + the [from,to) range. The per-core
-                // seed distinctness is recovered IN-KERNEL as base_seed + start_id — so the only
-                // per-dispatch dynamic work here is three broadcast scalars, not one map per core.
-                .common_runtime_arg_names = {"seed", "from", "to"},
+                // All per-node, as in the descriptor-era kernel: seed/from/to are dynamic
+                // (hash-excluded, re-applied each dispatch); start_id/num_tiles are the static work split.
+                .runtime_arg_names = {"seed", "from", "to", "start_id", "num_tiles"},
             },
         .hw_config =
             m2::ComputeHardwareConfig{
@@ -161,13 +167,26 @@ m2::ProgramSpec RandDeviceOperation::create_program_spec(
             },
     };
 
-    // Writer kernel: CONSUMER of the rand DFB. Streams each entry to the output tensor via a
-    // TensorAccessor binding. No compile-time TensorAccessorArgs and no OUTPUT_DTYPE_* defines:
-    // the tensor binding owns the accessor payload, and the DFB already holds the output dtype.
+    // Writer kernel: CONSUMER of the fp32 intermediate DFB and PRODUCER of the output-dtype scratch
+    // DFB. fp32 output is written straight from the intermediate; bf16 output is narrowed into the
+    // scratch. The path is selected by an OUTPUT_DTYPE_* define, as in the descriptor era; only
+    // fp32/bf16 are supported, so reject anything else — fail fast rather than emit a hanging program.
+    m2::KernelSpec::CompilerOptions writer_opts;
+    switch (info.output_spec.data_type()) {
+        case DataType::BFLOAT16: writer_opts.defines.emplace_back("OUTPUT_DTYPE_BFLOAT16", "1"); break;
+        case DataType::FLOAT32: writer_opts.defines.emplace_back("OUTPUT_DTYPE_FLOAT32", "1"); break;
+        default: TT_THROW("RandDeviceOperation: unsupported output dtype for writer kernel");
+    }
     m2::KernelSpec writer_kernel{
         .unique_id = WRITER_KERNEL,
         .source = std::filesystem::path{WRITER_KERNEL_PATH},
-        .dfb_bindings = {m2::ConsumerOf(RAND_DFB, RAND_DFB)},
+        .compiler_options = std::move(writer_opts),
+        // Writer owns the output scratch: bound as both producer and consumer so the DFB has both
+        // endpoints (Metal 2.0 requires a consumer). The kernel uses it as a fixed scratch slot.
+        .dfb_bindings =
+            {m2::ConsumerOf(RAND_DFB, RAND_DFB),
+             m2::ProducerOf(RAND_OUT_DFB, RAND_OUT_DFB),
+             m2::ConsumerOf(RAND_OUT_DFB, RAND_OUT_DFB)},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = OUTPUT_TENSOR}},
         .runtime_arg_schema =
             {
@@ -179,7 +198,7 @@ m2::ProgramSpec RandDeviceOperation::create_program_spec(
     m2::ProgramSpec spec;
     spec.name = "rand";
     spec.kernels = {std::move(compute_kernel), std::move(writer_kernel)};
-    spec.dataflow_buffers = {std::move(rand_dfb)};
+    spec.dataflow_buffers = {std::move(rand_dfb), std::move(rand_out_dfb)};
     spec.tensor_parameters = {m2::TensorParameter{.unique_id = OUTPUT_TENSOR, .spec = info.output_spec}};
     // Both kernels run on every work core; per-core differences live in the runtime args, not here.
     spec.work_units = {m2::WorkUnitSpec{
@@ -220,31 +239,29 @@ m2::ProgramRunArgs RandDeviceOperation::create_static_args(
 // ============================================================================
 m2::ProgramRunArgs RandDeviceOperation::create_dynamic_args(
     const operation_attributes_t& operation_attributes,
-    const tensor_args_t& /*tensor_args*/,
+    const tensor_args_t& tensor_args,
     Tensor& output,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    // The per-device seed offset only matters on a sharded mesh; computing it needs the core count,
-    // so do the work split ONLY then. On the common (non-sharded) path there is no per-core work at
-    // all here — just the three broadcast scalars below.
-    uint32_t device_seed_offset = 0;
-    if (!operation_attributes.mesh_dim_is_sharded.empty()) {
-        const auto ws = rand_work_split_grid(
-            output.device()->compute_with_storage_grid_size(), output.physical_volume() / constants::TILE_HW);
-        device_seed_offset = rand_device_seed_offset(operation_attributes, mesh_dispatch_coordinate, ws.cores.size());
-    }
+    // Per-core seed/from/to, exactly as the descriptor era: derive the full work split (for the core
+    // list + index), give each core a distinct seed (base + core index, plus the per-device offset on
+    // a sharded mesh), and repeat from/to per core. These are excluded from the program hash and
+    // re-applied on every dispatch.
+    const auto ws = rand_work_split(extract_immutable_info(operation_attributes, tensor_args));
+    const uint32_t device_seed_offset =
+        rand_device_seed_offset(operation_attributes, mesh_dispatch_coordinate, ws.cores.size());
 
     const float eps = 1e-6f;
     const uint32_t from_bits = std::bit_cast<uint32_t>(operation_attributes.from);
     const uint32_t to_bits = std::bit_cast<uint32_t>(operation_attributes.to - eps);
-    // ONE base seed for the device (per-core distinctness is base + start_id, computed in-kernel).
-    // attrs.seed == 0 means "non-deterministic": draw a fresh base each dispatch.
-    const uint32_t base_seed =
-        operation_attributes.seed != 0 ? operation_attributes.seed + device_seed_offset : get_random_seed();
 
-    // No per-core runtime_arg_values: all three dynamic values are broadcast. Zero per-core map
-    // allocations per dispatch — this is the whole point of moving seed to the common channel.
     m2::ProgramRunArgs::KernelRunArgs compute_args{.kernel_spec_name = COMPUTE_KERNEL};
-    compute_args.common_runtime_arg_values = {{"seed", base_seed}, {"from", from_bits}, {"to", to_bits}};
+    for (int i = 0; i < static_cast<int>(ws.cores.size()); ++i) {
+        const uint32_t seed = operation_attributes.seed != 0
+                                  ? operation_attributes.seed + static_cast<uint32_t>(i) + device_seed_offset
+                                  : get_random_seed();
+        compute_args.runtime_arg_values.push_back(
+            {ws.cores[i], {{"seed", seed}, {"from", from_bits}, {"to", to_bits}}});
+    }
 
     m2::ProgramRunArgs params;
     params.kernel_run_args = {std::move(compute_args)};
