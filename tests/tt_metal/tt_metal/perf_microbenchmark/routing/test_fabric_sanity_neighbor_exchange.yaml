@@ -198,3 +198,7 @@ Tests:
     defaults:
       ftype: unicast
       size: 32
+      num_packets: 30000
+
+    patterns:
+      - type: neighbor_exchange

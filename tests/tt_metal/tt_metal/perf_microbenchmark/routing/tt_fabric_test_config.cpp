@@ -1099,6 +1099,15 @@ bool TestConfigBuilder::should_skip_test_on_platform(const ParsedTestConfig& tes
             }
         }
     }
+    if (device_info_provider_.is_multi_mesh() && (test_config.fabric_setup.topology == Topology::Linear ||
+                                                  test_config.fabric_setup.topology == Topology::Ring)) {
+        log_info(
+            LogTest,
+            "Skipping test '{}' - {} topology is not compatible with a multi-mesh fabric",
+            test_config.name,
+            test_config.fabric_setup.topology);
+        return true;
+    }
     return false;
 }
 

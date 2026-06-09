@@ -5,14 +5,16 @@ show_help() {
     cat << EOF
 Usage: $0 --hosts <comma-separated-host-list> --image <docker-image> [OPTIONS]
 
-Run fabric tests on 4x8, 4x32, or 8x16 cluster configuration.
+Run fabric tests on 4x8, 4x32, 8x16, or 64x8 cluster configuration.
 
 Required Options:
     --hosts <host-list>                 Comma-separated list of hosts (single host for 4x8)
     --image <docker-image>              Docker image to use ("none" to use local build)
 
 Optional:
-    --config <4x8|4x32|8x16|4x8z|2x4x4z|4x32z|8x4x4z>  Mesh configuration (default: 4x32)
+    --config <4x8|4x32|8x16|64x8|4x8z|2x4x4z|4x32z|4x32x4|8x4x4z>  Mesh configuration (default: 4x32)
+                                        64x8 is a single mesh spanning 16 hosts (host_topology 8x2),
+                                        launched like 4x32/8x16 but with one MPI rank per host (16 ranks).
                                         The *z configs are multi-mesh layouts that exercise Z links
                                         (inter-mesh) in addition to the intra-mesh N/S/E/W links.
                                         They launch one MPI rank per mesh, each with its own TT_MESH_ID.
@@ -26,12 +28,16 @@ Optional:
                                         4x8 default:   tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
                                         4x32 default:  tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto
                                         8x16 default:  tt_metal/fabric/mesh_graph_descriptors/16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto
+                                        64x8 default:  tt_metal/fabric/mesh_graph_descriptors/64x8_16_bh_galaxy_mesh.textproto
+                                                       (single 64x8 mesh across 16 hosts; one MPI rank per host)
                                         4x8z default:  tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_4x4x2_z_graph_descriptor.textproto
                                                        (single galaxy split into 4 Z-connected 4x2 meshes)
                                         2x4x4z default: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_2x4x4_z_graph_descriptor.textproto
                                                        (single galaxy split into 2 Z-connected 4x4 meshes)
                                         4x32z default:  tt_metal/fabric/mesh_graph_descriptors/quad_bh_galaxy_4x4x8_z_torus_graph_descriptor.textproto
                                                        (4 galaxies as 4 Z-connected 8x4 torus meshes)
+                                        4x32x4 default: tt_metal/fabric/mesh_graph_descriptors/4_quad_bh_galaxy_4x32x4_torus_z_graph_descriptor.textproto
+                                                       (4 fully-connected 32x4 torus meshes, one per host)
                                         8x4x4z default: tt_metal/fabric/mesh_graph_descriptors/quad_bh_galaxy_8x4x4_z_graph_descriptor.textproto
                                                        (8 Z-connected 4x4 meshes across 4 galaxies; even single-host, odd split 2x1)
     --test-binary <path>                Path to test binary
@@ -59,10 +65,14 @@ OUTPUT_DIR="fabric_test_logs"
 MESH_GRAPH_DESC_PATH_4x8="tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
 MESH_GRAPH_DESC_PATH_4x32="tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
 MESH_GRAPH_DESC_PATH_8x16="tt_metal/fabric/mesh_graph_descriptors/16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
+# 64x8: single 64x8 mesh spanning 16 hosts (host_topology 8x2); launched like 4x32/8x16.
+MESH_GRAPH_DESC_PATH_64x8="tt_metal/fabric/mesh_graph_descriptors/64x8_16_bh_galaxy_mesh.textproto"
 MESH_GRAPH_DESC_PATH_4x8z="tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_4x4x2_z_graph_descriptor.textproto"
 # 2x4x4z: single galaxy split into 2 Z-connected 4x4 meshes (dual_4x4 layout).
 MESH_GRAPH_DESC_PATH_2x4x4z="tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_2x4x4_z_graph_descriptor.textproto"
 MESH_GRAPH_DESC_PATH_4x32z="tt_metal/fabric/mesh_graph_descriptors/quad_bh_galaxy_4x4x8_z_torus_graph_descriptor.textproto"
+# 4x32x4: 4 fully-connected 32x4 torus meshes (one host per mesh.
+MESH_GRAPH_DESC_PATH_4x32x4="tt_metal/fabric/mesh_graph_descriptors/4_quad_bh_galaxy_4x32x4_torus_z_graph_descriptor.textproto"
 MESH_GRAPH_DESC_PATH_8x4x4z="tt_metal/fabric/mesh_graph_descriptors/quad_bh_galaxy_8x4x4_z_graph_descriptor.textproto"
 CONFIG="4x32"
 MESH_GRAPH_DESC_PATH=""
@@ -104,8 +114,8 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             CONFIG="$2"
-            if [[ "$CONFIG" != "4x8" && "$CONFIG" != "4x32" && "$CONFIG" != "8x16" && "$CONFIG" != "4x8z" && "$CONFIG" != "2x4x4z" && "$CONFIG" != "4x32z" && "$CONFIG" != "8x4x4z" ]]; then
-                echo "Error: --config must be one of '4x8', '4x32', '8x16', '4x8z', '2x4x4z', '4x32z', or '8x4x4z'"
+            if [[ "$CONFIG" != "4x8" && "$CONFIG" != "4x32" && "$CONFIG" != "8x16" && "$CONFIG" != "64x8" && "$CONFIG" != "4x8z" && "$CONFIG" != "2x4x4z" && "$CONFIG" != "4x32z" && "$CONFIG" != "4x32x4" && "$CONFIG" != "8x4x4z" ]]; then
+                echo "Error: --config must be one of '4x8', '4x32', '8x16', '64x8', '4x8z', '2x4x4z', '4x32z', '4x32x4', or '8x4x4z'"
                 echo ""
                 show_help
                 exit 1
@@ -207,12 +217,16 @@ if [[ "$MESH_GRAPH_DESC_PATH_EXPLICIT" == false ]]; then
         MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_4x32"
     elif [[ "$CONFIG" == "8x16" ]]; then
         MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_8x16"
+    elif [[ "$CONFIG" == "64x8" ]]; then
+        MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_64x8"
     elif [[ "$CONFIG" == "4x8z" ]]; then
         MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_4x8z"
     elif [[ "$CONFIG" == "2x4x4z" ]]; then
         MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_2x4x4z"
     elif [[ "$CONFIG" == "4x32z" ]]; then
         MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_4x32z"
+    elif [[ "$CONFIG" == "4x32x4" ]]; then
+        MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_4x32x4"
     elif [[ "$CONFIG" == "8x4x4z" ]]; then
         MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_8x4x4z"
     fi
@@ -220,7 +234,7 @@ fi
 
 # Multi-mesh (Z) configs need a multi-mesh-aware test config; fall back to the
 # multi-mesh sanity config unless the user explicitly passed --test-config.
-if [[ "$TEST_CONFIG_EXPLICIT" == false && ( "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || "$CONFIG" == "8x4x4z" ) ]]; then
+if [[ "$TEST_CONFIG_EXPLICIT" == false && ( "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || "$CONFIG" == "4x32x4" || "$CONFIG" == "8x4x4z" ) ]]; then
     TEST_CONFIG="$TEST_CONFIG_Z"
 fi
 
@@ -258,6 +272,30 @@ fi
 if [[ -n "$FILTER" ]]; then
     EXTRA_BINARY_ARGS="$EXTRA_BINARY_ARGS --filter $FILTER"
 fi
+
+# Non-Z multi-host configs are a single mesh (TT_MESH_ID=0) that spans several
+# hosts; we launch one MPI rank per host and let OpenMPI round-robin the ranks
+# across the --host list. The rank count therefore equals the mesh's host count
+# (product of the descriptor's host_topology dims):
+#   4x32 -> host_topology 4x1 = 4 ranks
+#   8x16 -> host_topology 2x2 = 4 ranks
+#   64x8 -> host_topology 8x2 = 16 ranks
+NONZ_NUM_RANKS=4
+if [[ "$CONFIG" == "64x8" ]]; then
+    NONZ_NUM_RANKS=16
+fi
+
+# Assemble the ":"-separated MPMD segments for the non-Z multi-host launch,
+# shared by the docker and no-docker paths. Every rank drives the same single
+# mesh (TT_MESH_ID=0) and descriptor; OpenMPI places one rank per --host entry.
+NONZ_SEGMENTS=()
+for ((i = 0; i < NONZ_NUM_RANKS; i++)); do
+    [[ $i -gt 0 ]] && NONZ_SEGMENTS+=(":")
+    NONZ_SEGMENTS+=(-np 1)
+    NONZ_SEGMENTS+=(-x TT_MESH_ID=0)
+    NONZ_SEGMENTS+=(-x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH")
+    NONZ_SEGMENTS+=("$TEST_BINARY" --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS)
+done
 
 # Resolve TT_VISIBLE_DEVICES for single-host multi-mesh Z configs from tray discovery
 # (tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py --fabric-config).
@@ -600,7 +638,7 @@ print_fabric_final_summary() {
     fi
 }
 
-if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || "$CONFIG" == "8x4x4z" ]]; then
+if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || "$CONFIG" == "4x32x4" || "$CONFIG" == "8x4x4z" ]]; then
     # Multi-mesh Z configs: launch one MPI rank per mesh, each with its own
     # TT_MESH_ID, so the descriptor's inter-mesh (Z) connections are exercised
     # alongside the intra-mesh N/S/E/W links during neighbor exchange.
@@ -641,15 +679,16 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || "$
         write_quad_split_rankfile
         echo "Running multi-mesh 8x4x4z (8 Z-connected 4x4 meshes across 4 hosts, slice-based split; 12 ranks, even=single-host {1,2}, odd=split {3}+next-host {0}); ranks pinned via rankfile."
     else
+        # 4x32z / 4x32x4: one full galaxy per host, 4 inter-connected meshes
+        # (4x32z uses Z links; 4x32x4 uses non-Z fully-connected links). Those
+        # inter-mesh connections only exist between specific physically-adjacent
+        # galaxies, so rank i (== mesh i) MUST land on a deterministic host. We
+        # therefore pin rank i to the i-th --hosts entry (do NOT rely on MPI
+        # round-robin). Provide hosts in the same order as scaleout_configs/full_rankfile.
         NUM_MESHES=4
-        # 4x32z: one full galaxy per host. The Z ring (mesh 0->1->2->3->0) only
-        # exists between specific physically-adjacent galaxies, so rank i (==
-        # mesh i) MUST land on a deterministic host. We therefore pin rank i to
-        # the i-th --hosts entry (do NOT rely on MPI round-robin). Provide hosts
-        # in the same order as scaleout_configs/full_rankfile.
         IFS=',' read -ra Z_RANK_HOSTS <<< "$HOSTS"
         if [[ "${#Z_RANK_HOSTS[@]}" -ne "$NUM_MESHES" ]]; then
-            echo "Error: --config 4x32z requires exactly $NUM_MESHES hosts in --hosts (got ${#Z_RANK_HOSTS[@]})"
+            echo "Error: --config $CONFIG requires exactly $NUM_MESHES hosts in --hosts (got ${#Z_RANK_HOSTS[@]})"
             exit 1
         fi
         Z_RANKFILE="$(mktemp)"
@@ -657,7 +696,7 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || "$
             echo "rank $i=${Z_RANK_HOSTS[$i]} slot=0" >> "$Z_RANKFILE"
         done
         Z_GLOBAL_HOST=(--hostfile "$Z_RANKFILE" --map-by "rankfile:file=$Z_RANKFILE")
-        echo "Running multi-mesh 4x32z (4 Z-connected 8x4 torus galaxies); rank i pinned to host i:"
+        echo "Running multi-mesh $CONFIG (4 Z-connected torus galaxies); rank i pinned to host i:"
         for ((i = 0; i < NUM_MESHES; i++)); do
             echo "  rank $i -> mesh_id $i -> ${Z_RANK_HOSTS[$i]}"
         done
@@ -746,6 +785,9 @@ elif [[ "$DOCKER_IMAGE" == "none" ]]; then
             "$TEST_BINARY" \
             --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE" | highlight_fabric_test_success
     else
+        echo "Running single-mesh $CONFIG across $NONZ_NUM_RANKS hosts (no docker): $HOSTS"
+        echo ""
+
         mpirun-ulfm \
             --tag-output \
             --mca plm_ssh_args "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR" \
@@ -753,26 +795,7 @@ elif [[ "$DOCKER_IMAGE" == "none" ]]; then
             "${MPI_EXTRA_ARGS[@]}" \
             --bind-to none \
             --host "$HOSTS" \
-            -np 1 \
-            -x TT_MESH_ID=0 \
-            -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-            "$TEST_BINARY" \
-            --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
-            -np 1 \
-            -x TT_MESH_ID=0 \
-            -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-            "$TEST_BINARY" \
-            --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
-            -np 1 \
-            -x TT_MESH_ID=0 \
-            -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-            "$TEST_BINARY" \
-            --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
-            -np 1 \
-            -x TT_MESH_ID=0 \
-            -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-            "$TEST_BINARY" \
-            --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE" | highlight_fabric_test_success
+            "${NONZ_SEGMENTS[@]}" |& tee "$LOG_FILE" | highlight_fabric_test_success
     fi
 elif [[ "$CONFIG" == "4x8" ]]; then
     SINGLE_HOST="${HOSTS%%,*}"
@@ -791,32 +814,16 @@ elif [[ "$CONFIG" == "4x8" ]]; then
         "$TEST_BINARY" \
         --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE" | highlight_fabric_test_success
 else
+    echo "Running single-mesh $CONFIG across $NONZ_NUM_RANKS hosts: $HOSTS"
+    echo ""
+
     ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
         --empty-entrypoint \
         --mpi-interface "$MPI_IF" \
         "${MPI_EXTRA_ARGS[@]}" \
         --bind-to none \
         --host "$HOSTS" \
-        -np 1 \
-        -x TT_MESH_ID=0 \
-        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-        "$TEST_BINARY" \
-        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
-        -np 1 \
-        -x TT_MESH_ID=0 \
-        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-        "$TEST_BINARY" \
-        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
-        -np 1 \
-        -x TT_MESH_ID=0 \
-        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-        "$TEST_BINARY" \
-        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS : \
-        -np 1 \
-        -x TT_MESH_ID=0 \
-        -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
-        "$TEST_BINARY" \
-        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE" | highlight_fabric_test_success
+        "${NONZ_SEGMENTS[@]}" |& tee "$LOG_FILE" | highlight_fabric_test_success
 fi
 
 echo ""

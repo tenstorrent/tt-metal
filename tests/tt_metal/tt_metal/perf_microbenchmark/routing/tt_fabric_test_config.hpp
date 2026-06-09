@@ -443,7 +443,9 @@ public:
     std::vector<TestConfig> build_tests(
         const std::vector<ParsedTestConfig>& raw_configs, CmdlineParser& cmdline_parser);
 
-    // Helper function to check if a test should be skipped based on architecture or cluster type.
+    // Helper function to check if a test should be skipped based on architecture, cluster type, or
+    // topology/fabric incompatibilities that must be detected before opening devices (e.g. 1D
+    // Linear/Ring topologies on a multi-mesh fabric).
     bool should_skip_test_on_platform(const ParsedTestConfig& test_config) const;
 
     // Helper function to check if a test should be skipped based on topology incompatibilities.
