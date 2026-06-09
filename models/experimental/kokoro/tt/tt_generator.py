@@ -61,17 +61,13 @@ from .tt_source_module_hn_nsf import (
     preprocess_tt_source_module_hn_nsf,
 )
 from .tt_matmul_memory import (
-    is_l1_width_sharded,
     maybe_reshard_to_caller,
-    pick_l1_activation_mc,
 )
 from .tt_torch_stft import (
     TTTorchSTFT,
     TTTorchSTFTParams,
     preprocess_tt_torch_stft,
 )
-
-_L1_ACTIV_BUDGET_BYTES = 768 * 1024
 
 
 # ---------------------------------------------------------------------------
@@ -480,17 +476,14 @@ class TTGenerator:
         """
         p = self.params
         ck = self.compute_kernel_config
-        B, T_x, C_in = (int(d) for d in x_nlc.shape)
-        picked_mc = pick_l1_activation_mc(
-            memory_config,
-            rows=B * T_x,
-            features=C_in,
-            peak_nbytes=4 * B * T_x * C_in * (4 if x_nlc.dtype == ttnn.float32 else 2),
-            budget_bytes=_L1_ACTIV_BUDGET_BYTES,
-        )
-        # Width-sharded activations need interleaved_to_sharded at every op boundary and
-        # a wide core grid; keep the generator hot path on L1 interleaved instead.
-        activ_mc = ttnn.L1_MEMORY_CONFIG if is_l1_width_sharded(picked_mc) else picked_mc
+        # The L1-activation optimization (pick_l1_activation_mc) is sized from the *initial* input
+        # shape, but the generator activations grow ~prod(upsample_rates)× along the time axis after
+        # the ConvTranspose ups stages.  An L1 memory config selected for the small [B, T_x, C_in]
+        # input is then reused for those upsampled activations, and the conv1d/conv_transpose ops on
+        # L1-interleaved tensors at these shapes return corrupt output (full-forward PCC collapses to
+        # ~0, vs ~0.89 on DRAM).  Keep the conv-heavy generator hot path on the caller's (DRAM)
+        # config; pick_l1_activation_mc remains for the sweep-validated matmul call sites elsewhere.
+        activ_mc = memory_config
 
         har_nlc = self._harmonic_source_path(
             f0,
