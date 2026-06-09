@@ -25,6 +25,10 @@ class VoxtralTTMLP:
         activation_memory_config=ttnn.DRAM_MEMORY_CONFIG,
         ff1_3_program_config=None,
         ff2_program_config=None,
+        w1_mem_config=None,
+        w2_mem_config=None,
+        w3_mem_config=None,
+        ff1_3_in0_shard_mem_config=None,
     ) -> None:
         self.device = device
         self.output_dtype = output_dtype
@@ -33,6 +37,7 @@ class VoxtralTTMLP:
         self.activation_memory_config = activation_memory_config
         self.ff1_3_program_config = ff1_3_program_config
         self.ff2_program_config = ff2_program_config
+        self.ff1_3_in0_shard_mem_config = ff1_3_in0_shard_mem_config
 
         def get_weight(key: str) -> torch.Tensor:
             if key in state_dict:
@@ -50,21 +55,21 @@ class VoxtralTTMLP:
             device=device,
             dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=w1_mem_config or ttnn.DRAM_MEMORY_CONFIG,
         )
         self.w2 = ttnn.from_torch(
             w2,
             device=device,
             dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=w2_mem_config or ttnn.DRAM_MEMORY_CONFIG,
         )
         self.w3 = ttnn.from_torch(
             w3,
             device=device,
             dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=w3_mem_config or ttnn.DRAM_MEMORY_CONFIG,
         )
 
     def __call__(self, x: ttnn.Tensor, *, activation_memory_config=None) -> ttnn.Tensor:
@@ -87,8 +92,17 @@ class VoxtralTTMLP:
         if self.ff2_program_config is not None:
             _ff2_kw["program_config"] = self.ff2_program_config
 
-        w1_out = ttnn.linear(x, self.w1, **_ff1_3_kw)
-        w3_out = ttnn.linear(x, self.w3, **_ff1_3_kw)
+        # For DS matmuls, in0 must be L1 K-width-sharded; shard x then discard the copy.
+        if self.ff1_3_in0_shard_mem_config is not None:
+            x_in = ttnn.to_memory_config(x, self.ff1_3_in0_shard_mem_config)
+        else:
+            x_in = x
+
+        w1_out = ttnn.linear(x_in, self.w1, **_ff1_3_kw)
+        w3_out = ttnn.linear(x_in, self.w3, **_ff1_3_kw)
+
+        if x_in is not x:
+            ttnn.deallocate(x_in)
 
         if self.exact_silu:
             w1_act = ttnn.silu(w1_out, memory_config=ff1_3_out_mem)
