@@ -731,6 +731,7 @@ class WanCheckpoint:
         parallel_config: DiTParallelConfig,
         is_fsdp: bool,
         model_type: str,
+        lora_enabled: bool = False,
     ) -> WanTransformer3DModel:
         """Construct a ``WanTransformer3DModel`` for this checkpoint (weights NOT loaded).
 
@@ -754,6 +755,7 @@ class WanCheckpoint:
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
             model_type=model_type,
+            lora_enabled=lora_enabled,
         )
 
     def load(
