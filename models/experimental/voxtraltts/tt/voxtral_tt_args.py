@@ -219,17 +219,24 @@ def get_VoxtralTTArgs(preloaded_state_dict: Optional[dict[str, torch.Tensor]] = 
             try:
                 kwargs.setdefault("use_hf_rope", True)
                 super().__init__(*args, **kwargs)
-                # Decode SwiGLU gate SiLU: fusing it INTO the w1 DRAM-sharded matmul is SLOWER on
-                # Blackhole — the perf report shows fused w1 at 147us vs the identical plain
-                # 32x3072x9216 matmul (w3) at 110us. With fusion OFF the SiLU folds into the existing
-                # w1*w3 multiply (tt_transformers/mlp.py input_tensor_a_activations) — no extra op — so
-                # w1 runs the plain ~110us config. Default OFF; re-enable with VOXTRAL_W1_FUSE_SILU=1.
-                self.mlp_w1_fuse_silu_decode = os.environ.get("VOXTRAL_W1_FUSE_SILU", "0") == "1"
-                # MLP w1/w3 (3072x9216) interleaved-weight path: weights DRAM-interleaved (mlp.py gate)
-                # so the decode matmul is a 1D mcast (~88us) instead of DRAM-sharded (~110us). Verified
-                # ~1.13x e2e (615->542 ms/frame) with teacher-forced PCC 0.9994. ON by default;
-                # disable with VOXTRAL_MLP_1D=0.
-                self.mlp_interleaved_weights = os.environ.get("VOXTRAL_MLP_1D", "1") == "1"
+                # Decode SwiGLU gate SiLU fusion. Unfusing it (folding SiLU into the w1*w3 bfp8 mul)
+                # is faster (w1 147->110us) BUT perturbs the gated activation enough to flip the
+                # step-1 semantic near-tie in the free-run AR loop, collapsing free-run waveform PCC
+                # 0.77 -> 0.40 (teacher-forced stays 0.9994; bisected — w2/wo 1D are innocent). So
+                # SiLU is FUSED by default to preserve free-run quality. Unfuse with VOXTRAL_W1_FUSE_SILU=0.
+                self.mlp_w1_fuse_silu_decode = os.environ.get("VOXTRAL_W1_FUSE_SILU", "1") == "1"
+                # MLP w1/w3 (3072x9216) interleaved-weight 1D path (~88us vs DRAM-sharded ~110us).
+                # OFF by default: the 1D w1 config cannot fuse SiLU (interleaved weight + DS fused-SiLU
+                # config => "Only L1 buffers can have a CB"), so enabling it forces SiLU unfused, which
+                # drops free-run PCC (see above). Enable with VOXTRAL_MLP_1D=1 (auto-unfuses SiLU).
+                self.mlp_interleaved_weights = os.environ.get("VOXTRAL_MLP_1D", "0") == "1"
+                # w1/w3 1D-interleaved weights are incompatible with fusing SiLU into the w1 DS
+                # dram_matmul. If both are requested, the 1D path wins and SiLU is folded into the mul.
+                if self.mlp_interleaved_weights and self.mlp_w1_fuse_silu_decode:
+                    logger.info(
+                        "VOXTRAL: mlp_interleaved_weights (w1/w3 1D) forces SiLU unfused; ignoring W1_FUSE_SILU."
+                    )
+                    self.mlp_w1_fuse_silu_decode = False
                 # MLP w2 down-proj (9216x3072) interleaved-weight path: weights DRAM-interleaved
                 # (mlp.py gate) + L1-interleaved w2_in/w2_out so the decode matmul is a fully
                 # interleaved 1D mcast (~76us on 48 cores) instead of DRAM-sharded (~103us) — sweep
