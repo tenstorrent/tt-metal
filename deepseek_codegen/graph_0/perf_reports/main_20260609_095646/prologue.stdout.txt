@@ -1,0 +1,11 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 120
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'prologue_start'.
+Using operations until 'layer_0_start'.
+Detected data from 32 devices. Merging device data...
+Writing CSV output to /home/ubuntu/tt-metal/deepseek_codegen/graph_0/perf_reports/main_20260609_095646/prologue.ops.csv
+Warning: Unclassified operation 'ReshapeViewDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to /home/ubuntu/tt-metal/deepseek_codegen/graph_0/perf_reports/main_20260609_095646/prologue.summary.csv.csv
+Plotting PNG stacked report to /home/ubuntu/tt-metal/deepseek_codegen/graph_0/perf_reports/main_20260609_095646/prologue.summary.csv.png

@@ -1,0 +1,24 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 120
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'moe_start'.
+Using operations until 'moe_end'.
+Detected data from 32 devices. Merging device data...
+Writing CSV output to /home/ubuntu/tt-metal/deepseek_codegen/graph_0/perf_reports/main_20260609_095646/moe.ops.csv
+Warning: Unclassified operation 'LayerNormPreAllGatherDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'AllGatherDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ReshapeViewDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'RepeatDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'DeepseekGroupedGateDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'AllToAllDispatchDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'MoeExpertTokenRemapDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'SparseMatmulDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'FullDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'AllToAllCombineDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'DeepseekMoEPostCombineTilizeDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ReduceScatterMinimalAsyncDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'AllGatherAsyncDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'MeshPartitionDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to /home/ubuntu/tt-metal/deepseek_codegen/graph_0/perf_reports/main_20260609_095646/moe.summary.csv.csv
+Plotting PNG stacked report to /home/ubuntu/tt-metal/deepseek_codegen/graph_0/perf_reports/main_20260609_095646/moe.summary.csv.png

@@ -1,0 +1,13 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 120
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'lm_head_start'.
+Using operations until 'lm_head_end'.
+Detected data from 32 devices. Merging device data...
+Writing CSV output to /home/ubuntu/tt-metal/deepseek_codegen/graph_0/perf_reports/main_20260609_095646/lmhead.ops.csv
+Warning: Unclassified operation 'LayerNormPreAllGatherDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'AllGatherDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ArgMaxDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to /home/ubuntu/tt-metal/deepseek_codegen/graph_0/perf_reports/main_20260609_095646/lmhead.summary.csv.csv
+Plotting PNG stacked report to /home/ubuntu/tt-metal/deepseek_codegen/graph_0/perf_reports/main_20260609_095646/lmhead.summary.csv.png

@@ -1,5 +1,81 @@
 # MoE Compute Integration Journal
 
+## BASELINE PROFILED (2026-06-09) — full main.py 2-layer device profile; MoE = 88% of device time
+
+Device recovered after host REBOOT (boot Jun 9 07:48; the Jun-9-00:58 PCIe link-drop cleared). 4x8 mesh
+opens clean (DEVICE_OPEN_OK, EXIT=0, no node-0/TLB/0xffffffff wedge). Profiled the WHOLE `main.py` EAGER
+(default path; trace is gated behind TTXLA_USE_TRACE=1) via the tracy wrapper:
+`python3 -m tracy -r -p main.py` (cold instrumented-kernel compile ~8 min, then run+report; total ~10 min)
+-> report `generated/profiler/reports/2026_06_09_09_56_46/`. Windowed each signpost phase with
+`tt-perf-report --start-signpost <s> --end-signpost <e>`. CSVs: `perf_reports/main_20260609_095646/`.
+
+PER-PHASE device-busy (single eager run, warm ccache):
+  prologue 0.019 ms | attn_0 1.967 ms | mlp_0(DENSE) 0.685 ms | attn_1 1.970 ms | moe 16.112 ms |
+  lm_head 2.463 ms | **FULL(2L) 23.216 ms** (= exact sum of phases; no inter-phase gap).
+attn_0 == attn_1 to 0.2% -> attn/layer solid. Layer 0 = DENSE (mlp_0), layer 1 = MoE (moe). Only ONE
+DeepseekGroupedGate / AllToAllDispatch / AllToAllCombine in the whole run -> main.py has exactly **1 MoE
+layer**, contra the earlier "2x gate" survey note; so layer_id threading is NOT needed for this test.
+
+EXTRAPOLATION to full model (DeepSeek-V3: **61 layers = 3 dense + 58 MoE**; first_k_dense_replace=3,
+moe_layer_freq=1 — public config, none in-repo):
+  EST e2e = prologue + attn*61 + mlp_dense*3 + moe*58 + lm_head
+          = 0.019 + 1.969*61 + 0.685*3 + 16.112*58 + 2.463 = **1059 ms** device-busy / decode step.
+  => **MoE is 88.2%** of full-model device time; attention 11.3%. THE lever is the MoE block.
+
+MoE phase breakdown (16.11 ms, top ops): **SparseMatmul 5.56 ms (x2 = gate_up+down expert matmuls)** |
+AllGather 2.22 ms (x8) | TilizeWithValPadding 2.07 ms (x3) | AllToAllCombine 1.01 ms | ReshapeView
+0.90 ms (x12) | Untilize 0.76 ms (x3) | ... = heavy layout churn + CCL around the sparse matmuls. This is
+the SPARSE path. moe_test's `moe_compute` moe_block was ~2.05 ms device-busy => **integrating moe_compute
+into main.py** (fuses dispatch+w0/w1+act+w2+combine -> removes SparseMatmul + most layout churn + the
+separate combine) is **optimization ITERATION 1** and the core task requirement. PR #45764 combine fix
+staged+verified; run_routed_experts (moe_test, PCC 0.9956) is the reusable swap.
+
+CAVEAT (measurement): single eager-run device-busy (NOT median-of-N, NOT trace steady-state; op-to-op
+host gaps excluded — they're dispatch-bound, see below). Stable enough for ranking + first baseline; will
+hold the method CONSTANT across optimizations for comparability, switching to median/trace only if a win
+lands within run-to-run noise.
+
+## DEVICE PERF measured (2026-06-08) + SCHEDULED: profile main.py + autonomous optimization
+
+**Measured the moe_block device time** via the tracy wrapper + `tt-perf-report`. moe_block (1 MoE-FFN
+layer) device-busy ≈ **2.05 ms** (FW; 1.97 ms kernel), 63 device ops. Top FW: MoECompute 513–695µs,
+Transpose 252µs(x5), ReduceScatter 174–206µs(x3), Reduce 170µs, AllGather 140–164µs(x4), Tilize 109µs,
+shared-FFN Matmul 83µs(x4), AllBroadcast 77µs, ReduceScatterMinimalAsync 63µs. **KEY: ~2ms device-busy
+vs 1.137s WALL-CLOCK → device ~99.8% idle (host-dispatch-bound; op-to-op gaps 100k–344k µs).** So the
+real device time is tiny; eager wall-clock is dispatch-dominated, and the "1.85x vs sparse" wall-clock
+number understates moe_compute. CSVs saved: `perf_reports/moe_block_20260608_164455/`.
+Extrapolation: MoE-FFN × ~58 MoE layers ≈ 120–140 ms device; full e2e also needs attention (MLA) + 3
+dense + embed/lm-head (NOT in moe_test → need main.py).
+
+**DEVICE-TIME PROFILING FLOW (works):** `cd graph_0 && PYTHONPATH=$TT_METAL_HOME:graph_0 python3 -m
+tracy -r -p <script.py>` → report at `generated/profiler/reports/<ts>/ops_perf_results_<ts>.csv` → then
+`tt-perf-report <csv> --csv out.csv --summary-file s.csv`. (tt-perf-report needs the wrapper's NAMED
+report with DEVICE ID/OP CODE; `--device-only` lacks those. Raw TT_METAL_DEVICE_PROFILER=1 recompiles
+every kernel with PROFILE_KERNEL=1 — very slow cold, cached after. metal-trace execute_trace HANGS on
+CCL replay — don't use it; profiler is the path.) tt-perf-report installed via `python_env/bin/python -m
+ensurepip` then `pip install tt-perf-report`.
+
+**SCHEDULED (user, 2026-06-08): after an 8h wait —** (1) profile the WHOLE `main.py` (full 2-layer graph
+incl attention) with the flow above and SAVE the data; (2) run the autonomous OPTIMIZATION loop (see
+"NEXT PHASE" at bottom): profile → slowest op → one hypothesis → edit moe_compute_block.py/main.py →
+GATE on PCC (≥0.99) → measure device time → commit per win → repeat. DON'T STOP.
+
+**DEVICE RECOVERY (user-authorized 2026-06-08):** if the device wedges, run `source
+/home/ubuntu/tt-metal/python_env/bin/activate && tt-smi -r` (venv tt-smi recovers the node-0/FW-init
+wedge; a bare tt-smi -r did not). Always run device tests under a timeout.
+
+**2026-06-09 00:58 RESUME — BLOCKED: chips dropped off PCIe.** After the 8h wait the device shows "No
+chips detected in the cluster" / `tt-smi -ls` "No Tenstorrent devices detected"; `tt-smi -r` (from venv,
+x2) fails with "Reset IOCTL failed ... No such device" — the chips are GONE from the PCIe bus (link drop
+during idle), which tt-smi -r CANNOT recover (nothing to reset). Needs a HOST REBOOT / power-cycle (or a
+sudo PCIe rescan / driver reload — NOT attempted; exceeds the tt-smi -r authorization and is a shared
+host). The scheduled main.py-profile + optimization loop are BLOCKED until the device returns.
+`device_watch_recover.sh` is polling (on chips re-appearing it runs tt-smi -r + re-probes; re-invokes on
+DEVICE_OPEN_OK). NEXT (device back): profile main.py (`python3 -m tracy -r -p main.py`; signposts
+prologue/attn_0/mlp_0/attn_1/moe/lm_head let tt-perf-report window each phase) → save CSVs → optimization
+loop. main.py inputs are in `./tensors` (56 files); entry `main()` @ main.py:6597.
+
+
 ## RESULT (2026-06-08) — combine hang FIXED on device ✅; now debugging PCC=0.778
 
 Device recovered (user "reset" cleared the fabric wedge; boot still Jun5 12:00 = NOT a host reboot, so
@@ -534,6 +610,7 @@ fixed/comparable measurement + a git commit per useful win + run the loop and DO
 | date | change | commit | block device-ms (2L, traced) | per-layer ms | EST full-model e2e ms | PCC | notes |
 |------|--------|--------|------------------------------|--------------|-----------------------|-----|-------|
 | 2026-06-04 | baseline: sparse_matmul path (moe_compute NOT yet used) | (uncommitted) | TBD (use Tracy/trace; 2.10s wall is dispatch-bound, not device) | TBD | TBD (fill in step 2) | 1.0000 | starting point |
+| 2026-06-09 | **BASELINE**: full main.py 2-layer device profile (sparse MoE path) | (this commit) | full=23.216 (2L device-busy, eager) | attn 1.969 / dense 0.685 / **moe 16.112** | **1059** | 1.0000 | tracy `-r -p main.py`; DS-V3 61L=3 dense+58 MoE; MoE=88.2%; top op SparseMatmul 5.56ms×2; 1 MoE layer in test |
 | … | … | … | … | … | … | … | … |
 
 ### Commit convention (keep the history)
