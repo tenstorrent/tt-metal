@@ -15,6 +15,11 @@
  *   tile_order=SubblockMajor → sequential pack_tile_block, per-subblock reserve/push
  *   tile_order=TileRowMajor      → absolute-offset pack_tile<true>, per-row-group reserve/push
  *
+ * pin_interm_to_captured_base overrides the reserve/push granularity for BOTH layouts: one
+ * reserve at entry + one push at exit, with each K-block's partials packed to fixed offsets
+ * (subblock-contiguous for SubblockMajor; row-strided with the M-row-group base folded into
+ * col_base for TileRowMajor). TileRowMajor pin additionally requires packer_l1_acc + Interm.
+ *
  * Both modes share K-loop, reload, L1_ACC management, and pre/post callbacks.
  * SKIP_COMPUTE (microbench define) elides the inner matmul LLK call only.
  */
@@ -104,14 +109,23 @@ ALWI void matmul_block(
         last_block_target != LastBlockTarget::OutWithUntilize || tile_order == OutputCBLayout::SubblockMajor,
         "OutWithUntilize requires tile_order == SubblockMajor; route row-major untilize via Interm + reblock_and_untilize");
     // pin_interm_to_captured_base packs each subblock's partial to a fixed tile offset
-    // within a single one-shot interm reservation (offset = (in0_subblock * in1_num_subblocks
-    // + in1_subblock) * out_num_tiles). That offset arithmetic assumes SubblockMajor; the
-    // TileRowMajor row-strided layout has a different tile-position scheme and isn't
-    // expressible via a single subblock-aligned offset. No current caller wires
-    // TileRowMajor + pin, so reject the combo at compile time.
+    // within a single one-shot interm reservation. Two pin layouts are supported:
+    //   • SubblockMajor: subblock-contiguous offset
+    //       (in0_subblock * in1_num_subblocks + in1_subblock) * out_num_tiles.
+    //   • TileRowMajor: row-strided offset with the M-row-group base folded into col_base
+    //       (in0_subblock * row_group_tiles + in1_subblock * out_subblock_w), because pin has
+    //       no per-row-group reserve to supply that base — see the pack sites in the K-loop.
+    // The TileRowMajor pin layout is only correct with packer_l1_acc + Interm target:
+    // L1_ACC means no software reload (so the helper never needs a row-strided gather), and
+    // Interm (pack_last_to_interm) makes spill_row_grouped engage so non-last spills land at
+    // the same row-strided offsets the last block uses, letting L1_ACC accumulate per-address.
+    // Reject every other pin layout combo at compile time.
     static_assert(
-        !pin_interm_to_captured_base || tile_order == OutputCBLayout::SubblockMajor,
-        "pin_interm_to_captured_base requires tile_order == SubblockMajor");
+        !pin_interm_to_captured_base || tile_order == OutputCBLayout::SubblockMajor ||
+            (tile_order == OutputCBLayout::TileRowMajor && packer_l1_acc &&
+             last_block_target == LastBlockTarget::Interm),
+        "pin_interm_to_captured_base requires tile_order == SubblockMajor, or TileRowMajor with "
+        "packer_l1_acc + Interm target (no software reload, row-grouped spills)");
     // pin packs each tile with pack_tile<true> at absolute offsets;
     // pack_untilize_dest packs DST through its own untilize fast path starting at
     // offset 0 of the current reservation, which doesn't compose with an absolute-
@@ -355,9 +369,13 @@ ALWI void matmul_block(
 
             int in0_index_subblock_offset = 0;
             for (uint32_t in0_subblock = 0; in0_subblock < shape.in0_num_subblocks; in0_subblock++) {
-                if constexpr (tile_order == OutputCBLayout::TileRowMajor && !caller_owns_pack_target) {
+                if constexpr (tile_order == OutputCBLayout::TileRowMajor && !caller_owns_pack_target &&
+                              !pin_interm_to_captured_base) {
                     // Row-major path reserves per M-row-group (one row of all N-subblocks).
                     // Smaller than full-block reserve, so shared out/interm buffers don't deadlock.
+                    // Pin mode skips this: the one-shot reserve_back(out_block_num_tiles) at helper
+                    // entry already covers the whole block, and the row-strided packs below fold the
+                    // M-row-group base into col_base instead of relying on a per-group reserve.
                     if (last_out) {
                         pack_target_buf.reserve_back(row_group_tiles);
                     } else if constexpr (spill_row_grouped) {
@@ -501,9 +519,20 @@ ALWI void matmul_block(
                             // reserve. Row stride uses out_row_width (padded output-pack
                             // width on DRAM-sharded; equal to in1_per_core_w on most
                             // factories).
-                            const uint32_t col_base = in1_subblock * shape.out_subblock_w;
-                            pack_subblock_row_strided(
-                                0, pack_target_id, col_base, out_row_width, shape.out_subblock_h, shape.out_subblock_w);
+                            if constexpr (pin_interm_to_captured_base) {
+                                // Pin has no per-row-group reserve, so fold the M-row-group base
+                                // (in0_subblock * row_group_tiles) into col_base. Resulting absolute
+                                // offset is (in0_subblock*out_subblock_h + r)*out_row_width +
+                                // (in1_subblock*out_subblock_w + c) within the one-shot reservation.
+                                const uint32_t col_base =
+                                    in0_subblock * row_group_tiles + in1_subblock * shape.out_subblock_w;
+                                pack_subblock_row_strided(
+                                    0, pack_target_id, col_base, out_row_width, shape.out_subblock_h, shape.out_subblock_w);
+                            } else {
+                                const uint32_t col_base = in1_subblock * shape.out_subblock_w;
+                                pack_subblock_row_strided(
+                                    0, pack_target_id, col_base, out_row_width, shape.out_subblock_h, shape.out_subblock_w);
+                            }
                         } else if constexpr (last_block_target == LastBlockTarget::OutWithUntilize) {
                             pack_untilize_dest<untilize_block_ct_dim>(pack_target_id);
                         } else if constexpr (pin_interm_to_captured_base && pack_last_to_interm) {
@@ -559,9 +588,19 @@ ALWI void matmul_block(
                         }
 
                         if constexpr (spill_row_grouped) {
-                            const uint32_t col_base = in1_subblock * shape.out_subblock_w;
-                            pack_subblock_row_strided(
-                                0, interm_cb_id, col_base, out_row_width, shape.out_subblock_h, shape.out_subblock_w);
+                            if constexpr (pin_interm_to_captured_base) {
+                                // Same M-row-group base fold as the last-block pack so non-last
+                                // spills accumulate (L1_ACC) at the exact row-strided offsets the
+                                // last block writes — see the last-block pack above.
+                                const uint32_t col_base =
+                                    in0_subblock * row_group_tiles + in1_subblock * shape.out_subblock_w;
+                                pack_subblock_row_strided(
+                                    0, interm_cb_id, col_base, out_row_width, shape.out_subblock_h, shape.out_subblock_w);
+                            } else {
+                                const uint32_t col_base = in1_subblock * shape.out_subblock_w;
+                                pack_subblock_row_strided(
+                                    0, interm_cb_id, col_base, out_row_width, shape.out_subblock_h, shape.out_subblock_w);
+                            }
                         } else if constexpr (pin_interm_to_captured_base) {
                             // Pinned SubblockMajor spill: per-tile pack at the subblock's fixed
                             // tile offset within the one-shot reservation. Matches the reload's
@@ -582,7 +621,10 @@ ALWI void matmul_block(
                     in1_index_subblock_offset += shape.out_subblock_w;
                 }
 
-                if constexpr (tile_order == OutputCBLayout::TileRowMajor && !caller_owns_pack_target) {
+                if constexpr (tile_order == OutputCBLayout::TileRowMajor && !caller_owns_pack_target &&
+                              !pin_interm_to_captured_base) {
+                    // Pin mode skips the per-row-group push: one push_back(out_block_num_tiles)
+                    // at helper exit (pin + pack_last_to_interm) makes the whole block visible.
                     if (last_out) {
                         pack_target_buf.push_back(row_group_tiles);
                     } else if constexpr (spill_row_grouped) {
