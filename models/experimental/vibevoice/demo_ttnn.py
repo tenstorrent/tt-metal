@@ -9,7 +9,6 @@ The VibeVoiceProcessor (HF) and WAV writing (soundfile) stay here — NOT in tt/
 
 Usage:
     export PYTHONPATH=$(pwd)
-    export VIBEVOICE_MODEL_PATH=/path/to/VibeVoice-1.5B
     python models/experimental/vibevoice/demo_ttnn.py \
         --text "Hello, how are you today?" \
         --voice models/experimental/vibevoice/resources/voices/en-Alice_woman.wav \
@@ -24,11 +23,12 @@ import torch
 import ttnn
 
 from models.experimental.vibevoice.common.config import (
-    MODEL_PATH,
     DEFAULT_TXT_PATH,
-    VOICES_DIR,
+    MODEL_PATH,
     QWEN_TOKENIZER,
+    VOICES_DIR,
 )
+from models.experimental.vibevoice.common.model_utils import ensure_model_weights
 from models.experimental.vibevoice.tt.ttnn_vibevoice_model import TTVibeVoiceModel
 
 
@@ -95,8 +95,10 @@ def main():
     parser.add_argument("--max_new_tokens", type=int, default=512)
     args = parser.parse_args()
 
-    if not Path(args.model_path).is_dir():
-        print(f"[demo_ttnn] ERROR: Model not found at {args.model_path}", file=sys.stderr)
+    try:
+        args.model_path = str(ensure_model_weights(args.model_path))
+    except Exception as exc:
+        print(f"[demo_ttnn] ERROR: {exc}", file=sys.stderr)
         print("[demo_ttnn] Set VIBEVOICE_MODEL_PATH or pass --model_path", file=sys.stderr)
         sys.exit(1)
 

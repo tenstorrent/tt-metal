@@ -20,11 +20,12 @@ import sys
 from pathlib import Path
 
 from models.experimental.vibevoice.common.config import (
+    DEFAULT_TXT_PATH,
     MODEL_PATH,
     REFERENCE_DIR,
-    DEFAULT_TXT_PATH,
     VOICES_DIR,
 )
+from models.experimental.vibevoice.common.model_utils import ensure_model_weights
 
 
 def main():
@@ -60,6 +61,12 @@ def main():
         help="Path to VibeVoice-1.5B checkpoint.",
     )
     args = parser.parse_args()
+
+    try:
+        args.model_path = str(ensure_model_weights(args.model_path))
+    except Exception as exc:
+        print(f"[demo_hf] ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     run_inference_py = REFERENCE_DIR / "run_inference.py"
     if not run_inference_py.exists():
