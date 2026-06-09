@@ -1238,7 +1238,7 @@ inline CoreCoord dispatch_core(const tt_metal::IDevice* device) {
 // SD drives only the core dispatch fields; all fabric-mux, multi-CQ, go-signal, and downstream
 // fields are zeroed since the spoof path never uses them.
 //
-// completion_queue_{base,size} default to 0 for SD dispatcher tests (no host-text writeback).
+// completion_queue_{base,size} default to 0 for SD dispatcher tests (no host-test writeback).
 // SD prefetcher tests that exercise host writeback must pass real values - cq_dispatch.cpp
 // computes the host PCIe destination from COMPLETION_QUEUE_BASE_ADDR.
 //
