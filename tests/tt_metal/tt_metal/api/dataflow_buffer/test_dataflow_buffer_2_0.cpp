@@ -1061,9 +1061,11 @@ static void run_single_dfb_program_2_0(
     } else {
         // Tensix producer: num_threads must match num_producers so total credits
         // posted = num_producers * num_entries_per_producer = entries_per_core.
+        // BLOCKED posts credits block_size-at-a-time (host pre-fills the L1 ring either way).
         producer = make_compute_kernel(
             PRODUCER,
-            "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_producer_2_0.cpp",
+            producer_blocked ? "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_blocked_producer_2_0.cpp"
+                             : "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_producer_2_0.cpp",
             static_cast<uint8_t>(p.num_producers));
     }
     producer.dfb_bindings = {
@@ -1269,6 +1271,53 @@ static void run_single_dfb_program_2_0(
                 }
             }
             EXPECT_EQ(expected, output) << "M2 Tensix→DM ring-pressure mismatch";
+        } else if (
+            p.producer_type == M2PorCType::TENSIX && p.cap == m2::DFBAccessPattern::BLOCKED && p.num_consumers > 1) {
+            // Tensix→DM BLOCKED, multi-thread: a permutation, NOT identity. The Tensix producer only
+            // posts credits over a host-prefilled FLAT ring (L1[k] = input[k]). Unlike DM→DM BLOCKED
+            // — where the DM producer's block-strided DRAM read (dfb_blocked_producer_2_0.cpp) applies
+            // the inverse interleave that exactly cancels the consumer's — there is no DRAM-reading
+            // producer here, so nothing cancels the consumer's de-interleave. Consumer c reads its
+            // contiguous sub-ring (capacity = num_entries/num_consumers, stride_in_entries=1) and
+            // writes block b to out page (b*num_consumers + c)*block_size. Net device map:
+            //   output[(b*N + c)*block_size + j] = input[c*capacity + b*block_size + j]
+            // (For N==1 this degenerates to identity — handled by the else branch below.)
+            const uint32_t wpe = p.entry_size / sizeof(uint32_t);
+            const uint32_t N = p.num_consumers;
+            const uint32_t capacity = p.num_entries / N;
+            const uint32_t blocks_per_thread = num_entries_per_consumer / p.block_size;
+            std::vector<uint32_t> expected(input.size(), 0u);
+            for (uint32_t c = 0; c < N; ++c) {
+                for (uint32_t b = 0; b < blocks_per_thread; ++b) {
+                    for (uint32_t j = 0; j < p.block_size; ++j) {
+                        const uint32_t src = c * capacity + b * p.block_size + j;
+                        const uint32_t dst = (b * N + c) * p.block_size + j;
+                        std::copy(
+                            input.begin() + src * wpe, input.begin() + (src + 1) * wpe, expected.begin() + dst * wpe);
+                    }
+                }
+            }
+            // Diagnostic (mirrors the STRIDED branch): if it mismatches, map each output tile back to
+            // the input page that actually landed there, so a device-side credit/sub-ring surprise is
+            // debuggable (a deadlock would show up as a launch hang instead, pointing at credits/TCs).
+            if (expected != output) {
+                for (uint32_t t = 0; t < std::min<uint32_t>(entries_per_core, 16); ++t) {
+                    int match = -1;
+                    for (uint32_t src = 0; src < p.num_entries; ++src) {
+                        if (std::equal(
+                                input.begin() + src * wpe, input.begin() + (src + 1) * wpe, output.begin() + t * wpe)) {
+                            match = static_cast<int>(src);
+                            break;
+                        }
+                    }
+                    log_info(
+                        tt::LogTest,
+                        "  Tensix→DM BLOCKED output tile {} ← {}",
+                        t,
+                        match >= 0 ? ("input page " + std::to_string(match)) : std::string("UNKNOWN"));
+                }
+            }
+            EXPECT_EQ(expected, output) << "M2 Tensix→DM BLOCKED multi-thread permutation mismatch";
         } else {
             EXPECT_EQ(input, output) << "M2 single-DFB identity mismatch";
         }
@@ -1577,6 +1626,42 @@ DFB_BLOCKED_TEST_2_0(DMTest1xDFB3Bx3B_blk4_impl, DM, DM, 3, 3, 4, 24, true)
 TEST_F(MeshDeviceFixture, DMTest1xDFB1Bx1B_blk4_entry2048_2_0) {
     M2SingleDFBParams params{
         .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 1,
+        .num_consumers = 1,
+        .pap = m2::DFBAccessPattern::BLOCKED,
+        .cap = m2::DFBAccessPattern::BLOCKED,
+        .implicit_sync = false,
+        .entry_size = 2048,
+        .num_entries = 16,
+        .block_size = 4,
+    };
+    run_single_dfb_program_2_0(this->devices_.at(0), params);
+}
+
+// --- BLOCKED→BLOCKED (Trisc→DM: Tensix BLOCKED producer → DM BLOCKED consumer, explicit) ---
+// Tensix producer posts credits block_size-at-a-time (host pre-fills the L1 ring); the DM consumer
+// bursts each block out to DRAM. Avoids the unpacker (consumer-side) Tensix path — only the packer
+// (producer) is on Tensix. Symmetric 1×1: one contiguous sub-ring, identity verify.
+DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB1Bx1B_blk4, TENSIX, DM, 1, 1, 4, 16, false)
+// N=1 block-size / ring coverage — all verify as identity (the permutation degenerates at N=1).
+DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB1Bx1B_blk2, TENSIX, DM, 1, 1, 2, 16, false)
+DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB1Bx1B_blk8, TENSIX, DM, 1, 1, 8, 16, false)
+DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB1Bx1B_blk4_ring32, TENSIX, DM, 1, 1, 4, 32, false)
+DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB1Bx1B_blk3, TENSIX, DM, 1, 1, 3, 12, false)
+// Symmetric multi-thread Trisc->DM (N producers == N consumers). These RUN like DM->DM NxN, but the
+// flat host-prefill + consumer de-interleave make the output a permutation of the input — verified by
+// the Tensix->DM BLOCKED golden branch in run_single_dfb_program_2_0. NOTE: the Tensix (compute)
+// PRODUCER only supports 1/2/4 threads (ValidateProgramSpec, program_spec.cpp) — 3 is NOT legal — so
+// the symmetric Trisc->DM set is 2Bx2B and 4Bx4B (no 3Bx3B). 4Bx4B is the ceiling. (DM->DM 3Bx3B is
+// fine because DM kernels allow 3 threads; only compute kernels are restricted to 1/2/4.)
+DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB2Bx2B_blk4, TENSIX, DM, 2, 2, 4, 16, false)
+DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB4Bx4B_blk4, TENSIX, DM, 4, 4, 4, 32, false)
+
+// Bigger entry size (2048) for Trisc->DM BLOCKED — N=1 identity; macro can't set entry_size.
+TEST_F(MeshDeviceFixture, TensixDMTest1xDFB1Bx1B_blk4_entry2048_2_0) {
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::TENSIX,
         .consumer_type = M2PorCType::DM,
         .num_producers = 1,
         .num_consumers = 1,
