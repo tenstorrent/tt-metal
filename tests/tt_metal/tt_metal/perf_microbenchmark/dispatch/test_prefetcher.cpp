@@ -428,16 +428,15 @@ protected:
     static constexpr uint32_t DRAM_EXEC_BUF_DEFAULT_BASE_ADDR = 0x1f400000;  // Magic, half of dram
     static constexpr uint32_t DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE = 10;
 
-    // Exec buffer DRAM base: on the Quasar simulator, place it just above THIS test's bank-0 data
-    // (per-bank prepopulate + DRAM-result headroom) so it stays below the fixed SD issue queue;
-    // elsewhere keep the default. Tests whose data alone reaches the issue queue are skipped in
-    // SetUp, so any test that runs has room left for its (small) exec buffer.
     uint32_t compute_exec_buf_base_addr() const {
         if (!Common::is_quasar_sim()) {
             return DRAM_EXEC_BUF_DEFAULT_BASE_ADDR;
         }
-        const uint32_t bank0_data_bytes = dram_data_size_words_ * sizeof(uint32_t) + DEVICE_DATA_SIZE;
-        return tt::align(dram_base_ + bank0_data_bytes, 1u << DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE);
+        // On the Quasar simulator, place the exec buffer just above the test's bank data so it stays below the issue
+        // queue. Tests whose data alone reaches the issue queue are skipped, so any test that runs has room left for
+        // its exec buffer.
+        const uint32_t bank_data_bytes = dram_data_size_words_ * sizeof(uint32_t) + DEVICE_DATA_SIZE;
+        return tt::align(dram_base_ + bank_data_bytes, 1u << DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE);
     }
 
     // Default values for inline data and flush prefetch for prefetcher tests
@@ -2611,12 +2610,13 @@ public:
 
         this->init_params(this->GetParam());
 
-        // On Quasar, the SD issue queue is fixed at kSdQuasarIssueBase. If the exec_buf base
-        // address (derived from the allocator) would overlap the issue queue, skip rather than
-        // overrun the CQ region and produce spurious command data.
-        if (Common::is_quasar_sim() && this->compute_exec_buf_base_addr() >= Common::kSdQuasarIssueBase) {
-            GTEST_SKIP() << "SD exec_buf base " << this->compute_exec_buf_base_addr()
-                         << " reaches the Quasar-sim SD issue queue at " << Common::kSdQuasarIssueBase;
+        // On Quasar simulator, the issue queue is fixed at QUASAR_SIMULATION_ISSUE_QUEUE_BASE. If the exec_buf base
+        // address would overlap the issue queue, skip the test rather than overrun the CQ region.
+        if (Common::is_quasar_sim() &&
+            this->compute_exec_buf_base_addr() >= Common::QUASAR_SIMULATION_ISSUE_QUEUE_BASE) {
+            GTEST_SKIP() << "exec_buf base " << this->compute_exec_buf_base_addr()
+                         << " reaches the Quasar simulator issue queue at "
+                         << Common::QUASAR_SIMULATION_ISSUE_QUEUE_BASE;
         }
     }
 
@@ -2664,11 +2664,11 @@ public:
 
         // Hugepage addressing
         // WH/BH stage commands in the PCIe hugepage (same region the FD runtime uses for the issue
-        // queue; safe since SD mode never runs the FD runtime concurrently). Quasar has no PCIe
-        // hugepage — commands are staged in DRAM bank 0 at Common::kSdQuasarIssueBase instead.
+        // queue; safe since SD mode never runs the FD runtime concurrently). Quasar simulator has no PCIe
+        // hugepage — commands are staged in DRAM at QUASAR_SIMULATION_ISSUE_QUEUE_BASE instead.
         uint32_t dev_hugepage_base = 0;
         void* host_hugepage_base = nullptr;
-        if (this->device_->arch() != tt::ARCH::QUASAR) {
+        if (!Common::is_quasar_sim()) {
             dev_hugepage_base = memmap.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
             const ChipId mmio_id =
                 tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_->id());
@@ -2680,11 +2680,11 @@ public:
             host_hugepage_base = hugepage_bar_base + dev_hugepage_base;
         } else {
             TT_FATAL(
-                Common::kSdQuasarIssueBase >= this->dram_base_,
+                Common::QUASAR_SIMULATION_ISSUE_QUEUE_BASE >= this->dram_base_,
                 "SD DRAM command buffer ({:#x}) overlaps allocator region (base {:#x})",
-                Common::kSdQuasarIssueBase,
+                Common::QUASAR_SIMULATION_ISSUE_QUEUE_BASE,
                 this->dram_base_);
-            dev_hugepage_base = Common::kSdQuasarIssueBase;
+            dev_hugepage_base = Common::QUASAR_SIMULATION_ISSUE_QUEUE_BASE;
         }
 
         // Physical cores
@@ -2722,22 +2722,22 @@ public:
         // pre-computed FetchQ value (may have MSB stall flag set for exec_buf).
         auto write_prefetcher_cmd = [&](const uint32_t* src, uint32_t cmd_size_bytes, uint32_t cmd_size_entry) {
             if (Common::is_quasar_sim()) {
-                // DRAM path: write commands to DRAM bank 0 at kSdQuasarIssueBase. Wrap to base on overflow.
-                if (dram_write_offset + cmd_size_bytes > Common::kSdQuasarIssueSize) {
+                // DRAM path: write commands to DRAM at QUASAR_SIMULATION_ISSUE_QUEUE_BASE. Wrap to base on overflow.
+                if (dram_write_offset + cmd_size_bytes > Common::QUASAR_SIMULATION_ISSUE_QUEUE_SIZE) {
                     dram_write_offset = 0;
                 }
                 tt::tt_metal::detail::WriteToDeviceDRAMChannel(
                     this->device_,
                     0,
-                    Common::kSdQuasarIssueBase + dram_write_offset,
+                    Common::QUASAR_SIMULATION_ISSUE_QUEUE_BASE + dram_write_offset,
                     std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(src), cmd_size_bytes));
                 dram_write_offset += cmd_size_bytes;
             } else {
                 const uint64_t host_offset = static_cast<uint64_t>(
                     reinterpret_cast<char*>(host_mem_ptr) - static_cast<char*>(host_hugepage_base));
                 TT_FATAL(
-                    host_offset + cmd_size_bytes <= this->sd_hugepage_issue_buffer_size(),
-                    "SD prefetch: command stream exceeds sd_hugepage_issue_buffer_size()");
+                    host_offset + cmd_size_bytes <= this->sd_issue_queue_size(),
+                    "SD prefetch: command stream exceeds sd_issue_queue_size()");
                 tt::tt_metal::memcpy_to_device<true>(host_mem_ptr, src, cmd_size_bytes);
                 host_mem_ptr += cmd_size_bytes / sizeof(uint32_t);
             }
@@ -2783,12 +2783,13 @@ public:
             // HOST_DATA_DIRTY_PATTERN validation in DeviceData::validate().
             static constexpr uint32_t kChunkBytes = 64 * 1024;
             std::vector<uint32_t> chunk(kChunkBytes / sizeof(uint32_t), this->HOST_DATA_DIRTY_PATTERN);
-            for (uint32_t offset = 0; offset < Common::kSdQuasarIssueSize; offset += kChunkBytes) {
-                const uint32_t chunk_bytes = std::min(kChunkBytes, Common::kSdQuasarIssueSize - offset);
+            for (uint32_t offset = 0; offset < Common::QUASAR_SIMULATION_COMPLETION_QUEUE_SIZE; offset += kChunkBytes) {
+                const uint32_t chunk_bytes =
+                    std::min(kChunkBytes, Common::QUASAR_SIMULATION_COMPLETION_QUEUE_SIZE - offset);
                 tt::tt_metal::detail::WriteToDeviceDRAMChannel(
                     this->device_,
                     0,
-                    Common::kSdQuasarCompletionBase + offset,
+                    Common::QUASAR_SIMULATION_COMPLETION_QUEUE_BASE + offset,
                     std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(chunk.data()), chunk_bytes));
             }
             cluster.dram_barrier(this->device_->id());
@@ -2831,7 +2832,7 @@ public:
         auto prefetch_defines = Common::make_sd_prefetch_defines(
             this->device_,
             dev_hugepage_base,
-            this->sd_hugepage_issue_buffer_size(),
+            this->sd_issue_queue_size(),
             prefetch_q_base,
             prefetch_q_size,
             prefetch_q_rd_ptr_addr,
@@ -2875,7 +2876,7 @@ public:
             "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp", Common::sd_prefetch_core, prefetch_defines);
         tt_metal::SetRuntimeArgs(program, prefetch_kernel, Common::sd_prefetch_core, {0u, 0u, 0u});
 
-        const uint32_t dev_completion_base = dev_hugepage_base + this->sd_hugepage_issue_buffer_size();
+        const uint32_t dev_completion_base = dev_hugepage_base + this->sd_issue_queue_size();
         auto dispatch_defines = Common::make_sd_dispatch_defines(
             this->device_,
             dispatch_buffer_pages,
@@ -2960,15 +2961,15 @@ class SDPrefetchRandomTestFixture : public SDPrefetchTestBase<RandomTestFixture>
 class SDPrefetchHostTestFixture : public SDPrefetchTestBase<PrefetcherHostTestFixture> {
 public:
     // Completion-buffer hooks: in SD mode the dispatch kernel writes to the hugepage region
-    // we set up ourselves (dev_hugepage_base + sd_hugepage_issue_buffer_size()), not to a
+    // we set up ourselves (dev_hugepage_base + sd_issue_queue_size()), not to a
     // runtime-managed FDMeshCommandQueue completion queue.
     //
-    // WH/BH: points into the host-mapped hugepage at dev_hugepage_base + issue_buffer_size.
-    // Quasar: points into a host-side staging buffer; refresh_completion_data() fills it from DRAM
-    //         at Common::kSdQuasarCompletionBase before validate() is called.
+    // WH/BH: points into the host-mapped hugepage at dev_hugepage_base + issue_queue_size.
+    // Quasar simulator: points into a host-side staging buffer; refresh_completion_data() fills it from DRAM at
+    // QUASAR_SIMULATION_COMPLETION_QUEUE_BASE before validate() is called.
     void* get_completion_queue_buffer() override {
-        if (this->device_->arch() == tt::ARCH::QUASAR) {
-            quasar_completion_buf_.resize(Common::kSdQuasarIssueSize);
+        if (Common::is_quasar_sim()) {
+            quasar_completion_buf_.resize(Common::QUASAR_SIMULATION_COMPLETION_QUEUE_SIZE);
             return quasar_completion_buf_.data();
         }
         const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
@@ -2980,12 +2981,12 @@ public:
         char* hugepage_bar_base =
             static_cast<char*>(tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_id, channel));
         hugepage_bar_base += (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
-        return hugepage_bar_base + dev_hugepage_base + this->sd_hugepage_issue_buffer_size();
+        return hugepage_bar_base + dev_hugepage_base + this->sd_issue_queue_size();
     }
     uint32_t get_completion_queue_buffer_size() override { return this->sd_completion_queue_size(); }
 
     void refresh_completion_data() override {
-        if (this->device_->arch() == tt::ARCH::QUASAR) {
+        if (Common::is_quasar_sim()) {
             // Read the dispatch kernel's DRAM completion writes into the host staging buffer so
             // device_data.validate() sees the correct data.
             const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
@@ -3002,21 +3003,21 @@ public:
             // The write pointer is stored in 16-byte units; strip the toggle bit.
             constexpr uint32_t toggle_mask = ~(1u << 31);
             const uint32_t wr_ptr_16B = wr_ptr_and_toggle & toggle_mask;
-            const uint32_t completion_base_16B = Common::kSdQuasarCompletionBase >> 4;
+            const uint32_t completion_base_16B = Common::QUASAR_SIMULATION_COMPLETION_QUEUE_BASE >> 4;
             if (wr_ptr_16B <= completion_base_16B) {
                 return;
             }
             const uint32_t bytes_written = (wr_ptr_16B - completion_base_16B) * 16;
             TT_FATAL(
-                bytes_written <= Common::kSdQuasarIssueSize,
-                "Quasar SD completion readback exceeds queue size ({} > {})",
+                bytes_written <= Common::QUASAR_SIMULATION_COMPLETION_QUEUE_SIZE,
+                "Quasar simulator completion readback exceeds queue size ({} > {})",
                 bytes_written,
-                Common::kSdQuasarIssueSize);
+                Common::QUASAR_SIMULATION_COMPLETION_QUEUE_SIZE);
 
             tt::tt_metal::detail::ReadFromDeviceDRAMChannel(
                 this->device_,
                 0,
-                Common::kSdQuasarCompletionBase,
+                Common::QUASAR_SIMULATION_COMPLETION_QUEUE_BASE,
                 std::span<uint8_t>(quasar_completion_buf_.data(), bytes_written));
         }
     }
