@@ -29,6 +29,14 @@ Env vars:
   PREFILL_SP / PREFILL_TP / PREFILL_MAX_SEQ_LEN / PREFILL_IS_BALANCED
     — must match the runner so token packing produces the same byte layout.
 
+  PREFILL_REQUEST_LOOP_PCC     — "1": source tokens from the golden longbook_qa trace instead of
+                                 standalone_input.json and push exactly
+                                 PREFILL_STANDALONE_CHUNKED_NCHUNKS chunks (default 11 -> 56320
+                                 tokens) into slot PREFILL_STANDALONE_CHUNKED_SLOT. Pairs with the
+                                 runner's PREFILL_REQUEST_LOOP_PCC=1 KV-cache PCC check.
+  DEEPSEEK_PREFILL_TRACE_DIR   — golden trace dir read in PCC mode (default: the longbook_qa 56320
+                                 trace; must match the runner).
+
 Usage (two terminals):
     # terminal A — runner (creates service + exports descriptor + waits):
     PREFILL_STANDALONE=1 PREFILL_H2D_EXTERNAL_PRODUCER=1 \
@@ -76,6 +84,45 @@ NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
 # Chunked / indexed-RoPE prefill is non-balanced (block-cyclic).
 IS_BALANCED = os.environ.get("PREFILL_IS_BALANCED", "0") == "1"
 
+# Default golden trace (must match prefill_runner.DEFAULT_PREFILL_TRACE_DIR): longbook_qa 56320 = 11*5120.
+DEFAULT_PREFILL_TRACE_DIR = (
+    "/mnt/models/deepseek-prefill-cache/golden/kimi-26/debug_trace/longbook_qa_eng_prefill_56320_nopad"
+)
+
+
+def _load_tokens():
+    """Return (task_id, slot_id, actual_isl, token_ids) for the run.
+
+    Two sources, selected by PREFILL_REQUEST_LOOP_PCC:
+      * PCC mode ("1"): the golden longbook_qa trace — read token_ids from
+        DEEPSEEK_PREFILL_TRACE_DIR/metadata.json, take the first NCHUNKS*CHUNK_SIZE (chunk-aligned,
+        all real tokens), slot from PREFILL_STANDALONE_CHUNKED_SLOT. Pairs with the runner's
+        request-loop PCC check, mirroring run_standalone_chunked_prefill_loop's input.
+      * otherwise: PREFILL_STANDALONE_INPUT JSON {"task_id", "token_ids", optional "slot_id"}.
+    """
+    if os.environ.get("PREFILL_REQUEST_LOOP_PCC", "0") == "1":
+        n_chunks = int(os.environ.get("PREFILL_STANDALONE_CHUNKED_NCHUNKS", "11"))
+        slot_id = int(os.environ.get("PREFILL_STANDALONE_CHUNKED_SLOT", "0")) % NUM_USERS
+        total_len = n_chunks * CHUNK_SIZE
+        trace_dir = Path(os.environ.get("DEEPSEEK_PREFILL_TRACE_DIR", DEFAULT_PREFILL_TRACE_DIR))
+        logger.info(f"[producer] PCC mode: reading {total_len} tokens ({n_chunks} chunks) from trace {trace_dir}")
+        with open(trace_dir / "metadata.json") as f:
+            md = json.load(f)
+        token_ids = list(md["token_ids"])[:total_len]
+        assert (
+            len(token_ids) == total_len
+        ), f"trace has {len(token_ids)} tokens but need {total_len}; lower PREFILL_STANDALONE_CHUNKED_NCHUNKS"
+        return 0, slot_id, total_len, token_ids
+
+    default_input = Path(__file__).parent / "standalone_input.json"
+    input_path = Path(os.environ.get("PREFILL_STANDALONE_INPUT", default_input))
+    logger.info(f"[producer] reading input from {input_path}")
+    with open(input_path) as f:
+        data = json.load(f)
+    token_ids = list(data["token_ids"])
+    slot_id = int(data.get("slot_id", 0)) % NUM_USERS
+    return data["task_id"], slot_id, len(token_ids), token_ids
+
 
 def _chunk_to_host_array(chunk_token_ids: list[int]):
     """Build the un-sharded per-chunk token buffer for `service.forward_to_tensor_bytes`.
@@ -107,9 +154,6 @@ def main() -> None:
     timeout_s = int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60"))
     num_iterations = int(os.environ.get("PREFILL_STANDALONE_ITERS", "1"))
 
-    default_input = Path(__file__).parent / "standalone_input.json"
-    input_path = Path(os.environ.get("PREFILL_STANDALONE_INPUT", default_input))
-
     logger.info(
         f"[producer] service_id={service_id!r} timeout={timeout_s}s "
         f"mesh={GLOBAL_MESH_SHAPE} max_seq_len={MAX_SEQ_LEN} iters={num_iterations}"
@@ -120,19 +164,13 @@ def main() -> None:
     service = ttnn.H2DStreamService.connect(service_id, timeout_ms=timeout_s * 1000)
     logger.info(f"[producer] attached in {(time.perf_counter() - t0):.2f}s")
 
-    logger.info(f"[producer] reading input from {input_path}")
-    with open(input_path) as f:
-        data = json.load(f)
-    task_id = data["task_id"]
-    token_ids = list(data["token_ids"])
+    task_id, slot_id, actual_isl, token_ids = _load_tokens()  # actual_isl captured BEFORE padding
 
     if len(token_ids) > MAX_SEQ_LEN:
         raise ValueError(
             f"task_id={task_id} prompt has {len(token_ids)} tokens but MAX_SEQ_LEN={MAX_SEQ_LEN}. "
             f"Set PREFILL_MAX_SEQ_LEN to match the runner."
         )
-    actual_isl = len(token_ids)  # captured BEFORE padding
-    slot_id = int(data.get("slot_id", 0)) % NUM_USERS
     # Chunked prefill streams ONE chunk per push. Pad the prompt up to a chunk boundary, then
     # push each CHUNK_SIZE-wide chunk with per-chunk PrefillMetadata: actual_start is the chunk's
     # absolute KV start (= c * CHUNK_SIZE for chunk-aligned demo), actual_end clamps to actual_isl

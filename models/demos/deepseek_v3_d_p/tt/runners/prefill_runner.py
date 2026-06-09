@@ -260,6 +260,94 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
     logger.info(f"Prefill complete for task {task_id} (slot={slot_id}, isl={actual_isl})")
 
 
+def _kv_cache_pcc_check(pipeline: TtDeepSeekPrefillPipeline, slot_id: int, n_chunks: int) -> float:
+    """Gather the device KV cache for `slot_id`, un-rotate the block-cyclic layout to natural order,
+    and PCC-compare each layer against the golden DeepSeek-R1 `kv_post_transform` trace.
+
+    Shared by `run_standalone_chunked_prefill_loop` (single-process) and the request-loop PCC mode
+    (driven by the external producer over the H2D socket). Returns the min per-layer PCC and asserts
+    (unless PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1) when any layer is below threshold.
+
+    Env:
+      DEEPSEEK_PREFILL_TRACE_DIR              golden trace dir (default: the longbook_qa 56320 trace)
+      PREFILL_STANDALONE_CHUNKED_PCC          min per-layer KV-cache PCC threshold (default 0.88)
+      PREFILL_STANDALONE_CHUNKED_RECORD_ONLY  "1" -> log PCC only, do not assert
+    """
+
+    import torch
+    from safetensors import safe_open
+
+    from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
+    from tests.ttnn.utils_for_testing import comp_pcc
+
+    cfg = pipeline.config
+    mesh_device = pipeline.mesh_device
+    sp = cfg.sp_factor
+    chunk_size = cfg.chunk_size
+    num_layers = cfg.num_layers
+    seq_len_cache = cfg.max_seq_len
+    total_len = n_chunks * chunk_size
+
+    trace_dir = Path(os.environ.get("DEEPSEEK_PREFILL_TRACE_DIR", DEFAULT_PREFILL_TRACE_DIR))
+    if not trace_dir.exists():
+        raise FileNotFoundError(f"golden trace dir not found: {trace_dir} (set DEEPSEEK_PREFILL_TRACE_DIR)")
+
+    threshold = float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.88"))
+    record_only = os.environ.get("PREFILL_STANDALONE_CHUNKED_RECORD_ONLY", "0") == "1"
+    kv_lora = pipeline.hf_config.kv_lora_rank
+    kvpe_dim = pipeline.hf_config.qk_rope_head_dim + kv_lora
+
+    # One gather: [num_users*num_layers, tp_replicas, seq_len_cache, kvpe] -> collapse TP via [:, :1].
+    cache_full = ttnn.to_torch(
+        pipeline.kvpe_cache,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+    ).to(torch.float32)[
+        :, :1
+    ]  # [num_users*num_layers, 1, seq_len_cache, kvpe]
+
+    p = blockcyclic_positions(sp, chunk_size, seq_len_cache)
+    logger.info(f"[kv-pcc] device KV cache vs golden kv_post_transform (slot={slot_id}, per layer):")
+    min_pcc = 1.0
+    failures = []
+    for i in range(num_layers):
+        # user-major slot layout: cache batch index = slot_id * num_layers + layer_idx
+        batch_idx = slot_id * num_layers + i
+        nat = torch.empty(seq_len_cache, kvpe_dim, dtype=torch.float32)
+        nat[p] = cache_full[batch_idx, 0]  # un-rotate block-cyclic -> natural order
+        dev_cache = nat[:total_len]
+
+        with safe_open(trace_dir / "kv_cache" / f"layer_{i}.safetensors", framework="pt") as fsafe:
+            g_post = fsafe.get_slice(f"kv_post_transform_layer_{i}")[:total_len].to(torch.float32)
+        # nope (kv_lora) compares directly; the RoPE (pe) slice uses the Meta-interleaved basis while
+        # the golden stores the HF half-split, so re-interleave the golden before comparing.
+        _, pcc_nope = comp_pcc(g_post[:, :kv_lora], dev_cache[:, :kv_lora])
+        ref_pe = g_post[:, kv_lora:]
+        d = ref_pe.shape[-1]
+        ref_pe_int = torch.stack([ref_pe[:, : d // 2], ref_pe[:, d // 2 :]], dim=-1).reshape(-1, d)  # HF -> Meta
+        _, pcc_pe = comp_pcc(ref_pe_int, dev_cache[:, kv_lora:])
+        layer_pcc = min(pcc_nope, pcc_pe)
+        min_pcc = min(min_pcc, layer_pcc)
+        logger.info(f"  cache layer {i} PCC: nope={pcc_nope:.6f} pe(interleaved)={pcc_pe:.6f} -> {layer_pcc:.6f}")
+        if layer_pcc < threshold:
+            failures.append((i, layer_pcc))
+
+    logger.info(f"[kv-pcc] KV cache min PCC across {num_layers} layers: {min_pcc:.6f} (threshold {threshold})")
+    # stdout, not a log line: callers (tests / orchestrators) parse this.
+    print(
+        f"[standalone-chunked] kv_cache_pcc_complete slot={slot_id} n_chunks={n_chunks} "
+        f"total_len={total_len} min_pcc={min_pcc:.6f}"
+    )
+    if failures:
+        msg = "; ".join(f"layer {layer} PCC {pcc:.6f} < {threshold}" for layer, pcc in failures)
+        if record_only:
+            logger.warning(f"[kv-pcc] sub-threshold PCC (record-only, not asserted): {msg}")
+        else:
+            raise AssertionError(f"[kv-pcc] KV cache PCC below {threshold}: {msg}")
+    else:
+        logger.success(f"[kv-pcc] KV cache PCC PASSED (min {min_pcc:.6f} >= {threshold})")
+    return min_pcc
+
+
 def run_standalone_chunked_prefill_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
     """Standalone chunked-prefill *validation* loop: drive the golden longbook_qa prompt through the
     pipeline in CHUNK_SIZE chunks (exactly as `run_standalone_loop` drives the chunk loop), then PCC
@@ -287,11 +375,6 @@ def run_standalone_chunked_prefill_loop(pipeline: TtDeepSeekPrefillPipeline) -> 
     """
     import json
     import time as _time
-
-    from safetensors import safe_open
-
-    from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
-    from tests.ttnn.utils_for_testing import comp_pcc
 
     cfg = pipeline.config
     mesh_device = pipeline.mesh_device
@@ -346,61 +429,7 @@ def run_standalone_chunked_prefill_loop(pipeline: TtDeepSeekPrefillPipeline) -> 
     logger.info(f"[standalone-chunked] {n_chunks} chunks prefilled in {dt_ms:.2f} ms")
 
     # --- PCC the device KV cache against the golden kv_post_transform trace (per layer). ---
-    threshold = float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.88"))
-    record_only = os.environ.get("PREFILL_STANDALONE_CHUNKED_RECORD_ONLY", "0") == "1"
-    kv_lora = pipeline.hf_config.kv_lora_rank
-    kvpe_dim = pipeline.hf_config.qk_rope_head_dim + kv_lora
-
-    # One gather: [num_users*num_layers, tp_replicas, seq_len_cache, kvpe] -> collapse TP via [:, :1].
-    cache_full = ttnn.to_torch(
-        pipeline.kvpe_cache,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-    ).to(torch.float32)[
-        :, :1
-    ]  # [num_users*num_layers, 1, seq_len_cache, kvpe]
-
-    p = blockcyclic_positions(sp, chunk_size, seq_len_cache)
-    logger.info("[standalone-chunked] device KV cache vs golden kv_post_transform (per layer):")
-    min_pcc = 1.0
-    failures = []
-    for i in range(num_layers):
-        # user-major slot layout: cache batch index = slot_id * num_layers + layer_idx
-        batch_idx = slot_id * num_layers + i
-        nat = torch.empty(seq_len_cache, kvpe_dim, dtype=torch.float32)
-        nat[p] = cache_full[batch_idx, 0]  # un-rotate block-cyclic -> natural order
-        dev_cache = nat[:total_len]
-
-        with safe_open(trace_dir / "kv_cache" / f"layer_{i}.safetensors", framework="pt") as fsafe:
-            g_post = fsafe.get_slice(f"kv_post_transform_layer_{i}")[:total_len].to(torch.float32)
-        # nope (kv_lora) compares directly; the RoPE (pe) slice uses the Meta-interleaved basis while
-        # the golden stores the HF half-split, so re-interleave the golden before comparing.
-        _, pcc_nope = comp_pcc(g_post[:, :kv_lora], dev_cache[:, :kv_lora])
-        ref_pe = g_post[:, kv_lora:]
-        d = ref_pe.shape[-1]
-        ref_pe_int = torch.stack([ref_pe[:, : d // 2], ref_pe[:, d // 2 :]], dim=-1).reshape(-1, d)  # HF -> Meta
-        _, pcc_pe = comp_pcc(ref_pe_int, dev_cache[:, kv_lora:])
-        layer_pcc = min(pcc_nope, pcc_pe)
-        min_pcc = min(min_pcc, layer_pcc)
-        logger.info(f"  cache layer {i} PCC: nope={pcc_nope:.6f} pe(interleaved)={pcc_pe:.6f} -> {layer_pcc:.6f}")
-        if layer_pcc < threshold:
-            failures.append((i, layer_pcc))
-
-    logger.info(
-        f"[standalone-chunked] KV cache min PCC across {num_layers} layers: {min_pcc:.6f} (threshold {threshold})"
-    )
-    # stdout, not a log line: callers (tests / orchestrators) parse this.
-    print(
-        f"[standalone-chunked] kv_cache_pcc_complete slot={slot_id} n_chunks={n_chunks} "
-        f"total_len={total_len} min_pcc={min_pcc:.6f}"
-    )
-    if failures:
-        msg = "; ".join(f"layer {layer} PCC {pcc:.6f} < {threshold}" for layer, pcc in failures)
-        if record_only:
-            logger.warning(f"[standalone-chunked] sub-threshold PCC (record-only, not asserted): {msg}")
-        else:
-            raise AssertionError(f"[standalone-chunked] KV cache PCC below {threshold}: {msg}")
-    else:
-        logger.success(f"[standalone-chunked] KV cache PCC PASSED (min {min_pcc:.6f} >= {threshold})")
+    _kv_cache_pcc_check(pipeline, slot_id, n_chunks)
 
 
 def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DStreamService) -> None:
@@ -418,13 +447,28 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
     """
     import time as _time
 
+    # Bounded PCC mode: when PREFILL_REQUEST_LOOP_PCC=1 the runner expects a finite stream of
+    # PREFILL_STANDALONE_CHUNKED_NCHUNKS chunks (the producer reads the golden longbook_qa trace and
+    # pushes exactly that many), then exits the loop so main() can PCC the resulting KV cache against
+    # the golden trace — the socket-driven analogue of run_standalone_chunked_prefill_loop.
+    pcc_mode = os.environ.get("PREFILL_REQUEST_LOOP_PCC", "0") == "1"
+    expected_chunks = int(os.environ.get("PREFILL_STANDALONE_CHUNKED_NCHUNKS", "11")) if pcc_mode else None
+
     logger.info(
         "[request] entering request loop — blocks on h2d_socket_sync for each push, "
-        "runs until SIGTERM/SIGINT (Ctrl-C). Drive it with prefill_h2d_producer.py / the scheduler."
+        + (
+            f"runs for {expected_chunks} chunks then PCC-checks the KV cache (PREFILL_REQUEST_LOOP_PCC=1)."
+            if pcc_mode
+            else "runs until SIGTERM/SIGINT (Ctrl-C). Drive it with prefill_h2d_producer.py / the scheduler."
+        )
     )
 
+    last_slot_id = int(os.environ.get("PREFILL_STANDALONE_CHUNKED_SLOT", "0")) % NUM_USERS
     i = 0
     while not _shutdown:
+        if expected_chunks is not None and i >= expected_chunks:
+            logger.info(f"[request] received all {expected_chunks} expected chunks; exiting loop for PCC check")
+            break
         # Device-side sync: workers block on data_ready_sem (set by the service
         # core after a producer push lands), copy backing -> fresh output, ack
         # consumed_counter. Returns tensors independent of the backing. This call
@@ -437,6 +481,7 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
         # Decode per-iter PrefillMetadata (replicated across the mesh — first device view).
         meta_host = ttnn.to_torch(ttnn.get_device_tensors(tt_metadata)[0]).view(torch.int32).flatten()
         slot_id = int(meta_host[0]) % NUM_USERS
+        last_slot_id = slot_id
         actual_start = int(meta_host[1])
         actual_end = int(meta_host[2])
         actual_isl = actual_end - actual_start
@@ -466,6 +511,12 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
         i += 1
     logger.info(f"[request] loop exited after {i} requests")
 
+    if pcc_mode:
+        # Drain the device, then PCC the KV cache filled over the socket against the golden trace.
+        ttnn.synchronize_device(pipeline.mesh_device)
+        logger.info(f"[request] running KV-cache PCC check (slot={last_slot_id}, n_chunks={i})")
+        _kv_cache_pcc_check(pipeline, last_slot_id, i)
+
 
 def _print_config() -> None:
     """Print all env var values at startup so the config is visible in logs."""
@@ -488,6 +539,7 @@ def _print_config() -> None:
         ("PREFILL_STANDALONE_CHUNKED_NCHUNKS", os.environ.get("PREFILL_STANDALONE_CHUNKED_NCHUNKS", "11")),
         ("PREFILL_STANDALONE_CHUNKED_SLOT", os.environ.get("PREFILL_STANDALONE_CHUNKED_SLOT", "0")),
         ("PREFILL_STANDALONE_CHUNKED_PCC", os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.88")),
+        ("PREFILL_REQUEST_LOOP_PCC", os.environ.get("PREFILL_REQUEST_LOOP_PCC", "0")),
         ("PREFILL_ENABLE_MIGRATION", os.environ.get("PREFILL_ENABLE_MIGRATION", "0")),
         ("PREFILL_H2D_SERVICE_ID", os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")),
     ]
