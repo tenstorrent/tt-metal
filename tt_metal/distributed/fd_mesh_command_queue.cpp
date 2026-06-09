@@ -1463,7 +1463,10 @@ void FDMeshCommandQueue::record_end() {
     trace_ctx_ = nullptr;
 
     // Restore the program-cache "misses allowed" flag saved in record_begin().
-    mesh_device_->set_program_cache_misses_allowed(program_cache_misses_allowed_before_trace_);
+    {
+        auto lock = lock_api_function_();
+        mesh_device_->set_program_cache_misses_allowed(program_cache_misses_allowed_before_trace_);
+    }
 
     trace_dispatch::load_host_dispatch_state(
         mesh_device_->num_sub_devices(),
