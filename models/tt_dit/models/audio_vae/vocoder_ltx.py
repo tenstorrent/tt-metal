@@ -36,6 +36,15 @@ from ...parallel.manager import CCLManager
 from ...utils.tracing import Tracer
 
 
+class _TraceEntry(NamedTuple):
+    """A captured trace for one input shape: the trace id plus its persistent
+    input/output device buffers (replay copies new data into ``input``, reads ``output``)."""
+
+    trace_id: int
+    input: ttnn.Tensor
+    output: ttnn.Tensor
+
+
 class DilatedConv1d(_AlignedOutConv1d):
     """Dilated 1D conv: a symmetric ("same") zeros-pad ``Conv1dViaConv3d`` with
     ``dilation`` passed through to conv3d. For the AMP block's ``(k-1)*d`` (always
@@ -401,7 +410,9 @@ class Vocoder(Module):
     def _host_to_device(self, mel_spec: torch.Tensor) -> ttnn.Tensor:
         """Host preprocessing + upload. Returns the ROW_MAJOR full-T device tensor that
         ``_forward_device`` consumes. Split out from ``forward`` so the pure-device graph
-        can be captured for trace replay; sets ``self._t_pad`` for the device/host stages."""
+        can be captured for trace replay; sets ``self._t_pad`` for the device/host stages.
+        When ``out`` is given, copies into that persistent device buffer (trace replay path)
+        instead of allocating a new one."""
         x_t = mel_spec.transpose(2, 3) if mel_spec.dim() == 4 else mel_spec.transpose(1, 2).unsqueeze(1)
         if x_t.dim() == 4:
             assert x_t.shape[1] == 2, f"stereo input must have 2 channels, got {x_t.shape[1]}"
@@ -427,6 +438,15 @@ class Vocoder(Module):
                 x_BTC_torch = torch.nn.functional.pad(x_BTC_torch, (0, 0, 0, t_pad))
         self._t_pad = t_pad
 
+        if out is not None:
+            host_t = ttnn.from_torch(
+                x_BTC_torch,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=self.dtype,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            ttnn.copy_host_to_device_tensor(host_t, out)
+            return out
         return ttnn.from_torch(x_BTC_torch, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
 
     def _forward_device(self, x_dev: ttnn.Tensor) -> ttnn.Tensor:
