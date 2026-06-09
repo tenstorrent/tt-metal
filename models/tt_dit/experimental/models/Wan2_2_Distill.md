@@ -39,13 +39,12 @@ tokenizer, text encoder, VAE, scheduler config.
 | `guidance_scale` | 1.0 | CFG baked in — disables negative-prompt path |
 | `guidance_scale_2` | 1.0 | Same as above for the low-noise stage |
 
-## Supported configurations (PR1)
+## Supported configurations
 
 | System | Mesh | SP | TP | Topology | Test ID |
 |---|---|---|---|---|---|
 | BH Galaxy | 4x8 | 8 (axis 1) | 4 (axis 0) | Ring | `bh_4x8sp1tp0_ring` |
-
-Additional mesh shapes will be added in follow-up work.
+| BH Quad-Galaxy | 4x32 | 32 (axis 1) | 4 (axis 0) | Ring | `bh_4x32sp1tp0_ring` |
 
 ## How to run
 
