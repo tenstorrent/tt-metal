@@ -48,8 +48,9 @@ std::string posix_errno_str() { return std::strerror(errno); }
 // initialised segment on /dev/shm.
 // =============================================================================
 InterProcessCounterChannel::InterProcessCounterChannel(const std::string& shm_name) :
-    shm_path_(shm_name), role_(Role::Owner) {
-    fd_ = ::shm_open(shm_path_.c_str(), O_CREAT | O_EXCL | O_RDWR, S_IRUSR | S_IWUSR);
+    shm_path_(shm_name),
+    role_(Role::Owner),
+    fd_(::shm_open(shm_path_.c_str(), O_CREAT | O_EXCL | O_RDWR, S_IRUSR | S_IWUSR)) {
     if (fd_ == -1) {
         // EEXIST here means a previous run left a stale segment; the
         // owner is responsible for unlinking it before re-creating.
