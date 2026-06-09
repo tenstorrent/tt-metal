@@ -1,47 +1,62 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Top-K Router implementation for Mixture of Experts (MoE) in GPT-OSS.
+MiniMax-M2 MoE router (gate).
 
-This module implements the routing mechanism that selects which experts should
-process each token in the MoE architecture. The router uses a learned linear
-transformation followed by top-k selection to assign tokens to experts.
+Differs from gpt-oss's softmax top-k router:
+  * sigmoid scoring (not softmax)
+  * the gate Linear has NO bias; instead a separate ``e_score_correction_bias``
+    is added to the sigmoid scores FOR SELECTION ONLY
+  * the returned top-k weights are the UNBIASED sigmoid values gathered at the
+    selected indices, then normalized to sum to 1 (not a softmax over top-k)
 
+HF reference (MiniMaxM2SparseMoeBlock.route_tokens_to_experts):
+    routing_weights = sigmoid(router_logits.float())
+    scores_for_choice = routing_weights + e_score_correction_bias
+    _, top_k_index = topk(scores_for_choice, top_k)
+    top_k_weights = routing_weights.gather(1, top_k_index)
+    top_k_weights /= top_k_weights.sum(dim=-1, keepdim=True)
 """
-
-import torch
 
 import ttnn
 from models.demos.minimax_m2.utils.general_utils import get_cache_file_name
 
 
-def topk_router(g, experts_per_token, use_throughput_experts, softmax_compute_config=None):
-    typecast_needed = False
-    if g.dtype != ttnn.bfloat16:
-        g_og = g
-        typecast_needed = True
-        g = ttnn.typecast(g, dtype=ttnn.bfloat16)
+def route_tokens_to_experts(router_logits, experts_per_token, num_experts, score_bias, use_throughput_experts):
+    """Apply MiniMax-M2 routing to gate logits [tokens, num_experts]."""
+    if router_logits.dtype != ttnn.bfloat16:
+        router_logits = ttnn.typecast(router_logits, dtype=ttnn.bfloat16)
 
-    expert_weights, expert_indices = ttnn.topk(g, k=experts_per_token, dim=-1, sorted=True)
-    if typecast_needed:
-        g.deallocate(True)
-        g = g_og
-    if softmax_compute_config is None:
-        softmax_compute_config = ttnn.init_device_compute_kernel_config(
-            g.device().arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi3,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
-    expert_weights = ttnn.softmax(
-        expert_weights, dim=1, numeric_stable=True, compute_kernel_config=softmax_compute_config
-    )
-    if use_throughput_experts:
-        return expert_indices, expert_weights
+    # Sigmoid scores over all experts.
+    routing_weights = ttnn.sigmoid(router_logits)
+
+    # Selection scores = sigmoid + correction bias (bias affects WHICH experts are
+    # chosen, not the returned weights).
+    if score_bias is not None:
+        scores_for_choice = ttnn.add(routing_weights, score_bias)
     else:
-        return expert_indices, ttnn.scatter(ttnn.zeros_like(g), dim=1, index=expert_indices, src=expert_weights)
+        scores_for_choice = routing_weights
+
+    _, expert_indices = ttnn.topk(scores_for_choice, k=experts_per_token, dim=-1, sorted=True)
+    if scores_for_choice is not routing_weights:
+        scores_for_choice.deallocate(True)
+
+    # Gather the UNBIASED sigmoid weights at the selected indices, normalize to sum 1.
+    top_k_weights = ttnn.gather(routing_weights, dim=-1, index=expert_indices)
+    denom = ttnn.sum(top_k_weights, dim=-1, keepdim=True)
+    top_k_weights = ttnn.div(top_k_weights, denom)
+    denom.deallocate(True)
+
+    if use_throughput_experts:
+        routing_weights.deallocate(True)
+        return expert_indices, top_k_weights
+
+    # Dense [tokens, num_experts] weights (normalized value at selected experts, 0 elsewhere).
+    dense_weights = ttnn.scatter(ttnn.zeros_like(routing_weights), dim=1, index=expert_indices, src=top_k_weights)
+    routing_weights.deallocate(True)
+    top_k_weights.deallocate(True)
+    return expert_indices, dense_weights
 
 
 class TopKRouter:
@@ -50,8 +65,9 @@ class TopKRouter:
         self.num_experts = hf_config.num_local_experts
         self.hidden_dim = hf_config.hidden_size
         self.tensor_cache_path = tensor_cache_path
+
+        # MiniMax-M2 gate Linear has no bias; weight is [num_experts, hidden] -> [hidden, num_experts].
         torch_weight = state_dict["weight"].transpose(0, 1) if state_dict else None
-        torch_bias = state_dict["bias"].unsqueeze(0) if state_dict else None
         self.weight = ttnn.as_tensor(
             torch_weight,
             device=mesh_device,
@@ -60,128 +76,48 @@ class TopKRouter:
             cache_file_name=get_cache_file_name(tensor_cache_path, "weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self.bias = ttnn.as_tensor(
-            torch_bias,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            cache_file_name=get_cache_file_name(tensor_cache_path, "bias"),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+
+        # e_score_correction_bias [num_experts] -> [1, num_experts], replicated; added to
+        # selection scores only. Absent in some checkpoints -> no correction.
+        score_bias_torch = None
+        if state_dict and "e_score_correction_bias" in state_dict:
+            score_bias_torch = state_dict["e_score_correction_bias"].reshape(1, -1)
+        self.score_bias = (
+            ttnn.as_tensor(
+                score_bias_torch,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                cache_file_name=get_cache_file_name(tensor_cache_path, "e_score_correction_bias"),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
+                if isinstance(mesh_device, ttnn.MeshDevice)
+                else None,
+            )
+            if score_bias_torch is not None
+            else None
         )
 
-        # Keep compute_config=None for linear (known quality-safe default)
-        # Custom compute configs were previously found to cause quality degradation
+        # Custom compute configs were found to degrade quality in gpt-oss; keep default.
         self.compute_config = None
 
-        # Cache softmax compute config (same as what topk_router creates per-call)
-        self.softmax_compute_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi3,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
-
-        # Fused op support: matmul + topk + softmax in one kernel
-        # The fused kernel uses 4 groups of 3 cores, one per N-tile (32 experts
-        # each), so it requires exactly 128 experts. Enable automatically when possible.
-        self.use_fused_op = self.num_experts == 128
-        self._fused_bias = None
-        # Keep the original unsharded bias for fused op initialization
-        # (ttnn.as_tensor shards self.bias across the mesh, but the fused op
-        # needs the full [1, num_experts] bias replicated on every device)
-        if self.use_fused_op and state_dict:
-            self._bias_torch = state_dict["bias"].unsqueeze(0).to(torch.bfloat16)
-        else:
-            self._bias_torch = None
-
-    def _init_fused_op(self, device, B):
-        """Lazily initialize fused op tensors (bias broadcast + output pre-alloc)."""
-        mesh_mapper = ttnn.ReplicateTensorToMesh(device) if isinstance(device, ttnn.MeshDevice) else None
-
-        if self._fused_bias is None:
-            if self._bias_torch is not None:
-                # Use the original unsharded bias (self._bias_torch is [1, num_experts])
-                # and broadcast to [B, num_experts] so every tile row has the bias vector.
-                bias_bcast = self._bias_torch.expand(B, -1).contiguous()
-            else:
-                bias_bcast = None
-            self._fused_bias = ttnn.as_tensor(
-                bias_bcast,
-                dtype=ttnn.bfloat16,
-                device=device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=mesh_mapper,
-                cache_file_name=get_cache_file_name(self.tensor_cache_path, f"fused_bias_B{B}"),
-            )
-
     def __call__(self, hidden_states, use_throughput_experts):
-        # Compute actual token count from the tensor volume before reshape,
-        # since shape[0] after reshape returns the tile-padded dimension
-        # (e.g. 8 tokens padded to 32 in TILE_LAYOUT).
+        # Actual token count from volume (shape[0] after reshape is tile-padded).
         actual_tokens = hidden_states.volume() // self.hidden_dim
         hidden_states = ttnn.reshape(hidden_states, (-1, self.hidden_dim))
 
-        # Fused op only supports decode mode (B=32, seq_len=1 → shape [32, hidden_dim])
-        if self.use_fused_op and actual_tokens == 32 and use_throughput_experts:
-            return self._fused_call(hidden_states, use_throughput_experts)
-
-        # Use L1 for decode (small tensors), DRAM for prefill (large sequences)
+        # L1 for decode (small), DRAM for prefill (large sequences).
         is_decode = actual_tokens <= 128
         mem_config = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
         router_logits = ttnn.linear(
             hidden_states,
-            self.weight,
-            bias=self.bias,
+            self.weight,  # no bias (MiniMax-M2)
             memory_config=mem_config,
             compute_kernel_config=self.compute_config,
         )
 
-        expert_indices, expert_weights = topk_router(
-            router_logits, self.top_k, use_throughput_experts, self.softmax_compute_config
+        expert_indices, expert_weights = route_tokens_to_experts(
+            router_logits, self.top_k, self.num_experts, self.score_bias, use_throughput_experts
         )
         ttnn.deallocate(router_logits)
-        return expert_indices, expert_weights
-
-    def _fused_call(self, hidden_states, use_throughput_experts):
-        """Forward pass using fused matmul+topk+softmax kernel.
-
-        Note: Fused op only supports throughput experts (sparse [B,k] output).
-        """
-        if not use_throughput_experts:
-            raise ValueError("Fused topk_router_gpt requires use_throughput_experts=True")
-
-        # Typecast to bf16 if needed (fused op requires bf16 input)
-        needs_typecast = hidden_states.dtype != ttnn.bfloat16
-        if needs_typecast:
-            hidden_states_bf16 = ttnn.typecast(hidden_states, dtype=ttnn.bfloat16)
-        else:
-            hidden_states_bf16 = hidden_states
-
-        B = hidden_states_bf16.shape[0]
-        device = hidden_states_bf16.device()
-
-        # Initialize fused op buffers (once)
-        self._init_fused_op(device, B)
-
-        # Run fused matmul + topk + softmax
-        indices_rm, weights_rm = ttnn.experimental.topk_router_gpt(
-            hidden_states_bf16,
-            weight_tensor=self.weight,
-            bias_tensor=self._fused_bias,
-            k=self.top_k,
-            num_experts=self.num_experts,
-        )
-
-        if needs_typecast:
-            ttnn.deallocate(hidden_states_bf16)
-
-        # Kernel produces uint16 RM [B, k_padded] and bf16 RM [B, k_padded].
-        # Slice to [B, top_k] in RM and return directly.
-        # fused_decode.py handles RM input natively (zero-cost reshape to 4D).
-        expert_indices = ttnn.slice(indices_rm, [0, 0], [B, self.top_k])
-        expert_weights = ttnn.slice(weights_rm, [0, 0], [B, self.top_k])
-        ttnn.deallocate(indices_rm)
-        ttnn.deallocate(weights_rm)
         return expert_indices, expert_weights

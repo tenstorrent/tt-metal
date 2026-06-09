@@ -34,8 +34,11 @@ class MLP:
         use_throughput_experts=True,
         tokens_per_device=32,
     ):
-        # Split state dict
-        router_state_dict = substate(state_dict, "router")
+        # Split state dict. MiniMax-M2's SparseMoeBlock has `gate.weight` (no bias) plus
+        # a sibling `e_score_correction_bias` buffer; experts live under `experts.*`.
+        router_state_dict = dict(substate(state_dict, "gate"))
+        if state_dict and "e_score_correction_bias" in state_dict:
+            router_state_dict["e_score_correction_bias"] = state_dict["e_score_correction_bias"]
         experts_state_dict = substate(state_dict, "experts")
 
         # Initialize components with mesh_config
