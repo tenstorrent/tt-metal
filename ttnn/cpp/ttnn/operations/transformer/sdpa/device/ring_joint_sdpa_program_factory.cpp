@@ -67,6 +67,8 @@ struct RingJointRuntimePlan {
     uint32_t logical_nt = 0;
     KVPadQMapping kv_pad_q_mapping;
     RingWorkPlan ring_work_plan;
+    bool kernel_chunked = false;
+    bool kernel_is_causal = false;
 };
 
 struct RingJointRuntimeDerivation {
@@ -79,7 +81,7 @@ struct RingJointRuntimeDerivation {
     uint32_t k_chunk_tile_count = 0;
     uint32_t num_joint_k_chunks = 0;
     uint32_t joint_seq_len = 0;
-    bool is_chunked = false;
+    bool kernel_chunked = false;
     bool kv_pad_rotation_enabled = false;
     bool kernel_is_causal = false;
 };
@@ -194,7 +196,7 @@ RingWorkPlan build_ring_work_plan_impl(
                 continue;
             }
             if (kv_global_tile_for_host_ring_plan(
-                    derivation.is_chunked,
+                    derivation.kernel_chunked,
                     ring_id,
                     local_tile_start,
                     derivation.q_chunk_group_tile_count,
@@ -208,7 +210,7 @@ RingWorkPlan build_ring_work_plan_impl(
         // Non-pad chunked prefill historically keeps every spatial ring iter active; KV-pad rotation
         // tightens this to valid chunks so empty pad slabs can be skipped.
         const bool has_kv_work =
-            (derivation.is_chunked && !derivation.kv_pad_rotation_enabled) || valid_spatial_kv_chunks > 0;
+            (derivation.kernel_chunked && !derivation.kv_pad_rotation_enabled) || valid_spatial_kv_chunks > 0;
         const bool ring_iter_does_work =
             (has_kv_work || joint_contributes) &&
             !(derivation.kernel_is_causal && ring_write_plan.device_index < ring_id && !is_balanced);
@@ -336,9 +338,11 @@ RingJointRuntimeDerivation build_runtime_derivation(
     derivation.k_chunk_tile_count = k_chunk_size / tt::constants::TILE_HEIGHT;
     derivation.num_joint_k_chunks = tt::div_up(L, k_chunk_size);
     derivation.joint_seq_len = L;
-    derivation.is_chunked = tensor_args.is_chunked();
+    // Cross is non-causal on chunked-shaped tensors, so kernels and the work planner use the
+    // non-chunked path.
+    derivation.kernel_chunked = tensor_args.is_chunked() && !args.is_cross;
     derivation.kv_pad_rotation_enabled = args.has_kv_pad_rotation();
-    derivation.kernel_is_causal = args.is_causal && !derivation.is_chunked;
+    derivation.kernel_is_causal = args.is_causal && !derivation.kernel_chunked;
 
     TT_FATAL(
         derivation.ring_size <= std::numeric_limits<uint32_t>::digits,
@@ -369,6 +373,8 @@ RingJointRuntimePlan build_runtime_plan(
     }
 
     plan.ring_work_plan = build_ring_work_plan(ring_write_plan, derivation, args.is_balanced);
+    plan.kernel_chunked = derivation.kernel_chunked;
+    plan.kernel_is_causal = derivation.kernel_is_causal;
     return plan;
 }
 
@@ -700,12 +706,13 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     // group size below is that Q-sized region across all devices.
     // diagonal-tile CB slot is shared with is_causal — needed whenever either is on.
     const uint32_t q_chunk_group_tile_count = q_local_padded_Nt * ring_size;
-    const bool is_chunked = tensor_args.is_chunked();
-    const bool diag_tile_enabled = args.is_causal || is_chunked;
-    // Kernel-level is_causal flag carries the legacy local-frame causal-stamp semantics. Chunked
-    // prefill is mathematically causal (args.is_causal=True) but uses absolute-coords stamps every
-    // ring iter, so the chunked path supersedes the legacy path — mask the flag off here.
-    const bool kernel_is_causal = args.is_causal && !is_chunked;
+    // kernel_chunked drives the chunked-prefill math in the kernels and the host ring-work planner.
+    // Cross runs the non-causal full-prefill path on chunked-shaped tensors, so it is excluded; the
+    // kernel-level is_causal flag carries the legacy local-frame causal-stamp semantics (chunked
+    // prefill supersedes it via absolute-coords stamps). Both are derived once in build_runtime_plan.
+    const bool kernel_chunked = runtime_plan.kernel_chunked;
+    const bool kernel_is_causal = runtime_plan.kernel_is_causal;
+    const bool diag_tile_enabled = args.is_causal || kernel_chunked;
 
     // Lightweight mask: needed when any K/joint dimension has padding, or when causal/chunked
     // masking is active.
@@ -840,10 +847,19 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
 
     log_debug(tt::LogOp, "max_q_per_core: {}", max_q_per_core);
 
+    // In-place latent-V optimization: when the Q chunk is a single tile (Sq_chunk_t==1) the
+    // second matmul (softmax@V) is data-movement bound, so instead of materializing V from K^T
+    // (an L1->L1 transfer) we read the first vDHt rows of K^T directly. V is never produced and the
+    // phase-2 matmul consumes one V column tile per issue (out_subblock_w=1). The kernels derive the
+    // same predicate from their compile-time args via the shared kt_inplace_v_enabled() helper.
+    const bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
+
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
-    // Latent-V reuses the K CB for K^T and compact V. A third fixed-size entry lets the reader
-    // materialize next V while compute still consumes current V.
+    // Latent-V keeps the K CB triple-buffered. With V rematerialized, the 3rd slot let the reader
+    // build the next V while compute consumed the current one; with in-place latent V (kt_inplace_v)
+    // there is no V entry, but the 3rd K^T slot still buys prefetch slack that hides the reader's
+    // NoC latency tail — measured ~+3pt math util on the dv512 q32 shape vs double-buffering.
     uint32_t k_tiles = Sk_chunk_t * DHt * (v_shares_k_buffer ? 3 : 2);
     uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
     uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t;
@@ -901,8 +917,14 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         qk_out_subblock_h,
         qk_out_subblock_w);
 
-    auto [out_out_subblock_h, out_out_subblock_w] =
-        detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size, use_streaming_compute ? 2 : UINT32_MAX);
+    // In-place latent-V reads non-contiguous K^T rows as V columns, so the phase-2 matmul must
+    // emit exactly one output column tile per issue (max_subblock_w=1).
+    auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(
+        Sq_chunk_t,
+        vDHt,
+        dst_size,
+        /*max_subblock_h=*/use_streaming_compute ? 2 : UINT32_MAX,
+        /*max_subblock_w=*/kt_inplace_v ? 1u : UINT32_MAX);
     // Streaming compute may widen the QKT@V row group beyond the host matmul subblock
     // height for odd Q chunks. The writer must drain cb_out with the same row-group
     // cadence that compute pushes, otherwise deferred-save rows can be popped and
@@ -1025,7 +1047,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         args.is_balanced,
         static_cast<uint32_t>(enable_zigzag_balancing),
         // Reader slot 24: chunked_enabled. Writer/compute use their corresponding slot for use_streaming_compute.
-        static_cast<uint32_t>(is_chunked),
+        static_cast<uint32_t>(kernel_chunked),
         num_active_cores,
         q_chunk_group_tile_count,
         static_cast<uint32_t>(indexed_kv_cache),
@@ -1141,7 +1163,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         args.is_balanced,
         static_cast<uint32_t>(enable_zigzag_balancing),
         static_cast<std::uint32_t>(writer_out_row_group_h),
-        static_cast<uint32_t>(is_chunked),
+        static_cast<uint32_t>(kernel_chunked),
         q_chunk_group_tile_count,
         compile_time_active_ring_iter_mask,
         compile_time_last_active_ring_iter,
@@ -1192,7 +1214,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         kernel_is_causal,
         args.is_balanced,
         static_cast<uint32_t>(enable_zigzag_balancing),
-        static_cast<uint32_t>(is_chunked),
+        static_cast<uint32_t>(kernel_chunked),
         q_chunk_group_tile_count,
         static_cast<uint32_t>(kv_pad_rotation_enabled),
         compile_time_kv_pad_q_mapping.q_pre_wrap_start_tile,

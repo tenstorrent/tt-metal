@@ -10,6 +10,7 @@
 #include <tt-metalium/constants.hpp>
 #include "api/debug/assert.h"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
 
 template <uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {
@@ -464,8 +465,111 @@ void fill_causal_diagonal_tile_bf16(uint32_t cb_id, uint32_t tile_id) {
 }
 
 /**
+ * Fill a bf16 tile with a diagonal-edge mask pattern relative to `boundary_col = row + diagonal_offset`:
+ *   - leading edge (leading_edge=true):  col c is -inf if c < boundary_col
+ *   - trailing edge (leading_edge=false): col c is -inf if c > boundary_col
+ */
+template <uint32_t tile_bytes, int32_t diagonal_offset = 0, bool leading_edge = true>
+void fill_diagonal_edge_tile_bf16(uint32_t cb_id, uint32_t tile_id) {
+    fill_tile_zeros<tile_bytes>(cb_id, tile_id);
+
+    constexpr uint32_t neginf_bf16 = 0xFF80;
+    constexpr uint32_t bf16_per_uint32 = 2;
+    constexpr uint32_t uint32_per_face_row = tt::constants::FACE_WIDTH / bf16_per_uint32;  // 8
+    constexpr uint32_t uint32_per_face = tt::constants::FACE_HW / bf16_per_uint32;         // 128
+
+    volatile tt_l1_ptr uint32_t* ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+
+    constexpr uint32_t face_offsets[4] = {
+        0,
+        uint32_per_face,
+        2 * uint32_per_face,
+        3 * uint32_per_face,
+    };
+    constexpr uint32_t face_row_starts[4] = {0, 0, 16, 16};
+    constexpr uint32_t face_col_starts[4] = {0, 16, 0, 16};
+
+    for (uint32_t f = 0; f < 4; f++) {
+        const uint32_t face_base = face_offsets[f];
+        const uint32_t row_start = face_row_starts[f];
+        const uint32_t col_start = face_col_starts[f];
+        for (uint32_t row = 0; row < tt::constants::FACE_HEIGHT; row++) {
+            const uint32_t global_row = row_start + row;
+            const int32_t boundary_col = static_cast<int32_t>(global_row) + diagonal_offset;
+            const uint32_t row_base = face_base + row * uint32_per_face_row;
+            for (uint32_t word = 0; word < uint32_per_face_row; word++) {
+                const int32_t col0 = static_cast<int32_t>(col_start + word * bf16_per_uint32);
+                const int32_t col1 = col0 + 1;
+                uint32_t mask_word = 0;
+                if constexpr (leading_edge) {
+                    if (col0 < boundary_col) {
+                        mask_word |= neginf_bf16;
+                    }
+                    if (col1 < boundary_col) {
+                        mask_word |= neginf_bf16 << 16;
+                    }
+                } else {
+                    if (col0 > boundary_col) {
+                        mask_word |= neginf_bf16;
+                    }
+                    if (col1 > boundary_col) {
+                        mask_word |= neginf_bf16 << 16;
+                    }
+                }
+                if (mask_word != 0) {
+                    ptr[row_base + word] = mask_word;
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Emit the four sliding-window edge tiles (trailing_primary, leading_prev, leading_current,
+ * trailing_next) starting at `start_tile_idx` in the mask CB.
+ *
+ * The per-tile diagonal offsets place each edge's transition at the correct sub-tile column.
+ * `leading_remainder`/`trailing_remainder` are the window edges' positions within a 32-row tile;
+ * when they are 0 the window is tile-aligned and the prev/next straddle tiles go unused. The
+ * causal window has only a leading (left) edge — its trailing tile reuses the plain causal diagonal.
+ *
+ * NOTE: this is per-row *stamp* geometry (floor + remainder), intentionally distinct from the
+ * ceil-based loop bounds in SlidingWindowLoopGeometry. See sliding_window_geometry.hpp.
+ */
+template <uint32_t sliding_window_size, bool is_causal_lw, uint32_t cb_mask_in, uint32_t tile_bytes>
+void fill_sliding_window_edge_tiles(uint32_t start_tile_idx) {
+    constexpr uint32_t half_window = sliding_window_size / 2;
+    constexpr uint32_t leading_remainder =
+        is_causal_lw ? (sliding_window_size % tt::constants::TILE_HEIGHT) : (half_window % tt::constants::TILE_HEIGHT);
+    constexpr uint32_t trailing_remainder = is_causal_lw ? 0 : (half_window % tt::constants::TILE_HEIGHT);
+    constexpr int32_t leading_prev_offset =
+        is_causal_lw ? (leading_remainder == 0 ? 1 : static_cast<int32_t>(33 - leading_remainder))
+                     : (leading_remainder == 0 ? 0 : static_cast<int32_t>(32 - leading_remainder));
+    constexpr int32_t leading_current_offset =
+        is_causal_lw ? (leading_remainder == 0 ? 1 : 1 - static_cast<int32_t>(leading_remainder))
+                     : (leading_remainder == 0 ? 0 : -static_cast<int32_t>(leading_remainder));
+    constexpr int32_t trailing_primary_offset = static_cast<int32_t>(trailing_remainder);
+    constexpr int32_t trailing_next_offset = static_cast<int32_t>(trailing_remainder) - 32;
+
+    // Tile 0: trailing/right edge. Causal uses the normal causal diagonal.
+    fill_diagonal_edge_tile_bf16<tile_bytes, trailing_primary_offset, /*leading_edge=*/false>(
+        cb_mask_in, start_tile_idx);
+    // Tile 1/2: left edge when it straddles two K tiles; tile 1 is unused for aligned windows.
+    fill_diagonal_edge_tile_bf16<tile_bytes, leading_prev_offset, /*leading_edge=*/true>(
+        cb_mask_in, start_tile_idx + 1);
+    fill_diagonal_edge_tile_bf16<tile_bytes, leading_current_offset, /*leading_edge=*/true>(
+        cb_mask_in, start_tile_idx + 2);
+    // Tile 3: non-causal right edge when it straddles into the next K tile; unused for causal/aligned windows.
+    fill_diagonal_edge_tile_bf16<tile_bytes, trailing_next_offset, /*leading_edge=*/false>(
+        cb_mask_in, start_tile_idx + 3);
+}
+
+/**
  * Generate lightweight mask tiles into a single CB for ring joint SDPA.
- * Layout: [neginf_tile(0)] [causal_diag_tile?(1)] [global_n_partial_tile?] [joint_l_partial_tile?]
+ * Layout without sliding: [neginf_tile(0)] [causal_diag_tile?] [global_n_partial_tile?] [joint_l_partial_tile?]
+ * Layout with sliding:    [neginf_tile(0)] [trailing_primary(1)] [leading_prev(2)]
+ *                         [leading_current(3)] [trailing_next(4)] [partial tiles...]
  * Tiles are pushed once and stay permanently fronted for the entire kernel lifetime.
  *
  * @tparam global_n_partial_col  Column within tile where global_n padding starts (0 = tile-aligned, no partial)
@@ -473,11 +577,18 @@ void fill_causal_diagonal_tile_bf16(uint32_t cb_id, uint32_t tile_id) {
  * @tparam cb_mask_in            CB to generate mask tiles into (must be constexpr for get_tile_size)
  * @tparam is_causal_lw          Whether to include the causal diagonal tile
  */
-template <uint32_t global_n_partial_col, uint32_t joint_l_partial_col, uint32_t cb_mask_in, bool is_causal_lw = false>
+template <
+    uint32_t global_n_partial_col,
+    uint32_t joint_l_partial_col,
+    uint32_t cb_mask_in,
+    bool is_causal_lw = false,
+    uint32_t sliding_window_size = 0>
 void generate_lightweight_mask_tiles() {
     constexpr uint32_t partial_mask_tiles = (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
-    constexpr uint32_t causal_diag_tiles = is_causal_lw ? 1 : 0;
-    constexpr uint32_t total_mask_tiles = 1 + causal_diag_tiles + partial_mask_tiles;
+    constexpr bool has_sliding_window = sliding_window_size > 0;
+    constexpr uint32_t sliding_diag_tiles = has_sliding_window ? kSlidingWindowEdgeTiles : 0;
+    constexpr uint32_t causal_diag_tiles = (!has_sliding_window && is_causal_lw) ? 1 : 0;
+    constexpr uint32_t total_mask_tiles = 1 + sliding_diag_tiles + causal_diag_tiles + partial_mask_tiles;
     constexpr uint32_t mask_tile_size_bytes = get_tile_size(cb_mask_in);
 
     cb_reserve_back(cb_mask_in, total_mask_tiles);
@@ -487,8 +598,10 @@ void generate_lightweight_mask_tiles() {
 
     uint32_t tile_idx = 1;
 
-    // Tile 1 (if causal): causal diagonal tile
-    if constexpr (is_causal_lw) {
+    if constexpr (has_sliding_window) {
+        fill_sliding_window_edge_tiles<sliding_window_size, is_causal_lw, cb_mask_in, mask_tile_size_bytes>(tile_idx);
+        tile_idx += kSlidingWindowEdgeTiles;
+    } else if constexpr (is_causal_lw) {
         fill_causal_diagonal_tile_bf16<mask_tile_size_bytes>(cb_mask_in, tile_idx++);
     }
 

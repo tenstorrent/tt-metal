@@ -620,7 +620,6 @@ on:
           - n300-llmbox
           - topology-6u
           - BH-LLMBox
-          - BH-DeskBox
           - BH-LoudBox
         default: "N150"
       log-level:
@@ -818,6 +817,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -879,12 +879,13 @@ jobs:
     timeout-minutes: 30
     runs-on: >-
       ${{
-        (needs.resolve-inputs.outputs.runner-label == 'topology-6u' || needs.resolve-inputs.outputs.runner-label == 'BH-LLMBox' || needs.resolve-inputs.outputs.runner-label == 'BH-DeskBox' || needs.resolve-inputs.outputs.runner-label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', needs.resolve-inputs.outputs.runner-label))
+        (needs.resolve-inputs.outputs.runner-label == 'topology-6u' || needs.resolve-inputs.outputs.runner-label == 'BH-LLMBox' || needs.resolve-inputs.outputs.runner-label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', needs.resolve-inputs.outputs.runner-label))
         || format('tt-ubuntu-2204-{0}-viommu-stable', needs.resolve-inputs.outputs.runner-label)
       }}
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -956,6 +957,7 @@ jobs:
           name: sweeps-vectors
           path: /tmp/vectors
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           clean: false
       - id: set-matrix
@@ -1024,12 +1026,13 @@ jobs:
     timeout-minutes: 720
     runs-on: >-
       ${{
-        (matrix.test-group.runner_label == 'topology-6u' || matrix.test-group.runner_label == 'BH-LLMBox' || matrix.test-group.runner_label == 'BH-DeskBox' || matrix.test-group.runner_label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', matrix.test-group.runner_label))
+        (matrix.test-group.runner_label == 'topology-6u' || matrix.test-group.runner_label == 'BH-LLMBox' || matrix.test-group.runner_label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', matrix.test-group.runner_label))
         || format('tt-ubuntu-2204-{0}-viommu-stable', matrix.test-group.runner_label)
       }}
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -1271,6 +1274,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -1354,6 +1358,7 @@ jobs:
     steps:
       - name: Checkout repository (actions only)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: |
             .github/actions

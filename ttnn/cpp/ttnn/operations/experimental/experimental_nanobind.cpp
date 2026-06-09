@@ -51,6 +51,7 @@
 #include "ttnn/operations/experimental/plusone/plusone_nanobind.hpp"
 #include "ttnn/operations/experimental/dropout/dropout_nanobind.hpp"
 #include "ttnn/operations/experimental/bcast_to/bcast_to_nanobind.hpp"
+#include "ttnn/operations/experimental/multi_scale_deformable_attn/multi_scale_deformable_attn_nanobind.hpp"
 #include "ttnn/operations/experimental/reshape/view_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_nanobind.hpp"
@@ -78,6 +79,7 @@
 #include "ttnn/operations/experimental/deepseek_prefill/insert/insert_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/moe_grouped_topk_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/update_padded_kv_cache_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/rotary_embedding_indexed_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate/deepseek_moe_gate_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
@@ -157,6 +159,7 @@ void py_module(nb::module_& mod) {
     ccl::py_module(m_experimental_ccl);
 
     broadcast_to::detail::bind_broadcast_to(mod);
+    multi_scale_deformable_attn::detail::bind_multi_scale_deformable_attn(mod);
 
     minimal_matmul::detail::bind_minimal_matmul(mod);
     minimal_matmul::detail::bind_minimal_matmul_split(mod);
@@ -176,6 +179,7 @@ void py_module(nb::module_& mod) {
     deepseek_prefill::detail::bind_extract(mod);
     deepseek_prefill::detail::bind_insert(mod);
     deepseek_prefill::detail::bind_update_padded_kv_cache(mod);
+    deepseek_prefill::detail::bind_rotary_embedding_indexed(mod);
 
     deepseek_moe_post_combine_tilize::detail::bind_deepseek_moe_post_combine_tilize(mod);
     fusion::detail::bind_fusion_dispatch_op(mod);

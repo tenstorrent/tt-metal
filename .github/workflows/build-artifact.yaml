@@ -281,6 +281,7 @@ jobs:
       python-version: ${{ steps.parse.outputs.python-version }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
@@ -323,6 +324,7 @@ jobs:
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
@@ -475,6 +477,7 @@ jobs:
 
       - name: ⬇️ Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           ref: ${{ inputs.ref || github.sha }}
@@ -598,25 +601,13 @@ jobs:
           ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
-          # Surface any remote storage errors from the log so they are visible
-          # in the job summary without having to download a full log artifact.
+          # Surface remote storage stats and errors from the ccache log.
+          # Uses a filter script to avoid overflowing the 1024k step summary limit.
           if [ -f /tmp/ccache.log ]; then
-            ERRORS=$(grep -i 'error\|failed\|timeout' /tmp/ccache.log || true)
-            if [ -n "$ERRORS" ]; then
-              echo '## CCache Errors' >> $GITHUB_STEP_SUMMARY
-              echo '```' >> $GITHUB_STEP_SUMMARY
-              echo "$ERRORS" >> $GITHUB_STEP_SUMMARY
-              echo '```' >> $GITHUB_STEP_SUMMARY
-            fi
-          fi
-
-      - name: Print ccache log
-        if: always()
-        run: |
-          if [ -f /tmp/ccache.log ]; then
-            echo "=== ccache log ===" && cat /tmp/ccache.log
-          else
-            echo "No ccache log found at /tmp/ccache.log"
+            echo '## CCache Remote Storage' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            .github/scripts/ccache_log_filter.sh /tmp/ccache.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: ☁️ Upload packages

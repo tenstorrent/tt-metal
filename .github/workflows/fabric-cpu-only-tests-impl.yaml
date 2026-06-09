@@ -22,8 +22,18 @@ on:
 
 jobs:
   fabric-cpu-unit-tests:
-    name: ${{ inputs.arch }} fabric cpu unit tests
-    runs-on: tt-ubuntu-2204-large-stable
+    name: ${{ inputs.arch }} fabric cpu unit tests (${{ matrix.shard.name }})
+    runs-on: tt-ubuntu-2204-medium-stable
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          # Shard A (~6m20s): unit + phys-grouping + control-plane + t3k + wh-galaxy
+          - name: "unit-phys-ctrl-t3k-wh"
+            groups: "unit phys-grouping control-plane t3k wh-galaxy"
+          # Shard B (~5m): bh-galaxy
+          - name: "bh"
+            groups: "bh-galaxy"
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -44,6 +54,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -54,11 +65,13 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           hang-detection-timeout: 20.0
-      - name: Run fabric cpu-only unit tests
+      - name: Run fabric cpu-only unit tests (${{ matrix.shard.name }})
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           # Keep commands in tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh (also runnable locally).
-          ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh
+          for g in ${{ matrix.shard.groups }}; do
+            ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group "$g"
+          done
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10

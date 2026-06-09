@@ -67,5 +67,4 @@ inline void _llk_unpack_AB_sub_bcast_col_custom_(const std::uint32_t address_a, 
 
 inline void _llk_unpack_AB_sub_bcast_col_uninit_custom_()
 {
-    TTI_SETADCXX(p_setadc::UNP_AB, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
 }

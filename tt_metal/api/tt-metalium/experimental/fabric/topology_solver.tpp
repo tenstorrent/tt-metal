@@ -2075,6 +2075,8 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
         }
         same_rank_groups.push_back(std::move(group_indices));
     }
+
+    minimize_same_rank_groups_used = constraints.minimize_same_rank_groups_used();
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -2382,6 +2384,28 @@ int SearchHeuristic::compute_candidate_cost(
         }
     }
 
+    // Host-affinity (packing) score: prefer a global whose same-rank group (host partition) is already the
+    // fullest among hosts that still have room — a best-fit bin-packing bias that consolidates targets onto the
+    // fewest hosts. We score by how many already-mapped globals share the candidate's host (occupancy), with an
+    // extra bump per already-mapped target NEIGHBOR on that host so connected targets (e.g. a pipeline chain)
+    // prefer to grow within the current host. This is pure value-ordering — it never changes which mappings are
+    // valid, so it cannot introduce UNSAT or alter correctness. Inert when no same-rank global groups were
+    // provided (global_to_same_rank_group empty / unlabeled).
+    int host_affinity_score = 0;
+    const auto& global_to_host = constraint_data.global_to_same_rank_group;
+    if (!global_to_host.empty() && global_idx < global_to_host.size()) {
+        const int candidate_host = global_to_host[global_idx];
+        if (candidate_host >= 0) {
+            for (size_t t = 0; t < mapping.size(); ++t) {
+                const int mapped_global = mapping[t];
+                if (mapped_global >= 0 && static_cast<size_t>(mapped_global) < global_to_host.size() &&
+                    global_to_host[static_cast<size_t>(mapped_global)] == candidate_host) {
+                    ++host_affinity_score;
+                }
+            }
+        }
+    }
+
     // Compute degree gap (runtime optimization)
     size_t target_deg = graph_data.target_deg[target_idx];
     size_t global_deg = graph_data.global_deg[global_idx];
@@ -2395,17 +2419,19 @@ int SearchHeuristic::compute_candidate_cost(
         degree_gap_cost = INT_MAX;
     }
 
-    // Cost = -is_preferred * SOFT_WEIGHT
+    // Cost = -host_affinity * HOST_AFFINITY_WEIGHT
+    //      - is_preferred * SOFT_WEIGHT
     //      - channel_match_score
     //      + degree_gap * RUNTIME_WEIGHT
-    // Lower cost = better candidate
+    // Lower cost = better candidate. Host-affinity dominates so packing tightness wins over softer
+    // channel/preferred biases (connectivity remains a hard constraint, so packing can never be unsafe).
     int preferred_cost;
     if (is_preferred) {
         preferred_cost = SOFT_WEIGHT;
     } else {
         preferred_cost = 0;
     }
-    return static_cast<int>(-preferred_cost - channel_match_score +
+    return static_cast<int>(-host_affinity_score * HOST_AFFINITY_WEIGHT - preferred_cost - channel_match_score +
                             degree_gap_cost);
 }
 
