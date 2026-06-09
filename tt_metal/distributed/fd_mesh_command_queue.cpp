@@ -15,8 +15,6 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <array>
-#include <cstdlib>
-#include <cstring>
 #include <functional>
 #include <optional>
 #include <type_traits>
@@ -57,6 +55,9 @@
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <distributed/mesh_device_impl.hpp>
 #include "dispatch/simple_trace_allocator.hpp"
+#if defined(TT_UMD_BUILD_SIMULATION)
+#include "buffers/simulator_direct_write.hpp"
+#endif
 
 namespace tt::tt_metal {
 struct ProgramCommandSequence;
@@ -65,18 +66,6 @@ struct ProgramCommandSequence;
 namespace tt::tt_metal::distributed {
 
 namespace {
-
-bool simulator_direct_tensor_writes_enabled() {
-    static const bool enabled = [] {
-        const char* env = std::getenv("TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES");
-        if (env == nullptr) {
-            return false;
-        }
-        return std::strcmp(env, "0") != 0 && std::strcmp(env, "false") != 0 && std::strcmp(env, "FALSE") != 0 &&
-               std::strcmp(env, "off") != 0 && std::strcmp(env, "OFF") != 0;
-    }();
-    return enabled;
-}
 
 // Don't use std::forward since we are in a loop.
 // NOLINTBEGIN(cppcoreguidelines-missing-std-forward)
@@ -611,20 +600,16 @@ bool FDMeshCommandQueue::write_shard_to_device(
     auto region_value = region.value_or(BufferRegion(0, device_buffer->size()));
     auto shard_view = device_buffer->view(region_value);
 
-    // Simulator preload shortcut: direct synchronous writes avoid simulating CQ payload copies.
-    // Only takes effect while the CQ is idle; once any FD work has been enqueued on this CQ we
-    // fall back to the FD path so that ordering against in-flight programs is preserved.
-    if (!in_use_ && this->get_target_device_type() == tt::TargetDevice::Simulator &&
-        simulator_direct_tensor_writes_enabled() && src != nullptr && region_value.offset == 0) {
-        auto payload =
-            tt::stl::Span<const uint8_t>(static_cast<const uint8_t*>(src), static_cast<size_t>(region_value.size));
-        if (logical_core_filter != nullptr) {
-            tt::tt_metal::experimental::core_subset_write::WriteToBuffer(*shard_view, payload, *logical_core_filter);
-        } else {
-            tt::tt_metal::detail::WriteToBuffer(*shard_view, payload);
-        }
+#if defined(TT_UMD_BUILD_SIMULATION)
+    const tt_sim::DirectWriteGuard tt_sim_direct_write_guard{
+        .target = this->get_target_device_type(),
+        .cq_idle = !in_use_.load(std::memory_order_acquire),
+        .rtoptions = &MetalContext::instance(mesh_device_->impl().get_context_id()).rtoptions(),
+    };
+    if (tt_sim::try_direct_write(tt_sim_direct_write_guard, *shard_view, src, region_value, logical_core_filter)) {
         return false;
     }
+#endif
 
     in_use_ = true;
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);

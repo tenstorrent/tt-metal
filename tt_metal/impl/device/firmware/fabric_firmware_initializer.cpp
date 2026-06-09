@@ -286,6 +286,7 @@ void FabricFirmwareInitializer::init(
 
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
         log_info(tt::LogMetal, "Initializing Fabric");
+#if defined(TT_UMD_BUILD_SIMULATION)
         if (rtoptions_.get_simulator_enabled()) {
             for (auto* dev : devices_) {
                 const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
@@ -298,6 +299,7 @@ void FabricFirmwareInitializer::init(
                 }
             }
         }
+#endif
         control_plane_.write_routing_tables_to_all_chips();
         compile_and_configure_fabric();
         log_info(tt::LogMetal, "Fabric Initialized with config {}", fabric_config);
