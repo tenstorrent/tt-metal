@@ -186,6 +186,9 @@ def register_fix(
     diff_files: List[str],
     source_model_id: str,
     notes: str = "",
+    failure_class: Optional[str] = None,
+    error_extract: Optional[str] = None,
+    component_kind: Optional[str] = None,
     log_path: Path = _DEFAULT_LOG,
     lock_path: Path = _DEFAULT_LOCK,
 ) -> bool:
