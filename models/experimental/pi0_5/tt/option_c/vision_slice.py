@@ -613,6 +613,8 @@ def _load_siglip_weights_chunk_stacked_sharded(
     full_weights: Dict[str, torch.Tensor],
     layers_per_chip: List[int],
     vision_submesh,
+    num_heads: int,
+    head_dim: int,
     dtype=ttnn.bfloat8_b,
 ) -> Dict[str, List[Optional["ttnn.Tensor"]]]:
     """Upload all SigLIP layer weights as vision-submesh sharded tensors.
@@ -646,21 +648,50 @@ def _load_siglip_weights_chunk_stacked_sharded(
         chunk_layer_ranges.append((lo, lo + n))
         lo += n
 
-    matmul_suffixes_attn = [
-        "self_attn.q_proj.weight",
-        "self_attn.k_proj.weight",
-        "self_attn.v_proj.weight",
-        "self_attn.out_proj.weight",
-    ]
+    # SigLIP attention weights need head-dim padding (72 → 96 for SigLIP-base)
+    # because TT-Metal tile alignment requires head_dim % 32 == 0. Q/K/V get
+    # padded then concat'd into a fused wqkv matrix (matches the existing
+    # SigLIPAttentionTTNN __init__); out_proj gets padded on its input axis.
+    padded_head_dim = ((head_dim + 31) // 32) * 32
+    pad_amount = padded_head_dim - head_dim
+
+    def _pad_head_dim_weight(w: torch.Tensor, heads_out: bool) -> torch.Tensor:
+        """Pad a Q/K/V or O weight matrix's head_dim from head_dim to padded_head_dim.
+
+        For Q/K/V (heads_out=True): weight is [num_heads*head_dim, hidden]. Pad
+        head_dim axis to padded_head_dim → [num_heads*padded_head_dim, hidden].
+        For O (heads_out=False): weight is [hidden, num_heads*head_dim]. Pad the
+        head_dim axis on the input side → [hidden, num_heads*padded_head_dim].
+        """
+        if pad_amount == 0:
+            return w
+        if heads_out:
+            # w: [num_heads * head_dim, hidden] → reshape to [num_heads, head_dim, hidden]
+            w_r = w.reshape(num_heads, head_dim, w.shape[-1])
+            # pad last-axis-but-one (head_dim): F.pad pads in reverse, so (left, right) of each dim
+            # We want to pad dim=1 (head_dim). torch.nn.functional.pad takes pairs starting from last.
+            w_p = torch.nn.functional.pad(w_r, (0, 0, 0, pad_amount))  # pad head_dim
+            return w_p.reshape(num_heads * padded_head_dim, w.shape[-1])
+        else:
+            # w: [hidden, num_heads * head_dim] → reshape to [hidden, num_heads, head_dim]
+            w_r = w.reshape(w.shape[0], num_heads, head_dim)
+            w_p = torch.nn.functional.pad(w_r, (0, pad_amount))  # pad head_dim
+            return w_p.reshape(w.shape[0], num_heads * padded_head_dim)
+
+    def _pad_head_dim_bias(b: torch.Tensor) -> torch.Tensor:
+        """Pad a Q/K/V bias from [num_heads*head_dim] to [num_heads*padded_head_dim]."""
+        if pad_amount == 0:
+            return b
+        b_r = b.reshape(num_heads, head_dim)
+        b_p = torch.nn.functional.pad(b_r, (0, pad_amount))
+        return b_p.reshape(num_heads * padded_head_dim)
+
+    # MLP and LN weight suffixes — uploaded with no special handling.
     matmul_suffixes_mlp = [
         "mlp.fc1.weight",
         "mlp.fc2.weight",
     ]
-    bias_suffixes = [
-        "self_attn.q_proj.bias",
-        "self_attn.k_proj.bias",
-        "self_attn.v_proj.bias",
-        "self_attn.out_proj.bias",
+    bias_suffixes_mlp_and_ln = [
         "mlp.fc1.bias",
         "mlp.fc2.bias",
         "layer_norm1.bias",
@@ -670,6 +701,9 @@ def _load_siglip_weights_chunk_stacked_sharded(
         "layer_norm1.weight",
         "layer_norm2.weight",
     ]
+    # Out-proj weight + bias get special handling for input-side head-dim padding.
+    out_proj_w_suffix = "self_attn.out_proj.weight"
+    out_proj_b_suffix = "self_attn.out_proj.bias"
 
     def _build_position_tensor(
         suffix: str,
@@ -715,13 +749,143 @@ def _load_siglip_weights_chunk_stacked_sharded(
 
     out: Dict[str, List[Optional["ttnn.Tensor"]]] = {}
 
-    for s in matmul_suffixes_attn + matmul_suffixes_mlp:
-        key = s.replace(".weight", "").replace("self_attn.", "").replace("mlp.", "")
+    # MLP weights (no padding).
+    for s in matmul_suffixes_mlp:
+        key = s.replace(".weight", "").replace("mlp.", "")
         per_pos: List[Optional["ttnn.Tensor"]] = []
         for j in range(max_layers_per_chunk):
             t = _build_position_tensor(s, j, dtype, is_matmul=True)
             per_pos.append(t)
         out[key] = per_pos
+
+    # Fused wqkv per position: concat([wq, wk, wv], dim=-1) after .T and per-head padding.
+    # Each layer's contribution at chunk i's slot: [hidden, 3*num_heads*padded_head_dim].
+    def _build_wqkv_position(position: int) -> Optional["ttnn.Tensor"]:
+        # Probe reference shape from first chunk that has a layer at this position.
+        ref: Optional[torch.Tensor] = None
+        for chunk_idx in range(num_chunks):
+            cl_lo, cl_hi = chunk_layer_ranges[chunk_idx]
+            if cl_lo + position < cl_hi:
+                wq_ref = _fetch_layer_weight(full_weights, cl_lo + position, "self_attn.q_proj.weight")
+                if wq_ref is not None:
+                    ref = wq_ref
+                    break
+        if ref is None:
+            return None
+        hidden = ref.shape[-1]
+        wqkv_n = 3 * num_heads * padded_head_dim
+        # Stacked across chunks: [num_chunks, hidden, wqkv_n] (uploaded post-.T form).
+        stacked = torch.zeros((num_chunks, hidden, wqkv_n), dtype=ref.dtype)
+        for chunk_idx in range(num_chunks):
+            cl_lo, cl_hi = chunk_layer_ranges[chunk_idx]
+            if cl_lo + position >= cl_hi:
+                continue
+            global_layer = cl_lo + position
+            wq = _fetch_layer_weight(full_weights, global_layer, "self_attn.q_proj.weight")
+            wk = _fetch_layer_weight(full_weights, global_layer, "self_attn.k_proj.weight")
+            wv = _fetch_layer_weight(full_weights, global_layer, "self_attn.v_proj.weight")
+            if wq is None or wk is None or wv is None:
+                continue
+            wq_p = _pad_head_dim_weight(wq, heads_out=True).T.contiguous()  # [hidden, num_heads*padded]
+            wk_p = _pad_head_dim_weight(wk, heads_out=True).T.contiguous()
+            wv_p = _pad_head_dim_weight(wv, heads_out=True).T.contiguous()
+            fused = torch.cat([wq_p, wk_p, wv_p], dim=-1)
+            stacked[chunk_idx] = fused
+        return ttnn.from_torch(
+            stacked,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=vision_submesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(vision_submesh, dim=0),
+        )
+
+    def _build_bqkv_position(position: int) -> Optional["ttnn.Tensor"]:
+        # Reference probe.
+        ref: Optional[torch.Tensor] = None
+        for chunk_idx in range(num_chunks):
+            cl_lo, cl_hi = chunk_layer_ranges[chunk_idx]
+            if cl_lo + position < cl_hi:
+                bq_ref = _fetch_layer_weight(full_weights, cl_lo + position, "self_attn.q_proj.bias")
+                if bq_ref is not None:
+                    ref = bq_ref
+                    break
+        if ref is None:
+            return None
+        bqkv_n = 3 * num_heads * padded_head_dim
+        # Tile-pad 1D bias to [1, bqkv_n] for the kernel.
+        stacked = torch.zeros((num_chunks, 1, bqkv_n), dtype=ref.dtype)
+        for chunk_idx in range(num_chunks):
+            cl_lo, cl_hi = chunk_layer_ranges[chunk_idx]
+            if cl_lo + position >= cl_hi:
+                continue
+            global_layer = cl_lo + position
+            bq = _fetch_layer_weight(full_weights, global_layer, "self_attn.q_proj.bias")
+            bk = _fetch_layer_weight(full_weights, global_layer, "self_attn.k_proj.bias")
+            bv = _fetch_layer_weight(full_weights, global_layer, "self_attn.v_proj.bias")
+            if bq is None or bk is None or bv is None:
+                continue
+            bq_p = _pad_head_dim_bias(bq)
+            bk_p = _pad_head_dim_bias(bk)
+            bv_p = _pad_head_dim_bias(bv)
+            fused = torch.cat([bq_p, bk_p, bv_p], dim=0).reshape(1, -1)
+            stacked[chunk_idx] = fused
+        return ttnn.from_torch(
+            stacked,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=vision_submesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(vision_submesh, dim=0),
+        )
+
+    def _build_out_proj_w_position(position: int) -> Optional["ttnn.Tensor"]:
+        ref: Optional[torch.Tensor] = None
+        for chunk_idx in range(num_chunks):
+            cl_lo, cl_hi = chunk_layer_ranges[chunk_idx]
+            if cl_lo + position < cl_hi:
+                ref = _fetch_layer_weight(full_weights, cl_lo + position, out_proj_w_suffix)
+                if ref is not None:
+                    break
+        if ref is None:
+            return None
+        hidden = ref.shape[0]
+        out_n = num_heads * padded_head_dim
+        # Uploaded as .T form: shape [hidden, out_n] per slot.
+        # Wait — out_proj is [hidden, num_heads*head_dim]. After padding input axis:
+        # [hidden, num_heads*padded_head_dim]. After .T: [num_heads*padded, hidden].
+        # ttnn.linear(attn_concat [..., num_heads*padded], W [num_heads*padded, hidden]) → [..., hidden]
+        # So the stacked uploaded shape is [num_chunks, num_heads*padded, hidden].
+        stacked = torch.zeros((num_chunks, out_n, hidden), dtype=ref.dtype)
+        for chunk_idx in range(num_chunks):
+            cl_lo, cl_hi = chunk_layer_ranges[chunk_idx]
+            if cl_lo + position >= cl_hi:
+                continue
+            global_layer = cl_lo + position
+            wo = _fetch_layer_weight(full_weights, global_layer, out_proj_w_suffix)
+            if wo is None:
+                continue
+            wo_p = _pad_head_dim_weight(wo, heads_out=False).T.contiguous()  # [num_heads*padded, hidden]
+            stacked[chunk_idx] = wo_p
+        return ttnn.from_torch(
+            stacked,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=vision_submesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(vision_submesh, dim=0),
+        )
+
+    wqkv_per_pos: List[Optional["ttnn.Tensor"]] = []
+    bqkv_per_pos: List[Optional["ttnn.Tensor"]] = []
+    out_proj_per_pos: List[Optional["ttnn.Tensor"]] = []
+    for j in range(max_layers_per_chunk):
+        wqkv_per_pos.append(_build_wqkv_position(j))
+        bqkv_per_pos.append(_build_bqkv_position(j))
+        out_proj_per_pos.append(_build_out_proj_w_position(j))
+    out["wqkv"] = wqkv_per_pos
+    out["bqkv"] = bqkv_per_pos
+    out["out_proj"] = out_proj_per_pos
 
     # LN weights at bf16 (matches the existing slice's precision policy).
     for s in ln_weight_suffixes:
@@ -733,7 +897,9 @@ def _load_siglip_weights_chunk_stacked_sharded(
         out[key + "_w"] = per_pos
 
     # Biases (1D). Keep at bf8_b for matmul biases, bf16 for LN biases.
-    for s in bias_suffixes:
+    # Attention Q/K/V biases handled via the fused bqkv above. Out-proj bias
+    # is regular (input axis isn't padded).
+    for s in bias_suffixes_mlp_and_ln + [out_proj_b_suffix]:
         key = s.replace(".bias", "_b").replace("self_attn.", "").replace("mlp.", "").replace(".", "_")
         per_pos = []
         for j in range(max_layers_per_chunk):
@@ -842,11 +1008,21 @@ class Pi0_5OptionCVisionSliceSplitParent:
         # ttnn submeshes expose .shape as (rows, cols).
         self.submesh_shape = (vision_submesh.shape[0], vision_submesh.shape[1])
 
+        # SigLIP attention head config — needed for QKV padding + the forward.
+        siglip_cfg = config.siglip_config
+        self.num_heads = siglip_cfg.num_attention_heads
+        self.head_dim = siglip_cfg.head_dim
+        self.padded_head_dim = ((self.head_dim + 31) // 32) * 32  # 72 → 96
+        self.hidden_size = siglip_cfg.hidden_size
+        self.layer_norm_eps = siglip_cfg.layer_norm_eps
+
         # Upload all SigLIP layer weights as chunk-stacked sharded tensors.
         self.weights_on_vision = _load_siglip_weights_chunk_stacked_sharded(
             weights["vlm_vision"],
             layers_per_chip,
             vision_submesh,
+            num_heads=self.num_heads,
+            head_dim=self.head_dim,
         )
 
     def chunk_coord(self, chunk_idx: int) -> Tuple[int, int]:
@@ -871,3 +1047,147 @@ class Pi0_5OptionCVisionSliceSplitParent:
                 return global_layer_idx - lo
             lo += n
         raise ValueError(f"global_layer_idx {global_layer_idx} out of range for siglip_depth {self.siglip_depth}")
+
+    def forward_chunk(self, hidden_states: "ttnn.Tensor", chunk_idx: int) -> "ttnn.Tensor":
+        """Run all encoder layers of chunk `chunk_idx` on the vision submesh.
+
+        Per layer (positions 0..layers_per_chip[chunk_idx]-1):
+            1. LayerNorm1 (weight + bias)
+            2. Fused wqkv linear → nlp_create_qkv_heads (MHA, num_kv_heads=num_heads)
+            3. SDPA (is_causal=False, scale=1/sqrt(head_dim))
+            4. nlp_concat_heads → out_proj linear
+            5. Residual add
+            6. LayerNorm2
+            7. fc1 (linear + GELU) → fc2 (linear)
+            8. Residual add
+
+        `hidden_states` must be a vision-submesh tensor [B, 1, M, hidden]
+        (4D for nlp_create_qkv_heads). Live data at `chunk_idx`'s chip slot.
+        Returns the same-shape tensor with the chunk's encoder run applied
+        — live data still at `chunk_idx`'s chip slot.
+
+        Doesn't apply post_ln or mm_projector; those are chunk-final-only
+        (the last chunk's caller handles them).
+
+        Doesn't include P2P advance between chunks — that's done by the
+        outer chain (the next sub-commit).
+        """
+        if chunk_idx < 0 or chunk_idx >= self.num_chunks:
+            raise ValueError(f"chunk_idx {chunk_idx} out of range [0, {self.num_chunks})")
+        n_layers = self.layers_per_chip[chunk_idx]
+        if n_layers == 0:
+            return hidden_states  # nothing to do
+
+        # Get the per-position weight slots used in this forward.
+        wqkv = self.weights_on_vision["wqkv"]
+        bqkv = self.weights_on_vision["bqkv"]
+        out_proj = self.weights_on_vision["out_proj"]
+        out_proj_b = self.weights_on_vision["out_proj_b"]
+        fc1 = self.weights_on_vision["fc1"]
+        fc2 = self.weights_on_vision["fc2"]
+        fc1_b = self.weights_on_vision["fc1_b"]
+        fc2_b = self.weights_on_vision["fc2_b"]
+        ln1_w = self.weights_on_vision["layer_norm1_w"]
+        ln1_b = self.weights_on_vision["layer_norm1_b"]
+        ln2_w = self.weights_on_vision["layer_norm2_w"]
+        ln2_b = self.weights_on_vision["layer_norm2_b"]
+
+        scale = 1.0 / (self.head_dim**0.5)
+        h = hidden_states
+
+        for j in range(n_layers):
+            # ---- LayerNorm 1 ----
+            normed = ttnn.layer_norm(
+                h,
+                weight=ln1_w[j],
+                bias=ln1_b[j],
+                epsilon=self.layer_norm_eps,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+
+            # ---- Fused QKV ----
+            xqkv = ttnn.linear(
+                normed,
+                wqkv[j],
+                bias=bqkv[j],
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(normed)
+
+            # ---- Split heads (MHA: num_kv_heads = num_heads) ----
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+                xqkv,
+                num_heads=self.num_heads,
+                num_kv_heads=self.num_heads,
+                transpose_k_heads=False,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+
+            # ---- SDPA (no causal mask, no past_kv — vision is bidirectional) ----
+            attn = ttnn.transformer.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                is_causal=False,
+                scale=scale,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(q)
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
+
+            # ---- Concat heads ----
+            attn_flat = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(attn)
+
+            # ---- Out projection ----
+            o = ttnn.linear(
+                attn_flat,
+                out_proj[j],
+                bias=out_proj_b[j],
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(attn_flat)
+
+            # ---- Residual add (attention) ----
+            h_post_attn = ttnn.add(h, o, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(o)
+            ttnn.deallocate(h)
+
+            # ---- LayerNorm 2 ----
+            normed = ttnn.layer_norm(
+                h_post_attn,
+                weight=ln2_w[j],
+                bias=ln2_b[j],
+                epsilon=self.layer_norm_eps,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+
+            # ---- MLP: fc1 + GELU + fc2 ----
+            x = ttnn.linear(
+                normed,
+                fc1[j],
+                bias=fc1_b[j],
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                activation="gelu",
+            )
+            ttnn.deallocate(normed)
+            mlp_out = ttnn.linear(
+                x,
+                fc2[j],
+                bias=fc2_b[j],
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(x)
+
+            # ---- Residual add (MLP) ----
+            h_new = ttnn.add(h_post_attn, mlp_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(mlp_out)
+            ttnn.deallocate(h_post_attn)
+            h = h_new
+
+        return h

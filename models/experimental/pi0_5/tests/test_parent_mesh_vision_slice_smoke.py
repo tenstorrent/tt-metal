@@ -139,3 +139,77 @@ def test_parent_vision_slice_weight_placement():
     finally:
         ttnn.close_mesh_device(parent)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
+
+def test_parent_vision_slice_forward_chunk0():
+    """Run chunk 0's 4 SigLIP encoder layers via forward_chunk(0) on the vision
+    submesh. Validates the inline LayerNorm + fused wqkv + nlp_create_qkv_heads
+    + SDPA + nlp_concat_heads + out_proj + MLP block chain on real SigLIP-base
+    weights, with the live shard at chunk 0's chip coord (0, 0)."""
+    import torch as _torch
+
+    cfg = PaliGemmaConfig()
+    weights = _load_real_weights()
+
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    parent = ttnn.open_mesh_device(GALAXY_SHAPE)
+    try:
+        vision_submesh = parent.create_submesh(
+            ttnn.MeshShape(*VISION_SUBMESH_SHAPE),
+            ttnn.MeshCoordinate(*VISION_SUBMESH_OFFSET),
+        )
+        slice_ = Pi0_5OptionCVisionSliceSplitParent(
+            config=cfg,
+            weights=weights,
+            vision_submesh=vision_submesh,
+        )
+
+        # Build a hidden_states input on the vision submesh, live at chunk 0's coord (0,0).
+        # Shape: [B, 1, num_patches, hidden] = [1, 1, 256, 1152] (production SigLIP-base
+        # patch count + hidden). 4D so nlp_create_qkv_heads' shape contract holds.
+        num_chips = VISION_SUBMESH_SHAPE[0] * VISION_SUBMESH_SHAPE[1]
+        B, M, H = 1, 256, slice_.hidden_size
+        h_torch = _torch.zeros(num_chips, B, M, H, dtype=_torch.bfloat16)
+        c0 = slice_.chunk_coord(0)
+        lin0 = c0[0] * VISION_SUBMESH_SHAPE[1] + c0[1]
+        h_torch[lin0, 0, :, :] = _torch.randn(M, H, dtype=_torch.bfloat16) * 0.02
+        # ttnn.from_torch with ShardTensorToMesh(dim=0) on [num_chips, B, M, H] gives
+        # per-chip ttnn shape [1, B, M, H] = 4D — exactly what nlp_create_qkv_heads wants.
+        hidden = ttnn.from_torch(
+            h_torch.contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=vision_submesh,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(vision_submesh, dim=0),
+        )
+        print(f"\n[input] hidden shape={list(hidden.shape)} live at chunk 0 coord {c0}")
+
+        # Run chunk 0's 4 SigLIP encoder layers.
+        print(f"\n[chain] running forward_chunk(0) — 4 SigLIP encoder layers on chip {c0}...")
+        out = slice_.forward_chunk(hidden, chunk_idx=0)
+        ttnn.synchronize_device(vision_submesh)
+
+        # Read back chunk 0's chip slot to validate output.
+        shards = ttnn.get_device_tensors(out)
+        out_chip0 = ttnn.to_torch(shards[lin0])
+        non_zero = (out_chip0.abs() > 1e-6).sum().item()
+        nan_count = _torch.isnan(out_chip0).sum().item()
+        finite_count = _torch.isfinite(out_chip0).sum().item()
+        total = out_chip0.numel()
+        print(
+            f"\n[output @ chunk 0 coord {c0}] shape={list(out_chip0.shape)} "
+            f"non_zero={non_zero}/{total} nan={nan_count} finite={finite_count}/{total}"
+        )
+        print(f"  first 5 values: {out_chip0.flatten()[:5].tolist()}")
+        if finite_count > 0:
+            finite_t = out_chip0[_torch.isfinite(out_chip0)]
+            print(f"  finite range: [{finite_t.min().item():.4e}, {finite_t.max().item():.4e}]")
+
+        assert nan_count == 0, "Output contains NaN (chunk forward broke)"
+        assert non_zero > 0, "Output is all zeros — chunk forward did not propagate"
+        print("\n[PASS] parent-mesh vision slice chunk-0 forward: 4 SigLIP encoder layers ran end-to-end")
+        ttnn.deallocate(out)
+    finally:
+        ttnn.close_mesh_device(parent)
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
