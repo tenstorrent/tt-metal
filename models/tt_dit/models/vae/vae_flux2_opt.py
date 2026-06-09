@@ -9,10 +9,9 @@ from typing import TYPE_CHECKING
 
 import ttnn
 
-from ...blocks.vae_opt import VaeContext, VaeConv2d, VaeMidBlock, VaeNormDescGroup, VaeUpBlock, _all_gather_hw
+from ...blocks.vae_opt import VaeContext, VaeConv2d, VaeMidBlock, VaeNormDescGroup, VaeUpBlock, _all_gather_hw, _norm
 from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList, Parameter
-from ...layers.normalization import GroupNorm
 from ...parallel.config import Flux2VaeParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils.substate import pop_substate, rename_substate
@@ -81,9 +80,7 @@ class Flux2VaeDecoder(Module):
             for i, (ch_in, ch_out) in enumerate(itertools.pairwise(channel_counts))
         )
 
-        self.conv_norm_out = GroupNorm(
-            num_groups=32, num_channels=channel_counts[-1], eps=1e-6, mesh_axis=ctx.tp_axis, mesh_device=ctx.device
-        )
+        self.conv_norm_out = _norm(VaeNormDescGroup(num_groups=32, eps=1e-6), num_channels=channel_counts[-1], ctx=ctx)
         self.conv_out = VaeConv2d(
             channel_counts[-1], out_channels, kernel_size=3, padding=1, tensor_parallel=False, ctx=ctx
         )
@@ -151,14 +148,11 @@ class Flux2VaeDecoder(Module):
         for block in self.up_blocks:
             z = block.forward(z)
 
-        # SP exit: gather H+W back to full spatial so the final norm/conv (which are not
-        # SP-aware) and the pipeline's downstream code see the same shape as without SP.
-        z = _all_gather_hw(self._ctx, z)
-
         z = self.conv_norm_out.forward(z)
-        z = ttnn.silu(z)
+        z = ttnn.silu(z, output_tensor=z)
 
         if self._ctx.ccl_manager is not None and self._ctx.tp_axis is not None:
             z = self._ctx.ccl_manager.all_gather(z, dim=-1, mesh_axis=self._ctx.tp_axis, use_hyperparams=True)
 
-        return self.conv_out.forward(z)
+        z = self.conv_out.forward(z)
+        return _all_gather_hw(self._ctx, z)
