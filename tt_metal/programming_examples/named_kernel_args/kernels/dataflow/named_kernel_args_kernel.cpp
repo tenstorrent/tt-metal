@@ -5,15 +5,13 @@
 // Phase 1 (first porting step) of the "kernel arguments as function & template parameters"
 // work (see tech_reports/NamedKernelArgs/kernel_args_as_parameters.md).
 //
-// The kernel is now authored in the TARGET form: a TT_KERNEL-marked entry whose template
+// The kernel is authored in the TARGET form: a TT_KERNEL-marked entry whose template
 // parameters are the compile-time args (CTAs) and whose function parameters are the runtime
-// args (RTAs/CRTAs). The signature parser (jit_build/kernel_signature_parser) finds the
-// TT_KERNEL marker before JIT compile and logs the extracted CTA / runtime arg names.
-//
-// The kernel_main() at the bottom is a TEMPORARY hand-written shim. It is exactly what
-// write_kernel_main_shim() will generate in the next step; once codegen lands, this hand-shim
-// is deleted and the firmware-called kernel_main() becomes generated. The DPRINT output is
-// unchanged from the Phase-0 baseline, so we can diff it across porting steps.
+// args (RTAs/CRTAs). The user writes NO kernel_main() and NO get_arg() calls. Before JIT
+// compile, the signature parser (jit_build/kernel_signature_parser) extracts the entry's name
+// and its CTA / runtime arg names, and genfiles generates the kernel_main() shim that fetches
+// each arg by name (get_arg(args::<name>)) and calls this entry. The DPRINT output is identical
+// to the Phase-0 baseline.
 //
 // NOTE: In Phase 1 the TT_KERNEL marker only needs to be a distinctive token for the
 // tokenizer; it expands to FORCE_INLINE so the user entry folds into the generated
@@ -41,12 +39,6 @@ TT_KERNEL void named_kernel_args_kernel(
     DPRINT("[named_kernel_args] CRTA scaler={:x} sem_addr={:x}\n", scaler, sem_addr);
 }
 
-// TEMPORARY hand-written shim — write_kernel_main_shim() will generate exactly this.
-void kernel_main() {
-    named_kernel_args_kernel<get_arg(args::block_h), get_arg(args::block_w), get_arg(args::untilize)>(
-        get_arg(args::src_addr),
-        get_arg(args::dst_addr),
-        get_arg(args::num_tiles),
-        get_arg(args::scaler),
-        get_arg(args::sem_addr));
-}
+// No kernel_main() here — it is generated from this signature by genfiles (see
+// generate_kernel_main_shim). The firmware calls that generated kernel_main(), which inlines
+// this entry (TT_KERNEL == FORCE_INLINE).

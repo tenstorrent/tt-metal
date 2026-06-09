@@ -278,6 +278,30 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     write_file(path, content.str());
 }
 
+// Generate the kernel_main() shim for a TT_KERNEL entry. It calls the user entry function,
+// passing every argument by name through get_arg(args::<name>): template parameters (CTAs) go
+// in the angle brackets (constexpr), function parameters (RTAs/CRTAs) go in the parentheses
+// (runtime L1 reads). The args:: accessors come from the generated kernel_args_generated.h, so
+// this shim is emitted after that header and after the user source.
+std::string generate_kernel_main_shim(const KernelMainSignature& sig) {
+    std::ostringstream os;
+    os << "\n// AUTO-GENERATED — do not edit. kernel_main() shim for the TT_KERNEL entry.\n";
+    os << "void kernel_main() {\n    " << sig.name;
+    if (!sig.template_param_names.empty()) {
+        os << "<";
+        for (size_t i = 0; i < sig.template_param_names.size(); ++i) {
+            os << (i ? ", " : "") << "get_arg(args::" << sig.template_param_names[i] << ")";
+        }
+        os << ">";
+    }
+    os << "(";
+    for (size_t i = 0; i < sig.fn_param_names.size(); ++i) {
+        os << (i ? ", " : "") << "get_arg(args::" << sig.fn_param_names[i] << ")";
+    }
+    os << ");\n}\n";
+    return os.str();
+}
+
 }  // namespace
 
 void jit_build_genfiles_kernel_include(
@@ -286,24 +310,9 @@ void jit_build_genfiles_kernel_include(
     log_trace(tt::LogBuildKernels, "Generating defines for BRISC/NCRISC/ERISC user kernel");
 
     // Phase 1 (kernel-args-as-parameters): before JIT compile, scan the kernel source for a
-    // TT_KERNEL marker and parse the entry signature. Today this only logs the parsed template
-    // (CTA) and function (RTA/CRTA) parameter names; a later step turns it into a generated
-    // kernel_main() shim. Kernels without a TT_KERNEL marker parse to nullopt and are unaffected.
-    if (auto sig = parse_kernel_main_signature(kernel_src.get_content())) {
-        const std::string source_desc =
-            kernel_src.source_type_ == KernelSource::FILE_PATH ? kernel_src.path_.string() : std::string("<inline>");
-        log_info(
-            tt::LogBuildKernels,
-            "TT_KERNEL entry parsed\n"
-            "  source          : {}\n"
-            "  function name   : {}\n"
-            "  CTAs (template) : [{}]\n"
-            "  runtime (fn)    : [{}]",
-            source_desc,
-            sig->name,
-            fmt::join(sig->template_param_names, ", "),
-            fmt::join(sig->fn_param_names, ", "));
-    }
+    // TT_KERNEL marker and parse the entry signature. Kernels without a marker parse to nullopt
+    // and are unaffected.
+    auto sig = parse_kernel_main_signature(kernel_src.get_content());
 
     string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
 
@@ -318,6 +327,34 @@ void jit_build_genfiles_kernel_include(
             string("#include \"kernel_bindings_generated.h\"\n#include \"kernel_args_generated.h\"\n");
     }
     kernel_header_content += get_kernel_source_to_include(kernel_src);
+
+    // For a TT_KERNEL-tagged entry, generate the kernel_main() shim that fetches every arg by
+    // name and calls the user entry. It must follow the user source (so the entry is declared)
+    // and the args:: header (emitted above for Metal 2.0).
+    if (sig) {
+        const std::string source_desc =
+            kernel_src.source_type_ == KernelSource::FILE_PATH ? kernel_src.path_.string() : std::string("<inline>");
+        log_info(
+            tt::LogBuildKernels,
+            "TT_KERNEL entry parsed\n"
+            "  source          : {}\n"
+            "  function name   : {}\n"
+            "  CTAs (template) : [{}]\n"
+            "  runtime (fn)    : [{}]",
+            source_desc,
+            sig->name,
+            fmt::join(sig->template_param_names, ", "),
+            fmt::join(sig->fn_param_names, ", "));
+        if (is_metal2) {
+            kernel_header_content += generate_kernel_main_shim(*sig);
+        } else {
+            log_warning(
+                tt::LogBuildKernels,
+                "TT_KERNEL entry '{}' found in a non-Metal2.0 kernel; no kernel_main() shim generated. "
+                "Named kernel arguments require the Metal 2.0 host API.",
+                sig->name);
+        }
+    }
 
     string kernel_header = out_dir + "kernel_includes.hpp";
     write_file(kernel_header, kernel_header_content);
