@@ -3794,7 +3794,7 @@ def test_ring_mla_create_chunked_perf_table(model_name, q_chunk_size, k_chunk_si
 RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
     # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
     # 4-device ring (QuietBox, 100 SDPA cores)
-    ("kimi50k", 32, 640, 4, 63.3),
+    ("kimi50k", 32, 640, 4, 66.05),
 ]
 
 
