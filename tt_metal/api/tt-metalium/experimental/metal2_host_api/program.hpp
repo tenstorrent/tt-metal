@@ -32,7 +32,7 @@ Program MakeProgramFromSpec(
 //
 // For high-performance inner loops, prefer the power user APIs below.
 // If stateful behavior of parameters is required, use the power user APIs.
-void SetProgramRunArgs(Program& program, const ProgramRunArgs& params);
+void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation = false);
 
 // Fast-path partial update: refresh ONLY the TensorArgs of an existing Program.
 // All other ProgramRunArgs (named/vararg RTAs and CRTAs, DFB params) retain their values

@@ -446,11 +446,14 @@ void AttachBorrowedDFBBuffers(
 // PUBLIC ENTRY POINTS: SetProgramRunArgs + UpdateTensorArgs + GetProgramRunArgsView
 // ============================================================================
 
-void SetProgramRunArgs(Program& program, const ProgramRunArgs& params) {
+void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation) {
     log_debug(tt::LogMetal, "Setting ProgramRunArgs");
 
-    // Validate parameters against the schema
-    ValidateProgramRunArgs(program, params);
+    // Validate parameters against the schema (can be skipped for trusted inputs, e.g. cached-program
+    // re-enqueue inner loops where the args have already been validated once).
+    if (!skip_validation) {
+        ValidateProgramRunArgs(program, params);
+    }
 
     detail::ProgramImpl& program_impl = program.impl();
 
