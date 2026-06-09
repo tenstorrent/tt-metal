@@ -995,9 +995,15 @@ def test_demo_text(
 
     repeat_batch_prompts = []
     if is_seqlen_sweep:
-        for i in range(repeat_batches):
-            step_prompts = load_inputs(seqlen_sweep_files[i], global_batch_size, instruct)
-            repeat_batch_prompts.append(step_prompts)
+        label_to_len = {"1k": 1024, "2k": 2048, "4k": 4096, "8k": 8192, "16k": 16384, "32k": 32768, "64k": 65536, "128k": 131072}
+        filtered_files = [
+            f for f in seqlen_sweep_files
+            if label_to_len.get(Path(f).stem.split("_")[-1], 0) <= max_seq_len
+        ]
+        if not filtered_files:
+            pytest.skip(f"No sweep prompt files fit within max_seq_len={max_seq_len}")
+        for f in filtered_files:
+            repeat_batch_prompts.append(load_inputs(f, global_batch_size, instruct))
     else:
         for i in range(repeat_batches):
             repeat_batch_prompts.append(
