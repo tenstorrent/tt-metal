@@ -11,6 +11,12 @@
 #include <cstdio>
 #include <cstdlib>
 
+// Unified ASAN trace. Forward-declared (not #included) because this header is
+// compiled into the tt_metal target too, which does not carry the tt-emule
+// include path. The single definition lives in emulated_program_runner.cpp
+// (EMULE_ASAN_IMPLEMENTATION), linked into the same libtt_metal.
+extern "C" [[noreturn]] void __emule_asan_panic(const char* fmt, ...);
+
 namespace tt::tt_metal::emule {
 
 // Re-read every call: caching breaks combined test runs that toggle the var.
@@ -24,8 +30,7 @@ inline void check_buffer_allocated(const tt::tt_metal::Buffer& buffer, const cha
         return;
     }
     if (!buffer.is_allocated()) {
-        fprintf(
-            stderr,
+        __emule_asan_panic(
             "[ASAN ERROR] Use-After-Free: %s called on Buffer (unique_id=%zu, size=%lu, type=%d) "
             "that is not currently allocated (either deallocated or never allocated). "
             "This would access reclaimed device memory and corrupt unrelated allocations on silicon.\n",
@@ -33,7 +38,6 @@ inline void check_buffer_allocated(const tt::tt_metal::Buffer& buffer, const cha
             buffer.unique_id(),
             static_cast<unsigned long>(buffer.size()),
             static_cast<int>(buffer.buffer_type()));
-        std::abort();
     }
 }
 
@@ -49,13 +53,8 @@ inline void check_host_l1_alignment(uint32_t address, uint32_t alignment, const 
         return;
     }
     if (alignment > 1 && address % alignment != 0) {
-        fprintf(
-            stderr,
-            "[ASAN ERROR] L1 Alignment: %s host address 0x%x must be %u-byte aligned\n",
-            op,
-            address,
-            alignment);
-        std::abort();
+        __emule_asan_panic(
+            "[ASAN ERROR] L1 Alignment: %s host address 0x%x must be %u-byte aligned\n", op, address, alignment);
     }
 }
 
@@ -71,13 +70,8 @@ inline void check_host_dram_alignment(uint32_t address, uint32_t alignment, cons
         return;
     }
     if (alignment > 1 && address % alignment != 0) {
-        fprintf(
-            stderr,
-            "[ASAN ERROR] DRAM Alignment: %s host address 0x%x must be %u-byte aligned\n",
-            op,
-            address,
-            alignment);
-        std::abort();
+        __emule_asan_panic(
+            "[ASAN ERROR] DRAM Alignment: %s host address 0x%x must be %u-byte aligned\n", op, address, alignment);
     }
 }
 

@@ -12,7 +12,9 @@ Paths are prefixed with the repo: **`[metal]`** = `tt-metal/`, **`[emule]`** =
 **Common mechanics**
 - All checks are gated by one env var, **`TT_METAL_EMULE_ASAN=1`**, off by
   default (one exception: *CB Reservation Overflow* is always on — see §8).
-- Each fires a single `[ASAN ERROR] <Category>: …` line and then `abort()`s.
+- Each fires a single `[ASAN ERROR] <Category>: …` line, then a unified
+  diagnostic trace (see *Diagnostic trace* below), then `abort()`s — every site
+  calls `__emule_asan_panic()` instead of a bare `abort()`.
 - When the flag is off, every check is a no-op: host helpers return early, and
   the runner leaves the kernel's thread-local state pointers null so the in-kernel
   checks short-circuit.
@@ -30,6 +32,33 @@ Paths are prefixed with the repo: **`[metal]`** = `tt-metal/`, **`[emule]`** =
   (runs after all kernel threads join). The live-buffer extents it relies on are
   registered in `[metal] tt_metal/impl/emulation/emule_live_ranges.{hpp,cpp}`,
   wired in from `[metal] tt_metal/impl/buffers/buffer.cpp`.
+
+## Diagnostic trace
+
+Every `[ASAN ERROR]` is followed by a unified trace, emitted by
+`__emule_asan_panic()` in **`[emule] include/jit_hw/emule_asan.h`** (a
+self-contained, libc/POSIX-only header included by both the kernel-side JIT
+headers and libtt_metal). It prints:
+
+- **Which kernel + where:** when a kernel is on the stack, the kernel source
+  path (`__emule_kernel_name`, threaded in per launch by the runner) plus the
+  logical/physical core and processor/neo/trisc ids (from the existing identity
+  thread-locals). Host-API checks (no kernel running) omit this block.
+- **A symbolized backtrace:** `backtrace()` captures the stack; each frame is
+  mapped to its module via `dladdr`, and frames inside a JIT kernel `.so` are
+  resolved to **kernel-source `file:line`** by shelling out to `llvm-symbolizer`
+  (falling back to `addr2line`, then to raw `backtrace_symbols`). The walk stops
+  at the JIT entry point `__emule_kernel_entry` so libc/runner internals aren't
+  dumped.
+
+To make kernel frames resolvable, `jit_compile_kernel` adds `-g
+-fno-omit-frame-pointer -funwind-tables` to the kernel compile **when ASAN is
+on** (kept at `-O2` so numerics match normal runs); the ASAN flag is folded into
+the JIT cache key (`:asan_g`) so these debug `.so` files never collide with the
+lean non-ASAN cache. The kernel-frame `file:line` refers to the JIT-generated
+kernel source. For post-execution checks (Dirty CB, Object Intent) the kernel
+has already returned, so the trace shows kernel identity + the runner stack, not
+the offending kernel line.
 
 ## Checks at a glance
 
