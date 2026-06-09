@@ -40,6 +40,24 @@ bool is_input_dtype_supported(BinaryOpType op, tt::tt_metal::DataType dtype) {
     return dtype_policy::is_supported(op, dtype);
 }
 
+bool is_dtype_combination_supported(BinaryOpType op, DataType dtype_a, DataType dtype_b) {
+    if (dtype_a == dtype_b) {
+        return true;
+    }
+
+    if (dtype_policy::is_mixed_bfloat_tile_pair(dtype_a, dtype_b) &&
+        dtype_policy::supports_mixed_bfloat_tile_inputs(op)) {
+        return is_input_dtype_supported(op, dtype_a) && is_input_dtype_supported(op, dtype_b);
+    }
+
+    if (op == BinaryOpType::ISCLOSE) {
+        return (dtype_a == DataType::FLOAT32 && dtype_b == DataType::BFLOAT16) ||
+               (dtype_a == DataType::BFLOAT16 && dtype_b == DataType::FLOAT32);
+    }
+
+    return false;
+}
+
 std::map<std::string, std::string> get_defines(
     BinaryOpType op_type,
     const std::optional<tt::tt_metal::DataType> input_dtype,

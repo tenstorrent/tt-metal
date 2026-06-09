@@ -67,4 +67,34 @@ bool is_supported(BinaryOpType op, DataType dtype) {
     return std::ranges::find(supported_dtypes, dtype) != supported_dtypes.end();
 }
 
+bool is_bfloat_tile_dtype(DataType dtype) {
+    using namespace dtype_sets;
+    return std::ranges::find(bfloat_tile, dtype) != bfloat_tile.end();
+}
+
+bool is_mixed_bfloat_tile_pair(DataType dtype_a, DataType dtype_b) {
+    return dtype_a != dtype_b && is_bfloat_tile_dtype(dtype_a) && is_bfloat_tile_dtype(dtype_b);
+}
+
+bool supports_mixed_bfloat_tile_inputs(BinaryOpType op) {
+    switch (op) {
+        case BinaryOpType::ADD:
+        case BinaryOpType::SUB:
+        case BinaryOpType::MUL:
+        case BinaryOpType::RSUB:
+        case BinaryOpType::SQUARED_DIFFERENCE:
+        case BinaryOpType::LOGICAL_AND:
+        case BinaryOpType::LOGICAL_OR:
+        case BinaryOpType::LOGICAL_XOR:
+        case BinaryOpType::GT:
+        case BinaryOpType::LT:
+        case BinaryOpType::LE:
+        case BinaryOpType::GE:
+        case BinaryOpType::EQ:
+        case BinaryOpType::NE:
+        case BinaryOpType::DIV: return true;
+        default: return false;
+    }
+}
+
 }  // namespace ttnn::operations::binary::dtype_policy

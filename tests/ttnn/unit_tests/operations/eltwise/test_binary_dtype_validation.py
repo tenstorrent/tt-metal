@@ -132,6 +132,23 @@ def test_binary_unsupported_input_dtype_rejected(device, op, dtype):
         op(tensor_a, tensor_b)
 
 
+# Mixed bfloat_tile dtypes (BFLOAT16 / BFLOAT8_B / BFLOAT4_B): FPU binary_ng path only.
+@pytest.mark.parametrize(
+    "op, dtype_a, dtype_b",
+    [
+        pytest.param(ttnn.add, ttnn.bfloat8_b, ttnn.bfloat16, id="add_bf8_bfloat16"),
+        pytest.param(ttnn.add, ttnn.bfloat16, ttnn.bfloat8_b, id="add_bfloat16_bf8"),
+        pytest.param(ttnn.subtract, ttnn.bfloat8_b, ttnn.bfloat16, id="subtract_bf8_bfloat16"),
+        pytest.param(ttnn.mul, ttnn.bfloat16, ttnn.bfloat8_b, id="mul_bfloat16_bf8"),
+        pytest.param(ttnn.eq, ttnn.bfloat8_b, ttnn.bfloat16, id="eq_bf8_bfloat16"),
+        pytest.param(ttnn.div, ttnn.bfloat16, ttnn.bfloat8_b, id="div_bfloat16_bf8"),
+    ],
+)
+def test_binary_mixed_bfloat_tile_allowed(device, op, dtype_a, dtype_b):
+    tensor_a, tensor_b = _make_mixed_binary_tensors(device, dtype_a, dtype_b)
+    op(tensor_a, tensor_b)
+
+
 # Mixed-dtype pairs where each dtype is individually supported for the op.
 @pytest.mark.parametrize(
     "op, dtype_a, dtype_b",
@@ -152,6 +169,8 @@ def test_binary_unsupported_input_dtype_rejected(device, op, dtype):
         pytest.param(ttnn.mul, ttnn.bfloat16, ttnn.float32, id="mul_bfloat16_float32"),
         pytest.param(ttnn.pow, ttnn.float32, ttnn.bfloat16, id="pow_float32_bfloat16"),
         pytest.param(ttnn.pow, ttnn.bfloat16, ttnn.float32, id="pow_bfloat16_float32"),
+        pytest.param(ttnn.pow, ttnn.bfloat16, ttnn.bfloat8_b, id="pow_bfloat16_bf8"),
+        pytest.param(ttnn.maximum, ttnn.bfloat16, ttnn.bfloat8_b, id="maximum_bfloat16_bf8"),
         # float_and_int32
         pytest.param(ttnn.div, ttnn.int32, ttnn.float32, id="div_int32_float32"),
         # maximum_minimum

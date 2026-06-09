@@ -39,6 +39,9 @@ inline constexpr std::array relational{
 // SFPU where kernel: explicit Int32/UInt32/Float32; other floats use Float16_b tile path.
 inline constexpr std::array where{DT::BFLOAT16, DT::FLOAT32, DT::BFLOAT8_B, DT::BFLOAT4_B, DT::UINT32, DT::INT32};
 
+// BFLOAT16 plus block-float tile dtypes.
+inline constexpr std::array bfloat_tile{DT::BFLOAT16, DT::BFLOAT8_B, DT::BFLOAT4_B};
+
 // Enum values that are not dispatched to binary_ng (e.g. ADDALPHA -> ADD).
 inline constexpr std::array<DT, 0> unsupported{};
 
@@ -47,5 +50,11 @@ inline constexpr std::array<DT, 0> unsupported{};
 std::span<const tt::tt_metal::DataType> supported_input_dtypes(BinaryOpType op);
 
 bool is_supported(BinaryOpType op, tt::tt_metal::DataType dtype);
+
+bool is_bfloat_tile_dtype(tt::tt_metal::DataType dtype);
+
+bool is_mixed_bfloat_tile_pair(tt::tt_metal::DataType dtype_a, tt::tt_metal::DataType dtype_b);
+
+bool supports_mixed_bfloat_tile_inputs(BinaryOpType op);
 
 }  // namespace ttnn::operations::binary::dtype_policy

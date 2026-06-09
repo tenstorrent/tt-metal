@@ -19,6 +19,8 @@ bool is_typecast(tt::tt_metal::DataType input, tt::tt_metal::DataType output);
 
 bool is_input_dtype_supported(BinaryOpType op, tt::tt_metal::DataType dtype);
 
+bool is_dtype_combination_supported(BinaryOpType op, tt::tt_metal::DataType dtype_a, tt::tt_metal::DataType dtype_b);
+
 std::map<std::string, std::string> get_defines(
     BinaryOpType op_type,
     std::optional<tt::tt_metal::DataType> input_dtype = std::nullopt,
