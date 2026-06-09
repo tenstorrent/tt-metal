@@ -352,6 +352,7 @@ class DistributedLayerNorm(Module):
             x,
             self.recip_tensor,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
+            dtype=ttnn.float32,
         )
 
         stats = self.ccl_manager.all_gather_persistent_buffer(

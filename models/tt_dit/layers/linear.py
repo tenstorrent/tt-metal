@@ -95,6 +95,19 @@ def gelu_tanh(x: ttnn.Tensor) -> ttnn.Tensor:
     return 0.5 * x * one_plus_tanh
 
 
+def gelu_tanh_f32(x: ttnn.Tensor) -> ttnn.Tensor:
+    # Same tanh GELU but with f32 intermediates to avoid bf16 round-trip losses.
+    # The bf16 decomposed path has ~7 materializations each truncating to bf16;
+    # this keeps all intermediates in f32 with only one bf16 round-trip at the end.
+    input_dtype = x.dtype
+    x = ttnn.typecast(x, ttnn.float32)
+    sqrt_2_over_pi = math.sqrt(2.0 / math.pi)
+    inner = ttnn.add(x, ttnn.multiply(ttnn.pow(x, 3), 0.044715))
+    one_plus_tanh = 1.0 + ttnn.tanh(ttnn.multiply(inner, sqrt_2_over_pi))
+    result = 0.5 * x * one_plus_tanh
+    return ttnn.typecast(result, input_dtype)
+
+
 class ColParallelLinear(Module):
     """
     Linear layer with column parallel weights
@@ -449,6 +462,8 @@ def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tens
         return t * ttnn.sigmoid(1.702 * t)  # quick approx gelu
     if activation_fn == "gelu_tanh":
         return gelu_tanh(t)
+    if activation_fn == "gelu_tanh_f32":
+        return gelu_tanh_f32(t)
     if activation_fn == "gelu_exact":
         return ttnn.gelu(t, fast_and_approximate_mode=False)
     if activation_fn == "swiglu":
