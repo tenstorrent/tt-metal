@@ -4,7 +4,7 @@ the budget declared in .github/time_budget.yaml.
 The companion script verify_time_budget.py checks one tests file against the
 budget during CI. This tool answers the inverse question: "How much time does
 team X currently allocate for test type Y on machine Z?" by summing the
-per-SKU timeouts across every tests file of that test type.
+per-SKU timeouts across the tests files covered by that budget key.
 
 Notes on the data model (see tests/pipeline_reorg/*_tests.yaml):
   * Each entry has a `team:` field. This field -- not the file name -- is the
@@ -15,6 +15,9 @@ Notes on the data model (see tests/pipeline_reorg/*_tests.yaml):
     (unit, e2e, sanity, stress, perf, integration, l2, device_perf, smoke,
     profiler, sweep, health, demo). `device_perf` and `perf` are distinct.
   * Per entry: skus: { <machine>: { timeout: <minutes>, tier: <n> } }.
+  * The models unit/e2e/sweep budgets are split. The plain keys cover non-tiered
+    pipelines; the unit_tier<n>/e2e_tier<n>/sweep_tier<n> keys cover
+    models_<testtype>_tests.yaml.
 
 Usage:
   query_time_budget.py --team models --testtype unit --machine wh_n150 [--tier 1] [-v]
@@ -30,6 +33,7 @@ import yaml
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 TESTS_DIR = os.path.join(REPO_ROOT, "tests", "pipeline_reorg")
 DEFAULT_BUDGET_FILE = os.path.join(REPO_ROOT, ".github", "time_budget.yaml")
+TIERED_MODEL_TESTTYPES = {"unit", "e2e", "sweep"}
 
 
 def testtype_of_file(filename):
@@ -56,6 +60,26 @@ def testtype_of_file(filename):
 def find_test_files(tests_dir, testtype):
     """All *_tests.yaml files in tests_dir whose test type equals `testtype`."""
     return sorted(f for f in glob.glob(os.path.join(tests_dir, "*_tests.yaml")) if testtype_of_file(f) == testtype)
+
+
+def uses_tiered_model_budget(team, testtype):
+    """Whether this query should use the models-specific tiered budget split."""
+    return team == "models" and testtype in TIERED_MODEL_TESTTYPES
+
+
+def select_files_for_budget(files, team, testtype, tier):
+    """Return the files that correspond to the budget key being queried.
+
+    The models unit/e2e/sweep budgets are split: the plain keys cover non-tiered
+    pipelines, while the <testtype>_tier<n> keys cover models_<testtype>_tests.yaml.
+    """
+    if not uses_tiered_model_budget(team, testtype):
+        return files
+
+    tiered_filename = f"models_{testtype}_tests.yaml"
+    if tier is not None:
+        return [f for f in files if os.path.basename(f) == tiered_filename]
+    return [f for f in files if os.path.basename(f) != tiered_filename]
 
 
 def collect_allocations(files, team, machine, tier=None):
@@ -86,12 +110,17 @@ def collect_allocations(files, team, machine, tier=None):
     return total, breakdown
 
 
-def lookup_budget(budget_file, team, testtype, machine):
+def lookup_budget(budget_file, team, testtype, machine, tier=None):
     """Return the declared budget, or None if not present."""
     with open(budget_file, "r") as f:
         budgets = yaml.safe_load(f) or {}
     try:
-        return budgets[team][testtype][machine]
+        team_budgets = budgets[team]
+        if tier is not None and uses_tiered_model_budget(team, testtype):
+            return team_budgets[f"{testtype}_tier{tier}"][machine]
+        if tier is not None and f"{testtype}_tier{tier}" in team_budgets:
+            return team_budgets[f"{testtype}_tier{tier}"][machine]
+        return team_budgets[testtype][machine]
     except (KeyError, TypeError):
         return None
 
@@ -101,18 +130,23 @@ def main():
     parser.add_argument("--team", required=True, help="Team name, e.g. models, llk, runtime")
     parser.add_argument("--testtype", required=True, help="Test type, e.g. unit, sanity, stress, e2e")
     parser.add_argument("--machine", required=True, help="SKU/machine name, e.g. wh_n150, wh_llmbox")
-    parser.add_argument("--tier", type=int, default=None, help="Optional: only sum entries of this tier")
+    parser.add_argument(
+        "--tier", type=int, choices=(1, 2, 3), default=None, help="Optional: only sum entries of this tier"
+    )
     parser.add_argument("--tests-dir", default=TESTS_DIR, help="Directory of *_tests.yaml files")
     parser.add_argument("--budget-file", default=DEFAULT_BUDGET_FILE, help="Path to time_budget.yaml")
     parser.add_argument("-v", "--verbose", action="store_true", help="Print per-test breakdown")
     args = parser.parse_args()
 
-    files = find_test_files(args.tests_dir, args.testtype)
-    if not files:
+    matching_files = find_test_files(args.tests_dir, args.testtype)
+    files = select_files_for_budget(matching_files, args.team, args.testtype, args.tier)
+    if not matching_files:
         print(f"[WARN] No '*_{args.testtype}_tests.yaml' files found in {args.tests_dir}")
+    elif not files:
+        print(f"[WARN] No files correspond to this budget key after applying model tier split rules")
 
     total, breakdown = collect_allocations(files, args.team, args.machine, args.tier)
-    budget = lookup_budget(args.budget_file, args.team, args.testtype, args.machine)
+    budget = lookup_budget(args.budget_file, args.team, args.testtype, args.machine, args.tier)
 
     tier_note = f", tier {args.tier}" if args.tier is not None else ""
     print(f"Team '{args.team}' / test type '{args.testtype}' / machine '{args.machine}'{tier_note}")
