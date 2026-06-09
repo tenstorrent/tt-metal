@@ -117,6 +117,7 @@ def _load_reference_outputs(device, model_name, sequence_length, model_location_
     }
 
 
+@pytest.mark.skip(reason="https://github.com/tenstorrent/tt-metal/issues/46445")
 @pytest.mark.parametrize("model_name, sequence_length", [(MODEL_NAME, MAX_MODEL_LEN)])
 def test_bge_m3_vllm_dense_embedding(device, model_name, sequence_length, model_location_generator):
     outputs = _load_reference_outputs(device, model_name, sequence_length, model_location_generator)
