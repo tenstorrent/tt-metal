@@ -38,13 +38,15 @@ using namespace tt::tt_fabric;
 
 namespace {
 
-// Helper function to build adjacency graph from row-major mesh connection
-// Always uses LINE connectivity (no wrap-around) with configurable connections per edge
+// Helper function to build adjacency graph from row-major mesh connection.
+// LINE neighbors are always included. When `ring_dims[d]` is true, also wrap both ends of dimension d.
+// Missing `ring_dims` entries are treated as LINE (no wrap). RING wrap is skipped when dim < 3.
 AdjacencyGraph<uint32_t> build_row_major_mesh_graph(
     const std::vector<uint32_t>& instance_ids,
     const std::vector<int32_t>& dims,
     const std::string& grouping_name,
-    uint32_t connections_per_edge) {
+    uint32_t connections_per_edge,
+    const std::vector<bool>& ring_dims = {}) {
     std::map<uint32_t, std::vector<uint32_t>> adj_map;
 
     if (instance_ids.empty() || dims.empty()) {
@@ -114,26 +116,120 @@ AdjacencyGraph<uint32_t> build_row_major_mesh_graph(
         uint32_t node_id = instance_ids[node_idx];
         std::vector<int32_t> coords = get_coords(node_idx);
 
-        // For each dimension, connect to neighbor
         for (int32_t dim_idx = 0; dim_idx < static_cast<int32_t>(dims.size()); ++dim_idx) {
-            // Connect to neighbor in positive direction
-            if (coords[dim_idx] < dims[dim_idx] - 1) {
-                std::vector<int32_t> neighbor_coords = coords;
-                neighbor_coords[dim_idx]++;
-                uint32_t neighbor_idx = get_index(neighbor_coords);
-                uint32_t neighbor_id = instance_ids[neighbor_idx];
+            const int32_t dim_size = dims[dim_idx];
+            const int32_t coord_val = coords[dim_idx];
+            const bool is_ring =
+                dim_idx < static_cast<int32_t>(ring_dims.size()) && ring_dims[static_cast<size_t>(dim_idx)];
 
-                // Add connections_per_edge edges (bidirectional)
+            auto add_neighbor_coord = [&](int32_t neighbor_coord_val) {
+                std::vector<int32_t> neighbor_coords = coords;
+                neighbor_coords[dim_idx] = neighbor_coord_val;
+                uint32_t neighbor_id = instance_ids[get_index(neighbor_coords)];
                 for (uint32_t conn = 0; conn < connections_per_edge; ++conn) {
                     adj_map[node_id].push_back(neighbor_id);
                     adj_map[neighbor_id].push_back(node_id);
                 }
+            };
+
+            // +direction LINE neighbor (one-sided, matches PGD flatten and main — do not also walk -direction
+            // or each undirected edge is inserted twice and STRICT matching sees 2 channels per edge).
+            if (coord_val < dim_size - 1) {
+                add_neighbor_coord(coord_val + 1);
+            }
+
+            // RING wrap: connect coord 0 to dim-1 (skip dim < 3; bidirectional push covers both ends).
+            if (is_ring && dim_size >= 3 && coord_val == 0) {
+                add_neighbor_coord(dim_size - 1);
             }
         }
     }
 
     return AdjacencyGraph<uint32_t>(adj_map);
 }
+
+struct MgdDeviceTopology {
+    std::vector<int32_t> dims;
+    std::vector<bool> ring_dims;
+};
+
+std::optional<MgdDeviceTopology> get_mgd_instance_device_topology(
+    const MeshGraphDescriptor& mesh_graph_descriptor, const std::string& instance_name) {
+    const auto& instance_ids = mesh_graph_descriptor.instances_by_name(instance_name);
+    if (instance_ids.empty()) {
+        return std::nullopt;
+    }
+    const auto& instance = mesh_graph_descriptor.get_instance(instance_ids[0]);
+
+    const proto::TorusTopology* device_topology = nullptr;
+    if (instance.kind == NodeKind::Mesh) {
+        const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
+        if (mesh_desc != nullptr) {
+            device_topology = &mesh_desc->device_topology();
+        }
+    } else if (instance.kind == NodeKind::Switch) {
+        const auto* switch_desc = std::get<const proto::SwitchDescriptor*>(instance.desc);
+        if (switch_desc != nullptr) {
+            device_topology = &switch_desc->device_topology();
+        }
+    }
+    if (device_topology == nullptr || device_topology->dims().empty()) {
+        return std::nullopt;
+    }
+
+    MgdDeviceTopology topo;
+    topo.dims.assign(device_topology->dims().begin(), device_topology->dims().end());
+    topo.ring_dims.reserve(device_topology->dim_types_size());
+    for (int i = 0; i < device_topology->dim_types_size(); ++i) {
+        topo.ring_dims.push_back(device_topology->dim_types(i) == proto::TorusTopology::RING);
+    }
+    return topo;
+}
+
+GroupingInfo finalize_mesh_grouping_with_device_topology(
+    const GroupingInfo& grouping,
+    const MgdDeviceTopology& device_topo,
+    const std::map<uint32_t, uint32_t>* mgd_to_pgd_nodes = nullptr) {
+    const bool has_ring =
+        std::any_of(device_topo.ring_dims.begin(), device_topo.ring_dims.end(), [](bool is_ring) { return is_ring; });
+    if (!has_ring) {
+        return grouping;
+    }
+
+    int64_t num_nodes = 1;
+    for (int32_t dim : device_topo.dims) {
+        num_nodes *= dim;
+    }
+
+    std::vector<uint32_t> node_ids;
+    node_ids.reserve(static_cast<size_t>(num_nodes));
+    if (mgd_to_pgd_nodes == nullptr) {
+        for (uint32_t i = 0; i < static_cast<uint32_t>(num_nodes); ++i) {
+            node_ids.push_back(i);
+        }
+    } else {
+        for (uint32_t mgd_id = 0; mgd_id < static_cast<uint32_t>(num_nodes); ++mgd_id) {
+            auto it = mgd_to_pgd_nodes->find(mgd_id);
+            TT_FATAL(
+                it != mgd_to_pgd_nodes->end(),
+                "Grouping '{}' is missing topology mapping for MGD node {}",
+                grouping.name,
+                mgd_id);
+            node_ids.push_back(it->second);
+        }
+    }
+
+    GroupingInfo result = grouping;
+    result.adjacency_graph =
+        build_row_major_mesh_graph(node_ids, device_topo.dims, grouping.name, 1, device_topo.ring_dims);
+    return result;
+}
+
+struct MeshTopologyMatch {
+    std::string name;
+    size_t idx = 0;
+    MappingResult<uint32_t, uint32_t> mapping;
+};
 
 // Helper function to build adjacency graph from MGD mesh instance's device topology
 // Builds a row-major mesh graph based on the mesh's device_topology dims
@@ -168,11 +264,8 @@ AdjacencyGraph<uint32_t> build_mgd_mesh_instance_adjacency(
         asic_ids.push_back(i);
     }
 
-    // Build row-major mesh graph representing ASIC-level topology
-    // Always uses LINE connectivity (no wrap-around) and 1 connection per edge
-    auto result = build_row_major_mesh_graph(asic_ids, device_dims, "", 1);
-
-    return result;
+    // LINE-only graph for topology matching (RING edges are added when groupings are committed).
+    return build_row_major_mesh_graph(asic_ids, device_dims, "", 1);
 }
 
 // Helper function to build adjacency graph from MGD switch instance
@@ -208,201 +301,8 @@ AdjacencyGraph<uint32_t> build_mgd_switch_instance_adjacency(
         asic_ids.push_back(i);
     }
 
-    // Build row-major mesh graph representing ASIC-level topology
-    // Always uses LINE connectivity (no wrap-around) and 1 connection per edge
-    auto result = build_row_major_mesh_graph(asic_ids, device_dims, "", 1);
-
-    return result;
-}
-
-// Compute torus wrap-around edges for a row-major device topology. `ring_dims[d]` indicates whether dimension `d`
-// is a RING (wrap-around) dimension; entries beyond `ring_dims.size()` are treated as LINE (no wrap). Node ids in
-// the returned edges use the same 0..N-1 row-major numbering as the MGD mesh adjacency graph.
-std::vector<std::pair<uint32_t, uint32_t>> compute_torus_wraparound_edges(
-    const std::vector<int32_t>& dims, const std::vector<bool>& ring_dims) {
-    std::vector<std::pair<uint32_t, uint32_t>> edges;
-    if (dims.empty()) {
-        return edges;
-    }
-
-    int64_t total_size = 1;
-    for (int32_t dim : dims) {
-        if (dim <= 0) {
-            return edges;
-        }
-        total_size *= dim;
-    }
-    // Guard: node IDs are uint32_t so a mesh with more than 2^32 nodes cannot be represented.
-    if (total_size > static_cast<int64_t>(std::numeric_limits<uint32_t>::max())) {
-        TT_THROW("Mesh topology too large: total_size {} exceeds uint32_t node-id range", total_size);
-    }
-
-    // Row-major helpers: the last dimension varies fastest (matches build_row_major_mesh_graph).
-    auto get_coords = [&](uint32_t idx) -> std::vector<int32_t> {
-        std::vector<int32_t> coords(dims.size());
-        uint32_t remaining = idx;  // kept as uint32_t to avoid narrowing; safe since total_size <= UINT32_MAX
-        for (int32_t i = static_cast<int32_t>(dims.size()) - 1; i >= 0; --i) {
-            coords[i] = static_cast<int32_t>(remaining % static_cast<uint32_t>(dims[i]));
-            remaining /= static_cast<uint32_t>(dims[i]);
-        }
-        return coords;
-    };
-    auto get_index = [&](const std::vector<int32_t>& coords) -> uint32_t {
-        uint32_t idx = 0;
-        uint32_t multiplier = 1;
-        for (int32_t i = static_cast<int32_t>(dims.size()) - 1; i >= 0; --i) {
-            idx += static_cast<uint32_t>(coords[i]) * multiplier;
-            multiplier *= static_cast<uint32_t>(dims[i]);
-        }
-        return idx;
-    };
-
-    std::set<std::pair<uint32_t, uint32_t>> seen;
-    for (size_t d = 0; d < dims.size(); ++d) {
-        const bool is_ring = d < ring_dims.size() && ring_dims[d];
-        if (!is_ring) {
-            continue;
-        }
-        // For size < 3 the wrap-around edge would duplicate the existing LINE edge between the two endpoints.
-        if (dims[d] < 3) {
-            log_debug(
-                tt::LogFabric,
-                "Skipping torus wrap-around for RING dimension {} with size {} (< 3): wrap edge would duplicate "
-                "existing LINE edge",
-                d,
-                dims[d]);
-            continue;
-        }
-        for (uint32_t idx = 0; idx < static_cast<uint32_t>(total_size); ++idx) {
-            std::vector<int32_t> coords = get_coords(idx);
-            if (coords[d] != 0) {
-                continue;
-            }
-            std::vector<int32_t> partner_coords = coords;
-            partner_coords[d] = dims[d] - 1;
-            uint32_t partner_idx = get_index(partner_coords);
-            auto edge = std::minmax(idx, partner_idx);
-            if (seen.insert(edge).second) {
-                edges.emplace_back(edge.first, edge.second);
-            }
-        }
-    }
-
-    return edges;
-}
-
-// Helper to read a row-major device topology's torus (wrap-around) edges from an MGD mesh/switch instance.
-// Returns wrap-around edges in the same 0..N-1 row-major node numbering used by build_mgd_mesh_instance_adjacency.
-// Returns empty if the instance is not a mesh/switch or has no RING dimensions.
-std::vector<std::pair<uint32_t, uint32_t>> get_mgd_instance_torus_edges(
-    const MeshGraphDescriptor& mesh_graph_descriptor, const std::string& instance_name) {
-    const auto& instance_ids = mesh_graph_descriptor.instances_by_name(instance_name);
-    if (instance_ids.empty()) {
-        return {};
-    }
-    const auto& instance = mesh_graph_descriptor.get_instance(instance_ids[0]);
-
-    const proto::TorusTopology* device_topology = nullptr;
-    if (instance.kind == NodeKind::Mesh) {
-        const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
-        if (mesh_desc != nullptr) {
-            device_topology = &mesh_desc->device_topology();
-        }
-    } else if (instance.kind == NodeKind::Switch) {
-        const auto* switch_desc = std::get<const proto::SwitchDescriptor*>(instance.desc);
-        if (switch_desc != nullptr) {
-            device_topology = &switch_desc->device_topology();
-        }
-    }
-    if (device_topology == nullptr) {
-        return {};
-    }
-
-    std::vector<int32_t> dims(device_topology->dims().begin(), device_topology->dims().end());
-    std::vector<bool> ring_dims;
-    ring_dims.reserve(device_topology->dim_types_size());
-    for (int i = 0; i < device_topology->dim_types_size(); ++i) {
-        ring_dims.push_back(device_topology->dim_types(i) == proto::TorusTopology::RING);
-    }
-    return compute_torus_wraparound_edges(dims, ring_dims);
-}
-
-void apply_torus_edges_to_adjacency_map(
-    AdjacencyGraph<uint32_t>::AdjacencyMap& adj_map, const std::vector<std::pair<uint32_t, uint32_t>>& torus_edges) {
-    for (const auto& [a, b] : torus_edges) {
-        if (a == b) {
-            continue;
-        }
-        auto& neighbors_a = adj_map[a];
-        if (std::find(neighbors_a.begin(), neighbors_a.end(), b) == neighbors_a.end()) {
-            neighbors_a.push_back(b);
-        }
-        auto& neighbors_b = adj_map[b];
-        if (std::find(neighbors_b.begin(), neighbors_b.end(), a) == neighbors_b.end()) {
-            neighbors_b.push_back(a);
-        }
-    }
-}
-
-// Return a copy of an MGD grouping whose adjacency graph includes torus wrap-around edges. Edge endpoints are already
-// in MGD node ids (same numbering as build_mgd_mesh_instance_adjacency / build_mgd_switch_instance_adjacency).
-GroupingInfo add_torus_edges_to_mgd_grouping(
-    const GroupingInfo& mgd_grouping, const std::vector<std::pair<uint32_t, uint32_t>>& mgd_torus_edges) {
-    GroupingInfo augmented = mgd_grouping;
-    if (mgd_torus_edges.empty()) {
-        return augmented;
-    }
-
-    AdjacencyGraph<uint32_t>::AdjacencyMap adj_map = mgd_grouping.adjacency_graph.get_adjacency_map();
-    apply_torus_edges_to_adjacency_map(adj_map, mgd_torus_edges);
-    augmented.adjacency_graph = AdjacencyGraph<uint32_t>(adj_map);
-    return augmented;
-}
-
-// Return a copy of `grouping` whose adjacency graph has the MGD torus wrap-around edges layered in.
-// `mgd_torus_edges` are expressed in MGD node ids; we re-derive the MGD->PGD embedding (matching the topology
-// solve used during matching) and translate each torus edge into the grouping's node space before adding it.
-GroupingInfo add_torus_edges_to_grouping(
-    const GroupingInfo& grouping,
-    const AdjacencyGraph<uint32_t>& mgd_adjacency,
-    const std::vector<std::pair<uint32_t, uint32_t>>& mgd_torus_edges) {
-    GroupingInfo augmented = grouping;
-    if (mgd_torus_edges.empty()) {
-        return augmented;
-    }
-
-    MappingConstraints<uint32_t, uint32_t> constraints;
-    constraints.add_required_constraint(0, 0);
-    auto mapping_result = solve_topology_mapping<uint32_t, uint32_t>(
-        mgd_adjacency, grouping.adjacency_graph, constraints, ConnectionValidationMode::STRICT, true);
-    if (!mapping_result.success) {
-        log_warning(
-            tt::LogFabric,
-            "add_torus_edges_to_grouping: topology re-solve failed; returning grouping without torus edges. Check that "
-            "MGD node 0 exists in mgd_adjacency.");
-        return augmented;
-    }
-
-    std::vector<std::pair<uint32_t, uint32_t>> translated_edges;
-    translated_edges.reserve(mgd_torus_edges.size());
-    for (const auto& [mgd_a, mgd_b] : mgd_torus_edges) {
-        auto it_a = mapping_result.target_to_global.find(mgd_a);
-        auto it_b = mapping_result.target_to_global.find(mgd_b);
-        if (it_a == mapping_result.target_to_global.end() || it_b == mapping_result.target_to_global.end()) {
-            log_warning(
-                tt::LogFabric,
-                "add_torus_edges_to_grouping: MGD torus edge ({},{}) not found in topology mapping; skipping edge",
-                mgd_a,
-                mgd_b);
-            continue;
-        }
-        translated_edges.emplace_back(it_a->second, it_b->second);
-    }
-
-    AdjacencyGraph<uint32_t>::AdjacencyMap adj_map = grouping.adjacency_graph.get_adjacency_map();
-    apply_torus_edges_to_adjacency_map(adj_map, translated_edges);
-    augmented.adjacency_graph = AdjacencyGraph<uint32_t>(adj_map);
-    return augmented;
+    // LINE-only graph for topology matching (RING edges are added when groupings are committed).
+    return build_row_major_mesh_graph(asic_ids, device_dims, "", 1);
 }
 
 // Helper function to build adjacency graph from MGD graph instance
@@ -914,11 +814,9 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         // Required nodes from MGD adjacency graph (this represents the topology pattern to match)
         size_t required_nodes = mgd_grouping_info.adjacency_graph.get_nodes().size();
 
-        // Torus (wrap-around) edges implied by RING dims of this MGD mesh's device topology. These are intentionally
-        // NOT used for topology matching (which runs against the LINE subgraph); they are layered back onto the
-        // committed grouping's adjacency graph once a PGD grouping both matches the MGD and embeds on the PSD.
-        const std::vector<std::pair<uint32_t, uint32_t>> mgd_torus_edges =
-            get_mgd_instance_torus_edges(mesh_graph_descriptor, instance_name);
+        // RING dims from MGD device topology. Matching uses LINE-only graphs; committed groupings are rebuilt with
+        // RING.
+        const auto device_topo = get_mgd_instance_device_topology(mesh_graph_descriptor, instance_name);
 
         // Group valid candidates by node difference (map is ordered by key ascending)
         // Store (name, index) pairs to handle multiple groupings with same name
@@ -937,8 +835,8 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
 
         // Process difference levels from closest to farthest; commit only when embedding on PSD succeeds
         log_info(tt::LogFabric, "Processing difference levels from closest to farthest");
-        std::vector<std::pair<std::string, size_t>> best_matches_topology;
-        std::vector<std::pair<std::string, size_t>> best_matches_psd_placed;
+        std::vector<MeshTopologyMatch> best_matches_topology;
+        std::vector<MeshTopologyMatch> best_matches_psd_placed;
 
         bool committed_pgd_matches = false;
         for (const auto& [node_diff, name_idx_pairs] : candidates_by_diff) {
@@ -957,7 +855,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                     ConnectionValidationMode::STRICT,
                     true);
                 if (mapping_result.success) {
-                    best_matches_topology.emplace_back(name, idx);
+                    best_matches_topology.push_back({name, idx, std::move(mapping_result)});
                 } else {
                     log_info(
                         tt::LogFabric,
@@ -980,13 +878,13 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
             }
 
             if (physical_system_descriptor != nullptr) {
-                for (const auto& [name, idx] : best_matches_topology) {
-                    const GroupingInfo& flattened_candidate = mesh_flat_groupings.at(name)[idx];
+                for (const auto& match : best_matches_topology) {
+                    const GroupingInfo& flattened_candidate = mesh_flat_groupings.at(match.name)[match.idx];
                     std::vector<std::string> psd_errors;
                     const auto mapped_asics =
                         find_any_in_psd(flattened_candidate, *physical_system_descriptor, psd_errors);
                     if (!mapped_asics.empty()) {
-                        best_matches_psd_placed.emplace_back(name, idx);
+                        best_matches_psd_placed.push_back(match);
                     } else if (!psd_errors.empty()) {
                         log_info(
                             tt::LogFabric,
@@ -1009,16 +907,13 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
             }
 
             if (!best_matches_psd_placed.empty()) {
-                for (const auto& [match_name, match_idx] : best_matches_psd_placed) {
-                    auto lookup_it = mesh_flat_groupings.find(match_name);
-                    if (lookup_it != mesh_flat_groupings.end() && match_idx < lookup_it->second.size()) {
-                        const GroupingInfo& flattened_grouping = lookup_it->second[match_idx];
-                        // When the MGD mesh is a torus, layer the wrap-around edges onto the committed grouping
-                        // graph. We re-derive the MGD->PGD embedding (cheap, only for torus meshes) and translate
-                        // each torus edge into PGD node space before adding it.
-                        if (!mgd_torus_edges.empty()) {
-                            result[instance_type][instance_name].push_back(add_torus_edges_to_grouping(
-                                flattened_grouping, mgd_grouping_info.adjacency_graph, mgd_torus_edges));
+                for (const auto& match : best_matches_psd_placed) {
+                    auto lookup_it = mesh_flat_groupings.find(match.name);
+                    if (lookup_it != mesh_flat_groupings.end() && match.idx < lookup_it->second.size()) {
+                        const GroupingInfo& flattened_grouping = lookup_it->second[match.idx];
+                        if (device_topo.has_value()) {
+                            result[instance_type][instance_name].push_back(finalize_mesh_grouping_with_device_topology(
+                                flattened_grouping, *device_topo, &match.mapping.target_to_global));
                         } else {
                             result[instance_type][instance_name].push_back(flattened_grouping);
                         }
@@ -1045,9 +940,9 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         if (!committed_pgd_matches) {
             // No PGD grouping both matched MGD and placed on PSD — use the MGD grouping info itself
             log_info(tt::LogFabric, "Using MGD mesh grouping for {} (no PSD-viable PGD match)", mgd_grouping_info.name);
-            if (!mgd_torus_edges.empty()) {
+            if (device_topo.has_value()) {
                 result[instance_type][instance_name].push_back(
-                    add_torus_edges_to_mgd_grouping(mgd_grouping_info, mgd_torus_edges));
+                    finalize_mesh_grouping_with_device_topology(mgd_grouping_info, *device_topo));
             } else {
                 result[instance_type][instance_name].push_back(mgd_grouping_info);
             }
@@ -1111,9 +1006,9 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::get_mgd_mesh_groupings_for
     std::vector<GroupingInfo> meshes;
     meshes.reserve(mesh_it->second.size());
     for (const auto& [instance_name, mgd_grouping] : mesh_it->second) {
-        const auto torus_edges = get_mgd_instance_torus_edges(mesh_graph_descriptor, instance_name);
-        if (!torus_edges.empty()) {
-            meshes.push_back(add_torus_edges_to_mgd_grouping(mgd_grouping, torus_edges));
+        const auto device_topo = get_mgd_instance_device_topology(mesh_graph_descriptor, instance_name);
+        if (device_topo.has_value()) {
+            meshes.push_back(finalize_mesh_grouping_with_device_topology(mgd_grouping, *device_topo));
         } else {
             meshes.push_back(mgd_grouping);
         }

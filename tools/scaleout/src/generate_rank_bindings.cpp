@@ -71,12 +71,16 @@ PhysicalSystemDescriptor run_psd_discovery() {
  * 2. TT_METAL_HOME/tests/tt_metal/tt_fabric/physical_groupings/<cluster_name>_physical_grouping_descriptor.textproto
  * 3. Architecture/cluster-type specific default:
  * tests/tt_metal/tt_fabric/physical_groupings/<arch>_<cluster_type>_physical_grouping_descriptor.textproto
+ *    Wormhole Galaxy + Blackhole Galaxy Rev C: wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto
+ *    Blackhole Galaxy Rev A/B: bh_galaxy_rev_ab_physical_grouping_descriptor.textproto
  * 4. Generic default: tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto
  *
  * Cluster name is obtained from TT_CLUSTER_NAME environment variable.
  * Architecture and cluster type are obtained from MetalContext.
+ * When psd is provided, Blackhole Galaxy revision selects rev_ab vs rev_c PGD.
  */
-PhysicalGroupingDescriptor find_and_load_pgd(const std::optional<std::string>& pgd_path = std::nullopt) {
+PhysicalGroupingDescriptor find_and_load_pgd(
+    const std::optional<std::string>& pgd_path = std::nullopt, const PhysicalSystemDescriptor* psd = nullptr) {
     // Check for explicit PGD path from argument first
     if (pgd_path.has_value() && !pgd_path->empty()) {
         std::filesystem::path explicit_path(*pgd_path);
@@ -141,13 +145,24 @@ PhysicalGroupingDescriptor find_and_load_pgd(const std::optional<std::string>& p
 
     // Hardcoded if-else if statement for cluster type and architecture combinations
     if (cluster_type == tt::tt_metal::ClusterType::GALAXY && arch == tt::ARCH::WORMHOLE_B0) {
-        arch_cluster_filename = "wh_galaxy_physical_grouping_descriptor.textproto";
-    } else if (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY && arch == tt::ARCH::BLACKHOLE) {
-        arch_cluster_filename = "bh_galaxy_physical_grouping_descriptor.textproto";
+        arch_cluster_filename = "wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
+        log_info(tt::LogFabric, "Wormhole Galaxy detected — using {}", arch_cluster_filename);
+    } else if (
+        (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY || cluster.is_ubb_galaxy()) &&
+        arch == tt::ARCH::BLACKHOLE) {
+        if (psd != nullptr && psd->is_bh_galaxy_rev_c()) {
+            arch_cluster_filename = "wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
+            log_info(tt::LogFabric, "Blackhole Galaxy Rev C detected — using {}", arch_cluster_filename);
+        } else {
+            arch_cluster_filename = "bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
+            log_info(tt::LogFabric, "Blackhole Galaxy Rev A/B detected — using {}", arch_cluster_filename);
+        }
     } else if (cluster_type == tt::tt_metal::ClusterType::T3K && arch == tt::ARCH::WORMHOLE_B0) {
         arch_cluster_filename = "wh_t3k_physical_grouping_descriptor.textproto";
+        log_info(tt::LogFabric, "T3K detected — using {}", arch_cluster_filename);
     } else {
         arch_cluster_filename = "default_physical_grouping_descriptor.textproto";
+        log_info(tt::LogFabric, "No architecture/cluster-type specific PGD — using default: {}", arch_cluster_filename);
     }
 
     // If we found a specific file, add it to search paths (checked before default)
@@ -645,7 +660,7 @@ int main(int argc, char** argv) {
 
         // Stage: Load Physical Grouping Descriptor
         log_info(tt::LogFabric, "Stage: Loading Physical Grouping Descriptor...");
-        PhysicalGroupingDescriptor pgd = find_and_load_pgd(args.physical_grouping_descriptor_path);
+        PhysicalGroupingDescriptor pgd = find_and_load_pgd(args.physical_grouping_descriptor_path, &psd);
         log_info(tt::LogFabric, "Physical Grouping Descriptor loaded");
 
         // Get current rank - only rank 0 performs topology mapping and file generation

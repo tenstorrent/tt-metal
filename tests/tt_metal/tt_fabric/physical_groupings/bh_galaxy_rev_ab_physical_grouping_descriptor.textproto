@@ -1,9 +1,7 @@
-# Physical Groupings File - Default Configuration
-# This is a default/copy of the triple pod configuration
-# Used as fallback when cluster-specific PGD is not found
-# This file defines groupings for a pipelined configuration with 48 stages (meshes)
-# Each mesh contains 1 tray (8 ASICs), arranged in 3 pods with 16 meshes each
-# The actual ASIC IDs are derived at runtime from the Physical System Descriptor (PSD)
+# Blackhole Galaxy Rev A/B physical groupings.
+# HALFTRAY pairings use diagonal half-pod trays {1,3} and {2,4} (four HALFTRAY variants).
+# 4x4 / 2x8 meshes use diagonal tray pairings {3,1}/{4,2} and row pairs {1,2}/{3,4}.
+# Selected by generate_rank_bindings for Blackhole Galaxy when PSD is not Rev C.
 # Uses predefined keywords: TRAY_1-TRAY_4, HOSTS, and MESH
 
 # TRAY_1: Top left corner is ASIC_LOCATION_1
@@ -27,7 +25,7 @@ groupings {
 
 # TRAY_2: Bottom left corner is ASIC_LOCATION_1
 groupings {
-  name: "tray_2_BH_Galaxy"
+  name: "tray_2"
   preset_type: TRAY_2
   instances: [
     { id: 0 asic_location: ASIC_LOCATION_8 },
@@ -43,9 +41,10 @@ groupings {
     dims: [2, 4]
   }
 }
+
 # TRAY_3: Top right corner is ASIC_LOCATION_1
 groupings {
-  name: "tray_3_BH_Galaxy"
+  name: "tray_3"
   preset_type: TRAY_3
   instances: [
     { id: 0 asic_location: ASIC_LOCATION_1 },
@@ -61,6 +60,7 @@ groupings {
     dims: [2, 4]
   }
 }
+
 # TRAY_4: Bottom right corner is ASIC_LOCATION_1
 groupings {
   name: "tray_4"
@@ -80,9 +80,9 @@ groupings {
   }
 }
 
-# HOSTS: 4 trays (TRAY_1, TRAY_2, TRAY_3, TRAY_4)
+# Galaxy host layout (TRAY_3, TRAY_4, TRAY_1, TRAY_2)
 groupings {
-  name: "BH_galaxy_hosts"
+  name: "galaxy_hosts"
   preset_type: HOSTS
   instances: [
     { id: 0 grouping_ref { preset_type: TRAY_3 } },
@@ -95,7 +95,7 @@ groupings {
   }
 }
 
-# For triple connection / smaller pipeline stages
+# Rev A/B half-pod slices: diagonal tray pairs {1,3} and {2,4} (four HALFTRAY variants).
 groupings {
   name: "halftray_2x2"
   custom_type: "HALFTRAY1"
@@ -178,9 +178,9 @@ groupings {
   }
 }
 
-# MESH: 2 trays (16 ASICs)
+# MESH: 2 trays (16 ASICs) — diagonal pairings {3,1} and {4,2}
 groupings {
-  name: "4x4_Mesh BH"
+  name: "4x4_Mesh_diagonal"
   preset_type: MESH
   instances: [
     { id: 0 grouping_ref { preset_type: TRAY_3 } },
@@ -191,9 +191,8 @@ groupings {
   }
 }
 
-# MESH: 2 trays (16 ASICs)
 groupings {
-  name: "4x4_Mesh BH"
+  name: "4x4_Mesh_diagonal"
   preset_type: MESH
   instances: [
     { id: 0 grouping_ref { preset_type: TRAY_4 } },
@@ -204,9 +203,9 @@ groupings {
   }
 }
 
-# MESH: 2 trays (16 ASICs)
+# MESH: 2 trays (16 ASICs) — adjacent pairings {1,2} and {3,4}
 groupings {
-  name: "2x8_Mesh BH"
+  name: "2x8_Mesh_adjacent"
   preset_type: MESH
   instances: [
     { id: 0 grouping_ref { preset_type: TRAY_1 } },
@@ -217,9 +216,8 @@ groupings {
   }
 }
 
-# MESH: 2 trays (16 ASICs)
 groupings {
-  name: "2x8_Mesh BH"
+  name: "2x8_Mesh_adjacent"
   preset_type: MESH
   instances: [
     { id: 0 grouping_ref { preset_type: TRAY_3 } },
@@ -230,9 +228,7 @@ groupings {
   }
 }
 
-
 # MESH: 1 host (32 ASICs) - for single galaxy (8x4)
-# Note: Single instance grouping, no row_major_mesh needed (only applies to multi-instance groupings)
 groupings {
   name: "4x8_Mesh"
   preset_type: MESH
@@ -280,7 +276,6 @@ groupings {
   }
 }
 
-# MESH: 4 hosts (128 ASICs) arranged in 2x2 grid - for 16x8 quad BH galaxy
 groupings {
   name: "4x32_Mesh"
   preset_type: MESH
