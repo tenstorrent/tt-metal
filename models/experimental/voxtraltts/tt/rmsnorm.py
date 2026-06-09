@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -108,6 +109,21 @@ class VoxtralTextRMSNorm:
         self.dim = int(dim)
         self.mesh_device = device
 
+        # Fused-kernel path (opt-in, default ON). The manual __call__ below spends ~8 ttnn ops per
+        # norm; with 53 norms/decode-token that is ~hundreds of tiny ops whose host-dispatch GAP
+        # (~100us each) dominates decode wall-clock (and RTF) far more than their compute. The fused
+        # ``ttnn.rms_norm`` does square+mean+rsqrt+normalize+weight in ONE kernel. We still promote the
+        # input to fp32 first so the x*x square is fp32 (HF-faithful — the bf16 square is exactly what
+        # this class was created to avoid), and use fp32_dest_acc for the variance accumulation.
+        # Disable with VOXTRAL_TEXT_FUSED_RMSNORM=0 to fall back to the explicit decomposition.
+        self.use_fused = os.environ.get("VOXTRAL_TEXT_FUSED_RMSNORM", "1") == "1"
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
     def __call__(self, x: ttnn.Tensor, mode: Mode | str = Mode.DECODE, **kwargs: Any) -> ttnn.Tensor:
         """Returns ``weight * normalize_fp32(x)`` with the bf16/fp32 cast pattern HF uses."""
         if isinstance(mode, str):
@@ -116,6 +132,9 @@ class VoxtralTextRMSNorm:
         norm_config = kwargs.get("norm_config")
         sharded_output_config = norm_config.get("sharded_output_config") if norm_config else None
         output_mem_config = norm_config.get("output_mem_config") if norm_config else None
+
+        if self.use_fused:
+            return self._forward_fused(x, mode, sharded_output_config, output_mem_config)
 
         # Match DistributedNorm: decode activations are width-sharded in L1.
         input_mem_cfg = (
@@ -170,6 +189,42 @@ class VoxtralTextRMSNorm:
         )
         if normalised_in.is_allocated():
             ttnn.deallocate(normalised_in)
+
+        if in_sharded:
+            out = ttnn.to_memory_config(out, sharded_output_config)
+        elif output_mem_config is not None:
+            out = ttnn.to_memory_config(out, output_mem_config)
+        return out
+
+    def _forward_fused(self, x, mode, sharded_output_config, output_mem_config):
+        """Single fused ``ttnn.rms_norm`` (fp32 square via fp32 input + fp32_dest_acc).
+
+        Same numerics intent as the manual path (fp32 promote → variance → rsqrt → normalize →
+        bf16 weight-multiply) but in one kernel instead of ~8 ops, killing the per-op dispatch gap.
+        """
+        input_mem_cfg = (
+            sharded_output_config if mode == Mode.DECODE and sharded_output_config else ttnn.DRAM_MEMORY_CONFIG
+        )
+        x = ttnn.to_memory_config(x, input_mem_cfg)
+        in_sharded = mode == Mode.DECODE and sharded_output_config is not None
+        if in_sharded:
+            x = ttnn.sharded_to_interleaved(x)
+
+        input_dtype = x.dtype
+        # Promote to fp32 so the kernel's x*x is computed in fp32 (HF-faithful — the precision this
+        # class exists to preserve). fp32_dest_acc keeps the variance reduction in fp32 too.
+        x_fp32 = ttnn.typecast(x, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.rms_norm(
+            x_fp32,
+            epsilon=self.eps,
+            weight=self.weight_tt,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if x_fp32.is_allocated():
+            ttnn.deallocate(x_fp32)
+        if out.dtype != input_dtype:
+            out = ttnn.typecast(out, input_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         if in_sharded:
             out = ttnn.to_memory_config(out, sharded_output_config)
