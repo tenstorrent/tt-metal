@@ -44,6 +44,24 @@ constexpr bool is_fp32_output_format() {
     return dfb_l1_format<output_dfb>() == static_cast<uint32_t>(DataFormat::Float32);
 }
 
+template <uint32_t input_dfb, bool pack_default>
+constexpr bool has_unpack_to_dest_fp32() {
+    // Detects whether the CB was configured with UnpackToDestMode::UnpackToDestFp32 in the
+    // program factory. The JIT folds that host-side enum into unpack_dst_format[]: when set,
+    // a Float32 CB keeps Dest-side format Float32 (0); with Default mode it is downgraded to
+    // Tf32 (4). So comparing unpack_src_format[cb] == unpack_dst_format[cb] is a reliable
+    // compile-time signal on the TRISCs that can see both arrays (UNPACK and MATH; PACK cannot).
+    //
+    // pack_default controls the value returned on PACK (where the check is not observable).
+    // Callers pick it so the surrounding static_assert passes on PACK, deferring enforcement
+    // to UNPACK/MATH.
+#if defined(UCK_CHLKC_PACK)
+    return pack_default;
+#else
+    return unpack_src_format[input_dfb] == unpack_dst_format[input_dfb];
+#endif
+}
+
 template <uint32_t block_width_tiles, uint32_t input_dfb, uint32_t output_dfb>
 constexpr bool can_use_fast_tilize() {
 #ifdef ARCH_QUASAR
@@ -90,6 +108,33 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
     constexpr bool lossless_fp32_override =
         (fp32_mode == tilize_config::Fp32Mode::Lossless) && is_fp32_input_format<input_dfb>();
     constexpr bool use_fast = can_use_fast_tilize<block_width_tiles, input_dfb, output_dfb>() && !lossless_fp32_override;
+
+    // Lossless fp32 requires BOTH fp32 Dest AND the input CB configured with UnpackToDestFp32.
+    // Without these, the slow tilize path still round-trips fp32 through tf32 in Dest and the
+    // "lossless" promise is silently broken. Gate with if constexpr so the asserts only fire
+    // when the input is actually fp32 and Lossless mode is requested.
+    if constexpr (lossless_fp32_override) {
+        static_assert(DST_ACCUM_MODE,
+            "Fp32Mode::Lossless requires fp32_dest_acc_en=true in the ComputeConfig: "
+            "Dest must hold fp32, otherwise the slow tilize path still downgrades to tf32.");
+        static_assert(has_unpack_to_dest_fp32<input_dfb, /*pack_default=*/true>(),
+            "Fp32Mode::Lossless requires UnpackToDestMode::UnpackToDestFp32 on the input CB. "
+            "Set unpack_to_dest_mode[input_cb] = UnpackToDestMode::UnpackToDestFp32 in the "
+            "program factory; otherwise the unpacker truncates fp32 to tf32 on its way to Dest.");
+    }
+
+    // Conversely, the fast tilize path requires UnpackToDestMode::Default on the input CB.
+    // Combining fast_tilize with UnpackToDestFp32 silently corrupts output (the unpacker
+    // writes 32-bit fp32 payloads into Dest slots that fast_tilize's pack stage reads as
+    // tf32). Only applicable to fp32 inputs — Float16_b is unaffected because its
+    // unpack_dst_format equals its unpack_src_format regardless of UnpackToDestMode.
+    if constexpr (use_fast && is_fp32_input_format<input_dfb>()) {
+        static_assert(!has_unpack_to_dest_fp32<input_dfb, /*pack_default=*/false>(),
+            "Fast tilize on fp32 input requires UnpackToDestMode::Default on the input CB. "
+            "Combining fast_tilize with UnpackToDestFp32 corrupts output. Either leave "
+            "unpack_to_dest_mode[input_cb] as Default in the program factory, or request "
+            "Fp32Mode::Lossless to force the slow (bit-exact) tilize path.");
+    }
 
     // Determine if we're doing data type reconfiguration
     constexpr bool use_unpack_reconfig =

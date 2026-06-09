@@ -92,6 +92,7 @@ jobs:
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
           build-artifact-name: ${{ inputs.build-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
