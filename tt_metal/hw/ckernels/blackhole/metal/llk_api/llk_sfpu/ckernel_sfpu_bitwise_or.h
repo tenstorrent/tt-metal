@@ -15,11 +15,8 @@ inline void calculate_bitwise_or(const uint value) {
         vInt input = dst_reg[0];
         vInt scalar_value = value;
         vInt res = input | scalar_value;
-        v_if(res > INT_MIN && res < 0) {
-            res = 0 - res;
-            res = copysgn(res, scalar_value);
-        }
-        v_endif dst_reg[0] = res;
+        // FIXME: BH doesn't convert to SMag automatically
+        dst_reg[0] = sfpi::convert<vSMag>(res);
         dst_reg++;
     }
 }
