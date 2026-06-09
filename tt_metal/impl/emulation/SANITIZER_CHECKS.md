@@ -43,7 +43,7 @@ Paths are prefixed with the repo: **`[metal]`** = `tt-metal/`, **`[emule]`** =
 | Illegal Semaphore Access | kernel | `[emule] jit_kernel_stubs.hpp` & `dataflow_api.h` | scalar access into the reserved semaphore region |
 | CB Boundary Violation | kernel | `[emule] jit_kernel_stubs.hpp` & `dataflow_api.h` (counters in `api/cb_api.h`) | access to a CB page outside an **active** reserve/wait window |
 | CB Reservation Overflow | kernel | `[emule] include/jit_hw/api/cb_api.h` | `cb_reserve_back(n)` with `n` > the CB's total pages |
-| NoC-read-pending on push | kernel | `[emule] api/cb_api.h` (push) + `api/dataflow/dataflow_api.h` (read counter) | `cb_push_back` while a `noc_async_read` is unbarriered |
+| NoC-read-pending on pop | kernel | `[emule] api/cb_api.h` (pop) + `api/dataflow/dataflow_api.h` (read counter) | `cb_pop_front` while a `noc_async_read` is unbarriered |
 | NOC Transfer Alignment | kernel | `[emule] include/jit_hw/api/dataflow/dataflow_api.h` | a NoC endpoint isn't aligned to its own memory-type alignment |
 | Dirty CB Detected | runner | `[metal] emulated_program_runner.cpp` (counter in `[emule] tt_emule/cb_sync_state.hpp`) | a consumed CB left non-empty at exit (push > pop) |
 | Object Intent Violation | runner | `[metal] emulated_program_runner.cpp` | a kernel changed a buffer it never resolved a pointer into |
@@ -179,16 +179,20 @@ instead of reporting a clear error.
 *Diagnostic:* `CB Reservation Overflow: CB <id> has <N> total pages, …`.
 *Exercised by:* `test_cb_pages.cpp`.
 
-### 9. NoC Read Pending on `cb_push_back`
-**Lives in:** `cb_push_back` in `[emule] include/jit_hw/api/cb_api.h`; the pending
+### 9. NoC Read Pending on `cb_pop_front`
+**Lives in:** `cb_pop_front` in `[emule] include/jit_hw/api/cb_api.h`; the pending
 counter is incremented/cleared in `noc_async_read` / `noc_async_read_barrier` in
 `[emule] include/jit_hw/api/dataflow/dataflow_api.h`.
-**What it catches:** pushing a CB page while a `noc_async_read` filling it hasn't
-been barriered — the consumer could read half-filled data on silicon.
+**What it catches:** popping (freeing) a CB page while a `noc_async_read` hasn't
+been barriered — the pop releases the page for the producer to refill, and a read
+still landing into it would race the refill (consumer reads stale/torn data on
+silicon). The check sits on **pop**, not push: a pop frees the page, so all reads
+must have completed first; before a push only writes precede it, so an unbarriered
+read there is harmless.
 **How it works:** `noc_async_read` increments a thread-local
-`__emule_pending_noc_reads`; the read barrier clears it. `cb_push_back` aborts if
-that counter is still > 0 (a barrier was skipped before the push).
-*Diagnostic:* `Race Condition: cb_push_back(cb_id=…) called while a NoC read is still pending`.
+`__emule_pending_noc_reads`; the read barrier clears it. `cb_pop_front` aborts if
+that counter is still > 0 (a barrier was skipped before the pop).
+*Diagnostic:* `Race Condition: cb_pop_front(cb_id=…) called while a NoC read is still pending`.
 *Exercised by:* `test_noc_without_barrier.cpp`.
 
 ### 10. NOC Transfer Alignment
@@ -282,7 +286,7 @@ instead of dereferencing a null/garbage backing pointer.
 | Illegal Semaphore | `[emule] jit_kernel_stubs.hpp`/`dataflow_api.h` | offset ∈ reserved semaphore L1 range |
 | CB Boundary | `[emule] jit_kernel_stubs.hpp`/`dataflow_api.h` | accessed page outside an **active** reserve/wait window |
 | CB Reservation Overflow | `[emule] api/cb_api.h` | `cb_reserve_back(n)` with `n > num_pages` (always on) |
-| NoC pending on push | `[emule] api/cb_api.h` + `dataflow_api.h` | `cb_push_back` while `__emule_pending_noc_reads > 0` |
+| NoC pending on pop | `[emule] api/cb_api.h` + `dataflow_api.h` | `cb_pop_front` while `__emule_pending_noc_reads > 0` |
 | NOC Transfer Alignment | `[emule] api/dataflow/dataflow_api.h` | each endpoint vs its own absolute alignment (16 / 32 / 64 B) |
 | Dirty CB | `[metal] emulated_program_runner.cpp` (+ `[emule] cb_sync_state.hpp`) | `occupied > 0 && total_popped > 0` after join |
 | Object Intent | `[metal] emulated_program_runner.cpp` | post-launch `memcmp` of buffers never resolved into |
