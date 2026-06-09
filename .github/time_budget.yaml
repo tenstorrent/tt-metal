@@ -122,7 +122,7 @@ ttsim:
 
 shield:
   e2e:
-    wh_llmbox: 110
+    wh_llmbox: 60
 
 # Former fabric + scaleout budgets merged under team scaleout (see tests/pipeline_reorg).
 scaleout:
