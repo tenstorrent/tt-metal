@@ -5,18 +5,12 @@ include(sources.cmake)
 add_library(unit_tests_context_smoke OBJECT)
 add_library(TT::Metalium::Test::Context::Smoke ALIAS unit_tests_context_smoke)
 TT_ENABLE_UNITY_BUILD(unit_tests_context_smoke)
-target_sources(
-    unit_tests_context_smoke
-    PRIVATE
-        ${UNIT_TESTS_CONTEXT_SMOKE_SOURCES}
-        ${PROJECT_SOURCE_DIR}/tests/mock_ccl_support/metal_env_mock_ccl_test_helper.cpp
-)
+target_sources(unit_tests_context_smoke PRIVATE ${UNIT_TESTS_CONTEXT_SMOKE_SOURCES})
 target_include_directories(
     unit_tests_context_smoke
     PRIVATE
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
-        ${PROJECT_SOURCE_DIR}/tests/mock_ccl_support
         ${CMAKE_CURRENT_SOURCE_DIR}
 )
 target_link_libraries(
@@ -34,7 +28,6 @@ target_include_directories(
     PRIVATE
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
-        ${PROJECT_SOURCE_DIR}/tests/mock_ccl_support
         ${CMAKE_CURRENT_SOURCE_DIR}
 )
 set_target_properties(
