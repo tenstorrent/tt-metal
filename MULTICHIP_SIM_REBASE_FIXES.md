@@ -134,10 +134,13 @@ MMIO in the descriptor.
 
 ---
 
-## Known remaining issue (in progress) — WH worker FW-init timeout
+## 4. craq-sim `ac9c0e39` — drop per-instruction agent log in WH NCRISC RVC decode
 
-With fix #3 in place the N300 WH sim test gets past tunnel discovery and device open,
-then fails later in firmware init:
+**File:** `src/riscv_impl.h`
+
+### Error
+With fix #3 in place the N300 WH sim test got past tunnel discovery and device open,
+then failed in firmware init:
 
 ```
 Device 0: Timeout (10000 ms) waiting for physical cores to finish: 18-18 ... 25-25
@@ -145,9 +148,40 @@ Device 0 init: failed to initialize FW! Try resetting the board.
  --- tt::tt_metal::RiscFirmwareInitializer::initialize_and_launch_firmware(int)
 ```
 
-The full WH worker tensix grid never reports init-FW complete within the 10 s budget
-(`firmware_wait_timeout_ms()` returns 10000 for `.so` sim backends). This is a separate,
-deeper craq-sim WH simulation/convergence issue (likely related to NCRISC IRAM execution
-and per-tile clocking) and is being investigated with the parallel-clock / teleport sim
-env vars (`TT_METAL_SIMULATOR_PARALLEL_TENSIX_TILE_CLOCK`, `..._PARALLEL_CLOCK_THREADS`,
-`..._L1_TELEPORT`, `..._DRAM_TELEPORT`). Not yet fixed.
+### Root cause
+The worker tensix grid *was* running init FW (all 5 RISCs — brisc/trisc0-2/ncrisc —
+were released on every tile; 0 cores were parked for a missing binary). The problem was
+throughput, not a hang. `decode_and_execute_wh_ncrisc_rvc()` — on the **hot path** of
+every NCRISC compressed-instruction decode — opened, wrote, and closed an agent debug
+log (`fopen`/`fprintf`/`fclose`) per instruction. A single ~5 s run emitted **986,019**
+`ncrisc_rvc_decode` lines (vs. 320 `soft_reset_release` and a handful of others),
+throttling the simulator to ~0.6 KHz. The worker grid therefore couldn't finish init
+within `firmware_wait_timeout_ms()` (10000 ms for `.so` sim backends).
+
+This was leftover WIP instrumentation (hardcoded `sessionId "ae7d0a"`, `runId "post-fix"`,
+hardcoded debug-log path).
+
+### Fix
+Remove the per-instruction `#region agent log` block from `decode_and_execute_wh_ncrisc_rvc()`.
+Sim throughput returns to normal and the FW-init timeout no longer triggers — the test
+now advances past worker init and fabric setup.
+
+---
+
+## Known remaining issue (in progress) — unimplemented WH NCRISC compressed instruction
+
+With fix #4 the N300 WH test runs fast and reaches device open + fabric setup, then hits a
+genuine functional gap in the WH NCRISC RV32C decoder:
+
+```
+ERROR: UnimplementedFunctionality: decode_and_execute_wh_ncrisc_unimplemented_rvc:
+       WH NCRISC RVC inst=0x2c00 at pc=0xc940
+```
+
+`0x2c00` is RVC quadrant 0 / funct3 `001`, which in standard RV32C decodes to `c.fld`
+(a floating-point double load). An integer-only NCRISC firmware would never legitimately
+emit that, so the NCRISC has diverged and is decoding non-code/data as instructions at
+`pc=0xc940`. This is a separate, deeper NCRISC execution-divergence bug (previously masked
+by the logging slowdown in #4) and is the next item to investigate — likely tracing where
+NCRISC control flow leaves the real text section (IRAM/L1 view, prefetch-before-clobber,
+or reset-PC handling). Not yet fixed.
