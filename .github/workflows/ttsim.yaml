@@ -382,8 +382,7 @@ jobs:
         timeout-minutes: 10
         run: |
           if [[ "${{ matrix.arch }}" == "quasar" ]]; then
-            ./build/test/tt_metal/test_quasar_compute_kernels
-            ./build/test/tt_metal/test_quasar_semaphores
+            ./build/test/tt_metal/unit_tests_legacy --gtest_filter="QuasarMeshDeviceSingleCardFixture.*"
           else
             ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.IdleEthTestNocStreamRegs"
             ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDispatchFixture.IdleEthDRAMLoopbackSingleCore"
