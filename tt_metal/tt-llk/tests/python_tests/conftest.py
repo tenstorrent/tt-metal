@@ -188,6 +188,13 @@ def pytest_addoption(parser):
     )
 
     parser.addoption(
+        "--no-pch",
+        action="store_true",
+        default=False,
+        help="Disable precompiled headers for kernel builds (PCH is on by default)",
+    )
+
+    parser.addoption(
         "--logging-level",
         action="store",
         default=None,
@@ -278,6 +285,8 @@ def pytest_configure(config):
         config.getoption("--no-debug-symbols", default=False),
         config.getoption("--speed-of-light", default=False),
     )
+
+    TestConfig.USE_PCH = not config.getoption("--no-pch", default=False)
 
     TestConfig.setup_mode(
         # Pass worker id here, so TestConfig can calculate Tensix tile it will run on

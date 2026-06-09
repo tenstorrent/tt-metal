@@ -170,6 +170,40 @@ class TestConfig:
     PROFILER_SHARED_ARTEFACTS_AVAILABLE: ClassVar[bool] = False
     KERNEL_COMPONENTS: ClassVar[list[str]] = ["unpack", "math", "pack"]
 
+    # Precompiled headers: amortize parsing of the heavy, config-independent
+    # ckernel/SFPU header tree across the many per-variant kernel compiles.
+    # Safe by construction: the umbrella below contains only foundational
+    # headers that do NOT depend on the per-variant build.h, and builds are
+    # keyed by the exact compile flags. An invalid/incompatible PCH is a hard
+    # error (-Werror=invalid-pch) so problems surface instead of silently
+    # degrading; the .gch is published atomically so concurrent workers never
+    # read a partially written one (see _ensure_pch).
+    USE_PCH: ClassVar[bool] = True
+    SHARED_PCH_DIR: ClassVar[Path] = None
+    _PCH_UMBRELLA: ClassVar[str] = "\n".join(
+        [
+            "// AUTO-GENERATED PRECOMPILED-HEADER UMBRELLA. DO NOT EDIT.",
+            "#include <algorithm>",
+            "#include <array>",
+            "#include <cstdint>",
+            "#include <cstdio>",
+            "#include <limits>",
+            "#include <type_traits>",
+            "#include <utility>",
+            '#include "ckernel.h"',
+            '#include "ckernel_defs.h"',
+            '#include "ckernel_globals.h"',
+            '#include "ckernel_ops.h"',
+            '#include "ckernel_sfpu.h"',
+            '#include "ckernel_template.h"',
+            '#include "llk_assert.h"',
+            '#include "llk_defs.h"',
+            '#include "tensix.h"',
+            '#include "tensix_types.h"',
+            "",
+        ]
+    )
+
     # === Runtime static variables, for keeping context of multiple test runs
     CURRENT_LOADED_CONFIG: ClassVar[str] = "uninitialised"
     BUILD_MODE: ClassVar[BuildMode] = BuildMode.DEFAULT
@@ -349,6 +383,7 @@ class TestConfig:
         TestConfig.SHARED_DIR = TestConfig.ARTEFACTS_DIR / "shared"
         TestConfig.SHARED_OBJ_DIR = TestConfig.SHARED_DIR / "obj"
         TestConfig.SHARED_ELF_DIR = TestConfig.SHARED_DIR / "elf"
+        TestConfig.SHARED_PCH_DIR = TestConfig.SHARED_DIR / "pch"
         # Profiler builds need separate shared artefacts (trisc.cpp compiles differently with -DLLK_PROFILER)
         TestConfig.PROFILER_SHARED_DIR = TestConfig.ARTEFACTS_DIR / "shared-profiler"
         TestConfig.PROFILER_SHARED_OBJ_DIR = TestConfig.PROFILER_SHARED_DIR / "obj"
@@ -374,6 +409,7 @@ class TestConfig:
                 TestConfig.SHARED_DIR,
                 TestConfig.SHARED_OBJ_DIR,
                 TestConfig.SHARED_ELF_DIR,
+                TestConfig.SHARED_PCH_DIR,
                 TestConfig.PROFILER_SHARED_DIR,
                 TestConfig.PROFILER_SHARED_OBJ_DIR,
                 TestConfig.PROFILER_SHARED_ELF_DIR,
@@ -1126,6 +1162,44 @@ class TestConfig:
                 f"Failed to parse text size from riscv-tt-elf-size output for {elf_path}:\n{result.stdout}"
             ) from e
 
+    def _ensure_pch(self, name: str, base_compile_flags: str) -> Path:
+        """Build (once) and return a precompiled header for kernel component *name*.
+
+        The PCH is keyed by the exact compile flags so every variant that shares
+        those flags reuses one .gch, and any flag change gets a distinct PCH.
+        It is built WITHOUT the per-variant build.h include dir, so it is
+        variant-independent; the consuming compile re-adds that dir and pulls in
+        build.h normally.
+
+        The .gch is published atomically: it is compiled to a unique temp path
+        and then renamed into place. The lock-free fast path above only ever
+        observes a fully written .gch, so a concurrent worker can never feed a
+        half-written PCH to gcc (which would fail with -Werror=invalid-pch).
+        A genuine PCH build failure is intentionally NOT swallowed.
+        """
+        key = sha256(base_compile_flags.encode()).hexdigest()[:16]
+        pch_h = TestConfig.SHARED_PCH_DIR / f"{name}_{key}.h"
+        pch_gch = TestConfig.SHARED_PCH_DIR / f"{name}_{key}.h.gch"
+        if pch_gch.exists():
+            return pch_h
+
+        lock = FileLock(str(pch_h) + ".lock")
+        with lock:
+            if pch_gch.exists():
+                return pch_h
+            if not pch_h.exists():
+                pch_h.write_text(TestConfig._PCH_UMBRELLA)
+            tmp_gch = Path(f"{pch_gch}.{os.getpid()}.tmp")
+            compile_command = (
+                f"{TestConfig.GXX} {base_compile_flags} "
+                f"-x c++-header {pch_h} -o {tmp_gch}"
+            )
+            logger.trace(compile_command)
+            run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR)
+            # Atomic publish (same directory => same filesystem => atomic rename).
+            os.replace(tmp_gch, pch_gch)
+        return pch_h
+
     def build_elfs(self):
 
         VARIANT_DIR = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
@@ -1202,10 +1276,26 @@ class TestConfig:
                         f"-DDPRINT_BUFFER_SIZE={TestConfig.DEVICE_PRINT_PER_THREAD_SIZE} "
                         f"-DPROCESSOR_INDEX={risc_id} "
                     )
+
+                # Front-end (compile) flags, excluding the per-variant build.h
+                # include dir. These are what the PCH is built with and keyed by,
+                # so a single PCH is shared by every variant with the same flags.
+                base_compile_flags = (
+                    f"{TestConfig.ARCH_COMPUTE} {TestConfig.ARCH_SPECIFIC_OPTIONS} {TestConfig.OPTIONS_ALL} "
+                    f"-I{TestConfig.TESTS_WORKING_DIR} -I{TestConfig.RISCV_SOURCES} {local_options_compile} "
+                    f"{optional_kernel_flags} -DLLK_TRISC_{trisc_define} {device_print_flags}"
+                ).strip()
+
+                # PCH is a pure optimization; skip under coverage to avoid any
+                # interaction with gcov instrumentation of the header tree.
+                pch_flag = ""
+                if TestConfig.USE_PCH and self.coverage_build == CoverageBuild.No:
+                    pch_header = self._ensure_pch(name, base_compile_flags)
+                    pch_flag = f"-include {pch_header} -Winvalid-pch "
+
                 compile_command = (
-                    f"{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.ARCH_SPECIFIC_OPTIONS} {TestConfig.OPTIONS_ALL} -I{TestConfig.TESTS_WORKING_DIR} "
-                    f"-I{TestConfig.RISCV_SOURCES} -I{VARIANT_DIR} {local_options_compile} {optional_kernel_flags} "
-                    f"-DLLK_TRISC_{trisc_define} {device_print_flags}{TestConfig.OPTIONS_LINK} {COVERAGES_DEPS} "
+                    f"{TestConfig.GXX} {base_compile_flags} -I{VARIANT_DIR} "
+                    f"{pch_flag}{TestConfig.OPTIONS_LINK} {COVERAGES_DEPS} "
                     f"-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / name}.ld -T{TestConfig.LINKER_SCRIPTS}/sections.ld "
                     f"-x c++ - -lc -o {VARIANT_ELF_DIR / name}.elf"
                 )
