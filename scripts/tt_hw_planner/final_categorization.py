@@ -17,8 +17,12 @@ No HOT/COLD: workload firing no longer gates placement. Components that
 never fire in a given workload are still device-targets — they just
 happen to be inert paths in that workload.
 
-Structural exclusions (ModuleList containers etc.) are listed separately
-and not counted toward placement.
+A decomposed parent has no standalone test (it was split into children),
+so it is ON_DEVICE only when its whole module is proven done: either its
+own stub graduated, or every child it was decomposed into (per the
+decomposition plan — including children that were never realized) has
+graduated. Otherwise PENDING. There is no separate "structural" bucket —
+every NEW component lands in exactly one of the three placement buckets.
 """
 
 from __future__ import annotations
@@ -36,14 +40,12 @@ _PENDING = "PENDING"
 
 @dataclass
 class CategorizationReport:
-    """Structured output: every NEW non-structural component in one of
-    three buckets — ON_DEVICE / KERNEL_MISSING / PENDING — plus a
-    separate list of structural exclusions."""
+    """Structured output: every NEW component lands in exactly one of
+    three buckets — ON_DEVICE / KERNEL_MISSING / PENDING."""
 
     on_device: List[str] = field(default_factory=list)
     kernel_missing: List[str] = field(default_factory=list)
     pending: List[str] = field(default_factory=list)
-    structural_excluded: List[str] = field(default_factory=list)
 
     @property
     def total_categorized(self) -> int:
@@ -75,10 +77,12 @@ def build_final_categorization(
     graduated_set: Optional[Set[str]] = None,
 ) -> CategorizationReport:
     """Walk bringup_status.json + persistent state and bucket every NEW
-    non-structural component:
+    component:
 
-      1. graduated stub on disk → ON_DEVICE
-      2. on no-emit list → structural_excluded (NOT placement-categorized)
+      1. decomposed parent (no-emit) → ON_DEVICE only if its own stub
+         graduated OR every intended child (decomposition plan) graduated,
+         else PENDING
+      2. graduated stub on disk → ON_DEVICE
       3. on skip-list with category == KERNEL_MISSING → KERNEL_MISSING
       4. anything else → PENDING (retry next run; not a permanent state)
     """
@@ -95,19 +99,56 @@ def build_final_categorization(
     except Exception:
         return CategorizationReport()
 
-    new_components = [c.get("name") for c in status.get("components", []) if c.get("status") == "NEW" and c.get("name")]
+    components_list = status.get("components", []) or []
+    new_components = [c.get("name") for c in components_list if c.get("status") == "NEW" and c.get("name")]
     if not new_components:
         return CategorizationReport()
+
+    sp_of: Dict[str, str] = {c["name"]: (c.get("submodule_path") or "") for c in components_list if c.get("name")}
+    sp_to_comp: Dict[str, str] = {sp: n for n, sp in sp_of.items() if sp}
 
     no_emit = set(load_no_emit_tests(model_id).keys())
     skipped = load_persistent_skips(model_id)
     graduated_set = set(graduated_set or _infer_graduated_from_disk(demo_dir, new_components))
     graduated_set -= set(skipped.keys())
 
+    decomp_children = _load_decomposition_children(demo_dir)
+    _covered_memo: Dict[str, bool] = {}
+
+    def _parent_covered(name: str, stack: frozenset) -> bool:
+        if name in _covered_memo:
+            return _covered_memo[name]
+        if name in stack:
+            return False
+        if name in graduated_set:
+            _covered_memo[name] = True
+            return True
+        kids = decomp_children.get(name)
+        if not kids:
+            _covered_memo[name] = False
+            return False
+        nxt = stack | {name}
+        ok = all(_sp_covered(sp, nxt) for sp in kids)
+        _covered_memo[name] = ok
+        return ok
+
+    def _sp_covered(submodule_path: str, stack: frozenset) -> bool:
+        comp = sp_to_comp.get(submodule_path)
+        if comp is None:
+            return False
+        if comp in graduated_set:
+            return True
+        if comp in no_emit:
+            return _parent_covered(comp, stack)
+        return False
+
     report = CategorizationReport()
     for comp in new_components:
         if comp in no_emit:
-            report.structural_excluded.append(comp)
+            if _parent_covered(comp, frozenset()):
+                report.on_device.append(comp)
+            else:
+                report.pending.append(comp)
             continue
         if comp in graduated_set:
             report.on_device.append(comp)
@@ -118,6 +159,36 @@ def build_final_categorization(
         # Anything else is in-progress / queue for the next session.
         report.pending.append(comp)
     return report
+
+
+def _load_decomposition_children(demo_dir: Path) -> Dict[str, List[str]]:
+    """Map each decomposed parent → its intended child submodule_paths,
+    from the live decomposition_plan.json plus any archived plans."""
+    plans: List[Path] = []
+    live = demo_dir / "decomposition_plan.json"
+    if live.is_file():
+        plans.append(live)
+    arch = demo_dir / "decomposition_plan.applied"
+    if arch.is_dir():
+        plans.extend(sorted(arch.glob("plan_*.json")))
+
+    out: Dict[str, List[str]] = {}
+    for p in plans:
+        try:
+            data = json.loads(p.read_text())
+        except Exception:
+            continue
+        if not isinstance(data, list):
+            continue
+        for entry in data:
+            if not isinstance(entry, dict):
+                continue
+            parent = entry.get("parent_name")
+            kids = entry.get("children") or []
+            paths = [c.get("submodule_path") for c in kids if isinstance(c, dict) and c.get("submodule_path")]
+            if parent and paths:
+                out[parent] = paths
+    return out
 
 
 def _infer_graduated_from_disk(demo_dir: Path, components: List[str]) -> List[str]:
@@ -149,10 +220,6 @@ def format_categorization_summary(report: CategorizationReport) -> str:
         f"  PENDING        ({len(report.pending):2}) retry next run:       "
         f"{', '.join(sorted(report.pending)) or '(none)'}"
     )
-    if report.structural_excluded:
-        lines.append(
-            f"  (structural — tested via parent, NOT categorized: " f"{', '.join(sorted(report.structural_excluded))})"
-        )
     return "\n".join(lines)
 
 

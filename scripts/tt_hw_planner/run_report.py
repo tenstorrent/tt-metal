@@ -63,13 +63,12 @@ def _emit_run_report_impl(
     demo_pytest_status: Optional[str],
 ) -> Path:
     from .final_categorization import build_final_categorization
-    from .overlay_manager import load_no_emit_tests, load_persistent_skips
+    from .overlay_manager import load_persistent_skips
 
     report_path = demo_dir / "RUN_REPORT.md"
 
     cat_report = build_final_categorization(model_id=model_id, demo_dir=demo_dir)
     skips = load_persistent_skips(model_id)
-    no_emit = load_no_emit_tests(model_id)
 
     lines: List[str] = []
     lines.append(f"# Bring-up run report — `{model_id}`")
@@ -101,9 +100,6 @@ def _emit_run_report_impl(
     lines.append(f"- **PENDING** ({len(cat_report.pending)}): retry next run")
     if cat_report.pending:
         lines.append(f"  - {', '.join(f'`{c}`' for c in sorted(cat_report.pending))}")
-    lines.append(f"- **structural** ({len(cat_report.structural_excluded)}): " "ModuleList — tested via parent")
-    if cat_report.structural_excluded:
-        lines.append(f"  - {', '.join(f'`{c}`' for c in sorted(cat_report.structural_excluded))}")
     lines.append("")
 
     if skips:
@@ -125,14 +121,6 @@ def _emit_run_report_impl(
                 retry_s = f" (retries: {retries})" if retries else ""
                 lines.append(f"- `{name}`{retry_s}: {reason}")
             lines.append("")
-
-    if no_emit:
-        lines.append("## Structurally excluded (no_emit)")
-        lines.append("")
-        for name, entry in sorted(no_emit.items(), key=lambda x: x[0]):
-            reason = (entry.get("reason") or "").replace("\n", " ")[:200]
-            lines.append(f"- `{name}`: {reason}")
-        lines.append("")
 
     lines.append("## Next steps")
     lines.append("")

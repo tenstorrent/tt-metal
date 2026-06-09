@@ -9667,13 +9667,6 @@ def _cmd_up_core(args) -> int:
 
         # ──────────────────────────────────────────────────────────────
         # FINAL CATEGORIZATION + AUTHORITATIVE GATE
-        #
-        # The end-to-end demo is only emitted when every HOT component
-        # (invoked in the workload) is graduated. COLD components are
-        # OK on CPU fallback (perf-irrelevant — never invoked). DROPPED
-        # (ModuleList) components are OK (tested via parent's PCC). The
-        # gate ensures the demo's mixed TT-device + CPU-fallback profile
-        # is INTENTIONAL, not silently degraded.
         # ──────────────────────────────────────────────────────────────
         from .final_categorization import (
             build_final_categorization,

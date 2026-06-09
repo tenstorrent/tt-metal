@@ -1,12 +1,13 @@
 """Unit tests for the placement model.
 
-Every NEW non-structural component lands in exactly one of:
+Every NEW component lands in exactly one of:
   ON_DEVICE       — graduated to native ttnn, PCC verified
   KERNEL_MISSING  — skip-list entry with verified missing TTNN op
   PENDING         — not yet graduated, retry next run
 
-ModuleList containers (no_emit list) are STRUCTURAL EXCLUSIONS — not a
-placement category.
+A decomposed parent (no_emit list) has no standalone test; its placement
+rolls up from its children — ON_DEVICE once they all graduate, else
+PENDING. There is no separate "structural" bucket.
 """
 
 from __future__ import annotations
@@ -42,7 +43,7 @@ def _make_demo_with_components(demo_dir: Path, comps: list) -> None:
 def test_report_has_three_placement_fields() -> None:
     fc = _fc()
     fields = set(fc.CategorizationReport.__dataclass_fields__)
-    assert fields == {"on_device", "kernel_missing", "pending", "structural_excluded"}, fields
+    assert fields == {"on_device", "kernel_missing", "pending"}, fields
 
 
 def test_runtime_target_for_on_device_is_device() -> None:
@@ -119,24 +120,136 @@ def test_non_kernel_missing_skip_is_dropped_and_component_pending(tmp_path, monk
     assert report.on_device == []
 
 
-def test_no_emit_components_are_structural_not_categorized(tmp_path, monkeypatch) -> None:
+def _make_demo_with_raw_components(demo_dir: Path, comps: list, plan: list = None) -> None:
+    demo_dir.mkdir(parents=True, exist_ok=True)
+    status = {"new_model_id": "test/model", "components": comps}
+    (demo_dir / "bringup_status.json").write_text(json.dumps(status))
+    if plan is not None:
+        (demo_dir / "decomposition_plan.json").write_text(json.dumps(plan))
+
+
+def test_no_emit_parent_without_plan_is_pending(tmp_path, monkeypatch) -> None:
     fc = _fc()
     om = _om()
     monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
     demo = tmp_path / "demo"
-    _make_demo_with_components(demo, ["modulelist_container"])
-    om.persist_no_emit_test("test/m", "modulelist_container", reason="ModuleList drop")
+    _make_demo_with_raw_components(demo, [{"name": "parent", "status": "NEW", "submodule_path": "parent"}])
+    om.persist_no_emit_test("test/m", "parent", reason="decomposition consumer split parent into children")
 
-    report = fc.build_final_categorization(
-        model_id="test/m",
-        demo_dir=demo,
-        graduated_set=set(),
-    )
-    assert report.structural_excluded == ["modulelist_container"]
+    report = fc.build_final_categorization(model_id="test/m", demo_dir=demo, graduated_set=set())
+    assert report.pending == ["parent"]
     assert report.on_device == []
-    assert report.kernel_missing == []
+
+
+def test_no_emit_parent_on_device_when_all_intended_children_graduated(tmp_path, monkeypatch) -> None:
+    fc = _fc()
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+    demo = tmp_path / "demo"
+    _make_demo_with_raw_components(
+        demo,
+        [
+            {"name": "parent", "status": "NEW", "submodule_path": "blk"},
+            {"name": "child_a", "status": "NEW", "submodule_path": "blk.a"},
+            {"name": "child_b", "status": "NEW", "submodule_path": "blk.b"},
+        ],
+        plan=[{"parent_name": "parent", "children": [{"submodule_path": "blk.a"}, {"submodule_path": "blk.b"}]}],
+    )
+    om.persist_no_emit_test("test/m", "parent", reason="decomposition consumer split parent into children")
+
+    report = fc.build_final_categorization(model_id="test/m", demo_dir=demo, graduated_set={"child_a", "child_b"})
+    assert sorted(report.on_device) == ["child_a", "child_b", "parent"]
     assert report.pending == []
-    assert report.runtime_target("modulelist_container") is None
+
+
+def test_no_emit_parent_pending_when_a_child_not_graduated(tmp_path, monkeypatch) -> None:
+    fc = _fc()
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+    demo = tmp_path / "demo"
+    _make_demo_with_raw_components(
+        demo,
+        [
+            {"name": "parent", "status": "NEW", "submodule_path": "blk"},
+            {"name": "child_a", "status": "NEW", "submodule_path": "blk.a"},
+            {"name": "child_b", "status": "NEW", "submodule_path": "blk.b"},
+        ],
+        plan=[{"parent_name": "parent", "children": [{"submodule_path": "blk.a"}, {"submodule_path": "blk.b"}]}],
+    )
+    om.persist_no_emit_test("test/m", "parent", reason="decomposition consumer split parent into children")
+
+    report = fc.build_final_categorization(model_id="test/m", demo_dir=demo, graduated_set={"child_a"})
+    assert "parent" in report.pending
+    assert "child_a" in report.on_device
+    assert "child_b" in report.pending
+
+
+def test_no_emit_parent_pending_when_a_child_branch_was_never_ported(tmp_path, monkeypatch) -> None:
+    fc = _fc()
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+    demo = tmp_path / "demo"
+    _make_demo_with_raw_components(
+        demo,
+        [
+            {"name": "parent", "status": "NEW", "submodule_path": "blk"},
+            {"name": "child_a", "status": "NEW", "submodule_path": "blk.a"},
+        ],
+        plan=[{"parent_name": "parent", "children": [{"submodule_path": "blk.a"}, {"submodule_path": "blk.b"}]}],
+    )
+    om.persist_no_emit_test("test/m", "parent", reason="decomposition consumer split parent into children")
+
+    report = fc.build_final_categorization(model_id="test/m", demo_dir=demo, graduated_set={"child_a"})
+    assert "parent" in report.pending
+    assert "child_a" in report.on_device
+
+
+def test_no_emit_parent_on_device_via_own_graduated_stub(tmp_path, monkeypatch) -> None:
+    fc = _fc()
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+    demo = tmp_path / "demo"
+    _make_demo_with_raw_components(
+        demo,
+        [{"name": "parent", "status": "NEW", "submodule_path": "blk"}],
+        plan=[{"parent_name": "parent", "children": [{"submodule_path": "blk.a"}, {"submodule_path": "blk.b"}]}],
+    )
+    om.persist_no_emit_test("test/m", "parent", reason="decomposition consumer split parent into children")
+
+    report = fc.build_final_categorization(model_id="test/m", demo_dir=demo, graduated_set={"parent"})
+    assert report.on_device == ["parent"]
+    assert report.pending == []
+
+
+def test_nested_no_emit_parents_roll_up_recursively(tmp_path, monkeypatch) -> None:
+    fc = _fc()
+    om = _om()
+    monkeypatch.setattr(om, "_OVERLAYS_DIR", tmp_path / "overlays")
+    demo = tmp_path / "demo"
+    comps = [
+        {"name": "outer", "status": "NEW", "submodule_path": "enc"},
+        {"name": "inner", "status": "NEW", "submodule_path": "enc.layers.0"},
+        {"name": "leaf_ffn", "status": "NEW", "submodule_path": "enc.layers.0.ffn"},
+        {"name": "leaf_attn", "status": "NEW", "submodule_path": "enc.layers.0.attn"},
+    ]
+    plan = [
+        {"parent_name": "outer", "children": [{"submodule_path": "enc.layers.0"}]},
+        {
+            "parent_name": "inner",
+            "children": [{"submodule_path": "enc.layers.0.ffn"}, {"submodule_path": "enc.layers.0.attn"}],
+        },
+    ]
+    _make_demo_with_raw_components(demo, comps, plan=plan)
+    om.persist_no_emit_test("test/m", "outer", reason="decomposition")
+    om.persist_no_emit_test("test/m", "inner", reason="decomposition")
+
+    report = fc.build_final_categorization(model_id="test/m", demo_dir=demo, graduated_set={"leaf_ffn"})
+    assert "outer" in report.pending
+    assert "inner" in report.pending
+
+    report2 = fc.build_final_categorization(model_id="test/m", demo_dir=demo, graduated_set={"leaf_ffn", "leaf_attn"})
+    assert sorted(report2.on_device) == ["inner", "leaf_attn", "leaf_ffn", "outer"]
+    assert report2.pending == []
 
 
 def test_summary_lists_three_placement_buckets() -> None:
@@ -149,14 +262,6 @@ def test_summary_lists_three_placement_buckets() -> None:
     # HOT/COLD vocabulary is gone
     assert "HOT" not in summary
     assert "COLD" not in summary
-
-
-def test_summary_shows_structural_when_present() -> None:
-    fc = _fc()
-    report = fc.CategorizationReport(on_device=["a"], structural_excluded=["modulelist_a"])
-    summary = fc.format_categorization_summary(report)
-    assert "modulelist_a" in summary
-    assert "structural" in summary.lower()
 
 
 def test_kernel_gap_report_lists_components_with_reasons(tmp_path, monkeypatch) -> None:
