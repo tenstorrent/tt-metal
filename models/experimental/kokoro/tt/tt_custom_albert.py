@@ -31,6 +31,7 @@ import torch.nn as nn
 
 import ttnn
 
+from models.experimental.kokoro.tt.tt_matmul_memory import maybe_reshard_to_caller
 
 # --- params -----------------------------------------------------------------
 
@@ -102,6 +103,128 @@ def _largest_divisor(n: int, max_divisor: int = 8) -> int:
     return 1
 
 
+# Sweep winners at T=64 (Kokoro PL-BERT): (grid_x, grid_y), in0_block_w.
+# See models/experimental/kokoro/tests/perf/test_custom_albert_matmul_sweep.py.
+_T64_LINEAR_TUNING: dict[str, tuple[tuple[int, int], int]] = {
+    "emb_map": ((8, 3), 4),
+    "qkv": ((9, 8), 4),
+    "dense": ((4, 6), 8),
+    "ffn_in": ((8, 4), 8),
+    "ffn_out": ((8, 3), 8),
+}
+
+
+def _grids_for_cores(cores: int, gx_max: int, gy_max: int) -> list[tuple[int, int]]:
+    out: list[tuple[int, int]] = []
+    for gx in range(1, gx_max + 1):
+        if cores % gx:
+            continue
+        gy = cores // gx
+        if gy <= gy_max:
+            out.append((gx, gy))
+    return out
+
+
+def _pick_1d_in0_grid(
+    device: ttnn.Device,
+    *,
+    n: int,
+    preferred: tuple[int, int] | None,
+) -> tuple[int, int]:
+    """Divisor-legal (gx, gy) for 1D_in0 (cores must divide N-tiles)."""
+    tile = ttnn.TILE_SIZE
+    nt = n // tile
+    grid = device.compute_with_storage_grid_size()
+    gx_max, gy_max = int(grid.x), int(grid.y)
+    max_cores = gx_max * gy_max
+
+    if preferred is not None:
+        px, py = preferred
+        if px <= gx_max and py <= gy_max and px * py <= max_cores and nt % (px * py) == 0:
+            return preferred
+
+    cands: set[tuple[int, int]] = set()
+    for c in range(min(nt, max_cores), 0, -1):
+        if nt % c:
+            continue
+        cands.update(_grids_for_cores(c, gx_max, gy_max))
+    if not cands:
+        return 1, 1
+    return max(cands, key=lambda g: (g[0] * g[1], g[0]))
+
+
+def _ws_out_mem_config() -> ttnn.MemoryConfig:
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
+
+
+def _ws_output_eligible(
+    B: int,
+    T: int,
+    *,
+    device: ttnn.Device,
+    out_features: int,
+    kind: str | None = None,
+) -> bool:
+    """Width-sharded matmul output: Kokoro (B=1, T=64) when N-tiles fit the sweep core grid."""
+    if B != 1 or T != 64:
+        return False
+    tile = ttnn.TILE_SIZE
+    n_tiles = int(out_features) // tile
+    if int(out_features) % tile != 0:
+        return False
+
+    dev_grid = device.compute_with_storage_grid_size()
+    gx_max, gy_max = int(dev_grid.x), int(dev_grid.y)
+
+    if kind is not None:
+        tuning = _T64_LINEAR_TUNING.get(kind)
+        if tuning is not None:
+            px, py = tuning[0]
+            grid_cores = px * py
+            # Width-sharding needs N-tiles spread evenly across the tuned grid;
+            # per_core_N may be >1 (e.g. ffn_in: 64 tiles over 32 cores), so the
+            # grid must divide n_tiles, not merely be >= it.
+            if px <= gx_max and py <= gy_max and n_tiles % grid_cores == 0:
+                return True
+            return False
+
+    return n_tiles <= gx_max * gy_max
+
+
+def _linear_tuned(
+    x: ttnn.Tensor,
+    weight: ttnn.Tensor,
+    *,
+    bias: ttnn.Tensor,
+    program_config: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig,
+    compute_kernel_config,
+    memory_config: ttnn.MemoryConfig = ttnn.L1_MEMORY_CONFIG,
+    use_ws_output: bool,
+) -> ttnn.Tensor:
+    """Sweep-tuned linear: L1 width-sharded output when eligible, else L1 interleaved."""
+    if use_ws_output:
+        out = ttnn.linear(
+            x,
+            weight,
+            bias=bias,
+            transpose_b=True,
+            program_config=program_config,
+            memory_config=_ws_out_mem_config(),
+            compute_kernel_config=compute_kernel_config,
+        )
+        return maybe_reshard_to_caller(out, memory_config)
+    out = ttnn.linear(
+        x,
+        weight,
+        bias=bias,
+        transpose_b=True,
+        program_config=program_config,
+        memory_config=memory_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+    return out
+
+
 def _upload_fused_qkv(attn, device, dtype, *, head_size: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Fuse ``query``/``key``/``value`` into one linear for a single device matmul.
 
@@ -137,13 +260,17 @@ def preprocess_tt_custom_albert(
     """Upload a ``transformers.AlbertModel`` (or ``CustomAlbert``) to device.
 
     ``embedding_dtype`` must stay ``bfloat16``: ``ttnn.embedding`` requires BF16 weights on device.
+
+    Embedding tables are stored ROW_MAJOR: ``ttnn.embedding`` row-gathers in row-major,
+    so a TILE-layout table would be untilized on every forward (UntilizeWithUnpadding).
     """
     cfg = albert_model.config
     emb = albert_model.embeddings
 
-    word_emb = _t(emb.word_embeddings.weight, device=device, dtype=embedding_dtype)
-    pos_emb = _t(emb.position_embeddings.weight, device=device, dtype=embedding_dtype)
-    token_type_emb = _t(emb.token_type_embeddings.weight, device=device, dtype=embedding_dtype)
+    rm = ttnn.ROW_MAJOR_LAYOUT
+    word_emb = _t(emb.word_embeddings.weight, device=device, dtype=embedding_dtype, layout=rm)
+    pos_emb = _t(emb.position_embeddings.weight, device=device, dtype=embedding_dtype, layout=rm)
+    token_type_emb = _t(emb.token_type_embeddings.weight, device=device, dtype=embedding_dtype, layout=rm)
     emb_ln_w, emb_ln_b = _upload_layernorm(emb.LayerNorm, device, weights_dtype)
 
     emb_map_w, emb_map_b = _upload_linear(albert_model.encoder.embedding_hidden_mapping_in, device, weights_dtype)
@@ -284,27 +411,39 @@ def _mcast_1d_dram_program_config(
     fp32_dest_acc_en: bool = True,
     prefer_subblock_h: int | None = None,
     prefer_subblock_w: int | None = None,
+    grid_xy: tuple[int, int] | None = None,
+    in0_block_w: int | None = None,
+    width_sharded_out: bool = False,
 ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
     """DRAM multicast-1D config aligned with ``get_mcast_1d_config`` (``fuse_batch=False``)."""
     tile = ttnn.TILE_SIZE
-    grid_size = device.compute_with_storage_grid_size()
-    grid_x, grid_y = grid_size.x, grid_size.y
+    if grid_xy is not None:
+        grid_x, grid_y = grid_xy
+    else:
+        grid_size = device.compute_with_storage_grid_size()
+        grid_x, grid_y = grid_size.x, grid_size.y
     num_cores = grid_x * grid_y
 
     per_core_m = max(1, math.ceil(seq_len / tile))
     per_core_n = max(1, math.ceil(math.ceil(n / num_cores) / tile))
-    in0_block_w = 2 if (k // tile) % 2 == 0 else 1
+    if in0_block_w is None:
+        in0_block_w = 2 if (k // tile) % 2 == 0 else 1
 
     max_subblock = 4 if fp32_dest_acc_en else 8
-    out_subblock_w = max([i for i in range(1, max_subblock + 1) if per_core_n % i == 0], default=1)
-    out_subblock_h = max(
-        [i for i in range(1, max_subblock + 1) if per_core_m % i == 0 and i * out_subblock_w <= max_subblock],
-        default=1,
-    )
+    if width_sharded_out:
+        out_subblock_h = 1
+        out_subblock_w = max([i for i in range(1, max_subblock + 1) if per_core_n % i == 0], default=1)
+    else:
+        out_subblock_w = max([i for i in range(1, max_subblock + 1) if per_core_n % i == 0], default=1)
+        out_subblock_h = max(
+            [i for i in range(1, max_subblock + 1) if per_core_m % i == 0 and i * out_subblock_w <= max_subblock],
+            default=1,
+        )
     if prefer_subblock_w is not None and per_core_n % prefer_subblock_w == 0:
         out_subblock_w = prefer_subblock_w
     if (
-        prefer_subblock_h is not None
+        not width_sharded_out
+        and prefer_subblock_h is not None
         and per_core_m % prefer_subblock_h == 0
         and prefer_subblock_h * out_subblock_w <= max_subblock
     ):
@@ -320,6 +459,53 @@ def _mcast_1d_dram_program_config(
         fuse_batch=False,
         fused_activation=fused_activation,
         mcast_in0=True,
+    )
+
+
+def _tuned_1d_linear_program_config(
+    device: ttnn.Device,
+    *,
+    batch: int,
+    seq_len: int,
+    k: int,
+    n: int,
+    kind: str,
+    fused_activation=None,
+    fp32_dest_acc_en: bool = True,
+    width_sharded_out: bool = True,
+) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+    """Build 1D_in0 program config; apply sweep grids only for Kokoro (B=1, T=64)."""
+    use_t64 = batch == 1 and seq_len == 64
+    ws_out = width_sharded_out and _ws_output_eligible(batch, seq_len, device=device, out_features=n, kind=kind)
+    prefer_subblock_h = 2 if kind == "qkv" and seq_len >= ttnn.TILE_SIZE else None
+    if kind == "qkv" and seq_len < ttnn.TILE_SIZE:
+        prefer_subblock_h = 1
+
+    # Resolve the sweep-tuned (grid, in0_block_w) independent of whether the output
+    # is width-sharded: an interleaved-output op (e.g. ffn_out) should still run on
+    # its tuned grid rather than dropping to the full-grid fallback.
+    tuning = _T64_LINEAR_TUNING.get(kind) if use_t64 else None
+    grid_xy = tuning[0] if tuning else None
+    ibw = tuning[1] if tuning else None
+    if grid_xy is not None:
+        px, py = grid_xy
+        dev_grid = device.compute_with_storage_grid_size()
+        max_cores = int(dev_grid.x) * int(dev_grid.y)
+        if px > int(dev_grid.x) or py > int(dev_grid.y) or px * py > max_cores:
+            grid_xy = None
+            ibw = None
+
+    return _mcast_1d_dram_program_config(
+        device,
+        seq_len=seq_len,
+        k=k,
+        n=n,
+        fused_activation=fused_activation,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        prefer_subblock_h=prefer_subblock_h,
+        grid_xy=grid_xy,
+        in0_block_w=ibw,
+        width_sharded_out=ws_out,
     )
 
 
@@ -538,6 +724,7 @@ class TTAlbertMatmulProgramConfigs:
 def _build_matmul_program_configs(
     device: ttnn.Device,
     *,
+    B: int,
     T: int,
     hidden_size: int,
     head_size: int,
@@ -545,44 +732,57 @@ def _build_matmul_program_configs(
     intermediate_size: int,
     fp32_dest_acc_en: bool = True,
 ) -> TTAlbertMatmulProgramConfigs:
-    subblock_h = 2 if T >= ttnn.TILE_SIZE else 1
     return TTAlbertMatmulProgramConfigs(
-        qkv=_mcast_1d_dram_program_config(
+        qkv=_tuned_1d_linear_program_config(
             device,
+            batch=B,
             seq_len=T,
             k=hidden_size,
             n=3 * hidden_size,
+            kind="qkv",
             fp32_dest_acc_en=fp32_dest_acc_en,
-            prefer_subblock_h=subblock_h,
+            width_sharded_out=True,
         ),
-        dense=_mcast_1d_dram_program_config(
+        dense=_tuned_1d_linear_program_config(
             device,
+            batch=B,
             seq_len=T,
             k=hidden_size,
             n=hidden_size,
+            kind="dense",
             fp32_dest_acc_en=fp32_dest_acc_en,
+            width_sharded_out=True,
         ),
-        ffn_in=_mcast_1d_dram_program_config(
+        ffn_in=_tuned_1d_linear_program_config(
             device,
+            batch=B,
             seq_len=T,
             k=hidden_size,
             n=intermediate_size,
+            kind="ffn_in",
             fused_activation=_FFN_FUSED_GELU,
             fp32_dest_acc_en=fp32_dest_acc_en,
+            width_sharded_out=True,
         ),
-        ffn_out=_mcast_1d_dram_program_config(
+        ffn_out=_tuned_1d_linear_program_config(
             device,
+            batch=B,
             seq_len=T,
             k=intermediate_size,
             n=hidden_size,
+            kind="ffn_out",
             fp32_dest_acc_en=fp32_dest_acc_en,
+            width_sharded_out=False,
         ),
-        emb_map=_mcast_1d_dram_program_config(
+        emb_map=_tuned_1d_linear_program_config(
             device,
+            batch=B,
             seq_len=T,
             k=embedding_size,
             n=hidden_size,
+            kind="emb_map",
             fp32_dest_acc_en=fp32_dest_acc_en,
+            width_sharded_out=True,
         ),
         attn_qk=_batched_attn_matmul_program_config(
             device,
@@ -635,7 +835,15 @@ def _build_extended_mask(
 class TTAlbertLayer:
     """One ALBERT layer: fused QKV + manual attention -> FFN, each with residual + LayerNorm."""
 
-    __slots__ = ("params", "num_heads", "head_size", "hidden_size", "layer_norm_eps", "compute_kernel_config")
+    __slots__ = (
+        "params",
+        "device",
+        "num_heads",
+        "head_size",
+        "hidden_size",
+        "layer_norm_eps",
+        "compute_kernel_config",
+    )
 
     def __init__(
         self,
@@ -645,9 +853,11 @@ class TTAlbertLayer:
         hidden_size: int,
         layer_norm_eps: float,
         compute_kernel_config,
+        device: ttnn.Device,
     ) -> None:
         assert hidden_size % num_heads == 0, "hidden_size must be divisible by num_attention_heads"
         self.params = params
+        self.device = device
         self.num_heads = num_heads
         self.head_size = hidden_size // num_heads
         self.hidden_size = hidden_size
@@ -673,15 +883,16 @@ class TTAlbertLayer:
                 ttnn.deallocate(x)
             x = x_l1
 
+        x_residual = ttnn.clone(x, memory_config=memory_config)
         x_b1th = _to_b1th(x, B=B, T=T, width=self.hidden_size, memory_config=memory_config)
-        xqkv = ttnn.linear(
+        xqkv = _linear_tuned(
             x_b1th,
             p.qkv_w,
             bias=p.qkv_b,
-            transpose_b=True,
             program_config=matmul_pcs.qkv,
-            memory_config=memory_config,
             compute_kernel_config=self.compute_kernel_config,
+            memory_config=memory_config,
+            use_ws_output=_ws_output_eligible(B, T, device=self.device, out_features=3 * self.hidden_size, kind="qkv"),
         )
         xqkv = _fix_b1th_after_linear(xqkv, B=B, T=T, width=3 * self.hidden_size, memory_config=memory_config)
 
@@ -722,20 +933,21 @@ class TTAlbertLayer:
         ctx_b1th = ttnn.experimental.nlp_concat_heads(ctx_heads, memory_config=memory_config)
         ttnn.deallocate(ctx_heads)
 
-        projected = ttnn.linear(
+        projected = _linear_tuned(
             ctx_b1th,
             p.dense_w,
             bias=p.dense_b,
-            transpose_b=True,
             program_config=matmul_pcs.dense,
-            memory_config=memory_config,
             compute_kernel_config=self.compute_kernel_config,
+            memory_config=memory_config,
+            use_ws_output=_ws_output_eligible(B, T, device=self.device, out_features=self.hidden_size, kind="dense"),
         )
         ttnn.deallocate(ctx_b1th)
         projected_btH = _from_b1th(projected, B=B, T=T, hidden_size=self.hidden_size, memory_config=memory_config)
         ttnn.deallocate(projected)
 
-        residual = ttnn.add(x, projected_btH, memory_config=memory_config)
+        residual = ttnn.add(x_residual, projected_btH, memory_config=memory_config)
+        ttnn.deallocate(x_residual)
         ttnn.deallocate(projected_btH)
 
         out = _apply_layer_norm(
@@ -758,20 +970,25 @@ class TTAlbertLayer:
         memory_config: ttnn.MemoryConfig = ttnn.L1_MEMORY_CONFIG,
     ) -> ttnn.Tensor:
         p = self.params
+        x_shape = list(x.shape)
+        B, T = int(x_shape[-3]), int(x_shape[-2])
         if not _is_l1_interleaved(x.memory_config()):
             x_l1 = ttnn.to_memory_config(x, memory_config)
             if x_l1 is not x:
                 ttnn.deallocate(x)
             x = x_l1
 
-        h_act = ttnn.linear(
+        x_residual = ttnn.clone(x, memory_config=memory_config)
+        h_act = _linear_tuned(
             x,
             p.ffn_w,
             bias=p.ffn_b,
-            transpose_b=True,
             program_config=matmul_pcs.ffn_in,
-            memory_config=memory_config,
             compute_kernel_config=self.compute_kernel_config,
+            memory_config=memory_config,
+            use_ws_output=_ws_output_eligible(
+                B, T, device=self.device, out_features=int(p.ffn_w.shape[-2]), kind="ffn_in"
+            ),
         )
         h2 = ttnn.linear(
             h_act,
@@ -783,7 +1000,8 @@ class TTAlbertLayer:
             compute_kernel_config=self.compute_kernel_config,
         )
         ttnn.deallocate(h_act)
-        residual = ttnn.add(h2, x, memory_config=memory_config)
+        residual = ttnn.add(h2, x_residual, memory_config=memory_config)
+        ttnn.deallocate(x_residual)
         ttnn.deallocate(h2)
         out = _apply_layer_norm(
             residual,
@@ -824,7 +1042,7 @@ class TTCustomAlbert:
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
-        self._intermediate_size = int(params.layer_groups[0][0].ffn_w.shape[-1])
+        self._intermediate_size = int(params.layer_groups[0][0].ffn_w.shape[-2])
         self._head_size = params.hidden_size // params.num_attention_heads
         self._matmul_pc_cache: dict[tuple[int, int], TTAlbertMatmulProgramConfigs] = {}
         self._ln_cfg_cache: dict[tuple[int, int, int], TTAlbertLnConfig] = {}
@@ -836,6 +1054,7 @@ class TTCustomAlbert:
                     hidden_size=params.hidden_size,
                     layer_norm_eps=params.layer_norm_eps,
                     compute_kernel_config=self.compute_kernel_config,
+                    device=device,
                 )
                 for lp in group
             )
@@ -847,6 +1066,7 @@ class TTCustomAlbert:
         if key not in self._matmul_pc_cache:
             self._matmul_pc_cache[key] = _build_matmul_program_configs(
                 self.device,
+                B=B,
                 T=T,
                 hidden_size=self.params.hidden_size,
                 head_size=self._head_size,
@@ -952,14 +1172,16 @@ class TTCustomAlbert:
         matmul_pcs = self._matmul_program_configs(B, T)
         ln_cfg = self._ln_config(B, T, self.params.hidden_size)
 
-        hidden = ttnn.linear(
+        hidden = _linear_tuned(
             emb,
             self.params.emb_map_w,
             bias=self.params.emb_map_b,
-            transpose_b=True,
             program_config=matmul_pcs.emb_map,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            use_ws_output=_ws_output_eligible(
+                B, T, device=self.device, out_features=self.params.hidden_size, kind="emb_map"
+            ),
         )
         ttnn.deallocate(emb)
 
