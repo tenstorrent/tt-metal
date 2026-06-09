@@ -16,6 +16,13 @@ namespace ckernel
 namespace sfpu
 {
 
+// Helper that is always false but remains value-dependent on the template
+// parameter, enabling well-formed static_assert in if-constexpr else branches
+// (C++17 requirement: the condition must be value-dependent to prevent
+// immediate rejection without instantiation).
+template <DataFormat>
+inline constexpr bool unsupported_binary_comp_format_v = false;
+
 // Int32 binary comparison for relational ops (signed), ported from BH.
 // All ops reduce to computing LT(X, Y) with optional operand swap and result
 // inversion:
@@ -87,6 +94,28 @@ inline void calculate_binary_comp_int32(
         }
 
         TT_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, dst_index_out + (d << 1));
+    }
+}
+
+// Unified binary comparison entry point.
+// DataFormat is a compile-time template argument that controls dispatch to the
+// appropriate implementation, so callers always use the same function regardless
+// of the element type — the selection is fully abstracted away from the caller.
+//
+// When additional formats are supported in the future, add the corresponding
+// implementation as an `else if constexpr (FMT == DataFormat::Float32)` branch
+// here and remove the static_assert below.
+template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP, DataFormat FMT>
+inline void calculate_binary_comp(
+    const int iterations, const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
+{
+    if constexpr (FMT == DataFormat::Int32)
+    {
+        calculate_binary_comp_int32<APPROXIMATION_MODE, ITERATIONS, RELATIONAL_OP>(iterations, dst_index_in0, dst_index_in1, dst_index_out);
+    }
+    else
+    {
+        static_assert(unsupported_binary_comp_format_v<FMT>, "Only DataFormat::Int32 is currently supported for binary comparison on Quasar");
     }
 }
 

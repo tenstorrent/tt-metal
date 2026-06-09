@@ -124,20 +124,54 @@ class EN_DEST_REUSE(TemplateParameter):
         return "#define EN_DEST_REUSE"
 
 
+# Comparison-op strings understood by SFPU_INT_OP.  These map directly to the
+# SfpuType enumerators defined in tt_llk_quasar/llk_lib/llk_defs.h (lower-cased).
+# If a new comparison op is added to SfpuType, add its upper-cased name here.
+_COMP_OP_NAMES: frozenset[str] = frozenset({"GT", "LT", "LE", "GE"})
+
+
 @dataclass
 class SFPU_INT_OP(TemplateParameter):
-    """Emit a #define to select the integer SFPU operation in a shared C++ test source.
+    """Emit compile-time constants to select the integer SFPU operation in a shared C++ test source.
 
-    Supported values: "MUL", "GT", "LT", "LE", "GE".  When omitted the C++ source
-    falls through to its default (add_int) path.
+    For comparison ops (GT, LT, LE, GE) a ``constexpr SfpuType SFPU_COMP_OP`` constant is
+    emitted. The companion ``COMP_DATA_FORMAT`` parameter must also be added to the template
+    list; it emits both the format constant and the ``#define SFPU_COMP_ENABLED`` sentinel that
+    activates the comparison code path in the C++ test source.
+
+    For other ops (e.g. "MUL") the legacy ``#define SFPU_INT_OP_{OP}`` form is kept.
+
+    When omitted the C++ source falls through to its default (add_int) path.
     """
 
     op: str = ""
 
     def convert_to_cpp(self) -> str:
-        if self.op:
-            return f"#define SFPU_INT_OP_{self.op.upper()}"
-        return ""
+        if not self.op:
+            return ""
+        op_upper = self.op.upper()
+        if op_upper in _COMP_OP_NAMES:
+            return f"constexpr auto SFPU_COMP_OP = SfpuType::{self.op.lower()};"
+        return f"#define SFPU_INT_OP_{op_upper}"
+
+
+@dataclass
+class COMP_DATA_FORMAT(TemplateParameter):
+    """Inject a compile-time DataFormat constant for binary comparison SFPU ops.
+
+    Generates ``constexpr auto COMP_DATA_FORMAT = DataFormat::<name>;`` so the
+    unified ``calculate_binary_comp`` template can dispatch to the correct
+    implementation (int vs. float) purely at compile time.
+
+    Also emits ``#define SFPU_COMP_ENABLED`` so that preprocessor-controlled
+    ``#include`` and dispatch guards in the C++ test source know to activate the
+    comparison code path.
+    """
+
+    data_format: DataFormat = DataFormat.Int32
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr auto COMP_DATA_FORMAT = DataFormat::{self.data_format.name};\n#define SFPU_COMP_ENABLED"
 
 
 def _generate_operation_constants(mathop: MathOperation) -> list[str]:
