@@ -257,6 +257,18 @@ grid_12_9_configs = {
     (16512, 6144, 4608): (12, 2, 10, (1, 2)),  # 208 tiles  [UNSWEPT ESTIMATE]
     (16512, 6144, 2304): (12, 2, 8, (4, 1)),  # 176 tiles  (K_b=3→216 reduced to K_b=2)       [UNSWEPT ESTIMATE]
     (16512, 4608, 768): (12, 4, 4, (1, 4)),  # 176 tiles — ff2 merged    [UNSWEPT ESTIMATE]
+    # flux2 8192-token shapes (e.g. 4096-res with SP=8, or alt-parallelism).
+    # (8192, 6144, 4608) heuristic (16,8,16)→768 tiles crashes at 3,256,832 B (2.07×L1).
+    # AGMM overhead scales with M_block; using M_block=8 (half of capped 16) + K_b=2 is safe.
+    # M_t=256; 256%8=0 ✓. Subblocks mirror M=16384 entries.
+    (8192, 6144, 4608): (8, 2, 8, (1, 4)),  # 128 tiles — ff1 spatial   [UNSWEPT ESTIMATE]
+    (8192, 6144, 2304): (8, 2, 8, (4, 1)),  # 128 tiles — ff1 chunk/ff2 [UNSWEPT ESTIMATE]
+    (8192, 6144, 768): (8, 4, 4, (1, 4)),  # 112 tiles — to_out        [UNSWEPT ESTIMATE]
+    (8192, 4608, 768): (8, 4, 4, (1, 4)),  # 112 tiles — ff2 spatial   [UNSWEPT ESTIMATE]
+    # x_c_merged for M=8192+128=8320 → M_tiles=260; 260%4=0 (260%8≠0), use M_block=4
+    (8320, 6144, 4608): (4, 2, 8, (1, 4)),  #  64 tiles — ff1 merged    [UNSWEPT ESTIMATE]
+    (8320, 6144, 2304): (4, 2, 8, (4, 1)),  #  64 tiles  [UNSWEPT ESTIMATE]
+    (8320, 4608, 768): (4, 4, 4, (1, 4)),  #  48 tiles — ff2 merged    [UNSWEPT ESTIMATE]
 }
 
 
