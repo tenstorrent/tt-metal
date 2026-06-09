@@ -159,7 +159,8 @@ void kernel_main() {
     constexpr uint32_t padded_Nt = get_compile_time_arg_val(9);
     // Slot 10: reader-unused (writer/compute consume it for constexpr mask-CB sizing).
     constexpr uint32_t logical_n [[maybe_unused]] = get_compile_time_arg_val(10);
-    constexpr uint32_t logical_nt = get_compile_time_arg_val(11);
+    // Slot 11 is retained for compile-time arg index stability; live logical_nt is a runtime arg below.
+    constexpr uint32_t logical_nt_compile [[maybe_unused]] = get_compile_time_arg_val(11);
     constexpr uint32_t Lt = get_compile_time_arg_val(12);
     constexpr uint32_t L = get_compile_time_arg_val(13);
     constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(14);
@@ -178,10 +179,14 @@ void kernel_main() {
     constexpr uint32_t chunk_size_t = get_compile_time_arg_val(26);
     constexpr bool indexed_kv_cache = get_compile_time_arg_val(27) == 1;
     constexpr bool kv_pad_rotation_enabled = get_compile_time_arg_val(28) == 1;
-    constexpr uint32_t active_ring_iter_mask = get_compile_time_arg_val(29);
+    // Slot 29 is retained for compile-time arg index stability; live active-ring mask is a runtime arg below.
+    constexpr uint32_t active_ring_iter_mask_compile [[maybe_unused]] = get_compile_time_arg_val(29);
     constexpr uint32_t NHV = get_compile_time_arg_val(30);
     // Latent-V mode: absent V is materialized from the prefix of K tiles already in L1.
     constexpr bool v_shares_k_buffer = get_compile_time_arg_val(31) == 1;
+    // In-place latent-V (single-tile Q): the compute kernel reads V straight from K^T, so the
+    // reader never materializes V. Shared with the program factory and compute kernel.
+    constexpr bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
     constexpr uint32_t q_heads_per_v = NH / NHV;
 
     // Joint-path compile-time gating. When zero, joint Q/K branches are statically dead
@@ -229,11 +234,11 @@ void kernel_main() {
         max_q_per_core = get_arg_val<uint32_t>(argidx++);
     }
 
+    const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
+    const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         true, /* wait_for_op_signal */
         argidx);
-
-    // After fused-op receiver consumed its runtime args, remaining RT args are S&F chain metadata
 
     // Compile-time semaphore ids and chain flags are appended after all TensorAccessorArgs()
     // Head chain semaphores (head-level chain, always built)
@@ -604,7 +609,9 @@ void kernel_main() {
                     q_pushed = true;
                 }
 
-                if constexpr (v_shares_k_buffer) {
+                // In-place latent-V (kt_inplace_v) materializes nothing: compute reads V straight
+                // from the K^T already pushed above, so neither branch below runs for that case.
+                if constexpr (v_shares_k_buffer && !kt_inplace_v) {
                     bool skip_v_materialization = false;
                     uint32_t v_rows_to_materialize = Sk_chunk_t;
                     if constexpr (is_causal && !chunked_enabled) {
@@ -636,7 +643,7 @@ void kernel_main() {
                         materialize_v_prefix_from_k<cb_v_in, v_cb_entry_tiles, Sk_chunk_t, vDHt, k_tile_bytes>(
                             cb_k_start_address, v_rows_to_materialize);
                     }
-                } else {
+                } else if constexpr (!v_shares_k_buffer) {
                     // V: either read locally (injector or not participant) or receive from chain.
                     const uint32_t nv = nq / q_heads_per_v;
                     const Slice v_slice(k_slice.d0, nv, k_slice.d2_start, k_slice.d2_end, 0, vDHt);
@@ -671,12 +678,15 @@ void kernel_main() {
             }
         }
         for (uint32_t dummy_chunk = 0;
-             dummy_chunk < dummy_kv_chunks_for_phase_alignment<v_shares_k_buffer>(KV_chunks_processed_in_iter);
+             dummy_chunk <
+             dummy_kv_chunks_for_phase_alignment<v_shares_k_buffer, kt_inplace_v>(KV_chunks_processed_in_iter);
              ++dummy_chunk) {
             cb_reserve_back(cb_k_in, k_chunk_tiles);
             cb_push_back(cb_k_in, k_chunk_tiles);
-            cb_reserve_back(cb_v_in, v_cb_entry_tiles);
-            cb_push_back(cb_v_in, v_cb_entry_tiles);
+            if constexpr (!kt_inplace_v) {
+                cb_reserve_back(cb_v_in, v_cb_entry_tiles);
+                cb_push_back(cb_v_in, v_cb_entry_tiles);
+            }
         }
     }
 }

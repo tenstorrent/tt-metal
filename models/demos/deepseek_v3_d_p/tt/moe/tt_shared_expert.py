@@ -20,6 +20,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -268,6 +269,14 @@ class TtSharedExpert(LightweightModule):
         self.subdevice_id = subdevice_id
         self.subdevice_cores = subdevice_cores
         self.weight_cache_path = weight_cache_path
+        # Hold the reduce-scatter INPUT alive until the next forward so it is not freed while the
+        # async reduce_scatter is still reading it and reused by the concurrent dispatch op (the
+        # catastrophic use-after-free). See forward().
+        self._rs_input_keepalive = None
+        # Shared per-mesh CCL handle. Drives reduce_scatter_minimal_async and owns the shared,
+        # stable-address reduce_scatter INTERMEDIATE buffer (one per mesh, reused by all layers'
+        # shared experts) — see forward() and TT_CCL.get_shared_rs_intermediate.
+        self.tt_ccl = get_tt_ccl(mesh_device)
         self.cache_name_prefix = cache_name_prefix
 
         logger.debug(f"Initializing TtSharedExpert with emb_dim={emb_dim}, hidden_dim={hidden_dim}")
@@ -466,14 +475,40 @@ class TtSharedExpert(LightweightModule):
 
         # 4) Reduce-scatter across mesh columns when TP > 1.
         if self.mesh_device.shape[1] > 1:
-            output = ttnn.reduce_scatter(
+            # This reduce_scatter runs overlapped with the MoE dispatch op (on a separate
+            # sub-device, overlap_shared_expert_with_dispatch). The op is async: its kernels keep
+            # accessing its DRAM buffers after this Python call returns, while the concurrent
+            # dispatch allocates its own (large) buffers. Any buffer this op frees before its
+            # kernels finish can be re-handed to dispatch and overwritten mid-flight — corrupting
+            # the result non-deterministically. Both the reduce_scatter INPUT and its INTERMEDIATE
+            # accumulator were observed (via DRAM address tracing) re-handed to the dispatch op's
+            # `metadata` / `dispatched_buffer` at the exact same address: the input alias produced
+            # the catastrophic period-2 failure, the intermediate alias the residual non-determinism.
+            #
+            # Own the intermediate (reduce_scatter_minimal_async with an explicit persistent buffer),
+            # reusing one shared, stable-address buffer owned by tt_ccl (shared across all layers,
+            # which run sequentially). This keeps it alive across the overlap (so dispatch can't reuse
+            # its slot) AND fixes its DRAM address every iteration, so the op's fabric reduction order
+            # is identical each iteration — giving bit-exact determinism. The op overwrites the
+            # intermediate before reading it (the line-reduction compute skips the first slice), so no
+            # per-iteration re-zeroing is needed.
+            rs_intermediate = self.tt_ccl.get_shared_rs_intermediate(output_full)
+            output = ttnn.experimental.reduce_scatter_minimal_async(
                 output_full,
+                persistent_output_buffers=[rs_intermediate],
                 dim=-1,
-                cluster_axis=1,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=1),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
                 num_links=self.num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=self.topology,
+                cluster_axis=1,
                 subdevice_id=self.subdevice_id,
             )
+            # Keep the (fresh-per-iter) RS input alive until the next forward so the concurrent
+            # dispatch cannot reuse its slot mid-flight. (The intermediate is kept alive by the cache.)
+            self._rs_input_keepalive = output_full
         else:
             output = output_full
         logger.debug(f"After shared_expert_ffn: {output.shape}")

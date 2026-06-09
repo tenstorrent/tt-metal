@@ -1453,11 +1453,11 @@ D2HSocket* MeshDeviceImpl::get_realtime_profiler_socket() const {
 
 DramCorePrefetcherManager& MeshDeviceImpl::dram_core_prefetcher(MeshDevice* mesh_device) {
     if (!dram_core_prefetcher_) {
-        dram_core_prefetcher_ = std::make_unique<DramCorePrefetcherManager>(mesh_device);
+        dram_core_prefetcher_ =
+            std::make_unique<DramCorePrefetcherManager>(mesh_device, std::bind(&MeshDeviceImpl::lock_api, this));
     }
     return *dram_core_prefetcher_;
 }
-
 
 CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(uint32_t bank_id) const {
     const auto& soc_desc = MetalContext::instance(context_id_).get_cluster().get_soc_desc(reference_device()->id());
