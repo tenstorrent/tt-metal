@@ -2,13 +2,15 @@
 
 Reference PyTorch setup for porting [VibeVoice-1.5B](https://huggingface.co/microsoft/VibeVoice-1.5B) to TTNN. The backbone is **Qwen2.5-1.5B** (28 layers, hidden 1536, GQA); plan to reuse or wrap [`models/tt_transformers/`](../../tt_transformers/) for `language_model`.
 
-Weights are **not** vendored in this tree. Point to a local checkout of the HF snapshot:
+Weights are **not** vendored in this tree. On first run, demos and tests download
+[`microsoft/VibeVoice-1.5B`](https://huggingface.co/microsoft/VibeVoice-1.5B) into
+`models/experimental/vibevoice/weights/VibeVoice-1.5B` (requires `huggingface_hub`).
+
+Override the location with:
 
 ```bash
 export VIBEVOICE_MODEL_PATH=/path/to/VibeVoice-1.5B
 ```
-
-Default (if unset): `/home/iguser/devstral2/VibeVoice/VibeVoice-1.5B`
 
 ## Layout
 
@@ -16,7 +18,9 @@ Default (if unset): `/home/iguser/devstral2/VibeVoice/VibeVoice-1.5B`
 vibevoice/
 ├── README.md
 ├── conftest.py              # pytest: reference/ on PYTHONPATH
-├── common/config.py         # MODEL_PATH, voices, transformers pin
+├── common/
+│   ├── config.py            # paths, HF repo id, transformers pin
+│   └── model_utils.py       # resolve path + auto-download weights
 ├── reference/
 │   ├── vibevoice/           # vendored 1.5B-only Python (from VibeVoice repo)
 │   ├── model_print.py
@@ -24,6 +28,7 @@ vibevoice/
 ├── resources/
 │   ├── voices/              # demo voice presets (not weights)
 │   └── text/                # short scripts for smoke / PCC
+├── weights/                 # auto-downloaded HF checkpoint (gitignored content)
 ├── tests/pcc/
 └── tt/                      # TTNN layers (empty initially)
 ```
@@ -33,8 +38,7 @@ vibevoice/
 Pin `transformers` — **4.57+** breaks `generate()` KV-cache behavior for this model.
 
 ```bash
-pip install 'transformers==4.51.3' torch accelerate diffusers tqdm librosa scipy
-export VIBEVOICE_MODEL_PATH=/path/to/VibeVoice-1.5B
+pip install 'transformers==4.51.3' torch accelerate diffusers tqdm librosa scipy huggingface_hub
 ```
 
 The processor also pulls **Qwen/Qwen2.5-1.5B** tokenizer assets from the Hugging Face cache (`QWEN_TOKENIZER` in `common/config.py`).
@@ -43,16 +47,15 @@ The processor also pulls **Qwen/Qwen2.5-1.5B** tokenizer assets from the Hugging
 
 ```bash
 export PYTHONPATH=$(pwd)
-export VIBEVOICE_MODEL_PATH=/path/to/VibeVoice-1.5B
 
-# Print architecture
+# Print architecture (downloads weights on first run)
 python models/experimental/vibevoice/reference/model_print.py
 
 # End-to-end reference TTS (CPU default; use --device cuda if available)
 python models/experimental/vibevoice/reference/run_inference.py \
   --output_dir /tmp/vibevoice_out
 
-# PCC reference tests (skip if weights missing)
+# PCC tests (auto-download weights; skipped if download fails)
 pytest models/experimental/vibevoice/tests/pcc/ -v
 ```
 

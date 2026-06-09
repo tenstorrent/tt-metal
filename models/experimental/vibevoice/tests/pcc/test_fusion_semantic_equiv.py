@@ -20,7 +20,6 @@ of TTNN, so it is independent of bf16 precision.
 import sys
 from pathlib import Path
 
-import pytest
 import torch
 
 from models.common.utility_functions import comp_pcc
@@ -37,8 +36,6 @@ _REFERENCE_DIR = _VIBEVOICE_ROOT / "reference"
 for _p in (_REFERENCE_DIR, _VIBEVOICE_ROOT.parent.parent.parent):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
-
-pytestmark = pytest.mark.skipif(not Path(MODEL_PATH).is_dir(), reason="VIBEVOICE_MODEL_PATH weights missing")
 
 N_FRAMES = 6  # number of diffusion latent frames to simulate
 
