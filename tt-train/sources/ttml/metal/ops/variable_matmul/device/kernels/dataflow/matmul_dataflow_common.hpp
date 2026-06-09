@@ -319,30 +319,3 @@ FORCE_INLINE void do_deferred_block_write(
         out_row_offset_tiles);
     cb_pop_front(cb_id_out, out_block_num_tiles);
 }
-
-/**
- * Final (non-deferred) output block write at the end of an N-block iteration: granular variant
- * pops the output CB tile-by-tile to overlap compute and write.
- */
-template <uint32_t M_block_tiles, uint32_t N_block_tiles, bool UseOutOffset, typename TensorAccessorType>
-FORCE_INLINE void do_final_block_write(
-    const TensorAccessorType& tensor_accessor,
-    const TensorShape2D& out_shape,
-    uint32_t cb_id_out,
-    uint32_t out_tile_size,
-    uint32_t m_tile,
-    uint32_t m_tile_end,
-    uint32_t n_tile,
-    uint32_t n_tile_end,
-    uint32_t out_row_offset_tiles) {
-    write_block_sync_granular<M_block_tiles, N_block_tiles, UseOutOffset>(
-        tensor_accessor,
-        out_shape,
-        cb_id_out,
-        out_tile_size,
-        m_tile,
-        m_tile_end,
-        n_tile,
-        n_tile_end,
-        out_row_offset_tiles);
-}

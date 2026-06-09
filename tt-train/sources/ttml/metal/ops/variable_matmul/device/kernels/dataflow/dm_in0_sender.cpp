@@ -290,7 +290,7 @@ void kernel_main() {
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
-                    do_final_block_write<M_block_tiles, N_block_tiles, use_out_offset>(
+                    write_block_sync_granular<M_block_tiles, N_block_tiles, use_out_offset>(
                         out_accessor,
                         out_shape,
                         cb_id_out,
