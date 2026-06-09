@@ -160,6 +160,10 @@ thread_local uint32_t* __emule_l1_resolved_ranges_count = nullptr;
 thread_local uint32_t __emule_l1_resolved_ranges_capacity = 0;
 thread_local uint32_t __emule_cb_reserved_pages[32] = {};
 thread_local uint32_t __emule_cb_waited_pages[32] = {};
+thread_local const char* __emule_cb_reserve_file[32] = {};
+thread_local uint32_t __emule_cb_reserve_line[32] = {};
+thread_local const char* __emule_cb_wait_file[32] = {};
+thread_local uint32_t __emule_cb_wait_line[32] = {};
 thread_local bool __emule_cb_boundary_strict = false;
 
 // DRAM equivalent of __emule_l1_tensor_ranges; consumed only by __emule_dram_ptr below.
@@ -2178,7 +2182,7 @@ public:
         resolved_acc_.insert(resolved_acc_.end(), local_log, local_log + local_count);
     }
 
-    void verify_post_launch(const uint8_t* l1_data, uint32_t lx, uint32_t ly) const {
+    void verify_post_launch(const uint8_t* l1_data, uint32_t lx, uint32_t ly, const char* kernel_name) const {
         if (snapshots_.empty()) {
             return;
         }
@@ -2190,14 +2194,22 @@ public:
             uint32_t r_start = static_cast<uint32_t>(snap.packed >> 32);
             uint32_t r_end = static_cast<uint32_t>(snap.packed);
             if (std::memcmp(snap.bytes.data(), l1_data + r_start, r_end - r_start) != 0) {
+                // No source line: this is detected post-exit by memcmp (the stray
+                // write bypassed __emule_local_l1_to_ptr, so there is no captured
+                // call site). The kernel name + core + the clobbered buffer range
+                // are the actionable info; the cause is typically an overrun from
+                // an adjacent buffer this kernel *did* resolve.
                 __emule_asan_panic(
                     "[ASAN ERROR] Object Intent Violation: Attempted to modify memory belonging to an "
-                    "adjacent object context — L1 buffer [0x%x, 0x%x) on core (%u, %u) changed but no "
-                    "kernel in this launch resolved a pointer into it via __emule_local_l1_to_ptr.\n",
-                    r_start,
-                    r_end,
+                    "adjacent object context — kernel %s on core (%u, %u) changed L1 buffer [0x%x, 0x%x) "
+                    "without ever resolving a pointer into it via __emule_local_l1_to_ptr (likely an overrun "
+                    "from an adjacent buffer). No source line: detected post-exit by memory comparison, after "
+                    "the kernel returned.\n",
+                    kernel_name ? kernel_name : "(unknown)",
                     lx,
-                    ly);
+                    ly,
+                    r_start,
+                    r_end);
             }
         }
     }
@@ -2240,24 +2252,59 @@ inline void clear_sanitizer_thread_locals() {
     for (uint32_t i = 0; i < EMULE_NUM_CBS; ++i) {
         __emule_cb_reserved_pages[i] = 0;
         __emule_cb_waited_pages[i] = 0;
+        __emule_cb_reserve_file[i] = nullptr;
+        __emule_cb_reserve_line[i] = 0;
+        __emule_cb_wait_file[i] = nullptr;
+        __emule_cb_wait_line[i] = 0;
     }
     __emule_cb_boundary_strict = false;
 }
 
 inline void abort_if_dirty_cb(
-    uint32_t cb_id, uint32_t unpushed, uint32_t unpopped, uint32_t lx, uint32_t ly, uint32_t processor_id) {
+    uint32_t cb_id,
+    uint32_t unpushed,
+    uint32_t unpopped,
+    uint32_t lx,
+    uint32_t ly,
+    uint32_t processor_id,
+    const char* reserve_file,
+    uint32_t reserve_line,
+    const char* wait_file,
+    uint32_t wait_line) {
+    // The kernel has already returned, so there is no kernel frame to backtrace;
+    // the offending file:line comes from the call site captured at reserve/wait
+    // time (__emule_cb_reserve_file / __emule_cb_wait_file). Only the imbalanced
+    // side(s) are reported.
+    char reserve_clause[512] = "";
+    if (unpushed > 0) {
+        std::snprintf(
+            reserve_clause,
+            sizeof(reserve_clause),
+            " %u page(s) reserved via cb_reserve_back at %s:%u were never committed with cb_push_back.",
+            unpushed,
+            reserve_file ? reserve_file : "?",
+            reserve_line);
+    }
+    char wait_clause[512] = "";
+    if (unpopped > 0) {
+        std::snprintf(
+            wait_clause,
+            sizeof(wait_clause),
+            " %u page(s) waited via cb_wait_front at %s:%u were never released with cb_pop_front.",
+            unpopped,
+            wait_file ? wait_file : "?",
+            wait_line);
+    }
     __emule_asan_panic(
-        "[ASAN ERROR] Dirty CB Detected: Core (%u, %u) CB %u was not flushed! "
-        "Kernel (processor %u) exited with %u page(s) reserved via cb_reserve_back but never "
-        "committed with cb_push_back, and %u page(s) waited via cb_wait_front but never released "
-        "with cb_pop_front. Every reserve must be matched by a push and every wait by a pop "
-        "before the kernel exits, or the CB's read/write pointers desync on silicon.\n",
+        "[ASAN ERROR] Dirty CB Detected: Core (%u, %u) CB %u was not flushed! Kernel (processor %u):%s%s "
+        "Every reserve must be matched by a push and every wait by a pop before the kernel exits, "
+        "or the CB's read/write pointers desync on silicon.\n",
         lx,
         ly,
         cb_id,
         processor_id,
-        unpushed,
-        unpopped);
+        reserve_clause,
+        wait_clause);
 }
 
 // A CB is "flushed" when every cb_reserve_back was committed by a matching
@@ -2281,7 +2328,17 @@ inline void sweep_per_kernel_dirty_cbs(
         uint32_t unpushed = __emule_cb_reserved_pages[cb_id];
         uint32_t unpopped = __emule_cb_waited_pages[cb_id];
         if (unpushed > 0 || unpopped > 0) {
-            abort_if_dirty_cb(cb_id, unpushed, unpopped, lx, ly, processor_id);
+            abort_if_dirty_cb(
+                cb_id,
+                unpushed,
+                unpopped,
+                lx,
+                ly,
+                processor_id,
+                __emule_cb_reserve_file[cb_id],
+                __emule_cb_reserve_line[cb_id],
+                __emule_cb_wait_file[cb_id],
+                __emule_cb_wait_line[cb_id]);
         }
     }
 }
@@ -2622,7 +2679,10 @@ static void launch_cores(
                         t.join();
                     }
 
-                    intent_tracker.verify_post_launch(l1_data, lx, ly);
+                    const char* oi_kernel_name = (cs.ki_list->size() == 1 && !cs.ki_list->front().kernel_name.empty())
+                                                     ? cs.ki_list->front().kernel_name.c_str()
+                                                     : nullptr;
+                    intent_tracker.verify_post_launch(l1_data, lx, ly, oi_kernel_name);
 
                     // Rethrow first kernel exception
                     for (size_t i = 0; i < kernel_exceptions.size(); ++i) {
