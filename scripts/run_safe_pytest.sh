@@ -50,7 +50,6 @@
 # Modes:
 #   default  - Dispatch timeout only. Lean, no debug overhead.
 #   --dev    - Debug mode with watcher, asserts, and triage (see above).
-#   --profile - Tracy device profiling with per-op CSV report (see above).
 #
 # Exit codes:
 #   0 - All tests passed
@@ -556,14 +555,7 @@ fi
 # --- Run pytest ---
 # -x: stop on first failure (avoids running tests after a hang bricks the device)
 # --run-all: skip -x to get full pass/fail counts (for eval scoring)
-# --profile: wrap pytest in the Tracy profiler. `python -m tracy -r` runs pytest
-#   as a child and post-processes results into ops_perf_results*.csv on pass or
-#   fail. Its exit-code masking is handled at the result check below.
-if [[ "$PROFILE_MODE" == true ]]; then
-    PYTEST_CMD=(python -m tracy -r -m pytest "${TEST_PATH}")
-else
-    PYTEST_CMD=(pytest "${TEST_PATH}")
-fi
+PYTEST_CMD=(pytest "${TEST_PATH}")
 if [[ "$FAIL_FAST" == true ]]; then
     PYTEST_CMD+=(-x)
 fi
@@ -618,10 +610,7 @@ CHILD_PID=
 echo "========================================"
 
 # --- Handle result ---
-# The triage-log guard matters in profile mode: the tracy wrapper exits 0 even
-# when the underlying test failed OR hung, so without it a hang would be reported
-# PASS and skip the device reset. An empty triage log means no hang fired.
-if [[ $EXIT_CODE -eq 0 && ! -s "$TRIAGE_LOG" ]]; then
+if [[ $EXIT_CODE -eq 0 ]]; then
     rm -f "$DIRTY_FLAG"
     rm -f "$TRIAGE_LOG"
     rm -f "$PYTEST_STDOUT_LOG"
