@@ -5,17 +5,10 @@
 
 from pathlib import Path
 
-import pytest
 import torch
 
 from models.experimental.vibevoice.common.config import MODEL_PATH
 from vibevoice.modular.modeling_vibevoice import VibeVoiceForConditionalGeneration
-
-
-pytestmark = pytest.mark.skipif(
-    not Path(MODEL_PATH).is_dir(),
-    reason=f"VibeVoice weights not found at {MODEL_PATH} (set VIBEVOICE_MODEL_PATH)",
-)
 
 
 def test_model_load_has_qwen_backbone():

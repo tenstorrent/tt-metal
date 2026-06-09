@@ -37,8 +37,6 @@ for _p in (_VIBEVOICE_ROOT / "reference", _VIBEVOICE_ROOT.parent.parent.parent):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-pytestmark = pytest.mark.skipif(not Path(MODEL_PATH).is_dir(), reason="VIBEVOICE_MODEL_PATH weights missing")
-
 N_FRAMES = 4
 
 

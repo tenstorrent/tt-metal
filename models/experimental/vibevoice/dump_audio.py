@@ -3,7 +3,6 @@
 """Generate reference + TT speech and write both to WAV for A/B listening.
 
 Usage (from tt-metal root):
-    export VIBEVOICE_MODEL_PATH=$PWD/models/experimental/vibevoice/weights/VibeVoice-1.5B
     python models/experimental/vibevoice/dump_audio.py --out_dir /tmp/vv_audio --max_new_tokens 128
 
 Writes <out_dir>/ref.wav and <out_dir>/tt.wav (24 kHz) and prints a mel-distance metric.
@@ -15,7 +14,8 @@ from pathlib import Path
 import torch
 import ttnn
 
-from models.experimental.vibevoice.common.config import MODEL_PATH, DEFAULT_TXT_PATH, VOICES_DIR
+from models.experimental.vibevoice.common.config import DEFAULT_TXT_PATH, VOICES_DIR
+from models.experimental.vibevoice.common.model_utils import ensure_model_weights
 from models.experimental.vibevoice.tt.ttnn_vibevoice_model import TTVibeVoiceModel
 
 _VV_ROOT = Path(__file__).resolve().parent
@@ -46,14 +46,20 @@ def main():
     args = ap.parse_args()
     Path(args.out_dir).mkdir(parents=True, exist_ok=True)
 
+    try:
+        model_path = str(ensure_model_weights())
+    except Exception as exc:
+        print(f"[dump_audio] ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
+
     from vibevoice.modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
     from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
 
     with open(DEFAULT_TXT_PATH, encoding="utf-8") as f:
         script = f.read().strip().replace("’", "'")
-    processor = VibeVoiceProcessor.from_pretrained(MODEL_PATH)
+    processor = VibeVoiceProcessor.from_pretrained(model_path)
     ref = VibeVoiceForConditionalGenerationInference.from_pretrained(
-        MODEL_PATH, torch_dtype=torch.float32, device_map="cpu", attn_implementation="sdpa"
+        model_path, torch_dtype=torch.float32, device_map="cpu", attn_implementation="sdpa"
     )
     ref.eval()
     ref.set_ddpm_inference_steps(num_steps=args.num_steps)
@@ -83,7 +89,7 @@ def main():
     mesh = ttnn.open_device(device_id=0, l1_small_size=32768)
     try:
         tt_model = TTVibeVoiceModel.from_checkpoint(
-            mesh, MODEL_PATH, cfg_scale=args.cfg_scale, num_diffusion_steps=args.num_steps
+            mesh, model_path, cfg_scale=args.cfg_scale, num_diffusion_steps=args.num_steps
         )
         tt_model.set_speech_scale_bias(ref.model.speech_scaling_factor.item(), ref.model.speech_bias_factor.item())
         torch.manual_seed(0)

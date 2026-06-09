@@ -7,7 +7,6 @@ Verifies that all expected key prefixes exist in the loaded state dict and
 that tensor shapes match the architecture defined in vibevoice_config.py.
 """
 
-from pathlib import Path
 
 import pytest
 
@@ -18,8 +17,6 @@ from models.experimental.vibevoice.tt.load_weights import (
     remap_lm_keys_to_tt_transformers,
 )
 from models.experimental.vibevoice.tt.vibevoice_config import load_vibevoice_model_config
-
-pytestmark = pytest.mark.skipif(not Path(MODEL_PATH).is_dir(), reason="VIBEVOICE_MODEL_PATH weights missing")
 
 
 @pytest.fixture(scope="module")
