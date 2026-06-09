@@ -17,7 +17,7 @@ for path in (_REFERENCE_DIR, _TT_METAL_ROOT):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from models.experimental.vibevoice.common.config import MODEL_PATH  # noqa: E402
+from models.experimental.vibevoice.common.model_utils import ensure_model_weights  # noqa: E402
 from vibevoice.modular.modeling_vibevoice import VibeVoiceForConditionalGeneration  # noqa: E402
 
 
@@ -26,8 +26,8 @@ def parse_args():
     parser.add_argument(
         "--model_path",
         type=str,
-        default=MODEL_PATH,
-        help="Path to the local VibeVoice-1.5B weights directory",
+        default=None,
+        help="Path to the local VibeVoice-1.5B weights directory (auto-downloads when omitted)",
     )
     parser.add_argument(
         "--device",
@@ -41,6 +41,12 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    try:
+        args.model_path = str(ensure_model_weights(args.model_path))
+    except Exception as exc:
+        print(f"Error: {exc}")
+        return 1
 
     if args.device == "cuda" and not torch.cuda.is_available():
         print("CUDA not available, using CPU.")

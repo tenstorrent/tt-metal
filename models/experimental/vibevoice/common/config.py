@@ -13,10 +13,13 @@ VOICES_DIR = RESOURCES_DIR / "voices"
 TEXT_EXAMPLES_DIR = RESOURCES_DIR / "text"
 DEFAULT_TXT_PATH = TEXT_EXAMPLES_DIR / "1p_short.txt"
 
-MODEL_PATH = os.environ.get(
-    "VIBEVOICE_MODEL_PATH",
-    "/home/iguser/devstral2/VibeVoice/VibeVoice-1.5B",
-)
+HF_REPO_ID = "microsoft/VibeVoice-1.5B"
+WEIGHTS_DIR = VIBEVOICE_ROOT / "weights"
+DEFAULT_MODEL_PATH = WEIGHTS_DIR / "VibeVoice-1.5B"
+MODEL_PATH_ENV_VAR = "VIBEVOICE_MODEL_PATH"
+
+# Updated at runtime by ensure_model_weights() in tests and entry-point scripts.
+MODEL_PATH = os.environ.get(MODEL_PATH_ENV_VAR, str(DEFAULT_MODEL_PATH))
 
 # Processor loads Qwen tokenizer from HF cache (not bundled in VibeVoice-1.5B weights).
 QWEN_TOKENIZER = "Qwen/Qwen2.5-1.5B"
