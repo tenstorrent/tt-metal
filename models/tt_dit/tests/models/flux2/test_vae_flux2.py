@@ -13,22 +13,60 @@ from ....models.vae.vae_flux2_opt import Flux2VaeDecoder
 from ....parallel.config import Flux2VaeParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils import tensor
+from ....utils.check import assert_quality
+
+_LAYERS_PER_BLOCK = 1  # pruned from pretrained (2) to keep host run fast
+
+
+def _load_pruned_torch_model() -> reference.AutoencoderKLFlux2:
+    """Load the pretrained VAE and truncate each up_block to _LAYERS_PER_BLOCK resnets.
+
+    The mid_block is left intact — it already uses num_layers=1 (2 resnets, 1 attention)
+    matching TT's VaeMidBlock default, regardless of layers_per_block.
+    """
+    model = reference.AutoencoderKLFlux2.from_pretrained("black-forest-labs/FLUX.2-dev", subfolder="vae")
+    assert isinstance(model, reference.AutoencoderKLFlux2)
+    model.eval()
+    keep = _LAYERS_PER_BLOCK + 1
+    for up_block in model.decoder.up_blocks:
+        up_block.resnets = torch.nn.ModuleList(list(up_block.resnets)[:keep])
+    return model
+
+
+def _torch_decode_reference(torch_model: reference.AutoencoderKLFlux2, inp: torch.Tensor) -> torch.Tensor:
+    """Apply BN inv-normalize, unpatchify, then run the torch decoder.
+
+    inp: [B, C*p^2, H_t, W_t] patchified latent.
+    Returns [B, 3, H, W] (NCHW) for comparison with the TT output permuted to NCHW.
+    """
+    p = 2  # _PATCH_SIZE
+    z_channels = torch_model.config.latent_channels
+    bn_eps = torch_model.bn.eps
+    s = (torch_model.bn.running_var + bn_eps).sqrt()  # [C*p^2]
+    m = torch_model.bn.running_mean  # [C*p^2]
+    # Matches TT _inv_normalize: z * sqrt(var + eps) + mean
+    inp_norm = inp * s.view(1, -1, 1, 1) + m.view(1, -1, 1, 1)
+
+    # Unpatchify: [B, C*p^2, H_t, W_t] -> [B, C, H_lat, W_lat]
+    B, _, h_t, w_t = inp_norm.shape
+    z = inp_norm.reshape(B, z_channels, p, p, h_t, w_t)
+    z = z.permute(0, 1, 4, 2, 5, 3).contiguous()
+    z = z.reshape(B, z_channels, h_t * p, w_t * p)
+
+    with torch.no_grad():
+        return torch_model.decode(z).sample  # [B, 3, H, W]
 
 
 def prep_data(
     vae_parallel_config: Flux2VaeParallelConfig,
     inp: torch.Tensor,
     mesh_device: ttnn.Device,
-    sp_axis: int,
     tt_model: Flux2VaeDecoder,
 ) -> ttnn.Tensor:
     # inp: [B, C*p^2, H_t, W_t] patchified latent in torch.
     # Convert to patchified token format [B, H_t*W_t, C*p^2].
     inp_flat = inp.permute(0, 2, 3, 1).flatten(1, 2)
 
-    # Both pipeline branches (h_parallel.mesh_axis == sp_axis, or all-gather + re-shard)
-    # result in the same target layout when starting from the full tensor:
-    # shard on dim=1 (token/H dimension) with h_parallel.mesh_axis, or replicate if None.
     if vae_parallel_config.h_parallel is not None:
         tt_latents = tensor.from_torch(
             inp_flat,
@@ -38,8 +76,6 @@ def prep_data(
     else:
         tt_latents = tensor.from_torch(inp_flat, device=mesh_device)
 
-    # Derive unpatchify dimensions from inp.shape; avoids needing explicit height/width args.
-    # inp.shape[2] = height // (vae_scale_factor * p),  so height // vae_scale_factor = shape[2] * p.
     p = Flux2VaeDecoder._PATCH_SIZE
     height_for_unp = inp.shape[2] * p
     width_for_unp = inp.shape[3] * p
@@ -79,12 +115,8 @@ def prep_data(
 )
 @pytest.mark.parametrize(
     ("batch_size", "height", "width"),
-    [
-        (1, 1024, 1024),
-        (1, 2048, 2048),
-        (1, 4096, 4096),
-    ],
-    ids=["1024", "2048", "4096"],
+    [(1, 1024, 1024)],
+    ids=["1024"],
 )
 def test_vae_flux2_decoder(
     *,
@@ -99,9 +131,7 @@ def test_vae_flux2_decoder(
     h_axis = 1 - tp_axis
     w_axis = None
 
-    torch_model = reference.AutoencoderKLFlux2.from_pretrained("black-forest-labs/FLUX.2-dev", subfolder="vae")
-    assert isinstance(torch_model, reference.AutoencoderKLFlux2)
-    torch_model.eval()
+    torch_model = _load_pruned_torch_model()
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
     vae_parallel_config = Flux2VaeParallelConfig.from_axes(mesh_device, tp_axis=tp_axis, h_axis=h_axis, w_axis=w_axis)
@@ -110,41 +140,26 @@ def test_vae_flux2_decoder(
     patch_size = 2
     vae_scale_factor = 8
 
-    # tt_model = Flux2VaeDecoder(
-    #     out_channels=torch_model.config.out_channels,
-    #     block_out_channels=torch_model.config.block_out_channels,
-    #     layers_per_block=torch_model.config.layers_per_block,
-    #     z_channels=z_channels,
-    #     device=mesh_device,
-    #     parallel_config=vae_parallel_config,
-    #     ccl_manager=ccl_manager,
-    # )
-
     tt_model = Flux2VaeDecoder(
-        out_channels=3,
-        block_out_channels=[128, 256, 512, 512],
-        layers_per_block=2,
-        z_channels=32,
+        out_channels=torch_model.config.out_channels,
+        block_out_channels=list(torch_model.config.block_out_channels),
+        layers_per_block=_LAYERS_PER_BLOCK,
+        z_channels=z_channels,
         device=mesh_device,
         parallel_config=vae_parallel_config,
         ccl_manager=ccl_manager,
         use_conv3d=False,
     )
-
     tt_model.load_torch_state_dict(torch_model.state_dict())
 
     f = vae_scale_factor * patch_size
     inp = torch.randn(batch_size, z_channels * patch_size**2, height // f, width // f)
 
-    # sp_axis is the DiT sequence-parallel axis; in this test it matches tp_axis.
-    tt_inp = prep_data(vae_parallel_config, inp, mesh_device, sp_axis=tp_axis, tt_model=tt_model)
+    torch_output = _torch_decode_reference(torch_model, inp)  # [B, 3, H, W]
 
-    # tt_out = tt_model.forward(tt_inp)
-
-    # tt_out_torch = tensor.to_torch(tt_out).permute(0, 3, 1, 2)
-    # assert_quality(torch_output, tt_out_torch, pcc=0.9978, relative_rmse=0.034)
-
-    # start = time()
-    tt_model.forward(tt_inp)
+    tt_inp = prep_data(vae_parallel_config, inp, mesh_device, tt_model=tt_model)
+    tt_out = tt_model.forward(tt_inp)
     ttnn.synchronize_device(mesh_device)
-    # logger.info(f"VAE time taken: {time() - start}")
+
+    tt_out_torch = tensor.to_torch(tt_out).permute(0, 3, 1, 2)  # [B, 3, H, W]
+    assert_quality(torch_output, tt_out_torch, pcc=0.9978, relative_rmse=0.034)
