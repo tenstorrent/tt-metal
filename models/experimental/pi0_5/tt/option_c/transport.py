@@ -3,11 +3,20 @@
 
 """Inter-stage activation transport for Option C.
 
-Mirrors `option_b.transport.send_activation_via_host` — tt-metal does not yet
-expose a direct submesh→submesh point-to-point copy across heterogeneous
-submeshes, so we bounce through host DRAM:
+Two transport paths today:
 
-    src_submesh → torch tensor (host) → dst_submesh
+1. `send_activation_via_host` — bounces through host DRAM. Works between any
+   two submeshes (even ones not sharing a parent). Default path; ~100-200 ms
+   per inference of total host-bounce overhead at full depth.
+
+2. `send_shard_via_p2p` — direct device-to-device transfer via the ethernet
+   fabric using `ttnn.point_to_point`. Requires:
+     - tensor ALLOCATED on the parent mesh (with shards positioned per-coord)
+     - sender + receiver coords on same row OR same column of the parent
+     - fabric initialized at mesh open (`set_fabric_config(FABRIC_1D)`)
+   Verified working on the BH Galaxy parent via
+   `tests/test_p2p_smoke.py::test_p2p_basic_transfers`. Microsecond-class
+   transfer time (no host involvement).
 
 Inter-stage payload sizes (per deployment plan §3.2):
 
@@ -18,10 +27,18 @@ Inter-stage payload sizes (per deployment plan §3.2):
     prefill chip i → denoise (KV migration, see kv_migration.py)     ~500 KB / layer (one-shot)
     denoise chip i → i+1    [50, 1024] bf8                           ~50 KB  / Euler step (10× / inf)
 
-When tt-blaze sockets land, this should grow a `direct_d2d_send` path.
+Integration status:
+- D2D primitive verified (test_p2p_smoke.py).
+- Caller-side integration not yet wired — the layer-paired forward
+  (`vlm_slice.py::Pi0_5OptionCVLMSlicePaired.forward`) allocates activations
+  on 1-chip micro-submeshes, which doesn't fit the P2P "tensor on parent
+  mesh, P2P between coords" model. Migrating to parent-mesh activations is
+  the next step.
 """
 
 from __future__ import annotations
+
+from typing import Optional, Tuple
 
 import ttnn
 
@@ -53,6 +70,54 @@ def send_activation_via_host(src_tensor: "ttnn.Tensor", dst_submesh) -> "ttnn.Te
         mesh_mapper=mapper,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
+
+
+# ---------------------------------------------------------------------- #
+# D2D transport (ttnn.point_to_point via ethernet fabric)                  #
+# ---------------------------------------------------------------------- #
+
+
+def send_shard_via_p2p(
+    tensor: "ttnn.Tensor",
+    sender_coord: Tuple[int, int],
+    receiver_coord: Tuple[int, int],
+    output_tensor: Optional["ttnn.Tensor"] = None,
+) -> "ttnn.Tensor":
+    """Transfer one shard of a parent-mesh tensor from `sender_coord` to
+    `receiver_coord` via the ethernet fabric (no host involvement).
+
+    Constraints (verified via tests/test_p2p_smoke.py):
+      - `tensor` must already live on the PARENT MeshDevice (full-mesh
+        allocation, e.g. via ShardTensorToMesh or replicate_tensor_to_mesh_mapper).
+      - `sender_coord` and `receiver_coord` must be on the same row OR same
+        column of the parent mesh — 1D linear topology routing.
+      - Parent must have been opened with
+        `ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)` BEFORE
+        `ttnn.open_mesh_device` (see `mesh_setup.open_galaxy_mesh(enable_fabric=True)`).
+      - Interleaved memory only (sharded p2p not yet supported in ttnn —
+        see deepseek_v3/utils/composite_ops.py:25 TODO).
+
+    Semantics: returns a tensor whose shard at `receiver_coord` holds the
+    bytes that were at `sender_coord` in `tensor`. The sender shard is NOT
+    preserved in the returned tensor — this is a one-shot copy, not a
+    broadcast.
+
+    For the layer-paired prefill chain (activation flows layer i → i+1):
+        out = send_shard_via_p2p(
+            tensor=activation_on_parent,
+            sender_coord=(row_i, col_i),
+            receiver_coord=(row_{i+1}, col_{i+1}),
+        )
+    Then layer i+1's matmul reads the shard at (row_{i+1}, col_{i+1}).
+    """
+    src = ttnn.MeshCoordinate(*sender_coord)
+    dst = ttnn.MeshCoordinate(*receiver_coord)
+    kwargs = {
+        "topology": ttnn.Topology.Linear,
+    }
+    if output_tensor is not None:
+        kwargs["output_tensor"] = output_tensor
+    return ttnn.point_to_point(tensor, src, dst, **kwargs)
 
 
 def send_per_chip_activation_via_host(src_tensor: "ttnn.Tensor", src_chip_idx: int, dst_submesh) -> "ttnn.Tensor":
