@@ -797,13 +797,20 @@ def test_mla_chunked_prefill(request, mesh_device, kwargs, reference, device_par
     DEEPSEEK_MLA_TRACE_DIR), or run with no reference ('func'). Select with e.g.
     -k 'maxedge and trace and 8x4'. See _run_chunked_prefill.
 
-    kimi_k2_6 reuses the same config-driven driver but is only supported for the random-weights,
-    non-trace path: the GPU traces are deepseek-only, and the chunked kimi path is validated against
-    the CPU torch reference with random weights (mirroring test_kimi_mla)."""
-    if variant.name == "kimi_k2_6":
-        if not is_blackhole():
-            pytest.skip("kimi_k2_6 requires Blackhole")
-        if reference == "trace":
-            pytest.skip("kimi_k2_6: GPU traces are deepseek-only (no Kimi traces)")
-        assert not kwargs.get("use_pretrained", False), "kimi_k2_6 chunked-prefill: random weights only"
+    Real weights on the CPU-reference path: point the variant's HF env var (DEEPSEEK_V3_HF_MODEL /
+    KIMI_K2_6_HF_MODEL) at a checkpoint to validate the chunked path against the CPU torch reference
+    with pretrained weights instead of random. create_mla_reference is config-driven and
+    architecture-agnostic (Kimi's YaRN/theta flow through, absorbed-MLA math matches the variant's own
+    reference), so this works for both variants. It complements the deepseek GPU-trace path, which only
+    replays full-chunk iters and so never exercises real weights across the rotation/partial-chunk edge
+    scenarios that the cpu path covers. Without the env var, fall back to random (mirroring
+    test_kimi_mla). kimi_k2_6 has no trace path (traces are deepseek-only) but otherwise runs the same
+    config-driven driver on any arch/mesh."""
+    if variant.name == "kimi_k2_6" and reference == "trace":
+        pytest.skip("kimi_k2_6: GPU traces are deepseek-only (no Kimi traces)")
+    # Opt into real weights on the cpu path when the variant's checkpoint env var is set. The "trace"
+    # path already forces pretrained; "func" is ref-less so weights don't matter. The pretrained
+    # fixture skips the test if the env var is set but the checkpoint is incomplete.
+    if reference == "cpu" and os.environ.get(variant.env_var) and not kwargs.get("use_pretrained"):
+        kwargs = {**kwargs, "use_pretrained": True}
     _run_chunked_prefill(request, mesh_device, reference=reference, **kwargs)
