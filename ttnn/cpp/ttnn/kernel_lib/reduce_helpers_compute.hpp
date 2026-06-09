@@ -8,6 +8,7 @@
 
 #include "api/compute/reduce.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/common_types.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/id_only_helpers.hpp"
 /**
@@ -29,7 +30,10 @@
  * DEST register capacity is automatically detected via dest_helpers.hpp.
  *
  * IMPORTANT: Requires compute kernel hardware initialization.
- * Call compute_kernel_hw_startup() before using.
+ * Call compute_kernel_hw_startup(cb_in, cb_scaler, cb_out) exactly once at the
+ * start of your kernel before using. Do NOT re-call it later (and never inside
+ * a loop) — re-running mid-kernel can race the compute pipeline and produce
+ * undefined behavior.
  *
  * IMPORTANT: The scaler CB must contain the scaling factor tile BEFORE calling reduce().
  * reduce() waits the scaler tile but never pops it, so one pushed tile can serve any number of
@@ -156,6 +160,42 @@ struct ReduceInputBlockShape {
 };
 
 /**
+ * @brief Partial-scaler descriptor for non-tile-aligned reduce dimensions
+ *
+ * When the reduce dimension is not a multiple of TILE_DIM, the reader emits
+ * TWO scaler tiles into scaler_cb: tile 0 has the full scaler (all positions
+ * filled), and tile 1 has the partial scaler (only the valid positions filled,
+ * the rest zeroed). The compute kernel must use tile 1 for the *last* tile
+ * along the reduce dimension and tile 0 for every other tile.
+ *
+ * This struct selects which scaler-tile index to use on the last reduce-dim
+ * iteration. The default (`none()`) keeps the legacy behavior of using tile 0
+ * everywhere. Use `last_tile_at(1)` (or any non-zero idx) to switch to the
+ * partial scaler on the last tile.
+ *
+ * Pair with dataflow_kernel_lib::prepare_partial_reduce_scalers (or
+ * calculate_and_prepare_partial_reduce_scalers) on the reader side.
+ *
+ * REDUCE_SCALAR does not support partial scalers — it applies the scaler
+ * twice (row then col), which a single partial tile cannot encode. The
+ * runtime asserts that REDUCE_SCALAR callers pass none().
+ *
+ * Usage:
+ *   constexpr auto partial = has_partial
+ *       ? ReducePartialScaler::last_tile_at(1)
+ *       : ReducePartialScaler::none();
+ *   reduce<SUM, REDUCE_ROW>(cb_in, cb_scaler, cb_out, shape, ..., partial);
+ */
+struct ReducePartialScaler {
+    // Scaler-tile index to use for the LAST reduce-dim iteration. 0 = no
+    // partial (use tile 0 everywhere); >0 = index of the partial scaler tile.
+    uint32_t last_tile_scaler_idx = 0;
+
+    static constexpr ReducePartialScaler none() { return {0}; }
+    static constexpr ReducePartialScaler last_tile_at(uint32_t idx = 1) { return {idx}; }
+};
+
+/**
  * @brief Configuration for accumulation-style reductions
  *
  * Holds the static configuration for accumulation (accumulator DFB and DST index).
@@ -233,13 +273,7 @@ struct Accumulate {
     constexpr bool is_first() const { return iteration == 0; }
 };
 
-/**
- * @brief Tag type indicating no accumulation (zero overhead)
- *
- * When this type is passed to reduce(), all accumulation code is
- * eliminated at compile-time via `if constexpr`.
- */
-struct NoAccumulation {};
+// NoAccumulation is defined in common_types.hpp (shared with binary_op_helpers).
 
 // =============================================================================
 // Type Traits
@@ -281,15 +315,7 @@ struct is_post_reduce_op<T, std::void_t<decltype(std::declval<T>()(std::declval<
 template <typename T>
 inline constexpr bool is_post_reduce_op_v = is_post_reduce_op<T>::value;
 
-/**
- * @brief Default no-op functor for post operation parameter
- *
- * When no custom post operation is needed, this empty functor is used.
- * It compiles away completely due to inlining.
- */
-struct NoOp {
-    ALWI void operator()(uint32_t = 0) const {}
-};
+// NoOp is defined in common_types.hpp (shared with binary_op_helpers).
 
 // =============================================================================
 // Main Reduce Function
@@ -305,7 +331,9 @@ struct NoOp {
  *
  * IMPORTANT - HARDWARE INITIALIZATION REQUIREMENT:
  * Before calling this function, you MUST initialize the compute kernel hardware by
- * calling compute_kernel_hw_startup() at the start of your kernel.
+ * calling compute_kernel_hw_startup() exactly once at the start of your kernel.
+ * Do NOT re-call it later (and never inside a loop) — re-running mid-kernel can
+ * race the compute pipeline and produce undefined behavior.
  *
  * IMPORTANT - SCALER CB REQUIREMENT:
  * The scaler CB (scaler_cb) must contain the scaling factor tile BEFORE calling
@@ -348,6 +376,11 @@ struct NoOp {
  * is NoWaitNoPop or WaitUpfrontNoPop.
  * @param accumulate Accumulation configuration (default: NoAccumulation)
  * @param post_reduce_op Callback after each reduction (default: NoOp)
+ * @param partial_scaler Partial-scaler selector for non-tile-aligned reduce
+ *        dimensions (default: ReducePartialScaler::none()). When set to
+ *        last_tile_at(idx), the helper waits for `idx + 1` scaler tiles and
+ *        uses scaler tile `idx` for the last reduce-dim iteration. Pair with
+ *        dataflow_kernel_lib::prepare_partial_reduce_scalers on the reader.
  *
  * @example
  *   // Reduce entire HxW grid to single tile (REDUCE_SCALAR)
@@ -438,7 +471,8 @@ ALWI void reduce(
     ReduceInputBlockShape input_block_shape,
     ReduceInputMemoryLayout input_memory_layout = ReduceInputMemoryLayout::contiguous(),
     AccumulateT accumulate = AccumulateT{},
-    PostReduceOp post_reduce_op = PostReduceOp{});
+    PostReduceOp post_reduce_op = PostReduceOp{},
+    ReducePartialScaler partial_scaler = ReducePartialScaler::none());
 
 // The id-only form: builds the DataflowBuffers from the ids and runs the form above. See id_only_helpers.hpp.
 template <
@@ -456,7 +490,8 @@ KERNEL_LIB_ID_ONLY_HELPER ALWI void reduce(
     ReduceInputBlockShape input_block_shape,
     ReduceInputMemoryLayout input_memory_layout = ReduceInputMemoryLayout::contiguous(),
     AccumulateT accumulate = AccumulateT{},
-    PostReduceOp post_reduce_op = PostReduceOp{}) {
+    PostReduceOp post_reduce_op = PostReduceOp{},
+    ReducePartialScaler partial_scaler = ReducePartialScaler::none()) {
     DataflowBuffer input_dfb(input_dfb_id);
     DataflowBuffer scaler_dfb(scaler_dfb_id);
     DataflowBuffer output_dfb(output_dfb_id);
@@ -475,7 +510,14 @@ KERNEL_LIB_ID_ONLY_HELPER ALWI void reduce(
                 fp32_mode,
                 AccumulateT,
                 PostReduceOp>(
-                input_dfb, scaler_dfb, output_dfb, input_block_shape, input_memory_layout, accumulate, post_reduce_op);
+                input_dfb,
+                scaler_dfb,
+                output_dfb,
+                input_block_shape,
+                input_memory_layout,
+                accumulate,
+                post_reduce_op,
+                partial_scaler);
             return;
         }
     }
@@ -490,7 +532,14 @@ KERNEL_LIB_ID_ONLY_HELPER ALWI void reduce(
         fp32_mode,
         AccumulateT,
         PostReduceOp>(
-        input_dfb, scaler_dfb, output_dfb, input_block_shape, input_memory_layout, accumulate, post_reduce_op);
+        input_dfb,
+        scaler_dfb,
+        output_dfb,
+        input_block_shape,
+        input_memory_layout,
+        accumulate,
+        post_reduce_op,
+        partial_scaler);
 }
 
 }  // namespace compute_kernel_lib
