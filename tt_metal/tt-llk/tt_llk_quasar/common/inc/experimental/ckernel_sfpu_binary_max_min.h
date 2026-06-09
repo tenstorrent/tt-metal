@@ -78,7 +78,7 @@ inline void calculate_binary_max_min(const std::uint32_t dst_index_in0, const st
 
     constexpr std::uint32_t SFPMEM_MODE = _binary_max_min_sfpmem_mode_<FMT>();
 
-    // Tile-base offsets relative to the dest counter start set by _llk_math_eltwise_sfpu_params_.
+    // Tile-base offsets relative to the dest counter start set by _llk_math_eltwise_binary_sfpu_params_.
     // Per-row stride comes from ADDR_MOD_6's dest.incr=2 on SFPSTORE, not from these offsets.
     const std::uint32_t offset0 = (dst_index_in0 * 32) << 1;
     const std::uint32_t offset1 = (dst_index_in1 * 32) << 1;

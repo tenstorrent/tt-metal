@@ -145,9 +145,10 @@ inline void _llk_pack_untilize_wrapper_(
         address, pack_dst_format, face_r_dim, tile_dst_rt_offset);
 }
 
-inline void _llk_pack_untilize_uninit_wrapper_([[maybe_unused]] const std::uint32_t pack_src_format, const std::uint32_t face_r_dim = FACE_R_DIM)
+inline void _llk_pack_untilize_uninit_wrapper_(
+    [[maybe_unused]] const std::uint32_t pack_src_format, [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM)
 {
-    _llk_pack_untilize_uninit_(face_r_dim);
+    _llk_pack_untilize_uninit_();
 }
 
 #elif defined(ARCH_BLACKHOLE)
