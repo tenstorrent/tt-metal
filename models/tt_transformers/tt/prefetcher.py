@@ -96,6 +96,42 @@ def make_prefetcher(
     return Prefetcher(mesh_device, num_tensors, num_layers, num_receiver_cores=num_receiver_cores)
 
 
+def to_core_range_set(cores: List, return_list: bool = False) -> Union[ttnn.CoreRangeSet, List[ttnn.CoreRangeSet]]:
+    """Convert cores (CoreCoord/CoreRange/CoreRangeSet, or a list thereof) to CoreRangeSet(s).
+
+    Shared by both prefetcher backends (``Prefetcher`` and ``DramCorePrefetcher``) so the core-type
+    handling has a single definition.
+    """
+    assert cores, "No cores provided"
+
+    def to_ranges(c):
+        if isinstance(c, ttnn.CoreRangeSet):
+            return c.ranges()
+        elif isinstance(c, ttnn.CoreRange):
+            return [c]
+        elif isinstance(c, ttnn.CoreCoord):
+            return [ttnn.CoreRange(c, c)]
+        raise ValueError(f"Unsupported core type: {type(c)}")
+
+    if return_list:
+        return [ttnn.CoreRangeSet(to_ranges(c)) for c in cores]
+    return ttnn.CoreRangeSet([r for c in cores for r in to_ranges(c)])
+
+
+def resolve_verified_model_cfg(model_name: str) -> Optional[dict]:
+    """Return the ``VERIFIED_MODEL_CONFIGS`` entry whose key is a substring of ``model_name``.
+
+    Returns ``None`` off Blackhole (the only architecture the prefetcher paths are verified on) or
+    when no verified model matches. Shared by ``is_prefetcher_supported`` and
+    ``is_dram_core_prefetcher_supported`` so the model lookup + Blackhole gate have one definition.
+    (The per-weight shape math and L1-budget checks intentionally differ between the two backends.)
+    """
+    if not is_blackhole():
+        return None
+    name = next((m for m in VERIFIED_MODEL_CONFIGS if m in model_name), None)
+    return VERIFIED_MODEL_CONFIGS[name] if name is not None else None
+
+
 def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 16) -> bool:
     """
     Check if model can use DRAM prefetcher: CB pages <= 65535, L1 size fits, kv_heads % num_devices == 0.
@@ -106,16 +142,13 @@ def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 
     Returns:
         bool: True if supported on Blackhole with given config, False otherwise
     """
-    verified_model_name = next((m for m in VERIFIED_MODEL_CONFIGS if m in model_name), None)
-    if not is_blackhole() or verified_model_name is None:
+    cfg = resolve_verified_model_cfg(model_name)
+    if cfg is None:
         return False
     TILE_SIZE, MAX_CB_PAGES = 32, 65535
     MAX_L1_PER_BANK = {4: 1000000, 8: 1000000}.get(num_devices, 850000)
-    kv_heads_divisible = VERIFIED_MODEL_CONFIGS[verified_model_name]["n_kv_heads"] % num_devices == 0
-    dim, hidden_dim = (
-        VERIFIED_MODEL_CONFIGS[verified_model_name]["dim"],
-        VERIFIED_MODEL_CONFIGS[verified_model_name]["hidden_dim"],
-    )
+    kv_heads_divisible = cfg["n_kv_heads"] % num_devices == 0
+    dim, hidden_dim = cfg["dim"], cfg["hidden_dim"]
     n_per_device = hidden_dim // num_devices
     n_per_core = math.ceil(n_per_device / ring_size)
     n_per_core_padded = ((n_per_core + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
@@ -371,20 +404,7 @@ class Prefetcher(LightweightModule):
         self, cores: List, return_list: bool = False
     ) -> Union[ttnn.CoreRangeSet, List[ttnn.CoreRangeSet]]:
         """Convert cores (CoreCoord/CoreRange/CoreRangeSet) to CoreRangeSet(s)."""
-        assert cores, "No cores provided"
-
-        def to_ranges(c):
-            if isinstance(c, ttnn.CoreRangeSet):
-                return c.ranges()
-            elif isinstance(c, ttnn.CoreRange):
-                return [c]
-            elif isinstance(c, ttnn.CoreCoord):
-                return [ttnn.CoreRange(c, c)]
-            raise ValueError(f"Unsupported core type: {type(c)}")
-
-        if return_list:
-            return [ttnn.CoreRangeSet(to_ranges(c)) for c in cores]
-        return ttnn.CoreRangeSet([r for c in cores for r in to_ranges(c)])
+        return to_core_range_set(cores, return_list=return_list)
 
     def init(self, mode: Mode = Mode.DECODE) -> None:
         """
@@ -560,6 +580,15 @@ class Prefetcher(LightweightModule):
         stops the long-lived DRISC daemon.)
         """
         return
+
+    def weight_cache_suffix(self) -> str:
+        """Cache-key discriminator for the on-disk weight layout this backend produces.
+
+        The worker-core backend keeps the caller's default (width-sharded) layout, which is the
+        historical cache layout, so the suffix is empty — existing cache files stay valid. The
+        DRAM-core backend overrides this to keep its receiver-contiguous weights in separate files.
+        """
+        return ""
 
     def weight_mem_config(
         self, k: int, n: int, default: ttnn.MemoryConfig, is_galaxy: bool = False
