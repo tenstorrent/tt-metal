@@ -1,0 +1,49 @@
+# Mesh Graph Descriptor for the 2-rank ttml -> tt-transformers weight bridge test.
+#
+# Hardware assumption: T3K (a.k.a. wh loudbox) -- 4x N300 boards wired into a
+# 2x4 wormhole mesh of 8 chips. Each board is one PCIe device with 2 chips
+# (chip 0 reachable over PCIe, chip 1 reachable from chip 0 via the on-board
+# eth link). The full physical eth topology must be described here, otherwise
+# UMD topology discovery finds eth links to ASICs that are not declared in
+# the MGD and ControlPlane::init_control_plane() trips
+# `Fabric node ID not yet assigned for ASIC id ...`.
+#
+# Layout: two [1, 4] line meshes, one per rank, covering all 4 T3K boards.
+#   - Rank 0 owns mesh_id 0 -- boards 0+1 (TT_VISIBLE_DEVICES="0,1"). TTML side.
+#   - Rank 1 owns mesh_id 1 -- boards 2+3 (TT_VISIBLE_DEVICES="2,3"). TTT side.
+#   - The FABRIC graph wires the two halves together so
+#     ttnn.experimental.send_async/recv_async (used by WeightBridge) can route
+#     over the eth links between them (boundary: 2 chip pairs * 2 channels each
+#     = 4 channels).
+#
+# Pairs with device_config.mesh_shape=[1, 4] and enable_ddp=true on the ttml
+# rank, and ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 4)) on the ttt
+# rank. Both submeshes must be the same shape: WeightBridge pairs sender
+# (row, col) -> receiver (row, col) and asserts the manifest's sender shape
+# equals the receiver's mesh shape.
+
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 4 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels {
+    count: 2
+    policy: RELAXED
+  }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 4 }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
