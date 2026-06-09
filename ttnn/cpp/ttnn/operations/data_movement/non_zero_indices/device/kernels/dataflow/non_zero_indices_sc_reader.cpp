@@ -93,15 +93,33 @@ void kernel_main() {
             input_cb.push_back(1);
 
             uint32_t input_l1_addr = input_cb.get_read_ptr();
+// nonzero_mask strips the IEEE sign bit for float dtypes so that -0.0
+// (sign bit set, all others clear) compares equal to zero.  For integer
+// dtypes IS_FLOAT is not defined and the mask is all-ones (no-op).
 #if NUM_BYTES == 4
-            volatile tt_l1_ptr int* input_ptr = reinterpret_cast<volatile tt_l1_ptr int*>(input_l1_addr);
+            volatile tt_l1_ptr uint32_t* input_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(input_l1_addr);
+#ifdef IS_FLOAT
+            constexpr uint32_t nonzero_mask = 0x7FFFFFFFu;
+#else
+            constexpr uint32_t nonzero_mask = 0xFFFFFFFFu;
+#endif
 #elif NUM_BYTES == 2
             volatile tt_l1_ptr uint16_t* input_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(input_l1_addr);
+#ifdef IS_FLOAT
+            constexpr uint16_t nonzero_mask = 0x7FFFu;
+#else
+            constexpr uint16_t nonzero_mask = 0xFFFFu;
+#endif
 #elif NUM_BYTES == 1
-            volatile tt_l1_ptr char* input_ptr = reinterpret_cast<volatile tt_l1_ptr char*>(input_l1_addr);
+            volatile tt_l1_ptr uint8_t* input_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(input_l1_addr);
+#ifdef IS_FLOAT
+            constexpr uint8_t nonzero_mask = 0x7Fu;
+#else
+            constexpr uint8_t nonzero_mask = 0xFFu;
+#endif
 #endif
             for (uint32_t i = 0; i < last_dim; ++i) {
-                if (input_ptr[i] != 0) {
+                if ((input_ptr[i] & nonzero_mask) != 0u) {
                     indices_ptr[num_non_zero * 4 + 0] = b;
                     indices_ptr[num_non_zero * 4 + 1] = n;
                     indices_ptr[num_non_zero * 4 + 2] = h;
@@ -168,12 +186,29 @@ void kernel_main() {
 
                         uint32_t tile_l1_addr = input_cb.get_read_ptr();
 #if NUM_BYTES == 4
-                        volatile tt_l1_ptr int* tile_ptr = reinterpret_cast<volatile tt_l1_ptr int*>(tile_l1_addr);
+                        volatile tt_l1_ptr uint32_t* tile_ptr =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_l1_addr);
+#ifdef IS_FLOAT
+                        constexpr uint32_t nonzero_mask = 0x7FFFFFFFu;
+#else
+                        constexpr uint32_t nonzero_mask = 0xFFFFFFFFu;
+#endif
 #elif NUM_BYTES == 2
                         volatile tt_l1_ptr uint16_t* tile_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(tile_l1_addr);
+#ifdef IS_FLOAT
+                        constexpr uint16_t nonzero_mask = 0x7FFFu;
+#else
+                        constexpr uint16_t nonzero_mask = 0xFFFFu;
+#endif
 #elif NUM_BYTES == 1
-                        volatile tt_l1_ptr char* tile_ptr = reinterpret_cast<volatile tt_l1_ptr char*>(tile_l1_addr);
+                        volatile tt_l1_ptr uint8_t* tile_ptr =
+                            reinterpret_cast<volatile tt_l1_ptr uint8_t*>(tile_l1_addr);
+#ifdef IS_FLOAT
+                        constexpr uint8_t nonzero_mask = 0x7Fu;
+#else
+                        constexpr uint8_t nonzero_mask = 0xFFu;
+#endif
 #endif
                         // Map logical (tile_row, tile_col) → face-layout offset.
                         // face 0=top-left, 1=top-right, 2=bottom-left, 3=bottom-right.
@@ -189,7 +224,7 @@ void kernel_main() {
                             const uint32_t face_col = tile_col & (FACE_W - 1);
                             const uint32_t m = face_idx * FACE_SIZE + face_row * FACE_W + face_col;
 
-                            if (tile_ptr[m] != 0) {
+                            if ((tile_ptr[m] & nonzero_mask) != 0u) {
                                 indices_ptr[num_non_zero * 4 + 0] = b;
                                 indices_ptr[num_non_zero * 4 + 1] = n;
                                 indices_ptr[num_non_zero * 4 + 2] = abs_row;

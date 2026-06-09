@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/data_movement/non_zero_indices/device/non_zero_indices_program_factory.hpp"
 
+#include <ttnn/tensor/types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -150,6 +151,12 @@ ProgramDescriptor NonZeroIndicesProgramFactory::create_descriptor(
     KernelDescriptor::Defines defines = {{"NUM_BYTES", std::to_string(input.element_size())}};
     if (is_tile) {
         defines.push_back({"INPUT_IS_TILE", "1"});
+    }
+    // IS_FLOAT: -0.0 has a non-zero bit pattern (sign bit set, all others clear).
+    // The kernel must mask the sign bit before the != 0 check so that -0.0 is
+    // treated as zero, matching torch.nonzero() semantics.
+    if (is_floating_point(input.dtype())) {
+        defines.push_back({"IS_FLOAT", "1"});
     }
 
     std::vector<uint32_t> compile_time_args = {
