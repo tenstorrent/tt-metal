@@ -118,6 +118,8 @@ def test_h2d_stream_service_replicated_sweep(
     fifo_pages,
     input_path,
 ):
+    if shape_list == [1, 1, 1, 65536] and input_path == "tensor":
+        pytest.skip("Disabled: DMA buffer pin fails for large buffer on blackhole. See #46428")
     shape = ttnn.Shape(shape_list)
     per_row_bytes = shape_list[-1] * _DTYPE_SIZE
     global_spec = _make_global_spec(shape)
