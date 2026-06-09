@@ -1064,7 +1064,6 @@ def test_demo(mesh_device, model_path, prefill_len, request):
                 "page_block_size": sweep_page_block_size,
                 "page_max_num_blocks": (sweep_max_seq_len + sweep_page_block_size - 1) // sweep_page_block_size,
             }
-            prompt_file = f"{_TT_TRANSFORMERS_PROMPTS_DIR}/input_data_long_{pl // 1024}k.json"
             prompt = load_demo_prompt(pl, instruct=True)
             run_generation(
                 mesh_device=mesh_device,
