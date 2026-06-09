@@ -108,8 +108,11 @@ def regenerate_cpp(request):
 
 # Default seed for deterministic stimuli. Override via LLK_TEST_SEED to reproduce
 # a specific run or to sweep different random inputs.
-_DEFAULT_TORCH_SEED = int(os.environ.get("LLK_TEST_SEED", "42"))
-
+_LLK_TEST_SEED = os.environ.get("LLK_TEST_SEED")
+try:
+    _DEFAULT_TORCH_SEED = int(_LLK_TEST_SEED, 0) if _LLK_TEST_SEED is not None else 42
+except ValueError as e:
+    raise pytest.UsageError(f"LLK_TEST_SEED must be an integer, got {_LLK_TEST_SEED!r}") from e
 
 @pytest.fixture(autouse=True)
 def _seed_torch_rng():
