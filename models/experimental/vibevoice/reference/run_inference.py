@@ -27,11 +27,8 @@ for path in (_REFERENCE_DIR, _TT_METAL_ROOT):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from models.experimental.vibevoice.common.config import (  # noqa: E402
-    DEFAULT_TXT_PATH,
-    MODEL_PATH,
-    VOICES_DIR,
-)
+from models.experimental.vibevoice.common.config import DEFAULT_TXT_PATH, VOICES_DIR  # noqa: E402
+from models.experimental.vibevoice.common.model_utils import ensure_model_weights  # noqa: E402
 from vibevoice.modular.modeling_vibevoice_inference import (  # noqa: E402
     VibeVoiceForConditionalGenerationInference,
 )
@@ -126,7 +123,12 @@ def parse_txt_script(txt_content: str) -> Tuple[List[str], List[str]]:
 
 def parse_args():
     parser = argparse.ArgumentParser(description="VibeVoice-1.5B reference TTS from text file")
-    parser.add_argument("--model_path", type=str, default=MODEL_PATH, help="Local model weights directory")
+    parser.add_argument(
+        "--model_path",
+        type=str,
+        default=None,
+        help="Local model weights directory (auto-downloads when omitted)",
+    )
     parser.add_argument("--txt_path", type=str, default=str(DEFAULT_TXT_PATH), help="Script text file")
     parser.add_argument(
         "--speaker_names",
@@ -154,6 +156,12 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    try:
+        args.model_path = str(ensure_model_weights(args.model_path))
+    except Exception as exc:
+        print(f"Error: {exc}")
+        return 1
 
     if args.device.lower() == "mpx":
         print("Note: device 'mpx' detected, treating it as 'mps'.")
