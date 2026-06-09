@@ -2427,6 +2427,25 @@ class Glm4MoeLiteDenseOnlyTT:
             token_ids[b] = int(best_global)
         return token_ids
 
+    def resolve_trace_sampling_tokens(
+        self,
+        result: ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor],
+        *,
+        batch: int = 1,
+    ) -> list[int]:
+        """Resolve global greedy token IDs from a trace-sampling decode() return value."""
+        if isinstance(result, tuple):
+            top1_values_tt, top1_indices_tt = result
+        else:
+            top1_values_tt = None
+            top1_indices_tt = result
+        token_ids = self._resolve_token_ids_from_trace_output(
+            top1_values_tt=top1_values_tt,
+            top1_indices_tt=top1_indices_tt,
+            batch=int(batch),
+        )
+        return [int(token_ids[b].item()) for b in range(int(batch))]
+
     def _mtp_decode_step_tt(self, *, state: _DecodeTraceSamplingState, kv_cache: list[ttnn.Tensor]) -> ttnn.Tensor:
         """MTP decode step using persistent device tensors. Returns MTP logits on device."""
         batch = int(state.batch)

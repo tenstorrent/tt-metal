@@ -249,6 +249,7 @@ def q_projection(
         q = None
 
     # kv_b1: project q_nope into KV latent space
+    # w_kv_b1 stays row-parallel under TP regardless of ATTN_DP.
     use_tp_kv_b1 = cfg.tp_enabled
     if use_tp_kv_b1:
         qk_nope = int(hparams.qk_nope_head_dim)

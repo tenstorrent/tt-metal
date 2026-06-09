@@ -13,11 +13,12 @@ import torch
 import ttnn
 from models.common.rmsnorm import RMSNorm
 from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
+from models.experimental.glm4_moe_lite.tt.runtime_config import _env_bool
 from models.experimental.glm4_moe_lite.tt.weights import LazyStateDict
 
 
 def _env_tp_enabled() -> bool:
-    return os.environ.get("GLM4_MOE_LITE_TP", "").strip() == "1"
+    return _env_bool("GLM4_MOE_LITE_TP")
 
 
 def _env_fuse_qkv_a() -> bool:
@@ -103,7 +104,7 @@ def _env_attn_dp() -> bool:
     This removes the per-projection all_reduce calls for w_q_kv_a, w_q_a,
     w_kv_a, w_q_b, and w_kv_b2. w_o remains row-parallel (still needs all_reduce).
     """
-    return os.environ.get("GLM4_MOE_LITE_ATTN_DP", "").strip() == "1"
+    return _env_bool("GLM4_MOE_LITE_ATTN_DP")
 
 
 def _env_dram_sharded_weights() -> bool:
@@ -816,16 +817,22 @@ def convert_decoder_layer_weights(
     # Optional fused gate+up weight for shared expert MLP (one matmul instead of two).
     w_mlp_gate_up: Optional[ttnn.Tensor] = None
     if os.environ.get("GLM4_MOE_LITE_FUSE_SHARED_GATE_UP", "1").strip() != "0":
-        gate_torch = state[f"{mlp_prefix}gate_proj.weight"]  # [out, in]
-        up_torch = state[f"{mlp_prefix}up_proj.weight"]  # [out, in]
-        gate_up_torch = torch.cat([gate_torch, up_torch], dim=0)  # [2*out, in]
-        w_mlp_gate_up = _linear_weight_tt(
-            device=device,
-            torch_weight_out_in=gate_up_torch,
-            cache_file=c("w_mlp_gate_up", mlp_variant),
-            dtype=mlp_dtype,
-            mesh_mapper=mlp_gate_mapper,
-        )
+        if tp_enabled and tp_size > 1 and mlp_gate_mapper is not None:
+            # Column-TP must shard gate and up independently, then concat per device.
+            # Cat-in-torch then shard splits [gate|up] on the fused output axis and
+            # misaligns gate/up halves on each device (breaks MoE prefill TP PCC).
+            w_mlp_gate_up = ttnn.concat([w_mlp_gate, w_mlp_up], dim=3)
+        else:
+            gate_torch = state[f"{mlp_prefix}gate_proj.weight"]  # [out, in]
+            up_torch = state[f"{mlp_prefix}up_proj.weight"]  # [out, in]
+            gate_up_torch = torch.cat([gate_torch, up_torch], dim=0)  # [2*out, in]
+            w_mlp_gate_up = _linear_weight_tt(
+                device=device,
+                torch_weight_out_in=gate_up_torch,
+                cache_file=c("w_mlp_gate_up", mlp_variant),
+                dtype=mlp_dtype,
+                mesh_mapper=mlp_gate_mapper,
+            )
 
     # ---- Routed MoE (layers >= first_k_dense_replace) ----
     moe: Optional[MoELayerTTWeights] = None

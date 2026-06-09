@@ -25,29 +25,18 @@ from models.experimental.glm4_moe_lite.tt.weights import find_missing_shards, re
 _profiler_read_interval = int(os.environ.get("GLM4_MOE_LITE_PROFILER_READ_INTERVAL", "0").strip() or "0")
 
 
-def _sampling_result_to_token(result, mesh_device) -> int:
-    """Extract token ID from trace-sampling result, handling mesh-distributed tensors."""
-    if isinstance(result, tuple):
-        values_tt, indices_tt = result
-    else:
-        indices_tt = result
-        values_tt = None
+def _debug_decode_tokens_enabled() -> bool:
+    return os.environ.get("GLM4_MOE_LITE_DEBUG_DECODE_TOKENS", "").strip() == "1"
 
-    is_mesh = mesh_device.__class__.__name__ == "MeshDevice"
-    if is_mesh:
-        if values_tt is not None:
-            val_shards = ttnn.get_device_tensors(values_tt)
-            idx_shards = ttnn.get_device_tensors(indices_tt)
-            best_val, best_idx = float("-inf"), 0
-            for v_tt, i_tt in zip(val_shards, idx_shards):
-                v = float(ttnn.to_torch(v_tt.cpu()).flatten()[0].item())
-                if v > best_val:
-                    best_val = v
-                    best_idx = int(ttnn.to_torch(i_tt.cpu()).flatten()[0].item())
-            return best_idx
-        device_tensors = ttnn.get_device_tensors(indices_tt)
-        return int(ttnn.to_torch(device_tensors[0].cpu()).flatten()[0].item())
-    return int(ttnn.to_torch(indices_tt.cpu()).flatten()[0].item())
+
+def _log_token_pick(label: str, token_id: int, *, tok, vocab: int) -> None:
+    if not _debug_decode_tokens_enabled():
+        return
+    snippet = tok.decode([int(token_id)], skip_special_tokens=False) if tok is not None else "?"
+    print(
+        f"[DEBUG] {label}: id={int(token_id)} vocab={vocab} decode={snippet!r}",
+        flush=True,
+    )
 
 
 def _set_default_fabric_config(num_devices: int) -> None:
@@ -416,13 +405,13 @@ def main() -> int:
         # For batch>1, track per-sequence generated tokens; use sequence 0 for display.
         generated: list[list[int]] = [[] for _ in range(batch_size)]
         if use_sampling and (phase == "decode" or use_fake_context):
-            token_in = _sampling_result_to_token(last_sampling_result, mesh_device)
-            tokens_in = [token_in] * batch_size
+            tokens_in = runner.resolve_trace_sampling_tokens(last_sampling_result, batch=batch_size)
         else:
             # logits: [B, 1, vocab] or [B, vocab]
             logits_flat = logits.reshape(batch_size, -1)
             tokens_in = [int(torch.argmax(logits_flat[b]).item()) for b in range(batch_size)]
         for b in range(batch_size):
+            _log_token_pick("prefill_first_token", tokens_in[b], tok=tok, vocab=int(runner.hparams.vocab_size))
             generated[b].append(tokens_in[b])
 
         # Warmup decode: run one decode step to compile/capture trace before timing.
@@ -469,8 +458,9 @@ def main() -> int:
                     enable_trace=True,
                     sampling_params=True,
                 )
-                token_in = _sampling_result_to_token(result, mesh_device)
-                tokens_in = [token_in] * batch_size
+                tokens_in = runner.resolve_trace_sampling_tokens(result, batch=batch_size)
+                if step < 3:
+                    _log_token_pick(f"decode_step_{step}", tokens_in[0], tok=tok, vocab=int(runner.hparams.vocab_size))
             else:
                 logits = runner.decode(
                     tokens=tok_in,
