@@ -20,7 +20,7 @@ inline void calculate_bitwise_xor(const uint value) {
         vInt input = dst_reg[0];
         vInt v = value;
         vInt res = input ^ v;
-        // FIXME: BH doesn;t convert to SMag automatically
+        // FIXME: BH doesn't convert to SMag automatically
         dst_reg[0] = sfpi::convert<vSMag>(res);
         dst_reg++;
     }
