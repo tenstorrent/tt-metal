@@ -287,10 +287,9 @@ bool process_cmd(
     PrefetchExecBufState& exec_buf_state);
 
 #ifdef ARCH_QUASAR
-// Same-core copy: word-by-word L1->L1 memcpy through the L1 uncached alias, used when prefetcher and dispatcher are on
+// Same-core copy: L1->L1 memcpy through the L1 uncached alias, used when prefetcher and dispatcher are on
 // the same core.
-FORCE_INLINE void local_copy_words(uintptr_t dst_addr, uintptr_t src_addr, uint32_t num_bytes, uint32_t dst_end) {
-    ASSERT((num_bytes & 0x3u) == 0);
+FORCE_INLINE void local_copy_bytes(uintptr_t dst_addr, uintptr_t src_addr, uint32_t num_bytes, uint32_t dst_end) {
     ASSERT((src_addr & 0x3u) == 0);
     ASSERT((dst_addr & 0x3u) == 0);
     ASSERT(dst_addr + num_bytes <= dst_end);
@@ -299,6 +298,14 @@ FORCE_INLINE void local_copy_words(uintptr_t dst_addr, uintptr_t src_addr, uint3
     const uint32_t words = num_bytes >> 2;
     for (uint32_t i = 0; i < words; ++i) {
         dst_ptr[i] = src_ptr[i];
+    }
+    const uint32_t tail_bytes = num_bytes & 0x3u;
+    if (tail_bytes != 0) {
+        volatile uint8_t tt_l1_ptr* dst_tail = uncached_l1_ptr<uint8_t>(dst_addr + (words << 2));
+        volatile uint8_t tt_l1_ptr* src_tail = uncached_l1_ptr<uint8_t>(src_addr + (words << 2));
+        for (uint32_t i = 0; i < tail_bytes; ++i) {
+            dst_tail[i] = src_tail[i];
+        }
     }
 }
 #endif
@@ -319,7 +326,7 @@ FORCE_INLINE void write_downstream(
                 get_noc_addr_helper(downstream_noc_encoding, local_downstream_data_ptr),
                 remaining);
 #elif defined(ARCH_QUASAR)
-            local_copy_words(local_downstream_data_ptr, data_ptr, remaining, downstream_end);
+            local_copy_bytes(local_downstream_data_ptr, data_ptr, remaining, downstream_end);
 #else
             cq_noc_async_write_with_state_any_len<true, true, CQNocWait::CQ_NOC_WAIT, downstream_cmd_buf>(
                 static_cast<uint32_t>(data_ptr),
@@ -338,7 +345,7 @@ FORCE_INLINE void write_downstream(
         get_noc_addr_helper(downstream_noc_encoding, local_downstream_data_ptr),
         length);
 #elif defined(ARCH_QUASAR)
-    local_copy_words(local_downstream_data_ptr, data_ptr, length, downstream_end);
+    local_copy_bytes(local_downstream_data_ptr, data_ptr, length, downstream_end);
 #else
     cq_noc_async_write_with_state_any_len<true, true, CQNocWait::CQ_NOC_WAIT, downstream_cmd_buf>(
         static_cast<uint32_t>(data_ptr),
@@ -859,7 +866,7 @@ static uint32_t process_relay_inline_noflush_cmd(uintptr_t cmd_ptr, uint32_t& di
     if (cmddat_wrap_enable && length > remaining) {
         // wrap cmddat
 #if defined(ARCH_QUASAR)
-        local_copy_words(dispatch_data_ptr, data_ptr, remaining, downstream_cb_end);
+        local_copy_bytes(dispatch_data_ptr, data_ptr, remaining, downstream_cb_end);
 #else
         noc_async_write(
             static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
@@ -869,7 +876,7 @@ static uint32_t process_relay_inline_noflush_cmd(uintptr_t cmd_ptr, uint32_t& di
         data_ptr = cmddat_q_base;
     }
 #if defined(ARCH_QUASAR)
-    local_copy_words(dispatch_data_ptr, data_ptr, length, downstream_cb_end);
+    local_copy_bytes(dispatch_data_ptr, data_ptr, length, downstream_cb_end);
 #else
     noc_async_write(static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), length);
 #endif
@@ -904,7 +911,7 @@ static uint32_t write_pages_to_dispatcher(
 #if defined(FABRIC_RELAY)
         noc_async_write(scratch_write_addr, noc_addr, last_chunk_size);
 #elif defined(ARCH_QUASAR)
-        local_copy_words(downstream_data_ptr, scratch_write_addr, last_chunk_size, downstream_cb_end);
+        local_copy_bytes(downstream_data_ptr, scratch_write_addr, last_chunk_size, downstream_cb_end);
 #else
         cq_noc_async_write_with_state_any_len<true, true>(scratch_write_addr, noc_addr, last_chunk_size);
 #endif
@@ -919,7 +926,7 @@ static uint32_t write_pages_to_dispatcher(
 #if defined(FABRIC_RELAY)
     noc_async_write(scratch_write_addr, noc_addr, amt_to_write);
 #elif defined(ARCH_QUASAR)
-    local_copy_words(downstream_data_ptr, scratch_write_addr, amt_to_write, downstream_cb_end);
+    local_copy_bytes(downstream_data_ptr, scratch_write_addr, amt_to_write, downstream_cb_end);
 #else
     cq_noc_async_write_with_state_any_len<true, true>(scratch_write_addr, noc_addr, amt_to_write);
 #endif
@@ -1617,7 +1624,7 @@ static uint32_t process_exec_buf_relay_inline_noflush_cmd(
         noc_async_write(
             static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
 #elif defined(ARCH_QUASAR)
-        local_copy_words(dispatch_data_ptr, data_ptr, remaining, downstream_cb_end);
+        local_copy_bytes(dispatch_data_ptr, data_ptr, remaining, downstream_cb_end);
 #else
         cq_noc_async_write_with_state_any_len<true, true>(
             static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
@@ -1639,7 +1646,7 @@ static uint32_t process_exec_buf_relay_inline_noflush_cmd(
 #if defined(FABRIC_RELAY)
     noc_async_write(static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), length);
 #elif defined(ARCH_QUASAR)
-    local_copy_words(dispatch_data_ptr, data_ptr, length, downstream_cb_end);
+    local_copy_bytes(dispatch_data_ptr, data_ptr, length, downstream_cb_end);
 #else
     cq_noc_async_write_with_state_any_len<true, true>(
         static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), length);
