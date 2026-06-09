@@ -512,7 +512,7 @@ def _run_chunked_prefill(
       * "cpu"   -> synthetic inputs + torch MLA reference (k_pe in Meta basis). Partial-chunk iters
                    (rotation) allowed; any prefix is preloaded from the CPU reference KV.
       * "trace" -> GPU-trace inputs + reference (k_pe in HF basis, re-interleaved to compare). TRACE
-                   ONLY: requires DEEPSEEK_MLA_TRACE_DIR (skips if unset) and full-chunk iters.
+                   ONLY: requires DEEPSEEK_MLA_TRACE_DIR (skips if unset); supports partial iters.
       * None    -> no reference (functional/perf): random inputs + random prefix, finite-output check.
     Multi-user partitions iters_isl across users (last gets the remainder); each user is independent in
     its own cache slot, so cross-user contamination surfaces as a per-user output PCC drop.

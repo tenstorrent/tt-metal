@@ -20,11 +20,12 @@ from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_refe
 
 
 def discover_traces(root, num_users):
-    """Immediate subdirs of `root`, one per user (cycled if fewer than num_users). Assert mla_io/."""
+    """Immediate subdirs of `root`, one per user (cycled if fewer than num_users). Assert mla_io/ + kv_cache/."""
     dirs = sorted(d for d in Path(root).iterdir() if d.is_dir())
     assert dirs, f"no trace subdirs under {root}"
     for d in dirs:
         assert (d / "mla_io").is_dir(), f"trace dir {d} is missing mla_io/"
+        assert (d / "kv_cache").is_dir(), f"trace dir {d} is missing kv_cache/"
     return [dirs[u % len(dirs)] for u in range(num_users)]
 
 
