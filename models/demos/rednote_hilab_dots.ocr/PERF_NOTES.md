@@ -205,3 +205,25 @@ SwiGLU chain.
    prefill) to get a clean per-op top-10, then attack the hottest matmul.
 3. **fp32 score sensitivity:** the attention QK^T is kept fp32 for the wide K
    dynamic range; revisit whether bf8 KV-cache storage holds PCC at long N.
+
+## Sub-pass 3: bf8 dense-MLP weights (gate_up + down)
+
+Tracy showed decode is device-compute-bound (~15.7 ms/tok) and matmul-dominated,
+with the two dense SwiGLU MLP matmuls (`gate_up` 1536→17920, `down` 8960→1536)
+the largest contributors. At decode seq=1 both are skinny matmuls whose cost is
+dominated by the **DRAM weight read** (gate_up ~27.5M params, down ~13.8M params).
+Storing both weight tensors as **bfloat8_b** (was bf16) halves that read. Mirrors
+the proven `lm_head` bf8-weight win. Activations + HiFi4 fp32_dest_acc compute
+unchanged; both matmuls converted.
+
+| metric | bf16 weights | bf8 weights | delta |
+| --- | --- | --- | --- |
+| MLP block PCC (`test_tt_mlp.py`) | — | **0.99979** | > 0.99 gate held |
+| decode traced ms/tok (32 tok, 3 iters) | 19.50 | **17.63** | **−1.87 ms (−9.6%)** |
+| DecodeGraph signpost ms/tok | 19.36 | **17.43** | −1.93 ms (−10.0%) |
+| OCR text (16/32 tok vs HF) | exact | **exact** | `**TABLE II** – ODDS RATIO OF HODGKIN LYMPHOMA…` |
+
+**Honest read:** the realized win is **~1.9 ms/tok**, smaller than the ~3 ms
+hypothesis (the matmuls aren't purely DRAM-read-bound at this config), but it is
+a consistent, correctness-neutral −10% of the decode step. Both MLP matmuls were
+converted (PCC headroom ample at 0.99979, so no need to fall back to one).

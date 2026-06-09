@@ -34,7 +34,13 @@ class TtMLP(LightweightModule):
         gate_weight: torch.Tensor [intermediate, dim] (gate proj, no bias).
         up_weight: torch.Tensor [intermediate, dim] (up proj, no bias).
         down_weight: torch.Tensor [dim, intermediate] (down proj, no bias).
-        dtype: activation/weight dtype (bf16).
+        dtype: legacy activation dtype hint (bf16); retained for API compat.
+        weight_dtype: storage dtype for the gate_up + down weight tensors.
+            Defaults to bfloat8_b: at decode (seq=1) both MLP matmuls are
+            DRAM-bandwidth-bound on the weight read (gate_up ~27.5M params,
+            down ~13.8M params), so halving the weight bytes to bf8 removes the
+            dominant read cost — the same win proven on lm_head (-36%, PCC
+            0.99997). Activations + HiFi4 fp32_dest_acc compute stay unchanged.
     """
 
     def __init__(
@@ -44,6 +50,7 @@ class TtMLP(LightweightModule):
         up_weight,
         down_weight,
         dtype=ttnn.bfloat16,
+        weight_dtype=ttnn.bfloat8_b,
         weight_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     ):
         super().__init__()
@@ -64,7 +71,7 @@ class TtMLP(LightweightModule):
         self.gate_up_weight = ttnn.as_tensor(
             gate_up,
             device=device,
-            dtype=dtype,
+            dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=weight_memory_config,
             mesh_mapper=mesh_mapper,
@@ -73,7 +80,7 @@ class TtMLP(LightweightModule):
         self.down_weight = ttnn.as_tensor(
             down_weight.transpose(0, 1).contiguous(),  # [intermediate, dim]
             device=device,
-            dtype=dtype,
+            dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=weight_memory_config,
             mesh_mapper=mesh_mapper,
