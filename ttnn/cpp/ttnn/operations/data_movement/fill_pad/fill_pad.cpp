@@ -13,10 +13,7 @@
 namespace ttnn {
 
 Tensor fill_implicit_tile_padding(
-    const Tensor& input_tensor,
-    float fill_value,
-    const std::optional<MemoryConfig>& memory_config,
-    bool fill_value_is_packed_bits) {
+    const Tensor& input_tensor, tt::tt_metal::PadValue fill_value, const std::optional<MemoryConfig>& memory_config) {
     // if padded shape == logical shape for last 2 dims no padding should be present, and no fill pad is necessary
     uint32_t padded_height =
         tt::div_up(input_tensor.logical_shape()[-2], tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;
@@ -53,8 +50,7 @@ Tensor fill_implicit_tile_padding(
             /*sub_core_grid=*/std::nullopt,
             /*skip_padding_fill=*/true);
 
-        reshaped_tensor =
-            ttnn::prim::fill_pad(reshaped_tensor, fill_value, output_memory_config, fill_value_is_packed_bits);
+        reshaped_tensor = ttnn::prim::fill_pad(reshaped_tensor, fill_value, output_memory_config);
         output_tensor = ttnn::reshape(
             reshaped_tensor,
             original_shape,
@@ -64,8 +60,7 @@ Tensor fill_implicit_tile_padding(
             /*sub_core_grid=*/std::nullopt,
             /*skip_padding_fill=*/true);
     } else {
-        output_tensor =
-            ttnn::prim::fill_pad(mutable_input_tensor, fill_value, output_memory_config, fill_value_is_packed_bits);
+        output_tensor = ttnn::prim::fill_pad(mutable_input_tensor, fill_value, output_memory_config);
     }
     // BFLOAT8_B was typecast to BFLOAT16 above for fill_pad; restore the original dtype on every return path,
     // including the rank>3 branch (previously the cast-back only fired on the rank<=3 path, leaking BFLOAT16

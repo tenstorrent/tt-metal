@@ -28,7 +28,7 @@ tt::tt_metal::ProgramDescriptor FillPadProgramFactory::create_descriptor(
         "FillPadProgramFactory: unsupported dtype {}",
         input_tensor.dtype());
 
-    const float fill_value = operation_attributes.fill_value;
+    const tt::tt_metal::PadValue& fill_value = operation_attributes.fill_value;
     tt::tt_metal::IDevice* device = input_tensor.device();
     ProgramDescriptor desc;
 
@@ -63,8 +63,7 @@ tt::tt_metal::ProgramDescriptor FillPadProgramFactory::create_descriptor(
     const bool need_fp32_dest_acc = is_fp32 || is_uint32 || is_int32;
     // Float types: raw bit pattern of fill_value for fill_tile_bitcast.
     // Integer types: packed native bit pattern for fill_tile_int.
-    const uint32_t fill_bits = detail::pack_fill_value_for_dtype(
-        input_tensor.dtype(), fill_value, operation_attributes.fill_value_is_packed_bits);
+    const uint32_t fill_bits = detail::pack_fill_value_for_dtype(input_tensor.dtype(), fill_value);
 
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -319,7 +318,7 @@ tt::tt_metal::ProgramDescriptor FillPadL1ShardedProgramFactory::create_descripto
         "FillPadL1ShardedProgramFactory: unsupported dtype {}",
         input_tensor.dtype());
 
-    const float fill_value = operation_attributes.fill_value;
+    const tt::tt_metal::PadValue& fill_value = operation_attributes.fill_value;
 
     ProgramDescriptor desc;
 
@@ -463,8 +462,7 @@ tt::tt_metal::ProgramDescriptor FillPadL1ShardedProgramFactory::create_descripto
     const bool is_uint32 = (input_tensor.dtype() == DataType::UINT32);
     const bool is_int32 = (input_tensor.dtype() == DataType::INT32);
     const bool need_fp32_dest_acc = is_fp32 || is_uint32 || is_int32;
-    const uint32_t fill_bits = detail::pack_fill_value_for_dtype(
-        input_tensor.dtype(), fill_value, operation_attributes.fill_value_is_packed_bits);
+    const uint32_t fill_bits = detail::pack_fill_value_for_dtype(input_tensor.dtype(), fill_value);
 
     // ---- CB indices ----
     constexpr uint32_t cb_data_in_idx = tt::CBIndex::c_0;

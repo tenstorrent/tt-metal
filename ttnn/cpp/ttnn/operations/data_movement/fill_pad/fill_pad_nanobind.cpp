@@ -8,6 +8,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>
 
 #include "fill_pad.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
@@ -22,13 +23,12 @@ void bind_fill_pad_op(nb::module_& mod) {
 
         Args:
             input_tensor (ttnn.Tensor): Any input tensor with desired device and data types for output tensor.
-            fill_value (float): Value to fill the tensor padding with.
+            fill_value (int or float): Value to fill the tensor padding with. An int is interpreted as the raw
+                integer bit pattern (e.g. for int32 values that are not exactly float-representable); a float is
+                decoded numerically.
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            fill_value_is_packed_bits (bool, optional): For INT32 tensors only, interpret fill_value as the raw
-                int32 bit pattern (via reinterpret) instead of decoding it numerically. Used to carry int32 fill
-                values that are not exactly float-representable. Defaults to `False` (numeric decode).
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -41,8 +41,7 @@ void bind_fill_pad_op(nb::module_& mod) {
         nb::arg("input_tensor"),
         nb::arg("fill_value"),
         nb::kw_only(),
-        nb::arg("memory_config") = nb::none(),
-        nb::arg("fill_value_is_packed_bits") = false);
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace

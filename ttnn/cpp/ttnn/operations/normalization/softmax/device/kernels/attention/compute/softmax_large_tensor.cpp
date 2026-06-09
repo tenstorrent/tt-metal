@@ -276,9 +276,6 @@ void reduce_cb(bool use_prev_reduce, uint32_t cb_length_t) {
         });
 }
 
-// Compile-time replacement for the old runtime std::swap(cb_ping_a, cb_ping_b) ping-pong: on even
-// passes write cb_ping_a (read prev from cb_ping_b), on odd passes swap the roles. CB ids must be
-// compile-time for reduce<>, so the swap is resolved here by pass parity instead of at runtime.
 template <PoolType reduce_type, uint32_t cb_in_id, uint32_t cb_scaler_id, uint32_t cb_ping_a, uint32_t cb_ping_b>
 ALWI void reduce_cb_pass(uint32_t cur_pass, bool use_prev_reduce, uint32_t cb_length_t) {
     if ((cur_pass & 1) == 0) {

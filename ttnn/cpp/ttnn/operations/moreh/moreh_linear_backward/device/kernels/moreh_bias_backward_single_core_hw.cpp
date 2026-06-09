@@ -87,10 +87,6 @@ void kernel_main() {
                     cb_in0_obj.pop_front(onetile);
                 }
 
-                // CB ids are now reduce<> template params, but both the input CB (cb_in0 vs
-                // cb_intermed0, set by do_mask) and the output CB (cb_out0 vs cb_intermed1, set by
-                // last_out) are chosen at runtime, so the selection is hoisted into compile-time
-                // instantiations. The runtime args are identical across branches.
                 const auto reduce_block = compute_kernel_lib::ReduceInputBlockShape::single();
                 const auto reduce_layout = compute_kernel_lib::ReduceInputMemoryLayout::contiguous();
                 const auto reduce_accum = compute_kernel_lib::Accumulate::at(cb_intermed1, num_tile_done);

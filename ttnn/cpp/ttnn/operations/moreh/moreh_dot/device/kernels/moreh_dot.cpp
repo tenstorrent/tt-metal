@@ -44,8 +44,6 @@ void kernel_main() {
         REL();
 
         // reduce-w
-        // Output CB depends on whether this is the last block; CB ids are now template params, so
-        // the runtime branch is hoisted into two compile-time instantiations.
         if (last_out) {
             compute_kernel_lib::reduce<
                 REDUCE_OP,

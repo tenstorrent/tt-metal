@@ -234,11 +234,6 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
         reduce_defines["REDUCE_POST_MUL"] = "1";
     }
 
-    if (use_sfpu_reduce_path) {
-        reduce_defines["REDUCE_FORMAT"] = a.dtype() == DataType::INT32 ? "DataFormat::Int32" : "DataFormat::Float32";
-        reduce_defines["REDUCE_SFPU_PATH"] = "1";
-    }
-
     // Float32 SFPU reduce must unpack source tiles straight into the fp32 DST register.
     // Without this, the unpacker rounds Float32 -> Tf32/bf16 before SFPU sees the data,
     // silently destroying mantissa precision.
@@ -291,7 +286,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
         };
     }
 
-    // reduce.cpp is REDUCE_FORMAT-aware; MIN uses -MAX(-x) in reduce_w_neg.
+    // MIN on Int32/Float32 uses -MAX(-x) in reduce_w_neg.
     const std::string compute_kernel =
         rm_path ? std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_rm.cpp")
                 : std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce") +

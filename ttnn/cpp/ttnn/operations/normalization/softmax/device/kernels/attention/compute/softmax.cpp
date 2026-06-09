@@ -19,7 +19,6 @@
 // The buffer for the att mask is currently sized as (1t,Wt) so we only reuse it for one HtWt-sized batch of x
 // then read another Wt tiles of mask for the next batch
 
-// CB ids are template params because compute_kernel_lib::reduce<> now takes them as template args.
 template <uint32_t cb_in, uint32_t cb_max_scaler, uint32_t cb_max, uint32_t cb_out>
 void calc_numeric_stable(uint32_t Wt, uint32_t ndst) {
     auto cb_in_obj = CircularBuffer(cb_in);

@@ -14,6 +14,7 @@
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 #include "llk_math_eltwise_binary.h"
@@ -38,7 +39,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[cb_input]);
 
-    if constexpr (compute_kernel_lib::detail::is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, reduce_format>()) {
+    if constexpr (is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, reduce_format>()) {
         constexpr uint32_t acc_dst = 0;
         constexpr uint32_t work_dst = 1;
 
