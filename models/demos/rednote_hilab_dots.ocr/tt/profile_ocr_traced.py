@@ -163,6 +163,12 @@ def main():
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        # Warmup device patch-embed kernels (JIT compiles ttnn.linear + ttnn.rms_norm
+        # once here, untimed, so the timed zone below measures only warm device time).
+        _pe_warmup = model.vision_tower.device_patch_embed(pixel_values)
+        ttnn.synchronize_device(device)
+        ttnn.deallocate(_pe_warmup)
+
         # Time device patch-embed: runs the matmul+RMSNorm on device, copies
         # result into the persistent vision_in buffer the trace will consume.
         with zone("TTNNDotsVisionPatchEmbed"):
