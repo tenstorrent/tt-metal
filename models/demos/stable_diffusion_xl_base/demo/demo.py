@@ -311,6 +311,9 @@ def test_demo(
     if image_resolution == (512, 512) and is_blackhole():
         pytest.skip("512x512 not supported on Blackhole")
 
+    if encoders_on_device and capture_trace and not use_cfg_parallel and is_blackhole():
+        pytest.skip("Disabled on blackhole: see #46426")
+
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
         mesh_device,
