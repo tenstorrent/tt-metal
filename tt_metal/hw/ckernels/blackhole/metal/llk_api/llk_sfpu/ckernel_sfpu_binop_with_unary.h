@@ -8,8 +8,9 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "sfpu/ckernel_sfpu_converter.h"
+#include "sfpu/ckernel_sfpu_converter.h"  // Converter::as_float
 #include "sfpi.h"
+#include "ckernel_sfpu_conversions.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
 
 namespace ckernel::sfpu {
@@ -41,6 +42,12 @@ void calculate_binop_with_scalar(uint32_t param) {
             result = val * parameter;
         } else if constexpr (BINOP_MODE == RSUB) {
             result = parameter - val;
+        }
+
+        // bf16 dest stores truncate fp32->bf16 by default, but torch computes
+        // rsub result in bf16 with IEEE round-to-nearest-even
+        if constexpr (BINOP_MODE == RSUB && !DST_ACCUM_MODE) {
+            result = float32_to_bf16_rne(result);
         }
 
         sfpi::dst_reg[0] = result;

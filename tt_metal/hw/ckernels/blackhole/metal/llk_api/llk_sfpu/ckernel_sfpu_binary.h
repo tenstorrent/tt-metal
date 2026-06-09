@@ -10,6 +10,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
+#include "ckernel_sfpu_conversions.h"
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_log.h"
@@ -18,30 +19,6 @@ using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
-
-// Convert float32 to bfloat16 using IEEE 754 Round-to-Nearest-Even (RNE)
-// This implements the "add 0x7fff + LSB" algorithm for correct tie-breaking
-sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
-    // Get the float32 bits as unsigned integer
-    sfpi::vUInt bits = sfpi::reinterpret<sfpi::vUInt>(in);
-
-    // Extract the LSB of what will become the bf16 mantissa (bit 16 of float32)
-    // This is needed for the tie-breaker: round to even
-    sfpi::vUInt lsb = (bits >> 16) & 1;
-
-    // Add 0x7fff + lsb to implement RNE:
-    // - If lower 16 bits > 0x8000: overflow → rounds up
-    // - If lower 16 bits < 0x8000: no overflow → rounds down
-    // - If lower 16 bits = 0x8000 (tie) and lsb=0: 0x7fff+0=0xffff, no overflow → stays even
-    // - If lower 16 bits = 0x8000 (tie) and lsb=1: 0x7fff+1=0x8000, overflow → rounds up to even
-    bits = bits + 0x7fffU + lsb;
-
-    // Clear the lower 16 bits to get bf16 in upper 16 bits (bf16 format in float32)
-    bits = bits & 0xFFFF0000U;
-
-    // Reinterpret back as float
-    return sfpi::reinterpret<sfpi::vFloat>(bits);
-}
 
 sfpi_inline sfpi::vFloat calculate_sfpu_binary_power(sfpi::vFloat base, sfpi::vFloat pow) {
     sfpi::vFloat original_base = base;
