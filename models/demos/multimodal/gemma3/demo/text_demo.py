@@ -926,7 +926,7 @@ def test_demo_text(
     elif len(input_prompts) == 1:  # Manual input
         input_prompts = input_prompts * global_batch_size
     else:  # Inputs from file
-        input_prompts = load_inputs(input_prompts, global_batch_size, input_prompts)
+        input_prompts = load_inputs(input_prompts, global_batch_size, instruct)
     profiler.end("loading_inputs")
     # To simulate a deployment environment, the demo supports repeating batched prompts.
     # This loop will rotate the prompts between the users for each batch, to simulate users sending different requests
