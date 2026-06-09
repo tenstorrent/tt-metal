@@ -190,5 +190,10 @@ class WanDistillPipelineI2V(WanPipelineI2V):
             is_fsdp=is_fsdp,
             boundary_ratio=cls.DISTILL_BOUNDARY_RATIO,
             model_type="i2v",
+            # CFG is baked into the distill (guidance_scale=1.0), so the uncond
+            # forward is wasted work that lerp() discards. Disabling CFG makes
+            # combined_step skip it, halving the per-step forwards (output is
+            # identical since lerp(uncond, cond, 1.0) == cond).
+            cfg_enabled=False,
         )
         return cls(device=mesh_device, config=config)
