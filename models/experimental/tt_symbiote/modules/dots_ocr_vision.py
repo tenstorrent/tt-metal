@@ -2645,6 +2645,15 @@ class TTNNDotsPatchMerger(TTNNModule):
         self.compute_kernel_config = _vision_matmul_compute_config(
             self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
         )
+        grid = self.device.compute_with_storage_grid_size()
+        if int(grid.x) == 11 and int(grid.y) == 10:
+            from models.experimental.tt_symbiote.modules.vision_tp4_bh import (
+                bh_tp4_merger_fc1_pc,
+                bh_tp4_merger_fc2_pc,
+            )
+
+            self._bh_tp4_merger_fc1_pc = bh_tp4_merger_fc1_pc(self.device)
+            self._bh_tp4_merger_fc2_pc = bh_tp4_merger_fc2_pc(self.device)
 
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         if hidden_states.layout != ttnn.TILE_LAYOUT:
@@ -2722,30 +2731,52 @@ class TTNNDotsPatchMerger(TTNNModule):
             )
             return hidden_states
 
-        # Generic DRAM-interleaved fallback (e.g. Blackhole 11x10 grid).
+        # BH 11×10 fallback: swept fc1 PC + L1 activations; fc2 uses auto-config.
+        from models.experimental.tt_symbiote.modules.vision_tp4_bh import (
+            bh_tp4_merger_fc1_pc,
+        )
+
+        l1 = ttnn.L1_MEMORY_CONFIG
+        grid = self.device.compute_with_storage_grid_size()
+        on_bh = int(grid.x) == 11 and int(grid.y) == 10
         fc1_n = int(self.tt_w1.shape[-1])
-        fc1_pc = _vision_matmul_program_config(self.device, new_r, int(self.mlp_size), fc1_n)
+        fc1_pc = (
+            getattr(self, "_bh_tp4_merger_fc1_pc", None) or bh_tp4_merger_fc1_pc(self.device)
+            if on_bh
+            else _vision_matmul_program_config(self.device, new_r, int(self.mlp_size), fc1_n)
+        )
+        fc1_mem = l1 if on_bh and fc1_pc is not None else ttnn.DRAM_MEMORY_CONFIG
+        if fc1_mem == l1:
+            hidden_states = ttnn.to_memory_config(hidden_states, l1)
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_w1,
             bias=self.tt_w1_bias,
             dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=fc1_mem,
             program_config=fc1_pc,
             compute_kernel_config=compute_kc,
         )
-        hidden_states = ttnn.gelu(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        hidden_states = ttnn.gelu(hidden_states, memory_config=fc1_mem)
         fc2_k = int(self.tt_w2.shape[-2])
         fc2_n = int(self.tt_w2.shape[-1])
-        fc2_pc = _vision_matmul_program_config(self.device, new_r, fc2_k, fc2_n)
+        fc2_pc = (
+            getattr(self, "_bh_tp4_merger_fc2_pc", None)
+            if on_bh
+            else _vision_matmul_program_config(self.device, new_r, fc2_k, fc2_n)
+        )
+        fc2_kwargs = dict(
+            dtype=ttnn.bfloat8_b,
+            memory_config=l1,
+            compute_kernel_config=compute_kc,
+        )
+        if fc2_pc is not None:
+            fc2_kwargs["program_config"] = fc2_pc
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_w2,
             bias=self.tt_w2_bias,
-            dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            program_config=fc2_pc,
-            compute_kernel_config=compute_kc,
+            **fc2_kwargs,
         )
 
         return hidden_states

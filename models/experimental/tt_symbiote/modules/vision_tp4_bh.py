@@ -460,10 +460,9 @@ def bh_tp4_patch_embed_pc(device):
 def bh_tp4_merger_fc2_pc(device):
     """Patch-merger fc2 ``2816×6144×384`` (col-sharded out) on BH P150 11×10.
 
-    Microbench with BFP8 L1 in0/out and LoFi: auto-config ~140 μs beats
-    every ``bh_tp4_matmul_pc`` candidate (~900 μs).  Return ``None`` so the
-    forward path keeps auto-config.  (``perf_tp1vt.txt``'s ~1383 μs was HiFi4
-    without an explicit PC in an older trace.)
+    Silicon sweep 2026-06-09: auto-config ~194 μs beats every 2D-mcast candidate
+    (best search ~231 μs at g11x2 ibw=8 sub=4x2).  Return ``None`` so forward
+    keeps auto (in0_block_w=2, subblock 1x6 on Tracy).
     """
     _ = device
     return None
