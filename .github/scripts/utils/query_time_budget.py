@@ -19,14 +19,11 @@ Key conventions
 * Owner is the entry's `team:` field, not the file name. One file may hold
   several teams' entries, so all files of a test type are scanned and filtered.
 * A file's "test type" is the workflow_name passed to verify_time_budget.py by
-  the workflow that runs it -- NOT the file name. It is read live from
-  .github/workflows, because names can differ: release_tests.yaml and
-  galaxy_deepseek_prefill_tests.yaml both map to `demo`, and
-  demo_sp_multihost_tests.yaml maps to `e2e`.
+  the workflow that runs it.
 * The models unit/e2e/sweep budgets are tier-split: the plain key covers the
   non-tiered pipelines, while unit_tier<n>/e2e_tier<n>/sweep_tier<n> cover
   models_<testtype>_tests.yaml. Pass --tier to target a tiered budget.
-* Cron frequency is parsed live from .github/workflows by following the test
+* Cron frequency is parsed from .github/workflows by following the test
   file -> running workflow -> scheduled caller(s). Only cron schedules count;
   manual workflow_dispatch runs are excluded from the estimate.
 
@@ -49,6 +46,20 @@ Example
     Est. machine-hours/week: 11.0 h  (47 min x 14 runs/wk / 60)
     Note: estimate uses cron schedules only; manual workflow_dispatch runs are NOT counted.
     [OK] Within budget (7 min headroom).
+
+
+  $ query_time_budget.py --team runtime --testtype unit --machine wh_n150_civ2
+  Team 'runtime' / test type 'unit' / machine 'wh_n150_civ2'
+    Files scanned: 5
+    Tests matched: 20
+    Allocated:     222 min
+    Budget:        222 min
+    Scheduled pipelines (cron):
+          7 runs/wk  code-coverage.yaml
+          7 runs/wk  runtime-unit-tests.yaml
+    Est. machine-hours/week: 51.8 h  (222 min x 14 runs/wk / 60)
+    Note: estimate uses cron schedules only; manual workflow_dispatch runs are NOT counted.
+    [OK] Within budget (0 min headroom).
 """
 
 import argparse
