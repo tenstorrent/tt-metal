@@ -1121,6 +1121,38 @@ class TTNNDotsVisionMLP(TTNNModule):
         self.tt_fc2_weight = _shard_w(self._fc2_weight, row_mapper)
         self.tt_fc2_bias = _repl_b(self._fc2_bias)
 
+        from models.experimental.tt_symbiote.modules.vision_tp4_bh import bh_tp4_mlp_down_pc
+
+        num_tp = self._mlp_tp_num_devices()
+        itp = int(self._fc1_weight.shape[0]) // num_tp
+        self._tp_down_pc = bh_tp4_mlp_down_pc(self.device, itp=itp)
+        self._tp_down_k = itp
+
+    def _tp_mlp_down_program_config(self, m_dim: int, k_dim: int, n_dim: int):
+        """Program config for TP row-parallel down matmul (``M×I/TP×H``).
+
+        ``_vision_matmul_program_config`` returns ``None`` on BH 11×10 for
+        M=11264 (352 m-tiles does not divide grid_y=10), which leaves the
+        auto-config path at ~3.6 ms / 6% TFLOPs.  Prefer the hardware-swept
+        BH TP4 config (``bh_tp4_mlp_down_pc``) with BFP8 output.
+        """
+        cached = getattr(self, "_tp_down_pc", None)
+        if cached is not None and m_dim == 11264 and k_dim == int(getattr(self, "_tp_down_k", k_dim)):
+            return cached
+        from models.experimental.tt_symbiote.modules.vision_tp4_bh import bh_tp4_mlp_down_pc, bh_tp4_matmul_pc
+
+        pc = bh_tp4_mlp_down_pc(self.device, seq_len=m_dim, itp=k_dim)
+        if pc is not None:
+            return pc
+        return bh_tp4_matmul_pc(
+            self.device,
+            m_dim,
+            k_dim,
+            n_dim,
+            in0_dtype=ttnn.bfloat8_b,
+            out_dtype=ttnn.bfloat8_b,
+        ) or _vision_matmul_program_config(self.device, m_dim, k_dim, n_dim)
+
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -1281,19 +1313,20 @@ class TTNNDotsVisionMLP(TTNNModule):
         ttnn.deallocate(up)
 
         # Row-parallel down-projection: each device contracts its intermediate shard
-        # into a full-width partial sum. The hand-tuned ``_vision_mlp_down_l1_pc`` is
-        # pinned to the unsharded K=intermediate shape, so derive the config from the
-        # sharded shapes instead. Output stays DRAM-interleaved for the reduce_scatter.
+        # into a full-width partial sum.  BFP8 L1 out + explicit 2D-mcast PC
+        # (``bh_tp4_mlp_down_pc``) avoids the auto-config HiFi4 BF16 slow path.
+        l1 = ttnn.L1_MEMORY_CONFIG
         down_m = int(gate_up_mul.shape[0]) * int(gate_up_mul.shape[1]) * int(gate_up_mul.shape[2])
         down_k = int(self.tt_fc2_weight.shape[-2])  # intermediate / num_tp (contraction shard)
         down_n = int(self.tt_fc2_weight.shape[-1])  # full hidden
-        down_pc = _vision_matmul_program_config(dev, down_m, down_k, down_n)
+        self._tp_down_k = down_k
+        down_pc = self._tp_mlp_down_program_config(down_m, down_k, down_n)
         partial = ttnn.linear(
             gate_up_mul,
             self.tt_fc2_weight,
             bias=None,
-            dtype=ttnn.bfloat16,
-            memory_config=mem,
+            dtype=ttnn.bfloat8_b,
+            memory_config=l1,
             compute_kernel_config=self.compute_kernel_config,
             program_config=down_pc,
         )
@@ -1313,17 +1346,19 @@ class TTNNDotsVisionMLP(TTNNModule):
             dim=3,
             num_links=num_links,
             cluster_axis=1,
-            memory_config=mem,
+            memory_config=l1,
             topology=ttnn.Topology.Linear,
         )
+        ttnn.deallocate(partial)
         output = ttnn.all_gather(
             reduced,
             dim=3,
             num_links=num_links,
             cluster_axis=1,
-            memory_config=mem,
+            memory_config=l1,
             topology=ttnn.Topology.Linear,
         )
+        ttnn.deallocate(reduced)
         # fc2 bias is replicated (full hidden) and added once, after the reduce, so it
         # is not summed num_tp times.
         if self.tt_fc2_bias is not None:
@@ -1446,6 +1481,7 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
         grid_thw: torch.Tensor = None,
         activation_memory_config: ttnn.MemoryConfig | None = None,
     ) -> ttnn.Tensor:
+        _vision_tower_signpost("vision_tower.start")
         mem = activation_memory_config or ttnn.DRAM_MEMORY_CONFIG
         mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
 
@@ -3008,6 +3044,8 @@ class TTNNDotsOCRVisionTower(TTNNModule):
         attention_mask: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Vision blocks + post-trunk norm + patch merger (``patch_embed`` already applied)."""
+        if isinstance(x, torch.Tensor):
+            _vision_tower_signpost("vision_tower.start")
         if grid_thw is None:
             raise ValueError("grid_thw is required for Dots vision")
         if grid_thw.dim() == 1:
