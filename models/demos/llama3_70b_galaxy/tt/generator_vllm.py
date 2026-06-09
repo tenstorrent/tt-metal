@@ -9,10 +9,12 @@ from models.demos.llama3_70b_galaxy.tt.generator import Generator
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations, TtModelArgs
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
+from models.tt_transformers.tt.common import get_tt_kv_cache_path
 from models.tt_transformers.tt.generator import create_submeshes
 
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: TtTransformer, tt_cache_path):
+    tt_cache_path = get_tt_kv_cache_path(tt_cache_path)
     submesh_devices = [model.mesh_device]
     kv_cache = []
 

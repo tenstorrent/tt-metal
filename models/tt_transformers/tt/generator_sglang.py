@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 import ttnn
 from models.common.utility_functions import is_wormhole_b0
+from models.tt_transformers.tt.common import get_tt_kv_cache_path
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup
@@ -17,6 +18,7 @@ from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs,
 
 def allocate_sglang_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
     logger.warning("[TT-METAL-SGLANG-LOG] allocate_sglang_kv_cache called in generator")
+    tt_cache_path = get_tt_kv_cache_path(tt_cache_path)
     submesh_devices = [model.mesh_device for model in dp_model]
     kv_cache = []
     for mesh_idx, submesh in enumerate(submesh_devices):
