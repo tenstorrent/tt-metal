@@ -10,15 +10,52 @@ import weakref
 from types import NoneType
 from typing import TYPE_CHECKING, Any, overload
 
+import torch
 from loguru import logger
 
 import ttnn
+from models.tt_dit.utils import tensor
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from typing import ClassVar
 
 _OMITTED = object()
+
+
+class StateTensor:
+    """Helper class to store the state of a tensor during tracing.
+    This is mostly useful for tensors that are not part of the trace inputs or outputs.
+    """
+
+    def __init__(self) -> None:
+        self._value: ttnn.Tensor | None = None
+
+    def update(
+        self,
+        value: torch.Tensor | ttnn.Tensor,
+        traced: bool,
+        dtype: ttnn.DataType = ttnn.bfloat16,
+        mesh_axes: list[int] | None = None,
+        device: ttnn.Device | None = None,
+    ) -> None:
+        """Update the state tensor with a new value.
+           If the tensor is used during tracing, the value is copied to (or used to initalize) the underlying tensor.
+
+        Args:
+            value: The new value to update the state tensor with.
+            traced: Whether the tensor is used during tracing.
+            dtype: The data type of the value.
+            mesh_axes: The mesh axes of the value.
+            device: The device of the value.
+        """
+        if torch.is_tensor(value):
+            assert device is not None, "device must be provided if using torch tensor"
+            value = tensor.from_torch(value, device=device, mesh_axes=mesh_axes, dtype=dtype)
+        if self._value is None or not traced:
+            self._value = value
+        else:
+            ttnn.copy(value, self._value)
 
 
 class Tracer:
