@@ -47,7 +47,7 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py"
         ),
         (
             f"pytest {_TEST_PATH} -k 'mesh-8x4 and layer3 and gate_device and no_ref and isl_5k and not fabric2d-'",
-            33_691_097,
+            29_523_042,  # Recalibrated 2026-06-09 on bh-glx-110-c05u02 — post-main-rebase speedup from #45189 (unified_routed_expert_ffn).
             "deepseek_v3_prefill_block_5k",
             "deepseek_v3_prefill_block_8x4_layer3_moe_5k",
             1,
@@ -57,7 +57,7 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py"
         ),
         (
             f"pytest {_TEST_PATH} -k 'mesh-8x4 and layer3 and gate_device and no_ref and isl_25k and not fabric2d-'",
-            130_873_080,
+            71_674_205,  # Recalibrated 2026-06-09 on bh-glx-110-c05u02 — post-main-rebase speedup from #45189 (unified_routed_expert_ffn).
             "deepseek_v3_prefill_block_25k",
             "deepseek_v3_prefill_block_8x4_layer3_moe_25k",
             1,
@@ -90,7 +90,8 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py"
         ),
         (
             f"pytest {_TEST_PATH} -k 'fabric2d-mesh-8x4 and layer3 and gate_device and no_ref and isl_5k'",
-            22_294_000,  # TODO: Write it when it is calibrated the last time
+            33_816_205,  # Recalibrated 2026-06-09 on bh-glx-110-c05u02 (post-main-rebase).
+            "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_8x4_layer3_moe_fabric2d_5k",
             1,
             1,
