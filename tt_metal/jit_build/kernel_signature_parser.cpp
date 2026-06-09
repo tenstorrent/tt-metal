@@ -10,6 +10,8 @@
 #include <string_view>
 #include <vector>
 
+#include <tracy/Tracy.hpp>
+
 namespace tt::tt_metal {
 
 namespace {
@@ -217,6 +219,10 @@ std::string read_identifier(const std::string& s, size_t& pos) {
 }  // namespace
 
 std::optional<KernelMainSignature> parse_kernel_main_signature(const std::string& source) {
+    // Profiler zone: measures the TT_KERNEL signature-parse overhead added to the JIT pipeline.
+    // Captured under Tracy when TRACY_ENABLE is on; a no-op otherwise.
+    ZoneScopedN("parse_kernel_main_signature");
+
     const std::string text = strip_noise(source);
     const size_t n = text.size();
 
