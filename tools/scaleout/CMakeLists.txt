@@ -50,6 +50,7 @@ target_sources(
             cabling_generator/regen_descriptors.hpp
             connector/connector.hpp
             factory_system_descriptor/utils.hpp
+            factory_system_descriptor/subset_check.hpp
             node/node_types.hpp
     PRIVATE
         node/node.cpp
@@ -59,6 +60,7 @@ target_sources(
         cabling_generator/regen_descriptors.cpp
         connector/connector.cpp
         factory_system_descriptor/utils.cpp
+        factory_system_descriptor/subset_check.cpp
         ${GENERATED_PROTO_SRCS}
 )
 
