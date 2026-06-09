@@ -189,7 +189,20 @@ class Pi0_5PipelineC:
     # Requires parent_mesh to be passed in (the galaxy parent the submeshes were carved from)
     # and the parent mesh to have been opened with set_fabric_config(FABRIC_1D).
     use_parent_mesh_slice: bool = False
-    # Galaxy parent MeshDevice (8, 4). Required when use_parent_mesh_slice=True.
+    # D2D parent-mesh denoise slice for the expert chain (Step 3 of D2D
+    # rollout). When True:
+    #   - replaces stage_2's host-bouncing expert chain with
+    #     Pi0_5OptionCExpertSliceParent (3 layers per chip × 6 chips, weights
+    #     sharded on the parent mesh, P2P advance between expert chips)
+    #   - all hops are same-column (denoise sits at parent col 3, rows 2..7)
+    #     so a single fabric hop per transition — no multihop needed
+    # Scaffolding stage: the slice is built and weights are uploaded, but the
+    # forward + Euler wrap-back P2P land in follow-up commits. The flag is
+    # plumbed now so the benchmark surface stays stable across the
+    # incremental commits.
+    use_parent_mesh_denoise: bool = False
+    # Galaxy parent MeshDevice (8, 4). Required when use_parent_mesh_slice
+    # OR use_parent_mesh_denoise is True.
     parent_mesh: Optional["ttnn.MeshDevice"] = None
     # When True, post-initialize walk the denoise stage's expert + suffix
     # slices and migrate every matmul weight + LN/mod weight from DRAM to L1.
@@ -308,6 +321,32 @@ class Pi0_5PipelineC:
                 prefill_offset=PREFILL_SUBMESH_OFFSET,
                 prefill_shape=PREFILL_SUBMESH_SHAPE,
                 layer_range=(0, self.config.vlm_config.depth),
+            )
+
+        # D2D parent-mesh slice for denoise (expert chain). Scaffolding stage:
+        # the slice is built so weights upload + per-chip placement is
+        # validated under the benchmark surface, but the forward path is
+        # still the host-bounce layer-paired expert chain. Switching the
+        # expert forward to this slice is the next commit in the rollout.
+        self.parent_mesh_denoise_slice = None
+        if self.use_parent_mesh_denoise:
+            if self.parent_mesh is None:
+                raise ValueError("use_parent_mesh_denoise=True requires parent_mesh to be set")
+            from .expert_slice import Pi0_5OptionCExpertSliceParent
+            from .stages import (
+                DENOISE_SUBMESH_OFFSET,
+                DENOISE_SUBMESH_SHAPE,
+                EXPERT_LAYERS_PER_DENOISE_CHIP,
+            )
+
+            self.parent_mesh_denoise_slice = Pi0_5OptionCExpertSliceParent(
+                config=self.config,
+                weights=self.weights,
+                parent_mesh=self.parent_mesh,
+                denoise_offset=DENOISE_SUBMESH_OFFSET,
+                denoise_shape=DENOISE_SUBMESH_SHAPE,
+                expert_layer_range=(0, self.config.expert_config.depth),
+                layers_per_chip=EXPERT_LAYERS_PER_DENOISE_CHIP,
             )
 
         # Opt-in L1 migration for the TP prefill path. Mirrors Option B's

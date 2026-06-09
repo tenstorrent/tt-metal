@@ -717,3 +717,415 @@ class Pi0_5OptionCExpertSlicePaired:
             self.last_core_grid,
         )
         return h
+
+
+# ---------------------------------------------------------------------------- #
+# Parent-mesh expert slice (D2D) — 3 layers per chip × 6 chips, weights         #
+# sharded on parent mesh, activation flows chip→chip via fabric P2P every       #
+# 3 layers. Same recipe as `vlm_slice.Pi0_5OptionCVLMSliceParent`, but for the  #
+# denoise submesh column (rows 2..7, col 3 — all P2P hops are same-column,     #
+# single-hop fabric, no multihop needed).                                      #
+# ---------------------------------------------------------------------------- #
+
+
+def _load_expert_weights_stacked_sharded(
+    full_weights: Dict[str, torch.Tensor],
+    layer_range: Tuple[int, int],
+    parent_mesh,
+    parent_shape: Tuple[int, int],
+    denoise_offset: Tuple[int, int],
+    denoise_shape: Tuple[int, int],
+    layers_per_chip: int,
+    dtype=ttnn.bfloat8_b,
+) -> Dict[str, List["ttnn.Tensor"]]:
+    """Upload all expert layer weights as parent-mesh sharded tensors.
+
+    The denoise submesh holds `layers_per_chip` layers per chip (3 by default).
+    For each weight category and each per-chip position `j ∈ [0, layers_per_chip)`,
+    we build one parent-mesh stacked tensor where chip d's slot holds the
+    weights for layer `layer_lo + d*layers_per_chip + j`. Other slots are zero.
+
+    At forward time, when running layer i with local position j on chip d:
+      - we use the position-j tensor for that weight category
+      - chip d's matmul produces the right output (its slot has the right weights)
+      - other chips' matmuls produce garbage that we discard (only chip d's
+        shard is live).
+
+    Returns a dict keyed by weight name (e.g. "q_proj", "gate_proj", "wqkv",
+    "input_layernorm", "post_attention_layernorm", "adarms_mod_weight",
+    "adarms_mod_bias"), each mapping to a list of `layers_per_chip` parent-
+    mesh tensors indexed by per-chip position.
+    """
+    lo, hi = layer_range
+    n_layers = hi - lo
+    expected = denoise_shape[0] * denoise_shape[1] * layers_per_chip
+    if n_layers != expected:
+        raise ValueError(
+            f"layer_range span {n_layers} must equal denoise chip count "
+            f"{denoise_shape[0] * denoise_shape[1]} × layers_per_chip={layers_per_chip} "
+            f"= {expected}"
+        )
+    devices_total = parent_shape[0] * parent_shape[1]
+
+    def _denoise_lin(chip_idx: int) -> int:
+        sub_row = chip_idx // denoise_shape[1]
+        sub_col = chip_idx % denoise_shape[1]
+        return (denoise_offset[0] + sub_row) * parent_shape[1] + (denoise_offset[1] + sub_col)
+
+    def _key(layer_idx: int, suffix: str) -> str:
+        return f"model.layers.{layer_idx}.{suffix}"
+
+    matmul_suffixes = [
+        "self_attn.q_proj.weight",
+        "self_attn.k_proj.weight",
+        "self_attn.v_proj.weight",
+        "self_attn.o_proj.weight",
+        "mlp.gate_proj.weight",
+        "mlp.up_proj.weight",
+        "mlp.down_proj.weight",
+    ]
+    # AdaRMS norm Dense weights (per-block modulation) and biases.
+    mod_weight_keys = [
+        "input_layernorm.dense.weight",
+        "post_attention_layernorm.dense.weight",
+    ]
+    mod_bias_keys = [
+        "input_layernorm.dense.bias",
+        "post_attention_layernorm.dense.bias",
+    ]
+
+    out: Dict[str, List["ttnn.Tensor"]] = {}
+    num_chips = denoise_shape[0] * denoise_shape[1]
+
+    def _alloc_for_position(
+        suffix: str,
+        position: int,
+        weight_dtype,
+        is_matmul: bool,
+    ) -> Optional["ttnn.Tensor"]:
+        """Build the position-`j` parent-mesh sharded tensor for `suffix`.
+        Chip d holds layer (lo + d*layers_per_chip + j)'s weight."""
+        # Probe layer at position j of chip 0 for the reference shape.
+        ref_layer = lo + position
+        ref_key = _key(ref_layer, suffix)
+        if ref_key not in full_weights:
+            return None
+        ref = full_weights[ref_key]
+        ref_t = ref.T.contiguous() if is_matmul else ref
+        target_shape = tuple(ref_t.shape)
+        stacked = torch.zeros((devices_total,) + target_shape, dtype=ref_t.dtype)
+        for d in range(num_chips):
+            global_i = lo + d * layers_per_chip + position
+            if global_i >= hi:
+                continue
+            wk = _key(global_i, suffix)
+            if wk not in full_weights:
+                continue
+            w = full_weights[wk]
+            if is_matmul:
+                w = w.T.contiguous()
+            lin = _denoise_lin(d)
+            stacked[lin] = w
+        return ttnn.from_torch(
+            stacked,
+            dtype=weight_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=parent_mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(parent_mesh, dim=0),
+        )
+
+    def _alloc_fused_wqkv_for_position(position: int) -> Optional["ttnn.Tensor"]:
+        """Build a fused wqkv for position j (matches the paired slice's
+        ttnn.concat([wq, wk, wv], dim=-1) pattern, but done on host so we
+        upload one tensor instead of three + a concat op).
+
+        Layer i's wqkv lives at the layer's owner chip's slot.
+        """
+        # Probe shape at lo + position.
+        ref_layer = lo + position
+        keys = (
+            _key(ref_layer, "self_attn.q_proj.weight"),
+            _key(ref_layer, "self_attn.k_proj.weight"),
+            _key(ref_layer, "self_attn.v_proj.weight"),
+        )
+        if not all(k in full_weights for k in keys):
+            return None
+        wq_t = full_weights[keys[0]].T.contiguous()
+        wk_t = full_weights[keys[1]].T.contiguous()
+        wv_t = full_weights[keys[2]].T.contiguous()
+        target_shape = (wq_t.shape[0], wq_t.shape[1] + wk_t.shape[1] + wv_t.shape[1])
+        stacked = torch.zeros((devices_total,) + target_shape, dtype=wq_t.dtype)
+        for d in range(num_chips):
+            global_i = lo + d * layers_per_chip + position
+            if global_i >= hi:
+                continue
+            ks = (
+                _key(global_i, "self_attn.q_proj.weight"),
+                _key(global_i, "self_attn.k_proj.weight"),
+                _key(global_i, "self_attn.v_proj.weight"),
+            )
+            if not all(k in full_weights for k in ks):
+                continue
+            wq = full_weights[ks[0]].T.contiguous()
+            wk = full_weights[ks[1]].T.contiguous()
+            wv = full_weights[ks[2]].T.contiguous()
+            fused = torch.cat([wq, wk, wv], dim=-1)
+            lin = _denoise_lin(d)
+            stacked[lin] = fused
+        return ttnn.from_torch(
+            stacked,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=parent_mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(parent_mesh, dim=0),
+        )
+
+    def _alloc_fused_adarms_mod_for_position(position: int, is_weight: bool) -> Optional["ttnn.Tensor"]:
+        """Build the fused adaRMS mod weight/bias for position j (matches the
+        paired slice's torch.cat([input_ln.dense, post_attn_ln.dense]) pattern).
+        Shape: [W, 6W] (weight) or [6W] (bias)."""
+        keys = mod_weight_keys if is_weight else mod_bias_keys
+        ref_layer = lo + position
+        ref_keys = [_key(ref_layer, k) for k in keys]
+        if not all(k in full_weights for k in ref_keys):
+            return None
+        ref_parts = [full_weights[k] for k in ref_keys]
+        ref_cat = torch.cat(ref_parts, dim=0)  # cat on out-dim (the "6" axis)
+        if is_weight:
+            ref_cat = ref_cat.T.contiguous()  # [W, 6W]
+        target_shape = tuple(ref_cat.shape)
+        stacked = torch.zeros((devices_total,) + target_shape, dtype=ref_cat.dtype)
+        for d in range(num_chips):
+            global_i = lo + d * layers_per_chip + position
+            if global_i >= hi:
+                continue
+            layer_keys = [_key(global_i, k) for k in keys]
+            if not all(k in full_weights for k in layer_keys):
+                continue
+            parts = [full_weights[k] for k in layer_keys]
+            cat = torch.cat(parts, dim=0)
+            if is_weight:
+                cat = cat.T.contiguous()
+            lin = _denoise_lin(d)
+            stacked[lin] = cat
+        # adarms mod is kept at bf16 (same rationale as the paired slice: the
+        # scale/translate multiplies the residual; bf8_b compounds drift).
+        if is_weight:
+            return ttnn.from_torch(
+                stacked,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=parent_mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensorToMesh(parent_mesh, dim=0),
+            )
+        # Bias is 1D [6W]; tile-pad to [tile, 6W] for the kernel.
+        # We use ROW_MAJOR + a [1, 6W] shape, then upload as tiled via reshape.
+        # Simpler: keep as 1D and let the caller reshape/broadcast at use site.
+        return ttnn.from_torch(
+            stacked.unsqueeze(-2),  # → [devices, 1, 6W]
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=parent_mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(parent_mesh, dim=0),
+        )
+
+    # Build per-position tensors for each matmul suffix.
+    for suffix in matmul_suffixes:
+        key = suffix.replace(".weight", "").replace("self_attn.", "").replace("mlp.", "")
+        per_pos: List["ttnn.Tensor"] = []
+        for j in range(layers_per_chip):
+            t = _alloc_for_position(suffix, j, dtype, is_matmul=True)
+            if t is None:
+                break
+            per_pos.append(t)
+        if per_pos:
+            out[key] = per_pos
+
+    # Fused wqkv per position (q_proj + k_proj + v_proj along output axis).
+    wqkv_per_pos: List["ttnn.Tensor"] = []
+    for j in range(layers_per_chip):
+        t = _alloc_fused_wqkv_for_position(j)
+        if t is None:
+            break
+        wqkv_per_pos.append(t)
+    if wqkv_per_pos:
+        out["wqkv"] = wqkv_per_pos
+
+    # AdaRMS modulation Dense (fused [input_ln.dense + post_attn_ln.dense]).
+    mod_w_per_pos: List["ttnn.Tensor"] = []
+    mod_b_per_pos: List["ttnn.Tensor"] = []
+    for j in range(layers_per_chip):
+        tw = _alloc_fused_adarms_mod_for_position(j, is_weight=True)
+        if tw is None:
+            break
+        mod_w_per_pos.append(tw)
+        tb = _alloc_fused_adarms_mod_for_position(j, is_weight=False)
+        if tb is not None:
+            mod_b_per_pos.append(tb)
+    if mod_w_per_pos:
+        out["adarms_mod_weight"] = mod_w_per_pos
+    if mod_b_per_pos:
+        out["adarms_mod_bias"] = mod_b_per_pos
+
+    return out
+
+
+class Pi0_5OptionCExpertSliceParent:
+    """6-chip parent-mesh expert slice — 3 layers per chip × 6 chips on the
+    denoise submesh (single column at parent coords (2..7, 3)), weights
+    sharded across the parent mesh, activation flows chip→chip via fabric
+    P2P every `layers_per_chip` layers.
+
+    STATUS: scaffolding / minimal-viable. The full block forward (adaRMS
+    modulation + cross-attention over migrated VLM prefix KV + RoPE + MLP)
+    is the follow-up. This class lays the architectural pattern:
+
+    - Open the denoise submesh as part of the galaxy parent (no carving).
+    - Upload all 18 layers' weights as parent-mesh sharded tensors via
+      `_load_expert_weights_stacked_sharded` — chip d, position j, holds
+      layer (d*layers_per_chip + j)'s weights.
+    - Activation lives on the parent mesh as a sharded tensor; the "live"
+      shard moves chip-to-chip via `send_shard_via_p2p` (same column →
+      single-hop fabric, no multihop) every `layers_per_chip` layers.
+
+    For pi0.5 Option C this replaces the host-bouncing layer-paired denoise
+    expert chain — estimated ~30-60 ms saved across 5 inter-chip transitions
+    plus the per-Euler-step wrap-back (last chip → chip 0).
+
+    Args:
+        config:         full PaliGemma config.
+        weights:        full categorized weights dict (we slice action_expert).
+        parent_mesh:    the galaxy parent mesh (8, 4). Required because
+                        weights are parent-mesh sharded.
+        denoise_offset: (row, col) origin of the denoise submesh in the parent.
+        denoise_shape:  (rows, cols) of the denoise submesh.
+        expert_layer_range: half-open (lo, hi). hi - lo must equal num denoise
+                            chips × layers_per_chip.
+        layers_per_chip: layers held per denoise chip (default 3 → 18 total).
+
+    NOT YET IMPLEMENTED in this class:
+        - Full AdaRMSGemmaBlockTTNN forward semantics. Currently only the
+          per-chip matmul chain + P2P advance is wired (smoke validation).
+        - Cross-attention over migrated prefix KV (which lives on the same
+          chip as its consuming expert layer post-migrate_layer_paired_d2d).
+        - Final adaRMS norm on the last denoise chip.
+    """
+
+    def __init__(
+        self,
+        config: PaliGemmaConfig,
+        weights: Dict[str, Dict[str, torch.Tensor]],
+        parent_mesh,
+        denoise_offset: Tuple[int, int],
+        denoise_shape: Tuple[int, int],
+        expert_layer_range: Tuple[int, int] = (0, 18),
+        layers_per_chip: int = 3,
+    ) -> None:
+        if not (0 <= expert_layer_range[0] < expert_layer_range[1] <= config.expert_config.depth):
+            raise ValueError(
+                f"expert_layer_range {expert_layer_range} out of bounds for "
+                f"expert_config.depth={config.expert_config.depth}"
+            )
+        n_denoise_chips = denoise_shape[0] * denoise_shape[1]
+        expected_layers = n_denoise_chips * layers_per_chip
+        if expert_layer_range[1] - expert_layer_range[0] != expected_layers:
+            raise ValueError(
+                f"expert_layer_range span {expert_layer_range[1] - expert_layer_range[0]} "
+                f"must equal denoise chip count {n_denoise_chips} × layers_per_chip="
+                f"{layers_per_chip} = {expected_layers}"
+            )
+
+        self.config = config
+        self.parent_mesh = parent_mesh
+        self.denoise_offset = denoise_offset
+        self.denoise_shape = denoise_shape
+        self.parent_shape = (parent_mesh.shape[0], parent_mesh.shape[1])
+        self.layer_lo, self.layer_hi = expert_layer_range
+        self.num_layers = self.layer_hi - self.layer_lo
+        self.layers_per_chip = layers_per_chip
+        self.num_chips = n_denoise_chips
+
+        # Upload all weights as parent-mesh sharded tensors (per-position).
+        if "action_expert" not in weights:
+            raise KeyError("weights dict must contain 'action_expert'")
+        self.weights_on_parent = _load_expert_weights_stacked_sharded(
+            weights["action_expert"],
+            expert_layer_range,
+            parent_mesh,
+            self.parent_shape,
+            denoise_offset,
+            denoise_shape,
+            layers_per_chip,
+        )
+
+    def expert_chip_for_layer(self, local_layer_idx: int) -> int:
+        return local_layer_idx // self.layers_per_chip
+
+    def position_in_chip(self, local_layer_idx: int) -> int:
+        return local_layer_idx % self.layers_per_chip
+
+    def denoise_coord_for_layer(self, local_layer_idx: int) -> Tuple[int, int]:
+        """Galaxy-parent coord of the denoise chip owning the given local layer."""
+        chip_idx = self.expert_chip_for_layer(local_layer_idx)
+        sub_row = chip_idx // self.denoise_shape[1]
+        sub_col = chip_idx % self.denoise_shape[1]
+        return (self.denoise_offset[0] + sub_row, self.denoise_offset[1] + sub_col)
+
+    def forward_qo_chain(self, activation: "ttnn.Tensor") -> "ttnn.Tensor":
+        """Simplified forward that runs the q_proj → o_proj matmul pair per layer.
+
+        Each layer does:
+            1. h = linear(h, q_proj[position_in_chip(i)])   → [..., num_heads*head_dim]
+            2. h = linear(h, o_proj[position_in_chip(i)])   → [..., width]
+        Then at each chip boundary (i % layers_per_chip == layers_per_chip-1
+        and not the last layer), P2P advances the live shard to the next
+        denoise chip (same column → single-hop fabric).
+
+        Q→O is the outer shape of the attention sublayer (skipping SDPA).
+        Unlike the VLM's square q_proj `[W=2048, W=2048]`, the expert's
+        q_proj is rectangular `[W=1024, num_heads*head_dim=2048]` so Q output
+        cannot feed the next layer's Q input directly. Chaining through O
+        brings the activation back to `[..., W=1024]` which feeds the next
+        layer's Q. Validates the matmul chain + P2P advance at scale.
+
+        Returns the final activation at the last expert chip's parent coord.
+        """
+        from .transport import send_shard_via_p2p
+
+        for r in ("q_proj", "o_proj"):
+            if r not in self.weights_on_parent:
+                raise RuntimeError(f"{r} weights not loaded; check _load_expert_weights_stacked_sharded")
+        q_proj_per_pos = self.weights_on_parent["q_proj"]
+        o_proj_per_pos = self.weights_on_parent["o_proj"]
+
+        h = activation
+        for local_i in range(self.num_layers):
+            j = self.position_in_chip(local_i)
+            q_out = ttnn.linear(
+                h,
+                q_proj_per_pos[j],
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(h)
+            h = ttnn.linear(
+                q_out,
+                o_proj_per_pos[j],
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(q_out)
+
+            at_chip_boundary = (j == self.layers_per_chip - 1) and (local_i + 1 < self.num_layers)
+            if at_chip_boundary:
+                cur = self.denoise_coord_for_layer(local_i)
+                nxt = self.denoise_coord_for_layer(local_i + 1)
+                h_advanced = send_shard_via_p2p(h, cur, nxt)
+                if h_advanced is not h:
+                    ttnn.deallocate(h)
+                h = h_advanced
+        return h
