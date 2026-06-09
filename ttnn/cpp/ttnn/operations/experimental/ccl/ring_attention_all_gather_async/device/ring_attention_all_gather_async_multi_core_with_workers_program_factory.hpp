@@ -54,6 +54,11 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     CoreCoord core_grid_offset = CoreCoord(0, 0),
-    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR);
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
+    // When set, gather only this single batch slot of `input_tensor` (dim-0 index) and write it to
+    // batch slot 0 of `output_tensor` (which must then be batch-1). Lets a fused consumer keep a full
+    // KV cache as input while the gathered scratch buffer is only one slot wide. std::nullopt => gather
+    // the full batch (default, unchanged behavior).
+    std::optional<uint32_t> input_batch_slice_idx = std::nullopt);
 
 }  // namespace ttnn

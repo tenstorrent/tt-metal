@@ -213,22 +213,25 @@ class ttMLA:
 
     @staticmethod
     def make_chunked_kv_buf(mesh_device, cache_batch: int, seq_len: int, kvpe_dim: int) -> ttnn.Tensor:
-        """Allocate the ring_mla gathered-KV scratch buffer [cache_batch, 1, seq_len, kvpe_dim].
+        """Allocate the ring_mla gathered-KV scratch buffer [1, 1, seq_len, kvpe_dim].
 
-        Replicated across the mesh (the op gathers the full window per chip). It holds no per-layer
-        state, so a multi-layer caller can allocate ONE and share it across all layers' ttMLA via the
-        chunked_kv_buf constructor arg (avoids per-layer depth^2 DRAM). cache_batch must equal the KV
-        cache batch (slot_num * layer_num) to satisfy ring_mla's batch-match assertion.
+        Replicated across the mesh (the op gathers the full window per chip). ring_mla's fused
+        all-gather gathers only the single active cache slot (kv_cache_batch_idx) into batch slot 0 of
+        this buffer, so it is ALWAYS batch-1 regardless of how many users/layers the KV cache holds —
+        one layer's worth of scratch (~32MB for 56320x576 bf8), not slot_num*layer_num (~2GB for L61).
+        `cache_batch` is accepted for call-site compatibility but no longer sizes the buffer. The buffer
+        holds no per-layer state, so a multi-layer caller still allocates ONE and shares it across all
+        layers' ttMLA via the chunked_kv_buf constructor arg.
         """
-        # Allocate device-side (replicated across the mesh) instead of from_torch(torch.zeros(...)):
-        # for the full-model chunked case the buffer is [num_layers, 1, seq_len, 576] (~2GB), and a
-        # host torch.zeros + tilize + 32-device replicate-transfer takes ~20 min. ttnn.zeros memsets
-        # on device with no host roundtrip.
-        return ttnn.zeros(
-            [cache_batch, 1, seq_len, kvpe_dim],
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
+        # Allocate UNINITIALIZED on device (replicated across the mesh). This is pure scratch: ring_mla
+        # all-gathers the cache's [0, logical_n) prefix into slot 0 before the SDPA reads it (reads
+        # bounded by logical_n, tile-aligned), so the contents need not be zeroed. ttnn.empty just
+        # reserves DRAM (instant) vs ttnn.zeros which would memset across the mesh.
+        return ttnn.empty(
+            shape=[1, 1, seq_len, kvpe_dim],
             dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
@@ -334,20 +337,19 @@ class ttMLA:
         # Hoist them to a shared owner (or pass them in) when ttMLA instances are created per layer.
         if self.is_chunked:
             # Single combined gathered-KV buffer for ring_mla: K and V both come from the latent
-            # kvpe cache, so one (cache_batch, 1, seq_len, kvpe_dim) buffer replaces the separate
-            # per-K/per-V ring-SDPA buffers (and the dummy joint tensors) used in the other mode.
+            # kvpe cache, so one (1, 1, seq_len, kvpe_dim) buffer replaces the separate per-K/per-V
+            # ring-SDPA buffers (and the dummy joint tensors) used in the other mode.
             #
-            # TODO: reduce DRAM pressure -- ring_mla only ever gathers into the single
-            # kv_cache_batch_idx slot, but the op's TT_FATAL forces gathered-KV batch == cache
-            # batch (slot_num * layer_num). Allocating the full batch wastes DRAM for all but one
-            # slot; relaxing the op to index the gathered buffer independently (always slot 0)
-            # would let this be a batch-1 buffer.
+            # ring_mla's fused all-gather gathers only the single active kv_cache_batch_idx slot into
+            # batch slot 0 of this buffer, so it is batch-1 regardless of cache batch (slot_num *
+            # layer_num) -- one layer's worth of scratch, not depth*slot. (Previously the op forced
+            # gathered-KV batch == cache batch; the all-gather + ring reader now index the gathered
+            # buffer independently at slot 0.)
             #
             # This is a scratch buffer with no per-layer state, so a multi-layer caller (the chunked
-            # transformer) passes ONE shared buffer for all layers via chunked_kv_buf -- otherwise a
-            # per-layer batch-(slot*layer) buffer would scale as depth^2. When None we self-allocate
-            # (single-layer use, e.g. the block / MLA-unit tests).
-            cache_batch = self.slot_num * self.layer_num
+            # transformer) passes ONE shared buffer for all layers via chunked_kv_buf. When None we
+            # self-allocate (single-layer use, e.g. the block / MLA-unit tests).
+            cache_batch = self.slot_num * self.layer_num  # retained for call compatibility (buffer is batch-1)
             kvpe_dim = self.kv_lora_rank + self.qk_rope_head_dim
             self._chunked_kv_buf = (
                 chunked_kv_buf

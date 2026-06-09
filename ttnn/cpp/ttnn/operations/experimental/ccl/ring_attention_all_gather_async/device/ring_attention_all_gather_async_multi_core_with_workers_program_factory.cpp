@@ -102,7 +102,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     const CoreCoord core_grid_offset,
-    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy) {
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
+    std::optional<uint32_t> input_batch_slice_idx) {
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
     using tt::tt_metal::KernelDescriptor;
@@ -418,9 +419,11 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             const auto input_tensor_num_pages = input_tensor[i].buffer()->num_pages();
             const auto input_tensor_shape = input_tensor[i].padded_shape();
             const auto output_tensor_shape = output_tensor[i].padded_shape();
-            const uint32_t batch_head_size = input_tensor_shape[0] * input_tensor_shape[1];
+            const uint32_t num_heads = input_tensor_shape[1];
+            // single_batch_head_num_pages is always pages-per-(batch,head); independent of slicing.
+            const uint32_t full_batch_head_size = input_tensor_shape[0] * num_heads;
 
-            uint32_t single_batch_head_num_pages = input_tensor_num_pages / batch_head_size;
+            uint32_t single_batch_head_num_pages = input_tensor_num_pages / full_batch_head_size;
             const uint32_t base_pages_per_worker = single_batch_head_num_pages / num_links;
             const uint32_t remainder = single_batch_head_num_pages % num_links;
             const uint32_t input_tile_id_start = (link * base_pages_per_worker) + std::min(link, remainder);
@@ -433,13 +436,33 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             TT_ASSERT(!(input_tensor_shape[3] % tt::constants::TILE_WIDTH));
             TT_ASSERT(!(output_tensor_shape[3] % tt::constants::TILE_WIDTH));
 
+            // Single-slot gather: only the `num_heads` (batch,head) blocks of slot `input_batch_slice_idx`
+            // are read from the input; the reader starts at `input_batch_base` pages into the input and
+            // writes them to batch slot 0 of the (batch-1) output. Default: gather the full batch from 0.
+            uint32_t batch_head_size = full_batch_head_size;
+            uint32_t input_batch_base = 0;
+            if (input_batch_slice_idx.has_value()) {
+                TT_FATAL(
+                    *input_batch_slice_idx < input_tensor_shape[0],
+                    "input_batch_slice_idx={} out of range for input batch={}",
+                    *input_batch_slice_idx,
+                    input_tensor_shape[0]);
+                TT_FATAL(
+                    output_tensor_shape[0] == 1,
+                    "Single-slot all-gather requires a batch-1 output tensor, got batch={}",
+                    output_tensor_shape[0]);
+                batch_head_size = num_heads;
+                input_batch_base = (*input_batch_slice_idx) * num_heads * input_tensor_Ht * input_tensor_Wt;
+            }
+
             tensor_descriptor_args.push_back(input_tensor_Wt);      // 0 == input_tensor_Wt
             tensor_descriptor_args.push_back(input_tensor_Ht);      // 1 == input_tensor_Ht
             tensor_descriptor_args.push_back(output_tensor_Wt);     // 2 == output_tensor_Wt
             tensor_descriptor_args.push_back(output_tensor_Ht);     // 3 == output_tensor_Ht
-            tensor_descriptor_args.push_back(batch_head_size);      // 4 == batch_head_size
+            tensor_descriptor_args.push_back(batch_head_size);      // 4 == batch_head_size (bh-loop count)
             tensor_descriptor_args.push_back(input_tile_id_start);  // 5 == input_tile_id_start
             tensor_descriptor_args.push_back(input_tile_id_end);    // 6 == input_tile_id_end
+            tensor_descriptor_args.push_back(input_batch_base);     // 7 == input_batch_base (phase-1 input page offset)
         }
 
         KernelDescriptor::RTArgList reader_forward_rt_args;
