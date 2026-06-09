@@ -5,7 +5,6 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "/home/maxim-artemov/workspace/debug_include.hpp"
 
 namespace ttnn::operations::index_fill {
 
@@ -65,14 +64,13 @@ void IndexFillOperation::validate_on_program_cache_miss(
 IndexFillOperation::spec_return_value_t IndexFillOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& old_spec = tensor_args.input.tensor_spec();
-    py_log_cout(
-        "tensor diff:\n> old layout result {}\n> new layout result {}",
-        old_spec.tensor_layout().with_memory_config(operation_attributes.memory_config),
-        tt::tt_metal::TensorLayout(old_spec.data_type(), old_spec.page_config(), operation_attributes.memory_config)  //
-    );
     return TensorSpec(
         old_spec.logical_shape(),
-        tt::tt_metal::TensorLayout(old_spec.data_type(), old_spec.page_config(), operation_attributes.memory_config));
+        tt::tt_metal::TensorLayout(
+            old_spec.data_type(),
+            old_spec.page_config(),
+            operation_attributes.memory_config,
+            old_spec.tensor_layout().get_alignment()));
 }
 IndexFillOperation::tensor_return_value_t IndexFillOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

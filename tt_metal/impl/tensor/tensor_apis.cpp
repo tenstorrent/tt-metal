@@ -9,7 +9,6 @@
 
 #include "host_tensor_impl.hpp"
 #include "mesh_tensor_impl.hpp"
-#include "/home/maxim-artemov/workspace/debug_include.hpp"
 
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
@@ -94,19 +93,6 @@ MeshTensor enqueue_write_tensor(
     std::optional<TensorSpec> tensor_spec_overriden_memory_config;
     if (memory_config) {
         const auto& old_spec = host_tensor.tensor_spec();
-        py_log_cout(
-            "tensor diff:\n> old layout result {}\n> new layout result {}",
-            old_spec.tensor_layout().with_memory_config(*memory_config),
-            TensorLayout(
-                old_spec.data_type(),
-                old_spec.page_config(),
-                *memory_config,
-                old_spec.tensor_layout().get_alignment())  //
-        );
-
-        // tensor_spec_overriden_memory_config = TensorSpec(
-        //         old_spec.logical_shape(), old_spec.tensor_layout().with_memory_config(*memory_config));
-
         tensor_spec_overriden_memory_config = TensorSpec(
             old_spec.logical_shape(),
             TensorLayout(
@@ -235,16 +221,15 @@ void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& h
     }
 
     const auto& old_spec = host_tensor.tensor_spec();
-    py_log_cout(
-        "tensor diff:\n> old layout result {}\n> new layout result {}",
-        old_spec.tensor_layout().with_memory_config(device_tensor.memory_config()),
-        TensorLayout(old_spec.data_type(), old_spec.page_config(), device_tensor.memory_config())  //
-    );
     device_tensor = MeshTensor(
         mesh_buffer,
         TensorSpec(
             old_spec.logical_shape(),
-            TensorLayout(old_spec.data_type(), old_spec.page_config(), device_tensor.memory_config())),
+            TensorLayout(
+                old_spec.data_type(),
+                old_spec.page_config(),
+                device_tensor.memory_config(),
+                old_spec.tensor_layout().get_alignment())),
         host_tensor.tensor_topology());
 }
 
@@ -354,13 +339,13 @@ std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> enqueue_write_te
     std::optional<TensorSpec> tensor_spec_overriden_memory_config;
     if (memory_config) {
         const auto& old_spec = host_tensor.tensor_spec();
-        py_log_cout(
-            "tensor diff:\n> old layout result {}\n> new layout result {}",
-            old_spec.tensor_layout().with_memory_config(*memory_config),
-            TensorLayout(old_spec.data_type(), old_spec.page_config(), *memory_config)  //
-        );
         tensor_spec_overriden_memory_config = TensorSpec(
-            old_spec.logical_shape(), TensorLayout(old_spec.data_type(), old_spec.page_config(), *memory_config));
+            old_spec.logical_shape(),
+            TensorLayout(
+                old_spec.data_type(),
+                old_spec.page_config(),
+                *memory_config,
+                old_spec.tensor_layout().get_alignment()));
     }
 
     const auto* tensor_spec = tensor_spec_overriden_memory_config.has_value()
@@ -433,16 +418,15 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
     const auto& mesh_device_shape = mesh_buffer->device()->shape();
     auto topology = TensorTopology::create_fully_replicated_tensor_topology(mesh_device_shape);
     const auto& old_spec = host_tensor.tensor_spec();
-    py_log_cout(
-        "tensor diff:\n> old layout result {}\n> new layout result {}",
-        old_spec.tensor_layout().with_memory_config(device_tensor.memory_config()),
-        TensorLayout(old_spec.data_type(), old_spec.page_config(), device_tensor.memory_config())  //
-    );
     device_tensor = MeshTensor(
         mesh_buffer,
         TensorSpec(
             old_spec.logical_shape(),
-            TensorLayout(old_spec.data_type(), old_spec.page_config(), device_tensor.memory_config())),
+            TensorLayout(
+                old_spec.data_type(),
+                old_spec.page_config(),
+                device_tensor.memory_config(),
+                old_spec.tensor_layout().get_alignment())),
         topology);
 }
 
@@ -538,16 +522,15 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
     std::copy(shard_coords.begin(), shard_coords.end(), std::back_inserter(coords));
 
     const auto& old_spec = host_tensor.tensor_spec();
-    py_log_cout(
-        "tensor diff:\n> old layout result {}\n> new layout result {}",
-        old_spec.tensor_layout().with_memory_config(device_tensor.memory_config()),
-        TensorLayout(old_spec.data_type(), old_spec.page_config(), device_tensor.memory_config())  //
-    );
     device_tensor = MeshTensor(
         mesh_buffer,
         TensorSpec(
             old_spec.logical_shape(),
-            TensorLayout(old_spec.data_type(), old_spec.page_config(), device_tensor.memory_config())),
+            TensorLayout(
+                old_spec.data_type(),
+                old_spec.page_config(),
+                device_tensor.memory_config(),
+                old_spec.tensor_layout().get_alignment())),
         host_tensor.tensor_topology());
 
     return coords;

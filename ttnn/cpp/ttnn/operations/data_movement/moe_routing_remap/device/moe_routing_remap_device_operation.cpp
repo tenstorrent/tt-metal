@@ -9,7 +9,6 @@
 #include "moe_routing_remap_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-#include "/home/maxim-artemov/workspace/debug_include.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -56,12 +55,10 @@ MoeRoutingRemapDeviceOperation::spec_return_value_t MoeRoutingRemapDeviceOperati
 
     const auto mem_config = operation_attributes.output_mem_config.value_or(routing_weights.memory_config());
     const auto& old_spec = routing_weights.tensor_spec();
-    py_log_cout(
-        "tensor diff:\n> old layout result {}\n> new layout result {}",
-        old_spec.tensor_layout().with_memory_config(mem_config),
-        TensorLayout(old_spec.data_type(), old_spec.page_config(), mem_config)  //
-    );
-    return TensorSpec(old_spec.logical_shape(), TensorLayout(old_spec.data_type(), old_spec.page_config(), mem_config));
+    return TensorSpec(
+        old_spec.logical_shape(),
+        TensorLayout(
+            old_spec.data_type(), old_spec.page_config(), mem_config, old_spec.tensor_layout().get_alignment()));
 }
 
 MoeRoutingRemapDeviceOperation::tensor_return_value_t MoeRoutingRemapDeviceOperation::create_output_tensors(
