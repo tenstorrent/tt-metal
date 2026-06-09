@@ -667,7 +667,7 @@ class WhisperGenerator:
         decoded = processor.batch_decode(caches, skip_special_tokens=True)
         results = []
         for cache, text in zip(caches, decoded):
-            if text.endswith("�") and len(cache) <= STREAM_MAX_HOLD_TOKENS:
+            if text.endswith("\ufffd") and len(cache) <= STREAM_MAX_HOLD_TOKENS:
                 results.append("")  # incomplete multi-byte tail — keep the tokens and wait for the next one
             else:
                 cache.clear()  # bytes form complete characters (or a never-completing tail we stop holding)
