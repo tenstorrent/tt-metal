@@ -259,6 +259,16 @@ class DotsOCRAttentionTP4(TTNNModule):
         q = ttnn.experimental.rotary_embedding(q, cos, sin)
         k = ttnn.experimental.rotary_embedding(k, cos, sin)
 
+        # ``rotary_embedding`` materializes the tile-padded seq dim, so for a
+        # non-tile-multiple ``seq_len`` (e.g. 2814) Q/K come back padded to 2816
+        # while V (no rotary) stays at ``seq_len`` -- SDPA then rejects the K/V
+        # length mismatch. Slice Q/K back to the real ``seq_len``. No-op when the
+        # input was already tile-aligned (the standalone TP4 model pads on host).
+        if int(q.shape[2]) != seq_len:
+            q = q[:, :, :seq_len, :]
+        if int(k.shape[2]) != seq_len:
+            k = k[:, :, :seq_len, :]
+
         # Populate the paged KV cache (per chip: this chip's 1 KV head, rotated K
         # + raw V, bf16 as paged_fill_cache requires) so decode can read it.
         if past_key_value is not None:
