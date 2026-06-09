@@ -687,6 +687,8 @@ class Generator(WarmupForwardMixin):
         tt_out_logits_saved=None,
         batch_size=1,
         num_cached_tokens=0,  # Number of tokens already cached (for prefix caching)
+        inputs_embeds=None,  # Multimodal: pre-fused [1,S,H] hidden state; skips token embedding
+        rot_mats=None,  # Optional external RoPE (e.g. M-RoPE); overrides the default 1D prefill rot_mats
     ):
         assert num_cached_tokens == 0 or kv_cache is not None, (
             f"kv_cache must be provided for prefix caching when num_cached_tokens > 0: "
@@ -776,13 +778,17 @@ class Generator(WarmupForwardMixin):
             chunk_page_table=prefill_chunk_page_table,
             chunk_start_idx=prefill_chunk_start_idx,
             batch_size=batch_size,
+            inputs_embeds=inputs_embeds,
         )
         # Store column_mask on CCL reference(s) used by attention.
         self._set_prefill_column_mask(tt_column_mask)
         # Pass the PADDED prefill length (tokens are padded to get_padded_prefill_len) so the RoPE
         # table covers >128k contexts without bumping max_seq_len (which would OOM the full-attn
         # QK-norm transient). qwen3.6 config context is 256k.
-        full_rot_mats = self.model.get_or_create_prefill_rot_mats(seq_len=tokens.shape[-1])
+        # Multimodal: a caller-supplied M-RoPE (rot_mats) overrides the default 1D prefill table.
+        full_rot_mats = (
+            rot_mats if rot_mats is not None else self.model.get_or_create_prefill_rot_mats(seq_len=tokens.shape[-1])
+        )
         tt_toks = self.model.ttnn_prefill_forward(
             x=tt_prefill_input,
             user_id=tt_user_id,
@@ -796,6 +802,66 @@ class Generator(WarmupForwardMixin):
             batch_size=batch_size,
         )
         return tt_toks
+
+    def prefill_forward_text_embeds(
+        self,
+        tokens,  # [1, S_padded] padded token ids (shape / page-table / last-token bookkeeping)
+        inputs_embeds,  # [1, S_padded, H] pre-fused vision+text hidden state (torch)
+        rot_mats,  # (cos_tt, sin_tt) M-RoPE device tensors covering the S_padded positions
+        page_table=None,
+        kv_cache=None,
+        prompt_lens=None,  # [real_len] (unpadded); logits taken at real_len-1. Defaults to S_padded.
+    ):
+        """Multimodal / pre-embedded single-user prefill through the SERVER path.
+
+        Mirrors qwen3_vl: the fused vision+text embeddings bypass the token-embedding
+        lookup (inputs_embeds), M-RoPE overrides the default 1D prefill rot_mats, and the
+        paged KV cache + DeltaNet recurrent state are populated exactly as in
+        prefill_forward_text — so Generator.decode_forward can continue from here. Returns
+        host logits [1, padded_vocab] at the last real prompt position (caller samples).
+        This is the entry-point a multimodal vLLM generator would call.
+        """
+        batch, s_padded = tokens.shape
+        assert batch == 1, "prefill_forward_text_embeds is single-user (batch=1)"
+        real_len = int(prompt_lens[0]) if prompt_lens is not None else s_padded
+        last_token_idx = real_len - 1
+
+        if self.model.is_prefill_setup is False:
+            self.model.switch_mode("prefill")
+        # Reset per-sequence GDN/conv state + CCL idx (same contract as prefill_forward_text).
+        if getattr(self.model, "is_qwen36", False):
+            for _layer in self.model.layers:
+                _attn = getattr(_layer, "attention", None)
+                if _attn is not None and hasattr(_attn, "clear_state"):
+                    _attn.clear_state()
+            _ccl = getattr(self.model, "tt_ccl", None)
+            if _ccl is not None and hasattr(_ccl, "reset_gather_and_buffer_idx"):
+                _ccl.reset_gather_and_buffer_idx()
+
+        # Unwrap the outer kv-cache list (allocate_vllm_kv_cache returns [per_layer_list]);
+        # ttnn_prefill_forward indexes kv_cache[i] per layer. Mirrors prefill_forward_text.
+        if kv_cache is not None:
+            kv_cache = kv_cache[0]
+        tt_out_logits_saved = torch.zeros(1, self.model.args.padded_vocab_size)
+        tt_tok = self.prefill_forward_single_user_text(
+            tokens,
+            page_table=page_table,
+            user_id=0,
+            last_token_idx=last_token_idx,
+            kv_cache=kv_cache,
+            tt_out_logits_saved=tt_out_logits_saved,
+            batch_size=1,
+            num_cached_tokens=0,
+            inputs_embeds=inputs_embeds,
+            rot_mats=rot_mats,
+        )
+        self.model.process_output_prefill(
+            tt_tok,
+            last_token_idx=last_token_idx,
+            tt_out_logits_saved=tt_out_logits_saved,
+            user_id=0,
+        )
+        return tt_out_logits_saved
 
     def _easy_trace_prefill(
         self,

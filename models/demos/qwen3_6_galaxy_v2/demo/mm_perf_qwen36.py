@@ -1,0 +1,221 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+"""Qwen3.6-27B VLM SERVER-PATH perf: image prefill via Generator + traced decode.
+
+Measures server-equivalent VL perf by routing through the Generator class (the
+path tt-inference-server/vLLM uses):
+  - PREFILL: Generator.prefill_forward_text_embeds(inputs_embeds=fused, rot_mats=M-RoPE)
+    — the new qwen3_vl-style pre-embedded prefill (skips token embedding, populates
+    paged KV + DeltaNet state). Timed COLD (1st, incl. compile) and WARM (re-run after
+    decode, discarded — a 2nd in-place prefill corrupts state but the kernels are warm).
+  - DECODE: Generator.decode_forward(enable_trace=True, on-device sampling) — the server
+    traced decode. tok/s is valid timing (same kernels regardless of position).
+  - VISION: the seq-parallel 27-layer encoder, timed warm.
+
+NOTE: decode-via-Generator OUTPUT is not coherent here — decode_forward derives the
+RoPE position from current_pos (the KV index), but multimodal needs it decoupled
+(rope = max(pos_3d)+1 << KV index, since vision tokens compress positions). The
+standalone demo/mm_demo_qwen36.py handles that decoupling and produces correct text;
+wiring a rope-position override into decode_forward is the remaining follow-up. The
+tok/s measured here is unaffected (identical kernels), and equals text decode.
+
+Run:
+    export TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd) HF_MODEL=Qwen/Qwen3.6-27B MESH_DEVICE=BH_GLX
+    source python_env/bin/activate
+    python -m pytest --noconftest models/demos/qwen3_6_galaxy_v2/demo/mm_perf_qwen36.py -v -s
+"""
+from __future__ import annotations
+
+import os
+import time
+
+import pytest
+import torch
+from loguru import logger
+from PIL import Image
+
+import ttnn
+from models.demos.qwen3_6_galaxy_v2.demo.text_demo_qwen36 import (  # noqa: F401  direct-open mesh fixture
+    _SNAPSHOT,
+    _build_tt_model_paged_kv,
+    _load_full_state_dict,
+    bh_glx_mesh,
+)
+
+_N_LAYERS = 64
+_PATTERN = (["linear_attention"] * 3 + ["full_attention"]) * 16
+_DECODE_STEPS = int(os.environ.get("QWEN36_MM_DECODE_STEPS", "32"))
+_IMAGE_PATH = os.environ.get("QWEN36_MM_IMAGE", "models/demos/multimodal/gemma3/dog.jpg")
+_PROMPT = os.environ.get("QWEN36_MM_PROMPT", "<|vision_start|><|image_pad|><|vision_end|>What is in this image?")
+
+
+@pytest.mark.hardware
+def test_mm_perf_qwen36(bh_glx_mesh):  # noqa: F811
+    from models.common.sampling import SamplingParams
+    from models.demos.llama3_70b_galaxy.tt.llama_common import PagedAttentionConfig
+    from models.demos.qwen3_6_galaxy.reference.qwen36 import build_mrope_cos_sin
+    from models.demos.qwen3_6_galaxy_v2.tt.generator import Generator, get_padded_prefill_len
+    from models.demos.qwen3_6_galaxy_v2.tt.generator_vllm import allocate_vllm_kv_cache
+    from models.demos.qwen3_6_galaxy_v2.tt.qwen36_mm_generator import Qwen36MMGenerator
+    from models.demos.qwen3_6_galaxy_v2.tt.vision_model_args import Qwen36VisionModelArgs
+    from models.tt_dit.parallel.manager import CCLManager
+
+    for _k, _v in {
+        "QWEN36_FORCE_SWITCH_DECODE": "1",
+        "QWEN36_DECODE_L1_RESIDUAL": "1",
+        "QWEN36_RESIDUAL_BUF_BF16": "1",
+        "QWEN36_LM_HEAD_PLAIN_DECODE": "1",
+        "QWEN36_SEQ_CORES_PER_HEAD": "4",
+    }.items():
+        os.environ.setdefault(_k, _v)
+    if not os.environ.get("HF_MODEL"):
+        os.environ["HF_MODEL"] = "Qwen/Qwen3.6-27B"
+
+    # --- Paged model + Generator + paged KV (exactly like test_qwen36_demo_generator_batch1) ---
+    state_dict = _load_full_state_dict(_SNAPSHOT)
+    block_size = 32
+    max_blocks = max(64, (4096 + _DECODE_STEPS + block_size - 1) // block_size + 8)
+    paged_cfg = PagedAttentionConfig(block_size=block_size, max_num_blocks=max_blocks)
+    model, args = _build_tt_model_paged_kv(bh_glx_mesh, state_dict, _PATTERN, _N_LAYERS, paged_cfg)
+
+    import torch as _torch
+
+    permutation = _torch.randperm(paged_cfg.max_num_blocks)
+    page_table = _torch.argsort(permutation).reshape(
+        args.max_batch_size, paged_cfg.max_num_blocks // args.max_batch_size
+    )
+    _kv_shape = (paged_cfg.max_num_blocks, 1, paged_cfg.block_size, args.head_dim)
+    tt_kv_cache = allocate_vllm_kv_cache(
+        _kv_shape, torch.bfloat16, args.n_layers, model, args.weight_cache_path(ttnn.bfloat8_b)
+    )
+
+    generator = Generator(model, args, bh_glx_mesh)
+    generator._disable_prefill_tracing = True
+    generator.prefill_warmup_completed = True
+
+    # --- Vision pipeline -> fused embeds + 3D positions (warm-timed) ---
+    ccl_manager = CCLManager(bh_glx_mesh, num_links=1, topology=ttnn.Topology.Linear)
+    vision_args = Qwen36VisionModelArgs(bh_glx_mesh, dummy_weights=False, max_batch_size=1, max_seq_len=2048)
+    text_embed_weight = state_dict["model.language_model.embed_tokens.weight"].float()
+    mmgen = Qwen36MMGenerator(
+        bh_glx_mesh, ccl_manager, vision_args, text_model=model, text_embed_weight=text_embed_weight
+    )
+    tok = mmgen.tokenizer
+
+    img = Image.open(_IMAGE_PATH).convert("RGB").resize((224, 224))
+    mmgen.prepare_inputs(_PROMPT, images=[img])  # warmup (compile vision kernels)
+    ttnn.synchronize_device(bh_glx_mesh)
+    _t = time.perf_counter()
+    inputs, fused_unpadded = mmgen.prepare_inputs(_PROMPT, images=[img])
+    ttnn.synchronize_device(bh_glx_mesh)
+    t_vision = time.perf_counter() - _t
+
+    S_unpadded = fused_unpadded.shape[1]
+    S = get_padded_prefill_len(S_unpadded)
+    pos3d = inputs.position_ids_3d  # [3, 1, S_unpadded]
+    if S > S_unpadded:
+        pad = S - S_unpadded
+        fused = torch.cat(
+            [fused_unpadded, torch.zeros(*fused_unpadded.shape[:-2], pad, fused_unpadded.shape[-1])], dim=-2
+        )
+        last = pos3d[:, :, -1:].max().item()
+        pad_pos = torch.arange(last + 1, last + 1 + pad, dtype=pos3d.dtype).view(1, 1, pad).expand(3, 1, pad)
+        pos3d = torch.cat([pos3d, pad_pos], dim=-1)
+    else:
+        fused = fused_unpadded
+    # Padded token ids (real ids + zero pad) for shape/page/last-token bookkeeping.
+    ids = inputs.input_ids.to(torch.long)
+    ids_padded = torch.cat([ids, torch.zeros(1, S - S_unpadded, dtype=torch.long)], dim=1) if S > S_unpadded else ids
+
+    # M-RoPE cos/sin (real 3D positions), uploaded replicated — same convention as decode rope_setup.
+    cos_ref, sin_ref = build_mrope_cos_sin(
+        positions_3d=pos3d[:, 0, :],
+        head_dim=256,
+        partial_rotary_factor=0.25,
+        mrope_section=[11, 11, 10],
+        theta=10_000_000.0,
+    )
+    upload = lambda t: ttnn.from_torch(  # noqa: E731
+        t.unsqueeze(0),
+        device=bh_glx_mesh,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(bh_glx_mesh),
+    )
+    rot_mats = (upload(cos_ref), upload(sin_ref))
+
+    logger.info(f"[mm-perf] S_unpadded={S_unpadded} -> bucket S={S}; vision+preproc(warm)={t_vision*1e3:.1f} ms")
+
+    # --- PREFILL via the server path (cold = incl. compile) ---
+    ttnn.synchronize_device(bh_glx_mesh)
+    _t = time.perf_counter()
+    prefill_logits = generator.prefill_forward_text_embeds(
+        ids_padded,
+        inputs_embeds=fused,
+        rot_mats=rot_mats,
+        page_table=page_table,
+        kv_cache=tt_kv_cache,
+        prompt_lens=[S_unpadded],
+    )
+    ttnn.synchronize_device(bh_glx_mesh)
+    t_prefill_cold = time.perf_counter() - _t
+    first_tok = int(torch.as_tensor(prefill_logits).float().reshape(-1)[: args.vocab_size].argmax().item())
+    logger.info(
+        f"[mm-perf] first token = {first_tok} ({tok.decode([first_tok])!r}); prefill(cold)={t_prefill_cold*1e3:.1f} ms"
+    )
+
+    # --- DECODE via the server traced path (tok/s timing; see module docstring re: coherence) ---
+    sampling_params = SamplingParams(temperature=1.0, top_k=20, top_p=0.95)
+    out_tok = torch.tensor([first_tok], dtype=torch.long).reshape(1, 1)
+    current_pos = torch.tensor([S_unpadded], dtype=torch.long)
+    read_events, tt_out_toks = [], []
+    _loop_t0 = None
+    for it in range(_DECODE_STEPS):
+        if it == 1:
+            ttnn.synchronize_device(bh_glx_mesh)
+            _loop_t0 = time.perf_counter()
+        tt_tok, read_event = generator.decode_forward(
+            out_tok,
+            current_pos,
+            enable_trace=True,
+            page_table=page_table,
+            kv_cache=tt_kv_cache,
+            read_from_device=True,
+            async_read=True,
+            sampling_params=sampling_params,
+            reset_inputs=(it == 0),
+        )
+        read_events.append(read_event)
+        tt_out_toks.append(tt_tok)
+        current_pos = current_pos + 1
+    ttnn.synchronize_device(bh_glx_mesh)
+    t_decode_steady = time.perf_counter() - _loop_t0
+    n_steady = _DECODE_STEPS - 1
+    decode_tok_s = n_steady / t_decode_steady
+
+    # --- Warm prefill (re-run AFTER decode; output discarded — kernels now warm) ---
+    ttnn.synchronize_device(bh_glx_mesh)
+    _t = time.perf_counter()
+    generator.prefill_forward_text_embeds(
+        ids_padded,
+        inputs_embeds=fused,
+        rot_mats=rot_mats,
+        page_table=page_table,
+        kv_cache=tt_kv_cache,
+        prompt_lens=[S_unpadded],
+    )
+    ttnn.synchronize_device(bh_glx_mesh)
+    t_prefill_warm = time.perf_counter() - _t
+
+    logger.info("=" * 72)
+    logger.info("[mm-perf] QWEN3.6-27B VL SERVER-PATH PERF (BH_GLX, batch=1)")
+    logger.info(f"  prompt tokens (incl. vision)   : {S_unpadded}  (prefill bucket {S})")
+    logger.info(f"  vision encoder + preproc (warm): {t_vision*1e3:9.1f} ms")
+    logger.info(f"  prefill TTFT (cold, w/ compile): {t_prefill_cold*1e3:9.1f} ms")
+    logger.info(f"  prefill TTFT (warm)            : {t_prefill_warm*1e3:9.1f} ms")
+    logger.info(
+        f"  decode (traced, on-dev sample) : {1e3*t_decode_steady/n_steady:9.2f} ms/tok = {decode_tok_s:6.2f} tok/s"
+    )
+    logger.info("=" * 72)
+    assert decode_tok_s > 0

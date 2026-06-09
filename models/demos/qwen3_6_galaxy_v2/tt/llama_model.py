@@ -459,20 +459,39 @@ class TtTransformer(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=0,
         batch_size=1,
+        inputs_embeds=None,
     ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on host (to be copied to device later).
+
+        When ``inputs_embeds`` ([1, S, H] torch) is provided, the first returned
+        tensor is the pre-fused hidden state uploaded col-sharded (dims=(None,3))
+        — matching the layout the prefill decoder expects after embedding — and
+        the token-embedding lookup is skipped downstream.
         """
-        tokens = tokens.reshape(1, 1, 1, -1)
-        S = tokens.shape[-1]
-        tokens = ttnn.from_torch(
-            tokens,
-            device=None,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
+        if inputs_embeds is not None:
+            H = inputs_embeds.shape[-1]
+            S = inputs_embeds.shape[-2]
+            tokens = ttnn.from_torch(
+                inputs_embeds.reshape(1, 1, S, H).to(torch.bfloat16),
+                device=None,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, dims=(None, 3), mesh_shape=self.args.cluster_shape
+                ),
+            )
+        else:
+            tokens = tokens.reshape(1, 1, 1, -1)
+            S = tokens.shape[-1]
+            tokens = ttnn.from_torch(
+                tokens,
+                device=None,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
 
         columns = 4
         rows = 8
@@ -625,9 +644,14 @@ class TtTransformer(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         column_mask=None,
+        is_embedded=False,
     ):
-        tt_tokens = self.embd(tokens)
-        tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
+        if is_embedded:
+            # `tokens` is already the col-sharded pre-fused hidden state [1,1,S,H/cols].
+            tt_tokens = ttnn.unsqueeze_to_4D(tokens)
+        else:
+            tt_tokens = self.embd(tokens)
+            tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
         return tt_tokens, user_id, page_table, chunk_page_table, chunk_start_idx, column_mask
 
     def prepare_inputs_prefill(
@@ -638,17 +662,26 @@ class TtTransformer(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=0,
         batch_size=1,
+        inputs_embeds=None,
     ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device.
         Returns 6 outputs: prefill_input, tt_user_id, page_table_tt, tt_chunk_page_table, tt_chunk_start_idx, tt_column_mask.
+
+        Multimodal: when ``inputs_embeds`` (a torch ``[1, S, H]`` pre-fused
+        vision+text hidden state) is provided, the token-embedding lookup is
+        skipped and the fused embeddings are uploaded col-sharded directly
+        (mirrors qwen3_vl's pre-embedded prefill path). ``tokens`` is still used
+        for shape / page-table bookkeeping.
         """
         host_inputs = self.prepare_prefill_inputs_host(
-            tokens, user_id, page_table, chunk_page_table, chunk_start_idx, batch_size
+            tokens, user_id, page_table, chunk_page_table, chunk_start_idx, batch_size, inputs_embeds=inputs_embeds
         )
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)  # Helper function
-        transformed_device_inputs = self.transform_prefill_inputs_device(*device_inputs)
+        transformed_device_inputs = self.transform_prefill_inputs_device(
+            *device_inputs, is_embedded=(inputs_embeds is not None)
+        )
         return transformed_device_inputs
 
     def prepare_inputs_decode(self, tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded):
