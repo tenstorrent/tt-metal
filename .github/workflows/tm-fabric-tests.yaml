@@ -107,13 +107,6 @@ jobs:
       tracy: true
       skip-tt-train: true
 
-  resolve-docker-pull-refs:
-    needs: [check-harbor, build-artifact]
-    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
-    with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-
   generate-fabric-matrix:
     runs-on: ubuntu-latest
     outputs:
@@ -198,7 +191,7 @@ jobs:
           echo "matrix=$matrix_json" >> $GITHUB_OUTPUT
           echo "Generated matrix: $matrix_json"
   fabric-tests:
-    needs: [resolve-docker-pull-refs, build-artifact, generate-fabric-matrix]
+    needs: [build-artifact, generate-fabric-matrix]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -206,7 +199,7 @@ jobs:
         test-config: ${{ fromJson(needs.generate-fabric-matrix.outputs.matrix) }}
     uses: ./.github/workflows/tm-fabric-tests-impl.yaml
     with:
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       run-fabric-cpu-only-unit-tests: ${{ matrix.test-config.run-fabric-cpu-only-unit-tests || false }}
@@ -220,11 +213,11 @@ jobs:
       bh-runner-quietbox-2: ${{ matrix.test-config.bh-runner-quietbox-2 || false }}
   fabric-perf-tests:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run-wh-t3k-perf-tests != false || github.event_name == 'push' }}
-    needs: [resolve-docker-pull-refs, build-artifact]
+    needs: [build-artifact]
     secrets: inherit
     uses: ./.github/workflows/tm-fabric-tests-perf-impl.yaml
     with:
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       run-perf-fabric-mux-bw: ${{ github.event_name == 'workflow_dispatch' && inputs.run-perf-fabric-mux-bw != false || github.event_name == 'push' }}
