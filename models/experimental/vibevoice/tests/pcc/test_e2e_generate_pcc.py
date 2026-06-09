@@ -32,11 +32,6 @@ for _p in (_REFERENCE_DIR, _VIBEVOICE_ROOT.parent.parent.parent):
 _VOICE_PATH = VOICES_DIR / "en-Alice_woman.wav"
 _TEXT_PATH = DEFAULT_TXT_PATH
 
-pytestmark = pytest.mark.skipif(
-    not Path(MODEL_PATH).is_dir(),
-    reason=f"VibeVoice weights not found at {MODEL_PATH} (set VIBEVOICE_MODEL_PATH)",
-)
-
 CFG_SCALE = 1.3
 NUM_DIFFUSION_STEPS = 10
 SPEECH_PCC = 0.99
