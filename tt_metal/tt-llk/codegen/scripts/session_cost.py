@@ -53,10 +53,10 @@ from pathlib import Path
 # Anthropic public pricing (USD per 1M tokens) — Claude 4.x family.
 PRICING = {
     "opus": {
-        "input": 15.00,
-        "output": 75.00,
-        "cache_read": 1.50,
-        "cache_creation": 18.75,
+        "input": 5.00,
+        "output": 25.00,
+        "cache_read": 0.50,
+        "cache_creation": 6.25,
     },
     "sonnet": {
         "input": 3.00,
