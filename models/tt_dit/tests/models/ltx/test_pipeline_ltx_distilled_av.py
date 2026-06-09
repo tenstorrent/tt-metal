@@ -234,23 +234,51 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
         audio = pipeline.decode_audio(latent, num_frames, fps=24.0)
     warm_ms = (time.perf_counter() - t0) * 1000 / N
     wav = audio.waveform
+    sr = audio.sampling_rate
+    out_dir = os.environ.get("AUDIO_OUT")
 
-    # Does trace replay the same audio it computes eager? (the main-vocoder trace shares the
-    # device with the interleaved eager BWE.) Compare on the real weights + real shape.
-    if os.environ.get("AUDIO_COMPARE_TRACE", "0") == "1" and not traced:
-        eager_wav = wav.clone()
-        pipeline.tt_vocoder_with_bwe.use_trace = True
-        _ = pipeline.decode_audio(latent, num_frames, fps=24.0)  # capture
-        traced_wav = pipeline.decode_audio(latent, num_frames, fps=24.0).waveform  # replay
-        d = (eager_wav - traced_wav).abs().max().item()
-        rms = ((eager_wav - traced_wav) ** 2).mean().sqrt().item() / (eager_wav.pow(2).mean().sqrt().item() + 1e-9)
-        print(f"\nAUDIO_GIRL traced-vs-eager max|Δ|={d:.3e} rmse/σ={rms:.3e}", flush=True)
+    def _save(w, name):
+        if not out_dir:
+            return
+        import soundfile as sf
+
+        os.makedirs(out_dir, exist_ok=True)
+        a = w[0] if w.dim() == 3 else w  # (2, T) -> (T, 2)
+        path = os.path.join(out_dir, name)
+        sf.write(path, a.transpose(0, 1).cpu().numpy(), int(sr))
+        logger.info(f"wrote {path}")
+
+    _save(wav, f"girl_audio_{'conv1d' if _ao._USE_CONV1D_DEPTHWISE else 'mac'}{'_traced' if traced else ''}.wav")
+
+    # Per-1s-interval conv1d-vs-MAC on the real weights: a localized burst (the static) shows
+    # up as one interval spiking well above the uniform reduction-order difference, where an
+    # aggregate metric would average it out.
+    if os.environ.get("AUDIO_COMPARE_DEPTHWISE", "0") == "1":
+        _ao._USE_CONV1D_DEPTHWISE = True
+        w_conv = pipeline.decode_audio(latent, num_frames, fps=24.0).waveform
+        _ao._USE_CONV1D_DEPTHWISE = False
+        w_mac = pipeline.decode_audio(latent, num_frames, fps=24.0).waveform
+        _save(w_conv, "girl_audio_conv1d.wav")
+        _save(w_mac, "girl_audio_mac.wav")
+        rms_rows = []
+        for start in range(0, w_conv.shape[-1], sr):  # 1s intervals
+            c, m = w_conv[..., start : start + sr], w_mac[..., start : start + sr]
+            sig = m.pow(2).mean().sqrt().item() + 1e-9
+            mx = (c - m).abs().max().item()
+            rr = ((c - m) ** 2).mean().sqrt().item() / sig
+            rms_rows.append(rr)
+            logger.info(f"[interval] t={start/sr:4.1f}s  conv-vs-mac max|Δ|={mx:.3e} rmse/σ={rr:.3e}")
+        worst = max(rms_rows)
+        med = sorted(rms_rows)[len(rms_rows) // 2]
+        print(f"\nAUDIO_GIRL conv-vs-mac worst_interval_rmse/σ={worst:.3e} median={med:.3e} ratio={worst/(med+1e-9):.2f}", flush=True)
+        # No interval may spike far above the uniform difference — that is a localized burst.
+        assert worst < 5 * med + 1e-6, f"interval rmse/σ {worst:.3e} >> median {med:.3e}: localized divergence (static)"
+
     pipeline.release_traces()
-    dur = wav.shape[-1] / audio.sampling_rate
+    dur = wav.shape[-1] / sr
     print(
         f"\nAUDIO_GIRL depthwise={'conv1d' if _ao._USE_CONV1D_DEPTHWISE else 'mac'} traced={traced} "
-        f"latent_frames={als.frames} out={tuple(wav.shape)} "
-        f"{dur:.2f}s@{audio.sampling_rate}Hz cold={cold_ms:.1f}ms warm={warm_ms:.1f}ms",
+        f"latent_frames={als.frames} out={tuple(wav.shape)} {dur:.2f}s@{sr}Hz cold={cold_ms:.1f}ms warm={warm_ms:.1f}ms",
         flush=True,
     )
     assert torch.isfinite(wav).all(), "decoded waveform has non-finite samples"
