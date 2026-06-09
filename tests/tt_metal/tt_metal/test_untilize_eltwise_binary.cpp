@@ -201,7 +201,9 @@ TEST_F(MeshDeviceSingleCardFixture, UntilizeEltwiseBinary) {
             "tests/tt_metal/tt_metal/test_kernels/compute/untilA_elwbin_3m.cpp",
             core,
             tt_metal::ComputeConfig{
-                .compile_args = compute_kernel_args, .defines = {{"ELTWISE_OP", op_id_to_op_define[eltwise_op]}}});
+                .math_fidelity = MathFidelity::LoFi,
+                .compile_args = compute_kernel_args,
+                .defines = {{"ELTWISE_OP", op_id_to_op_define[eltwise_op]}}});
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application

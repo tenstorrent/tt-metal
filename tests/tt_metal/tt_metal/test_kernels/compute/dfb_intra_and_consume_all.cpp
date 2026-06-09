@@ -32,17 +32,18 @@
 //   [2] words_per_entry      - words per dfb(1) entry for in-place increment
 
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t num_entries_consumer = get_compile_time_arg_val(0);
-    const uint32_t entries_per_neo      = get_compile_time_arg_val(1);
-    const uint32_t words_per_entry      = get_compile_time_arg_val(2);
+    constexpr uint32_t num_entries_consumer = get_arg(args::num_entries_consumer);
+    constexpr uint32_t entries_per_neo = get_arg(args::entries_per_neo);
+    constexpr uint32_t words_per_entry = get_arg(args::words_per_entry);
 
     // Phase 1: consume all entries from the DM-produced strided x blocked DFB.
     // UNPACK TRISC: each Neo's unpacker waits for its own TC credit (remapper fans out 1 DM post
     // to N consumer TCs so every blocked UNPACK TRISC sees the full set of entries).
     // PACK / MATH TRISCs: wait_front and pop_front are no-ops; they exit Phase 1 immediately.
-    DataflowBuffer dfb_consumer(0);
+    DataflowBuffer dfb_consumer(dfb::remapper_in);
     for (uint32_t i = 0; i < num_entries_consumer; i++) {
         dfb_consumer.wait_front(1);
         dfb_consumer.pop_front(1);
@@ -54,7 +55,10 @@ void kernel_main() {
     // Because PACK races through Phase 1 (no-ops), it can pre-fill the entire TC capacity
     // of dfb(1) before the UNPACK TRISC arrives from Phase 1. PACK then blocks in finish()
     // until UNPACK has consumed all entries and called its own finish().
-    DataflowBuffer dfb_intra(1);
+    //
+    // Both PRODUCER ("intra_out") and CONSUMER ("intra_in") bindings on this kernel
+    // reference the same self-looped intra DFB, so either accessor resolves to the same ID.
+    DataflowBuffer dfb_intra(dfb::intra_out);
 
 #ifdef UCK_CHLKC_UNPACK
     uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();

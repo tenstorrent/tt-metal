@@ -31,7 +31,7 @@ void multicast_data(
     auto src = use<CircularBuffer::AddrSelector::READ_PTR>(src_cb);
     if (is_receiver_core) {
         if constexpr (act_mcast_num_cores > 0) {
-            noc.async_write_multicast<Noc::McastMode::INCLUDE_SRC>(
+            noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
                 src, mcast_ep, total_bytes, act_mcast_num_cores + 1, {.offset_bytes = src_offset}, dst, true);
         } else {
             // Sender is the only receiver — can't use multicast loopback (hangs with 0 destinations)
@@ -293,7 +293,7 @@ void kernel_main() {
                         // We should also multicast VALID flag to destinations for receiver semaphore
                         if constexpr (act_mcast_num_cores) {
                             act_mcast_receiver_sem.set(VALID);
-                            act_mcast_receiver_sem.set_multicast<Noc::McastMode::INCLUDE_SRC>(
+                            act_mcast_receiver_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
                                 noc,
                                 act_mcast_rect.noc_x_start,
                                 act_mcast_rect.noc_y_start,

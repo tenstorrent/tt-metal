@@ -17,6 +17,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_tensor_on_mesh,
     get_model_traced_mesh_shape,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import (
     build_op_kwargs,
@@ -57,8 +58,19 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
+    import os as _os
+
     mesh_shape = get_model_traced_mesh_shape()
-    device = create_mesh_device(mesh_shape)
+    # Prefer WORKER COL: every traced config of this op runs on COL, but the
+    # auto-detect over-routes the whole module to ROW from a single x=7/8-8 master
+    # config, breaking the COL-only configs in single-pass (no-env) runs. Defer to
+    # TTNN_DISPATCH_AXIS when set so CI's two-pass (row+col) is unchanged.
+    _axis = (
+        None
+        if _os.environ.get("TTNN_DISPATCH_AXIS", "").strip().lower() in ("col", "row")
+        else ttnn.DispatchCoreAxis.COL
+    )
+    device = create_mesh_device(mesh_shape, dispatch_core_axis=_axis)
     device_name = ttnn.get_arch_name()
     yield (device, device_name)
     ttnn.close_mesh_device(device)
@@ -282,6 +294,16 @@ def run(
 
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
+
+    # Reconcile the per-chip torch golden to the mesh-stitched actual output:
+    # for sharded inputs the golden is the full/global tensor while the device
+    # output is a per-device shard, so the golden must be sliced down to match
+    # (the previous code sliced the *actual* to the golden, which is backwards
+    # when the golden is larger -> shape-mismatch assert). Mirrors add_model_traced.
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(
+            torch_output_tensor, output_tensor, input_a_tensor_placement, input_b_tensor_placement
+        )
 
     # Slice output back to original shape in case tile padding expanded it
     if output_tensor.shape != torch_output_tensor.shape:

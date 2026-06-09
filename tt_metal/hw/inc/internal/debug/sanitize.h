@@ -333,8 +333,8 @@ void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
         san->is_target = (which_core == DEBUG_SANITIZE_NOC_TARGET);
         san->return_code = return_code;
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-        // Flush 64B cache line to L1 so host sees all fields via NOC; fence ensures completion
-        flush_l2_cache_line(reinterpret_cast<uintptr_t>(san));
+        // Flush the mailbox metadata range to L1 so host sees all fields via NOC; fence ensures completion
+        flush_l2_cache_range(reinterpret_cast<uintptr_t>(san), sizeof(debug_sanitize_addr_msg_t));
 #endif
     }
 
@@ -675,12 +675,15 @@ void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
         NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_TARG_ADDR_LO),                                             \
         NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_AT_LEN_BE),                                                \
         false);
+// Used for inline writes, whose destination (coordinate + address) lives in NOC_TARG_ADDR. The low 32 bits
+// (NOC_TARG_ADDR_LO) must be OR'd in: a stray comma operator previously discarded them, leaving the local
+// offset reading as 0 and defeating the address check.
 #define DEBUG_SANITIZE_NOC_ADDR_FROM_STATE(noc_id, cmd_buf)                                                   \
     DEBUG_SANITIZE_NOC_ADDR(                                                                                  \
         noc_id,                                                                                               \
         ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_TARG_ADDR_COORDINATE) << NOC_ADDR_COORD_SHIFT) | \
             ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_TARG_ADDR_MID) << 32) |                      \
-            ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_TARG_ADDR_LO), false),                       \
+            ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_TARG_ADDR_LO)),                              \
         4);
 #define DEBUG_SANITIZE_NOC_ADDR_(noc_id, a, l, check_linked)                                                     \
     debug_sanitize_noc_addr(noc_id, a, 0, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_READ, check_linked); \
@@ -743,29 +746,30 @@ void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
             l,                                                                                                         \
             false);                                                                                                    \
     }
-#define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_id, noc_a_lower, worker_a)            \
-    {                                                                                                           \
-        while (!noc_cmd_buf_ready(noc_id, write_cmd_buf));                                                      \
-        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_(                                                                  \
-            noc_id,                                                                                             \
-            ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_TARG_ADDR_COORDINATE)                    \
-             << NOC_ADDR_COORD_SHIFT) |                                                                         \
-                ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_TARG_ADDR_MID) << 32) | noc_a_lower, \
-            worker_a,                                                                                           \
-            NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_AT_LEN_BE),                                         \
-            false);                                                                                             \
+// For a (non-inline) write the destination NoC coordinate lives in NOC_RET_ADDR; NOC_TARG_ADDR holds the
+// local source address and the initiating NIU's own coordinate (the write-ack return target). Reconstruct the
+// destination from NOC_RET_ADDR so the sanitizer checks/reports the real target, not the sender's own core.
+#define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_id, noc_a_lower, worker_a)                   \
+    {                                                                                                                  \
+        while (!noc_cmd_buf_ready(noc_id, write_cmd_buf));                                                             \
+        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_(                                                                         \
+            noc_id,                                                                                                    \
+            ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_RET_ADDR_COORDINATE) << NOC_ADDR_COORD_SHIFT) | \
+                ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_RET_ADDR_MID) << 32) | noc_a_lower,         \
+            worker_a,                                                                                                  \
+            NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_AT_LEN_BE),                                                \
+            false);                                                                                                    \
     }
-#define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE(noc_id, noc_a_lower, worker_a, l)                  \
-    {                                                                                                           \
-        while (!noc_cmd_buf_ready(noc_id, write_cmd_buf));                                                      \
-        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_(                                                                  \
-            noc_id,                                                                                             \
-            ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_TARG_ADDR_COORDINATE)                    \
-             << NOC_ADDR_COORD_SHIFT) |                                                                         \
-                ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_TARG_ADDR_MID) << 32) | noc_a_lower, \
-            worker_a,                                                                                           \
-            l,                                                                                                  \
-            false);                                                                                             \
+#define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE(noc_id, noc_a_lower, worker_a, l)                         \
+    {                                                                                                                  \
+        while (!noc_cmd_buf_ready(noc_id, write_cmd_buf));                                                             \
+        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_(                                                                         \
+            noc_id,                                                                                                    \
+            ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_RET_ADDR_COORDINATE) << NOC_ADDR_COORD_SHIFT) | \
+                ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_RET_ADDR_MID) << 32) | noc_a_lower,         \
+            worker_a,                                                                                                  \
+            l,                                                                                                         \
+            false);                                                                                                    \
     }
 #define DEBUG_INSERT_DELAY(transaction_type) debug_insert_delay(transaction_type)
 #define DEBUG_SANITIZE_NO_DRAM_ADDR(noc_id, addr, l) debug_throw_on_dram_addr(noc_id, addr, l)

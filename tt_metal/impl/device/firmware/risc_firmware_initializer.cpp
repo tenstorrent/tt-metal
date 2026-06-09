@@ -166,7 +166,8 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
 
             // Register the build env unconditionally so JIT compilation (CompileProgram) works on mock
             // and emulated devices too. The build env is HAL/arch-derived and does not probe hardware.
-            BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
+            BuildEnvManager::get_instance().add_build_env(
+                device_id, num_hw_cqs_, descriptor_->metal_context().get_context_id());
             // build_firmware() is a pure compile/link step that doesn't touch hardware, and the
             // resulting ELFs export symbols (e.g. __fw_export_text_end) that kernel linker scripts
             // depend on -- without them, JIT-compiling kernels on a mock device fails with
@@ -1380,7 +1381,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
 
         tt::umd::RiscType reset_val;
         if (cluster_.arch() == ARCH::QUASAR) {
-            reset_val = tt::umd::RiscType::ALL_NEO_DMS;
+            reset_val = tt::umd::RiscType::ALL;
         } else {
             reset_val = tt::umd::RiscType::BRISC;
             if (multi_risc_active_eth_cores.contains(worker_core)) {

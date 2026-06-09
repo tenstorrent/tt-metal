@@ -72,7 +72,7 @@ FullDeviceOperation::tensor_return_value_t FullDeviceOperation::create_output_te
 
 namespace ttnn::prim {
 ttnn::operations::full::FullDeviceOperation::tensor_return_value_t full(
-    ttnn::SmallVector<uint32_t> shape,
+    ttsl::SmallVector<uint32_t> shape,
     std::variant<float, int> fill_value,
     ttnn::MeshDevice* mesh_device,
     const DataType& dtype,
