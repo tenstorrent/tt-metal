@@ -31,6 +31,9 @@ class VoxtralTTAttention:
         activation_memory_config=ttnn.DRAM_MEMORY_CONFIG,
         wqkv_program_config=None,
         wo_program_config=None,
+        wqkv_mem_config=None,
+        wo_mem_config=None,
+        wqkv_in0_shard_mem_config=None,
         *,
         is_causal: bool = False,
         use_qk_norm: bool = False,
@@ -49,6 +52,7 @@ class VoxtralTTAttention:
         self.activation_memory_config = activation_memory_config
         self.wqkv_program_config = wqkv_program_config
         self.wo_program_config = wo_program_config
+        self.wqkv_in0_shard_mem_config = wqkv_in0_shard_mem_config
         self.is_causal = is_causal
         self.use_qk_norm = use_qk_norm
         self._qk_norm_mode = qk_norm_mode
@@ -100,14 +104,14 @@ class VoxtralTTAttention:
             device=device,
             dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=wqkv_mem_config or ttnn.DRAM_MEMORY_CONFIG,
         )
         self.wo = ttnn.from_torch(
             wo,
             device=device,
             dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=wo_mem_config or ttnn.DRAM_MEMORY_CONFIG,
         )
 
     def __call__(
@@ -135,7 +139,18 @@ class VoxtralTTAttention:
         _wqkv_kw = dict(_lin_kw)
         if self.wqkv_program_config is not None:
             _wqkv_kw["program_config"] = self.wqkv_program_config
-        xqkv = ttnn.linear(hidden_states, self.wqkv, **_wqkv_kw)
+
+        if self.wqkv_in0_shard_mem_config is not None:
+            # DS path: shard in0 K-wise; output is L1 WIDTH SHARDED.
+            # De-shard after so nlp_create_qkv_heads gets a contiguous interleaved tensor.
+            hs_sharded = ttnn.to_memory_config(hidden_states, self.wqkv_in0_shard_mem_config)
+            _wqkv_kw["memory_config"] = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+            xqkv_sharded = ttnn.linear(hs_sharded, self.wqkv, **_wqkv_kw)
+            ttnn.deallocate(hs_sharded)
+            xqkv = ttnn.to_memory_config(xqkv_sharded, act_mem)
+            ttnn.deallocate(xqkv_sharded)
+        else:
+            xqkv = ttnn.linear(hidden_states, self.wqkv, **_wqkv_kw)
 
         if self.use_qk_norm and self.q_norm is not None and self.k_norm is not None:
             b, one, s, _ = tuple(xqkv.shape)
