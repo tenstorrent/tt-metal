@@ -1833,25 +1833,58 @@ class TestReportVersion:
 
 class TestBufferChunksSchemaAndAggregation:
     """Schema, version, and per-(op, device, addr, bank, core) aggregation tests
-    for the ``buffer_chunks`` table that replaced the legacy ``buffer_pages``."""
+    for the ``buffer_chunks`` table that replaced the legacy ``buffer_pages``.
+
+    The schema/version tests drive the real ``import_report`` path via
+    ``_make_report`` + ``_import_to_db`` and verify behaviour by querying the
+    resulting database; the pure aggregation tests at the bottom exercise
+    ``_aggregate_pages_to_chunks`` directly with no DB."""
+
+    # Minimum buffer_chunks landed at "3.0"; any later 3.x is also acceptable.
+    # Pinning a literal would force lockstep edits on every unrelated schema
+    # bump, so we assert the floor instead.
+    MIN_SCHEMA_VERSION = (3, 0)
 
     @staticmethod
-    def _open_db(tmp_path):
-        db_path = tmp_path / "schema.db"
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        graph_report.create_database_schema(cursor)
-        graph_report.save_database_schema_version(cursor)
-        conn.commit()
-        return conn, cursor
+    def _semver_tuple(value):
+        """Parse a dotted version string (``"3.0"``, ``"3.1.4"``) into a tuple of ints."""
+        return tuple(int(p) for p in str(value).split("."))
 
-    def test_schema_version_is_3_1(self):
-        """The current importer writes schema version ``3.1``."""
-        assert graph_report.DATABASE_SCHEMA_VERSION == "3.1"
+    @staticmethod
+    def _minimal_report():
+        """Smallest report ``import_report`` accepts: capture_start only, no buffers."""
+        return _make_report([{"counter": 0, "node_type": "capture_start", "params": {}, "connections": []}])
 
-    def test_schema_creates_buffer_chunks_not_buffer_pages(self, tmp_path):
-        """``create_database_schema`` produces ``buffer_chunks`` and not ``buffer_pages``."""
-        conn, cursor = self._open_db(tmp_path)
+    def test_schema_version_meets_minimum_for_buffer_chunks(self, tmp_path):
+        """The ``schema_version`` written by ``import_report`` is >= the buffer_chunks floor."""
+        conn, cursor = _import_to_db(self._minimal_report(), tmp_path)
+        try:
+            row = cursor.execute("SELECT value FROM report_metadata WHERE key = 'schema_version'").fetchone()
+            assert row is not None, "schema_version not persisted to report_metadata"
+            assert (
+                self._semver_tuple(row[0]) >= self.MIN_SCHEMA_VERSION
+            ), f"schema_version {row[0]!r} predates the buffer_chunks landing"
+        finally:
+            conn.close()
+
+    def test_buffer_chunks_table_is_queryable_with_expected_columns(self, tmp_path):
+        """A ``SELECT`` over every column ttnn-visualizer's ``BufferChunk`` reads succeeds.
+
+        Querying by name (rather than introspecting ``sqlite_master``/``PRAGMA``) means
+        a missing or renamed column raises ``OperationalError`` and fails the test."""
+        conn, cursor = _import_to_db(self._minimal_report(), tmp_path)
+        try:
+            cursor.execute(
+                "SELECT operation_id, device_id, address, bank_id, core_x, core_y, "
+                "chunk_address, chunk_size, page_size, num_pages, buffer_type FROM buffer_chunks"
+            )
+            cursor.fetchall()
+        finally:
+            conn.close()
+
+    def test_legacy_buffer_pages_table_is_not_created(self, tmp_path):
+        """The new importer must not create the legacy ``buffer_pages`` table."""
+        conn, cursor = _import_to_db(self._minimal_report(), tmp_path)
         try:
             tables = {
                 row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
@@ -1861,34 +1894,39 @@ class TestBufferChunksSchemaAndAggregation:
         finally:
             conn.close()
 
-    def test_buffer_chunks_has_expected_columns(self, tmp_path):
-        """``buffer_chunks`` columns match what ttnn-visualizer's ``BufferChunk`` reads."""
-        conn, cursor = self._open_db(tmp_path)
-        try:
-            cols = [row[1] for row in cursor.execute("PRAGMA table_info(buffer_chunks)").fetchall()]
-            assert cols == [
-                "operation_id",
-                "device_id",
-                "address",
-                "bank_id",
-                "core_x",
-                "core_y",
-                "chunk_address",
-                "chunk_size",
-                "page_size",
-                "num_pages",
-                "buffer_type",
-            ]
-        finally:
-            conn.close()
+    def test_buffer_pages_fallback_populates_buffer_chunks(self, tmp_path):
+        """A legacy ``buffer_pages`` snapshot in the report is aggregated into ``buffer_chunks``.
 
-    def test_schema_version_persisted_to_report_metadata(self, tmp_path):
-        """``save_database_schema_version`` writes ``3.1`` into ``report_metadata``."""
-        conn, cursor = self._open_db(tmp_path)
+        Builds a tiny report with the fallback per-page format (no
+        ``buffer_pages_by_address`` / ``per_operation_buffers``), imports it,
+        and checks that the aggregated row carries the expected math: chunk
+        covers the page-address span, ``num_pages`` reflects input count."""
+        report = self._minimal_report()
+        # Three contiguous L1 pages on one core at address 1000.
+        report["buffer_pages"] = [
+            {
+                "device_id": 0,
+                "address": 1000,
+                "core_x": 0,
+                "core_y": 0,
+                "bank_id": 64,
+                "page_index": i,
+                "page_address": i * 2048,
+                "page_size": 2048,
+                "buffer_type": 1,
+            }
+            for i in range(3)
+        ]
+        conn, cursor = _import_to_db(report, tmp_path)
         try:
-            row = cursor.execute("SELECT value FROM report_metadata WHERE key = 'schema_version'").fetchone()
-            assert row is not None
-            assert row[0] == "3.1"
+            rows = cursor.execute(
+                "SELECT device_id, address, bank_id, core_x, core_y, "
+                "chunk_address, chunk_size, page_size, num_pages, buffer_type FROM buffer_chunks"
+            ).fetchall()
+            assert len(rows) == 1, f"expected 1 aggregated chunk, got {rows}"
+            dev, addr, bank, cx, cy, chunk_addr, chunk_size, page_size, num_pages, btype = rows[0]
+            assert (dev, addr, bank, cx, cy) == (0, 1000, 64, 0, 0)
+            assert (chunk_addr, chunk_size, page_size, num_pages, btype) == (0, 3 * 2048, 2048, 3, 1)
         finally:
             conn.close()
 

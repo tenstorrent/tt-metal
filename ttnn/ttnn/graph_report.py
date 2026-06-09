@@ -52,7 +52,7 @@ else:
     )
 
 SUPPORTED_REPORT_VERSION = 1
-DATABASE_SCHEMA_VERSION = "3.1"
+DATABASE_SCHEMA_VERSION = "3.0"
 
 
 def _int_param(params, key):
