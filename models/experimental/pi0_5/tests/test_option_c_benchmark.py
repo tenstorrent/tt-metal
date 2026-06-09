@@ -65,6 +65,10 @@ ITERS = int(os.environ.get("PI0_OC_BENCH_ITERS", "5"))
 # host-torch path). Set PI0_OC_BENCH_DEVICE_SIGLIP=1 to enable. First forward
 # is JIT-compile heavy (~3 sec); subsequent iters are fast.
 DEVICE_SIGLIP = os.environ.get("PI0_OC_BENCH_DEVICE_SIGLIP") == "1"
+# D2D parent-mesh prefill slice. When 1, replaces the host-bouncing layer-
+# paired path with Pi0_5OptionCVLMSliceParent + migrate_layer_paired_d2d.
+# Requires fabric initialized at parent open (set_fabric_config(FABRIC_1D)).
+USE_PARENT_MESH_SLICE = os.environ.get("PI0_OC_BENCH_PARENT_MESH_SLICE") == "1"
 
 # Shape constants — mirror `test_option_b_benchmark.py` so the two
 # benchmarks compare apples-to-apples.
@@ -147,7 +151,7 @@ def test_oc_bench_e2e_staged_breakdown():
         f"\n[bench layout] vlm_depth={VLM_DEPTH_BENCH}  expert_depth={EXPERT_DEPTH_BENCH}  device_siglip={DEVICE_SIGLIP}"
     )
 
-    with open_galaxy_mesh(shrunk) as (_parent, submeshes):
+    with open_galaxy_mesh(shrunk, enable_fabric=USE_PARENT_MESH_SLICE) as (_parent, submeshes):
         pipe = Pi0_5PipelineC(
             layout=shrunk,
             submeshes=submeshes,
@@ -155,6 +159,8 @@ def test_oc_bench_e2e_staged_breakdown():
             weights=weights,
             denoise_steps=NUM_DENOISE_STEPS,
             device_siglip=DEVICE_SIGLIP,
+            use_parent_mesh_slice=USE_PARENT_MESH_SLICE,
+            parent_mesh=_parent if USE_PARENT_MESH_SLICE else None,
         )
         pipe.initialize()
 

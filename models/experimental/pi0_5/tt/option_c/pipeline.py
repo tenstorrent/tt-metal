@@ -182,6 +182,15 @@ class Pi0_5PipelineC:
     # Grid (gx, gy) for the MLP width-shard. Default (8, 8) = 64 cores; with
     # TP=2 (per-chip N=8192) that's per-core [K, 128] = 272 KB at bf8.
     prefill_mlp_l1_width_sharded_grid: tuple = (8, 8)
+    # D2D parent-mesh slice for prefill (Option A end-state). When True:
+    #   - replaces stage_1.forward with Pi0_5OptionCVLMSliceParent.forward_real_block_chain
+    #   - uses migrate_layer_paired_d2d (P2P fabric) instead of host-bounce KV migration
+    #   - estimated savings vs current path: ~150-180 ms (inter-layer host bounces + KV migration)
+    # Requires parent_mesh to be passed in (the galaxy parent the submeshes were carved from)
+    # and the parent mesh to have been opened with set_fabric_config(FABRIC_1D).
+    use_parent_mesh_slice: bool = False
+    # Galaxy parent MeshDevice (8, 4). Required when use_parent_mesh_slice=True.
+    parent_mesh: Optional["ttnn.MeshDevice"] = None
     # When True, post-initialize walk the denoise stage's expert + suffix
     # slices and migrate every matmul weight + LN/mod weight from DRAM to L1.
     # Default False = today's behavior (uploads land in DRAM via the default
@@ -273,8 +282,33 @@ class Pi0_5PipelineC:
         self.kv_migrator = KVMigration(denoise_submesh=self.submeshes[2])
 
         self.stage_0.initialize()
-        self.stage_1.initialize()
+        # Skip stage_1 init when using the parent-mesh slice — the
+        # parent_mesh_slice replaces stage_1's forward and KV emission, so
+        # stage_1's replicated weight uploads would just be wasted memory.
+        # We still keep the stage_1 object around for first_chip_submesh
+        # access (the transport landing site).
+        if not self.use_parent_mesh_slice:
+            self.stage_1.initialize()
         self.stage_2.initialize(kv_migrator=self.kv_migrator)
+
+        # D2D parent-mesh slice for prefill. When enabled, this REPLACES the
+        # host-bouncing layer-paired prefill path. We construct it here but
+        # delegate the actual forward to it in run_inference().
+        self.parent_mesh_slice = None
+        if self.use_parent_mesh_slice:
+            if self.parent_mesh is None:
+                raise ValueError("use_parent_mesh_slice=True requires parent_mesh to be set")
+            from .stages import PREFILL_SUBMESH_OFFSET, PREFILL_SUBMESH_SHAPE
+            from .vlm_slice import Pi0_5OptionCVLMSliceParent
+
+            self.parent_mesh_slice = Pi0_5OptionCVLMSliceParent(
+                config=self.config,
+                weights=self.weights,
+                parent_mesh=self.parent_mesh,
+                prefill_offset=PREFILL_SUBMESH_OFFSET,
+                prefill_shape=PREFILL_SUBMESH_SHAPE,
+                layer_range=(0, self.config.vlm_config.depth),
+            )
 
         # Opt-in L1 migration for the TP prefill path. Mirrors Option B's
         # pattern. The migration helper walks each TP block on the slice
@@ -349,42 +383,65 @@ class Pi0_5PipelineC:
         # target in both modes (full submesh in replicated mode, chip 0 in
         # paired mode), so this single line covers both paths.
         t0 = time.perf_counter()
-        prefill_in_submesh = self.stage_1.first_chip_submesh
-        prefix_hidden_s1 = send_activation_via_host(prefix_hidden_s0, prefill_in_submesh)
+        if self.use_parent_mesh_slice:
+            # Vision → parent mesh directly (one host bounce, no
+            # intermediate prefill-submesh hop).
+            prefix_hidden_s1 = self._lift_activation_to_parent_mesh(prefix_hidden_s0)
+            prefill_in_submesh = None  # not used in this path
+        else:
+            prefill_in_submesh = self.stage_1.first_chip_submesh
+            prefix_hidden_s1 = send_activation_via_host(prefix_hidden_s0, prefill_in_submesh)
         ttnn.deallocate(prefix_hidden_s0)
         t.transport_0_to_1_ms = (time.perf_counter() - t0) * 1000
 
         # ---------- Stage 1: VLM prefill ------------------------------------
-        # Mask must live on the same submesh as the prefill input — chip 0 in
-        # paired mode; full prefill submesh in replicated mode.
-        S_prefix = prefix_hidden_s1.shape[1]
-        mask_prefix_s1 = self._build_or_upload_prefix_mask(attention_mask_prefix, S_prefix, prefill_in_submesh)
-        t0 = time.perf_counter()
-        h_after_1 = self.stage_1.forward(
-            prefix_hidden_s1,
-            attention_mask=mask_prefix_s1,
-            use_cache=True,
-        )
-        t.stage_1_prefill_ms = (time.perf_counter() - t0) * 1000
-        # h_after_1 is not consumed downstream in the no-prefill-residual
-        # path; deallocate to free L1 on the prefill submesh.
-        ttnn.deallocate(h_after_1)
+        S_prefix = prefix_hidden_s1.shape[-2] if self.use_parent_mesh_slice else prefix_hidden_s1.shape[1]
+        if self.use_parent_mesh_slice:
+            # D2D parent-mesh path: activation already on the galaxy parent
+            # at the first prefill chip's coord.
+            t0 = time.perf_counter()
+            h_after_1, per_layer_kv_on_parent = self.parent_mesh_slice.forward_real_block_chain(
+                prefix_hidden_s1, return_kv_cache=True
+            )
+            t.stage_1_prefill_ms = (time.perf_counter() - t0) * 1000
+            ttnn.deallocate(h_after_1)
 
-        # ---------- KV migration (layer-paired, prefill → denoise) ----------
-        # When denoise runs on per-chip micro-submeshes, route each layer's KV
-        # to its owning denoise chip (else past_k on the full 6-chip submesh +
-        # k_rope on chip j inside the block forward triggers "Operands to
-        # concat need to be on the same device" in the KV-cache concat).
-        t0 = time.perf_counter()
-        per_layer_kv: List[Optional[Tuple["ttnn.Tensor", "ttnn.Tensor"]]] = [None] * self.config.vlm_config.depth
-        for global_idx, kv in self.stage_1.get_kv_cache():
-            per_layer_kv[global_idx] = kv
-        denoise_micro = (
-            self.stage_2.micro_submeshes if self.stage_2 is not None and self.stage_2.layer_paired_l1 else None
-        )
-        self.kv_migrator.migrate_layer_paired(per_layer_kv, denoise_micro_submeshes=denoise_micro)
-        prefix_kv_on_denoise = self.kv_migrator.as_list(self.config.vlm_config.depth)
-        t.kv_migration_ms = (time.perf_counter() - t0) * 1000
+            # D2D KV migration using the parent-mesh K/V tensors emitted by
+            # the forward. This replaces 18 layers of host-bounce migration
+            # with 18 layers of fabric P2P (microseconds vs ~120-150 ms).
+            t0 = time.perf_counter()
+            self.kv_migrator.migrate_layer_paired_d2d(per_layer_kv_on_parent)
+            # Free the source KV tensors after migration.
+            for k_t, v_t in per_layer_kv_on_parent:
+                ttnn.deallocate(k_t)
+                ttnn.deallocate(v_t)
+            prefix_kv_on_denoise = self.kv_migrator.as_list(self.config.vlm_config.depth)
+            t.kv_migration_ms = (time.perf_counter() - t0) * 1000
+        else:
+            # Host-bouncing layer-paired path (current default).
+            # Mask must live on the same submesh as the prefill input — chip 0 in
+            # paired mode; full prefill submesh in replicated mode.
+            mask_prefix_s1 = self._build_or_upload_prefix_mask(attention_mask_prefix, S_prefix, prefill_in_submesh)
+            t0 = time.perf_counter()
+            h_after_1 = self.stage_1.forward(
+                prefix_hidden_s1,
+                attention_mask=mask_prefix_s1,
+                use_cache=True,
+            )
+            t.stage_1_prefill_ms = (time.perf_counter() - t0) * 1000
+            ttnn.deallocate(h_after_1)
+
+            # ---------- KV migration (layer-paired, prefill → denoise) ----------
+            t0 = time.perf_counter()
+            per_layer_kv: List[Optional[Tuple["ttnn.Tensor", "ttnn.Tensor"]]] = [None] * self.config.vlm_config.depth
+            for global_idx, kv in self.stage_1.get_kv_cache():
+                per_layer_kv[global_idx] = kv
+            denoise_micro = (
+                self.stage_2.micro_submeshes if self.stage_2 is not None and self.stage_2.layer_paired_l1 else None
+            )
+            self.kv_migrator.migrate_layer_paired(per_layer_kv, denoise_micro_submeshes=denoise_micro)
+            prefix_kv_on_denoise = self.kv_migrator.as_list(self.config.vlm_config.depth)
+            t.kv_migration_ms = (time.perf_counter() - t0) * 1000
 
         # ---------- Stage 2: denoise (full Euler loop) ----------------------
         # Suffix MLP and the first expert layer live on chip 0 of the denoise
@@ -475,6 +532,40 @@ class Pi0_5PipelineC:
             step_times.append((time.perf_counter() - t_s0) * 1000)
 
         return x_t, step_times
+
+    def _lift_activation_to_parent_mesh(self, src: "ttnn.Tensor") -> "ttnn.Tensor":
+        """Move a vision-submesh activation onto the GALAXY PARENT mesh,
+        placed at the first prefill chip's parent coord.
+
+        Used by the D2D parent-mesh prefill path: vision emits prefix_hidden
+        on the vision submesh; the parent-mesh slice needs it sharded on the
+        parent mesh with the live data at the first prefill chip's coord.
+        Goes via host once (single cross-stage transition); the 17 inter-
+        layer transitions that follow are pure fabric D2D.
+        """
+        from .stages import GALAXY_PARENT_SHAPE, PREFILL_SUBMESH_OFFSET
+
+        # Read the vision-submesh tensor down to torch.
+        shards = ttnn.get_device_tensors(src)
+        # For replicated vision output, any shard is the same — take shard 0.
+        host = ttnn.to_torch(shards[0])  # [1, S, hidden] (or [1, 1, S, hidden])
+        # Normalize to 4D [1, 1, S, hidden]
+        while host.ndim < 4:
+            host = host.unsqueeze(0)
+        # Build a parent-mesh-sharded tensor: 32 slots along dim 0, with
+        # real data at the first prefill chip's parent linear index.
+        devices_total = GALAXY_PARENT_SHAPE[0] * GALAXY_PARENT_SHAPE[1]
+        lin0 = (PREFILL_SUBMESH_OFFSET[0]) * GALAXY_PARENT_SHAPE[1] + PREFILL_SUBMESH_OFFSET[1]
+        full = torch.zeros((devices_total,) + tuple(host.shape[1:]), dtype=host.dtype)
+        full[lin0] = host[0]
+        return ttnn.from_torch(
+            full,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.parent_mesh,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.parent_mesh, dim=0),
+        )
 
     def _upload_replicated(
         self,
