@@ -42,11 +42,11 @@ void kernel_main() {
 
         // transpose input
         cb_tilize_exp.wait_front(1);
-        transpose_wh_init_short(cb_tilize);
+        transpose_init(cb_tilize);
         pack_untilize_dest_init<1>(cb_out);
 
         tile_regs_acquire();
-        transpose_wh_tile(cb_tilize, 0, 0);  // transpose call
+        transpose_tile(cb_tilize, 0, 0);  // transpose call
         tile_regs_commit();
 
         // pack and untilize

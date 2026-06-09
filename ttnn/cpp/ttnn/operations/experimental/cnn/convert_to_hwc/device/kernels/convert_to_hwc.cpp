@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/pack_untilize.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/tilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
@@ -16,9 +16,9 @@ FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
     tile_regs_acquire();
     tile_regs_wait();
 
-    transpose_wh_init_short(cb_in);
+    transpose_init(cb_in);
     for (uint32_t i = 0; i < BatchSize; i++) {
-        transpose_wh_tile(cb_in, i, i);
+        transpose_tile(cb_in, i, i);
     }
 
     cb_reserve_back(cb_out, BatchSize);
@@ -53,7 +53,7 @@ void kernel_main() {
             1, total_sticks_per_block);
 
         pack_untilize_init(cb_in_batch, cb_transpose_in0);
-        transpose_wh_init(cb_in_batch, cb_transpose_in0);
+        transpose_init(cb_in_batch);
         pack_untilize_dest_init<1>(cb_in_batch);
 
         for (uint32_t idx = 0; idx < total_tiles_per_block; idx++) {

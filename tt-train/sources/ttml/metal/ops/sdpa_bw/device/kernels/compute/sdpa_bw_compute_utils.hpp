@@ -20,6 +20,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/transpose_wh.h"
 #include "api/compute/transpose_wh_dest.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 #include "tt-train/sources/ttml/metal/common/sdpa_compute_utils_common.hpp"
@@ -134,7 +135,7 @@ inline void transpose_tile_fpu(const uint32_t cb_input, /*output cb*/ const uint
 
     tile_regs_acquire();
     transpose_wh_init(cb_input, cb_transpose_wh);
-    transpose_wh_tile(cb_input, /* tile idx */ 0, /* reg idx */ 0);
+    transpose_tile(cb_input, /* tile idx */ 0, /* reg idx */ 0);
     tile_regs_commit();
 
     cb_reserve_back(cb_transpose_wh, onetile);

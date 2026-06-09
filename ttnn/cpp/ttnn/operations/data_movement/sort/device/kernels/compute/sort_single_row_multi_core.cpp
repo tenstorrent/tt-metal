@@ -4,7 +4,7 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
@@ -63,8 +63,9 @@ void kernel_main() {
     if constexpr (is_row_major) {
         compute_kernel_hw_startup(rm_input_value_cb_id, rm_input_index_cb_id, input_tensor_cb_id);
     } else {
+        compute_kernel_hw_startup(input_tensor_cb_id, input_tensor_transposed_cb_id);
         ckernel::topk_tile_init();
-        transpose_wh_init(input_tensor_cb_id, input_tensor_transposed_cb_id);
+        transpose_init(input_tensor_cb_id);
     }
 
     for (uint32_t h = 0; h < Ht; h++) {
@@ -107,7 +108,7 @@ void kernel_main() {
                                     input_tensor_cb_id, index_tensor_cb_id, input_tensor_transposed_cb_id);
 
                                 ckernel::topk_tile_init();
-                                transpose_wh_init(input_tensor_cb_id, input_tensor_transposed_cb_id);
+                                transpose_init(input_tensor_cb_id);
                             }
 
                             input_tensor_cb.wait_front(2 * one_tile);
@@ -120,15 +121,15 @@ void kernel_main() {
                             // in all stages except the very first.
                             if ((stage == 1 && sub == 1) || is_row_major) {
                                 reconfig_data_format_srca(input_tensor_cb_id);
-                                transpose_wh_init_short(input_tensor_cb_id);
-                                transpose_wh_tile(input_tensor_cb_id, 0, input_dest_start);
-                                transpose_wh_tile(input_tensor_cb_id, 1, input_dest_end);
+                                transpose_init(input_tensor_cb_id);
+                                transpose_tile(input_tensor_cb_id, 0, input_dest_start);
+                                transpose_tile(input_tensor_cb_id, 1, input_dest_end);
 
                                 // Process index tiles
                                 reconfig_data_format_srca(index_tensor_cb_id);
-                                transpose_wh_init_short(index_tensor_cb_id);
-                                transpose_wh_tile(index_tensor_cb_id, 0, index_dest_start);
-                                transpose_wh_tile(index_tensor_cb_id, 1, index_dest_end);
+                                transpose_init(index_tensor_cb_id);
+                                transpose_tile(index_tensor_cb_id, 0, index_dest_start);
+                                transpose_tile(index_tensor_cb_id, 1, index_dest_end);
                             } else {
                                 // Intermediate step - tiles are already transposed
                                 // Process value tiles
@@ -199,9 +200,9 @@ void kernel_main() {
 
                                 tile_regs_acquire();
                                 reconfig_data_format_srca(input_tensor_transposed_cb_id);
-                                transpose_wh_init_short(input_tensor_transposed_cb_id);
-                                transpose_wh_tile(input_tensor_transposed_cb_id, 0, input_dest_start);
-                                transpose_wh_tile(input_tensor_transposed_cb_id, 1, input_dest_end);
+                                transpose_init(input_tensor_transposed_cb_id);
+                                transpose_tile(input_tensor_transposed_cb_id, 0, input_dest_start);
+                                transpose_tile(input_tensor_transposed_cb_id, 1, input_dest_end);
                                 tile_regs_commit();
 
                                 input_tensor_transposed_cb.pop_front(2 * one_tile);
@@ -222,9 +223,9 @@ void kernel_main() {
 
                                 tile_regs_acquire();
                                 reconfig_data_format_srca(index_tensor_transposed_cb_id);
-                                transpose_wh_init_short(index_tensor_transposed_cb_id);
-                                transpose_wh_tile(index_tensor_transposed_cb_id, 0, input_dest_start);
-                                transpose_wh_tile(index_tensor_transposed_cb_id, 1, input_dest_end);
+                                transpose_init(index_tensor_transposed_cb_id);
+                                transpose_tile(index_tensor_transposed_cb_id, 0, input_dest_start);
+                                transpose_tile(index_tensor_transposed_cb_id, 1, input_dest_end);
                                 tile_regs_commit();
 
                                 index_tensor_transposed_cb.pop_front(2 * one_tile);

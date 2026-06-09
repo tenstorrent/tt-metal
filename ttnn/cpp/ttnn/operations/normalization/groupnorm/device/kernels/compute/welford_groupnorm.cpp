@@ -128,7 +128,7 @@ void kernel_main() {
     // True when the welford intake CB is configured with UnpackToDestFp32, i.e. the FP32
     // path. Covers both the TILIZE_IN branch (intake CB is c_29) and the non-TILIZE_IN
     // alias branch (intake CB is cb_in0_welford, see welford_fp32_alias). On this path,
-    // transpose_wh_tile routes through llk_math_transpose_dest, whose math-side init
+    // transpose_tile routes through llk_math_transpose_dest, whose math-side init
     // records slots [16, 32) of the math-thread replay buffer, clobbering welford's
     // LREG2 / LREG3 portions, so the welford SFPU state must be re-initialized after each
     // transpose. For bf16 input, transpose routes through SrcA without touching the
@@ -305,24 +305,24 @@ void kernel_main() {
                         // The reader pushes cb_in0 and cb_in0_welford in separate push_back
                         // calls (cb_in0 first, alias second); cb_in0.wait_front above only
                         // synchronizes on the first. Wait on the alias to synchronize on the
-                        // second before transpose_wh_tile reads via the alias below.
+                        // second before transpose_tile reads via the alias below.
                         cb_in0_welford.wait_front(1);
                     }
 #ifdef TILIZE_IN
-                    transpose_wh_init_short(cb_in_id);
-                    transpose_wh_tile(cb_in_id, 0, input_dst);
+                    transpose_init(cb_in_id);
+                    transpose_tile(cb_in_id, 0, input_dst);
 #else
-                    transpose_wh_init_short(cb_in0_welford_id);
-                    transpose_wh_tile(cb_in0_welford_id, 0, input_dst);
+                    transpose_init(cb_in0_welford_id);
+                    transpose_tile(cb_in0_welford_id, 0, input_dst);
 #endif
 
-                    // Re-establish the welford SFPU replay buffer state. When transpose_wh_tile
-                    // takes the unpack-to-DEST fp32 path, transpose_wh_tile calls
+                    // Re-establish the welford SFPU replay buffer state. When transpose_tile
+                    // takes the unpack-to-DEST fp32 path, transpose_tile calls
                     // llk_math_transpose_dest, whose math-side init records slots [16, 32) of
                     // the math-thread replay buffer, clobbering welford's LREG2 / LREG3 portions.
                     // Without welford_init<WelfordInitMode::PreserveStats>(), welford_update_rows would replay stale
                     // transpose-dest ops.
-                    // When the unpack-to-DEST fp32 path is inactive, transpose_wh_tile routes
+                    // When the unpack-to-DEST fp32 path is inactive, transpose_tile routes
                     // through SrcA without touching the math-thread replay buffer, so re-init is
                     // not needed.
                     if constexpr (welford_unpack_fp32_active) {

@@ -100,7 +100,7 @@ void kernel_main() {
             // Read input, transpose and compute ema
             cb_src.wait_front(ONE_TILE);
             tile_regs_acquire();
-            transpose_wh_tile(src_cb_idx, 0, inp_dst_index);
+            transpose_tile(src_cb_idx, 0, inp_dst_index);
             ema_tile(inp_dst_index);
             tile_regs_commit();
             cb_src.pop_front(ONE_TILE);
@@ -114,7 +114,7 @@ void kernel_main() {
             // Transpose back and write to output
             cb_trp.wait_front(ONE_TILE);
             tile_regs_acquire();
-            transpose_wh_tile(trp_cb_idx, 0, output_dst_index);
+            transpose_tile(trp_cb_idx, 0, output_dst_index);
             tile_regs_commit();
             cb_trp.pop_front(ONE_TILE);
 

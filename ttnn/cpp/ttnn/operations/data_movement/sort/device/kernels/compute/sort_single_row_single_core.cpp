@@ -4,7 +4,7 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
@@ -131,8 +131,9 @@ void kernel_main() {
     if constexpr (is_row_major) {
         compute_kernel_hw_startup(rm_input_cb_id, index_tensor_cb_id, input_tensor_cb_id);
     } else {
+        compute_kernel_hw_startup(input_tensor_cb_id, input_tensor_transposed_cb_id);
         ckernel::topk_tile_init();
-        transpose_wh_init(input_tensor_cb_id, input_tensor_transposed_cb_id);
+        transpose_init(input_tensor_cb_id);
     }
 
     for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
@@ -176,7 +177,7 @@ void kernel_main() {
             // as layernorm_large_tensor.cpp's TILIZE_IN path).
             binary_op_init_common(input_tensor_cb_id, index_tensor_cb_id, input_tensor_transposed_cb_id);
             ckernel::topk_tile_init();
-            transpose_wh_init(input_tensor_cb_id, input_tensor_transposed_cb_id);
+            transpose_init(input_tensor_cb_id);
         }
 
         sort_Wt_tiles_row_to_bitonic_sequence(

@@ -7,7 +7,7 @@
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
 #include "ttnn/operations/reduction/topk/device/kernels/compute/topk_common_funcs.hpp"
@@ -80,15 +80,15 @@ void process_and_sort_tiles(
         tile_regs_acquire();
         // transpose and unpack into dest regs
         reconfig_data_format_srca(cb_biased_scores);
-        transpose_wh_init_short(cb_biased_scores);
-        transpose_wh_tile(cb_biased_scores, wt, 0);
-        transpose_wh_tile(cb_biased_scores, wt + 1, 1);
+        transpose_init(cb_biased_scores);
+        transpose_tile(cb_biased_scores, wt, 0);
+        transpose_tile(cb_biased_scores, wt + 1, 1);
 
         // transpose and unpack into dest regs
         reconfig_data_format_srca(cb_expert_index_template);
-        transpose_wh_init_short(cb_expert_index_template);
-        transpose_wh_tile(cb_expert_index_template, wt, 2);
-        transpose_wh_tile(cb_expert_index_template, wt + 1, 3);
+        transpose_init(cb_expert_index_template);
+        transpose_tile(cb_expert_index_template, wt, 2);
+        transpose_tile(cb_expert_index_template, wt + 1, 3);
 
         // llk_topk_sort -> inplace
         ckernel::topk_local_sort(0, (int)ascending, end_phase);
@@ -189,13 +189,13 @@ void topk_group_scores(
 
 void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_index, const uint32_t tiles) {
     reconfig_data_format_srca(input_cb_index);
-    transpose_wh_init_short(input_cb_index);
+    transpose_init(input_cb_index);
     pack_reconfig_data_format(output_cb_index);
     for (uint32_t i = 0; i < tiles; i++) {
         cb_wait_front(input_cb_index, 1);
 
         tile_regs_acquire();
-        transpose_wh_tile(input_cb_index, 0, 0);
+        transpose_tile(input_cb_index, 0, 0);
         tile_regs_commit();
 
         cb_pop_front(input_cb_index, 1);
@@ -232,15 +232,15 @@ void topk(
 
     // transpose and unpack into dest regs
     reconfig_data_format_srca(cb_winning_group_scores);
-    transpose_wh_init_short(cb_winning_group_scores);
-    transpose_wh_tile(cb_winning_group_scores, 0, 0);
-    transpose_wh_tile(cb_winning_group_scores, 1, 1);
+    transpose_init(cb_winning_group_scores);
+    transpose_tile(cb_winning_group_scores, 0, 0);
+    transpose_tile(cb_winning_group_scores, 1, 1);
 
     // transpose and unpack into dest regs
     reconfig_data_format_srca(cb_winning_group_indices);
-    transpose_wh_init_short(cb_winning_group_indices);
-    transpose_wh_tile(cb_winning_group_indices, 0, 2);
-    transpose_wh_tile(cb_winning_group_indices, 1, 3);
+    transpose_init(cb_winning_group_indices);
+    transpose_tile(cb_winning_group_indices, 0, 2);
+    transpose_tile(cb_winning_group_indices, 1, 3);
     // llk_topk_sort -> inplace
     ckernel::topk_local_sort(0, (int)ascending, 4);
     ckernel::topk_merge(0, 0, 32);
@@ -249,12 +249,12 @@ void topk(
     // Compare upper half with the next tile; insert into correct position
     for (uint32_t j = 2; j < tiles; j++) {
         reconfig_data_format_srca(cb_winning_group_scores);
-        transpose_wh_init_short(cb_winning_group_scores);
-        transpose_wh_tile(cb_winning_group_scores, j, 1);
+        transpose_init(cb_winning_group_scores);
+        transpose_tile(cb_winning_group_scores, j, 1);
 
         reconfig_data_format_srca(cb_winning_group_indices);
-        transpose_wh_init_short(cb_winning_group_indices);
-        transpose_wh_tile(cb_winning_group_indices, j, 3);
+        transpose_init(cb_winning_group_indices);
+        transpose_tile(cb_winning_group_indices, j, 3);
 
         ckernel::topk_local_sort(0, (int)ascending, 4);
         ckernel::topk_merge(0, 0, 32);

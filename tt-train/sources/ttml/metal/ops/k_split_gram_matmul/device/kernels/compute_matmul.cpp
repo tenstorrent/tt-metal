@@ -115,7 +115,7 @@ void pack_subblock_pernsb(
             const uint32_t in_tile = m * current_N + n;
             const uint32_t out_tile = n * current_M + m;
             tile_regs_acquire();
-            transpose_wh_tile(in_cb, in_tile, 0);
+            transpose_tile(in_cb, in_tile, 0);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile<true>(0, out_cb, out_tile);
@@ -203,7 +203,7 @@ void add_transpose_block(
         pack_reconfig_data_format(mirror_cb);
         for (uint32_t m = 0; m < M_rows; m++) {
             tile_regs_acquire();
-            transpose_wh_tile(staging_cb, m, 0);
+            transpose_tile(staging_cb, m, 0);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(0, mirror_cb);

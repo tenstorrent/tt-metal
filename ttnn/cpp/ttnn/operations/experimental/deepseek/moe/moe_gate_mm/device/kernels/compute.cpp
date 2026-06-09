@@ -10,7 +10,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 
 #include "bias_bcast_sfpu.h"
 #include "top2_sum_sfpu.h"
@@ -260,8 +260,8 @@ void kernel_main() {
 
     // Transpose
     cb_wait_front(cb_s2c_out, 1);
-    transpose_wh_init_short(cb_s2c_out);
-    transpose_wh_tile(cb_s2c_out, 0, 0);
+    transpose_init(cb_s2c_out);
+    transpose_tile(cb_s2c_out, 0, 0);
 
     // Sum the top-2 of the output
     sum_top2_tile_init();
@@ -289,8 +289,8 @@ void kernel_main() {
         tile_regs_acquire();
 
         // Get the adjusted scores
-        transpose_wh_init_short(cb_s2c_out);
-        transpose_wh_tile(cb_s2c_out, 0, 0);
+        transpose_init(cb_s2c_out);
+        transpose_tile(cb_s2c_out, 0, 0);
         cb_pop_front(cb_s2c_out, 1);
 
         // Get the group masks
@@ -340,8 +340,8 @@ void kernel_main() {
 
         // Get top 8 from adjusted scores, and mask them
         tile_regs_acquire();
-        transpose_wh_init_short(cb_s2c_out);
-        transpose_wh_tile(cb_s2c_out, 0, 0);
+        transpose_init(cb_s2c_out);
+        transpose_tile(cb_s2c_out, 0, 0);
         cb_pop_front(cb_s2c_out, 1);
 
         copy_tile_init(cb_w2c_in5);

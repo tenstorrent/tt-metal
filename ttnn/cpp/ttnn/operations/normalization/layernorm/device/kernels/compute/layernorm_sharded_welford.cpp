@@ -165,7 +165,7 @@ void kernel_main() {
 
     // Welford-fp32 alias of cb_in_id. When welford_fp32_alias is true, cb_x_welford_named points
     // to c_29, a separate buffer index sharing cb_in_id's SRAM but configured with UnpackToDestFp32,
-    // so Welford's transpose_wh_tile preserves fp32 precision in DEST. The two aliased indices
+    // so Welford's transpose_tile preserves fp32 precision in DEST. The two aliased indices
     // have independent read/write pointers so the fused path pushes both side by side; the non-fused
     // path reads c_0 (sharded) without read/write pointer manipulation, and so does the alias.
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
@@ -295,11 +295,11 @@ void kernel_main() {
     // visible to binary_op_init_common / unary_op_init_common at the top of kernel_main (only
     // cb_in0/cb_in_id is), so we run the full init once to program all hw config registers
     // (pack, math hw_configure) for it. For the non-alias path cb_x_welford_id == cb_in_id and
-    // transpose_wh_init_short suffices.
+    // transpose_init suffices.
     if constexpr (welford_fp32_alias) {
         transpose_wh_init(cb_x_welford_id, cb_ex_partial_id);
     } else {
-        transpose_wh_init_short(cb_x_welford_id);
+        transpose_init(cb_x_welford_id);
     }
     welford_init();
     index_h_offset = 0;
@@ -313,19 +313,19 @@ void kernel_main() {
             if constexpr (welford_fp32_alias) {
                 // SFPU replay slots [0, 32) currently hold the welford recurrence (welford uses
                 // the full 32-slot math-thread replay buffer; the recovery block below re-records
-                // all of it after each transpose). transpose_wh_init_short re-records slots
-                // [16, 32) with the transpose-dest setup so transpose_wh_tile below can replay them.
-                transpose_wh_init_short(cb_x_welford_id);
+                // all of it after each transpose). transpose_init re-records slots
+                // [16, 32) with the transpose-dest setup so transpose_tile below can replay them.
+                transpose_init(cb_x_welford_id);
             }
-            transpose_wh_tile(cb_x_welford_id, w + index_h_offset, welford_input_dst);
+            transpose_tile(cb_x_welford_id, w + index_h_offset, welford_input_dst);
             if constexpr (welford_fp32_alias) {
-                // transpose_wh_tile took the UnpackToDestFp32 path. Its math-side init clobbered
+                // transpose_tile took the UnpackToDestFp32 path. Its math-side init clobbered
                 // the welford recurrence at SFPU replay slots [16, 32).
                 // welford_init<WelfordInitMode::PreserveStats>() re-records all 32 slots with
                 // the welford recurrence; PreserveStats keeps the running mean / M2 accumulator
                 // in LREG4/5. UNPACK A is left in transpose=1;
                 // welford_update is pure SFPU and does not consume that state, and the next
-                // iteration's transpose_wh_init_short reprograms it.
+                // iteration's transpose_init reprograms it.
                 welford_init<WelfordInitMode::PreserveStats>();
             }
             welford_update<per_core_recip_lut_size>(welford_input_dst, sample_idx, *p_reciprocals);
@@ -334,9 +334,9 @@ void kernel_main() {
         // Do the partial Welford tile, if any
         if (partial_welford_tile_w > 0) {
             if constexpr (welford_fp32_alias) {
-                transpose_wh_init_short(cb_x_welford_id);
+                transpose_init(cb_x_welford_id);
             }
-            transpose_wh_tile(cb_x_welford_id, block_wt - 1, welford_input_dst);
+            transpose_tile(cb_x_welford_id, block_wt - 1, welford_input_dst);
             if constexpr (welford_fp32_alias) {
                 welford_init<WelfordInitMode::PreserveStats>();
             }
@@ -409,13 +409,13 @@ void kernel_main() {
     // ---------------------------------------------------------------------------
     cb_ex_global.wait_front(num_block_ht_result_tiles);
     cb_transpose.reserve_back(num_block_ht_result_tiles);
-    transpose_wh_init_short(cb_ex_global_id);
+    transpose_init(cb_ex_global_id);
     uint32_t processed_tiles = 0;
     while (processed_tiles < num_block_ht_result_tiles) {
         uint32_t tiles_to_load = std::min(num_block_ht_result_tiles - processed_tiles, num_dest_regs);
         tile_regs_acquire();
         for (uint32_t i = 0; i < tiles_to_load; i++) {
-            transpose_wh_tile(cb_ex_global_id, processed_tiles + i, i);
+            transpose_tile(cb_ex_global_id, processed_tiles + i, i);
         }
         tile_regs_commit();
         tile_regs_wait();

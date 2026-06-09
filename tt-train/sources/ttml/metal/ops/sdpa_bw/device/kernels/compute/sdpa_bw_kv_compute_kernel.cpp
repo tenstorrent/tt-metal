@@ -26,7 +26,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "sdpa_bw_compute_utils.hpp"
 
 // ----------------------------------------------------------------------

@@ -5,8 +5,8 @@
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
-#include "api/compute/transpose_wh.h"
-#include "api/compute/transpose_wh_dest.h"
+#include "api/compute/transpose.h"
+#include "api/compute/transpose_dest.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"

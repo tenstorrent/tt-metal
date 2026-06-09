@@ -120,8 +120,8 @@ FORCE_INLINE void generate_row0_bcast(const uint32_t cb_id, uint16_t bf16_val) {
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
-#include "api/compute/transpose_wh.h"
-#include "api/compute/transpose_wh_dest.h"
+#include "api/compute/transpose.h"
+#include "api/compute/transpose_dest.h"
 #include "api/compute/cumsum.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
@@ -691,7 +691,7 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
     cb_pop_front(in_scores_cb, num_input_tiles);
     cb_pop_front(in_indices_cb, num_input_tiles);
     // Phase 1's llk_unpack_A_top32_rm_init modifies four unpacker registers for
-    // row-major mode. transpose_wh_init_short restores Haloize_mode and X counter,
+    // row-major mode. transpose_init restores Haloize_mode and X counter,
     // but Tile_x_dim and Y_stride must be restored explicitly here.
     UNPACK(TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111));
     UNPACK(TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111));
@@ -727,12 +727,12 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
 
     // Step 1: load first 1024 values/indices chunk with transpose.
     reconfig_data_format_srca(in_scores_cb);
-    transpose_wh_init_short(in_scores_cb);
-    transpose_wh_tile(in_scores_cb, 0, value_offset_tiles);
+    transpose_init(in_scores_cb);
+    transpose_tile(in_scores_cb, 0, value_offset_tiles);
 
     reconfig_data_format_srca(in_indices_cb);
-    transpose_wh_init_short(in_indices_cb);
-    transpose_wh_tile(in_indices_cb, 0, index_offset_tiles);
+    transpose_init(in_indices_cb);
+    transpose_tile(in_indices_cb, 0, index_offset_tiles);
 
     // Step 2: prepare first chunk for pre-sorted combine pipeline.
     MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(sfpu::_top32_rm_init_)));
@@ -748,12 +748,12 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     // Steps 3-5: ingest remaining full 1024 chunks and combine.
     for (uint32_t i = 1; i < num_chunks; ++i) {
         reconfig_data_format_srca(in_scores_cb);
-        transpose_wh_init_short(in_scores_cb);
-        transpose_wh_tile(in_scores_cb, i, value_offset_tiles + 1);
+        transpose_init(in_scores_cb);
+        transpose_tile(in_scores_cb, i, value_offset_tiles + 1);
 
         reconfig_data_format_srca(in_indices_cb);
-        transpose_wh_init_short(in_indices_cb);
-        transpose_wh_tile(in_indices_cb, i, index_offset_tiles + 1);
+        transpose_init(in_indices_cb);
+        transpose_tile(in_indices_cb, i, index_offset_tiles + 1);
 
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
