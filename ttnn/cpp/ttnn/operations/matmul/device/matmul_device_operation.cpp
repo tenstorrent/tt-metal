@@ -318,6 +318,7 @@ void validate_matmul_sharded_operand_grids_within_program_compute_grid(
 
 void validate_matmul_work_distribution_and_gather_ring_topology(
     const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
     const ttnn::Shape& a_shape_padded,
     const ttnn::Shape& b_shape_padded,
     const tt::tt_metal::Tile& in0_tile,
@@ -417,13 +418,15 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
-                // When input is sharded the factory places output on the input shard grid, not on
-                // an origin-anchored compute_with_storage_grid_size rectangle. Use the device grid
-                // as the extent so offset grids (e.g. column 1) are not incorrectly rejected.
+                // The factory selects all_cores from the first available shard spec: in0, then in1,
+                // then output. Any of those can produce an offset grid (e.g. column 1 in a fused
+                // chain). Use the device grid as the extent whenever any operand is sharded so we
+                // don't incorrectly reject those grids against the origin-anchored config rect.
                 const auto device_extent = input_tensor_a.device()->compute_with_storage_grid_size();
-                const auto effective_extent = input_tensor_a.memory_config().is_sharded()
-                                                  ? device_extent
-                                                  : program_config.compute_with_storage_grid_size;
+                const bool any_sharded = input_tensor_a.memory_config().is_sharded() ||
+                                         input_tensor_b.memory_config().is_sharded() || output_mem_config.is_sharded();
+                const auto effective_extent =
+                    any_sharded ? device_extent : program_config.compute_with_storage_grid_size;
                 check_output_shard_grid_within_extent(
                     output_mem_config, effective_extent, "MatmulMultiCoreReuseProgramConfig");
             } else {
@@ -819,6 +822,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         input_tensor_a, input_tensor_b, chosen_program_config);
     validate_matmul_work_distribution_and_gather_ring_topology(
         input_tensor_a,
+        input_tensor_b,
         a_shape_padded,
         b_shape_padded,
         in0_tile,
