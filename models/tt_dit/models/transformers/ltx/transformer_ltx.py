@@ -414,8 +414,11 @@ class LTXTransformerBlock(Module):
                 prompt_1BLP=video_kv_v2a,
                 rope_cos=audio_cross_pe_cos,
                 rope_sin=audio_cross_pe_sin,
-                k_rope_cos=video_cross_pe_cos_full,
-                k_rope_sin=video_cross_pe_sin_full,
+                # Ring cross keeps video K/V SP-sharded: pass the sharded K-rope and kv_logical_n so
+                # the ring SDPA gathers internally instead of a separate K/V all-gather.
+                k_rope_cos=video_cross_pe_cos,
+                k_rope_sin=video_cross_pe_sin,
+                kv_logical_n=video_N,
                 trans_mat=trans_mat,
             )
             audio_1BND = ttnn.addcmul(audio_1BND, v2a_output, a_ca_gate)
