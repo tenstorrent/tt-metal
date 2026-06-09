@@ -23,6 +23,11 @@ from ..parallel.config import AudioTCParallelConfig, AudioTParallelConfig, Paral
 from ..parallel.manager import CCLManager
 from ..utils.conv3d import _ntuple, aligned_channels, get_conv3d_config
 
+# Per-mesh cache of constant zeros buffers (see _persistent_zeros): keeps the device
+# graph free of per-call host→device writes so it can be captured for trace replay.
+# Keyed by id(mesh_device) — meshes are process-lived, so id reuse is not a concern.
+_ZEROS_CACHE: dict = {}
+
 
 def channel_axis(parallel_config) -> int | None:
     """Mesh axis the channel (C) dim is tensor-parallel over, or None.
@@ -334,6 +339,24 @@ def _set_tpad_tail(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cac
     return out
 
 
+def _persistent_zeros(shape, *, dtype, layout, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
+    """A cached zeros constant for the given (shape, dtype, layout) on this mesh.
+
+    The pad/zero-stuff helpers feed these as read-only ``concat`` inputs; a fresh
+    ``ttnn.zeros`` per call enqueues a host→device write, which ``begin_trace_capture``
+    forbids. Allocating once (during warmup, before capture) and reusing the constant
+    keeps the device graph write-free so it can be traced. Read-only sharing is safe —
+    nothing mutates or deallocates these buffers.
+    """
+    cache = _ZEROS_CACHE.setdefault(id(mesh_device), {})
+    key = (tuple(shape), dtype, layout)
+    z = cache.get(key)
+    if z is None:
+        z = ttnn.zeros(shape, dtype=dtype, layout=layout, device=mesh_device)
+        cache[key] = z
+    return z
+
+
 def _zero_pad_t(x_BTC: ttnn.Tensor, pad_left: int, pad_right: int, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
     """Zero-pad along the T axis."""
     if pad_left == 0 and pad_right == 0:
@@ -342,11 +365,11 @@ def _zero_pad_t(x_BTC: ttnn.Tensor, pad_left: int, pad_right: int, mesh_device: 
     pieces = []
     dtype = x_BTC.get_dtype()
     if pad_left > 0:
-        zeros = ttnn.zeros((B, pad_left, C), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+        zeros = _persistent_zeros((B, pad_left, C), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_device=mesh_device)
         pieces.append(zeros)
     pieces.append(x_BTC)
     if pad_right > 0:
-        zeros = ttnn.zeros((B, pad_right, C), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+        zeros = _persistent_zeros((B, pad_right, C), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_device=mesh_device)
         pieces.append(zeros)
     return ttnn.concat(pieces, dim=1)
 
@@ -359,7 +382,7 @@ def _pad_channels_to_aligned(x_BTC: ttnn.Tensor, mesh_device: ttnn.MeshDevice, c
         return x_BTC
     pad_c = aligned - C
     dtype = x_BTC.get_dtype()
-    zeros = ttnn.zeros((B, T, pad_c), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    zeros = _persistent_zeros((B, T, pad_c), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_device=mesh_device)
     return ttnn.concat([x_BTC, zeros], dim=2)
 
 
@@ -374,7 +397,9 @@ def _zero_stuff_t(x_BTC: ttnn.Tensor, *, stride: int, mesh_device: ttnn.MeshDevi
     B, T, C = x_BTC.shape
     dtype = x_BTC.get_dtype()
     x_btoc = ttnn.reshape(x_BTC, (B, T, 1, C))
-    zero_block = ttnn.zeros((B, T, stride - 1, C), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    zero_block = _persistent_zeros(
+        (B, T, stride - 1, C), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_device=mesh_device
+    )
     stacked = ttnn.concat([x_btoc, zero_block], dim=2)
     interleaved = ttnn.reshape(stacked, (B, T * stride, C))
     out_len = T * stride - (stride - 1)
