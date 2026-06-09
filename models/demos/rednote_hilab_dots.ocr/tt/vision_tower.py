@@ -199,10 +199,53 @@ class TtVisionTower(LightweightModule):
         self.post_norm = post_norm
         head_dim = embed_dim // num_heads
 
-        # Keep the patch_embed weights on host (host-resident boundary).
+        # Keep the patch_embed weights on host too (used by the reference/golden
+        # host_patch_embed path; the device path preloads its own copies below).
         self._pe_proj_weight = state_dict["patch_embed.proj.weight"].to(torch.float32)
         self._pe_proj_bias = state_dict["patch_embed.proj.bias"].to(torch.float32)
         self._pe_norm_weight = state_dict["patch_embed.norm.weight"].to(torch.float32)
+
+        # Device patch_embed: the Conv2d(3,1536,k=14,s=14) over non-overlapping
+        # patches is exactly a matmul. Flatten each patch to 588 = 3*14*14 (C,H,W
+        # order) and matmul with Wf = proj_weight.reshape(1536, 588). ttnn.linear
+        # computes x @ W with W as [in, out], so store the transpose [588, 1536].
+        # Preloaded once here (not re-uploaded per call).
+        is_mesh_device = device.__class__.__name__ == "MeshDevice"
+        pe_mesh_mapper = ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None
+        pe_in_dim = num_channels * temporal_patch_size * patch_size * patch_size  # 588
+        Wf = self._pe_proj_weight.reshape(embed_dim, pe_in_dim).transpose(0, 1).contiguous()  # [588, 1536]
+        self._pe_Wf_tt = ttnn.as_tensor(
+            Wf,
+            device=device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=weight_memory_config,
+            mesh_mapper=pe_mesh_mapper,
+        )
+        self._pe_bias_tt = ttnn.as_tensor(
+            self._pe_proj_bias.reshape(1, embed_dim),
+            device=device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=weight_memory_config,
+            mesh_mapper=pe_mesh_mapper,
+        )
+        TILE = 32
+        self._pe_norm_weight_tt = ttnn.as_tensor(
+            self._pe_norm_weight.reshape([1, 1, embed_dim // TILE, TILE]),
+            device=device,
+            dtype=dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=weight_memory_config,
+            mesh_mapper=pe_mesh_mapper,
+        )
+        self._pe_in_dim = pe_in_dim
+        self._pe_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
         # 2D RoPE + cu_seqlens for this grid (host-side position/grid metadata).
         grid_thw = torch.as_tensor(grid_thw)
@@ -270,6 +313,48 @@ class TtVisionTower(LightweightModule):
             embed_dim=self.embed_dim,
             eps=self.rms_norm_eps,
         )
+
+    def device_patch_embed(self, pixel_values: torch.Tensor) -> ttnn.Tensor:
+        """Device patch embed -> ttnn tensor [num_patches, embed_dim] (TILE layout).
+
+        The Conv2d(3,1536,k=14,s=14) over non-overlapping patches is exactly a
+        matmul: flatten each patch to 588 = 3*14*14 (C,H,W order) and matmul with
+        the preloaded Wf, add bias, then RMSNorm -- all on device. Only the cheap
+        metadata reshape of the raw pixels stays on host; the COST (the matmul)
+        moves to the device. Replaces the ~240 ms host Conv2d at 19,520 patches.
+        """
+        # Cheap host-side metadata reshape: pack pixels to [num_patches, 588] in
+        # (C,H,W) order, exactly matching proj_weight.reshape(embed_dim, 588).
+        x = pixel_values.view(-1, self.num_channels, self.temporal_patch_size, self.patch_size, self.patch_size)[
+            :, :, 0
+        ]
+        x = x.reshape(-1, self._pe_in_dim).contiguous()  # [num_patches, 588]
+
+        x_tt = ttnn.from_torch(
+            x,
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device)
+            if self.device.__class__.__name__ == "MeshDevice"
+            else None,
+        )
+
+        x_tt = ttnn.linear(
+            x_tt,
+            self._pe_Wf_tt,
+            bias=self._pe_bias_tt,
+            compute_kernel_config=self._pe_compute_kernel_config,
+            dtype=ttnn.bfloat16,
+        )
+        x_tt = ttnn.rms_norm(
+            x_tt,
+            epsilon=self.rms_norm_eps,
+            weight=self._pe_norm_weight_tt,
+            compute_kernel_config=self._pe_compute_kernel_config,
+        )
+        return x_tt
 
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         """hidden_states: [num_patches, embed_dim] (TILE layout, post patch_embed)

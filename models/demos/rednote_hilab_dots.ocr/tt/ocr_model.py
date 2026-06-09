@@ -149,14 +149,8 @@ class TtOcrModel(LightweightModule):
     # -- vision -------------------------------------------------------------
     def encode_image(self, pixel_values: torch.Tensor) -> torch.Tensor:
         """pixel_values -> merged vision embeddings [num_vis_tokens, hidden] (torch)."""
-        patch_tokens = self.vision_tower.patch_embed(pixel_values)  # host Conv2d+RMSNorm
-        tt_in = ttnn.from_torch(
-            patch_tokens.to(torch.float32),
-            device=self.device,
-            dtype=self.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # patch_embed (Conv2d+RMSNorm) runs on device: ttnn matmul + rms_norm.
+        tt_in = self.vision_tower.device_patch_embed(pixel_values)
         tt_out = self.vision_tower(tt_in)
         vis = ttnn.to_torch(tt_out).to(torch.float32)
         return vis.reshape(-1, self.hidden_size)

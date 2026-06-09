@@ -78,16 +78,9 @@ def _run_pcc(device) -> float:
         post_norm=post_norm,
     )
 
-    # Host-resident patch_embed (documented boundary) -> device input tokens.
-    hidden_states = tt_tower.patch_embed(pixel_values)  # [num_patches, embed_dim]
-
-    tt_input = ttnn.from_torch(
-        hidden_states,
-        device=device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    # Device patch_embed (host Conv2d migrated to ttnn matmul+rms_norm) -> device
+    # input tokens [num_patches, embed_dim], already a ttnn TILE-layout tensor.
+    tt_input = tt_tower.device_patch_embed(pixel_values)
 
     tt_output = tt_tower(tt_input)
     tt_output_torch = ttnn.to_torch(tt_output).to(torch.float32).reshape(ref_output.shape)
