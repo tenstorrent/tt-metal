@@ -213,7 +213,8 @@ class ColParallelLinear(Module):
             weight = self.weight.data
 
         parallel_config_tp = parallel_config.tensor_parallel.factor if parallel_config is not None else 1
-        if parallel_config_tp > 1 and self.ccl_manager.topology == ttnn.Topology.Ring:
+        needs_gather = x.padded_shape[-1] != weight.padded_shape[-2]
+        if parallel_config_tp > 1 and self.ccl_manager.topology == ttnn.Topology.Ring and needs_gather:
             M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
             full_grid = self.mesh_device.compute_with_storage_grid_size()
             core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
@@ -253,8 +254,7 @@ class ColParallelLinear(Module):
             M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
             core_grid = get_matmul_core_grid(self.mesh_device)
 
-            # Gather if needed here. Helps cleanup upstream code
-            if K != weight.padded_shape[-2] and parallel_config_tp > 1:
+            if needs_gather:
                 x = self.ccl_manager.all_gather_persistent_buffer(
                     x, dim=-1, mesh_axis=parallel_config.tensor_parallel.mesh_axis, use_hyperparams=True
                 )

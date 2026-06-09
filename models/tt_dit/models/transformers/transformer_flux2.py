@@ -151,8 +151,98 @@ class Flux2SingleTransformerBlock(Module):
                 device_count=self._tp_factor,
             )
 
-    # Since we do not have operations to concatenate and slice a tensor along a sharded dimension,
-    # we keep the spatial and prompt tensors separate for now.
+    def _forward_separate(
+        self,
+        spatial,
+        prompt,
+        spatial_rope,
+        prompt_rope,
+        spatial_sequence_length,
+        compute_prompt_output,
+        shift_msa,
+        scale_msa,
+        gate_msa,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
+        x = ttnn.squeeze(self.norm(ttnn.unsqueeze(spatial, 0), dynamic_weight=scale_msa, dynamic_bias=shift_msa), 0)
+        c = ttnn.squeeze(self.norm(ttnn.unsqueeze(prompt, 0), dynamic_weight=scale_msa, dynamic_bias=shift_msa), 0)
+
+        x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+        c = self._ccl_manager.all_gather_persistent_buffer(c, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+
+        x_mlp = self.proj_mlp(x)
+        c_mlp = self.proj_mlp(c) if compute_prompt_output else None
+
+        x, c = self.attn.forward(
+            spatial=x,
+            prompt=c,
+            spatial_rope=spatial_rope,
+            prompt_rope=prompt_rope,
+            spatial_sequence_length=spatial_sequence_length,
+        )
+
+        x = ttnn.concat([x, x_mlp], dim=-1)
+
+        is_ring = self._ccl_manager.topology == ttnn.Topology.Ring
+        if is_ring:
+            spatial = self.proj_out.forward_fused_addcmul(x, spatial, gate_msa, scalar=1.0)
+        else:
+            spatial = ttnn.addcmul(spatial, self.proj_out(x), gate_msa)
+
+        if not compute_prompt_output:
+            return spatial, None
+
+        c = ttnn.concat([c, c_mlp], dim=-1)
+        if is_ring:
+            prompt = self.proj_out.forward_fused_addcmul(c, prompt, gate_msa, scalar=1.0)
+        else:
+            prompt = ttnn.addcmul(prompt, self.proj_out(c), gate_msa)
+
+        return spatial, prompt
+
+    def _forward_merged(
+        self,
+        spatial,
+        prompt,
+        spatial_rope,
+        prompt_rope,
+        spatial_sequence_length,
+        compute_prompt_output,
+        shift_msa,
+        scale_msa,
+        gate_msa,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
+        x = ttnn.squeeze(self.norm(ttnn.unsqueeze(spatial, 0), dynamic_weight=scale_msa, dynamic_bias=shift_msa), 0)
+        c = ttnn.squeeze(self.norm(ttnn.unsqueeze(prompt, 0), dynamic_weight=scale_msa, dynamic_bias=shift_msa), 0)
+
+        x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+        c = self._ccl_manager.all_gather_persistent_buffer(c, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+
+        x_c = ttnn.concat([x, c], dim=1)
+        x_c_mlp = self.proj_mlp(x_c)
+
+        x, c = self.attn.forward(
+            spatial=x,
+            prompt=c,
+            spatial_rope=spatial_rope,
+            prompt_rope=prompt_rope,
+            spatial_sequence_length=spatial_sequence_length,
+        )
+
+        x_c = ttnn.concat([x, c], dim=1)
+        spatial_prompt = ttnn.concat([spatial, prompt], dim=1)
+
+        x_c = ttnn.concat([x_c, x_c_mlp], dim=-1)
+
+        is_ring = self._ccl_manager.topology == ttnn.Topology.Ring
+        if is_ring:
+            spatial_prompt = self.proj_out.forward_fused_addcmul(x_c, spatial_prompt, gate_msa, scalar=1.0)
+        else:
+            spatial_prompt = ttnn.addcmul(spatial_prompt, self.proj_out(x_c), gate_msa)
+
+        spatial = spatial_prompt[:, : spatial.shape[1], :]
+        prompt = spatial_prompt[:, spatial.shape[1] :, :]
+        return spatial, prompt
+
     def forward(
         self,
         *,
@@ -179,44 +269,30 @@ class Flux2SingleTransformerBlock(Module):
 
         shift_msa, scale_msa, gate_msa = temb_mod_params
 
-        x = ttnn.squeeze(self.norm(ttnn.unsqueeze(spatial, 0), dynamic_weight=scale_msa, dynamic_bias=shift_msa), 0)
-        c = ttnn.squeeze(self.norm(ttnn.unsqueeze(prompt, 0), dynamic_weight=scale_msa, dynamic_bias=shift_msa), 0)
-
-        x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
-        c = self._ccl_manager.all_gather_persistent_buffer(c, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
-
-        x_mlp = self.proj_mlp(x)
-        c_mlp = self.proj_mlp(c) if compute_prompt_output else None
-
-        x, c = self.attn.forward(
-            spatial=x,
-            prompt=c,
-            spatial_rope=spatial_rope,
-            prompt_rope=prompt_rope,
-            spatial_sequence_length=spatial_sequence_length,
-        )
-
-        x = ttnn.concat([x, x_mlp], dim=-1)
-        del x_mlp
-
-        is_ring = self._ccl_manager.topology == ttnn.Topology.Ring
-        # Ring: fuse RS + addcmul at the final write step (spatial + proj_out(x) * gate_msa).
-        if is_ring:
-            spatial = self.proj_out.forward_fused_addcmul(x, spatial, gate_msa, scalar=1.0)
+        if compute_prompt_output:
+            return self._forward_merged(
+                spatial,
+                prompt,
+                spatial_rope,
+                prompt_rope,
+                spatial_sequence_length,
+                compute_prompt_output,
+                shift_msa,
+                scale_msa,
+                gate_msa,
+            )
         else:
-            spatial = ttnn.addcmul(spatial, self.proj_out(x), gate_msa)
-
-        if not compute_prompt_output:
-            return spatial, None
-
-        c = ttnn.concat([c, c_mlp], dim=-1)
-        del c_mlp
-        if is_ring:
-            prompt = self.proj_out.forward_fused_addcmul(c, prompt, gate_msa, scalar=1.0)
-        else:
-            prompt = ttnn.addcmul(prompt, self.proj_out(c), gate_msa)
-
-        return spatial, prompt
+            return self._forward_separate(
+                spatial,
+                prompt,
+                spatial_rope,
+                prompt_rope,
+                spatial_sequence_length,
+                compute_prompt_output,
+                shift_msa,
+                scale_msa,
+                gate_msa,
+            )
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/transformers/transformer_flux.py
