@@ -86,6 +86,15 @@ ttnn:
   integration:
     wh_llmbox: 30   # t3k_integration_tests.yaml (ttnn entries)
     wh_galaxy: 340  # galaxy_integration_tests.yaml
+  l2:
+    wh_n150: 970
+    wh_n300: 970
+    bh_p100: 795
+    bh_p150b_civ2: 940
+    wh_n150_civ2: 20
+    wh_n300_civ2: 20
+    bh_p100a_civ2_viommu: 20
+    bh_p150b_civ2_viommu: 20
   # Profiler budgets are kept under their own subheading for now while team /
   # test-framework assignment is being settled. Tracked in
   # https://github.com/tenstorrent/tt-metal/issues/44285
@@ -98,6 +107,18 @@ ttnn:
     wh_n300_civ2: 60
     bh_p100a_civ2_viommu: 60
     bh_p150b_civ2_viommu: 60
+
+train:
+  l2:
+    wh_n150: 40
+    wh_n300: 40
+    bh_p100: 40
+    bh_p150b_civ2: 40
+
+ttsim:
+  l2:
+    sim_wormhole_b0: 15
+    sim_blackhole: 15
 
 shield:
   e2e:
@@ -128,6 +149,7 @@ scaleout:
     bh_loudbox: 80
     bh_p300: 80
     bh_quietbox_2: 80
+
 runtime:
   sanity:
     wh_n150_civ2: 13
@@ -169,6 +191,10 @@ models:
     wh_galaxy_perf: 10
   stress:
     wh_galaxy_perf: 500
+  l2:
+    wh_n150: 90
+    wh_n300: 115
+    bh_p150b_civ2: 70
   e2e:
     wh_llmbox: 198
     wh_llmbox_perf: 330
@@ -223,7 +249,6 @@ models:
     bh_p150b_civ2_viommu: 50
     bh_llmbox: 1200
     bh_loudbox: 1200
-
     bh_p300: 800
     bh_quietbox_2: 280
   sweep:
