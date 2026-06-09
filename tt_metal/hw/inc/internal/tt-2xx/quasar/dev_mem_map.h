@@ -123,7 +123,7 @@
 // kernels are loaded as part of kernel_config at MEM_MAP_END or after
 // linker needs an address that doesn't overlap any of the FW and data sections
 // so just give an address outside of physical memory
-#define MEM_KERNEL_BASE (8 * 1024 * 1024)
+#define MEM_KERNEL_BASE (4 * 1024 * 1024)
 
 #define MEM_TRISC_LOCAL_BASE (MEM_LOCAL_BASE)
 
