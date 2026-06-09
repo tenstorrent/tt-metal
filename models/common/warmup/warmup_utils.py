@@ -87,10 +87,14 @@ class WarmupForwardMixin:
         can_sample_on_device,
         read_from_device=True,
         greedy_only: bool = False,
+        non_greedy_decoding_on_device: bool | None = None,
     ):
         """
         This function is called by vLLM
         """
+        if non_greedy_decoding_on_device is not None:
+            greedy_only = not non_greedy_decoding_on_device
+
         sampling_params = self._create_sampling_params(can_sample_on_device, max_batch_size, greedy_only=greedy_only)
 
         tokens, start_pos, page_table = self._create_decode_warmup_inputs(max_batch_size, num_blocks)
