@@ -478,20 +478,17 @@ _DEFAULT_BLOCKINGS = {
 }
 
 
-# fp32 conv3d has 2× the L1 footprint of bf16, so it keeps its own channel-keyed
-# table, swept on BH-LB 1×8 mesh with L1 budget = 50% of 1.5 MB (safe when the
-# audio chain runs co-resident with pipeline allocations).
-# Key:   (in_channels, out_channels, kernel_size_3tuple)
-# Value: (C_in_block, C_out_block, T_out_block, H_out_block=1, W_out_block=1)
+# fp32 conv3d blockings (separate table; 2× L1 vs bf16).
+# Key: (in_channels, out_channels, kernel_size). Value: (C_in, C_out, T_out, 1, 1).
 _FP32_BLOCKINGS: dict = {
-    # --- Main vocoder ups inner-conv (ConvTranspose1d via Conv1d, run unsharded after T-gather) ---
+    # ups inner-conv
     (1536, 768, (11, 1, 1)): (128, 128, 32, 1, 1),  # ups[0]
     (768, 384, (4, 1, 1)): (256, 32, 64, 1, 1),  # ups[1]
     (384, 192, (4, 1, 1)): (128, 64, 32, 1, 1),  # ups[2]
     (192, 96, (4, 1, 1)): (64, 32, 64, 1, 1),  # ups[3]
-    (96, 64, (4, 1, 1)): (32, 32, 16, 1, 1),  # ups[4] (out=48 padded to 64)
-    (64, 32, (4, 1, 1)): (64, 32, 16, 1, 1),  # ups[5] (in=48 padded to 64, out=2 padded to 32)
-    # --- Main vocoder (upsample_rates=[5,2,2,2,2,2], initial_channel=1536) ---
+    (96, 64, (4, 1, 1)): (32, 32, 16, 1, 1),  # ups[4]
+    (64, 32, (4, 1, 1)): (64, 32, 16, 1, 1),  # ups[5]
+    # main vocoder
     (128, 1536, (7, 1, 1)): (128, 32, 29, 1, 1),  # conv_pre
     (768, 768, (11, 1, 1)): (128, 64, 64, 1, 1),  # stage 0 AMP k11
     (768, 768, (7, 1, 1)): (256, 32, 64, 1, 1),  # stage 0 AMP k7
@@ -505,15 +502,13 @@ _FP32_BLOCKINGS: dict = {
     (96, 96, (11, 1, 1)): (32, 32, 16, 1, 1),  # stage 3 AMP k11
     (96, 96, (7, 1, 1)): (32, 32, 16, 1, 1),  # stage 3 AMP k7
     (96, 96, (3, 1, 1)): (32, 32, 8, 1, 1),  # stage 3 AMP k3
-    # 48 channels: aligned_channels(48,32)=64 in both in and out.
     (64, 64, (11, 1, 1)): (64, 64, 32, 1, 1),  # stage 4 AMP k11
     (64, 64, (7, 1, 1)): (64, 64, 4, 1, 1),  # stage 4 AMP k7
     (64, 64, (3, 1, 1)): (32, 32, 16, 1, 1),  # stage 4 AMP k3
-    # 24 channels: aligned(24,32)=32 in both in and out.
     (32, 32, (11, 1, 1)): (32, 32, 4, 1, 1),  # stage 5 AMP k11
     (32, 32, (7, 1, 1)): (32, 32, 64, 1, 1),  # stage 5 AMP k7
     (32, 32, (3, 1, 1)): (32, 32, 2, 1, 1),  # stage 5 AMP k3
-    # --- BWE vocoder (upsample_rates=[6,5,2,2,2], initial_channel=512) ---
+    # BWE vocoder
     (128, 512, (7, 1, 1)): (64, 32, 7, 1, 1),  # conv_pre
     (256, 256, (11, 1, 1)): (64, 32, 6, 1, 1),  # stage 0 AMP k11
     (256, 256, (7, 1, 1)): (256, 32, 3, 1, 1),  # stage 0 AMP k7
