@@ -31,6 +31,12 @@ SECTIONS
 {
   PROVIDE (__erisc_jump_table = ORIGIN(ERISC_JUMPTABLE));
 
+  /* gp for an eth kernel must match the firmware it links against (substitutes.cpp _start
+     loads gp from __global_pointer$). The firmware (erisc-b0-app.ld) sets it to
+     ORIGIN(ERISC_DATA) + 0x7f0; mirror that here so kernels that pull in substitutes.o
+     (e.g. the fabric erisc router) link instead of failing on undefined __global_pointer$. */
+  PROVIDE (__global_pointer$ = ORIGIN(ERISC_DATA) + 0x7f0);
+
   /* DEVICE_PRINT string table – file-only section, VMA = 0x6400000 */
   .device_print_strings 0x6400000 :
   {
