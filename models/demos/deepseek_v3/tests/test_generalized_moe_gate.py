@@ -330,7 +330,6 @@ def test_generalized_moe_gate_512_per_block(device, diag_block, enable_sigmoid, 
         f"block {diag_block} not a valid top-8.\n dev_idx={dev_idx}\n gold={gold_local}\n"
         f" dev_key={dev_key}\n gold_key={gold_key}"
     )
-    breakpoint()
 
 
 @pytest.mark.parametrize("enable_sigmoid", [True, False])

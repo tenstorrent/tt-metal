@@ -90,7 +90,7 @@ num_blocks == 2(combine 路径):
 | 3 | scores/idx/bias 全 pack 成 **scores** | `pack_untilize_dest` 选 DEST tile 用的是**运行时 `tile_dst_rt_offset`(最后一个参数)**,不是第 3 个位置参数(那是 `block_c_index`)。用 `pack_untilize_dest<1,1>(cb, 1, 0, 16, 4, 0/1/2)`。 |
 | 4 | idx(uint16)回来是垃圾 | bf16 的 scores 路径把**运行时 unpack 格式留成了 bf16**,而 WH 上 `tilize_uninit` 不完全恢复,所以 idx 的 `tilize_block` 把 raw uint16 当 bf16 解。→ 给 idx 的 tilize 一个**自己的 `compute_kernel_hw_startup(run_idx_cb, cb_tilize_idx)`**(UInt16 CB)。CB 编译期格式一直是对的;坏的是**运行时**格式。**bf16 不能当 raw-bit 载体**(denormal flush —— id 0-255 = 0x00xx 是 subnormal)。 |
 | 5 | 还原的 run 是 **`[a,b,a,b]` 2-周期重复** | `step2` 是为 FINALIZE 布局设计的(`store8_even_cols` 在偏移 `{0,4}`);作用在 `produce_run` 的 `{0,2}` run 上会按错 stride、把后半 2-周期混叠。→ **`step2` 之前先 `relocate_run<0,2,0,4>`**(对齐到 `{0,4}`)。 |
-| 6 | place / transpose 还原全 0 | **`llk_unpack_set_srcb_dummy_valid()` 放在 `transpose_wh` 之前**会让它的 TRNSPSRCB 读到 dummy SrcB → 全 0。transpose_wh 本身**不需要** srcb-dummy-valid;它放在**所有 transpose 之后**、紧挨着需要它的 `step2`(normalize_step2 / combine_finalize)。(另:transpose_wh 的 `idst` **没有** tile 限制 —— 能写任意 DEST tile;之前"写不到 tile 2/3"就是这个 srcb bug。) |
+| 6 | place / transpose 还原全 0 | **`llk_unpack_set_srcb_dummy_valid()` 放在 `transpose_wh` 之前**会让它的 TRNSPSRCB 读到 dummy SrcB → 全 0。transpose_wh 本身**不需要** srcb-dummy-valid;它放在**所有 transpose 之后**、紧挨着需要它的 `step2`(`combine_finalize`)。(另:transpose_wh 的 `idst` **没有** tile 限制 —— 能写任意 DEST tile;之前"写不到 tile 2/3"就是这个 srcb bug。) |
 | 7 | combine:垃圾 + hang,然后**选反了半** | `produce_run` + restore 在**同一个 acquire** —— produce_run 的 SFPU/SrcB 状态污染了同 acquire 的 transpose_wh。→ **merge-only acquire**(两个 block 都 stash,restore+merge 里没有 produce_run)。 |
 | 8 | combine:merge 选了**错的 8 个**(dev 最大 key == gold 最小 key) | **bias 排序键被 2-周期破坏**,而 scores+idx 没事:`step2` 用 `num_tiles=2`,只把 scores(tile0)+idx(tile1) 转置成 standard,**没转 bias(tile2)** → bias 以 math 布局被 pack → 往返损坏。256 输出路径从不读 bias(normalize 只读 scores),所以一直发现不了,直到 merge 按 bias 排序才暴露。→ **`step2_configure_mop<3>`**(转置 tile 0,1,2)。对 256/finalize 输出无害(它们只 pack tile 0,1)。 |
 
@@ -114,18 +114,20 @@ num_blocks == 2(combine 路径):
 
 ## 7. 测试 / 调试宏(`generalized_moe_gate_kernel.cpp`)与测试
 
-宏:`GMG_UNGROUPED_TOP8`(默认)、`GMG_DIAG_BLOCK`、`GMG_TEST_PRODUCE_RUN`、`GMG_TEST_STASH`(256 stash 隔离)、
-`GMG_TEST_PARK/PARK2`、`GMG_DUMP_OCCUPANCY`、`GMG_COMBINE_DIAG`。测试(在
-`models/demos/deepseek_v3/tests/test_generalized_moe_gate.py`):`test_generalized_moe_gate`(256)、
+保留的宏:`GMG_UNGROUPED_TOP8`(默认 ON)、`GMG_DIAG_BLOCK`(combine 路径里逐 block A1 验证)、
+`GMG_DUMP_AFTER_SUM_TOP2/STEP0/STEP1` 和 `GMG_DIAG_TOPA/TOPB`(阶段探针)。combine bring-up 的隔离宏
+(`GMG_TEST_STASH/PARK/PARK2/PRODUCE_RUN`、`GMG_DUMP_OCCUPANCY`、`GMG_COMBINE_DIAG`)和死 helper
+(`place_run_at`、`unpack_run_to_regions[_transpose]`)在 combine 落地后已删。测试(在
+`models/demos/deepseek_v3/tests/test_generalized_moe_gate.py`):`test_generalized_moe_gate`(256/128)、
 `test_generalized_moe_gate_512_global`(combine)、`test_generalized_moe_gate_512_per_block`、
-`test_dump_stash_run`(256 完整 16×16 区域 dump)、`test_dump_combine_run`(512 完整 16×16 dump 放置后的 run ——
-最终定位 bias bug 的工具:用 32×32 输出读整个 face)。
+`test_dump_stash_run` / `test_dump_combine_run`(纯调试用的完整 16×16 区域 dump —— `test_dump_combine_run` 就是
+靠读整个 32×32 face 最终定位 bias bug 的工具)。
 
 ## 8. 剩余工作(都不阻塞 512)
 
-1. **清理**:`GMG_TEST_STASH` 还开着 → 256(`num_blocks==1`)路径走 stash+place 隔离(偏慢)。关掉它让 256 回到
-   原来的快速单 op。(只影响 `num_blocks==1`。)
-2. **Kimi 384**:`num_blocks=2`,block1 = 256-383(+128 padding)。多半只是 op.py/test 的事 —— 把 padding expert
+1. **Kimi 384**:`num_blocks=2`,block1 = 256-383(+128 padding)。多半只是 op.py/test 的事 —— 把 padding expert
    的 key 设得很低,让它们永不被选中;kernel 的 combine 应该不用改。
-3. **>512**:需要 combine **树**(现在是单次 2-run merge)。
-4. **性能** + softmax 融合。
+2. **Top-n(k = 4/6/10)**:目前 k=8 写死在 `merge16_to_run`/`finalize`/bitonic 排序里,需要把 k 参数化。
+3. **Softmax / sqrt-softplus** 归一化变体(见 `SOFTMAX_NOTES.md`)。
+4. **>512**:需要 combine **树**(现在是单次 2-run merge)。
+5. **性能。**
