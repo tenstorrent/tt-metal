@@ -7,7 +7,12 @@ tuning that mattered across BGE-M3, ViT, and Swin-L.
 
 ---
 
-## 1. SDPA vs manual attention — when to use which
+## 1. SDPA vs manual attention — when to use which {#attn-sdpa-vs-manual}
+<!-- route
+op_class: attention
+rank: time
+lever_type: single-shot
+-->
 
 | | Manual (BMM + softmax) | SDPA (fused) |
 |---|---|---|
@@ -26,7 +31,12 @@ tuning that mattered across BGE-M3, ViT, and Swin-L.
 
 ---
 
-## 2. Manual attention — height-sharded BMMs (ViT 224)
+## 2. Manual attention — height-sharded BMMs (ViT 224) {#attn-manual-bmm}
+<!-- route
+op_class: attention,matmul
+rank: time
+lever_type: search
+-->
 
 Each `(batch, head)` pair is an independent matmul; height-shard over `B·heads·S`:
 
@@ -70,7 +80,12 @@ ttnn.SoftmaxShardedMultiCoreProgramConfig(
 
 ---
 
-## 3. SDPA — the fused flash kernel
+## 3. SDPA — the fused flash kernel {#attn-sdpa-config}
+<!-- route
+op_class: attention
+rank: time
+lever_type: search
+-->
 
 ```python
 context = ttnn.transformer.scaled_dot_product_attention(
@@ -105,7 +120,12 @@ bandwidth-bound on Q/K/V — check for an unnecessary bf16 cast (§5).
 
 ---
 
-## 3b. Flash-decode — SDPA for autoregressive generation
+## 3b. Flash-decode — SDPA for autoregressive generation {#attn-flash-decode}
+<!-- route
+op_class: attention
+regime: decode
+lever_type: search
+-->
 
 Decoder LLMs in decode mode (`seq_len=1`, parallel over batch) use a *different* SDPA op:
 
@@ -130,7 +150,11 @@ needed for causal). See 08 section 4 for the full prefill/decode op table.
 
 ---
 
-## 3c. `exp_approx_mode` depends on seqlen/chunk ratio
+## 3c. `exp_approx_mode` depends on seqlen/chunk ratio {#attn-exp-approx}
+<!-- route
+op_class: attention
+lever_type: single-shot
+-->
 
 The earlier "exact is faster on BH" finding holds for *short* encoder sequences. For LLMs:
 - **Short `seqlen/chunk_size`**: `exp_approx_mode=True` is fine and can be faster.
@@ -142,7 +166,12 @@ Rule: the longer the sequence (more chunks to accumulate over), the more you nee
 
 ---
 
-## 4. DRAM staging for SDPA (long sequence)
+## 4. DRAM staging for SDPA (long sequence) {#attn-dram-staging}
+<!-- route
+op_class: attention
+memory: l1_interleaved,sharded
+lever_type: single-shot
+-->
 
 For long sequences SDPA's internal flash buffers need L1 room. Stage Q/K/V in **DRAM**
 before the call so L1 is free for the working chunks:
@@ -160,7 +189,12 @@ working memory. DRAM staging lets SDPA stream from full NoC bandwidth and use la
 
 ---
 
-## 5. Score dtype — keep Q/K/V native (the −13.7 ms lesson)
+## 5. Score dtype — keep Q/K/V native (the −13.7 ms lesson) {#attn-score-dtype}
+<!-- route
+op_class: attention,datamove
+rank: time,count
+lever_type: single-shot
+-->
 
 The largest single batch-32 win in BGE-M3 was **removing** a Q/K/V → bf16 cast before
 SDPA. Stock attention inserted `3 tensors × 24 layers = 72` typecasts/forward.
@@ -177,7 +211,11 @@ and remove it** unless PCC demands otherwise. Keep the mask in model dtype too.
 
 ---
 
-## 6. Exact vs approximate softmax
+## 6. Exact vs approximate softmax {#attn-softmax-exact}
+<!-- route
+op_class: attention,reduction
+lever_type: single-shot
+-->
 
 `exp_approx_mode=True` uses a polynomial-LUT exp. Counter-intuitively, on Blackhole at
 S=512 **exact softmax (`False`) is faster** than approximate for both BGE-M3 batch sizes
@@ -186,7 +224,12 @@ precision. **Default to False; only enable approx if your specific shape proves 
 
 ---
 
-## 7. SDPA compute kernel
+## 7. SDPA compute kernel {#attn-compute-kernel}
+<!-- route
+op_class: attention
+fidelity: hifi4,hifi3,hifi2
+lever_type: walk
+-->
 
 ```python
 sdpa_compute = ttnn.init_device_compute_kernel_config(
@@ -206,7 +249,11 @@ sdpa_compute = ttnn.init_device_compute_kernel_config(
 
 ---
 
-## 8. The attention mask
+## 8. The attention mask {#attn-mask}
+<!-- route
+op_class: attention
+lever_type: single-shot
+-->
 
 - **Mask must be in DRAM** — `sdpa_device_operation.cpp` hard-asserts it. Moving it to L1
   just inserts a reshard that ships it back. Don't.

@@ -25,7 +25,12 @@ per-matmul identically.
 
 ---
 
-## 2. Fuse the activation into FF1 — never split it
+## 2. Fuse the activation into FF1 — never split it {#mlp-fused-activation}
+<!-- route
+op_class: matmul,eltwise
+rank: time,count
+lever_type: single-shot
+-->
 
 `fused_activation=(ttnn.UnaryOpType.GELU, True)` applies GELU as the matmul packs each
 output tile. The SFPU's LUT hides inside the packer schedule:
@@ -51,7 +56,13 @@ For SwiGLU/GeGLU gated MLPs, the gate can be fused similarly where the op suppor
 
 ---
 
-## 3. Program config — block-sharded 2D-mcast (ViT, small/mid batch)
+## 3. Program config — block-sharded 2D-mcast (ViT, small/mid batch) {#mlp-program-config}
+<!-- route
+op_class: matmul
+rank: time
+regime: prefill,na
+lever_type: search
+-->
 
 When the activation fits L1, keep FF1/FF2 block-sharded so they chain with the
 surrounding LN/residual without reshards (the ViT pattern):
@@ -85,7 +96,12 @@ and the residual.
 
 ---
 
-## 3b. Matmul variant by regime (LLM prefill vs decode)
+## 3b. Matmul variant by regime (LLM prefill vs decode) {#mlp-variant-by-regime}
+<!-- route
+op_class: matmul
+regime: prefill,decode
+lever_type: single-shot
+-->
 
 For generative LLMs the MLP matmul *variant* changes by phase (full detail in 08 section 2):
 
@@ -103,7 +119,11 @@ escape hatch for an L1 CB clash rather than a decode-bandwidth play.
 
 ---
 
-## 4. `minimal_matmul` — mandatory when 2D-mcast clashes L1
+## 4. `minimal_matmul` — mandatory when 2D-mcast clashes L1 {#mlp-minimal-matmul}
+<!-- route
+op_class: matmul
+lever_type: single-shot
+-->
 
 At large batch the FF1 intermediate (`B·S × 4H`) is huge. 2D-mcast's in0 CB can exceed
 the 1.57 MB L1 budget — BGE-M3 batch-32 FF1 via `ttnn.linear` produced **0 compiling
@@ -134,7 +154,13 @@ ff1 = ttnn.experimental.minimal_matmul(
 
 ---
 
-## 5. The subblock unlock — `fp32_dest_acc_en=False` + tall subblocks
+## 5. The subblock unlock — `fp32_dest_acc_en=False` + tall subblocks {#mlp-subblock-unlock}
+<!-- route
+op_class: matmul
+rank: time
+bound: flop,both
+lever_type: search
+-->
 
 ```python
 mlp_compute = ttnn.init_device_compute_kernel_config(
@@ -160,7 +186,14 @@ different point, not the old one with a doubled dimension.**
 
 ---
 
-## 6. Fidelity walk for MLP
+## 6. Fidelity walk for MLP {#mlp-fidelity-walk}
+<!-- route
+op_class: matmul
+rank: time
+bound: flop,both
+fidelity: hifi4,hifi3,hifi2
+lever_type: walk
+-->
 
 The MLP matmuls are the largest device-time buckets, so the fidelity walk pays most here:
 
@@ -175,7 +208,13 @@ bf8b MLP matmuls tolerate LoFi (PCC holds). Walk down per family, full-model-PCC
 
 ---
 
-## 7. L1 handoff — FF1 → FF2 island (large batch)
+## 7. L1 handoff — FF1 → FF2 island (large batch) {#mlp-l1-handoff}
+<!-- route
+op_class: matmul
+bound: dram
+memory: dram_interleaved
+lever_type: single-shot
+-->
 
 At large batch where everything else is DRAM, a **local** L1 island still wins: write FF1
 output to L1 so FF2 reads from L1:
@@ -195,7 +234,12 @@ this).
 
 ---
 
-## 8. Attention-output projection (`H → H`)
+## 8. Attention-output projection (`H → H`) {#mlp-attn-out-projection}
+<!-- route
+op_class: matmul
+rank: time
+lever_type: search
+-->
 
 Smaller than the MLP but same rules. At small batch, `ttnn.linear` 1D-mcast or auto is
 fine. At large batch, the `fp32_dest=False` + `1×8` subblock unlock applies:
@@ -214,7 +258,12 @@ LN without reshards.
 
 ---
 
-## 9. The matmul sweep method (any family)
+## 9. The matmul sweep method (any family) {#mlp-sweep-method}
+<!-- route
+op_class: matmul
+rank: time
+lever_type: search
+-->
 
 1. **Lock the compute kernel**: bf8b in/weights + LoFi + `fp32_dest_acc_en=False` +
    `packer_l1_acc=True` (the last is mandatory — see 01 §4).

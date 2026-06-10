@@ -5,7 +5,11 @@ outcome reduces to one of the limits below being silently broken.
 
 ---
 
-## 1. The core grid — never hard-code it
+## 1. The core grid — never hard-code it {#fnd-core-grid}
+<!-- route
+grid: partial,tiny
+lever_type: single-shot
+-->
 
 | Device | Compute grid | Cores | DRAM banks | L1 / core |
 |---|---|---:|---:|---:|

@@ -32,6 +32,7 @@ Supporting cross-cutting material:
 - **[06_FUSION_AND_RESIDUALS.md](./06_FUSION_AND_RESIDUALS.md)** — op-count reduction, residual folds, reshard/dtype fusion.
 - **[07_METHODOLOGY.md](./07_METHODOLOGY.md)** — how to sweep, the noise floor, single-layer vs full-model PCC, harness bugs.
 - **[09_PROFILING_AND_OP_ANALYSIS.md](./09_PROFILING_AND_OP_ANALYSIS.md)** — Tracy capture, tt-perf-report, bucketing the op CSV by total device time and op count, drilling by shape, reading data-movement buckets.
+- **[10_PROGRESS_REPORT.md](./10_PROGRESS_REPORT.md)** — HTML progress dashboard for tracking experiments across a long loop: KPI cards, FPS chart, color-coded experiment log, top-bucket table. Single-file, Chart.js via CDN, served over SSH tunnel or local HTTP.
 
 ## The five rules that held across all three campaigns
 

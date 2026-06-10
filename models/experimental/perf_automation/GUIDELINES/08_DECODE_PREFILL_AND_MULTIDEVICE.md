@@ -25,7 +25,12 @@ configs, memory configs, and matmul variants for the same weight.* Build both pa
 
 ---
 
-## 2. Matmul variant by regime — the decision
+## 2. Matmul variant by regime — the decision {#regime-matmul-variant}
+<!-- route
+op_class: matmul
+regime: prefill,decode
+lever_type: single-shot
+-->
 
 | Variant | Parallelizes | Activation / output | Weights | Use for |
 |---|---|---|---|---|
@@ -51,7 +56,12 @@ the activation width-shard exceeds L1 — see 01 §6.)
 
 ---
 
-## 3. The KV cache
+## 3. The KV cache {#kv-cache}
+<!-- route
+op_class: attention,datamove
+regime: decode
+lever_type: single-shot
+-->
 
 Decode reads the whole history from a cache instead of recomputing it.
 
@@ -69,7 +79,12 @@ Decode reads the whole history from a cache instead of recomputing it.
 
 ---
 
-## 4. Decode vs prefill attention ops — they are different ops
+## 4. Decode vs prefill attention ops — they are different ops {#decode-attention-ops}
+<!-- route
+op_class: attention
+regime: decode
+lever_type: single-shot
+-->
 
 | Step | Prefill op | Decode op |
 |---|---|---|
@@ -87,7 +102,12 @@ per head the NoC bandwidth between cores bottlenecks).
 
 ---
 
-## 5. Grouped-Query Attention (GQA)
+## 5. Grouped-Query Attention (GQA) {#gqa}
+<!-- route
+op_class: attention
+regime: decode
+lever_type: single-shot
+-->
 
 Modern LLMs use fewer KV heads than Q heads (`n_kv_heads < n_q_heads`). The head-split ops
 take `num_kv_heads` separately:
@@ -103,7 +123,13 @@ K/V projections proportionally — a real memory + bandwidth win at decode.
 
 ---
 
-## 6. RoPE — fused rotary position embeddings
+## 6. RoPE — fused rotary position embeddings {#rope-fused}
+<!-- route
+op_class: attention,eltwise
+rank: count,time
+regime: prefill,decode
+lever_type: single-shot
+-->
 
 LLMs apply rotary embeddings to Q and K before attention. Use the fused op, not a manual
 rotate:
@@ -124,7 +150,11 @@ generate them on-device via `RotarySetup.get_rot_mats(position_ids)`, don't push
 
 ---
 
-## 7. Multi-device weight fracturing
+## 7. Multi-device weight fracturing {#multidevice-fracturing}
+<!-- route
+op_class: ccl,matmul
+lever_type: single-shot
+-->
 
 For models too big for one chip, weights are **fractured** (sharded) across devices:
 
@@ -150,7 +180,12 @@ For models too big for one chip, weights are **fractured** (sharded) across devi
 
 ---
 
-## 8. Host-device communication minimization (decode is host-sensitive)
+## 8. Host-device communication minimization (decode is host-sensitive) {#decode-host-comm}
+<!-- route
+dispatch: gappy
+regime: decode
+lever_type: single-shot
+-->
 
 Decode runs hundreds of tiny ops; host overhead dominates without care:
 - **Embeddings on-device** — token IDs are smaller than embeddings to push.
@@ -164,7 +199,13 @@ These matter only in the host-bound (decode/small-batch) regime — see 06 §8 a
 
 ---
 
-## 9. The DRAM weight-layout trick for norms
+## 9. The DRAM weight-layout trick for norms {#decode-norm-weight-layout}
+<!-- route
+op_class: reduction
+bound: dram
+regime: decode
+lever_type: single-shot
+-->
 
 Norm weights (γ, β) pushed in TILE layout need padding to TILE_HEIGHT, wasting DRAM
 bandwidth. Instead wrap them into TILE_WIDTH sticks in ROW_MAJOR — no padding, done once

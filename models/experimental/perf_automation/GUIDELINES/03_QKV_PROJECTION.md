@@ -7,7 +7,12 @@ Swin-L (windowed QKV).
 
 ---
 
-## 1. Always fuse QKV into one matmul
+## 1. Always fuse QKV into one matmul {#qkv-fuse}
+<!-- route
+op_class: matmul
+rank: time,count
+lever_type: single-shot
+-->
 
 Compute Q, K, V as a **single** `[*, H] × [H, 3H]` matmul, not three separate ones.
 Splitting into three matmuls adds two ops and underutilizes the grid. All three campaigns
@@ -29,7 +34,12 @@ BGE-M3 tested "split QKV into Q, K, V separately" → regressed (extra matmuls).
 
 ---
 
-## 2. Program config — the two layouts
+## 2. Program config — the two layouts {#qkv-program-config}
+<!-- route
+op_class: matmul
+rank: time
+lever_type: search
+-->
 
 ### 2D-mcast block-sharded (ViT, BGE-M3 batch 32)
 For prefill (large `M = B·S`), block-shard the activation and use 2D multicast:
@@ -64,7 +74,13 @@ first at small batch**; only hand-tune if Tracy shows the QKV matmul is a real b
 
 ---
 
-## 3. Compute kernel — LoFi unlocks the matmul
+## 3. Compute kernel — LoFi unlocks the matmul {#qkv-compute-kernel}
+<!-- route
+op_class: matmul
+bound: flop,both
+fidelity: hifi4,hifi3,hifi2
+lever_type: walk
+-->
 
 ```python
 qkv_compute = ttnn.init_device_compute_kernel_config(
@@ -84,7 +100,12 @@ flipping it (see 01_FOUNDATIONS §3).
 
 ---
 
-## 4. The K-dimension determines `in0_block_w`
+## 4. The K-dimension determines `in0_block_w` {#qkv-in0-block-w}
+<!-- route
+op_class: matmul
+rank: time
+lever_type: search
+-->
 
 `in0_block_w` must divide `K_tiles`. For QKV, `K = H`:
 - H=768 → K_tiles=24 → `in0_block_w ∈ {1,2,3,4,6,8,12,24}`, ViT uses 2.
@@ -95,7 +116,12 @@ divisors, prefer the largest that fits L1.
 
 ---
 
-## 5. Head split — three strategies, pick by regime
+## 5. Head split — three strategies, pick by regime {#qkv-head-split}
+<!-- route
+op_class: attention
+rank: time,count
+lever_type: single-shot
+-->
 
 After QKV you must reshape `[B, S, 3H] → 3 × [B, heads, S, head_dim]`. Options:
 
@@ -145,7 +171,12 @@ Tracy: stock create_heads 15 µs/call → 4 µs/call (groups tuned); concat 7.1 
 
 ---
 
-## 5b. RoPE — fused rotary embeddings (LLMs)
+## 5b. RoPE — fused rotary embeddings (LLMs) {#qkv-rope}
+<!-- route
+op_class: attention
+regime: prefill,decode
+lever_type: single-shot
+-->
 
 Decoder LLMs apply rotary position embeddings to Q and K *after* the head split, *before*
 attention. Use the fused op, never a manual slice+rotate+concat:
@@ -165,7 +196,12 @@ detail in 08 section 6.
 
 ---
 
-## 5c. Decode head-split is a different op
+## 5c. Decode head-split is a different op {#qkv-head-split-decode}
+<!-- route
+op_class: attention
+regime: decode
+lever_type: single-shot
+-->
 
 The head-split op differs by phase (they are genuinely different kernels):
 
@@ -181,7 +217,12 @@ the batch dimension. See 08 section 4.
 
 ---
 
-## 6. Resharding between QKV and attention (ViT pattern)
+## 6. Resharding between QKV and attention (ViT pattern) {#qkv-attention-reshard}
+<!-- route
+op_class: datamove
+rank: time
+lever_type: single-shot
+-->
 
 ViT runs the fused QKV on the **fixed full grid** (10×12) but the attention BMMs on a
 **batch-dependent grid**. It reshards QKV between them:

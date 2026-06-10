@@ -56,6 +56,38 @@ attack the next bucket.
 
 ---
 
+## STANDARDIZED ROUTING TAGS (machine routing — read before adding/editing sections)
+
+Lever sections in `01–06, 08` carry a stable `{#anchor}` on the header and a
+`<!-- route -->` metadata block so the automated workflow can route a profiled bottleneck
+to the right sections by **tag equality**. Bucket tags are computed automatically from the
+Tracy CSV + `tt-perf-report`; section tags are declared once, here. Full registry, derivation
+rules, and thresholds: `PLAN_AGENT_WORKFLOW.md §4` (project root).
+
+The closed vocabulary (never invent values — extend the registry first):
+
+| dim | values |
+|---|---|
+| `op_class` | matmul, attention, reduction, eltwise, datamove, embedding, conv_pool, ccl, host_fallback, other |
+| `bound` | dram, flop, both, slow, host |
+| `rank` | time, count |
+| `fidelity` | lofi, hifi2, hifi3, hifi4, na |
+| `grid` | full, partial, tiny |
+| `dispatch` | ok, gappy |
+| `memory` | dram_interleaved, l1_interleaved, sharded |
+| `regime` | prefill, decode, na |
+| `lever_type` | single-shot, walk, search |
+
+Authoring rules:
+- Declare **only** the dims the section genuinely keys on; an omitted dim matches everything.
+- Values are comma-OR lists (e.g. `bound: flop,both`).
+- **No priority field** — candidate ordering is the agent's judgment, not metadata.
+- Fidelity-walk sections declare the fidelities they can walk *down from*
+  (`fidelity: hifi4,hifi3,hifi2`) so an already-LoFi bucket auto-excludes them.
+- Process docs (`00, 07, 09, 10`, this index) are **not** routed — they load by role.
+
+---
+
 ## TASK → FILE MAP
 
 ### You need to profile / find what's slow
@@ -69,6 +101,17 @@ attack the next bucket.
 | Identify a mystery op by its neighbors | `09_PROFILING_AND_OP_ANALYSIS.md` | §5 |
 | Understand reshape/tilize/reshard buckets | `09_PROFILING_AND_OP_ANALYSIS.md` | §6 |
 | Sanity-check a capture before trusting it | `09_PROFILING_AND_OP_ANALYSIS.md` | §7 |
+
+---
+
+### You need to track progress across a long optimization loop
+| Task | Read | Section(s) |
+|---|---|---|
+| Set up the single-file HTML progress dashboard | `10_PROGRESS_REPORT.md` | §2–§3 |
+| Serve it over HTTP / SSH tunnel / copy locally | `10_PROGRESS_REPORT.md` | §4 |
+| What to write in each experiment row | `10_PROGRESS_REPORT.md` | §5 |
+| Avoid celebrating a within-noise "win" | `10_PROGRESS_REPORT.md` | §6 + `07_METHODOLOGY.md` §3 |
+| When to refresh the top-bucket table | `10_PROGRESS_REPORT.md` | §6 + `09 §8` |
 
 ---
 
@@ -231,6 +274,7 @@ Matmul only?                   →  single-layer is usually fine; re-check the b
 | `07_METHODOLOGY.md` | Sweep/PCC/wall-time loop, noise floor, harness bugs, signpost captures |
 | `08_DECODE_PREFILL_AND_MULTIDEVICE.md` | Prefill vs decode phases, KV-cache, GQA, RoPE, multi-device fracturing |
 | `09_PROFILING_AND_OP_ANALYSIS.md` | Tracy capture, tt-perf-report, CSV bucketing, data-movement analysis |
+| `10_PROGRESS_REPORT.md` | Single-file HTML progress dashboard — baseline + goal + experiment log + top buckets, served over SSH tunnel or local HTTP |
 
 ---
 
@@ -254,3 +298,7 @@ Matmul only?                   →  single-layer is usually fine; re-check the b
 | Prefill matmul variant | Matmul 2D, DRAM interleaved | 08 §2 |
 | Decode matmul variant | DRAM-sharded, L1 width-sharded activation | 08 §2 |
 | Tracy op count sanity check | 4N matmuls, N SDPA, ~2N norms for N-layer model | 09 §7 |
+| Where to record an experiment result | append to `DATA.experiments` in `progress.html`; refresh | 10 §5 |
+| Status values for a row | `baseline` / `keep` / `discard` / `crash` | 10 §2 |
+| Serve the progress dashboard | `python3 -m http.server 8899 --bind 0.0.0.0` in `perf_progress/` | 10 §4 |
+| Refresh top buckets in the dashboard | after every `keep` change — re-bucket the new CSV | 10 §6 + 09 §8 |

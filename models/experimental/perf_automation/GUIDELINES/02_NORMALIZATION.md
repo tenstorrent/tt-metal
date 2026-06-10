@@ -30,7 +30,12 @@ instead of over the hidden dim — same reduction structure, different axis.
 
 ---
 
-## 2. Interleaved vs sharded vs distributed — the central decision
+## 2. Interleaved vs sharded vs distributed — the central decision {#norm-sharding-decision}
+<!-- route
+op_class: reduction
+rank: time
+lever_type: single-shot
+-->
 
 | Variant | Input layout | Program config | Use when |
 |---|---|---|---|
@@ -52,7 +57,13 @@ grid. Otherwise interleaved. Don't force sharding at large batch — you'll hit 
 
 ---
 
-## 3. Sharded program config — every knob
+## 3. Sharded program config — every knob {#norm-sharded-config}
+<!-- route
+op_class: reduction
+rank: time
+memory: sharded
+lever_type: search
+-->
 
 ```python
 ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -90,7 +101,11 @@ ViT (12 layers) does **not** set the legacy/welford knobs and uses `math_approx_
 
 ---
 
-## 3b. Distributed norm — sharded across devices on the embedding dim
+## 3b. Distributed norm — sharded across devices on the embedding dim {#norm-distributed}
+<!-- route
+op_class: reduction,ccl
+lever_type: single-shot
+-->
 
 When the hidden dim is fractured across devices (LLMs), no single device has the full row
 to reduce over. The distributed norm is a three-step pattern:
@@ -111,7 +126,12 @@ allows (see 08 section 7). Reference: `models/tt_transformers/tt/distributed_nor
 
 ---
 
-## 3c. The DRAM weight-layout trick (norm weights)
+## 3c. The DRAM weight-layout trick (norm weights) {#norm-weight-layout}
+<!-- route
+op_class: reduction
+bound: dram
+lever_type: single-shot
+-->
 
 Norm weights (gamma, beta) in TILE layout need padding to TILE_HEIGHT, wasting DRAM
 bandwidth. Wrap them into TILE_WIDTH sticks in ROW_MAJOR instead - no padding, done once
@@ -125,7 +145,13 @@ ttnn_gamma_rm = ttnn.as_tensor(gamma, layout=ttnn.ROW_MAJOR_LAYOUT,
 
 ---
 
-## 4. Fidelity and fp32 accumulation — the firm rule
+## 4. Fidelity and fp32 accumulation — the firm rule {#norm-fidelity-fp32}
+<!-- route
+op_class: reduction
+rank: time
+fidelity: hifi4,hifi3
+lever_type: walk
+-->
 
 ```python
 ln_compute = ttnn.init_device_compute_kernel_config(
@@ -180,7 +206,12 @@ into the reshard that precedes it. Single op, no extra dispatch.
 
 ---
 
-## 6. Residual fusion — the most under-used feature
+## 6. Residual fusion — the most under-used feature {#norm-residual-fusion}
+<!-- route
+op_class: reduction,eltwise
+rank: count,time
+lever_type: single-shot
+-->
 
 `ttnn.layer_norm` accepts `residual_input_tensor`. This makes `add + LN` one op:
 
@@ -199,7 +230,12 @@ into the LN. Both avoid the round-trip — pick whichever matches your layout.
 
 ---
 
-## 7. Sharded handoff — chain LN output into the next op
+## 7. Sharded handoff — chain LN output into the next op {#norm-sharded-handoff}
+<!-- route
+op_class: reduction,datamove
+memory: sharded
+lever_type: single-shot
+-->
 
 Sharded LN output can feed the next op without a reshard, **if** the next op accepts the
 same shard config:
@@ -217,7 +253,12 @@ the handoff is a regression.**
 
 ---
 
-## 8. GroupNorm (Swin-L DyHead) — the spatial-reduction cousin
+## 8. GroupNorm (Swin-L DyHead) — the spatial-reduction cousin {#norm-groupnorm}
+<!-- route
+op_class: reduction
+rank: time
+lever_type: single-shot
+-->
 
 GroupNorm normalizes over `(H·W / groups)` spatial elements. Findings from the
 Swin-L DyHead campaign (Wormhole):
@@ -239,7 +280,12 @@ to fill the grid if it pollutes the reduction.
 
 ---
 
-## 9. The bandwidth ceiling — know when to stop
+## 9. The bandwidth ceiling — know when to stop {#norm-bandwidth-ceiling}
+<!-- route
+op_class: reduction
+bound: dram,both
+lever_type: single-shot
+-->
 
 After program-config and fidelity tuning, LN is **bandwidth-bound**: "read shard, reduce,
 write shard." BGE-M3 B1 LN floors at ~9.6 µs/call. Doubling cores doesn't help; the op is

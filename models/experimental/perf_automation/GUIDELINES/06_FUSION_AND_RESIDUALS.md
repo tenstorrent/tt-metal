@@ -7,7 +7,12 @@ everywhere. This file collects the fusion patterns that held across BGE-M3, ViT,
 
 ---
 
-## 1. Fuse `add + Norm` into the norm's residual input
+## 1. Fuse `add + Norm` into the norm's residual input {#fuse-residual-norm}
+<!-- route
+op_class: eltwise,reduction
+rank: count
+lever_type: single-shot
+-->
 
 The single most reusable fusion. Any norm that accepts `residual_input_tensor`:
 
@@ -23,7 +28,12 @@ DRAM round-trip," achieved either by fusion or by layout matching.
 
 ---
 
-## 2. Fuse activation into the producing matmul
+## 2. Fuse activation into the producing matmul {#fuse-activation-matmul}
+<!-- route
+op_class: eltwise
+rank: count
+lever_type: single-shot
+-->
 
 GELU/SiLU into FF1, ReLU into a projection — always fuse via `fused_activation`. The SFPU
 LUT hides in the packer schedule (+~0.8 µs vs bare matmul, vs +6–40 µs as a separate op).
@@ -31,7 +41,12 @@ See 05 §2. Same idea for any unary that immediately follows a matmul.
 
 ---
 
-## 3. Fuse dtype casts into reshards — always
+## 3. Fuse dtype casts into reshards — always {#fuse-cast-reshard}
+<!-- route
+op_class: datamove
+rank: count,time
+lever_type: single-shot
+-->
 
 `interleaved_to_sharded`, `sharded_to_interleaved`, and `to_memory_config`-style ops accept
 `output_dtype=`. Never run a standalone `typecast` next to a reshard:
@@ -47,7 +62,12 @@ BGE-M3: −82 µs on the S→I output path alone.
 
 ---
 
-## 4. Fuse adjacent unary ops via `unary_chain`
+## 4. Fuse adjacent unary ops via `unary_chain` {#fuse-unary-chain}
+<!-- route
+op_class: eltwise
+rank: count
+lever_type: single-shot
+-->
 
 When two scalar/unary ops are adjacent (e.g. `hardsigmoid(x)` then `x − 0.5`, or
 `2·x + 1`), `ttnn.unary_chain` runs them in one kernel:
@@ -65,7 +85,12 @@ and exactly the kind of op-count win that matters in a host-bound trace.
 
 ---
 
-## 5. Pre-fuse anything that depends only on weights — at load time
+## 5. Pre-fuse anything that depends only on weights — at load time {#fuse-weight-folds}
+<!-- route
+op_class: eltwise,embedding
+rank: count
+lever_type: single-shot
+-->
 
 Any per-forward op whose output depends only on weights (not input data) can be done once
 at weight-load:
@@ -82,7 +107,11 @@ batch 1, because two dispatch ops also leave the trace pipeline).
 
 ---
 
-## 6. Skip whole op-chains with config flags
+## 6. Skip whole op-chains with config flags {#fuse-skip-chains}
+<!-- route
+rank: count
+lever_type: single-shot
+-->
 
 If the caller can guarantee a precondition, short-circuit the op chain:
 - **`attn_mask=None`** when inputs are unpadded → SDPA's compile-time constexpr strips the
@@ -94,7 +123,13 @@ precondition.
 
 ---
 
-## 7. Cross-block sharded handoff
+## 7. Cross-block sharded handoff {#fuse-cross-block-handoff}
+<!-- route
+op_class: datamove
+rank: time
+memory: sharded
+lever_type: single-shot
+-->
 
 Thread the last norm's sharded output of block N into block N+1's first norm as its
 residual, so the block boundary has no I→S reshard. BGE-M3: −53 µs. Only works when both
