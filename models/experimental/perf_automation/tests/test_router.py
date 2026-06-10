@@ -89,6 +89,22 @@ def test_route_wildcard():
     assert route(index, {"op_class": "eltwise"}) == []
 
 
+def test_route_rejects_unknown_dim():
+    index = build_index()
+    # `rank_axis` is the old POC dim name -> a real, likely-silent mistake.
+    with pytest.raises(ValueError):
+        route(index, {"rank_axis": "time"})
+
+
+def test_route_rejects_invalid_value():
+    index = build_index()
+    # `gemm`/`saturated` are not in the closed vocabulary (PLAN section 4.1).
+    with pytest.raises(ValueError):
+        route(index, {"op_class": "gemm"})
+    with pytest.raises(ValueError):
+        route(index, {"fidelity": "saturated"})
+
+
 # ---- read_section ----
 
 

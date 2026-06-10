@@ -36,6 +36,33 @@ DIMENSIONS = (
 )
 WILDCARD = "*"
 
+# Closed routing vocabulary (PLAN section 4.1). Queries must use these exact
+# values; a parser/vocab drift must fail loudly at the routing boundary rather
+# than silently flooding or starving SELECT.
+VOCABULARY: dict[str, frozenset[str]] = {
+    "op_class": frozenset(
+        {
+            "matmul",
+            "attention",
+            "reduction",
+            "eltwise",
+            "datamove",
+            "embedding",
+            "conv_pool",
+            "ccl",
+            "host_fallback",
+            "other",
+        }
+    ),
+    "bound": frozenset({"dram", "flop", "both", "slow", "host"}),
+    "rank": frozenset({"time", "count"}),
+    "fidelity": frozenset({"lofi", "hifi2", "hifi3", "hifi4", "na"}),
+    "grid": frozenset({"full", "partial", "tiny"}),
+    "dispatch": frozenset({"ok", "gappy"}),
+    "memory": frozenset({"dram_interleaved", "l1_interleaved", "sharded"}),
+    "regime": frozenset({"prefill", "decode", "na"}),
+}
+
 _ROOT = Path(__file__).resolve().parent.parent
 GUIDELINES_DIR = _ROOT / "GUIDELINES"
 CACHE_PATH = _ROOT / ".cache" / "playbook_index.json"
@@ -121,13 +148,33 @@ def _dim_match(section_values: list[str], query_value: Any) -> bool:
     return query_value in section_values
 
 
+def _validate_query(query: dict[str, Any]) -> None:
+    """Reject unknown dimensions and out-of-vocabulary values (PLAN section 4.1).
+
+    Fail loudly at the routing boundary so a parser/vocab drift surfaces here
+    instead of silently flooding or starving SELECT downstream.
+    """
+    for key, value in query.items():
+        if key not in VOCABULARY:
+            raise ValueError(f"unknown routing dimension {key!r}; valid dimensions: " f"{sorted(VOCABULARY)}")
+        if value is None or value == WILDCARD:
+            continue
+        if value not in VOCABULARY[key]:
+            raise ValueError(
+                f"invalid value {value!r} for dimension {key!r}; valid values: " f"{sorted(VOCABULARY[key])}"
+            )
+
+
 def route(index: list[dict[str, Any]], query: dict[str, Any]) -> list[dict[str, Any]]:
     """Return index entries whose declared tags match the bucket `query`.
 
     Tag-equality across all 8 dimensions with wildcard on either side. Fidelity
     exhaustion falls out naturally: a `fidelity: hifi4,hifi3,hifi2` section does
     not match a `fidelity=lofi` bucket. Results keep document order.
+
+    Raises ValueError on an unknown dimension key or out-of-vocabulary value.
     """
+    _validate_query(query)
     return [entry for entry in index if all(_dim_match(entry[dim], query.get(dim)) for dim in DIMENSIONS)]
 
 

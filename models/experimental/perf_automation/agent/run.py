@@ -73,7 +73,7 @@ class Run:
     ) -> "Run":
         """Create runs/<id>/ (+ profiles/), point runs/latest at it, write manifest."""
         runs_root = Path(runs_root)
-        run_id = run_id or datetime.now().strftime("%Y-%m-%dT%H-%M")
+        run_id = run_id or datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
         run = cls(runs_root, run_id)
         run.profiles_dir.mkdir(parents=True, exist_ok=True)
 
