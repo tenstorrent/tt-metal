@@ -17,3 +17,4 @@
 {"source":"eval_test_runner","pid":1147981,"started_at_ms":1781076605297,"wait_ms":165,"run_ms":166936,"test_path":"eval/golden_tests/scaled_dot_product_attention/","exit_code":0}
 {"source":"tt-probe","pid":1154231,"started_at_ms":1781077072269,"wait_ms":255,"run_ms":27035,"test_path":"scaled_dot_product_attention","exit_code":0}
 {"source":"tt-probe","pid":1156091,"started_at_ms":1781077148179,"wait_ms":175,"run_ms":26552,"test_path":"scaled_dot_product_attention","exit_code":0}
+{"source":"tt-probe","pid":1157858,"started_at_ms":1781077254625,"wait_ms":190,"run_ms":30108,"test_path":"scaled_dot_product_attention","exit_code":0}

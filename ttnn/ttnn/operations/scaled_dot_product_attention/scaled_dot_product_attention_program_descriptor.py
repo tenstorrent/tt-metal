@@ -87,12 +87,15 @@ def create_program_descriptor(
 
     # Input/probs/output CB formats follow the input dtype (validate() enforces
     # Q/K/V/mask dtype equality, and output dtype == query dtype). Stat /
-    # accumulator intermediates stay Float32 (fp32 DEST accumulation crosses
-    # those CBs); reduce-scaler tiles stay bfloat16 (helper fill format).
+    # accumulator intermediates follow fp32_dest_acc_en: Float32 when the fp32
+    # DEST accumulation crosses those CBs (default), Float16_b otherwise —
+    # packing a 16-bit DEST into Float32 CBs corrupts values (probe_007: pcc
+    # ~0.41 at every fidelity). Reduce-scaler tiles stay bfloat16 (helper fill).
     in_fmt = q.dtype
     t_in = ttnn.tile_size(in_fmt)
     t_bf = ttnn.tile_size(ttnn.bfloat16)
-    t_f32 = ttnn.tile_size(ttnn.float32)
+    acc_fmt = ttnn.float32 if compute_kernel_config.fp32_dest_acc_en else ttnn.bfloat16
+    t_acc = ttnn.tile_size(acc_fmt)
 
     # --- Work distribution over flattened (b, h, q_chunk) units ---
     total_units = B * H * Nq
@@ -120,18 +123,18 @@ def create_program_descriptor(
         cb(CB_V_TILES, 2 * c_kv * Dt, t_in, in_fmt),
         cb(CB_SCALER_MAX, 1, t_bf, ttnn.bfloat16),
         cb(CB_SCALER_SUM, 1, t_bf, ttnn.bfloat16),
-        cb(CB_CUR_SUM, c_q, t_f32, ttnn.float32),
-        cb(CB_PREV_MAX, c_q, t_f32, ttnn.float32),
-        cb(CB_RUNNING_MAX, 2 * c_q, t_f32, ttnn.float32),
-        cb(CB_ALPHA, c_q, t_f32, ttnn.float32),
-        cb(CB_RUNNING_SUM, 2 * c_q, t_f32, ttnn.float32),
-        cb(CB_INV_SUM, c_q, t_f32, ttnn.float32),
+        cb(CB_CUR_SUM, c_q, t_acc, acc_fmt),
+        cb(CB_PREV_MAX, c_q, t_acc, acc_fmt),
+        cb(CB_RUNNING_MAX, 2 * c_q, t_acc, acc_fmt),
+        cb(CB_ALPHA, c_q, t_acc, acc_fmt),
+        cb(CB_RUNNING_SUM, 2 * c_q, t_acc, acc_fmt),
+        cb(CB_INV_SUM, c_q, t_acc, acc_fmt),
         cb(CB_OUT_TILES, 2 * c_q * Dt, t_in, in_fmt),
-        cb(CB_SCORES, c_q * c_kv, t_f32, ttnn.float32),
-        cb(CB_SCORES_SCALED, c_q * c_kv, t_f32, ttnn.float32),
+        cb(CB_SCORES, c_q * c_kv, t_acc, acc_fmt),
+        cb(CB_SCORES_SCALED, c_q * c_kv, t_acc, acc_fmt),
         cb(CB_PROBS, c_q * c_kv, t_in, in_fmt),
-        cb(CB_PV, c_q * Dt, t_f32, ttnn.float32),
-        cb(CB_O_ACC, 2 * c_q * Dt, t_f32, ttnn.float32),
+        cb(CB_PV, c_q * Dt, t_acc, acc_fmt),
+        cb(CB_O_ACC, 2 * c_q * Dt, t_acc, acc_fmt),
     ]
     if has_mask:
         cbs.append(cb(CB_MASK_TILES, 2 * c_q * c_kv, t_in, in_fmt))
