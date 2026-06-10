@@ -152,8 +152,9 @@ def groupnorm_sc_N_1_HW_C(
     compute_kernel_config: optional ttnn.WormholeComputeKernelConfig /
     BlackholeComputeKernelConfig (math_fidelity, fp32_dest_acc_en,
     math_approx_mode, dst_full_sync_en). Defaults reproduce the Phase-0
-    hard-coded behavior: HiFi4, fp32_dest_acc_en=False, math_approx_mode=False,
-    dst_full_sync_en=False.
+    hard-coded behavior (HiFi4, fp32_dest_acc_en=False, math_approx_mode=False,
+    dst_full_sync_en=False), except fp32 input which defaults
+    fp32_dest_acc_en=True (dtype-driven; fp32 had no prior behavior).
     """
     validate(input_tensor, num_groups, gamma=gamma, beta=beta, eps=eps)
 
