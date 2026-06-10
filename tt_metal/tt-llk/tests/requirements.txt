@@ -1,12 +1,10 @@
 --index-url https://pypi.org/simple/
 --extra-index-url https://download.pytorch.org/whl/cpu
 
-# tt packages from test.pypi.org
+## TT packages
 tt-exalens==0.3.21
-tt-umd==0.9.6
-
-# tt-smi from pypi
 tt-smi==3.1.1
+tt-umd==0.9.6
 
 coverage[toml]==7.10.5
 exceptiongroup==1.3.0
