@@ -131,10 +131,21 @@ def run(
             partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
         )(tuple(residual_kwargs["shape"]))
 
-    # Layer norm on last dimension — PyTorch expects weight/bias to be 1D
+    # Layer norm on last dimension — PyTorch expects weight/bias to be 1D of
+    # length normalized_shape[-1]. The model often stores gamma/beta in the tiled
+    # [1, 1, C/32, 32] RM layout (e.g. (1,1,32,32) for C=1024); .squeeze() leaves
+    # that as (32,32) and torch.layer_norm rejects it ("weight shape != normalized
+    # _shape"). Flatten to C when the element count matches the normalized dim.
     normalized_shape = shape[-1:]
-    golden_weight = torch_weight.squeeze() if torch_weight is not None else None
-    golden_bias = torch_bias.squeeze() if torch_bias is not None else None
+    _norm = int(normalized_shape[-1])
+
+    def _flatten_affine(t):
+        if t is None:
+            return None
+        return t.reshape(-1) if t.numel() == _norm else t.squeeze()
+
+    golden_weight = _flatten_affine(torch_weight)
+    golden_bias = _flatten_affine(torch_bias)
     golden_input = torch_input_tensor_a if torch_residual is None else (torch_input_tensor_a + torch_residual)
     torch_output_tensor = torch.nn.functional.layer_norm(
         golden_input,

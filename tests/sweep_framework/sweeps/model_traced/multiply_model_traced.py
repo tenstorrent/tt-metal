@@ -118,6 +118,14 @@ def run(
         # Tensor-scalar multiply: use the scalar value directly.
         # The scalar may come from 'scalar' kwarg, 'arg1' param, or default to 2.0.
         scalar_value = scalar if scalar is not None else (arg1 if arg1 is not None else 2.0)
+        # The scalar is a float (e.g. masking value -FLT_MAX ≈ -3.4e38) but the
+        # tracer serializes it as a huge Python int; passing that to ttnn.multiply
+        # tries to cast to unsigned ("can't convert negative int to unsigned").
+        # Coerce numeric scalars to float so the op gets a real float scalar.
+        if isinstance(scalar_value, bool):
+            pass
+        elif isinstance(scalar_value, int):
+            scalar_value = float(scalar_value)
         torch_output_tensor = torch.mul(torch_input_tensor_a, scalar_value)
         is_scalar_multiply = True
     else:

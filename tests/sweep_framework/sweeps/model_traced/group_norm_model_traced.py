@@ -359,6 +359,19 @@ def run(
     num_cores_across_channel = max(1, (C + 31) // 32)
     if weight_shape and len(weight_shape) >= 2 and int(weight_shape[-2]) > 0:
         num_cores_across_channel = int(weight_shape[-2])
+    # For block-sharded group_norm the channels are split across the core grid's
+    # x dimension, so the op's real num_cores_across_channel is core_grid.x. The
+    # mask/weight/bias must be built for that exact count or the channel->group
+    # mapping is wrong (≈0.79 PCC). weight_shape[-2] (=C/32) often does not even
+    # divide num_groups (so create_group_norm_input_mask rejects it and a wrong
+    # fallback count is silently used). Prefer core_grid.x when it validly tiles
+    # both the channels (C/32) and the groups.
+    try:
+        _cgx = int(getattr(_early_core_grid, "x", 0))
+    except Exception:
+        _cgx = 0
+    if _cgx > 0 and num_groups % _cgx == 0 and (C // 32) % _cgx == 0:
+        num_cores_across_channel = _cgx
 
     # Use ttnn.create_group_norm_input_mask for proper channel-group mapping.
     # create_group_norm_input_mask only accepts num_cores values that evenly

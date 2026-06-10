@@ -934,6 +934,22 @@ def run(
             if isinstance(dtype, dict)
             else parse_dict_value("dtype", {"type": "DataType", "repr": dtype})
         )
+    # Drop a traced program_config whose compute grid can't fit this device. Some
+    # configs are traced on a wider chip (e.g. Blackhole's (8,10)) and overflow
+    # the Wormhole 8x8 grid even under ETH dispatch, crashing with
+    # "compute_with_storage_grid_size must fit within (8,8)". The grid only sets
+    # the matmul's M/N core tiling — the result is grid-independent — so drop the
+    # config and let ttnn.linear auto-select a valid grid for this device.
+    if isinstance(program_config, dict):
+        _csg = program_config.get("compute_with_storage_grid_size")
+        if isinstance(_csg, dict):
+            try:
+                _dg = device.compute_with_storage_grid_size()
+                if int(_csg.get("x", 0)) > int(_dg.x) or int(_csg.get("y", 0)) > int(_dg.y):
+                    program_config = None
+            except Exception:
+                pass
+
     # Use traced program_config when available — master and sweep both run on the
     # same Galaxy 4×8 topology so block/grid sizes are valid. Parse dict form to
     # the appropriate ttnn program_config object.

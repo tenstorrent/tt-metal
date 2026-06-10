@@ -220,7 +220,39 @@ def create_mesh_device(
          op's masters all need the same axis.
       3. Default to COL.
     """
-    # 0. Explicit per-vector axis override.
+    # Prefer ETH dispatch on single-host clusters, for EVERY caller (explicit
+    # axis or auto-detect). On a single Wormhole chip, WORKER dispatch (either
+    # axis) reserves a worker row/col and leaves only 8x7 / 7x8 = 56 compute
+    # cores; many traced configs need the full 8x8 (64-core) grid and otherwise
+    # crash with "compute_with_storage_grid_size must fit within (8,7)",
+    # "num_shards (64) <= num_compute_banks (56)", "num_cores <= grid.x*grid.y",
+    # or "not on_dispatch_core". ETH frees the full 8x8 grid (verified:
+    # WORKER->56, ETH->64) and is a strict superset of both WORKER axes, so it
+    # hosts every config either axis could plus the full-grid ones. This must run
+    # even when dispatch_core_axis is None: ops whose grid nominally fits a WORKER
+    # axis (so they pass axis=None) still need the 8th row/col that only ETH frees
+    # (e.g. a (5,8) matmul grid needs y=8, which WORKER ROW's 8x7 lacks).
+    #
+    # Gate to single-host small clusters (N150=1, N300=2). On large Galaxy
+    # clusters ETH dispatch cores can't be allocated and a failed ETH open
+    # re-inits MetalContext and wedges the command queue, so leave those on
+    # WORKER. (T3K/larger excluded pending validation on that hardware.)
+    try:
+        _single_host = ttnn.get_num_devices() <= 2
+    except Exception:
+        _single_host = False
+    if _single_host:
+        try:
+            return ttnn.open_mesh_device(
+                mesh_shape=ttnn.MeshShape(*mesh_shape),
+                l1_small_size=l1_small_size,
+                dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.ETH),
+            )
+        except Exception:
+            # ETH dispatch unavailable here — fall back to the logic below.
+            pass
+
+    # 0. Explicit per-vector axis override (WORKER on the requested axis).
     if dispatch_core_axis is not None:
         return ttnn.open_mesh_device(
             mesh_shape=ttnn.MeshShape(*mesh_shape),

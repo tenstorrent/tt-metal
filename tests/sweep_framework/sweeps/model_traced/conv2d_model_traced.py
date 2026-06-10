@@ -107,6 +107,25 @@ _ACTIVATION_MAP = {
 }
 
 
+def _parse_core_grid(value_str):
+    """Parse a serialized CoreRangeSet from a Conv2dConfig repr's ``core_grid=``
+    field into a ttnn.CoreRangeSet, or None when absent / std::nullopt.
+
+    Mirrors the CoreRangeSet repr the tracer records, e.g.
+    ``core_grid={[0-0 - 4-7]}`` (single range) or
+    ``core_grid={[0-0 - 4-7], [0-0 - 6-3]}`` (multiple), where each
+    ``[sx-sy - ex-ey]`` is CoreRange(CoreCoord(sx,sy) -> CoreCoord(ex,ey)).
+    """
+    m = re.search(r"core_grid=(\{[^}]*\}|std::nullopt)", value_str)
+    if not m or m.group(1) == "std::nullopt":
+        return None
+    ranges = [
+        ttnn.CoreRange(ttnn.CoreCoord(int(g[0]), int(g[1])), ttnn.CoreCoord(int(g[2]), int(g[3])))
+        for g in re.findall(r"\[(\d+)-(\d+)\s*-\s*(\d+)-(\d+)\]", m.group(1))
+    ]
+    return ttnn.CoreRangeSet(ranges) if ranges else None
+
+
 def _parse_conv_config(traced_conv_config):
     """Parse serialized Conv2dConfig dict into ttnn.Conv2dConfig."""
     if not traced_conv_config or not isinstance(traced_conv_config, dict):
@@ -165,6 +184,14 @@ def _parse_conv_config(traced_conv_config):
         m = re.search(rf"{attr}=(\d+)", value_str)
         if m:
             setattr(conv_config, attr, int(m.group(1)))
+
+    # core_grid carries the traced shard grid. The op requires it to be set
+    # whenever override_sharding_config / override_output_sharding_config is
+    # True (TT_FATAL "conv_config.core_grid.has_value()"), so reconstruct the
+    # exact traced CoreRangeSet rather than leaving it nullopt.
+    core_grid = _parse_core_grid(value_str)
+    if core_grid is not None:
+        conv_config.core_grid = core_grid
 
     return conv_config
 

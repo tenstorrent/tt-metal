@@ -112,32 +112,40 @@ def _slice_input_shard_axis_and_factor(placement_dict):
 
 
 def invalidate_vector(test_vector) -> tuple:
-    """Exclude the distributed mesh-partition slice whose bound tensors weren't traced.
+    """Exclude the index-tensor slice form whose bound tensors weren't traced.
 
-    One traced config (8dc9af…) calls ttnn.slice in its tensor-parallel form
-    (slice_dim + num_devices, with starts/ends passed as device TENSORS that shard
-    the input across the mesh). The tracer captured only the starts/ends tensor
-    *shapes*, not their *values*, so the exact per-device slice bounds are
-    unrecoverable — the generic golden has to guess (defaulting to a [0:dim/2]
-    index slice), which doesn't match the partition the op actually performs. Rather
-    than assert against a fabricated golden, mark these unreconstructable.
+    The ``slice_dim`` (+optional ``num_devices``) overload of ttnn.slice passes
+    starts/ends as device TENSORS rather than int lists — either captured as
+    ``starts_shape``/``ends_shape`` or as the 2nd/3rd positional tensor args
+    (``input_b_``/``input_c_``, each an INT32 ``(2,)`` start/end pair, e.g. the
+    tt_transformers LM-head vocab slice). The tracer records only the bound
+    tensors' *shapes*, not their *values*, so the exact slice bounds are
+    unrecoverable — the generic golden falls back to a ``[0:dim/2]`` half-slice
+    that doesn't match what the op did (≈0.5 PCC). Mark these unreconstructable
+    rather than assert against a fabricated golden.
 
-    Regular slice configs (no num_devices, or with concrete list starts/ends) are
-    unaffected.
+    Regular slice configs (concrete list starts/ends via starts/ends,
+    slice_start/slice_end, or arg1/arg2) are unaffected.
     """
 
     def _present(v):
         return v is not None and v != "__ABSENT__"
 
     num_devices = test_vector.get("num_devices")
-    starts_val = test_vector.get("starts")
-    ends_val = test_vector.get("ends")
-    # tensor-form bounds: a *_shape is recorded but no concrete value list.
-    tensor_bounds = _present(test_vector.get("starts_shape")) or _present(test_vector.get("ends_shape"))
-    if _present(num_devices) and tensor_bounds and not (_present(starts_val) or _present(ends_val)):
+    slice_dim = test_vector.get("slice_dim")
+    # Any concrete list bounds the run() path can replay.
+    list_bounds = any(
+        _present(test_vector.get(k)) for k in ("starts", "ends", "slice_start", "slice_end", "arg1", "arg2")
+    )
+    # Tensor-form bounds: bound *shapes* recorded but no concrete values. They
+    # arrive as starts_shape/ends_shape or as the 2nd/3rd positional tensor args.
+    tensor_bounds = any(
+        _present(test_vector.get(k)) for k in ("starts_shape", "ends_shape", "input_b_shape", "input_c_shape")
+    )
+    if (_present(num_devices) or _present(slice_dim)) and tensor_bounds and not list_bounds:
         return (
             True,
-            "tensor-parallel slice (slice_dim+num_devices) with untraced starts/ends tensor values — slice bounds unrecoverable",
+            "index-tensor slice (slice_dim) with untraced starts/ends tensor values — slice bounds unrecoverable",
         )
     return False, None
 
@@ -209,9 +217,23 @@ def run(
         "input_tensor_tensor_placement", None
     )
     is_mesh_device = hasattr(device, "get_num_devices")
+
+    # Some traced vectors carry the slice bounds under the op's internal C++ arg
+    # names (slice_start/slice_end/slice_step) instead of positional arg1/arg2/arg3.
+    # The model called ttnn.slice positionally — those names are NOT valid Python
+    # kwargs for the binding (it exposes starts/ends) — so route them into the
+    # positional bounds. They must also be excluded from op_kwargs below, else they
+    # leak in as invalid keyword args ("incompatible function arguments").
+    if arg1 is None:
+        arg1 = kwargs.get("slice_start")
+    if arg2 is None:
+        arg2 = kwargs.get("slice_end")
+    if arg3 is None:
+        arg3 = kwargs.get("slice_step")
+
     op_kwargs = build_op_kwargs(
         kwargs,
-        exclude={"starts", "ends", "steps", "slice_dim", "num_devices"},
+        exclude={"starts", "ends", "steps", "slice_start", "slice_end", "slice_step", "slice_dim", "num_devices"},
         output_memory_config=output_memory_config,
         device=device,
     )

@@ -240,11 +240,44 @@ def _parse_unary_op(value: Any) -> Any:
         return value
 
 
+def _is_unary_with_param_dict(value: Any) -> bool:
+    """Check for a UnaryWithParam dict {type: 'UnaryWithParam', value: 'UnaryWithParam(op_type=UnaryOpType::SILU, ...)'}."""
+    return isinstance(value, dict) and value.get("type") == "UnaryWithParam"
+
+
+def _parse_unary_with_param(value: Any) -> Any:
+    """Parse a UnaryWithParam dict to a ttnn.UnaryWithParam (the form eltwise
+    ops' ``activations`` kwarg expects). Format:
+    ``UnaryWithParam(op_type=UnaryOpType::SILU)`` or with ``param=<float>``."""
+    if not _is_unary_with_param_dict(value):
+        return value
+    import re as _re
+
+    s = str(value.get("value", ""))
+    m = _re.search(r"UnaryOpType::(\w+)", s)
+    if not m:
+        return value
+    try:
+        import ttnn as _ttnn
+
+        op = getattr(_ttnn.UnaryOpType, m.group(1))
+        pm = _re.search(r"param\s*[=:]\s*(-?\d+\.?\d*(?:[eE]-?\d+)?)", s)
+        if pm:
+            return _ttnn.UnaryWithParam(op, float(pm.group(1)))
+        return _ttnn.UnaryWithParam(op)
+    except (ImportError, AttributeError, ValueError):
+        return value
+
+
 def _maybe_parse_unary_list(value: Any) -> Any:
-    """If value is a list of UnaryOpType dicts, convert each element."""
+    """If value is a list of UnaryOpType or UnaryWithParam dicts, convert each."""
     if isinstance(value, list) and value and all(_is_unary_op_dict(v) for v in value):
         parsed = [_parse_unary_op(v) for v in value]
-        # Return parsed list only if every element converted to an enum
+        if all(not isinstance(p, dict) for p in parsed):
+            return parsed
+    # Fused-activation lists carry UnaryWithParam dicts (e.g. add/mul activations).
+    if isinstance(value, list) and value and all(_is_unary_with_param_dict(v) for v in value):
+        parsed = [_parse_unary_with_param(v) for v in value]
         if all(not isinstance(p, dict) for p in parsed):
             return parsed
     return value

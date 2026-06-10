@@ -196,6 +196,9 @@ def run(
     if not input_is_sharded:
         if applied_shard_scheme is None:
             applied_shard_scheme = "BLOCK_SHARDED"
+        # The trace may record the full enum repr ("TensorMemoryLayout.BLOCK_SHARDED"
+        # or "...::BLOCK_SHARDED"); reduce to the bare name the checks below expect.
+        applied_shard_scheme = str(applied_shard_scheme).rsplit(".", 1)[-1].rsplit("::", 1)[-1]
 
         if applied_shard_scheme == "BLOCK_SHARDED":
             applied_shard_scheme_ttnn = ttnn.TensorMemoryLayout.BLOCK_SHARDED
