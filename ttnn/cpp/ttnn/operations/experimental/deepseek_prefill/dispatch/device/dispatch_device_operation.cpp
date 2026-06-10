@@ -27,11 +27,22 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
         tensor_args.expert_dispatch_table_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
         "Expert dispatch table tensor must be ROW_MAJOR layout");
 
-    // Validate input tensor dtypes
+    // Validate input tensor dtypes. The row-major path moves token bytes verbatim, so it supports
+    // BFLOAT16 or FP8_E4M3 (the dispatched buffer inherits the input dtype). FP8_E4M3 input is only
+    // valid on the row-major path; the TILE use_fp8_dispatch path is a separate bf16->fp8 typecast.
     TT_FATAL(
-        tensor_args.input_tensor.dtype() == DataType::BFLOAT16,
-        "Input tensor must be BFLOAT16, got {}",
+        tensor_args.input_tensor.dtype() == DataType::BFLOAT16 ||
+            tensor_args.input_tensor.dtype() == DataType::FP8_E4M3,
+        "Input tensor must be BFLOAT16 or FP8_E4M3, got {}",
         tensor_args.input_tensor.dtype());
+    if (tensor_args.input_tensor.dtype() == DataType::FP8_E4M3) {
+        TT_FATAL(
+            tensor_args.input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+            "FP8_E4M3 input is only supported with ROW_MAJOR layout");
+        TT_FATAL(
+            !operation_attributes.use_fp8_dispatch,
+            "use_fp8_dispatch is the bf16->fp8 TILE path and is incompatible with an FP8_E4M3 input");
+    }
     TT_FATAL(
         tensor_args.weights_tensor.dtype() == DataType::BFLOAT16,
         "Weights tensor must be BFLOAT16, got {}",
@@ -93,10 +104,13 @@ DispatchDeviceOperation::spec_return_value_t DispatchDeviceOperation::compute_ou
     auto dispatch_buffer_shape = ttnn::Shape({1, 1, max_dispatch_buffer_token_size, hidden_dim});
     auto dispatch_metadata_shape = ttnn::Shape({1, 1, max_dispatch_buffer_token_size, metadata_len});
 
-    // FP8 dispatch emits Fp8_e4m3 (1 byte/element); DataType::FP8_E4M3 maps directly to
-    // tt::DataFormat::Fp8_e4m3 via datatype_to_dataformat_converter, so downstream CBs created
-    // with detail::create_tensor_cb(output_tensor, ...) pick up the right dtype/page-size.
-    auto dispatch_buffer_dtype = operation_attributes.use_fp8_dispatch ? DataType::FP8_E4M3 : DataType::BFLOAT16;
+    // use_fp8_dispatch (TILE path) typecasts bf16->fp8 and emits Fp8_e4m3 (1 byte/element);
+    // DataType::FP8_E4M3 maps directly to tt::DataFormat::Fp8_e4m3 via datatype_to_dataformat_converter,
+    // so downstream CBs created with detail::create_tensor_cb(output_tensor, ...) pick up the right
+    // dtype/page-size. The row-major path moves token bytes verbatim, so the dispatched buffer instead
+    // inherits the input dtype (BFLOAT16 -> BFLOAT16, FP8_E4M3 -> FP8_E4M3).
+    auto dispatch_buffer_dtype =
+        operation_attributes.use_fp8_dispatch ? DataType::FP8_E4M3 : tensor_args.input_tensor.dtype();
 
     // Create TensorSpec objects with correct dtypes
     auto dispatch_buffer_spec = TensorSpec(
