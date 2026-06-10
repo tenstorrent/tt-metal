@@ -30,7 +30,9 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
 
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
-    constexpr uint32_t num_shared_experts = get_named_compile_time_arg_val("num_shared_experts");
+    // Unused since shared experts now read the full Nt-tall W2 (see W2 loop comment); kept for the
+    // forthcoming TpNt-geometry work.
+    [[maybe_unused]] constexpr uint32_t num_shared_experts = get_named_compile_time_arg_val("num_shared_experts");
     constexpr uint32_t shared_expert_tp_factor = get_named_compile_time_arg_val("shared_expert_tp_factor");
 
     using Cfg = moe_ring::MoeRingConfig<Ht, Nt, num_cores, has_bias, shared_expert_tp_factor>;
@@ -343,10 +345,12 @@ void kernel_main() {
             //-------------------------------------------------------------------------
             uint32_t w2_global_page = w2_slice_first_global_page;
 
-            const auto w2_blocks_per_expert = (expert_id >= num_experts - num_shared_experts)
-                                                  ? Cfg::w2_blocks_per_shared_expert
-                                                  : Cfg::w2_blocks_per_expert;
-            for (uint32_t block_id = 0; block_id < w2_blocks_per_expert; ++block_id) {
+            // Read the FULL Nt-tall W2 for every expert, including shared experts. Shared-expert W2
+            // is zero-padded to full Nt height (add_shared_expert_weights); the zero rows are inert
+            // under the full contraction the compute kernel performs. Shortening the read to TpNt is
+            // incorrect with the current zero-padded weight layout and is deferred to the
+            // TpNt-geometry work (see the shared-expert-tp design note).
+            for (uint32_t block_id = 0; block_id < Cfg::w2_blocks_per_expert; ++block_id) {
                 noc_async_read_set_trid(trid_to_issue);
 
                 // First transaction:

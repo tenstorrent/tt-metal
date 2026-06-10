@@ -93,7 +93,7 @@ void kernel_main() {
 
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     [[maybe_unused]] constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
-    constexpr uint32_t num_shared_experts = get_named_compile_time_arg_val("num_shared_experts");
+    [[maybe_unused]] constexpr uint32_t num_shared_experts = get_named_compile_time_arg_val("num_shared_experts");
     constexpr uint32_t shared_expert_tp_factor = get_named_compile_time_arg_val("shared_expert_tp_factor");
 
     constexpr auto activation_type =
@@ -163,7 +163,6 @@ void kernel_main() {
     // Ring setup
     //-------------------------------------------------------------------------
     constexpr uint32_t w2_blocks_per_a2a_iter = Cfg::w2_blocks_per_expert / Cfg::num_a2a_iters;
-    constexpr uint32_t w2_blocks_per_a2a_iter_shared_expert = Cfg::w2_blocks_per_shared_expert / Cfg::num_a2a_iters;
 
     [[maybe_unused]] constexpr uint32_t num_a2a_steps_per_iter = num_cores;
 
@@ -354,10 +353,14 @@ void kernel_main() {
                 tile_regs_acquire();
 
                 uint32_t w2_k_tracker = 0;
-                const auto w2_blocks_per_a2a_iter_using = (expert_id >= num_experts - num_shared_experts)
-                                                              ? w2_blocks_per_a2a_iter_shared_expert
-                                                              : w2_blocks_per_a2a_iter;
-                for (uint32_t block_id = 0; block_id < w2_blocks_per_a2a_iter_using; ++block_id) {
+                // Shared experts contract the FULL Nt K-extent, identical to routed experts. Their
+                // W0/W1 and W2 weights are zero-padded to full Nt (add_shared_expert_weights), so the
+                // padding K rows/cols contribute zero and the full ring walk is correct. The TpNt
+                // work-distribution optimization (shortening the contraction) is deferred: a partial
+                // walk over zero-padded weights selects a core-relative window, not the real [0,TpNt)
+                // slice, so it is incorrect. Realizing it requires a true TpNt ring geometry -- see
+                // the shared-expert-tp design note.
+                for (uint32_t block_id = 0; block_id < w2_blocks_per_a2a_iter; ++block_id) {
                     cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
                     for (uint32_t k = 0; k < w2_tiles_per_block; k += w2_tiles_per_iter_w) {
                         if constexpr (has_bias) {

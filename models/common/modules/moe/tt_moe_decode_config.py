@@ -220,10 +220,11 @@ class ComputeConfig(_TTOpKwargs):
     has_bias: bool
     activation_type: ActivationFunction
     intermediate_size: int
+    num_shared_experts: int
 
     @classmethod
     def adopt_fields(cls) -> set[str]:
-        return {"cluster_axis", "has_bias"}
+        return {"cluster_axis", "has_bias", "num_shared_experts"}
 
 
 class PostCombineTilizeConfig(_TTOpKwargs):
