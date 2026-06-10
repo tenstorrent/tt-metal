@@ -549,9 +549,69 @@ the YAML; [`resolve_trace_region_size`](./demos/utils/trace_region_sizes.py)
 raises `TraceRegionSizeNotConfiguredError` if an entry is missing.
 
 - **Model keys** — same short kebab-case + `aliases` convention as `model_targets.yaml`.
-- **SKU keys** — canonical names (`wh_n150`, `wh_llmbox_perf`, `bh_p150`, …); legacy labels like `T3K` / `P150x4` resolve via `normalize_sku`.
-- **`tt_transformers`** — `get_supported_trace_region_size` in [`demo/trace_region_config.py`](./tt_transformers/demo/trace_region_config.py) loads from the YAML automatically when `HF_MODEL` is set.
-- **Other demos** — call `resolve_trace_region_size(HF_MODEL, get_current_device_sku_name())` from [`demos/utils/trace_region_sizes.py`](./demos/utils/trace_region_sizes.py).
+- **SKU keys** — canonical names (`wh_n150`, `wh_llmbox_perf`, `bh_p150`, …); legacy labels like `T3K` / `P150x4` / `wh_llmbox` / `bh_galaxy` resolve via `normalize_sku` in [`model_targets.py`](./demos/utils/model_targets.py).
+- **`tt_transformers`** — `get_supported_trace_region_size` in [`demo/trace_region_config.py`](./tt_transformers/demo/trace_region_config.py) loads from the YAML automatically when `HF_MODEL` is set (root [`conftest.py`](../conftest.py) applies the override on `mesh_device`).
+- **Other demos** — call `resolve_trace_region_size(model_name, get_current_device_sku_name())` from [`demos/utils/trace_region_sizes.py`](./demos/utils/trace_region_sizes.py).
+
+#### Galaxy and other bypass demos
+
+Galaxy e2e/sweep jobs use **different** trace sizes than the matching
+`tt_transformers` model on the same SKU. Do not reuse the tt_transformers
+key — add a separate model block, e.g.:
+
+| Model key | SKU | Notes |
+|---|---|---|
+| `llama3.3-70b-galaxy` | `wh_galaxy_perf` | Full e2e / prefix-caching (216 580 672 bytes) |
+| `llama3.3-70b-galaxy-decode` | `wh_galaxy_perf` | Decode-only benchmarks (23 887 872 bytes) |
+| `llama3.3-70b-galaxy-qwen` | `wh_galaxy_perf` | Qwen-on-galaxy stack |
+| `qwen3-32b-galaxy` | `wh_galaxy_perf` | Galaxy e2e (102 000 000 bytes) |
+| `qwen3-32b-galaxy-decode` | `wh_galaxy_perf` | Galaxy decode benchmarks |
+
+For pytest demos that open a device via the shared `device_params` /
+`mesh_device` fixtures, pass the YAML model key through parametrize instead
+of hardcoding bytes:
+
+```python
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ..., TRACE_MODEL_KEY_PARAM: "llama3.3-70b-galaxy"}],
+    indirect=True,
+)
+```
+
+Root and per-demo `conftest.py` call `apply_trace_model_key()` on
+`device_params` before the device is opened.
+
+For demos that open a device directly (no shared fixture), use
+`build_trace_device_params(model_key)`:
+
+```python
+from models.demos.utils.trace_region_sizes import build_trace_device_params
+
+device_params = build_trace_device_params("deepseek-v3")
+```
+
+#### Dynamic allocation (`trace_region_size: 0`)
+
+Some models let the runtime size trace buffers at launch. Set
+`trace_region_size: 0` in the YAML (see `deepseek-v3`) and use the named
+constant `TRACE_REGION_SIZE_DYNAMIC` from `trace_region_sizes.py` when
+referencing the value in code or comments. Do **not** assign
+`trace_region_size = …` in demo code — always go through the resolver or
+`build_trace_device_params`.
+
+#### CI coverage test
+
+[`models/tt_transformers/tests/test_trace_region_sizes.py`](./tt_transformers/tests/test_trace_region_sizes.py)
+cross-checks every tiered CI job that sets `HF_MODEL` (including per-SKU
+`hf_model` placeholders in device-perf entries) against the YAML. Run locally
+(without hardware):
+
+```bash
+pytest models/tt_transformers/tests/test_trace_region_sizes.py --noconftest -v
+```
 
 ---
 

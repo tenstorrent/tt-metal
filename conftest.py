@@ -295,7 +295,9 @@ def get_tt_cache_path():
 
 @pytest.fixture(scope="function")
 def device_params(request):
-    return getattr(request, "param", {})
+    from models.demos.utils.trace_region_sizes import apply_trace_model_key
+
+    return apply_trace_model_key(getattr(request, "param", {}))
 
 
 @pytest.fixture(scope="module")

@@ -5,6 +5,8 @@ import pytest
 import gc
 import ttnn
 
+from models.demos.utils.trace_region_sizes import apply_trace_model_key
+
 
 @pytest.fixture(autouse=True)
 def ensure_gc():
@@ -19,7 +21,7 @@ def ensure_devices(ensure_devices_tg):
 @pytest.fixture
 def device_params(request, galaxy_type):
     # Get param dict passed in from test parametrize (or default to empty dict)
-    params = getattr(request, "param", {}).copy()
+    params = apply_trace_model_key(getattr(request, "param", {}).copy())
 
     if "fabric_config" in params and params["fabric_config"] == True:
         params["fabric_config"] = (

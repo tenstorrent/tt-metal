@@ -16,6 +16,12 @@ from models.demos.utils.model_targets import _model_matches, normalize_sku
 
 TRACE_REGION_SIZES_YAML_PATH = Path(__file__).resolve().parents[2] / "model_trace_region_sizes.yaml"
 
+# trace_region_size=0 lets the runtime allocate trace buffers dynamically (see deepseek-v3 demo).
+TRACE_REGION_SIZE_DYNAMIC = 0
+
+# Populated from device_params parametrize dict; resolved at fixture time via apply_trace_model_key().
+TRACE_MODEL_KEY_PARAM = "_trace_model_key"
+
 
 class TraceRegionSizeNotConfiguredError(ValueError):
     """Raised when trace_region_size is missing from model_trace_region_sizes.yaml."""
@@ -60,7 +66,28 @@ def resolve_trace_region_size(model_name: str | None, sku: str | None) -> int:
             if not isinstance(sku_block, dict):
                 continue
             value = sku_block.get("trace_region_size")
-            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
                 return value
 
     raise TraceRegionSizeNotConfiguredError(_missing_trace_region_size_message(model_name, sku_norm))
+
+
+def resolve_demo_trace_region_size(model_key: str) -> int:
+    """Resolve trace region size for a demo using the current cluster SKU."""
+    from models.demos.utils.device_sku import get_current_device_sku_name
+
+    return resolve_trace_region_size(model_key, get_current_device_sku_name())
+
+
+def apply_trace_model_key(device_params: dict[str, Any]) -> dict[str, Any]:
+    """Resolve trace_region_size from YAML when TRACE_MODEL_KEY_PARAM is set in device_params."""
+    params = device_params.copy()
+    model_key = params.pop(TRACE_MODEL_KEY_PARAM, None)
+    if model_key is not None:
+        params["trace_region_size"] = resolve_demo_trace_region_size(model_key)
+    return params
+
+
+def build_trace_device_params(model_key: str, **extra: Any) -> dict[str, Any]:
+    """Build device_params dict with trace_region_size resolved from YAML."""
+    return {"trace_region_size": resolve_demo_trace_region_size(model_key), **extra}

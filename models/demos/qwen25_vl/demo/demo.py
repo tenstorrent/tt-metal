@@ -14,7 +14,6 @@ from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLForCond
 
 import ttnn
 from models.common.sampling import SamplingParams
-from models.common.utility_functions import is_blackhole
 from models.demos.qwen25_vl.tt.common import (
     PagedAttentionConfig,
     merge_vision_tokens,
@@ -25,15 +24,30 @@ from models.demos.qwen25_vl.tt.common import (
 from models.demos.qwen25_vl.tt.generator import Generator
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
+from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
+from models.demos.utils.trace_region_sizes import resolve_trace_region_size
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
 
-# trace_region_size per architecture
-TRACE_REGION_SIZE = 28467200
-if is_blackhole():
-    TRACE_REGION_SIZE = 36000000
+
+def _qwen25_vl_model_key() -> str:
+    hf_model = os.getenv("HF_MODEL", "")
+    hf_lower = hf_model.lower()
+    if "72b" in hf_lower:
+        return "qwen2.5-72b-vl"
+    if "32b" in hf_lower:
+        return "qwen2.5-vl-32b"
+    return "qwen2.5-vl-7b"
+
+
+def _qwen25_vl_device_params():
+    return {
+        "fabric_config": True,
+        "trace_region_size": resolve_trace_region_size(_qwen25_vl_model_key(), get_current_device_sku_name()),
+        "num_command_queues": 1,
+    }
 
 
 def create_tt_page_table(paged_attention_config, tt_model_args):
@@ -236,7 +250,7 @@ def create_tt_model(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": True, "trace_region_size": TRACE_REGION_SIZE, "num_command_queues": 1}],
+    [_qwen25_vl_device_params()],
     indirect=True,
 )
 @pytest.mark.parametrize(

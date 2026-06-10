@@ -2,15 +2,28 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import re
+from pathlib import Path
+
 import pytest
 import yaml
 
 from models.demos.utils.trace_region_sizes import (
+    TRACE_REGION_SIZE_DYNAMIC,
     TRACE_REGION_SIZES_YAML_PATH,
     TraceRegionSizeNotConfiguredError,
     load_trace_region_sizes,
     resolve_trace_region_size,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+CI_PIPELINE_FILES = (
+    REPO_ROOT / "tests/pipeline_reorg/models_e2e_tests.yaml",
+    REPO_ROOT / "tests/pipeline_reorg/models_unit_tests.yaml",
+    REPO_ROOT / "tests/pipeline_reorg/models_device_perf_tests.yaml",
+    REPO_ROOT / "tests/pipeline_reorg/models_sweep_tests.yaml",
+)
+HF_MODEL_RE = re.compile(r"HF_MODEL=([^\s]+)")
 
 
 def _iter_yaml_trace_region_entries():
@@ -33,7 +46,7 @@ def _iter_yaml_trace_region_entries():
             if not isinstance(sku_block, dict):
                 continue
             expected = sku_block.get("trace_region_size")
-            if not isinstance(expected, int) or isinstance(expected, bool) or expected <= 0:
+            if not isinstance(expected, int) or isinstance(expected, bool) or expected < 0:
                 continue
             for model_name in model_names:
                 yield model_name, sku_key, expected
@@ -53,7 +66,9 @@ def test_trace_region_sizes_yaml_schema():
         assert isinstance(skus, dict) and skus, f"{model_name}: missing skus"
         for sku_name, sku_block in skus.items():
             value = sku_block.get("trace_region_size")
-            assert isinstance(value, int) and value > 0, f"{model_name}/{sku_name}: invalid trace_region_size"
+            assert (
+                isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            ), f"{model_name}/{sku_name}: invalid trace_region_size"
 
 
 @pytest.mark.parametrize("model_name,sku,expected_size", list(_iter_yaml_trace_region_entries()))
@@ -79,8 +94,80 @@ def test_resolve_trace_region_size_raises_when_not_configured():
         resolve_trace_region_size("unknown-model", "wh_n150")
 
 
+def _hf_model_name_candidates(hf_model: str) -> list[str]:
+    import re
+
+    candidates = [hf_model]
+    basename = hf_model.strip("/").split("/")[-1]
+    if basename not in candidates:
+        candidates.append(basename)
+    match = re.search(r"(.*?\d+[bB])-", basename)
+    if match:
+        base = match.group(1)
+        if base not in candidates:
+            candidates.append(base)
+    return candidates
+
+
+def _resolve_ci_trace_region_size(hf_model: str, sku: str) -> int:
+    last_error: TraceRegionSizeNotConfiguredError | None = None
+    for candidate in _hf_model_name_candidates(hf_model):
+        try:
+            return resolve_trace_region_size(candidate, sku)
+        except TraceRegionSizeNotConfiguredError as exc:
+            last_error = exc
+    assert last_error is not None
+    raise last_error
+
+
+def _iter_ci_trace_region_requirements():
+    """Yield (job_name, model_name, sku) for tiered CI jobs that set HF_MODEL."""
+    for pipeline_path in CI_PIPELINE_FILES:
+        if not pipeline_path.is_file():
+            continue
+        entries = yaml.safe_load(pipeline_path.read_text(encoding="utf-8")) or []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            model_id = str(entry.get("model", ""))
+            if model_id.startswith("gemma-4"):
+                continue
+
+            cmd = entry.get("cmd", "")
+            cmd_hf_match = HF_MODEL_RE.search(cmd)
+            cmd_hf_model = cmd_hf_match.group(1).strip("'\"") if cmd_hf_match else None
+            if cmd_hf_model and "{" in cmd_hf_model:
+                cmd_hf_model = None
+
+            job_name = entry.get("name", entry.get("model", "unknown"))
+            skus = entry.get("skus", {})
+            if not isinstance(skus, dict):
+                continue
+            for sku_key, sku_block in skus.items():
+                if not isinstance(sku_block, dict):
+                    sku_block = {}
+                hf_model = sku_block.get("hf_model") or cmd_hf_model
+                if not hf_model:
+                    continue
+                yield job_name, hf_model, sku_key
+
+
 def test_load_trace_region_sizes_is_cached():
     load_trace_region_sizes.cache_clear()
     first = load_trace_region_sizes()
     second = load_trace_region_sizes()
     assert first is second
+
+
+def test_resolve_deepseek_v3_dynamic_allocation():
+    assert resolve_trace_region_size("deepseek-v3", "wh_llmbox_perf") == TRACE_REGION_SIZE_DYNAMIC
+
+
+@pytest.mark.parametrize(
+    "job_name,hf_model,sku",
+    list(_iter_ci_trace_region_requirements()),
+    ids=lambda val: str(val).replace("/", "_")[:120],
+)
+def test_ci_hf_model_jobs_have_trace_region_config(job_name, hf_model, sku):
+    del job_name
+    _resolve_ci_trace_region_size(hf_model, sku)
