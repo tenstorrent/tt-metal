@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T18:51:26Z",
+  "updated_at": "2026-06-10T20:32:08Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -858,19 +858,9 @@
         "wer": 0.0
       },
       "perf": {
-        "status": "done",
+        "status": "pending",
         "attempts": 0,
-        "artifacts": [
-          "models/demos/rednote_hilab_dots.ocr/tt/text_attention.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/decoder_layer.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/ocr_model.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/text_attention.traced_ops.json",
-          "models/demos/rednote_hilab_dots.ocr/PERF_NOTES.md",
-          "models/demos/rednote_hilab_dots.ocr/perf/traced/cpp_device_perf_report_kv_redo3_traced.csv"
-        ],
-        "notes": "REDO 3 done, decode fused kernels, all four checklist levers worked one at a time with the e2e WER gate re-run after each. (a)+(b) fused rope: 14 explicit fp32 rope ops/layer -> 4 (xqkv @ 0/\u00b11 rotate-half block matrix + cos/sin rows, v-block passes through exactly; fp32-exact so the \u00b13122 attention-sink mandate is untouched) applied PRE-head-split, then nlp_create_qkv_heads_decode hands k/v straight to paged_update_cache (permute+i2s pairs gone); decode-mode rotary_embedding_llama itself rejected structurally (bf16-only kernel, META-convention trans_mat cannot express the HF half-swap so the fp32 prefill K cache would flip convention, and B=1 -> 1 core). 18.17 -> 17.57 ms, gate PASS. Framework bug found: nlp_create_qkv_heads_decode ZEROES odd head rows from bf16 DRAM-interleaved input on Blackhole (32B bf16 sub-tile lines vs 64B DRAM NoC alignment; bf16+L1 and fp32+DRAM correct) \u2014 block stages the bf16 input in L1. (c) bf16 scaled_dot_product_attention_decode KEPT: Q pre-scale 1/sqrt(hd) folded into the host cos/sin q-section (zero ops, kernel scale=1.0, logits \u00b13122 -> \u00b1276), KV cache fp32->bf16 and q3|k3|v3 -> q3|k1|v1 native-GQA packing (44% fewer QKV weight bytes, 3x less cache traffic, nkv=1 re-enables sharded out for nlp_concat_heads_decode), causality from the runtime cur_pos tensor (streamed 3200-wide decode mask + its H2D copy deleted); 8x8 SDPA grid (>64 cores/head TT_FATALs), HiFi2+fp32acc, exact exp. 17.57 -> 10.76 ms, gate PASS \u2014 all ~115 greedy argmax decisions match HF through the layer-0 sink (near-tie validation). (d) all_gather_matmul KEPT in its Linear-topology form: fused all_gather_matmul_async is Ring-only (tt_transformers gates on Topology.Ring), so o_proj wo is REPLICATED and the narrow bf16 concat-heads row is all_gathered then matmul'd once \u2014 RS+AG all-reduce of fp32 partials gone (2 CCL -> 1 per layer, prefill+decode); MLP down keeps RS+AG (replicating 8960x1536 = ~770MB/chip). Wall flat but traced CCL kernel -20%, 28 ops/step fewer, exact math. Final: steady 18.07 -> 10.63 ms/tok (1.70x, target <=12 MET), traced kernel 16.14 -> 9.03 ms/step, ops/step 1213 -> 679 (-44%), prefill 267 -> 90 ms. Parity gate PASS after every step and on the final config: WER 0.0000 == HF, 5/5 exact; block tests text_attention 0.999050 / decoder_layer 0.999944 (unchanged). Tracy traced top-10 recorded in PERF_NOTES.md; next levers: matmul dispatch count (169/step, 59.5%), async CCL, ~1.6 ms host floor. Dispatched inline (no Agent tool in tick context); worker contract followed.",
-        "steady_step_ms": 10.63,
-        "speedup": 1.7
+        "notes": "REDO 4 (precision budget): gate is PCC>=0.99 + WER parity, current 0.9999 is overkill. Spend precision down strategically per stage, one change at a time, e2e parity after each: fp32 residual stream -> bf16; fp32 lm_head path -> bf16 acts/bf8 weights; remaining fp32 rope/QK chain -> bf16 (pre-scaled-Q already tames sinks); attention softmax LAST (drop fp32 only if parity holds incl. near-ties); bf8 weights wherever PCC>=0.99. Target <=8 ms/tok; revert any step that breaks WER 0.0 or PCC<0.99."
       },
       "decode_strategy": "kv_cache"
     }
