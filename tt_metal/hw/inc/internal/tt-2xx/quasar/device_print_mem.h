@@ -23,14 +23,14 @@ struct DevicePrintMemoryLayout {
 #endif
 #else
 #if !defined(DEVICE_PRINT_BUFFER_SIZE)
-    static constexpr size_t buffer_size_triscs = 3264;
+    static constexpr uint32_t buffer_size_triscs = 3264;
 #else
-    static constexpr size_t buffer_size_triscs = DEVICE_PRINT_BUFFER_SIZE;
+    static constexpr uint32_t buffer_size_triscs = DEVICE_PRINT_BUFFER_SIZE;
 #endif
 #if !defined(DEVICE_PRINT_BUFFER_SIZE2)
-    static constexpr size_t buffer_size_dms = 1632;
+    static constexpr uint32_t buffer_size_dms = 1632;
 #else
-    static constexpr size_t buffer_size_dms = DEVICE_PRINT_BUFFER_SIZE2;
+    static constexpr uint32_t buffer_size_dms = DEVICE_PRINT_BUFFER_SIZE2;
 #endif
 #if defined(COMPILE_FOR_DM)
     DevicePrintBuffer<buffer_size_triscs, 16, 8> buffer_triscs;  // Quasar TRISC 16 processors
