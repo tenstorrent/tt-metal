@@ -143,10 +143,12 @@ def test_rejects_bad_gamma_shape(device):
         groupnorm_sc_N_1_HW_C(t, 2, gamma=g)
 
 
-def test_group_not_tile_aligned_is_refinement_gate(device):
-    # (C/G) % 32 != 0 — kernel-side constraint, gated as NotImplementedError
+def test_group_not_tile_aligned_supported(device):
+    # (C/G) % 32 != 0 — supported since Refinement 3 (cluster path); the call
+    # must succeed and produce the right output shape (accuracy is covered by
+    # test_groupnorm_sc_N_1_HW_C_refinement3.py).
     t = ttnn.from_torch(
         torch.randn(1, 1, 32, 320, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
-    with pytest.raises(NotImplementedError):
-        groupnorm_sc_N_1_HW_C(t, 32)  # Cg = 10
+    out = groupnorm_sc_N_1_HW_C(t, 32)  # Cg = 10
+    assert list(out.shape) == [1, 1, 32, 320]

@@ -146,7 +146,7 @@ def test_fp32_affine_on_tail(device):
     run_case(device, (1, 1, 47, 64), 1, affine_dtype=ttnn.float32)
 
 
-# --- group straddle stays gated until Refinement 3 ----------------------------
+# --- group straddle: gated until Refinement 3, now supported ------------------
 
 
 @pytest.mark.parametrize(
@@ -156,9 +156,7 @@ def test_fp32_affine_on_tail(device):
         pytest.param((1, 1, 64, 320), 32, id="aligned_c_straddle_g32"),
     ],
 )
-def test_group_straddle_rejected(device, shape, num_groups):
-    x = ttnn.from_torch(
-        torch.randn(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-    )
-    with pytest.raises(NotImplementedError):
-        groupnorm_sc_N_1_HW_C(x, num_groups)
+def test_group_straddle_supported(device, shape, num_groups):
+    # Accuracy is covered by test_groupnorm_sc_N_1_HW_C_refinement3.py; this
+    # asserts the former refinement gate is open.
+    run_case(device, shape, num_groups)
