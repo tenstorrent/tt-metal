@@ -95,8 +95,6 @@ def test_resolve_trace_region_size_raises_when_not_configured():
 
 
 def _hf_model_name_candidates(hf_model: str) -> list[str]:
-    import re
-
     candidates = [hf_model]
     basename = hf_model.strip("/").split("/")[-1]
     if basename not in candidates:
