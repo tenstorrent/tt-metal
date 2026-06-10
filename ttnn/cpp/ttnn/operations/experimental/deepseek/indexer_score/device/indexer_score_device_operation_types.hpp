@@ -16,7 +16,7 @@ namespace ttnn::operations::experimental::deepseek::indexer {
 struct IndexerScoreProgramConfig {
     std::size_t q_chunk_size = 32;
     std::size_t k_chunk_size = 32;
-    std::size_t head_group_size = 0;  // 0 = all heads resident
+    std::size_t head_group_size = 1;  // heads resident at once; 1 always fits L1, raise for perf (0 = all)
 };
 
 struct operation_attributes_t {

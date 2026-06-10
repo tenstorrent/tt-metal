@@ -67,7 +67,9 @@ def test_indexer_score_glx_chunked(device, heads, dim, sq, t, chunk_start):
     # negative gates make real scores negative — zero-filled columns would win topk
     w = torch.randn(1, heads, sq, 1, generator=g, dtype=torch.bfloat16)
 
-    out = indexer_score(q, k, w, chunk_start, device)
+    # GLX perf config: all heads resident (default streams 1 head — safe, slow)
+    cfg = None if sq <= 64 else ttnn.IndexerScoreProgramConfig(head_group_size=0)
+    out = indexer_score(q, k, w, chunk_start, device, program_config=cfg)
     ref = indexer_score_ref(q, k, w, chunk_start)
 
     assert out.shape == (1, 1, sq, t)

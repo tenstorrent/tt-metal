@@ -16,7 +16,7 @@ void bind_indexer_score(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("q_chunk_size") = 32,
             nb::arg("k_chunk_size") = 32,
-            nb::arg("head_group_size") = 0)
+            nb::arg("head_group_size") = 1)
         .def_rw("q_chunk_size", &IndexerScoreProgramConfig::q_chunk_size)
         .def_rw("k_chunk_size", &IndexerScoreProgramConfig::k_chunk_size)
         .def_rw("head_group_size", &IndexerScoreProgramConfig::head_group_size);
@@ -35,7 +35,8 @@ void bind_indexer_score(nb::module_& mod) {
             is_causal: apply causality from chunk_start_idx
             chunk_start_idx: global position of query row 0
             program_config: work-unit knobs (q_chunk_size, k_chunk_size,
-                head_group_size; elements, tile-aligned; 0 heads = all resident)
+                head_group_size; elements, tile-aligned). Defaults always fit
+                L1; raise head_group_size (0 = all resident) for performance.
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",

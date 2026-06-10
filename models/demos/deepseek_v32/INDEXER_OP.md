@@ -110,11 +110,12 @@ SDPAProgramConfig analogue), sizes in elements:
 |---|---|---|---|
 | `q_chunk_size` (QC) | tile rows per work unit | 32 (1 tile) | must divide Sq; rows above the diagonal masked with the full −inf tile |
 | `k_chunk_size` (KC) | k tiles per unit | 32 (1 tile) | edge units partial (kw < KC); bigger = fewer chunks, less q re-read; perf target 16 bf16 / 32 bfp8 |
-| `head_group_size` (HB) | heads resident at once | 0 = all | must divide Hi; <Hi streams q blocks per tile |
+| `head_group_size` (HB) | heads resident at once | 1 (always fits L1) | must divide Hi; <Hi streams q blocks per tile — slow but safe; set higher (0 = all) for perf |
 | grid / fidelity | cores; HiFi2→LoFi with bfp8 k | full, HiFi4 | host-side only for now |
 
 L1 (1464 KB): `2·Dt·Kt (k) + HB·QC·(Dt+1) (q+w) + QC·Kt fp32 acc + 2·QC·Kt out`.
-Defaults: 64h×4 q resident 512K + 128K w + 256K k + 64K acc + 64K out ≈ 1.0 MB.
+Defaults (HB=1) stay under 0.5 MB for any model; GLX perf config HB=64
+resident: 512K q + 128K w + 256K k + 64K acc + 64K out ≈ 1.0 MB.
 512-head model: head_block=64 streamed, Kt=64 — same kernel, no scheme change.
 
 ## Formats / fidelity
