@@ -95,10 +95,6 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
     [
         pytest.param(32, 7168, 16, 4, 4, True, id="pcc"),
-        # perf_no_pcc validates liveness + timing only (run_pcc_check=False): the large seq=3200
-        # workload runs to completion but its output is NOT numerically checked. Correctness of the
-        # large-sequence path is instead covered by the block-level perf tests
-        # (perf/test_prefill_block_perf.py), which compare against calibrated device timing.
         pytest.param(3200, 7168, 64, 2, 8, False, id="perf_no_pcc"),
     ],
 )
