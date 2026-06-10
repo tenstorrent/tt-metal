@@ -222,7 +222,10 @@ def transpose_dest_int8(
         formats,
         templates=[MATH_TRANSPOSE_FACES(math_transpose_faces)],
         runtimes=[
-            UNPACK_TRANS_FACES(Transpose.No),
+            # The kernel hard-codes transpose_of_faces=1 (the haloize path); this
+            # param is currently unused by transpose_wh_int8_test.cpp but is set to
+            # Yes to stay aligned with the kernel's actual behavior.
+            UNPACK_TRANS_FACES(Transpose.Yes),
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(),
         ],

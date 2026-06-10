@@ -38,7 +38,7 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __b
 
 #ifndef ARCH_QUASAR
     const bool is_int32 = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;
-    const bool is_int8 = (src_format & 0xf) == (std::uint32_t)DataFormat::Int8;
+    const bool is_8bit_int = (src_format & 0xf) == (std::uint32_t)DataFormat::Int8;
     const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
                                        (dst_format == (std::uint32_t)DataFormat::UInt32) ||
                                        (dst_format == (std::uint32_t)DataFormat::Int32);
@@ -53,7 +53,7 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __b
             true, false, icb)));
         MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
         MATH((llk_math_transpose_dest_init<false, true>()));
-    } else if (is_int8) {
+    } else if (is_8bit_int) {
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true, icb)));
         MATH((llk_math_eltwise_unary_datacopy_init<
               DataCopyType::A2D,
@@ -104,7 +104,10 @@ ALWI void transpose_wh_init_short(uint32_t icb, uint32_t call_line = __builtin_L
     const std::uint32_t dst_format = get_operand_dst_format(icb);
 
 #ifndef ARCH_QUASAR
-    const bool is_int8 = (src_format & 0xf) == (std::uint32_t)DataFormat::Int8;
+    // Low-nibble compare intentionally matches both signed Int8 (14) and unsigned UInt8
+    // (30 -> low nibble 0xE): both 8-bit integer formats need the int-FPU (ELWADD) A2D
+    // reconstruct path.
+    const bool is_8bit_int = (src_format & 0xf) == (std::uint32_t)DataFormat::Int8;
     const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
                                        (dst_format == (std::uint32_t)DataFormat::UInt32) ||
                                        (dst_format == (std::uint32_t)DataFormat::Int32);
@@ -113,7 +116,7 @@ ALWI void transpose_wh_init_short(uint32_t icb, uint32_t call_line = __builtin_L
             true, false, icb)));
         MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
         MATH((llk_math_transpose_dest_init<false, true>()));
-    } else if (is_int8) {
+    } else if (is_8bit_int) {
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true, icb)));
         MATH((llk_math_eltwise_unary_datacopy_init<
               DataCopyType::A2D,

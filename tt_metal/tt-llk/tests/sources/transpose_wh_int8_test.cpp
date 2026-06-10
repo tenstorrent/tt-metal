@@ -4,7 +4,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Faithful reproduction of the compute-API transpose_wh_tile i8 path
-// (tt_metal/hw/inc/api/compute/transpose_wh.h, the float/int8 `else` branch):
+// (tt_metal/hw/inc/api/compute/transpose_wh.h, the dedicated `else if (is_8bit_int)`
+// branch in transpose_wh_init / transpose_wh_init_short):
 // the full 32x32 transpose is performed in the UNPACKER (transpose_of_faces +
 // within_face_16x16_transpose / haloize), and the math thread only does the
 // A2D datacopy that reconstructs the Int8 register datum into DEST. There is no
