@@ -11,7 +11,12 @@ REFERENCE_DIR = VIBEVOICE_ROOT / "reference"
 RESOURCES_DIR = VIBEVOICE_ROOT / "resources"
 VOICES_DIR = RESOURCES_DIR / "voices"
 TEXT_EXAMPLES_DIR = RESOURCES_DIR / "text"
-DEFAULT_TXT_PATH = TEXT_EXAMPLES_DIR / "1p_short.txt"
+
+# Upstream demo assets: https://github.com/vibevoice-community/VibeVoice/tree/main/demo
+GITHUB_DEMO_REPO = "vibevoice-community/VibeVoice"
+GITHUB_DEMO_BRANCH = "main"
+DEFAULT_TXT_PATH = TEXT_EXAMPLES_DIR / "1p_vibevoice.txt"
+DEFAULT_VOICE_PATH = VOICES_DIR / "en-Alice_woman.wav"
 
 HF_REPO_ID = "microsoft/VibeVoice-1.5B"
 WEIGHTS_DIR = VIBEVOICE_ROOT / "weights"

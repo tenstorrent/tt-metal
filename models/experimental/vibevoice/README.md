@@ -2,11 +2,15 @@
 
 Reference PyTorch setup for porting [VibeVoice-1.5B](https://huggingface.co/microsoft/VibeVoice-1.5B) to TTNN. The backbone is **Qwen2.5-1.5B** (28 layers, hidden 1536, GQA); plan to reuse or wrap [`models/tt_transformers/`](../../tt_transformers/) for `language_model`.
 
-Weights are **not** vendored in this tree. On first run, demos and tests download
-[`microsoft/VibeVoice-1.5B`](https://huggingface.co/microsoft/VibeVoice-1.5B) into
-`models/experimental/vibevoice/weights/VibeVoice-1.5B` (requires `huggingface_hub`).
+Weights and demo assets are **not** vendored in this tree. On first run, demos and tests download:
 
-Override the location with:
+- **Model weights:** [`microsoft/VibeVoice-1.5B`](https://huggingface.co/microsoft/VibeVoice-1.5B) into
+  `models/experimental/vibevoice/weights/VibeVoice-1.5B` (requires `huggingface_hub`).
+- **Demo text + voices:** [vibevoice-community/VibeVoice](https://github.com/vibevoice-community/VibeVoice/tree/main/demo)
+  (`demo/text_examples` and `demo/voices`) into `models/experimental/vibevoice/resources/` via
+  `common/resource_utils.py`.
+
+Override the checkpoint location with:
 
 ```bash
 export VIBEVOICE_MODEL_PATH=/path/to/VibeVoice-1.5B
@@ -20,14 +24,15 @@ vibevoice/
 ├── conftest.py              # pytest: reference/ on PYTHONPATH
 ├── common/
 │   ├── config.py            # paths, HF repo id, transformers pin
-│   └── model_utils.py       # resolve path + auto-download weights
+│   ├── model_utils.py       # resolve path + auto-download weights
+│   └── resource_utils.py    # download demo text/voices from upstream GitHub
 ├── reference/
 │   ├── vibevoice/           # vendored 1.5B-only Python (from VibeVoice repo)
 │   ├── model_print.py
 │   └── run_inference.py
-├── resources/
-│   ├── voices/              # demo voice presets (not weights)
-│   └── text/                # short scripts for smoke / PCC
+├── resources/               # auto-downloaded demo assets (gitignored content)
+│   ├── voices/              # from github .../demo/voices
+│   └── text/                # from github .../demo/text_examples
 ├── weights/                 # auto-downloaded HF checkpoint (gitignored content)
 ├── tests/pcc/
 └── tt/                      # TTNN layers (empty initially)
