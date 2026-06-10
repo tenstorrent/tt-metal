@@ -1645,12 +1645,18 @@ def test_full_model_parity_decode_trace(layer_set, decode_steps, pli, mesh_devic
         # vLLM path: refresh persistent per-layer page tables + stash
         # the per-submesh routing list, then go through the same
         # Generator.decode_forward. Exactly mirrors what
-        # ``Gemma4ForCausalLM.decode_forward`` does in the bridge.
+        # ``Gemma4ForCausalLM.decode_forward`` does in the bridge. The
+        # externally threaded ``kv_cache`` is just the compatibility handle
+        # into the harness-owned cache allocation; the actual per-step routing
+        # authority comes from the page-table refresh above.
         pool.reserve_decode_token(req)
         pts_step_torch = pool.per_layer_page_tables(req)
         tt_model_vllm.update_persistent_per_layer_page_tables(pts_step_torch)
         tt_model_vllm._active_page_tables_per_layer = pts_step_torch
         try:
+            # Reuse the same harness-owned cache handle across decode steps.
+            # The thing that changes step to step is the refreshed page-table
+            # routing above, not the identity of ``kv_cache`` itself.
             v_out = gen_vllm.decode_forward(
                 tokens=tokens_step,
                 start_pos=pos_step,
@@ -1842,7 +1848,11 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
     # captured trace lands on the per-layer routing path. Without this
     # the warmup trace would bind against the legacy page_table only,
     # and at inference our update_persistent_per_layer_page_tables
-    # writes wouldn't reach anything the trace actually reads.
+    # writes wouldn't reach anything the trace actually reads. This is
+    # the ownership boundary the issue calls out: after trace capture,
+    # the authoritative decode state lives in the model's persistent
+    # buffers plus the harness-owned cache allocation, not in a caller
+    # swapping ``kv_cache`` references between steps.
     tt_model_vllm.update_persistent_per_layer_page_tables(warmup_page_table_per_layer)
     tt_model_vllm._active_page_tables_per_layer = warmup_page_table_per_layer
     try:
@@ -2104,3 +2114,32 @@ def test_bridge_alias_handles_distinct_source_page_tables():
     # Source layers themselves stay self-pointing.
     assert out[13] is page_tables[13]
     assert out[14] is page_tables[14]
+
+
+def test_bridge_rejects_swapped_runtime_kv_cache_allocation():
+    """The Gemma4 vLLM bridge should pin the first runtime KV allocation.
+
+    The issue is not that callers pass ``kv_cache`` at all; the shared Generator
+    API still threads it through. The issue is that after trace capture the
+    bridge should treat the first harness-owned cache allocation as sticky
+    runtime state and reject a later call that swaps in different cache leaves.
+
+    Re-wrapping the same leaves in fresh Python lists must stay allowed, since
+    the Generator / bridge stack does that naturally. Swapping the leaves
+    themselves must fail loudly.
+    """
+    from models.demos.gemma4.tt.generator_vllm import Gemma4ForCausalLM
+
+    bridge = Gemma4ForCausalLM.__new__(Gemma4ForCausalLM)
+    bridge._runtime_kv_cache_identity = None
+
+    leaf_a0 = object()
+    leaf_a1 = object()
+    first_handle = [[leaf_a0, leaf_a1]]
+    bridge._remember_runtime_kv_cache_identity(first_handle)
+
+    # Same leaves, freshly wrapped: valid compatibility path.
+    bridge._remember_runtime_kv_cache_identity([[leaf_a0, leaf_a1]])
+
+    with pytest.raises(ValueError, match="different kv_cache allocation after initialization"):
+        bridge._remember_runtime_kv_cache_identity([[object(), leaf_a1]])

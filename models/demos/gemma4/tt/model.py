@@ -916,10 +916,12 @@ class Gemma4Model:
 
         ``page_tables_per_layer`` likewise comes via a stash
         (``_active_page_tables_per_layer``) when running under the vLLM
-        hybrid bridge — Generator's prefill internals don't thread the
-        kwarg, so the bridge attaches it to the model object before
-        invoking us. When None, falls back to legacy single-page-table
-        behavior.
+        hybrid bridge, because Generator's prefill internals don't thread
+        that kwarg directly. In that path, the bridge-managed cache plus
+        the persistent page-table buffers are the authoritative runtime
+        state; the threaded ``kv_cache`` kwarg remains for Generator
+        compatibility only. When the stash is absent, this falls back to
+        legacy single-page-table behavior.
 
         ``get_last_token`` is passed down so the last-token slice happens
         *before* lm_head — slicing after would still allocate full-seq
@@ -1081,7 +1083,10 @@ class Gemma4Model:
             current_pos: [1,32] uint32 position tensor for RoPE embedding lookup.
             rot_mat_idxs: Unused (RoPE computed internally from current_pos).
             page_table: Optional paged attention table.
-            kv_cache: Optional KV cache override.
+            kv_cache: Optional KV cache override. ``None`` uses the model-owned
+                ``self.tt_kv_cache``. In the Gemma4 vLLM bridge, callers should
+                treat explicit ``kv_cache`` inputs as setup-time compatibility
+                plumbing rather than a freely swappable runtime ownership handle.
             sampling_on_device: If True and self.sampling exists, sample on device.
             capture_sampling_trace: If True, return logits for split-trace sampling.
             pli_combined: Optional [1,1,n_layers,pli_size] device tensor of host-precomputed
