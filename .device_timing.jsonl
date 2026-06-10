@@ -69,3 +69,6 @@
 {"source":"run_safe_pytest","pid":2032454,"started_at_ms":1781110277093,"wait_ms":1,"run_ms":94465,"test_path":"tests/ttnn/unit_tests/operations/groupnorm_sc_N_1_HW_C/test_groupnorm_sc_N_1_HW_C.py","exit_code":1}
 {"source":"run_safe_pytest","pid":2039862,"started_at_ms":1781110382318,"wait_ms":1,"run_ms":20251,"test_path":"tests/ttnn/unit_tests/operations/groupnorm_sc_N_1_HW_C/test_groupnorm_sc_N_1_HW_C.py","exit_code":1}
 {"source":"run_safe_pytest","pid":2040748,"started_at_ms":1781110450537,"wait_ms":2,"run_ms":68731,"test_path":"tests/ttnn/unit_tests/operations/groupnorm_sc_N_1_HW_C/test_groupnorm_sc_N_1_HW_C.py","exit_code":0}
+{"source":"run_safe_pytest","pid":2045615,"started_at_ms":1781110568919,"wait_ms":1,"run_ms":19110,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_regression.py","exit_code":0}
+{"source":"run_safe_pytest","pid":2046722,"started_at_ms":1781110601194,"wait_ms":1,"run_ms":600019,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":143}
+{"source":"run_safe_pytest","pid":2092695,"started_at_ms":1781111228729,"wait_ms":2,"run_ms":351302,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":1}

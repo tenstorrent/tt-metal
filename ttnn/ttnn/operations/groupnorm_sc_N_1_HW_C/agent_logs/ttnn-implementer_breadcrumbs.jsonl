@@ -53,3 +53,6 @@
 {"event":"test_run","status":"pass","details":"probe_009 rerun: (1,1,32,320) G=32 Cg=10 PCC=0.999994 max_diff=0.037. CB-wrap fix worked: per-tile streams, WS_MAX mask frames, WC_FULL row frames, scalar output masks.","ts":"2026-06-10T16:48:13+00:00"}
 {"event":"test_run","status":"pass","details":"refinement3 suite 33/33 (dev): SD widths Cg 10-80, C-tail+straddle, hw-tail+straddle, all dtypes incl bf8b output mask, mixed affine, multi-batch/multicluster.","ts":"2026-06-10T16:51:03+00:00"}
 {"event":"test_run","status":"pass","details":"Full unit suite 126/126 non-dev (all phases + refinement3). Prior gate tests updated to assert support (drift contract).","ts":"2026-06-10T16:55:30+00:00"}
+{"event":"test_run","status":"pass","details":"golden test_regression.py 35/35","ts":"2026-06-10T16:56:34+00:00"}
+{"event":"test_run","status":"fail","classification":"timeout_sigterm","details":"Full golden sweep exceeded 600s bash cap (exit 143). Not a test failure. Sharding by shape ids as verifier did at R2.","ts":"2026-06-10T17:06:59+00:00"}
+{"event":"test_run","status":"fail","classification":"unknown_pending","details":"golden shard0: 55 failed / 550 passed / 583 skipped. Inspecting failed cell ids.","ts":"2026-06-10T17:13:16+00:00"}
