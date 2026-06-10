@@ -60,7 +60,8 @@ jobs:
           # value or any "all" token means run the full matrix; otherwise keep entries
           # whose test_type OR test_group matches any selected token.
           TEST_TYPE="${{ inputs.test-type }}"
-          if [ -z "$TEST_TYPE" ] || echo ",${TEST_TYPE}," | grep -q ",all,"; then
+          if [ -z "$TEST_TYPE" ] || \
+            echo "$TEST_TYPE" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -Fxq "all"; then
             echo "matrix<<EOF" >> $GITHUB_OUTPUT
             echo "$MATRIX" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
