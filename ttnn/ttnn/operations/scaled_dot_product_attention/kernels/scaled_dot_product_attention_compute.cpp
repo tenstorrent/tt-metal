@@ -328,6 +328,17 @@ void kernel_main() {
             ckl::Recip<>{},
             ckl::PackTile<cb_inv_sum>{});
 
+#ifdef SDPA_DEBUG_DPRINT
+        cb_wait_front(cb_inv_sum, 1);
+        {
+            volatile tt_l1_ptr uint32_t* inv_p =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_inv_sum));
+            DPRINT_PACK(
+                DPRINT << "INV bits[0]=" << HEX() << inv_p[0] << " [1]=" << inv_p[1] << DEC()
+                       << " f=" << SETPRECISION(9) << F32(*reinterpret_cast<volatile float*>(&inv_p[0])) << ENDL());
+        }
+#endif
+
         // ---- Phase 12: out = O * inv on SFPU (fp32-exact), pack -> output dtype ----
         // copy_tile of Float32 CBs is unpack-to-dest (exact); MulBinary is SFPU
         // fp32 RNE — no FPU tf32 truncation on either operand. For bf16 output,
