@@ -216,3 +216,12 @@ revert what breaks the gate. Keep extra precision ONLY where a
 measured hazard demands it (recorded in notes — e.g. attention-sink
 softmax, deep-stack residual accumulation). "Above the gate" is the
 target band, not "as accurate as possible".
+
+**Long-AR drift gate (mandatory for precision changes):** short-sample
+parity does not catch error accumulation across decode steps (each step
+reads back its own reduced-precision history via the KV cache). Any
+dtype change in the decode loop must ALSO pass a long-generation check:
+>=180 tokens on a production-scale prompt, token-by-token vs HF greedy
+— exact match, or first divergence only at an HF-near-tie (verify the
+fp32-ideal model decides the same way). Report `drift_first_divergence`
+in notes; revert changes whose divergence stems from accumulated error.
