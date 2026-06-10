@@ -43,10 +43,11 @@ returned token to the next step *instead of* its own prediction. The
 readiness check just passes `TokenAccuracy.collect_predicted_tokens` as
 this callback.
 
-The teacher-forcing runner requests traced decode by default by calling
-`generate(..., enable_trace=True)`. Implementations should honor this by
-using their traced decode path when available and should use
-`enable_trace=False` as the explicit bringup/debug fallback.
+The teacher-forcing runner requires traced decode by calling
+`generate(..., enable_trace=True)`. Implementations must explicitly accept
+that keyword and execute every decode step through the traced path. A
+catch-all `**kwargs` parameter is not sufficient, and silent eager fallback
+is a readiness failure.
 
 If `next_input is None`, the generator feeds its own prediction back
 (HF-style autoregressive generation).
@@ -90,7 +91,7 @@ class Generator(ABC):
             def decode_forward(self, tokens, start_pos, *, page_table, kv_cache, **kw):
                 return self._inner.decode_forward(...)
 
-            def generate(self, prompt_token_ids, max_new_tokens, *, next_input=None, **kw):
+            def generate(self, prompt_token_ids, max_new_tokens, *, next_input=None, enable_trace=True, **kw):
                 ...  # see method docstring
 
             def reset(self):
@@ -174,6 +175,7 @@ class Generator(ABC):
         max_new_tokens: int,
         *,
         next_input: Optional[NextInputFn] = None,
+        enable_trace: bool = True,
         **kwargs: Any,
     ) -> List[int]:
         """
@@ -202,9 +204,11 @@ class Generator(ABC):
         possibly-forced next inputs.
 
         Sampling must be greedy/argmax for readiness compatibility. The
-        teacher-forcing runner passes ``enable_trace=True`` by default;
-        implementations should use that flag to request traced decode and
-        should honor ``enable_trace=False`` for trace-debug fallback runs.
+        teacher-forcing runner always passes ``enable_trace=True``.
+        Implementations must use that flag to run decode through the traced
+        path and must fail rather than silently falling back to eager decode
+        when tracing is unavailable. ``enable_trace=False`` may exist only
+        as a model-local debug path outside readiness.
         The remaining ``**kwargs`` slot is reserved for per-model extras
         (e.g. ``stop_on_eos`` toggles); implementations should ignore
         unknown kwargs.
