@@ -101,6 +101,48 @@ class Concat(ttml.autograd.Function):
         return tuple(grads)
 
 
+class Split(ttml.autograd.Function):
+    """Autograd-aware split of one tensor into contiguous chunks along a dim.
+
+    This is the cheap inverse of :class:`Concat` and the efficient replacement
+    for calling :func:`autograd_slice` several times on the same tensor.
+
+    Forward: ``len(sizes)`` contiguous ``ttnn.slice`` views.
+    Backward: a single ``ttnn.concat`` of the upstream gradients.
+
+    Why a dedicated op: two adjacent ``autograd_slice`` calls each rebuild a
+    full-width gradient (allocate zeros + concat) and those then get summed,
+    i.e. ``2x (zeros + concat) + add``. Because the chunks tile the split dim,
+    the true input gradient is just ``concat(grad_chunks)`` -- one op, no zeros,
+    no add. On N300 this cuts the kv_down split backward ~5x (see PR).
+    """
+
+    @staticmethod
+    def forward(ctx, input, sizes, dim):
+        val = input.get_value()
+        rank = len(val.shape)
+        if dim < 0:
+            dim += rank
+        ctx.dim = dim
+
+        outputs = []
+        offset = 0
+        for size in sizes:
+            start = [0] * rank
+            end = list(val.shape)
+            start[dim] = offset
+            end[dim] = offset + size
+            outputs.append(ttnn.slice(val, start, end))
+            offset += size
+        return tuple(outputs)
+
+    @staticmethod
+    def backward(ctx, *grad_outputs):
+        # grad_outputs are ordered like the forward chunks, so a single concat
+        # along the split dim reconstructs the gradient w.r.t. the input.
+        return ttnn.concat(list(grad_outputs), ctx.dim)
+
+
 class Sigmoid(ttml.autograd.Function):
     """Autograd-aware sigmoid.
 
@@ -255,6 +297,14 @@ def autograd_slice(tensor, start, end):
 def autograd_concat(tensors, dim):
     """Concat with autograd backward."""
     return Concat.apply(dim, *tensors)
+
+
+def autograd_split(tensor, sizes, dim):
+    """Split a tensor into contiguous chunks of ``sizes`` along ``dim``.
+
+    Cheaper backward than repeated :func:`autograd_slice` (single concat).
+    """
+    return Split.apply(tensor, sizes, dim)
 
 
 def autograd_sigmoid(tensor):
