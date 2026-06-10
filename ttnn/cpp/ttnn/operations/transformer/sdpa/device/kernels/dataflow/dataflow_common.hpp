@@ -1089,8 +1089,12 @@ inline void zero_fill_block(
     uint32_t dst_addr,
     uint32_t outer_stride,
     uint32_t inner_stride) {
-    const uint32_t page_size =
-        has_get_aligned_page_size_v<ReaderType> ? reader.get_aligned_page_size() : reader.page_size;
+    uint32_t page_size;
+    if constexpr (has_get_aligned_page_size_v<ReaderType>) {
+        page_size = reader.get_aligned_page_size();
+    } else {
+        page_size = reader.page_size;
+    }
     Noc noc;
     for (uint32_t r = 0; r < num_rows; ++r) {
         uint32_t dst = dst_addr + (dst_row_origin + r) * outer_stride;
