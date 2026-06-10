@@ -71,6 +71,7 @@ MESH_DEVICE_MAP: Dict[Tuple[str, Tuple[int, int]], str] = {
     ("Blackhole", (1, 1)): "P150",
     ("Blackhole", (1, 2)): "P300",
     ("Blackhole", (1, 4)): "P150x4",
+    ("Blackhole", (2, 2)): "P150x4_2x2",
     ("Blackhole", (1, 8)): "P150x8",
     ("Blackhole", (8, 4)): "BHGLX",
 }

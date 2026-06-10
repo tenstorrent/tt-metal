@@ -860,6 +860,7 @@ _trace_region_size = (
             "P150": (1, 1),
             "P300": (1, 2),
             "P150x4": (1, 4),
+            "P150x4_2x2": (2, 2),
             "P150x8": (1, 8),
             "BHGLX": (8, 4),
         }.get(os.environ.get("MESH_DEVICE"), get_default_mesh_device_param())

@@ -8044,11 +8044,14 @@ def cmd_bringup(args) -> int:
             from .hardware import HARDWARE as _HW
 
             _box = next(b for b in _HW if b.name == full.box)
-            shapes = list(_box.mesh_shapes)
-            # Sort by: (chip_count desc, max_dim desc) so largest mesh
-            # with max-TP shape wins. e.g. QB2 → (1,4), not (2,2).
-            shapes.sort(key=lambda s: (s[0] * s[1], max(s)), reverse=True)
-            best = shapes[0]
+            if getattr(_box, "default_mesh", None):
+                best = _box.default_mesh
+            else:
+                shapes = list(_box.mesh_shapes)
+                # Sort by: (chip_count desc, max_dim desc) so largest mesh
+                # with max-TP shape wins.
+                shapes.sort(key=lambda s: (s[0] * s[1], max(s)), reverse=True)
+                best = shapes[0]
             full.mesh = f"{best[0]},{best[1]}"
             print(
                 f"  [auto-up] no --mesh passed → using box's LARGEST canonical mesh: "
@@ -8906,6 +8909,39 @@ def _cmd_up_core(args) -> int:
         pass
 
     if _cold_start_signal is not None:
+        _cs_missing, _cs_partial = [], []
+        try:
+            from .compatibility import Status as _CS
+
+            for r in getattr(_early_compat, "results", None) or []:
+                if not getattr(r, "needed", False):
+                    continue
+                _bn = getattr(getattr(r, "block", None), "name", "?")
+                _st = getattr(r, "status", None)
+                if _st == _CS.MISSING:
+                    _cs_missing.append(_bn)
+                elif _st == _CS.PARTIAL:
+                    _cs_partial.append(_bn)
+        except Exception:
+            _cs_missing, _cs_partial = [], []
+        if _cs_missing or _cs_partial:
+            sep = "=" * 72
+            print(sep)
+            print("  COLD-START BLOCKED — model is not cleanly supported")
+            print(sep)
+            if _cs_missing:
+                print(f"  MISSING (no native ttnn op): {', '.join(_cs_missing)}")
+            if _cs_partial:
+                print(f"  PARTIAL (needs porting):     {', '.join(_cs_partial)}")
+            print()
+            print("  The generic cold-start demo runs the whole model and has no")
+            print("  per-op CPU fallback, so it would fail on the block(s) above.")
+            print("  Use per-component bring-up instead — unsupported ops run on")
+            print("  CPU while the rest graduates on device:")
+            print(f"      python -m scripts.tt_hw_planner auto-onboard {MODEL}")
+            print(f"      python -m scripts.tt_hw_planner auto-up {MODEL}")
+            print(sep)
+            return 2
         sep = "=" * 72
         print(sep)
         print("  COLD-START PATH (no per-model `tt/` folder needed)")

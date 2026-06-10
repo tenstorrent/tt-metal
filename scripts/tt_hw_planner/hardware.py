@@ -65,6 +65,7 @@ class Box:
     mesh_shapes: List[Tuple[int, int]]
     notes: str = ""
     eth_link_gbps: float = 0.0
+    default_mesh: Optional[Tuple[int, int]] = None
 
     @property
     def total_hbm_gb(self) -> float:
@@ -129,7 +130,9 @@ HARDWARE: List[Box] = [
         hbm_per_chip_gb=32.0,
         mesh_shapes=[(1, 1), (1, 2), (2, 1), (1, 4), (2, 2), (4, 1)],
         eth_link_gbps=0.0,
-        notes="4x Blackhole (p150b or p300c), 128 GB. Canonical TP=[1,4]; " "[2,2] for 2D parallel.",
+        default_mesh=(2, 2),
+        notes="4x Blackhole (p150c), 128 GB, physical 2x2 mesh (8 QSFP-DD, 2 links/chip). "
+        "Default mesh [2,2]; [1,4] also maps (logical TP=4 onto the 2x2).",
     ),
     Box(
         name="Galaxy",
