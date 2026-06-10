@@ -16,6 +16,8 @@ from models.common.utility_functions import (
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+pytestmark = pytest.mark.use_module_device({"l1_small_size": 16384})
+
 
 def pad_and_fold_conv_activation_for_unity_stride(activation_pyt_nchw_tensor, pad_h, pad_w, stride_h, stride_w):
     assert stride_h == stride_w
