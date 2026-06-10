@@ -180,7 +180,7 @@ inline void dprint_tensix_dest_reg_row_float16(uint32_t data_format, uint16_t ro
     dprint_array_with_data_type<ARRAY_LEN>(data_format, rd_data);
 }
 
-inline void dprint_tensix_dest_reg_row_int32(uint16_t row) {
+inline void dprint_tensix_dest_reg_row_int32([[maybe_unused]] uint16_t row) {
 #ifdef ARCH_BLACKHOLE
     constexpr int ARRAY_LEN = 16;
     uint32_t rd_data[ARRAY_LEN + 1];  // data + array type
