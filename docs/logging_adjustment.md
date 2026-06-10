@@ -24,7 +24,7 @@ Setup console environment with help of command from table below
 
 **Note:** Status message like PASSED / FAILED will be visible anyway
 
-| level | command | screening |
+| level | command | filtering |
 | --- | --- | --- |
 | TRACE | `export LOGURU_LEVEL=TRACE` | all messages will be visible |
 | DEBUG | `export LOGURU_LEVEL=DEBUG` | all messages except TRACE will be visible |
