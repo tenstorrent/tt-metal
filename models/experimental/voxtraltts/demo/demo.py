@@ -83,7 +83,7 @@ class DataArgs:
     # Upper bound on AR acoustic steps. The demo auto-raises this per-prompt when the
     # word count implies more tokens are needed (see _min_speech_tokens). Use a small
     # value like 64 for quick smoke tests; leave at 0 to always use the auto-estimate.
-    max_speech_tokens: int = 13000
+    max_speech_tokens: int = 1000
     seed: int = 0
     default_voice: str = "casual_female"
     warmup_iters: int = 0
