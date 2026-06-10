@@ -152,41 +152,10 @@ def test_eltwise_unary_datacopy_quasar(
     ):
         pytest.skip("MX formats require implied_math_format=Yes on Quasar")
 
-    if (
-        formats.output_format == DataFormat.MxFp4
-        or formats.input_format == DataFormat.MxFp4
+    if is_mx_supported_tile_dims(
+        formats.input_format, formats.output_format, tile_dimensions
     ):
-        if tuple(tile_dimensions) not in ((32, 32), (16, 16)):
-            pytest.skip(
-                "Mx formats only supported for square tile dimensions (num_faces = 1 or 4)"
-            )
-
-    if (
-        formats.output_format == DataFormat.MxInt8
-        or formats.input_format == DataFormat.MxInt8
-    ):
-        if tuple(tile_dimensions) not in ((32, 32), (16, 16)):
-            pytest.skip(
-                "Mx formats only supported for square tile dimensions (num_faces = 1 or 4)"
-            )
-
-    if (
-        formats.output_format == DataFormat.MxInt4
-        or formats.input_format == DataFormat.MxInt4
-    ):
-        if tuple(tile_dimensions) not in ((32, 32), (16, 16)):
-            pytest.skip(
-                "Mx formats only supported for square tile dimensions (num_faces = 1 or 4)"
-            )
-
-    if (
-        formats.output_format == DataFormat.MxInt2
-        or formats.input_format == DataFormat.MxInt2
-    ):
-        if tuple(tile_dimensions) not in ((32, 32), (16, 16)):
-            pytest.skip(
-                "Mx formats only supported for square tile dimensions (num_faces = 1 or 4)"
-            )
+        pytest.skip("MX formats only support square tile dimensions (num_faces = 1, 4)")
 
     tile_shape = construct_tile_shape(tile_dimensions)
 

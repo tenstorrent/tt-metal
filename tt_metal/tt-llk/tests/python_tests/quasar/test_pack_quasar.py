@@ -40,7 +40,7 @@ from helpers.test_variant_parameters import (
     TEST_FACE_DIMS,
     TILE_COUNT,
 )
-from helpers.tile_constants import SUPPORTED_TILE_SIZES
+from helpers.tile_constants import SUPPORTED_TILE_SIZES, is_mx_unsupported_tile_dims
 from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
@@ -172,33 +172,10 @@ def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT
         tile_dimensions,
     ) = formats_dest_acc_sync_dims_relu[0]
 
-    if (
-        formats.output_format == DataFormat.MxFp4
-        or formats.input_format == DataFormat.MxFp4
+    if is_mx_unsupported_tile_dims(
+        formats.input_format, formats.output_format, tile_dimensions
     ):
-        if tuple(tile_dimensions) not in ((32, 32), (16, 16)):
-            pytest.skip("MxFp4 only supported for num_faces = 1, 4")
-
-    if (
-        formats.output_format == DataFormat.MxInt8
-        or formats.input_format == DataFormat.MxInt8
-    ):
-        if tuple(tile_dimensions) not in ((32, 32), (16, 16)):
-            pytest.skip("MxInt8 only supported for num_faces = 1, 4")
-
-    if (
-        formats.output_format == DataFormat.MxInt4
-        or formats.input_format == DataFormat.MxInt4
-    ):
-        if tuple(tile_dimensions) not in ((32, 32), (16, 16)):
-            pytest.skip("MxInt4 only supported for num_faces = 1, 4")
-
-    if (
-        formats.output_format == DataFormat.MxInt2
-        or formats.input_format == DataFormat.MxInt2
-    ):
-        if tuple(tile_dimensions) not in ((32, 32), (16, 16)):
-            pytest.skip("MxInt2 only supported for num_faces = 1, 4")
+        pytest.skip("MX formats only support square tile dimensions (num_faces = 1, 4)")
 
     tile_shape = construct_tile_shape(tile_dimensions)
 
