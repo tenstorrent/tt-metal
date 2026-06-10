@@ -44,11 +44,11 @@ inline void _llk_math_eltwise_unary_datacopy_(
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    // Datacopy preserves bf16 -0.0 (tt-metal #18346) and 16-bit-integer datums through the MOVA2D/MOVB2D
-    // below, so keep the Src zero-substitution flag disabled. Asserted here (not the init) so it survives
-    // any llk_math_hw_configure that runs after the init; skip-if-set keeps it cheap (tt-llk #960/#966).
-    // (The 32b unpack-to-dest path below manages the flag itself as part of the #449 Fp32_enabled dance.)
-    math::_configure_unary_preserve_zero_flag_state_();
+    // NOTE: the Src zero-substitution flag baseline is the operand-driven DEFAULT state established by
+    // hw_configure/reconfig. Eltwise-unary / SFPU ops that need -0.0 preserved (tt-metal #18346) select
+    // UNARY_PRESERVE in unary_op_init_common. A plain datacopy must NOT force the flag, or it perturbs
+    // float copies in reduce-based ops (layernorm/group_norm). The 32b unpack-to-dest path below manages
+    // the flag itself as part of the #449 Fp32_enabled dance (tt-llk #960/#966).
 
     // For 32bit data, each half of DEST can take 16 tiles. Since dest offset is returned as if 16bit data are used, we need to
     // adjust it to offset in faces for 32bit data.
