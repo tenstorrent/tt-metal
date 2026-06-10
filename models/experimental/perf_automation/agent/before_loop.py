@@ -4,7 +4,7 @@ Invocation is FOLDER + METRIC; everything else is discovered by the sub-agent
 (perf test + case, PCC entry points, components, model files) and verified by
 deterministic stages (preflight pytest --collect-only before any long run).
 
-    python -m agent.before_loop <model_root> --metric wall_ms --target 12
+    python -m agent.before_loop <model_root> --metric device_ms --target 12
 
 Stages (each prints a banner to stderr and appends to runs/<id>/events.jsonl):
   [1/5] environment_check   [2/5] cache_playbook   [3/5] discover (sub-agent)
