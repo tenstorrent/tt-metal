@@ -344,3 +344,14 @@ def decoder_layer_forward(
         num_kv_heads=num_kv_heads,
     )
     return h + text_mlp_forward(text_rmsnorm_forward(h, state_dict["post_attention_layernorm.weight"], eps), mlp_sd)
+
+
+# ---------------------------------------------------------------------------
+# lm_head (untied vocab projection, no bias)
+# ---------------------------------------------------------------------------
+def lm_head_forward(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+    """Final vocab projection: Linear(hidden -> vocab), no bias, untied from embed_tokens.
+
+    x: [batch, seq, hidden]; weight: [vocab, hidden]. Returns logits [batch, seq, vocab].
+    """
+    return F.linear(x, weight)

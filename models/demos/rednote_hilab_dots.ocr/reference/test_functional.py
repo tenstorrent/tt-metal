@@ -337,3 +337,19 @@ def test_decoder_layer():
     p = pcc(ref, hf_out)
     _save_golden("decoder_layer", {"input": x, "output": ref, "cos": cos, "sin": sin, "pcc_vs_hf": p})
     assert p > 0.99, p
+
+
+def test_lm_head():
+    torch.manual_seed(0)
+    cfg = text_config()
+    w = load_weights("lm_head", ["weight"])["weight"]
+    assert w.shape == (cfg.vocab_size, cfg.hidden_size)
+    x = torch.randn(1, TEXT_SEQ, cfg.hidden_size)
+    hf = torch.nn.Linear(cfg.hidden_size, cfg.vocab_size, bias=False)
+    hf.weight.data.copy_(w)
+    with torch.no_grad():
+        hf_out = hf(x)
+        ref = fn.lm_head_forward(x, w)
+    p = pcc(ref, hf_out)
+    _save_golden("lm_head", {"input": x, "output": ref, "pcc_vs_hf": p})
+    assert p > 0.99, p

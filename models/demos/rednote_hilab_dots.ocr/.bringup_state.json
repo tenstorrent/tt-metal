@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T02:38:20Z",
+  "updated_at": "2026-06-10T02:43:31Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -498,8 +498,15 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/reference/functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/test_functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/golden/lm_head.pt"
+        ],
+        "notes": "untied Linear 1536->151936 no bias, real lm_head.weight, matches torch.nn.Linear",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -585,6 +592,12 @@
       "tick": 4,
       "ts": "2026-06-10T02:38:20Z",
       "action": "reference[text_rmsnorm,text_attention,text_mlp,decoder_layer]",
+      "result": "ok"
+    },
+    {
+      "tick": 5,
+      "ts": "2026-06-10T02:43:31Z",
+      "action": "reference[lm_head]",
       "result": "ok"
     }
   ],

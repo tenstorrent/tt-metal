@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T02:38:20Z
+**Updated:** 2026-06-10T02:43:31Z
 
 ## Block Status
 
@@ -70,7 +70,7 @@
 | decoder_layer | debug | n/a | — | 0 |  |
 | decoder_layer | optimization | pending | — | 0 |  |
 | decoder_layer | real_weights | pending | — | 0 |  |
-| lm_head | reference | pending | — | 0 |  |
+| lm_head | reference | done | 1.000000 | 0 | untied Linear 1536->151936 no bias, real lm_head.weight, matches torch.nn.Linear |
 | lm_head | ttnn | pending | — | 0 |  |
 | lm_head | debug | n/a | — | 0 |  |
 | lm_head | optimization | pending | — | 0 |  |
@@ -88,6 +88,7 @@
 - tick 2 (2026-06-10T02:23:55Z): reference[vision_patch_embed,vision_rmsnorm,vision_attention,vision_mlp] — ok
 - tick 3 (2026-06-10T02:31:43Z): reference[vision_block,patch_merger,vision_transformer,embedding] — ok
 - tick 4 (2026-06-10T02:38:20Z): reference[text_rmsnorm,text_attention,text_mlp,decoder_layer] — ok
+- tick 5 (2026-06-10T02:43:31Z): reference[lm_head] — ok
 
 ## Host-Resident Exceptions
 
