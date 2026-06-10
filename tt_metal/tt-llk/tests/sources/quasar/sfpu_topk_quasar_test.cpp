@@ -56,13 +56,29 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t unpack_src_data_types[NUM_STAGES] = {formats.unpack_A_src, TOPK_INDEX_FORMAT};
     const std::uint32_t unpack_dst_data_types[NUM_STAGES] = {formats.unpack_A_dst, TOPK_INDEX_FORMAT};
 
-    // Dvalid setup: UNPACK -> FPU -> SFPU -> PACK
+    // Dvalid setup: FPU -> SFPU -> PACK
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
 
     const std::uint32_t buf_desc_id = 0;
 
+    // The L1 base is stable; tile offsets are passed to execute.
+    // Keep unpack configuration per stage because values use
+    // formats.unpack_A_* while indices use TOPK_INDEX_FORMAT
+    // (Quasar Int16 transport for the uint16 index payload).
+    buffer_descriptor_u bd_val = {0};
+    bd_val.f.l1_addr_16B       = L1_ADDRESS(params.buffer_A[0]);
+    bd_val.f.x_dim             = FACE_C_DIM;
+    bd_val.f.y_dim             = FACE_R_DIM;
+    bd_val.f.z_dim             = 4;
+
+    tdma_descriptor_t td_val;
+    td_val.buf_desc    = bd_val;
+    td_val.buf_desc_id = buf_desc_id;
+
     for (int current_tile_row = 0; current_tile_row < NUM_TOPK_PIPELINE_EXECUTIONS; ++current_tile_row)
     {
+        const int tile_row_offset = current_tile_row * params.FULL_CT_DIM;
+
         for (std::uint32_t current_iteration = 0; current_iteration < TOPK_NUM_ITERATIONS; ++current_iteration)
         {
             const int distance         = (1 << current_iteration);
@@ -71,6 +87,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             for (int current_tile_pair_idx = 0; current_tile_pair_idx < num_pairs; ++current_tile_pair_idx)
             {
+                const int tile_pair_offset = current_tile_pair_idx * (distance * NUM_TILES_PER_STAGE);
+
                 if (!first_iteration)
                 {
                     // Each source tile of this pair was packed back to buffer_A by one
@@ -90,44 +108,33 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                 for (Stage stage : {Stage::Values, Stage::Indices})
                 {
-                    const int stage_index                 = static_cast<int>(stage);
+                    const int stage_index                 = to_underlying(stage);
                     const std::uint32_t unpack_src_format = unpack_src_data_types[stage_index];
                     const std::uint32_t unpack_dst_format = unpack_dst_data_types[stage_index];
 
-                    const int tile_row_offset  = current_tile_row * params.FULL_CT_DIM;
-                    const int tile_pair_offset = current_tile_pair_idx * (distance * NUM_TILES_PER_STAGE);
-                    const int stage_offset     = stage_index * NUM_VALUE_TILES_PER_ROW;
-                    // The L1 base is stable; tile offsets are passed to execute.
-                    // Keep unpack configuration per stage because values use
-                    // formats.unpack_A_* while indices use TOPK_INDEX_FORMAT
-                    // (Quasar Int16 transport for the uint16 index payload).
-                    buffer_descriptor_u bd_val = {0};
-                    bd_val.f.l1_addr_16B       = L1_ADDRESS(params.buffer_A[0]);
-                    bd_val.f.format            = static_cast<std::uint8_t>(unpack_src_format);
-                    bd_val.f.x_dim             = FACE_C_DIM;
-                    bd_val.f.y_dim             = FACE_R_DIM;
-                    bd_val.f.z_dim             = 4;
+                    const int stage_offset = stage_index * NUM_VALUE_TILES_PER_ROW;
 
-                    tdma_descriptor_t td_val;
-                    td_val.buf_desc        = bd_val;
-                    td_val.buf_desc_id     = buf_desc_id;
-                    td_val.reg_data_format = static_cast<std::uint8_t>(unpack_dst_format);
+                    td_val.buf_desc.f.format = static_cast<std::uint8_t>(unpack_src_format);
+                    td_val.reg_data_format   = static_cast<std::uint8_t>(unpack_dst_format);
+
                     _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
                     _llk_unpack_configure_unary_<p_unpacr::UNP_A>(td_val);
 
                     if (first_iteration)
                     {
-                        _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, true /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, 1);
+                        _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, true /*transpose*/, is_fp32_dest_acc_en>(
+                            buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, 1);
                     }
                     else
                     {
-                        _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, 1);
+                        _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, false /*transpose*/, is_fp32_dest_acc_en>(
+                            buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, 1);
                     }
 
                     const int first_tile_index  = tile_row_offset + stage_offset + tile_pair_offset;
                     const int second_tile_index = first_tile_index + distance;
-                    _llk_unpack_unary_operand_<p_unpacr::UNP_A>(first_tile_index);
-                    _llk_unpack_unary_operand_<p_unpacr::UNP_A>(second_tile_index);
+                    _llk_unpack_unary_operand_<p_unpacr::UNP_A>(first_tile_index, ckernel::DEFAULT_TENSOR_SHAPE);
+                    _llk_unpack_unary_operand_<p_unpacr::UNP_A>(second_tile_index, ckernel::DEFAULT_TENSOR_SHAPE);
 
                 } // Stage loop.
             } // Pipeline loop.
@@ -142,8 +149,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 // ============================================================================
 
 #ifdef LLK_TRISC_MATH
-
-const bool is_int_fpu_en = false;
 
 #include "cfg_defines.h"
 #include "ckernel_sfpu.h"
@@ -184,6 +189,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::topk_local_sort>();
     ckernel::sfpu::_init_topk();
 
+    // Datacopy 4 tiles (2 value + 2 index) from SRC to DEST; the FPU dvalid
+    // wait gates the writes until pack releases the bank.
+    const std::uint32_t num_rows = 4 * FACE_R_DIM;
+
+    // The index datacopy intentionally leaves ALU_FORMAT_SPEC_REG set to Int16.
+    // Restore the value format before the SFPU network; the TopK value
+    // SFPLOAD/SFPSTORE paths also use explicit FP16B as a guard.
+    const DataFormat value_math_format = static_cast<DataFormat>(formats.math);
+
     for (int current_tile_row = 0; current_tile_row < NUM_TOPK_PIPELINE_EXECUTIONS; ++current_tile_row)
     {
         for (std::uint32_t current_iteration = 0; current_iteration < TOPK_NUM_ITERATIONS; ++current_iteration)
@@ -195,9 +209,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             for (int current_tile_pair_idx = 0; current_tile_pair_idx < num_pairs; ++current_tile_pair_idx)
             {
-                // Datacopy 4 tiles (2 value + 2 index) from SRC to DEST; the FPU dvalid
-                // wait gates the writes until pack releases the bank.
-                const std::uint32_t num_rows = 4 * FACE_R_DIM;
+                // The datacopy addrmod/MOP depend only on num_rows (constant), not on the
+                // per-stage format, so configure once per pair. The SFPU topk ops below may
+                // reprogram bank0, so this stays inside the pipeline loop.
+                _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(num_rows, 1);
 
                 for (Stage stage : {Stage::Values, Stage::Indices})
                 {
@@ -205,7 +220,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const DataFormat math_format = static_cast<DataFormat>(math_data_types[stage_index]);
 
                     _configure_alu_formats_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(math_format, math_format, false /*en_int32_dest_format*/);
-                    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(num_rows, 1);
 
                     const int first_tile_in_pair_idx  = stage_index * NUM_TILES_PER_STAGE;
                     const int second_tile_in_pair_idx = first_tile_in_pair_idx + 1;
@@ -217,10 +231,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 // All 4 tiles are in dest: release the FPU dvalid to the SFPU client.
                 _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
 
-                // The index datacopy above intentionally leaves ALU_FORMAT_SPEC_REG set
-                // to Int16. Restore the value format before the SFPU network; the TopK
-                // value SFPLOAD/SFPSTORE paths also use explicit FP16B as a guard.
-                const DataFormat value_math_format = static_cast<DataFormat>(formats.math);
                 _configure_alu_formats_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(
                     value_math_format, value_math_format, false /*en_int32_dest_format*/);
 
@@ -289,6 +299,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t pack_src_data_types[NUM_STAGES] = {formats.pack_src, TOPK_INDEX_FORMAT};
     const std::uint32_t pack_dst_data_types[NUM_STAGES] = {formats.pack_dst, TOPK_INDEX_FORMAT};
 
+    // Tile dims and buf_desc_id are stable; only the format and L1 address change
+    // per stage. Keep the descriptor here and update those fields inside the loop.
+    tdma_descriptor_t tdma_desc;
+    tdma_desc.buf_desc         = buffer_descriptor_u {0};
+    tdma_desc.buf_desc.f.x_dim = FACE_C_DIM;
+    tdma_desc.buf_desc.f.y_dim = FACE_R_DIM;
+    tdma_desc.buf_desc.f.z_dim = 4;
+    tdma_desc.buf_desc_id      = buf_desc_id;
+
     for (int current_tile_row = 0; current_tile_row < NUM_TOPK_PIPELINE_EXECUTIONS; ++current_tile_row)
     {
         for (std::uint32_t current_iteration = 0; current_iteration < TOPK_NUM_ITERATIONS; ++current_iteration)
@@ -299,6 +318,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             for (int current_tile_pair_idx = 0; current_tile_pair_idx < num_pairs; ++current_tile_pair_idx)
             {
+                _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, 1);
+
                 // PACR stalls on the SFPU dvalid; no explicit math-done wait needed.
                 for (Stage stage : {Stage::Values, Stage::Indices})
                 {
@@ -308,37 +329,29 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                     const int tile_dest_offset = stage_index * NUM_TILES_PER_STAGE;
 
-                    // Configure buffer descriptor for packing
-                    buffer_descriptor_u bd_val = {0};
-                    bd_val.f.format            = static_cast<std::uint8_t>(pack_dst_format);
-                    bd_val.f.x_dim             = FACE_C_DIM;
-                    bd_val.f.y_dim             = FACE_R_DIM;
-                    bd_val.f.z_dim             = 4;
+                    // Configure the per-stage format and L1 address for packing.
+                    tdma_desc.buf_desc.f.format = static_cast<std::uint8_t>(pack_dst_format);
 
                     if (last_iter)
                     {
-                        const int tile_row_offset = current_tile_row * NUM_TILES_IN_RESULT_BUFFER_PER_ROW;
-                        const int tile_L1_offset  = tile_row_offset + stage_index;
-                        bd_val.f.l1_addr_16B      = params.buffer_Res[tile_L1_offset] / 16;
+                        const int tile_row_offset        = current_tile_row * NUM_TILES_IN_RESULT_BUFFER_PER_ROW;
+                        const int tile_L1_offset         = tile_row_offset + stage_index;
+                        tdma_desc.buf_desc.f.l1_addr_16B = params.buffer_Res[tile_L1_offset] / 16;
                     }
                     else
                     {
-                        const int tile_row_offset  = current_tile_row * params.FULL_CT_DIM;
-                        const int tile_pair_offset = current_tile_pair_idx * (distance * NUM_TILES_PER_STAGE);
-                        const int stage_offset     = stage_index * NUM_VALUE_TILES_PER_ROW;
-                        const int tile_L1_offset   = tile_row_offset + stage_offset + tile_pair_offset;
-                        bd_val.f.l1_addr_16B       = params.buffer_A[tile_L1_offset] / 16;
+                        const int tile_row_offset        = current_tile_row * params.FULL_CT_DIM;
+                        const int tile_pair_offset       = current_tile_pair_idx * (distance * NUM_TILES_PER_STAGE);
+                        const int stage_offset           = stage_index * NUM_VALUE_TILES_PER_ROW;
+                        const int tile_L1_offset         = tile_row_offset + stage_offset + tile_pair_offset;
+                        tdma_desc.buf_desc.f.l1_addr_16B = params.buffer_A[tile_L1_offset] / 16;
                     }
 
-                    tdma_descriptor_t tdma_desc;
-                    tdma_desc.buf_desc        = bd_val;
-                    tdma_desc.buf_desc_id     = buf_desc_id;
                     tdma_desc.reg_data_format = static_cast<std::uint8_t>(pack_src_format);
                     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
 
                     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
-                    _llk_pack_init_(buf_desc_id, 1);
-                    _llk_pack_(tile_dest_offset, 0);
+                    _llk_pack_(tile_dest_offset, 0, ckernel::DEFAULT_TENSOR_SHAPE);
 
                 } // Stage loop.
 

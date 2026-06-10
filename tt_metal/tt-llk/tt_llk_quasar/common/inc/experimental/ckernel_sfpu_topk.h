@@ -25,21 +25,6 @@ namespace ckernel
 namespace sfpu
 {
 
-// SFPSWAP modes (mode-to-int mapping is the same as the Blackhole reference).
-// Defined locally because Quasar's ckernel_instr_params.h does not provide p_sfpswap.
-struct p_sfpswap
-{
-    constexpr static std::uint32_t UNCONDITIONALLY = 0;
-    constexpr static std::uint32_t ALL_ROWS_MAX    = 1;
-    constexpr static std::uint32_t ROWS_01_MAX     = 2;
-    constexpr static std::uint32_t ROWS_02_MAX     = 3;
-    constexpr static std::uint32_t ROWS_03_MAX     = 4;
-    constexpr static std::uint32_t ROW_0_MAX       = 5;
-    constexpr static std::uint32_t ROW_1_MAX       = 6;
-    constexpr static std::uint32_t ROW_2_MAX       = 7;
-    constexpr static std::uint32_t ROW_3_MAX       = 8;
-};
-
 // Sort direction for topk. Defined locally — Quasar's llk_defs.h does not define SortDir.
 enum SortDir : bool
 {
@@ -80,6 +65,14 @@ inline void bitonic_topk_inc_x8_dest(std::uint32_t inc, bool cr)
     }
 }
 
+/**
+ * @brief Set LaneConfig bit [2] (ENABLE_DEST_INDEX) so SFPSWAP tracks indices alongside values.
+ *
+ * @note Call after @ref _llk_math_eltwise_unary_sfpu_init_ (with SfpuType::topk_local_sort) and before
+ *       any topk execute (@ref calculate_bitonic_topk_phases_steps / @ref calculate_bitonic_topk_merge /
+ *       @ref calculate_bitonic_topk_rebuild). The bit persists on Quasar, so it is set once per topk
+ *       sequence rather than per call.
+ */
 inline void _init_topk()
 {
     // Write 0x4 to LaneConfig (config_dest=0xF) to set bit [2] = ENABLE_DEST_INDEX.
@@ -106,7 +99,7 @@ inline void bitonic_topk_load8(std::uint32_t offset, std::uint32_t dist)
 {
     constexpr std::uint32_t dst_indices_offset = 128;
     constexpr std::uint32_t instr_mod_value    = is_fp32_dest_acc_en ? p_sfpu::sfpmem::FP32 : p_sfpu::sfpmem::FP16B;
-    constexpr std::uint32_t instr_mod_index    = is_fp32_dest_acc_en ? p_sfpu::sfpmem::INT32 : p_sfpu::sfpmem::INT16;
+    constexpr std::uint32_t instr_mod_index    = is_fp32_dest_acc_en ? p_sfpu::sfpmem::INT32 : p_sfpu::sfpmem::UINT16;
 
     std::uint32_t face_offset = offset >> 4;
     std::uint32_t ld_offset   = (offset & 0xF) + face_offset * 32;
@@ -126,7 +119,7 @@ inline void bitonic_topk_store8(std::uint32_t offset, std::uint32_t dist)
 {
     constexpr std::uint32_t dst_indices_offset = 128;
     constexpr std::uint32_t instr_mod_value    = is_fp32_dest_acc_en ? p_sfpu::sfpmem::FP32 : p_sfpu::sfpmem::FP16B;
-    constexpr std::uint32_t instr_mod_index    = is_fp32_dest_acc_en ? p_sfpu::sfpmem::INT32 : p_sfpu::sfpmem::INT16;
+    constexpr std::uint32_t instr_mod_index    = is_fp32_dest_acc_en ? p_sfpu::sfpmem::INT32 : p_sfpu::sfpmem::UINT16;
 
     std::uint32_t face_offset = offset >> 4;
     std::uint32_t ld_offset   = (offset & 0xF) + face_offset * 32;
@@ -148,7 +141,7 @@ inline void bitonic_topk_load16(std::uint32_t dist0, std::uint32_t dist1)
 {
     constexpr std::uint32_t dst_indices_offset = 128;
     constexpr std::uint32_t instr_mod_value    = is_fp32_dest_acc_en ? p_sfpu::sfpmem::FP32 : p_sfpu::sfpmem::FP16B;
-    constexpr std::uint32_t instr_mod_index    = is_fp32_dest_acc_en ? p_sfpu::sfpmem::INT32 : p_sfpu::sfpmem::INT16;
+    constexpr std::uint32_t instr_mod_index    = is_fp32_dest_acc_en ? p_sfpu::sfpmem::INT32 : p_sfpu::sfpmem::UINT16;
 
     // Values
     TTI_SFPLOAD(p_sfpu::LREG0, instr_mod_value, ADDR_MOD_7, 0, 0);
@@ -190,7 +183,7 @@ inline void bitonic_topk_store16(std::uint32_t dist0, std::uint32_t dist1)
 {
     constexpr std::uint32_t dst_indices_offset = 128;
     constexpr std::uint32_t instr_mod_value    = is_fp32_dest_acc_en ? p_sfpu::sfpmem::FP32 : p_sfpu::sfpmem::FP16B;
-    constexpr std::uint32_t instr_mod_index    = is_fp32_dest_acc_en ? p_sfpu::sfpmem::INT32 : p_sfpu::sfpmem::INT16;
+    constexpr std::uint32_t instr_mod_index    = is_fp32_dest_acc_en ? p_sfpu::sfpmem::INT32 : p_sfpu::sfpmem::UINT16;
 
     // Values
     TTI_SFPSTORE(p_sfpu::LREG0, instr_mod_value, ADDR_MOD_7, 0, 0);
@@ -278,16 +271,16 @@ inline void bitonic_topk_ph2_st3_to_1()
 
 // Step-N inner-most layer used by the outer-loop in _bitonic_topk_phases_steps for the
 // largest-stride compares. No SFPTRANSP — operates directly on LREG0..LREG3.
-// dir==ArgMax: SFPSWAP(LREG0,LREG2) + SFPSWAP(LREG1,LREG3).
-// dir==ArgMin: SFPSWAP arg order flipped (LREG2,LREG0) + (LREG3,LREG1) — comparison-direction
+// sort_dir==ArgMax: SFPSWAP(LREG0,LREG2) + SFPSWAP(LREG1,LREG3).
+// sort_dir==ArgMin: SFPSWAP arg order flipped (LREG2,LREG0) + (LREG3,LREG1) — comparison-direction
 // inversion that's distinct from the SFPCONFIG bit-8 EXCHANGE_SRCB_SRCC mechanism phase 4 uses.
 // CALLER RESPONSIBILITY: there is no trailing SFPTRANSP, so the caller must follow this with
 // either a different-LREG SFPSWAP, an SFPTRANSP, or an explicit TTI_SFPNOP(0,0,0) before any
 // SFPSTORE that consumes LREG0..LREG3 (avoids the SFPSWAP→SFPSTORE auto-stall hardware bug).
-inline void bitonic_topk_step_N(bool dir)
+inline void bitonic_topk_step_N(bool sort_dir)
 {
     // Step N
-    if (dir == static_cast<bool>(SortDir::ArgMax))
+    if (sort_dir == static_cast<bool>(SortDir::ArgMax))
     {
         TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
         TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
@@ -304,7 +297,7 @@ inline void bitonic_topk_step_N(bool dir)
 // Performs two passes of "step 4 then step 3" SFPSWAPs followed by an SFPTRANSP. The
 // double execution implements the full step-4-to-1 sweep.
 //
-// dir==ArgMin temporarily flips LaneConfig bit [8] (EXCHANGE_SRCB_SRCC) via SFPCONFIG so
+// sort_dir==ArgMin temporarily flips LaneConfig bit [8] (EXCHANGE_SRCB_SRCC) via SFPCONFIG so
 // SFPSWAP compares with reversed min/max polarity; bit [8] is cleared again before return.
 // Both 0x104 (set) and 0x004 (clear) keep bit [2] (ENABLE_DEST_INDEX) so the index pairing
 // invariant established by _init_topk() is preserved across calls.
@@ -312,11 +305,11 @@ inline void bitonic_topk_step_N(bool dir)
 // The replay_start template parameter is kept for call-site parity with the BH
 // implementation, but Quasar executes this body inline.
 template <int replay_start>
-inline void bitonic_topk_ph3_st4_to_1(bool dir)
+inline void bitonic_topk_ph3_st4_to_1(bool sort_dir)
 {
     (void)replay_start;
 
-    if (dir == static_cast<bool>(SortDir::ArgMin))
+    if (sort_dir == static_cast<bool>(SortDir::ArgMin))
     {
         TTI_SFPCONFIG(0x104, 0xF, 1); // Reverse the max/min behaviour of SWAP
         // SFPCONFIG is a 2-cycle op; per Quasar errata TEN-4581 ("any 2-cycle op
@@ -339,7 +332,7 @@ inline void bitonic_topk_ph3_st4_to_1(bool dir)
     TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
     TTI_SFPTRANSP;
 
-    if (dir == static_cast<bool>(SortDir::ArgMin))
+    if (sort_dir == static_cast<bool>(SortDir::ArgMin))
     {
         TTI_SFPCONFIG(0x004, 0xF, 1); // Restore the max/min behaviour of SWAP
         // See above — SFPCONFIG → next SFPU op needs an SFPNOP per TEN-4581.
@@ -357,7 +350,7 @@ inline void bitonic_topk_ph3_st4_to_1(bool dir)
 // the network inline because replayed SFPSWAP sequences do not preserve the ordering
 // this bitonic network requires.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false>
-inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, const int i_start_phase, const int i_end_step, const int i_start_step)
+inline void _bitonic_topk_phases_steps(const int initial_sort_dir, const int i_end_phase, const int i_start_phase, const int i_end_step, const int i_start_step)
 {
     static_assert(!STABLE_SORT, "Stable TopK is not supported by the Quasar bitonic TopK path");
 
@@ -373,15 +366,15 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
     {
         for (int col = 0; col < 2; col++)
         {
-            bool dir = idir;
-            for (int ph = i_start_phase; ph < (i_end_phase + 1); ph++)
+            bool sort_dir = initial_sort_dir;
+            for (int phase = i_start_phase; phase < (i_end_phase + 1); phase++)
             {
                 TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, p_setrwc::SET_D);
-                switch (ph)
+                switch (phase)
                 {
                     case 0:
                     {
-                        for (int d = 0; d < 4; d++)
+                        for (int group = 0; group < 4; group++)
                         {
                             bitonic_topk_load16<is_fp32_dest_acc_en>(4, 8);
                             bitonic_topk_ph0_st1_to_1();
@@ -392,7 +385,7 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
 
                     case 1:
                     {
-                        for (int d = 0; d < 4; d++)
+                        for (int group = 0; group < 4; group++)
                         {
                             bitonic_topk_load16<is_fp32_dest_acc_en>(4, 8);
                             bitonic_topk_ph1_st2_to_1();
@@ -403,7 +396,7 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
 
                     case 2:
                     {
-                        for (int d = 0; d < 4; d++)
+                        for (int group = 0; group < 4; group++)
                         {
                             bitonic_topk_load16<is_fp32_dest_acc_en>(4, 8);
                             bitonic_topk_ph2_st3_to_1();
@@ -414,12 +407,12 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
 
                     case 3:
                     {
-                        for (int d = 0; d < 4; d++)
+                        for (int group = 0; group < 4; group++)
                         {
                             bitonic_topk_load16<is_fp32_dest_acc_en>(4, 8);
-                            bitonic_topk_ph3_st4_to_1<16>(dir);
+                            bitonic_topk_ph3_st4_to_1<16>(sort_dir);
                             bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, 8);
-                            dir = !dir;
+                            sort_dir = !sort_dir;
                         }
                         break;
                     }
@@ -428,34 +421,34 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                     {
                         // Phases 4..N: steps `num_steps`..5 are emitted inline;
                         // steps 4..1 fall back to the same phase-4 helper as case 3.
-                        const std::uint32_t num_steps         = ph + 1;
+                        const std::uint32_t num_steps         = phase + 1;
                         const std::uint32_t start_step        = single_phase ? i_start_step : num_steps;
                         const std::uint32_t end_step          = single_phase ? i_end_step : 4;
                         const std::uint32_t sorted_seq_length = 1 << num_steps;
                         std::uint32_t datums_compared         = 0;
 
-                        for (std::uint32_t ss = start_step; ss > end_step; ss--)
+                        for (std::uint32_t step = start_step; step > end_step; step--)
                         {
                             // Steps N..5 (inline)
                             TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, p_setrwc::SET_D);
-                            dir                      = idir;
-                            std::uint32_t dist       = (ss == 5) ? 16 : 32;
-                            std::uint32_t inner_d    = dist >> 3;
-                            datums_compared          = 0;
-                            std::uint32_t dst_offset = 0;
+                            sort_dir                       = initial_sort_dir;
+                            std::uint32_t dist             = (step == 5) ? 16 : 32;
+                            std::uint32_t inner_iter_count = dist >> 3;
+                            datums_compared                = 0;
+                            std::uint32_t dst_offset       = 0;
 
                             while (datums_compared < total_datums_to_compare)
                             {
-                                for (std::uint32_t ii = 0; ii < inner_d; ii++)
+                                for (std::uint32_t inner_iter = 0; inner_iter < inner_iter_count; inner_iter++)
                                 {
                                     bitonic_topk_load16<is_fp32_dest_acc_en>(4, 2 * dist);
-                                    bitonic_topk_step_N(dir);
+                                    bitonic_topk_step_N(sort_dir);
                                     bitonic_topk_store16<is_fp32_dest_acc_en, false>(4, 2 * dist);
 
                                     std::uint32_t dst_inc = 8;
                                     dst_offset += dst_inc;
                                     bool dst_cr = false;
-                                    if (ii == (inner_d - 1))
+                                    if (inner_iter == (inner_iter_count - 1))
                                     {
                                         dst_cr     = true;
                                         dst_inc    = 4 * dist;
@@ -469,21 +462,21 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                                     bitonic_topk_inc_x8_dest(dst_inc, dst_cr);
                                     datums_compared += 16;
                                 }
-                                dir = (datums_compared == sorted_seq_length) ? !dir : dir;
+                                sort_dir = (datums_compared == sorted_seq_length) ? !sort_dir : sort_dir;
                             }
                         }
 
                         // Steps 4..1.
-                        dir = idir;
+                        sort_dir = initial_sort_dir;
                         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, p_setrwc::SET_D);
                         datums_compared = 0;
                         while (datums_compared < total_datums_to_compare)
                         {
                             bitonic_topk_load16<is_fp32_dest_acc_en>(4, 8);
-                            bitonic_topk_ph3_st4_to_1<16>(dir);
+                            bitonic_topk_ph3_st4_to_1<16>(sort_dir);
                             bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, 8);
                             datums_compared += 16;
-                            dir = (datums_compared == sorted_seq_length) ? !dir : dir;
+                            sort_dir = (datums_compared == sorted_seq_length) ? !sort_dir : sort_dir;
                         }
                         break;
                     }
@@ -498,17 +491,30 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
     }
 }
 
-// Thin forwarding wrapper: the test passes this as the `fn` argument to
-// _llk_math_eltwise_unary_sfpu_params_, which calls it with the runtime int args.
-// ENABLE_DEST_INDEX (LaneConfig bit [2]) is set once by `_init_topk()` and
-// LaneConfig persists on Quasar — no per-call re-assertion needed. A previous
-// defensive SFPCONFIG re-assertion here clobbered LaneConfig bit [8]
-// (EXCHANGE_SRCB_SRCC) that `bitonic_topk_ph3_st4_to_1` sets for the ArgMin
-// path, breaking the index swap for multi-tile-row Ascending inputs. Matches BH.
+/**
+ * @brief Run the bitonic local-sort network (phases/steps) over the dest tile on the math thread.
+ *
+ * Thin forwarding wrapper to @ref _bitonic_topk_phases_steps; matches the int-argument call signature
+ * the LLK topk wrapper forwards from the test.
+ *
+ * @tparam APPROXIMATION_MODE: Approximation flag, kept for SFPU call-shape parity, values = <true/false>
+ * @tparam is_fp32_dest_acc_en: Dest register is in 32-bit mode, values = <true/false>
+ * @tparam STABLE_SORT: Must be false — stable sort is not supported on the Quasar bitonic path, values = <false>
+ * @param initial_sort_dir: Sort direction (ArgMax/ArgMin) the network starts from.
+ * @param i_end_phase: Last bitonic phase to run (inclusive).
+ * @param i_start_phase: First bitonic phase to run.
+ * @param i_end_step: Last step to run within a single requested phase.
+ * @param i_start_step: First step to run within a single requested phase.
+ * @note Requires LaneConfig bit [2] (ENABLE_DEST_INDEX) set by @ref _init_topk beforehand; it persists
+ *       on Quasar, so this path does NOT re-assert it via SFPCONFIG. A previous re-assertion clobbered
+ *       LaneConfig bit [8] (EXCHANGE_SRCB_SRCC) that @ref bitonic_topk_ph3_st4_to_1 sets for the ArgMin
+ *       path, breaking the index swap for multi-tile-row Ascending inputs. Matches the Blackhole reference.
+ */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false>
-inline void calculate_bitonic_topk_phases_steps(const int idir, const int i_end_phase, const int i_start_phase, const int i_end_step, const int i_start_step)
+inline void calculate_bitonic_topk_phases_steps(
+    const int initial_sort_dir, const int i_end_phase, const int i_start_phase, const int i_end_step, const int i_start_step)
 {
-    _bitonic_topk_phases_steps<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT>(idir, i_end_phase, i_start_phase, i_end_step, i_start_step);
+    _bitonic_topk_phases_steps<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT>(initial_sort_dir, i_end_phase, i_start_phase, i_end_step, i_start_step);
 }
 
 // Merge: one bitonic merge pass over already-sorted runs in Dest. For each (face, col)
@@ -531,7 +537,7 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
             TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, p_setrwc::SET_D);
 
             int k_max                             = k > 32 ? 32 : k;
-            std::uint32_t inner_d                 = k_max >> 2; // inner-loop comparisons to sort a length-K sequence
+            std::uint32_t inner_iter_count        = k_max >> 2; // inner-loop comparisons to sort a length-K sequence
             std::uint32_t total_datums_to_compare = ((64 >> m_iter) < 2 * k_max) ? 2 * k_max : (64 >> m_iter);
             std::uint32_t dist                    = (k_max << m_iter) > 32 ? 32 : (k_max << m_iter);
             std::uint32_t ld_dist                 = (dist < 16) ? dist : 2 * dist; // accounts for face offsets within a tile
@@ -541,14 +547,14 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
 
             while (datums_compared < total_datums_to_compare)
             {
-                for (std::uint32_t ii = 0; ii < inner_d; ii++)
+                for (std::uint32_t inner_iter = 0; inner_iter < inner_iter_count; inner_iter++)
                 {
                     bitonic_topk_load8<is_fp32_dest_acc_en>(dst_offset, ld_dist);
                     TTI_SFPSWAP(0, top_min ? p_sfpu::LREG1 : p_sfpu::LREG0, top_min ? p_sfpu::LREG0 : p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
                     bitonic_topk_store8<is_fp32_dest_acc_en>(dst_offset, ld_dist);
 
                     datums_compared += 8;
-                    if (ii == (inner_d - 1))
+                    if (inner_iter == (inner_iter_count - 1))
                     {
                         dst_cr += 2 * dist;
                         dst_offset = dst_cr;
@@ -567,21 +573,32 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
     }
 }
 
-// Thin forwarding wrapper: matches the call signature of
-// `_llk_math_eltwise_unary_sfpu_params_`. `idir` is named to mirror the BH metal-side
-// wrapper's third template parameter (the sort-direction bit forwarded as `top_min`).
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool idir = false, bool STABLE_SORT = false>
+/**
+ * @brief Run one bitonic merge pass over already-sorted runs in dest on the math thread.
+ *
+ * Thin forwarding wrapper to @ref _bitonic_topk_merge.
+ *
+ * @tparam APPROXIMATION_MODE: Approximation flag, kept for SFPU call-shape parity, values = <true/false>
+ * @tparam is_fp32_dest_acc_en: Dest register is in 32-bit mode, values = <true/false>
+ * @tparam initial_sort_dir: Sort-direction bit, forwarded as `top_min` to the merge body; corresponds to
+ *         the Blackhole wrapper's third template parameter, values = <true/false>
+ * @tparam STABLE_SORT: Must be false — stable sort is not supported on the Quasar bitonic path, values = <false>
+ * @param m_iter: Merge iteration index (selects sorted-run length / compare stride).
+ * @param k: TopK width K.
+ * @note Requires @ref _init_topk beforehand. Does not re-assert SFPCONFIG — see @ref calculate_bitonic_topk_phases_steps.
+ */
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool initial_sort_dir = false, bool STABLE_SORT = false>
 inline void calculate_bitonic_topk_merge(const int m_iter, const int k)
 {
     // SFPCONFIG re-assertion removed — see comment on calculate_bitonic_topk_phases_steps.
-    _bitonic_topk_merge<APPROXIMATION_MODE, is_fp32_dest_acc_en, idir, STABLE_SORT>(m_iter, k);
+    _bitonic_topk_merge<APPROXIMATION_MODE, is_fp32_dest_acc_en, initial_sort_dir, STABLE_SORT>(m_iter, k);
 }
 
 // Rebuild: re-runs phase (logK-1) on a merged tile pair to reextract sorted runs.
 // A switch on `(logk - 1)` selects one of cases 0/1/2/3/default; each emits a
 // load/swap-sequence/store pattern inline for the same replay-safety reason as local sort.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false>
-inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k, const int logk, const int skip_second)
+inline void _bitonic_topk_rebuild(const bool initial_sort_dir, const int m_iter, const int k, const int logk, const int skip_second)
 {
     static_assert(!STABLE_SORT, "Stable TopK is not supported by the Quasar bitonic TopK path");
 
@@ -593,15 +610,15 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
     const std::uint32_t dist      = (k << rebuild_m) > 32 ? 32 : (k << rebuild_m);
     const std::uint32_t ld_offset = (dist >> 4) * 32 + (dist & 0xF);
     std::uint32_t ld_dist         = 0;
-    const int ph                  = logk - 1;
+    const int phase               = logk - 1;
 
-    if (ph == 1 && m_iter < 2)
+    if (phase == 1 && m_iter < 2)
     {
         ld_dist = (ld_offset < 16) ? 4 * ld_offset : 2 * ld_offset;
     }
 
-    // Default-branch (ph >= 4) constants — also per-call (ph is fixed per call).
-    const std::uint32_t num_steps            = ph + 1;
+    // Default-branch (phase >= 4) constants — also per-call (phase is fixed per call).
+    const std::uint32_t num_steps            = phase + 1;
     const std::uint32_t start_step           = num_steps;
     const std::uint32_t end_step             = 4;
     const std::uint32_t sorted_seq_length    = 1 << num_steps;
@@ -614,10 +631,10 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
         for (int col = 0; col < 2; col++)
         {
             TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, p_setrwc::SET_D);
-            bool dir                      = idir;
+            bool sort_dir                 = initial_sort_dir;
             std::uint32_t datums_compared = 0;
 
-            switch (ph)
+            switch (phase)
             {
                 case 0:
                     break;
@@ -668,43 +685,43 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                     while (datums_compared < total_datums_to_compare)
                     {
                         bitonic_topk_load16<is_fp32_dest_acc_en>(4, 8);
-                        bitonic_topk_ph3_st4_to_1<8>(dir);
+                        bitonic_topk_ph3_st4_to_1<8>(sort_dir);
                         bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, 8);
                         TTI_INCRWC(0, 0, 0, 8);
                         TTI_INCRWC(0, 0, 0, 8);
                         TTI_INCRWC(0, 0, 0, 8);
                         TTI_INCRWC(0, 0, 0, 8);
                         datums_compared += 16;
-                        dir = !dir;
+                        sort_dir = !sort_dir;
                     }
                     break;
 
                 default:
                 {
-                    // ph >= 4: two-part sort (constants hoisted to the per-call block above).
+                    // phase >= 4: two-part sort (constants hoisted to the per-call block above).
                     // Part 1: steps `num_steps`..5 emitted inline.
                     // Part 2: steps 4..1.
-                    for (std::uint32_t ss = start_step; ss > end_step; ss--)
+                    for (std::uint32_t step = start_step; step > end_step; step--)
                     {
                         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, p_setrwc::SET_D);
-                        dir                      = idir;
-                        datums_compared          = 0;
-                        std::uint32_t dist_inner = (ss == 5) ? 16 : 32;
-                        std::uint32_t inner_d    = dist_inner >> 3;
-                        std::uint32_t dst_offset = 0;
+                        sort_dir                       = initial_sort_dir;
+                        datums_compared                = 0;
+                        std::uint32_t dist_inner       = (step == 5) ? 16 : 32;
+                        std::uint32_t inner_iter_count = dist_inner >> 3;
+                        std::uint32_t dst_offset       = 0;
 
                         while (datums_compared < total_datums_default)
                         {
-                            for (std::uint32_t ii = 0; ii < inner_d; ii++)
+                            for (std::uint32_t inner_iter = 0; inner_iter < inner_iter_count; inner_iter++)
                             {
                                 bitonic_topk_load16<is_fp32_dest_acc_en>(4, 2 * dist_inner);
-                                bitonic_topk_step_N(dir);
+                                bitonic_topk_step_N(sort_dir);
                                 bitonic_topk_store16<is_fp32_dest_acc_en, false>(4, 2 * dist_inner);
 
                                 std::uint32_t dst_inc = 8;
                                 dst_offset += dst_inc;
                                 bool dst_cr = false;
-                                if (ii == (inner_d - 1))
+                                if (inner_iter == (inner_iter_count - 1))
                                 {
                                     dst_cr     = true;
                                     dst_inc    = 4 * dist_inner;
@@ -718,21 +735,21 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                                 bitonic_topk_inc_x8_dest(dst_inc, dst_cr);
                                 datums_compared += 16;
                             }
-                            dir = (datums_compared == sorted_seq_length) ? !dir : dir;
+                            sort_dir = (datums_compared == sorted_seq_length) ? !sort_dir : sort_dir;
                         }
                     }
 
                     // Part 2: steps 4..1.
-                    dir             = idir;
+                    sort_dir        = initial_sort_dir;
                     datums_compared = 0;
                     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, p_setrwc::SET_D);
                     while (datums_compared < total_datums_default)
                     {
                         bitonic_topk_load16<is_fp32_dest_acc_en>(4, 8);
-                        bitonic_topk_ph3_st4_to_1<8>(dir);
+                        bitonic_topk_ph3_st4_to_1<8>(sort_dir);
                         bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, 8);
                         datums_compared += 16;
-                        dir = (datums_compared == sorted_seq_length) ? !dir : dir;
+                        sort_dir = (datums_compared == sorted_seq_length) ? !sort_dir : sort_dir;
                     }
                     break;
                 }
@@ -745,18 +762,30 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
     }
 }
 
-// Thin forwarding wrapper. `idir` is `int` because the variadic
-// `_llk_math_eltwise_unary_sfpu_params_` forwards arguments unchanged from the test, where
-// it is an `int` (TOPK_SORT_DIRECTION value). The implicit int->bool conversion happens at
-// the `_bitonic_topk_rebuild(idir, …)` call site.
+/**
+ * @brief Rebuild the bitonic sequence after a merge pass on the math thread.
+ *
+ * Thin forwarding wrapper to @ref _bitonic_topk_rebuild.
+ *
+ * @tparam APPROXIMATION_MODE: Approximation flag, kept for SFPU call-shape parity, values = <true/false>
+ * @tparam is_fp32_dest_acc_en: Dest register is in 32-bit mode, values = <true/false>
+ * @tparam STABLE_SORT: Must be false — stable sort is not supported on the Quasar bitonic path, values = <false>
+ * @param initial_sort_dir: Sort direction (ArgMax/ArgMin); int because the variadic SFPU params helper
+ *        forwards the test's int TOPK_SORT_DIRECTION value (converted to bool at the call site).
+ * @param m_iter: Merge iteration index.
+ * @param k: TopK width K.
+ * @param logk: log2(K); selects the phase via (logk - 1).
+ * @param skip_second: When set, halves the datum count (skips the second sub-sequence).
+ * @note Requires @ref _init_topk beforehand. Does not re-assert SFPCONFIG — see @ref calculate_bitonic_topk_phases_steps.
+ */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false>
-inline void calculate_bitonic_topk_rebuild(const int idir, const int m_iter, const int k, const int logk, const int skip_second)
+inline void calculate_bitonic_topk_rebuild(const int initial_sort_dir, const int m_iter, const int k, const int logk, const int skip_second)
 {
     // SFPCONFIG re-assertion removed — see comment on calculate_bitonic_topk_phases_steps.
     // Removing this re-assertion is the primary fix for the multi-tile-row Ascending
     // failure: the SFPCONFIG was clobbering LaneConfig bit [8] (EXCHANGE_SRCB_SRCC)
     // that `bitonic_topk_ph3_st4_to_1` sets for the ArgMin path.
-    _bitonic_topk_rebuild<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT>(idir, m_iter, k, logk, skip_second);
+    _bitonic_topk_rebuild<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT>(initial_sort_dir, m_iter, k, logk, skip_second);
 }
 
 } // namespace sfpu

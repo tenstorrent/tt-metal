@@ -509,4 +509,18 @@ struct p_sfpnonlinear
     constexpr static std::uint32_t TANH_MODE  = 0x5;
 };
 
+// SFPSWAP instruction modes (mode-to-int mapping matches the Blackhole reference).
+struct p_sfpswap
+{
+    constexpr static std::uint32_t UNCONDITIONALLY = 0;
+    constexpr static std::uint32_t ALL_ROWS_MAX    = 1;
+    constexpr static std::uint32_t ROWS_01_MAX     = 2;
+    constexpr static std::uint32_t ROWS_02_MAX     = 3;
+    constexpr static std::uint32_t ROWS_03_MAX     = 4;
+    constexpr static std::uint32_t ROW_0_MAX       = 5;
+    constexpr static std::uint32_t ROW_1_MAX       = 6;
+    constexpr static std::uint32_t ROW_2_MAX       = 7;
+    constexpr static std::uint32_t ROW_3_MAX       = 8;
+};
+
 } // namespace ckernel
