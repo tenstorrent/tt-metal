@@ -1364,52 +1364,60 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         check_block_size_validity(endpoints.producers, "PRODUCER");
         check_block_size_validity(endpoints.consumers, "CONSUMER");
 
-        // Cross-role BLOCKED consistency. BLOCKED is symmetric by construction: each thread owns a
-        // contiguous sub-ring and producer t pairs 1:1 with consumer t. So if either endpoint is
-        // BLOCKED, both must be BLOCKED, share the same block_size, and have equal thread counts.
-        // (Within-role agreement of access_pattern/block_size/num_threads is enforced above, so the
-        // first record of each role is representative.) This catches mixed/asymmetric BLOCKED at the
-        // API layer with a clear message, rather than later at device-side capacity computation.
+        // Cross-role BLOCKED consistency. The supported BLOCKED-involving pairings are:
+        //   - BLOCKED -> BLOCKED  (symmetric, or integer-ratio asymmetric fan-in/out via the
+        //     tile-counter round-robin over contiguous sub-rings)
+        //   - BLOCKED-producer -> ALL-consumer  (the producer block-bursts into the existing ALL
+        //     broadcast ring; every consumer reads every block, free-after-all-ack)
+        // BLOCKED -> STRIDED, and any BLOCKED *consumer* under a non-BLOCKED producer, are NOT yet
+        // supported. (Within-role agreement is enforced above, so the first record of each role is
+        // representative.) For BLOCKED->ALL the producer's block_size>0 is already validated per-binding,
+        // and num_entries % (block_size * num_producers) == 0 is enforced device-side in the ALL case.
         if (!endpoints.producers.empty() && !endpoints.consumers.empty()) {
             const auto& prod = endpoints.producers.front();
             const auto& cons = endpoints.consumers.front();
             const bool prod_blocked = prod.binding->access_pattern == DFBAccessPattern::BLOCKED;
             const bool cons_blocked = cons.binding->access_pattern == DFBAccessPattern::BLOCKED;
             if (prod_blocked || cons_blocked) {
-                TT_FATAL(
-                    prod_blocked && cons_blocked,
-                    "DFB '{}': BLOCKED must be set on both producer and consumer (producer '{}' is {}, "
-                    "consumer '{}' is {}); mixed BLOCKED/non-BLOCKED endpoints are not supported.",
-                    dfb.unique_id,
-                    prod.kernel->unique_id,
-                    prod_blocked ? "BLOCKED" : "non-BLOCKED",
-                    cons.kernel->unique_id,
-                    cons_blocked ? "BLOCKED" : "non-BLOCKED");
-                TT_FATAL(
-                    prod.binding->block_size == cons.binding->block_size,
-                    "DFB '{}': BLOCKED producer and consumer must share the same block_size "
-                    "(producer '{}' = {}, consumer '{}' = {}).",
-                    dfb.unique_id,
-                    prod.kernel->unique_id,
-                    prod.binding->block_size,
-                    cons.kernel->unique_id,
-                    cons.binding->block_size);
-                // BLOCKED supports asymmetric thread counts (fan-in/out via the tile-counter
-                // round-robin), but only at an INTEGER ratio — the larger side's thread count must be a
-                // whole multiple of the smaller's (matches calculate_num_tile_counters' divisibility).
-                const uint32_t pt = prod.kernel->num_threads;
-                const uint32_t ct = cons.kernel->num_threads;
-                const uint32_t hi = std::max(pt, ct);
-                const uint32_t lo = std::min(pt, ct);
-                TT_FATAL(
-                    lo > 0 && hi % lo == 0,
-                    "DFB '{}': BLOCKED producer/consumer thread counts must form an integer ratio "
-                    "(producer '{}' = {}, consumer '{}' = {}); non-integer ratios are not supported.",
-                    dfb.unique_id,
-                    prod.kernel->unique_id,
-                    pt,
-                    cons.kernel->unique_id,
-                    ct);
+                // BLOCKED-producer -> ALL-consumer rides the ALL broadcast path (not the sub-ring
+                // pairing), so it is exempt from the symmetric BLOCKED->BLOCKED constraints below.
+                const bool blocked_to_all = prod_blocked && cons.binding->access_pattern == DFBAccessPattern::ALL;
+                if (!blocked_to_all) {
+                    TT_FATAL(
+                        prod_blocked && cons_blocked,
+                        "DFB '{}': a BLOCKED endpoint must pair as BLOCKED->BLOCKED or "
+                        "BLOCKED-producer->ALL-consumer (producer '{}' is {}, consumer '{}' is {}); other "
+                        "mixed-BLOCKED combinations are not yet supported.",
+                        dfb.unique_id,
+                        prod.kernel->unique_id,
+                        prod_blocked ? "BLOCKED" : "non-BLOCKED",
+                        cons.kernel->unique_id,
+                        cons_blocked ? "BLOCKED" : "non-BLOCKED");
+                    TT_FATAL(
+                        prod.binding->block_size == cons.binding->block_size,
+                        "DFB '{}': BLOCKED producer and consumer must share the same block_size "
+                        "(producer '{}' = {}, consumer '{}' = {}).",
+                        dfb.unique_id,
+                        prod.kernel->unique_id,
+                        prod.binding->block_size,
+                        cons.kernel->unique_id,
+                        cons.binding->block_size);
+                    // BLOCKED->BLOCKED supports asymmetric thread counts (fan-in/out via the tile-counter
+                    // round-robin), but only at an INTEGER ratio (matches calculate_num_tile_counters).
+                    const uint32_t pt = prod.kernel->num_threads;
+                    const uint32_t ct = cons.kernel->num_threads;
+                    const uint32_t hi = std::max(pt, ct);
+                    const uint32_t lo = std::min(pt, ct);
+                    TT_FATAL(
+                        lo > 0 && hi % lo == 0,
+                        "DFB '{}': BLOCKED producer/consumer thread counts must form an integer ratio "
+                        "(producer '{}' = {}, consumer '{}' = {}); non-integer ratios are not supported.",
+                        dfb.unique_id,
+                        prod.kernel->unique_id,
+                        pt,
+                        cons.kernel->unique_id,
+                        ct);
+                }
             }
         }
 

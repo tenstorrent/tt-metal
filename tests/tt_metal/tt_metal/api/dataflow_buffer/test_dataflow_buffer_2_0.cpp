@@ -1318,6 +1318,35 @@ static void run_single_dfb_program_2_0(
                 }
             }
             EXPECT_EQ(expected, output) << "M2 Tensix→DM BLOCKED multi-thread permutation mismatch";
+        } else if (
+            p.producer_type == M2PorCType::DM && p.consumer_type == M2PorCType::DM &&
+            p.pap == m2::DFBAccessPattern::BLOCKED && p.cap == m2::DFBAccessPattern::ALL) {
+            // BLOCKED-producer -> ALL-consumer (DM->DM). The producer block-bursts into its contiguous
+            // per-producer sub-ring (capacity = num_entries/P, stride_in_entries=1); the ALL consumer
+            // reads round-robin across the P producer sub-rings — the SAME de-interleave that makes
+            // STRIDED->ALL identity (out tile r reads ring slot (r%P)*capacity + (r/P)). For P==1 the
+            // round-trip is identity, but for P>1 the producer's per-BLOCK interleave does NOT cancel
+            // the consumer's per-TILE round-robin, so it is a permutation:
+            //   producer p, block b, offset j: input tile (b*P + p)*bs + j is written to ring slot
+            //     p*capacity + b*bs + j, which the consumer reads out to tile (b*bs + j)*P + p.
+            //   => output[(b*bs + j)*P + p] = input[(b*P + p)*bs + j]    (reduces to identity at P==1).
+            const uint32_t wpe = p.entry_size / sizeof(uint32_t);
+            const uint32_t P = p.num_producers;
+            const uint32_t bs = p.block_size;
+            const uint32_t capacity = p.num_entries / P;
+            const uint32_t blocks_per_producer = capacity / bs;
+            std::vector<uint32_t> expected(input.size(), 0u);
+            for (uint32_t pp = 0; pp < P; ++pp) {
+                for (uint32_t b = 0; b < blocks_per_producer; ++b) {
+                    for (uint32_t j = 0; j < bs; ++j) {
+                        const uint32_t src = (b * P + pp) * bs + j;
+                        const uint32_t dst = (b * bs + j) * P + pp;
+                        std::copy(
+                            input.begin() + src * wpe, input.begin() + (src + 1) * wpe, expected.begin() + dst * wpe);
+                    }
+                }
+            }
+            EXPECT_EQ(expected, output) << "M2 DM→DM BLOCKED→ALL permutation mismatch";
         } else {
             EXPECT_EQ(input, output) << "M2 single-DFB identity mismatch";
         }
@@ -1685,6 +1714,44 @@ TEST_F(MeshDeviceFixture, TensixDMTest1xDFB1Bx1B_blk4_entry2048_2_0) {
     };
     run_single_dfb_program_2_0(this->devices_.at(0), params);
 }
+
+// --- BLOCKED-producer → ALL-consumer (DM-DM, explicit sync) ---
+// The producer block-bursts into its contiguous per-producer sub-ring; every ALL consumer reads every
+// entry (free-after-all-ack via the built-in broadcast_tc — DM→DM never engages the remapper). Rides
+// the existing ALL device path (cap=ALL drives capacity/stride/broadcast); pap=BLOCKED only swaps the
+// producer's txn descriptor to a block burst, so NO device/kernel change is needed. Host-side, one
+// validation guard was relaxed to admit BLOCKED→ALL (program_spec.cpp) plus a divisibility check so the
+// sub-ring holds a whole number of blocks (dataflow_buffer.cpp). Constraints: C ≤ 4 (ALL slot cap),
+// P+C ≤ 6 (Gen2 DM cap), num_entries % (block_size*P) == 0. Verified by the DM→DM BLOCKED→ALL golden
+// in run_single_dfb_program_2_0: identity at P==1, permutation at P>1 (the producer's per-block
+// interleave does not cancel the ALL consumer's per-tile round-robin).
+#define DFB_BLOCKED_ALL_TEST_2_0(suffix, num_p, num_c, blk, entries) \
+    TEST_F(MeshDeviceFixture, suffix##_2_0) {                        \
+        M2SingleDFBParams params{                                    \
+            .producer_type = M2PorCType::DM,                         \
+            .consumer_type = M2PorCType::DM,                         \
+            .num_producers = (num_p),                                \
+            .num_consumers = (num_c),                                \
+            .pap = m2::DFBAccessPattern::BLOCKED,                    \
+            .cap = m2::DFBAccessPattern::ALL,                        \
+            .implicit_sync = false,                                  \
+            .num_entries = (entries),                                \
+            .block_size = (blk),                                     \
+        };                                                           \
+        run_single_dfb_program_2_0(this->devices_.at(0), params);    \
+    }
+
+// Single-producer (P==1): the whole ring is one sub-ring written in order, so the round-trip is
+// identity regardless of consumer count. C = 1/2/4 ALL consumers all read the full ring.
+DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB1Bx1A_blk4, 1, 1, 4, 16)
+DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB1Bx2A_blk4, 1, 2, 4, 16)
+DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB1Bx2A_blk2, 1, 2, 2, 16)
+DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB1Bx4A_blk4, 1, 4, 4, 16)
+// Multi-producer (P==2): capacity = num_entries/P = 8 per producer → 2 blocks of 4. The output is a
+// permutation of the input (golden derived from the STRIDED→ALL round-robin de-interleave). C ≤ 4,
+// P+C ≤ 6 (2Bx4A sits at the DM cap of 6 cores).
+DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB2Bx2A_blk4, 2, 2, 4, 16)
+DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB2Bx4A_blk4, 2, 4, 4, 16)
 
 // --- STRIDED 1xX, Xx1 (DM-DM, DM-Tensix, Tensix-DM) ---
 DFB_TEST_2_0(DMTest1xDFB1Sx1S, DM, DM, 1, STRIDED, 1, STRIDED)
