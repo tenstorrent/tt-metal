@@ -105,6 +105,11 @@ void kernel_main() {
             }
         }
 
+        // cb_in1 is a producer-local scratch buffer (src->scratch->dest staging) with no
+        // downstream consumer, but the reserve_back above must still be balanced by a push_back
+        // so the CB is flushed at kernel exit. Only the unaligned path reserves it, so the push
+        // stays inside this branch.
+        cb_in1.push_back(num_trids);
     }
     noc_async_read_set_trid(0);
     cb_in0.push_back(block_height);
