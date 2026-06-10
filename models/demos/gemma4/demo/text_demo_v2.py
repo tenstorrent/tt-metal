@@ -522,7 +522,8 @@ def test_demo_text(
     # Iteration 0 is the decode compile step — exclude from the steady-state average.
     steady_iters = max(iteration - 1, 1)
     total_decode = sum(profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, iteration))
-    ttft_ms = total_prefill / batch_size * 1000
+    ttft_ms = total_prefill * 1000
+    amortized_prefill_ms = total_prefill / batch_size * 1000
     decode_tps_u = steady_iters / total_decode if total_decode > 0 else 0
     decode_tps = decode_tps_u * batch_size
 
@@ -530,6 +531,8 @@ def test_demo_text(
     logger.info("=== Performance metrics ===")
     logger.info(f"Prompt tokens: {prefill_lens[0]}, generated tokens: {iteration}")
     logger.info(f"Time to First Token (TTFT): {ttft_ms:.1f} ms")
+    if batch_size > 1:
+        logger.info(f"Amortized prefill/user: {amortized_prefill_ms:.1f} ms")
     if decode_tps_u > 0:
         logger.info(
             f"Decode: {1000 / decode_tps_u:.2f} ms/token @ {decode_tps_u:.2f} tok/s/user "
@@ -545,7 +548,8 @@ def test_demo_text(
         measurements = {
             "inference_prefill": total_prefill,
             "inference_decode": total_decode,
-            "prefill_time_to_token": total_prefill / batch_size,
+            "prefill_time_to_token": total_prefill,
+            "prefill_time_to_token_per_user_amortized": total_prefill / batch_size,
             "decode_t/s/u": decode_tps_u,
             "decode_t/s": decode_tps,
             "Full demo runtime": profiler.get_duration("run"),
@@ -642,9 +646,18 @@ def _run_spec_decode(
     input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
 
     logger.info("Spec-decode prefill...")
-    generator.prefill_forward_text(
-        input_tokens_prefill_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos
+    prefill_t0 = time.perf_counter()
+    prefill_logits = generator.prefill_forward_text(
+        input_tokens_prefill_pt,
+        page_table=page_table,
+        kv_cache=tt_kv_cache,
+        prompt_lens=decoding_pos,
+        warmup_prefill=False,
     )
+    ttnn.synchronize_device(mesh_device)
+    prefill_elapsed = time.perf_counter() - prefill_t0
+    if hasattr(prefill_logits, "deallocate"):
+        prefill_logits.deallocate(True)
 
     prompt_len = int(decoding_pos[0])
     anchor_pos = prompt_len - 1
@@ -728,6 +741,7 @@ def _run_spec_decode(
     logger.info(f"\n== SPEC-DECODE GENERATION ==\n{text.strip()}\n")
     logger.info("=== Speculative decoding metrics ===")
     logger.info(f"Prompt tokens: {prompt_len}, generated tokens: {n_tokens}")
+    logger.info(f"Time to First Token (TTFT): {prefill_elapsed * 1000.0 / batch_size:.1f} ms")
     logger.info(
         f"Drafter: {draft_len} drafts/iter; mean accepted {mean_accept:.2f}/{draft_len} (tokens/iter: {mean_accept + 1:.2f})"
     )

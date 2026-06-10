@@ -143,12 +143,17 @@ class Gemma4Generator(Generator):
             self.trace_inputs_prefill[trace_key] = None
             self.trace_output_prefill[trace_key] = None
 
+    def prefill_forward_text(self, *args, **kwargs):
+        if kwargs.get("model_id_warmup") is not None:
+            kwargs["warmup_prefill"] = False
+        return super().prefill_forward_text(*args, **kwargs)
+
     def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device):
         super().warmup_model_prefill(
             kv_cache=kv_cache,
             enable_trace=enable_trace,
             can_sample_on_device=can_sample_on_device,
-            non_greedy_decoding_on_device=non_greedy_decoding_on_device,
+            greedy_only=not non_greedy_decoding_on_device,
         )
         if enable_trace and bool(getattr(self.model[0], "hidden_size_per_layer_input", 0)):
             # E2B/E4B only: prefill uploads prompt-specific per-layer inputs via
