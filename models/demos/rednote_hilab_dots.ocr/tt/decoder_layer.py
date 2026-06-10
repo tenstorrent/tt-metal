@@ -114,18 +114,29 @@ class TtDecoderLayer(LightweightModule):
     def prepare_causal_mask(self, seq):
         return self.self_attn.prepare_causal_mask(seq)
 
-    def forward(self, x_11SH: ttnn.Tensor, rot_mats, causal_mask: ttnn.Tensor) -> ttnn.Tensor:
+    def prepare_decode_rope(self, position):
+        return self.self_attn.prepare_decode_rope(position)
+
+    def prepare_decode_mask(self, slot, max_seq):
+        return self.self_attn.prepare_decode_mask(slot, max_seq)
+
+    def init_kv_cache(self, max_seq_len):
+        return self.self_attn.init_kv_cache(max_seq_len)
+
+    def forward(self, x_11SH: ttnn.Tensor, rot_mats, causal_mask: ttnn.Tensor, kv_cache=None) -> ttnn.Tensor:
         """x_11SH: [1, 1, seq, hidden] TILE_LAYOUT, replicated on the mesh.
 
         rot_mats: (cos, sin) from prepare_rope, [1, hpd, seq, head_dim] fp32.
         causal_mask: from prepare_causal_mask, [1, hpd, seq, seq] fp32.
+        kv_cache: optional dict from init_kv_cache — prefill populates the
+            layer's persistent K/V cache inside the attention sub-block.
         Returns: [1, 1, seq, hidden], replicated (both branch outputs are
         all-reduced inside the sub-blocks). The residual stream keeps the
         INPUT dtype so a chained caller controls compounding precision.
         """
         res_dtype = x_11SH.dtype
         attn_in = self.input_layernorm(x_11SH)
-        attn_out = self.self_attn(attn_in, rot_mats, causal_mask)
+        attn_out = self.self_attn(attn_in, rot_mats, causal_mask, kv_cache=kv_cache)
         ttnn.deallocate(attn_in)
         # Residual adds pinned to L1: their consumers are the RMSNorms and the
         # next add — never a matmul — so the L1-interleaved-into-matmul stall
@@ -135,6 +146,29 @@ class TtDecoderLayer(LightweightModule):
         h = ttnn.add(x_11SH, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=res_dtype)
         ttnn.deallocate(attn_out)
 
+        ff_in = self.post_attention_layernorm(h)
+        ff_out = self.mlp(ff_in)
+        ttnn.deallocate(ff_in)
+        out = ttnn.add(h, ff_out, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=res_dtype)
+        ttnn.deallocate(h)
+        ttnn.deallocate(ff_out)
+        return out
+
+    def forward_decode(self, x_111H: ttnn.Tensor, kv_cache, rot_step, decode_mask: ttnn.Tensor) -> ttnn.Tensor:
+        """KV-cached single-token step: same pre-norm residual wiring, seq=1.
+
+        x_111H: [1, 1, 1, hidden] fp32 TILE_LAYOUT, replicated. rot_step /
+        decode_mask from prepare_decode_rope / prepare_decode_mask;
+        kv_cache from init_kv_cache with kv_cache["pos"] already at this
+        token's slot. Norms and MLP are seq-agnostic; only the attention
+        sub-block carries a distinct decode path.
+        """
+        res_dtype = x_111H.dtype
+        attn_in = self.input_layernorm(x_111H)
+        attn_out = self.self_attn.forward_decode(attn_in, kv_cache, rot_step, decode_mask)
+        ttnn.deallocate(attn_in)
+        h = ttnn.add(x_111H, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=res_dtype)
+        ttnn.deallocate(attn_out)
         ff_in = self.post_attention_layernorm(h)
         ff_out = self.mlp(ff_in)
         ttnn.deallocate(ff_in)

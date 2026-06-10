@@ -39,6 +39,23 @@ and its per-chip PARTIAL sums are combined with a sync all-reduce
 swapped from all_gather + local adds in the optimization phase per
 tp-guidance). On a single device the sharding degenerates to the
 replicated full computation and the CCL is skipped.
+
+Generation phase (decode_strategy=kv_cache): beside the full-sequence
+prefill ``forward`` the block carries a KV-cached single-token decode path
+— ``init_kv_cache`` pre-allocates persistent per-chip fp32 K/V caches
+``[1, heads_per_device, max_seq, head_dim]`` (kv_replication=2 means each
+chip's Q-head group holds a FULL copy of its KV head's cache, so decode
+attention is chip-local — no CCL in attention; the only CCL stays after the
+row-parallel o_proj). ``forward`` populates the cache once per call via
+``ttnn.fill_cache`` (post-rope K, V), then ``forward_decode`` processes ONE
+token row per step: QKV linear -> nlp_create_qkv_heads -> explicit fp32
+rope -> ``ttnn.experimental.paged_update_cache`` (single contiguous cache,
+no page table; the seamless_m4t kv_cache recipe) -> single-row fp32
+attention core over the cached K/V with a streamed [1, 1, 1, max_seq]
+additive mask. The bf16-only ``scaled_dot_product_attention_decode`` kernel
+is rejected for the same measured reason as bf16 SDPA in prefill (Qwen2
+attention-sink ±3122 logits, PCC ~0.92): the explicit fp32 core IS this
+model's SDPA-decode idiom; ``paged_update_cache`` supports fp32 caches.
 """
 
 import torch
@@ -183,6 +200,88 @@ class TtTextAttention(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
+    def prepare_decode_rope(self, position: int, theta: float = 1e6):
+        """Replicated fp32 cos/sin [1, heads_per_device, 1, head_dim] for ONE position.
+
+        Same HF-convention table as reference text_rope_cos_sin (theta=1e6).
+        """
+        inv_freq = 1.0 / (theta ** (torch.arange(0, self.head_dim, 2, dtype=torch.float) / self.head_dim))
+        freqs = float(position) * inv_freq
+        emb = torch.cat((freqs, freqs), dim=-1)
+        cos, sin = emb.cos(), emb.sin()
+
+        def _to_dev(t):
+            t = t.float().reshape(1, 1, 1, self.head_dim).expand(1, self.heads_per_device, 1, self.head_dim)
+            return ttnn.from_torch(
+                t.contiguous(),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+
+        return _to_dev(cos), _to_dev(sin)
+
+    def prepare_decode_mask(self, slot: int, max_seq: int):
+        """Replicated fp32 additive row mask [1, 1, 1, max_seq]: slots > ``slot`` hidden.
+
+        The cache stores ALL max_seq slots (pad rows hold garbage K/V until a
+        later decode step overwrites them); the mask makes them unattendable.
+        """
+        mask = torch.full((1, 1, 1, max_seq), torch.finfo(torch.float32).min / 2)
+        mask[..., : slot + 1] = 0.0
+        return ttnn.from_torch(
+            mask,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+    # ------------------------------------------------------------------
+    # KV cache (generation phase, decode_strategy=kv_cache)
+    # ------------------------------------------------------------------
+    def init_kv_cache(self, max_seq_len: int):
+        """Pre-allocate persistent per-chip fp32 K/V caches [1, hpd, max_seq, hd].
+
+        Each chip's Q-head group holds a full replicated copy of its KV
+        head's cache (kv_replication=2 -> hpd identical rows), so the decode
+        attention core stays chip-local. Buffers persist across calls;
+        ``forward(kv_cache=...)`` refills slots 0..S-1 on each prefill.
+        """
+        zeros = torch.zeros(1, self.heads_per_device, max_seq_len, self.head_dim)
+        k_cache, v_cache = (
+            ttnn.from_torch(
+                zeros,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            for _ in range(2)
+        )
+        # paged_update_cache input: [1, B=1, num_heads, head_dim] HEIGHT_SHARDED L1.
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        shard_grid = ttnn.num_cores_to_corerangeset(1, grid, row_wise=True)
+        update_cfg = ttnn.create_sharded_memory_config(
+            shape=(32, self.head_dim),  # heads padded to one tile
+            core_grid=shard_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+        # Persistent int32 [1] slot buffer (stable address for trace reuse).
+        pos_tt = ttnn.from_torch(
+            torch.zeros(1, dtype=torch.int32),
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        return {"k": k_cache, "v": v_cache, "pos": pos_tt, "update_cfg": update_cfg, "max_seq": max_seq_len}
+
     # ------------------------------------------------------------------
     # Device forward (causal prefill over the full sequence)
     # ------------------------------------------------------------------
@@ -202,11 +301,15 @@ class TtTextAttention(LightweightModule):
         ttnn.deallocate(t)
         return out
 
-    def forward(self, x_11SH: ttnn.Tensor, rot_mats, causal_mask: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x_11SH: ttnn.Tensor, rot_mats, causal_mask: ttnn.Tensor, kv_cache=None) -> ttnn.Tensor:
         """x_11SH: [1, 1, seq, hidden] fp32 TILE_LAYOUT, replicated on the mesh.
 
         rot_mats: (cos, sin) from prepare_rope, [1, hpd, seq, head_dim] fp32.
         causal_mask: from prepare_causal_mask, [1, hpd, seq, seq] fp32.
+        kv_cache: optional dict from init_kv_cache — prefill populates slots
+            0..seq-1 with the post-rope K and V via ttnn.fill_cache (pad rows
+            beyond the live prompt are masked by the decode mask until a
+            decode step overwrites them).
         Returns: [1, 1, seq, hidden] fp32, replicated (all-reduced o_proj output).
         """
         xqkv = ttnn.linear(
@@ -231,6 +334,10 @@ class TtTextAttention(LightweightModule):
         cos, sin = rot_mats
         q = self._apply_rope_fp32(q, cos, sin)
         k = self._apply_rope_fp32(k, cos, sin)
+
+        if kv_cache is not None:
+            ttnn.fill_cache(kv_cache["k"], k, 0)
+            ttnn.fill_cache(kv_cache["v"], v, 0)
 
         # Explicit fp32 causal attention (bf16 SDPA kernel scrambles the
         # ±3000-magnitude Qwen2 layer-0 logits — see module docstring).
@@ -278,6 +385,90 @@ class TtTextAttention(LightweightModule):
             # N-1 local adds (full 4*hidden payload gathered then summed on
             # 110-core BinaryNg) — tracy tick-28 A/B: 364.8 -> 281.3 us/iter
             # (-23%), PCC unchanged.
+            reduced = ttnn.reduce_scatter(out, dim=3, num_links=2, topology=ttnn.Topology.Linear)
+            ttnn.deallocate(out)
+            out = ttnn.all_gather(reduced, dim=3, num_links=2, topology=ttnn.Topology.Linear)
+            ttnn.deallocate(reduced)
+        return out
+
+    # ------------------------------------------------------------------
+    # Device forward (KV-cached single-token decode step)
+    # ------------------------------------------------------------------
+    def forward_decode(self, x_111H: ttnn.Tensor, kv_cache, rot_step, decode_mask: ttnn.Tensor) -> ttnn.Tensor:
+        """One KV-cached token step: O(1) projections + attention over the cache.
+
+        x_111H: [1, 1, 1, hidden] fp32 TILE_LAYOUT, replicated on the mesh.
+        kv_cache: dict from init_kv_cache. ``kv_cache["pos"]`` (persistent
+            int32 [1]) must already hold this token's cache slot.
+        rot_step: (cos, sin) from prepare_decode_rope, [1, hpd, 1, hd] fp32.
+        decode_mask: from prepare_decode_mask, [1, 1, 1, max_seq] fp32.
+        Returns: [1, 1, 1, hidden] fp32, replicated (all-reduced o_proj).
+        No CCL in attention: each chip's KV-head cache copy is local.
+        """
+        xqkv = ttnn.linear(
+            x_111H,
+            self.wqkv,
+            bias=self.bqkv,
+            dtype=ttnn.float32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            xqkv,
+            num_heads=self.heads_per_device,
+            num_kv_heads=self.heads_per_device,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(xqkv)
+
+        cos, sin = rot_step
+        q = self._apply_rope_fp32(q, cos, sin)  # [1, hpd, 1, hd]
+        k = self._apply_rope_fp32(k, cos, sin)
+
+        # paged_update_cache wants [1, B=1, heads, hd] HEIGHT_SHARDED L1.
+        for t, cache in ((k, kv_cache["k"]), (v, kv_cache["v"])):
+            row = ttnn.permute(t, (0, 2, 1, 3))  # [1, 1, hpd, hd]
+            ttnn.deallocate(t)
+            row_sh = ttnn.interleaved_to_sharded(row, kv_cache["update_cfg"])
+            ttnn.deallocate(row)
+            ttnn.experimental.paged_update_cache(cache, row_sh, update_idxs_tensor=kv_cache["pos"])
+            ttnn.deallocate(row_sh)
+
+        # Explicit fp32 single-row attention over the full cache window; the
+        # streamed mask hides slots beyond the current position.
+        k_t = ttnn.transpose(kv_cache["k"], -2, -1)
+        scores = ttnn.matmul(
+            q,
+            k_t,
+            dtype=ttnn.float32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        ttnn.deallocate(q)
+        ttnn.deallocate(k_t)
+        scores = ttnn.multiply(scores, self.scale)
+        scores = ttnn.add(scores, decode_mask)
+        probs = ttnn.softmax(scores, dim=-1, numeric_stable=True)
+        ttnn.deallocate(scores)
+        attn = ttnn.matmul(
+            probs,
+            kv_cache["v"],
+            dtype=ttnn.float32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        ttnn.deallocate(probs)
+        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.linear(
+            attn,
+            self.wo,
+            dtype=x_111H.dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        ttnn.deallocate(attn)
+        if self.num_devices > 1:
             reduced = ttnn.reduce_scatter(out, dim=3, num_links=2, topology=ttnn.Topology.Linear)
             ttnn.deallocate(out)
             out = ttnn.all_gather(reduced, dim=3, num_links=2, topology=ttnn.Topology.Linear)

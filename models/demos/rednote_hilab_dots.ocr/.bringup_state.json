@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T09:39:56Z",
+  "updated_at": "2026-06-10T09:58:25Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -841,9 +841,17 @@
       "validation_threshold": "HF + 0.05",
       "hybrid_notes": "Image preprocessing (resize, patchify, grid_thw) and tokenizer/chat-template stay on HF host; rot_pos_emb tables and cu_seqlens computed on host.",
       "generation": {
-        "status": "pending",
+        "status": "done",
         "attempts": 0,
-        "notes": "REDO: replace full-seq recompute with KV-cached token step (paged_update_cache + SDPA-decode); prefill once; parity gate unchanged"
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/ocr_model.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/text_attention.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/decoder_layer.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_e2e_ocr.py",
+          "models/demos/rednote_hilab_dots.ocr/demo/demo_ocr.py"
+        ],
+        "notes": "REDO complete (decode_strategy=kv_cache): full-sequence-recompute AR loop replaced by a KV-cached token step. text_attention gained init_kv_cache (persistent per-chip fp32 K/V [1,hpd,max_seq,hd]; kv_replication=2 - each Q-head group holds a full copy of its KV head's cache, chip-local attention, no CCL in attention) plus a decode path beside prefill: QKV linear -> nlp_create_qkv_heads -> explicit fp32 rope -> ttnn.experimental.paged_update_cache (single contiguous cache, persistent int32 slot buffer shared across all 28 layers, seamless_m4t recipe) -> single-row fp32 attention over the cache with a streamed [1,1,1,max_seq] mask. Prefill runs ONCE (ttnn.fill_cache of post-rope K/V slots 0..P32-1; first token from prompt-row logits); decoder_layer.forward_decode wires norms/MLP around the token row; ocr_model holds persistent caches (max_cache_seq 3200) and prefill+step loop. The bf16-only scaled_dot_product_attention_decode kernel was rejected for the established Qwen2 attention-sink reason (+-3122 logits, bf16 SDPA PCC ~0.92 prefill); fp32 explicit core is the model's SDPA-decode idiom; paged_update_cache supports fp32 caches (cache-row check vs torch: PCC ~1.0). Parity gate PASS: WER 0.0000 (TTNN) vs HF 0.0000, tolerance 0.05, all 5 samples exact. 5-sample set + long sample prefilled: steady decode 89.8-90.5 ms/tok at gate shapes and 90.2 ms/tok at 2305-token context (prefill 266.8 ms once) - per-token cost flat in context (was ~90 ms/tok x O(L) recompute). Step is host-dispatch-bound; perf phase traces the token step (target <=20 ms/tok at 3k). Guard verify_use_case ok. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "wer": 0.0
       },
       "perf": {
         "status": "pending",
@@ -1140,6 +1148,12 @@
       "tick": 47,
       "ts": "2026-06-10T09:08:28Z",
       "action": "perf[ocr]",
+      "result": "ok"
+    },
+    {
+      "tick": 48,
+      "ts": "2026-06-10T09:58:25Z",
+      "action": "generation[ocr]",
       "result": "ok"
     }
   ],
