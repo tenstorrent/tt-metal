@@ -188,11 +188,14 @@ def create_program_descriptor(
         )
 
     # Streaming row-chunk width: Wg tiles on the aligned path; on the cluster
-    # path passes 1/2 stream chunk_rows-row group-span blocks (chunk_rows *
-    # Ws_max tiles live between mul/sub and reduce) and pass 3 streams full
-    # cluster rows (Wc_max).
-    chunk_w = max(chunk_rows * Ws_max, Wc_max) if groups_non_aligned else Wg
+    # path input/output/xhat/scaled are consumed tile-by-tile, so they only
+    # need double-buffering at the widest per-row chunk (Ws_max or Wc_max).
+    # Only cb_centered must hold a FULL chunk_rows x Ws_max block live between
+    # the sub/mask/square stage and the accumulating reduce (sequential
+    # helpers can't pipeline), plus pass-3 streaming headroom.
+    chunk_w = max(Ws_max, Wc_max) if groups_non_aligned else Wg
     stream_pages = 2 * chunk_w
+    centered_pages = max(chunk_rows * Ws_max + Ws_max, 2 * Wc_max) if groups_non_aligned else stream_pages
 
     # Scaler precision follows the stat format. For non-tile-aligned shapes the
     # group element count is not a power of two, so a bf16 scaler quantizes
@@ -208,7 +211,7 @@ def create_program_descriptor(
         cb(CB_OUTPUT_TILES, stream_pages, out_page, in_dtype),
         cb(CB_MEAN, 1, stat_page, stat_dtype),
         cb(CB_VAR, 1, stat_page, stat_dtype),
-        cb(CB_CENTERED, stream_pages, stat_page, stat_dtype),
+        cb(CB_CENTERED, centered_pages, stat_page, stat_dtype),
     ]
     if has_gamma:
         gamma_page = gamma_tensor.buffer_page_size()

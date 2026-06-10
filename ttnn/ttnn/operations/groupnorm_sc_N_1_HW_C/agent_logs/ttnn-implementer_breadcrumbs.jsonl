@@ -63,3 +63,4 @@
 {"event":"dprint_observation","details":"SDXL probe: per-group bias ~1e-4 (means OK), error std 0.046 uniform. Either rstd off ~4.6% per group uniformly or per-element noise. Probing slope per group.","ts":"2026-06-10T17:20:48+00:00"}
 {"event":"dprint_observation","details":"slope=1.0458 ALL groups, resid 0.0017 -> rstd uniformly +4.6% (var -8.7%). 512 per-row partial reloads truncate toward zero (TF32 srcA). Lever: chunk pass1/2 reduce blocks to R=16 rows -> 32 reloads.","ts":"2026-06-10T17:22:14+00:00"}
 {"event":"test_run","status":"fail","details":"chunked accumulation: SDXL 55->10 failed (45 pass). Checking remaining 10 cells.","ts":"2026-06-10T17:25:14+00:00"}
+{"event":"test_run","status":"pass","details":"SDXL shape 1x1x16384x320 now 55/55. CB slimming: only cb_centered holds full chunk; in/out/xhat/scaled at 2*max(Ws,Wc).","ts":"2026-06-10T17:28:58+00:00"}
