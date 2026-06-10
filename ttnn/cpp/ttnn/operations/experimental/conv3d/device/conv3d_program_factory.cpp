@@ -130,7 +130,10 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     const uint32_t dst_size = ttnn::get_dest_reg_count(compute_kernel_config);
     const uint32_t out_subblock_w = std::min(matmul_N_t, dst_size);
     const auto arch = tt::tt_metal::hal::get_arch();
-    const bool scale_subblock_h = arch == tt::ARCH::WORMHOLE_B0 && out_subblock_w == matmul_N_t;
+    // TT_CONV3D_BH_SUBH: experimental re-test of the BH sub_h=1 policy above on
+    // the matmul-helper kernel (the policy predates the migration).
+    const bool scale_subblock_h =
+        (arch == tt::ARCH::WORMHOLE_B0 || std::getenv("TT_CONV3D_BH_SUBH") != nullptr) && out_subblock_w == matmul_N_t;
     const uint32_t out_subblock_h = scale_subblock_h ? largest_divisor_up_to(matmul_M_t, dst_size / out_subblock_w) : 1;
     const uint32_t output_write_bytes_per_transaction = C_out_block * dtype_bytes;
     const bool small_output_write_transactions =
