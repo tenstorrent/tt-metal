@@ -201,10 +201,11 @@ def test_v32_mla_vs_cpu_reference(mesh_device, seq_len, device_params, variant, 
 def run_cpu_reference_chunked(args, mla_cpu, hidden_states, seq_len, chunk, seed):
     """Chunk-loop truth on MLACPU decode branch; mask [chunk, end_pos] keeps causality."""
     cache_dir = Path(os.environ.get("DEEPSEEK_V32_MLA_REF_CACHE", "/tmp/deepseek_v32_mla_ref_cache"))
-    cache_path = cache_dir / f"chunked_funcidx_seq{seq_len}_c{chunk}_seed{seed}.pt"
+    cache_path = cache_dir / f"chunked_funcidx_seq{seq_len}_c{chunk}_seed{seed}_v2.pt"
     if cache_path.exists():
         logger.info(f"Loading cached chunked CPU reference from {cache_path}")
-        return torch.load(cache_path, weights_only=True)["ref_output"]
+        cached = torch.load(cache_path, weights_only=True)
+        return cached["ref_output"], cached["ref_kvpe"]
 
     freqs_all = precompute_freqs_cis(args)
     outs = []
@@ -215,10 +216,11 @@ def run_cpu_reference_chunked(args, mla_cpu, hidden_states, seq_len, chunk, seed
                 mla_cpu.forward(hidden_states[:, s : s + chunk].to(torch.bfloat16), s, freqs_all[s : s + chunk], mask)
             )
     ref_output = torch.cat(outs, dim=1)
+    ref_kvpe = torch.cat([mla_cpu.kv_cache[:1, :seq_len], mla_cpu.pe_cache[:1, :seq_len]], dim=-1)
     cache_dir.mkdir(parents=True, exist_ok=True)
-    torch.save({"ref_output": ref_output}, cache_path)
+    torch.save({"ref_output": ref_output, "ref_kvpe": ref_kvpe}, cache_path)
     logger.info(f"Saved chunked CPU reference to {cache_path}")
-    return ref_output
+    return ref_output, ref_kvpe
 
 
 # Chunked prefill e2e (step 4): chunk size is a parameter — 1k dev default (agreement 15).
@@ -257,12 +259,13 @@ def test_v32_mla_chunked_vs_cpu_reference(mesh_device, seq_len, chunk, device_pa
         num_kvpe_cache_layers=1,
     )
 
+    # seq_len sizes the persistent ring buffers — full cache, not chunk.
     mla_tt = ttMLAv32(
         config,
         weights,
         mesh_device,
         layer_idx=0,
-        seq_len=chunk,
+        seq_len=seq_len,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         is_chunked=True,
@@ -294,7 +297,16 @@ def test_v32_mla_chunked_vs_cpu_reference(mesh_device, seq_len, chunk, device_pa
         )
     tt_output = torch.cat(outs, dim=2)
 
-    ref_output = run_cpu_reference_chunked(args, mla_cpu, hidden, seq_len, chunk, seed)
+    ref_output, ref_kvpe = run_cpu_reference_chunked(args, mla_cpu, hidden, seq_len, chunk, seed)
+    from models.common.utility_functions import comp_pcc
+
+    for s in range(0, seq_len, chunk):
+        _, m = comp_pcc(ref_output[:, s : s + chunk], tt_output[0, :, s : s + chunk], 0)
+        logger.info(f"chunk@{s}: {m}")
+    # KVPE prefix diagnostic: separates stems/rope (cache content) from selection.
+    tt_kvpe = ttnn.to_torch(ttnn.get_device_tensors(tt_kvpe_cache)[0])[:1, 0, :seq_len].to(torch.bfloat16)
+    _, m = comp_pcc(ref_kvpe, tt_kvpe, 0)
+    logger.info(f"kvpe prefix: {m}")
     _, pcc_message = assert_with_pcc(ref_output.unsqueeze(0), tt_output, OUTPUT_PCC)
     logger.info(f"Chunked output PCC: {pcc_message}")
     ttnn.synchronize_device(mesh_device)

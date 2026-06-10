@@ -45,6 +45,12 @@ class ttMLA(_ttMLAv3):
         self._index_k_cache = torch.zeros(
             self.index_args.max_seq_len, self.index_args.index_head_dim, dtype=torch.bfloat16
         )
+        # Host bf16 KVPE mirror (chunked sparse fallback): avoids double bf8
+        # quantization in the host workaround; the fused op will read the bf8
+        # cache like ring_mla (agreement: v3 cache format).
+        self._kvpe_mirror = torch.zeros(
+            self.index_args.max_seq_len, config.kv_lora_rank + config.qk_rope_head_dim, dtype=torch.bfloat16
+        )
         super().__init__(config, weights, mesh_device, **kwargs)
 
     def _indexer_topk(self, hidden_states: ttnn.Tensor, seq_len: int, start_pos: int = 0) -> ttnn.Tensor:
