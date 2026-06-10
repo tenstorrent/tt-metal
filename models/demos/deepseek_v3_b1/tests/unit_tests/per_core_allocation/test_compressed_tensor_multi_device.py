@@ -608,7 +608,7 @@ def _run_cb_heavy_noop_program(io_tensors, cb_core_grid, cb_total_size_bytes):
     # Dispatch needs all 3 RISCs configured (NCRISC + BRISC + TRISC) even if kernels are blank;
     # otherwise launch crashes on the un-bound cores.
     reader = ttnn.KernelDescriptor(
-        kernel_source="tt_metal/kernels/dataflow/blank.cpp",
+        kernel_source="tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=cb_core_grid,
         config=ttnn.DataMovementConfigDescriptor(
@@ -616,7 +616,7 @@ def _run_cb_heavy_noop_program(io_tensors, cb_core_grid, cb_total_size_bytes):
         ),
     )
     writer = ttnn.KernelDescriptor(
-        kernel_source="tt_metal/kernels/dataflow/blank.cpp",
+        kernel_source="tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=cb_core_grid,
         config=ttnn.DataMovementConfigDescriptor(
@@ -624,7 +624,7 @@ def _run_cb_heavy_noop_program(io_tensors, cb_core_grid, cb_total_size_bytes):
         ),
     )
     compute = ttnn.KernelDescriptor(
-        kernel_source="tt_metal/kernels/compute/blank.cpp",
+        kernel_source="tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=cb_core_grid,
         config=ttnn.ComputeConfigDescriptor(),

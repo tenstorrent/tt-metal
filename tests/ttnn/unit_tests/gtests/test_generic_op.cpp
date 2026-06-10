@@ -777,7 +777,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
         .config = tt::tt_metal::WriterConfigDescriptor{},
     };
     KernelDescriptor compute_kernel_descriptor = {
-        .kernel_source = "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+        .kernel_source = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu.cpp",
         .core_ranges = device_cores,
         .compile_time_args = {num_tiles, 1},
         .defines = sfpu_defines,
@@ -860,7 +860,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCache) {
                  .config = tt::tt_metal::WriterConfigDescriptor{},
              },
              {
-                 .kernel_source = "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+                 .kernel_source = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu.cpp",
                  .core_ranges = device_cores,
                  .compile_time_args = {num_tiles, 1},
                  .defines = sfpu_defines,
@@ -982,7 +982,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCacheCommonRuntimeArgs) {
                  .config = tt::tt_metal::WriterConfigDescriptor{},
              },
              {
-                 .kernel_source = "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+                 .kernel_source = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu.cpp",
                  .core_ranges = device_cores,
                  .compile_time_args = {num_tiles, 1},
                  .defines = sfpu_defines,
