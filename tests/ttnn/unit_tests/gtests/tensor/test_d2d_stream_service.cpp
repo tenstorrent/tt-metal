@@ -130,21 +130,36 @@ uint32_t core_range_volume(const CoreRange& cr) {
     return (cr.end_coord.x - cr.start_coord.x + 1) * (cr.end_coord.y - cr.start_coord.y + 1);
 }
 
+// Socket / scratch FIFO size for a given spec. derive_chunk_plan FATALs unless
+// the FIFO holds at least one tensor page, so wide last dims (page > 4096 B)
+// need a bigger FIFO than the historical 4096. Round the page up to a 4096
+// multiple: narrow pages keep a 4096 FIFO (so the FIFO still holds *several*
+// pages, exercising chunk packing and the pages_per_chunk reduction loop),
+// while a wide page gets a FIFO sized to exactly one page. 4096 is a multiple
+// of the L1 alignment, so this is always >= the buffer's aligned_page_size.
+uint32_t fifo_bytes_for(const TensorSpec& spec) {
+    constexpr uint32_t kMinFifo = 4096u;
+    const uint32_t page = static_cast<uint32_t>(spec.compute_page_size_bytes());
+    return std::max(kMinFifo, ((page + kMinFifo - 1u) / kMinFifo) * kMinFifo);
+}
+
 // Standard config: UINT32 ROW_MAJOR DRAM-interleaved, replicated on every
-// device, L1 socket FIFO. The mapper is built fresh per call (create_pair
-// moves it out). share_fabric_links defaults to false (OWN mode) so the
-// functional tests stream without needing per-transfer grants; the lease tests
-// pass true and drive the grant/release handshake explicitly.
+// device, L1 socket FIFO sized to the tensor page (see fifo_bytes_for). The
+// mapper is built fresh per call (create_pair moves it out). share_fabric_links
+// defaults to false (OWN mode) so the functional tests stream without needing
+// per-transfer grants; the lease tests pass true and drive the grant/release
+// handshake explicitly.
 D2DStreamConfig make_config(
     const std::shared_ptr<MeshDevice>& sender_mesh, const ttnn::Shape& global_shape, bool share_fabric_links = false) {
     const auto tensor_layout = TensorLayout(
         DataType::UINT32,
         PageConfig(Layout::ROW_MAJOR),
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
+    const TensorSpec global_spec(global_shape, tensor_layout);
     return D2DStreamConfig{
-        .global_spec = TensorSpec(global_shape, tensor_layout),
+        .global_spec = global_spec,
         .mapper = create_mesh_mapper(*sender_mesh, MeshMapperConfig{.placements = replicate_all(*sender_mesh)}),
-        .socket_mem_config = SocketMemoryConfig{BufferType::L1, /*fifo_size=*/4096},
+        .socket_mem_config = SocketMemoryConfig{BufferType::L1, fifo_bytes_for(global_spec)},
         .sender_worker_cores = kWorkerCores,
         .receiver_worker_cores = kWorkerCores,
         .share_fabric_links = share_fabric_links,
@@ -158,6 +173,14 @@ TensorSpec make_spec(const ttnn::Shape& global_shape, DataType dtype, Layout lay
         global_shape,
         TensorLayout(
             dtype, PageConfig(layout), MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt}));
+}
+
+// "Fixed work per core" shape: every worker core gets exactly 32 ROW_MAJOR pages
+// of 512 u32 each, so num_pages == 32 * num_workers — a dense, perfectly even
+// split with real per-core work (unlike the tiny [1,1,32,64], which leaves most
+// of a full grid idle). 512 u32 = 2048 B page keeps a 2-page socket chunk.
+ttnn::Shape fixed_per_core_shape(const CoreRange& worker_cores) {
+    return ttnn::Shape({1, 1, 32u * core_range_volume(worker_cores), 512u});
 }
 
 // Run create_pair and assert the construction-time getters return sane state.
@@ -977,21 +1000,25 @@ MeshWorkload make_bridge_workload(
     return workload;
 }
 
-// Build an H2D service on the sender mesh sized to one full global tensor per push.
+// Build an H2D service on the sender mesh. FIFO / scratch are sized to one
+// tensor page (see fifo_bytes_for), NOT the whole tensor: H2D streams page-by-
+// page and blocks the host when the FIFO fills, and the receiver kernel signals
+// data_ready only after draining the full token, so a page-sized FIFO is correct
+// and keeps L1 use bounded for large shapes (a whole-tensor FIFO is impossible in
+// L1 past a few MB). fifo_bytes_for is dtype/layout-aware (block-float TILE specs
+// that pack exponents alongside data are covered).
 std::unique_ptr<H2DStreamService> make_h2d_service(
     const std::shared_ptr<MeshDevice>& sender_mesh,
     const TensorSpec& global_spec,
     const CoreRange& worker_cores,
     uint32_t metadata_size_bytes) {
-    // Size the FIFO / scratch to one full packed tensor (dtype/layout-aware, so
-    // block-float TILE specs that pack exponents alongside data are covered).
-    const uint32_t total_bytes = static_cast<uint32_t>(global_spec.compute_packed_buffer_size_bytes());
+    const uint32_t fifo_bytes = fifo_bytes_for(global_spec);
     H2DStreamService::Config h2d_cfg{
         .global_spec = global_spec,
         .mapper = create_mesh_mapper(*sender_mesh, MeshMapperConfig{.placements = replicate_all(*sender_mesh)}),
         .socket_buffer_type = BufferType::L1,
-        .fifo_size_bytes = total_bytes,
-        .scratch_cb_size_bytes = total_bytes,
+        .fifo_size_bytes = fifo_bytes,
+        .scratch_cb_size_bytes = fifo_bytes,
         .worker_cores = worker_cores,
         .metadata_size_bytes = metadata_size_bytes,
     };
@@ -1144,7 +1171,7 @@ void verify_dtype_chain(
     D2DStreamConfig cfg{
         .global_spec = global_spec,
         .mapper = create_mesh_mapper(*sender_mesh, MeshMapperConfig{.placements = replicate_all(*sender_mesh)}),
-        .socket_mem_config = SocketMemoryConfig{BufferType::L1, /*fifo_size=*/4096},
+        .socket_mem_config = SocketMemoryConfig{BufferType::L1, fifo_bytes_for(global_spec)},
         .sender_worker_cores = worker_cores,
         .receiver_worker_cores = worker_cores,
         .share_fabric_links = false,  // OWN mode: stream without per-transfer grants
@@ -1193,7 +1220,7 @@ TEST_F(D2DStreamServiceTest, CreatableSingleChipPair) {
     auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
 
-    verify_creatable(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}));
+    verify_creatable(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 512}));
 }
 
 // 1x2 <-> 1x2 (exercises the per-coord SocketConnection list and the 1:1 coord
@@ -1210,7 +1237,7 @@ TEST_F(D2DStreamServiceTest, CreatableRowPair) {
     auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(0, 0));
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(1, 0));
 
-    verify_creatable(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}));
+    verify_creatable(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 512}));
 }
 
 // Worker-sync resources (data_ready_counter / consumed_counter L1 slots +
@@ -1230,7 +1257,7 @@ TEST_F(D2DStreamServiceTest, SyncResourceAddresses) {
     auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
 
-    verify_sync_resources(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}));
+    verify_sync_resources(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 512}));
 }
 
 // Single end-to-end device-to-device transfer (single chip pair). Host-readback
@@ -1249,7 +1276,7 @@ TEST_F(D2DStreamServiceTest, TransferSingleChipPair) {
     auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
 
-    verify_transfer(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}));
+    verify_transfer(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 512}));
 }
 
 // Same single transfer across a 1x2 row pair (exercises > 1 socket / coord).
@@ -1265,7 +1292,7 @@ TEST_F(D2DStreamServiceTest, TransferRowPair) {
     auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(0, 0));
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(1, 0));
 
-    verify_transfer(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}));
+    verify_transfer(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 512}));
 }
 
 // Worker handshake end-to-end on a single chip pair, driven by real placeholder
@@ -1284,7 +1311,7 @@ TEST_F(D2DStreamServiceTest, HandshakeSingleChipPair) {
     auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
 
-    verify_handshake(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), /*num_iters=*/4);
+    verify_handshake(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 512}), /*num_iters=*/4);
 }
 
 // Worker handshake across a 1x2 row pair (multiple sockets / coords).
@@ -1300,7 +1327,7 @@ TEST_F(D2DStreamServiceTest, HandshakeRowPair) {
     auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(0, 0));
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(1, 0));
 
-    verify_handshake(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), /*num_iters=*/4);
+    verify_handshake(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 512}), /*num_iters=*/4);
 }
 
 // Reuse the persistent service across several rounds with distinct seeds,
@@ -1319,7 +1346,7 @@ TEST_F(D2DStreamServiceTest, ReuseSingleChipPair) {
     auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
 
-    verify_reuse(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), /*num_rounds=*/4);
+    verify_reuse(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 512}), /*num_rounds=*/4);
 }
 
 // Reuse across a 1x2 row pair.
@@ -1335,7 +1362,7 @@ TEST_F(D2DStreamServiceTest, ReuseRowPair) {
     auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(0, 0));
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(1, 0));
 
-    verify_reuse(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), /*num_rounds=*/4);
+    verify_reuse(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 512}), /*num_rounds=*/4);
 }
 
 // Fabric-link lease round-trip on a single chip pair: grant a transfer, run it,
@@ -1354,7 +1381,7 @@ TEST_F(D2DStreamServiceTest, FabricLeaseSingleChipPair) {
     auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
 
-    verify_fabric_lease(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}));
+    verify_fabric_lease(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 512}));
 }
 
 // Fabric-link lease across a 1x2 row pair (the lease covers every coord on both
@@ -1371,7 +1398,7 @@ TEST_F(D2DStreamServiceTest, FabricLeaseRowPair) {
     auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(0, 0));
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(1, 0));
 
-    verify_fabric_lease(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}));
+    verify_fabric_lease(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 512}));
 }
 
 // Fabric-link lease stress: 100 interleaved grant/release cycles against a single
@@ -1390,7 +1417,7 @@ TEST_F(D2DStreamServiceTest, FabricLeaseStressSingleChipPair) {
     auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
 
-    verify_fabric_lease_stress(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), /*num_iters=*/100);
+    verify_fabric_lease_stress(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 512}), /*num_iters=*/100);
 }
 
 // Per-handle teardown must release service cores / L1 / sockets so a fresh pair
@@ -1411,7 +1438,7 @@ TEST_F(D2DStreamServiceTest, RecreateAfterTeardown) {
     auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
 
-    const auto shape_arg = ttnn::Shape({1, 1, 32, 64});
+    const auto shape_arg = ttnn::Shape({1, 1, 32, 512});
     verify_handshake(sender_mesh, receiver_mesh, shape_arg, /*num_iters=*/2);
     verify_handshake(sender_mesh, receiver_mesh, shape_arg, /*num_iters=*/2);
 }
@@ -1431,7 +1458,7 @@ TEST_F(D2DStreamServiceTest, MetadataSenderWriteSingleChipPair) {
     auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
 
-    verify_metadata_sender_write(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), kWorkerCores);
+    verify_metadata_sender_write(sender_mesh, receiver_mesh, fixed_per_core_shape(kWorkerCores), kWorkerCores);
 }
 
 // STEP 2 with 4 worker cores: only the highest-id core writes metadata; the other
@@ -1449,7 +1476,7 @@ TEST_F(D2DStreamServiceTest, MetadataSenderWrite4Cores) {
     auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
 
-    verify_metadata_sender_write(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), kWorkerCores4);
+    verify_metadata_sender_write(sender_mesh, receiver_mesh, fixed_per_core_shape(kWorkerCores4), kWorkerCores4);
 }
 
 // STEP 3: full end-to-end metadata across the worker-grid matrix (1/2/4/all). The
@@ -1467,7 +1494,7 @@ TEST_F(D2DStreamServiceTest, MetadataEndToEndSingleCore) {
     const auto coord1 = (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0);
     auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
-    verify_metadata_end_to_end(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), kWorkerCores);
+    verify_metadata_end_to_end(sender_mesh, receiver_mesh, fixed_per_core_shape(kWorkerCores), kWorkerCores);
 }
 
 TEST_F(D2DStreamServiceTest, MetadataEndToEnd2Cores) {
@@ -1482,7 +1509,7 @@ TEST_F(D2DStreamServiceTest, MetadataEndToEnd2Cores) {
     const auto coord1 = (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0);
     auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
-    verify_metadata_end_to_end(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), kWorkerCores2);
+    verify_metadata_end_to_end(sender_mesh, receiver_mesh, fixed_per_core_shape(kWorkerCores2), kWorkerCores2);
 }
 
 TEST_F(D2DStreamServiceTest, MetadataEndToEnd4Cores) {
@@ -1497,7 +1524,7 @@ TEST_F(D2DStreamServiceTest, MetadataEndToEnd4Cores) {
     const auto coord1 = (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0);
     auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
-    verify_metadata_end_to_end(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), kWorkerCores4);
+    verify_metadata_end_to_end(sender_mesh, receiver_mesh, fixed_per_core_shape(kWorkerCores4), kWorkerCores4);
 }
 
 TEST_F(D2DStreamServiceTest, MetadataEndToEndAllCores) {
@@ -1514,7 +1541,7 @@ TEST_F(D2DStreamServiceTest, MetadataEndToEndAllCores) {
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
     const auto grid = receiver_mesh->compute_with_storage_grid_size();
     const CoreRange all_cores{CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}};
-    verify_metadata_end_to_end(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), all_cores);
+    verify_metadata_end_to_end(sender_mesh, receiver_mesh, fixed_per_core_shape(all_cores), all_cores);
 }
 
 // STEP 3 reuse: the persistent service handles several metadata transfers with
@@ -1531,7 +1558,8 @@ TEST_F(D2DStreamServiceTest, MetadataReuse4Cores) {
     const auto coord1 = (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0);
     auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
-    verify_metadata_reuse(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), kWorkerCores4, /*num_rounds=*/4);
+    verify_metadata_reuse(
+        sender_mesh, receiver_mesh, fixed_per_core_shape(kWorkerCores4), kWorkerCores4, /*num_rounds=*/4);
 }
 
 // ===========================================================================
@@ -1588,7 +1616,7 @@ TEST_F(D2DStreamServiceTest, ReceiverConsumeAllCores) {
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
     const auto grid = receiver_mesh->compute_with_storage_grid_size();
     const CoreRange all_cores{CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}};
-    verify_receiver_consume(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), all_cores, /*num_iters=*/4);
+    verify_receiver_consume(sender_mesh, receiver_mesh, fixed_per_core_shape(all_cores), all_cores, /*num_iters=*/4);
 }
 
 // Full grid + metadata: the {-1,0,final} blob must land on the sender service core
@@ -1610,7 +1638,7 @@ TEST_F(D2DStreamServiceTest, ReceiverConsumeMetadataAllCores) {
     verify_receiver_consume(
         sender_mesh,
         receiver_mesh,
-        ttnn::Shape({1, 1, 32, 64}),
+        fixed_per_core_shape(all_cores),
         all_cores,
         /*num_iters=*/4,
         /*metadata_size_bytes=*/3u * sizeof(uint32_t));
@@ -1631,7 +1659,8 @@ TEST_F(D2DStreamServiceTest, ReceiverConsumeReuseAllCores) {
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
     const auto grid = receiver_mesh->compute_with_storage_grid_size();
     const CoreRange all_cores{CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}};
-    verify_receiver_consume_reuse(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), all_cores, /*num_rounds=*/4);
+    verify_receiver_consume_reuse(
+        sender_mesh, receiver_mesh, fixed_per_core_shape(all_cores), all_cores, /*num_rounds=*/4);
 }
 
 // Multi-device variant: mirrors the existing RowPair setup (1x2 <-> 1x2).
@@ -1699,7 +1728,7 @@ TEST_F(D2DStreamServiceTest, H2DtoD2DBridgeAllCores) {
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
     const auto grid = receiver_mesh->compute_with_storage_grid_size();
     const CoreRange all_cores{CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}};
-    verify_h2d_d2d_bridge(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), all_cores, /*num_iters=*/4);
+    verify_h2d_d2d_bridge(sender_mesh, receiver_mesh, fixed_per_core_shape(all_cores), all_cores, /*num_iters=*/4);
 }
 
 // Full grid + metadata end-to-end through both services.
@@ -1720,7 +1749,7 @@ TEST_F(D2DStreamServiceTest, H2DtoD2DBridgeMetadataAllCores) {
     verify_h2d_d2d_bridge(
         sender_mesh,
         receiver_mesh,
-        ttnn::Shape({1, 1, 32, 64}),
+        fixed_per_core_shape(all_cores),
         all_cores,
         /*num_iters=*/4,
         /*metadata_size_bytes=*/3u * sizeof(uint32_t));
@@ -1741,7 +1770,8 @@ TEST_F(D2DStreamServiceTest, H2DtoD2DBridgeReuseAllCores) {
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
     const auto grid = receiver_mesh->compute_with_storage_grid_size();
     const CoreRange all_cores{CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}};
-    verify_h2d_d2d_bridge_reuse(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), all_cores, /*num_rounds=*/4);
+    verify_h2d_d2d_bridge_reuse(
+        sender_mesh, receiver_mesh, fixed_per_core_shape(all_cores), all_cores, /*num_rounds=*/4);
 }
 
 // Multi-device variant: mirrors the existing RowPair setup (1x2 <-> 1x2).
@@ -1759,13 +1789,11 @@ TEST_F(D2DStreamServiceTest, H2DtoD2DBridgeRowPair) {
 }
 
 // ===========================================================================
-// Multi-dtype tests: the full chain transferring several element types (no
-// metadata). Single-chip pair, full worker grid, 2 iterations (rotating data).
-// BFLOAT16 / FLOAT32 / UINT8 are ROW_MAJOR; BFLOAT8_B / BFLOAT4_B are block-float
-// formats that require TILE layout.
+// Single-chip + full-grid setup shared by the shape-matrix and multi-dtype
+// tests below: carve two 1x1 submeshes (sender at (0,0), receiver adjacent) and
+// an all-cores worker grid, skipping cleanly when the host can't provide them.
 // ===========================================================================
-
-#define D2D_DTYPE_SKIP_GUARD()                                                                         \
+#define D2D_SINGLECHIP_ALLCORES_GUARD()                                                                \
     if (!service_cores_supported()) {                                                                  \
         GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";             \
     }                                                                                                  \
@@ -1780,12 +1808,57 @@ TEST_F(D2DStreamServiceTest, H2DtoD2DBridgeRowPair) {
     const auto grid = receiver_mesh->compute_with_storage_grid_size();                                 \
     const CoreRange all_cores { CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1} }
 
+// ===========================================================================
+// Part B shape matrix (uint32, full grid): exercises the page partition + socket
+// chunk plan across the shapes that stress different edges. The baseline (dense,
+// even per-core split) and tiny (empty-range workers) cases are already covered
+// by H2DtoD2DBridgeAllCores / H2DtoD2DBridge1Core. These add:
+//   - large       big page count, wide page > FIFO (one tensor page per chunk)
+//   - uneven      711 pages mod num_workers -> remainder partition; wide page
+//   - long-uneven thin remainder (just over num_workers); wide page
+//   - narrow-uneven 256 B page -> multi-page chunks AND 711 not divisible by the
+//                 per-chunk count, so derive_chunk_plan's reduction loop fires
+// The unevenness that exercises the partition is the PAGE COUNT (711 / 155 rows);
+// the last dim only sets the page size. The H2D socket requires the page size
+// (last_dim * 4 B) to be PCIE-aligned, so the wide last dims are chosen as
+// multiples of 64 u32 (256 B) while keeping the odd row counts.
+// ===========================================================================
+
+// ~536 MB / tensor; capped at 2 iters (still catches stale/ignored transfers via
+// the per-iteration value bump) to bound runtime + fabric traffic.
+TEST_F(D2DStreamServiceTest, H2DtoD2DBridgeShapeLarge) {
+    D2D_SINGLECHIP_ALLCORES_GUARD();
+    verify_h2d_d2d_bridge(sender_mesh, receiver_mesh, ttnn::Shape({1, 8, 4096, 4096}), all_cores, /*num_iters=*/2);
+}
+
+TEST_F(D2DStreamServiceTest, H2DtoD2DBridgeShapeUneven) {
+    D2D_SINGLECHIP_ALLCORES_GUARD();
+    verify_h2d_d2d_bridge(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 711, 5120}), all_cores, /*num_iters=*/3);
+}
+
+TEST_F(D2DStreamServiceTest, H2DtoD2DBridgeShapeLongUneven) {
+    D2D_SINGLECHIP_ALLCORES_GUARD();
+    verify_h2d_d2d_bridge(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 155, 3712}), all_cores, /*num_iters=*/3);
+}
+
+TEST_F(D2DStreamServiceTest, H2DtoD2DBridgeShapeNarrowUneven) {
+    D2D_SINGLECHIP_ALLCORES_GUARD();
+    verify_h2d_d2d_bridge(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 711, 64}), all_cores, /*num_iters=*/3);
+}
+
+// ===========================================================================
+// Multi-dtype tests: the full chain transferring several element types (no
+// metadata). Single-chip pair, full worker grid, 2 iterations (rotating data).
+// BFLOAT16 / FLOAT32 / UINT8 are ROW_MAJOR; BFLOAT8_B / BFLOAT4_B are block-float
+// formats that require TILE layout.
+// ===========================================================================
+
 TEST_F(D2DStreamServiceTest, DtypeBfloat16) {
-    D2D_DTYPE_SKIP_GUARD();
+    D2D_SINGLECHIP_ALLCORES_GUARD();
     verify_dtype_chain<bfloat16>(
         sender_mesh,
         receiver_mesh,
-        ttnn::Shape({1, 1, 32, 64}),
+        fixed_per_core_shape(all_cores),
         DataType::BFLOAT16,
         Layout::ROW_MAJOR,
         all_cores,
@@ -1794,11 +1867,11 @@ TEST_F(D2DStreamServiceTest, DtypeBfloat16) {
 }
 
 TEST_F(D2DStreamServiceTest, DtypeFloat32) {
-    D2D_DTYPE_SKIP_GUARD();
+    D2D_SINGLECHIP_ALLCORES_GUARD();
     verify_dtype_chain<float>(
         sender_mesh,
         receiver_mesh,
-        ttnn::Shape({1, 1, 32, 64}),
+        fixed_per_core_shape(all_cores),
         DataType::FLOAT32,
         Layout::ROW_MAJOR,
         all_cores,
@@ -1807,11 +1880,11 @@ TEST_F(D2DStreamServiceTest, DtypeFloat32) {
 }
 
 TEST_F(D2DStreamServiceTest, DtypeUint8) {
-    D2D_DTYPE_SKIP_GUARD();
+    D2D_SINGLECHIP_ALLCORES_GUARD();
     verify_dtype_chain<uint8_t>(
         sender_mesh,
         receiver_mesh,
-        ttnn::Shape({1, 1, 32, 64}),
+        fixed_per_core_shape(all_cores),
         DataType::UINT8,
         Layout::ROW_MAJOR,
         all_cores,
@@ -1820,11 +1893,11 @@ TEST_F(D2DStreamServiceTest, DtypeUint8) {
 }
 
 TEST_F(D2DStreamServiceTest, DtypeBfloat8B) {
-    D2D_DTYPE_SKIP_GUARD();
+    D2D_SINGLECHIP_ALLCORES_GUARD();
     verify_dtype_chain<float>(
         sender_mesh,
         receiver_mesh,
-        ttnn::Shape({1, 1, 32, 64}),
+        fixed_per_core_shape(all_cores),
         DataType::BFLOAT8_B,
         Layout::TILE,
         all_cores,
@@ -1833,11 +1906,11 @@ TEST_F(D2DStreamServiceTest, DtypeBfloat8B) {
 }
 
 TEST_F(D2DStreamServiceTest, DtypeBfloat4B) {
-    D2D_DTYPE_SKIP_GUARD();
+    D2D_SINGLECHIP_ALLCORES_GUARD();
     verify_dtype_chain<float>(
         sender_mesh,
         receiver_mesh,
-        ttnn::Shape({1, 1, 32, 64}),
+        fixed_per_core_shape(all_cores),
         DataType::BFLOAT4_B,
         Layout::TILE,
         all_cores,
