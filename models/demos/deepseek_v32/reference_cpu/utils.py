@@ -2,14 +2,26 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-CPU-compatible implementations of CUDA kernel operations for Indexer layer.
-These are mock implementations that simulate the behavior of the tilelang kernels.
+CPU-compatible utilities for the DeepSeek V3.2 reference (Indexer + MLA).
+
+Contains:
+  * CPU equivalents of the tilelang CUDA kernels: ``act_quant_cpu``,
+    ``fp8_index_cpu``, ``rotate_activation_cpu`` (Walsh-Hadamard transform).
+  * Rotary-positional-embedding helpers shared by both layers:
+    ``precompute_freqs_cis`` (YaRN-scaled) and ``apply_rotary_emb`` (interleaved
+    for MLA, non-interleaved for the Indexer).
+
+These are pure-PyTorch and free of any model-class imports, so ``model.py`` can
+import them without a circular dependency.
 """
 
+import math
 from typing import Tuple
 
 import torch
 import torch.nn.functional as F
+
+# ===== Kernel equivalents (mock tilelang kernels) =====
 
 
 def act_quant_cpu(x: torch.Tensor, block_size: int = 128, scale_fmt: str = None) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -195,3 +207,87 @@ def _hadamard_transform_recursive(x: torch.Tensor) -> torch.Tensor:
     )
 
     return result
+
+
+# ===== Rotary positional embeddings (shared by Indexer + MLA) =====
+
+
+def precompute_freqs_cis(args) -> torch.Tensor:
+    """
+    Precomputes frequency-based complex exponential values for rotary positional embeddings.
+
+    Args:
+        args: Model arguments containing positional embedding parameters
+            (``qk_rope_head_dim``, ``max_seq_len``, ``beta_fast``, ``beta_slow``,
+            ``rope_theta``, ``rope_factor``, ``original_seq_len``).
+
+    Returns:
+        torch.Tensor: Precomputed complex exponential values [seq_len, rope_head_dim//2]
+    """
+    dim = args.qk_rope_head_dim
+    seqlen = args.max_seq_len
+    beta_fast = args.beta_fast
+    beta_slow = args.beta_slow
+    base = args.rope_theta
+    factor = args.rope_factor
+
+    def find_correction_dim(num_rotations, dim, base, max_seq_len):
+        """Computes the correction dimension for rotary positional embedding."""
+        return dim * math.log(max_seq_len / (num_rotations * 2 * math.pi)) / (2 * math.log(base))
+
+    def find_correction_range(low_rot, high_rot, dim, base, max_seq_len):
+        """Computes the range of correction dimensions."""
+        low = math.floor(find_correction_dim(low_rot, dim, base, max_seq_len))
+        high = math.ceil(find_correction_dim(high_rot, dim, base, max_seq_len))
+        return max(low, 0), min(high, dim - 1)
+
+    def linear_ramp_factor(min_val, max_val, dim):
+        """Computes a linear ramp function for smoothing."""
+        if min_val == max_val:
+            max_val += 0.001
+        linear_func = (torch.arange(dim, dtype=torch.float32) - min_val) / (max_val - min_val)
+        ramp_func = torch.clamp(linear_func, 0, 1)
+        return ramp_func
+
+    # Compute base frequencies
+    freqs = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
+
+    # Apply correction for extended sequence lengths (YaRN)
+    if seqlen > args.original_seq_len:
+        low, high = find_correction_range(beta_fast, beta_slow, dim, base, args.original_seq_len)
+        smooth = 1 - linear_ramp_factor(low, high, dim // 2)
+        freqs = freqs / factor * (1 - smooth) + freqs * smooth
+
+    # Create position indices and compute outer product
+    t = torch.arange(seqlen)
+    freqs = torch.outer(t, freqs)  # [seq_len, rope_head_dim//2]
+
+    # Convert to complex exponentials
+    freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
+
+    return freqs_cis
+
+
+def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor, interleaved: bool = True) -> torch.Tensor:
+    """
+    Applies rotary positional embeddings.
+
+    Args:
+        x: Input tensor
+        freqs_cis: Precomputed complex exponential values
+        interleaved: Whether to use interleaved format (MLA uses True, the
+            Indexer uses False)
+
+    Returns:
+        Tensor with rotary embeddings applied
+    """
+    dtype = x.dtype
+    shape = x.shape
+    if not interleaved:
+        x = x.view(*shape[:-1], 2, -1).transpose(-1, -2).contiguous()
+    x = torch.view_as_complex(x.float().view(*shape[:-1], -1, 2))
+    freqs_cis = freqs_cis.view(1, x.size(1), 1, x.size(-1))
+    y = torch.view_as_real(x * freqs_cis).flatten(3)
+    if not interleaved:
+        y = torch.cat([y[..., 0::2], y[..., 1::2]], dim=-1)
+    return y.to(dtype)
