@@ -64,6 +64,7 @@ constexpr uint32_t cb_q_tiles = 0;
 constexpr uint32_t cb_kt_tiles = 1;
 constexpr uint32_t cb_v_tiles = 2;
 constexpr uint32_t cb_mask_tiles = 3;
+constexpr uint32_t cb_pad_mask = 4;  // S_kv pad row (bf16): 0 valid / -1e9 pad cols (Refinement 4)
 constexpr uint32_t cb_scaler_max = 8;
 constexpr uint32_t cb_scaler_sum = 9;
 constexpr uint32_t cb_cur_sum = 10;
@@ -97,6 +98,11 @@ void kernel_main() {
     // stability, no longer branched on (packer rounds half-up, no DEST rounding
     // pass needed — probe_017/019).
     [[maybe_unused]] constexpr bool OUT_IS_BF16 = get_compile_time_arg_val(10) != 0;
+    // Non-tile-aligned S_kv (Refinement 4): the reader prepares a pad-mask row
+    // (cb_pad_mask, c_kv_last tiles, 0 valid / -1e9 pad cols) once; Phase 2 adds
+    // it on the LAST KV block only — before the running-max update, so the
+    // zero-padded score columns never corrupt rowmax/rowsum.
+    constexpr bool HAS_PAD = get_compile_time_arg_val(11) != 0;
 
     const uint32_t start_unit = get_arg_val<uint32_t>(0);
     const uint32_t num_units = get_arg_val<uint32_t>(1);
@@ -152,24 +158,62 @@ void kernel_main() {
                 q_buf,  // interm unused (num_k_blocks == 1)
                 ckl::MatmulBlockShape::of(cur_cq, 1, 1, cur_ckv, Dt, 1));
 
-            // ---- Phase 2: S' = scale*S (+ mask), block-wise mask before the max ----
+            // ---- Phase 2: S' = scale*S (+ mask) (+ S_kv pad row on last block),
+            //      everything additive lands before the running-max update ----
+            // Pad add: Row-indexed (tile wt of the pad row covers score column wt),
+            // HeldBulk (the c_kv_last pad tiles are pushed once and never popped).
+            // bf16 pad CB mixes fine with the in_fmt mask CB: per-element srca
+            // reconfig is emitted at element entry within each outer iter.
+            using PadAdd = ckl::DestReuseBinary<
+                cb_pad_mask,
+                BinaryFpuOp::Add,
+                ckl::DestReuseType::DEST_TO_SRCB,
+                InputLifecycle::HeldBulk,
+                ckl::DestReuseReconfig::Input,
+                Dst::D0,
+                Dst::D0,
+                OperandKind::Row>;
+            const bool pad_block = HAS_PAD && (kb == Nkv - 1);
             if constexpr (HAS_MASK) {
-                ckl::eltwise_chain(
-                    ckl::EltwiseShape::grid(cur_cq, cur_ckv),
-                    ckl::CopyTile<cb_scores, Dst::D0, InputLifecycle::Streaming>{},
-                    ckl::MulUnary<Dst::D0>{scale_bits},
-                    ckl::DestReuseBinary<
-                        cb_mask_tiles,
-                        BinaryFpuOp::Add,
-                        ckl::DestReuseType::DEST_TO_SRCB,
-                        InputLifecycle::Streaming>{},
-                    ckl::PackTile<cb_scores_scaled>{});
+                if (pad_block) {
+                    ckl::eltwise_chain(
+                        ckl::EltwiseShape::grid(cur_cq, cur_ckv),
+                        ckl::CopyTile<cb_scores, Dst::D0, InputLifecycle::Streaming>{},
+                        ckl::MulUnary<Dst::D0>{scale_bits},
+                        ckl::DestReuseBinary<
+                            cb_mask_tiles,
+                            BinaryFpuOp::Add,
+                            ckl::DestReuseType::DEST_TO_SRCB,
+                            InputLifecycle::Streaming>{},
+                        PadAdd{},
+                        ckl::PackTile<cb_scores_scaled>{});
+                } else {
+                    ckl::eltwise_chain(
+                        ckl::EltwiseShape::grid(cur_cq, cur_ckv),
+                        ckl::CopyTile<cb_scores, Dst::D0, InputLifecycle::Streaming>{},
+                        ckl::MulUnary<Dst::D0>{scale_bits},
+                        ckl::DestReuseBinary<
+                            cb_mask_tiles,
+                            BinaryFpuOp::Add,
+                            ckl::DestReuseType::DEST_TO_SRCB,
+                            InputLifecycle::Streaming>{},
+                        ckl::PackTile<cb_scores_scaled>{});
+                }
             } else {
-                ckl::eltwise_chain(
-                    ckl::EltwiseShape::grid(cur_cq, cur_ckv),
-                    ckl::CopyTile<cb_scores, Dst::D0, InputLifecycle::Streaming>{},
-                    ckl::MulUnary<Dst::D0>{scale_bits},
-                    ckl::PackTile<cb_scores_scaled>{});
+                if (pad_block) {
+                    ckl::eltwise_chain(
+                        ckl::EltwiseShape::grid(cur_cq, cur_ckv),
+                        ckl::CopyTile<cb_scores, Dst::D0, InputLifecycle::Streaming>{},
+                        ckl::MulUnary<Dst::D0>{scale_bits},
+                        PadAdd{},
+                        ckl::PackTile<cb_scores_scaled>{});
+                } else {
+                    ckl::eltwise_chain(
+                        ckl::EltwiseShape::grid(cur_cq, cur_ckv),
+                        ckl::CopyTile<cb_scores, Dst::D0, InputLifecycle::Streaming>{},
+                        ckl::MulUnary<Dst::D0>{scale_bits},
+                        ckl::PackTile<cb_scores_scaled>{});
+                }
             }
 
             // ---- Phase 4: cur_max = rowmax(S') (col tile); scores stay fronted ----

@@ -40,6 +40,7 @@ CB_PV = 27
 CB_O_ACC = 28
 CB_CUR_MAX_FULL = 29  # block rowmax bcast to full tile (fp32, Refinement 5)
 CB_M_FULL = 30  # running max as full tile (fp32, Refinement 5)
+CB_PAD_MASK = 4  # S_kv pad mask row (bf16, Refinement 4): 0 valid / -1e9 pad cols
 
 
 def _float_bits(value: float) -> int:
@@ -60,12 +61,22 @@ def create_program_descriptor(
     scale: float,
     compute_kernel_config,
 ) -> ttnn.ProgramDescriptor:
-    B, H, S_q, D = list(q.shape)
-    _, H_kv, S_kv, _ = list(k.shape)
+    # Tile counts come from the PADDED shape (TILE layout pads the last two dims
+    # to 32 with zeros). Logical shapes drive only validate()/scale, both handled
+    # by the entry point. For non-tile-aligned S_kv (Refinement 4) the zero-padded
+    # K rows produce score columns of 0 — they would corrupt rowmax (MAX sees 0)
+    # and rowsum (exp(0 - m) != 0), so the reader prepares a pad-mask row (cb 4):
+    # 0 in valid columns, -1e9 in the last tile's pad columns, added to the scores
+    # before the running-max update. Padded D / S_q need no fix: zero D columns
+    # add 0 to QK^T and 0 to P@V; pad Q rows produce garbage rows sliced off host-side.
+    B, H = list(q.shape)[:2]
+    _, S_q, D = list(q.padded_shape)[1:]
+    _, H_kv, S_kv, _ = list(k.padded_shape)
 
     Dt = D // TILE
     Sq_t = S_q // TILE
     Skv_t = S_kv // TILE
+    kv_rem = list(k.shape)[-2] % TILE  # valid cols in the last KV tile (0 = aligned)
 
     # Chunk size: c = clamp(16 / Dt, 1, 4)
     c = max(1, min(4, 16 // Dt))
@@ -145,6 +156,10 @@ def create_program_descriptor(
     ]
     if has_mask:
         cbs.append(cb(CB_MASK_TILES, 2 * c_q * c_kv, t_in, in_fmt))
+    if kv_rem != 0:
+        # Pad-mask row: c_kv_last bf16 tiles (zeros except the last tile's pad
+        # cols at -1e9), prepared once by the reader, never popped (HeldBulk).
+        cbs.append(cb(CB_PAD_MASK, c_kv_last, t_bf, ttnn.bfloat16))
 
     # --- Reader ---
     reader_ct_args = [
@@ -161,6 +176,7 @@ def create_program_descriptor(
         1 if has_mask else 0,
         1 if mask_is_per_head else 0,
         H_kv,  # GQA/MQA: Q head h -> KV head h / (H // H_kv); == H for MHA
+        kv_rem,  # valid cols in the last KV tile (0 = S_kv tile-aligned)
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(q).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(k).get_compile_time_args())
@@ -197,6 +213,7 @@ def create_program_descriptor(
         # CT arg 10 reserved (out-is-bf16): kernel no longer branches on it —
         # the packer rounds half-up, no DEST rounding pass needed (probe_017/019).
         1 if in_fmt == ttnn.bfloat16 else 0,
+        1 if kv_rem != 0 else 0,  # HAS_PAD: add pad-mask row on the last KV block
     ]
 
     scale_bits = _float_bits(scale)

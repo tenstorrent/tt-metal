@@ -70,7 +70,7 @@ INPUT_TAGGERS = {
 SUPPORTED = {
     "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT],
-    "alignment": ["tile_aligned"],
+    "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "attention_kind": ["self", "cross"],
     "kv_heads_mode": ["mha", "gqa", "mqa"],
     "mask_mode": ["none", "causal"],
@@ -131,10 +131,10 @@ def validate(q, k, v, *, attention_mask=None, scale=None):
     for axis_name, tagger in INPUT_TAGGERS.items():
         axes[axis_name] = tagger(inputs, axes)
 
-    # The alignment tagger examines Q only (feature-spec contract); S_kv
-    # alignment is gated here for external callers.
-    if k.shape[-2] % TILE != 0:
-        raise NotImplementedError(f"sdpa: S_kv ({k.shape[-2]}) must be tile-aligned")
+    # Non-tile-aligned shapes (Refinement 4): S_q/D padding is benign (zero
+    # rows/cols contribute nothing; garbage Q-pad rows are sliced host-side);
+    # non-aligned S_kv is handled by a generated pad-mask row added to the
+    # scaled scores before the running-max update. No S_kv gate needed.
 
     for t in (k, v) + ((attention_mask,) if attention_mask is not None else ()):
         if t.dtype != q.dtype:

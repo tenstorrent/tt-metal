@@ -28,10 +28,11 @@ void kernel_main() {
     constexpr bool HAS_MASK = get_compile_time_arg_val(10) != 0;
     constexpr bool MASK_PER_HEAD = get_compile_time_arg_val(11) != 0;
     constexpr uint32_t H_kv = get_compile_time_arg_val(12);  // KV heads (== H for MHA, < H for GQA, 1 for MQA)
+    constexpr uint32_t kv_rem = get_compile_time_arg_val(13);  // valid cols in last KV tile (0 = aligned)
 
     constexpr uint32_t HEAD_RATIO = H / H_kv;  // validate() enforces H % H_kv == 0
 
-    constexpr auto q_args = TensorAccessorArgs<13>();
+    constexpr auto q_args = TensorAccessorArgs<14>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -51,6 +52,7 @@ void kernel_main() {
     constexpr uint32_t cb_kt_tiles = 1;
     constexpr uint32_t cb_v_tiles = 2;
     constexpr uint32_t cb_mask_tiles = 3;
+    constexpr uint32_t cb_pad_mask = 4;
     constexpr uint32_t cb_scaler_max = 8;
     constexpr uint32_t cb_scaler_sum = 9;
 
@@ -65,6 +67,30 @@ void kernel_main() {
         calculate_and_prepare_reduce_scaler<cb_scaler_max, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<cb_scaler_sum, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+
+    // Pad-mask row for non-tile-aligned S_kv (Refinement 4): c_kv_last bf16
+    // tiles, all zero except the LAST tile's columns >= kv_rem, which carry
+    // -1e9 (not -inf: avoids inf-inf NaN, matching the kernel's m_prev init).
+    // Compute adds this row to the scaled scores on the last KV block — before
+    // the running-max update — so zero-padded K rows never enter rowmax/rowsum.
+    // Pushed once, never popped (compute waits HeldBulk every last block).
+    if constexpr (kv_rem != 0) {
+        constexpr uint16_t NEG_BIG_BF16 = 0xCE6E;  // bf16(-1e9)
+        constexpr uint32_t TILE_VALS = 32 * 32;
+        cb_reserve_back(cb_pad_mask, c_kv_last);
+        volatile tt_l1_ptr uint16_t* pad = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_pad_mask));
+        for (uint32_t i = 0; i < c_kv_last * TILE_VALS; ++i) {
+            pad[i] = 0;
+        }
+        // Faces are 16x16; index = face*256 + (r%16)*16 + (c%16), face = (r/16)*2 + (c/16).
+        volatile tt_l1_ptr uint16_t* last = pad + (c_kv_last - 1) * TILE_VALS;
+        for (uint32_t r = 0; r < 32; ++r) {
+            for (uint32_t c = kv_rem; c < 32; ++c) {
+                last[((r >> 4) * 2 + (c >> 4)) * 256 + (r & 15) * 16 + (c & 15)] = NEG_BIG_BF16;
+            }
+        }
+        cb_push_back(cb_pad_mask, c_kv_last);
+    }
 
     for (uint32_t unit = start_unit; unit < start_unit + num_units; ++unit) {
         const uint32_t bh = unit / Nq;  // flattened b*H + h
