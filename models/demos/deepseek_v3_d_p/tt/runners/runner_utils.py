@@ -11,7 +11,7 @@ live in blaze at `disaggregation/migration/python/prefill_runner_util.py`.
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import torch
 from loguru import logger
@@ -23,6 +23,10 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reorder_tensor_chunks
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
+    create_kv_chunk_address_table_ds,
+    create_kv_chunk_address_table_kimi,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +50,7 @@ class RunnerVariant:
     ttnn_cache_default: str
     default_is_balanced: bool
     default_gate_mode: str  # GateComputeMode name
+    kv_cache_table_create_function: Callable  # builds this variant's KV chunk address table
 
 
 VARIANTS = {
@@ -58,6 +63,7 @@ VARIANTS = {
         ttnn_cache_default="/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure",
         default_is_balanced=True,
         default_gate_mode="DEVICE_FP32",
+        kv_cache_table_create_function=create_kv_chunk_address_table_ds,
     ),
     "kimi_k2_6": RunnerVariant(
         name="kimi_k2_6",
@@ -74,6 +80,7 @@ VARIANTS = {
         ttnn_cache_default="/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill",
         default_is_balanced=False,  # Kimi is validated only in non_balanced layout
         default_gate_mode="HOST_ALL",  # Kimi (1 expert group) is validated only with the host gate
+        kv_cache_table_create_function=create_kv_chunk_address_table_kimi,
     ),
 }
 

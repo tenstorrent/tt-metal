@@ -279,6 +279,7 @@ def main() -> None:
 
         table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
         build_and_serialize_kv_chunk_table(
+            variant=VARIANT,
             mesh_device=mesh_device,
             kvpe_cache=pipeline.kvpe_cache,
             seq_len=MAX_SEQ_LEN,
