@@ -25,26 +25,41 @@ TILE = 32
 # 1. INPUT_TAGGERS
 # ---------------------------------------------------------------------------
 #
-# inputs = (q_shape, k_shape, v_shape) — mask is carried in axes["mask"].
+# inputs = (q_shape, k_shape, v_shape). Axis names match feature_spec.TARGET
+# (alignment / attention_kind / kv_heads_mode) so the golden cartesian derives
+# them from shape instead of iterating them as free axes.
 
 
 def tag_alignment(inputs, axes):
-    """S_q, S_kv and D all tile-aligned (Phase 0 requirement)."""
-    q, k, _v = inputs
-    if q[-1] % TILE == 0 and q[-2] % TILE == 0 and k[-2] % TILE == 0:
-        return "tile_aligned"
-    return "non_tile_aligned"
+    """Examines Q's last two dims (S_q, D); W takes priority when both off."""
+    q, _k, _v = inputs
+    if q[-1] % TILE != 0:
+        return "w_non_aligned"
+    if q[-2] % TILE != 0:
+        return "h_non_aligned"
+    return "tile_aligned"
 
 
-def tag_gqa(inputs, axes):
-    """Phase 0: H_kv must equal H (no grouped-query mapping yet)."""
+def tag_attention_kind(inputs, axes):
+    """self when S_q == S_kv, cross otherwise."""
     q, k, _v = inputs
-    return "mha" if q[1] == k[1] else "gqa"
+    return "self" if q[-2] == k[-2] else "cross"
+
+
+def tag_kv_heads(inputs, axes):
+    """mha when H_q == H_kv, mqa when H_kv == 1, gqa otherwise."""
+    q, k, _v = inputs
+    if q[1] == k[1]:
+        return "mha"
+    if k[1] == 1:
+        return "mqa"
+    return "gqa"
 
 
 INPUT_TAGGERS = {
     "alignment": tag_alignment,
-    "gqa": tag_gqa,
+    "attention_kind": tag_attention_kind,
+    "kv_heads_mode": tag_kv_heads,
 }
 
 
@@ -56,8 +71,10 @@ SUPPORTED = {
     "dtype": [ttnn.bfloat16],
     "layout": [ttnn.TILE_LAYOUT],
     "alignment": ["tile_aligned"],
-    "gqa": ["mha"],
-    "mask": ["none", "additive"],
+    "attention_kind": ["self", "cross"],
+    "kv_heads_mode": ["mha"],
+    "mask_mode": ["none", "causal"],
+    "scale_mode": ["auto", "explicit"],
 }
 
 
@@ -102,14 +119,22 @@ def _validate_shapes(q, k, v, attention_mask):
 def validate(q, k, v, *, attention_mask=None, scale=None):
     _validate_shapes(q, k, v, attention_mask)
 
+    # mask_mode: any additive mask (causal included) takes the same kernel
+    # path, so presence maps to the "causal" axis value.
     axes = {
         "dtype": q.dtype,
         "layout": q.layout,
-        "mask": "none" if attention_mask is None else "additive",
+        "mask_mode": "none" if attention_mask is None else "causal",
+        "scale_mode": "auto" if scale is None else "explicit",
     }
     inputs = (tuple(q.shape), tuple(k.shape), tuple(v.shape))
     for axis_name, tagger in INPUT_TAGGERS.items():
         axes[axis_name] = tagger(inputs, axes)
+
+    # The alignment tagger examines Q only (feature-spec contract); S_kv
+    # alignment is gated here for external callers.
+    if k.shape[-2] % TILE != 0:
+        raise NotImplementedError(f"sdpa: S_kv ({k.shape[-2]}) must be tile-aligned")
 
     for t in (k, v) + ((attention_mask,) if attention_mask is not None else ()):
         if t.dtype != q.dtype:

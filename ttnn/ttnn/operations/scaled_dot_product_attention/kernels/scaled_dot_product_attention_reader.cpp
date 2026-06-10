@@ -54,6 +54,7 @@ void kernel_main() {
     const auto q_accessor = TensorAccessor(q_args, q_addr, tile_bytes);
     const auto k_accessor = TensorAccessor(k_args, k_addr, tile_bytes);
     const auto v_accessor = TensorAccessor(v_args, v_addr, tile_bytes);
+    [[maybe_unused]] const auto mask_accessor = TensorAccessor(mask_args, mask_addr, tile_bytes);
 
     // Scalers once per program (pool-type-aware fill: MAX/ROW row0, SUM/ROW col0).
     dataflow_kernel_lib::
@@ -118,7 +119,6 @@ void kernel_main() {
 
             // Mask tiles: row-major (r, n) over [q_row0, q_row0+cur_cq) x [n0, n0+cur_ckv).
             if constexpr (HAS_MASK) {
-                const auto mask_accessor = TensorAccessor(mask_args, mask_addr, tile_bytes);
                 const uint32_t b = bh / H;
                 const uint32_t h = bh % H;
                 const uint32_t mask_head = MASK_PER_HEAD ? (b * H + h) : b;

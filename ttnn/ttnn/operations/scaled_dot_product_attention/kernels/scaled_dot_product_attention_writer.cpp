@@ -38,14 +38,19 @@ void kernel_main() {
         const uint32_t q_row0 = qc * c_q;
         const uint32_t head_base = bh * Sq_t * Dt;
 
+        // Batch the whole chunk: one wait, all writes in flight, one barrier,
+        // one pop (CB holds 2 * c_q * Dt pages, so a full chunk always fits).
+        const uint32_t chunk_tiles = cur_cq * Dt;
+        cb_wait_front(cb_out_tiles, chunk_tiles);
+        uint32_t l1_addr = get_read_ptr(cb_out_tiles);
         for (uint32_t r = 0; r < cur_cq; ++r) {
             const uint32_t row_base = head_base + (q_row0 + r) * Dt;
             for (uint32_t d = 0; d < Dt; ++d) {
-                cb_wait_front(cb_out_tiles, 1);
-                noc_async_write_tile(row_base + d, out_accessor, get_read_ptr(cb_out_tiles));
-                noc_async_write_barrier();
-                cb_pop_front(cb_out_tiles, 1);
+                noc_async_write_tile(row_base + d, out_accessor, l1_addr);
+                l1_addr += tile_bytes;
             }
         }
+        noc_async_write_barrier();
+        cb_pop_front(cb_out_tiles, chunk_tiles);
     }
 }
