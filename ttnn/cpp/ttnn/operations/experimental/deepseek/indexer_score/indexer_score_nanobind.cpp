@@ -13,7 +13,7 @@ void bind_indexer_score(nb::module_& mod) {
     ttnn::bind_function<"indexer_score", "ttnn.experimental.deepseek.">(
         mod,
         R"doc(
-        DeepSeek-V3.2 DSA lightning-indexer scorer (skeleton).
+        DeepSeek-V3.2 DSA lightning-indexer scorer.
 
         score[b, s, t] = sum_h relu(q[b,h,s,:] . k[b,t,:]) * weights[b,h,s]
 

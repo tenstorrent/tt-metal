@@ -40,7 +40,7 @@ def indexer_score_ref(q, k, w, chunk_start):
 
 
 def indexer_score(q, k, w, chunk_start, device):
-    """Op under test (skeleton: compiles/dispatches, output garbage -> bad PCC)."""
+    """Op under test."""
 
     def dev(t):
         return ttnn.from_torch(t, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
@@ -49,19 +49,27 @@ def indexer_score(q, k, w, chunk_start, device):
     return ttnn.to_torch(out)
 
 
-@pytest.mark.parametrize("sp_rank", [0, 7])
-def test_indexer_score_glx_chunked(device, sp_rank):
-    chunk_start = GLX_HISTORY + sp_rank * GLX_SQ
+@pytest.mark.parametrize(
+    "heads, dim, sq, t, chunk_start",
+    [
+        (64, 128, 64, 256, 128),  # mini, sp_rank 0 of 2
+        (64, 128, 64, 256, 192),  # mini, sp_rank 1 of 2 (fully causal corner)
+        (GLX_HEADS, GLX_DIM, GLX_SQ, GLX_T, GLX_HISTORY + 0 * GLX_SQ),  # GLX sp_rank 0
+        (GLX_HEADS, GLX_DIM, GLX_SQ, GLX_T, GLX_HISTORY + 7 * GLX_SQ),  # GLX sp_rank 7
+    ],
+    ids=["mini_rank0", "mini_rank1", "glx_rank0", "glx_rank7"],
+)
+def test_indexer_score_glx_chunked(device, heads, dim, sq, t, chunk_start):
     g = torch.Generator().manual_seed(42)
-    q = torch.randn(1, GLX_HEADS, GLX_SQ, GLX_DIM, generator=g, dtype=torch.bfloat16)
-    k = torch.randn(1, 1, GLX_T, GLX_DIM, generator=g, dtype=torch.bfloat16)
+    q = torch.randn(1, heads, sq, dim, generator=g, dtype=torch.bfloat16)
+    k = torch.randn(1, 1, t, dim, generator=g, dtype=torch.bfloat16)
     # negative gates make real scores negative — zero-filled columns would win topk
-    w = torch.randn(1, GLX_HEADS, GLX_SQ, 1, generator=g, dtype=torch.bfloat16)
+    w = torch.randn(1, heads, sq, 1, generator=g, dtype=torch.bfloat16)
 
     out = indexer_score(q, k, w, chunk_start, device)
     ref = indexer_score_ref(q, k, w, chunk_start)
 
-    assert out.shape == (1, 1, GLX_SQ, GLX_T)
+    assert out.shape == (1, 1, sq, t)
     # -inf maps must agree exactly (<= bf16 lowest counts as masked on device)
     masked = ref == float("-inf")
     assert torch.equal(out <= torch.finfo(torch.bfloat16).min, masked)

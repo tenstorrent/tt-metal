@@ -129,6 +129,68 @@ to −inf** (rank0: 2,990 tiles ≈ 6 MB, <3% runtime; pattern:
 page writes from multiple cores are aligned (32-elem fragment = 64 B ≥ NoC
 align). Later: `valid_len` contract with top-k to skip the fill entirely.
 
+## Implementation (functional, in tree)
+
+Files under `ttnn/cpp/ttnn/operations/experimental/deepseek/indexer_score/device/`:
+factory `indexer_score_program_factory.cpp`, kernels
+`kernels/{reader,compute,writer}_indexer_score.cpp`.
+
+### Program factory
+
+Validates tile alignment (`Sq, T, D, chunk_start % 32 == 0`,
+`chunk_start + Sq ≤ T`, `Hi % 8 == 0`, B=1, causal only), computes
+`valid(s) = min(Tt, chunk_t + s + 1)` and `V = Σ valid(s)` on host, and deals V
+flat across the full grid (`min(V, cores)` workers, base = V/N, remainder one
+extra). Per-core runtime args are just `flat_start, count` + buffer addresses
+(replaced in `override_runtime_arguments`); all three kernels invert the flat
+index locally with the same loop, so there are no segment tables. Compile args
+common to all kernels: `Hi, Sqt, Tt, Dt, chunk_t`; TensorAccessor args
+appended for reader (q/k/w) and writer (out, page = T·2 bytes).
+
+ComputeConfig: HiFi4, `fp32_dest_acc_en`, `dst_full_sync_en` (8 fp32 DEST
+tiles → 8-head passes).
+
+### CBs
+
+| CB | what | size |
+|---|---|---|
+| c_0 q | resident q row, `Hi·Dt` tiles bf16 | 512 KB @64h |
+| c_1 k | k column, double buffered | `2·Dt` bf16 |
+| c_2 w | resident w row | `Hi` bf16 |
+| c_3 mask | diag strict-upper −inf tile, persistent | 1 bf16 |
+| c_24 qk | per-head relu(q·kᵀ) | `Hi` fp32 |
+| c_25 mul | relu·w contributions | 8 fp32 |
+| c_26 acc | head accumulator ping-pong | 2 fp32 |
+| c_16 out | untilized output | 2 bf16 |
+| c_17 scratch | writer-only −inf source | 1 bf16 |
+
+### Kernels (all walk the same flat span)
+
+**Reader** — on a new q-tile-row pushes the resident q row (`Hi·Dt` tiles,
+id `h·Sqt·Dt + s·Dt + d`) and w row (`h·Sqt + s`); per output tile pushes the
+k column (`t·Dt + d`). Builds the mask tile once in L1 (strict upper = 0xFF80,
+else 0, face-ordered).
+
+**Compute** — per output tile: phase 1, 8 heads per DEST acquire: `Dt`
+`matmul_tiles` accumulate q·kᵀ (transpose set at `mm_init`), `relu_tile`,
+pack 8 → cb_qk. Phase 2 per 8: `mul_tiles_bcast_cols(qk, w)` (per-row gate in
+col 0), then ping-pong `add_tiles` into cb_acc (first contribution primes via
+`copy_tile`). Diagonal (`t == chunk_t + s`): `add_tiles(acc, mask)`. Then
+`pack_untilize<1,1>` → cb_out bf16. Pops q/w on row change. Heads are fully
+core-local; sum order is the same on every device, so SP ranks agree exactly.
+
+**Writer** — scatters each tile as 32 row fragments of 64 B at
+`page = s·32 + r`, offset `t·64` (64 B aligned, NoC-safe). The owner of a
+row's last valid tile (`t == valid(s) − 1`, `valid(s) < Tt`) fills the tail
+`[valid·64, Tt·64)` of all 32 rows from the −inf scratch — the within-tile
+masked part comes from the compute mask, the tail from the writer; no other
+core touches those rows.
+
+Same scheme for every device in the ring; SP rank enters only via
+`chunk_start`. Kernel includes are `api/compute/...` / `api/dataflow/...`;
+compute entrypoint `kernel_main()`. Perf knobs from the design (head_block,
+k_chunk, l1-acc, bfp8 k) are not wired yet.
+
 ## Validation
 
 Single-chip, `sp_rank ∈ {0,7}` boundary cases via `chunk_start`; −inf maps
@@ -143,8 +205,10 @@ Branch: `skrstic/dsa_indexer_score_op`.
 - [x] skeleton op, validation, RM out spec, nanobind, CMake; empty factory
 - [x] design (this doc); visualizations `indexer_score_viz.html`, `indexer_core0_viz.html`
 - [x] test dims 55296 → 56320
-- [ ] program factory: flat valid-tile deal + runtime args
-- [ ] kernels: reader / compute (head-blocked, l1-acc, mask) / writer (−inf tails)
+- [x] program factory: flat valid-tile deal + runtime args
+- [x] kernels: reader / compute (8-head DEST passes, fp32 ping-pong acc, diag
+      mask) / writer (RM 64 B fragments, −inf tails); mini + GLX rank 0/7 pass
+      (PCC ≥ 0.999, exact −inf map)
 - [ ] row-major top-k (separate); negative-weights topk-safety test
 - [ ] perf: bfp8 k + LoFi, fused relu·w, pack overlap
 
