@@ -10,7 +10,8 @@ contract in `contract.py`, and a reference file produced by
 
   1. Builds the generator via `<model_dir>/tt/generator.py::build_generator`.
   2. For each entry in the reference, calls
-     `generator.generate(prompt_ids, n_steps, next_input=acc.collect_predicted_tokens)`.
+     `generator.generate(..., next_input=acc.collect_predicted_tokens,
+     enable_trace=True)`.
   3. Resets the generator between entries.
   4. Prints per-entry and aggregate top-1 / top-5 / top-K accuracy plus
      directly timed TTFT and decode t/s/u.
@@ -26,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import inspect
 import sys
 import time
 from pathlib import Path
@@ -81,6 +83,7 @@ def _run_one_entry(
     generator: Generator,
     acc: TokenAccuracy,
     entry_idx: int,
+    enable_trace: bool = True,
 ) -> Dict[str, Any]:
     prompt_ids = acc.get_prompt_token_ids(entry_idx)
     n_steps = acc.num_gt_tokens(entry_idx)
@@ -100,17 +103,29 @@ def _run_one_entry(
         timing["callback_count"] += 1
         return acc.collect_predicted_tokens(predicted, user_idx=entry_idx)
 
+    generate_kwargs: Dict[str, Any] = {}
+    if _accepts_generate_kwarg(generator, "enable_trace"):
+        generate_kwargs["enable_trace"] = enable_trace
+
     timing["start_s"] = time.perf_counter()
     generator.generate(
         prompt_token_ids=prompt_ids,
         max_new_tokens=n_steps,
         next_input=next_input,
+        **generate_kwargs,
     )
     end_s = time.perf_counter()
 
     stats = acc.compute_accuracy(user_idx=entry_idx)
     stats.update(_compute_perf_stats(timing=timing, end_s=end_s, token_count=stats["total"]))
     return stats
+
+
+def _accepts_generate_kwarg(generator: Generator, name: str) -> bool:
+    signature = inspect.signature(generator.generate)
+    return name in signature.parameters or any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()
+    )
 
 
 def _compute_perf_stats(*, timing: Dict[str, Any], end_s: float, token_count: int) -> Dict[str, float]:
@@ -164,10 +179,13 @@ def run_teacher_forcing(
     reference_path: Path,
     mesh_device,
     build_kwargs: Dict[str, Any] | None = None,
+    enable_trace: bool = True,
 ) -> List[Dict[str, Any]]:
     """
     Programmatic entry point. Builds the generator, runs teacher forcing
     over all reference entries, and returns the per-entry accuracy dicts.
+    Decode tracing is requested by default for generators that accept an
+    `enable_trace` kwarg in `generate()`.
     """
     build_kwargs = build_kwargs or {}
     build_generator = _import_build_generator(model_dir)
@@ -179,7 +197,12 @@ def run_teacher_forcing(
         for entry_idx in range(acc.num_entries):
             if entry_idx > 0:
                 generator.reset()
-            stats = _run_one_entry(generator=generator, acc=acc, entry_idx=entry_idx)
+            stats = _run_one_entry(
+                generator=generator,
+                acc=acc,
+                entry_idx=entry_idx,
+                enable_trace=enable_trace,
+            )
             per_entry.append(stats)
             print(_format_row(f"entry[{entry_idx}]", stats))
     finally:
@@ -220,6 +243,11 @@ def _main() -> None:
     parser = argparse.ArgumentParser(description="Run the teacher-forcing readiness check against a reference file.")
     parser.add_argument("--model-dir", type=Path, required=True, help="Path to the model directory.")
     parser.add_argument("--reference", type=Path, required=True, help="Path to the .refpt reference file.")
+    parser.add_argument(
+        "--disable-trace",
+        action="store_true",
+        help="Request untraced decode from generator.generate() for trace-debug fallback runs.",
+    )
     add_mesh_device_args(parser)
     args = parser.parse_args()
 
@@ -229,6 +257,7 @@ def _main() -> None:
             model_dir=args.model_dir.resolve(),
             reference_path=args.reference.resolve(),
             mesh_device=mesh_device,
+            enable_trace=not args.disable_trace,
         )
     finally:
         close_readiness_mesh_device(mesh_device, args.fabric_config)

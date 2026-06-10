@@ -1,5 +1,7 @@
 /goal Use $full-model for the HF_MODEL optimized multichip decoder in the current tt-metal checkout.
 
+As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
+
 This goal creates the full-model state for the repo-local TTNN autoport pipeline. Start from the completed optimized multichip decoder and work on models/autoports/<model>/tt/model.py and tt/generator.py; do not begin vLLM integration work in this goal.
 
 Goal completion requirements:

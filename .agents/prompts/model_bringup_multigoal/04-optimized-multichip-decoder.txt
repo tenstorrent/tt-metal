@@ -1,5 +1,7 @@
 /goal Use $optimize for the HF_MODEL multichip decoder in the current tt-metal checkout.
 
+As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
+
 This goal creates the optimized-multichip-decoder state for the repo-local TTNN autoport pipeline. Start from the completed multichip decoder and optimize that multichip path in place; do not begin full-model or vLLM work in this goal.
 
 Goal completion requirements:
