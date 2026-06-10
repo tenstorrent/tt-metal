@@ -171,8 +171,6 @@ jobs:
           hang-detection-timeout: ${{ contains(matrix.test-group.name, 'PERF') && '20.0' || '5.0' }}
       - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         timeout-minutes: 10
-        with:
-          runner-label: ${{ inputs.runner-label }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |

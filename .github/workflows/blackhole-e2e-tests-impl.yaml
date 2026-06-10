@@ -174,8 +174,6 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         if: ${{ !startsWith(matrix.test-group.sku, 'bh_p100') && !startsWith(matrix.test-group.sku, 'bh_p150') }}
         timeout-minutes: 10
-        with:
-          runner-label: ${{ matrix.test-group.sku == 'bh_deskbox' && 'BH-DeskBox' || '' }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |

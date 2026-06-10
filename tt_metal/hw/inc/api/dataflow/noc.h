@@ -5,8 +5,13 @@
 #pragma once
 
 #include "api/dataflow/dataflow_api.h"
+#include "internal/debug/noc_zero_guard.h"
+
+template <typename DSpecT>
+class TensorAccessor;
 
 struct MulticastEndpoint;
+class CircularBuffer;
 class DataflowBuffer;
 
 // Concrete arg struct for the DFB-specific Noc overloads.
@@ -306,6 +311,7 @@ public:
         const src_args_t<Src>& src_args,
         const dst_args_t<Dst>& dst_args,
         const NocOptVals& noc_opts = {}) const {
+        NOC_ASSERT_NOT_ZERO_MODE();  // no NoC write between async_write_zeros and write_zeros_l1_barrier
         constexpr bool posted = has_flag(opts, NocOptions::POSTED);
 
         if constexpr (has_flag(opts, NocOptions::TXN_ID)) {
@@ -390,6 +396,7 @@ public:
             !has_flag(opts, NocOptions::POSTED),
             "Mcasts with posted transactions are not supported");  // TODO: Make this an arch specific assertion
 
+        NOC_ASSERT_NOT_ZERO_MODE();  // no NoC write between async_write_zeros and write_zeros_l1_barrier
         auto src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
         auto dst_noc_addr = get_dst_ptr_mcast<AddressType::NOC>(dst, dst_args);
         if constexpr (has_flag(opts, NocOptions::MCAST_INCL_SRC)) {
@@ -430,6 +437,7 @@ public:
             "NocOptions::TXN_ID is not supported for set_async_write_state; "
             "use async_write<NocOptions::TXN_ID> for non-stateful writes with a transaction ID");
         constexpr bool posted = has_flag(opts, NocOptions::POSTED);
+        NOC_ASSERT_NOT_ZERO_MODE();  // no cmd-buffer-0 op between async_write_zeros and write_zeros_l1_barrier
         DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc_id_, DEBUG_SANITIZE_NOC_UNICAST);
         auto dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
         RECORD_NOC_EVENT_WITH_ADDR(
@@ -481,6 +489,7 @@ public:
             "NocOptions::TXN_ID is not supported for async_write_with_state; "
             "use async_write<NocOptions::TXN_ID> for non-stateful writes with a transaction ID");
         constexpr bool posted = has_flag(opts, NocOptions::POSTED);
+        NOC_ASSERT_NOT_ZERO_MODE();  // no cmd-buffer-0 op between async_write_zeros and write_zeros_l1_barrier
 
         if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
             noc_async_write_one_packet_with_state<posted>(
@@ -666,6 +675,83 @@ public:
      * core.
      */
     void async_full_barrier() const { noc_async_full_barrier(noc_id_); }
+
+    /**
+     * @brief Zeroes a local-L1 destination buffer (overload 1).
+     *
+     * @note Quasar: this temporarily reprograms the overlay write command buffer (cmd buffer 0)
+     *       into iDMA zero mode; it is restored to normal write mode only by
+     *       write_zeros_l1_barrier(). Do NOT issue any other NOC write (noc.async_write /
+     *       noc_async_write, also cmd buffer 0) on the same core between this call and
+     *       write_zeros_l1_barrier() -- those writes would run in zero mode and corrupt their
+     *       data. Barrier first, then reuse cmd buffer 0.
+     *
+     * @see write_zeros_l1_barrier.
+     *
+     * @param dst Destination object (CircularBuffer or DataflowBuffer)
+     * @param size_bytes Number of bytes to zero
+     * @param args Additional arguments for destination address calculation (offset within @p dst)
+     * @tparam Dst Must be CircularBuffer or DataflowBuffer
+     */
+    template <typename Dst>
+    void async_write_zeros(const Dst& dst, uint32_t size_bytes, const dst_args_t<Dst>& args = {}) const;
+
+    /**
+     * @brief Zeroes pages of a DRAM tensor using a caller-pre-zeroed scratch buffer (overload 2).
+     *
+     * The source bytes are read starting at @p scratch's current READ pointer.
+     * Reads up to NOC_MAX_BURST_SIZE bytes per chunk, so the zeroed prefix at that read pointer
+     * must cover at least min(@p size_bytes, NOC_MAX_BURST_SIZE) bytes; otherwise the impl reads
+     * garbage past the zero region and streams it to DRAM.
+     *
+     * Contract: the zeroed bytes must sit at @p scratch's read pointer. Two valid patterns:
+     *   - Same-kernel scratch: a fresh/empty CB or DFB has read_ptr == write_ptr, so zeroing it
+     *     via overload (1) (which writes the write pointer) lands where overload (2) reads.
+     *   - Producer/consumer handoff: the producer zeroes via overload (1) then push_back()s the
+     *     entry; the consumer wait_front()s it before passing it here.
+     *
+     * Caller MUST zero the scratch via overload (1) + write_zeros_l1_barrier() before the first call.
+     *
+     * Each call zeroes within a single page: @p args.offset_bytes + @p size_bytes must not exceed
+     * the accessor's aligned page size, otherwise the write spills into a neighbouring page.
+     *
+     * @see write_zeros_dram_barrier.
+     *
+     * @param accessor Destination DRAM tensor accessor
+     * @param size_bytes Number of bytes to zero per page
+     * @param args Destination page args (page_id, offset_bytes)
+     * @param scratch Pre-zeroed L1 scratch buffer (CircularBuffer or DataflowBuffer); read at its read pointer
+     * @tparam DSpecT TensorAccessor type spec; must satisfy DSpecT::is_dram
+     * @tparam Scratch Must be CircularBuffer or DataflowBuffer
+     *
+     * @code
+     *   // Same-kernel scratch: fresh CB, so read_ptr == write_ptr.
+     *   noc.async_write_zeros(scratch, scratch_bytes);
+     *   noc.write_zeros_l1_barrier();
+     *   for (p) noc.async_write_zeros(addr_gen, page_size, {.page_id = p}, scratch);
+     *   noc.write_zeros_dram_barrier();
+     * @endcode
+     */
+    template <typename DSpecT, typename Scratch>
+    void async_write_zeros(
+        const ::TensorAccessor<DSpecT>& accessor,
+        uint32_t size_bytes,
+        const dst_args_t<::TensorAccessor<DSpecT>>& args,
+        const Scratch& scratch) const;
+
+    /**
+     * @brief Barrier for L1 destinations zeroed via async_write_zeros overload (1).
+     *
+     * @see async_write_zeros (overload 1).
+     */
+    void write_zeros_l1_barrier() const;
+
+    /**
+     * @brief Barrier for DRAM destinations zeroed via async_write_zeros overload (2).
+     *
+     * @see async_write_zeros (overload 2).
+     */
+    void write_zeros_dram_barrier() const;
 
 #ifdef ARCH_QUASAR
     /**

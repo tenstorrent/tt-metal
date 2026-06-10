@@ -112,6 +112,7 @@ jobs:
     if: ${{ needs.determine-tests.outputs.any-selected == 'true' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:

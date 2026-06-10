@@ -8,23 +8,12 @@
 //
 
 #include <cstdint>
+#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
-
-// Fill a CB buffer with zeros via loopback NOC writes from the hardware MEM_ZEROS region.
-FORCE_INLINE void fill_zero_buffer(uint32_t cb_id) {
-    cb_reserve_back(cb_id, 1);
-    uint32_t buf = get_write_ptr(cb_id);
-    uint64_t buf_noc = get_noc_addr(NOC_X(my_x[0]), NOC_Y(my_y[0]), buf);
-    for (uint32_t off = 0; off < NOC_MAX_BURST_SIZE; off += MEM_ZEROS_SIZE) {
-        uint32_t chunk = ((uint32_t)MEM_ZEROS_SIZE < (NOC_MAX_BURST_SIZE - off)) ? (uint32_t)MEM_ZEROS_SIZE
-                                                                                 : (NOC_MAX_BURST_SIZE - off);
-        noc_async_write(MEM_ZEROS_BASE, buf_noc + off, chunk);
-    }
-    noc_async_write_barrier();
-}
 
 void kernel_main() {
     // ===== Compile-time args =====
+    constexpr uint32_t page_size = get_compile_time_arg_val(0);
     constexpr uint32_t cb_zero_buffer_id = get_compile_time_arg_val(1);
 
     // TensorAccessorArgs for the cache tensor (starting at index 2)
@@ -38,12 +27,15 @@ void kernel_main() {
 
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
-    fill_zero_buffer(cb_zero_buffer_id);
-    uint32_t zero_buffer_addr = get_write_ptr(cb_zero_buffer_id);
+    // Pre-zero a NOC_MAX_BURST_SIZE L1 scratch once (overload 1), then write it to each
+    // DRAM page (overload 2). No MEM_ZEROS_BASE dependency.
+    Noc noc;
+    CircularBuffer scratch_cb(cb_zero_buffer_id);
+    noc.async_write_zeros(scratch_cb, NOC_MAX_BURST_SIZE);
+    noc.write_zeros_l1_barrier();
 
-    // Write zeros to each page in the range using TensorAccessor-compatible API
-    for (uint32_t page = page_start; page < page_end; page++) {
-        noc_async_write_page(page, output_addr_gen, zero_buffer_addr);
+    for (uint32_t page = page_start; page < page_end; ++page) {
+        noc.async_write_zeros(output_addr_gen, page_size, {.page_id = page}, scratch_cb);
     }
-    noc_async_write_barrier();
+    noc.write_zeros_dram_barrier();
 }

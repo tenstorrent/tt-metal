@@ -7,6 +7,7 @@
 #include <tuple>
 #include <utility>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 
 namespace detail {
 template <typename... Args, uint32_t... Indexes>
@@ -158,18 +159,14 @@ void compute_actual_k_block(
                 // Dev N-1, from Dev 0 via long send). All sends use out_ready_semaphore_forward
                 // at the receiver — single sem per iter.
                 //
-                // Sender fires K_num_blocks sem incs per m_block (iter 0..N-1). Receiver waits
-                // (N-1)*K_blocks_per_device times — leaves K_blocks_per_device extra sem incs
-                // unconsumed per m_block. Without compensation, sem accumulates past sem_target
-                // and the NEXT m_block's first wait passes BEFORE sender has written that
-                // m_block's data, causing stale reads. Fix: at the last K-block iter of each
-                // m_block, advance sem_target by K_blocks_per_device to consume those extras.
+                // The sender skips the redundant final relay lap (the last K_blocks_per_device
+                // iters; see dm_in0_sender), so it fires exactly (N-1)*K_blocks_per_device sem
+                // incs per m_block — precisely the count the receiver waits on here. sem ends each
+                // m_block exactly at sem_target with nothing left in flight, so no compensation
+                // (and no end-of-op drain) is needed.
                 if (device_iter > 0) {
                     noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + 1);
                     sem_target_forward += 1;
-                }
-                if (k_block_iter == total_k_block_count - 1) {
-                    sem_target_forward += k_blocks_per_device;
                 }
             } else if (device_iter > 0) {
                 // Ring: both halves arrive simultaneously from both directions
@@ -283,20 +280,8 @@ bool is_backward_k_block_iter(uint32_t k_block_iter, uint32_t k_blocks_per_devic
     return (device_iter % 2);
 }
 
-void fill_zeros_async(uint32_t write_addr, uint32_t tile_bytes) {
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    // Fill tile with zeros
-    uint32_t bytes_left = tile_bytes;
-    for (;;) {
-        uint32_t read_size = bytes_left > MEM_ZEROS_SIZE ? MEM_ZEROS_SIZE : bytes_left;
-        noc_async_read(zeros_noc_addr, write_addr, read_size);
-        write_addr += read_size;
-        bytes_left -= read_size;
-        if (bytes_left == 0) {
-            break;
-        }
-    }
+inline void fill_zeros_async(const Noc& noc, const CircularBuffer& cb, uint32_t bytes, uint32_t offset_bytes = 0) {
+    noc.async_write_zeros(cb, bytes, {.offset_bytes = offset_bytes});
 }
 
 struct TensorShape2D {
@@ -331,7 +316,7 @@ template <
 void read_in0_block_sync(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
-    uint32_t write_ptr,
+    uint32_t cb_id,
     uint32_t tile_size_bytes,
 #ifdef READ_FROM_LOCAL_INPUT
     const LocalTensorAccessorType& in3_accessor,
@@ -349,8 +334,15 @@ void read_in0_block_sync(
     uint32_t d1_tiles_right) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end_left > d1_start_left);
-    ASSERT(d1_end_right > d1_start_right);
+    // Linear topology is unidirectional: the "right" (backward) half is legitimately empty
+    // (k_right_tiles == 0 for a full block), so allow an empty range here. A non-empty-but-
+    // inverted range would still be a bug, hence >=.
+    ASSERT(d1_end_right >= d1_start_right);
 
+    Noc noc;
+    CircularBuffer cb(cb_id);
+    const uint32_t cb_base_write_ptr = cb.get_write_ptr();
+    uint32_t write_ptr = cb_base_write_ptr;
     for (uint32_t i = d0_start; i < d0_end; i++) {
         if (i >= shape.logical_d0) {
             break;
@@ -370,7 +362,7 @@ void read_in0_block_sync(
                 }
 #endif
             } else {
-                fill_zeros_async(write_ptr, tile_size_bytes);
+                fill_zeros_async(noc, cb, tile_size_bytes, write_ptr - cb_base_write_ptr);
             }
             write_ptr += tile_size_bytes;
         }
@@ -391,7 +383,7 @@ void read_in0_block_sync(
                 }
 #endif
             } else {
-                fill_zeros_async(write_ptr, tile_size_bytes);
+                fill_zeros_async(noc, cb, tile_size_bytes, write_ptr - cb_base_write_ptr);
             }
             write_ptr += tile_size_bytes;
         }
@@ -399,6 +391,7 @@ void read_in0_block_sync(
         write_ptr += (d1_tiles_right - (d1_end_right - d1_start_right)) * tile_size_bytes;
     }
     noc_async_read_barrier();
+    noc.write_zeros_l1_barrier();
 }
 
 /**
@@ -410,7 +403,7 @@ template <uint32_t K_block_tiles, uint32_t N_block_tiles, typename TensorAccesso
 void read_in1_block_sync(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
-    uint32_t write_ptr,
+    uint32_t cb_id,
     uint32_t tile_size_bytes,
     uint32_t d0_start_left,
     uint32_t d0_end_left,
@@ -419,8 +412,13 @@ void read_in1_block_sync(
     uint32_t d1_start,
     uint32_t d1_end) {
     ASSERT(d0_end_left > d0_start_left);
-    ASSERT(d0_end_right > d0_start_right);
+    // Linear topology is unidirectional: the "right" (backward) half is legitimately empty.
+    ASSERT(d0_end_right >= d0_start_right);
     ASSERT(d1_end > d1_start);
+    Noc noc;
+    CircularBuffer cb(cb_id);
+    const uint32_t cb_base_write_ptr = cb.get_write_ptr();
+    uint32_t write_ptr = cb_base_write_ptr;
     for (uint32_t i = d0_start_left; i < d0_end_left; i++) {
         for (uint32_t j = d1_start; j < d1_end; j++) {
             if (j >= shape.logical_d1) {
@@ -431,7 +429,7 @@ void read_in1_block_sync(
                 uint32_t tile_id = i * shape.logical_d1 + j;
                 noc_async_read_page(tile_id, tensor_accessor, write_ptr);
             } else {
-                fill_zeros_async(write_ptr, tile_size_bytes);
+                fill_zeros_async(noc, cb, tile_size_bytes, write_ptr - cb_base_write_ptr);
             }
             write_ptr += tile_size_bytes;
         }
@@ -448,7 +446,7 @@ void read_in1_block_sync(
                 uint32_t tile_id = i * shape.logical_d1 + j;
                 noc_async_read_page(tile_id, tensor_accessor, write_ptr);
             } else {
-                fill_zeros_async(write_ptr, tile_size_bytes);
+                fill_zeros_async(noc, cb, tile_size_bytes, write_ptr - cb_base_write_ptr);
             }
             write_ptr += tile_size_bytes;
         }
@@ -456,6 +454,7 @@ void read_in1_block_sync(
         write_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
     noc_async_read_barrier();
+    noc.write_zeros_l1_barrier();
 }
 
 /**
