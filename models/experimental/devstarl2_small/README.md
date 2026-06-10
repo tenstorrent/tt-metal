@@ -51,11 +51,43 @@ Run from repo root on Blackhole QuietBox or P150.
 
 ### Execution
 
-| Demo | Script | Description | Command |
-|------|--------|-------------|---------|
-| Image + text | `demo/tt_image_demo.py` | One-shot image Q&A on TT (vision → projector → text LM). Default prompt: `resource/sample.jpeg`. | `python3 -m models.experimental.devstarl2_small.demo.tt_image_demo --backend tt --image models/experimental/devstarl2_small/resource/sample.jpeg --vision-square-pixels 1540 --mesh-width 4 --max-new-tokens 100` |
-| Text LM | `demo/tt_text_demo.py` | Text-only TT prefill/decode + LM head. Default Fibonacci prompt; override with `--prompt`. | `python models/experimental/devstarl2_small/demo/tt_text_demo.py --mesh-width 4` |
-| Interactive agent | `demo/tt_demo_agent.py` | Multi-turn coding REPL on TT; `/image PATH [question…]` for multimodal. | `python models/experimental/devstarl2_small/demo/tt_demo_agent.py --vision-square-pixels 1540` |
+Run from repo root. The only platform difference is the device mesh: **BH-QB uses `--mesh-width 4`** (1×4) and **P150 uses `--mesh-width 1`** (1×1). `--mesh-width` is now validated against the visible device count and fails early if the requested mesh is unavailable.
+
+| Demo | Script | Description |
+|------|--------|-------------|
+| Image + text | `demo/tt_image_demo.py` | One-shot image Q&A on TT (vision → projector → text LM). Default prompt: `resource/sample.jpeg`. |
+| Text LM | `demo/tt_text_demo.py` | Text-only TT prefill/decode + LM head. Default Fibonacci prompt; override with `--prompt`. |
+| Interactive agent | `demo/tt_demo_agent.py` | Multi-turn coding REPL on TT; `/image PATH [question…]` for multimodal. |
+
+**Image + text**
+
+```sh
+# Blackhole QuietBox (1x4)
+python3 -m models.experimental.devstarl2_small.demo.tt_image_demo --backend tt --image models/experimental/devstarl2_small/resource/sample.jpeg --vision-square-pixels 1540 --mesh-width 4 --max-new-tokens 100
+
+# P150 (1x1)
+python3 -m models.experimental.devstarl2_small.demo.tt_image_demo --backend tt --image models/experimental/devstarl2_small/resource/sample.jpeg --vision-square-pixels 1540 --mesh-width 1 --max-new-tokens 100
+```
+
+**Text LM**
+
+```sh
+# Blackhole QuietBox (1x4)
+python models/experimental/devstarl2_small/demo/tt_text_demo.py --mesh-width 4
+
+# P150 (1x1)
+python models/experimental/devstarl2_small/demo/tt_text_demo.py --mesh-width 1
+```
+
+**Interactive agent**
+
+```sh
+# Blackhole QuietBox (1x4)
+python models/experimental/devstarl2_small/demo/tt_demo_agent.py --vision-square-pixels 1540 --mesh-width 4
+
+# P150 (1x1)
+python models/experimental/devstarl2_small/demo/tt_demo_agent.py --vision-square-pixels 1540 --mesh-width 1
+```
 
 ### Performance
 
