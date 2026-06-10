@@ -41,7 +41,6 @@ def test_group_and_credit_credits_pending_twin() -> None:
 
 def test_group_and_credit_no_credit_without_graduated_sibling() -> None:
     resolved = {"a": "enc.layers.0", "b": "enc.layers.0"}
-    # neither graduated → nothing to credit from
     assert ad.group_and_credit(resolved, set()) == {}
 
 
@@ -61,14 +60,11 @@ def test_strict_resolve_uses_recorded_then_candidates_no_fuzzy() -> None:
             return object()
         raise AttributeError(path)
 
-    # recorded path resolves
     assert ad._strict_resolve_path(_Model(), "text_encoder.layers.0", [], fake_resolve) == "text_encoder.layers.0"
-    # recorded missing, first candidate ([0] form) resolves and normalizes
     assert (
         ad._strict_resolve_path(_Model(), None, ["nope.path", "text_encoder.layers[0]"], fake_resolve)
         == "text_encoder.layers.0"
     )
-    # nothing resolves → None (NO fuzzy fallback)
     assert ad._strict_resolve_path(_Model(), None, ["bogus.a", "bogus.b"], fake_resolve) is None
 
 
@@ -81,7 +77,6 @@ def test_alias_credit_store_roundtrip(tmp_path, monkeypatch) -> None:
     listing = om.load_alias_credits(model_id)
     assert listing["encoder_layer"]["canonical_path"] == "text_encoder.layers.0"
     assert listing["encoder_layer"]["twin"] == "layer"
-    # idempotent
     om.persist_alias_credit(model_id, "encoder_layer", canonical_path="x", twin="y")
     assert om.load_alias_credits(model_id)["encoder_layer"]["twin"] == "layer"
     assert om.remove_alias_credit(model_id, "encoder_layer") is True
@@ -103,11 +98,9 @@ def test_alias_credit_routes_component_to_on_device(tmp_path, monkeypatch) -> No
     }
     (demo / "bringup_status.json").write_text(json.dumps(status))
 
-    # not credited, not graduated → PENDING
     rep = fc.build_final_categorization(model_id="test/m", demo_dir=demo, graduated_set=set())
     assert rep.pending == ["encoder_layer"]
 
-    # alias-credited → ON_DEVICE
     om.persist_alias_credit("test/m", "encoder_layer", canonical_path="text_encoder.layers.0", twin="layer")
     rep2 = fc.build_final_categorization(model_id="test/m", demo_dir=demo, graduated_set=set())
     assert rep2.on_device == ["encoder_layer"]

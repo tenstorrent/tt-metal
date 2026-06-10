@@ -64,7 +64,6 @@ def test_consumer_adds_children_to_bringup_status(tmp_path: Path, monkeypatch) -
 
     status = json.loads((demo_dir / "bringup_status.json").read_text())
     names = [c["name"] for c in status["components"]]
-    # children are namespaced by submodule_path slug: encoder.layers.0 -> encoder_layers_0
     assert "encoder_layers_0" in names
     assert "encoder_layers_1" in names
     by_name = {c["name"]: c for c in status["components"]}
@@ -207,7 +206,6 @@ def test_emit_repo_root_is_models_parent_not_models_dir() -> None:
 
     assert _emit_repo_root(Path("/wt/models/demos/audio/seamless")) == Path("/wt")  # depth-4
     assert _emit_repo_root(Path("/repo/models/demos/foo")) == Path("/repo")  # depth-3
-    # NOT the models/ dir (the old bug)
     assert _emit_repo_root(Path("/wt/models/demos/audio/seamless")) != Path("/wt/models")
 
 
@@ -243,7 +241,6 @@ def test_reinject_re_adds_wiped_child_from_archived_plan(tmp_path: Path, monkeyp
     assert by_path["t2u_model.model.encoder"]["name"] == "t2u_model_model_encoder"
     assert by_path["t2u_model.model.encoder"]["_added_by_decomposition_of"] == "parent_a"
 
-    # Idempotent: a second pass re-adds nothing.
     again, _ = reinject_missing_decomposition_children(model_id="test/m", demo_dir=demo_dir)
     assert again == 0
 
