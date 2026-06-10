@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T21:53:05Z",
+  "updated_at": "2026-06-10T22:08:54Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -228,9 +228,16 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
+        "status": "done",
         "attempts": 0,
-        "notes": "OCCUPANCY REDO: per the new occupancy+convergence contract \u2014 query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid"
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_mlp.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_vision_mlp.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_mlp.traced_ops.json",
+          "generated/profiler/reports/2026_06_10_22_04_15/ops_perf_results_2026_06_10_22_04_15.csv"
+        ],
+        "notes": "OCCUPANCY REDO complete at the PRODUCTION posture (bf16 tower, col/row-parallel tp=4, 11264-row document shape, 1x4 BH mesh; queried grid 11x10=110): per-block harness re-pointed from the stale fp32/896/tp1 posture, profiled under tracy --traced (metal trace replay). Block traced kernel time 4.00 -> 2.46 ms/device (-38%); traced wall 3.12 -> 2.63 ms/call (42 calls/image => ~20 ms off the tower). Levers, one change per measurement: (1) CCL num_links 1->2: reduce_scatter 1201->655 us, all_gather 1241->648 us/device (links at HW ceiling per vision_attention TT_FATAL evidence, 2 eth channels/QB hop); (2) bf8b-first single-pass directive: bfloat8_b weights + HiFi2 (fp32 dest acc kept) on all three projections, matmuls 1371->1075 us/device, fp32 high-precision path untouched; (3) gate/up 1D height-mcast program config in0_block_w=4 from scratch A/B (matmuls 1075->961 us/device, FPU util 31->37%; ibw>=8 and EVERY explicit config for the down matmul CB-overflow program.cpp:1326, so down keeps the heuristic - best FPU util of the three at 39%). Final occupancy vs 110-core grid: gate/up 88/110 (80%, ceil(352 Mt/110)=4 rows/core - M-tile divisibility ceiling), down 100/110 (91%), fused silu-mul 110/110, CCL 34-36c link-bound at 2/2 links. Rejected with evidence: bf16 dest acc (gate no-win 369 vs 362 us; down -12% but breaks the fp32-dest-acc precision recipe for ~0.6% image-level gain), M-padding 11264->11520 (pad+slice cancels gain, changes block contract). Gates: block PCC 0.999991 (>0.99, unchanged from pre-redo) and e2e WER parity re-run (TTNN wer=0.0 == HF wer=0.0, drift 0.0, tolerance 0.05). KB ttnn_mul_1 fused silu-mul retained; framework fix: KIND_REQUIRED_KERNELS[mlp] activation option set extended with ttnn.mul/ttnn.multiply for the fused BinaryNg idiom (guard self-tests 37/37 pass). Composition note for vision_block tick: MLP all-reduce is 1.3 ms/device (53% of block kernel time); a row-sharded residual stream could fold the all_gather half away. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999991
       },
       "real_weights": {
         "status": "done",
@@ -1131,6 +1138,12 @@
       "tick": 56,
       "ts": "2026-06-10T21:53:05Z",
       "action": "device[vision_attention]",
+      "result": "ok"
+    },
+    {
+      "tick": 57,
+      "ts": "2026-06-10T22:08:54Z",
+      "action": "device[vision_mlp]",
       "result": "ok"
     }
   ],

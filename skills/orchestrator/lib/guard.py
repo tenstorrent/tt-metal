@@ -80,7 +80,11 @@ KIND_REQUIRED_KERNELS: dict[str, list[set[str]]] = {
     ],
     "mlp": [
         {"ttnn.linear", "ttnn.matmul"},
-        {"ttnn.silu", "ttnn.gelu", "ttnn.geglu", "ttnn.relu"},
+        # ttnn.mul/ttnn.multiply cover the fused-activation BinaryNg idiom
+        # (KB ttnn_mul_1): ttnn.mul(gate, up,
+        # input_tensor_a_activations=[ttnn.UnaryOpType.SILU]) computes silu
+        # inside the binary kernel, so no standalone silu op is traced.
+        {"ttnn.silu", "ttnn.gelu", "ttnn.geglu", "ttnn.relu", "ttnn.mul", "ttnn.multiply"},
     ],
     "decoder_layer": [
         {"ttnn.linear", "ttnn.matmul"},

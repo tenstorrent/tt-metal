@@ -2,10 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tracy harness for TtVisionMLP at the PRODUCTION operating point.
 
-Production context (tests/test_vision_transformer.py): the fp32 vision tower
-calls vision_mlp 42x per image (one SwiGLU FFN per block) on a replicated
-[1, 1, 896, 1536] fp32 activation on the 1x4 mesh (784 patches padded to 896
-rows, hidden 1536, intermediate 4224).
+Production context (tt/ocr_model.py): the bf16 vision tower with
+column/row-parallel TP across the 1x4 line (tp_degree=4, per-chip
+intermediate 4224/4=1056) calls vision_mlp 42x per image at DOCUMENT
+scale (~11k vision tokens for /tmp/demo_image1_cropped.jpg => padded
+11264 rows), hidden 1536.
+
+Operating points:
+
+- default: bf16 + tp=4 + seq=11264 (PRODUCTION, occupancy REDO);
+- ``--seq 896`` selects the golden 784-patch gate shape;
+- ``--dtype fp32 --tp 1`` selects the legacy high-precision path used by
+  tests/test_vision_transformer.py.
 
 Run under tracy:
     python -m tracy -p -v -r --op-support-count 20000 \
@@ -16,6 +24,7 @@ import argparse
 import importlib.util
 import json
 import sys
+import time
 from pathlib import Path
 
 import torch
@@ -30,7 +39,7 @@ sys.modules[_spec.name] = _mod
 _spec.loader.exec_module(_mod)
 TtVisionMLP = _mod.TtVisionMLP
 
-PADDED_SEQ = 896  # 784 real patches padded to a multiple of 128 (host-side)
+PROD_SEQ = 11264  # ~11224 document vision tokens padded to a multiple of 128
 HIDDEN = 1536
 
 
@@ -51,24 +60,33 @@ def _load_weights():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--traced", action="store_true")
+    parser.add_argument("--dtype", choices=["bf16", "fp32"], default="bf16")
+    parser.add_argument("--weight-dtype", choices=["match", "bf8b"], default="match")
+    parser.add_argument("--tp", type=int, default=4, help="column/row-parallel TP degree (1=replicate)")
+    parser.add_argument("--seq", type=int, default=PROD_SEQ, help="padded sequence rows (896=gate shape)")
+    parser.add_argument("--iters", type=int, default=5, help="timed untraced iterations")
     args = parser.parse_args()
+    dtype = ttnn.bfloat16 if args.dtype == "bf16" else ttnn.float32
+    print(f"input: seq={args.seq} dtype={args.dtype} weight_dtype={args.weight_dtype} tp={args.tp}")
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(1, 4),
         l1_small_size=32768,
-        trace_region_size=25_000_000,
+        trace_region_size=120_000_000,
     )
     try:
-        # Production dtype: the vision tower runs fp32 end-to-end.
-        block = TtVisionMLP(mesh_device, _load_weights(), dtype=ttnn.float32)
+        kwargs = {}
+        if args.weight_dtype == "bf8b":
+            kwargs["weight_dtype"] = ttnn.bfloat8_b
+        block = TtVisionMLP(mesh_device, _load_weights(), dtype=dtype, tp_degree=args.tp, **kwargs)
 
         torch.manual_seed(0)
-        x = torch.randn(1, 1, PADDED_SEQ, HIDDEN)
+        x = torch.randn(1, 1, args.seq, HIDDEN)
         # Persistent input buffer: stable address for trace replay.
         x_tt = ttnn.from_torch(
             x,
-            dtype=ttnn.float32,
+            dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -81,19 +99,29 @@ def main():
             ttnn.deallocate(out)
         ttnn.synchronize_device(mesh_device)
 
+        # Untraced wall-clock (the block runs 42x once per image in production).
+        times = []
+        for _ in range(max(1, args.iters)):
+            t0 = time.perf_counter()
+            out = block.forward(x_tt)
+            ttnn.synchronize_device(mesh_device)
+            times.append((time.perf_counter() - t0) * 1000)
+            ttnn.deallocate(out)
+        times.sort()
+        print(f"untraced wall ms: min={times[0]:.2f} median={times[len(times)//2]:.2f} max={times[-1]:.2f}")
+
         if args.traced:
             tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
             out = block.forward(x_tt)
             ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
-            # One warmup replay, then the profiled replay.
+            # One warmup replay, then the timed/profiled replay.
             ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
             ttnn.synchronize_device(mesh_device)
+            t0 = time.perf_counter()
             ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
             ttnn.synchronize_device(mesh_device)
+            print(f"traced wall ms: {(time.perf_counter() - t0) * 1000:.2f}")
             ttnn.release_trace(mesh_device, tid)
-        else:
-            out = block.forward(x_tt)
-            ttnn.synchronize_device(mesh_device)
         print("profiled iteration complete (traced=%s)" % args.traced)
     finally:
         ttnn.close_mesh_device(mesh_device)
