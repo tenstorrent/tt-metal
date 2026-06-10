@@ -20,6 +20,7 @@ MODEL_ID = "rednote-hilab/dots.ocr"
 VISION_PATCH_EMBED_PREFIX = "vision_tower.patch_embed.patchifier"
 VISION_TOWER_PREFIX = "vision_tower"
 VISION_NUM_BLOCKS = 42
+TEXT_EMBED_KEY = "model.embed_tokens.weight"
 
 _CHECKPOINT_CACHE: Dict[str, torch.Tensor] = {}
 
@@ -170,6 +171,18 @@ def vision_transformer_weights(
     return out
 
 
+def embedding_weights(hf_sd: Optional[Dict[str, torch.Tensor]] = None) -> Dict[str, torch.Tensor]:
+    """State dict for TtEmbedding: {"weight": [vocab, hidden]}.
+
+    HF key ``model.embed_tokens.weight`` (Qwen2-style text token embedding,
+    untied from ``lm_head.weight`` — ``tie_word_embeddings`` is false for
+    dots.ocr, so no shared-tensor helper is involved).
+    """
+    if hf_sd is None:
+        hf_sd = load_hf_state_dict(keys=[TEXT_EMBED_KEY])
+    return {"weight": hf_sd[TEXT_EMBED_KEY]}
+
+
 def count_params(sd) -> int:
     """Tensor-leaf element count of a (possibly nested) state dict."""
     if isinstance(sd, torch.Tensor):
@@ -232,3 +245,7 @@ if __name__ == "__main__":
     assert vt["post_trunk_norm.weight"].shape == (1536,)
     assert vt["merger.mlp.2.weight"].shape == (1536, 6144)
     print(f"vision_transformer: {len(vt)} tensors, {count_params(vt)} params OK")
+
+    esd = embedding_weights()
+    assert esd["weight"].shape == (151936, 1536), esd["weight"].shape
+    print(f"embedding: {len(esd)} tensors, {count_params(esd)} params OK")

@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T07:28:34Z
+**Updated:** 2026-06-10T07:36:26Z
 
 ## Block Status
 
@@ -49,7 +49,7 @@
 | embedding | ttnn | done | 1.000000 | 0 | Single ttnn.embedding lookup (KB ttnn_embedding cited: uint32 ROW_MAJOR indices [1,1,1,128], table [1,1,151936,1536] ROW_MAJOR DRAM, TILE_LAYOUT output) + ttnn.unsqueeze_to_4D + ttnn.all_gather(dim=3, Topology.Linear). Parallelism plan placement=shard implemented via the reference_impl tt_transformers/tt/embedding.py pattern: table sharded on the HIDDEN dim across the 1x4 mesh (ShardTensorToMesh dim=-1), per-device hidden slices recombined by all_gather into a replicated activation — the plan's 'shard vocab dim' wording deviates from the named tt_transformers pattern (vocab shard would need index offset/masking ttnn.embedding lacks); hidden-dim shard delta documented in the block docstring. Real model.embed_tokens.weight (untied) loaded from checkpoint in the test; replicated output compared single-device vs golden ids/output. Guard ok (lint 0, kernels ok, no new host ops). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | embedding | debug | n/a | — | 0 |  |
 | embedding | optimization | done | 1.000000 | 0 | Tracy-driven at-ceiling verdict, no change applied: traced tracy (metal-trace captured+replayed, 2 replay sessions) at the production operating point (uint32 ids [1,1,1,128] replicated, bf16 table [1,1,151936,1536] hidden-dim-sharded 1x4 mesh) shows per-device block kernel time ~33us: AllGatherDeviceOperation 88.1% (~29us/device, 9-10 cores), EmbeddingsDeviceOperation ~4us@4c. The gather is fabric-latency-bound at this payload (128x384 bf16 ~98KB/device/hop): wall-clock A/B over 200 traced replays measured FLAT across every available lever - baseline DRAM 57.7, L1-pinned embedding-out+gather-out 57.0, num_links=2 58.0, L1+links2 58.0 us/iter - so no change was applied (V1 -1.2% is replay noise and would break the DRAM block-output contract without evidence). KB ttnn_embedding placement observations already matched by the ttnn-phase code (prefill >32 flattened tokens -> DRAM interleaved + TILE output, uint32 ROW_MAJOR indices, table DRAM ROW_MAJOR); ttnn_embedding_1 sibling-lookup, cos_1, rope and embedding_bw entries n/a to this block. Async all_gather deferred to generation/perf phases per tp-guidance (sync CCL acceptable; in single-op-chain isolation async overlap cannot help). PCC 1.000000 (unchanged) re-verified on 1x4 mesh; traced_ops sidecar regenerated (all_gather/embedding/unsqueeze_to_4D). Guard ok (lint 0, traced tracy artifact verified). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
-| embedding | real_weights | pending | — | 0 |  |
+| embedding | real_weights | done | 1.000000 | 0 | embedding_weights loader added to consolidated tt/weight_loader.py (pure-PyTorch, memoized key-filtered safetensors load of model.embed_tokens.weight [151936,1536], untied from lm_head — tie_word_embeddings false, no shared-tensor helper; __main__ self-test extended: 233373696 params, shape asserted). Stage-1 parametric tests/test_real_hf_weights.py row runs TtEmbedding at the production operating point (bf16 table hidden-dim-sharded ShardTensorToMesh dim=-1 on the 1x4 mesh, uint32 ROW_MAJOR golden real prompt token ids [1,128] replicated, all_gather recombine, one device's replicated copy compared) vs the pure-PyTorch embedding_forward reference with the same real weights: PCC 1.000000 (>0.99). Block forward untouched; full harness re-run, all 8 rows passing (vision rows unchanged). Guard ok (lint 0, params_loaded 233373696>0). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | text_rmsnorm | reference | done | 1.000000 | 0 | Qwen2RMSNorm eps=1e-6, fp32 variance then weight*x, real layers.0 input_layernorm weight |
 | text_rmsnorm | ttnn | done | 0.999986 | 0 | Qwen2RMSNorm eps=1e-6 via fused ttnn.rms_norm ([1,1,dim//32,32] ROW_MAJOR gamma, HiFi2+fp32-acc per reference_impl models/common/rmsnorm.py) PLUS the parallelism-plan distributed path: rms_norm_pre_all_gather -> sync ttnn.all_gather(dim=3, Topology.Linear; async deferred to optimization per tp-guidance) -> rms_norm_post_all_gather with dim-2-sharded gamma (KB ttnn_rms_norm_post_all_gather cited; KB ttnn_pow chain fused into ttnn.rms_norm). Real layers.0 input_layernorm weight; 1x4 mesh; replicated path compared single-device vs golden (PCC 0.999986), distributed path concat-on-hidden vs golden (PCC 0.999986). Guard ok (lint 0, kernels ok, no new host ops). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | text_rmsnorm | debug | n/a | — | 0 |  |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 29 (2026-06-10T06:22:15Z): device[text_mlp] — ok
 - tick 30 (2026-06-10T06:33:07Z): device[decoder_layer] — ok
 - tick 31 (2026-06-10T06:40:18Z): device[lm_head] — ok
 - tick 32 (2026-06-10T06:46:52Z): device[vision_patch_embed] — ok
@@ -94,6 +93,7 @@
 - tick 36 (2026-06-10T07:12:02Z): device[vision_block] — ok
 - tick 37 (2026-06-10T07:19:34Z): device[patch_merger] — ok
 - tick 38 (2026-06-10T07:28:34Z): device[vision_transformer] — ok
+- tick 39 (2026-06-10T07:36:26Z): device[embedding] — ok
 
 ## Host-Resident Exceptions
 

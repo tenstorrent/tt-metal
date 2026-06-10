@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T07:28:34Z",
+  "updated_at": "2026-06-10T07:36:26Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -490,8 +490,15 @@
         "pcc": 1.0
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/weight_loader.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_real_hf_weights.py"
+        ],
+        "notes": "embedding_weights loader added to consolidated tt/weight_loader.py (pure-PyTorch, memoized key-filtered safetensors load of model.embed_tokens.weight [151936,1536], untied from lm_head \u2014 tie_word_embeddings false, no shared-tensor helper; __main__ self-test extended: 233373696 params, shape asserted). Stage-1 parametric tests/test_real_hf_weights.py row runs TtEmbedding at the production operating point (bf16 table hidden-dim-sharded ShardTensorToMesh dim=-1 on the 1x4 mesh, uint32 ROW_MAJOR golden real prompt token ids [1,128] replicated, all_gather recombine, one device's replicated copy compared) vs the pure-PyTorch embedding_forward reference with the same real weights: PCC 1.000000 (>0.99). Block forward untouched; full harness re-run, all 8 rows passing (vision rows unchanged). Guard ok (lint 0, params_loaded 233373696>0). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 1.0,
+        "params_loaded": 233373696
       }
     },
     {
@@ -1041,6 +1048,12 @@
       "tick": 38,
       "ts": "2026-06-10T07:28:34Z",
       "action": "device[vision_transformer]",
+      "result": "ok"
+    },
+    {
+      "tick": 39,
+      "ts": "2026-06-10T07:36:26Z",
+      "action": "device[embedding]",
       "result": "ok"
     }
   ],

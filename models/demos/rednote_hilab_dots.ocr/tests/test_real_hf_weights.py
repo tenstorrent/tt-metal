@@ -40,6 +40,7 @@ _vision_mlp_mod = _load_module("dots_ocr_tt_vision_mlp", MODEL_DIR / "tt" / "vis
 _vision_block_mod = _load_module("dots_ocr_tt_vision_block", MODEL_DIR / "tt" / "vision_block.py")
 _patch_merger_mod = _load_module("dots_ocr_tt_patch_merger", MODEL_DIR / "tt" / "patch_merger.py")
 _vision_transformer_mod = _load_module("dots_ocr_tt_vision_transformer", MODEL_DIR / "tt" / "vision_transformer.py")
+_embedding_mod = _load_module("dots_ocr_tt_embedding", MODEL_DIR / "tt" / "embedding.py")
 
 
 def _pcc(a, b):
@@ -283,6 +284,34 @@ def _t_vision_transformer(mesh_device) -> tuple[float, int]:
     return _pcc(ref_out, out), wl.count_params(sd)
 
 
+def _t_embedding(mesh_device) -> tuple[float, int]:
+    # Real model.embed_tokens.weight (151936x1536, untied from lm_head)
+    # through the consolidated loader. Production-distribution input: the
+    # golden's real prompt token ids (an embedding lookup IS the model's
+    # first op, so real ids are exactly the production distribution).
+    # Production operating point: bf16 table hidden-dim-sharded across the
+    # 1x4 mesh, uint32 ROW_MAJOR ids replicated, all_gather recombine
+    # (embedding ttnn/optimization phases); replicated output, one device's
+    # copy compared.
+    golden = torch.load(MODEL_DIR / "reference" / "golden" / "embedding.pt")
+    ids = golden["input"]  # [1, 128] int64 token ids
+    sd = wl.embedding_weights()
+    ref_out = ref.embedding_forward(ids, sd["weight"])
+
+    block = _embedding_mod.TtEmbedding(mesh_device, sd)
+    ids_tt = ttnn.from_torch(
+        ids.reshape(1, 1, 1, -1).to(torch.int32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    out = ttnn.to_torch(ttnn.get_device_tensors(block.forward(ids_tt))[0]).float()
+    out = out.reshape(ref_out.shape)
+    return _pcc(ref_out, out), wl.count_params(sd)
+
+
 BLOCKS = [
     ("vision_patch_embed", _t_vision_patch_embed),
     ("vision_rmsnorm", _t_vision_rmsnorm),
@@ -291,6 +320,7 @@ BLOCKS = [
     ("vision_block", _t_vision_block),
     ("patch_merger", _t_patch_merger),
     ("vision_transformer", _t_vision_transformer),
+    ("embedding", _t_embedding),
 ]
 
 
