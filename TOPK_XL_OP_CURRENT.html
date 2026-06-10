@@ -1,0 +1,1786 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>topk_xl Current Implementation</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8fb;
+      --panel: #ffffff;
+      --ink: #172033;
+      --muted: #5b6477;
+      --line: #d9deea;
+      --accent: #0f6b7f;
+      --accent-2: #7a4a12;
+      --code-bg: #f0f3f8;
+      --warn-bg: #fff8e6;
+      --ok-bg: #eef8f1;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.55;
+      background: var(--bg);
+      color: var(--ink);
+    }
+
+    header {
+      background: #1f2937;
+      color: #fff;
+      padding: 36px 32px;
+      border-bottom: 5px solid var(--accent);
+    }
+
+    header h1 {
+      margin: 0 0 8px;
+      font-size: 30px;
+      font-weight: 750;
+      letter-spacing: 0;
+    }
+
+    header p {
+      margin: 0;
+      max-width: 980px;
+      color: #d8dee9;
+      font-size: 15px;
+    }
+
+    main {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 28px 24px 56px;
+    }
+
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 22px 24px;
+      margin: 18px 0;
+      box-shadow: 0 1px 2px rgba(17, 24, 39, 0.04);
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      color: #111827;
+      font-size: 22px;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 22px 0 10px;
+      color: #1f2937;
+      font-size: 17px;
+      letter-spacing: 0;
+    }
+
+    h4 {
+      margin: 16px 0 8px;
+      font-size: 15px;
+      color: #263244;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 8px 0;
+    }
+
+    ul, ol {
+      margin: 8px 0 8px 22px;
+      padding: 0;
+    }
+
+    li {
+      margin: 5px 0;
+    }
+
+    code, pre {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    code {
+      background: var(--code-bg);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-size: 0.92em;
+    }
+
+    pre {
+      background: #f8fafc !important;
+      color: #111827 !important;
+      border: 1px solid #cfd7e6;
+      border-radius: 6px;
+      padding: 14px 16px;
+      overflow-x: auto;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    pre code {
+      background: transparent !important;
+      color: #111827 !important;
+      padding: 0;
+      border-radius: 0;
+      font-size: inherit;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0 18px;
+      font-size: 13px;
+    }
+
+    th, td {
+      border: 1px solid var(--line);
+      padding: 9px 10px;
+      vertical-align: top;
+      text-align: left;
+    }
+
+    th {
+      background: #eef2f7;
+      color: #1f2937;
+      font-weight: 700;
+    }
+
+    .toc {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 8px 22px;
+    }
+
+    .toc a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    .toc a:hover {
+      text-decoration: underline;
+    }
+
+    .note {
+      border-left: 4px solid var(--accent);
+      background: #eef7fa;
+      padding: 10px 12px;
+      margin: 12px 0;
+      border-radius: 4px;
+    }
+
+    .warning {
+      border-left: 4px solid var(--accent-2);
+      background: var(--warn-bg);
+      padding: 10px 12px;
+      margin: 12px 0;
+      border-radius: 4px;
+    }
+
+    .ok {
+      border-left: 4px solid #2e7d32;
+      background: var(--ok-bg);
+      padding: 10px 12px;
+      margin: 12px 0;
+      border-radius: 4px;
+    }
+
+    .small {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .visual-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 14px;
+      margin: 14px 0 18px;
+    }
+
+    .flow-card {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fbfcff;
+      padding: 14px;
+      overflow: hidden;
+    }
+
+    .flow-card h4 {
+      margin-top: 0;
+      color: #152238;
+    }
+
+    .flow-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 10px 0;
+      min-height: 44px;
+    }
+
+    .flow-stack {
+      display: grid;
+      gap: 8px;
+      margin: 10px 0;
+    }
+
+    .node {
+      min-width: 82px;
+      border: 1px solid #b8c3d4;
+      border-radius: 5px;
+      background: #fff;
+      padding: 8px 9px;
+      text-align: center;
+      font-size: 12px;
+      color: #172033;
+      box-shadow: 0 1px 0 rgba(17, 24, 39, 0.05);
+    }
+
+    .node.cb {
+      background: #edf7fb;
+      border-color: #8fc3d2;
+    }
+
+    .node.reg {
+      background: #f1f5ff;
+      border-color: #a8b9df;
+    }
+
+    .node.sfpu {
+      background: #fff5e8;
+      border-color: #d7a75c;
+    }
+
+    .node.pack {
+      background: #eef8f1;
+      border-color: #96c69e;
+    }
+
+    .node small {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.25;
+    }
+
+    .arrow {
+      position: relative;
+      flex: 1;
+      min-width: 32px;
+      height: 2px;
+      background: #8794a8;
+      overflow: visible;
+    }
+
+    .arrow::after {
+      content: "";
+      position: absolute;
+      right: -1px;
+      top: -4px;
+      width: 0;
+      height: 0;
+      border-top: 5px solid transparent;
+      border-bottom: 5px solid transparent;
+      border-left: 8px solid #8794a8;
+    }
+
+    .arrow.pulse::before {
+      content: "";
+      position: absolute;
+      width: 12px;
+      height: 12px;
+      top: -5px;
+      left: 0;
+      border-radius: 50%;
+      background: var(--accent);
+      animation: travel 2.2s linear infinite;
+    }
+
+    @keyframes travel {
+      from {
+        transform: translateX(0);
+        opacity: 0.15;
+      }
+      20% {
+        opacity: 0.9;
+      }
+      to {
+        transform: translateX(calc(100% - 8px));
+        opacity: 0.15;
+      }
+    }
+
+    .tile {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 4px;
+      width: 100%;
+      max-width: 250px;
+      margin: 8px 0;
+    }
+
+    .cell {
+      border: 1px solid #c7d0df;
+      border-radius: 4px;
+      min-height: 28px;
+      padding: 5px 4px;
+      text-align: center;
+      font-size: 11px;
+      background: #fff;
+      color: #172033;
+    }
+
+    .cell.value {
+      background: #e8f6fb;
+      border-color: #8fc3d2;
+    }
+
+    .cell.index {
+      background: #ecf8ee;
+      border-color: #96c69e;
+    }
+
+    .cell.fused {
+      background: linear-gradient(90deg, #e8f6fb 0 50%, #ecf8ee 50% 100%);
+      border-color: #9db3c1;
+    }
+
+    .cell.inactive {
+      background: #f3f4f6;
+      color: #6b7280;
+      border-style: dashed;
+    }
+
+    .cell.hot {
+      animation: glow 1.8s ease-in-out infinite;
+    }
+
+    @keyframes glow {
+      0%, 100% {
+        box-shadow: 0 0 0 rgba(15, 107, 127, 0);
+      }
+      50% {
+        box-shadow: 0 0 0 3px rgba(15, 107, 127, 0.18);
+      }
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 10px 0;
+    }
+
+    .legend span {
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 5px 7px;
+      font-size: 12px;
+      background: #fff;
+    }
+
+    .zoom-panel {
+      border: 1px solid #c9d4e5;
+      border-radius: 6px;
+      background: #fbfdff;
+      padding: 16px;
+      margin: 16px 0;
+    }
+
+    .matrix-pair {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) 80px minmax(220px, 1fr);
+      gap: 12px;
+      align-items: center;
+      margin: 14px 0;
+    }
+
+    .face-matrix {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 5px;
+      border: 1px solid #b9c5d6;
+      border-radius: 6px;
+      padding: 8px;
+      background: #ffffff;
+      min-width: 0;
+    }
+
+    .face-title {
+      grid-column: 1 / -1;
+      font-weight: 700;
+      color: #24324a;
+      font-size: 12px;
+      margin-bottom: 2px;
+    }
+
+    .lane {
+      min-height: 32px;
+      border-radius: 4px;
+      border: 1px solid #c7d0df;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      font-size: 11px;
+      color: #172033;
+      background: #fff;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .lane.value {
+      background: #e8f6fb;
+      border-color: #8fc3d2;
+    }
+
+    .lane.index {
+      background: #ecf8ee;
+      border-color: #96c69e;
+    }
+
+    .lane.move-a {
+      animation: laneMoveA 2.6s ease-in-out infinite;
+    }
+
+    .lane.move-b {
+      animation: laneMoveB 2.6s ease-in-out infinite;
+    }
+
+    .lane.move-c {
+      animation: laneMoveC 2.6s ease-in-out infinite;
+    }
+
+    @keyframes laneMoveA {
+      0%, 100% { transform: translate(0, 0); }
+      45% { transform: translate(105%, 0); }
+      55% { transform: translate(105%, 0); }
+    }
+
+    @keyframes laneMoveB {
+      0%, 100% { transform: translate(0, 0); }
+      45% { transform: translate(0, 115%); }
+      55% { transform: translate(0, 115%); }
+    }
+
+    @keyframes laneMoveC {
+      0%, 100% { transform: translate(0, 0); }
+      45% { transform: translate(-105%, -115%); }
+      55% { transform: translate(-105%, -115%); }
+    }
+
+    .register-strip {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+      gap: 8px;
+      margin: 12px 0;
+    }
+
+    .register {
+      border: 1px solid #b9c5d6;
+      border-radius: 5px;
+      padding: 8px 9px;
+      background: #fff;
+      font-size: 12px;
+    }
+
+    .register strong {
+      display: block;
+      color: #172033;
+      margin-bottom: 2px;
+    }
+
+    @media (max-width: 780px) {
+      .matrix-pair {
+        grid-template-columns: 1fr;
+      }
+
+      .matrix-pair .arrow {
+        width: 2px;
+        height: 36px;
+        justify-self: center;
+      }
+
+      .matrix-pair .arrow::after {
+        right: -4px;
+        top: auto;
+        bottom: -1px;
+        border-left: 5px solid transparent;
+        border-right: 5px solid transparent;
+        border-top: 8px solid #8794a8;
+        border-bottom: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>topk_xl Current Implementation</h1>
+    <p>
+      Detailed implementation note for the experimental TTNN <code>topk_xl</code> operation as it exists in this worktree.
+      It describes the host constraints, row-major tensor layout, circular-buffer layout, reader/compute/writer dataflow,
+      DST register layout, and the LLK calls that make the operation work.
+    </p>
+  </header>
+
+  <main>
+    <section id="toc">
+      <h2>Contents</h2>
+      <div class="toc">
+        <a href="#summary">1. Summary</a>
+        <a href="#requirements">2. Public Op Requirements</a>
+        <a href="#host">3. Host Program Shape</a>
+        <a href="#layout">4. Tensor and CB Layout</a>
+        <a href="#pipeline">5. End-to-End Dataflow</a>
+        <a href="#compute">6. Compute Algorithm</a>
+        <a href="#rank-order">7. Public Rank-Order Output</a>
+        <a href="#llk-contracts">8. LLK Call Contracts</a>
+        <a href="#inactive">9. LLK Support Not Used by This Path</a>
+        <a href="#validation">10. Current Validation</a>
+      </div>
+    </section>
+
+    <section id="summary">
+      <h2>1. Summary</h2>
+      <p>
+        <code>ttnn::experimental::topk_xl</code> computes sorted top-k values and their original row-major indices for
+        large row-major BF16 input rows. The current program factory in this worktree launches one worker core
+        (<code>CoreCoord{0, 0}</code>), so the current code path is single-core. That is an implementation limitation,
+        not an op requirement. The natural scaling path is row-parallel execution across multiple Tensix cores, where
+        each core owns an independent subset of flattened rows and runs the same reader -> compute -> writer pipeline.
+      </p>
+      <p>
+        The current implementation is intentionally narrow:
+      </p>
+      <ul>
+        <li>Input tensor layout is <code>ROW_MAJOR</code>.</li>
+        <li>Input dtype is <code>BFLOAT16</code>.</li>
+        <li>Output values layout is <code>ROW_MAJOR</code>, dtype <code>BFLOAT16</code>.</li>
+        <li>Output indices layout is <code>ROW_MAJOR</code>, dtype <code>UINT32</code>.</li>
+        <li>Supported <code>K</code> values are <code>512</code>, <code>1024</code>, and <code>2048</code>.</li>
+        <li>Only <code>largest=true</code> and <code>sorted=true</code> are supported.</li>
+        <li>The last dimension <code>N</code> must satisfy <code>N % K == 0</code> and <code>N <= 131072</code>.</li>
+      </ul>
+      <p>
+        Internally, each <code>K</code>-element chunk is copied into DST, converted into a fused value/index
+        representation, locally sorted, split into value and true UINT32 index regions, and merged into the running
+        top-k result. At the end of each row, a materialization step transposes the internal rank traversal into a public
+        rank-page layout, and the writer completes the remaining static page rotate with NOC writes.
+      </p>
+    </section>
+
+    <section id="requirements">
+      <h2>2. Public Op Requirements</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Requirement</th>
+            <th>Current contract</th>
+            <th>Reason</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Input placement</td>
+            <td>Device tensor with allocated buffer</td>
+            <td>Kernels read through a device <code>TensorAccessor</code>.</td>
+          </tr>
+          <tr>
+            <td>Input layout</td>
+            <td><code>ROW_MAJOR</code></td>
+            <td>The reader treats each flattened row as one contiguous row-major page.</td>
+          </tr>
+          <tr>
+            <td>Input dtype</td>
+            <td><code>BFLOAT16</code></td>
+            <td>Copy LLK unpacks BF16 values into FP32 DST words where the upper half carries the value.</td>
+          </tr>
+          <tr>
+            <td>Output values</td>
+            <td><code>ROW_MAJOR</code>, <code>BFLOAT16</code>, shape last dim <code>K</code></td>
+            <td>Values are packed from the value DST region and written as contiguous row-major rank results.</td>
+          </tr>
+          <tr>
+            <td>Output indices</td>
+            <td><code>ROW_MAJOR</code>, <code>UINT32</code>, shape last dim <code>K</code></td>
+            <td>Indices are true row-major element offsets into the input row, not 16-bit tile coordinates.</td>
+          </tr>
+          <tr>
+            <td><code>K</code></td>
+            <td><code>512</code>, <code>1024</code>, or <code>2048</code></td>
+            <td>These are the LLK-supported sequence sizes currently wired through TTNN.</td>
+          </tr>
+          <tr>
+            <td><code>N</code></td>
+            <td><code>N >= K</code>, <code>N % K == 0</code>, <code>N <= 131072</code></td>
+            <td>The row is processed as <code>num_chunks = N / K</code>. The maximum row length is the current static chunk-base dispatch limit.</td>
+          </tr>
+          <tr>
+            <td>Sort mode</td>
+            <td><code>largest=true</code>, <code>sorted=true</code></td>
+            <td>The compute kernel keeps the largest top-k in descending public rank order.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="host">
+      <h2>3. Host Program Shape</h2>
+      <p>
+        The host program is created by <code>TopkXLProgramFactory</code>. It flattens all dimensions except the last into
+        <code>num_rows</code>. For an input shape <code>[D0, D1, ..., N]</code>:
+      </p>
+      <pre><code>num_rows = D0 * D1 * ...
+num_chunks = N / K
+tiles_per_sequence = ceil(K / 1024)</code></pre>
+      <p>
+        The current implementation runs on one worker core, <code>CoreCoord{0, 0}</code>, with three kernels:
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Kernel</th>
+            <th>Processor/NOC</th>
+            <th>Main responsibility</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>reader.cpp</code></td>
+            <td><code>RISCV_1</code>, <code>NOC_0</code></td>
+            <td>Read row-major BF16 chunks from DRAM/L1 tensor storage into input CB tile pages.</td>
+          </tr>
+          <tr>
+            <td><code>compute.cpp</code></td>
+            <td>Compute kernel</td>
+            <td>Copy, index, sort, split, merge, materialize, and pack top-k results.</td>
+          </tr>
+          <tr>
+            <td><code>writer.cpp</code></td>
+            <td><code>RISCV_0</code>, <code>NOC_1</code></td>
+            <td>Write value and index rank slices from output CBs to row-major output tensors.</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        All three CBs are double buffered. The depth is <code>2 * tiles_per_sequence</code> pages, so while compute is
+        consuming one chunk/row result, data movement can prepare or drain the other page group.
+      </p>
+      <div class="warning">
+        <strong>Parallelism status:</strong> the current code creates one core. The op should be extended to distribute
+        flattened rows over a core range. That multi-core version should give each core its own reader/compute/writer
+        instance and local CBs, with runtime or compile-time row ranges such as <code>row_start</code> and
+        <code>num_rows_for_core</code>. No cross-core reduction is required for row-parallel topk because each row is
+        independent.
+      </div>
+    </section>
+
+    <section id="layout">
+      <h2>4. Tensor and Circular-Buffer Layout</h2>
+
+      <h3>4.1 Tensor Row Layout</h3>
+      <p>
+        Input is interpreted as flattened rows. Each row is contiguous:
+      </p>
+      <pre><code>input row r:
+  element 0, element 1, ..., element N-1
+
+chunk c:
+  input row elements [c*K, c*K + K)</code></pre>
+      <p>
+        The output tensors have the same leading dimensions as the input and last dimension <code>K</code>:
+      </p>
+      <pre><code>values row r:
+  top value rank 0, top value rank 1, ..., top value rank K-1
+
+indices row r:
+  original row-major input index for each output rank, uint32</code></pre>
+
+      <h3>4.2 CB IDs and Page Sizes</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>CB</th>
+            <th>ID</th>
+            <th>DataFormat</th>
+            <th>Page size</th>
+            <th>Depth</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Input</td>
+            <td><code>c_0</code></td>
+            <td><code>Float16_b</code></td>
+            <td><code>1024 * sizeof(BF16) = 2048 bytes</code></td>
+            <td><code>2 * tiles_per_sequence</code> pages</td>
+          </tr>
+          <tr>
+            <td>Output values</td>
+            <td><code>c_1</code></td>
+            <td><code>Float16_b</code></td>
+            <td><code>1024 * sizeof(BF16) = 2048 bytes</code></td>
+            <td><code>2 * tiles_per_sequence</code> pages</td>
+          </tr>
+          <tr>
+            <td>Output indices</td>
+            <td><code>c_2</code></td>
+            <td><code>Float32</code> as pack format for 32-bit words</td>
+            <td><code>1024 * sizeof(UINT32) = 4096 bytes</code></td>
+            <td><code>2 * tiles_per_sequence</code> pages</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        <code>tiles_per_sequence</code> is <code>1</code> for <code>K=512</code> and <code>K=1024</code>, and
+        <code>2</code> for <code>K=2048</code>. A tile page always represents a 32x32 tile, or 1024 element lanes.
+      </p>
+
+      <div class="warning">
+        For <code>K=512</code>, only 512 elements are active. The input CB still reserves one full tile page, but the
+        reader reads only <code>K * sizeof(BF16)</code> bytes and the copy LLK unpacks only 512 active lanes. Inactive
+        lanes are cleared to negative infinity so they sort behind real values. The writer later writes only
+        <code>K/16 = 32</code> public slices out of the packed output tile page.
+      </div>
+
+      <h3>4.3 DST Register Layout During Compute</h3>
+      <p>
+        The compute kernel uses DST tile slots for two candidate sequences:
+      </p>
+      <pre><code>tiles_per_sequence = ceil(K / 1024)
+sequence_tiles = 2 * tiles_per_sequence
+
+slot0 = 0
+slot1 = sequence_tiles</code></pre>
+      <p>
+        For a single sequence after <code>topk_xl_separate_indices_row_major</code>, DST contains an unfused value region
+        followed by an index region:
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>K</th>
+            <th>Value region</th>
+            <th>Index region</th>
+            <th>Element count represented</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>512</td>
+            <td>1 tile slot, active half tile</td>
+            <td>same tile-sized offset region at <code>+64</code> DST addr units</td>
+            <td>512 active values and 512 UINT32 indices</td>
+          </tr>
+          <tr>
+            <td>1024</td>
+            <td>1 full tile slot</td>
+            <td>one sequence offset at <code>+64</code> DST addr units</td>
+            <td>1024 values and 1024 UINT32 indices</td>
+          </tr>
+          <tr>
+            <td>2048</td>
+            <td>2 full tile slots</td>
+            <td>one sequence offset at <code>+128</code> DST addr units</td>
+            <td>2048 values and 2048 UINT32 indices</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        The LLK code uses <code>indices_offset = num_tiles_per_sequence * 64</code> in DST address units. Public
+        <code>pack_tile</code> calls see this as:
+      </p>
+      <pre><code>values:  pack dst tile slot0 + t
+indices: pack dst tile slot0 + tiles_per_sequence + t</code></pre>
+    </section>
+
+    <section id="pipeline">
+      <h2>5. End-to-End Dataflow</h2>
+
+      <h3>5.1 Reader</h3>
+      <p>
+        The reader uses object-based APIs:
+      </p>
+      <ul>
+        <li><code>TensorAccessor</code> describes row-major input storage.</li>
+        <li><code>CircularBuffer input_cb(cb_in)</code> controls CB reservation and push.</li>
+        <li><code>Noc noc</code> issues <code>noc.async_read</code>.</li>
+      </ul>
+      <p>
+        For every row, every chunk, and every tile page in the chunk, the reader reserves one input CB page and reads the
+        active bytes into that page:
+      </p>
+      <pre><code>for row in rows:
+  for chunk in N/K chunks:
+    for tile in tiles_per_sequence:
+      reserve input CB page
+      read from input TensorAccessor page_id=row,
+           offset=chunk*K*sizeof(BF16) + tile*input_tile_bytes
+      push input CB page</code></pre>
+      <p>
+        For <code>K=2048</code>, each chunk is two tile pages. For <code>K=512</code>, only the first half of the tile
+        page contains new input data; the compute copy path uses <code>num_elements=512</code>, so the unread half is not
+        part of the active sequence.
+      </p>
+
+      <h3>5.2 Compute</h3>
+      <p>
+        The compute kernel calls <code>compute_kernel_hw_startup(input_cb, values_cb)</code> once at kernel start. After
+        that it uses <code>CircularBuffer</code> objects for CB flow control and raw CB IDs for LLK calls that require
+        operand IDs. Packer format changes are limited to <code>pack_reconfig_data_format</code> when switching between
+        values and indices.
+      </p>
+      <p>
+        For each row, compute acquires DST registers once and streams chunks in order:
+      </p>
+      <pre><code>process first chunk into slot0, descending final order
+
+for each later chunk:
+  process chunk into slot1, ascending order
+  merge slot0 and slot1, keeping top K in slot0
+  rebuild slot0 for the next merge
+
+materialize slot0 into public rank tile order
+pack values to values CB
+pack indices to indices CB
+release DST</code></pre>
+
+      <h3>5.3 Writer</h3>
+      <p>
+        The writer also uses object-based APIs:
+      </p>
+      <ul>
+        <li><code>CircularBuffer values_cb</code> and <code>CircularBuffer indices_cb</code> wait/pop output pages.</li>
+        <li><code>TensorAccessor values</code> and <code>TensorAccessor indices</code> describe output rows.</li>
+        <li><code>Noc::async_write</code> moves slices from CB pages to row-major output tensors.</li>
+      </ul>
+      <p>
+        The materializer performs the face transpose. The writer performs the fixed page rotate while writing. The public
+        write unit is one 16-element rank slice:
+      </p>
+      <pre><code>row_slice_elements = 16
+output_slices_per_row = K / 16
+rank_page_groups = output_slices_per_row / 16
+
+rank_page = ((page &amp; 0xF) * rank_page_groups) | (page &gt;&gt; 4)</code></pre>
+      <p>
+        The writer uses <code>page</code> as the source slice inside the packed CB and <code>rank_page</code> as the
+        destination slice inside the public row-major output row. This completes the conversion from internal sorted
+        traversal to public rank order.
+      </p>
+    </section>
+
+    <section id="compute">
+      <h2>6. Compute Algorithm</h2>
+
+      <h3>6.1 Per-Chunk Processing</h3>
+      <p>
+        <code>process_chunk&lt;K&gt;</code> performs five operations:
+      </p>
+      <ol>
+        <li>Wait for <code>tiles_per_sequence</code> input CB pages.</li>
+        <li>Copy row-major BF16 input into DST tiles with inactive lanes cleared.</li>
+        <li>Add an initial low-16 tile-coordinate index into each FP32 DST word.</li>
+        <li>Run a local bitonic sort on the chunk.</li>
+        <li>Split fused value/index words into BF16 value words and true row-major UINT32 indices.</li>
+      </ol>
+      <p>
+        The initial fused representation is not a real FP32 numeric value. It is a 32-bit word used by the SFPU sort
+        machinery:
+      </p>
+      <pre><code>[ upper 16 bits: BF16 value ][ lower 16 bits: temporary tile-coordinate index ]</code></pre>
+      <p>
+        The sort compares the value half while carrying the index half with the value. Immediately after the local sort,
+        the current op converts the low-16 tile-coordinate index into a true row-major UINT32 index for the input row.
+      </p>
+
+      <h3>6.2 Chunk Base Dispatch</h3>
+      <p>
+        True row-major index construction needs <code>chunk_base = chunk * K</code>. The current SFPU config-load path
+        uses template-static immediates for the chunk base. The compute kernel dispatches to a template-recursive static
+        initializer based on <code>K</code> and <code>chunk</code>:
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>K</th>
+            <th>Lower-half cases</th>
+            <th>Upper16 range</th>
+            <th>Max chunks covered</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>512</td>
+            <td>128</td>
+            <td>0..1</td>
+            <td>256 chunks, N=131072</td>
+          </tr>
+          <tr>
+            <td>1024</td>
+            <td>64</td>
+            <td>0..1</td>
+            <td>128 chunks, N=131072</td>
+          </tr>
+          <tr>
+            <td>2048</td>
+            <td>32</td>
+            <td>0..3</td>
+            <td>64 chunks, N=131072</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>6.3 Merge Across Chunks</h3>
+      <p>
+        The first chunk is processed into <code>slot0</code> with descending order. Each later chunk is processed into
+        <code>slot1</code> with ascending order, producing the opposing bitonic direction required by the merge network.
+        The unfused merge path then combines <code>slot0</code> and <code>slot1</code>, preserving values and UINT32
+        indices separately:
+      </p>
+      <pre><code>topk_xl_init&lt;K, false&gt;()
+topk_xl_merge&lt;K, false&gt;(slot0)
+topk_xl_rebuild&lt;K, false&gt;(slot0, false)</code></pre>
+      <p>
+        After the merge, the top <code>K</code> candidates remain in <code>slot0</code>. Rebuild restores the bitonic
+        structure so <code>slot0</code> can be merged with the next sorted chunk.
+      </p>
+    </section>
+
+    <section id="rank-order">
+      <h2>7. Public Rank-Order Output</h2>
+      <p>
+        The internal sorted traversal is not directly public row-major rank order. The final conversion is split into two
+        stages:
+      </p>
+      <ol>
+        <li><code>topk_xl_materialize_rank_order&lt;K&gt;(slot0)</code> performs the required 16x16 face transpose for
+        values and indices in DST.</li>
+        <li><code>writer.cpp</code> performs a fixed page rotate while issuing NOC writes to the output tensors.</li>
+      </ol>
+      <p>
+        Values and indices are packed separately:
+      </p>
+      <pre><code>values_cb.reserve_back(tiles_per_sequence)
+pack values tiles slot0 + [0, tiles_per_sequence)
+values_cb.push_back(tiles_per_sequence)
+
+indices_cb.reserve_back(tiles_per_sequence)
+pack indices tiles slot0 + tiles_per_sequence + [0, tiles_per_sequence)
+indices_cb.push_back(tiles_per_sequence)</code></pre>
+      <p>
+        The writer uses <code>K/16</code> slices. Slice size is 16 elements:
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Output</th>
+            <th>Slice elements</th>
+            <th>Slice bytes</th>
+            <th>Public row bytes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Values</td>
+            <td>16 BF16</td>
+            <td>32</td>
+            <td><code>K * 2</code></td>
+          </tr>
+          <tr>
+            <td>Indices</td>
+            <td>16 UINT32</td>
+            <td>64</td>
+            <td><code>K * 4</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>7.1 Zoom: <code>topk_xl_materialize_rank_order</code></h3>
+      <p>
+        The materializer is a DST-only transformation. At this point there are no input CB reads and no output CB writes.
+        The compute kernel has already produced a final unfused top-k sequence in <code>slot0</code>: a value region and
+        a matching UINT32 index region. <code>topk_xl_materialize_rank_order&lt;K&gt;(slot0)</code> changes the order inside
+        those DST regions so that <code>pack_tile</code> can emit rank pages.
+      </p>
+
+      <div class="zoom-panel">
+        <h4>Single-face view: transpose a 16x16 face inside DST</h4>
+        <p>
+          The real face is 16x16 lanes. This diagram uses a 4x4 miniature to show the same operation. A lane labeled
+          <code>r2c1</code> means row 2, column 1 of the face before materialization. After materialization it appears
+          at row 1, column 2.
+        </p>
+        <div class="matrix-pair">
+          <div class="face-matrix">
+            <div class="face-title">Before: internal face order in DST</div>
+            <div class="lane value move-a">r0c0</div><div class="lane value move-a">r0c1</div><div class="lane value">r0c2</div><div class="lane value">r0c3</div>
+            <div class="lane value move-b">r1c0</div><div class="lane value">r1c1</div><div class="lane value">r1c2</div><div class="lane value">r1c3</div>
+            <div class="lane value">r2c0</div><div class="lane value move-c">r2c1</div><div class="lane value">r2c2</div><div class="lane value">r2c3</div>
+            <div class="lane value">r3c0</div><div class="lane value">r3c1</div><div class="lane value">r3c2</div><div class="lane value">r3c3</div>
+          </div>
+          <div class="arrow pulse"></div>
+          <div class="face-matrix">
+            <div class="face-title">After: transposed rank-page face</div>
+            <div class="lane value">r0c0</div><div class="lane value">r1c0</div><div class="lane value">r2c0</div><div class="lane value">r3c0</div>
+            <div class="lane value">r0c1</div><div class="lane value">r1c1</div><div class="lane value hot">r2c1</div><div class="lane value">r3c1</div>
+            <div class="lane value">r0c2</div><div class="lane value">r1c2</div><div class="lane value">r2c2</div><div class="lane value">r3c2</div>
+            <div class="lane value">r0c3</div><div class="lane value">r1c3</div><div class="lane value">r2c3</div><div class="lane value">r3c3</div>
+          </div>
+        </div>
+        <p class="small">
+          The animation is illustrative: the LLK uses SFPU/DST transpose operations over 32-bit DST words, not scalar
+          software moves. The important contract is that each 16x16 face is transposed in place at a fixed DST offset.
+        </p>
+      </div>
+
+      <div class="zoom-panel">
+        <h4>Value and index companion faces</h4>
+        <p>
+          The materializer applies the same face transpose to values and to their UINT32 index companions. It does not
+          recompute indices; it only moves the already-built UINT32 index words to match the value ranks.
+        </p>
+        <div class="matrix-pair">
+          <div class="face-matrix">
+            <div class="face-title">Value face before</div>
+            <div class="lane value">v00</div><div class="lane value">v01</div><div class="lane value">v02</div><div class="lane value">v03</div>
+            <div class="lane value">v10</div><div class="lane value">v11</div><div class="lane value">v12</div><div class="lane value">v13</div>
+            <div class="lane value">v20</div><div class="lane value">v21</div><div class="lane value">v22</div><div class="lane value">v23</div>
+            <div class="lane value">v30</div><div class="lane value">v31</div><div class="lane value">v32</div><div class="lane value">v33</div>
+          </div>
+          <div class="arrow pulse"></div>
+          <div class="face-matrix">
+            <div class="face-title">Matching index face after same transpose</div>
+            <div class="lane index">i00</div><div class="lane index">i10</div><div class="lane index">i20</div><div class="lane index">i30</div>
+            <div class="lane index">i01</div><div class="lane index">i11</div><div class="lane index">i21</div><div class="lane index">i31</div>
+            <div class="lane index">i02</div><div class="lane index">i12</div><div class="lane index">i22</div><div class="lane index">i32</div>
+            <div class="lane index">i03</div><div class="lane index">i13</div><div class="lane index">i23</div><div class="lane index">i33</div>
+          </div>
+        </div>
+        <p class="small">
+          In the real DST layout, value and index faces live in separate regions. The materializer visits the value face
+          offsets first, then the index face offsets using <code>indices_offset</code>.
+        </p>
+      </div>
+
+      <div class="zoom-panel">
+        <h4>What registers and offsets are active</h4>
+        <div class="register-strip">
+          <div class="register">
+            <strong>DST</strong>
+            Source and destination of the transformation. Materialization is in-place over the final top-k regions.
+          </div>
+          <div class="register">
+            <strong>SFPU/MATH</strong>
+            Executes the face transpose body and rebases the DST address before each face.
+          </div>
+          <div class="register">
+            <strong>SrcA/SrcB</strong>
+            No new user data is unpacked. The wrapper marks dummy SrcB valid and waits/clears AB around the call.
+          </div>
+          <div class="register">
+            <strong>PACK</strong>
+            Not active during materialize. Packing happens afterward from the transformed DST regions.
+          </div>
+        </div>
+        <p>
+          The public LLK wrapper requires <code>dst_index == 0</code>. The current compute kernel calls
+          <code>topk_xl_materialize_rank_order&lt;K&gt;(slot0)</code> with <code>slot0 = 0</code>.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>K</th>
+              <th><code>row_scale_factor</code></th>
+              <th>Value face offsets transposed</th>
+              <th><code>indices_offset</code></th>
+              <th>Index face offsets transposed</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>512</td>
+              <td>1</td>
+              <td><code>0, 16</code></td>
+              <td><code>64</code></td>
+              <td><code>64, 80</code></td>
+            </tr>
+            <tr>
+              <td>1024</td>
+              <td>2</td>
+              <td><code>0, 16, 32, 48</code></td>
+              <td><code>64</code></td>
+              <td><code>64, 80, 96, 112</code></td>
+            </tr>
+            <tr>
+              <td>2048</td>
+              <td>4</td>
+              <td><code>0, 16, 32, 48, 64, 80, 96, 112</code></td>
+              <td><code>128</code></td>
+              <td><code>128, 144, 160, 176, 192, 208, 224, 240</code></td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          In code, this is expressed as:
+        </p>
+        <pre><code>row_scale_factor       = K == 512 ? 1 : K == 1024 ? 2 : 4
+num_tiles_per_sequence = K == 2048 ? 2 : 1
+indices_offset         = num_tiles_per_sequence * 64
+
+materialize_transpose_N_faces&lt;row_scale_factor * 2, false, indices_offset&gt;()</code></pre>
+        <p>
+          <code>materialize_transpose_N_faces</code> calls <code>transpose_dest_face_32b_rebased&lt;offset&gt;</code> for
+          each listed face offset. The rebased helper sets the DST target offset and then runs the shared noinline
+          32-bit face-transpose body. Reusing that body is important for code size, especially for <code>K=2048</code>.
+        </p>
+      </div>
+
+      <div class="zoom-panel">
+        <h4>What materialize does not do</h4>
+        <ul>
+          <li>It does not choose top-k elements. Merge/rebuild already did that.</li>
+          <li>It does not convert tile-coordinate indices to row-major indices. The row-major split already did that.</li>
+          <li>It does not pack data to CBs. Packing happens afterward with <code>pack_tile</code>.</li>
+          <li>It does not perform the final page rotate. The writer applies <code>rank_page = ((page &amp; 0xF) * groups) | (page &gt;&gt; 4)</code>.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="llk-contracts">
+      <h2>8. LLK Call Contracts</h2>
+      <p>
+        This section lists the LLK-level calls that participate in the current TTNN execution path. Calls are ordered in
+        the same order they appear during compute.
+      </p>
+      <div class="legend">
+        <span><strong>Blue</strong>: BF16 value payload</span>
+        <span><strong>Green</strong>: index payload</span>
+        <span><strong>Split cell</strong>: fused value/index word</span>
+        <span><strong>Dashed</strong>: inactive lanes or state-only work</span>
+      </div>
+
+      <h3>8.0 Visual LLK Dataflow Map</h3>
+      <p>
+        These cards show the transformation at tile granularity. A tile is drawn as a small 4x4 sample of a 32x32 tile;
+        the real tile has 1024 lanes. For <code>K=512</code>, only half of the first tile is active. For
+        <code>K=2048</code>, the same pattern spans two tile pages and two DST value tiles.
+      </p>
+
+      <div class="visual-grid">
+        <div class="flow-card">
+          <h4>8.1 startup: configure compute pipes</h4>
+          <div class="flow-row">
+            <div class="node cb">CB c0<small>input BF16</small></div>
+            <div class="arrow pulse"></div>
+            <div class="node reg">UNPACK/SrcA<small>format state</small></div>
+            <div class="arrow"></div>
+            <div class="node pack">PACK c1<small>values BF16</small></div>
+          </div>
+          <p class="small">No row data moves. The call configures UNPACK, MATH, PACK, pack init, and pack-dest init.</p>
+        </div>
+
+        <div class="flow-card">
+          <h4>8.2 copy init: prepare row-major A2D copy</h4>
+          <div class="flow-row">
+            <div class="node cb">CB c0 front<small>1 or 2 pages</small></div>
+            <div class="arrow pulse"></div>
+            <div class="node reg">UNPACK A<small>copy MOP</small></div>
+            <div class="arrow"></div>
+            <div class="node sfpu">MATH<small>copy MOP</small></div>
+          </div>
+          <p class="small">Programs the unpack and math copy path. It does not change DST contents by itself.</p>
+        </div>
+
+        <div class="flow-card">
+          <h4>8.3 copy tile: row-major BF16 -> DST</h4>
+          <div class="flow-row">
+            <div class="node cb">CB c0<small>BF16 row chunk</small></div>
+            <div class="arrow pulse"></div>
+            <div class="node reg">UNPACK A<small>SrcA lanes</small></div>
+            <div class="arrow pulse"></div>
+            <div class="node reg">DST slot<small>FP32-width words</small></div>
+          </div>
+          <div class="tile">
+            <div class="cell value hot">v0</div><div class="cell value hot">v1</div><div class="cell value">v2</div><div class="cell value">v3</div>
+            <div class="cell value">...</div><div class="cell value">v511</div><div class="cell inactive">-inf</div><div class="cell inactive">-inf</div>
+          </div>
+          <p class="small">Active BF16 values occupy DST words. Inactive lanes are cleared to negative infinity.</p>
+        </div>
+
+        <div class="flow-card">
+          <h4>8.4 add-index init: program address mods</h4>
+          <div class="flow-row">
+            <div class="node sfpu">SFPU CFG<small>ADDR_MOD_6</small></div>
+            <div class="arrow pulse"></div>
+            <div class="node sfpu">SFPU CFG<small>ADDR_MOD_4</small></div>
+            <div class="arrow"></div>
+            <div class="node reg">DST<small>unchanged</small></div>
+          </div>
+          <p class="small">State-only call. It prepares element and face-pair strides for the next SFPU pass.</p>
+        </div>
+
+        <div class="flow-card">
+          <h4>8.5 add-index: DST value -> fused word</h4>
+          <div class="flow-row">
+            <div class="node reg">DST<small>[bf16 v | 0]</small></div>
+            <div class="arrow pulse"></div>
+            <div class="node sfpu">LREG0..7<small>tile coord index</small></div>
+            <div class="arrow pulse"></div>
+            <div class="node reg">DST<small>[bf16 v | u16 i]</small></div>
+          </div>
+          <div class="tile">
+            <div class="cell fused hot">v0|i0</div><div class="cell fused hot">v1|i1</div><div class="cell fused">v2|i2</div><div class="cell fused">v3|i3</div>
+            <div class="cell fused">...</div><div class="cell fused">vN|iN</div><div class="cell inactive">-inf</div><div class="cell inactive">-inf</div>
+          </div>
+          <p class="small">The low 16 bits are still a tile/SFPU coordinate. They are not public row-major indices yet.</p>
+        </div>
+
+        <div class="flow-card">
+          <h4>8.6 fused topk init: prepare sort network</h4>
+          <div class="flow-row">
+            <div class="node sfpu">SFPU CFG<small>ADDR_MOD 1..7</small></div>
+            <div class="arrow pulse"></div>
+            <div class="node sfpu">MOP/replay<small>fused body</small></div>
+            <div class="arrow"></div>
+            <div class="node reg">DST<small>unchanged</small></div>
+          </div>
+          <p class="small">State-only call for fused local sort. Value and low-16 index stay coupled in one DST word.</p>
+        </div>
+
+        <div class="flow-card">
+          <h4>8.7 local sort: fused top-k chunk</h4>
+          <div class="flow-row">
+            <div class="node reg">DST chunk<small>unsorted fused</small></div>
+            <div class="arrow pulse"></div>
+            <div class="node sfpu">SFPU bitonic<small>compare value half</small></div>
+            <div class="arrow pulse"></div>
+            <div class="node reg">DST chunk<small>sorted fused</small></div>
+          </div>
+          <div class="tile">
+            <div class="cell fused hot">vMax|i</div><div class="cell fused hot">v2|i</div><div class="cell fused">v3|i</div><div class="cell fused">...</div>
+            <div class="cell fused">value</div><div class="cell fused">index travels</div><div class="cell fused">with value</div><div class="cell inactive">pad</div>
+          </div>
+          <p class="small">Sort compares BF16 value bits while carrying the low-16 coordinate with the winning value.</p>
+        </div>
+
+        <div class="flow-card">
+          <h4>8.8 row-major split init: load chunk base</h4>
+          <div class="flow-row">
+            <div class="node sfpu">LREG12<small>chunk*K</small></div>
+            <div class="arrow pulse"></div>
+            <div class="node sfpu">LREG13<small>0x000F</small></div>
+            <div class="arrow pulse"></div>
+            <div class="node sfpu">LREG14<small>0x0001</small></div>
+          </div>
+          <p class="small">State-only call. Constants are used to decode the tile coordinate into row-major position.</p>
+        </div>
+
+        <div class="flow-card">
+          <h4>8.9 split row-major indices: fused -> value + uint32 index</h4>
+          <div class="flow-row">
+            <div class="node reg">DST fused<small>[v | tile-i]</small></div>
+            <div class="arrow pulse"></div>
+            <div class="node sfpu">LREG decode<small>row-major i</small></div>
+            <div class="arrow pulse"></div>
+            <div class="node reg">DST split<small>values + indices</small></div>
+          </div>
+          <div class="tile">
+            <div class="cell value hot">v0</div><div class="cell value">v1</div><div class="cell index hot">idx0</div><div class="cell index">idx1</div>
+            <div class="cell value">v2</div><div class="cell value">v3</div><div class="cell index">idx2</div><div class="cell index">idx3</div>
+          </div>
+          <p class="small">Values stay in the first region. True UINT32 row-major indices are stored at the K-derived index offset.</p>
+        </div>
+
+        <div class="flow-card">
+          <h4>8.10 unfused topk init: prepare merge network</h4>
+          <div class="flow-row">
+            <div class="node sfpu">SFPU CFG<small>unfused</small></div>
+            <div class="arrow pulse"></div>
+            <div class="node sfpu">MOP/replay<small>values + indices</small></div>
+            <div class="arrow"></div>
+            <div class="node reg">DST<small>unchanged</small></div>
+          </div>
+          <p class="small">State-only call. Later merge/rebuild reads value and index companion regions separately.</p>
+        </div>
+
+        <div class="flow-card">
+          <h4>8.11 merge: two chunks -> top K</h4>
+          <div class="flow-row">
+            <div class="node reg">slot0<small>values0, indices0</small></div>
+            <div class="arrow pulse"></div>
+            <div class="node sfpu">unfused merge<small>compare values</small></div>
+            <div class="arrow pulse"></div>
+            <div class="node reg">slot0<small>top K</small></div>
+          </div>
+          <div class="flow-row">
+            <div class="node reg">slot1<small>values1, indices1</small></div>
+            <div class="arrow pulse"></div>
+            <div class="node sfpu">carry index<small>uint32 companion</small></div>
+            <div class="arrow"></div>
+            <div class="node reg">slot1<small>scratch/tail</small></div>
+          </div>
+          <p class="small">The output top K remains in slot0. The UINT32 index companion moves with each selected value.</p>
+        </div>
+
+        <div class="flow-card">
+          <h4>8.12 rebuild: restore bitonic layout</h4>
+          <div class="flow-row">
+            <div class="node reg">slot0<small>top K ordered</small></div>
+            <div class="arrow pulse"></div>
+            <div class="node sfpu">rebuild<small>transpose/sort phases</small></div>
+            <div class="arrow pulse"></div>
+            <div class="node reg">slot0<small>merge-ready</small></div>
+          </div>
+          <p class="small">Values and indices are unchanged semantically; their internal arrangement is rebuilt for the next merge.</p>
+        </div>
+
+        <div class="flow-card">
+          <h4>8.13 materialize: internal order -> rank pages</h4>
+          <div class="flow-row">
+            <div class="node reg">DST split<small>internal traversal</small></div>
+            <div class="arrow pulse"></div>
+            <div class="node sfpu">face transpose<small>values + indices</small></div>
+            <div class="arrow pulse"></div>
+            <div class="node reg">DST split<small>rank-page order</small></div>
+          </div>
+          <div class="tile">
+            <div class="cell value hot">rank 0..15</div><div class="cell value">rank 16..31</div><div class="cell index hot">idx 0..15</div><div class="cell index">idx 16..31</div>
+            <div class="cell value">next face</div><div class="cell value">...</div><div class="cell index">next face</div><div class="cell index">...</div>
+          </div>
+          <p class="small">The writer still applies the final fixed page rotate while writing row-major output slices.</p>
+        </div>
+
+        <div class="flow-card">
+          <h4>8.14 pack: DST -> output CBs</h4>
+          <div class="flow-row">
+            <div class="node reg">DST values<small>slot0 + t</small></div>
+            <div class="arrow pulse"></div>
+            <div class="node pack">PACK<small>BF16</small></div>
+            <div class="arrow pulse"></div>
+            <div class="node cb">CB c1<small>values</small></div>
+          </div>
+          <div class="flow-row">
+            <div class="node reg">DST indices<small>slot0 + T + t</small></div>
+            <div class="arrow pulse"></div>
+            <div class="node pack">PACK<small>UINT32 bits</small></div>
+            <div class="arrow pulse"></div>
+            <div class="node cb">CB c2<small>indices</small></div>
+          </div>
+          <p class="small">The packer is reconfigured only when switching value and index output CB formats.</p>
+        </div>
+      </div>
+
+      <h3>8.1 <code>compute_kernel_hw_startup(input_cb, values_cb)</code></h3>
+      <table>
+        <tbody>
+          <tr>
+            <th>Role</th>
+            <td>One-time compute hardware startup before any operation-specific init.</td>
+          </tr>
+          <tr>
+            <th>Input contract</th>
+            <td><code>input_cb</code> is a BF16 tile-page CB. It is used as both SrcA and SrcB for initial unpack/math configuration.</td>
+          </tr>
+          <tr>
+            <th>Output contract</th>
+            <td><code>values_cb</code> is the initial pack output CB and is configured for BF16 value packing.</td>
+          </tr>
+          <tr>
+            <th>State effects</th>
+            <td>Configures unpack, math, pack, pack init, and pack dest init once at kernel start.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>8.2 <code>topk_xl_copy_tile_init(input_cb_id)</code></h3>
+      <table>
+        <tbody>
+          <tr>
+            <th>Role</th>
+            <td>Initializes unpack and math state for the row-major input copy path.</td>
+          </tr>
+          <tr>
+            <th>Input contract</th>
+            <td><code>input_cb_id</code> must identify the CB page group currently waited at the front. The CB contains one or two tile pages of row-major BF16 data.</td>
+          </tr>
+          <tr>
+            <th>Output contract</th>
+            <td>No data is produced by init. It prepares <code>topk_xl_copy_tile</code> to unpack into DST.</td>
+          </tr>
+          <tr>
+            <th>State effects</th>
+            <td>Calls <code>state_configure&lt;Operand::SRCA&gt;</code>, unpack hardware configure, math hardware configure, unpack copy init, and math copy init.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>8.3 <code>topk_xl_copy_tile&lt;K&gt;(input_cb_id, dst_base, 0, K)</code></h3>
+      <table>
+        <tbody>
+          <tr>
+            <th>Role</th>
+            <td>Copies one <code>K</code>-element row-major chunk from input CB pages into DST tile slots.</td>
+          </tr>
+          <tr>
+            <th>Input layout</th>
+            <td>
+              BF16 row-major data in tile pages. <code>K=512</code> uses one page with 512 active elements.
+              <code>K=1024</code> uses one full page. <code>K=2048</code> uses two full pages.
+            </td>
+          </tr>
+          <tr>
+            <th>Output layout</th>
+            <td>
+              DST contains FP32-width words whose upper half holds the BF16 value. The low half is initially available for index metadata.
+              Inactive lanes are negative infinity.
+            </td>
+          </tr>
+          <tr>
+            <th>Important details</th>
+            <td>
+              The unpack side sets the ADC count from <code>num_elements</code>; a zero-element second tile in a partial path is clear-only.
+              The current TTNN path always passes <code>num_elements=K</code>.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>8.4 <code>topk_xl_add_lsb_indices_init()</code></h3>
+      <table>
+        <tbody>
+          <tr>
+            <th>Role</th>
+            <td>Programs address modifiers used by the low-16 temporary index injection pass.</td>
+          </tr>
+          <tr>
+            <th>Input contract</th>
+            <td>No data input. Must run before <code>topk_xl_add_lsb_indices</code>.</td>
+          </tr>
+          <tr>
+            <th>State effects</th>
+            <td>Programs ADDR_MOD slots for element advance and face-pair skipping used by the SFPU body.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>8.5 <code>topk_xl_add_lsb_indices&lt;K, 0&gt;(dst_base)</code></h3>
+      <table>
+        <tbody>
+          <tr>
+            <th>Role</th>
+            <td>Adds a temporary low-16 tile-coordinate index to every active DST value word.</td>
+          </tr>
+          <tr>
+            <th>Input layout</th>
+            <td>DST value words from <code>topk_xl_copy_tile</code>.</td>
+          </tr>
+          <tr>
+            <th>Output layout</th>
+            <td>Fused words: <code>[ BF16 value | u16 temporary tile-coordinate index ]</code>.</td>
+          </tr>
+          <tr>
+            <th>Index format</th>
+            <td>
+              The low 16 bits are a tile/SFPU coordinate, not yet a public row-major index. The current one-core program
+              uses <code>core_id=0</code>; a row-parallel multi-core version should assign core-local row ranges and keep
+              final public indices row-relative.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>8.6 <code>topk_xl_init&lt;K, true&gt;()</code></h3>
+      <table>
+        <tbody>
+          <tr>
+            <th>Role</th>
+            <td>Initializes the fused topk bitonic-sort SFPU state.</td>
+          </tr>
+          <tr>
+            <th>Input contract</th>
+            <td>No direct data input. Must run before fused <code>local_sort</code>.</td>
+          </tr>
+          <tr>
+            <th>State effects</th>
+            <td>Programs ADDR_MODs and the MOP/replay state used by fused local sort, merge, and rebuild paths.</td>
+          </tr>
+          <tr>
+            <th>Fused meaning</th>
+            <td>Value and temporary low-16 index travel together in one 32-bit DST word.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>8.7 <code>topk_xl_local_sort&lt;K&gt;(dst_base, ascending)</code></h3>
+      <table>
+        <tbody>
+          <tr>
+            <th>Role</th>
+            <td>Sorts one <code>K</code>-element chunk in DST using a bitonic sorting network.</td>
+          </tr>
+          <tr>
+            <th>Input layout</th>
+            <td>Fused <code>[BF16 value | u16 temporary index]</code> words in DST.</td>
+          </tr>
+          <tr>
+            <th>Output layout</th>
+            <td>The same fused words, sorted in the requested internal direction.</td>
+          </tr>
+          <tr>
+            <th>Direction use</th>
+            <td>The first chunk is sorted with <code>ascending=false</code>. Later chunks are sorted with <code>ascending=true</code> before merging.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>8.8 <code>topk_xl_separate_indices_row_major_init_static&lt;upper16, lower16&gt;()</code></h3>
+      <table>
+        <tbody>
+          <tr>
+            <th>Role</th>
+            <td>Loads the chunk base used to build true row-major UINT32 indices.</td>
+          </tr>
+          <tr>
+            <th>Input contract</th>
+            <td><code>upper16/lower16</code> encode <code>chunk * K</code>. The chunk base must be aligned to <code>K</code>.</td>
+          </tr>
+          <tr>
+            <th>State effects</th>
+            <td>Programs ADDR_MOD_0 and loads constants into SFPU config registers: chunk base, mask <code>0x000F</code>, and mask <code>0x0001</code>.</td>
+          </tr>
+          <tr>
+            <th>Why static</th>
+            <td>The current path uses immediate config-load forms, so the compute kernel dispatches to static template cases for the supported row length range.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>8.9 <code>topk_xl_separate_indices_row_major&lt;K&gt;(dst_base)</code></h3>
+      <table>
+        <tbody>
+          <tr>
+            <th>Role</th>
+            <td>Splits fused sorted words into an unfused value region and a true UINT32 index region.</td>
+          </tr>
+          <tr>
+            <th>Input layout</th>
+            <td>Fused sorted words: <code>[BF16 value | u16 tile-coordinate index]</code>.</td>
+          </tr>
+          <tr>
+            <th>Output value layout</th>
+            <td>Original value region is rewritten with the low half cleared: <code>[BF16 value | 0]</code>. This is packable as BF16 values.</td>
+          </tr>
+          <tr>
+            <th>Output index layout</th>
+            <td>
+              Index region at <code>indices_offset = num_tiles_per_sequence * 64</code> contains 32-bit integer words.
+              The high half is cleared, the low tile coordinate is decoded to row-major within-chunk position, and chunk base is ORed in.
+            </td>
+          </tr>
+          <tr>
+            <th>Row-major decode</th>
+            <td>
+              Decodes raw tile/SFPU bits into row-major position. <code>K=2048</code> also maps the tile-in-sequence bit into row-major bit 10.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>8.10 <code>topk_xl_init&lt;K, false&gt;()</code></h3>
+      <table>
+        <tbody>
+          <tr>
+            <th>Role</th>
+            <td>Initializes the unfused merge/rebuild SFPU state for value and index regions.</td>
+          </tr>
+          <tr>
+            <th>Input contract</th>
+            <td>Runs after candidate chunks have been split into value and UINT32 index regions.</td>
+          </tr>
+          <tr>
+            <th>State effects</th>
+            <td>Programs unfused ADDR_MOD/MOP state. The merge/rebuild path treats values and indices as separate companion regions.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>8.11 <code>topk_xl_merge&lt;K, false&gt;(slot0)</code></h3>
+      <table>
+        <tbody>
+          <tr>
+            <th>Role</th>
+            <td>Merges two sorted <code>K</code>-element sequences and keeps the top <code>K</code> in the first sequence.</td>
+          </tr>
+          <tr>
+            <th>Input layout</th>
+            <td>
+              Unfused layout starting at <code>slot0</code>: values0, indices0, values1, indices1. The exact tile count per region is
+              <code>tiles_per_sequence</code>.
+            </td>
+          </tr>
+          <tr>
+            <th>Output layout</th>
+            <td>Top <code>K</code> values and their UINT32 indices remain in the first sequence region at <code>slot0</code>.</td>
+          </tr>
+          <tr>
+            <th>Ordering</th>
+            <td>The merge network assumes opposing internal sort directions from the two input sequences.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>8.12 <code>topk_xl_rebuild&lt;K, false&gt;(slot0, false)</code></h3>
+      <table>
+        <tbody>
+          <tr>
+            <th>Role</th>
+            <td>Restores the bitonic structure of the merged top-k sequence so it can be merged with the next chunk.</td>
+          </tr>
+          <tr>
+            <th>Input layout</th>
+            <td>Unfused top <code>K</code> result from <code>topk_xl_merge</code>.</td>
+          </tr>
+          <tr>
+            <th>Output layout</th>
+            <td>Same values and indices, reorganized into the internal bitonic layout expected by the next unfused merge.</td>
+          </tr>
+          <tr>
+            <th>Direction</th>
+            <td>Current path passes <code>ascending=false</code> to maintain descending largest-top-k public order.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>8.13 <code>topk_xl_materialize_rank_order&lt;K&gt;(slot0)</code></h3>
+      <table>
+        <tbody>
+          <tr>
+            <th>Role</th>
+            <td>Converts the final internal sorted layout into rank pages suitable for public output packing.</td>
+          </tr>
+          <tr>
+            <th>Input layout</th>
+            <td>Final unfused values and UINT32 indices in <code>slot0</code>. Current LLK asserts <code>dst_index == 0</code>.</td>
+          </tr>
+          <tr>
+            <th>Output layout</th>
+            <td>
+              Values and indices are face-transposed in DST. This performs the data-dependent part of conversion to row-major rank order.
+              The remaining fixed rotate is handled by the writer.
+            </td>
+          </tr>
+          <tr>
+            <th>Faces touched</th>
+            <td>
+              <code>K=512</code>: 2 value faces plus 2 index faces.
+              <code>K=1024</code>: 4 plus 4.
+              <code>K=2048</code>: 8 plus 8.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>8.14 <code>pack_reconfig_data_format</code> and <code>pack_tile</code></h3>
+      <table>
+        <tbody>
+          <tr>
+            <th>Role</th>
+            <td>Pack final DST value and index regions to output CBs.</td>
+          </tr>
+          <tr>
+            <th>Value packing</th>
+            <td>
+              Startup configured the packer for <code>values_cb</code>. On rows after the first, compute switches from indices back to values with
+              <code>pack_reconfig_data_format(indices_cb, values_cb)</code>. It packs <code>tiles_per_sequence</code> value tiles.
+            </td>
+          </tr>
+          <tr>
+            <th>Index packing</th>
+            <td>
+              Compute switches from values to indices with <code>pack_reconfig_data_format(values_cb, indices_cb)</code>. It packs
+              <code>tiles_per_sequence</code> index tiles as 32-bit words.
+            </td>
+          </tr>
+          <tr>
+            <th>CB contract</th>
+            <td>Caller reserves the output CB pages before packing and pushes the same page count afterward.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="inactive">
+      <h2>9. LLK Support Present But Not Used by This TTNN Path</h2>
+      <p>
+        The public <code>topk_xl.h</code> API exposes a few helpers that are not part of the current row-major BF16/UINT32
+        TTNN execution path:
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Helper</th>
+            <th>Purpose</th>
+            <th>Current TTNN status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>topk_xl_remove_msb_values_init</code> / <code>topk_xl_remove_msb_values</code></td>
+            <td>PACK-thread helper that strips BF16 value halves from fused words so low-16 indices can be packed separately.</td>
+            <td>Not used. Current op splits into a true UINT32 index region before final packing.</td>
+          </tr>
+          <tr>
+            <td><code>topk_xl_separate_indices_init</code> / <code>topk_xl_separate_indices</code></td>
+            <td>Older grouped-index split path: builds <code>group_id &lt;&lt; shift | u16 index</code>.</td>
+            <td>Not used. Current op needs row-major indices, so it uses <code>topk_xl_separate_indices_row_major</code>.</td>
+          </tr>
+          <tr>
+            <td><code>topk_xl_separate_indices_row_major_advance_chunk_base</code></td>
+            <td>Runtime chunk-base increment helper.</td>
+            <td>Not used in TTNN path. The compute kernel dispatches static chunk bases instead.</td>
+          </tr>
+          <tr>
+            <td><code>topk_xl_copy_tile_reinit_mop</code> and <code>topk_xl_reinit_mop_after_copy</code></td>
+            <td>More granular MOP restoration helpers for alternate kernel schedules.</td>
+            <td>Not used by current compute.cpp. The current path calls the full operation-specific init where needed.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="validation">
+      <h2>10. Current Validation</h2>
+      <div class="ok">
+        Current clean-JIT TTNN validation passed: <code>18 passed</code>, <code>0/86</code> JIT cache hits.
+      </div>
+      <p>
+        The test matrix covers:
+      </p>
+      <ul>
+        <li><code>K=512</code>, <code>K=1024</code>, and <code>K=2048</code>.</li>
+        <li>One-row and two-row cases.</li>
+        <li>Small rows such as <code>N=K</code> and <code>N=2K</code>.</li>
+        <li>Large-index cases above 65535, including the maximum chunk counts for <code>N=131072</code>.</li>
+      </ul>
+      <p>
+        Commands used for the latest validation:
+      </p>
+      <pre><code>./build_metal.sh --release
+rm -rf built/tt-metal-cache* &amp;&amp; tt-smi -r &amp;&amp; \
+  scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/experimental/test_topk_xl.py -q</code></pre>
+      <p class="small">
+        Note: this document describes the implementation state in this worktree on 2026-06-10. It is intentionally tied
+        to the files under <code>ttnn/cpp/ttnn/operations/experimental/topk_xl</code> and
+        <code>tt_metal/hw/inc/api/compute/topk_xl.h</code>.
+      </p>
+    </section>
+  </main>
+</body>
+</html>

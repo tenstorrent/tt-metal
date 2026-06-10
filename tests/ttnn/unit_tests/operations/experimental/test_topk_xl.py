@@ -1,0 +1,93 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+import pytest
+import numpy as np
+import torch
+import ttnn
+
+from tests.ttnn.utils_for_testing import assert_equal
+
+pytestmark = pytest.mark.use_module_device
+
+
+def _make_bf16_exact_input(num_rows: int, n: int) -> torch.Tensor:
+    rows = []
+    for row in range(num_rows):
+        hi16 = (0x3F80 + row * (n + 1) + np.arange(n, dtype=np.uint32)).astype(np.uint32)
+        values = torch.from_numpy((hi16 << 16).view(np.float32).copy())
+        rows.append(values.to(torch.bfloat16))
+    return torch.stack(rows)
+
+
+def _make_large_index_input(num_rows: int, n: int, k: int) -> torch.Tensor:
+    values = torch.zeros((num_rows, n), dtype=torch.bfloat16)
+    hi16 = (0x3F80 + np.arange(k, dtype=np.uint32)).astype(np.uint32)
+    high_values = torch.from_numpy((hi16 << 16).view(np.float32).copy()).to(torch.bfloat16)
+    values[:, -k:] = high_values
+    return values
+
+
+@pytest.mark.parametrize(
+    "k,num_rows,n",
+    [
+        (512, 1, 512),
+        (512, 2, 512),
+        (512, 1, 1024),
+        (512, 2, 1024),
+        (1024, 1, 1024),
+        (1024, 2, 1024),
+        (1024, 1, 2048),
+        (1024, 2, 2048),
+        (2048, 1, 2048),
+        (2048, 2, 2048),
+        (2048, 1, 4096),
+        (2048, 2, 4096),
+    ],
+)
+def test_topk_xl_row_major_bfloat16_uint32_indices(device, k, num_rows, n):
+    torch_input = _make_bf16_exact_input(num_rows, n)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    tt_values, tt_indices = ttnn.experimental.topk_xl(tt_input, k=k)
+
+    ref_values, ref_indices = torch.topk(torch_input.float(), k, dim=-1, largest=True, sorted=True)
+    ref_values = ref_values.to(torch.bfloat16)
+
+    values = ttnn.to_torch(tt_values)
+    indices = ttnn.to_torch(tt_indices, dtype=torch.uint32)
+
+    assert list(tt_values.shape) == [num_rows, k]
+    assert list(tt_indices.shape) == [num_rows, k]
+    assert tt_values.dtype == ttnn.bfloat16
+    assert tt_indices.dtype == ttnn.uint32
+    assert tt_values.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert tt_indices.layout == ttnn.ROW_MAJOR_LAYOUT
+
+    assert_equal(values, ref_values)
+    assert_equal(indices.to(torch.int64), ref_indices)
+
+
+@pytest.mark.parametrize(
+    "k,num_chunks",
+    [(512, 129), (512, 256), (1024, 65), (1024, 128), (2048, 33), (2048, 64)],
+)
+def test_topk_xl_row_major_uint32_indices_above_uint16(device, k, num_chunks):
+    n = num_chunks * k
+    torch_input = _make_large_index_input(num_rows=1, n=n, k=k)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    tt_values, tt_indices = ttnn.experimental.topk_xl(tt_input, k=k)
+
+    values = ttnn.to_torch(tt_values)
+    indices = ttnn.to_torch(tt_indices, dtype=torch.uint32)
+
+    ref_values, ref_indices = torch.topk(torch_input.float(), k, dim=-1, largest=True, sorted=True)
+    ref_values = ref_values.to(torch.bfloat16)
+
+    assert int(ref_indices.min()) >= 65536
+    assert_equal(values, ref_values)
+    assert_equal(indices.to(torch.int64), ref_indices)
