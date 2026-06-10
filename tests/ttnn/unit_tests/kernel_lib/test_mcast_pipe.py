@@ -20,16 +20,19 @@
 # Green here == the helper reproduces the bake-off WINNERS' behavior bit-exact, with no hang,
 # AND infers the right multicast mode purely from geometry + the active-core count.
 #
-# HARDCODED virtualization offset for THIS machine (Blackhole p150a, COORDINATE_VIRTUALIZATION):
-#   worker logical (lx, ly) -> virtual NoC (lx + 1, ly + 2)   [VIRTUAL_TENSIX_START_X/Y]
-
 import torch
 import pytest
 import ttnn
 from loguru import logger
 
-VIRT_X, VIRT_Y = 1, 2  # Blackhole p150a worker virtualization offset
 TILE_BYTES = 32 * 32 * 2  # bf16 tile
+
+
+def _virt(device, lx, ly):
+    """Logical worker -> virtual NoC coords (firmware-dependent; never hardcode the offset)."""
+    c = device.worker_core_from_logical_core(ttnn.CoreCoord(lx, ly))
+    return c.x, c.y
+
 
 KERNEL_DIR = "tests/ttnn/unit_tests/kernel_lib/kernels"
 
@@ -86,8 +89,9 @@ def _run_pipe(device, variant, recv_rect, sender_logical, payload_tiles, n_iters
     )
 
     # ---- virtual mcast rectangle ----
-    vx0, vy0, vx1, vy1 = rx0 + VIRT_X, ry0 + VIRT_Y, rx1 + VIRT_X, ry1 + VIRT_Y
-    sender_vx, sender_vy = sx + VIRT_X, sy + VIRT_Y
+    vx0, vy0 = _virt(device, rx0, ry0)
+    vx1, vy1 = _virt(device, rx1, ry1)
+    sender_vx, sender_vy = _virt(device, sx, sy)
 
     # ---- CBs (both on union so index->addr map is identical across all cores) ----
     cb_src, cb_dst = 0, 1
@@ -237,9 +241,10 @@ def _run_f3(device, rect_len, payload_tiles, n_iters):
     page_bytes = TILE_BYTES
     payload_pages = payload_tiles
     R = rect_len
-    # sender is IN the rect; all R column cores (sender + R-1 receivers) are active. R==1 is the
-    # degenerate self-only case the Pipe must collapse to a local copy.
-    num_active_cores = R
+    # sender is IN the rect; num_active_cores NEVER counts the sender (the loopback path adds
+    # its own +1), so R-1 receivers. R==1 is the degenerate self-only case (0 receivers) the
+    # Pipe must collapse to a local copy.
+    num_active_cores = R - 1
 
     in_shape = [1, 1, 32, 32 * payload_tiles]
     payload = torch.arange(0, payload_tiles * 1024, dtype=torch.float32).reshape(in_shape).to(torch.bfloat16)
@@ -256,8 +261,9 @@ def _run_f3(device, rect_len, payload_tiles, n_iters):
     sender_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
     has_receivers = R > 1  # degenerate (R==1) self-only: no receiver cores, sender does a local copy
 
-    vx0, vy0, vx1, vy1 = 0 + VIRT_X, 0 + VIRT_Y, 0 + VIRT_X, (R - 1) + VIRT_Y
-    sender_vx, sender_vy = 0 + VIRT_X, 0 + VIRT_Y
+    vx0, vy0 = _virt(device, 0, 0)
+    vx1, vy1 = _virt(device, 0, R - 1)
+    sender_vx, sender_vy = vx0, vy0
 
     cb_src, cb_dst = 0, 1
     cbs = [

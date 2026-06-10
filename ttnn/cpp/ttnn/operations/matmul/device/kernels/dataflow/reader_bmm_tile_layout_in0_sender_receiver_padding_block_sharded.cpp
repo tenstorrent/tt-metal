@@ -13,6 +13,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 void kernel_main() {
     constexpr bool core_has_output_block_work = (bool)get_compile_time_arg_val(0);
@@ -101,6 +102,23 @@ void kernel_main() {
         }
     }
     receiver_sem.set(VALID);
+
+    // mcast_pipe (R6 role-flip): every grid core runs BOTH faces of the channel over the rotating
+    // rounds. SENDER face below; the per-round RECEIVER face is built inside the loop (its ack
+    // target rotates with block_id). One count works here: the factory always sets
+    // in0_mcast_num_dests == in0_mcast_num_cores. The Pipe never counts self, so in-grid cores
+    // pass num_dests - 1. Loopback is inferred per send(): extract (src == dst, block already in
+    // cb_in0) -> EXCLUDE; non-extract (cb_in2 -> cb_in0) -> INCLUDE; out-of-grid -> EXCLUDE.
+    // In-grid single-core (active == 0) collapses to the local-copy degenerate.
+    constexpr uint32_t in0_pipe_active_cores =
+        core_in_in0_receiver_mcast_grid ? in0_mcast_num_dests - 1 : in0_mcast_num_dests;
+    dataflow_kernel_lib::Pipe<> in0_send_pipe(
+        noc,
+        dataflow_kernel_lib::McastRect{
+            in0_mcast_dest_noc_start_x, in0_mcast_dest_noc_start_y, in0_mcast_dest_noc_end_x, in0_mcast_dest_noc_end_y},
+        in0_pipe_active_cores,
+        receiver_sem,  // data ready (S->R level flag)
+        sender_sem);   // consumed (R->S counter)
 
     cb_in2.reserve_back(batch * in0_block_num_tiles);
 
@@ -216,131 +234,26 @@ void kernel_main() {
                             }
                         }
 
-                        // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr
-                        // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
-                        // zero for the next block
-                        if constexpr (core_in_in0_receiver_mcast_grid) {
-                            // wait for every core in receiver grid EXCLUDING myself
-                            sender_sem.wait(in0_mcast_num_dests - 1);
-                        } else {
-                            // wait for every core in receiver grid
-                            sender_sem.wait(in0_mcast_num_dests);
-                        }
-                        sender_sem.set(0);
-
-                        // Now we have the block in the CB address, we can mcast to dests!
-                        if constexpr (core_in_in0_receiver_mcast_grid) {
-                            // Mcast from/to same CB
-                            if constexpr (extract_shard_sub_blocks) {
-                                // multicast to every core in receiver grid EXCLUDING myself
-                                // Skip if there are no other cores since this core already has the data.
-                                // Note: noc_async_write_multicast[_loopback_src] may hang if called with 0 cores.
-                                if constexpr (in0_mcast_num_cores > 1) {
-                                    MulticastEndpoint mcast_dst;
-                                    noc.async_write_multicast(
-                                        CoreLocalMem<uint32_t>(in0_tensor_read_addr),
-                                        mcast_dst,
-                                        in0_block_size_bytes,
-                                        in0_mcast_num_cores - 1,
-                                        {},
-                                        {.noc_x_start = in0_mcast_dest_noc_start_x,
-                                         .noc_y_start = in0_mcast_dest_noc_start_y,
-                                         .noc_x_end = in0_mcast_dest_noc_end_x,
-                                         .noc_y_end = in0_mcast_dest_noc_end_y,
-                                         .addr = in0_tensor_local_l1_write_addr},
-                                        true);
-                                }
-                            }
-                            // Mcast from different CB to another CB
-                            else {
-                                if constexpr (in0_mcast_num_cores == 1) {
-                                    // noc_async_write if we only want to copy data between CB locally
-                                    UnicastEndpoint ucast_dst;
-                                    noc.async_write(
-                                        CoreLocalMem<uint32_t>(in0_tensor_read_addr),
-                                        ucast_dst,
-                                        in0_block_size_bytes,
-                                        {},
-                                        {.noc_x = in0_mcast_dest_noc_start_x,
-                                         .noc_y = in0_mcast_dest_noc_start_y,
-                                         .addr = in0_tensor_local_l1_write_addr});
-                                } else {
-                                    // multicast to every core in receiver grid
-                                    MulticastEndpoint mcast_dst;
-                                    noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
-                                        CoreLocalMem<uint32_t>(in0_tensor_read_addr),
-                                        mcast_dst,
-                                        in0_block_size_bytes,
-                                        in0_mcast_num_cores,
-                                        {},
-                                        {.noc_x_start = in0_mcast_dest_noc_start_x,
-                                         .noc_y_start = in0_mcast_dest_noc_start_y,
-                                         .noc_x_end = in0_mcast_dest_noc_end_x,
-                                         .noc_y_end = in0_mcast_dest_noc_end_y,
-                                         .addr = in0_tensor_local_l1_write_addr},
-                                        true);
-                                }
-                            }
-
-                            // We should also multicast the flag to destinations
-                            receiver_sem.set(VALID);
-                            if constexpr (in0_mcast_num_cores > 1) {
-                                receiver_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
-                                    noc,
-                                    in0_mcast_dest_noc_start_x,
-                                    in0_mcast_dest_noc_start_y,
-                                    in0_mcast_dest_noc_end_x,
-                                    in0_mcast_dest_noc_end_y,
-                                    in0_mcast_num_cores);
-                            }
-                        } else {
-                            // If we are not part of receiver grid, always do a regular noc_async_write_multicast to all
-                            // cores in receiver grid
-                            MulticastEndpoint mcast_dst;
-                            noc.async_write_multicast(
-                                CoreLocalMem<uint32_t>(in0_tensor_read_addr),
-                                mcast_dst,
-                                in0_block_size_bytes,
-                                in0_mcast_num_cores,
-                                {},
-                                {.noc_x_start = in0_mcast_dest_noc_start_x,
-                                 .noc_y_start = in0_mcast_dest_noc_start_y,
-                                 .noc_x_end = in0_mcast_dest_noc_end_x,
-                                 .noc_y_end = in0_mcast_dest_noc_end_y,
-                                 .addr = in0_tensor_local_l1_write_addr},
-                                true);
-
-                            // We should also multicast the flag to destinations
-                            receiver_sem.set(VALID);
-                            receiver_sem.set_multicast(
-                                noc,
-                                in0_mcast_dest_noc_start_x,
-                                in0_mcast_dest_noc_start_y,
-                                in0_mcast_dest_noc_end_x,
-                                in0_mcast_dest_noc_end_y,
-                                in0_mcast_num_cores);
-                        }
-                        // Note: no need for write barrier, since these two multicasts are done on the same noc id and
-                        // same vc even though cmd bufs are different Also, this only works because we are setting VCs
-                        // statically (using NOC_CMD_STATIC_VC).
-
-                        // Flush is required because the semaphore multicast reads receiver_sem's L1
-                        // address as the source value. Without a flush, the CPU can proceed to the next
-                        // iteration and overwrite receiver_sem to INVALID before the NoC has read the
-                        // VALID value from L1, causing receivers to see INVALID and hang.
-                        // In single-core receiver-grid configurations, semaphore multicast may be compiled out;
-                        // in that case, skip the flush to avoid an unnecessary stall.
-                        if constexpr (!(core_in_in0_receiver_mcast_grid && (in0_mcast_num_cores == 1))) {
-                            noc.async_writes_flushed();
-                        }
+                        // mcast_pipe SENDER face: send() absorbs the ack wait (PRE_HANDSHAKE,
+                        // in0_pipe_active_cores), the data mcast (mode inferred: extract src==dst ->
+                        // EXCLUDE n-1; non-extract -> INCLUDE n; out-of-grid -> EXCLUDE n), the VALID
+                        // flag mcast on the same VC, and the flush. In-grid single-core collapses to
+                        // a local copy with no handshake/flush (raw skipped both there too). The
+                        // sender does NOT wait its own flag: its block is in place by construction.
+                        in0_send_pipe.send(in0_tensor_read_addr, in0_tensor_local_l1_write_addr, in0_block_size_bytes);
                     } else if constexpr (core_in_in0_receiver_mcast_grid) {
-                        // Increment remote sender's semaphore using pre-computed coordinates
-                        sender_sem.up(noc, remote_sender_noc_x[block_id], remote_sender_noc_y[block_id], 1);
-                    }
-
-                    if constexpr (core_in_in0_receiver_mcast_grid) {
-                        // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
-                        receiver_sem.wait(VALID);
+                        // mcast_pipe RECEIVER face: rebuilt per round, the ack target rotates with
+                        // block_id. receive() acks the sender, waits VALID, clears the flag (H11);
+                        // the top-of-loop INVALID reset stays raw — it also clears the stale VALID
+                        // this core's own sender round leaves behind.
+                        dataflow_kernel_lib::Pipe<> in0_recv_pipe(
+                            noc,
+                            dataflow_kernel_lib::McastRect::single_core(
+                                remote_sender_noc_x[block_id], remote_sender_noc_y[block_id]),
+                            1,
+                            receiver_sem,
+                            sender_sem);
+                        in0_recv_pipe.receive();
                     }
                     cb_in0.push_back(in0_block_num_tiles);
 
