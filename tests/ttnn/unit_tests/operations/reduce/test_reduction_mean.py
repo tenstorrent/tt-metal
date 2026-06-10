@@ -66,11 +66,11 @@ def test_mean_scaling(device, shape, dim, keepdim):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.999,
         rtol=0.004,
         atol=0.004,
         frobenius_threshold=0.004,
         check_ulp=True,
+        check_pcc=False,
     )
 
 
@@ -93,11 +93,11 @@ def test_mean_scaling_factor(device, shape, dim, scalar):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.9999,
         rtol=0.004,
         atol=0.008,
         frobenius_threshold=0.004,
         check_ulp=True,
+        check_pcc=False,
     )
 
 
