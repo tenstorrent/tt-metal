@@ -57,7 +57,6 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat val) {
                 1.5497927553951740264892578125e-2f);
 
             result = val * p;
-            result = sfpi::copysgn(result, val);
         }
         v_else {
             // Normal region: Use tanh(x) = 2*sigmoid(2x) - 1
