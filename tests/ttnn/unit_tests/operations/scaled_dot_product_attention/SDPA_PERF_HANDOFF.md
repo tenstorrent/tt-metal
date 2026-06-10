@@ -95,9 +95,15 @@ KV streamed one tile at a time). All four cases reach 64 cores.
 | favorable_h16_s8192_d128 | _(run to fill)_ | | | 64/64 |
 | very_favorable_h8_s16384_d512 | _(run to fill — likely slow: c_kv=1)_ | | | 64/64 |
 
-All cases fill the grid; util is **~1–2% of LoFi peak at full 64-core fan-out**.
-The profiler also shows the op runs at **`MATH FIDELITY = HiFi3`** by default (not LoFi)
-— so switching the matmuls to LoFi/HiFi2 (within the 0.99 PCC budget) is a direct lever.
+All cases fill the grid. The `util` column above is against **LoFi peak (258 TFLOPs)**.
+Note the op actually runs at **`MATH FIDELITY = HiFi3`** (3 passes through the matrix
+unit ⇒ peak ≈ LoFi/3 ≈ **86 TFLOPs**). So against the fidelity it's *really* using, FPU
+util is ~3× the LoFi numbers (≈ **3.3%** and **5.8%**). Two readings, both true:
+- **vs LoFi (~1–2%)** = headroom against best case — and "switch to LoFi" is *part* of that
+  headroom: a ~3× matmul-throughput lever if PCC ≥ 0.99 survives it.
+- **vs HiFi3 (~3–6%)** = how well the FPU is used at the current fidelity.
+
+Either way it's far from compute-bound.
 
 **Key finding from profiling:** the grid is *not* the problem on these shapes — it
 fills all 64 cores. The bottleneck is **per-core efficiency**: each core runs a
