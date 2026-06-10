@@ -131,7 +131,7 @@ Use `DPRINT(...)` in kernel code, then configure host-side capture:
 
 | option | command | effect |
 | --- | --- | --- |
-| required | `export TT_METAL_DPRINT_CORES=all` also `export TT_METAL_DPRINT_CORES=0,0` also `export TT_METAL_DPRINT_CORES="(0,0),(1,2),(3,4)"` also `export TT_METAL_DPRINT_CORES="(0,0)-(2,2)"` | enables kernel print collection |
+| required | `export TT_METAL_DPRINT_CORES=<core_spec>` | enables kernel print collection (examples: `all`, `0,0`, `"(0,0),(1,2),(3,4)"`, `"(0,0)-(2,2)"`) |
 | optional | `export TT_METAL_DPRINT_RISCVS=BR` there are more possible values! (not covered here) | prints only selected RISCs |
 | optional | `export TT_METAL_DPRINT_FILE=kernel_debug.log` | writes output to file |
 | optional | `export TT_METAL_DPRINT_ONE_FILE_PER_RISC=1` | creates per-RISC log files |
