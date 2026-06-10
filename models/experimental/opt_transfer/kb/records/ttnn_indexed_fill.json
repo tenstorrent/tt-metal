@@ -1,0 +1,74 @@
+{
+  "id": "ttnn_indexed_fill",
+  "fused_op": "ttnn.indexed_fill",
+  "category": "data_movement",
+  "pattern_kind": "chain",
+  "torch_pattern": "input_a[batch_ids] = input_b",
+  "signature": {},
+  "config_template": {
+    "args": [
+      "batch_ids",
+      "input_a",
+      "input_b"
+    ],
+    "shapes": {
+      "batch_ids": "[{NUM_INDICES}]",
+      "input_a": "[{BATCH}, {DIM1}, {DIM2}, {DIM3}]",
+      "input_b": "[{NUM_INDICES}, {DIM1}, {DIM2}, {DIM3}]"
+    },
+    "dim": 0,
+    "notes": "Fills rows of input_a along batch dim selected by batch_ids with corresponding slices of input_b"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_source: torch_input_a[torch_batch_ids[-1]] = torch_input_b  # from unit test golden check; ttnn_replacement: output = ttnn.indexed_fill(batch_ids, input_a, input_b)",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_indexed_fill.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.indexed_fill",
+      "tensor_role": "batch_ids",
+      "size_descriptor": "small_index_tensor (num_indices <= batch)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: batch_ids moved to device with ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)"
+    },
+    {
+      "op": "ttnn.indexed_fill",
+      "tensor_role": "input_a",
+      "size_descriptor": "full_batch_tensor",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: input_a = ttnn.Tensor(torch_input_a, tt_dtype).to(device) (default DRAM interleaved)"
+    },
+    {
+      "op": "ttnn.indexed_fill",
+      "tensor_role": "input_b",
+      "size_descriptor": "fill_source_tensor",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: input_b = ttnn.Tensor(torch_input_b, tt_dtype).to(device) (default DRAM interleaved)"
+    }
+  ]
+}

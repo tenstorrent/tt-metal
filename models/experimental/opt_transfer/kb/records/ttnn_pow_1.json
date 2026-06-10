@@ -1,0 +1,69 @@
+{
+  "id": "ttnn_pow_1",
+  "fused_op": "ttnn.pow",
+  "category": "eltwise_binary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.pow(input_tensor_a, exponent)",
+  "signature": {},
+  "config_template": {
+    "queue_id": "{CQ_ID}",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Elementwise power where exponent is a tensor (binary broadcast variant). Validated in tests with float32/bfloat16 TILE_LAYOUT inputs; used in RoPE frequency computation as ttnn.pow(rope_theta, exponents) where the base is scalar and exponent is a tensor.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_pow_fractional.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binaryng_fp32.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_eltwise_pow_float.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_pow.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_pow.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.pow",
+      "tensor_role": "input_a",
+      "size_descriptor": "tiles e.g. [64,640], [2,32,320], [1,2,32,64,64]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT, interleaved (default)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit tests: ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)"
+    },
+    {
+      "op": "ttnn.pow",
+      "tensor_role": "input_b (exponent)",
+      "size_descriptor": "same or broadcastable shape as input_a",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT, interleaved (default)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit tests: ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)"
+    },
+    {
+      "op": "ttnn.pow",
+      "tensor_role": "input_b (exponent)",
+      "size_descriptor": "small 1D frequency tensor [head_dim/2] for RoPE inv_freq",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT, interleaved (default)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "RoPE call site: ttnn.pow(self.config.rope_theta, exponents) where exponents = ttnn.multiply(ttnn.arange(0, head_dim, 2, ...), 1.0/head_dim) in TILE_LAYOUT"
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "id": "ttnn_unary_chain_1",
+  "fused_op": "ttnn.unary_chain",
+  "category": "eltwise_unary_fusion",
+  "pattern_kind": "chain",
+  "torch_pattern": "x = x - 0.99000000953674316\nx = torch.lt(x, 0)\nx = x.to(torch.bfloat16)",
+  "signature": {},
+  "config_template": {
+    "ops_chain": [
+      {
+        "op_type": "ttnn.UnaryOpType.SUB_UNARY_SFPU",
+        "params": "{SCALAR}"
+      },
+      {
+        "op_type": "ttnn.UnaryOpType.LTZ",
+        "params": null
+      },
+      {
+        "op_type": "ttnn.UnaryOpType.TYPECAST",
+        "params": [
+          "{SRC_DTYPE}.value",
+          "{DST_DTYPE}.value"
+        ]
+      }
+    ]
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Chain fusion including scalar-broadcast subtract, zero-comparison, and dtype cast; bit-exact vs unfused single-op sequence (torch.equal assertion in test). TYPECAST inside chain takes (src_dtype.value, dst_dtype.value) params.; ttnn_replacement: ttnn.unary_chain(x_tt, [ttnn.UnaryWithParam(ttnn.UnaryOpType.SUB_UNARY_SFPU, 0.99000000953674316), ttnn.UnaryWithParam(ttnn.UnaryOpType.LTZ), ttnn.UnaryWithParam(ttnn.UnaryOpType.TYPECAST, ttnn.DataType.FLOAT32.value, ttnn.DataType.BFLOAT16.value)])",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_sfpu_chain.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_typecast.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.unary_chain",
+      "tensor_role": "input",
+      "size_descriptor": "parametrized input_shapes (tile-aligned)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: default interleaved placement, no explicit memory_config at call site"
+    }
+  ]
+}

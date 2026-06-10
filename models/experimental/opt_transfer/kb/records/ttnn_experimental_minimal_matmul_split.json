@@ -1,0 +1,49 @@
+{
+  "id": "ttnn_experimental_minimal_matmul_split",
+  "fused_op": "ttnn.experimental.minimal_matmul_split",
+  "category": "matmul_fusion",
+  "pattern_kind": "chain",
+  "torch_pattern": "out = torch.matmul(x, weight); out = out + bias if bias is not None else out; out = fused_activation(out) if fused_activation is not None else out; outputs = torch.chunk(out, chunks, dim=-1)",
+  "signature": {},
+  "config_template": {
+    "chunks": "{CHUNKS}",
+    "dim": -1,
+    "bias_tensor": "{BIAS_TENSOR_OR_NONE}",
+    "fused_activation": "{ACTIVATION_FN_OR_NONE}",
+    "compute_kernel_config": "{COMPUTE_KERNEL_CONFIG}",
+    "config": "MinimalMatmulConfig(M={M}, K={K}, N={N}, subblock_h={SB_H}, subblock_w={SB_W}, compute_with_storage_grid_size={CORE_GRID})"
+  },
+  "weight_transform": "weight kept as single fused [K, N] matrix; split is performed on the matmul output along dim=-1 rather than pre-splitting weights",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Fuses linear (matmul + optional bias + optional activation) with an output chunk/split along the last dim into a single op; torch_pattern reconstructed from call-site semantics since no registered golden/tests were provided",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "llm",
+  "confidence": "low",
+  "unit_test_refs": [],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.minimal_matmul_split",
+      "tensor_role": "activation_input",
+      "size_descriptor": "M x K (post all-gather activation in model call site)",
+      "memory_config": null,
+      "program_config": "matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size) with subblock_h={SB_H}, subblock_w={SB_W}, compute_with_storage_grid_size={CORE_GRID}",
+      "condition": {
+        "var": "chunks",
+        "op": ">",
+        "value": 1
+      },
+      "source": "call_site"
+    },
+    {
+      "op": "ttnn.experimental.minimal_matmul_split",
+      "tensor_role": "weight",
+      "size_descriptor": "K x N",
+      "memory_config": null,
+      "program_config": "shared matmul_config (subblock_h/subblock_w/compute_with_storage_grid_size from get_matmul_core_grid(mesh_device))",
+      "condition": null,
+      "source": "call_site"
+    }
+  ]
+}

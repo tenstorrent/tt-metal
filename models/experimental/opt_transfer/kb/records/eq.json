@@ -1,0 +1,26 @@
+{
+  "id": "eq",
+  "fused_op": "eq_",
+  "category": "eltwise_binary_inplace",
+  "pattern_kind": "chain",
+  "torch_pattern": "input_tensor_a.eq_(input_tensor_b)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "[{N}, {C}, {H}, {W}]",
+    "second_operand": "tensor_of_same_shape_or_scalar",
+    "memory_config": "{INPUT_MEMORY_CONFIG}",
+    "queue_id": 0
+  },
+  "weight_transform": null,
+  "source": "golden: _golden_function_eq_; tests: test_binary_eqi_ttnn, test_eqi_ttnn",
+  "usage_examples": [],
+  "applicability_notes": "ttnn_replacement: ttnn.eq_(input_tensor_a, input_tensor_b); constraints: {'broadcasting': 'second operand may be a scalar (float/int) or a tensor of matching shape', 'in_place': 'first input is overwritten with elementwise equality result'}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_composite.py"
+  ],
+  "placement_observations": []
+}

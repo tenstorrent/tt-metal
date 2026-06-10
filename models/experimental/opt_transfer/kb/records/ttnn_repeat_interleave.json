@@ -1,0 +1,77 @@
+{
+  "id": "ttnn_repeat_interleave",
+  "fused_op": "ttnn.repeat_interleave",
+  "category": "data_movement",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.repeat_interleave(tensor, repeats, dim=dim)",
+  "signature": {},
+  "config_template": {
+    "repeats": "{REPEATS}",
+    "dim": "{DIM}",
+    "layout": "ttnn.TILE_LAYOUT",
+    "constraints": [
+      "repeats must be an int (tensor-valued repeats not supported)",
+      "input must be on device in TILE_LAYOUT"
+    ]
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Common uses: (1) GQA KV-head expansion \u2014 replaces torch.repeat_interleave(k, num_kv_groups, dim=1) on key/value tensors before attention; (2) batch expansion for parallel sampling (dim=0). For GQA with fp32 attention math, prefer repeat_interleave in bf16 followed by ttnn.typecast to fp32 (chain: repeat_interleave -> typecast), since the layout-bound repeat_interleave then moves 2-byte instead of 4-byte elements. PCC vs torch golden >= 0.9999.; ttnn_replacement: ttnn.repeat_interleave(input_tensor, repeats={REPEATS}, dim={DIM})",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/data_movement/test_repeat_interleave.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.repeat_interleave",
+      "tensor_role": "input",
+      "size_descriptor": "small tile-aligned tensor [1,1,32,32]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT, device=device) with default (DRAM interleaved) memory config"
+    },
+    {
+      "op": "ttnn.repeat_interleave",
+      "tensor_role": "input (K/V heads for GQA expansion)",
+      "size_descriptor": "KV tensor [batch, num_kv_heads, seq_len, head_dim], expanded along dim=1 by num_kv_groups",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "num_kv_groups",
+        "op": ">",
+        "value": 1
+      },
+      "source": "model call site: GQA attention, k_exp = ttnn.repeat_interleave(k_for_attn, self.num_kv_groups, dim=1); op skipped entirely when num_kv_groups == 1"
+    },
+    {
+      "op": "ttnn.repeat_interleave",
+      "tensor_role": "output (then typecast)",
+      "size_descriptor": "expanded KV tensor [batch, num_heads, seq_len, head_dim] in bf16, typecast to fp32 afterwards",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "num_kv_groups",
+        "op": ">",
+        "value": 1
+      },
+      "source": "model call site: repeat_interleave performed on bf16 tensor before ttnn.typecast(..., dtype=ttnn.float32) to halve bytes moved; intermediates deallocated immediately"
+    }
+  ]
+}

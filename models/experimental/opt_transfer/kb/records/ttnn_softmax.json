@@ -1,0 +1,97 @@
+{
+  "id": "ttnn_softmax",
+  "fused_op": "ttnn.softmax",
+  "category": "normalization",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.nn.Softmax(dim)(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "dim": "{DIM}",
+    "numeric_stable": "{NUMERIC_STABLE:bool, default True for attention scores}",
+    "compute_kernel_config": "{COMPUTE_KERNEL_CONFIG:optional}",
+    "memory_config": "{MEMORY_CONFIG:optional}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Replaces torch softmax (torch.nn.Softmax / F.softmax). Equivalent unfused ttnn chain seen in models (safe_softmax): max -> sub -> exp -> sum -> add(eps) -> reciprocal -> mul, which ttnn.softmax(numeric_stable=True) fuses. When preceded by scale and additive mask, prefer ttnn.scale_mask_softmax.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/fused/test_softmax.py",
+    "tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.softmax",
+      "tensor_role": "input (attention scores)",
+      "size_descriptor": "[B, H, S, S] tiled attention scores",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: scores = ttnn.add(scores, mask_tt, memory_config=ttnn.L1_MEMORY_CONFIG); attn_weights = ttnn.softmax(scores, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.softmax",
+      "tensor_role": "output (attn_weights)",
+      "size_descriptor": "[B, H, S, S] tiled attention probabilities",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: attn_weights = ttnn.softmax(scores, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.softmax",
+      "tensor_role": "input",
+      "size_descriptor": "row length along softmax dim",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "shape[dim]",
+        "op": "<",
+        "value": 4096
+      },
+      "source": "model call site safe_softmax: use fused ttnn.softmax only if x.shape[dim] < 4096, otherwise fall back to manual max/exp/sum/reciprocal/mul decomposition"
+    },
+    {
+      "op": "ttnn.softmax",
+      "tensor_role": "output (attention_probs)",
+      "size_descriptor": "attention probabilities reshaped/resharded for following matmul",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "ttnn.create_sharded_memory_config(attention_probs.shape, core_grid=ttnn.CoreGrid(y={MM_D_Y}, x={MM_D_X}), strategy={MM_D_X_STRATEGY})"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: attention_probs = ttnn.softmax(attention_scores, dim=-1, numeric_stable=False); attention_probs = ttnn.to_memory_config(attention_probs, memory_config=ttnn.create_sharded_memory_config(...))"
+    },
+    {
+      "op": "ttnn.softmax",
+      "tensor_role": "output (router/expert weights)",
+      "size_descriptor": "small [*, E] or top-k [*, k] routing tensors",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "MoE router call sites: ttnn.softmax(topk_values, dim=-1), ttnn.softmax(expert_weights, dim=1, numeric_stable=True, compute_kernel_config=softmax_compute_config)"
+    }
+  ]
+}

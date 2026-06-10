@@ -1,0 +1,26 @@
+{
+  "id": "ttnn_bitcast",
+  "fused_op": "ttnn.bitcast",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "x.view(dtype)",
+  "signature": {},
+  "config_template": {
+    "input_dtype": "{INPUT_DTYPE}",
+    "output_dtype": "{OUTPUT_DTYPE}",
+    "layout": "{LAYOUT}",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Reinterprets the underlying bits of the input tensor as a different dtype (torch.Tensor.view(dtype) golden). Preserves the input layout; element bit-width must match between input and output dtypes. No numerical computation performed, so it is fusable as a zero-cost dtype reinterpretation in a chain.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary.py"
+  ],
+  "placement_observations": []
+}

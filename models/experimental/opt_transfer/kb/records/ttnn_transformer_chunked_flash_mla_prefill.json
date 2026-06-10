@@ -1,0 +1,55 @@
+{
+  "id": "ttnn_transformer_chunked_flash_mla_prefill",
+  "fused_op": "ttnn.transformer.chunked_flash_mla_prefill",
+  "category": "attention",
+  "pattern_kind": "chain",
+  "torch_pattern": [],
+  "signature": {},
+  "config_template": {
+    "head_dim_v": "{KV_LORA_RANK}",
+    "chunk_start_idx": "{CHUNK_START_IDX}",
+    "scale": "{SCALE}",
+    "program_config": "{SDPA_PROGRAM_CONFIG}",
+    "compute_kernel_config": "{COMPUTE_KERNEL_CONFIG}",
+    "memory_config": "ttnn.DRAM_MEMORY_CONFIG"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/sdpa/mla_test_utils.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.transformer.chunked_flash_mla_prefill",
+      "tensor_role": "output",
+      "size_descriptor": "attention_output[B, NH, SEQ, {KV_LORA_RANK}]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "{SDPA_PROGRAM_CONFIG}",
+      "condition": null,
+      "source": "test_examples: memory_config=ttnn.DRAM_MEMORY_CONFIG passed explicitly"
+    },
+    {
+      "op": "ttnn.transformer.chunked_flash_mla_prefill",
+      "tensor_role": "page_table",
+      "size_descriptor": "page_table[B, MAX_NUM_BLOCKS_PER_SEQ]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test_examples: tt_page_table gating chunked prefill path (placement inferred from typical paged-KV setup; buffer not explicitly stated)"
+    }
+  ]
+}

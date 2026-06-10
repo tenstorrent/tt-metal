@@ -1,0 +1,69 @@
+{
+  "id": "ttnn_experimental_llama_all_gather_matmul_async",
+  "fused_op": "ttnn.experimental.llama_all_gather_matmul_async",
+  "category": "fused_ccl_matmul",
+  "pattern_kind": "chain",
+  "torch_pattern": "gathered = torch.cat(all_gather(input, dim=3, cluster_axis=cluster_axis), dim=3); out = torch.matmul(gathered, in1)",
+  "signature": {},
+  "config_template": {
+    "dim": "{GATHER_DIM}",
+    "cluster_axis": "{CLUSTER_AXIS}",
+    "mesh_device": "{MESH_DEVICE}",
+    "multi_device_global_semaphore": "{CCL_SEMAPHORE[i % NUM_BUFFERS]}",
+    "persistent_intermediate_buffer": "{INTERMEDIATE_TENSORS[i % NUM_BUFFERS]}",
+    "ag_memory_config": "{AG_OUTPUT_MEM_CONFIG}",
+    "mm_memory_config": "{MM_OUTPUT_SHARDED_MEM_CONFIG}"
+  },
+  "weight_transform": "in1 (matmul weight) must be pre-sharded/laid out for the post-gather activation width: weight shape [K_full, N] where K_full = K_local * num_devices_along_{CLUSTER_AXIS}; no numeric transform, identity values",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_source: decomposition of fused op (all_gather along dim=3 across cluster_axis followed by matmul); no registered golden, inferred from op signature and test harness inputs (tt_input_tensor, tt_in1_tensor, dim=3, cluster_axis); fusion_notes: Fuses CCL all-gather with the consuming matmul; requires persistent intermediate buffers and per-iteration global semaphores rotated over num_buffers to allow async overlap.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/ccl/test_llama_all_gather_matmul.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.llama_all_gather_matmul_async",
+      "tensor_role": "all_gather_output (intermediate)",
+      "size_descriptor": "input gathered along dim=3 across cluster_axis (width grows by num_devices)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: ag_memory_config=ag_output_mem_config (explicit AG output memory config passed per-call; buffer/layout not fully resolvable from snippet, default-interleaved assumed)"
+    },
+    {
+      "op": "ttnn.experimental.llama_all_gather_matmul_async",
+      "tensor_role": "matmul_output",
+      "size_descriptor": "decode/prefill matmul output [B, 1, M, N]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "WIDTH_SHARDED",
+        "shard_spec_template": "{CORE_GRID} x [{M_PER_CORE}, {N // NUM_CORES}]"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: mm_memory_config=mm_output_sharded_mem_config (variable name indicates sharded output config; L1 sharding assumed from naming convention)"
+    },
+    {
+      "op": "ttnn.experimental.llama_all_gather_matmul_async",
+      "tensor_role": "persistent_intermediate_buffer",
+      "size_descriptor": "fully gathered tensor size, rotated over num_buffers for async pipelining",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: tt_intermediate_tensors[i % num_buffers] pre-allocated persistent buffers reused across iterations"
+    }
+  ]
+}

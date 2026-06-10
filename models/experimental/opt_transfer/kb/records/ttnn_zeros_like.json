@@ -1,0 +1,69 @@
+{
+  "id": "ttnn_zeros_like",
+  "fused_op": "ttnn.zeros_like",
+  "category": "creation/initialization",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.zeros_like(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "dtype": "{DTYPE}",
+    "layout": "ttnn.TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}",
+    "shape": "{INPUT_SHAPE}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Elementwise creation op mirroring input tensor shape/dtype. Commonly used to preallocate output buffers for ops with out= parameter (cumsum, cumprod, sort) and as the zero-initialized base tensor for ttnn.scatter in MoE routing (scatter into dense routing table) and multimodal embedding merge. dtype can be overridden (e.g. ttnn.uint16 for sort indices). Fusable into downstream scatter/copy chains as the zero-fill source.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/data_movement/test_creation.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_sort.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_cumprod.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_cumsum.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.zeros_like",
+      "tensor_role": "output",
+      "size_descriptor": "same shape as input, e.g. [1,1,S,E] router probs or [B*S,H] flattened embeddings",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test_examples: ttnn.zeros_like(input_tensor) with no explicit memory_config inherits default interleaved DRAM; ttnn.is_tensor_storage_on_device(output_tensor) asserted true"
+    },
+    {
+      "op": "ttnn.zeros_like",
+      "tensor_role": "output (preallocated out= buffer)",
+      "size_descriptor": "same shape as input, TILE layout",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test_examples: preallocated_output_tensor = ttnn.zeros_like(input_tensor, dtype=ttnn_dtype, layout=ttnn.Layout.TILE) then passed as out= to ttnn.cumsum/cumprod/sort"
+    },
+    {
+      "op": "ttnn.zeros_like",
+      "tensor_role": "scatter base (zero-initialized dense tensor)",
+      "size_descriptor": "[1,1,S,num_experts] dense routing tensor or [B*S,H] flattened input embeddings",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_sites: ttnn.scatter(ttnn.zeros_like(router_probs), dim=-1, ...) in MoE router; zeros = ttnn.zeros_like(input_embeds) reused for deepstack visual embed scatter"
+    }
+  ]
+}

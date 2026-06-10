@@ -1,0 +1,79 @@
+{
+  "id": "ttnn_transformer_ring_distributed_scaled_dot_product_attention",
+  "fused_op": "ttnn.transformer.ring_distributed_scaled_dot_product_attention",
+  "category": "attention",
+  "pattern_kind": "chain",
+  "torch_pattern": "attn_weights = torch.matmul(q, k.transpose(-2, -1)) * scale; attn_weights = torch.softmax(attn_weights, dim=-1); attn_output = torch.matmul(attn_weights, v)",
+  "signature": {},
+  "config_template": {
+    "ring_size": "{RING_SIZE}",
+    "scale": "1/sqrt({HEAD_DIM})",
+    "compute_kernel_config": "ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True)",
+    "program_config": "SDPA_PROGCFG({SEQ_LEN}, chunk_start_idx=0)",
+    "page_table": null,
+    "chunk_start_idx": null
+  },
+  "weight_transform": "none (activation-only op; q/k/v provided as [1, {NUM_HEADS}, {SEQ_LEN}, {HEAD_DIM}] head-formatted tensors, typically bfp8_b)",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_source: canonical SDPA decomposition (no registered golden for ring-distributed variant; semantics match scaled_dot_product_attention golden, sequence-parallel across a device ring); constraints: {'batch_size': 1, 'seq_len_min_exclusive': 1024, 'topology': 'ring of {RING_SIZE} devices (e.g. 4 devices per row in 8x4 mesh)', 'prefill_only': 'chunk_start_idx must be None or 0 (use chunked SDPA otherwise)'}",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "llm",
+  "confidence": "low",
+  "unit_test_refs": [],
+  "placement_observations": [
+    {
+      "op": "ttnn.transformer.ring_distributed_scaled_dot_product_attention",
+      "tensor_role": "q",
+      "size_descriptor": "[1, {NUM_HEADS}, {SEQ_LEN}, {HEAD_DIM}], seq_len > 1024, batch_size == 1, dtype bfp8_b",
+      "memory_config": null,
+      "program_config": "model_config['SDPA_PROGCFG'](seq_len, chunk_start_idx=0)",
+      "condition": {
+        "var": "seq_len",
+        "op": ">",
+        "value": 1024
+      },
+      "source": "model call site (ring_distributed_sdpa branch)"
+    },
+    {
+      "op": "ttnn.transformer.ring_distributed_scaled_dot_product_attention",
+      "tensor_role": "k",
+      "size_descriptor": "[1, {NUM_KV_HEADS}, {SEQ_LEN}, {HEAD_DIM}], seq_len > 1024, dtype bfp8_b",
+      "memory_config": null,
+      "program_config": "model_config['SDPA_PROGCFG'](seq_len, chunk_start_idx=0)",
+      "condition": {
+        "var": "seq_len",
+        "op": ">",
+        "value": 1024
+      },
+      "source": "model call site (ring_distributed_sdpa branch)"
+    },
+    {
+      "op": "ttnn.transformer.ring_distributed_scaled_dot_product_attention",
+      "tensor_role": "v",
+      "size_descriptor": "[1, {NUM_KV_HEADS}, {SEQ_LEN}, {HEAD_DIM}], seq_len > 1024, dtype bfp8_b",
+      "memory_config": null,
+      "program_config": "model_config['SDPA_PROGCFG'](seq_len, chunk_start_idx=0)",
+      "condition": {
+        "var": "seq_len",
+        "op": ">",
+        "value": 1024
+      },
+      "source": "model call site (ring_distributed_sdpa branch)"
+    },
+    {
+      "op": "ttnn.transformer.ring_distributed_scaled_dot_product_attention",
+      "tensor_role": "output",
+      "size_descriptor": "[1, {NUM_HEADS}, {SEQ_LEN}, {HEAD_DIM}]; op selected only when seq_len > 1024 and batch_size == 1 and chunk_start_idx in (None, 0); chunked SDPA used when chunk_start_idx > 0",
+      "memory_config": null,
+      "program_config": "model_config['SDPA_PROGCFG'](seq_len, chunk_start_idx=0) with compute_kernel_config_hifi4, ring_size=4",
+      "condition": {
+        "var": "seq_len",
+        "op": ">",
+        "value": 1024
+      },
+      "source": "model call site (ring_distributed_sdpa branch)"
+    }
+  ]
+}

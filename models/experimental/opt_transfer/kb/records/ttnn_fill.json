@@ -1,0 +1,55 @@
+{
+  "id": "ttnn_fill",
+  "fused_op": "ttnn.fill",
+  "category": "eltwise_unary_creation",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.full_like(input_tensor_a, fill_value)",
+  "signature": {},
+  "config_template": {
+    "fill_value": "{FILL_VALUE}",
+    "dtype": "{DTYPE}",
+    "layout": "ttnn.TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}",
+    "output_tensor": "{OPTIONAL_INPLACE_OUTPUT}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Replaces torch.full_like(x, v); shape/dtype taken from input tensor. Supports in-place reuse via output_tensor=input (used for zeroing KV caches). Validated for bfloat16, float32, int32, uint32, uint16.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_fill.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.fill",
+      "tensor_role": "input/output (in-place kv_cache reset)",
+      "size_descriptor": "large persistent KV/KVPE cache tensor (full decode cache)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: ttnn.fill(cache, 0.0, memory_config=cache.memory_config(), output_tensor=cache) \u2014 DeepSeek generator KV/KVPE cache reset, memory_config inherited from existing cache allocation"
+    },
+    {
+      "op": "ttnn.fill",
+      "tensor_role": "input",
+      "size_descriptor": "small test tensors (e.g. [1,1,20,31], [1,2])",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit tests: ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT, device=device) with default DRAM interleaved memory config across bfloat16/float32/int32/uint32/uint16"
+    }
+  ]
+}

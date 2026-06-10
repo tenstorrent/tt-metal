@@ -1,0 +1,94 @@
+{
+  "id": "ttnn_rms_norm_post_all_gather",
+  "fused_op": "ttnn.rms_norm_post_all_gather",
+  "category": "normalization/distributed",
+  "pattern_kind": "chain",
+  "torch_pattern": "# part 2 of distributed RMSNorm: stats = all_gathered per-device sum(x^2) tiles\nsumsq = stats.sum(dim=-1, keepdim=True)\nvar = sumsq / hidden_size\nout = inp * torch.rsqrt(var + eps)\nout = out * weight",
+  "signature": {},
+  "config_template": {
+    "epsilon": "{EPS}",
+    "weight": "{GAMMA_TENSOR}",
+    "stats": "{GATHERED_STATS_TENSOR}",
+    "compute_kernel_config": "{COMPUTE_KERNEL_CONFIG}",
+    "program_config": "ttnn.LayerNormShardedMultiCoreProgramConfig(compute_with_storage_grid_size=({GRID_X},{GRID_Y}), subblock_w={SUBBLOCK_W}, block_h={SEQ}//32//{GRID_Y}, block_w={HIDDEN}//32//{GRID_X}, inplace=False)  # only when input is sharded",
+    "dtype": "{OUT_DTYPE: bfloat16|bfloat8_b}",
+    "memory_config": "{OUT_MEMORY_CONFIG}",
+    "use_2d_core_grid": "{USE_2D_CORE_GRID: optional bool}"
+  },
+  "weight_transform": "gamma loaded as-is (no transpose); reshape [HIDDEN] -> [1,1,HIDDEN//32,32] or padded TILE layout, replicated across mesh devices (each device normalizes its own activation shard with full gamma slice it owns)",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_source: distributed rmsnorm part-2 decomposition observed in unit tests (golden_src not registered); replaces the contiguous subsequence [sum(stats) -> div(hidden) -> add(eps) -> rsqrt -> mul(x) -> mul(gamma)]; constraints: ['must be preceded by ttnn.rms_norm_pre_all_gather + ttnn.all_gather(stats, dim=3)', 'stats tensor width is 32*num_devices (one tile column per device)', 'weight required; no bias (RMSNorm)']",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/ccl/fusion_subtests/rms_test.py",
+    "tests/ttnn/unit_tests/operations/fused/distributed_norm_test_utils.py",
+    "tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm.py",
+    "tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_sharded.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.rms_norm_post_all_gather",
+      "tensor_role": "stats (gathered)",
+      "size_descriptor": "[1,1,{SEQ},32*{NUM_DEVICES}] tiny tile-column tensor",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: all_gather(tt_stats, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG) directly feeding rms_norm_post_all_gather"
+    },
+    {
+      "op": "ttnn.rms_norm_post_all_gather",
+      "tensor_role": "input (activations)",
+      "size_descriptor": "decode-shaped [1,1,{BATCH<=32},{HIDDEN}] sharded across core grid",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_WIDTH_SHARDED",
+        "shard_spec_template": "shard over ({GRID_X},{GRID_Y}) cores, shard_shape=[{SEQ_TILES}*32, {HIDDEN}//{NUM_CORES}]"
+      },
+      "program_config": "SHARDED_NORM_PRGM_CFG / ttnn.LayerNormShardedMultiCoreProgramConfig(...)",
+      "condition": null,
+      "source": "test_example: rms_norm_post_all_gather(tt_input_tensor, program_config=SHARDED_NORM_PRGM_CFG, stats=tt_stats_tensor, memory_config=out_memory_config); model call_site with self.sharded_progcfg"
+    },
+    {
+      "op": "ttnn.rms_norm_post_all_gather",
+      "tensor_role": "input (activations)",
+      "size_descriptor": "prefill-shaped [1,1,{SEQ},{HIDDEN}] interleaved",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "prefill (no program_config, compute_kernel_config only, optional use_2d_core_grid)"
+      },
+      "source": "call_site: rms_norm_post_all_gather(inp, tt_stats_gathered, epsilon, weight, compute_kernel_config=..., use_2d_core_grid=use_2d_grid)"
+    },
+    {
+      "op": "ttnn.rms_norm_post_all_gather",
+      "tensor_role": "output",
+      "size_descriptor": "same shape as input shard",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_INTERLEAVED",
+        "shard_spec_template": "or sharded matching out_memory_config when sharded program_config used"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "dtype",
+        "op": "==",
+        "value": "bfloat8_b in traced/perf paths, bfloat16 in accuracy paths"
+      },
+      "source": "test_example: dtype=ttnn.bfloat8_b, memory_config=output_memory_config (trace capture test); call_site: dtype=ttnn.bfloat16 with sharded_progcfg"
+    }
+  ]
+}

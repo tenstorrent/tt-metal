@@ -1,0 +1,37 @@
+{
+  "id": "ttnn_addmm",
+  "fused_op": "ttnn.addmm",
+  "category": "matmul",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.addmm(input_tensor, mat1_tensor, mat2_tensor, alpha=alpha, beta=beta)",
+  "signature": {},
+  "config_template": {
+    "input_shape": [
+      "{M}",
+      "{N}"
+    ],
+    "mat1_shape": [
+      "{M}",
+      "{K}"
+    ],
+    "mat2_shape": [
+      "{K}",
+      "{N}"
+    ],
+    "alpha": "{ALPHA|default=1.0}",
+    "beta": "{BETA|default=1.0}",
+    "dtype": "{DTYPE|bfloat16|bfloat8_b}"
+  },
+  "weight_transform": "none (mat2 consumed as-is, no transpose; tile-layout conversion only)",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Fuses beta*input + alpha*(mat1 @ mat2) into a single op. Golden: torch.addmm(input_tensor, mat1_tensor, mat2_tensor, alpha=alpha, beta=beta, out=out_tensor). Defaults alpha=1.0, beta=1.0 (tests call both with and without scalars).",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/matmul/test_addmm.py"
+  ],
+  "placement_observations": []
+}

@@ -1,0 +1,58 @@
+{
+  "id": "ttnn_sum_1",
+  "fused_op": "ttnn.sum",
+  "category": "reduction",
+  "pattern_kind": "chain",
+  "torch_pattern": "weighted = combine * weights; out = torch.sum(weighted, dim=EXPERT_DIM)",
+  "signature": {},
+  "config_template": {
+    "dim": "{EXPERT_DIM}",
+    "keepdim": "{KEEPDIM}",
+    "memory_config": "{MEM_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "MoE weighted-combine pattern: elementwise mul by routing weights followed by sum over the expert dimension (dim=0, 1, or EXPERT_DIM depending on layout). Taken from tt_moe.py test ('to_layout(TILE) + mul + sum') and repeated at many MoE call sites (mixtral, gpt-oss, deepseek). Contiguous chain \u2014 candidate for fused weighted-reduce.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/deepseek/test_deepseek_moe_post_combine_reduce.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_reduction.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_reduction_h_interleaved.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_reduction_on_batch.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_reduction_program_cache.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_sum.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.sum",
+      "tensor_role": "output",
+      "size_descriptor": "post-combine expert reduction [K,1,M,H] -> [1,1,M,H], feeds all_reduce",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: tt_sum = ttnn.sum(tt_weighted, dim=0, keepdim=True) then typecast bfloat8_b and all_reduce with memory_config=ttnn.L1_MEMORY_CONFIG"
+    },
+    {
+      "op": "ttnn.sum",
+      "tensor_role": "output",
+      "size_descriptor": "[seq_len, emb_dim] summed over topk_dim before reduce_scatter",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: TtReduceModule, surrounding weighted-sum path uses output_memory_config=ttnn.DRAM_MEMORY_CONFIG; unweighted fallback ttnn.sum(combine_output, dim=self.topk_dim)"
+    }
+  ]
+}

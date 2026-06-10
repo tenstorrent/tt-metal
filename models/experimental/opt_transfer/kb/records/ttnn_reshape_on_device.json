@@ -1,0 +1,71 @@
+{
+  "id": "ttnn_reshape_on_device",
+  "fused_op": "ttnn.reshape_on_device",
+  "category": "data_movement",
+  "pattern_kind": "chain",
+  "torch_pattern": "x = x.reshape([{N}, {C}, {H}, {W}])",
+  "signature": {},
+  "config_template": {
+    "shape": [
+      "{N}",
+      "{C}",
+      "{H}",
+      "{W}"
+    ],
+    "memory_config": "{MEM_CFG}",
+    "notes": "Supports -1 inference for a single dim; operates on padded_shape, input must be on device (TILE_LAYOUT in tests). Total element count must be preserved."
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "constraints: {'rank': 4, 'allows_negative_one_dim': True, 'layout': 'TILE_LAYOUT or ROW_MAJOR_LAYOUT (tests use TILE_LAYOUT)', 'dtype_observed': ['bfloat16']}; fusion_notes: Frequently appears in transpose->reshape->transpose->reshape chains (e.g. space-to-depth style stride folding in conv preprocessing: reshape(n, w//stride_w, c*stride_w, h)). Candidate for fusing the whole chain into a single fold/space-to-depth op.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_reshape.py",
+    "tests/ttnn/unit_tests/operations/conv/data_movement/test_fold_op.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.reshape_on_device",
+      "tensor_role": "activation_input_output",
+      "size_descriptor": "4D activation, NHWC-permuted conv preprocessing tensor (n, w//stride_w, c*stride_w, h)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: transpose/reshape stride-folding chain uses memory_config=ttnn.L1_MEMORY_CONFIG for both reshape_on_device calls"
+    },
+    {
+      "op": "ttnn.transpose",
+      "tensor_role": "activation_input_output",
+      "size_descriptor": "4D activation, same chain as reshape_on_device",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: ttnn.transpose(..., memory_config=ttnn.L1_MEMORY_CONFIG) immediately before/after reshape_on_device"
+    },
+    {
+      "op": "ttnn.reshape_on_device",
+      "tensor_role": "activation_input_output",
+      "size_descriptor": "small 4D tensor (5,3,96,64 ~92K elems), TILE_LAYOUT bfloat16",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: ttnn.Tensor(...).to(TILE_LAYOUT).to(device) default memory config, no explicit memory_config passed to reshape_on_device"
+    }
+  ]
+}

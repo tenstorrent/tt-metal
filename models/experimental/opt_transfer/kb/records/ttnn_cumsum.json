@@ -1,0 +1,55 @@
+{
+  "id": "ttnn_cumsum",
+  "fused_op": "ttnn.cumsum",
+  "category": "reduction_scan",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.cumsum(torch_input_tensor, dim=dim, dtype=torch_dtype)",
+  "signature": {},
+  "config_template": {
+    "dim": "{DIM}",
+    "dtype": "{DTYPE} (optional; accumulate in ttnn.float32 then ttnn.typecast back to input dtype for precision-sensitive paths; ttnn.int32 for integer mask/index cumsum)",
+    "reverse_order": "{REVERSE_ORDER} (bool, default False; True implements the backward/reverse cumulative sum, equivalent to torch flip-cumsum-flip used in cumsum backward)",
+    "out": "{OPTIONAL_PREALLOCATED_OUTPUT} (must match shape/dtype; e.g. ttnn.zeros_like(input, dtype={DTYPE}, layout=ttnn.Layout.TILE))",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "constraints: {'layout': 'TILE_LAYOUT required for masked-index usage (callers insert ttnn.to_layout(mask, ttnn.TILE_LAYOUT) before cumsum)', 'padding': 'implicit tile padding must be neutral (tests call ttnn.fill_implicit_tile_padding before cumsum)', 'out_tensor': 'preallocated out tensor with mismatched dtype/shape raises RuntimeError'}; fusion_notes: Sequential cumsum over two dims (dim=1 then dim=2 on NHWC, batch=1) implements an integral image and can be replaced by the single fused op ttnn.experimental.intimg(features_nhwc). Reverse cumsum via reverse_order=True replaces torch flip/cumsum/flip chains in backward passes. Common downstream chain: cumsum(mask,dim=1,int32) -> add(past_len) -> mul(mask) -> add(padding_idx) -> typecast(uint32) for position-id generation.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/reduce/test_cumsum.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_intimg.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.cumsum",
+      "tensor_role": "output",
+      "size_descriptor": "4D NHWC, batch=1 (integral-image intermediate)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR_or_TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test_examples: ttnn_integral_image_cumsum_channel_last deallocates input and calls ttnn.move(tmp) on the intermediate cumsum output to defragment/compact L1 between the two chained cumsum calls"
+    },
+    {
+      "op": "ttnn.cumsum",
+      "tensor_role": "input",
+      "size_descriptor": "attention-mask shaped [batch, seq_len]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_sites: mask converted to TILE_LAYOUT and typecast to int32 before ttnn.cumsum(mask, dim=1, dtype=ttnn.int32); default interleaved memory config (no explicit override at call site)"
+    }
+  ]
+}

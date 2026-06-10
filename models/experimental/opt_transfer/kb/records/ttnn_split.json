@@ -1,0 +1,105 @@
+{
+  "id": "ttnn_split",
+  "fused_op": "ttnn.split",
+  "category": "data_movement",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.split(input, split_size_or_sections, dim={DIM})",
+  "signature": {},
+  "config_template": {
+    "split_size_or_sections": "{SPLIT_SIZE_OR_SECTIONS}",
+    "dim": "{DIM}",
+    "notes": "Accepts either an int chunk size (e.g. PREFILL_CHUNK_SIZE) or a list of section sizes (e.g. tokens_per_image). Returns a Python list of ttnn.Tensor chunks. Seq-dim splits in transformer prefill use dim=2 (1,1,S,H layout); batch/token splits use dim=0."
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_source: call_site (ttnn.split mirrors torch.split signature: ttnn.split(image_features, tokens_per_image, dim=0); ttnn.split(hidden_states, PREFILL_CHUNK_SIZE, dim=2)); fusion_notes: Used as a chunking primitive for streaming long-sequence prefill: split -> per-chunk compute (sparse_matmul / MoE forward / lm_head) -> stream-accumulate/concat. Inputs are commonly deallocated immediately after split (deallocate(True)) to reduce peak DRAM. Common companion pattern: parallel splits of hidden_states (dim=2) and routing_weights/indices (dim=0) with identical chunk counts, zipped in a loop.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "llm",
+  "confidence": "low",
+  "unit_test_refs": [],
+  "placement_observations": [
+    {
+      "op": "ttnn.split",
+      "tensor_role": "input (hidden_states)",
+      "size_descriptor": "seq_len (dim 2) > PREFILL_CHUNK_SIZE",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "seq_len",
+        "op": ">",
+        "value": "PREFILL_CHUNK_SIZE"
+      },
+      "source": "call_site: 'if seq_len > PREFILL_CHUNK_SIZE: hidden_chunks = ttnn.split(hidden_states, PREFILL_CHUNK_SIZE, dim=2) ... else: hidden_chunks = [hidden_states]' \u2014 split only invoked above chunk-size threshold; chunks stream-processed to reduce peak DRAM usage"
+    },
+    {
+      "op": "ttnn.split",
+      "tensor_role": "input (down_input)",
+      "size_descriptor": "seq_len (dim 2) > program_config.get_down_split_size(seq_len)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": "split_size = program_config.get_down_split_size(seq_len)",
+      "condition": {
+        "var": "seq_len",
+        "op": ">",
+        "value": "program_config.get_down_split_size(seq_len)"
+      },
+      "source": "call_site: 'if seq_len > split_size: down_input_list = ttnn.split(down_input, split_size, dim=2); down_input.deallocate(True)' \u2014 input deallocated immediately after split, outputs consumed by ttnn.sparse_matmul per-split"
+    },
+    {
+      "op": "ttnn.split",
+      "tensor_role": "input (hidden_states, MoE prefill)",
+      "size_descriptor": "hidden_states.shape[seq_dim] > program_config.sequence_chunk_size",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": "chunk_size = program_config.sequence_chunk_size",
+      "condition": {
+        "var": "hidden_states.shape[seq_dim]",
+        "op": ">",
+        "value": "program_config.sequence_chunk_size"
+      },
+      "source": "call_site: 'if hidden_states.shape[seq_dim] > chunk_size: hidden_states_chunks = ttnn.split(hidden_states, chunk_size, dim=seq_dim); ... routing_weights_chunks = ttnn.split(routing_weights, chunk_size, dim=0)' \u2014 comment: 'Process each chunk and stream-concatenate to reduce peak DRAM usage'"
+    },
+    {
+      "op": "ttnn.split",
+      "tensor_role": "output (attn_output_11SH chunks)",
+      "size_descriptor": "chunk = seq_len // ring_size(4) // 2, dim=2",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "ring_distributed_sdpa",
+        "op": "==",
+        "value": true
+      },
+      "source": "call_site: 'attn_output_11SH_chunks = ttnn.split(attn_output_11SH, seq_len // 4 // 2, dim=2); attn_output_11SH.deallocate(True)' \u2014 chunks fed to ring_all_gather with memory_config=ttnn.DRAM_MEMORY_CONFIG"
+    },
+    {
+      "op": "ttnn.split",
+      "tensor_role": "output (image_tokens, ragged split by tokens_per_image)",
+      "size_descriptor": "per-image h*w tokens, dim=0",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR (converted post-split via ttnn.to_layout)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: 'for image_tokens in ttnn.split(image_features, tokens_per_image, dim=0): image_tokens = ttnn.to_layout(image_tokens, ttnn.ROW_MAJOR_LAYOUT); image_grid = ttnn.view(...)' \u2014 split output converted to ROW_MAJOR for view/permute/unsqueeze chain"
+    }
+  ]
+}

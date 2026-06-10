@@ -1,0 +1,97 @@
+{
+  "id": "ttnn_transformer_concatenate_heads",
+  "fused_op": "ttnn.transformer.concatenate_heads",
+  "category": "attention/data_movement",
+  "pattern_kind": "chain",
+  "torch_pattern": "output = torch.permute(input, (0, 2, 1, 3)).contiguous(); output = torch.reshape(output, (batch_size, sequence_size, num_heads * head_size)).contiguous()",
+  "signature": {},
+  "config_template": {
+    "input_shape": "[{BATCH}, {NUM_HEADS}, {SEQ}, {HEAD_SIZE}]",
+    "output_shape": "[{BATCH}, {SEQ}, {NUM_HEADS}*{HEAD_SIZE}]",
+    "memory_config": "{OUTPUT_MEMCFG}",
+    "layout": "ttnn.TILE_LAYOUT"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "ttnn_replacement: output = ttnn.transformer.concatenate_heads(input, memory_config={OUTPUT_MEMCFG}); constraints: ['input must be 4D [batch, num_heads, seq, head_size]', 'head_size must be a multiple of 32 (else pad head dim and matmul-side weights)', 'input must be TILE_LAYOUT']; fusion_notes: Replaces the permute(0,2,1,3)+reshape subsequence immediately after attention scores @ V (or SDPA); output feeds the attention output projection linear.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/transformers/test_concatenate_heads.py",
+    "tests/ttnn/unit_tests/operations/transformers/test_transformer.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.transformer.concatenate_heads",
+      "tensor_role": "output",
+      "size_descriptor": "[batch, seq, num_heads*head_size], encoder seq ~384, hidden ~1024",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "BERT-style attention: memory_config=ttnn.L1_MEMORY_CONFIG, consumed by ttnn.linear self_output in L1"
+    },
+    {
+      "op": "ttnn.transformer.concatenate_heads",
+      "tensor_role": "output",
+      "size_descriptor": "[batch, seq, hidden] feeding block-sharded out-proj linear",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "BLOCK_SHARDED",
+        "shard_spec_template": "create_sharded_memory_config(padded_shape, core_grid={GRID:8x8|10x12}, strategy=BLOCK, orientation=ROW_MAJOR)"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "ViT/SD-style: memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG, then reshard to block-sharded 64/120-core grid for out-proj"
+    },
+    {
+      "op": "ttnn.transformer.concatenate_heads",
+      "tensor_role": "output",
+      "size_descriptor": "decode/large-seq attention output",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "model_config['CONCAT_HEADS_OUTPUT_MEMCFG']",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "Falcon/LLM attention selfout: memory_config=model_config['CONCAT_HEADS_OUTPUT_MEMCFG'], output to SELFOUT_MM"
+    },
+    {
+      "op": "ttnn.transformer.concatenate_heads",
+      "tensor_role": "input",
+      "size_descriptor": "height-sharded L1 SDPA output",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test_concatenate_heads_sharded_input_interleaved_output regression (issue #40925)"
+    },
+    {
+      "op": "ttnn.transformer.concatenate_heads",
+      "tensor_role": "output",
+      "size_descriptor": "large activation, sharded input case",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "input_is_sharded_or_large",
+        "op": "==",
+        "value": true
+      },
+      "source": "unit test: MemoryConfig(INTERLEAVED, BufferType.DRAM) when input height-sharded L1; default/no memory_config in DiT/T5 TP call sites (DRAM interleaved before all_gather)"
+    }
+  ]
+}

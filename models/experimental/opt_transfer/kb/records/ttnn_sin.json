@@ -1,0 +1,53 @@
+{
+  "id": "ttnn_sin",
+  "fused_op": "ttnn.sin",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.sin(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "{DIM}",
+    "memory_config": "ttnn.DRAM_MEMORY_CONFIG",
+    "layout": "ttnn.TILE_LAYOUT",
+    "dtype": "{DTYPE}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Elementwise unary sine. Registered golden function is torch.sin. Frequently appears alongside ttnn.cos on the same input in sinusoidal timestep/positional embeddings (sin(emb), cos(emb) -> concat), and in snake activation chains (x + (1/beta)*sin^2(alpha*x)).",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_eltwise_sin.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.sin",
+      "tensor_role": "output",
+      "size_descriptor": "[1, 1, seq_len, head_dim] RoPE angle table (small, seq_len x head_dim/2 before concat)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "RoPE precompute call site: sin_half = ttnn.sin(angles); ... ttnn.to_layout(sin, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.sin",
+      "tensor_role": "input",
+      "size_descriptor": "[batch_size, 1] * time_proj_factor broadcast -> [batch_size, proj_dim/2] timestep embedding (small)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "Diffusion timestep embedding call sites: emb = timestep * self.time_proj_factor; s = ttnn.sin(emb); timestep asserted ttnn.float32; default interleaved memory config (no explicit memory_config passed)"
+    }
+  ]
+}

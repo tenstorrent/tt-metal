@@ -1,0 +1,82 @@
+{
+  "id": "ttnn_argmax",
+  "fused_op": "ttnn.argmax",
+  "category": "reduction",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.argmax(input_tensor, dim=dim, keepdim=keepdim)",
+  "signature": {},
+  "config_template": {
+    "dim": "{DIM}",
+    "keepdim": "{KEEPDIM}",
+    "use_multicore": true,
+    "output_tensor": null,
+    "sub_core_grids": null
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Golden maps directly to torch.argmax; when dim is None torch reduces over all dims (keepdim requires explicit all-dims tuple). ttnn.argmax requires ROW_MAJOR layout input \u2014 call sites consistently insert ttnn.to_layout(..., ROW_MAJOR_LAYOUT) or ttnn.untilize / ttnn.untilize_with_unpadding immediately before. Common chain it terminates: [untilize -> argmax] on final-token logits in LLM decode loops, often with keepdim=True and dim=3 (or dim=-1) over the vocab axis, frequently writing into a preallocated output_tensor for trace capture.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [],
+  "placement_observations": [
+    {
+      "op": "ttnn.argmax",
+      "tensor_role": "input (logits, row-major)",
+      "size_descriptor": "[1, 1, batch_or_1, vocab] decode logits, vocab-sized last dim",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "tt_out_gathered = all_gather(..., memory_config=ttnn.DRAM_MEMORY_CONFIG); tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=...); tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, keepdim=True, use_multicore=True, output_tensor=tt_out_tok, sub_core_grids=sub_core_grids)"
+    },
+    {
+      "op": "ttnn.argmax",
+      "tensor_role": "input (logits, row-major)",
+      "size_descriptor": "[1, 1, 1, vocab] single-token logits",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "logits_tt = ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG); logits_rm = ttnn.untilize_with_unpadding(logits_tt, output_tensor_end=[0,0,0,vocab-1], use_multicore=True); out_tok_tt = ttnn.argmax(logits_rm, dim=-1, keepdim=False, use_multicore=True)"
+    },
+    {
+      "op": "ttnn.argmax",
+      "tensor_role": "input (working tensor in iterative top-k loop)",
+      "size_descriptor": "[batch, N] 2D work tensor, argmax over last dim per iteration",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "work.dtype",
+        "op": "==",
+        "value": "ttnn.float32"
+      },
+      "source": "use_row_major = work.dtype == ttnn.float32; if use_row_major and work.layout != ttnn.ROW_MAJOR_LAYOUT: work = ttnn.to_layout(work, ttnn.ROW_MAJOR_LAYOUT); idx = ttnn.argmax(work, dim=-1)"
+    },
+    {
+      "op": "ttnn.argmax",
+      "tensor_role": "output (token ids)",
+      "size_descriptor": "small [..., 1] uint32 token-id tensor",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "\"For ttnn.argmax, the output is a small [...,1] uint32 tensor\"; ttnn.argmax(logits_rm, dim=-1, keepdim=False, use_multicore=True, output_tensor=out_tok_tt) writing into preallocated output for D2H single-token read; also ttnn.copy(argmax_result, self.token_id_device[trace_key]) feedback-buffer pattern"
+    }
+  ]
+}

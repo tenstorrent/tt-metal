@@ -1,0 +1,51 @@
+{
+  "id": "ttnn_stack",
+  "fused_op": "ttnn.stack",
+  "category": "data_movement",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.stack(torch_tensors, dim=dim)",
+  "signature": {},
+  "config_template": {
+    "dim": "{DIM}",
+    "num_inputs": "{N_TENSORS}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Concatenates a list of N tensors along a new dimension {DIM}. Direct 1:1 mapping of torch.stack; no weights involved. All input tensors must share shape, dtype, and layout. Output rank = input rank + 1.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/data_movement/test_stack.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.stack",
+      "tensor_role": "input_list",
+      "size_descriptor": "small unit-test tensors (generic shapes)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR_or_TILE (parametrized via ttnn.to_layout)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: ttnn.to_device(tensor, device, memory_config=ttnn.L1_MEMORY_CONFIG) prior to ttnn.stack"
+    },
+    {
+      "op": "ttnn.stack",
+      "tensor_role": "input_list",
+      "size_descriptor": "[prefill_seq_len, embed_dim] per-user embeddings, stacked to [batch_size, prefill_seq_len, embed_dim]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: input_prefill = ttnn.stack(input_prefill, dim=0) in multimodal prefill input prep (no explicit memory_config; inherits default/interleaved)"
+    }
+  ]
+}

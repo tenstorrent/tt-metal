@@ -1,0 +1,121 @@
+{
+  "id": "ttnn_transformer_paged_scaled_dot_product_attention_decode",
+  "fused_op": "ttnn.transformer.paged_scaled_dot_product_attention_decode",
+  "category": "attention",
+  "pattern_kind": "chain",
+  "torch_pattern": "attn_weights = torch.matmul(Q, K_unpaged.transpose(-2, -1)) * scale; attn_weights = attn_weights + attn_mask; attn_weights = torch.softmax(attn_weights, dim=-1); out = torch.matmul(attn_weights, V_unpaged)",
+  "signature": {},
+  "config_template": {
+    "program_config": "ttnn.SDPAProgramConfig(compute_with_storage_grid_size={GRID_X}x{GRID_Y}, q_chunk_size={Q_CHUNK}, k_chunk_size={K_CHUNK}, exp_approx_mode=False)",
+    "compute_kernel_config": "ttnn.WormholeComputeKernelConfig(math_fidelity={FIDELITY}, fp32_dest_acc_en={FP32_ACC}, packer_l1_acc={L1_ACC})",
+    "scale": "1.0 / ({HEAD_DIM} ** 0.5)",
+    "cur_pos_tensor": "int32 tensor of shape [{BATCH}] holding current decode position per user",
+    "page_table_tensor": "int32 tensor of shape [{BATCH}, {MAX_NUM_BLOCKS_PER_SEQ}] mapping logical KV blocks to physical pages",
+    "sliding_window_size": "{SLIDING_WINDOW} (optional, attend only to last {SLIDING_WINDOW} positions)",
+    "is_causal": "True (default) or False with explicit attn_mask",
+    "memory_config": "{OUTPUT_MEMCFG}"
+  },
+  "weight_transform": "K/V caches must be pre-transformed into paged layout: contiguous [B, NH_KV, S, DH] cache is shuffled into [num_blocks, NH_KV, block_size, DH] physical pages addressed via page_table_tensor; Q is reshaped to decode layout [1, B, NH_Q, DH] (seq dim 1 per user). No torch-side weight transform; mask (if non-causal) must be tilized.",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/sdpa/sdpa_test_utils.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.transformer.paged_scaled_dot_product_attention_decode",
+      "tensor_role": "attn_mask",
+      "size_descriptor": "[1, B, NH_Q, padded_cache_len] decode mask, non-causal path",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "is_causal",
+        "op": "==",
+        "value": false
+      },
+      "source": "test (dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)"
+    },
+    {
+      "op": "ttnn.transformer.paged_scaled_dot_product_attention_decode",
+      "tensor_role": "output",
+      "size_descriptor": "[1, B, NH_Q, DH] decode output (seq=1 per user)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "HEIGHT_SHARDED, shard_shape=[NH_Q_padded, {DH}], use_height_and_width_as_shard_shape=True, one batch per core"
+      },
+      "program_config": "SDPAProgramConfig from model_config",
+      "condition": {
+        "var": "sharded_out",
+        "op": "==",
+        "value": true
+      },
+      "source": "test (memory_config=height_sharded_memcfg if sharded_out else dram_memcfg)"
+    },
+    {
+      "op": "ttnn.transformer.paged_scaled_dot_product_attention_decode",
+      "tensor_role": "output",
+      "size_descriptor": "[1, B, NH_Q, DH] decode output",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": "sdpa_program_config / SDPA_DECODE_PROGCFG",
+      "condition": {
+        "var": "sharded_out",
+        "op": "==",
+        "value": false
+      },
+      "source": "model call sites (memory_config=ttnn.DRAM_MEMORY_CONFIG, multiple llama/falcon-style attention modules)"
+    },
+    {
+      "op": "ttnn.transformer.paged_scaled_dot_product_attention_decode",
+      "tensor_role": "output",
+      "size_descriptor": "[1, B_per_device_group, NH_Q_local, DH] batched decode output, batch-dependent shard",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "SCORES_BATCHED_MM_OUTPUT_MEMCFG({BATCH_PER_DEVICE_GROUP}): batch-sharded, one user-group per core"
+      },
+      "program_config": "model_config['PAGED_SDPA_DECODE_PROGCFG']",
+      "condition": null,
+      "source": "model call site (attn_output_1G4D_sharded, sdpa_out_mem_cfg = SCORES_BATCHED_MM_OUTPUT_MEMCFG(batch_size_per_device_group))"
+    },
+    {
+      "op": "ttnn.transformer.paged_scaled_dot_product_attention_decode",
+      "tensor_role": "k_cache",
+      "size_descriptor": "[num_blocks, NH_KV, block_size, DH] paged KV cache, full context length",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call sites (k_cache/v_cache persistent paged caches kept in DRAM across decode steps)"
+    },
+    {
+      "op": "ttnn.transformer.paged_scaled_dot_product_attention_decode",
+      "tensor_role": "cur_pos_tensor",
+      "size_descriptor": "[B] int32 per-user decode positions",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test (ttnn.Tensor(torch.tensor(start_indices), ttnn.int32).to(device))"
+    }
+  ]
+}

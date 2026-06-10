@@ -1,0 +1,111 @@
+{
+  "id": "ttnn_mul",
+  "fused_op": "ttnn.mul_",
+  "category": "eltwise_binary_inplace",
+  "pattern_kind": "chain",
+  "torch_pattern": "output_tensor = input_tensor_a * input_tensor_b",
+  "signature": {},
+  "config_template": {
+    "input_tensor_a": "shape={N},{C},{H},{W} layout=TILE_LAYOUT dtype=bfloat16 (mutated in place)",
+    "input_tensor_b": "tensor (broadcastable) or python scalar",
+    "use_legacy": "False (modern eltwise path, optional)",
+    "fast_and_approximate_mode": "True|False (optional, used in diffusion gating paths)",
+    "activations": "optional list of fused unary activations applied to the product"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "fusion_notes: Golden applies optional post-activations: apply_activations(input_tensor_a * input_tensor_b, activations). Supports tensor-tensor and tensor-scalar (e.g. attention score scaling by 1/sqrt(head_size), guidance_scale multiply). In-place: output aliases input_tensor_a, so input_tensor_a's memory_config dictates the output placement.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_inplace.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.mul_",
+      "tensor_role": "input_tensor_a (gate, aliases output)",
+      "size_descriptor": "diffusion transformer gated-MLP hidden_states, refiner down_blocks.1/up_blocks.2",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "BLOCK_SHARDED",
+        "shard_spec_template": "block-sharded across compute grid; shard {H_per_core}x{W_per_core}"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "module_path",
+        "op": "in",
+        "value": [
+          "down_blocks.1",
+          "up_blocks.2"
+        ]
+      },
+      "source": "call_site comment: 'gate is L1 BS, hidden_states is L1 interleaved; mul_ will output its result in L1 BS' \u2014 sharded operand placed first so in-place output stays L1 block-sharded"
+    },
+    {
+      "op": "ttnn.mul_",
+      "tensor_role": "input_tensor_b (hidden_states)",
+      "size_descriptor": "diffusion transformer gated-MLP hidden_states, refiner down_blocks.1/up_blocks.2",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "module_path",
+        "op": "in",
+        "value": [
+          "down_blocks.1",
+          "up_blocks.2"
+        ]
+      },
+      "source": "call_site comment in refiner branch of gated activation"
+    },
+    {
+      "op": "ttnn.mul_",
+      "tensor_role": "output (aliases input_tensor_a)",
+      "size_descriptor": "diffusion transformer gated-MLP hidden_states",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "BLOCK_SHARDED",
+        "shard_spec_template": "inherits shard spec of first operand (gate)"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "first_operand_layout",
+        "op": "==",
+        "value": "L1_BLOCK_SHARDED"
+      },
+      "source": "call_site comment: in-place op outputs into first operand's memory config"
+    },
+    {
+      "op": "ttnn.mul_",
+      "tensor_role": "input_tensor_a (noise_pred_text, classifier-free guidance)",
+      "size_descriptor": "full latent tensor (UNet output), scalar multiply by guidance_scale",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: result subsequently moved with ttnn.to_memory_config(noise_pred, ttnn.L1_MEMORY_CONFIG); guidance chain sub_/mul_/add_ kept in-place to avoid extra allocations"
+    },
+    {
+      "op": "ttnn.mul_",
+      "tensor_role": "input_tensor_a (attention_scores)",
+      "size_descriptor": "attention score matrix {B*heads},{seq},{seq}, scalar multiply by 1/sqrt(head_size)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "as produced by preceding QK matmul (consumed in-place by softmax_in_place)",
+        "shard_spec_template": null
+      },
+      "program_config": "followed by softmax_in_place with config.program_configs['softmax_program_config'] \u2014 scale kept in-place so sharded scores layout is preserved for sharded softmax",
+      "condition": null,
+      "source": "call_site: attention score scaling before ttnn.softmax_in_place"
+    }
+  ]
+}

@@ -1,0 +1,104 @@
+{
+  "id": "ttnn_slice",
+  "fused_op": "ttnn.slice",
+  "category": "data_movement",
+  "pattern_kind": "chain",
+  "torch_pattern": "y = x[:, :, start:end, :]  # e.g. chunk_input = torch_input[:, :, start_seq:end_seq, :] / tens_input[:, :ntok, :] (contract padded tokens back to logical length)",
+  "signature": {},
+  "config_template": {
+    "starts": "[0, 0, {START}, 0]",
+    "ends": "[{B}, {C}, {END}, {W}]",
+    "steps": "[1, 1, 1, 1]",
+    "memory_config": "{MEM_CONFIG}",
+    "notes": "Used for: last-token-tile extraction in prefill (START=(last_token_idx//32)*32, END=START+32), un-padding tile/CCL-padded last dims (ends[-1]={LOGICAL_HIDDEN}), KV-cache valid-prefix extraction (END=nearest_32(layer_past_len+1)), and seq/batch chunking loops (START=i*{CHUNK}, END=min(START+{CHUNK},{SEQ}))."
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_non_zero.py",
+    "tests/ttnn/unit_tests/operations/conv/data_movement/test_fold_op.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_slice.py",
+    "tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/test_fused_demo.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.slice",
+      "tensor_role": "output",
+      "size_descriptor": "last-token tile [1,1,32,{HIDDEN}] sliced from prefill activations [1,1,{SEQ},{HIDDEN}]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "prefill"
+      },
+      "source": "llama/falcon lm_head call sites: ttnn.slice(norm_out_replicated, ..., memory_config=ttnn.DRAM_MEMORY_CONFIG); most prefill last-token slices use default (DRAM interleaved)"
+    },
+    {
+      "op": "ttnn.slice",
+      "tensor_role": "output",
+      "size_descriptor": "decode-mode fused-projection split [1,1,{BATCH},{SUB_DIM}] with BATCH<=32",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "seq_len",
+        "op": "<=",
+        "value": 32
+      },
+      "source": "deepseek MLA decode: tt_q/tt_kv_nope/tt_kv_rope slices with memory_config=ttnn.L1_MEMORY_CONFIG; padded-N matmul output trimming with memory_config=ttnn.L1_MEMORY_CONFIG"
+    },
+    {
+      "op": "ttnn.slice",
+      "tensor_role": "output",
+      "size_descriptor": "KV-cache valid prefix [batch, kv_heads, nearest_32(past_len+1), head_dim]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "falcon attention: ttnn.slice(layer_past[0], ..., memory_config=model_config['K_CACHE_SLICE_OUTPUT_MEMCFG'] / 'DEFAULT_MEMCFG'), followed by interleaved_to_sharded when model_config['l1_sharded']"
+    },
+    {
+      "op": "ttnn.slice",
+      "tensor_role": "output",
+      "size_descriptor": "per-head K/V slice [1,1,{KEY_LEN},{SEQ}] inside attention loop",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "tsa attention: k_slice/v_slice = ttnn.slice(..., memory_config=self.l1_interleaved_memory_config) feeding matmul"
+    },
+    {
+      "op": "ttnn.slice",
+      "tensor_role": "output",
+      "size_descriptor": "bfloat8 TILE slice of padded matmul output before CCL all_reduce",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "gpt-oss: slice output is round-tripped via ttnn.to_memory_config(tt_out, ttnn.DRAM_MEMORY_CONFIG) as workaround for non-standard page layout under L1 fragmentation (#41640)"
+    }
+  ]
+}

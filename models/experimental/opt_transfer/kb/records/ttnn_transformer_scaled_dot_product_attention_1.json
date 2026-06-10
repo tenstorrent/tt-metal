@@ -1,0 +1,42 @@
+{
+  "id": "ttnn_transformer_scaled_dot_product_attention_1",
+  "fused_op": "ttnn.transformer.scaled_dot_product_attention",
+  "category": "attention",
+  "pattern_kind": "chain",
+  "torch_pattern": "K_repeated = torch.cat([K[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)\nV_repeated = torch.cat([V[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)\ngt = torch.nn.functional.scaled_dot_product_attention(Q, K_repeated, V_repeated, is_causal=True)",
+  "signature": {},
+  "config_template": {
+    "is_causal": true,
+    "scale": "1.0 / ({HEAD_DIM} ** 0.5)",
+    "sliding_window_size": "{SLIDING_WINDOW|None}",
+    "attention_sink": "{ATTENTION_SINK|None}",
+    "program_config": "ttnn.SDPAProgramConfig(compute_with_storage_grid_size=({GRID_X}, {GRID_Y}), q_chunk_size={Q_CHUNK}, k_chunk_size={K_CHUNK}, exp_approx_mode=False)",
+    "compute_kernel_config": "ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en={FP32_ACC}, packer_l1_acc={L1_ACC})"
+  },
+  "weight_transform": "none; GQA head repetition (repeat/cat of K,V across nh // nkv groups) is absorbed into the kernel \u2014 pass unreplicated [B, nkv, S, D] K/V tensors directly",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.transformer.scaled_dot_product_attention",
+      "tensor_role": "query/key/value (GQA causal prefill)",
+      "size_descriptor": "Q: [B, nh, S, D]; K/V: [B, nkv, S, D]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": "self.args.get_attn_sdpa_program_config(Mode.PREFILL, sdpa_seq_len, None, None)",
+      "condition": null,
+      "source": "test: from_torch(..., layout=ttnn.TILE_LAYOUT, memory_config=memory_config, pad_value=0.0); call_site: batched prefill sdpa_seq_len = seq_len // batch_size if batch_size > 1 else seq_len"
+    }
+  ]
+}

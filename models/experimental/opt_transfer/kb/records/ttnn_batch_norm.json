@@ -1,0 +1,76 @@
+{
+  "id": "ttnn_batch_norm",
+  "fused_op": "ttnn.batch_norm",
+  "category": "normalization",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.nn.functional.batch_norm(input=in_data, running_mean=mean_data, running_var=var_data, weight=weight_torch, bias=bias_torch, training=training, momentum=momentum, eps=eps)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "[{N}, {C}, {H}, {W}]",
+    "running_mean_shape": "[1, {C}, 1, 1]",
+    "running_var_shape": "[1, {C}, 1, 1]",
+    "weight_shape": "[1, {C}, 1, 1]",
+    "bias_shape": "[1, {C}, 1, 1]",
+    "eps": "{EPS}",
+    "momentum": "{MOMENTUM}",
+    "training": "{TRAINING}",
+    "dtype": "ttnn.float32",
+    "layout": "ttnn.TILE_LAYOUT",
+    "constraints": [
+      "running_mean and running_var must be defined when training=False (evaluation mode)",
+      "input tensors must be INTERLEAVED memory layout"
+    ]
+  },
+  "weight_transform": "weight/bias/running_mean/running_var reshaped to [1, C, 1, 1]; ttnn.from_torch(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device); no transposition required",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/fused/test_batch_norm.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.batch_norm",
+      "tensor_role": "input",
+      "size_descriptor": "any (4D NCHW activation)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: 'Input tensors to batch norm must be interleaved' (xfail when mem_layout is not ttnn.TensorMemoryLayout.INTERLEAVED)"
+    },
+    {
+      "op": "ttnn.batch_norm",
+      "tensor_role": "output",
+      "size_descriptor": "same shape as input",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "SHARDED",
+        "shard_spec_template": "{SHARD_SPEC}"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.batch_norm(..., memory_config=sharded_mem_config, output=output_tensor) \u2014 output may be sharded even though inputs must be interleaved"
+    },
+    {
+      "op": "ttnn.batch_norm",
+      "tensor_role": "running_mean/running_var/weight/bias",
+      "size_descriptor": "small per-channel stats [1, C, 1, 1]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(..., dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device) with default interleaved memory config"
+    }
+  ]
+}

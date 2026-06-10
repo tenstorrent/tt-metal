@@ -1,0 +1,52 @@
+{
+  "id": "ttnn_ones_like",
+  "fused_op": "ttnn.ones_like",
+  "category": "tensor_creation",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.ones_like(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "memory_config": "{MEMORY_CONFIG}",
+    "dtype": "{DTYPE}",
+    "layout": "{LAYOUT}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Elementwise-shaped creation op; replaces torch.ones_like with on-device constant fill matching input shape/dtype. Output stays on device (is_tensor_storage_on_device asserted in tests).",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/data_movement/test_creation.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.ones_like",
+      "tensor_role": "input",
+      "size_descriptor": "any",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: ttnn.to_device with default memory_config (DRAM interleaved); no explicit sharding or L1 placement observed"
+    },
+    {
+      "op": "ttnn.ones_like",
+      "tensor_role": "output",
+      "size_descriptor": "same_as_input",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: output remains on device (ttnn.is_tensor_storage_on_device asserted), default memory_config inherited"
+    }
+  ]
+}

@@ -1,0 +1,105 @@
+{
+  "id": "ttnn_linear_1",
+  "fused_op": "ttnn.linear",
+  "category": "fused_matmul_activation",
+  "pattern_kind": "chain",
+  "torch_pattern": "output_tensor = input_tensor_a @ input_tensor_b.to(input_tensor_a.dtype)\nif bias is not None:\n    output_tensor += bias\noutput_tensor = get_golden_function_for_activation(activation)(output_tensor)",
+  "signature": {},
+  "config_template": {
+    "call": "ttnn.linear(x, weight, bias={BIAS}, activation={ACTIVATION}, memory_config={MEM_CONFIG}, dtype={DTYPE}, core_grid=ttnn.CoreGrid(y={GRID_Y}, x={GRID_X}), compute_kernel_config={COMPUTE_KERNEL_CONFIG})",
+    "supported_activations": [
+      "silu",
+      "gelu",
+      "gelu_approx",
+      "relu",
+      "sigmoid"
+    ],
+    "notes": "Activation may be fused either via the `activation=` kwarg (composite path, only when no program_config \u2014 call sites use `activation='silu' if not pc_1 else None`) or via program_config.fused_activation (e.g. fused_activation=[ttnn.UnaryOpType.GELU, True]). One call site warns: 'activation must be passed to linear here, not in program config! Bad output otherwise' for gelu in vision MLP."
+  },
+  "weight_transform": "Same as plain linear: transpose torch [out, in] weight to [in, out] before from_torch.",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_sharded.py",
+    "tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_experimental.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_linear.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_matmul.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_matmul_batch_mismatch.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_matmul_deepseek.py",
+    "tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py",
+    "tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "linear",
+      "tensor_role": "output",
+      "size_descriptor": "MLP w1/gate output with fused silu, decode regime (no program_config)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "MLP call site: w1_out = ttnn.linear(x, self.w1, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG, activation='silu', core_grid=ttnn.CoreGrid(y=8, x=8))"
+    },
+    {
+      "op": "linear",
+      "tensor_role": "output",
+      "size_descriptor": "vision MLP c_fc with fused gelu, long image sequence (chunked to MAX_MM_SEQ_LEN)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "model_config['IMAGE_MLP_FC_PROGCFG'](seq_len, MAX_MM_SEQ_LEN)",
+      "condition": null,
+      "source": "c_fc_out = ttnn.linear(x_in, self.c_fc_weight, bias=..., activation='gelu', memory_config=ttnn.DRAM_MEMORY_CONFIG, program_config=pc_1)"
+    },
+    {
+      "op": "linear",
+      "tensor_role": "input/output",
+      "size_descriptor": "whisper FFN fc1+fc2: activations stay in L1 across both matmuls (one DRAM->L1, one L1->DRAM round trip per FFN)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "whisper: h = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG); h = ttnn.linear(h, fc1_weight, bias=fc1_bias, activation='gelu', memory_config=ttnn.L1_MEMORY_CONFIG); h = ttnn.linear(h, fc2_weight, ...)"
+    },
+    {
+      "op": "linear",
+      "tensor_role": "output",
+      "size_descriptor": "small classifier heads / mnist MLP with fused relu, batch-row activations",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "mnist/vgg heads: ttnn.linear(x, fc.weight, bias=fc.bias, memory_config=ttnn.L1_MEMORY_CONFIG, activation='relu')"
+    },
+    {
+      "op": "linear",
+      "tensor_role": "output",
+      "size_descriptor": "bert/distilbert FF1 with gelu_approx, batch-parameterized core grid",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "ttnn.linear(..., memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x), activation='gelu_approx')"
+    }
+  ]
+}

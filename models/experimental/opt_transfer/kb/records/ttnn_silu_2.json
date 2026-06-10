@@ -1,0 +1,60 @@
+{
+  "id": "ttnn_silu_2",
+  "fused_op": "ttnn.silu",
+  "category": "mlp_activation_fusion",
+  "pattern_kind": "horizontal_merge",
+  "torch_pattern": "torch.nn.functional.silu(gate) * up  # SwiGLU: gate, up = linear branches sharing input x",
+  "signature": {},
+  "config_template": {
+    "memory_config": "{MEMORY_CONFIG}",
+    "branches": 2,
+    "shared_input": "x [{B}, {SEQ}, {HIDDEN}]",
+    "notes": "Two sibling linear projections (gate_proj, up_proj) share input x; silu applied to gate branch then elementwise mul with up branch. Alternative single-matmul form: t, gate = ttnn.chunk(fused_proj_out, 2, -1); t * ttnn.silu(gate)"
+  },
+  "weight_transform": "optional: concat(w_gate, w_up) along output dim into one fused projection, then ttnn.chunk(out, 2, -1)",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "ttnn_replacement: gate = ttnn.linear(x, w_gate); up = ttnn.linear(x, w_up); out = ttnn.mul(ttnn.silu(gate), up)",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_examplerst.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_silu.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_silu_row_major.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.silu",
+      "tensor_role": "gate branch activation",
+      "size_descriptor": "[B, seq, intermediate_size] MLP gate output",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "seq_len",
+        "op": "<=",
+        "value": 32
+      },
+      "source": "gate_silu = ttnn.silu(gate_o, memory_config=ttnn.L1_MEMORY_CONFIG); gated = ttnn.mul(gate_silu, up_o, ..., memory_config=ttnn.L1_MEMORY_CONFIG); then resharded to DRAM-sharded for down projection (K_tiles=96 'wins big with DRAM-sharded')"
+    },
+    {
+      "op": "ttnn.silu",
+      "tensor_role": "gate branch activation (default placement)",
+      "size_descriptor": "[B, seq, intermediate_size] MLP gate output, prefill-sized",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "SwiGLU MLP forward: gate = ttnn.linear(x, self.w_gate); gate = ttnn.silu(gate); up = ttnn.linear(x, self.w_up); hidden = ttnn.mul(gate, up) (no explicit memory_config -> default DRAM interleaved)"
+    }
+  ]
+}

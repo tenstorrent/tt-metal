@@ -1,0 +1,83 @@
+{
+  "id": "ttnn_repeat",
+  "fused_op": "ttnn.repeat",
+  "category": "data_movement",
+  "pattern_kind": "chain",
+  "torch_pattern": "tensor.repeat(shape[0], shape[1], shape[2], shape[3])",
+  "signature": {},
+  "config_template": {
+    "input_tensor": "{INPUT}",
+    "repeat_shape": "ttnn.Shape([{REP_DIM0}, {REP_DIM1}, {REP_DIM2}, {REP_DIM3}])",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Pure data-movement broadcast/tile op. Frequently used as a workaround for missing implicit broadcasting before binary eltwise ops, batched matmul over an expert dimension ([1,1,T,H] -> [1,E,T,H]), attention-mask head expansion ([B,1,Q,K] -> [B,H,Q,K]), and replicating decode logits to 32 rows for topk/sampling kernels ([1,1,1,V] -> [1,1,32,V]). repeat(1,1,...) may alias the input (see BGE-M3 batch_size==1 guard), so a fuser must not assume a fresh buffer for identity repeats.; torch_pattern_source: registered _golden_function: `return tensor.repeat(shape[0], shape[1], shape[2], shape[3])`; unit test: `torch_result = torch_input_tensor.repeat(repeat_shape)`",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/data_movement/test_repeat.py",
+    "tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.repeat",
+      "tensor_role": "output (attention mask broadcast across heads)",
+      "size_descriptor": "[1, num_attention_heads, seq_len, seq_len] (row-major, tilized immediately after)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "Falcon-style model call site: ttnn.repeat(tt_attention_mask, ttnn.Shape([1, num_attention_heads, 1, 1]), memory_config=model_config['ATTN_MASK_MEMCFG']) followed by ttnn.tilize with same memcfg (ATTN_MASK_MEMCFG is the model's interleaved DRAM mask config)"
+    },
+    {
+      "op": "ttnn.repeat",
+      "tensor_role": "output (position_ids replicated across batch)",
+      "size_descriptor": "[batch_size, seq_len] small integer index tensor",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "batch_size",
+        "op": ">",
+        "value": 1
+      },
+      "source": "BGE-M3 embeddings call site: position_ids = ttnn.repeat(pos_prefix, (batch_size, 1), memory_config=self.config.embedding_memcfg); skipped entirely when batch_size == 1 because repeat(1,1) may alias the input"
+    },
+    {
+      "op": "ttnn.repeat",
+      "tensor_role": "output (activation replicated across expert dim for batched matmul)",
+      "size_descriptor": "[1, num_experts_per_device, total_tokens, hidden_size] large prefill activation",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "GPT-OSS experts MLP call site: post_dispatch = ttnn.repeat(post_dispatch, ttnn.Shape((1, num_experts_per_device, 1, 1))); downstream expert matmuls explicitly use ttnn.DRAM_MEMORY_CONFIG (default interleaved DRAM output for repeat)"
+    },
+    {
+      "op": "ttnn.repeat",
+      "tensor_role": "output (decode logits replicated to 32 sampling users)",
+      "size_descriptor": "[1, 1, 32, vocab] (vocab 2048-3072, padded to 8192 afterwards for multicore topk)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "Sampling call site: logits_32 = ttnn.repeat(logits_tt, ttnn.Shape([1, 1, 32, 1])) feeding ttnn.topk/ttnn.sampling; no explicit memory_config (default interleaved DRAM)"
+    }
+  ]
+}

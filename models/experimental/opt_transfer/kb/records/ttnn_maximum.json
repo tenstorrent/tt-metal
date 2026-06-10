@@ -1,0 +1,81 @@
+{
+  "id": "ttnn_maximum",
+  "fused_op": "ttnn.maximum",
+  "category": "eltwise_binary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.maximum(input_tensor_a, input_tensor_b)",
+  "signature": {},
+  "config_template": {
+    "layout": "ttnn.TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG:default=ttnn.DRAM_MEMORY_CONFIG}",
+    "dtype": "{DTYPE:bfloat16|int32}",
+    "broadcasting": "supports implicit broadcast (e.g. [1] vs [1, 5, 12])",
+    "shape": "[{N}, {C}, {H}, {W}] tile-aligned preferred (multiples of 32)"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Direct 1:1 fusion of torch.maximum. Seen in running-max accumulation loops (e.g. scatter-then-maximum reduction over sequence positions). Composable with ttnn.multiply for masked-max patterns.; ttnn_replacement: ttnn.maximum(input_tensor_a, input_tensor_b, memory_config={MEMORY_CONFIG}, output_tensor={OUTPUT_TENSOR}, queue_id={QUEUE_ID}); constraints: {'layout': 'TILE_LAYOUT required in observed tests', 'broadcast': 'shapes must be broadcast-compatible', 'in_place_output': 'optional preallocated output_tensor supported with queue_id'}",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_maximum.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_maximum.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.maximum",
+      "tensor_role": "input_a",
+      "size_descriptor": "small tiles [1,1,32,32] up to [2,2,1024,1024]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test"
+    },
+    {
+      "op": "ttnn.maximum",
+      "tensor_role": "input_b",
+      "size_descriptor": "broadcastable shapes incl. [1] vs [1,5,12]; tile shapes up to [2,2,1024,1024]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test"
+    },
+    {
+      "op": "ttnn.maximum",
+      "tensor_role": "output",
+      "size_descriptor": "same as broadcasted input shape; optionally preallocated (output_tensor=tt_out)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test"
+    },
+    {
+      "op": "ttnn.maximum",
+      "tensor_role": "input_b (scattered accumulator branch)",
+      "size_descriptor": "[B, vocab_size] vocab-sized 2D tensor in per-token accumulation loop",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site"
+    }
+  ]
+}

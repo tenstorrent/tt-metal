@@ -1,0 +1,68 @@
+{
+  "id": "ttnn_mac",
+  "fused_op": "ttnn.mac",
+  "category": "eltwise_ternary_fused",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.add(torch.mul(input_tensor_a, input_tensor_b), input_tensor_c)",
+  "signature": {},
+  "config_template": {
+    "input_tensor_a_shape": "{N, C, H, W}",
+    "input_tensor_b": "tensor of shape {N, C, H, W} or scalar",
+    "input_tensor_c": "tensor of shape {N, C, H, W} or scalar",
+    "layout": "TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Fuses an elementwise multiply followed by an elementwise add (a*b + c) into a single ttnn.mac kernel launch. Replaces the contiguous chain torch.mul -> torch.add when the add's second operand is independent of the mul output. Verified against golden _golden_function_mac.; constraints: {'scalar_overload': 'input_tensor_b and input_tensor_c may both be python floats (ttnn.mac(t, value1, value2))', 'broadcasting': 'tensor variant tested with all three inputs of identical shape', 'layout': 'inputs must be TILE_LAYOUT on device'}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_ternary.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_ternary_composite.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.mac",
+      "tensor_role": "input_tensor_a",
+      "size_descriptor": "small tiles (e.g. h=64, w=128; ranges -100..100)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test (ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT, device=device) with default memory_config -> DRAM interleaved)"
+    },
+    {
+      "op": "ttnn.mac",
+      "tensor_role": "input_tensor_b/input_tensor_c",
+      "size_descriptor": "same shape as input_tensor_a, or scalar immediates (1.0, 5.0, 10.0)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test (scalar overload ttnn.mac(input_tensor1, value1, value2) requires no device placement for b/c)"
+    },
+    {
+      "op": "ttnn.mac",
+      "tensor_role": "output",
+      "size_descriptor": "same shape as input_tensor_a",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test (output converted via to_layout(ROW_MAJOR) then from_device; no explicit output memory_config given)"
+    }
+  ]
+}

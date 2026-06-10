@@ -1,0 +1,89 @@
+{
+  "id": "ttnn_sum",
+  "fused_op": "ttnn.sum",
+  "category": "reduction",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.sum(input_tensor, dim=dim, keepdim=keepdim)  # dim=None reduces all dims",
+  "signature": {},
+  "config_template": {
+    "dim": "{DIM}",
+    "keepdim": "{KEEPDIM}",
+    "memory_config": "{MEM_CONFIG}",
+    "compute_kernel_config": "{COMPUTE_KERNEL_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Direct mapping from registered golden_function. dim may be int, tuple of ints, or None (full reduction). Input may be ROW_MAJOR or TILE layout; tests verify both. Lower numeric precision on row-major bf16 path (atol up to ~8 in tests).",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/deepseek/test_deepseek_moe_post_combine_reduce.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_reduction.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_reduction_h_interleaved.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_reduction_on_batch.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_reduction_program_cache.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_sum.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.sum",
+      "tensor_role": "output",
+      "size_descriptor": "width reduction dim=-1, keepdim=True, tile layout",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": "compute_kernel_config=COMPUTE_KERNEL_CONFIG_SDPA (HiFi/fp32-acc kernel)",
+      "condition": null,
+      "source": "unit_test: ttnn.sum(tt_input, dim=-1, keepdim=True, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=COMPUTE_KERNEL_CONFIG_SDPA)"
+    },
+    {
+      "op": "ttnn.sum",
+      "tensor_role": "input",
+      "size_descriptor": "decode-time activation, fits in L1",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: tt_input created with memory_config=ttnn.L1_MEMORY_CONFIG before sum"
+    },
+    {
+      "op": "ttnn.sum",
+      "tensor_role": "output",
+      "size_descriptor": "expert-dim reduction (dim=0, keepdim=True) of MoE combine output, [K,1,M,H] -> [1,1,M,H]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: ttnn.sum(output, dim=0, keepdim=True, memory_config=cfg['sum_experts_output_memory_config']); deepseek MoE prefill/decode, config-driven, DRAM in prefill regime"
+    },
+    {
+      "op": "ttnn.sum",
+      "tensor_role": "input",
+      "size_descriptor": "full vocab/embedding-width tensor, large last dim",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "tensor_bytes",
+        "op": ">",
+        "value": "L1_capacity"
+      },
+      "source": "model call site: _l2_normalize_ttnn moves input to ttnn.DRAM_MEMORY_CONFIG before pow+sum; chunked sum loop used when width is very large"
+    }
+  ]
+}

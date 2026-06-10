@@ -1,0 +1,101 @@
+{
+  "id": "ttnn_div",
+  "fused_op": "ttnn.div",
+  "category": "eltwise_binary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.div(input_tensor_a, input_tensor_b, rounding_mode=rounding_mode)",
+  "signature": {},
+  "config_template": {
+    "fast_and_approximate_mode": false,
+    "rounding_mode": null,
+    "input_shape_a": "[{N}, {C}, {H}, {W}]",
+    "input_shape_b": "[{N}, {C}, {H}, {W}] | scalar",
+    "broadcast": "elementwise_or_scalar",
+    "dtype": "bfloat16",
+    "layout": "TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Binary elementwise divide; second operand may be a tensor or python scalar. rounding_mode supports None/'trunc'/'floor' matching torch.div semantics. fast_and_approximate_mode trades precision for speed (bfloat16 NaN handling differs from torch, tests map NaN->inf). Supports preallocated output_tensor and queue_id.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_composite.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_fp32.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_int32.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_mul.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_where.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.div",
+      "tensor_role": "input_b",
+      "size_descriptor": "generic tile-aligned tensor [{N},{C},{H},{W}]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: ttnn.from_torch(in_data2, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.div",
+      "tensor_role": "input_a",
+      "size_descriptor": "reduced stats tensor [{N},1,1,1] (std over dims [1,2,3], keepdim=True)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: SD guidance rescale \u2014 std_ratio = ttnn.div(ttnn.std(noise_pred_text,...), ttnn.std(noise_pred,...)) followed by ttnn.mul chain"
+    },
+    {
+      "op": "ttnn.div",
+      "tensor_role": "input_a",
+      "size_descriptor": "latents tensor (VAE decode input, interleaved)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: tt_latents = ttnn.div(tt_latents, scaling_factor) before vae.decode, inside trace capture (non-inplace required for tracing)"
+    },
+    {
+      "op": "ttnn.div",
+      "tensor_role": "input_b",
+      "size_descriptor": "row-broadcast reduction [{B},1,{S},1] (sum over dim=3, keepdim=True) \u2014 MoE top-k score normalization",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: topk_experts_scores_normalized = ttnn.div(topk_experts_scores, topk_expert_scores_sum) where sum = ttnn.sum(..., dim=3, keepdim=True) + eps"
+    },
+    {
+      "op": "ttnn.div",
+      "tensor_role": "input_a",
+      "size_descriptor": "pooled embedding [{B},{H}] (sum over seq dim=1)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: mean-pooling pattern \u2014 result = ttnn.div(ttnn.sum(emb*mask, 1), ttnn.clamp(ttnn.sum(mask, 1), min=1e-9))"
+    }
+  ]
+}

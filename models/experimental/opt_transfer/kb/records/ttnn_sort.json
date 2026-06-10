@@ -1,0 +1,54 @@
+{
+  "id": "ttnn_sort",
+  "fused_op": "ttnn.sort",
+  "category": "reduction_sort",
+  "pattern_kind": "chain",
+  "torch_pattern": "values, indices = torch.sort(input, dim={DIM}, descending={DESCENDING})",
+  "signature": {},
+  "config_template": {
+    "dim": "{DIM}",
+    "descending": "{DESCENDING}",
+    "out": "optional tuple ({VALUES_TENSOR}, {INDICES_TENSOR}) preallocated via ttnn.zeros_like; indices dtype ttnn.uint16",
+    "layout": "ttnn.Layout.TILE",
+    "dtype": "ttnn.bfloat16"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Returns (values, indices) pair matching torch.sort semantics; indices are uint16 and must be cast to int64 for torch.gather equivalence. Validated for dim=-1 and arbitrary dims, ascending/descending.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/data_movement/test_sort.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.sort",
+      "tensor_role": "input",
+      "size_descriptor": "generic test shapes (bfloat16, TILE layout)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(..., memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1))"
+    },
+    {
+      "op": "ttnn.sort",
+      "tensor_role": "output_indices",
+      "size_descriptor": "same shape as input",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: preallocated out tensor ttnn.zeros_like(ttnn_input, dtype=ttnn.uint16)"
+    }
+  ]
+}

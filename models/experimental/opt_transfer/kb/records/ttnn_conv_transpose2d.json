@@ -1,0 +1,85 @@
+{
+  "id": "ttnn_conv_transpose2d",
+  "fused_op": "ttnn.conv_transpose2d",
+  "category": "convolution",
+  "pattern_kind": "chain",
+  "torch_pattern": "x = torch.permute(x, (0, 3, 1, 2)); x = torch.nn.functional.conv_transpose2d(x, weight, bias=bias, stride=(stride_h, stride_w), padding=(pad_h, pad_w), dilation=1, groups=groups); x = torch.permute(x, (0, 2, 3, 1))",
+  "signature": {},
+  "config_template": {
+    "in_channels": "{IN_CHANNELS}",
+    "out_channels": "{OUT_CHANNELS}",
+    "batch_size": "{BATCH}",
+    "input_height": "{H_IN}",
+    "input_width": "{W_IN}",
+    "kernel_size": "({KH}, {KW})",
+    "stride": "({STRIDE_H}, {STRIDE_W})",
+    "padding": "({PAD_H}, {PAD_W})",
+    "output_padding": "({OUT_PAD_H}, {OUT_PAD_W})",
+    "dilation": "(1, 1)",
+    "groups": "{GROUPS}",
+    "dtype": "{DTYPE}",
+    "mirror_kernel": true,
+    "return_weights_and_bias": true,
+    "conv_config": {
+      "act_block_w_div": "{ACT_BLOCK_W_DIV}",
+      "deallocate_activation": false
+    },
+    "compute_config": {
+      "math_fidelity": "ttnn.MathFidelity.LoFi",
+      "fp32_dest_acc_en": "{FP32_DEST_ACC_EN}",
+      "packer_l1_acc": "{PACKER_L1_ACC}"
+    }
+  },
+  "weight_transform": "Weight stays in torch conv_transpose2d layout (in_channels, out_channels/groups, kH, kW) on host (preprocess_weights_bias=False supported); ttnn preprocesses on first call and returns device weights via return_weights_and_bias=True for caching. mirror_kernel=True applies the kernel flip (torch conv_transpose semantics) inside ttnn, so weights are passed unflipped. Bias reshaped to (1, 1, 1, out_channels). Input must be permuted NCHW->NHWC (often row-major) before the call.",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Returns tuple: (output, [out_height, out_width], [prepared_weight, prepared_bias]) or (output, [weight, bias]) depending on return flags; callers cache prepared weights back into module state. 1D transposed conv (e.g. audio upsamplers) is expressed as input_height=1, input_width=seq_len, kernel_size=(1, K).; torch_pattern_source: registered golden for ttnn.conv_transpose2d (F.conv_transpose2d on NCHW with NHWC<->NCHW permutes); golden_src field was null, semantics confirmed by test harness comparing against torch conv_transpose2d",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/conv/test_conv_transpose2d.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.conv_transpose2d",
+      "tensor_role": "input_activation",
+      "size_descriptor": "NHWC flattened (1, 1, N*H*W, C); seen as (batch, 1, seq_len, C) row-major for 1D upsampler case",
+      "memory_config": {
+        "buffer": null,
+        "layout": "ROW_MAJOR",
+        "shard_spec_template": null
+      },
+      "program_config": "Conv2dConfig(act_block_w_div={ACT_BLOCK_W_DIV}, deallocate_activation=False)",
+      "condition": null,
+      "source": "call_site: audio upsampler passes x_nhwc_rm with input_height=1, input_width=seq_len; conv_config sets act_block_w_div and deallocate_activation=False"
+    },
+    {
+      "op": "ttnn.conv_transpose2d",
+      "tensor_role": "weight",
+      "size_descriptor": "(in_channels, out_channels/groups, kH, kW) torch layout, host-resident on first call",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: preprocess_weights_bias=False keeps weights on host; prepared device weights returned via return_weights_and_bias=True and cached (upconv_config.weight, self.weight) for reuse"
+    },
+    {
+      "op": "ttnn.conv_transpose2d",
+      "tensor_role": "compute",
+      "size_descriptor": "any",
+      "memory_config": {
+        "buffer": null,
+        "layout": null,
+        "shard_spec_template": null
+      },
+      "program_config": "compute_config: MathFidelity.LoFi, fp32_dest_acc_en={FP32_DEST_ACC_EN}, packer_l1_acc={PACKER_L1_ACC}",
+      "condition": null,
+      "source": "call_site: upconv path constructs compute_kernel_config with LoFi fidelity"
+    }
+  ]
+}

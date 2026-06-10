@@ -1,0 +1,118 @@
+{
+  "id": "ttnn_transformer_scaled_dot_product_attention_decode",
+  "fused_op": "ttnn.transformer.scaled_dot_product_attention_decode",
+  "category": "attention",
+  "pattern_kind": "chain",
+  "torch_pattern": "scores = torch.matmul(Q, K.transpose(-2, -1)) * scale; scores = scores + attn_mask; probs = torch.softmax(scores, dim=-1); out = torch.matmul(probs, V)  # reference: torch.nn.functional.scaled_dot_product_attention(Q, K, V, attn_mask=attn_mask, scale=scale) on K/V cache slices up to cur_pos",
+  "signature": {},
+  "config_template": {
+    "q_shape": "[1, {BATCH}, {NUM_HEADS}, {HEAD_DIM}]",
+    "k_shape": "[{BATCH}, {NUM_KV_HEADS}, {MAX_SEQ_LEN}, {HEAD_DIM}]",
+    "v_shape": "[{BATCH}, {NUM_KV_HEADS}, {MAX_SEQ_LEN}, {HEAD_DIM}]",
+    "scale": "1.0 / sqrt({HEAD_DIM}) or model-provided",
+    "cur_pos_tensor": "ttnn int32 tensor of shape [{BATCH}] holding current decode positions (preferred over python-list cur_pos for trace/cache reuse)",
+    "sliding_window_size": "{SLIDING_WINDOW} (optional)",
+    "program_config": "ttnn.SDPAProgramConfig(compute_with_storage_grid_size={GRID}, q_chunk_size={Q_CHUNK}, k_chunk_size={K_CHUNK}, exp_approx_mode={EXP_APPROX})",
+    "compute_kernel_config": "ttnn.WormholeComputeKernelConfig(math_fidelity={FIDELITY}, math_approx_mode={APPROX}, fp32_dest_acc_en={FP32_ACC}, packer_l1_acc={L1_ACC})",
+    "memory_config": "ttnn.DRAM_MEMORY_CONFIG or L1 height-sharded over {BATCH}"
+  },
+  "weight_transform": null,
+  "source": "torch_pattern derived from tt-metal sdpa_decode test reference (torch.nn.functional.scaled_dot_product_attention over KV cache slice at cur_pos); golden_src not registered",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/sdpa/sdpa_test_utils.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.transformer.scaled_dot_product_attention_decode",
+      "tensor_role": "output",
+      "size_descriptor": "decode single-token output [1, BATCH, NUM_HEADS, HEAD_DIM]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT, interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": "model_config['SDPA_DECODE_PROGCFG'] / sdpa_decode_progcfg (SDPAProgramConfig)",
+      "condition": null,
+      "source": "model call sites: memory_config=ttnn.DRAM_MEMORY_CONFIG (multiple sites, with FIXME note 'why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG')"
+    },
+    {
+      "op": "ttnn.transformer.scaled_dot_product_attention_decode",
+      "tensor_role": "output",
+      "size_descriptor": "decode single-token output, batch-height-sharded",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT, HEIGHT_SHARDED",
+        "shard_spec_template": "height-sharded across {BATCH} cores (height_sharded_memcfg)"
+      },
+      "program_config": "SDPAProgramConfig (test program_config)",
+      "condition": {
+        "var": "sharded_out",
+        "op": "==",
+        "value": true
+      },
+      "source": "unit tests: memory_config=height_sharded_memcfg if sharded_out else dram_memcfg"
+    },
+    {
+      "op": "ttnn.transformer.scaled_dot_product_attention_decode",
+      "tensor_role": "output",
+      "size_descriptor": "decode single-token output, fallback interleaved",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT, interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": "SDPAProgramConfig (test program_config)",
+      "condition": {
+        "var": "sharded_out",
+        "op": "==",
+        "value": false
+      },
+      "source": "unit tests: memory_config=height_sharded_memcfg if sharded_out else dram_memcfg"
+    },
+    {
+      "op": "ttnn.transformer.scaled_dot_product_attention_decode",
+      "tensor_role": "key_cache / value_cache",
+      "size_descriptor": "full KV cache [BATCH, NUM_KV_HEADS, MAX_SEQ_LEN, HEAD_DIM], large persistent",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT, interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call site: k_cache/v_cache updated in-place via ttnn.experimental.paged_update_cache then consumed by sdpa_decode; test attn_mask staged with memory_config=dram_memcfg"
+    },
+    {
+      "op": "ttnn.transformer.scaled_dot_product_attention_decode",
+      "tensor_role": "cur_pos_tensor",
+      "size_descriptor": "tiny int32 index tensor [BATCH]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR (int32), interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit tests: ttnn.Tensor(torch.tensor(start_indices), ttnn.int32).to(device); model call sites pass current_pos / cache_idxs / position_idx tensors"
+    },
+    {
+      "op": "ttnn.transformer.scaled_dot_product_attention_decode",
+      "tensor_role": "output (sharded post-processing)",
+      "size_descriptor": "decode output reshard target",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT, HEIGHT_SHARDED",
+        "shard_spec_template": "height_sharded_mem_config applied via ttnn.to_memory_config after DRAM sdpa output"
+      },
+      "program_config": "program_config.get_decode_sdpa_config(mesh_device)",
+      "condition": null,
+      "source": "call site: tt_sdpa_tensor = ttnn.to_memory_config(tt_sdpa_tensor, height_sharded_mem_config) following sdpa_decode with DRAM output"
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "id": "ttnn_experimental_dit_minimal_matmul_addcmul_fused",
+  "fused_op": "ttnn.experimental.dit_minimal_matmul_addcmul_fused",
+  "category": "fused_matmul_elementwise",
+  "pattern_kind": "chain",
+  "torch_pattern": "y = torch.matmul(x, weight); y = y + bias if bias is not None else y; y = activation_fn(y) if fused_activation else y; out = torch.addcmul(addcmul_residual, y, addcmul_gate, value=scalar)",
+  "signature": {},
+  "config_template": {
+    "config": "get_matmul_config({M}, {K}, {N_OUT}, {CORE_GRID})",
+    "scalar": "{ADDCMUL_SCALAR}",
+    "bias_tensor": "{BIAS_OR_NONE}",
+    "fused_activation": "{ACTIVATION_OR_NONE}",
+    "compute_kernel_config": "{COMPUTE_KERNEL_CONFIG}"
+  },
+  "weight_transform": "weight kept as-is in [K, N] layout (torch nn.Linear weight must be transposed to [in_features, out_features]); bias passed as separate bias_tensor",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "constraints: ['addcmul_residual and addcmul_gate must be broadcast-compatible with matmul output shape [M, N_out]', 'M, K, N_out derived from padded_shape; matmul program config built from device compute grid']",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "llm",
+  "confidence": "low",
+  "unit_test_refs": [],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.dit_minimal_matmul_addcmul_fused",
+      "tensor_role": "activation_input",
+      "size_descriptor": "M=x.padded_shape[-2], K=x.padded_shape[-1], N_out=weight.padded_shape[-1]",
+      "memory_config": null,
+      "program_config": "get_matmul_config(M, K, N_out, core_grid) where core_grid = mesh_device.compute_with_storage_grid_size()",
+      "condition": null,
+      "source": "call_site: to_out projection in DiT attention block"
+    },
+    {
+      "op": "ttnn.experimental.dit_minimal_matmul_addcmul_fused",
+      "tensor_role": "activation_input",
+      "size_descriptor": "output of all_gather (tt_all_gather_out_tensor)",
+      "memory_config": null,
+      "program_config": "matmul_config (precomputed matmul program config)",
+      "condition": null,
+      "source": "call_site: fuse_addcmul branch after all_gather, with optional fused_activation and bias"
+    }
+  ]
+}

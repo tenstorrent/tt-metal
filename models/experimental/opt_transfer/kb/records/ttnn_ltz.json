@@ -1,0 +1,26 @@
+{
+  "id": "ttnn_ltz",
+  "fused_op": "ttnn.ltz",
+  "category": "eltwise_unary_comparison",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.lt(input_tensor, 0)",
+  "signature": {},
+  "config_template": {
+    "input_tensor": "{INPUT}",
+    "output_tensor": "{OPTIONAL_PREALLOCATED_OUTPUT}",
+    "queue_id": "{QUEUE_ID:default=0}",
+    "memory_config": "{MEMORY_CONFIG:default=input.memory_config()}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Unary elementwise predicate: returns 1.0 where x < 0, else 0.0. Replaces torch.lt(x, 0) / (x < 0) subsequences. Fusable as a unary activation in eltwise chains. Supports preallocated output_tensor and queue_id per unit test.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py"
+  ],
+  "placement_observations": []
+}

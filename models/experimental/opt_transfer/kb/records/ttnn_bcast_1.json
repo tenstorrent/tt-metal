@@ -1,0 +1,27 @@
+{
+  "id": "ttnn_bcast_1",
+  "fused_op": "ttnn.bcast",
+  "category": "eltwise_binary_broadcast",
+  "pattern_kind": "chain",
+  "torch_pattern": "res = in0 - in1",
+  "signature": {},
+  "config_template": {
+    "math_op": "ttnn.BcastOpMath.SUB",
+    "dim": "ttnn.BcastOpDim.{DIM}",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": "reshape broadcast operand (in1) to bcast-compatible shape for the chosen BcastOpDim and convert to TILE_LAYOUT",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Broadcast subtract along H, W, or HW; result truncated back to in0 shape per golden.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_add.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py"
+  ],
+  "placement_observations": []
+}

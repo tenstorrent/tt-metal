@@ -1,0 +1,28 @@
+{
+  "id": "ttnn_isclose",
+  "fused_op": "ttnn.isclose",
+  "category": "eltwise_binary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.isclose(input_tensor_a, input_tensor_b, rtol=rtol, atol=atol, equal_nan=equal_nan)",
+  "signature": {},
+  "config_template": {
+    "rtol": "{RTOL:default=1e-05}",
+    "atol": "{ATOL:default=1e-08}",
+    "equal_nan": "{EQUAL_NAN:default=false}",
+    "layout": "TILE_LAYOUT",
+    "input_shape": "{DIM}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Elementwise binary comparison op. Output is a boolean-like tensor (1.0/0.0). Tests convert output to ROW_MAJOR_LAYOUT before to_torch. No fused multi-op torch subsequence observed; direct 1:1 mapping to torch.isclose.; ttnn_replacement: ttnn.isclose(input_tensor_a, input_tensor_b, rtol=rtol, atol=atol, equal_nan=equal_nan); constraints: {'inputs': 2, 'broadcast': 'shapes must be broadcast-compatible', 'layout': 'inputs must be in TILE_LAYOUT on device'}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_composite.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_relational.py"
+  ],
+  "placement_observations": []
+}

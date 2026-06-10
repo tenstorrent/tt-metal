@@ -1,0 +1,107 @@
+{
+  "id": "ttnn_experimental_rotary_embedding_llama",
+  "fused_op": "ttnn.experimental.rotary_embedding_llama",
+  "category": "positional_embedding",
+  "pattern_kind": "chain",
+  "torch_pattern": "def rotate_half(x):\n    x1 = x[..., : x.shape[-1] // 2]\n    x2 = x[..., x.shape[-1] // 2 :]\n    return torch.cat((-x2, x1), dim=-1)\n\n# official llama RoPE reference compared against in tests ('q_rotated_official'):\nout = (x * cos) + (rotate_half(x) * sin)",
+  "signature": {},
+  "config_template": {
+    "is_decode_mode": "{IS_DECODE}",
+    "memory_config": "{MEM_CONFIG}",
+    "compute_kernel_config": "{COMPUTE_KERNEL_CONFIG}"
+  },
+  "weight_transform": "cos/sin are precomputed per-position matrices broadcast over heads (cos_matrix/sin_matrix, shape [1, 1|B, S, head_dim], TILE_LAYOUT, replicated across mesh). transformation_mat = get_rot_transformation_mat(): a static 32x32-tile permutation matrix that implements rotate_half() as a matmul on-device; built once per mode ('decode'/'prefill') and reused. Inputs must be bfloat16 (call sites insert ttnn.typecast to bfloat16 before the op). Some models pre-permute Q/K projection rows at init so head-dim is already in interleaved (even/odd) layout, avoiding per-call reshape/permute. If head_dim is not tile-padded, cos is padded with 1.0 and sin with 0.0 (pad_head_dim).",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "fusion_notes: Q and K RoPE appear as two sibling calls sharing the same cos/sin/trans_mat; a fused_qk decode variant exists (to_qk_fused_memory_config + fused path). Frequently chained: typecast(bf16) -> rotary_embedding_llama -> typecast(bf8_b) -> SDPA, or permute/to_memory_config(shard) -> rope -> to_memory_config(L1 interleaved) -> permute in decode.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_deepseek_mla_ops.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "rotary_embedding_llama",
+      "tensor_role": "input",
+      "size_descriptor": "decode token: [1, batch, n_heads, head_dim] e.g. [1, 32, 16, 64]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "[32, {HEAD_DIM}] on {N_HEADS_GRID} cores (e.g. 8x4 grid, shard [32,64], '32 cores')"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "is_decode_mode",
+        "op": "==",
+        "value": true
+      },
+      "source": "deepseek q_rope/kv_rope decode call sites ('1,32,16,64 height sharded 8x4 [32,64]'), perf test ('HEIGHT_SHARDED with 32 cores'); inputs resharded via to_memory_config(rope_sharded_mem_config) before the op"
+    },
+    {
+      "op": "rotary_embedding_llama",
+      "tensor_role": "output",
+      "size_descriptor": "decode token: [1, batch, n_heads, head_dim]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "WIDTH_SHARDED",
+        "shard_spec_template": "[32, {HEAD_DIM}] on 8x4 grid; immediately resharded to L1 interleaved via ttnn.to_memory_config(..., ttnn.L1_MEMORY_CONFIG)"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "is_decode_mode",
+        "op": "==",
+        "value": true
+      },
+      "source": "deepseek decode call site comments ('# 1,32,16,64 width sharded 8x4 [32,64]' then to_memory_config L1 interleaved)"
+    },
+    {
+      "op": "rotary_embedding_llama",
+      "tensor_role": "input",
+      "size_descriptor": "prefill: [1, n_heads, seq_len, head_dim] (any seq_len)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "is_decode_mode",
+        "op": "==",
+        "value": false
+      },
+      "source": "call site comment: 'Use is_decode_mode=False to work with DRAM layout for all sequence lengths'; llama prefill q_heads_1QSD/k_heads_1KSD paths"
+    },
+    {
+      "op": "rotary_embedding_llama",
+      "tensor_role": "output",
+      "size_descriptor": "prefill: [1, n_heads, seq_len, head_dim]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "is_decode_mode",
+        "op": "==",
+        "value": false
+      },
+      "source": "call sites passing memory_config=ttnn.L1_MEMORY_CONFIG explicitly with is_decode_mode=False and compute_kernel_config=self.rope_compute_kernel_config / self.kcfg"
+    },
+    {
+      "op": "rotary_embedding_llama",
+      "tensor_role": "cos_sin_matrices",
+      "size_descriptor": "[1, 1|B, S, head_dim], static per-position lookup",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED (TILE), replicated across mesh (ReplicateTensorToMesh)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "rope_setup.get_rot_mats / rope_tensors['cos_matrix','sin_matrix'] created once and reused across Q and K calls; mesh tests use ReplicateTensorToMesh"
+    }
+  ]
+}

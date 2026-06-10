@@ -1,0 +1,72 @@
+{
+  "id": "tanh_bw",
+  "fused_op": "tanh_bw",
+  "category": "eltwise_unary_backward",
+  "pattern_kind": "chain",
+  "torch_pattern": "pyt_y = torch.tanh(input_tensor)\npyt_y.backward(gradient=grad_tensor)\ngrad_input = input_tensor.grad",
+  "signature": {},
+  "config_template": {
+    "function": "ttnn.tanh_bw",
+    "args": [
+      "grad_tensor",
+      "input_tensor"
+    ],
+    "kwargs": {
+      "memory_config": "{MEMORY_CONFIG}"
+    },
+    "returns": "list[Tensor] (grad w.r.t. input at index 0)",
+    "shape": "[{N}, {C}, {H}, {W}] (elementwise, shape-preserving)"
+  },
+  "weight_transform": "none",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Computes grad_input = grad_output * sech^2(x) = grad_output * (1 - tanh(x)^2). Replaces the torch autograd subsequence tanh(x) -> .backward(grad) -> .grad with a single fused backward kernel.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_tanh_bw_ulp.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "tanh_bw",
+      "tensor_role": "grad_tensor (input 0)",
+      "size_descriptor": "scalar/sample-point tests; arbitrary tile-aligned eltwise shapes",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT, interleaved (default from ttnn.from_torch with device, no explicit memory_config)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test (ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT))"
+    },
+    {
+      "op": "tanh_bw",
+      "tensor_role": "input_tensor (input 1)",
+      "size_descriptor": "scalar/sample-point tests; arbitrary tile-aligned eltwise shapes",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT, interleaved (default from ttnn.from_torch with device, no explicit memory_config)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test (ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT))"
+    },
+    {
+      "op": "tanh_bw",
+      "tensor_role": "output (grad_input, index 0 of result list)",
+      "size_descriptor": "same shape as inputs (elementwise)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT, interleaved (default; no explicit output memory_config at call site)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test (results = ttnn.tanh_bw(tt_grad, tt_input); ttnn.to_torch(results[0]))"
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "id": "ttnn_experimental_deepseek_moe_fast_reduce_nc",
+  "fused_op": "ttnn.experimental.deepseek_moe_fast_reduce_nc",
+  "category": "reduction",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.sum(x, dim=0, keepdim=True)",
+  "signature": {},
+  "config_template": {
+    "dim": 0,
+    "split_size": "{HIDDEN_SIZE} // {TP_SIZE}",
+    "output_memory_config": "{OUTPUT_MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "constraints: ['Used only when fabric_config == ttnn.FabricConfig.FABRIC_1D_RING and tp_size == 8 in observed model call sites', 'split_size must evenly divide the last dimension (split_size = last_dim // num_devices)', 'Typically immediately followed by ttnn.experimental.deepseek_moe_reduce_scatter consuming its output', 'Often preceded by ttnn.mul (scaling by topk expert weights) in the MoE combine path']",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "llm",
+  "confidence": "low",
+  "unit_test_refs": [],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.deepseek_moe_fast_reduce_nc",
+      "tensor_role": "output",
+      "size_descriptor": "[1, tokens_per_device, hidden_size] reduced over dim 0 from [select_experts_k, tokens_per_device, hidden_size]; last dim chunked by hidden_size // tp_size",
+      "memory_config": null,
+      "program_config": null,
+      "condition": {
+        "var": "tp_size",
+        "op": "==",
+        "value": 8
+      },
+      "source": "model call site: output_memory_config=cfg['ring_sum_experts_output_memory_config'] under fabric_config == FABRIC_1D_RING and tp_size == 8; concrete buffer/layout not visible at call site (config indirected through cfg dict)"
+    },
+    {
+      "op": "ttnn.experimental.deepseek_moe_fast_reduce_nc",
+      "tensor_role": "output",
+      "size_descriptor": "pre-reduce-scatter intermediate, shape [1, ..., last_dim] with split_size = last_dim // num_devices",
+      "memory_config": null,
+      "program_config": null,
+      "condition": null,
+      "source": "unit test call site: output_memory_config=rs_input_memory_config (output placed in the reduce_scatter input memory config); concrete buffer/layout parameterized in test"
+    }
+  ]
+}

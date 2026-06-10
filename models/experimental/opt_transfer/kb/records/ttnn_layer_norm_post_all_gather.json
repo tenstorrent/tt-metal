@@ -1,0 +1,85 @@
+{
+  "id": "ttnn_layer_norm_post_all_gather",
+  "fused_op": "ttnn.layer_norm_post_all_gather",
+  "category": "normalization",
+  "pattern_kind": "chain",
+  "torch_pattern": "mean = x.mean(dim=-1, keepdim=True); var = ((x - mean) ** 2).mean(dim=-1, keepdim=True); y = (x - mean) / torch.sqrt(var + eps); out = y * gamma + beta  # i.e. torch.nn.functional.layer_norm(x, [DIM], weight=gamma, bias=beta, eps=eps), finalized from pre-gathered partial stats E[x], E[x^2]",
+  "signature": {},
+  "config_template": {
+    "epsilon": "{EPS}",
+    "weight": "{GAMMA_TENSOR}",
+    "bias": "{BETA_TENSOR}",
+    "stats": "{GATHERED_STATS_TENSOR}",
+    "dtype": "{OUTPUT_DTYPE}",
+    "memory_config": "{OUT_MEMORY_CONFIG}",
+    "compute_kernel_config": "ttnn.WormholeComputeKernelConfig(math_fidelity={MATH_FIDELITY}, math_approx_mode=False, fp32_dest_acc_en=True)",
+    "program_config": "ttnn.LayerNormShardedMultiCoreProgramConfig(compute_with_storage_grid_size=({GRID_X}, {GRID_Y}), subblock_w={SUBBLOCK_W}, block_h={BATCH}*{SEQ_LEN}//32//{NUM_CORES_H}, block_w={DIM}//32//{NUM_CORES_W}, inplace={INPLACE})"
+  },
+  "weight_transform": "gamma/beta of shape [DIM] are reshaped to [1, 1, DIM // 32, 32] and laid out ROW_MAJOR (one tile-row per 32 elements) before ttnn.as_tensor/from_torch; stats tensor is the all-gathered output of layer_norm_pre_all_gather (per-device [.., 2*32] tile columns holding E[x] and E[x^2])",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Second stage of distributed (tensor-parallel) LayerNorm: layer_norm_pre_all_gather computes local partial sums, all_gather concatenates stats across devices, layer_norm_post_all_gather applies (x - mean) * rsqrt(var + eps) * gamma + beta on the locally-sharded hidden dim. Only fuse when DIM is split across devices.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/fused/distributed_norm_test_utils.py",
+    "tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm.py",
+    "tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_sharded.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.layer_norm_post_all_gather",
+      "tensor_role": "input_activation",
+      "size_descriptor": "[1, 1, BATCH*SEQ, DIM/num_devices] (per-device hidden shard)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE",
+        "shard_spec_template": "WIDTH_SHARDED over compute grid, shard=[BATCH*SEQ, DIM/num_devices/NUM_CORES]"
+      },
+      "program_config": "SHARDED_NORM_PRGM_CFG (ttnn.LayerNormShardedMultiCoreProgramConfig)",
+      "condition": null,
+      "source": "test_example: sharded distributed-norm path passing program_config=SHARDED_NORM_PRGM_CFG and memory_config=out_memory_config"
+    },
+    {
+      "op": "ttnn.layer_norm_post_all_gather",
+      "tensor_role": "stats",
+      "size_descriptor": "[1, 1, BATCH*SEQ, 2*32*num_devices] (gathered E[x], E[x^2] tile columns)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test_example: tt_stats passed as stats= kwarg, deallocated immediately after the call (tt_stats.deallocate(True)) indicating transient L1 residency"
+    },
+    {
+      "op": "ttnn.layer_norm_post_all_gather",
+      "tensor_role": "weight",
+      "size_descriptor": "[1, 1, DIM//32, 32] row-major gamma/beta",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test_example: ttnn_weight/ttnn_bias persistent parameters passed as weight=/bias= kwargs"
+    },
+    {
+      "op": "ttnn.layer_norm_post_all_gather",
+      "tensor_role": "output",
+      "size_descriptor": "same shard shape as input activation",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE",
+        "shard_spec_template": "inherits input WIDTH_SHARDED spec when inplace, else out_memory_config"
+      },
+      "program_config": "SHARDED_NORM_PRGM_CFG",
+      "condition": null,
+      "source": "test_example: dtype=output_df, memory_config=out_memory_config in sharded branch"
+    }
+  ]
+}

@@ -1,0 +1,88 @@
+{
+  "id": "ttnn_scale_mask_softmax_in_place",
+  "fused_op": "ttnn.scale_mask_softmax_in_place",
+  "category": "fused_attention_softmax",
+  "pattern_kind": "chain",
+  "torch_pattern": "x = input_tensor.float(); x = x * scalar; x = x + attention_mask  # optional, skipped if mask is None; out = torch.softmax(x, dim=-1)",
+  "signature": {},
+  "config_template": {
+    "scale": "{SCALE}",
+    "mask": "{ATTENTION_MASK}",
+    "is_causal_mask": "{IS_CAUSAL}",
+    "numeric_stable": "{NUMERIC_STABLE}",
+    "program_config": {
+      "sharded_variant": "ttnn.SoftmaxShardedMultiCoreProgramConfig(compute_with_storage_grid_size={GRID}, subblock_w={SUBBLOCK_W}, block_h={PADDED_HEADS}//32, block_w={PADDED_KV_SEQ_LEN}//32)",
+      "default_variant": "ttnn.SoftmaxDefaultProgramConfig()"
+    },
+    "compute_kernel_config": "{COMPUTE_KERNEL_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "In-place op: output aliases input tensor (attn_weights), so output memory_config == input memory_config. Replaces the chain (x * scale) -> (x + mask) -> softmax(x, dim=-1) inside attention blocks, between QK^T matmul and the V matmul. Scale and mask are both optional (no-arg form does plain in-place softmax). block_w of sharded program config is dynamically set to padded_kv_len // 32 per decode step.; torch_pattern_source: registered golden _golden_function",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/fused/test_softmax.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.scale_mask_softmax_in_place",
+      "tensor_role": "input/output (attn_weights, in-place)",
+      "size_descriptor": "[batch, padded_local_heads, seq_q, padded_layer_past_len], decode-time attention scores",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "shard over heads/rows; block_h = {PADDED_LOCAL_HEADS}//32, block_w = {PADDED_LAYER_PAST_LEN}//32"
+      },
+      "program_config": "ttnn.SoftmaxShardedMultiCoreProgramConfig(compute_with_storage_grid_size=(8, 4), subblock_w=1, block_h=padded_local_heads//32, block_w=padded_layer_past_len//32)",
+      "condition": null,
+      "source": "decoder attention call site (sharded decode path, model_config['SOFTMAX_PROGCFG'] with block_w = padded_layer_past_len // 32)"
+    },
+    {
+      "op": "ttnn.scale_mask_softmax_in_place",
+      "tensor_role": "input/output (attn_weights, in-place)",
+      "size_descriptor": "large prefill attention scores produced by interleaved matmul (e.g. reference QK^T output)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "ttnn.SoftmaxDefaultProgramConfig()",
+      "condition": null,
+      "source": "reference attention call site: attn_weights = ttnn.matmul(..., memory_config=dram_interleaved_memory_config) followed by scale_mask_softmax_in_place(..., program_config=ttnn.SoftmaxDefaultProgramConfig(), is_causal_mask=True)"
+    },
+    {
+      "op": "ttnn.scale_mask_softmax_in_place",
+      "tensor_role": "input/output (attention_scores, in-place)",
+      "size_descriptor": "cross-attention scores, block_w sized by key_len ([B, H, q_len, key_len])",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "BLOCK_SHARDED",
+        "shard_spec_template": "block_w = {KEY_LEN}//32"
+      },
+      "program_config": "softmax_program_config with block_w = key_len // 32; is_causal_mask=False, scale = 1/sqrt(head_size)",
+      "condition": {
+        "var": "attn_type",
+        "op": "==",
+        "value": "cross"
+      },
+      "source": "cross-attention call site (use_mask = attn_type == 'cross'); non-cross path falls back to ttnn.bcast + plain softmax"
+    },
+    {
+      "op": "ttnn.scale_mask_softmax_in_place",
+      "tensor_role": "input/output (qkt reshaped, in-place)",
+      "size_descriptor": "[9, 1, 6144, 384] (reshaped from [9, 16, 384, 384]); heads folded into row dim before softmax",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": "model-specific softmax_program_config; scale = 1/sqrt(hidden_dim); no-op reshapes fused into surrounding bmms",
+      "condition": null,
+      "source": "encoder fused-op call site (qkt reshape -> scale_mask_softmax_in_place -> reshape back)"
+    }
+  ]
+}

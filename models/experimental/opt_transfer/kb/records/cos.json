@@ -1,0 +1,40 @@
+{
+  "id": "cos",
+  "fused_op": "cos",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.cos(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "[{N}, {C}, {H}, {W}]",
+    "memory_config": "{MEMORY_CONFIG}",
+    "output_tensor": "{OPTIONAL_PREALLOCATED_OUTPUT}",
+    "queue_id": "{CQ_ID}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "cos",
+      "tensor_role": "output",
+      "size_descriptor": "[1, 1, {SEQ_LEN}, {HEAD_DIM}] (rope frequency table, persistent across decode steps)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: rope precompute \u2014 ttnn.to_layout(cos, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG) applied to cos output after concat/reshape"
+    }
+  ]
+}

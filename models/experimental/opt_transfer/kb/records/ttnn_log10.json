@@ -1,0 +1,26 @@
+{
+  "id": "ttnn_log10",
+  "fused_op": "ttnn.log10",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.log10(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "{DIM}",
+    "queue_id": 0,
+    "output_tensor": "optional preallocated ttnn.Tensor of shape {DIM}",
+    "memory_config": "optional ttnn.MemoryConfig"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Registered golden is torch.log10. Unary eltwise op; supports preallocated output_tensor and queue_id per test example. No model call sites available.; ttnn_replacement: ttnn.log10(input_tensor, output_tensor=output_tensor, queue_id=cq_id); constraints: {'input_domain': 'x > 0 (tests generate inputs in [1e-6, 1])', 'elementwise': True, 'arity': 1}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py"
+  ],
+  "placement_observations": []
+}

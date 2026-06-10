@@ -1,0 +1,97 @@
+{
+  "id": "ttnn_scatter",
+  "fused_op": "ttnn.scatter",
+  "category": "data_movement/indexing",
+  "pattern_kind": "chain",
+  "torch_pattern": "dense_routing = torch.zeros_like(router_probs).scatter(dim, top_k_indices, top_k_values)  # gpt_oss dense-routing pattern observed at call site; generic form: out = input.scatter({DIM}, index, src)",
+  "signature": {},
+  "config_template": {
+    "dim": "{DIM}",
+    "index_dtype": "ttnn.int32",
+    "layout": "ROW_MAJOR_LAYOUT if input.dtype == float32 else TILE_LAYOUT"
+  },
+  "weight_transform": "none (index tensor cast to int32; index/src/input converted to ROW_MAJOR_LAYOUT when dtype is float32, otherwise TILE_LAYOUT)",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "llm",
+  "confidence": "low",
+  "unit_test_refs": [],
+  "placement_observations": [
+    {
+      "op": "ttnn.scatter",
+      "tensor_role": "input",
+      "size_descriptor": "[B, H, S, D] attention context, float32",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "dtype",
+        "op": "==",
+        "value": "float32"
+      },
+      "source": "call_site: sparse-attention context scatter \u2014 float32 path converts base/src/index via ttnn.to_layout(..., ROW_MAJOR_LAYOUT) before ttnn.scatter(dim=2), then back to TILE_LAYOUT"
+    },
+    {
+      "op": "ttnn.scatter",
+      "tensor_role": "input",
+      "size_descriptor": "[B, H, S, D] attention context, bfloat16",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "dtype",
+        "op": "!=",
+        "value": "float32"
+      },
+      "source": "call_site: sparse-attention context scatter \u2014 non-float32 path keeps TILE_LAYOUT, scatter_idx converted to TILE_LAYOUT before ttnn.scatter(dim=2)"
+    },
+    {
+      "op": "ttnn.scatter",
+      "tensor_role": "index",
+      "size_descriptor": "[num_image_tokens] mask indices (multimodal embedding scatter, dim=0)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: ttnn.from_torch(mask_indices, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT) feeding ttnn.scatter(input_embeds, 0, mask_indices_tt, image_embeds)"
+    },
+    {
+      "op": "ttnn.scatter",
+      "tensor_role": "src",
+      "size_descriptor": "[1, 1, token_count, group_count] repeated src for expert-group mask",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: MoE expert-group masking \u2014 src repeated via ttnn.repeat then ttnn.scatter; output converted to TILE_LAYOUT only after scatter (active_groups_mask = ttnn.to_layout(..., TILE_LAYOUT))"
+    },
+    {
+      "op": "ttnn.scatter",
+      "tensor_role": "input",
+      "size_descriptor": "[1, 1, S, E] dense router probabilities (zeros_like base)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: MoE TopK router \u2014 ttnn.scatter(ttnn.zeros_like(router_probs), dim=-1, index=top_k_indices, src=top_k_values) fully on device; inputs deallocated immediately after"
+    }
+  ]
+}

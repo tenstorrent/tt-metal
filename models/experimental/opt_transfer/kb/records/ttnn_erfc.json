@@ -1,0 +1,29 @@
+{
+  "id": "ttnn_erfc",
+  "fused_op": "ttnn.erfc",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.erfc(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "fast_and_approximate_mode": "{FAST_APPROX}",
+    "memory_config": "{MEMORY_CONFIG}",
+    "output_tensor": "{OPTIONAL_PREALLOCATED_OUTPUT}",
+    "queue_id": "{CQ_ID}"
+  },
+  "weight_transform": null,
+  "source": {
+    "golden": "ttnn eltwise unary golden registry (name_to_golden_function['erfc'] = torch.erfc)",
+    "tests": "test_eltwise_unary: ttnn.erfc(input_tensor, output_tensor=output_tensor, queue_id=cq_id) vs torch.erfc(in_data)"
+  },
+  "usage_examples": [],
+  "applicability_notes": "ttnn_replacement: ttnn.erfc(input_tensor, fast_and_approximate_mode={FAST_APPROX}, memory_config={MEMORY_CONFIG}); constraints: {'layout': 'TILE_LAYOUT', 'dtype': ['bfloat16', 'float32'], 'notes': 'Unary eltwise op; supports fast_and_approximate_mode flag; supports preallocated output_tensor and queue_id per unit tests; tested input range [-10, 10].'}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py"
+  ],
+  "placement_observations": []
+}

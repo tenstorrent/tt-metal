@@ -1,0 +1,54 @@
+{
+  "id": "ttnn_cumprod",
+  "fused_op": "ttnn.cumprod",
+  "category": "reduction_scan",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.cumprod(torch_input_tensor, dim)",
+  "signature": {},
+  "config_template": {
+    "dim": "{DIM}",
+    "dtype": "{DTYPE}",
+    "reverse_order": "{REVERSE_ORDER:default=false}",
+    "out": "{OUT_TENSOR:optional}",
+    "memory_config": "{MEMORY_CONFIG:optional}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "ttnn_replacement: ttnn.cumprod(ttnn_input_tensor, dim, dtype={DTYPE}, reverse_order={REVERSE_ORDER}, out={OUT_TENSOR}, memory_config={MEMORY_CONFIG}); constraints: {'layout': 'TILE', 'shape_preserving': True, 'notes': ['Output shape equals input shape.', 'Implicit tile padding must be filled (e.g. ttnn.fill_implicit_tile_padding) so padded values do not corrupt the cumulative product.', 'reverse_order=True corresponds to torch flip-cumprod-flip pattern, used for cumprod backward: torch.cumprod(x, dim).grad accumulation.', \"Preallocated 'out' tensor must match shape and dtype of result; mismatched memory_config/shape raises RuntimeError.\"]}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/reduce/test_cumprod.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.cumprod",
+      "tensor_role": "input",
+      "size_descriptor": "generic test shapes (tile-padded)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT, interleaved (default from_torch placement)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: ttnn.from_torch(..., layout=ttnn.Layout.TILE, device=device) with default memory_config"
+    },
+    {
+      "op": "ttnn.cumprod",
+      "tensor_role": "output (preallocated 'out')",
+      "size_descriptor": "same shape/dtype as input",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT, interleaved (inherited via ttnn.zeros_like(input))",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: ttnn_preallocated_tensor = ttnn.zeros_like(ttnn_input_tensor); ttnn.cumprod(..., out=ttnn_preallocated_tensor)"
+    }
+  ]
+}

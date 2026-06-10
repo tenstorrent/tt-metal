@@ -1,0 +1,91 @@
+{
+  "id": "ttnn_divide",
+  "fused_op": "ttnn.divide",
+  "category": "eltwise_binary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.div(input_tensor_a, input_tensor_b, rounding_mode=rounding_mode)",
+  "signature": {},
+  "config_template": {
+    "dtype": "{DTYPE}",
+    "layout": "ttnn.TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}",
+    "optional_kwargs": {
+      "rounding_mode": "{ROUNDING_MODE|null}",
+      "fast_and_approximate_mode": "{APPROX|false}",
+      "use_legacy": "{USE_LEGACY|false}",
+      "dtype": "{OUTPUT_DTYPE|null}"
+    }
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_int32.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_typecast.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binaryng_fp32.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_divide.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.divide",
+      "tensor_role": "input_b",
+      "size_descriptor": "elementwise operand, same shape as input_a (test tensors)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG) preceding ttnn.divide(input_tensor_a, input_tensor_b)"
+    },
+    {
+      "op": "ttnn.divide",
+      "tensor_role": "input_a",
+      "size_descriptor": "large sparse tensor [..., V] with V potentially >> 65536; processed in last-dim chunks of 65536",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "last_dim",
+        "op": ">",
+        "value": 65536
+      },
+      "source": "call site _l2_normalize_sparse_ttnn: sparse_tt = ttnn.to_memory_config(sparse_tt, ttnn.DRAM_MEMORY_CONFIG); CHUNK = 65536; ttnn.divide(chunk, norm_tt) per slice then ttnn.concat"
+    },
+    {
+      "op": "ttnn.multiply",
+      "tensor_role": "input_b (valid_mask broadcast against divide output)",
+      "size_descriptor": "[Q, P] bfloat16 mask expanded from per-row lengths",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call site: valid_tt = ttnn.from_torch(valid_mask, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG) consumed by ttnn.multiply(cm_tt, valid_tt) immediately after ttnn.divide(scores_sum_tt, q_lens_tt)"
+    },
+    {
+      "op": "ttnn.divide",
+      "tensor_role": "input_b (counts/denominator for mean pooling)",
+      "size_descriptor": "small per-sequence count tensor [B, 1, 1] regime (mean-pool denominator)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call site (mean sentence pooling): counts_tt created with dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT; pooled_tt = ttnn.divide(summed_tt, counts_tt)"
+    }
+  ]
+}

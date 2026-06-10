@@ -1,0 +1,30 @@
+{
+  "id": "ttnn_reciprocal",
+  "fused_op": "ttnn.reciprocal",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.reciprocal(input_tensor_a)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "[{N}, {C}, {H}, {W}]",
+    "layout": "TILE_LAYOUT",
+    "dtype": "{DTYPE}",
+    "optional_kwargs": {
+      "output_tensor": "preallocated tensor of same shape (optional, in-place write supported)",
+      "queue_id": "{CQ_ID}"
+    }
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_source: golden: torch.nan_to_num(torch.reciprocal(input_tensor_a), nan=device.sfpu_nan(), posinf=device.sfpu_inf(), neginf=-device.sfpu_inf()); test: golden_tensor = torch.reciprocal(in_data); fusion_notes: [\"Frequently followed by ttnn.multiply/ttnn.mul as a division idiom (a * reciprocal(b) == a / b); seen in RMSNorm (x * reciprocal(rms)), softmax denominator (exp * reciprocal(sum+eps)), RoPE inv_freq (reciprocal(theta**exp)), and scheduler sigma scaling (sample * reciprocal(full(sigma))). Candidate chain fusion target: reciprocal -> mul => ttnn.div / torch '/'.\", 'Pattern reciprocal(ttnn.full(shape, fill_value=c)) then mul is a scalar-divide idiom replaceable by multiply(x, 1/c).']",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_math.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py"
+  ],
+  "placement_observations": []
+}

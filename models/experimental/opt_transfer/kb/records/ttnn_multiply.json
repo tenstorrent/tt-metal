@@ -1,0 +1,149 @@
+{
+  "id": "ttnn_multiply",
+  "fused_op": "ttnn.multiply",
+  "category": "eltwise_binary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.mul(input_tensor_a, input_tensor_b)",
+  "signature": {},
+  "config_template": {
+    "memory_config": "{OUTPUT_MEMORY_CONFIG}",
+    "dtype": "{DTYPE}",
+    "output_tensor": "{OPTIONAL_INPLACE_OUTPUT}",
+    "input_tensor_a_activation": null,
+    "use_legacy": false,
+    "sub_core_grids": "{OPTIONAL_CORE_RANGE_SET}"
+  },
+  "weight_transform": "none (op is weightless); when one operand is a per-channel weight/scale vector (e.g. RMSNorm gamma) it is reshaped to [1, 1, -1] or [1, 1, 1, -1] and converted to TILE_LAYOUT before the broadcast multiply; scalar operands may be passed as host Python floats",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_pow_fractional.py",
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_sharded.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binaryng_fp32.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_mul.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.multiply",
+      "tensor_role": "output",
+      "size_descriptor": "[batch, 1, seq_len, ffn_dim] SwiGLU intermediate (w1_out * w3_out)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: LLM MLP, w2_in = ttnn.multiply(w1_out, w3_out, dtype=ttnn.bfloat16, memory_config=w1_out.memory_config()) \u2014 output inherits input memory_config"
+    },
+    {
+      "op": "ttnn.multiply",
+      "tensor_role": "input_a",
+      "size_descriptor": "[batch, 1, seq_len, hidden_dim] RMSNorm activation",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: RMSNorm \u2014 input converted via ttnn.sharded_to_interleaved(inp, ttnn.DRAM_MEMORY_CONFIG) before x*rsqrt and x*weight multiplies"
+    },
+    {
+      "op": "ttnn.multiply",
+      "tensor_role": "output",
+      "size_descriptor": "[B*H, 1, seq_slice, seq_len] attention score slice (sliced/chunked attention, SD model)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "{GRID}x[{SLICE_HEIGHT_PER_CORE}, {SEQ_LEN}]"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "attention_is_sliced",
+        "op": "==",
+        "value": true
+      },
+      "source": "model call site: mm_slice = ttnn.multiply(mm_slice, self.scale, memory_config=self.height_sharded_memory_config) followed by softmax_in_place"
+    },
+    {
+      "op": "ttnn.multiply",
+      "tensor_role": "output",
+      "size_descriptor": "[B, H, seq_len, seq_len] full attention scores (large seq, non-sliced fallback)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "attention_is_sliced",
+        "op": "==",
+        "value": false
+      },
+      "source": "model call site: attn_weights = ttnn.multiply(attn_weights, reference_scalar, memory_config=dram_interleaved_memory_config)"
+    },
+    {
+      "op": "ttnn.multiply",
+      "tensor_role": "output",
+      "size_descriptor": "[1, 1, batch=32, hidden] decode-mode SSM state (small per-step tensor)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "decode"
+      },
+      "source": "model call site: Mamba SSM decode \u2014 ttnn.multiply(abar2, hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG, output_tensor=abar2) (in-place, L1)"
+    },
+    {
+      "op": "ttnn.multiply",
+      "tensor_role": "output",
+      "size_descriptor": "[1, 1, 32, 32] small tile-aligned tensor",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "BLOCK_SHARDED",
+        "shard_spec_template": "[32, 32]"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: block_sharded_memory_config = ttnn.create_sharded_memory_config([32, 32], ...); result = ttnn.multiply(tt_in1, tt_in2, memory_config=block_sharded)"
+    },
+    {
+      "op": "ttnn.multiply",
+      "tensor_role": "output",
+      "size_descriptor": "[B, L, C] channel-wise SE scale broadcast [B,1,C] over [B,L,C]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: squeeze-excitation \u2014 ttnn.multiply(x_nlc, y, memory_config=dram)"
+    },
+    {
+      "op": "ttnn.multiply",
+      "tensor_role": "output",
+      "size_descriptor": "[batch, 1, seq_len, hidden] final layernorm gamma multiply",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "{LN_F_OUTPUT_MEMCFG}",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: ln_output = ttnn.multiply(ln_output, ln_gamma, memory_config=model_config['LN_F_OUTPUT_MEMCFG'])"
+    }
+  ]
+}

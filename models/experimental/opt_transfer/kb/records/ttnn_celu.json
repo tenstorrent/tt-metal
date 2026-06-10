@@ -1,0 +1,42 @@
+{
+  "id": "ttnn_celu",
+  "fused_op": "ttnn.celu",
+  "category": "eltwise_unary_activation",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.celu(input_tensor_a, alpha=alpha)",
+  "signature": {},
+  "config_template": {
+    "alpha": "{ALPHA}",
+    "input_shape": "[{N}, {C}, {H}, {W}]",
+    "dtype": "{DTYPE}",
+    "layout": "TILE_LAYOUT"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Unary activation; replaces torch.celu (equivalently torch.nn.CELU / max(0,x)+min(0, alpha*(exp(x/alpha)-1))). alpha defaults to 1.0. Validated with PCC>=0.99 and ULP checks over range [-100,100] including +/-inf and nan.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_activation.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_celu_21f.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.celu",
+      "tensor_role": "input",
+      "size_descriptor": "small_2d (h=64, w=128) and generic test shapes",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: tt_in created with layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG"
+    }
+  ]
+}

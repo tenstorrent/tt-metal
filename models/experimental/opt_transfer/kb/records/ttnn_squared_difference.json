@@ -1,0 +1,72 @@
+{
+  "id": "ttnn_squared_difference",
+  "fused_op": "ttnn.squared_difference",
+  "category": "eltwise_binary_composite",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.square(torch.sub(input_tensor_a, input_tensor_b))",
+  "signature": {},
+  "config_template": {
+    "input_shape_a": "[{N}, {C}, {H}, {W}]",
+    "input_shape_b": "[{N}, {C}, {H}, {W}]",
+    "dtype": "{DTYPE: bfloat16|float32|uint32}",
+    "layout": "ttnn.TILE_LAYOUT",
+    "memory_config": "ttnn.DRAM_MEMORY_CONFIG",
+    "kwargs": {
+      "use_legacy": "{None|bool}"
+    }
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "ttnn_replacement: ttnn.squared_difference(input_tensor_a, input_tensor_b); constraints: {'broadcasting': 'standard eltwise binary broadcast rules', 'inputs_must_match_layout': 'TILE_LAYOUT in observed tests'}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_uint32.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binaryng_fp32.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.squared_difference",
+      "tensor_role": "input_a",
+      "size_descriptor": "generic tiled tensor (test sweep, no size-conditional placement observed)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG) before ttnn.squared_difference"
+    },
+    {
+      "op": "ttnn.squared_difference",
+      "tensor_role": "input_b",
+      "size_descriptor": "generic tiled tensor (test sweep, no size-conditional placement observed)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(..., dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)"
+    },
+    {
+      "op": "ttnn.squared_difference",
+      "tensor_role": "output",
+      "size_descriptor": "same as inputs (eltwise)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: output compared via DRAM_MEMORY_CONFIG reference tensor; output inherits default DRAM interleaved memory config"
+    }
+  ]
+}

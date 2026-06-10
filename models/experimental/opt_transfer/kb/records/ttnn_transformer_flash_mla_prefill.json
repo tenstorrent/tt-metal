@@ -1,0 +1,70 @@
+{
+  "id": "ttnn_transformer_flash_mla_prefill",
+  "fused_op": "ttnn.transformer.flash_mla_prefill",
+  "category": "attention",
+  "pattern_kind": "chain",
+  "torch_pattern": "scores = torch.matmul(q, k.transpose(-2, -1)) * scale; scores = scores.masked_fill(causal_mask, float('-inf')); probs = torch.softmax(scores, dim=-1); out = torch.matmul(probs, k[..., :head_dim_v])",
+  "signature": {},
+  "config_template": {
+    "head_dim_v": "{KV_LORA_RANK}",
+    "scale": "{1/sqrt(QK_HEAD_DIM)}",
+    "is_causal": true,
+    "attn_mask": null,
+    "program_config": "ttnn.SDPAProgramConfig(compute_with_storage_grid_size={GRID}, q_chunk_size={Q_CHUNK}, k_chunk_size={K_CHUNK}, exp_approx_mode={EXP_APPROX})",
+    "compute_kernel_config": "{COMPUTE_KERNEL_CONFIG}",
+    "memory_config": "ttnn.DRAM_MEMORY_CONFIG"
+  },
+  "weight_transform": "none (activation-only fused op; no weights consumed). If replacing the explicit-V variant, the upstream W_v linear weight stays a separate ttnn.linear and is not folded into this op.",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_notes: MLA prefill SDPA where V is shared with K in latent space: V = K[..., :head_dim_v] (kv_lora_rank). Optional 3-tensor variant (q, k, v_embedding) reduces to standard SDPA chain matmul->scale->mask->softmax->matmul when an explicit V is passed (see test 3, used as a workaround with pre-applied W_v: repeat + linear on v_latent before the call).",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/sdpa/mla_test_utils.py",
+    "tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.transformer.flash_mla_prefill",
+      "tensor_role": "output",
+      "size_descriptor": "prefill activation [1, num_heads_local, seq_len, kv_lora_rank], seq_len large (prefill regime)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "sdpa_program_config (ttnn.SDPAProgramConfig)",
+      "condition": null,
+      "source": "test: tt_out = ttnn.transformer.flash_mla_prefill(..., memory_config=ttnn.DRAM_MEMORY_CONFIG, attn_mask=None, is_causal=True)"
+    },
+    {
+      "op": "ttnn.transformer.flash_mla_prefill",
+      "tensor_role": "output",
+      "size_descriptor": "prefill activation, explicit-V variant [1, num_heads, seq_len, head_dim_v]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "sdpa_program_config_second (ttnn.SDPAProgramConfig)",
+      "condition": null,
+      "source": "test: tt_new_sdpa_out = ttnn.transformer.flash_mla_prefill(tt_q, tt_k, tt_v_embedding, ..., memory_config=ttnn.DRAM_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.transformer.flash_mla_prefill",
+      "tensor_role": "input_q",
+      "size_descriptor": "prefill query [1, num_heads_local, seq_len, kv_lora_rank + rope_dim], produced by ttnn.concat([q_nope, q_rope], dim=-1) and deallocated immediately after the call",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1); attn_out = ttnn.transformer.flash_mla_prefill(tt_q, tt_kvpe_fp16, **cfg['flash_mla']); ttnn.deallocate(tt_q)"
+    }
+  ]
+}

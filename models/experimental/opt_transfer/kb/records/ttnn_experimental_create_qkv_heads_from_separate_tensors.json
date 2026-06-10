@@ -1,0 +1,66 @@
+{
+  "id": "ttnn_experimental_create_qkv_heads_from_separate_tensors",
+  "fused_op": "ttnn.experimental.create_qkv_heads_from_separate_tensors",
+  "category": "attention_head_manipulation",
+  "pattern_kind": "horizontal_merge",
+  "torch_pattern": "query = torch.reshape(input_tensor, (batch_size, sequence_size, {NUM_HEADS}, {HEAD_SIZE})); query = torch.permute(query, (0, 2, 1, 3)).contiguous(); split_tensors = kv_input_tensor.split(kv_input_tensor.shape[-1] // (2 * {NUM_KV_HEADS}), dim=-1); key = torch.concat(split_tensors[::2], dim=-1); value = torch.concat(split_tensors[1::2], dim=-1); key = torch.reshape(key, (batch_size, sequence_size, {NUM_KV_HEADS}, {HEAD_SIZE})); value = torch.reshape(value, (batch_size, sequence_size, {NUM_KV_HEADS}, {HEAD_SIZE})); key = torch.permute(key, (0, 2, 1, 3)).contiguous(); value = torch.permute(value, (0, 2, 1, 3)).contiguous(); key = torch.permute(key, (0, 1, 3, 2)).contiguous()  # if transpose_k_heads",
+  "signature": {},
+  "config_template": {
+    "num_heads": "{NUM_HEADS}",
+    "num_kv_heads": "{NUM_KV_HEADS}",
+    "transpose_k_heads": "{TRANSPOSE_K:bool, true if downstream matmul expects K pre-transposed}",
+    "memory_config": "{OUT_MEM_CONFIG}"
+  },
+  "weight_transform": "None (no weights). Upstream QKV projection weights must be arranged so the KV projection output interleaves K/V per head along the last dimension: [..., k_head0 | v_head0 | k_head1 | v_head1 | ...], each chunk of width hidden_kv // (2*num_kv_heads).",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_create_qkv_heads.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.create_qkv_heads_from_separate_tensors",
+      "tensor_role": "output_qkv",
+      "size_descriptor": "q: [batch, num_q_heads, seq_len, head_dim]; k/v: [batch, num_kv_heads, seq_len(or head_dim if transposed), head_dim(or seq_len)]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)"
+    },
+    {
+      "op": "ttnn.experimental.create_qkv_heads_from_separate_tensors",
+      "tensor_role": "output_qkv",
+      "size_descriptor": "batch=2, num_heads=8, num_kv_heads=8, q_proj shape (2,1,seq_len,q_len), kv_proj shape (2,1,96,kv_len)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "self.height_sharded_memory_config"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: memory_config=self.height_sharded_memory_config; inputs reshaped immediately before, kv_proj/q_proj deallocated immediately after (L1-resident transient)"
+    },
+    {
+      "op": "ttnn.experimental.create_qkv_heads_from_separate_tensors",
+      "tensor_role": "input_q",
+      "size_descriptor": "[batch, 1, seq_len, num_q_heads*head_dim], TILE_LAYOUT",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "q_mem_config (sharded to match output sharding)"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: q_t = ttnn.Tensor(Q_flattened, dtype).to(ttnn.TILE_LAYOUT).to(device, q_mem_config)"
+    }
+  ]
+}

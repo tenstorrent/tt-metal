@@ -1,0 +1,55 @@
+{
+  "id": "ttnn_moe",
+  "fused_op": "ttnn.moe",
+  "category": "fused_reduction (topk + softmax + masked gather for MoE expert routing)",
+  "pattern_kind": "chain",
+  "torch_pattern": "topk_values, topk_indices = torch.topk(gate_logits, {K}, dim=-1)\ntopk_values = topk_values + topE_mask\nmask = (topk_indices == 0).to(gate_logits.dtype)\nweights = torch.sum(torch.softmax(topk_values, dim=-1) * mask, dim=-1, keepdim=True)",
+  "signature": {},
+  "config_template": {
+    "k": "{K}",
+    "input_shape": "[1, {S}, {B}, {E_PADDED}]",
+    "output_shape": "[1, {S}, {B}, {K}]",
+    "expert_mask_shape": "[1, 1, {B}, {E_PADDED}]",
+    "topE_mask_shape": "[1, 1, {B}, {B}]",
+    "notes": "topk requires min last-dim of 64; expert dim must be padded with -inf mask (expert_mask) before/into the op. k=32 used at call site even though only top-2 experts are selected (mask zeroes the rest)."
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_source: call_site unfused branch: topk_values, topk_indices = ttnn.topk(gate_logits_1SB8, 32); topk_values = ttnn.add(topk_values, self.top2_mask_11BB); mask_B2 = ttnn.eqz(topk_indices); mask_B2 = ttnn.typecast(mask_B2, dtype=ttnn.bfloat16); weights_1SB1 = ttnn.sum(ttnn.softmax(topk_values, dim=-1) * mask_B2, dim=3, keepdim=True); constraints: {'layout': 'TILE', 'min_topk_width': 64, 'reduction_dim': -1, 'keepdim': True}",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/reduce/test_moe.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.moe",
+      "tensor_role": "input (gate_logits)",
+      "size_descriptor": "[1, S, B, 8] padded to width 64 (decode-mode activations, small S)",
+      "memory_config": null,
+      "program_config": null,
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "DECODE"
+      },
+      "source": "call_site: 'if mode == Mode.DECODE: weights_1SB1 = ttnn.moe(gate_logits_1SB8, self.top8_mask_11B_64, self.top2_mask_11BB, 32)' \u2014 no explicit memory_config; fused path gated on decode mode only"
+    },
+    {
+      "op": "ttnn.moe",
+      "tensor_role": "input (expert_mask, topE_mask)",
+      "size_descriptor": "small constant masks [1,1,B,64] and [1,1,B,B]",
+      "memory_config": {
+        "buffer": null,
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test_example: 'ttnn.from_torch(expert_mask, dtype, layout=ttnn.Layout.TILE, device=device)' \u2014 TILE layout explicit, buffer type not specified"
+    }
+  ]
+}

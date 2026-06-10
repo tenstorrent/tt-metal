@@ -1,0 +1,28 @@
+{
+  "id": "ttnn_gt",
+  "fused_op": "ttnn.gt_",
+  "category": "eltwise_binary_inplace",
+  "pattern_kind": "chain",
+  "torch_pattern": "input_tensor_a.gt_(input_tensor_b)",
+  "signature": "ttnn.gt_(input_tensor_a, input_tensor_b_or_scalar)",
+  "config_template": {
+    "input_shape_a": "[{N}, {C}, {H}, {W}]",
+    "input_shape_b": "[{N}, {C}, {H}, {W}] | scalar",
+    "dtype": "{DTYPE}",
+    "layout": "TILE_LAYOUT",
+    "in_place": true,
+    "output": "writes into input_tensor_a"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Supports tensor-tensor and tensor-scalar variants (see test_binary_gti_ttnn and test_gti_ttnn). Output dtype matches input_tensor_a since the result is written in place; comparison result is 0.0/1.0 in the input dtype. Validated over value range [-100,100] vs [-150,150] and scalar offsets of +0.5 to avoid exact-equality ties.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_composite.py"
+  ],
+  "placement_observations": []
+}

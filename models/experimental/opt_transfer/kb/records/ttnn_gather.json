@@ -1,0 +1,91 @@
+{
+  "id": "ttnn_gather",
+  "fused_op": "ttnn.gather",
+  "category": "data_movement.indexing",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.gather(input, dim, index)",
+  "signature": {},
+  "config_template": {
+    "dim": "{DIM}",
+    "index": "{INDEX_TENSOR}",
+    "out": "{OPTIONAL_PREALLOCATED_OUTPUT}"
+  },
+  "weight_transform": "none",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "constraints: {'input_layout': 'TILE', 'index_layout': 'TILE', 'index_dtype': ['uint16', 'uint32'], 'input_dtype': ['bfloat16', 'float32'], 'output_shape': 'matches index.shape', 'notes': 'index must be expanded/repeated to full gather output shape before call (see call sites using ttnn.reshape + ttnn.repeat + ttnn.to_layout(TILE) on index); index dtype must be unsigned int (typecast to uint32 observed at attention call sites)'}; fusion_notes: Frequently preceded by index-preparation chain: ttnn.reshape(idx) -> ttnn.repeat(idx, broadcast_dims) -> ttnn.to_layout(idx, TILE_LAYOUT) [-> ttnn.typecast(idx, uint32)] -> ttnn.gather. This whole chain corresponds to a single torch.gather with broadcastable index or torch index_select-style selection (e.g. top-k token/expert selection: topk indices -> gather scores/keys/queries).",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/data_movement/test_gather.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.gather",
+      "tensor_role": "input",
+      "size_descriptor": "small-to-medium 4D tiles, e.g. [8,8,8,8] up to [32, 256*TILE_HEIGHT]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT (interleaved, default)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit tests: ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device) with no explicit memory_config (default DRAM interleaved)"
+    },
+    {
+      "op": "ttnn.gather",
+      "tensor_role": "index",
+      "size_descriptor": "same rank as input, gather dim may be smaller (e.g. [1,1,512,32] vs input [1,1,512,64])",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT (interleaved, default)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit tests: ttnn.from_torch(index, ttnn.uint16/uint32, layout=ttnn.Layout.TILE, device=device), no explicit memory_config"
+    },
+    {
+      "op": "ttnn.gather",
+      "tensor_role": "output",
+      "size_descriptor": "shape == index.shape",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT (interleaved, default)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit tests: preallocated out tensor created via ttnn.from_torch(output, ttnn.bfloat16, layout=TILE, device=device), no explicit memory_config"
+    },
+    {
+      "op": "ttnn.gather",
+      "tensor_role": "index (attention top-k selection)",
+      "size_descriptor": "[batch, n_heads, top_u/sample_k, head_dim] after reshape+repeat broadcast",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT (converted via ttnn.to_layout before gather)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call sites: sparse attention query/key sampling \u2014 sample_idx/q_idx/mask_idx prepared with reshape\u2192repeat\u2192to_layout(TILE)\u2192typecast(uint32) then ttnn.gather(kh/qh/attn_mask, dim=2, index=...)"
+    },
+    {
+      "op": "ttnn.gather",
+      "tensor_role": "input (MoE expert scores)",
+      "size_descriptor": "scores_flat [B,1,S,num_experts], gather on dim=3 with topk indices",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT (interleaved, default)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: MoE router \u2014 ttnn.gather(scores_flat, dim=3, index=topk_experts_indices) followed by sum/div normalization; inputs deallocated immediately after, indicating DRAM interleaved working set"
+    }
+  ]
+}

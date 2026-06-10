@@ -1,0 +1,55 @@
+{
+  "id": "ttnn_bitwise_not",
+  "fused_op": "ttnn.bitwise_not",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": [
+    "torch.bitwise_not(input_tensor_a)"
+  ],
+  "signature": {},
+  "config_template": {
+    "dtype": "ttnn.int32",
+    "layout": "ttnn.TILE_LAYOUT",
+    "input_shape": "{DIM}",
+    "memory_config": "ttnn.DRAM_MEMORY_CONFIG"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_source: golden; ttnn_replacement: ttnn.bitwise_not(input_tensor); constraints: {'dtype': ['int32'], 'notes': 'Bitwise ops require integer dtypes; test uses ttnn.int32 with TILE_LAYOUT. PCC asserted == 1 (exact match).'}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.bitwise_not",
+      "tensor_role": "input",
+      "size_descriptor": "generic elementwise tensor (num_elements reshaped to input_shapes)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test (ttnn.from_torch with dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device; default interleaved DRAM memory_config)"
+    },
+    {
+      "op": "ttnn.bitwise_not",
+      "tensor_role": "output",
+      "size_descriptor": "same shape as input",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test (no explicit output memory_config; inherits default interleaved DRAM)"
+    }
+  ]
+}

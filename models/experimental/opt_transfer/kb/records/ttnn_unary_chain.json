@@ -1,0 +1,70 @@
+{
+  "id": "ttnn_unary_chain",
+  "fused_op": "ttnn.unary_chain",
+  "category": "eltwise_unary_fusion",
+  "pattern_kind": "chain",
+  "torch_pattern": "x = torch.relu(x)\nx = torch.exp(x)\nx = torch.square(x)",
+  "signature": {},
+  "config_template": {
+    "ops_chain": [
+      {
+        "op_type": "ttnn.UnaryOpType.{UNARY_OP_0}",
+        "params": "{PARAMS_0}"
+      },
+      {
+        "op_type": "ttnn.UnaryOpType.{UNARY_OP_1}",
+        "params": "{PARAMS_1}"
+      },
+      {
+        "op_type": "ttnn.UnaryOpType.{UNARY_OP_2}",
+        "params": "{PARAMS_2}"
+      }
+    ],
+    "input_shape": [
+      "{N}",
+      "{C}",
+      "{H}",
+      "{W}"
+    ]
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Fuses a contiguous subsequence of N elementwise unary torch ops into a single ttnn.unary_chain kernel launch; activation-only, no weights. fast_and_approximate_mode flag passed as UnaryWithParam param (e.g. EXP, False).; ttnn_replacement: ttnn.unary_chain(x_tt, [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU), ttnn.UnaryWithParam(ttnn.UnaryOpType.EXP, False), ttnn.UnaryWithParam(ttnn.UnaryOpType.SQUARE)])",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_sfpu_chain.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_typecast.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.unary_chain",
+      "tensor_role": "input",
+      "size_descriptor": "[N, C, H, W] tile-aligned (padded_shape == [N, C, H, W])",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: xt.to(ttnn.TILE_LAYOUT).to(device) \u2014 default interleaved DRAM, no explicit memory_config"
+    },
+    {
+      "op": "ttnn.unary_chain",
+      "tensor_role": "output",
+      "size_descriptor": "same shape as input",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: output inherits default interleaved memory config; verified via ttnn.to_torch round-trip"
+    }
+  ]
+}

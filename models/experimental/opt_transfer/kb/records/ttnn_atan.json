@@ -1,0 +1,53 @@
+{
+  "id": "ttnn_atan",
+  "fused_op": "ttnn.atan",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.atan(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "{DIM}",
+    "memory_config": "{MEMORY_CONFIG}",
+    "output_tensor": "optional preallocated tensor of shape {DIM}",
+    "queue_id": "optional command-queue id (default 0)"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Elementwise unary arctangent. Golden registered as torch.atan via the shared eltwise-unary golden map. Supports preallocated output_tensor and queue_id. Fusable as a unary epilogue/activation in compute chains.; ttnn_replacement: ttnn.atan(input_tensor, output_tensor=output_tensor, queue_id=cq_id)",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.atan",
+      "tensor_role": "input",
+      "size_descriptor": "tile-aligned test shapes, values in [-1, 1]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: data_gen_with_range(input_shapes, -1, 1, device) with default interleaved DRAM memory config"
+    },
+    {
+      "op": "ttnn.atan",
+      "tensor_role": "output",
+      "size_descriptor": "same shape as input",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: preallocated output_tensor via data_gen_with_range with default interleaved DRAM memory config"
+    }
+  ]
+}

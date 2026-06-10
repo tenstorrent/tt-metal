@@ -1,0 +1,67 @@
+{
+  "id": "ttnn_div_no_nan",
+  "fused_op": "ttnn.div_no_nan",
+  "category": "eltwise_binary_composite",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.where(input_tensor_b == 0, 0, input_tensor_a / input_tensor_b)",
+  "signature": {},
+  "config_template": {
+    "input_dtype": "{DTYPE}",
+    "layout": "ttnn.TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}",
+    "scalar_overload": "input_tensor_b may be a python float; zero scalar yields zeros_like"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "ttnn_replacement: ttnn.div_no_nan(input_tensor_a, input_tensor_b); fusion_notes: Fuses the 3-op torch subsequence (eq-zero mask -> elementwise div -> where/select) into a single ttnn binary composite op. Scalar overload available when divisor is a python float.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_composite.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_div_ops.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.div_no_nan",
+      "tensor_role": "input_a",
+      "size_descriptor": "test shapes, range [-100, 100]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT, device=device) with default (DRAM interleaved) memory config"
+    },
+    {
+      "op": "ttnn.div_no_nan",
+      "tensor_role": "input_b",
+      "size_descriptor": "test shapes, range [-150, 150] (or python float scalar in {-5.1, 0.0, 10.9})",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: data_gen_with_range / ttnn.from_torch with default (DRAM interleaved) memory config"
+    },
+    {
+      "op": "ttnn.div_no_nan",
+      "tensor_role": "output",
+      "size_descriptor": "same shape as inputs",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: output compared via PCC >= 0.999, default memory config"
+    }
+  ]
+}

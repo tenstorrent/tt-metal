@@ -1,0 +1,52 @@
+{
+  "id": "ttnn_rsqrt",
+  "fused_op": "ttnn.rsqrt",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.rsqrt(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "fast_and_approximate_mode": false,
+    "memory_config": "{MEMORY_CONFIG}",
+    "queue_id": 0
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Unary eltwise; golden is torch.rsqrt. Supports fast_and_approximate_mode flag. Frequently appears inside RMSNorm decomposition: ttnn.rsqrt(ttnn.mean(ttnn.pow(x,2), dim=-1, keepdim=True) + eps) followed by ttnn.multiply with x and weight \u2014 the full chain `x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * weight` is a candidate for fusion into ttnn.rms_norm.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_eltwise_rsqrt.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.rsqrt",
+      "tensor_role": "input",
+      "size_descriptor": "[BATCH, 1, SEQ, 1] (last dim reduced via mean, keepdim=True)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: RMSNorm decomposition \u2014 input converted via ttnn.sharded_to_interleaved(inp, ttnn.DRAM_MEMORY_CONFIG) before pow/mean/rsqrt chain"
+    },
+    {
+      "op": "ttnn.rsqrt",
+      "tensor_role": "output",
+      "size_descriptor": "[BATCH, 1, SEQ, 1]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: RMSNorm decomposition \u2014 output kept interleaved, consumed by ttnn.multiply, final output optionally re-converted via ttnn.to_memory_config(output, memory_config)"
+    }
+  ]
+}

@@ -1,0 +1,108 @@
+{
+  "id": "ttnn_experimental_nlp_concat_heads",
+  "fused_op": "ttnn.experimental.nlp_concat_heads",
+  "category": "attention.data_movement",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.transpose(x, -3, -2).reshape([{B}, 1, {SEQ_LEN}, {NUM_HEADS} * {HEAD_DIM}])",
+  "signature": {},
+  "config_template": {
+    "input_shape": "[{B}, {NUM_HEADS}, {SEQ_LEN}, {HEAD_DIM}]",
+    "output_shape": "[{B}, 1, {SEQ_LEN}, {NUM_HEADS} * {HEAD_DIM}]",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_source: test: pt_out = torch.transpose(in0, -3, -2).reshape([B, 1, seq_len, num_heads * head_dim]); constraints: ['input must be 4D [B, num_heads, seq_len, head_dim] in TILE_LAYOUT', 'no-op shortcut commonly guarded by num_heads > 1 at call sites', 'decode-mode call sites transpose(1,2) first so heads land on dim -3 before concat']",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_nlp_concat_heads.py",
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_sharded.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.nlp_concat_heads",
+      "tensor_role": "output",
+      "size_descriptor": "[1, num_heads, seq_len, head_dim] -> [1, 1, seq_len, hidden]; prefill, seq_len up to thousands (followed by reshape if seq_len > 1024 / MAX_MM_SEQ_LEN)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "prefill"
+      },
+      "source": "model call sites: attn_output_11SH = ttnn.experimental.nlp_concat_heads(attn_output_1QSD, memory_config=ttnn.DRAM_MEMORY_CONFIG) followed by ttnn.reshape when seq_len > 1024"
+    },
+    {
+      "op": "ttnn.experimental.nlp_concat_heads",
+      "tensor_role": "output",
+      "size_descriptor": "small activation (decode or short-seq SDPA output) feeding ttnn.linear out-projection",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "decode"
+      },
+      "source": "model call sites: hidden_states = ttnn.experimental.nlp_concat_heads(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG); also ttnn.MemoryConfig(INTERLEAVED, BufferType.L1)"
+    },
+    {
+      "op": "ttnn.experimental.nlp_concat_heads",
+      "tensor_role": "output",
+      "size_descriptor": "vision/encoder context_layer kept on-chip for next block-sharded matmul",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "BLOCK_SHARDED",
+        "shard_spec_template": "L1_BLOCK_SHARDED_MEMORY_CONFIG (default block shard over core grid)"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call sites: context_layer = ttnn.experimental.nlp_concat_heads(context_layer, memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.experimental.nlp_concat_heads",
+      "tensor_role": "input",
+      "size_descriptor": "decode attention output [B, num_heads, 32(padded batch/seq), head_dim], one head per core",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "height-shard across {NUM_HEADS} cores, shard shape [{SEQ_LEN_PER_CORE}, {HEAD_DIM}], orientation COL_MAJOR"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "decode"
+      },
+      "source": "model call site comment: 'Height-shard attn_out across num_heads cores (1 head/core) so nlp_concat_heads runs sharded instead of single-core (20->~1.5 us)'; test: TensorMemoryLayout.HEIGHT_SHARDED, ShardOrientation.COL_MAJOR"
+    },
+    {
+      "op": "ttnn.experimental.nlp_concat_heads",
+      "tensor_role": "output",
+      "size_descriptor": "decode, sharded concat output later resharded into wo/o_proj width-sharded in0 layout",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "concat_out_memcfg / _cp_concat_out_memcfg: sharded output matching downstream sharded matmul reshard"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "sharded_concat_decode",
+        "op": "==",
+        "value": true
+      },
+      "source": "model call site: attn_concat_sharded = ttnn.experimental.nlp_concat_heads(attn_sharded, memory_config=concat_out_memcfg); else branch falls back to ttnn.L1_MEMORY_CONFIG"
+    }
+  ]
+}

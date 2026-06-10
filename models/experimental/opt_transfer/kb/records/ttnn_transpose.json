@@ -1,0 +1,28 @@
+{
+  "id": "ttnn_transpose",
+  "fused_op": "ttnn.transpose",
+  "category": "data_movement",
+  "pattern_kind": "chain",
+  "torch_pattern": "x = x.transpose({DIM1}, {DIM2})",
+  "signature": {},
+  "config_template": {
+    "dim1": "{DIM1}",
+    "dim2": "{DIM2}",
+    "memory_config": "{MEMCFG}",
+    "pad_value": "{PAD_VALUE|optional}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_source: call_site: ttnn.transpose(x, dim1, dim2) used as direct torch.transpose equivalent (e.g. k_t = ttnn.transpose(k, -2, -1) replacing k.transpose(-2, -1) before Q@K^T); ttnn_replacement: x = ttnn.transpose(x, {DIM1}, {DIM2}, memory_config={MEMCFG})",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_transpose.py",
+    "tests/ttnn/unit_tests/operations/conv/data_movement/test_fold_op.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_permute.py"
+  ],
+  "placement_observations": []
+}

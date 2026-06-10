@@ -1,0 +1,121 @@
+{
+  "id": "ttnn_group_norm",
+  "fused_op": "ttnn.group_norm",
+  "category": "normalization",
+  "pattern_kind": "chain",
+  "torch_pattern": "x = input_tensor.permute(0, 3, 1, 2)\nx = torch.nn.functional.group_norm(x.float(), num_groups, weight.float(), bias.float(), eps=epsilon)\noutput = x.permute(0, 2, 3, 1)",
+  "signature": {},
+  "config_template": {
+    "num_groups": "{NUM_GROUPS}",
+    "epsilon": "{EPS}",
+    "weight": "{GAMMA_T}",
+    "bias": "{BETA_T}",
+    "input_mask": "ttnn.create_group_norm_input_mask({C}, {NUM_GROUPS}, {CORE_GRID_X}, ttnn.DataType.BFLOAT8_B)",
+    "memory_config": "{INPUT_MEMORY_CONFIG}",
+    "core_grid": "{CORE_GRID}",
+    "inplace": false,
+    "use_welford": "{USE_WELFORD}",
+    "num_out_blocks": "{NUM_OUT_BLOCKS}",
+    "dtype": "{DTYPE}"
+  },
+  "weight_transform": "Channels-last layout: input is NHWC (often reshaped to [N,1,H*W,C]). Gamma/beta are distributed across cores along channel dim: weight = weight.reshape((num_cores_across_channel, -1))[:, :C // num_cores_across_channel].flatten(); same for bias. num_cores_across_channel derived from memory_layout (HEIGHT_SHARDED->1, BLOCK/WIDTH-> core_grid dim per shard orientation). An input_mask tensor must be created via ttnn.create_group_norm_input_mask(C, num_groups, core_grid.x, ttnn.DataType.BFLOAT8_B).",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Input must be channels-last and is typically reshaped to [batch, 1, H*W, C] before the call. Input often must be bfloat16 (typecast applied at call sites). On Blackhole, use_welford can cause PCC drop; use_welford gated on reciprocals_tensor presence. Output memory_config typically equals input memory_config (sharded).",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/fused/test_group_norm.py",
+    "tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.group_norm",
+      "tensor_role": "input",
+      "size_descriptor": "[N, 1, H*W, C] channels-last activation",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "ShardSpec(core_grid={GRID_SIZE}, shape=[{N*H*W // num_cores}, {C}], orientation=ROW_MAJOR)"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: input_tensor = ttnn.to_memory_config(input_tensor, sharded_mem_config) with TensorMemoryLayout.HEIGHT_SHARDED, BufferType.L1"
+    },
+    {
+      "op": "ttnn.group_norm",
+      "tensor_role": "output",
+      "size_descriptor": "same shape as input",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "same_as_input (sharded)",
+        "shard_spec_template": "inherits input shard_spec (memory_config=hidden_states.memory_config())"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_sites: memory_config=hidden_states.memory_config() / memory_config=sharded_mem_config"
+    },
+    {
+      "op": "ttnn.group_norm",
+      "tensor_role": "input",
+      "size_descriptor": "large activation (VAE/UNet feature maps, e.g. up_blocks)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "BLOCK_SHARDED or HEIGHT_SHARDED",
+        "shard_spec_template": "ShardSpec(core_grid={GRID}, shape=[{SHARD_H}, {SHARD_W}], orientation=ROW_MAJOR)"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "module_path",
+        "op": "contains",
+        "value": "up_blocks.2"
+      },
+      "source": "call_site: stable-diffusion resnet block \u2014 ttnn.move(hidden_states) / reallocate before group_norm to defragment L1 for large up_block tensors"
+    },
+    {
+      "op": "ttnn.group_norm",
+      "tensor_role": "input",
+      "size_descriptor": "interleaved input needing reshard",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED -> resharded to expected sharded config",
+        "shard_spec_template": "self.gn_expected_input_sharded_memory_config"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "get_memory_config(hidden_states)",
+        "op": "!=",
+        "value": "gn_expected_input_sharded_memory_config"
+      },
+      "source": "call_site: to_memory_config(L1_MEMORY_CONFIG) then to_memory_config(gn_expected_input_sharded_memory_config) before group_norm"
+    },
+    {
+      "op": "ttnn.group_norm",
+      "tensor_role": "input_mask",
+      "size_descriptor": "mask of shape derived from (C, num_groups, core_grid.x)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: ttnn.create_group_norm_input_mask(C, num_groups, core_grid.x, ttnn.DataType.BFLOAT8_B) then to_device"
+    },
+    {
+      "op": "ttnn.group_norm",
+      "tensor_role": "weight/bias (gamma_t/beta_t)",
+      "size_descriptor": "[num_cores_across_channel, C // num_cores_across_channel] flattened per-core layout",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "golden: weight.reshape((num_cores_across_channel, -1))[:, :C//num_cores_across_channel].flatten()"
+    }
+  ]
+}

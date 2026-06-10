@@ -1,0 +1,160 @@
+{
+  "id": "ttnn_layer_norm",
+  "fused_op": "ttnn.layer_norm",
+  "category": "normalization",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.nn.functional.layer_norm(input_tensor, (input_tensor.shape[-1],), weight, bias, eps=epsilon)",
+  "signature": {},
+  "config_template": {
+    "epsilon": "{EPS}",
+    "weight": "ttnn.Tensor[1, {HIDDEN_DIM}] | None",
+    "bias": "ttnn.Tensor[1, {HIDDEN_DIM}] | None",
+    "memory_config": "{MEM_CONFIG}",
+    "program_config": "ttnn.LayerNormDefaultProgramConfig() | ttnn.LayerNormShardedMultiCoreProgramConfig(compute_with_storage_grid_size={CORE_GRID}, subblock_w={SUBBLOCK_W}, block_h={M_TILES}, block_w={K_TILES}, inplace={INPLACE})",
+    "compute_kernel_config": "ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4)"
+  },
+  "weight_transform": "weight/bias: if len(shape) >= 2 squeeze to 1D, cast to input dtype; some models reshape to (-1, 32) row-major workaround or unsqueeze(0) for tile layout",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/test_fused_demo.py",
+    "tests/ttnn/unit_tests/operations/fused/sharded_test_utils.py",
+    "tests/ttnn/unit_tests/operations/fused/test_layer_norm.py",
+    "tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "layer_norm",
+      "tensor_role": "input_activation",
+      "size_descriptor": "[batch, seq, {HIDDEN_DIM}] transformer hidden states (BERT/ViT/DistilBERT scale, seq<=512)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "ttnn.LayerNormDefaultProgramConfig()",
+      "condition": null,
+      "source": "bert/vit/distilbert/squeezebert call sites: memory_config=ttnn.L1_MEMORY_CONFIG"
+    },
+    {
+      "op": "layer_norm",
+      "tensor_role": "input_activation",
+      "size_descriptor": "[batch*seq tiles, {HIDDEN_DIM}] optimized encoder path",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "BLOCK_SHARDED",
+        "shard_spec_template": "ttnn.ShardSpec({CORE_GRID}, [{SHARD_H}, {SHARD_W}], ttnn.ShardOrientation.ROW_MAJOR)"
+      },
+      "program_config": "config.program_configs['layernorm_program_config'] (sharded multicore)",
+      "condition": null,
+      "source": "bert optimized / vit optimized call sites: memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG, program_config=layernorm_before/after_program_config"
+    },
+    {
+      "op": "layer_norm",
+      "tensor_role": "input_activation",
+      "size_descriptor": "h_dim (seq_len/batch rows) in {32,128,256,1024,2048}, falcon7b hidden 4544",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "BLOCK_SHARDED",
+        "shard_spec_template": "model_config['LAYERNORM_BLOCK_SHARDED_MEM_CFG'][h_dim]"
+      },
+      "program_config": "model_config['LAYERNORM_BLOCK_SHARDED_PROG_CFG'][h_dim]",
+      "condition": {
+        "var": "h_dim",
+        "op": "in",
+        "value": [
+          32,
+          128,
+          256,
+          1024,
+          2048
+        ]
+      },
+      "source": "falcon7b layernorm(): interleaved_to_sharded then block-sharded layer_norm when h_dim matches known sizes"
+    },
+    {
+      "op": "layer_norm",
+      "tensor_role": "input_activation",
+      "size_descriptor": "h_dim not in supported sharded sizes",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "default (no program_config); weight/bias applied via separate multiply/add",
+      "condition": {
+        "var": "h_dim",
+        "op": "not_in",
+        "value": [
+          32,
+          128,
+          256,
+          1024,
+          2048
+        ]
+      },
+      "source": "falcon7b layernorm() else-branch: ttnn.layer_norm + ttnn.multiply(gamma) + ttnn.add(beta), memory_config=LN_F_OUTPUT_MEMCFG"
+    },
+    {
+      "op": "layer_norm",
+      "tensor_role": "input_activation",
+      "size_descriptor": "falcon40b [32, 8192] decode rows",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "BLOCK_SHARDED",
+        "shard_spec_template": "ttnn.ShardSpec(shard_spec_32_cores_grid (8x4), [{SHARD_H}, {SHARD_W}], ttnn.ShardOrientation.ROW_MAJOR)"
+      },
+      "program_config": "sharded program config (block sharded, 8x4 grid)",
+      "condition": null,
+      "source": "falcon40b: 'Interleaved does not work for [32, 8192]... runs out of L1'; block-sharded for S=128 8x4 grid gives good PCC; width-sharded gave bad PCC"
+    },
+    {
+      "op": "layer_norm",
+      "tensor_role": "input_activation",
+      "size_descriptor": "stable-diffusion transformer block hidden states (large spatial seq)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "sharded program_config; output memory_config=sharded_mem_cfg (L1 block sharded)",
+      "condition": null,
+      "source": "SD transformer_block: input moved to_memory_config(DRAM) before layer_norm, output produced into sharded_mem_cfg"
+    },
+    {
+      "op": "layer_norm",
+      "tensor_role": "output",
+      "size_descriptor": "transformer block norm output",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "SAME_AS_INPUT_IF_SHARDED_ELSE_INTERLEAVED",
+        "shard_spec_template": "input_tensor.memory_config().shard_spec"
+      },
+      "program_config": "ln_program_config if input.is_sharded() else LayerNormDefaultProgramConfig(legacy_reduction=True, legacy_rsqrt=True)",
+      "condition": {
+        "var": "input_tensor.is_sharded()",
+        "op": "==",
+        "value": true
+      },
+      "source": "attention block: memory_config=input_tensor.memory_config() if input_tensor.is_sharded() else ttnn.L1_MEMORY_CONFIG (norm3 falls back to DRAM)"
+    },
+    {
+      "op": "layer_norm",
+      "tensor_role": "input_activation",
+      "size_descriptor": "long-seq prefill, slice processed per iteration",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "BLOCK_SHARDED",
+        "shard_spec_template": "per-slice ttnn.ShardSpec(grid, [{SLICE_H}, {SHARD_W}], ttnn.ShardOrientation.ROW_MAJOR)"
+      },
+      "program_config": "sharded program config per slice",
+      "condition": null,
+      "source": "sliced layernorm path: interleaved_to_sharded_partial -> layer_norm -> sharded_to_interleaved_partial for sequences too large for L1"
+    }
+  ]
+}

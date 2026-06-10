@@ -1,0 +1,69 @@
+{
+  "id": "ttnn_transformer_paged_flash_multi_latent_attention_decode",
+  "fused_op": "ttnn.transformer.paged_flash_multi_latent_attention_decode",
+  "category": "attention",
+  "pattern_kind": "chain",
+  "torch_pattern": "v = kvpe_cache[..., :head_dim_v]  # V is read from first head_dim_v (kv_lora_rank) dims of K (MLA semantics); k = kvpe_cache  # gathered via page_table at cur_pos; attn_out = torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=scale)  # decode: single-position causal query against paged KV cache",
+  "signature": {},
+  "config_template": {
+    "head_dim_v": "{KV_LORA_RANK}",
+    "scale": "{HEAD_DIM}**-0.5",
+    "page_table_tensor": "{PAGE_TABLE}",
+    "cur_pos_tensor": "{POSITION_IDXS}",
+    "program_config": "ttnn.SDPAProgramConfig(compute_with_storage_grid_size={GRID}, q_chunk_size={Q_CHUNK}, k_chunk_size={K_CHUNK}, exp_approx_mode=False)",
+    "compute_kernel_config": "ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False)",
+    "memory_config": "{OUTPUT_SHARDED_MEM_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "MLA decode variant: only the combined KVPE cache (kv_lora_rank + rope dims = 576 for DeepSeek) is passed as K; V is implicitly the first head_dim_v (kv_lora_rank=512) columns of K. Replaces torch chain of (page-table gather -> slice V from K -> SDPA). Input q shape [1, bsz_local, num_heads, kv_lora_rank+rope_dim]; output [1, bsz_local, num_heads, kv_lora_rank].",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/sdpa/mla_test_utils.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "paged_flash_multi_latent_attention_decode",
+      "tensor_role": "q_input",
+      "size_descriptor": "[1, bsz_local=4, num_heads=128, head_dim=576] (decode, seq=1 per user)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "grid=8x9, shard_shape=[32, 576]"
+      },
+      "program_config": "sdpa_program_config (cfg['flash_mla'])",
+      "condition": null,
+      "source": "call_site comment: '1,4,128,576 L1 height sharded 8x9 [32,576]'"
+    },
+    {
+      "op": "paged_flash_multi_latent_attention_decode",
+      "tensor_role": "output",
+      "size_descriptor": "[1, bsz_local=4, num_heads=128, kv_lora_rank=512]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "grid=8x9, shard_shape=[32, 512]"
+      },
+      "program_config": "sdpa_program_config; memory_config=output_sharded_mem_config",
+      "condition": null,
+      "source": "call_site comment: '1,4,128,512 height sharded 8x9 [32,512]' and explicit memory_config=output_sharded_mem_config"
+    },
+    {
+      "op": "paged_flash_multi_latent_attention_decode",
+      "tensor_role": "kvpe_cache (paged K, V implicit)",
+      "size_descriptor": "[num_blocks, 1, block_size, kv_lora_rank+rope_dim=576], paged via page_table",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test/call_site usage as persistent paged cache indexed by page_table_tensor (standard paged-cache placement; not explicitly annotated)"
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "id": "ttnn_transpose_3",
+  "fused_op": "ttnn.transpose",
+  "category": "data_movement",
+  "pattern_kind": "chain",
+  "torch_pattern": "x = x.transpose(0, 2); x = x.transpose(1, 2)",
+  "signature": {},
+  "config_template": {
+    "dims_seq": [
+      [
+        0,
+        2
+      ],
+      [
+        1,
+        2
+      ]
+    ],
+    "row_major_roundtrip": true
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_source: call_site: query_states = ttnn.transpose(query_states, 0, 2); query_states = ttnn.transpose(query_states, 1, 2)  # [B,H,S,d] -> [S,B,H,d] layout swap for SDPA decode kernels; ttnn_replacement: x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT); x = ttnn.transpose(x, 0, 2); x = ttnn.transpose(x, 1, 2); x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_transpose.py",
+    "tests/ttnn/unit_tests/operations/conv/data_movement/test_fold_op.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_permute.py"
+  ],
+  "placement_observations": []
+}

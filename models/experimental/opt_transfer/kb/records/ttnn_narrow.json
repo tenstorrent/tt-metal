@@ -1,0 +1,51 @@
+{
+  "id": "ttnn_narrow",
+  "fused_op": "ttnn.narrow",
+  "category": "data_movement",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.narrow(input, {DIM}, {START}, {LENGTH})",
+  "signature": {},
+  "config_template": {
+    "dim": "{DIM}",
+    "start": "{START}",
+    "length": "{LENGTH}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_source: canonical torch equivalent (no registered golden_src; no unit tests available \u2014 pattern derived from op semantics, single-op chain); constraints: {'start_alignment': 'call sites tile-align start: start = (token_id // ttnn.TILE_SIZE) * ttnn.TILE_SIZE when narrowing along a tiled dim', 'length_alignment': 'length is TILE_SIZE-aligned when slicing tiled dims (dim=1 call site uses length=ttnn.TILE_SIZE); dim=0 (non-tile) slices use length=1'}; fusion_notes: Pure slice op; fuses as a chain element. Observed fused upstream of LM-head matmul (slice-before-matmul to reduce matmul work to a single tile row) and as zero-copy view extraction per-expert in MoE loops (dispatched_buffer / expert_outputs along dim=0). Also used to produce an 'out=' view target, i.e. narrow can appear on both input and output sides of a fused FFN.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "llm",
+  "confidence": "low",
+  "unit_test_refs": [],
+  "placement_observations": [
+    {
+      "op": "ttnn.narrow",
+      "tensor_role": "input",
+      "size_descriptor": "activations (1, seq_len, emb_dim); narrowed on dim=1 to length=TILE_SIZE before LM-head matmul",
+      "memory_config": null,
+      "program_config": null,
+      "condition": null,
+      "source": "TtLMHead.forward call site (logits single-token slice, tile_start = (local_token_id // TILE_SIZE) * TILE_SIZE)"
+    },
+    {
+      "op": "ttnn.narrow",
+      "tensor_role": "input",
+      "size_descriptor": "dispatched_buffer (experts_per_chip, max_tokens, emb_dim); narrowed on dim=0 to length=1 per expert",
+      "memory_config": null,
+      "program_config": null,
+      "condition": null,
+      "source": "MoE expert loop call site (per-expert token extraction)"
+    },
+    {
+      "op": "ttnn.narrow",
+      "tensor_role": "output_view",
+      "size_descriptor": "expert_outputs (experts_per_chip, max_tokens, emb_dim); narrow used to create out= write-view of length=1 on dim=0",
+      "memory_config": null,
+      "program_config": null,
+      "condition": null,
+      "source": "MoE expert loop call site (out=ttnn.narrow(expert_outputs, dim=0, start=local_expert, length=1) passed to _expert_ffn)"
+    }
+  ]
+}

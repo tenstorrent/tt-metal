@@ -1,0 +1,68 @@
+{
+  "id": "ttnn_clamp",
+  "fused_op": "ttnn.clamp",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.clamp(input_tensor_a, min, max)",
+  "signature": {},
+  "config_template": {
+    "min": "{MIN_VAL_or_None}",
+    "max": "{MAX_VAL_or_None}",
+    "output_tensor": "{OPTIONAL_in_place_alias_of_input}",
+    "memory_config": "{INHERIT_FROM_INPUT}",
+    "constraint": "at least one of min/max must be non-None"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_composite.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.clamp",
+      "tensor_role": "input/output (in-place)",
+      "size_descriptor": "MoE gate/up activations [1, num_experts*seq_len, intermediate_size_per_device]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "gpt-oss swiglu call site: ttnn.clamp(gate, min=None, max=config.swiglu_limit, output_tensor=gate) \u2014 in-place reuse of activation buffer to save memory"
+    },
+    {
+      "op": "ttnn.clamp",
+      "tensor_role": "input",
+      "size_descriptor": "pooled statistics tensor [N, 1, C] (post-reduction, small)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "speaker-embedding stats pooling: ttnn.sqrt(ttnn.clamp(ttnn.mean(...), min=1e-12)) with surrounding ops using ttnn.L1_MEMORY_CONFIG"
+    },
+    {
+      "op": "ttnn.clamp",
+      "tensor_role": "input",
+      "size_descriptor": "full video tensor BCTHW (large, decoder output)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "WanDecoder3D: output converted to TILE_LAYOUT immediately before ttnn.clamp(output, min=-1.0, max=1.0), then back to ROW_MAJOR; large interleaved activation"
+    }
+  ]
+}

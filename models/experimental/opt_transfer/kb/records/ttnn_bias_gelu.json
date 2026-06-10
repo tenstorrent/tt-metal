@@ -1,0 +1,26 @@
+{
+  "id": "ttnn_bias_gelu",
+  "fused_op": "ttnn.bias_gelu",
+  "category": "fused_eltwise_binary_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.nn.functional.gelu(torch.add(a, b))",
+  "signature": {},
+  "config_template": {
+    "dtype": "{DTYPE}",
+    "layout": "ttnn.TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}",
+    "use_legacy": null
+  },
+  "weight_transform": "bias = ttnn.from_torch(bias_torch, dtype={DTYPE}, layout=ttnn.TILE_LAYOUT, device=device)  # no reshaping; bias passed as second operand, broadcast rules follow eltwise binary semantics",
+  "source": "ttnn registered golden: torch.nn.functional.gelu(torch.add(a, b)); unit test tests/ eltwise binary fp32",
+  "usage_examples": [],
+  "applicability_notes": "ttnn_replacement: ttnn.bias_gelu(a, b); constraints: {'inputs': 'both operands must be on-device TILE_LAYOUT tensors; shapes equal or broadcastable per ttnn binary eltwise rules', 'accuracy': 'PCC >= 0.999 vs torch golden in fp32 per unit test'}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binaryng_fp32.py"
+  ],
+  "placement_observations": []
+}

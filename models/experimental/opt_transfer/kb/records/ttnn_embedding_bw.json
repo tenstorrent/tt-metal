@@ -1,0 +1,54 @@
+{
+  "id": "ttnn_embedding_bw",
+  "fused_op": "ttnn.embedding_bw",
+  "category": "backward/embedding",
+  "pattern_kind": "chain",
+  "torch_pattern": "pyt_y = torch.nn.functional.embedding(input_index, weights).reshape(grad_shape); pyt_y.backward(gradient=grad_data); golden_output_tensor = weights.grad",
+  "signature": {},
+  "config_template": {
+    "input_index_shape": "(1, 1, 1, {BATCH_SIZE} * {SEQ_LEN})",
+    "weights_shape": "({NUM_EMBEDDINGS}, {EMBEDDING_DIM})",
+    "grad_shape": "(1, 1, {BATCH_SIZE} * {SEQ_LEN}, {EMBEDDING_DIM})",
+    "dtype": "{OUTPUT_DTYPE}",
+    "grad_layout": "ttnn.TILE_LAYOUT"
+  },
+  "weight_transform": "weights passed unmodified as ttnn tensor (ttnn.from_torch); output is dense gradient w.r.t. embedding weight table, same shape as weights ({NUM_EMBEDDINGS}, {EMBEDDING_DIM})",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Computes gradient of embedding lookup w.r.t. the weight table (scatter-add of grad rows by index). Grad tensor must be flattened to (1, 1, batch*seq, embedding_dim) and TILE_LAYOUT. Replaces the torch chain F.embedding -> reshape -> backward -> weights.grad.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/data_movement/test_backward_embedding.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.embedding_bw",
+      "tensor_role": "grad_input",
+      "size_descriptor": "(1, 1, {BATCH_SIZE}*{SEQ_LEN}, {EMBEDDING_DIM})",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(grad_data, dtype=output_dtype, layout=ttnn.TILE_LAYOUT, device=device) with default (DRAM interleaved) memory config"
+    },
+    {
+      "op": "ttnn.embedding_bw",
+      "tensor_role": "weights",
+      "size_descriptor": "({NUM_EMBEDDINGS}, {EMBEDDING_DIM})",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: weights_ttnn created via ttnn.from_torch with default (DRAM interleaved) memory config"
+    }
+  ]
+}

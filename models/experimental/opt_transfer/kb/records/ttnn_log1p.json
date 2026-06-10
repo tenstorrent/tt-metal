@@ -1,0 +1,39 @@
+{
+  "id": "ttnn_log1p",
+  "fused_op": "ttnn.log1p",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.log1p(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "layout": "ttnn.TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}",
+    "queue_id": "{QUEUE_ID}"
+  },
+  "weight_transform": null,
+  "source": "ttnn eltwise unary golden registry (name_to_golden_function['log1p'] = torch.log1p)",
+  "usage_examples": [],
+  "applicability_notes": "ttnn_replacement: ttnn.log1p(input_tensor, queue_id={QUEUE_ID})",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.log1p",
+      "tensor_role": "input",
+      "size_descriptor": "tile-aligned [{N},{C},{H},{W}]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: input_tensor created with layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG"
+    }
+  ]
+}

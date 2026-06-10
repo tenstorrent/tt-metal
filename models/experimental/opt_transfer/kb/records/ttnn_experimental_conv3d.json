@@ -1,0 +1,59 @@
+{
+  "id": "ttnn_experimental_conv3d",
+  "fused_op": "ttnn.experimental.conv3d",
+  "category": "convolution",
+  "pattern_kind": "chain",
+  "torch_pattern": "y = torch.nn.functional.conv3d(x.permute(0, 4, 1, 2, 3), weight, bias=bias, stride=stride, padding=padding, dilation=dilation, groups=groups); y = y.permute(0, 2, 3, 4, 1)",
+  "signature": {},
+  "config_template": {
+    "output_channels": "{OUT_CHANNELS}",
+    "kernel_size": "[{KD}, {KH}, {KW}]",
+    "stride": "[{SD}, {SH}, {SW}]",
+    "padding": "[{PD}, {PH}, {PW}]",
+    "dilation": "[1, 1, 1]",
+    "groups": "{GROUPS}",
+    "padding_mode": "zeros|replicate",
+    "dtype": "ttnn.bfloat16",
+    "config": "ttnn.Conv3dConfig(C_in_block={C_IN_BLOCK}, compute_with_storage_grid_size=device.compute_with_storage_grid_size())",
+    "compute_kernel_config": "{COMPUTE_KERNEL_CONFIG}"
+  },
+  "weight_transform": "torch weight [C_out, C_in/groups, kD, kH, kW] is permuted to channels-last kernel order and flattened for the ttnn matmul-style conv3d kernel (permute(2,3,4,1,0).reshape(kD*kH*kW*C_in_per_group, C_out)); bias reshaped to [1, C_out]. Activation tensor must be in N,D(T),H,W,C channels-last layout (ttnn operates on NTHWC, requiring permute(0,2,3,4,1) of torch NCDHW input).",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "fusion_notes: Replaces a permute -> F.conv3d -> permute chain on channels-last device tensors. Call sites show explicit temporal padding handled outside the op (pad_dimension_t / halo exchange with padding_mode='replicate' before conv3d), so torch padding along D may be lowered to a separate pad + conv3d(padding_d=0).",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/conv/test_conv3d.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.conv3d",
+      "tensor_role": "input_tensor",
+      "size_descriptor": "activation [N, T, H, W, C_in] channels-last",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": "ttnn.Conv3dConfig(C_in_block={C_IN_BLOCK}, compute_with_storage_grid_size=device.compute_with_storage_grid_size())",
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT, pad_value=0) with default interleaved DRAM; Conv3dConfig built with C_in_block and full compute grid"
+    },
+    {
+      "op": "ttnn.experimental.conv3d",
+      "tensor_role": "weight_tensor",
+      "size_descriptor": "flattened kernel [kD*kH*kW*C_in_per_group, C_out]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test / model call sites: weight prepared once on host, stored as default interleaved DRAM tile tensor (self.weight.data)"
+    }
+  ]
+}

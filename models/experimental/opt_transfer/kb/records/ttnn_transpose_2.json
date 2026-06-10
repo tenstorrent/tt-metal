@@ -1,0 +1,32 @@
+{
+  "id": "ttnn_transpose_2",
+  "fused_op": "ttnn.transpose",
+  "category": "data_movement",
+  "pattern_kind": "chain",
+  "torch_pattern": "x = x.transpose(1, 2); x = x.reshape({BATCH}, {SEQ}, {EMBED_DIM})",
+  "signature": {},
+  "config_template": {
+    "dim1": 1,
+    "dim2": 2,
+    "shape": [
+      "{BATCH}",
+      "{SEQ}",
+      "{EMBED_DIM}"
+    ],
+    "memory_config": "{TRANSPOSE_MEMCFG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_source: call_site: attn_output = ttnn.transpose(attn_output, 1, 2); attn_output = ttnn.reshape(attn_output, (batch, tgt_len, embed_dim))  # [B,H,S,D] -> [B,S,H*D] head merge before output projection; ttnn_replacement: x = ttnn.transpose(x, 1, 2, memory_config={TRANSPOSE_MEMCFG}); x = ttnn.reshape(x, ({BATCH}, {SEQ}, {EMBED_DIM}), memory_config={RESHAPE_MEMCFG})",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_transpose.py",
+    "tests/ttnn/unit_tests/operations/conv/data_movement/test_fold_op.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_permute.py"
+  ],
+  "placement_observations": []
+}

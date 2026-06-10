@@ -1,0 +1,74 @@
+{
+  "id": "ttnn_fmod",
+  "fused_op": "ttnn.fmod",
+  "category": "eltwise_binary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.fmod(input_tensor_a, input_tensor_b)",
+  "signature": {},
+  "config_template": {
+    "dtype": "{DTYPE}",
+    "layout": "ttnn.TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}",
+    "input_shapes": [
+      "{N}",
+      "{C}",
+      "{H}",
+      "{W}"
+    ],
+    "scalar_variant": "ttnn.fmod(input_tensor_a, {SCALAR}) supported when divisor is a python scalar"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Golden upcasts bfloat16 inputs to float32 before torch.fmod when divisor is a scalar, then casts result back to bfloat16. Known divergence: for zero divisor TT returns -inf where torch.fmod returns nan; fp precision may yield 0 vs divisor when numerator is an exact multiple (issue #17362). Accuracy validated to 1 ULP for bfloat16/float32 tensor-tensor cases.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_composite.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_div_ops.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_fmod.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.fmod",
+      "tensor_role": "input_a",
+      "size_descriptor": "generic tile-aligned tensor (test range -150..150)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.fmod",
+      "tensor_role": "input_b",
+      "size_descriptor": "generic tile-aligned tensor (same shape as input_a)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.fmod",
+      "tensor_role": "input_a",
+      "size_descriptor": "generic tile-aligned tensor, bfloat16",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) (default interleaved DRAM)"
+    }
+  ]
+}

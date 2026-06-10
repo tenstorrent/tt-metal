@@ -1,0 +1,88 @@
+{
+  "id": "ttnn_experimental_rotary_embedding",
+  "fused_op": "ttnn.experimental.rotary_embedding",
+  "category": "positional_embedding/rope",
+  "pattern_kind": "chain",
+  "torch_pattern": "cos = cos_cached[:, :, token_idx : token_idx + 1, ...]\nsin = sin_cached[:, :, token_idx : token_idx + 1, ...]\nx1 = x[..., : x.shape[-1] // 2]\nx2 = x[..., x.shape[-1] // 2 :]\nrotated = torch.cat((-x2, x1), dim=-1)\nx_embed = (x * cos) + (rotated * sin)",
+  "signature": {},
+  "config_template": {
+    "input_tensor": "x of shape [1, {N_HEADS}, {SEQ_LEN}, {HEAD_DIM}] (prefill) or [1, {BATCH}, {N_HEADS_OR_1}, {HEAD_DIM}] (decode), dtype must be bfloat16, TILE_LAYOUT",
+    "cos_cache": "[1, 1, {MAX_SEQ_LEN}, {HEAD_DIM}] bfloat16 TILE_LAYOUT (HF-format, no Meta permutation)",
+    "sin_cache": "[1, 1, {MAX_SEQ_LEN}, {HEAD_DIM}] bfloat16 TILE_LAYOUT (HF-format, no Meta permutation)",
+    "token_idx": "{TOKEN_IDX} (int for decode -> cache sliced internally at [token_idx:token_idx+1]; None/omitted for prefill -> applied over full seq; decode output dim 2 padded to 32, reshape/slice back required)",
+    "memory_config": "{OUT_MEM_CONFIG}"
+  },
+  "weight_transform": "Precompute full cos_cached/sin_cached tables of shape [1, 1, max_seq_len, head_dim] (HF-style RoPE; no transformation matrices and no Meta-format head permutation), convert to bfloat16 and TILE_LAYOUT, place on device once at setup. Per-token slicing is performed inside the op via token_idx; no per-step host transform needed. Inputs that are not bfloat16 must be typecast to bfloat16 before the op.",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_rotary_embedding.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.rotary_embedding",
+      "tensor_role": "output",
+      "size_descriptor": "decode per-batch slice [1, 1, 1(padded->32), head_dim]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "decode"
+      },
+      "source": "call_site: q_rot/k_rot immediately moved via ttnn.to_memory_config(q_rot, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16) in per-batch decode rotary loop"
+    },
+    {
+      "op": "ttnn.experimental.rotary_embedding",
+      "tensor_role": "cos_cache/sin_cache",
+      "size_descriptor": "[1, 1, max_seq_len, head_dim] full-cache, resident for model lifetime",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: ttnn.Tensor(cos_cached, sincos_dtype).to(ttnn.TILE_LAYOUT).to(device) with default interleaved DRAM memory config"
+    },
+    {
+      "op": "ttnn.experimental.rotary_embedding",
+      "tensor_role": "output",
+      "size_descriptor": "model-config driven (Falcon-style ROTARY_EMBEDDING_OUTPUT_MEMCFG)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE",
+        "shard_spec_template": "model_config['ROTARY_EMBEDDING_OUTPUT_MEMCFG'] (may be sharded; tests convert via ttnn.sharded_to_interleaved when out_sharded)"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "out_sharded",
+        "op": "==",
+        "value": true
+      },
+      "source": "call_site: memory_config=self.model_config['ROTARY_EMBEDDING_OUTPUT_MEMCFG']; test: if out_sharded: xtt = ttnn.sharded_to_interleaved(xtt)"
+    },
+    {
+      "op": "ttnn.experimental.rotary_embedding",
+      "tensor_role": "input",
+      "size_descriptor": "q/k heads [1, n_heads, seq_len, head_dim], seq_len <= max_seq_len_cached",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: q_heads_1QSD_pre_rot typecast to bfloat16 if needed before op (interleaved default); assert seq_len <= max_seq_len_cached guard at every wrapper call site"
+    }
+  ]
+}

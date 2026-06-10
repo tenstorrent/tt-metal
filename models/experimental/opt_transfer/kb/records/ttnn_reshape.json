@@ -1,0 +1,149 @@
+{
+  "id": "ttnn_reshape",
+  "fused_op": "ttnn.reshape",
+  "category": "data_movement",
+  "pattern_kind": "chain",
+  "torch_pattern": "input_tensor.reshape(shape).contiguous().clone()",
+  "signature": {},
+  "config_template": {
+    "shape": "[{DIM0}, {DIM1}, {DIM2}, {DIM3}]",
+    "padded_shape": "[{PAD_DIM0}, {PAD_DIM1}, {PAD_DIM2}, {PAD_DIM3}] (optional; states logical vs tile-padded shape, e.g. logical batch B vs padded 32)",
+    "memory_config": "{MEMORY_CONFIG} (optional; passthrough of input memory config when omitted)"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_embedding.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_embedding.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_tilize_with_val_padding.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_matmul.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.reshape",
+      "tensor_role": "activation (prefill input to FF1/FF3 or QKV matmul, folded [1,1,S,H] -> [1,S/CHUNK,CHUNK,H])",
+      "size_descriptor": "seq_len >= prefill_len_cutoff (512 Blackhole / 1024 Wormhole) or seq_len > MAX_QKV_MM_SEQ_LEN (1024/2048)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT, interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "seq_len",
+        "op": ">=",
+        "value": "prefill_len_cutoff"
+      },
+      "source": "llama/mistral MLP and attention prefill forward: x = ttnn.reshape(x, [1, seq_len // self.args.prefill_len_cutoff, self.args.prefill_len_cutoff, -1]); inverse reshape back to [1,1,seq_len,-1] after the matmul"
+    },
+    {
+      "op": "ttnn.reshape",
+      "tensor_role": "activation (attention output before WO projection)",
+      "size_descriptor": "long sequence, seq_len > 1024",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT, interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "seq_len",
+        "op": ">",
+        "value": 1024
+      },
+      "source": "attention prefill: if seq_len > 1024: attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1]); output_11SH reshaped back to [1,1,seq_len,-1] after ttnn.linear(memory_config=ttnn.DRAM_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.reshape",
+      "tensor_role": "activation (q/k/v head-split reshape in encoder self-attention)",
+      "size_descriptor": "small/medium seq (encoder layer, [B,S,embed_dim] -> [B,S,num_heads,head_dim])",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT, interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "conformer/whisper-style attention: proj = ttnn.reshape(proj, (batch, seq_len, num_heads, head_dim), memory_config=ttnn.L1_MEMORY_CONFIG)  # pinned to L1 to hide DRAM writeback (~14% of layer kernel time when DRAM)"
+    },
+    {
+      "op": "ttnn.reshape",
+      "tensor_role": "input (sharded tensor must be moved to DRAM interleaved before reshape with sub_core_grids, then restored)",
+      "size_descriptor": "small (rope cos/sin matrices, [1, 32 or 64, 1, 128])",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT, interleaved (sharded input round-tripped through DRAM)",
+        "shard_spec_template": "orig_mem_cfg restored via ttnn.to_memory_config after reshape"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "rope_setup sub-core-grid path: x_dram = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG); x_reshaped = ttnn.reshape(x_dram, [1, 64 if use_qk_fused else 32, 1, 128], sub_core_grids=sub_core_grids); x_restored = ttnn.to_memory_config(x_reshaped, orig_mem_cfg)"
+    },
+    {
+      "op": "ttnn.reshape",
+      "tensor_role": "activation (MoE router input flattened to (-1, hidden_dim); downstream buffer chosen by token count)",
+      "size_descriptor": "decode if actual_tokens <= 128, prefill otherwise",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT, interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "actual_tokens",
+        "op": "<=",
+        "value": 128
+      },
+      "source": "MoE forward: hidden_states = ttnn.reshape(hidden_states, (-1, self.hidden_dim)); is_decode = actual_tokens <= 128; mem_config = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG"
+    },
+    {
+      "op": "ttnn.reshape",
+      "tensor_role": "activation (rank-promotion to 4D [1,1,B*S,H] before CCL all_gather/reduce_scatter, reshaped back after)",
+      "size_descriptor": "any (CCL ops require rank-4 tensors)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT, interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "rank",
+        "op": "<",
+        "value": 4
+      },
+      "source": "ccl_manager: if rank < 4: tensor = ttnn.reshape(tensor, [1]*(4-rank) + list(tensor.shape)); ... tensor = ttnn.reshape(tensor, list(tensor.shape)[4-rank:]) after the collective"
+    },
+    {
+      "op": "ttnn.reshape",
+      "tensor_role": "input (matmul operand with padded_shape, unit-test reference)",
+      "size_descriptor": "tile-aligned padded shapes (e.g. padded to (4096,32) / (256,32))",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT, interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn_input_a = ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG); ttnn_input_a = ttnn.reshape(ttnn_input_a, input_a_shape, padded_shape=(4096, 32)) followed by ttnn.matmul"
+    },
+    {
+      "op": "ttnn.reshape",
+      "tensor_role": "activation (tilized reshape workaround: convert to ROW_MAJOR before reshape to avoid hang, then back to TILE)",
+      "size_descriptor": "any (workaround for tt-metal issue #29932 on tilized multi-dim merges)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT during reshape, TILE_LAYOUT after",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "qwen-vl patch merger: x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT); x = ttnn.reshape(x, (x.shape[0], x.shape[1], -1, self.mlp_size)); x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)"
+    }
+  ]
+}

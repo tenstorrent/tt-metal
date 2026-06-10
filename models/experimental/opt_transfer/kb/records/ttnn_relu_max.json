@@ -1,0 +1,45 @@
+{
+  "id": "ttnn_relu_max",
+  "fused_op": "ttnn.relu_max",
+  "category": "eltwise_unary_composite",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.relu(torch.min(input_tensor_a, torch.tensor(upper_limit)))",
+  "signature": {},
+  "config_template": {
+    "upper_limit": "{UPPER_LIMIT}",
+    "input_shape": [
+      "{N}",
+      "{C}",
+      "{H}",
+      "{W}"
+    ],
+    "layout": "ttnn.TILE_LAYOUT",
+    "dtype": "{DTYPE}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Fuses clamp-from-above (min with scalar upper_limit) followed by relu into a single unary op. Replaces the contiguous torch subsequence min(x, c) -> relu(.). Scalar upper_limit is a compile-time/runtime kernel arg, not a tensor.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.relu_max",
+      "tensor_role": "input",
+      "size_descriptor": "small_2d (h=64, w=128 in unit test)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device) with default (DRAM interleaved) memory config"
+    }
+  ]
+}

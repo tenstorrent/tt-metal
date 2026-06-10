@@ -1,0 +1,145 @@
+{
+  "id": "ttnn_zeros",
+  "fused_op": "ttnn.zeros",
+  "category": "creation",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.zeros(input_shape)",
+  "signature": {},
+  "config_template": {
+    "shape": "{SHAPE}",
+    "dtype": "{DTYPE}",
+    "layout": "{LAYOUT|default=ttnn.TILE_LAYOUT}",
+    "device": "{DEVICE}",
+    "memory_config": "{MEMORY_CONFIG|default=ttnn.DRAM_MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_concat.py",
+    "tests/ttnn/unit_tests/operations/conv/test_prepare_conv_weights.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_creation.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_slice.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_cumprod.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_cumsum.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.zeros",
+      "tensor_role": "output (kv_cache k/v)",
+      "size_descriptor": "[batch, num_kv_heads, max_seq_len, head_dim] (large persistent cache, max_seq_len-scaled)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: per-layer KV cache allocation loop (k_cache/v_cache zeros with ttnn.DRAM_MEMORY_CONFIG, ttnn.TILE_LAYOUT, bfloat16/float32)"
+    },
+    {
+      "op": "ttnn.zeros",
+      "tensor_role": "output (replicated paged cache on mesh)",
+      "size_descriptor": "cache_shape per-device (large persistent cache)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: mesh_device cache init (dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG; replicated across devices since zeros takes no mesh_mapper)"
+    },
+    {
+      "op": "ttnn.zeros",
+      "tensor_role": "output (prewarm dummy activation)",
+      "size_descriptor": "[batch_size, seq_len_or_label+pred_len, d_model] (activation-sized)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "config.use_l1",
+        "op": "==",
+        "value": true
+      },
+      "source": "model call site: base_memcfg = ttnn.L1_MEMORY_CONFIG if self.config.use_l1 else ttnn.DRAM_MEMORY_CONFIG"
+    },
+    {
+      "op": "ttnn.zeros",
+      "tensor_role": "output (prewarm dummy activation)",
+      "size_descriptor": "[batch_size, seq_len_or_label+pred_len, d_model] (activation-sized)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "config.use_l1",
+        "op": "==",
+        "value": false
+      },
+      "source": "model call site: base_memcfg = ttnn.L1_MEMORY_CONFIG if self.config.use_l1 else ttnn.DRAM_MEMORY_CONFIG"
+    },
+    {
+      "op": "ttnn.zeros",
+      "tensor_role": "output (scatter accumulator / result buffer)",
+      "size_descriptor": "[B, vocab_size] (vocab-sized, large)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: result_tt/zeros_tt = ttnn.zeros((B, vocab_size), dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG) used as scatter base"
+    },
+    {
+      "op": "ttnn.zeros",
+      "tensor_role": "output (empty joint-attention placeholder)",
+      "size_descriptor": "[1, n_local_heads, 0, head_dim] (zero-length seq dim, trivially small)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "matches q.layout",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: add_q = add_k = add_v = ttnn.zeros(shape, device=self.mesh_device, layout=q.layout, dtype=q.dtype) feeding ring_joint_scaled_dot_product_attention"
+    },
+    {
+      "op": "ttnn.zeros",
+      "tensor_role": "output (decoder future padding)",
+      "size_descriptor": "[batch, pred_len, dec_in] (activation-sized, concat input)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: future_pad = ttnn.zeros((B, pred_len, dec_in), layout=ttnn.TILE_LAYOUT) then ttnn.concat([dec_known, future_pad], dim=1)"
+    },
+    {
+      "op": "ttnn.zeros",
+      "tensor_role": "output (preallocated slice_write destination)",
+      "size_descriptor": "full dims [N, C, H, W] written incrementally via slices",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "parameterized (TILE/ROW_MAJOR)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: ttnn_output = ttnn.zeros(dims, device=device, layout=layout, dtype=ttnn.bfloat16); ttnn.to_memory_config(ttnn_output, ttnn.DRAM_MEMORY_CONFIG)"
+    }
+  ]
+}

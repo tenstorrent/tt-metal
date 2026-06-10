@@ -1,0 +1,45 @@
+{
+  "id": "ttnn_sum_3",
+  "fused_op": "ttnn.sum",
+  "category": "reduction",
+  "pattern_kind": "horizontal_merge",
+  "torch_pattern": "sum1 = torch.sum(token_embeddings * input_mask_expanded, dim=1); sum2 = torch.sum(input_mask_expanded, dim=1).clamp(min=1e-9); result = sum1 / sum2  # masked mean pooling",
+  "signature": {},
+  "config_template": {
+    "dim": 1,
+    "keepdim": false,
+    "clamp_min": 1e-09
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Masked mean-pooling: two sibling ttnn.sum reductions (weighted-embedding sum and mask-count sum) over the same dim=1 feeding a div \u2014 sentence-transformer pooling pattern repeated verbatim at 6+ call sites. The two sums are parallel branches sharing the mask tensor; merge candidate.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/deepseek/test_deepseek_moe_post_combine_reduce.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_reduction.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_reduction_h_interleaved.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_reduction_on_batch.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_reduction_program_cache.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_sum.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.sum",
+      "tensor_role": "input",
+      "size_descriptor": "token embeddings [B,S,H] and expanded mask, interleaved",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: pooling path creates mask_tt with memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT before summed_tt = ttnn.sum(ttnn.multiply(tt_hidden, mask_tt), dim=2)"
+    }
+  ]
+}

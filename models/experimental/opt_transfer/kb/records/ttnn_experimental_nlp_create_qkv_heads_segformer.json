@@ -1,0 +1,105 @@
+{
+  "id": "ttnn_experimental_nlp_create_qkv_heads_segformer",
+  "fused_op": "ttnn.experimental.nlp_create_qkv_heads_segformer",
+  "category": "attention_head_manipulation",
+  "pattern_kind": "chain",
+  "torch_pattern": "x = x.reshape(batch, seq_len, hidden_dim // {HEAD_DIM}, {HEAD_DIM}); x = x.permute(0, 2, 1, 3)",
+  "signature": {},
+  "config_template": {
+    "head_dim": "{HEAD_DIM}",
+    "num_heads": "{HIDDEN_DIM} // {HEAD_DIM}",
+    "input_shape": "[{BATCH}, 1, {SEQ_LEN}, {HIDDEN_DIM}]",
+    "output_shape": "[{BATCH}, {HIDDEN_DIM} // {HEAD_DIM}, {SEQ_LEN}, {HEAD_DIM}]",
+    "memory_config": "ttnn.L1_MEMORY_CONFIG"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Single-tensor head-split variant (unlike fused QKV variants, operates on one of Q/K/V independently; returns a 1-tuple, callers index [0]). head_dim fixed at 32 in observed usages. K path additionally follows with ttnn.permute(key_layer, (0, 1, 3, 2)) for K^T; that permute is NOT fused into this op. Skipped entirely when num_attention_heads == 1.; torch_pattern_source: test reference: head_dim = 32; heads_num = hidden_dim // head_dim (segformer transpose_for_scores: view(B, S, heads_num, head_dim).permute(0, 2, 1, 3)); ttnn_replacement: ttnn.experimental.nlp_create_qkv_heads_segformer(x, memory_config={MEM_CONFIG})[0]",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_nlp_create_qkv_heads_segformer.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "nlp_create_qkv_heads_segformer",
+      "tensor_role": "output_query_heads",
+      "size_descriptor": "[B, num_heads, seq_len, 32], segformer encoder seq lens (e.g. H*W/{SR}^2)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "num_attention_heads",
+        "op": ">",
+        "value": 1
+      },
+      "source": "model call site: segformer efficient_selfattention query path (memory_config=ttnn.L1_MEMORY_CONFIG)"
+    },
+    {
+      "op": "nlp_create_qkv_heads_segformer",
+      "tensor_role": "output_key_heads",
+      "size_descriptor": "[B, num_heads, kv_seq_len, 32] (kv_seq_len reduced by sr_ratio when sr_ratio>1)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "num_attention_heads",
+        "op": ">",
+        "value": 1
+      },
+      "source": "model call site: segformer key path (memory_config=ttnn.L1_MEMORY_CONFIG), followed by ttnn.permute(0,1,3,2)"
+    },
+    {
+      "op": "nlp_create_qkv_heads_segformer",
+      "tensor_role": "output_value_heads",
+      "size_descriptor": "[B, num_heads, kv_seq_len, 32]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "num_attention_heads",
+        "op": ">",
+        "value": 1
+      },
+      "source": "model call site: segformer value path (memory_config=ttnn.L1_MEMORY_CONFIG)"
+    },
+    {
+      "op": "nlp_create_qkv_heads_segformer",
+      "tensor_role": "input_key",
+      "size_descriptor": "[B, 1, kv_seq_len, hidden_dim]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: key converted via ttnn.to_memory_config(key, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b) immediately before head split"
+    },
+    {
+      "op": "nlp_create_qkv_heads_segformer",
+      "tensor_role": "input_value",
+      "size_descriptor": "[B, 1, kv_seq_len, hidden_dim]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: value converted via ttnn.to_memory_config(value, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b) immediately before head split"
+    }
+  ]
+}

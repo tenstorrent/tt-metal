@@ -1,0 +1,63 @@
+{
+  "id": "ttnn_scale_causal_mask_hw_dims_softmax_in_place",
+  "fused_op": "ttnn.scale_causal_mask_hw_dims_softmax_in_place",
+  "category": "fused_softmax",
+  "pattern_kind": "chain",
+  "torch_pattern": "x = x.float(); x = x * scalar; x = x + attention_mask; out = torch.softmax(x, dim=-1)",
+  "signature": {},
+  "config_template": {
+    "scalar": "1 / math.sqrt({HEAD_DIM})",
+    "program_config": "ttnn.SoftmaxShardedMultiCoreProgramConfig(compute_with_storage_grid_size={GRID_SIZE}, subblock_w={SUBBLOCK_W}, block_h={SHARD_HEIGHT} // 32, block_w={SHARD_WIDTH} // 32)",
+    "compute_kernel_config": "{QKTV_AND_SOFTMAX_OPTIMIZED_KERNEL_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "constraints: {'in_place': True, 'mask_required': True, 'mask_broadcast': 'hw_dims_only (mask shared across batch/head dims)', 'softmax_dim': -1, 'input_must_be_sharded': True}",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [],
+  "placement_observations": [
+    {
+      "op": "ttnn.scale_causal_mask_hw_dims_softmax_in_place",
+      "tensor_role": "input_output (in-place attention scores, mm_slice)",
+      "size_descriptor": "per-slice attention score matrix [batch*heads_slice, seq_len, seq_len], block-/height-sharded across grid",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "shard_shape=[{SHARD_HEIGHT}, {SHARD_WIDTH}] on grid {GRID_SIZE}; block_h={SHARD_HEIGHT}//32, block_w={SHARD_WIDTH}//32"
+      },
+      "program_config": "ttnn.SoftmaxShardedMultiCoreProgramConfig(compute_with_storage_grid_size={GRID_SIZE}, subblock_w={SUBBLOCK_W}, block_h={SHARD_HEIGHT}//32, block_w={SHARD_WIDTH}//32)",
+      "condition": null,
+      "source": "model call sites: program_config=SOFTMAX_PROGCFG / SOFTMAX_OPTIMIZED_PROGCFG built from mm_output_height_shard_spec; op consumes height-sharded matmul output slice in L1"
+    },
+    {
+      "op": "ttnn.scale_causal_mask_hw_dims_softmax_in_place",
+      "tensor_role": "attention_mask",
+      "size_descriptor": "per-slice causal mask (one slice per seq-len slice i: attention_mask[i] / attention_masks_per_slice[i])",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call sites: mask indexed per slice and passed unsharded alongside sharded input (sliced prefill attention pattern)"
+    },
+    {
+      "op": "ttnn.sharded_to_interleaved_partial",
+      "tensor_role": "output (post-softmax gather destination)",
+      "size_descriptor": "full softmax output assembled from num_slices slices",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call site: ttnn.sharded_to_interleaved_partial(input_slice, tt_output_sharded_softmax, num_slices, i, memory_config=dram_interleaved_memory_config)"
+    }
+  ]
+}

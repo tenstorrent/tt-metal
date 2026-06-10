@@ -1,0 +1,86 @@
+{
+  "id": "ttnn_softmax_in_place",
+  "fused_op": "ttnn.softmax_in_place",
+  "category": "normalization",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.nn.Softmax(dim)(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "program_config": "ttnn.SoftmaxShardedMultiCoreProgramConfig(compute_with_storage_grid_size={GRID}, subblock_w={SUBBLOCK_W}, block_h={SHARD_H} // 32, block_w={SHARD_W} // 32)",
+    "compute_kernel_config": "{COMPUTE_KERNEL_CONFIG}",
+    "dim": "{DIM}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_notes: dim defaults to -1 when not provided; operates in-place on the ttnn side (input buffer reused), replacing the single torch softmax node. Commonly appears in the attention subsequence scale -> mask-add -> softmax -> matmul(V), where it replaces torch.nn.functional.softmax(attention_scores, dim=-1).; fusion_notes: In-place variant requires input layout TILE; when input is height-sharded the sharded program config block_h/block_w must match the input shard spec tiles exactly (shard_shape // 32).",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/fused/test_softmax.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.softmax_in_place",
+      "tensor_role": "input (attention_scores)",
+      "size_descriptor": "[batch*heads, seq, seq] attention score matrix, height-sharded across cores",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "shard_shape=[{TILES_PER_CORE_M}*32, {SEQ}] inherited in-place from producer (mul/bcast scale op)"
+      },
+      "program_config": "ttnn.SoftmaxShardedMultiCoreProgramConfig(compute_with_storage_grid_size={GRID}, block_h=shard_h//32, block_w=shard_w//32)",
+      "condition": null,
+      "source": "model call site: attention block, attention_probs = ttnn.softmax_in_place(attention_scores, program_config=config.program_configs['softmax_program_config']) followed by ttnn.matmul(..., memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.softmax_in_place",
+      "tensor_role": "input (mm_slice, time-sliced attention scores)",
+      "size_descriptor": "per-slice attention scores [1, 1, seq_len_slice, key_len], height-sharded; used when full scores too large for L1",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "shard_shape=[mm_output_height_shard_spec[0], mm_output_height_shard_spec[1]] (height_sharded_memory_config from preceding mul)"
+      },
+      "program_config": "ttnn.SoftmaxShardedMultiCoreProgramConfig(block_h=mm_output_height_shard_spec[0]//32, block_w=mm_output_height_shard_spec[1]//32)",
+      "condition": {
+        "var": "seq_len",
+        "op": ">",
+        "value": "L1_capacity_threshold (attention computed in num_slices slices)"
+      },
+      "source": "model call site: time-sliced attention (tsa_softmax program config inside slice loop over j, i)"
+    },
+    {
+      "op": "ttnn.softmax_in_place",
+      "tensor_role": "input (attn_weights / out)",
+      "size_descriptor": "large unsliced attention weights [1, num_heads (e.g. 71), seq_len, seq_len]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "default (none); only compute_kernel_config passed",
+      "condition": {
+        "var": "seq_len",
+        "op": ">",
+        "value": "shardable_threshold (reference/full-tensor path keeps scores DRAM interleaved)"
+      },
+      "source": "test/reference call site: attn_weights = ttnn.add(..., memory_config=dram_interleaved_memory_config); ttnn.softmax_in_place(attn_weights, compute_kernel_config=compute_kernel_config)"
+    },
+    {
+      "op": "ttnn.softmax_in_place",
+      "tensor_role": "input",
+      "size_descriptor": "tiled input tensor, memory config parameterized by test",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE (sharded or interleaved per mem_config param)",
+        "shard_spec_template": null
+      },
+      "program_config": "softmax_program_config (parameterized: sharded multicore or default)",
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(..., layout=ttnn.Layout.TILE, memory_config=mem_config); ttnn.softmax_in_place(input, program_config=softmax_program_config)"
+    }
+  ]
+}

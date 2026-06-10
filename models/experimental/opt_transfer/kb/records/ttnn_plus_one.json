@@ -1,0 +1,101 @@
+{
+  "id": "ttnn_plus_one",
+  "fused_op": "ttnn.plus_one",
+  "category": "eltwise_unary_inplace",
+  "pattern_kind": "chain",
+  "torch_pattern": "output = input + 1",
+  "signature": {},
+  "config_template": {
+    "input_shape": "[{W}] or [{N}, {W}] (small index tensor)",
+    "dtype": "int32 (also uint32)",
+    "inplace": true,
+    "kwargs": {
+      "sub_core_grids": "ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord({CX}, {CY}), ttnn.CoreCoord({CX}, {CY}))]) | None",
+      "skip_negative_entries": "true when entries == -1 mark inactive batch slots (current_pos), else false"
+    }
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "constraints: ['Operates in-place on the input tensor; no output tensor is returned.', 'Integer dtypes (int32) used in all observed call sites/tests.', 'skip_negative_entries=True leaves negative (sentinel) entries unchanged.', 'Typically pinned to a single core via sub_core_grids so it can run alongside ops occupying the main grid during trace capture.']",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/sdpa/mla_test_utils.py",
+    "tests/ttnn/unit_tests/operations/sdpa/sdpa_test_utils.py",
+    "tests/ttnn/unit_tests/operations/transformers/test_plus_one.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.plus_one",
+      "tensor_role": "input/output (in-place)",
+      "size_descriptor": "tiny 1D index tensor, width 1-32 (per-batch decode positions)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR / interleaved (default from ttnn.from_torch with device)",
+        "shard_spec_template": null
+      },
+      "program_config": "sub_core_grids=None (default single-core)",
+      "condition": null,
+      "source": "tests/ttnn/unit_tests/operations/test_plus_one.py: ttnn.from_torch(torch_input_tensor, dtype=dtype, device=device); ttnn.plus_one(input_tensor)"
+    },
+    {
+      "op": "ttnn.plus_one",
+      "tensor_role": "input/output (in-place)",
+      "size_descriptor": "tiny tensor, shapes (16,32)..(4,8,16,32), int32",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR / interleaved (default)",
+        "shard_spec_template": null
+      },
+      "program_config": "sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1,1), ttnn.CoreCoord(1,1))]) (single sub-device core)",
+      "condition": null,
+      "source": "tests/ttnn/unit_tests: test_plus_one_subdevice / test_plus_one_subdevice_nd"
+    },
+    {
+      "op": "ttnn.plus_one",
+      "tensor_role": "input/output (current_pos_tensor, per-batch decode positions)",
+      "size_descriptor": "tiny 1D tensor [batch_size], int32, may contain -1 sentinels",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR interleaved (default); sharded across sub_core_grids when is_cur_pos_sharded",
+        "shard_spec_template": "height-sharded over model_args.sub_core_grids when sharded"
+      },
+      "program_config": "sub_core_grids=model_args.sub_core_grids if is_cur_pos_sharded else CoreRangeSet([CoreRange((1,0),(1,0))]); skip_negative_entries=True",
+      "condition": {
+        "var": "is_cur_pos_sharded",
+        "op": "==",
+        "value": true
+      },
+      "source": "models/tt_transformers decode: _increment_decode_positions_device(current_pos, rot_mat_idxs, is_cur_pos_sharded)"
+    },
+    {
+      "op": "ttnn.plus_one",
+      "tensor_role": "input/output (rot_mat_idxs, rotary embedding index tensor)",
+      "size_descriptor": "tiny 1D index tensor [batch_size], int32",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR interleaved (default)",
+        "shard_spec_template": null
+      },
+      "program_config": "sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1,0), ttnn.CoreCoord(1,0))]) (fixed single core)",
+      "condition": null,
+      "source": "models/tt_transformers decode trace: ttnn.plus_one(rot_mat_idxs, sub_core_grids=CoreRangeSet([CoreRange((1,0),(1,0))]))"
+    },
+    {
+      "op": "ttnn.plus_one",
+      "tensor_role": "input/output (decode position tensors in Whisper traced decode)",
+      "size_descriptor": "tiny 1D position tensor [batch_size], int32",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR interleaved (default)",
+        "shard_spec_template": null
+      },
+      "program_config": "sub_core_grids=None (default)",
+      "condition": null,
+      "source": "whisper traced decode: ttnn.plus_one(self.current_decode_pos_per_size[trace_key]); ttnn.plus_one(self.decode_pos_embed[trace_key])"
+    }
+  ]
+}

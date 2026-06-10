@@ -1,0 +1,85 @@
+{
+  "id": "ttnn_update_cache",
+  "fused_op": "ttnn.update_cache",
+  "category": "kv_cache",
+  "pattern_kind": "chain",
+  "torch_pattern": "cache[0:num_users, 0:num_heads, cache_idx : cache_idx + x.shape[-2], 0 : x.shape[-1]] = x",
+  "signature": {},
+  "config_template": {
+    "cache_shape": "[{BATCH}, {NUM_HEADS}, {MAX_SEQ_LEN}, {HEAD_DIM}]",
+    "input_shape": "[{BATCH}, {NUM_HEADS}, {SEQ_CHUNK}, {HEAD_DIM}]",
+    "update_idx": "{CACHE_POS}",
+    "batch_offset": "{BATCH_OFFSET}",
+    "compute_kernel_config": "ttnn.WormholeComputeKernelConfig(fp32_dest_acc_en=True)",
+    "notes": "In-place update of pre-allocated KV cache at row update_idx; update_idx baked as Python constant in trace capture; MAX_SEQ_LEN must be padded to tile multiple (32). For prefill use ttnn.fill_cache; for paged/tensor-indexed updates use ttnn.experimental.paged_update_cache."
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_source: test: cache slice-assignment golden check; equivalently cache[batch_offset, :, update_idx, :] = cache_entry for single-token decode update; ttnn_replacement: ttnn.update_cache(cache, x, update_idx, batch_offset=batch_offset, compute_kernel_config=compute_kernel_config); constraints: {'in_place': True, 'cache_layout': 'TILE_LAYOUT', 'input_dtype_match': 'output equality (comp_equal) only guaranteed when input_dtype == cache_dtype == bfloat16; otherwise PCC check', 'decode_only': 'single-token (or tile-padded chunk) update per call; prefill path uses fill_cache'}",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_update_cache.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.update_cache",
+      "tensor_role": "cache (in-place output, layer_past K/V)",
+      "size_descriptor": "[batch, num_heads, max_seq_len(tile-padded), head_dim], persistent across decode steps",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: per-layer pre-allocated decoder KV cache docstring \u2014 'Stored in DRAM TILE_LAYOUT (default bfloat16). Updated in-place via ttnn.update_cache'"
+    },
+    {
+      "op": "ttnn.update_cache",
+      "tensor_role": "cache (in-place output, layer_past[0]/layer_past[1])",
+      "size_descriptor": "shard height = num_heads * padded_layer_past_len (grows with decode position)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "shard_spec.shape = [{NUM_HEADS} * {PADDED_LAYER_PAST_LEN}, {HEAD_DIM}]"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "model_config['l1_sharded']",
+        "op": "==",
+        "value": true
+      },
+      "source": "call_site: kv_cache_memcfg.shard_spec.shape[0] = layer_past[0].padded_shape[1] * padded_layer_past_len before update_cache; gated by model_config['l1_sharded'] in falcon-style attention"
+    },
+    {
+      "op": "ttnn.update_cache",
+      "tensor_role": "input (new K/V token, key_layer/value_layer)",
+      "size_descriptor": "single decode token per user: [batch, num_heads, 1(seq), head_dim]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: xt = xt.to(device, input_mem_config); call_site: key_layer/value_layer deallocated immediately after update (transient activation)"
+    },
+    {
+      "op": "ttnn.slice (post-update_cache consumer)",
+      "tensor_role": "output (sliced K/V for attention)",
+      "size_descriptor": "[batch, 1, nearest_32(layer_past_len + 1), head_dim]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: ttnn.slice(layer_past[0], ..., memory_config=self.model_config['K_CACHE_SLICE_OUTPUT_MEMCFG']) / 'V_CACHE_SLICE_OUTPUT_MEMCFG' immediately after update_cache"
+    }
+  ]
+}

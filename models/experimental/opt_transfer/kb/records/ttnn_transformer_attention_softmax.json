@@ -1,0 +1,87 @@
+{
+  "id": "ttnn_transformer_attention_softmax",
+  "fused_op": "ttnn.transformer.attention_softmax_",
+  "category": "fused_softmax",
+  "pattern_kind": "chain",
+  "torch_pattern": [
+    "scores = scores * (1 / head_size**0.5)  # skipped if head_size is None (scaler=1.0)",
+    "scores = scores + attention_mask        # skipped if attention_mask is None",
+    "probs = torch.softmax(scores, dim=-1)"
+  ],
+  "signature": {},
+  "config_template": {
+    "head_size": "{HEAD_DIM}",
+    "attention_mask": "{ATTENTION_MASK_TENSOR}",
+    "causal_mask": "{IS_CAUSAL:bool, optional}",
+    "program_config": "ttnn.SoftmaxShardedMultiCoreProgramConfig(compute_with_storage_grid_size={GRID}, subblock_w={SUBBLOCK_W}, block_h={HEADS_PER_CORE}*{SEQ_LEN}//32, block_w={SEQ_LEN}//32)  # optional; omit for interleaved/auto"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "In-place fused scale+mask+softmax over last dim of attention scores [B, H, S_q, S_k]. Replaces the 3-op chain mul(1/sqrt(head_size)) -> add(mask) -> softmax(-1). In-place: output inherits input memory_config. Model code falls back to unfused path when compute dtype is float32 or last dim >= 4096.; torch_pattern_source: golden",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/transformers/test_transformer.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.transformer.attention_softmax_",
+      "tensor_role": "input (attention_scores)",
+      "size_descriptor": "[batch, num_heads, seq_len, seq_len], tile layout",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "block_h={HEADS_PER_CORE}*{SEQ_LEN_TILES}, block_w={SEQ_LEN_TILES} per core"
+      },
+      "program_config": "ttnn.SoftmaxShardedMultiCoreProgramConfig(block_h=head_seqL_t__x, block_w=seqL_t)",
+      "condition": null,
+      "source": "call_site (dynamic_softmax_config / softmax_program_config call sites; sharded softmax program config with block dims derived from seq_len tiles)"
+    },
+    {
+      "op": "ttnn.transformer.attention_softmax_",
+      "tensor_role": "input (attention_scores)",
+      "size_descriptor": "last dim (key seq_len) regime gate for fused path",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "input.shape[-1]",
+        "op": "<",
+        "value": 4096
+      },
+      "source": "call_site (`if compute_dtype == ttnn.float32 or attn_scores.shape[-1] >= 4096: use_fused_softmax = False`); fused attention_softmax_ used only when last dim < 4096 and dtype != float32"
+    },
+    {
+      "op": "ttnn.transformer.attention_softmax_",
+      "tensor_role": "output (attention_probabilities, consumed by ttnn.matmul with value)",
+      "size_descriptor": "[batch, num_heads, seq_len, seq_len]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "L1_HEIGHT_SHARDED_MEMORY_CONFIG on downstream probs@value matmul"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site (context_layer = ttnn.matmul(attention_probabilities, value_layer, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG)); in-place op keeps probs resident in L1 for the value matmul"
+    },
+    {
+      "op": "ttnn.transformer.attention_softmax_",
+      "tensor_role": "output (attention_probs, small-batch interleaved variant)",
+      "size_descriptor": "[batch, num_heads, seq_len, seq_len], no program_config",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site (no program_config passed; downstream matmul uses ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x))"
+    }
+  ]
+}

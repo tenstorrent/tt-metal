@@ -1,0 +1,112 @@
+{
+  "id": "ttnn_sparse_matmul",
+  "fused_op": "ttnn.sparse_matmul",
+  "category": "matmul.sparse_moe_expert",
+  "pattern_kind": "horizontal_merge",
+  "torch_pattern": [],
+  "signature": {},
+  "config_template": {
+    "sparsity": "{SPARSITY_TENSOR}",
+    "nnz": "{NNZ}",
+    "is_input_a_sparse": "{IS_A_SPARSE:bool}",
+    "is_input_b_sparse": "{IS_B_SPARSE:bool}",
+    "memory_config": "{MEMORY_CONFIG: ttnn.L1_MEMORY_CONFIG | ttnn.DRAM_MEMORY_CONFIG}",
+    "output_tile": "ttnn.Tile([{TILE_H}, {TILE_W}])",
+    "program_config": "ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=ttnn.CoreCoord({CORE_X}, {CORE_Y}), in0_block_w={IN0_BLOCK_W}, out_subblock_h={OUT_SUBBLOCK_H}, ...)",
+    "dtype": "ttnn.bfloat16"
+  },
+  "weight_transform": "Stack per-expert projection weights along the expert dimension into a single tensor of shape [1, E, K, N] (gate_proj/up_proj: K=hidden_size, N=intermediate_size_per_device; down_proj: K=intermediate_size_per_device, N=hidden_size). Weights stay in [K, N] orientation (no transpose). Sparsity tensor encodes per-token/per-group expert selection with nnz = num_experts_per_tok (decode/top_k) or num active experts per chunk (prefill).",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/matmul/test_sparse_matmul.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.sparse_matmul",
+      "tensor_role": "output",
+      "size_descriptor": "prefill gate/up projection output: [1, E, chunk_len, intermediate_size], chunk_len = long sequence chunk",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig via program_config.get_prefill_gate_up_config(seq_len={SEQ_LEN}, n={INTERMEDIATE_SIZE}) / _build_sparse_matmul_config(TILE_SIZE, intermediate_size)",
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "prefill"
+      },
+      "source": "model call site (MoE prefill gate/up projection)"
+    },
+    {
+      "op": "ttnn.sparse_matmul",
+      "tensor_role": "output",
+      "size_descriptor": "prefill down projection output: [1, E, chunk_len, hidden_size]; input_a is sparse (is_input_a_sparse=True); processed in seq splits to bound memory",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig via program_config.get_prefill_down_config(seq_len={SPLIT_SEQ_LEN}, n={HIDDEN_SIZE}) / _build_sparse_matmul_config(TILE_SIZE, hidden_size)",
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "prefill"
+      },
+      "source": "model call site (MoE prefill down projection, streamed splits)"
+    },
+    {
+      "op": "ttnn.sparse_matmul",
+      "tensor_role": "output",
+      "size_descriptor": "decode gate/up projection output: [batch_size, E, intermediate_size_per_device] (seq_len == batch tokens, small)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig via program_config.get_decode_gate_up_config(seq_len={BATCH_TOKENS}, n={INTERMEDIATE_SIZE}) / _build_sparse_matmul_config(batch_size, intermediate_size)",
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "decode"
+      },
+      "source": "model call site (MoE decode gate/up projection)"
+    },
+    {
+      "op": "ttnn.sparse_matmul",
+      "tensor_role": "output",
+      "size_descriptor": "decode down projection output: [1, E, batch_tokens, hidden_size]; input_a sparse (is_input_a_sparse=True)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig via program_config.get_decode_down_config(seq_len={BATCH_TOKENS}, n={HIDDEN_SIZE}) / _build_sparse_matmul_config(batch_size, hidden_size)",
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "decode"
+      },
+      "source": "model call site (MoE decode down projection)"
+    },
+    {
+      "op": "ttnn.sparse_matmul",
+      "tensor_role": "output",
+      "size_descriptor": "general / parametrized shapes (all sparsity combinations: a-sparse, b-sparse, both)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=ttnn.CoreCoord({CORE_X}, {CORE_Y}), in0_block_w=1, out_subblock_h=1, ...) with output_tile=ttnn.Tile([{TILE_H}, {TILE_W}])",
+      "condition": null,
+      "source": "unit test"
+    }
+  ]
+}

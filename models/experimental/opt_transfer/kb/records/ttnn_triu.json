@@ -1,0 +1,30 @@
+{
+  "id": "ttnn_triu",
+  "fused_op": "ttnn.triu",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.triu(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "{N}x{C}x{H}x{W}",
+    "diagonal": 0,
+    "dtype": "{DTYPE}",
+    "layout": "TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": {
+    "golden": "ttnn eltwise unary golden registry: name_to_golden_function['triu'] = torch.triu",
+    "test": "test_unary_composite_triu_ttnn"
+  },
+  "usage_examples": [],
+  "applicability_notes": "constraints: {'rank': '>=2', 'notes': 'Upper-triangular mask applied over the last two dims; golden is torch.triu with default diagonal=0.'}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_composite.py"
+  ],
+  "placement_observations": []
+}

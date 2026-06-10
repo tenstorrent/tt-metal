@@ -1,0 +1,53 @@
+{
+  "id": "tosa_gather",
+  "fused_op": "tosa_gather",
+  "category": "data_movement",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch_gather = torch.gather(input, {DIM}, index)",
+  "signature": {},
+  "config_template": {
+    "input_dtype": "ttnn.bfloat16",
+    "index_dtype": "ttnn.uint32",
+    "layout": "ttnn.Layout.TILE",
+    "dim": "{DIM}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_notes: Test asserts ttnn.tosa_gather(input, index) matches a precomputed torch_gather reference (TOSA gather semantics: out[n, w, c] = input[n, index[n, w], c], realized via torch.gather along the W dim with index expanded over channels). No registered golden function; pattern recovered from the unit test's torch_gather reference comparison.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/data_movement/test_tosa_gather.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "tosa_gather",
+      "tensor_role": "input",
+      "size_descriptor": "unspecified (test default)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device) with default (DRAM interleaved) memory_config"
+    },
+    {
+      "op": "tosa_gather",
+      "tensor_role": "index",
+      "size_descriptor": "unspecified (test default)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: ttnn.from_torch(index, ttnn.uint32, layout=ttnn.Layout.TILE, device=device) with default (DRAM interleaved) memory_config"
+    }
+  ]
+}

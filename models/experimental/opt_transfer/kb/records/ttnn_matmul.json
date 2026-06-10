@@ -1,0 +1,176 @@
+{
+  "id": "ttnn_matmul",
+  "fused_op": "ttnn.matmul",
+  "category": "linear_algebra/matmul",
+  "pattern_kind": "chain",
+  "torch_pattern": "output_tensor = input_tensor_a @ input_tensor_b",
+  "signature": {},
+  "config_template": {
+    "call": "ttnn.matmul(input_tensor_a, input_tensor_b, memory_config={MEM_CFG}, dtype={DTYPE}, program_config={PROGRAM_CONFIG}, compute_kernel_config={KERNEL_CONFIG}, core_grid=ttnn.CoreGrid(y={GRID_Y}, x={GRID_X}))",
+    "shape_constraints": "a: [..., {M}, {K}], b: [..., {K}, {N}] -> out: [..., {M}, {N}]; tile-aligned ({M},{K},{N} padded to 32)",
+    "notes": "program_config selects 1D/2D/DRAM-sharded variants; dram_matmul_config({M}, {K}, {N}, num_cores={NUM_CORES}) for decode-mode (M=1..32) width-sharded matmuls"
+  },
+  "weight_transform": "identity (weight pre-converted to TILE_LAYOUT on device; dtype cast b -> a.dtype done by op)",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_deepseek_mla_ops.py",
+    "tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/test_fused_demo.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_experimental.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_matmul.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_matmul_deepseek.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_ring_matmul.py",
+    "tests/ttnn/unit_tests/operations/prefetcher_common.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "matmul",
+      "tensor_role": "output",
+      "size_descriptor": "decode: M=1(padded 32), K=4096, N=14336 (MLP w1/w3)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "WIDTH_SHARDED",
+        "shard_spec_template": "width-sharded over {NUM_CORES}=8 cores, shard [{M_TILES}*32, {N}/8]"
+      },
+      "program_config": "model_args.dram_matmul_config(1, 4096, 14336, num_cores=8, fused_activation=ttnn.UnaryOpType.SILU)",
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "decode"
+      },
+      "source": "llama/mistral MLP decode branch: w1_out = ttnn.matmul(x, self.w1, ..., memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)"
+    },
+    {
+      "op": "matmul",
+      "tensor_role": "output",
+      "size_descriptor": "decode: M=32, K=14336, N=4096 (MLP w2 down-proj)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "WIDTH_SHARDED",
+        "shard_spec_template": "width-sharded over 8 cores"
+      },
+      "program_config": "model_args.dram_matmul_config(1, 14336, 4096, num_cores=8)",
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "decode"
+      },
+      "source": "llama MLP decode w2_out matmul"
+    },
+    {
+      "op": "matmul",
+      "tensor_role": "output",
+      "size_descriptor": "prefill: M=seq_len (chunked to 1024), N=hidden (attention dense wo)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "model_config['VISION_XATTN_DENSE_PROGCFG'](seq_len)",
+      "condition": {
+        "var": "seq_len",
+        "op": ">",
+        "value": 1024
+      },
+      "source": "mllama xattn dense: output reshaped to [1, seq_len//1024, 1024, -1] when seq_len > 1024, memory_config=ttnn.DRAM_MEMORY_CONFIG"
+    },
+    {
+      "op": "matmul",
+      "tensor_role": "output",
+      "size_descriptor": "attention scores QK^T: [B*H, seq, seq], per-head sharded",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "per_core_M=head_seq_tiles, per_core_N=seq_tiles, ROW_MAJOR orientation"
+      },
+      "program_config": "config.program_configs['query_by_key_matmul_program_config']",
+      "condition": null,
+      "source": "BERT/SqueezeBERT/SentenceBERT attention: attention_scores = ttnn.matmul(query, key, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)"
+    },
+    {
+      "op": "matmul",
+      "tensor_role": "output",
+      "size_descriptor": "attention context (probs @ V): [B*H, seq, head_dim]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "height-sharded across attention cores"
+      },
+      "program_config": "config.program_configs['attention_probabilities_by_value_matmul_program_config']",
+      "condition": null,
+      "source": "BERT attention: context_layer = ttnn.matmul(attention_probs, value, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG)"
+    },
+    {
+      "op": "matmul",
+      "tensor_role": "output",
+      "size_descriptor": "SD cross-attn fused QKV projection, M=seq_len",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED if seq_len in {1024,4096} else BLOCK_SHARDED",
+        "shard_spec_template": "block-sharded grid per seq_len"
+      },
+      "program_config": "self.program_configs['qkv']",
+      "condition": {
+        "var": "seq_len",
+        "op": "in",
+        "value": [
+          1024,
+          4096
+        ]
+      },
+      "source": "stable-diffusion attention: interleaved_out = self.seq_len == 4096 or self.seq_len == 1024; memory_config = l1_interleaved if interleaved_out else block_sharded"
+    },
+    {
+      "op": "matmul",
+      "tensor_role": "output",
+      "size_descriptor": "LM head: M=seq, K=hidden, N=vocab/num_devices (large N)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "model_config['LLAMA3_LM_HEAD_MM_PROGCFG'] or model_config['LM_HEAD_MM_PROGCFG']",
+      "condition": null,
+      "source": "llama lm_head: lm_head_out = ttnn.matmul(norm_out_replicated, self.lm_head, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)"
+    },
+    {
+      "op": "matmul",
+      "tensor_role": "output",
+      "size_descriptor": "decode QKV projection: M=32 (batch in tile), N=qkv_dim",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "WIDTH_SHARDED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "seq_len",
+        "op": "==",
+        "value": 1
+      },
+      "source": "gpt-oss decode: xqkv_fused = ttnn.matmul(hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)"
+    },
+    {
+      "op": "matmul",
+      "tensor_role": "output",
+      "size_descriptor": "falcon dense 4h_to_h / h_to_4h, long sequence",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "none (auto-select) with get_default_hifi2_kernel_config()",
+      "condition": {
+        "var": "seq_len",
+        "op": ">",
+        "value": 1024
+      },
+      "source": "falcon helper: if seq_len > 1024: return ttnn.matmul(a, b, memory_config=output_mem_config, compute_kernel_config=get_default_hifi2_kernel_config()) (no core_grid/activation fusion on this path)"
+    }
+  ]
+}

@@ -1,0 +1,83 @@
+{
+  "id": "ttnn_arange",
+  "fused_op": "ttnn.arange",
+  "category": "creation",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.arange(start, end, step)",
+  "signature": {},
+  "config_template": {
+    "start": "{START}",
+    "end": "{END}",
+    "step": "{STEP}",
+    "dtype": "{DTYPE}",
+    "layout": "ttnn.ROW_MAJOR_LAYOUT",
+    "device": "{DEVICE}",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Single-op mapping: torch.arange(start, end, step) -> ttnn.arange(start, end, step). Output is 1-D of length ceil(|end-start|/|step|). Default output: ROW_MAJOR layout, bfloat16 dtype, DRAM interleaved. Commonly produced as uint32 for position-id generation (then reshaped to (1,-1)) or float32 for RoPE frequency/position vectors (then converted to TILE_LAYOUT before elementwise math). Frequently host-cacheable since output is deterministic per (start,end,step,dtype,layout,device).",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/data_movement/test_creation.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_manual_seed.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.arange",
+      "tensor_role": "output",
+      "size_descriptor": "1D, length = (end - start) / step (small, e.g. <= max_position_embeddings)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: assert output_tensor.memory_config() == ttnn.DRAM_MEMORY_CONFIG and output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT (default placement when no memory_config passed)"
+    },
+    {
+      "op": "ttnn.arange",
+      "tensor_role": "output",
+      "size_descriptor": "1D position ids, length = max_position_embeddings",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: ttnn.arange(0, max_position_embeddings, 1, dtype=ttnn.uint32, memory_config=self.config.embedding_memcfg) followed by ttnn.reshape(pos, (1,-1)) \u2014 position-id table for embedding lookup, dtype uint32"
+    },
+    {
+      "op": "ttnn.arange",
+      "tensor_role": "output",
+      "size_descriptor": "1D float32, length = head_dim/2 or seq_len (RoPE frequency/position vectors)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site (RoPE precompute): ttnn.arange(0, head_dim, 2, dtype=ttnn.float32) / ttnn.arange(0, seq_len, 1, dtype=ttnn.float32) then ttnn.to_layout(..., TILE_LAYOUT) before multiply/pow/reciprocal \u2014 created row-major then tilized for compute"
+    },
+    {
+      "op": "ttnn.arange",
+      "tensor_role": "output",
+      "size_descriptor": "1D uint32, length = num_positions = (image_size/patch_size)^2 (vision position ids)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: ttnn.arange(0, num_positions, 1, dtype=ttnn.uint32, device=mesh_device) then reshape (1,-1) \u2014 default interleaved DRAM, no explicit memory_config"
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "id": "ttnn_min_1",
+  "fused_op": "ttnn.min",
+  "category": "reduction",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch_output_tensor = torch.amin(torch_input_tensor, dim=dims, keepdim=True)",
+  "signature": {},
+  "config_template": {
+    "dim": "{DIMS}",
+    "keepdim": "{KEEPDIM}",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Multi-dim (tuple) reduction maps to torch.amin, which returns values only \u2014 direct one-to-one replacement. Golden also covers dim=None full reduction via torch.min(x) / all-dims with keepdim.; ttnn_replacement: output_tensor = ttnn.min(input_tensor, dim={DIMS}, keepdim=True)",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.min",
+      "tensor_role": "input",
+      "size_descriptor": "generic test shapes, bfloat16, multi-dim reduce",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test"
+    }
+  ]
+}

@@ -1,0 +1,128 @@
+{
+  "id": "ttnn_transformer_scaled_dot_product_attention",
+  "fused_op": "ttnn.transformer.scaled_dot_product_attention",
+  "category": "attention",
+  "pattern_kind": "chain",
+  "torch_pattern": "gt = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=is_causal, attn_mask=attn_mask, scale=scale)",
+  "signature": {},
+  "config_template": {
+    "is_causal": "{IS_CAUSAL}",
+    "scale": "1.0 / ({HEAD_DIM} ** 0.5)",
+    "sliding_window_size": "{SLIDING_WINDOW|None}",
+    "program_config": "ttnn.SDPAProgramConfig(compute_with_storage_grid_size=({GRID_X}, {GRID_Y}), q_chunk_size={Q_CHUNK}, k_chunk_size={K_CHUNK}, exp_approx_mode=False)",
+    "compute_kernel_config": "ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en={FP32_ACC}, packer_l1_acc={L1_ACC})",
+    "memory_config": "{OUTPUT_MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.transformer.scaled_dot_product_attention",
+      "tensor_role": "query/key/value (from split_query_key_value_and_split_heads)",
+      "size_descriptor": "[B, n_heads, seq_len, head_dim], prefill seq_len",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": "ttnn.SDPAProgramConfig(compute_with_storage_grid_size=({GRID_X}, {GRID_Y}), q_chunk_size={Q_CHUNK}, k_chunk_size={K_CHUNK}, exp_approx_mode=False)",
+      "condition": null,
+      "source": "call_site: qkv_fused split with memory_config=ttnn.DRAM_MEMORY_CONFIG followed by sdpa"
+    },
+    {
+      "op": "ttnn.transformer.scaled_dot_product_attention",
+      "tensor_role": "query/key/value (from split heads)",
+      "size_descriptor": "[B, n_heads, seq_len, head_dim]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": "self.sdpa_program_config",
+      "condition": null,
+      "source": "call_site: split heads with memory_config=ttnn.L1_MEMORY_CONFIG feeding sdpa with memory_config=ttnn.L1_MEMORY_CONFIG"
+    },
+    {
+      "op": "ttnn.transformer.scaled_dot_product_attention",
+      "tensor_role": "output",
+      "size_descriptor": "[B, n_heads, seq_len, head_dim], prefill",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": "self.sdpa_program_config / self.sdpa_prefill_program_config",
+      "condition": {
+        "var": "q_seq",
+        "op": ">",
+        "value": 1
+      },
+      "source": "call_site: _use_fused_prefill_sdpa branch with memory_config=ttnn.L1_MEMORY_CONFIG; also encoder sdpa with memory_config=ttnn.L1_MEMORY_CONFIG"
+    },
+    {
+      "op": "ttnn.transformer.scaled_dot_product_attention",
+      "tensor_role": "output",
+      "size_descriptor": "[B, n_heads, seq_len, head_dim], long-sequence decoder prefill",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": "get_decoder_prefill_sdpa_configs(device) -> sdpa_prefill_progcfg",
+      "condition": null,
+      "source": "call_site: decoder prefill sdpa with memory_config=ttnn.DRAM_MEMORY_CONFIG"
+    },
+    {
+      "op": "ttnn.transformer.scaled_dot_product_attention",
+      "tensor_role": "output (encoder attention scores/context)",
+      "size_descriptor": "seq_len-dependent",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": "cfg.score_prg_config",
+      "condition": {
+        "var": "seq_len",
+        "op": "<=",
+        "value": 128
+      },
+      "source": "call_site: sdpa_program_config = cfg.score_prg_config if seq_len <= 128 else _sdpa_program_config_for_seq_len(seq_len)"
+    },
+    {
+      "op": "ttnn.transformer.scaled_dot_product_attention",
+      "tensor_role": "key/value (KV cache, paged prefill)",
+      "size_descriptor": "[B, H, MaxS, head_dim], full max-seq KV cache",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": "self.model_config['SDPA_PROGCFG']",
+      "condition": null,
+      "source": "call_site: value_layer typecast to KV_CACHE_DTYPE with memory_config=ttnn.DRAM_MEMORY_CONFIG before fill_cache + sdpa"
+    },
+    {
+      "op": "ttnn.transformer.scaled_dot_product_attention",
+      "tensor_role": "program_config q/k chunk sizing",
+      "size_descriptor": "seq_len-dependent chunking",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": "ttnn.SDPAProgramConfig(compute_with_storage_grid_size=(8, 8), q_chunk_size={128|256}, k_chunk_size={128|256|32*num_chunks}, exp_approx_mode=False)",
+      "condition": null,
+      "source": "call_site/test: explicit SDPAProgramConfig constructions; SDPA_PROGCFG(seq_len // batch_size if seq_len // batch_size == 128 else seq_len)"
+    }
+  ]
+}

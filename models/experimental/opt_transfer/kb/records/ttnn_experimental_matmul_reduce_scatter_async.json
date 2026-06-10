@@ -1,0 +1,69 @@
+{
+  "id": "ttnn_experimental_matmul_reduce_scatter_async",
+  "fused_op": "ttnn.experimental.matmul_reduce_scatter_async",
+  "category": "fused_matmul_ccl",
+  "pattern_kind": "chain",
+  "torch_pattern": [
+    "out = torch.matmul(input, weight) + bias",
+    "scattered = reduce_scatter(out, dim=rs_scatter_dim)"
+  ],
+  "signature": {},
+  "config_template": {
+    "dim": "{SCATTER_DIM}",
+    "num_links": "{NUM_LINKS}",
+    "reduce_scatter_core_grid_offset": "({GRID_X_OFFSET}, {GRID_Y_OFFSET})",
+    "multi_device_global_semaphore": "{CCL_SEMAPHORE_HANDLE}",
+    "persistent_intermediate_buffer": "{PREALLOCATED_INTERMEDIATE_TENSOR}",
+    "persistent_output_buffer": "{PREALLOCATED_OUTPUT_TENSOR}",
+    "subdevice_id": "{WORKER_SUB_DEVICE_ID}",
+    "topology": "{RS_TOPOLOGY}"
+  },
+  "weight_transform": "Weight tensor passed unchanged from the standalone matmul (weight_tt); bias passed unchanged (bias_tt). No additional transform required for fusion.",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Fuses a matmul (with optional bias) with an async reduce_scatter CCL along the scatter dim, overlapping compute and communication. Requires preallocated persistent intermediate and output buffers, a multi-device global semaphore, and a disjoint core grid region (reduce_scatter_core_grid_offset) so matmul and CCL workers do not contend. golden_src is unregistered; torch-level pattern reconstructed from the unfused else-branch in the unit test (separate matmul then reduce_scatter_async).",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.matmul_reduce_scatter_async",
+      "tensor_role": "persistent_intermediate_buffer",
+      "size_descriptor": "full matmul output shape (pre-scatter), per device",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: persistent_intermediate_buffers[i] preallocated per mesh-device iteration before the fused call"
+    },
+    {
+      "op": "ttnn.experimental.matmul_reduce_scatter_async",
+      "tensor_role": "persistent_output_buffer",
+      "size_descriptor": "matmul output shape with dim {SCATTER_DIM} divided by num_devices",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: persistent_output_buffers[i] preallocated per mesh-device iteration before the fused call"
+    },
+    {
+      "op": "ttnn.experimental.matmul_reduce_scatter_async",
+      "tensor_role": "reduce_scatter_workers",
+      "size_descriptor": "any",
+      "memory_config": null,
+      "program_config": "reduce_scatter_core_grid_offset=(0, 6) \u2014 CCL workers placed starting at row 6, disjoint from matmul compute grid",
+      "condition": null,
+      "source": "test: reduce_scatter_core_grid_offset=(0, 6) in fused call"
+    }
+  ]
+}

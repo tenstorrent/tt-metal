@@ -1,0 +1,44 @@
+{
+  "id": "ttnn_where",
+  "fused_op": "ttnn.where",
+  "category": "eltwise_ternary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.where(input_tensor_a, input_tensor_b, input_tensor_c)",
+  "signature": {},
+  "config_template": {
+    "input_shapes": [
+      "{COND_SHAPE}",
+      "{TRUE_SHAPE}",
+      "{FALSE_SHAPE}"
+    ],
+    "broadcast": "elementwise_with_broadcast",
+    "dtype": "{DTYPE}",
+    "layout": "TILE_LAYOUT",
+    "output_tensor": "optional_preallocated"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Ternary elementwise select. Condition tensor is treated as boolean (nonzero == True); tests pass (x > 0) or .bool() as condition. Supports scalar true/false values (see call site: ttnn.where(pad_mask, ADDITIVE_MASKED_VALUE, ADDITIVE_UNMASKED_VALUE) implementing an additive attention mask, equivalent to torch.where(mask, masked_val, unmasked_val)). Common fusion neighbor: ttnn.gt producing the condition (masked_fill idiom: torch.where(mask > 0, masked_value, scores)). Supports optional output_tensor= for in-place-style writes.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_ternary.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_ternary_composite.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_ternary_sharding.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_where.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.where",
+      "tensor_role": "condition (mask)",
+      "size_descriptor": "[batch, 1, seq_len, seq_len] attention mask, seq_len % 128 == 0",
+      "memory_config": null,
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: masked_positions = ttnn.gt(expanded_mask, 0); if masked_positions.memory_config() != target_memcfg: masked_positions = ttnn.to_memory_config(masked_positions, target_memcfg) \u2014 condition tensor is explicitly converted to match the attention_scores memory config (target_memcfg) before ttnn.where, i.e. all where() operands must share the same memory config at this call site; concrete buffer/shard spec is runtime-determined."
+    }
+  ]
+}

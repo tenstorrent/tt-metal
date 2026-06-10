@@ -1,0 +1,42 @@
+{
+  "id": "ttnn_silu_1",
+  "fused_op": "ttnn.silu",
+  "category": "eltwise_unary_activation",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch_silu = torch.nn.SiLU(); torch_result = torch_silu(input)",
+  "signature": {},
+  "config_template": {
+    "memory_config": "{MEMORY_CONFIG}",
+    "layout_requirement": "TILE_LAYOUT",
+    "notes": "torch.nn.SiLU module form; identical lowering to functional form"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "ttnn_replacement: ttnn.silu(input_tensor, memory_config={MEMORY_CONFIG})",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_examplerst.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_silu.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_silu_row_major.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.silu",
+      "tensor_role": "input/output activation (sharded)",
+      "size_descriptor": "[batch_size, input_height, input_width, input_channels] NHWC feature map",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "in_sharded_mem_config (same shard spec as input)"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: output_tensor = ttnn.silu(input_tensor, memory_config=in_sharded_mem_config); output moved back via ttnn.to_memory_config(output_tensor, ttnn.L1_MEMORY_CONFIG)"
+    }
+  ]
+}

@@ -1,0 +1,233 @@
+{
+  "id": "ttnn_linear",
+  "fused_op": "ttnn.linear",
+  "category": "matmul",
+  "pattern_kind": "chain",
+  "torch_pattern": "output_tensor = input_tensor_a @ input_tensor_b.to(input_tensor_a.dtype)\nif bias is not None:\n    output_tensor += bias",
+  "signature": {},
+  "config_template": {
+    "call": "ttnn.linear(x, weight, bias={BIAS}, memory_config={MEM_CONFIG}, dtype={DTYPE}, program_config={PROGRAM_CONFIG}, core_grid=ttnn.CoreGrid(y={GRID_Y}, x={GRID_X}), compute_kernel_config={COMPUTE_KERNEL_CONFIG})",
+    "notes": "program_config and core_grid are mutually exclusive (core_grid passed only 'if not pc'). For long sequences reshape input to [1, {SEQ}//{MAX_MM_SEQ_LEN}, {MAX_MM_SEQ_LEN}, -1] before the matmul and back to [1, 1, {SEQ}, -1] after; MAX_MM_SEQ_LEN observed as 1024 or 2048."
+  },
+  "weight_transform": "torch nn.Linear weight [out_features, in_features] must be transposed to [in_features, out_features] (and optionally reshaped to rank-4 [1,1,K,N]) before ttnn.from_torch, since ttnn.linear computes x @ W. Evidence: `state['weight'].transpose_(0, 1)` and `w_torch.transpose(-2, -1).unsqueeze(0).unsqueeze(0)` in call sites; golden does `input_tensor_a @ input_tensor_b`.",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_sharded.py",
+    "tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_experimental.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_linear.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_matmul.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_matmul_batch_mismatch.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_matmul_deepseek.py",
+    "tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py",
+    "tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "linear",
+      "tensor_role": "output",
+      "size_descriptor": "router logits, tokens <= 128 (decode regime)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "actual_tokens",
+        "op": "<=",
+        "value": 128
+      },
+      "source": "MoE router call site: `is_decode = actual_tokens <= 128; mem_config = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG`"
+    },
+    {
+      "op": "linear",
+      "tensor_role": "output",
+      "size_descriptor": "router logits, tokens > 128 (prefill regime, large sequences)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "actual_tokens",
+        "op": ">",
+        "value": 128
+      },
+      "source": "MoE router call site: L1 for decode (small tensors), DRAM for prefill (large sequences)"
+    },
+    {
+      "op": "linear",
+      "tensor_role": "output",
+      "size_descriptor": "decode-mode QKV projection, M=32 (one tile of users), N=fused qkv dim",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "WIDTH_SHARDED",
+        "shard_spec_template": "ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG"
+      },
+      "program_config": "model_config['XQKV_DECODE_PROGCFG'] (DRAM-sharded matmul program config)",
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "decode"
+      },
+      "source": "llama attention decode: xqkv_fused_sharded = ttnn.linear(x, self.wqkv, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG, program_config=XQKV_DECODE_PROGCFG, compute_kernel_config=hifi2)"
+    },
+    {
+      "op": "linear",
+      "tensor_role": "weight",
+      "size_descriptor": "decode-mode projection weights (wqkv/wo/gate/up/down), K x N per device",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "WIDTH_SHARDED",
+        "shard_spec_template": "DRAM-sharded across banks (e.g. self.wqkv_dram_sharded, self.gate_proj_dram_sharded)"
+      },
+      "program_config": "_decode_*_dramshard_progcfg (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig)",
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "decode"
+      },
+      "source": "decode paths select *_dram_sharded weight variants with dramshard program configs; prefill paths use interleaved weights"
+    },
+    {
+      "op": "linear",
+      "tensor_role": "output",
+      "size_descriptor": "prefill QKV/WO/MLP projections, seq_len >= 1024 (input reshaped to chunks of 1024/2048)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "model_config['XQKV_PREFILL_PROGCFG'](seq_len) / 'WO_PREFILL_PROGCFG'(seq_len) \u2014 seq-len parameterized",
+      "condition": {
+        "var": "seq_len",
+        "op": ">",
+        "value": 1024
+      },
+      "source": "llama prefill: `if seq_len > 1024: x_11SH = ttnn.reshape(x_11SH, [1, seq_len // 1024, 1024, -1])` then ttnn.linear(..., memory_config=ttnn.DRAM_MEMORY_CONFIG, program_config=...PREFILL_PROGCFG(seq_len))"
+    },
+    {
+      "op": "linear",
+      "tensor_role": "input",
+      "size_descriptor": "prefill sequence longer than max matmul seq",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "model_config['IMAGE_ATTN_QKV_PROGCFG'](seq_len, MAX_MM_SEQ_LEN)",
+      "condition": {
+        "var": "seq_len",
+        "op": ">",
+        "value": "MAX_MM_SEQ_LEN"
+      },
+      "source": "vision attention: input reshaped [1, seq_len//MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1] before linear, output reshaped back after"
+    },
+    {
+      "op": "linear",
+      "tensor_role": "input/output",
+      "size_descriptor": "ViT/BERT encoder activations, batch<=12, seq~196-384, hidden 768-1024",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "BLOCK_SHARDED",
+        "shard_spec_template": "ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG, resharded between 48/64/120/144-core grids between ops"
+      },
+      "program_config": "config.program_configs['query_key_value_matmul_program_config' | 'self_output_matmul_program_config' | 'ff1_matmul_program_config' | 'ff2_matmul_program_config']",
+      "condition": null,
+      "source": "ViT/BERT call sites: ttnn.linear(..., memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, program_config=config.program_configs[...])"
+    },
+    {
+      "op": "linear",
+      "tensor_role": "weight",
+      "size_descriptor": "lm_head weight per device [7168, 4040], bfloat8_b",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "lm_head docstring: 'Weight dtype: bfloat8_b, Weight memory: DRAM INTERLEAVED'"
+    },
+    {
+      "op": "linear",
+      "tensor_role": "input/output",
+      "size_descriptor": "lm_head activations, decode (seq=1..32) vs prefill (long seq)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "decode"
+      },
+      "source": "lm_head docstring: 'Decode input/output: L1 INTERLEAVED, Prefill input/output: DRAM INTERLEAVED'"
+    },
+    {
+      "op": "linear",
+      "tensor_role": "input",
+      "size_descriptor": "matmul choice by sequence length: ttnn.linear preferred for short seq",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "short_lens_pc_1_3 / WO_PREFILL_PROGCFG(seq_len)",
+      "condition": {
+        "var": "seq_len",
+        "op": "<",
+        "value": 4096
+      },
+      "source": "mistral MLP/attention: 'For shorter sequence lengths use the original matmul since it performs better than the minimal matmul' \u2014 `if seq_len < 4096 or batch_size > 1: ttnn.linear(...)` else minimal_matmul"
+    },
+    {
+      "op": "linear",
+      "tensor_role": "input",
+      "size_descriptor": "transformer block in-projection with C in {768, 1280, 1536} channels (shard grid mismatch)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "self.program_config_in",
+      "condition": {
+        "var": "C",
+        "op": "in",
+        "value": [
+          768,
+          1280,
+          1536
+        ]
+      },
+      "source": "SD transformer: 'For 1280 channels shard layout will be over 64 cores, but MM runs on 40' \u2014 hidden_states moved to ttnn.L1_MEMORY_CONFIG before linear"
+    },
+    {
+      "op": "linear",
+      "tensor_role": "output",
+      "size_descriptor": "segformer attention key/value at very long seq",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "seq_len",
+        "op": "==",
+        "value": 16384
+      },
+      "source": "segformer: `if seq_len == 16384: key = ttnn.to_memory_config(key, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)` after sharded linear output"
+    }
+  ]
+}

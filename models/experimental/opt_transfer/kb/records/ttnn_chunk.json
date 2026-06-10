@@ -1,0 +1,42 @@
+{
+  "id": "ttnn_chunk",
+  "fused_op": "ttnn.chunk",
+  "category": "data_movement/split",
+  "pattern_kind": "horizontal_merge",
+  "torch_pattern": "out_0 = input[..., 0*({D}//{N}):1*({D}//{N})]; out_1 = input[..., 1*({D}//{N}):2*({D}//{N})]; ...; out_{N-1} = input[..., ({N}-1)*({D}//{N}):{N}*({D}//{N})]  # equivalently: outs = torch.chunk(input, {N}, dim={DIM})",
+  "signature": {},
+  "config_template": {
+    "chunks": "{N}",
+    "dim": "{DIM}",
+    "constraints": "shape[{DIM}] % {N} == 0; observed N in {2, 6}; observed {DIM} in {-1, 2, -2}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "fusion_notes: Frequently followed by elementwise consumers per-branch: silu(gate) * t (swiglu), (1 + scale) * norm(x) + shift (AdaLN modulation), typecast of gate branches to bfloat16. The chunk itself is a view-style split; downstream fusion candidates are silu-mul and dynamic-weight layernorm.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "llm",
+  "confidence": "low",
+  "unit_test_refs": [],
+  "placement_observations": [
+    {
+      "op": "ttnn.chunk",
+      "tensor_role": "input (timestep/modulation embedding, e.g. temb_11BD / shifted_temb_1BTD / scale_shift_1BSD)",
+      "size_descriptor": "small modulation tensor: shape ~ (1, B, T<=6, D) or (1, 1, B, D); last-dim split into 2 or 6 chunks",
+      "memory_config": null,
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: wan2.2/transformer-block AdaLN modulation paths (no explicit memory_config passed; tensor produced by linear/silu on temb, default interleaved placement)"
+    },
+    {
+      "op": "ttnn.chunk",
+      "tensor_role": "input (activation tensor t in swiglu MLP)",
+      "size_descriptor": "large activation: (..., seq, 2*hidden); split into 2 along dim=-1",
+      "memory_config": null,
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: activation dispatch (activation_fn == 'swiglu'); no explicit memory_config at call site"
+    }
+  ]
+}

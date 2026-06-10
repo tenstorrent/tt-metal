@@ -1,0 +1,70 @@
+{
+  "id": "ttnn_eq",
+  "fused_op": "ttnn.eq",
+  "category": "eltwise_binary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.eq(input_tensor_a, input_tensor_b)",
+  "signature": {},
+  "config_template": {
+    "dtype": "{DTYPE}",
+    "memory_config": "{MEMORY_CONFIG}",
+    "layout": "ttnn.TILE_LAYOUT"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Elementwise binary equality comparison. Supports tensor-tensor and tensor-scalar comparison (see call sites: ttnn.eq(input_ids, pad_token_id), ttnn.eq(attention_mask, 0)). Used in models to build padding masks from input_ids or HF-convention attention masks (1=keep, 0=pad). Output is boolean-like (1/0) in same dtype family. Tests exercise uint16/uint32 exact-match comparison after fill/add/sub/square ops.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_binary_eq_int.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_uint32.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_fill.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_math.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_uint32.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_where.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.eq",
+      "tensor_role": "input_a",
+      "size_descriptor": "small test tensors (1D vectors of 6-8 elements, [1,2] shapes)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG); comparison_result = ttnn.eq(output_tensor, torch_output_tensor)"
+    },
+    {
+      "op": "ttnn.eq",
+      "tensor_role": "input_b",
+      "size_descriptor": "same shape as input_a (elementwise comparison reference tensor)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: torch_output converted via ttnn.from_torch with TILE_LAYOUT, DRAM_MEMORY_CONFIG before ttnn.eq"
+    },
+    {
+      "op": "ttnn.eq",
+      "tensor_role": "input_a",
+      "size_descriptor": "token-id / attention-mask tensor [B, S] (sequence-length dependent)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: pad_mask = ttnn.eq(input_ids, self.pad_token_id) and pad_mask = ttnn.eq(attention_mask, 0); inputs inherit default interleaved placement, no explicit memory_config passed"
+    }
+  ]
+}

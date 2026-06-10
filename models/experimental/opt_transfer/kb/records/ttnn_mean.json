@@ -1,0 +1,84 @@
+{
+  "id": "ttnn_mean",
+  "fused_op": "ttnn.mean",
+  "category": "reduction",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.mean(input_tensor, dim=dim, keepdim=keepdim)",
+  "signature": {},
+  "config_template": {
+    "dim": "{DIM}",
+    "keepdim": "{KEEPDIM}",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Reduction over given dim(s); dim=None reduces all dims (golden expands to all dims when keepdim=True). Common appearances: variance term of RMSNorm (mean(pow(x,2), dim=-1, keepdim=True)), sequence pooling (dim=1 or dim=-2, keepdim=True), and statistics pooling (mean + mean(centered^2)). Input may be ROW_MAJOR or TILE; tile-padded inputs need ttnn.fill_implicit_tile_padding to neutralize padding before reducing.; ttnn_replacement: ttnn.mean(input_tensor, dim={DIM}, keepdim={KEEPDIM})",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/reduce/test_reduction.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_reduction_mean.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.mean",
+      "tensor_role": "input",
+      "size_descriptor": "[B, S, H] hidden states, reduced over last dim (RMSNorm variance)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "RMSNorm call site: inp = ttnn.sharded_to_interleaved(inp, ttnn.DRAM_MEMORY_CONFIG); xnorm = ttnn.mean(ttnn.pow(inp,2), dim=-1, keepdim=True) \u2014 sharded input converted to DRAM interleaved before reduction"
+    },
+    {
+      "op": "ttnn.mean",
+      "tensor_role": "output",
+      "size_descriptor": "[B, 1, C] pooled vector from large [B, L, C] activation (SE block, conv backbone)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "activation_size",
+        "op": ">",
+        "value": "L1_contention_threshold"
+      },
+      "source": "SE-block call site: y = ttnn.mean(x_nlc, dim=1, keepdim=True); y = ttnn.to_layout(y, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG) \u2014 comment: 'call hangs silently. DRAM is plentiful and removes the contention.'"
+    },
+    {
+      "op": "ttnn.mean",
+      "tensor_role": "output",
+      "size_descriptor": "[B, 1, C] pooled mean/std, small post-reduction tensors (statistics pooling)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "Statistics-pooling call site: mean = ttnn.mean(hidden_tt, dim=1, keepdim=True); centered = ttnn.subtract(hidden_tt, mean, memory_config=ttnn.L1_MEMORY_CONFIG); concat([mean, std], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG) \u2014 downstream consumers keep pooled outputs in L1"
+    },
+    {
+      "op": "ttnn.mean",
+      "tensor_role": "output",
+      "size_descriptor": "[B, 1, H] pooled sequence output feeding classifier linear",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "Classifier call site: sequence_output = ttnn.mean(sequence_output, dim=1, keepdim=True); logits = ttnn.linear(..., memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=8, x=12), dtype=ttnn.bfloat8_b)"
+    }
+  ]
+}

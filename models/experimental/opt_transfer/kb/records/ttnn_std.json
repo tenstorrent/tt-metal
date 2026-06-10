@@ -1,0 +1,46 @@
+{
+  "id": "ttnn_std",
+  "fused_op": "ttnn.std",
+  "category": "reduction",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.std(input_tensor, dim={DIM}, keepdim={KEEPDIM})",
+  "signature": {},
+  "config_template": {
+    "dim": "{DIM}",
+    "keepdim": "{KEEPDIM}",
+    "correction": "{CORRECTION:optional,default=1}",
+    "use_legacy": "{USE_LEGACY:optional}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Single-op mapping torch.std -> ttnn.std. In SDXL guidance-rescale call sites, two independent ttnn.std calls (on noise_pred_text_orig and noise_pred) feed a div; they have distinct inputs so they are NOT a horizontal_merge candidate, but the downstream std/std -> div -> mul sequence is a fusion-chain opportunity at graph level.; ttnn_replacement: ttnn.std(input_tensor, dim={DIM}, keepdim={KEEPDIM}); constraints: {'dim_none_behavior': 'reduces over all dimensions; with keepdim=True all dims must be passed explicitly to torch', 'input_layout': 'ROW_MAJOR_LAYOUT and TILE_LAYOUT both observed in tests', 'dtype': 'bfloat16 observed in tests', 'multi_dim_reduction': 'dim may be a list/tuple of dims, e.g. [1, 2, 3] for per-batch reduction on 4D activations'}",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/reduce/test_reduction.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.std",
+      "tensor_role": "input",
+      "size_descriptor": "4D activation [B, C, H, W] (diffusion noise_pred), reduced over dims [1,2,3] with keepdim=True",
+      "memory_config": null,
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: SD/SDXL guidance rescale loop (memory_config not explicitly specified, default inherited from producer)"
+    },
+    {
+      "op": "ttnn.std",
+      "tensor_role": "output",
+      "size_descriptor": "[B, 1, 1, 1] scalar-per-batch (keepdim=True over dims [1,2,3])",
+      "memory_config": null,
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: std_text/std_cfg consumed immediately by ttnn.div"
+    }
+  ]
+}

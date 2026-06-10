@@ -1,0 +1,28 @@
+{
+  "id": "ttnn_experimental_topk_router_gpt",
+  "fused_op": "ttnn.experimental.topk_router_gpt",
+  "category": "fused_moe_router",
+  "pattern_kind": "chain",
+  "torch_pattern": [
+    "logits = torch.nn.functional.linear(hidden_states, router_weight, router_bias)",
+    "topk_weights, topk_indices = torch.topk(logits, k={TOP_K}, dim=-1)",
+    "topk_weights = torch.softmax(topk_weights, dim=-1)"
+  ],
+  "signature": {},
+  "config_template": {
+    "k": "{TOP_K}",
+    "num_experts": "{NUM_EXPERTS}",
+    "dtype": "bfloat16",
+    "batch": "{B}"
+  },
+  "weight_transform": "torch router gate weight [num_experts, hidden_dim] must be laid out for ttnn linear (transpose to [hidden_dim, num_experts] and tilize); bias preallocated once as a persistent fused-op buffer (_init_fused_op) rather than per-call",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "constraints: ['input activations must be bfloat16 (caller typecasts and deallocates the temporary afterwards)', 'fused-op buffers (bias) must be initialized once before first call, keyed on device and batch size B']",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "call-site comment: 'Run fused matmul + topk + softmax' (no registered golden; pattern reconstructed only from in-repo call-site annotation)",
+  "confidence": "high",
+  "unit_test_refs": [],
+  "placement_observations": []
+}

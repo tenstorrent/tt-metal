@@ -1,0 +1,52 @@
+{
+  "id": "ttnn_softplus",
+  "fused_op": "ttnn.softplus",
+  "category": "eltwise_unary_activation",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.nn.functional.softplus(x, beta=beta, threshold=threshold)",
+  "signature": {},
+  "config_template": {
+    "beta": "{BETA}",
+    "threshold": "{THRESHOLD}",
+    "memory_config": "{OUTPUT_MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Unary eltwise op; defaults beta=1.0, threshold=20.0 match torch defaults. Golden function registered as torch.nn.functional.softplus. Fusable into preceding eltwise chains as a UnaryWithParam activation.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_eltwise_softplus_inf.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.softplus",
+      "tensor_role": "output",
+      "size_descriptor": "activation tensor (Mamba delta_t, shape [1, 1, B*L, d_inner]-class activation)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: delta_t2 = ttnn.softplus(delta_t1, beta=1.0, threshold=20.0, memory_config=ttnn.L1_MEMORY_CONFIG) with immediate deallocate of input (Mamba SSM block)"
+    },
+    {
+      "op": "ttnn.softplus",
+      "tensor_role": "input",
+      "size_descriptor": "activation tensor produced by preceding eltwise op, deallocated immediately after use",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: delta_t1 produced with dtype=configs['dtype']['activations'], consumed by softplus then ttnn.deallocate(delta_t1)"
+    }
+  ]
+}

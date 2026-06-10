@@ -1,0 +1,65 @@
+{
+  "id": "ttnn_neg",
+  "fused_op": "ttnn.neg",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.neg(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "memory_config": "{MEMORY_CONFIG}",
+    "output_dtype": "{DTYPE}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Unary elementwise negation. Golden registered as torch.neg. Supports bfloat16, float32, int32. Commonly appears in rotary embedding _rotate_half: ttnn.concat([ttnn.neg(x2), x1], dim=-1), where it replaces the torch subsequence 'torch.cat((-x2, x1), dim=-1)'. Fusable as a unary in eltwise chains (e.g. as a UnaryWithParam activation on preceding matmul/binary ops).",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_sharding.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.neg",
+      "tensor_role": "input",
+      "size_descriptor": "[1, 1, 64, 512] (small, single tile-row regime)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "{GRID} x [{SHARD_H}, {SHARD_W}] (input_shard_config; input sharded on one grid)"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test_unary_reshard: ttnn.neg(ttnn_input, memory_config=output_memory_config) with sharded input and resharded output on a different grid"
+    },
+    {
+      "op": "ttnn.neg",
+      "tensor_role": "output",
+      "size_descriptor": "[1, 1, 64, 512] (small, single tile-row regime)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "{OUT_GRID} x [{SHARD_H}, {SHARD_W}] (output_memory_config; output sharded on a different grid than input \u2014 op performs implicit reshard)"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test_unary_reshard"
+    },
+    {
+      "op": "ttnn.neg",
+      "tensor_role": "input",
+      "size_descriptor": "head_dim/2 slice of rotary input (x[..., d/2:])",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site _rotate_half: ttnn.concat([ttnn.neg(x2), x1], dim=-1) \u2014 no explicit memory_config, inherits interleaved default from sliced input"
+    }
+  ]
+}

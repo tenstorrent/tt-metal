@@ -1,0 +1,26 @@
+{
+  "id": "ttnn_gtz",
+  "fused_op": "ttnn.gtz",
+  "category": "eltwise_unary_comparison",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.gt(input_tensor, 0)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "[{N}, {C}, {H}, {W}]",
+    "memory_config": "{MEMORY_CONFIG}",
+    "output_tensor": "optional preallocated tensor of same shape",
+    "queue_id": "{CQ_ID}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Unary elementwise 'greater than zero' comparison. Replaces a torch comparison-against-zero-constant subsequence (torch.gt(x, 0) / x > 0). Output is boolean-like (0/1) in the tensor dtype. Supports preallocated output_tensor and command-queue id. Fusable into unary op chains via unary_with_param activation fusion where supported.; ttnn_replacement: ttnn.gtz(input_tensor, output_tensor=output_tensor, queue_id=cq_id)",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py"
+  ],
+  "placement_observations": []
+}

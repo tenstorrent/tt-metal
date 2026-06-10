@@ -1,0 +1,68 @@
+{
+  "id": "ttnn_scale_mask_softmax",
+  "fused_op": "ttnn.scale_mask_softmax",
+  "category": "fused_softmax",
+  "pattern_kind": "chain",
+  "torch_pattern": "input_tensor = input_tensor * scalar\nif attention_mask is not None:\n    input_tensor = input_tensor + attention_mask\noutput = torch.softmax(input_tensor, dim=-1)",
+  "signature": {},
+  "config_template": {
+    "scale": "{SCALE_FLOAT_OR_NONE}",
+    "mask": "{ATTENTION_MASK_TENSOR_OR_NONE}",
+    "compute_kernel_config": "{COMPUTE_KERNEL_CONFIG}",
+    "numeric_stable": "{BOOL}",
+    "is_causal_mask": "{BOOL}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "fusion_notes: Fuses pre-softmax scaling (e.g. 1/sqrt(head_dim)) and additive attention-mask application into a single softmax kernel. scale and mask are both optional: scale=None skips the multiply, mask=None skips the add, degenerating to plain softmax(dim=-1). Softmax dim must be the last dim. numeric_stable=True enables max-subtraction stabilization.; constraints: {'softmax_dim': -1, 'input_layout': 'TILE_LAYOUT', 'mask_dtypes_observed': ['bfloat16', 'float32'], 'mask_must_be_broadcastable_to_input': True}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/fused/test_softmax.py",
+    "tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.scale_mask_softmax",
+      "tensor_role": "input",
+      "size_descriptor": "attention_scores [batch, heads, seq_q, seq_k]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device) default interleaved DRAM"
+    },
+    {
+      "op": "ttnn.scale_mask_softmax",
+      "tensor_role": "mask",
+      "size_descriptor": "attention_mask broadcastable to scores",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: tt_mask_dram = ttnn.from_torch(..., memory_config=ttnn.DRAM_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.scale_mask_softmax",
+      "tensor_role": "mask",
+      "size_descriptor": "attention_mask broadcastable to scores",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: tt_mask_l1 = ttnn.from_torch(..., memory_config=ttnn.L1_MEMORY_CONFIG); both DRAM and L1 mask placements accepted (each compiles a separate program cache entry)"
+    }
+  ]
+}

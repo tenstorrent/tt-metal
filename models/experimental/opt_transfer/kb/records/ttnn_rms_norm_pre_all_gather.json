@@ -1,0 +1,78 @@
+{
+  "id": "ttnn_rms_norm_pre_all_gather",
+  "fused_op": "ttnn.rms_norm_pre_all_gather",
+  "category": "normalization_distributed",
+  "pattern_kind": "chain",
+  "torch_pattern": "stats = x.pow(2).sum(dim=-1, keepdim=True)",
+  "signature": {},
+  "config_template": {
+    "dtype": "ttnn.bfloat16",
+    "compute_kernel_config": "{COMPUTE_KERNEL_CONFIG}",
+    "program_config": "ttnn.LayerNormShardedMultiCoreProgramConfig(compute_with_storage_grid_size=({GRID_X},{GRID_Y}), subblock_w={SUBBLOCK_W}, block_h={SEQ_TILES}, block_w={HIDDEN_TILES_PER_CORE}, inplace=False) if input_sharded else None",
+    "use_2d_core_grid": "{USE_2D_GRID:optional}",
+    "output_shape": "(1, 1, {SEQ}, 32)"
+  },
+  "weight_transform": "none (stateless; gamma/eps consumed by rms_norm_post_all_gather)",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/ccl/fusion_subtests/rms_test.py",
+    "tests/ttnn/unit_tests/operations/fused/distributed_norm_test_utils.py",
+    "tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm.py",
+    "tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_sharded.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.rms_norm_pre_all_gather",
+      "tensor_role": "input",
+      "size_descriptor": "decode-shape activations (1,1,batch,hidden/num_devices), small seq",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "WIDTH_SHARDED",
+        "shard_spec_template": "core_grid=CoreGrid(y={GRID_Y},x={GRID_X}), strategy=WIDTH, orientation=ROW_MAJOR"
+      },
+      "program_config": "SHARDED_NORM_PRGM_CFG / ln_sharded_progcfg (LayerNormShardedMultiCoreProgramConfig, inplace=False)",
+      "condition": {
+        "var": "input_sharded",
+        "op": "==",
+        "value": true
+      },
+      "source": "test compute_pre_allgather_stats; model ln_sharded_input_memcfg call site; sharded_rmsnorm decode path with CoreGrid(y=1,x=1)"
+    },
+    {
+      "op": "ttnn.rms_norm_pre_all_gather",
+      "tensor_role": "input",
+      "size_descriptor": "prefill activations (1,1,seq,hidden/num_devices), large seq",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "None (compute_kernel_config only); asserts 'Distributed RMSNorm does not support sharded inputs'",
+      "condition": {
+        "var": "input_sharded",
+        "op": "==",
+        "value": false
+      },
+      "source": "tt_distributed_rmsnorm call sites with compute_kernel_config=LN_COMPUTE_KERNEL_CONFIG, dtype=bfloat16"
+    },
+    {
+      "op": "ttnn.rms_norm_pre_all_gather",
+      "tensor_role": "output",
+      "size_descriptor": "stats tensor (1,1,seq,32) tile-padded, tiny",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "downstream all_gather(tt_stats, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG) and reshape to (1,1,seq,32) at call sites"
+    }
+  ]
+}

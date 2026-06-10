@@ -1,0 +1,53 @@
+{
+  "id": "ttnn_erfinv",
+  "fused_op": "ttnn.erfinv",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.erfinv(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "{DIM}",
+    "queue_id": 0,
+    "output_tensor": "optional preallocated tensor of same shape {DIM}",
+    "memory_config": "ttnn.DRAM_MEMORY_CONFIG"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "ttnn_replacement: ttnn.erfinv(input_tensor, output_tensor=output_tensor, queue_id=cq_id); constraints: {'input_range_note': 'torch.erfinv is defined on (-1, 1); values outside produce nan/inf. Test exercises inputs in [-10, 10] against golden torch.erfinv.', 'layout': 'TILE_LAYOUT', 'elementwise': True, 'shape_preserving': True}; fusion_notes: Pure elementwise unary; eligible for unary op-chain fusion and as a fused activation epilogue on producer ops where supported.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.erfinv",
+      "tensor_role": "input",
+      "size_descriptor": "generic test shapes (parametrized input_shapes)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: data_gen_with_range(input_shapes, -10, 10, device) \u2014 default interleaved DRAM placement, no explicit memory_config at call site"
+    },
+    {
+      "op": "ttnn.erfinv",
+      "tensor_role": "output",
+      "size_descriptor": "same shape as input",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: preallocated output_tensor passed via output_tensor= kwarg, default interleaved DRAM"
+    }
+  ]
+}

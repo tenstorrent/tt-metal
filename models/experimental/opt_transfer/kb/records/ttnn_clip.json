@@ -1,0 +1,27 @@
+{
+  "id": "ttnn_clip",
+  "fused_op": "ttnn.clip",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.clip(input_tensor_a, min, max)",
+  "signature": {},
+  "config_template": {
+    "min": "{MIN_VAL}",
+    "max": "{MAX_VAL}",
+    "constraints": "At least one of min/max must be non-None; raises RuntimeError if both are None",
+    "operand_modes": "min/max may be scalars or tensors (tensor min/max supported per test: ttnn.clip(input_tensor1, min_tensor, max_tensor))",
+    "input_shape": "{N, C, H, W} or generic {DIM...} tile-layout tensor"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_source: golden; ttnn_replacement: ttnn.clip(input_tensor, min, max); fusion_notes: Unary eltwise clamp; fusable as activation epilogue on preceding compute op (e.g. conv/matmul output clamped to a range). Model call site uses it as final audio-range clamp x = ttnn.clip(x, -1.0, 1.0) following conv + reshape.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_composite.py"
+  ],
+  "placement_observations": []
+}

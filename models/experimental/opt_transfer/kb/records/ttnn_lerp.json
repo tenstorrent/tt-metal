@@ -1,0 +1,27 @@
+{
+  "id": "ttnn_lerp",
+  "fused_op": "ttnn.lerp",
+  "category": "eltwise_ternary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.lerp(input_tensor_a, input_tensor_b.to(input_tensor_a.dtype), input_tensor_c)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "{SHAPE}",
+    "weight": "{SCALAR_OR_TENSOR}",
+    "dtype": "{DTYPE}",
+    "layout": "TILE_LAYOUT",
+    "memory_config": "{MEM_CONFIG}"
+  },
+  "weight_transform": "identity; weight may be a python scalar or a tensor \u2014 if tensor, it is cast to input_tensor_a.dtype (weight.to(input_a.dtype)); end tensor is cast to input_a.dtype",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Used in diffusion classifier-free guidance: combined = ttnn.lerp(uncond, cond, guidance_scale) replaces uncond + guidance_scale * (cond - uncond). Supports both scalar-weight overload and full tensor-weight ternary form.; ttnn_replacement: ttnn.lerp(input_tensor_a, input_tensor_b, weight); constraints: ['all tensor operands must share broadcastable shapes', 'tensor weight is cast to input_a dtype before interpolation', 'accuracy validated to within 2 ULP against torch.lerp']",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_ternary_composite.py"
+  ],
+  "placement_observations": []
+}

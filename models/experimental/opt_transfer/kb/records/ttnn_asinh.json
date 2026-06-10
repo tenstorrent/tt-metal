@@ -1,0 +1,40 @@
+{
+  "id": "ttnn_asinh",
+  "fused_op": "ttnn.asinh",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.asinh(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "{DIM}",
+    "dtype": "{DTYPE}",
+    "layout": "ttnn.TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Composite unary op (no fast_and_approximate_mode, no float parameter). Registered golden is torch.asinh. Validated in tests over uniform input range [-100, 100] with pcc >= 0.9999.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.asinh",
+      "tensor_role": "input",
+      "size_descriptor": "any (test sweeps parametrized input_shapes)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test_unary_asinh_ttnn: ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT, device=device) with default memory_config (DRAM interleaved)"
+    }
+  ]
+}

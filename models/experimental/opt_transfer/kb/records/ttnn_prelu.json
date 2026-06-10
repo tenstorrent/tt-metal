@@ -1,0 +1,54 @@
+{
+  "id": "ttnn_prelu",
+  "fused_op": "ttnn.prelu",
+  "category": "eltwise_binary_activation",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.nn.functional.prelu(input_tensor_a, weight=input_tensor_b)",
+  "signature": {},
+  "config_template": {
+    "input_a_shape": "{N}x{C}x{H}x{W}",
+    "weight": "scalar | tensor[{C}] | broadcastable tensor",
+    "layout": "TILE_LAYOUT",
+    "dtype": "{DTYPE}",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": "If torch weight is a Python scalar, pass directly as second arg. If torch nn.PReLU module, extract module.weight (shape [C] or [1]) and pass as 1-D weight; convert via ttnn.from_torch(weight, layout=ttnn.TILE_LAYOUT, device=device) when passing as tensor. No transposition or repacking required.",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_notes: Equivalent decomposition replaced by single op: torch.where(x >= 0, x, weight * x). Weight may be a scalar, a 1-D per-channel tensor, or broadcastable tensor; golden coerces non-tensor weight via torch.tensor(weight, dtype=input.dtype).; ttnn_replacement: ttnn.prelu(input_tensor_a, input_tensor_b); constraints: {'dtype_tested': ['bfloat16'], 'value_range_tested': '[-100, 100]', 'pcc_threshold': 0.999, 'weight_forms': ['tensor', 'scalar', '1D per-channel list']}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_composite.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.prelu",
+      "tensor_role": "input_a",
+      "size_descriptor": "test shapes (parametrized), bfloat16",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(in_data1, layout=ttnn.TILE_LAYOUT, device=device) with default (DRAM interleaved) memory config"
+    },
+    {
+      "op": "ttnn.prelu",
+      "tensor_role": "input_b (weight)",
+      "size_descriptor": "same shape as input_a, or scalar, or 1-D [C]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(in_data2, layout=ttnn.TILE_LAYOUT, device=device) with default (DRAM interleaved) memory config; scalar/list variants passed host-side"
+    }
+  ]
+}

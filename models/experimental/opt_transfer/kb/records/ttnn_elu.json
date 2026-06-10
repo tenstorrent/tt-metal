@@ -1,0 +1,65 @@
+{
+  "id": "ttnn_elu",
+  "fused_op": "ttnn.elu",
+  "category": "eltwise_unary_activation",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.nn.functional.elu(input_tensor_a, alpha=alpha)",
+  "signature": {},
+  "config_template": {
+    "alpha": "{ALPHA:default=1.0}",
+    "memory_config": "{MEMORY_CONFIG:default=input.memory_config()}",
+    "layout": "TILE_LAYOUT"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "ttnn_replacement: ttnn.elu(input_tensor, alpha=alpha); constraints: {'layout': 'TILE_LAYOUT required', 'elementwise': True, 'shape_preserving': True}; fusion_notes: Unary eltwise op; fusable into preceding matmul/conv via activation fusion or chainable with other unary ops. In observed call site it sits between to_layout(TILE) and max_pool1d, consuming a reshaped (batch, out_length, channels) tensor.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_elu.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.elu",
+      "tensor_role": "input",
+      "size_descriptor": "small_test_tensor",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test"
+    },
+    {
+      "op": "ttnn.elu",
+      "tensor_role": "input",
+      "size_descriptor": "(batch, out_length, channels) post-reshape activation",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model_call_site (tensor staged to DRAM_MEMORY_CONFIG then self.output_memory_config before to_layout(TILE) and elu)"
+    },
+    {
+      "op": "ttnn.elu",
+      "tensor_role": "output",
+      "size_descriptor": "(batch, out_length, channels)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model_call_site (output fed directly into max_pool1d, inherits input memory_config)"
+    }
+  ]
+}

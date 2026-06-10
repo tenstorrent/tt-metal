@@ -1,0 +1,53 @@
+{
+  "id": "ttnn_experimental_dropout",
+  "fused_op": "ttnn.experimental.dropout",
+  "category": "eltwise_unary_regularization",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.nn.functional.dropout(x, p=prob, training=True)",
+  "signature": {},
+  "config_template": {
+    "probability": "{P}",
+    "scale": "1.0 / (1.0 - {P})",
+    "seed": "{SEED}",
+    "output_tensor": "optional; pass input tensor for in-place execution"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Stochastic op: per-call seed must vary across invocations (test increments seed each call). Supports in-place via output_tensor=input. Variance of realized drop ratio is high; only mean tracks probability (rtol~0.02 over 1000 trials). No golden registered; not bit-matchable against torch due to RNG differences.; torch_pattern_source: derived from unit test semantics: output zeroes fraction `prob` of elements (mean zero-ratio asserted ~= prob) and applies scale=1.0/(1.0-prob), matching F.dropout train-mode behavior",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/data_movement/test_dropout.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.dropout",
+      "tensor_role": "input",
+      "size_descriptor": "small (1,1,32,64), tile-aligned",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(t, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) with default (DRAM interleaved) memory config"
+    },
+    {
+      "op": "ttnn.experimental.dropout",
+      "tensor_role": "output",
+      "size_descriptor": "same as input (1,1,32,64)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: output_tensor=tensor (in-place) \u2014 output aliases input buffer/placement"
+    }
+  ]
+}

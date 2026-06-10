@@ -1,0 +1,49 @@
+{
+  "id": "ttnn_matmul_3",
+  "fused_op": "ttnn.matmul",
+  "category": "linear_algebra/matmul_fused_activation",
+  "pattern_kind": "chain",
+  "torch_pattern": "output_tensor = input_tensor_a @ input_tensor_b\noutput_tensor = get_golden_function_for_activation(activation)(output_tensor)",
+  "signature": {},
+  "config_template": {
+    "call": "ttnn.matmul(input_tensor_a, input_tensor_b, activation={ACTIVATION}, memory_config={MEM_CFG}, dtype={DTYPE})  # or program_config with fused_activation=ttnn.UnaryOpType.{ACTIVATION}",
+    "shape_constraints": "a: [..., {M}, {K}], b: [..., {K}, {N}]",
+    "notes": "fuses a contiguous matmul -> unary-activation chain (silu/gelu/relu) into a single matmul; observed: fused_activation=ttnn.UnaryOpType.SILU in dram_matmul_config, activation='gelu_approx' in falcon MLP"
+  },
+  "weight_transform": "identity",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_deepseek_mla_ops.py",
+    "tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/test_fused_demo.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_experimental.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_matmul.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_matmul_deepseek.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_ring_matmul.py",
+    "tests/ttnn/unit_tests/operations/prefetcher_common.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "matmul",
+      "tensor_role": "output",
+      "size_descriptor": "decode MLP gate proj with fused SILU: M=1(padded), K=4096, N=14336",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "WIDTH_SHARDED",
+        "shard_spec_template": "width-sharded over 8 cores"
+      },
+      "program_config": "dram_matmul_config(1, 4096, 14336, num_cores=8, fused_activation=ttnn.UnaryOpType.SILU)",
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "decode"
+      },
+      "source": "llama MLP decode w1_out matmul with fused SILU"
+    }
+  ]
+}

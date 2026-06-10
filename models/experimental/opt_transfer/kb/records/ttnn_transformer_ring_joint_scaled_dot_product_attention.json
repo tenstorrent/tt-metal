@@ -1,0 +1,78 @@
+{
+  "id": "ttnn_transformer_ring_joint_scaled_dot_product_attention",
+  "fused_op": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+  "category": "attention",
+  "pattern_kind": "chain",
+  "torch_pattern": "K_full = all_gather(K, dim=2, mesh_axis={SP_AXIS}); V_full = all_gather(V, dim=2, mesh_axis={SP_AXIS}); Q_cat = torch.cat([Q, joint_Q], dim=2); K_cat = torch.cat([K_full, joint_K], dim=2); V_cat = torch.cat([V_full, joint_V], dim=2); out = torch.nn.functional.scaled_dot_product_attention(Q_cat, K_cat, V_cat, attn_mask=None, is_causal=False); spatial_out = out[..., :{N}, :]; joint_out = out[..., {N}:, :]",
+  "signature": {},
+  "config_template": {
+    "joint_strategy": "rear",
+    "persistent_output_buffer_k": "ccl_manager.get_ag_ping_pong_buffer(K.shape, 2, {SP_MESH_AXIS})",
+    "persistent_output_buffer_v": "ccl_manager.get_ag_ping_pong_buffer(V.shape, 2, {SP_MESH_AXIS})",
+    "logical_n": "{N_GLOBAL_SEQ}",
+    "dim": 2,
+    "cluster_axis": "{SP_MESH_AXIS}",
+    "ring_size": "{SP_FACTOR}",
+    "program_config": "ttnn.SDPAProgramConfig(compute_with_storage_grid_size={GRID}, q_chunk_size={Q_CHUNK}, k_chunk_size={K_CHUNK})",
+    "compute_kernel_config": "ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=False, packer_l1_acc=False)",
+    "use_column_major_ccl": "{OPTIONAL_BOOL}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "llm",
+  "confidence": "low",
+  "unit_test_refs": [],
+  "placement_observations": [
+    {
+      "op": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "tensor_role": "persistent_output_buffer_k",
+      "size_descriptor": "K.shape gathered along seq dim across SP ring (factor x N_local)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "parallel_config.sequence_parallel.factor",
+        "op": ">",
+        "value": 1
+      },
+      "source": "persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis)"
+    },
+    {
+      "op": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "tensor_role": "joint_q/joint_k/joint_v (dummy)",
+      "size_descriptor": "[1, n_local_heads, 0, head_dim] zero-length joint sequence",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT (matches q.layout)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "joint_seq_len",
+        "op": "==",
+        "value": 0
+      },
+      "source": "add_q = add_k = add_v = ttnn.zeros([1, self.n_local_heads, 0, self.head_dim], device=self.mesh_device, layout=q.layout, dtype=q.dtype); 'Using dummy joint tensors (joint_seq_len = 0)'"
+    },
+    {
+      "op": "ttnn.transformer.ring_joint_scaled_dot_product_attention",
+      "tensor_role": "ccl_workers",
+      "size_descriptor": "ring all-gather worker configuration for large spatial seq",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": "num_workers_per_link=5, num_buffers_per_channel=32",
+      "condition": null,
+      "source": "num_workers_per_link=5, num_buffers_per_channel=32 passed alongside ring_joint_scaled_dot_product_attention call site"
+    }
+  ]
+}

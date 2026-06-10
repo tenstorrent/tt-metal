@@ -1,0 +1,40 @@
+{
+  "id": "multiply",
+  "fused_op": "multiply_",
+  "category": "eltwise_binary_inplace",
+  "pattern_kind": "chain",
+  "torch_pattern": "output_tensor = input_tensor_a * input_tensor_b\noutput_tensor = apply_activations(output_tensor, activations)",
+  "signature": {},
+  "config_template": {
+    "input_a_shape": "{SHAPE_A}",
+    "input_b_shape": "{SHAPE_B}",
+    "broadcast": "{BCAST_DIM_OR_NONE}",
+    "activations": "{OPTIONAL_ACTIVATION_LIST}",
+    "in_place": true,
+    "output_aliases": "input_tensor_a"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "In-place elementwise multiply; first operand is overwritten with the product. Optional fused unary activations applied to the result (golden: apply_activations). Useful for fusing 'y = a * b; y = act(y)' chains where 'a' is dead after the multiply.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [],
+  "placement_observations": [
+    {
+      "op": "multiply_",
+      "tensor_role": "input_a (in-place destination, e.g. noise_pred / sigma_difference latents-shaped tensor)",
+      "size_descriptor": "latents-shaped activation tensor (diffusion denoising loop, per-submesh shard)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: SD/Flux pipeline scheduler step \u2014 ttnn.multiply_(noise_pred_list[submesh_id], sigma_difference_device[submesh_id]); no explicit memory_config passed, default interleaved DRAM; note 'This allocates during trace' comment indicates in-place op still allocates intermediates under trace capture"
+    }
+  ]
+}

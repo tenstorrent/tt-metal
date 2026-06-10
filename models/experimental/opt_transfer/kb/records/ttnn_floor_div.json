@@ -1,0 +1,27 @@
+{
+  "id": "ttnn_floor_div",
+  "fused_op": "ttnn.floor_div",
+  "category": "eltwise_binary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.floor_divide(input_tensor_a, input_tensor_b)",
+  "signature": {},
+  "config_template": {
+    "input_shape_a": "{SHAPE_A}",
+    "input_shape_b": "{SHAPE_B}",
+    "scalar_overload": "supported: ttnn.floor_div(tensor, float_scalar)",
+    "dtype": "{DTYPE}",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Binary elementwise floor division; replaces torch.floor_divide. Second operand may be a tensor of matching shape or a python scalar (overload). Composite op on device (div + floor).",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_composite.py"
+  ],
+  "placement_observations": []
+}

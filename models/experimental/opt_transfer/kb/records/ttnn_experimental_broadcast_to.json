@@ -1,0 +1,57 @@
+{
+  "id": "ttnn_experimental_broadcast_to",
+  "fused_op": "ttnn.experimental.broadcast_to",
+  "category": "data_movement/broadcast",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch_result = torch.broadcast_to(torch_input_tensor, broadcast_shape)",
+  "signature": {},
+  "config_template": {
+    "shape": "ttnn.Shape({BCAST_SHAPE})",
+    "memory_config": "{MEM_CONFIG}",
+    "output": "optional preallocated output tensor with shape {BCAST_SHAPE}, TILE_LAYOUT, same memory_config as input",
+    "constraints": {
+      "layout": "TILE_LAYOUT required",
+      "sharding": "sharded memory_config not supported (raises RuntimeError); input and output must be interleaved",
+      "rank": "input shape must be broadcastable to target shape per standard broadcasting rules; broadcasting along both H and W simultaneously supported (e.g. (1,1,1,1)->(1,13,270,270))"
+    }
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "ttnn_replacement: output = ttnn.experimental.broadcast_to(input_tensor, ttnn.Shape({BCAST_SHAPE}), memory_config={MEM_CONFIG})",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_broadcast_to.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.broadcast_to",
+      "tensor_role": "input",
+      "size_descriptor": "small-to-medium tiled tensors, e.g. (1,1,1,1) up to (1,13,270,270)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT, interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT, memory_config=memory_config_input); sharded memory_config raises RuntimeError"
+    },
+    {
+      "op": "ttnn.experimental.broadcast_to",
+      "tensor_role": "output",
+      "size_descriptor": "broadcast target shape, e.g. (7,10,32,32) or (1,13,270,270)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT, interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: output memory_config matches input memory_config (memory_config=memory_config_input); optional preallocated output tensor uses same interleaved config; sharded output config raises RuntimeError"
+    }
+  ]
+}

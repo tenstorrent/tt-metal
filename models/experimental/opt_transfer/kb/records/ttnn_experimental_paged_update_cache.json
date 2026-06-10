@@ -1,0 +1,85 @@
+{
+  "id": "ttnn_experimental_paged_update_cache",
+  "fused_op": "ttnn.experimental.paged_update_cache",
+  "category": "kv_cache_update",
+  "pattern_kind": "chain",
+  "torch_pattern": "for b in range(batch_size): cache[b, :, update_idxs[b], :] = x[:, b]  # in-place scatter of one decode-step K/V token into pre-allocated cache slot; with paging: cache[page_table[b, update_idxs[b] // block_size], :, update_idxs[b] % block_size, :] = x[:, b]",
+  "signature": {},
+  "config_template": {
+    "cache_shape": "[{MAX_BATCH} (or {NUM_BLOCKS} if paged), {N_KV_HEADS}, {MAX_SEQ_LEN} (or {BLOCK_SIZE} if paged), {HEAD_DIM}]",
+    "input_shape": "[{SEQ}=1, {BATCH}, {N_KV_HEADS}, {HEAD_DIM}]  # one decode token per user, layout 1BKD",
+    "update_idxs_tensor": "int32 tensor of shape [{BATCH}] holding per-user write positions (persistent device buffer, refreshed via copy_host_to_device_tensor to keep traces position-agnostic)",
+    "page_table": "optional int32 tensor [{BATCH}, {MAX_BLOCKS_PER_SEQ}]; pass None/omit for contiguous (non-paged) cache",
+    "mesh_coords": "optional set of ttnn.MeshCoordinate to restrict update to mesh rows (used with 2D-sharded caches)"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Decode-path KV-cache writer. Always appears as two sibling calls (K cache then V cache) immediately before scaled_dot_product_attention_decode / paged SDPA decode; the K+V pair can be merged into ttnn.experimental.paged_fused_update_cache when both inputs are available (see call sites guarded by 'if fused'). Trace-safe because position is read from update_idxs_tensor on device.; torch_pattern_source: test torch reference ('Torch reference implementation' block + from_paged_cache inverse mapping in unit tests); golden_src not registered; ttnn_replacement: ttnn.experimental.paged_update_cache(cache, x, update_idxs_tensor=update_idxs, page_table=page_table)",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_deepseek_mla_ops.py",
+    "tests/ttnn/unit_tests/operations/transformers/test_paged_cache_mask.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.paged_update_cache",
+      "tensor_role": "cache (in-place output)",
+      "size_descriptor": "persistent KV cache [max_batch or num_blocks, n_kv_heads, max_seq_len or block_size, head_dim], lifetime = whole generation",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE / interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: tt_cache created with memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0)"
+    },
+    {
+      "op": "ttnn.experimental.paged_update_cache",
+      "tensor_role": "input (new K/V token, x)",
+      "size_descriptor": "single decode step: [1, batch, n_kv_heads, head_dim] (1BKD)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE / HEIGHT_SHARDED",
+        "shard_spec_template": "batch-sharded across cores: shard = [{N_KV_HEADS_PADDED_TO_TILE}, {HEAD_DIM}] per user (q_sharded_mem / kv_mem_cfg / sdpa_batch_sharded_memcfg)"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call sites: 'tt_k = ttnn.to_memory_config(tt_k, q_sharded_mem)' and 'key_states = ttnn.interleaved_to_sharded(key_states, sdpa_batch_sharded_memcfg)' immediately before paged_update_cache"
+    },
+    {
+      "op": "ttnn.experimental.paged_update_cache",
+      "tensor_role": "update_idxs_tensor",
+      "size_descriptor": "tiny: [batch] int32 positions",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR / interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: created with dtype=ttnn.int32 on device; model docstring: 'persistent buffer that we copy_host_to_device_tensor into per step' to keep a single metal trace valid across positions"
+    },
+    {
+      "op": "ttnn.experimental.paged_update_cache",
+      "tensor_role": "page_table",
+      "size_descriptor": "tiny: [batch, max_blocks_per_seq] int32",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR / interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "paged_attention_enabled",
+        "op": "==",
+        "value": true
+      },
+      "source": "call sites: 'if page_table is not None: ttnn.experimental.paged_update_cache(..., page_table=page_table) else: ttnn.experimental.paged_update_cache(...)' \u2014 page_table only supplied when paged attention is enabled"
+    }
+  ]
+}

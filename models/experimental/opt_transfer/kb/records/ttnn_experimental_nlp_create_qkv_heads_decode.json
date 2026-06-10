@@ -1,0 +1,98 @@
+{
+  "id": "ttnn_experimental_nlp_create_qkv_heads_decode",
+  "fused_op": "ttnn.experimental.nlp_create_qkv_heads_decode",
+  "category": "attention_head_manipulation",
+  "pattern_kind": "horizontal_merge",
+  "torch_pattern": "q = proj_output[..., : head_dim * n_local_heads].view(seqlen, batch, n_local_heads, head_dim).permute(0, 2, 1, 3); k = proj_output[..., head_dim * n_local_heads : head_dim * (n_local_heads + n_local_kv_heads)].view(seqlen, batch, n_local_kv_heads, head_dim).permute(0, 2, 1, 3); v = proj_output[..., head_dim * (n_local_heads + n_local_kv_heads) :].view(seqlen, batch, n_local_kv_heads, head_dim).permute(0, 2, 1, 3)",
+  "signature": {},
+  "config_template": {
+    "num_heads": "{N_LOCAL_HEADS}",
+    "num_kv_heads": "{N_LOCAL_KV_HEADS}",
+    "overlap_qk_coregrid": "{OVERLAP_QK_COREGRID:optional}",
+    "batch_offset": "{BATCH_OFFSET:optional}",
+    "slice_size": "{SLICE_SIZE:optional}",
+    "memory_config": "ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_notes: Three sibling branches (slice -> view -> permute) over a single fused QKV projection output [seqlen=1, 1, batch, (n_q + 2*n_kv)*head_dim]; merged into one op producing Q [1, batch, n_local_heads, head_dim], K and V [1, batch, n_local_kv_heads, head_dim].; constraints: {'mode': 'decode', 'seq_len': 1, 'input_shape': '[1, 1, {BATCH}, ({N_LOCAL_HEADS} + 2*{N_LOCAL_KV_HEADS}) * {HEAD_DIM}]', 'input_layout': 'TILE, sharded fused QKV projection output', 'gqa': 'num_kv_heads may be < num_heads; kv_replicated tensor-parallel setups use num_kv_heads=1 per device'}",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_nlp_create_qkv_heads_decode.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.nlp_create_qkv_heads_decode",
+      "tensor_role": "output_q",
+      "size_descriptor": "decode, seq_len=1, shape [1, {BATCH<=32}, {N_LOCAL_HEADS}, {HEAD_DIM}]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "one head (or batch-slice) per core, shard [{PADDED_BATCH=32}, {HEAD_DIM}]"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG (llama/falcon attention decode)"
+    },
+    {
+      "op": "ttnn.experimental.nlp_create_qkv_heads_decode",
+      "tensor_role": "output_k",
+      "size_descriptor": "decode, seq_len=1, shape [1, {BATCH<=32}, {N_LOCAL_KV_HEADS}, {HEAD_DIM}]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "one head (or batch-slice) per core, shard [{PADDED_BATCH=32}, {HEAD_DIM}]"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG"
+    },
+    {
+      "op": "ttnn.experimental.nlp_create_qkv_heads_decode",
+      "tensor_role": "output_v",
+      "size_descriptor": "decode, seq_len=1, shape [1, {BATCH<=32}, {N_LOCAL_KV_HEADS}, {HEAD_DIM}]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "one head (or batch-slice) per core, shard [{PADDED_BATCH=32}, {HEAD_DIM}]"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG"
+    },
+    {
+      "op": "ttnn.experimental.nlp_create_qkv_heads_decode",
+      "tensor_role": "outputs_qkv",
+      "size_descriptor": "decode with non-overlapping Q/K core grids (overlap_qk_coregrid=False) or batch slicing via batch_offset/slice_size",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "model-specific CREATE_HEAD_OUTPUT_MEMCFG / get_attn_create_head_output_mem_config(Mode.DECODE, prefetcher)"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "decode"
+      },
+      "source": "test: memory_config=CREATE_HEAD_OUTPUT_MEMCFG with overlap_qk_coregrid/batch_offset/slice_size; call_site: self.args.get_attn_create_head_output_mem_config(Mode.DECODE, self.prefetcher)"
+    },
+    {
+      "op": "ttnn.experimental.nlp_create_qkv_heads_decode",
+      "tensor_role": "input",
+      "size_descriptor": "fused QKV projection output, decode seq_len=1, width ({N_LOCAL_HEADS}+2*{N_LOCAL_KV_HEADS})*{HEAD_DIM}; deallocated immediately after the op",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE (sharded matmul output)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: xqkv_fused / fused_query_key_value deallocated right after head creation"
+    }
+  ]
+}

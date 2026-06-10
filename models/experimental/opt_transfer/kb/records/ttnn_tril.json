@@ -1,0 +1,36 @@
+{
+  "id": "ttnn_tril",
+  "fused_op": "ttnn.tril",
+  "category": "elementwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.tril(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "[{N}, {C}, {H}, {W}]",
+    "diagonal": 0,
+    "dtype": "{DTYPE}",
+    "layout": "TILE_LAYOUT"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Unary composite op that zeroes elements above the main diagonal (lower-triangular mask). Golden is torch.tril applied directly to the input tensor. Common usage: building causal attention masks, e.g. ttnn.expand to [B,1,S,S] followed by ttnn.tril, then (mask - 1.0) * inf \u2014 making it a candidate for fusion into causal-mask construction chains (expand -> tril -> sub -> mul).",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_composite.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.tril",
+      "tensor_role": "input (attention_mask)",
+      "size_descriptor": "[batch_size, 1, seq_len, seq_len] causal attention mask, expanded from [batch_size, 1, 1, seq_len]",
+      "memory_config": null,
+      "program_config": null,
+      "condition": null,
+      "source": "qwen2_5_vl attention mask construction call site: attention_mask = ttnn.expand(attention_mask, [-1, -1, seq_len, -1]); attention_mask = ttnn.tril(attention_mask); output later cloned to bfloat4_b \u2014 memory_config not explicitly specified at call site"
+    }
+  ]
+}

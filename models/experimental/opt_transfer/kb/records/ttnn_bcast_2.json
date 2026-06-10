@@ -1,0 +1,41 @@
+{
+  "id": "ttnn_bcast_2",
+  "fused_op": "ttnn.bcast",
+  "category": "eltwise_binary_broadcast",
+  "pattern_kind": "chain",
+  "torch_pattern": "res = in0 * in1",
+  "signature": {},
+  "config_template": {
+    "math_op": "ttnn.BcastOpMath.MUL",
+    "dim": "ttnn.BcastOpDim.{DIM}",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": "reshape broadcast operand (in1, e.g. layernorm gamma or scalar scale tensor) to bcast-compatible shape for the chosen BcastOpDim and convert to TILE_LAYOUT",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Broadcast multiply along H, W, or HW. Used for attention score scaling (BcastOpDim.HW with scalar scale, followed by softmax_in_place) and for layernorm gamma application (BcastOpDim.H).",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_add.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.bcast",
+      "tensor_role": "output",
+      "size_descriptor": "attention_scores [B, heads, seq, seq]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "inherits attention_scores.memory_config(); consumed in-place by softmax_in_place with softmax_program_config"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "attention call site: memory_config=attention_scores.memory_config(); used on non-causal fallback path (else-branch of fused scale-mask-softmax)"
+    }
+  ]
+}

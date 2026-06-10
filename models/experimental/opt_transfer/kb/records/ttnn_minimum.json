@@ -1,0 +1,66 @@
+{
+  "id": "ttnn_minimum",
+  "fused_op": "ttnn.minimum",
+  "category": "eltwise_binary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.minimum(input_tensor_a, input_tensor_b)",
+  "signature": {},
+  "config_template": {
+    "memory_config": "{MEMORY_CONFIG}",
+    "dtype": "{DTYPE}",
+    "layout": "ttnn.TILE_LAYOUT"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Elementwise binary minimum; second operand may be a tensor or a scalar (tests exercise scalar variants including int32 extremes -2147483648..2147483647). Supports broadcasting per torch.minimum semantics.; ttnn_replacement: ttnn.minimum(input_tensor_a, input_tensor_b)",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_minimum.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_minimum.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.minimum",
+      "tensor_role": "input_a",
+      "size_descriptor": "small-to-medium 4D activations, e.g. [1,1,32,32], [1,2,64,120], [1,3,320,320]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test_examples: tt_in created with layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG"
+    },
+    {
+      "op": "ttnn.minimum",
+      "tensor_role": "input_b",
+      "size_descriptor": "scalar (python int/float), incl. int32 boundary values",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test_examples: ttnn.minimum(tt_in, scalar); scalar parametrized [-2, 0, 10, 2147483647, -2147483648]"
+    },
+    {
+      "op": "ttnn.minimum",
+      "tensor_role": "output",
+      "size_descriptor": "same shape as input_a",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test_examples: default output memory config inherited from DRAM interleaved inputs"
+    }
+  ]
+}

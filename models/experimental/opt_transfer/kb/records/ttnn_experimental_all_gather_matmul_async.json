@@ -1,0 +1,80 @@
+{
+  "id": "ttnn_experimental_all_gather_matmul_async",
+  "fused_op": "ttnn.experimental.all_gather_matmul_async",
+  "category": "ccl_fused_matmul",
+  "pattern_kind": "chain",
+  "torch_pattern": "gathered = torch.cat(torch.distributed.all_gather(x), dim=3); out = torch.matmul(gathered, wo)",
+  "signature": {},
+  "config_template": {
+    "input_tensor": "{ACTIVATION}",
+    "weight_tensor": "{WO_WEIGHT}",
+    "persistent_output_buffer": null,
+    "dim": 3,
+    "multi_device_global_semaphore": "{AG_SEMAPHORE_HANDLES}",
+    "all_gather_core_grid_offset": [
+      0,
+      4
+    ],
+    "barrier_semaphore": "{BARRIER_SEMAPHORE_HANDLE}",
+    "num_links": "{NUM_LINKS}",
+    "memory_config_ag": "{AG_OUTPUT_MEMCFG}"
+  },
+  "weight_transform": "none; dense projection weight (wo) consumed as-is in pre-sharded ttnn layout, identical to the standalone matmul weight",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "constraints: {'topology': 'Ring only (fused AGMM invalid for Linear topology)', 'excluded_when': 'prefetcher is not None'}",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "llm",
+  "confidence": "low",
+  "unit_test_refs": [],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.all_gather_matmul_async",
+      "tensor_role": "input_activation (attn_output_cat)",
+      "size_descriptor": "decode-mode attention output, per-device width fraction [1, 1, {BATCH}, {HIDDEN}/{NUM_DEVICES}]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "WIDTH_SHARDED",
+        "shard_spec_template": "model_config['ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG'] (input re-sharded via ttnn.to_memory_config to AG output memcfg before call)"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "ccl_topology",
+        "op": "==",
+        "value": "ttnn.Topology.Ring"
+      },
+      "source": "model call site: attn_output_cat = ttnn.to_memory_config(attn_output_cat, model_config['ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG']) immediately before all_gather_matmul_async"
+    },
+    {
+      "op": "ttnn.experimental.all_gather_matmul_async",
+      "tensor_role": "all_gather_intermediate_output (memory_config_ag)",
+      "size_descriptor": "fully gathered activation [1, 1, {BATCH}, {HIDDEN}], decode mode",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "WIDTH_SHARDED",
+        "shard_spec_template": "args.get_attn_all_gather_output_mem_config(Mode.DECODE, None) / model_config['ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG']"
+      },
+      "program_config": "ATTN_AGMM_CONFIG (num_links from model_config['ATTN_AGMM_CONFIG']['num_links']; all_gather_core_grid_offset=(0,4))",
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "decode"
+      },
+      "source": "model call site: memory_config_ag=self.args.get_attn_all_gather_output_mem_config(Mode.DECODE, None)"
+    },
+    {
+      "op": "ttnn.experimental.all_gather_matmul_async",
+      "tensor_role": "matmul_output (dense_out_sharded)",
+      "size_descriptor": "decode-mode dense projection output [1, 1, {BATCH}, {HIDDEN_OUT}]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "SHARDED",
+        "shard_spec_template": "sharded output (variable named dense_out_sharded), exact memcfg not visible at call site"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: _, dense_out_sharded = ttnn.experimental.all_gather_matmul_async(...)"
+    }
+  ]
+}

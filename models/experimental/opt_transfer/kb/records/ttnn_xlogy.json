@@ -1,0 +1,30 @@
+{
+  "id": "ttnn_xlogy",
+  "fused_op": "ttnn.xlogy",
+  "category": "eltwise_binary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.xlogy(input_tensor_a, input_tensor_b)",
+  "signature": {},
+  "config_template": {
+    "input_shape_a": "{DIM}",
+    "input_shape_b": "{DIM}",
+    "dtype": "{DTYPE}",
+    "use_legacy": "{USE_LEGACY}",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": {
+    "golden": "_golden_function_xlogy -> torch.xlogy(input_tensor_a, input_tensor_b)",
+    "test": "test_binary_xlogy_ttnn"
+  },
+  "usage_examples": [],
+  "applicability_notes": "constraints: {'broadcasting': 'shapes of input_tensor_a and input_tensor_b must be identical or broadcastable', 'value_range_tested': 'a in [-100, 100], b in [-150, 150]'}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_fp32.py"
+  ],
+  "placement_observations": []
+}

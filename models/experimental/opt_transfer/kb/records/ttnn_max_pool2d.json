@@ -1,0 +1,92 @@
+{
+  "id": "ttnn_max_pool2d",
+  "fused_op": "ttnn.max_pool2d",
+  "category": "pooling",
+  "pattern_kind": "chain",
+  "torch_pattern": "input_nchw, torch_padding = prepare_torch_pool_input(input_tensor, batch_size, input_h, input_w, channels, padding, pad_fill_value=float(\"-inf\"))\noutput_tensor, indices = torch.nn.functional.max_pool2d(input_nchw, kernel_size=kernel_size, stride=stride, padding=torch_padding, dilation=dilation, ceil_mode=ceil_mode, return_indices=True)\noutput_tensor = pool_output_to_flat_nhwc(output_tensor)",
+  "signature": {},
+  "config_template": {
+    "input_tensor": "{INPUT}  # flattened NHWC tensor of shape (1, 1, N*H*W, C), ROW_MAJOR layout",
+    "batch_size": "{N}",
+    "input_h": "{H}",
+    "input_w": "{W}",
+    "channels": "{C}",
+    "kernel_size": "[{KH}, {KW}]",
+    "stride": "[{SH}, {SW}]",
+    "padding": "[{PH}, {PW}]",
+    "dilation": "[{DH}, {DW}]",
+    "ceil_mode": "{CEIL_MODE}",
+    "preamble": [
+      "x = ttnn.permute(x, (0, 2, 3, 1))  # NCHW -> NHWC",
+      "x = ttnn.reshape(x, (1, 1, {N}*{H}*{W}, {C}))  # flatten to (1,1,NHW,C)",
+      "x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)"
+    ],
+    "output_shape": "(1, 1, {N}*{OH}*{OW}, {C})  # OH = floor/ceil((H + 2*PH - DH*(KH-1) - 1)/SH + 1)"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Operates on channels-last flattened (1,1,N*H*W,C) ROW_MAJOR input, unlike torch NCHW. Padding may be symmetric [ph,pw] or explicit 4-list [top,bottom,left,right]; torch golden pads with -inf for asymmetric cases. Supports return_indices (indices returned in flat NHWC). A 3D max-pool can be decomposed into two chained max_pool2d calls (spatial HxW pool with batch=N*D, then depth pool with kernel [k,1] over (D, OH*OW)), as seen in call sites.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/data_movement/test_core.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_reduction.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.max_pool2d",
+      "tensor_role": "input",
+      "size_descriptor": "(1, 1, N*H*W, C) flattened NHWC activation",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: ttnn.from_torch(input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device) -> ttnn.max_pool2d (default interleaved DRAM)"
+    },
+    {
+      "op": "ttnn.max_pool2d",
+      "tensor_role": "input",
+      "size_descriptor": "(N, C, H, W) intermediate, converted before pooling",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: tt_x = ttnn.to_layout(tt_x, ttnn.ROW_MAJOR_LAYOUT); ttact_d = ttnn.to_device(tt_x, device); ttnn.max_pool2d(input_tensor=ttact_d, ...)"
+    },
+    {
+      "op": "ttnn.max_pool2d",
+      "tensor_role": "input",
+      "size_descriptor": "(1, 1, N*H*W, conv1_output_channels) activation following first conv in ResNet-style stem",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR",
+        "shard_spec_template": "HEIGHT_SHARDED (input_sharded_memory_config; commented re-shard at call site, tensor produced sharded by preceding conv)"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: x = ttnn.reallocate(x_rm); # x = ttnn.to_memory_config(x, self.max_pool.max_pool.input_sharded_memory_config); ttnn.max_pool2d(input_tensor=x, kernel_size=[3,3], stride=[2,2], padding=[1,1])"
+    },
+    {
+      "op": "ttnn.max_pool2d",
+      "tensor_role": "input",
+      "size_descriptor": "(1, 1, N*OH*OW, C) output of conv1, consumed directly without re-spilling",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR",
+        "shard_spec_template": "inherits sharded memory config from preceding conv2d output"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: x1, out_ht, out_wdth = self.conv1(x); ttnn.deallocate(x); x1 = ttnn.max_pool2d(x1, ...)"
+    }
+  ]
+}

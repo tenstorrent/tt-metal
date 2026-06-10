@@ -1,0 +1,62 @@
+{
+  "id": "ttnn_matmul_4",
+  "fused_op": "ttnn.matmul",
+  "category": "linear_algebra/matmul_horizontal_merge",
+  "pattern_kind": "horizontal_merge",
+  "torch_pattern": "w1_out = x @ w1\nw3_out = x @ w3",
+  "signature": {},
+  "config_template": {
+    "call": "fused_out = ttnn.matmul(x, w_fused, memory_config={MEM_CFG}, dtype={DTYPE}, program_config={PROGRAM_CONFIG}); branch_i = slice(fused_out, dim=-1, [{N_i_START}:{N_i_END}])",
+    "shape_constraints": "N sibling matmuls sharing input x: [..., {M}, {K}]; fused weight: [{K}, sum({N_i})]",
+    "notes": "observed instances: fused QKV (wq|wk|wv -> wqkv, split via nlp_create_qkv_heads / split_query_key_value_and_split_heads) and fused gate+up (w1|w3 -> w1_w3_fused, split along last dim)"
+  },
+  "weight_transform": "w_fused = torch.cat([w_branch_0, ..., w_branch_{N-1}], dim=-1); biases concatenated likewise; output split along last dim at branch boundaries",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_deepseek_mla_ops.py",
+    "tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/test_fused_demo.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_experimental.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_matmul.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_matmul_deepseek.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_ring_matmul.py",
+    "tests/ttnn/unit_tests/operations/prefetcher_common.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "matmul",
+      "tensor_role": "output",
+      "size_descriptor": "fused QKV decode: [1, 1, 32, qkv_dim]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "WIDTH_SHARDED (ring)",
+        "shard_spec_template": "model_config['SHARDED_QKV_OUT_RING_MEMCFG']"
+      },
+      "program_config": "model_config['XQKV_DECODE_RING_PROGCFG']",
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "decode"
+      },
+      "source": "llama TG attention: xqkv_fused_sharded = ttnn.matmul(x, self.wqkv, program_config=XQKV_DECODE_RING_PROGCFG, memory_config=SHARDED_QKV_OUT_RING_MEMCFG, dtype=ttnn.bfloat16)"
+    },
+    {
+      "op": "matmul",
+      "tensor_role": "output",
+      "size_descriptor": "MoE fused gate+up: [1, E, total_tokens, 2*intermediate_size]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "program_config.get_gate_up_config(n=w1_w3_fused.shape[-1], m=total_tokens)",
+      "condition": null,
+      "source": "gpt-oss MoE: w1_w3_out = ttnn.matmul(experts_input, weights.w1_w3_fused, memory_config=memory_config); split along last dim into gate/up"
+    }
+  ]
+}

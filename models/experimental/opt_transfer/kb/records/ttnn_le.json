@@ -1,0 +1,26 @@
+{
+  "id": "ttnn_le",
+  "fused_op": "ttnn.le_",
+  "category": "eltwise_binary_inplace",
+  "pattern_kind": "chain",
+  "torch_pattern": "input_tensor_a.le_(input_tensor_b)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "[{N}, {C}, {H}, {W}]",
+    "dtype": "{DTYPE}",
+    "layout": "TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "In-place elementwise less-than-or-equal comparison. Mutates the first tensor; downstream consumers of the original first tensor must be rewired to the mutated value. Validated with compare_equal in unit tests (exact 0/1 mask match). Supports tensor-tensor and tensor-scalar forms.; ttnn_replacement: ttnn.le_(input_tensor_a, input_tensor_b); constraints: {'in_place': True, 'output_aliases_input': 'input_tensor_a', 'second_operand': 'tensor of same shape or scalar', 'broadcasting': 'second operand may be a python scalar', 'output_dtype_note': 'result written into input_tensor_a as 0/1 mask values'}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_composite.py"
+  ],
+  "placement_observations": []
+}

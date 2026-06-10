@@ -1,0 +1,178 @@
+{
+  "id": "ttnn_typecast",
+  "fused_op": "ttnn.typecast",
+  "category": "eltwise_unary_dtype_cast",
+  "pattern_kind": "chain",
+  "torch_pattern": "def _golden_function(tensor, *args, **kwargs):\n    return tensor",
+  "signature": {},
+  "config_template": {
+    "dtype": "{TARGET_DTYPE}",
+    "memory_config": "{MEMORY_CONFIG}",
+    "queue_id": "{QUEUE_ID}"
+  },
+  "weight_transform": "none (activation-only op); when applied to weights at load time (e.g. weight_to_bfp8), it converts weight tensor dtype in-place: w = ttnn.typecast(w, ttnn.bfloat8_b)",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "constraints: ['Input must be interleaved; sharded memory configs are not supported (tests explicitly convert sharded->interleaved via ttnn.to_memory_config before typecast)', 'Typically requires TILE_LAYOUT; call sites convert ROW_MAJOR indices to TILE before typecast to avoid alignment issues, then back', 'Common fusion neighbors: precedes rotary_embedding (requires bf16), SDPA (bf8_b inputs), fill_cache/paged_fill_cache (cast to cache dtype), all_gather (cast to bfp8 to halve CCL bandwidth)', \"Frequently guarded by 'if x.dtype != target_dtype' \u2014 elide when dtypes already match\"]",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_binary_eq_int.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_eltwise_typecast.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_math.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_typecast_int.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.typecast",
+      "tensor_role": "input",
+      "size_descriptor": "any (e.g. [3,128,32] eltwise outputs in unit tests)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: 'Since typecast does not support sharded config, we can convert the sharded tensor to interleaved'; output_tensor = ttnn.to_memory_config(output_tensor_sharded, ttnn.DRAM_MEMORY_CONFIG); ttnn.typecast(output_tensor, dtype=ttnn.uint32)"
+    },
+    {
+      "op": "ttnn.experimental.typecast",
+      "tensor_role": "output",
+      "size_descriptor": "KV heads prefill activations [1, n_kv_heads, seq_len, head_dim]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "falcon attention: ttnn.experimental.typecast(key_layer, self.model_config['KV_CACHE_DTYPE'], memory_config=ttnn.DRAM_MEMORY_CONFIG) feeding ttnn.fill_cache"
+    },
+    {
+      "op": "ttnn.typecast",
+      "tensor_role": "output",
+      "size_descriptor": "K/V prefill states [bsz, nh, seq_len, head_dim] before slice_write into cache",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "k_bf8 = ttnn.typecast(key_states, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG); v_bf8 = ttnn.typecast(value_states, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.experimental.typecast",
+      "tensor_role": "output",
+      "size_descriptor": "replicated hidden states [1, 1, seq, hidden] before all_gather_async (cast to BFP8 to reduce CCL bandwidth)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "input.dtype",
+        "op": "!=",
+        "value": "model_config['BFP8_DTYPE']"
+      },
+      "source": "if replicated_hidden_states.dtype != self.model_config['BFP8_DTYPE']: replicated_hidden_states = ttnn.experimental.typecast(replicated_hidden_states, self.model_config['BFP8_DTYPE'], memory_config=ttnn.DRAM_MEMORY_CONFIG) followed by ttnn.experimental.all_gather_async"
+    },
+    {
+      "op": "ttnn.typecast",
+      "tensor_role": "output",
+      "size_descriptor": "K/V heads prefill [1, n_kv_heads, seq_len, head_dim] cast to bfloat8_b/cache dtype before fill_cache; subsequently sharded only when seq_len large",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "seq_len",
+        "op": ">=",
+        "value": "min_kv_prefill_shard_seqlen"
+      },
+      "source": "k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=keys_BKSD.dtype); if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table: k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD_8b, self.args.get_attn_kv_prefill_mem_config(seq_len))"
+    },
+    {
+      "op": "ttnn.typecast",
+      "tensor_role": "output",
+      "size_descriptor": "Q heads prefill [1, n_heads, seq_len, head_dim] cast to bfloat8_b before SDPA",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=self.activation_dtype or ttnn.bfloat8_b) feeding ttnn.transformer.(chunked_)scaled_dot_product_attention"
+    },
+    {
+      "op": "ttnn.typecast",
+      "tensor_role": "input",
+      "size_descriptor": "Q/K heads pre-rotary [1, heads, seq_len, head_dim]; rotary_embedding_llama requires bfloat16 inputs",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "input.dtype",
+        "op": "!=",
+        "value": "ttnn.bfloat16"
+      },
+      "source": "if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16: q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16) before ttnn.experimental.rotary_embedding_llama"
+    },
+    {
+      "op": "ttnn.typecast",
+      "tensor_role": "output",
+      "size_descriptor": "attention output summed over experts [1, 1, M, H] cast to bfloat8_b before all_reduce",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "tt_sum = ttnn.typecast(tt_sum, ttnn.bfloat8_b); tt_output = ttnn.all_reduce(tt_sum, ..., memory_config=ttnn.L1_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.typecast",
+      "tensor_role": "output",
+      "size_descriptor": "attention masks [B, heads, q_len, k_len] cast to bfloat4_b for memory savings, replicated across mesh",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "tt_xattn_mask = ttnn.to_layout(tt_xattn_mask, ttnn.TILE_LAYOUT); tt_xattn_mask = ttnn.typecast(tt_xattn_mask, ttnn.bfloat4_b) (mask tensor created with memory_config=ttnn.DRAM_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.typecast",
+      "tensor_role": "input",
+      "size_descriptor": "topk indices [B*S, topk] \u2014 cast must occur in TILE_LAYOUT to avoid alignment issues, then convert to ROW_MAJOR for dispatch",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "indices.dtype",
+        "op": "!=",
+        "value": "ttnn.int32"
+      },
+      "source": "comment: 'Typecast in TILE_LAYOUT to avoid alignment issues, then convert to ROW_MAJOR'; indices = ttnn.to_layout(indices, ttnn.TILE_LAYOUT); indices = ttnn.typecast(indices, ttnn.int32); indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)"
+    }
+  ]
+}

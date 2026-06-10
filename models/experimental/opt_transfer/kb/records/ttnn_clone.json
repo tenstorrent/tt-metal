@@ -1,0 +1,100 @@
+{
+  "id": "ttnn_clone",
+  "fused_op": "ttnn.clone",
+  "category": "data_movement",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.ops.aten.clone(torch_input)",
+  "signature": {},
+  "config_template": {
+    "dtype": "{DTYPE}",
+    "memory_config": "{MEMORY_CONFIG}",
+    "compute_kernel_config": "{COMPUTE_KERNEL_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "constraints: ['ttnn.clone does not work with L1 sharded tensors; input must be converted to interleaved (e.g., via ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)) before cloning', 'For interleaved->interleaved memory location changes, clone allocates a new buffer (vs ttnn.move which reuses)']",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/data_movement/test_clone.py",
+    "tests/ttnn/unit_tests/operations/fused/test_batch_norm.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.clone",
+      "tensor_role": "input",
+      "size_descriptor": "any",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "input.is_sharded",
+        "op": "==",
+        "value": false
+      },
+      "source": "call_site: 'ttnn.clone doesn't work with L1 sharded tensors' \u2014 noise_pred_text converted via ttnn.to_memory_config(noise_pred_text, ttnn.L1_MEMORY_CONFIG) before ttnn.clone"
+    },
+    {
+      "op": "ttnn.clone",
+      "tensor_role": "output",
+      "size_descriptor": "decoder sample [batch, H, W, C] pre-reshape",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: sample = ttnn.clone(sample, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16) after ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.clone",
+      "tensor_role": "output",
+      "size_descriptor": "hidden_states (replicated, full hidden dim)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: replicated_hidden_states = ttnn.clone(hidden_states, memory_config=self.model_config['DEFAULT_MEMCFG']); followed by typecast to BFP8 with ttnn.DRAM_MEMORY_CONFIG"
+    },
+    {
+      "op": "ttnn.clone",
+      "tensor_role": "output",
+      "size_descriptor": "attention_mask [seq, seq] causal mask",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: return ttnn.clone(attention_mask, dtype=ttnn.bfloat4_b) \u2014 dtype-compression clone of causal mask built via tril + affine ops"
+    },
+    {
+      "op": "ttnn.clone",
+      "tensor_role": "output",
+      "size_descriptor": "interleaved tensor, memory-location migration",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "output_memory_layout.is_sharded",
+        "op": "==",
+        "value": false
+      },
+      "source": "call_site: interleaved-to-interleaved with different memory location: tensor = ttnn.clone(tensor, memory_config=output_memory_layout) (clone path) vs ttnn.move; sharded cases go through sharded_to_interleaved/interleaved_to_sharded instead"
+    }
+  ]
+}

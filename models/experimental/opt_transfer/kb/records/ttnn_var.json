@@ -1,0 +1,27 @@
+{
+  "id": "ttnn_var",
+  "fused_op": "ttnn.var",
+  "category": "reduction",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.var(input_tensor, dim=dim, keepdim=keepdim)",
+  "signature": {},
+  "config_template": {
+    "dim": "{DIM}",
+    "keepdim": "{KEEPDIM}",
+    "correction": "{CORRECTION}",
+    "use_legacy": "{USE_LEGACY}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Variance reduction along dim(s). When dim is None, reduces over all dimensions (golden expands to all dims when keepdim=True). Supports correction parameter matching torch.var semantics. Tests exercise both ROW_MAJOR_LAYOUT and TILE_LAYOUT inputs.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/reduce/test_reduction.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py"
+  ],
+  "placement_observations": []
+}

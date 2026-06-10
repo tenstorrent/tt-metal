@@ -1,0 +1,25 @@
+{
+  "id": "ttnn_gez",
+  "fused_op": "ttnn.gez",
+  "category": "eltwise_unary_comparison",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.ge(input, 0)",
+  "signature": {},
+  "config_template": {
+    "queue_id": 0,
+    "memory_config": "{MEMORY_CONFIG}",
+    "output_tensor": "{OPTIONAL_PREALLOCATED_OUTPUT}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Unary zero-comparison op: returns elementwise (x >= 0) as 1.0/0.0 mask. Golden: lambda x: torch.ge(x, 0); test golden uses 'in_data >= 0'. Also matches torch.ge(x, torch.zeros_like(x)) and (x >= 0).to(dtype) patterns. Fuses as a chain replacement for a single comparison-with-zero op; no weights.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py"
+  ],
+  "placement_observations": []
+}

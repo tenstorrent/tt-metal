@@ -1,0 +1,53 @@
+{
+  "id": "ttnn_sign",
+  "fused_op": "ttnn.sign",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.sign(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "{N}x{C}x{H}x{W}",
+    "memory_config": "{MEMORY_CONFIG}",
+    "output_tensor": "optional preallocated output of same shape",
+    "queue_id": "{CQ_ID}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Elementwise unary sign. Golden registered as torch.sign. Supports optional preallocated output_tensor and queue_id (seen in unit test). No fusion-specific weight transform; layout must be TILE for eltwise unary kernels.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.sign",
+      "tensor_role": "input",
+      "size_descriptor": "small test shapes (range -10..10, tile-aligned)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: data_gen_with_range(input_shapes, -10, 10, device) -> default DRAM interleaved, TILE layout"
+    },
+    {
+      "op": "ttnn.sign",
+      "tensor_role": "output",
+      "size_descriptor": "same shape as input",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: preallocated output_tensor via data_gen_with_range, passed as output_tensor= kwarg"
+    }
+  ]
+}

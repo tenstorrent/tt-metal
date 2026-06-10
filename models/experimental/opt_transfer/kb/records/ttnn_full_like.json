@@ -1,0 +1,68 @@
+{
+  "id": "ttnn_full_like",
+  "fused_op": "ttnn.full_like",
+  "category": "creation/elementwise-fill",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.full_like(input_tensor, fill_value)",
+  "signature": {},
+  "config_template": {
+    "fill_value": "{FILL_VALUE}",
+    "dtype": "{DTYPE}",
+    "layout": "{LAYOUT}",
+    "memory_config": "{MEMORY_CONFIG}",
+    "optional_tensor": "{OPTIONAL_PREALLOCATED_OUTPUT}",
+    "queue_id": "{QUEUE_ID}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Creates a tensor with the same shape/dtype/layout as input, filled with fill_value. Supports writing into a preallocated optional_tensor (in-place output) without allocating new device buffers. Golden: torch.full_like(input_tensor, fill_value).",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/data_movement/test_creation.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.full_like",
+      "tensor_role": "input",
+      "size_descriptor": "generic test shapes",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device); default interleaved DRAM memory config"
+    },
+    {
+      "op": "ttnn.full_like",
+      "tensor_role": "output",
+      "size_descriptor": "same shape as input",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: output asserted on-device (ttnn.is_tensor_storage_on_device); when optional_tensor is supplied, no new buffer pages are allocated (output reuses preallocated buffer)"
+    },
+    {
+      "op": "ttnn.full_like",
+      "tensor_role": "input",
+      "size_descriptor": "position index tensor (small, per-batch int32)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: ttnn.full_like(position_idxs, fill_value=-1) on mesh_device with dtype=ttnn.int32, mesh_mapper for replication; used to build cached 'neg_one' state tensor"
+    }
+  ]
+}

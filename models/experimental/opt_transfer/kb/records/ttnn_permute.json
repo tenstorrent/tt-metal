@@ -1,0 +1,112 @@
+{
+  "id": "ttnn_permute",
+  "fused_op": "ttnn.permute",
+  "category": "data_movement",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.permute(input_tensor, dims)",
+  "signature": {},
+  "config_template": {
+    "dims": "{PERM_DIMS}",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Direct 1:1 mapping from torch.permute(x, dims) -> ttnn.permute(x, dims). Works on TILE and ROW_MAJOR layouts; arbitrary N-D permutations supported (tests cover 1D-6D). Common surrounding chains observed at call sites: NCHW->NHWC layout conversion (permute (0,2,3,1) + reshape (B,1,H*W,C)) and attention head reordering (reshape (B,S,nH,hd) + permute (0,2,1,3)).",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_transpose.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_permute.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.permute",
+      "tensor_role": "input",
+      "size_descriptor": "4D image activation [B, C, H, W] (SD UNet/VAE sub-block tests, e.g. midblock/crossattn)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "SD UNet/VAE block tests: ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG) followed by ttnn.permute(x, (0,2,3,1))"
+    },
+    {
+      "op": "ttnn.permute",
+      "tensor_role": "input",
+      "size_descriptor": "4D image activation [B, C, H, W], full-model / large-resolution paths (full VAE, transformer block, refiner UNet)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "H*W",
+        "op": ">",
+        "value": "sub-block test sizes (small feature maps use L1, full-resolution latents use DRAM)"
+      },
+      "source": "SD full-model tests: ttnn.from_torch(..., memory_config=ttnn.DRAM_MEMORY_CONFIG) followed by ttnn.permute(x, (0,2,3,1)); ttnn.reshape(x, (B,1,H*W,C))"
+    },
+    {
+      "op": "ttnn.permute",
+      "tensor_role": "output",
+      "size_descriptor": "5D volumetric activation [B, C, T/D, H, W] -> channels-last (UNet3D)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "UNet3D model: ttnn.permute(x0, (0, 2, 3, 4, 1), memory_config=ttnn.L1_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.permute",
+      "tensor_role": "output",
+      "size_descriptor": "3D audio/sequence tensor [B, C, T], long T (vocoder/HiFi-GAN, conformer)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "HiFi-GAN/vocoder modules: ttnn.permute(x_bct_tile, (0, 2, 1), memory_config=ttnn.DRAM_MEMORY_CONFIG); ttnn.permute(audio_tt, (0,3,2,1), memory_config=ttnn.DRAM_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.permute",
+      "tensor_role": "input",
+      "size_descriptor": "decode-mode attention tensor [1, num_heads, batch, kv_lora_rank] (small per-step decode shapes)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "decode"
+      },
+      "source": "DeepSeek MLA decode benchmark: ttnn.to_memory_config(tt_attn_out, memory_config=ttnn.L1_MEMORY_CONFIG) then ttnn.permute(tt_attn_out_interleaved, (0,2,1,3)); sharded inputs are first converted to L1 interleaved before permute"
+    },
+    {
+      "op": "ttnn.permute",
+      "tensor_role": "input",
+      "size_descriptor": "MoE expert routing weights [tokens, experts] / [1,1,S,E], small",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "MoE experts: topk weights converted ttnn.to_layout(..., ROW_MAJOR_LAYOUT) before ttnn.permute(topk_weights_rm, (3,1,2,0)), then back to TILE_LAYOUT (RM permute path for non-tile-friendly dims)"
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "id": "ttnn_glu",
+  "fused_op": "ttnn.glu",
+  "category": "activation",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.nn.functional.glu(input_tensor_a, dim)",
+  "signature": {},
+  "config_template": {
+    "dim": "{DIM}",
+    "note": "ttnn.glu halves size of {DIM}; on NHWC [B,1,T,2C] use dim=-1 to match F.glu(dim=1) on channel-first reference"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_composite.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.glu",
+      "tensor_role": "input",
+      "size_descriptor": "[B, 1, T_sub, 2C] NHWC conv1d output",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "ConformerConvolutionModule/VariancePredictor adapter call site: conv1d output converted to ROW_MAJOR_LAYOUT before ttnn.glu(out, dim=-1)"
+    },
+    {
+      "op": "ttnn.glu",
+      "tensor_role": "input",
+      "size_descriptor": "[B, 1, T, 2C] reshaped pointwise_conv1 (linear) output",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "ConformerConvolutionModule pointwise path: ttnn.reshape(y_pw1, (batch, 1, seq_len, 2*hidden), memory_config=mc_dram) feeding ttnn.glu(y_pw1_4d, dim=-1)"
+    },
+    {
+      "op": "ttnn.glu",
+      "tensor_role": "output",
+      "size_descriptor": "[B, 1, T_sub, C] (last dim halved 2C -> C)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "glu_out reshaped to [B, T_sub, C] then converted to TILE_LAYOUT for downstream LayerNorm/matmul"
+    }
+  ]
+}

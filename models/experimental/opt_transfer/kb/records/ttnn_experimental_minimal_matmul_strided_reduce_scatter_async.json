@@ -1,0 +1,76 @@
+{
+  "id": "ttnn_experimental_minimal_matmul_strided_reduce_scatter_async",
+  "fused_op": "ttnn.experimental.minimal_matmul_strided_reduce_scatter_async",
+  "category": "fused_matmul_collective",
+  "pattern_kind": "chain",
+  "torch_pattern": [
+    "out = torch.matmul(x, weight) (+ bias)",
+    "partials = [out_d for each device d along mesh_axis]",
+    "reduced = torch.sum(torch.stack(partials), dim=0)",
+    "torch_rs_scattered = torch.chunk(reduced, num_devices, dim=cfg.dim); each device d receives chunk[d]"
+  ],
+  "signature": {},
+  "config_template": {
+    "input_tensor": "{INPUT}",
+    "weight_tensor": "{WEIGHT}",
+    "dim": "{SCATTER_DIM}",
+    "multi_device_global_semaphore": "ccl_manager.get_rs_ping_pong_semaphore({MESH_AXIS})",
+    "fused_config": "get_fused_mmrs_config({M}, {K}, {N}, {CORE_GRID}, {NUM_LINKS})",
+    "bias": "{BIAS_OR_NONE}",
+    "num_links": "{NUM_LINKS}",
+    "memory_config_mm": "ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)",
+    "rs_output_mem_config": "ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)",
+    "topology": "ccl_manager.topology",
+    "input_rank_constraint": "input must be 4D; unsqueeze(x, 0) if rank <= 3"
+  },
+  "weight_transform": "weight pre-sharded across mesh devices along K (column-parallel partials reduced by reduce_scatter); transpose/shard per standard ttnn linear weight layout, no additional fusion-specific transform observed",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "llm",
+  "confidence": "low",
+  "unit_test_refs": [],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.minimal_matmul_strided_reduce_scatter_async",
+      "tensor_role": "matmul_output (intermediate)",
+      "size_descriptor": "M x N per device, shape [1, B, M, N] after unsqueeze",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "get_fused_mmrs_config(M, K, N, core_grid, num_links)",
+      "condition": null,
+      "source": "model call site (memory_config_mm=ttnn.MemoryConfig(INTERLEAVED, DRAM))"
+    },
+    {
+      "op": "ttnn.experimental.minimal_matmul_strided_reduce_scatter_async",
+      "tensor_role": "reduce_scatter_output",
+      "size_descriptor": "M x N/num_devices per device (scattered along dim=3)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "rs_core_grid_offset + num_links links, ping-pong semaphores",
+      "condition": null,
+      "source": "model call site (rs_output_mem_config=ttnn.MemoryConfig(INTERLEAVED, DRAM))"
+    },
+    {
+      "op": "ttnn.experimental.minimal_matmul_strided_reduce_scatter_async",
+      "tensor_role": "input_tensor",
+      "size_descriptor": "rank-4 required; unsqueezed from rank<=3 at call site",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test call site (memory_config_mm=mem_config, rs_output_mem_config=mem_config, same interleaved config for both)"
+    }
+  ]
+}

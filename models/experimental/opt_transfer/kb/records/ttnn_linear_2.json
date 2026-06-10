@@ -1,0 +1,97 @@
+{
+  "id": "ttnn_linear_2",
+  "fused_op": "ttnn.linear",
+  "category": "matmul",
+  "pattern_kind": "horizontal_merge",
+  "torch_pattern": "q = ttnn.linear(x, self.wq, ...)\nk = ttnn.linear(x, self.wk, ...)\nv = ttnn.linear(x, self.wv, ...)\n# (torch-level: q = x @ Wq; k = x @ Wk; v = x @ Wv  \u2014 N sibling projections of the same input)",
+  "signature": {},
+  "config_template": {
+    "call": "xqkv_fused = ttnn.linear(x, self.wqkv, memory_config={MEM_CONFIG}, dtype={DTYPE}, program_config={PROGRAM_CONFIG}, compute_kernel_config={COMPUTE_KERNEL_CONFIG})  # followed by ttnn.experimental.nlp_create_qkv_heads(xqkv_fused, num_heads={NUM_HEADS}, num_kv_heads={NUM_KV_HEADS}) to split",
+    "notes": "Applies to any N sibling linears sharing one input: q/k/v -> wqkv (split via nlp_create_qkv_heads), and is the same merge family as key/value -> fused_kv (whisper parameters.key_value). w1/w3 (gate/up) pairs in MLPs are kept as two linears in most call sites but share identical program/memory configs and are merge candidates."
+  },
+  "weight_transform": "wqkv = torch.cat([Wq.T, Wk.T, Wv.T], dim=-1) \u2014 transpose each torch [out, in] weight to [in, out], then concatenate along the output (last) dim; biases concatenated likewise. Output must be split per-head afterwards (nlp_create_qkv_heads / nlp_create_qkv_heads_decode), and KV-group-interleaved layouts require the matching rearranged wqkv.",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_sharded.py",
+    "tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_experimental.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_linear.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_matmul.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_matmul_batch_mismatch.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_matmul_deepseek.py",
+    "tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py",
+    "tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "linear",
+      "tensor_role": "output",
+      "size_descriptor": "fused QKV decode output, M=32 rows",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "WIDTH_SHARDED",
+        "shard_spec_template": "ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG"
+      },
+      "program_config": "model_config['XQKV_DECODE_PROGCFG']",
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "decode"
+      },
+      "source": "xqkv_fused_sharded = ttnn.linear(x, self.wqkv, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG, program_config=XQKV_DECODE_PROGCFG)"
+    },
+    {
+      "op": "linear",
+      "tensor_role": "output",
+      "size_descriptor": "fused QKV prefill output, seq_len chunked at MAX_QKV_MM_SEQ_LEN",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "model_config['XQKV_PREFILL_PROGCFG'](seq_len)",
+      "condition": {
+        "var": "seq_len",
+        "op": ">",
+        "value": "MAX_QKV_MM_SEQ_LEN"
+      },
+      "source": "prefill: `if seq_len > self.MAX_QKV_MM_SEQ_LEN: x_11SH = ttnn.reshape(...)`; xqkv_fused = ttnn.linear(x_11SH, self.wqkv, memory_config=ttnn.DRAM_MEMORY_CONFIG, program_config=XQKV_PREFILL_PROGCFG(seq_len))"
+    },
+    {
+      "op": "linear",
+      "tensor_role": "input",
+      "size_descriptor": "whisper fused key_value projection input, moved to L1 before merge matmul",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "key_value_states = ttnn.to_memory_config(key_value_states, ttnn.L1_MEMORY_CONFIG); fused_kv = ttnn.linear(key_value_states, parameters.key_value.weight, bias=..., core_grid=full_grid, memory_config=ttnn.L1_MEMORY_CONFIG)"
+    },
+    {
+      "op": "linear",
+      "tensor_role": "output",
+      "size_descriptor": "gate/up sibling pair in decode, DRAM-sharded weights, identical shard layout for both outputs (enables sharded ttnn.mul)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "WIDTH_SHARDED",
+        "shard_spec_template": "self._decode_gate_up_out_memcfg (same config for both branches)"
+      },
+      "program_config": "self._decode_gate_up_dramshard_progcfg (shared by both branches)",
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "decode"
+      },
+      "source": "gate_sharded = ttnn.linear(x_sharded, gate_proj_dram_sharded, ...); up_sharded = ttnn.linear(x_sharded, up_proj_dram_sharded, ...) with identical program/memory configs \u2014 'gate/up sharding == down in0 sharding (same K). Mul preserves layout.'"
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "id": "ttnn_ones",
+  "fused_op": "ttnn.ones",
+  "category": "tensor_creation",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.ones(input_shape)",
+  "signature": {},
+  "config_template": {
+    "shape": "{SHAPE}",
+    "dtype": "{DTYPE}",
+    "layout": "{LAYOUT}",
+    "device": "{DEVICE}",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Constant-fill creation op; direct 1:1 mapping from torch.ones. No input tensor operands; shape, dtype, layout, and memory_config are supplied as arguments.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_untilize_test.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_creation.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_math.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_manual_seed.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.ones",
+      "tensor_role": "output",
+      "size_descriptor": "[h, w] 2D tile-aligned (preallocated EQ output)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: ttnn.ones([h, w], ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.ones",
+      "tensor_role": "output",
+      "size_descriptor": "[32] small 1D vector (sampling temp tensor)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: ttnn.ones([32], layout=ttnn.ROW_MAJOR_LAYOUT, device=device) (default interleaved DRAM memory_config)"
+    }
+  ]
+}

@@ -1,0 +1,65 @@
+{
+  "id": "ttnn_i1",
+  "fused_op": "ttnn.i1",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.i1(input)",
+  "signature": {},
+  "config_template": {
+    "memory_config": "{MEMORY_CONFIG}",
+    "input_shape": "[{N}, {C}, {H}, {W}]",
+    "dtype": "{DTYPE}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Modified Bessel function of the first kind, order 1. Single-op elementwise unary; golden source not registered, torch equivalent inferred from test PCC comparison against torch_output_tensor (torch.i1). PCC threshold 0.9999 in tests for float32 and bfloat16.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_i1.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.i1",
+      "tensor_role": "input",
+      "size_descriptor": "unspecified (parametrized shapes, dtype float32)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test_example: input_tensor_a created with dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG"
+    },
+    {
+      "op": "ttnn.i1",
+      "tensor_role": "input",
+      "size_descriptor": "unspecified (parametrized shapes, dtype bfloat16)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test_example: input_tensor_a created with dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG"
+    },
+    {
+      "op": "ttnn.i1",
+      "tensor_role": "output",
+      "size_descriptor": "same as input",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test_example: ttnn.i1(input_tensor_a, memory_config=ttnn.DRAM_MEMORY_CONFIG)"
+    }
+  ]
+}

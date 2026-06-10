@@ -1,0 +1,79 @@
+{
+  "id": "ttnn_experimental_rotary_embedding_llama_fused_qk",
+  "fused_op": "ttnn.experimental.rotary_embedding_llama_fused_qk",
+  "category": "positional_embedding/rope",
+  "pattern_kind": "horizontal_merge",
+  "torch_pattern": "cos, sin = rot_mats[0], rot_mats[1]; q_embed = (q * cos) + (rotate_half(q) * sin); k_embed = (k * cos) + (rotate_half(k) * sin)  # two sibling HF-style RoPE branches (Q and K) sharing the same cos/sin inputs, taken from _hf_rope_decode fallback at the call site",
+  "signature": {},
+  "config_template": {
+    "mode": "decode",
+    "input_q_shape": "[1, {BATCH}, {NUM_Q_HEADS}, {HEAD_DIM}]",
+    "input_k_shape": "[1, {BATCH}, {NUM_KV_HEADS}, {HEAD_DIM}]",
+    "cos_shape": "[1, {BATCH}, 1, {HEAD_DIM}]",
+    "sin_shape": "[1, {BATCH}, 1, {HEAD_DIM}]",
+    "trans_mat": "transformation_mats['decode']",
+    "notes": "Q and K must be moved to a common fused QK memory config before the call (to_qk_fused_memory_config); inputs deallocated immediately after the op in decode loop. BATCH must match padded batch used by rot_mats and nlp_create_qkv_heads_decode output to avoid host shape reads during trace/graph capture."
+  },
+  "weight_transform": "Precompute cos/sin rotary matrices per position as ttnn tensors (rot_mats[0]=cos, rot_mats[1]=sin) and a static transformation matrix (transformation_mats['decode']) that implements rotate_half as a matmul; replicate transformation matrix across shard cores for decode.",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_source: model call site (_hf_rope_decode reference: 'cos, sin = rot_mats[0], rot_mats[1]' applied to both q_heads_pre_rot_1BQD and k_heads_pre_rot_1BKD)",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "llm",
+  "confidence": "low",
+  "unit_test_refs": [],
+  "placement_observations": [
+    {
+      "op": "rotary_embedding_llama_fused_qk",
+      "tensor_role": "input_q (q_heads_pre_rot_1BQD)",
+      "size_descriptor": "decode-shape [1, batch=8, n_q_heads=8, head_dim=128] (seq_len==1)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "fused QK shard via self.to_qk_fused_memory_config(q, k); one shard per (batch x head) row, shard shape [{TILE_H}, {HEAD_DIM}]"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "decode"
+      },
+      "source": "call_site: q/k passed through to_qk_fused_memory_config immediately before fused_qk rope in decode path"
+    },
+    {
+      "op": "rotary_embedding_llama_fused_qk",
+      "tensor_role": "input_k (k_heads_pre_rot_1BKD)",
+      "size_descriptor": "decode-shape [1, batch=8, n_kv_heads=8, head_dim=128] (seq_len==1)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "same fused QK memory config as Q (to_qk_fused_memory_config), co-resident with Q shards"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "decode"
+      },
+      "source": "call_site: k aligned to fused QK memory config alongside q before op; deallocated right after"
+    },
+    {
+      "op": "rotary_embedding_llama_fused_qk",
+      "tensor_role": "outputs (q_heads_1BQD, k_heads_1BKD)",
+      "size_descriptor": "decode-shape [1, 8, 8, 128] each (per inline comment at call site)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "inherits fused QK sharded config; consumed directly by KV-cache update in decode loop"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "decode"
+      },
+      "source": "call_site: '# [1, 8, 8, 128], [1, 8, 8, 128]' comment; outputs feed KV update with inputs deallocated"
+    }
+  ]
+}

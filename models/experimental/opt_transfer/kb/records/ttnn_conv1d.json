@@ -1,0 +1,120 @@
+{
+  "id": "ttnn_conv1d",
+  "fused_op": "ttnn.conv1d",
+  "category": "convolution",
+  "pattern_kind": "chain",
+  "torch_pattern": "x = x.permute(0, 2, 1)  # (N, C, L) -> (N, L, C) channels-last; out = torch.nn.functional.conv1d(x_ncl, weight, bias, stride={STRIDE}, padding={PADDING}, dilation={DILATION}); out = out.permute(0, 2, 1)",
+  "signature": {},
+  "config_template": {
+    "input_tensor": "{INPUT}",
+    "weight_tensor": "{WEIGHT}",
+    "bias_tensor": "{BIAS}",
+    "device": "{DEVICE}",
+    "in_channels": "{IN_CHANNELS}",
+    "out_channels": "{OUT_CHANNELS}",
+    "batch_size": "{BATCH}",
+    "input_length": "{SEQ_LEN}",
+    "kernel_size": "{KERNEL_SIZE}",
+    "stride": "{STRIDE}",
+    "padding": "{PADDING}",
+    "dilation": "{DILATION}",
+    "groups": "{GROUPS}",
+    "conv_config": "{CONV_CONFIG}",
+    "compute_config": "{COMPUTE_CONFIG}"
+  },
+  "weight_transform": "torch Conv1d weight of shape (out_channels, in_channels/groups, kernel_size) is passed host-side in ROW_MAJOR layout (no pre-tilization); ttnn.conv1d preprocesses it on-device on first call and returns the prepared weight ([new_w, new_b]) which should be cached and reused on subsequent calls (e.g. inside trace capture). Bias is passed as a ROW_MAJOR tensor (reshaped to (1, 1, 1, out_channels)). Activation must be reshaped to (batch, 1, input_length, in_channels) channels-last ROW_MAJOR.",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_notes: ttnn.conv1d consumes the activation in channels-last (N, 1, L, C) ROW_MAJOR form; call sites reshape via `x_rm = ttnn.reshape(x_rm, (batch, 1, seq_len, in_channels))` before the call. The op replaces the contiguous torch subsequence permute(NCL->NLC-equiv) -> F.conv1d -> permute back. Returns (output, out_length) or (output, out_length, [prepared_weight, prepared_bias]) when return_weights_and_bias is set.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/conv/test_conv1d.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.conv1d",
+      "tensor_role": "input_activation",
+      "size_descriptor": "(batch, 1, seq_len, in_channels) channels-last",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: '# ttnn.conv1d wants ROW_MAJOR input; convert if needed.' followed by ttnn.to_layout(y_dw_in, ttnn.ROW_MAJOR_LAYOUT); also ttnn.sharded_to_interleaved(input_embeds) before conv1d in Whisper conv2 split path"
+    },
+    {
+      "op": "ttnn.conv1d",
+      "tensor_role": "weight",
+      "size_descriptor": "(out_channels, in_channels/groups, kernel_size)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site docstring: 'weight_memory_config: where to place weights (default DRAM) ... the conv1/conv2 weights are kept in row-major as required by ttnn.conv1d (it preprocesses them on first call)'"
+    },
+    {
+      "op": "ttnn.conv1d",
+      "tensor_role": "config_tensors",
+      "size_descriptor": "internal halo/config tensors",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": null,
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test_example: conv_config with 'config_tensors_in_dram=True' and 'deallocate_activation=True'"
+    },
+    {
+      "op": "ttnn.conv1d",
+      "tensor_role": "input_activation",
+      "size_descriptor": "large NHW (batch*input_length requiring ~98 cores)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR",
+        "shard_spec_template": "height_sharded over CoreRangeSet({CoreRange((0,0),(11,7)), CoreRange((0,8),(1,8))}), num_cores_nhw=98"
+      },
+      "program_config": "conv_config.core_grid = ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (11, 7)), ttnn.CoreRange((0, 8), (1, 8))}); conv_config.override_sharding_config = True",
+      "condition": null,
+      "source": "test_example: override_sharding_config branch setting num_cores_nhw to 98"
+    },
+    {
+      "op": "ttnn.conv1d",
+      "tensor_role": "input_activation",
+      "size_descriptor": "batch_size > 1",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR",
+        "shard_spec_template": null
+      },
+      "program_config": "batch loop: process one batch slice at a time with batch_size=1",
+      "condition": {
+        "var": "batch_size",
+        "op": ">",
+        "value": 1
+      },
+      "source": "call_site: '# TODO: This is a hack to support batch size > 1, till the Conv OOM issue is resolved' \u2014 per-batch slicing loop in Whisper conv1"
+    },
+    {
+      "op": "ttnn.conv1d",
+      "tensor_role": "weight",
+      "size_descriptor": "out_channels split into channels_split_factor groups (channel-split to avoid OOM)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR",
+        "shard_spec_template": null
+      },
+      "program_config": "horizontal channel split: run conv1d per weight split (in_channels // channels_split_factor, out_channels // channels_split_factor) and concat outputs",
+      "condition": null,
+      "source": "call_site: loop over self.config.channels_split_factor with self.tt_weight_tensor_splits[i]"
+    }
+  ]
+}

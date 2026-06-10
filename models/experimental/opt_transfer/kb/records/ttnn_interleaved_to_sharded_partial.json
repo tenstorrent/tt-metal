@@ -1,0 +1,118 @@
+{
+  "id": "ttnn_interleaved_to_sharded_partial",
+  "fused_op": "ttnn.interleaved_to_sharded_partial",
+  "category": "data_movement",
+  "pattern_kind": "chain",
+  "torch_pattern": "tensor = tensor.reshape(1, 1, -1, tensor.shape[-1])\nslice_size = tensor.shape[-2] // num_slices\nstart = slice * slice_size\nstop = start + slice_size\ntensor = tensor[:, :, start:stop, :]",
+  "signature": {},
+  "config_template": {
+    "grid_size": "({GRID_X}, {GRID_Y})",
+    "shard_spec": "[{SHARD_HEIGHT}, {SHARD_WIDTH}]",
+    "num_slices": "{NUM_SLICES}",
+    "slice_index": "{SLICE_INDEX}",
+    "memory_layout": "{TensorMemoryLayout.HEIGHT_SHARDED|BLOCK_SHARDED|WIDTH_SHARDED}",
+    "shard_orientation": "ttnn.ShardOrientation.ROW_MAJOR",
+    "shard_height_constraint": "SHARD_HEIGHT == ({TOTAL_HEIGHT} // {NUM_SLICES}) // num_shard_rows; must be tile (32) aligned",
+    "shard_width_constraint": "SHARD_WIDTH == {W} for HEIGHT_SHARDED; {W} // {GRID_X} for BLOCK_SHARDED"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_sharded.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_experimental.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.interleaved_to_sharded_partial",
+      "tensor_role": "input",
+      "size_descriptor": "[1, 1, B*seq_len, hidden] interleaved, too large for full L1 residency (hence slicing into num_slices)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "seq_len",
+        "op": ">=",
+        "value": "slice_threshold (model_config MLP_NUM_SLICES > 1 regime)"
+      },
+      "source": "call_site: MLP slicing loop (model_config['MLP_NUM_SLICES'])"
+    },
+    {
+      "op": "ttnn.interleaved_to_sharded_partial",
+      "tensor_role": "output",
+      "size_descriptor": "activation slice [seq_len/num_slices, W]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "[{TILES_PER_SHARD}*32, 2*32]"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: time-sharded attention query slicing (tsa_mm_activations_height_shard_spec)"
+    },
+    {
+      "op": "ttnn.interleaved_to_sharded_partial",
+      "tensor_role": "output",
+      "size_descriptor": "attention mask slice [seq_len/num_slices, seq_len]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "[{TILES_PER_SHARD}*32, {SEQ_LEN}]"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: attention_mask slicing with mm_output_height_shard_spec"
+    },
+    {
+      "op": "ttnn.interleaved_to_sharded_partial",
+      "tensor_role": "output",
+      "size_descriptor": "layernorm input slice [seq_len/num_slices, hidden_dim]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "BLOCK_SHARDED",
+        "shard_spec_template": "[{LN_SHARD_HEIGHT_HIDDEN_DIM}, {LN_SHARD_WIDTH_HIDDEN_DIM}] on ({LN_NUM_CORES_X}, {LN_NUM_CORES_Y})"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: sliced layer_norm loop (xs_slice feeds ttnn.layer_norm)"
+    },
+    {
+      "op": "ttnn.interleaved_to_sharded_partial",
+      "tensor_role": "output",
+      "size_descriptor": "MLP activation slice [seq_len/num_slices, padded_hidden_size]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "BLOCK_SHARDED",
+        "shard_spec_template": "[{SEQ_LEN} // {NUM_SLICES} // {GRID_Y}, {PADDED_HIDDEN_SIZE} // {GRID_X}]"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "num_slices",
+        "op": ">",
+        "value": 1
+      },
+      "source": "call_site: MLP block-sharded slicing with MLP_PADDING_VALUE / MLP_GRID_SIZE"
+    },
+    {
+      "op": "ttnn.interleaved_to_sharded_partial",
+      "tensor_role": "output",
+      "size_descriptor": "generic input slice [32..H/2, W] per shard",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "WIDTH_SHARDED",
+        "shard_spec_template": "[{H} // {NUM_SLICES}, 1*32]"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test_example: width-sharded variant"
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "id": "moreh_full",
+  "fused_op": "moreh_full",
+  "category": "creation",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.full(shape, fill_value)",
+  "signature": {},
+  "config_template": {
+    "shape": "{SHAPE}",
+    "fill_value": "{FILL_VALUE}",
+    "device": "{DEVICE}",
+    "layout": "{LAYOUT:default=ttnn.ROW_MAJOR_LAYOUT}",
+    "dtype": "{DTYPE:default=ttnn.bfloat16}",
+    "memory_config": "{MEMORY_CONFIG:default=ttnn.DRAM_MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Tensor-creation op executed directly on device; no host data transfer. Observed in MoE dispatch/combine paths to preallocate a zeroed combine output buffer before the cross-device dispatch barrier (one allocation per layer, per device). Acts as torch.zeros replacement when fill_value=0.; torch_pattern_source: semantic-equivalent (golden_src=null; moreh_full fills a new tensor of `shape` with `fill_value`, matching torch.full). Call sites use fill_value=0, i.e. torch.zeros(shape, dtype=torch.bfloat16).; ttnn_replacement: ttnn.moreh_full(shape={SHAPE}, fill_value={FILL_VALUE}, device={DEVICE}, layout={LAYOUT}, dtype={DTYPE}, memory_config={MEMORY_CONFIG})",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "llm",
+  "confidence": "low",
+  "unit_test_refs": [],
+  "placement_observations": [
+    {
+      "op": "moreh_full",
+      "tensor_role": "output (preallocated combine buffer, zero-filled)",
+      "size_descriptor": "[effective_experts_k, tokens_per_device, hidden_size] per device (large 3D activation-sized buffer)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: MoE combine preallocation \u2014 ttnn.moreh_full(shape=[effective_experts_k, tokens_per_device, hidden_size], fill_value=0, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG) on mesh_device"
+    },
+    {
+      "op": "moreh_full",
+      "tensor_role": "output (zeroed combine output buffer allocated pre-dispatch)",
+      "size_descriptor": "fused_config.combine_preallocated.shape (config-driven, combine-output sized)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: fused MoE path \u2014 ttnn.moreh_full(shape=fused_config.combine_preallocated.shape, fill_value=0, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG) on mesh_device, allocated before dispatch (dispatch is the cross-device barrier)"
+    }
+  ]
+}

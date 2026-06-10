@@ -1,0 +1,39 @@
+{
+  "id": "ttnn_prod",
+  "fused_op": "ttnn.prod",
+  "category": "reduction",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.prod(input_tensor, dim={DIM}, keepdim={KEEPDIM})",
+  "signature": {},
+  "config_template": {
+    "dim": "{DIM}",
+    "keepdim": "{KEEPDIM}",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "ttnn_replacement: ttnn.prod(input_tensor, dim={DIM}, keepdim={KEEPDIM}, memory_config={MEMORY_CONFIG}); constraints: ['Implicit tile padding must be neutral for product (pad value must not annihilate the result); test resets padding via ttnn.fill_implicit_tile_padding before prod', 'Output rank/shape must match torch.prod(dim, keepdim) semantics']",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/reduce/test_reduction.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.prod",
+      "tensor_role": "output",
+      "size_descriptor": "unspecified (unit-test scale)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test"
+    }
+  ]
+}

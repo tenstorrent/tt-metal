@@ -1,0 +1,92 @@
+{
+  "id": "ttnn_fill_cache",
+  "fused_op": "ttnn.fill_cache",
+  "category": "kv_cache_write",
+  "pattern_kind": "chain",
+  "torch_pattern": "cache[i : i + 1, :, : x.shape[-2], :] = x",
+  "signature": {},
+  "config_template": {
+    "cache_shape": "[{BATCH}, {NUM_KV_HEADS}, {MAX_SEQ_LEN}, {HEAD_DIM}]",
+    "input_shape": "[1, {NUM_KV_HEADS}, {SEQ_LEN}, {HEAD_DIM}]",
+    "batch_idx": "{USER_ID}",
+    "constraints": {
+      "input_layout": "TILE_LAYOUT",
+      "seq_len": "{SEQ_LEN} <= {MAX_SEQ_LEN}, tile-padded",
+      "in_place": true,
+      "trace_safe": "batch_idx must be a Python constant captured in trace"
+    }
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_update_cache.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.fill_cache",
+      "tensor_role": "cache (destination)",
+      "size_descriptor": "[batch, num_kv_heads, max_seq_len, head_dim] persistent KV cache",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "falcon attention: ttnn.experimental.typecast(key_layer, KV_CACHE_DTYPE, memory_config=ttnn.DRAM_MEMORY_CONFIG) fed into fill_cache; caches allocated once at init at [B, n_kv, max_seq, D]"
+    },
+    {
+      "op": "ttnn.fill_cache",
+      "tensor_role": "input (k_fill / v_fill)",
+      "size_descriptor": "prefill K/V slice [1, num_kv_heads, seq_len, head_dim]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "XATTN_KV_PREFILL_MEM_CFG(seq_len) (height-sharded prefill KV config)"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "seq_len",
+        "op": ">=",
+        "value": "min_kv_prefill_shard_seqlen"
+      },
+      "source": "llama cross-attention: k_fill = ttnn.interleaved_to_sharded(xk, model_config['XATTN_KV_PREFILL_MEM_CFG'](seqlen_y)) to work around fill_cache memory constraint; deallocated after fill when seq_len >= min_kv_prefill_shard_seqlen and not page_table"
+    },
+    {
+      "op": "ttnn.fill_cache",
+      "tensor_role": "input (k_fill / v_fill)",
+      "size_descriptor": "prefill K/V slice, short sequence",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "seq_len",
+        "op": "<",
+        "value": "min_kv_prefill_shard_seqlen"
+      },
+      "source": "tt_transformers attention prefill: interleaved (default DRAM) k_fill/v_fill used directly when below sharding threshold; sharded path only taken when seq_len >= min_kv_prefill_shard_seqlen"
+    },
+    {
+      "op": "ttnn.fill_cache",
+      "tensor_role": "input (typecast K/V before cache write)",
+      "size_descriptor": "[1, num_kv_heads, seq_len, head_dim]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "ttnn.fill_cache(layer_past[0], ttnn.experimental.typecast(key_layer, KV_CACHE_DTYPE, memory_config=ttnn.DRAM_MEMORY_CONFIG), user_id)"
+    }
+  ]
+}

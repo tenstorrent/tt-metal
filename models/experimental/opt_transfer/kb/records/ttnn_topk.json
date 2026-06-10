@@ -1,0 +1,88 @@
+{
+  "id": "ttnn_topk",
+  "fused_op": "ttnn.topk",
+  "category": "reduction_sort",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.topk(input_tensor, k, dim=dim, largest=largest, sorted=sorted)",
+  "signature": {},
+  "config_template": {
+    "k": "{K}",
+    "dim": "{DIM}",
+    "largest": "{LARGEST}",
+    "sorted": "{SORTED}",
+    "sub_core_grids": "{SUB_CORE_GRIDS|optional}",
+    "memory_config": "{MEMORY_CONFIG|optional}",
+    "indices_tensor": "{INDICES_TENSOR|optional}",
+    "notes": "Reduced dim must be tile-padded; inputs with shape[dim] < TOPK_MIN_WIDTH (64) require ttnn.pad with -inf before topk; k is often padded to tile boundary (align_to_tile(k)) then sliced back with slice_to_length; implicit tile padding must be filled (ttnn.fill_implicit_tile_padding) to avoid garbage entries in results"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "fusion_notes: ['MoE decode path: ttnn.topk + add(mask) + eqz + typecast + softmax + mul + sum fuses into single ttnn.moe(gate_logits, top_k_mask, top_2_mask, k) op', 'Common downstream chain: topk -> to_layout(ROW_MAJOR) -> typecast(int32) -> ttnn.sampling for on-device top-k/top-p sampling', 'MoE routing chain: softmax -> topk -> softmax(top_k_values) -> scatter into dense routing tensor', 'float32 inputs may fall back to argmax-based topk (topk_indices_argmax) or a fallback op at some call sites']",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/reduce/test_reduction.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_topk.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.topk",
+      "tensor_role": "input",
+      "size_descriptor": "logits [1,1,32,vocab_size] decode-time sampling, vocab padded to tile width",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "qwen3_tts device sampling: logits_tt created with memory_config=ttnn.DRAM_MEMORY_CONFIG before ttnn.topk(logits_tt, k=max_top_k, dim=-1)"
+    },
+    {
+      "op": "ttnn.topk",
+      "tensor_role": "input",
+      "size_descriptor": "expert scores [1,1,S,E] where E < 64",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "input.shape[-1]",
+        "op": "<",
+        "value": 64
+      },
+      "source": "MoE expert-group routing: input padded with -inf to TOPK_MIN_WIDTH (64) via ttnn.pad before ttnn.topk when shape[3] < TOPK_MIN_WIDTH"
+    },
+    {
+      "op": "ttnn.topk",
+      "tensor_role": "output_indices",
+      "size_descriptor": "indices [.., k] consumed by ttnn.sampling",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "sampling pipeline: topk indices converted via ttnn.to_layout(ROW_MAJOR_LAYOUT) then ttnn.typecast(int32) before ttnn.sampling"
+    },
+    {
+      "op": "ttnn.topk",
+      "tensor_role": "input_and_output",
+      "size_descriptor": "decode-time logits, k=32-bucket sampling",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "perf test: ttnn.topk(tt_input, k, dim=-1, memory_config=TOPK_MEMORY_CONFIG, sub_core_grids=SUB_CORE_GRIDS) \u2014 explicit memory_config and sub_core_grids passed to constrain placement"
+    }
+  ]
+}

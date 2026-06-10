@@ -1,0 +1,76 @@
+{
+  "id": "ttnn_experimental_prefix_scan",
+  "fused_op": "ttnn.experimental.prefix_scan",
+  "category": "recurrent_scan",
+  "pattern_kind": "chain",
+  "torch_pattern": [],
+  "signature": {},
+  "config_template": {
+    "memory_config": "sharded_scan({SEQ_LEN}, {HIDDEN_DIM})",
+    "dtype": "ttnn.bfloat8_b",
+    "math_fidelity": "ttnn.MathFidelity.HiFi3"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "llm",
+  "confidence": "low",
+  "unit_test_refs": [],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.prefix_scan",
+      "tensor_role": "input_a (abar2 / decay coefficients)",
+      "size_descriptor": "[1, 1, {SEQ_LEN}, {HIDDEN_DIM}] (Mamba SSM scan activation)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "configs['sharded_scan'] (model-level sharded scan config; tensor explicitly converted via ttnn.to_memory_config immediately before the op, interleaved source deallocated)"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "Mamba model call site (ttnn.to_memory_config(abar2, self.configs['sharded_scan']))"
+    },
+    {
+      "op": "ttnn.experimental.prefix_scan",
+      "tensor_role": "input_b (bmulx0 / input contribution B*x)",
+      "size_descriptor": "[1, 1, {SEQ_LEN}, {HIDDEN_DIM}] (Mamba SSM scan activation)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "configs['sharded_scan'] (same sharded config as input_a; resharded immediately before op, interleaved source deallocated)"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "Mamba model call site (ttnn.to_memory_config(bmulx0, self.configs['sharded_scan']))"
+    },
+    {
+      "op": "ttnn.experimental.prefix_scan",
+      "tensor_role": "input_state (prev_hidden_state)",
+      "size_descriptor": "[1, 1, 1..32, {HIDDEN_DIM}] (recurrent hidden state carried across decode steps)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "persistent model-managed state tensor; passed unconverted (memory config established at allocation, not visible at this call site)"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "Mamba model call site (prev_hidden_state argument)"
+    },
+    {
+      "op": "ttnn.experimental.prefix_scan",
+      "tensor_role": "output (hidden_states_sharded)",
+      "size_descriptor": "[1, 1, {SEQ_LEN}, {HIDDEN_DIM}]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "configs['sharded_scan'] (memory_config=self.configs['sharded_scan'], dtype=ttnn.bfloat8_b)"
+      },
+      "program_config": "math_fidelity=ttnn.MathFidelity.HiFi3, dtype=ttnn.bfloat8_b",
+      "condition": null,
+      "source": "Mamba model call site (explicit memory_config kwarg on prefix_scan)"
+    }
+  ]
+}

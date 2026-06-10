@@ -1,0 +1,56 @@
+{
+  "id": "ttnn_rotate",
+  "fused_op": "ttnn.rotate",
+  "category": "image_spatial_transform",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch_input_nchw = input_tensor.permute(0, 3, 1, 2).to(torch.float32)\ntorch_output_nchw = torchvision.transforms.functional.rotate(torch_input_nchw, angle=float(angle), interpolation=InterpolationMode.NEAREST if interpolation_mode == \"nearest\" else InterpolationMode.BILINEAR, center=center, fill=fill)\ntorch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(input_tensor.dtype)",
+  "signature": {},
+  "config_template": {
+    "angle": "{ANGLE}",
+    "center": "{CENTER_XY_OR_NULL}",
+    "fill": "{FILL_VALUE}",
+    "expand": false,
+    "interpolation_mode": "{INTERP_MODE: nearest|bilinear}",
+    "input_layout": "NHWC",
+    "input_shape": "(N, {H}, {W}, {C})"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Fuses the NHWC->NCHW permute + torchvision rotate + NCHW->NHWC permute chain into a single ttnn.rotate operating natively on NHWC. Positive angle = counter-clockwise. center is (x, y) pixel coordinates.; ttnn_replacement: ttnn.rotate(input_tensor, angle=angle, center=center, fill=fill, interpolation_mode=interpolation_mode); constraints: {'expand': 'must be False (only same-size rotation supported)', 'layout': 'input must be NHWC; ttnn op consumes NHWC directly (golden permutes to NCHW for torchvision, then back)', 'interpolation_mode': ['nearest', 'bilinear'], 'exactness': 'nearest mode with angle % 90 == 0 is bit-exact; bilinear validated via PCC >= 0.995'}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/pool/test_rotate.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.rotate",
+      "tensor_role": "input",
+      "size_descriptor": "small NHWC activation, e.g. (1, 16, 16, 64) bfloat16",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device) with default interleaved DRAM memory config"
+    },
+    {
+      "op": "ttnn.rotate",
+      "tensor_role": "output",
+      "size_descriptor": "same shape as input (expand=False, same-size rotation)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: output read back via ttnn.to_torch with no explicit memory_config, default interleaved DRAM"
+    }
+  ]
+}

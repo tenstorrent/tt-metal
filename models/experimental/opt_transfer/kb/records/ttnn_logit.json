@@ -1,0 +1,53 @@
+{
+  "id": "ttnn_logit",
+  "fused_op": "ttnn.logit",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.special.logit(input_tensor_a, eps=eps)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "[{N}, {H}, {W}]",
+    "dtype": "{TTNN_DTYPE}",
+    "layout": "ttnn.TILE_LAYOUT",
+    "eps": "{EPS}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "ttnn_replacement: ttnn.logit(input_tensor_a, eps=eps); constraints: ['eps is an optional scalar; eps=None maps directly to torch.special.logit with no clamping (non-finite outputs possible outside (0,1))', 'for eps > 0.5 the golden uses a manual clamp(1-eps, eps) + log(x/(1-x)) to avoid platform-dependent UB in torch.special.logit', 'unary op: single input tensor, elementwise, shape-preserving']; fusion_notes: Replaces the contiguous subsequence clamp -> div(x, 1-x) -> log (or a direct torch.special.logit call) with a single ttnn.logit kernel.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.logit",
+      "tensor_role": "input",
+      "size_descriptor": "small tile-aligned tensor (e.g. [3, 128, 32])",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device) with default (DRAM interleaved) memory config"
+    },
+    {
+      "op": "ttnn.logit",
+      "tensor_role": "output",
+      "size_descriptor": "same shape as input",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: no explicit output memory_config passed; inherits default DRAM interleaved"
+    }
+  ]
+}

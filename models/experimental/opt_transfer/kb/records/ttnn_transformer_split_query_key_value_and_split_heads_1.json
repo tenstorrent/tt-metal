@@ -1,0 +1,26 @@
+{
+  "id": "ttnn_transformer_split_query_key_value_and_split_heads_1",
+  "fused_op": "ttnn.transformer.split_query_key_value_and_split_heads",
+  "category": "attention_head_manipulation",
+  "pattern_kind": "horizontal_merge",
+  "torch_pattern": "input_tensor = torch.cat([input_tensor, kv_input_tensor], dim=-1)\nbatch_size, sequence_size, hidden_size = input_tensor.shape\nhead_size = hidden_size // (num_heads + 2 * num_kv_heads)\nq_hidden = num_heads * head_size\nkv_hidden = 2 * num_kv_heads * head_size\nquery_flat = input_tensor[..., :q_hidden]\nkv_flat = input_tensor[..., q_hidden : q_hidden + kv_hidden]\nquery = query_flat.reshape(batch_size, sequence_size, num_heads, head_size)\nkv = kv_flat.reshape(batch_size, sequence_size, 2 * num_kv_heads, head_size)\nkey = kv[..., :num_kv_heads, :]\nvalue = kv[..., num_kv_heads:, :]\nquery = query.permute(0, 2, 1, 3).contiguous()\nkey = key.permute(0, 2, 1, 3).contiguous()\nvalue = value.permute(0, 2, 1, 3).contiguous()\nif transpose_key:\n    key = key.permute(0, 1, 3, 2).contiguous()",
+  "signature": {},
+  "config_template": {
+    "num_heads": "{NUM_HEADS}",
+    "num_kv_heads": "{NUM_KV_HEADS_OR_NULL}",
+    "transpose_key": "{TRANSPOSE_KEY}",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_source: registered_golden; constraints: {'input_layout': 'TILE_LAYOUT', 'input_rank': 3, 'kv_packing_order': 'K heads then V heads along last dim of kv_input_tensor'}",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/transformers/test_transformer.py"
+  ],
+  "placement_observations": []
+}

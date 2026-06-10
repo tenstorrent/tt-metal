@@ -1,0 +1,89 @@
+{
+  "id": "ttnn_experimental_repeat_and_interleave_eltwise_mul",
+  "fused_op": "ttnn.experimental.repeat_and_interleave_eltwise_mul",
+  "category": "fused_eltwise",
+  "pattern_kind": "chain",
+  "torch_pattern": [],
+  "signature": {},
+  "config_template": {
+    "memory_config": "{MEMORY_CONFIG}",
+    "dtype": "{ACTIVATION_DTYPE}",
+    "math_fidelity": "{MATH_FIDELITY}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "llm",
+  "confidence": "low",
+  "unit_test_refs": [],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.repeat_and_interleave_eltwise_mul",
+      "tensor_role": "output (abar1 = A * broadcast(delta_t))",
+      "size_descriptor": "Mamba SSM decode-step activation (batch x d_inner*d_state expanded eltwise tensor)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: abar1 = ttnn.experimental.repeat_and_interleave_eltwise_mul(self.A, delta_t2, memory_config=ttnn.L1_MEMORY_CONFIG, ...)"
+    },
+    {
+      "op": "ttnn.experimental.repeat_and_interleave_eltwise_mul",
+      "tensor_role": "output (bbar0 = broadcast(B0) * delta_t)",
+      "size_descriptor": "Mamba SSM decode-step activation (batch x d_inner*d_state expanded eltwise tensor)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: bbar0 = ttnn.experimental.repeat_and_interleave_eltwise_mul(B0, delta_t2, memory_config=ttnn.L1_MEMORY_CONFIG, ...)"
+    },
+    {
+      "op": "ttnn.experimental.repeat_and_interleave_eltwise_mul",
+      "tensor_role": "output (bmulx0 = bbar0 * broadcast(x))",
+      "size_descriptor": "Mamba SSM decode-step activation (batch x d_inner*d_state expanded eltwise tensor)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: bmulx0 = ttnn.experimental.repeat_and_interleave_eltwise_mul(bbar0, x, memory_config=ttnn.L1_MEMORY_CONFIG, ...)"
+    },
+    {
+      "op": "ttnn.experimental.repeat_and_interleave_eltwise_mul",
+      "tensor_role": "output (C1 = broadcast(C0) * hidden_state)",
+      "size_descriptor": "Mamba SSM decode-step activation (batch x d_inner*d_state expanded eltwise tensor)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: C1 = ttnn.experimental.repeat_and_interleave_eltwise_mul(C0, hidden_state0, memory_config=ttnn.L1_MEMORY_CONFIG, ...)"
+    },
+    {
+      "op": "ttnn.experimental.repeat_and_interleave_eltwise_mul",
+      "tensor_role": "input (operands deallocated immediately after consumption)",
+      "size_descriptor": "Mamba SSM decode-step intermediates; producers (delta_t2, B0, bbar0, hidden_state0, C0) are short-lived L1 activations explicitly deallocated after this op",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: ttnn.deallocate(delta_t2); ttnn.deallocate(B0); ttnn.deallocate(bbar0); ttnn.deallocate(hidden_state0); ttnn.deallocate(C0)"
+    }
+  ]
+}

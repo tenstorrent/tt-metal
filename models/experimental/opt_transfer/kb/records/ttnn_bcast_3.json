@@ -1,0 +1,65 @@
+{
+  "id": "ttnn_bcast_3",
+  "fused_op": "ttnn.bcast",
+  "category": "normalization_affine",
+  "pattern_kind": "chain",
+  "torch_pattern": "res = (in0 * in1) + in2",
+  "signature": {},
+  "config_template": {
+    "ops": [
+      {
+        "op": "ttnn.bcast",
+        "math_op": "ttnn.BcastOpMath.MUL",
+        "dim": "ttnn.BcastOpDim.H",
+        "memory_config": "{SHARDED_MEMORY_CONFIG}"
+      },
+      {
+        "op": "ttnn.bcast",
+        "math_op": "ttnn.BcastOpMath.ADD",
+        "dim": "ttnn.BcastOpDim.H",
+        "memory_config": "{SHARDED_MEMORY_CONFIG}"
+      }
+    ]
+  },
+  "weight_transform": "gamma and beta each reshaped to [1, 1, 1, hidden] broadcast shape and tilized; padded to tile boundary",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Contiguous chain seen in all falcon40b layernorm call sites: bcast MUL (gamma) immediately followed by bcast ADD (beta) on a layernorm output computed with gamma=None/beta=None. Equivalent to the affine tail of torch layernorm: x * gamma + beta. Both ops share the same dim and memory_config.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_add.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.bcast",
+      "tensor_role": "input_and_output",
+      "size_descriptor": "layernorm output slice, hidden=8192-class (falcon40b), per-slice seq chunk",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "sharded memconfig shared across MUL and ADD in the chain; result then sharded_to_interleaved(_partial) to DRAM"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "falcon40b decoder layernorm gamma/beta call sites (memconfig / self.sharded_memconfig), followed by sharded_to_interleaved to dram_memcfg"
+    },
+    {
+      "op": "ttnn.bcast",
+      "tensor_role": "weight (gamma/beta)",
+      "size_descriptor": "[1, 1, 1, hidden] broadcast row",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "falcon40b ln_attn_gamma/ln_attn_beta/ln_mlp_gamma/ln_mlp_beta tensors consumed by sharded bcast"
+    }
+  ]
+}

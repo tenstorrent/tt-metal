@@ -1,0 +1,25 @@
+{
+  "id": "ttnn_identity",
+  "fused_op": "ttnn.identity",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.clone(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "[{N}, {C}, {H}, {W}]",
+    "dtype": "{DTYPE}",
+    "layout": "ttnn.TILE_LAYOUT"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Registered golden maps 'identity' -> torch.clone. Pass-through unary copy op; preserves values exactly across dtypes (uint16, uint32, int32, bfloat16, float32 verified with assert_equal in unit tests).",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary.py"
+  ],
+  "placement_observations": []
+}

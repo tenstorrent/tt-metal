@@ -1,0 +1,127 @@
+{
+  "id": "ttnn_upsample",
+  "fused_op": "ttnn.upsample",
+  "category": "spatial_interpolation",
+  "pattern_kind": "chain",
+  "torch_pattern": "x = input.permute(0, 3, 1, 2); x = torch.nn.functional.interpolate(x, scale_factor=scale_factor, mode=mode); out = x.permute(0, 2, 3, 1)",
+  "signature": {},
+  "config_template": {
+    "input_tensor": "NHWC tensor, ROW_MAJOR_LAYOUT required",
+    "scale_factor": "{SCALE_H} | ({SCALE_H}, {SCALE_W})",
+    "mode": "'nearest' (default) | 'bilinear'",
+    "memory_config": "{OUTPUT_MEMORY_CONFIG} or None",
+    "compute_kernel_config": "required for mode='bilinear' (math_fidelity={MATH_FIDELITY}, fp32_dest_acc_en=False)"
+  },
+  "weight_transform": "none (parameter-free op); layout transform only: caller must ensure input is NHWC ROW_MAJOR (golden permutes NCHW<->NHWC around F.interpolate)",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Maps 1:1 to F.interpolate in NCHW with NHWC permute wrappers. Commonly fused in chains: reshape -> upsample -> reshape (5D temporal upsampling done as two upsample calls with scale (s,s) then (s,1)), and to_layout(ROW_MAJOR) -> upsample -> to_layout(TILE) -> conv2d.; torch_pattern_source: registered golden (golden_upsample)",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/pool/test_upsample.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.upsample",
+      "tensor_role": "input",
+      "size_descriptor": "NHWC activation, any size",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: 'x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)  # Upsample requires row major.' \u2014 input layout must be ROW_MAJOR"
+    },
+    {
+      "op": "ttnn.upsample",
+      "tensor_role": "input",
+      "size_descriptor": "[B, H, W, C] conv-decoder activation",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": "BLOCK sharded, ShardOrientation.ROW_MAJOR, grid={CORE_GRID}, shard_shape=[{B}*{H}*{W}/grid_h, {C}/grid_w]"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: create_sharded_memory_config(strategy=ttnn.ShardStrategy.BLOCK, orientation=ttnn.ShardOrientation.ROW_MAJOR) then to_memory_config before upsample"
+    },
+    {
+      "op": "ttnn.upsample",
+      "tensor_role": "input",
+      "size_descriptor": "pre-sharded activation (UNet/decoder block)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": "{IN_SHARDED_MEM_CONFIG} (precomputed sharded spec; input reshard forced if mismatch)"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: 'if input.memory_config() != self.in_sharded_mem_config: input = ttnn.to_memory_config(...)' before upsample"
+    },
+    {
+      "op": "ttnn.upsample",
+      "tensor_role": "output",
+      "size_descriptor": "upscaled activation [B, H*s, W*s, C]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": "{OUT_SHARDED_MEM_CONFIG} (explicit output sharded memory_config passed to op)"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: 'up_output = ttnn.upsample(input, self.scale_factor, memory_config=self.out_sharded_mem_config)'"
+    },
+    {
+      "op": "ttnn.upsample",
+      "tensor_role": "output",
+      "size_descriptor": "upscaled activation feeding DRAM-sliced conv2d",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "downstream_conv_is_DRAM_sliced",
+        "op": "==",
+        "value": true
+      },
+      "source": "call_site: 'if hidden_state_l1.memory_config() != ttnn.DRAM_MEMORY_CONFIG' \u2014 output spilled to DRAM when feeding DRAM-slice conv path; otherwise stays L1"
+    },
+    {
+      "op": "ttnn.upsample",
+      "tensor_role": "output",
+      "size_descriptor": "bilinear-upsampled encoder hidden state ([B, 128, 128, C] target)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: bilinear upsample to 128x128 followed by ttnn.to_memory_config(..., ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16) for concat"
+    },
+    {
+      "op": "ttnn.upsample",
+      "tensor_role": "output",
+      "size_descriptor": "interleaved (no explicit memory_config)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "memory_config_arg",
+        "op": "==",
+        "value": null
+      },
+      "source": "call_site: 'ttnn.upsample(input_tensor=x0, scale_factor=scale_factor, memory_config=None)' \u2014 default interleaved output when no memory_config given; test converts to L1 afterwards via to_memory_config"
+    }
+  ]
+}

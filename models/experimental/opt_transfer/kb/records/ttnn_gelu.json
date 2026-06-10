@@ -1,0 +1,110 @@
+{
+  "id": "ttnn_gelu",
+  "fused_op": "ttnn.gelu",
+  "category": "eltwise_unary_activation",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.nn.functional.gelu(x)",
+  "signature": {},
+  "config_template": {
+    "fast_and_approximate_mode": false,
+    "memory_config": "{MEMORY_CONFIG}",
+    "output_tensor": "{OPTIONAL_PREALLOCATED_OUTPUT}",
+    "queue_id": "{OPTIONAL_CQ_ID}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Exact GELU (erf-based). Supports in-place via output_tensor=input (seen in mlp_spatial/mlp_prompt call sites). Frequently follows ttnn.linear/matmul+bias; note one call site comments that fusing the activation into the matmul gave worse PCC, so a standalone ttnn.gelu after linear is a valid replacement for torch linear->gelu subsequences.; ttnn_replacement: ttnn.gelu(x, fast_and_approximate_mode=False)",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_activation.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.gelu",
+      "tensor_role": "input",
+      "size_descriptor": "h=64, w=128 tile-aligned activation",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG); tt_result = ttnn.gelu(tt_in)"
+    },
+    {
+      "op": "ttnn.gelu",
+      "tensor_role": "input",
+      "size_descriptor": "MLP intermediate [batch, seq, 4*hidden] from wi linear",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model MLP: x = ttnn.linear(x, self.w1, ..., memory_config=ttnn.DRAM_MEMORY_CONFIG); x = ttnn.gelu(x)"
+    },
+    {
+      "op": "ttnn.gelu",
+      "tensor_role": "output",
+      "size_descriptor": "T5-style FF intermediate activation",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "config.activation_memcfg (model-configured)"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "ttnn.gelu(intermediate, memory_config=self.config.activation_memcfg, fast_and_approximate_mode=False) following ttnn.linear with program_config=wi_prg_config; intermediate deallocated after"
+    },
+    {
+      "op": "ttnn.gelu",
+      "tensor_role": "input",
+      "size_descriptor": "conv1d output activation (whisper encoder stem)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "sharded (conv output sharding); converted via ttnn.sharded_to_interleaved immediately after gelu"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "input_embeds = ttnn.gelu(input_embeds); input_embeds = ttnn.sharded_to_interleaved(input_embeds) after ttnn.conv1d"
+    },
+    {
+      "op": "ttnn.gelu",
+      "tensor_role": "input",
+      "size_descriptor": "FF1 output in sharded BERT-style encoder",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "use_sharded",
+        "op": "==",
+        "value": true
+      },
+      "source": "if use_sharded: x = ttnn.to_memory_config(x, self.interleaved_mem_config) before x = ttnn.gelu(x) \u2014 gelu run on interleaved, resharded afterwards via create_sharded_memory_config"
+    },
+    {
+      "op": "ttnn.gelu",
+      "tensor_role": "input_output_inplace",
+      "size_descriptor": "large MLP projection output (spatial/prompt streams)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "ttnn.gelu(mlp_spatial, output_tensor=mlp_spatial, fast_and_approximate_mode=False) \u2014 in-place to avoid OOM (adjacent comment notes OOM and that fusing into matmul hurts PCC)"
+    }
+  ]
+}

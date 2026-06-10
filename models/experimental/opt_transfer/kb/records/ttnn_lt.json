@@ -1,0 +1,27 @@
+{
+  "id": "ttnn_lt",
+  "fused_op": "ttnn.lt_",
+  "category": "eltwise_binary_inplace_comparison",
+  "pattern_kind": "chain",
+  "torch_pattern": "input_tensor_a.lt_(input_tensor_b)",
+  "signature": {},
+  "config_template": {
+    "input_tensor_a_shape": "{DIM}",
+    "input_tensor_b": "tensor_of_shape_{DIM}_or_scalar",
+    "output": "in_place_overwrites_input_tensor_a",
+    "memory_config": "{MEMORY_CONFIG}",
+    "dtype": "{DTYPE}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "In-place elementwise less-than. Fusable as an eltwise binary compute op; destination aliases first input, so fusion must respect the write-back to input_tensor_a. Second operand may be a tensor of the same shape or a scalar.; constraints: {'in_place': True, 'broadcasting': 'scalar second operand supported (tested with float scalars)', 'output_semantics': 'boolean-valued (0/1) result written into input_tensor_a; compared with compare_equal (exact match) in tests', 'shapes': 'input_shapes identical for tensor-tensor variant in tests'}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_composite.py"
+  ],
+  "placement_observations": []
+}

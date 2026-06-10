@@ -1,0 +1,67 @@
+{
+  "id": "ttnn_leaky_relu",
+  "fused_op": "ttnn.leaky_relu",
+  "category": "eltwise_unary_activation",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.nn.functional.leaky_relu(input_tensor_a, negative_slope=negative_slope)",
+  "signature": {},
+  "config_template": {
+    "negative_slope": "{NEGATIVE_SLOPE}",
+    "memory_config": "{MEMORY_CONFIG}",
+    "output_tensor": "{OPTIONAL_PREALLOCATED_OUTPUT}",
+    "queue_id": "{OPTIONAL_CQ_ID}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "ttnn_replacement: ttnn.leaky_relu(input_tensor, negative_slope={NEGATIVE_SLOPE}, memory_config={MEMORY_CONFIG}); constraints: {'layout': 'TILE_LAYOUT supported (works directly on TILE-layout activations; conv outputs must be moved to TILE via ttnn.to_layout before applying)', 'dtype': 'bfloat16 exact within 1 ULP; bfloat8_b validated at pcc>=0.999', 'notes': 'negative_slope is a scalar attribute, not a tensor; default 0.01 matches torch default. Supports in-place-style preallocated output_tensor and explicit queue_id.'}; fusion_notes: Unary eltwise activation; candidate for fusion into preceding matmul/conv as fused activation or into eltwise chains. In HiFi-GAN-style residual blocks it appears as leaky_relu -> (to_layout/reshape) -> conv1d chains; the activation itself is the torch.nn.functional.leaky_relu node in the source graph.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.leaky_relu",
+      "tensor_role": "activation_input_output",
+      "size_descriptor": "[B, C, T] TILE-layout vocoder upsample-stage activation (T = audio frame count, grows per upsample stage)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: HiFi-GAN upsample stage 'h_bct_tile = ttnn.leaky_relu(h_bct_tile, self.leaky_relu_slope, memory_config=mc_dram)'"
+    },
+    {
+      "op": "ttnn.leaky_relu",
+      "tensor_role": "activation_input_output",
+      "size_descriptor": "[B, C_last, T_final] TILE-layout pre-conv_post activation (largest T, post all upsamples)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: final activation 'ttnn.leaky_relu(h_bct_tile, 0.01, memory_config=mc_dram)' (HF quirk: fixed slope 0.01, not leaky_relu_slope)"
+    },
+    {
+      "op": "ttnn.leaky_relu",
+      "tensor_role": "residual_branch_input",
+      "size_descriptor": "[B, T, C] TILE-layout MRF residual-block activation (applied before convs1[i] and after convs1[i], residual captured before first leaky_relu)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: residual block 'y_tile = ttnn.leaky_relu(residual_t, self.leaky_relu_slope, memory_config=mc_dram)' and 'y_tile = ttnn.leaky_relu(h_conv, self.leaky_relu_slope, memory_config=mc_dram)'"
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "id": "ttnn_max_2",
+  "fused_op": "ttnn.max",
+  "category": "reduction",
+  "pattern_kind": "chain",
+  "torch_pattern": "shifted = x - torch.max(x, dim=dim, keepdim=True)[0]; exp = torch.exp(shifted); out = exp / torch.sum(exp, dim=dim, keepdim=True)",
+  "signature": {},
+  "config_template": {
+    "dim": "{DIM}",
+    "keepdim": true,
+    "numeric_stable": true
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "ttnn.max as the numeric-stabilization head of a decomposed softmax chain (max -> sub -> exp -> sum -> add(eps) -> reciprocal -> mul). Used only when the fused ttnn.softmax is not applicable (row length >= 4096); below that threshold the entire chain fuses to ttnn.softmax(x, dim=dim, numeric_stable=True).",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/reduce/test_max.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.max",
+      "tensor_role": "input",
+      "size_descriptor": "softmax input row, x.shape[dim] >= 4096",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "x.shape[dim]",
+        "op": ">=",
+        "value": 4096
+      },
+      "source": "call_site safe_softmax: decomposed max/exp/sum/reciprocal path selected for large rows; tensors default interleaved"
+    },
+    {
+      "op": "ttnn.max",
+      "tensor_role": "output",
+      "size_descriptor": "reduced row [.., 1] (keepdim=True), broadcast back in subtraction",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site safe_softmax: max_vals = ttnn.max(x, dim=dim, keepdim=True) consumed immediately by x - max_vals"
+    }
+  ]
+}

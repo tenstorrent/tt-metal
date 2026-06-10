@@ -1,0 +1,26 @@
+{
+  "id": "ttnn_digamma",
+  "fused_op": "ttnn.digamma",
+  "category": "eltwise_unary_composite",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.digamma(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "{DIM}",
+    "memory_config": "ttnn.DRAM_MEMORY_CONFIG",
+    "dtype": "ttnn.bfloat16",
+    "layout": "ttnn.TILE_LAYOUT"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Unary composite op; elementwise digamma (derivative of lgamma). Golden registered as torch.digamma. Test domain uses inputs in range [1, 100]; digamma has poles at non-positive integers, so accuracy may degrade near them.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_composite.py"
+  ],
+  "placement_observations": []
+}

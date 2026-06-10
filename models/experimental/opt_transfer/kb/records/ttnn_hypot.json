@@ -1,0 +1,54 @@
+{
+  "id": "ttnn_hypot",
+  "fused_op": "ttnn.hypot",
+  "category": "eltwise_binary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.hypot(input_tensor_a, input_tensor_b)",
+  "signature": {},
+  "config_template": {
+    "input_shape_a": "[{N}, {C}, {H}, {W}]",
+    "input_shape_b": "[{N}, {C}, {H}, {W}]",
+    "dtype": "{DTYPE}",
+    "layout": "TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "constraints: {'broadcast': 'shapes must be broadcastable', 'accuracy': 'ulp_threshold=1 for bfloat16; rtol=1e-05, atol=1e-05 for float32'}; fusion_notes: Binary elementwise op; replaces unoptimized torch chain sqrt(square(a) + square(b)) when encountered, per torch.hypot semantics. Eligible for unary activation post-op fusion as a binary eltwise op.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binaryng_fp32.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.hypot",
+      "tensor_role": "input_a",
+      "size_descriptor": "small ([1,1,64,64]-class test tensors)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: ttnn.from_torch(x_torch, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device) with default memory_config"
+    },
+    {
+      "op": "ttnn.hypot",
+      "tensor_role": "input_b",
+      "size_descriptor": "small ([1,1,64,64]-class test tensors)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: ttnn.from_torch(y_torch, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device) with default memory_config"
+    }
+  ]
+}

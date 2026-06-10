@@ -1,0 +1,41 @@
+{
+  "id": "ttnn_atanh",
+  "fused_op": "ttnn.atanh",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "result = torch.atanh(input_tensor_a); result.masked_fill_((input_tensor_a <= -1) | (input_tensor_a >= 1), float('inf')) if input_tensor_a.dtype == torch.bfloat16 else result",
+  "signature": {},
+  "config_template": {
+    "input_shape": "{DIM}",
+    "dtype": "{DTYPE: bfloat16|bfloat8_b}",
+    "layout": "ttnn.TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}",
+    "output_memory_config": "{OUTPUT_MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Unary elementwise inverse hyperbolic tangent. Domain (-1, 1); for bfloat16 inputs at or beyond +/-1 the golden masks to inf (matching hardware saturation behavior). Fusable as a single-op chain replacing torch.atanh on the activation path.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.atanh",
+      "tensor_role": "input",
+      "size_descriptor": "parametrized test shapes, uniform(low, high) data",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT, device=device) with default DRAM interleaved memory_config; no explicit sharding or program config at call site"
+    }
+  ]
+}

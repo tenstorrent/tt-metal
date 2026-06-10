@@ -1,0 +1,44 @@
+{
+  "id": "cos_1",
+  "fused_op": "cos",
+  "category": "eltwise_unary/sinusoidal_timestep_embedding",
+  "pattern_kind": "horizontal_merge",
+  "torch_pattern": "emb = timestep * time_proj_factor; torch.cat([torch.cos(emb), torch.sin(emb)], dim=-1)",
+  "signature": {},
+  "config_template": {
+    "branches": [
+      "cos",
+      "sin"
+    ],
+    "shared_input": "emb [{BATCH}, {HALF_DIM}]",
+    "merge_op": "concat",
+    "merge_dim": -1,
+    "branch_order": "{COS_FIRST_OR_SIN_FIRST}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "cos",
+      "tensor_role": "input",
+      "size_descriptor": "[{BATCH}, 1] timestep scaled by time_proj_factor; small activation (batch_size rows, half_dim cols)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: diffusion timestep/guidance embedding \u2014 cos and sin sibling branches on emb, concatenated dim=-1 and fed to timestep_embedder; timestep input asserted float32"
+    }
+  ]
+}

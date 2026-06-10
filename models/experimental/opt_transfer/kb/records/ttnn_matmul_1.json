@@ -1,0 +1,45 @@
+{
+  "id": "ttnn_matmul_1",
+  "fused_op": "ttnn.matmul",
+  "category": "linear_algebra/matmul_transpose_b",
+  "pattern_kind": "chain",
+  "torch_pattern": "input_tensor_b = input_tensor_b.transpose(-1, -2)\noutput_tensor = input_tensor_a @ input_tensor_b",
+  "signature": {},
+  "config_template": {
+    "call": "ttnn.matmul(input_tensor_a, input_tensor_b, transpose_b=True, memory_config={MEM_CFG}, dtype={DTYPE}, compute_kernel_config={KERNEL_CONFIG})",
+    "shape_constraints": "a: [..., {M}, {K}], b: [..., {N}, {K}] -> out: [..., {M}, {N}]",
+    "notes": "absorbs an explicit ttnn.transpose(b, -2, -1) preceding the matmul (e.g. K^T in attention scores)"
+  },
+  "weight_transform": "none at load time; transpose fused into matmul kernel (eliminates separate transpose op)",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_deepseek_mla_ops.py",
+    "tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/test_fused_demo.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_experimental.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_matmul.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_matmul_deepseek.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_ring_matmul.py",
+    "tests/ttnn/unit_tests/operations/prefetcher_common.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "matmul",
+      "tensor_role": "output",
+      "size_descriptor": "fp32 SDPA prefill scores: [B, H, q_seq, k_seq]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "scores = ttnn.matmul(q_f32, k_exp, transpose_b=True, compute_kernel_config=self.sdpa_compute_kernel_config, memory_config=ttnn.L1_MEMORY_CONFIG)"
+    }
+  ]
+}

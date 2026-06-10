@@ -1,0 +1,59 @@
+{
+  "id": "ttnn_grid_sample",
+  "fused_op": "ttnn.grid_sample",
+  "category": "sampling",
+  "pattern_kind": "chain",
+  "torch_pattern": "input_nchw = input_tensor.permute(0, 3, 1, 2); output_nchw = torch.nn.functional.grid_sample(input_nchw.float(), grid.reshape(N, H_grid, W_grid * K, 2).float(), mode=mode, padding_mode=padding_mode, align_corners=align_corners); output = output_nchw.permute(0, 2, 3, 1).to(input_tensor.dtype)",
+  "signature": {},
+  "config_template": {
+    "mode": "{MODE:bilinear|nearest}",
+    "padding_mode": "{PADDING_MODE:zeros|border|reflection}",
+    "align_corners": "{ALIGN_CORNERS:bool}",
+    "batch_output_channels": "{BATCH_OUTPUT_CHANNELS:bool}",
+    "grid_batching_factor": "{K:int|None}"
+  },
+  "weight_transform": {
+    "weights": "none (grid_sample has no trainable weights)",
+    "input_transform": "permute NCHW -> NHWC: input.permute(0, 2, 3, 1); keep ROW_MAJOR_LAYOUT",
+    "grid_transform": "grid (N, H_out, W_out, 2) optionally packed along last dim with K coordinate sets -> (N, H_out, W_out/K, 2*K); ROW_MAJOR_LAYOUT; dtype float32 or bfloat16 (bfloat16 grid has looser tolerance: atol~1.0)",
+    "output_transform": "output is NHWC; permute(0, 3, 1, 2) to recover NCHW for downstream torch-equivalent ops"
+  },
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/pool/test_grid_sample.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.grid_sample",
+      "tensor_role": "input",
+      "size_descriptor": "(N, H_in, W_in, C) NHWC activation",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device) \u2014 default interleaved DRAM"
+    },
+    {
+      "op": "ttnn.grid_sample",
+      "tensor_role": "grid",
+      "size_descriptor": "(N, H_out, W_out, 2*K) coordinate grid",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(torch_grid, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=grid_dtype) \u2014 float32 or bfloat16, default interleaved DRAM"
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "id": "ttnn_log2",
+  "fused_op": "ttnn.log2",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": [
+    "torch.log2"
+  ],
+  "signature": {},
+  "config_template": {
+    "memory_config": "{MEMORY_CONFIG}",
+    "output_tensor": "{OPTIONAL_PREALLOCATED_OUTPUT}",
+    "queue_id": "{QUEUE_ID}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Elementwise unary log base 2. Golden: torch.log2(input_tensor). Supports preallocated output tensor and queue_id per unit test. Domain restricted to positive inputs (test generates range [1e-6, 1]).",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py"
+  ],
+  "placement_observations": []
+}

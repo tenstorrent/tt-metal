@@ -1,0 +1,26 @@
+{
+  "id": "ttnn_multigammaln",
+  "fused_op": "ttnn.multigammaln",
+  "category": "eltwise_unary_composite",
+  "pattern_kind": "horizontal_merge",
+  "torch_pattern": "result = torch.lgamma(x); result += torch.lgamma(x - 0.5); result += torch.lgamma(x - 1.0); result += torch.lgamma(x - 1.5); result += 3.434189657547",
+  "signature": {},
+  "config_template": {
+    "input_shape": "[{N}, {C}, {H}, {W}]",
+    "dtype": "ttnn.bfloat16",
+    "layout": "ttnn.TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "ttnn_replacement: ttnn.multigammaln(input_tensor)",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_composite.py"
+  ],
+  "placement_observations": []
+}

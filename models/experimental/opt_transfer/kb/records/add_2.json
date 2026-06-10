@@ -1,0 +1,44 @@
+{
+  "id": "add_2",
+  "fused_op": "add_",
+  "category": "eltwise_binary_inplace_fused_activation",
+  "pattern_kind": "chain",
+  "torch_pattern": "output_tensor = input_tensor_a + input_tensor_b\noutput_tensor = torch.nn.functional.silu(output_tensor)",
+  "signature": {},
+  "config_template": {
+    "input_tensor_a": "{TENSOR_A}",
+    "input_tensor_b": "{TENSOR_B}",
+    "activations": [
+      "ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)"
+    ],
+    "use_legacy": false,
+    "notes": "fuses trailing SiLU into in-place binary add (time-embedding path)"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_add.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_inplace.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "add_",
+      "tensor_role": "input_a / input_b (temb, temb_add)",
+      "size_descriptor": "small time-embedding vectors [1, 1, 1, {EMB_DIM}]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "SDXL UNet embedding path: temb = ttnn.add_(temb, temb_add, use_legacy=False, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)]); temb_add deallocated after"
+    }
+  ]
+}

@@ -1,0 +1,121 @@
+{
+  "id": "ttnn_fold",
+  "fused_op": "ttnn.fold",
+  "category": "data_movement/space_to_depth",
+  "pattern_kind": "chain",
+  "torch_pattern": "reshaped = x.reshape(N, H // stride_h, stride_h, W // stride_w, stride_w, C); transposed = reshaped.permute(0, 1, 3, 2, 4, 5); out = transposed.reshape(N, H // stride_h, W // stride_w, C * stride_h * stride_w)",
+  "signature": {},
+  "config_template": {
+    "stride_h": "{STRIDE_H}",
+    "stride_w": "{STRIDE_W}",
+    "padding": "[{PAD_H}, {PAD_H}, {PAD_W}, {PAD_W}, 0, {PAD_C}]",
+    "use_transpose_as_fold": "{USE_TRANSPOSE_AS_FOLD:bool, required for padded/sharded variants}",
+    "output_shape": "({N}, ({H}+2*{PAD_H})//{STRIDE_H}, ({W}+2*{PAD_W})//{STRIDE_W}, {C}*{STRIDE_H}*{STRIDE_W})",
+    "grid_size": "{CORE_RANGE_SET, e.g. CoreRange((0,0),(7,7))}",
+    "override_memory_config": "{OPTIONAL_OUTPUT_MEM_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Replaces the reshape+permute+reshape (space-to-depth / patchify) subsequence; commonly fused ahead of a linear projection (ViT patch embedding: reshape -> fold -> to_layout(TILE) -> linear) or as the unfold stage of a large-kernel stride conv (ResNet stem). Input must be ROW_MAJOR NHWC. Channel padding to a multiple of 4 may be required: padding[5] = nearest_y(C,4) - C.; constraints: {'input_layout': 'ROW_MAJOR_LAYOUT', 'input_format': 'NHWC', 'stride_divisibility': 'H % stride_h == 0 and W % stride_w == 0 (after padding)'}",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/conv/data_movement/test_fold_op.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.fold",
+      "tensor_role": "input",
+      "size_descriptor": "generic [N, H, W, C] interleaved",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR / interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: tt_input_tensor = ttnn.from_torch(..., memory_config=ttnn.DRAM_MEMORY_CONFIG); ttnn.fold(tt_input_tensor, stride_h, stride_w, padding=list(padding))"
+    },
+    {
+      "op": "ttnn.fold",
+      "tensor_role": "input",
+      "size_descriptor": "padded NHWC, channels padded to nearest multiple of 4",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR / sharded",
+        "shard_spec_template": "sharded over CoreRangeSet(CoreRange((0,0),(7,7))) (8x8 grid)"
+      },
+      "program_config": {
+        "use_transpose_as_fold": true,
+        "grid_size": "CoreRangeSet({CoreRange(CoreCoord(0,0), CoreCoord(7,7))})",
+        "padding": "[pad_h, pad_h, pad_w, pad_w, 0, nearest_y(C,4)-C]"
+      },
+      "condition": null,
+      "source": "unit_test: sharded fold with grid_size and use_transpose_as_fold=True"
+    },
+    {
+      "op": "ttnn.fold",
+      "tensor_role": "input",
+      "size_descriptor": "padded [n, padded_h, padded_w, C] interleaved",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR / interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": {
+        "use_transpose_as_fold": true,
+        "output_shape": "(n, padded_h // stride_h, padded_w // stride_w, C * (stride_h * stride_w))",
+        "padding": "[0, 0, 0, 0, 0, C_padded - c]"
+      },
+      "condition": null,
+      "source": "unit_test: L1_MEMORY_CONFIG interleaved with explicit output_shape"
+    },
+    {
+      "op": "ttnn.fold",
+      "tensor_role": "input",
+      "size_descriptor": "[N, H, W, C] height-sharded rows",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR / HEIGHT_SHARDED",
+        "shard_spec_template": "ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec) over {CORE_GRID}"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: run_fold_sharded_test, HEIGHT_SHARDED L1 input, output verified with torch.equal"
+    },
+    {
+      "op": "ttnn.fold",
+      "tensor_role": "output",
+      "size_descriptor": "ViT patch-embedding activation ~[1568, 1024] (patch_count^2=196 patches, C*patch_size^2 cols)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR -> converted to TILE_LAYOUT bfloat8_b before linear",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site (ViT): folded_pixel_values = ttnn.fold(...); ttnn.to_memory_config(folded_pixel_values, ttnn.L1_MEMORY_CONFIG); to_layout(TILE_LAYOUT, dtype=bfloat8_b) before ttnn.linear projection"
+    },
+    {
+      "op": "ttnn.fold",
+      "tensor_role": "output",
+      "size_descriptor": "ResNet-style stem activation [n, c, h, w] after stride-fold of large-kernel conv input",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR / sharded (set via override_memory_config)",
+        "shard_spec_template": "override_fold_mem_config supplied by caller (model-tuned shard spec)"
+      },
+      "program_config": {
+        "use_transpose_as_fold": true,
+        "grid_size": "self.fold_compute_grid_size",
+        "padding": "[pad_h, pad_h, pad_w, pad_w, 0, pad_c]",
+        "override_memory_config": "self.override_fold_mem_config"
+      },
+      "condition": null,
+      "source": "model call site: conv-stem fold wrapper passing grid_size and override_memory_config"
+    }
+  ]
+}

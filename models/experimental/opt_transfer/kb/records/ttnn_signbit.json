@@ -1,0 +1,59 @@
+{
+  "id": "ttnn_signbit",
+  "fused_op": "ttnn.signbit",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.signbit(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "input_layout": "TILE_LAYOUT",
+    "dtype": "{DTYPE}",
+    "shape": "{SHAPE}",
+    "memory_config": "{MEM_CONFIG}",
+    "optional_kwargs": {
+      "output_tensor": "preallocated output tensor (optional)",
+      "queue_id": "command queue id (optional, e.g. 0)"
+    }
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Elementwise unary; returns boolean-like tensor (sign bit of each element). Supports bfloat16, bfloat8_b, int32 (including INT32_MIN/MAX and signed-zero edge cases). Golden: torch.signbit. Output of ttnn may need .to(torch.bool) cast for exact comparison with torch golden.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_signbit.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.signbit",
+      "tensor_role": "input",
+      "size_descriptor": "small test shapes (e.g. rand bfloat16 tiles, range [-100,100])",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) with default (DRAM interleaved) memory config"
+    },
+    {
+      "op": "ttnn.signbit",
+      "tensor_role": "output",
+      "size_descriptor": "small test shapes",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.signbit(tt_input, memory_config=dst_mem_config) \u2014 destination memory config is parameterized; no size-conditional placement observed"
+    }
+  ]
+}

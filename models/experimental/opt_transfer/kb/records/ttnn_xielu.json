@@ -1,0 +1,45 @@
+{
+  "id": "ttnn_xielu",
+  "fused_op": "ttnn.xielu",
+  "category": "eltwise_unary_activation",
+  "pattern_kind": "horizontal_merge",
+  "torch_pattern": "beta = 0.5; eps = -1e-6; pos_part = alpha_p * x * x + beta * x; x_clipped = torch.minimum(x, torch.full_like(x, eps)); neg_part = alpha_n * torch.expm1(x_clipped) - alpha_n * x + beta * x; out = torch.where(x > 0, pos_part, neg_part)",
+  "signature": {},
+  "config_template": {
+    "alpha_p": "{ALPHA_P}",
+    "alpha_n": "{ALPHA_N}",
+    "beta": 0.5,
+    "eps": -1e-06,
+    "input_layout": "TILE_LAYOUT",
+    "supported_dtypes": [
+      "bfloat16",
+      "float32"
+    ]
+  },
+  "weight_transform": "none (alpha_p and alpha_n are scalar trainable parameters passed by value; if stored as nn.Parameter, extract scalar via .item() before lowering)",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "xIELU piecewise activation (arXiv:2411.13010). Golden computes in float32 when input is bfloat16 and casts back once; bf16 accuracy validated within 1 ULP, fp32 within rtol=6e-05/atol=1e-06.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_activation.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.xielu",
+      "tensor_role": "input",
+      "size_descriptor": "unspecified (unit-test tile-aligned tensor)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT (interleaved, default)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device) with no explicit memory_config (defaults to DRAM interleaved)"
+    }
+  ]
+}

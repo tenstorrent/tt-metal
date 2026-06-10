@@ -1,0 +1,69 @@
+{
+  "id": "ttnn_sqrt",
+  "fused_op": "ttnn.sqrt",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.sqrt(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "memory_config": "{MEMORY_CONFIG}",
+    "input_layout": "TILE_LAYOUT",
+    "dtype": "{DTYPE:bfloat16}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_eltwise_sqrt.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.sqrt",
+      "tensor_role": "input",
+      "size_descriptor": "reduced statistic tensor [B, 1, C] (output of keepdim mean/sum reduction, small)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: attentive-stats pooling; surrounding subtract/concat ops explicitly use ttnn.L1_MEMORY_CONFIG, sqrt consumes/produces L1-resident reduced stats"
+    },
+    {
+      "op": "ttnn.sqrt",
+      "tensor_role": "input",
+      "size_descriptor": "L2-norm accumulator [..., 1] reduced over large last dim, parent tensor chunked at 65536",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "last_dim",
+        "op": ">",
+        "value": 65536
+      },
+      "source": "call_site: _l2_normalize_sparse_ttnn moves parent tensor to ttnn.DRAM_MEMORY_CONFIG and chunks last dim at CHUNK=65536 before pow/sum/sqrt"
+    },
+    {
+      "op": "ttnn.sqrt",
+      "tensor_role": "output",
+      "size_descriptor": "std tensor [B, 1, C], immediately consumed by repeat/concat in L1",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: std = ttnn.sqrt(ttnn.clamp(...)); downstream ttnn.concat([...], memory_config=ttnn.L1_MEMORY_CONFIG)"
+    }
+  ]
+}

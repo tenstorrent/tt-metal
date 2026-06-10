@@ -1,0 +1,54 @@
+{
+  "id": "ttnn_logical_not",
+  "fused_op": "ttnn.logical_not",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.logical_not(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "{N}x{C}x{H}x{W}",
+    "dtype": "{DTYPE}",
+    "layout": "TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Elementwise unary logical NOT. Golden registered as torch.logical_not. int32 edge case: ttnn.logical_not(-2147483648) returns True on Wormhole (wraps to 0 via integer overflow) whereas torch returns False. Output is boolean-valued (0/1) in the input dtype.; ttnn_replacement: ttnn.logical_not(input_tensor)",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_int32.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.logical_not",
+      "tensor_role": "input",
+      "size_descriptor": "small_1d (5 elements, int32 edge-case test)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test_unary_logical_int32_edge_cases: ttnn.from_torch(..., dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.logical_not",
+      "tensor_role": "input",
+      "size_descriptor": "generic input_shape (uniform(-100,100) with periodic zeros)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device) \u2014 default memory config (DRAM interleaved)"
+    }
+  ]
+}

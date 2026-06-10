@@ -1,0 +1,105 @@
+{
+  "id": "ttnn_rms_norm",
+  "fused_op": "ttnn.rms_norm",
+  "category": "normalization",
+  "pattern_kind": "chain",
+  "torch_pattern": "variance = input_tensor.to(torch.float32).pow(2).mean(-1, keepdim=True)\ninput_tensor = input_tensor * torch.rsqrt(variance + epsilon)\nif weight is not None and weight.dtype in [torch.float16, torch.bfloat16]:\n    input_tensor = input_tensor.to(weight.dtype)\noutput = weight * input_tensor if weight is not None else input_tensor",
+  "signature": {},
+  "config_template": {
+    "epsilon": "{EPS}",
+    "weight": "{GAMMA_TENSOR}",
+    "memory_config": "{MEM_CFG}",
+    "program_config": "LayerNormShardedMultiCoreProgramConfig(compute_with_storage_grid_size={GRID}, block_h={SEQ_TILES}, block_w={HIDDEN_TILES_PER_CORE}, subblock_w={SUBBLOCK_W}, inplace={INPLACE}) | LayerNormDefaultProgramConfig()",
+    "compute_kernel_config": "WormholeComputeKernelConfig(math_fidelity={FIDELITY}, fp32_dest_acc_en={FP32_ACC}, packer_l1_acc={L1_ACC})"
+  },
+  "weight_transform": "1D gamma [H] -> unsqueeze to [1,1,1,H] (optionally expanded/tile-padded to [1,1,32,H]), converted via ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT); fill_implicit_tile_padding applied in tests",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/test_fused_demo.py",
+    "tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py",
+    "tests/ttnn/unit_tests/operations/fused/sharded_test_utils.py",
+    "tests/ttnn/unit_tests/operations/fused/test_rms_norm.py",
+    "tests/ttnn/unit_tests/operations/fused/test_rms_norm_sharded.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "rms_norm",
+      "tensor_role": "input/output (decode-mode activation, batch<=32 rows)",
+      "size_descriptor": "[1,1,{BATCH_PADDED_32},{HIDDEN}] decode activation",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE",
+        "shard_spec_template": "WIDTH_SHARDED grid={GRID}, shard_shape=[{BATCH_PADDED_32}, {HIDDEN}/{NUM_CORES}]"
+      },
+      "program_config": "LayerNormShardedMultiCoreProgramConfig(compute_with_storage_grid_size=device.compute_with_storage_grid_size(), block_h={SEQ_TILES}, block_w={HIDDEN_TILES_PER_CORE})",
+      "condition": {
+        "var": "seq_len",
+        "op": "<=",
+        "value": 32
+      },
+      "source": "mamba model (SHARDED_NORM_PRGM_CFG + sharded_h memcfg, interleaved_to_sharded before call); width-sharded perf test with LayerNormShardedMultiCoreProgramConfig"
+    },
+    {
+      "op": "rms_norm",
+      "tensor_role": "output (prefill / long-sequence activation)",
+      "size_descriptor": "[1,1,{SEQ_LEN},{HIDDEN}] prefill activation, seq_len large",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": "LayerNormDefaultProgramConfig()",
+      "condition": {
+        "var": "seq_len",
+        "op": ">",
+        "value": 32
+      },
+      "source": "DeepSeek MLA prefill (q_a_layernorm / kv_a_layernorm with memory_config=ttnn.DRAM_MEMORY_CONFIG); LoFi perf test with DRAM_MEMORY_CONFIG + LayerNormDefaultProgramConfig"
+    },
+    {
+      "op": "rms_norm",
+      "tensor_role": "input/output (per-head QK-norm, small tensors)",
+      "size_descriptor": "[1,{NUM_HEADS},{SEQ_OR_BATCH},{HEAD_DIM}] flattened to [1,1,{NUM_HEADS}*{SEQ_OR_BATCH},{HEAD_DIM}]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "Qwen3 attention QK-norm call sites (memory_config=ttnn.L1_MEMORY_CONFIG, no program_config)"
+    },
+    {
+      "op": "rms_norm",
+      "tensor_role": "weight (gamma)",
+      "size_descriptor": "1D [{HIDDEN}] reshaped to [1,1,1,{HIDDEN}] or tile-padded [1,1,32,{HIDDEN}]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit tests (ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT)) and qwen weight_4d.expand(1,1,32,hidden) call sites"
+    },
+    {
+      "op": "rms_norm",
+      "tensor_role": "input/output (block-sharded transformer-layer pre-norm)",
+      "size_descriptor": "[1,1,{SEQ_LEN},{HIDDEN}] layer activation resharded before norm",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE",
+        "shard_spec_template": "sharded memcfg {_cp_ln_in_memcfg} (to_memory_config before and after, output matches input shard spec)"
+      },
+      "program_config": "LayerNormShardedMultiCoreProgramConfig ({_cp_ln_progcfg}; 'drops from 1c x 17us to 32c x ~2us')",
+      "condition": null,
+      "source": "decoder layer call sites (input_ln/post_ln/final_norm sharded RMSNorm)"
+    }
+  ]
+}

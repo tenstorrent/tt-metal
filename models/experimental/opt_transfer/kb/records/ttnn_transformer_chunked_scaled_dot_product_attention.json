@@ -1,0 +1,77 @@
+{
+  "id": "ttnn_transformer_chunked_scaled_dot_product_attention",
+  "fused_op": "ttnn.transformer.chunked_scaled_dot_product_attention",
+  "category": "attention",
+  "pattern_kind": "chain",
+  "torch_pattern": [],
+  "signature": {},
+  "config_template": {
+    "input_tensor_q": "q_heads_1QSD [1, {NUM_Q_HEADS}, {SEQ_CHUNK}, {HEAD_DIM}]",
+    "input_tensor_k": "keys_BKSD (paged KV cache) [{BATCH}, {NUM_KV_HEADS}, {MAX_SEQ}, {HEAD_DIM}]",
+    "input_tensor_v": "values_BKSD (paged KV cache) [{BATCH}, {NUM_KV_HEADS}, {MAX_SEQ}, {HEAD_DIM}]",
+    "page_table_tensor": "page_table [{BATCH}, {MAX_NUM_BLOCKS}]",
+    "chunk_start_idx": "{CHUNK_START_IDX} (int) or chunk_start_idx_tensor (device tensor for flexible/prefix-cached SDPA)",
+    "scale": "{1/sqrt(HEAD_DIM)} (optional)",
+    "compute_kernel_config": "HiFi4 (compute_kernel_config_hifi4 / sdpa_prefill_compute_kernel_cfg / SDPA_COMPUTE_KERNEL_CONFIG)",
+    "program_config": "SDPAProgramConfig selected as a function of {SEQ_LEN} (and page_size for flexible chunking), e.g. model_config['SDPA_PROGCFG']({SEQ_LEN}) or get_attn_sdpa_program_config(Mode.PREFILL, {SEQ_LEN}, {CHUNK_START_IDX}, None)"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "constraints: ['sliding_window not supported in chunked prefill SDPA', 'requires paged KV cache + page_table', 'prefix caching requires chunk_start_idx_tensor variant']",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "llm",
+  "confidence": "low",
+  "unit_test_refs": [],
+  "placement_observations": [
+    {
+      "op": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "tensor_role": "program_config",
+      "size_descriptor": "seq_len (prefill chunk length)",
+      "memory_config": null,
+      "program_config": "model_config['SDPA_PROGCFG'](seq_len) \u2014 SDPA program config parameterized by sequence length",
+      "condition": {
+        "var": "chunk_start_idx",
+        "op": "!=",
+        "value": null
+      },
+      "source": "call_site: attn_output_84SD = chunked_scaled_dot_product_attention(..., program_config=self.model_config['SDPA_PROGCFG'](seq_len))"
+    },
+    {
+      "op": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "tensor_role": "program_config",
+      "size_descriptor": "seq_len, chunk_start_idx (prefill mode)",
+      "memory_config": null,
+      "program_config": "args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, chunk_start_idx, None) \u2014 program config chosen per seq_len and chunk offset",
+      "condition": {
+        "var": "chunk_start_idx",
+        "op": "!=",
+        "value": null
+      },
+      "source": "call_site: program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, chunk_start_idx, None)"
+    },
+    {
+      "op": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "tensor_role": "program_config",
+      "size_descriptor": "seq_len, page_size (flexible chunk / prefix caching)",
+      "memory_config": null,
+      "program_config": "model_config['SDPA_PROGCFG_FLEXIBLE_CHUNK'](seq_len, page_size) with page_size = paged_attention_config.block_size (default 32)",
+      "condition": {
+        "var": "chunk_start_idx_tensor",
+        "op": "!=",
+        "value": null
+      },
+      "source": "call_site: program_config=self.model_config['SDPA_PROGCFG_FLEXIBLE_CHUNK'](seq_len, page_size)"
+    },
+    {
+      "op": "ttnn.transformer.chunked_scaled_dot_product_attention",
+      "tensor_role": "compute_kernel_config",
+      "size_descriptor": "any prefill seq_len",
+      "memory_config": null,
+      "program_config": "HiFi4 compute kernel config (compute_kernel_config_hifi4 / SDPA_COMPUTE_KERNEL_CONFIG / sdpa_prefill_compute_kernel_cfg)",
+      "condition": null,
+      "source": "call_sites: compute_kernel_config=self.compute_kernel_config_hifi4; compute_kernel_config=self.model_config['SDPA_COMPUTE_KERNEL_CONFIG']"
+    }
+  ]
+}

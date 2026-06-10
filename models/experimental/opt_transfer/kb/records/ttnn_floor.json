@@ -1,0 +1,54 @@
+{
+  "id": "ttnn_floor",
+  "fused_op": "ttnn.floor",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.floor(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "{DIM}",
+    "dtype": "ttnn.float32 | ttnn.bfloat16",
+    "layout": "ttnn.TILE_LAYOUT",
+    "sub_core_grids": "Optional[ttnn.CoreRangeSet] (e.g. CoreRangeSet([CoreRange(CoreCoord(0,0), CoreCoord({GRID_X},{GRID_Y}))]))"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "ttnn_replacement: ttnn.floor(input_tensor, sub_core_grids=None)",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_program_cache.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.floor",
+      "tensor_role": "input",
+      "size_descriptor": "generic eltwise tile-aligned tensor (tested with values in [-43566, 43565], float32)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test_unary_floor: ttnn.from_torch(in_data1, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device); default interleaved DRAM, no memory_config override"
+    },
+    {
+      "op": "ttnn.floor",
+      "tensor_role": "input",
+      "size_descriptor": "small/medium tile tensors in cache-entry tests",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "sub_core_grids=CoreRangeSet([CoreRange((0,0),(3,3))]) or CoreRangeSet([CoreRange((0,0),(5,5))]); note: sub_core_grids choice and interleaved-vs-subgrid factory are part of the program cache key (different grids -> different cache entries)",
+      "condition": null,
+      "source": "cache tests: ttnn.floor(tt_a1, sub_core_grids=grid_a) / ttnn.floor(tt_a2, sub_core_grids=grid_b); device.cache_entries_counter.total == 2"
+    }
+  ]
+}

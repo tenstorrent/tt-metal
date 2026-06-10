@@ -1,0 +1,40 @@
+{
+  "id": "ttnn_hardsigmoid",
+  "fused_op": "ttnn.hardsigmoid",
+  "category": "eltwise_unary_activation",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.nn.functional.hardsigmoid(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "{SHAPE}",
+    "dtype": "{DTYPE}",
+    "layout": "ttnn.TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Composite unary activation: hardsigmoid(x) = clamp(x/6 + 0.5, 0, 1). Single-input, single-output elementwise op; fusable into preceding matmul/conv via UnaryWithParam activation lists where supported. Golden source maps 'hardsigmoid' directly to torch.nn.functional.hardsigmoid.; ttnn_replacement: ttnn.hardsigmoid(input_tensor); constraints: {'layout': 'TILE_LAYOUT required for unary eltwise kernels', 'dtype': ['bfloat16', 'bfloat8_b', 'float32'], 'accuracy': 'pcc >= 0.9999 vs torch golden (per unit test); bfloat8_b inputs round-tripped through ttnn for golden comparison'}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.hardsigmoid",
+      "tensor_role": "input",
+      "size_descriptor": "generic test shapes (parametrized input_shapes)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device) with default memory_config (DRAM interleaved); output inherits input memory config"
+    }
+  ]
+}

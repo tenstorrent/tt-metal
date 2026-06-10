@@ -1,0 +1,89 @@
+{
+  "id": "ttnn_mul_1",
+  "fused_op": "ttnn.mul",
+  "category": "eltwise_binary_fused_activation",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.mul(torch.nn.functional.silu(input_tensor_a), input_tensor_b)",
+  "signature": {},
+  "config_template": {
+    "input_tensor_a": "{GATE_PROJ_OUT}",
+    "input_tensor_b": "{UP_PROJ_OUT}",
+    "input_tensor_a_activations": [
+      "ttnn.UnaryOpType.SILU"
+    ],
+    "dtype": "{DTYPE:bfloat8_b|bfloat16}",
+    "memory_config": "{MEM_CONFIG:L1_WIDTH_SHARDED if mode==decode else DRAM}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Replaces the unfused two-op subsequence seen in call sites/tests: gate = ttnn.silu(gate); hidden = ttnn.mul(gate, up). SiLU is fused into the binary mul via input_tensor_a_activations=[ttnn.UnaryOpType.SILU]. Standard SwiGLU MLP fusion (gate*up before down projection). Same fusion mechanism supports other unary ops on input A (e.g. self.activation_type).",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_eltwise_binary.py",
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_pow_fractional.py",
+    "tests/ttnn/unit_tests/operations/deepseek/test_deepseek_moe_post_combine_reduce.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_int32.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_uint32.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_mul.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_sub.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "mul",
+      "tensor_role": "output",
+      "size_descriptor": "decode SwiGLU hidden, [1,1,batch_tiles*32,{INTERMEDIATE_DIM}/tp]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "WIDTH_SHARDED matching gate/up projection output sharding (mul preserves layout)"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "decode"
+      },
+      "source": "decode path: hidden_sharded = ttnn.mul(gate_sharded, up_sharded, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=self._decode_gate_up_out_memcfg); also memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG variant"
+    },
+    {
+      "op": "mul",
+      "tensor_role": "output",
+      "size_descriptor": "prefill SwiGLU hidden, [1,1,{SEQ_LEN},{INTERMEDIATE_DIM}/tp], seq_len >= 2048",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "prefill"
+      },
+      "source": "prefill MLP: w2_in = ttnn.mul(w1_out, w3_out, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)"
+    },
+    {
+      "op": "mul",
+      "tensor_role": "output",
+      "size_descriptor": "interleaved SwiGLU hidden carried through mem_cfg shared with gate/up linears",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "inherit w1_out.memory_config()"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "seq_len",
+        "op": "<",
+        "value": 4096
+      },
+      "source": "TG MLP prefill: w2_in = ttnn.mul(w1_out_reduced, w3_out_reduced, input_tensor_a_activations=[SILU], dtype=ttnn.bfloat8_b, memory_config=w1_out.memory_config()); branch comment: 'For shorter sequence lengths (seq_len < 4096 or batch_size > 1) use the original matmul'"
+    }
+  ]
+}

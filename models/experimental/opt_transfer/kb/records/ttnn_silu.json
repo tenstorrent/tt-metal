@@ -1,0 +1,147 @@
+{
+  "id": "ttnn_silu",
+  "fused_op": "ttnn.silu",
+  "category": "eltwise_unary_activation",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.nn.functional.silu(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "memory_config": "{MEMORY_CONFIG}",
+    "output_tensor": "{OUTPUT_TENSOR_FOR_INPLACE|null}",
+    "queue_id": "{QUEUE_ID|0}",
+    "layout_requirement": "TILE_LAYOUT",
+    "notes": "Supports in-place via output_tensor=input (used widely after group_norm in VAE/UNet resnet blocks); preserves input sharding when memory_config matches input shard spec; silu can hang if input is not TILE layout"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "ttnn_replacement: ttnn.silu(input_tensor, memory_config={MEMORY_CONFIG}, output_tensor={OUTPUT_TENSOR})",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_examplerst.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_silu.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_silu_row_major.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.silu",
+      "tensor_role": "input/output activation (in-place)",
+      "size_descriptor": "large VAE/UNet conv feature map ([N,1,H*W,C] tiled, H*W >> 1024 tiles)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "activation_rows(N*H*W)",
+        "op": ">",
+        "value": "L1_fit_threshold"
+      },
+      "source": "VAE decoder resnet block: hidden_states = ttnn.group_norm(..., memory_config=ttnn.DRAM_MEMORY_CONFIG); hidden_states = ttnn.silu(hidden_states, output_tensor=hidden_states)"
+    },
+    {
+      "op": "ttnn.silu",
+      "tensor_role": "input/output activation",
+      "size_descriptor": "conv decoder activation when conv slicing is enabled (does not fit L1 full-slice)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "conv_out_slice_config",
+        "op": "!=",
+        "value": "ttnn.Conv2dL1FullSliceConfig"
+      },
+      "source": "if self.conv_out_slice_config != ttnn.Conv2dL1FullSliceConfig: hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG); hidden_states = ttnn.silu(hidden_states)"
+    },
+    {
+      "op": "ttnn.silu",
+      "tensor_role": "input/output activation (sharded, NHWC conv-style)",
+      "size_descriptor": "[batch, H, W, C] height-sharded feature map fitting in L1",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "shard_shape=[{N*H*W}//{NUM_CORES}, {C}], grid={CORE_GRID}, orientation=ROW_MAJOR"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: input_tensor = ttnn.to_memory_config(input_tensor, memory_config=in_sharded_mem_config); output_tensor = ttnn.silu(input_tensor, memory_config=in_sharded_mem_config)"
+    },
+    {
+      "op": "ttnn.silu",
+      "tensor_role": "input/output activation (sharded, in-place memory config)",
+      "size_descriptor": "UNet sample tensor reshaped to [1,1,N*H*W,C], block/height sharded",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "SHARDED (inherits input shard spec)",
+        "shard_spec_template": "ttnn.get_memory_config(input)"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "sample = ttnn.silu(sample, memory_config=ttnn.get_memory_config(sample)); sample = ttnn.sharded_to_interleaved(sample, ttnn.L1_MEMORY_CONFIG, sample.dtype)"
+    },
+    {
+      "op": "ttnn.silu",
+      "tensor_role": "time-embedding input (AdaLN modulation path)",
+      "size_descriptor": "small [B, 1, D] / [1,1,B,D] time embedding (D ~ 1-6K, B small)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "DiT transformer blocks: time_embed = ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG); spatial_time = self.norm1_linear(time_embed)"
+    },
+    {
+      "op": "ttnn.silu",
+      "tensor_role": "gate activation in SwiGLU MLP (decode/small-seq)",
+      "size_descriptor": "small-batch decode activation [1, B, hidden] / [B, seq<=32, intermediate]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "seq_len",
+        "op": "<=",
+        "value": 32
+      },
+      "source": "LLM MLP: gate_silu = ttnn.silu(gate_o, memory_config=ttnn.L1_MEMORY_CONFIG); gated = ttnn.mul(gate_silu, up_o, memory_config=ttnn.L1_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.silu",
+      "tensor_role": "conv output activation (Mamba/conv1d block)",
+      "size_descriptor": "[1, 1, seq, d_inner] conv output, decode-sized",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "conv_out_after_silu = ttnn.silu(conv_out_with_bias, memory_config=ttnn.L1_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.silu",
+      "tensor_role": "depthwise-conv output activation (conformer conv module)",
+      "size_descriptor": "full-sequence [B, T, d_model] activation",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "z = ttnn.silu(z, memory_config=mc_dram); out = ttnn.linear(z, self.pointwise_conv2_weight, memory_config=mc_dram)"
+    }
+  ]
+}

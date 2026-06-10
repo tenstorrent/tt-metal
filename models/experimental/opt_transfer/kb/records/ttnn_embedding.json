@@ -1,0 +1,163 @@
+{
+  "id": "ttnn_embedding",
+  "fused_op": "ttnn.embedding",
+  "category": "embedding_lookup",
+  "pattern_kind": "chain",
+  "torch_pattern": "output_tensor = torch.nn.functional.embedding(input_tensor, weight)",
+  "signature": {},
+  "config_template": {
+    "layout": "ttnn.TILE_LAYOUT if {BATCH} % ttnn.TILE_SIZE == 0 else ttnn.ROW_MAJOR_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}",
+    "dtype": "{DTYPE}",
+    "embeddings_type": "ttnn.EmbeddingsType.GENERIC | ttnn.EmbeddingsType.PADDED (with padding_idx={PAD_TOKEN_ID}) | ttnn.EmbeddingsType.BINARY",
+    "padding_idx": "{PAD_TOKEN_ID} (optional, for padded embeddings)",
+    "input_constraint": "indices must be uint32, ROW_MAJOR_LAYOUT, rank<=2 typical [batch, seq]; pad seq to TILE_SIZE multiple via ttnn.pad if seq % 32 != 0 and TILE_LAYOUT output requested"
+  },
+  "weight_transform": "weight = ttnn.from_torch(torch_weight, dtype={WEIGHT_DTYPE e.g. ttnn.bfloat16/bfloat8_b}, layout=ttnn.ROW_MAJOR_LAYOUT); no transpose/reshape \u2014 torch nn.Embedding weight [vocab_size, hidden_dim] used as-is; output is [batch, seq, hidden_dim] (3D, callers often unsqueeze_to_4D/reshape to [B,1,S,H] afterward)",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Indices tensor must be integer (uint32). Output layout selectable; TILE_LAYOUT enables direct fusion into downstream add/layer_norm. Common fused neighborhoods: word+token_type+position embedding adds (BERT), embedding+multiply (scaled embed), cos/sin RoPE table lookups sharing one index tensor.; ttnn_replacement: output_tensor = ttnn.embedding(input_tensor, weight, layout={LAYOUT}, memory_config={MEMORY_CONFIG}, dtype={DTYPE})",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_embedding.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_embedding.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "embedding",
+      "tensor_role": "output",
+      "size_descriptor": "decoder hidden states [batch, seq, hidden] with large hidden (e.g. 4096) or prefill seq",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: LLM token embedding (falcon/llama/whisper/distilbert style): ttnn.embedding(..., layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=bfloat8_b/bfloat16)"
+    },
+    {
+      "op": "embedding",
+      "tensor_role": "output",
+      "size_descriptor": "encoder embeddings [batch, seq<=512, hidden~768-1024] (BERT-class models)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: BERT embeddings \u2014 word/token_type/position embeddings all produced with memory_config=ttnn.L1_MEMORY_CONFIG then fused via ttnn.add + layer_norm in L1"
+    },
+    {
+      "op": "embedding",
+      "tensor_role": "output",
+      "size_descriptor": "decode vs prefill token embedding, x flattened to [1,1,1,batch*seq]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "model_config['DECODE_RESIDUAL_MEMCFG'] (width-sharded decode residual)"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "seq_len*batch",
+        "op": "<=",
+        "value": 32
+      },
+      "source": "call_site: ttnn.embedding(x, weights, memory_config=DECODE_RESIDUAL_MEMCFG if x.shape[-1] <= 32 else ttnn.DRAM_MEMORY_CONFIG, dtype=bfloat16 if decode else bfloat8_b)"
+    },
+    {
+      "op": "embedding",
+      "tensor_role": "output",
+      "size_descriptor": "prefill token embedding, x.shape[-1] > 32 (flattened tokens)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "seq_len*batch",
+        "op": ">",
+        "value": 32
+      },
+      "source": "call_site: same conditional placement \u2014 DRAM interleaved + bfloat8_b when flattened token count exceeds one tile"
+    },
+    {
+      "op": "embedding",
+      "tensor_role": "input (indices)",
+      "size_descriptor": "rot_idxs / position indices [1, batch] uint32",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: RoPE setup \u2014 rot_idxs = ttnn.to_device(rot_idxs, device, memory_config=ttnn.DRAM_MEMORY_CONFIG) before cos/sin embedding lookups"
+    },
+    {
+      "op": "embedding",
+      "tensor_role": "output",
+      "size_descriptor": "RoPE cos/sin lookup output [1, batch, head_dim], batch a multiple of TILE_SIZE",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "height/width shard on sub core grid (use_height_and_width_as_shard_shape=True) when prefetcher/sub-core-grid path active; else DRAM interleaved"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "batch % TILE_SIZE",
+        "op": "==",
+        "value": 0
+      },
+      "source": "call_site: cos = ttnn.embedding(rot_idxs, cos_matrix, layout=TILE_LAYOUT, memory_config=mem_config) with mem_config = sharded L1 if batch%32==0 and prefetcher else ttnn.DRAM_MEMORY_CONFIG"
+    },
+    {
+      "op": "embedding",
+      "tensor_role": "output",
+      "size_descriptor": "RoPE cos/sin lookup output, batch NOT a multiple of TILE_SIZE",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "batch % TILE_SIZE",
+        "op": "!=",
+        "value": 0
+      },
+      "source": "call_site: use_rm = batch % ttnn.TILE_SIZE != 0; embedding_layout = ROW_MAJOR_LAYOUT if use_rm else TILE_LAYOUT, followed by ttnn.to_layout(TILE_LAYOUT) after transpose"
+    },
+    {
+      "op": "embedding",
+      "tensor_role": "weight",
+      "size_descriptor": "embedding table [vocab_size up to 250880, hidden up to 4096]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: weights = ttnn.to_device(ttnn.from_torch(torch_weights, dtype=dtype), device, memory_config=input_mem_config); large vocab tables kept in DRAM interleaved"
+    },
+    {
+      "op": "embedding",
+      "tensor_role": "output",
+      "size_descriptor": "Mamba token embedding (B, L, E) reshaped to [1,1,outer_dim,E]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: x = ttnn.embedding(x, embedding_weights, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)"
+    }
+  ]
+}

@@ -1,0 +1,98 @@
+{
+  "id": "ttnn_experimental_nlp_concat_heads_decode",
+  "fused_op": "ttnn.experimental.nlp_concat_heads_decode",
+  "category": "attention/tensor_manipulation",
+  "pattern_kind": "chain",
+  "torch_pattern": "x = attn_out[:, :, :num_heads, :]\nout = x.reshape(seq_len, 1, batch, num_heads * head_dim)",
+  "signature": {},
+  "config_template": {
+    "num_heads": "{N_LOCAL_HEADS}",
+    "sub_core_grids": "{SUB_CORE_GRIDS|null}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_source: test comment: Input (1, 32, 32(8), 128) [seq, batch, padded_heads(real_heads), head_dim] -> Output (1, 1, 32, 1024) [seqlen, 1, batch, hidden_size]; padded heads beyond num_heads are sliced away, then heads*head_dim are flattened contiguously per batch (a pure reshape after the slice); constraints: {'mode': 'decode (seq_len == 1)', 'input_rank': 4, 'input_shape': '[seq=1, batch={BATCH}, padded_heads>= {N_LOCAL_HEADS}, head_dim={HEAD_DIM}]', 'output_shape': '[1, 1, {BATCH}, {N_LOCAL_HEADS}*{HEAD_DIM}]', 'notes': 'Inverse of nlp_create_qkv_heads_decode; typically follows SDPA/batched-MM scores output and precedes the attention output projection (wo / o_proj) linear.'}",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_nlp_concat_heads_decode.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.nlp_concat_heads_decode",
+      "tensor_role": "input",
+      "size_descriptor": "decode activation, shape [1, batch=32, padded_heads=32, head_dim=128]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "{shape: [{PADDED_NUM_HEADS}, {HEAD_DIM}], grid: one core per batch row (SCORES_BATCHED_MM_OUTPUT_MEMCFG)}"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: concat_head_input_tt placed with mem_config=SCORES_BATCHED_MM_OUTPUT_MEMCFG"
+    },
+    {
+      "op": "ttnn.experimental.nlp_concat_heads_decode",
+      "tensor_role": "input",
+      "size_descriptor": "decode attention output per device group, [1, batch_size_per_device_group, padded_heads, head_dim]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "SCORES_BATCHED_MM_OUTPUT_MEMCFG(batch_size_per_device_group)"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: attn_output_11BH = ttnn.to_memory_config(attn_output_1G4D, model_config['SCORES_BATCHED_MM_OUTPUT_MEMCFG'](batch_size_per_device_group)) immediately before nlp_concat_heads_decode"
+    },
+    {
+      "op": "ttnn.experimental.nlp_concat_heads_decode",
+      "tensor_role": "output",
+      "size_descriptor": "decode activation [1, 1, batch, hidden_size=num_heads*head_dim]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "SHARDED",
+        "shard_spec_template": "op-default L1 sharded; re-sharded to ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG when fused all-gather-matmul path is taken"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "use_fused_all_gather_matmul or prefetcher is not None",
+        "op": "==",
+        "value": true
+      },
+      "source": "model call site: attn_output_cat = ttnn.to_memory_config(attn_output_cat, model_config['ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG']) guarded by use_fused_all_gather_matmul/prefetcher"
+    },
+    {
+      "op": "ttnn.experimental.nlp_concat_heads_decode",
+      "tensor_role": "output",
+      "size_descriptor": "decode activation [1, 1, batch, hidden_size], consumed by output projection linear",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "WIDTH_SHARDED",
+        "shard_spec_template": "feeds ttnn.linear(o_proj) whose memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: tt_out = ttnn.linear(tt_sdpa_out, weights.o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.experimental.nlp_concat_heads_decode",
+      "tensor_role": "input",
+      "size_descriptor": "decode, sub-core-grid restricted (prefetcher active)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "sharded over prefetcher.all_worker_cores_range_set"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "prefetcher",
+        "op": "!=",
+        "value": null
+      },
+      "source": "model call site: sub_core_grids=self.prefetcher.all_worker_cores_range_set if self.prefetcher is not None else None"
+    }
+  ]
+}

@@ -1,0 +1,95 @@
+{
+  "id": "ttnn_experimental_nlp_create_qkv_heads_falcon7b",
+  "fused_op": "ttnn.experimental.nlp_create_qkv_heads_falcon7b",
+  "category": "attention_tm",
+  "pattern_kind": "horizontal_merge",
+  "torch_pattern": "fused_qkv = fused_qkv.view({BATCH}, {SEQ_LEN}, {NUM_HEADS} + 2, {HEAD_DIM})\nquery_layer = fused_qkv[..., :-2, :].permute(0, 2, 1, 3)\nkey_layer = fused_qkv[..., [-2], :].permute(0, 2, 1, 3)\nvalue_layer = fused_qkv[..., [-1], :].permute(0, 2, 1, 3)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "[{BATCH}, 1, {SEQ_LEN}, ({NUM_HEADS} + 2) * {HEAD_DIM}]",
+    "output_shapes": {
+      "q": "[{BATCH}, {NUM_HEADS}, {SEQ_LEN}, {HEAD_DIM}]",
+      "k": "[{BATCH}, 1, {SEQ_LEN}, {HEAD_DIM}]",
+      "v": "[{BATCH}, 1, {SEQ_LEN}, {HEAD_DIM}]"
+    },
+    "memory_config": "{OUT_MEM_CONFIG}"
+  },
+  "weight_transform": "none (pure tensor-manipulation op; no weights). Upstream fused QKV projection weight must be laid out in Falcon-7B interleaved order: [h0..h{NUM_HEADS-1}, k, v] along the last dim.",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "constraints: {'input_layout': 'TILE_LAYOUT', 'kv_heads': 1, 'model_family': 'falcon-7b (MQA fused QKV layout)'}",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_nlp_create_qkv_heads.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.nlp_create_qkv_heads_falcon7b",
+      "tensor_role": "input (fused_query_key_value)",
+      "size_descriptor": "[batch, 1, seq_len, (num_heads+2)*head_dim]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test_examples: in0_t = ttnn.Tensor(A, dtype).to(ttnn.TILE_LAYOUT).to(device, in0_mem_config); buffer_type parametrized (DRAM/L1) and asserted preserved"
+    },
+    {
+      "op": "ttnn.experimental.nlp_create_qkv_heads_falcon7b",
+      "tensor_role": "output (query_layer)",
+      "size_descriptor": "[batch, num_heads, seq_len, head_dim]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_sites: memory_config=self.model_config['CREATE_QKV_HEADS_OUTPUT_MEMCFG'] (falcon7b attention, both prefill and decode paths); test asserts q.memory_config().buffer_type == out_mem_config.buffer_type"
+    },
+    {
+      "op": "ttnn.experimental.nlp_create_qkv_heads_falcon7b",
+      "tensor_role": "output (key_layer)",
+      "size_descriptor": "[batch, 1, seq_len, head_dim]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_sites: memory_config=self.model_config['CREATE_QKV_HEADS_OUTPUT_MEMCFG']; test asserts k.memory_config().buffer_type == out_mem_config.buffer_type"
+    },
+    {
+      "op": "ttnn.experimental.nlp_create_qkv_heads_falcon7b",
+      "tensor_role": "output (value_layer)",
+      "size_descriptor": "[batch, 1, seq_len, head_dim]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_sites: memory_config=self.model_config['CREATE_QKV_HEADS_OUTPUT_MEMCFG']; test asserts v.memory_config().buffer_type == out_mem_config.buffer_type"
+    },
+    {
+      "op": "ttnn.experimental.nlp_create_qkv_heads_falcon7b",
+      "tensor_role": "input (fused_query_key_value) lifetime",
+      "size_descriptor": "[batch, 1, seq_len, (num_heads+2)*head_dim]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_sites: fused_query_key_value.deallocate() immediately after the op in all 3 call sites \u2014 input is consumed and freed, enabling in-place-style memory reuse for Q/K/V outputs"
+    }
+  ]
+}

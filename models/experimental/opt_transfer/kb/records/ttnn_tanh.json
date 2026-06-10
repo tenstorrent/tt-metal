@@ -1,0 +1,108 @@
+{
+  "id": "ttnn_tanh",
+  "fused_op": "ttnn.tanh",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.tanh(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "fast_and_approximate_mode": "{FAST_APPROX:bool, default=False; observed True for small gate tensors and accuracy-tolerant paths (~77% faster: 1789ns vs 7886ns per tile)}",
+    "memory_config": "{MEMORY_CONFIG}",
+    "output_tensor": "{OPTIONAL_PREALLOCATED_OUTPUT}",
+    "queue_id": "{OPTIONAL_CQ_ID}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Element-wise unary; golden is torch.tanh. Frequently appears in fused contexts: (1) gated residual: ttnn.mul(branch_out, ttnn.tanh(gate)) ~ torch: branch_out * torch.tanh(gate); (2) logit softcapping: ttnn.mul(ttnn.tanh(ttnn.mul(logits, 1.0/cap)), cap) ~ torch: torch.tanh(logits / cap) * cap; (3) gelu-tanh approximation building block. Works element-wise on TP-sharded vocab dims without gather.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_tanh_accuracy.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_tanh_fw_ulp.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.tanh",
+      "tensor_role": "input",
+      "size_descriptor": "generic tile-aligned tensor (unit test)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: ttnn.from_torch(..., memory_config=ttnn.DRAM_MEMORY_CONFIG); output_tensor = ttnn.tanh(input_tensor_a, memory_config=ttnn.DRAM_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.tanh",
+      "tensor_role": "output",
+      "size_descriptor": "generic tile-aligned tensor (unit test)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: ttnn.tanh(input_tensor_a, memory_config=ttnn.DRAM_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.tanh",
+      "tensor_role": "input",
+      "size_descriptor": "small per-layer gate tensor (e.g., gate_attn/gate_ffn, shape ~[1] or [1,1,1,D])",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: attn_out = ttnn.mul(attn_out, ttnn.tanh(self.gate_attn, fast_and_approximate_mode=True)) following ttnn.to_memory_config(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG) (DRAM workaround for circular buffer error)"
+    },
+    {
+      "op": "ttnn.tanh",
+      "tensor_role": "output",
+      "size_descriptor": "vocoder post-conv activations [B, T_post, 1] on TILE",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: h = ttnn.tanh(x_post, memory_config=mc_dram)"
+    },
+    {
+      "op": "ttnn.tanh",
+      "tensor_role": "output",
+      "size_descriptor": "large audio waveform tensor (final decoder output, range [-1,1])",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: audio_tt = ttnn.tanh(hidden_states_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.tanh",
+      "tensor_role": "input",
+      "size_descriptor": "TP-sharded logits [B, 1, S, vocab/tp] in softcapping path",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: logits = ttnn.tanh(logits) within softcap sequence; element-wise op applied before all-gather of sharded vocab dim"
+    }
+  ]
+}

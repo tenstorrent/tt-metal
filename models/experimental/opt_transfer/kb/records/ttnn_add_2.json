@@ -1,0 +1,54 @@
+{
+  "id": "ttnn_add_2",
+  "fused_op": "ttnn.add",
+  "category": "eltwise_binary_fused_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.pow(torch.nn.functional.silu(x_torch) + y_torch, 4)",
+  "signature": {},
+  "config_template": {
+    "call": "ttnn.add(x_tt, y_tt, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.POWER, {POW})], input_tensor_a_activations=[ttnn.UnaryOpType.{PRE_UNARY}])",
+    "note": "fuses a pre-activation on input A (e.g. SILU) and a post-activation (e.g. POWER with param) into one add op; replaces chain unary(a) -> add -> unary"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_eltwise_binary.py",
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_padding_test.py",
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_sfpu_chain.py",
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_sharded.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_repeat.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_add.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast_tcast.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_fp32.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_program_cache.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_uint32.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binaryng_fp32.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_sub.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_typecast_int.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_activation.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_pow.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "add",
+      "tensor_role": "output",
+      "size_descriptor": "test tensor, tile layout, float32",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.add(x_tt, y_tt, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.POWER, 4)], input_tensor_a_activations=[ttnn.UnaryOpType.SILU]) with default memory config"
+    }
+  ]
+}

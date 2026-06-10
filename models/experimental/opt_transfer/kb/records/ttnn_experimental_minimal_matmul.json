@@ -1,0 +1,116 @@
+{
+  "id": "ttnn_experimental_minimal_matmul",
+  "fused_op": "ttnn.experimental.minimal_matmul",
+  "category": "matmul",
+  "pattern_kind": "chain",
+  "torch_pattern": "out = torch.matmul(input, weight); out = out + bias if bias is not None else out; out = fused_activation(out) if fused_activation is not None else out",
+  "signature": {},
+  "config_template": {
+    "config": "get_matmul_config({M}, {K}, {N}, {CORE_GRID}, {DEFAULT_BLOCK_SIZE})  # MinimalMatmulConfig with in0_block_w, per_core_M/N, subblock_h={SB_H}, subblock_w={SB_W}, compute_with_storage_grid_size={CORE_GRID}",
+    "compute_kernel_config": "{COMPUTE_KERNEL_CONFIG}  # e.g. hifi2 / hifi2_fp16 / lofi depending on precision regime",
+    "fused_activation": "{ACT_FN}  # optional unary activation fused into the matmul epilogue",
+    "dtype": "{DTYPE}  # e.g. ttnn.bfloat8_b for prefill outputs",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": "weight is pre-transposed to [K, N] layout (ttnn linear convention, weight_tensor.padded_shape[-1] == N); bias broadcast over M; weights converted to device tiles ahead of time (e.g. self.w2, self.wqkv, self.proj_weight.data)",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_source: call_site (alternation branch with ttnn.linear: minimal_matmul(input_tensor=x, weight_tensor=w, bias_tensor=b, fused_activation=act) is a drop-in replacement for ttnn.linear, i.e. activation(x @ W + b)); fusion_notes: Fuses linear (matmul + bias-add) + optional unary activation into a single op. Used in model code as the prefill-path replacement for ttnn.linear when seq_len > 128 (and mode != DECODE). Inputs with seq_len > MAX_QKV_MM_SEQ_LEN are pre-reshaped to [1, seq_len // MAX, MAX, -1] before the matmul and reshaped back after. Some call sites note it is NOT always a win (commented out where 'not giving any performance improvement over linear' or 'giving bad outputs for seqlen > 128').",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "llm",
+  "confidence": "low",
+  "unit_test_refs": [],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.minimal_matmul",
+      "tensor_role": "output",
+      "size_descriptor": "prefill activations, seq_len > 128 (w1/w3 FF matmuls, M = seq_len, N = hidden/ff_dim)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": "minimal_pc_1_3 (MinimalMatmulConfig from model_config)",
+      "condition": {
+        "var": "seq_len",
+        "op": ">",
+        "value": 128
+      },
+      "source": "call_site: w1_out/w3_out = ttnn.experimental.minimal_matmul(..., memory_config=ttnn.DRAM_MEMORY_CONFIG) in else-branch of seq_len gate"
+    },
+    {
+      "op": "ttnn.experimental.minimal_matmul",
+      "tensor_role": "output",
+      "size_descriptor": "attention output projection (WO) prefill, M = seq_len",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": "model_config['WO_PREFILL_MINIMAL_PROGCFG'](seq_len)",
+      "condition": null,
+      "source": "call_site: output_11SH = ttnn.experimental.minimal_matmul(input_tensor=attn_output_11SH, weight_tensor=self.wo_interleaved, ..., memory_config=ttnn.DRAM_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.experimental.minimal_matmul",
+      "tensor_role": "input",
+      "size_descriptor": "QKV fused prefill input x_11SH; reshaped to [1, seq_len // MAX_QKV_MM_SEQ_LEN, MAX_QKV_MM_SEQ_LEN, -1] when seq_len exceeds MAX_QKV_MM_SEQ_LEN",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": "args.get_attn_qkv_program_config(Mode.PREFILL, seq_len, None)",
+      "condition": {
+        "var": "seq_len",
+        "op": ">",
+        "value": 128
+      },
+      "source": "call_site: xqkv_fused = ttnn.experimental.minimal_matmul(x_11SH, self.wqkv, ...) selected when seq_len > 128, else ttnn.linear"
+    },
+    {
+      "op": "ttnn.experimental.minimal_matmul",
+      "tensor_role": "output",
+      "size_descriptor": "FF2 (w2) prefill output, seq_len > 128 and mode != DECODE",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": "pc_2 (FF2 MinimalMatmulConfig)",
+      "condition": {
+        "var": "seq_len",
+        "op": ">",
+        "value": 128
+      },
+      "source": "call_site: w2_out = ttnn.experimental.minimal_matmul(w2_in, self.w2, compute_kernel_config=li_ff2_compute_kernel_cfg, config=pc_2) in seq_len>128 branch, ttnn.linear otherwise"
+    },
+    {
+      "op": "ttnn.experimental.minimal_matmul",
+      "tensor_role": "output",
+      "size_descriptor": "generic linear layer output (M, K, N read from x.padded_shape and weight.padded_shape)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": "get_matmul_config(M, K, N, get_matmul_core_grid(mesh_device), default_block_size)",
+      "condition": null,
+      "source": "call_site: generic Linear.forward wrapper computes per-shape MinimalMatmulConfig from M,K,N and core grid"
+    },
+    {
+      "op": "ttnn.experimental.minimal_matmul",
+      "tensor_role": "output",
+      "size_descriptor": "prefill matmul output (alternate model), dtype bfloat8_b",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": "self.prefill_pc",
+      "condition": null,
+      "source": "call_site (commented-out variant): ttnn.experimental.minimal_matmul(..., dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG) \u2014 noted as no perf improvement over ttnn.linear at this site"
+    }
+  ]
+}

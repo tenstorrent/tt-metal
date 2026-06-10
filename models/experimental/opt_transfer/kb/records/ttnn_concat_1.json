@@ -1,0 +1,43 @@
+{
+  "id": "ttnn_concat_1",
+  "fused_op": "ttnn.concat",
+  "category": "data_movement",
+  "pattern_kind": "chain",
+  "torch_pattern": "act_groups = activations.view(N, H, W, groups, activation_channels // groups); res_groups = residuals.view(N, H, W, groups, residual_channels // groups); interleaved = torch.cat([act_groups, res_groups], dim=-1); interleaved = interleaved.permute(0, 1, 2, 3, 4).reshape(N, H, W, residual_channels + activation_channels)",
+  "signature": {},
+  "config_template": {
+    "dim": -1,
+    "groups": "{GROUPS}",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": "none",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Grouped (interleaved) concat: ttnn.concat with groups>1 replaces the contiguous torch chain view->cat->reshape that interleaves activation and residual channel groups (NHWC, channels-last). Applies when fusing groupnorm-friendly skip-connection concats (e.g. UNet residual merge with grouped channels). Both inputs must match in all dims except last; both channel counts divisible by {GROUPS}.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_concat.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_concat.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_concat_iterative.py",
+    "tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_sharded.py",
+    "tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.concat",
+      "tensor_role": "output",
+      "size_descriptor": "NHWC activation+residual channel-interleaved merge (UNet-style skip), dim=-1",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "golden _golden_function grouped_concat path; test variant: ttnn.concat(tt_concat_inputs, dim=dim, memory_config=output_memory_config) when input_mem_config is sharded, default interleaved otherwise"
+    }
+  ]
+}

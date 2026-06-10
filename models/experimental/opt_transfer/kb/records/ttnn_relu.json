@@ -1,0 +1,147 @@
+{
+  "id": "ttnn_relu",
+  "fused_op": "ttnn.relu",
+  "category": "eltwise_unary_activation",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.relu(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "memory_config": "{MEMORY_CONFIG}",
+    "output_tensor": "{OPTIONAL_IN_PLACE_OR_PREALLOCATED}",
+    "queue_id": "{OPTIONAL_CQ_ID}",
+    "notes": "Supports in-place execution via output_tensor=input (e.g. ttnn.relu(x8, output_tensor=x8)). Output memory_config may differ from input (resharding ReLU: relu(x, memory_config=output_shard_config)). Layout: TILE_LAYOUT typical; works on interleaved DRAM/L1 and sharded (HEIGHT/WIDTH/BLOCK) inputs."
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "fusion_notes: Pure elementwise unary; commonly absorbed as fused activation into preceding ttnn.linear/ttnn.matmul/ttnn.conv2d via activation='relu' in program_config, or fused into ttnn.add via add_and_apply_activation / unary post-op (residual add + relu pattern: ttnn.add(x, x_identity) -> ttnn.relu(x)).",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_examplerst.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_silu.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_sharding.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.relu",
+      "tensor_role": "output",
+      "size_descriptor": "MLP hidden activation [batch, seq, hidden] after ttnn.linear (fc1)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: hidden = ttnn.relu(hidden, memory_config=ttnn.DRAM_MEMORY_CONFIG) between two DRAM-interleaved ttnn.linear calls"
+    },
+    {
+      "op": "ttnn.relu",
+      "tensor_role": "input/output",
+      "size_descriptor": "classification-head intermediate after width-sharded linear (linear_1 -> relu -> linear_2)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "WIDTH_SHARDED inherited from producing ttnn.linear(memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG); relu called with no memory_config, preserves input sharding"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: out = ttnn.relu(out) following ttnn.linear(..., memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.relu",
+      "tensor_role": "input/output (in-place)",
+      "size_descriptor": "large 5D activation reshaped to (N*D*H, W, C), tilized",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: ttnn.relu(x8, output_tensor=x8) after ttnn.to_layout(x7, ttnn.TILE_LAYOUT) \u2014 in-place to avoid extra allocation for large tensor"
+    },
+    {
+      "op": "ttnn.relu",
+      "tensor_role": "output",
+      "size_descriptor": "conv1d sequence activation [batch, seq_len, channels] (TDNN/conv blocks)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: y = ttnn.relu(y, memory_config=mc_dram) after conv1d block / before ttnn.layer_norm"
+    },
+    {
+      "op": "ttnn.relu",
+      "tensor_role": "output",
+      "size_descriptor": "SE-block bottleneck [batch, y_len, out1_ch] after ttnn.conv1d + reshape",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: y = ttnn.relu(y, memory_config=dram) following ttnn.reshape(y, (batch, y_len, out1_ch), memory_config=dram)"
+    },
+    {
+      "op": "ttnn.relu",
+      "tensor_role": "input/output",
+      "size_descriptor": "Res2Net / attention-pooling NLC activation [batch, seq_len, channels]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "interleaved L1 (block operates with mc = ttnn.L1_MEMORY_CONFIG); relu called with no memory_config, inherits"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: a_tt = ttnn.relu(a_tt) inside Res2Net/attentive-stat-pooling block where mc = ttnn.L1_MEMORY_CONFIG"
+    },
+    {
+      "op": "ttnn.relu",
+      "tensor_role": "input",
+      "size_descriptor": "sharded 4D activation (batch, C, H, W) flattened",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "{SHARD_STRATEGY} sharded (in_sharded_mem_config), output kept in same shard config then converted via ttnn.to_memory_config(out, ttnn.L1_MEMORY_CONFIG)"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: ttnn.relu(input_tensor, memory_config=in_sharded_mem_config)"
+    },
+    {
+      "op": "ttnn.relu",
+      "tensor_role": "output",
+      "size_descriptor": "wide-row tensors (1, W) with row_width > tile_size, e.g. (1,1032), (1,2048) \u2014 chunked across width",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "output_shard_config may differ from input_shard_config (relu performs implicit reshard)"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: ttnn.relu(ttnn_input, memory_config=output_shard_config) with sharded input/output configs"
+    },
+    {
+      "op": "ttnn.relu",
+      "tensor_role": "input/output",
+      "size_descriptor": "residual-add output, same shard spec as identity branch",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "inherits x.memory_config() from preceding ttnn.add(x, x_identity, memory_config=x.memory_config()); shard shape/grid matched to x_identity via ttnn.reshard"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: x = ttnn.relu(x) after ttnn.add residual merge (ResNet-style block)"
+    }
+  ]
+}

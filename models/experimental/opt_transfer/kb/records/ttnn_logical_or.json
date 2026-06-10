@@ -1,0 +1,65 @@
+{
+  "id": "ttnn_logical_or",
+  "fused_op": "ttnn.logical_or_",
+  "category": "eltwise_binary_inplace",
+  "pattern_kind": "chain",
+  "torch_pattern": "input_tensor_a.logical_or_(input_tensor_b)",
+  "signature": {},
+  "config_template": {
+    "memory_config": "{MEMORY_CONFIG}",
+    "dtype": "{DTYPE}",
+    "layout": "ttnn.TILE_LAYOUT"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "In-place elementwise binary logical OR; output written into input_tensor_a. Maps 1:1 to torch.Tensor.logical_or_. No weights; broadcasting follows binary eltwise rules.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_composite.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.logical_or_",
+      "tensor_role": "input_a",
+      "size_descriptor": "generic [N, C, H, W] tiles",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test"
+    },
+    {
+      "op": "ttnn.logical_or_",
+      "tensor_role": "input_b",
+      "size_descriptor": "generic [N, C, H, W] tiles",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test"
+    },
+    {
+      "op": "ttnn.logical_or_",
+      "tensor_role": "output",
+      "size_descriptor": "same as input_a (in-place)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test"
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "id": "ttnn_rsub",
+  "fused_op": "ttnn.rsub",
+  "category": "eltwise_binary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.sub(value, input_tensor_a)",
+  "signature": {},
+  "config_template": {
+    "dtype": "{DTYPE}",
+    "layout": "ttnn.TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}",
+    "shape": "[{N}, {C}, {H}, {W}]",
+    "optional_kwargs": {
+      "use_legacy": "{USE_LEGACY|None}"
+    }
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_notes: Reversed subtraction: output = b - a (operand order swapped relative to ttnn.rsub(a, b)). Also matches `value - input_tensor_a` written as an infix expression with the subtrahend being the ttnn op's first argument.; ttnn_replacement: ttnn.rsub(input_tensor_a, value); constraints: {'layout': 'TILE_LAYOUT required', 'dtypes_observed': ['bfloat16', 'float32', 'int32/uint32 (via typecast)'], 'broadcasting': 'scalar or tensor second operand supported'}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_uint32.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binaryng_fp32.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_sub.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.rsub",
+      "tensor_role": "input_b",
+      "size_descriptor": "tile-aligned activation, e.g. [2,3,128,128]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: from_torch(..., layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.rsub",
+      "tensor_role": "input_a",
+      "size_descriptor": "small fp32 tensors (1x12 to 2x3x128x128)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: from_torch(..., dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device) \u2014 default DRAM interleaved"
+    }
+  ]
+}

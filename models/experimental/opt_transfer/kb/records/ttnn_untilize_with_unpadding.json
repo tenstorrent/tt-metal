@@ -1,0 +1,83 @@
+{
+  "id": "ttnn_untilize_with_unpadding",
+  "fused_op": "ttnn.untilize_with_unpadding",
+  "category": "data_movement/layout",
+  "pattern_kind": "chain",
+  "torch_pattern": "slices = tuple(slice(0, output_end[i] + 1) for i in range(len(output_end)))\ntorch_result = torch_tensor[slices]",
+  "signature": {},
+  "config_template": {
+    "output_tensor_end": "({BATCH}-1, {DIM1}-1, {DIM2}-1, {LOGICAL_LAST_DIM}-1)",
+    "memory_config": "{OUTPUT_MEMORY_CONFIG}",
+    "use_multicore": "{USE_MULTICORE:bool, default True for single-tile-row outputs feeding argmax}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": [
+    "Converts TILE_LAYOUT tensor to ROW_MAJOR while slicing away tile padding; torch-level semantics are an inclusive-end slice (end index = logical_size - 1 per dim).",
+    "For rank > 4 tensors the output_tensor_end parameter is ignored (per test).",
+    "Commonly fused as the chain tail: linear -> untilize_with_unpadding (drop padded classifier dim, e.g. 1024->1000) or before argmax on logits to drop padded Y/vocab dims."
+  ],
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_sharded.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_untilize_with_unpadding.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.untilize_with_unpadding",
+      "tensor_role": "output",
+      "size_descriptor": "classifier logits, last dim trimmed to 1000 (e.g. [N,1,1,1000])",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: x = self.fc(x); x = ttnn.untilize_with_unpadding(x, output_tensor_end=(...,999), memory_config=ttnn.L1_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.untilize_with_unpadding",
+      "tensor_role": "input",
+      "size_descriptor": "decode-step logits [1,1,1,vocab], Y padded to 32 in TILE_LAYOUT",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: logits_tt = ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG); ttnn.untilize_with_unpadding(logits_tt, output_tensor_end=[0,0,0,vocab-1], use_multicore=True)"
+    },
+    {
+      "op": "ttnn.untilize_with_unpadding",
+      "tensor_role": "output",
+      "size_descriptor": "logits row-major [1,1,1,vocab] consumed immediately by ttnn.argmax(dim=-1) then deallocated",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: logits_rm = ttnn.untilize_with_unpadding(logits_tt, output_tensor_end=end, use_multicore=True); ttnn.argmax(logits_rm, ...); ttnn.deallocate(logits_rm)"
+    },
+    {
+      "op": "ttnn.untilize_with_unpadding",
+      "tensor_role": "output",
+      "size_descriptor": "generic test tensors, interleaved output regardless of sharded/interleaved input",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, output_buffer_type)"
+    }
+  ]
+}

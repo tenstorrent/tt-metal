@@ -1,0 +1,180 @@
+{
+  "id": "ttnn_add",
+  "fused_op": "ttnn.add",
+  "category": "eltwise_binary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.add(input_tensor_a, input_tensor_b)",
+  "signature": {},
+  "config_template": {
+    "call": "ttnn.add(input_tensor_a, input_tensor_b, memory_config={MEM_CFG}, dtype={DTYPE}, output_tensor={OPTIONAL_INPLACE_TENSOR}, use_legacy={USE_LEGACY})",
+    "broadcast": "supports scalar second operand and row/col broadcast of bias-shaped tensors [1,...,1,{DIM}]",
+    "inplace_variant": "pass output_tensor=input_tensor_a to fuse residual-add in place (saves L1)"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_eltwise_binary.py",
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_padding_test.py",
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_sfpu_chain.py",
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_sharded.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_repeat.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_add.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast_tcast.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_fp32.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_program_cache.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_uint32.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binaryng_fp32.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_sub.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_typecast_int.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_activation.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_pow.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "add",
+      "tensor_role": "output",
+      "size_descriptor": "residual stream activation [1,1,seq_len,hidden]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "prefill"
+      },
+      "source": "qwen decoder layer: out_memcfg = ttnn.L1_MEMORY_CONFIG if mode == 'prefill' else ttnn.DRAM_MEMORY_CONFIG (decode-trace replay needs stable DRAM addresses)"
+    },
+    {
+      "op": "add",
+      "tensor_role": "output",
+      "size_descriptor": "ViT residual [batch, seq~224, hidden=768], block-sharded across 8x8 grid",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "BLOCK_SHARDED on {GRID_Y}x{GRID_X} grid, shard [{SEQ}/{GRID_Y}, {HIDDEN}/{GRID_X}]"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "vit attention/feedforward residual add: memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG, dtype=ttnn.bfloat8_b"
+    },
+    {
+      "op": "add",
+      "tensor_role": "output",
+      "size_descriptor": "embedding sum [batch, seq, hidden] (small, fits L1)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "vit/bert embeddings: ttnn.add(embedding_output, position_embeddings, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)"
+    },
+    {
+      "op": "add",
+      "tensor_role": "output",
+      "size_descriptor": "attention scores + mask [batch, heads, q_seq, k_seq] (interleaved, can be large)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "seq_len",
+        "op": ">",
+        "value": 1024
+      },
+      "source": "falcon attention test: attn_weights = ttnn.add(attn_weights, attention_mask, memory_config=dram_interleaved_memory_config); sliced variant uses HEIGHT_SHARDED L1 slices with output_tensor=mm_slice in-place"
+    },
+    {
+      "op": "add",
+      "tensor_role": "output",
+      "size_descriptor": "attention scores + mask slice [num_cores-sharded slice of 71*seq x seq]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "HEIGHT_SHARDED, ShardOrientation.ROW_MAJOR, shard [{SLICE_H}/{NUM_CORES}, {K_SEQ}]"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "falcon sliced attention: ttnn.add(mm_slice, attn_mask_slice, memory_config=height_sharded_memory_config, output_dtype=ttnn.bfloat16, output_tensor=mm_slice)"
+    },
+    {
+      "op": "add",
+      "tensor_role": "output",
+      "size_descriptor": "resnet residual feature map (per-core sharded conv output)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "resnet bottleneck: ttnn.add(out, ds_out, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)], memory_config=ttnn.L1_MEMORY_CONFIG)"
+    },
+    {
+      "op": "add",
+      "tensor_role": "output",
+      "size_descriptor": "large diffusion feature map [C,H,W] after sharded_to_interleaved",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "SD resnet block: hidden_states = ttnn.add(input_tensor, hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG) after both inputs converted from sharded to L1 interleaved"
+    },
+    {
+      "op": "add",
+      "tensor_role": "output",
+      "size_descriptor": "sharded transformer-block residual (inherits producer's shard spec)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "inherit: memory_config=hidden_states.memory_config()"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "SD/SDXL transformer block: sum = ttnn.add(attn_output, hidden_states, memory_config=hidden_states.memory_config()); attn_output resharded/to_memory_config'd to match first"
+    },
+    {
+      "op": "add",
+      "tensor_role": "output",
+      "size_descriptor": "mamba decode activation [1,1,B,hidden] (in-place)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "mamba residual block: ttnn.add(residual, mamba_block_out, memory_config=ttnn.L1_MEMORY_CONFIG, output_tensor=mamba_block_out)"
+    },
+    {
+      "op": "add",
+      "tensor_role": "output",
+      "size_descriptor": "falcon decoder residual add output",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "falcon decoder: memory_config=self.model_config['PARALLEL_ATTN_ADD_OUTPUT_MEMCFG'] / ['DROPOUT_ADD_OUTPUT_MEMCFG'] (model-config driven, typically DRAM interleaved)"
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "id": "ttnn_ge",
+  "fused_op": "ttnn.ge_",
+  "category": "eltwise_binary_inplace",
+  "pattern_kind": "chain",
+  "torch_pattern": "input_tensor_a.ge_(input_tensor_b)",
+  "signature": {},
+  "config_template": {
+    "input_tensor_a": {
+      "shape": "{SHAPE}",
+      "dtype": "{DTYPE}",
+      "layout": "TILE_LAYOUT",
+      "note": "modified in-place; result written back into input_tensor_a"
+    },
+    "input_tensor_b": {
+      "shape": "{SHAPE} or scalar",
+      "dtype": "{DTYPE} or python float/int",
+      "layout": "TILE_LAYOUT"
+    },
+    "output": {
+      "shape": "{SHAPE}",
+      "semantics": "boolean mask materialized as 0.0/1.0 in input dtype"
+    }
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "fusion_notes: Replaces torch subsequence `a.ge_(b)` (equivalently `a = (a >= b).to(a.dtype)` followed by reuse of `a`). Eliminates output allocation versus ttnn.ge by writing result into input_tensor_a's buffer. Scalar variant fuses the broadcast: `a.ge_(scalar)`.; constraints: ['input_tensor_a and input_tensor_b must have broadcast-compatible shapes (tests use identical shapes)', 'input_tensor_a is mutated; not safe if original values of a are consumed later', 'comparison result stored in numeric dtype as {0.0, 1.0}; exactness checked via compare_equal in tests']",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_composite.py"
+  ],
+  "placement_observations": []
+}

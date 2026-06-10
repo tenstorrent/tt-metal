@@ -1,0 +1,125 @@
+{
+  "id": "ttnn_experimental_fast_reduce_nc",
+  "fused_op": "ttnn.experimental.fast_reduce_nc",
+  "category": "reduction",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.sum(torch_input, dims, keepdim=True)",
+  "signature": {},
+  "config_template": {
+    "dims": "{REDUCE_DIMS}",
+    "output": null,
+    "compute_kernel_config": "{COMPUTE_KERNEL_CONFIG|null}",
+    "memory_config": "{MEMORY_CONFIG|default}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "constraints: {'reduce_dims': 'N/C dims only (dims in {0,1}); keepdim is implicit (output keeps reduced dim as 1)', 'input_layout': 'TILE_LAYOUT, interleaved (sharded inputs converted via ttnn.to_memory_config first)', 'typical_use': 'local sum-reduction after all_gather to emulate all_reduce (AG + local reduce), and expert-dim reduction in MoE combine'}",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/reduce/test_fast_reduce_nc.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.fast_reduce_nc",
+      "tensor_role": "input",
+      "size_descriptor": "all-gathered activation [1, num_devices, B*S, hidden]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "sharded",
+        "op": "==",
+        "value": true
+      },
+      "source": "call_site: gathered_tensor moved to L1_MEMORY_CONFIG before fast_reduce_nc when sharded"
+    },
+    {
+      "op": "ttnn.experimental.fast_reduce_nc",
+      "tensor_role": "output",
+      "size_descriptor": "reduced activation [1, 1, B*S, hidden]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "sharded",
+        "op": "==",
+        "value": true
+      },
+      "source": "call_site: memory_config=ttnn.L1_MEMORY_CONFIG if sharded else ttnn.DRAM_MEMORY_CONFIG"
+    },
+    {
+      "op": "ttnn.experimental.fast_reduce_nc",
+      "tensor_role": "output",
+      "size_descriptor": "reduced activation [1, 1, B*S, hidden]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "sharded",
+        "op": "==",
+        "value": false
+      },
+      "source": "call_site: memory_config=ttnn.L1_MEMORY_CONFIG if sharded else ttnn.DRAM_MEMORY_CONFIG"
+    },
+    {
+      "op": "ttnn.experimental.fast_reduce_nc",
+      "tensor_role": "output",
+      "size_descriptor": "decode-mode small activation [1, 1, bsz, q_lora_rank + kv_lora_rank + qk_rope_head_dim]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "decode"
+      },
+      "source": "call_site: MLA decode reduce_config = {memory_config: ttnn.L1_MEMORY_CONFIG} after all_gather_async"
+    },
+    {
+      "op": "ttnn.experimental.fast_reduce_nc",
+      "tensor_role": "input",
+      "size_descriptor": "all-gathered KV down-projection, prefill [1, num_devices, seq_len_local, kv_lora_rank + qk_rope_head_dim]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "prefill"
+      },
+      "source": "call_site: all_gather_async produced with memory_config=ttnn.DRAM_MEMORY_CONFIG, then fast_reduce_nc with hifi4_fp32_compute_kernel_config"
+    },
+    {
+      "op": "ttnn.experimental.fast_reduce_nc",
+      "tensor_role": "input",
+      "size_descriptor": "MoE expert-combined states [1, num_experts, chunk_len, hidden_size], reduced over dims=[1]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: gpt_oss-style MoE combine, default memory_config, dims=[1]"
+    }
+  ]
+}

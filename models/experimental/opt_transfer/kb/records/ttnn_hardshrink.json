@@ -1,0 +1,53 @@
+{
+  "id": "ttnn_hardshrink",
+  "fused_op": "ttnn.hardshrink",
+  "category": "eltwise_unary_activation",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.nn.functional.hardshrink(input_tensor_a, lambd=lambd)",
+  "signature": {},
+  "config_template": {
+    "lambd": "{LAMBD}",
+    "input_layout": "ttnn.TILE_LAYOUT",
+    "input_shape": "[{H}, {W}]",
+    "output_memory_config": "ttnn.DRAM_MEMORY_CONFIG"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Unary elementwise activation; golden function is torch.nn.functional.hardshrink. Scalar parameter 'lambd' passed through directly with default 0.5. Fusable into unary op chains.; ttnn_replacement: ttnn.hardshrink(input_tensor_a, lambd=lambd); constraints: {'lambd_default': 0.5, 'layout': 'TILE_LAYOUT required', 'pcc_threshold': 0.99}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_activation.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.hardshrink",
+      "tensor_role": "input_a",
+      "size_descriptor": "h=64, w=128 (single tile-aligned 2D tensor)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device) \u2014 default interleaved DRAM memory config"
+    },
+    {
+      "op": "ttnn.hardshrink",
+      "tensor_role": "output",
+      "size_descriptor": "same shape as input (h=64, w=128)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: no explicit memory_config passed to ttnn.hardshrink; inherits default interleaved DRAM"
+    }
+  ]
+}

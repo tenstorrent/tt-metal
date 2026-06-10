@@ -1,0 +1,56 @@
+{
+  "id": "ttnn_experimental_nlp_create_qkv_heads_vit",
+  "fused_op": "ttnn.experimental.nlp_create_qkv_heads_vit",
+  "category": "attention_head_manipulation",
+  "pattern_kind": "horizontal_merge",
+  "torch_pattern": "ref_q = A[:, :, :, : {HIDDEN}]\nref_k = A[:, :, :, {HIDDEN} : 2 * {HIDDEN}]\nref_v = A[:, :, :, 2 * {HIDDEN} :]\nref_q = torch.reshape(ref_q, [{BATCH}, {SEQ_LEN}, {NUM_HEADS}, {HEAD_DIM}]).transpose(-3, -2)\nref_k = torch.reshape(ref_k, [{BATCH}, {SEQ_LEN}, {NUM_HEADS}, {HEAD_DIM}]).transpose(-3, -2)\nref_v = torch.reshape(ref_v, [{BATCH}, {SEQ_LEN}, {NUM_HEADS}, {HEAD_DIM}]).transpose(-3, -2)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "[{BATCH}, 1, {SEQ_LEN}, 3 * {HIDDEN}]",
+    "num_heads": "{NUM_HEADS}",
+    "head_dim": "{HEAD_DIM}",
+    "hidden": "{HIDDEN}",
+    "output_shapes": "3 x [{BATCH}, {NUM_HEADS}, {SEQ_LEN}, {HEAD_DIM}]",
+    "memory_config": "{OUT_MEM_CONFIG}",
+    "notes": "ViT-base defaults: HIDDEN=768, NUM_HEADS=12, HEAD_DIM=64; input must be TILE_LAYOUT"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "constraints: {'input_layout': 'TILE_LAYOUT', 'last_dim': 'must equal 3 * NUM_HEADS * HEAD_DIM (fused QKV)', 'outputs': 'tuple of 3 tensors (q, k, v)'}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_nlp_create_qkv_heads_vit.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.nlp_create_qkv_heads_vit",
+      "tensor_role": "input_qkv",
+      "size_descriptor": "[batch, 1, seq_len, 3*768] interleaved",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test (in0_mem_config parametrized over DRAM/L1 interleaved; buffer_type asserted to match)"
+    },
+    {
+      "op": "ttnn.experimental.nlp_create_qkv_heads_vit",
+      "tensor_role": "output_q_k_v",
+      "size_descriptor": "[batch, num_heads, seq_len, head_dim] interleaved",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test (out_mem_config parametrized over DRAM/L1 interleaved; q/k/v buffer_type asserted to match out_mem_config)"
+    }
+  ]
+}

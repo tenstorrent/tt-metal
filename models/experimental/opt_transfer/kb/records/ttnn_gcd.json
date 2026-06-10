@@ -1,0 +1,54 @@
+{
+  "id": "ttnn_gcd",
+  "fused_op": "ttnn.gcd",
+  "category": "eltwise_binary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.gcd(input_tensor_a, input_tensor_b)",
+  "signature": {},
+  "config_template": {
+    "dtype": "ttnn.int32",
+    "layout": "ttnn.TILE_LAYOUT",
+    "memory_config": "ttnn.DRAM_MEMORY_CONFIG",
+    "input_shape": "{DIM}",
+    "broadcasting": "supported (e.g. [1] with [1, 5, 12])"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "ttnn_replacement: ttnn.gcd(input_tensor_a, input_tensor_b); constraints: {'dtype': 'int32 only (integer GCD semantics)', 'layout': 'TILE_LAYOUT', 'value_range': 'full int32 range [-2147483647, 2147483647] validated in tests', 'accuracy': 'bit-exact vs torch.gcd (torch.equal asserted)'}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_gcd.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.gcd",
+      "tensor_role": "input_a",
+      "size_descriptor": "small-to-large tiles (e.g. [1,1,32,32] up to [5,10,1024,1024])",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT, interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test"
+    },
+    {
+      "op": "ttnn.gcd",
+      "tensor_role": "input_b",
+      "size_descriptor": "small-to-large tiles, broadcastable shapes (e.g. [1] vs [1,5,12])",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT, interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test"
+    }
+  ]
+}

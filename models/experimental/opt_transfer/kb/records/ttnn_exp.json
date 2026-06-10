@@ -1,0 +1,73 @@
+{
+  "id": "ttnn_exp",
+  "fused_op": "ttnn.exp",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.exp(x)",
+  "signature": {},
+  "config_template": {
+    "fast_and_approximate_mode": "{FAST_APPROX}",
+    "memory_config": "{MEMORY_CONFIG}",
+    "sub_core_grids": "{SUB_CORE_GRID|null}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Golden registered as torch.exp. fp32 working range: overflow above 88.7 (inf), underflow below -87.3. fast_and_approximate_mode reduces ULP accuracy (tests allow up to 134 ULP in approx regimes vs 1 ULP accurate). Appears as the exp stage in decomposed softmax chains (exp -> sum -> reciprocal -> mul) when softmax dim >= 4096.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_examplerst.py",
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_pow_fractional.py",
+    "tests/ttnn/unit_tests/operations/debug/test_generic_op.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_exp_21f.py",
+    "tests/ttnn/unit_tests/operations/matmul/test_experimental.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.exp",
+      "tensor_role": "input",
+      "size_descriptor": "small tiles (e.g. [1,1,32,32] .. [1,2,32,960])",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: tt_in created with layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG"
+    },
+    {
+      "op": "ttnn.exp",
+      "tensor_role": "output",
+      "size_descriptor": "activation-sized intermediate (eltwise chain)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: ttnn.exp(abar1, fast_and_approximate_mode=True, memory_config=ttnn.L1_MEMORY_CONFIG); input deallocated immediately after"
+    },
+    {
+      "op": "ttnn.exp",
+      "tensor_role": "input",
+      "size_descriptor": "softmax reduction dim",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "x.shape[dim]",
+        "op": ">=",
+        "value": 4096
+      },
+      "source": "model call site: fused ttnn.softmax used if x.shape[dim] < 4096, otherwise decomposed exp/sum/reciprocal/mul chain"
+    }
+  ]
+}

@@ -1,0 +1,68 @@
+{
+  "id": "ttnn_remainder",
+  "fused_op": "ttnn.remainder",
+  "category": "eltwise_binary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.remainder(input_tensor_a, input_tensor_b)",
+  "signature": {},
+  "config_template": {
+    "memory_config": "{MEMORY_CONFIG}",
+    "dtype": "{DTYPE}",
+    "layout": "TILE_LAYOUT"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Elementwise binary remainder; supports tensor-tensor and tensor-scalar forms. Golden upcasts bfloat16 inputs to float32 before torch.remainder when divisor is a scalar, then casts result back to bfloat16.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_composite.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_div_ops.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_remainder.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.remainder",
+      "tensor_role": "input_a",
+      "size_descriptor": "small_tile [1,1,32,32]-class shapes",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test"
+    },
+    {
+      "op": "ttnn.remainder",
+      "tensor_role": "input_b",
+      "size_descriptor": "small_tile [1,1,32,32]-class shapes",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test (from_torch with memory_config=ttnn.DRAM_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.remainder",
+      "tensor_role": "output",
+      "size_descriptor": "small_tile [1,1,32,32]-class shapes",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test (ttnn.remainder(..., memory_config=ttnn.DRAM_MEMORY_CONFIG))"
+    }
+  ]
+}

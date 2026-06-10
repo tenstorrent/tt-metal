@@ -1,0 +1,27 @@
+{
+  "id": "tosa_scatter",
+  "fused_op": "tosa_scatter",
+  "category": "data_movement",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch_index = torch_index.unsqueeze(-1).expand([N, W, C]); torch_output = torch.scatter(torch_input, dim=dim, index=torch_index, src=torch_source)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "[{N}, {W}, {C}]",
+    "index_shape": "[{N}, {W}]",
+    "source_shape": "[{N}, {W}, {C}]",
+    "dim": 1,
+    "notes": "TOSA scatter semantics: index tensor is rank-2 [N, W] and is implicitly unsqueezed/expanded across the channel dim C before the scatter; output shape/dtype match input."
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "constraints: {'scatter_dim': 'fixed to dim=1 (TOSA W dimension); torch.scatter with other dims cannot be fused', 'index_rank': 'torch index must be expandable from [N, W] (i.e. produced by unsqueeze(-1).expand([N, W, C]))', 'output': 'output.shape == input.shape, output.dtype == input.dtype'}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/data_movement/test_tosa_scatter.py"
+  ],
+  "placement_observations": []
+}

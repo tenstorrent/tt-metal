@@ -1,0 +1,54 @@
+{
+  "id": "ttnn_ceil",
+  "fused_op": "ttnn.ceil",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.ceil(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "{N}x{C}x{H}x{W}",
+    "dtype": "{DTYPE: float32|bfloat16}",
+    "layout": "TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}",
+    "output_memory_config": "{OUTPUT_MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Elementwise unary rounding op; maps 1:1 to torch.ceil. Golden registered via unary golden dispatch table: 'ceil': torch.ceil. Fusable into preceding/following eltwise chains as a unary SFPU op (e.g. via unary op chain / fused activation slots on matmul or binary ops). Float dtypes only meaningful (integer ceil is identity).",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.ceil",
+      "tensor_role": "input",
+      "size_descriptor": "small_2d (h=64, w=128 tile-aligned)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test_unary_ceil: ttnn.from_torch(in_data1, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device) with default (DRAM interleaved) memory_config"
+    },
+    {
+      "op": "ttnn.ceil",
+      "tensor_role": "output",
+      "size_descriptor": "same_as_input",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test_unary_ceil: output produced with default memory_config (DRAM interleaved), no explicit output_mem_config passed"
+    }
+  ]
+}

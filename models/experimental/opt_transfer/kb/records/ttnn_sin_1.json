@@ -1,0 +1,44 @@
+{
+  "id": "ttnn_sin_1",
+  "fused_op": "ttnn.sin",
+  "category": "eltwise_unary",
+  "pattern_kind": "horizontal_merge",
+  "torch_pattern": "torch.cos(emb); torch.sin(emb)",
+  "signature": {},
+  "config_template": {
+    "shared_input_shape": "[{BATCH}, {HALF_DIM}]",
+    "branches": [
+      "ttnn.cos",
+      "ttnn.sin"
+    ],
+    "merge_op": "ttnn.concat(dim=-1)",
+    "memory_config": "ttnn.DRAM_MEMORY_CONFIG",
+    "layout": "ttnn.TILE_LAYOUT"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Sibling-branch pattern observed in every sinusoidal embedding call site: cos and sin are both computed from the same input tensor 'emb' (timestep * time_proj_factor or position*inv_freq angles), then concatenated along dim=-1. Both branches are eltwise unaries with the torch goldens torch.cos / torch.sin and can be horizontally merged into a single fused kernel pass over the shared input.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_eltwise_sin.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.concat",
+      "tensor_role": "output",
+      "size_descriptor": "[1, 1, seq_len, head_dim] concatenated sin/cos RoPE tables",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "RoPE precompute call site: ttnn.to_layout(cos/sin, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)"
+    }
+  ]
+}

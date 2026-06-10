@@ -1,0 +1,83 @@
+{
+  "id": "ttnn_expand",
+  "fused_op": "ttnn.expand",
+  "category": "data_movement",
+  "pattern_kind": "chain",
+  "torch_pattern": "expanded = tensor.expand([-1, -1, {SEQ_LEN}, -1])",
+  "signature": {},
+  "config_template": {
+    "shape": [
+      "-1",
+      "-1",
+      "{SEQ_LEN}",
+      "-1"
+    ]
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "llm",
+  "confidence": "low",
+  "unit_test_refs": [],
+  "placement_observations": [
+    {
+      "op": "ttnn.expand",
+      "tensor_role": "output (sdpa attention mask)",
+      "size_descriptor": "[B, 1, S, S] after expanding [B, 1, 1, S] mask along query dim",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: sdpa_mask = ttnn.expand(sdpa_mask, [-1, -1, seq_len, -1]); score_memcfg = cfg.score_memcfg or ttnn.DRAM_MEMORY_CONFIG; sdpa_mask = ttnn.to_memory_config(sdpa_mask, score_memcfg)"
+    },
+    {
+      "op": "ttnn.expand",
+      "tensor_role": "output (pad mask broadcast over heads/query)",
+      "size_descriptor": "[B, num_heads, query_seq_len, S] after expanding [B, 1, 1, S]",
+      "memory_config": {
+        "buffer": "inherits attention_scores.memory_config()",
+        "layout": "inherits attention_scores.memory_config()",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: expanded_mask = ttnn.expand(pad_mask, [-1, num_heads, query_seq_len, -1]); if expanded_mask.memory_config() != attention_scores.memory_config(): to_memory_config(expanded_mask, target_memcfg)"
+    },
+    {
+      "op": "ttnn.expand",
+      "tensor_role": "output (causal attention mask, pre-tril)",
+      "size_descriptor": "[B, 1, S, S] expanded from [B, 1, 1, S]; downstream cloned to bfloat4_b",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: attention_mask = ttnn.expand(attention_mask, [-1, -1, seq_len, -1]); ttnn.tril(...); ttnn.clone(attention_mask, dtype=ttnn.bfloat4_b) (qwen2_5_vl causal mask construction)"
+    },
+    {
+      "op": "ttnn.expand",
+      "tensor_role": "output (pad embedding tiles for prefill padding)",
+      "size_descriptor": "[prefill_seq_len - actual_prompt_len, hidden_dim], expanded from a single pad embedding row",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "prefill_seq_len - actual_prompt_len",
+        "op": ">",
+        "value": 0
+      },
+      "source": "call_site: input_padding = ttnn.expand(pad_embedding, (prefill_seq_len - actual_prompt_len, -1)) guarded by 'if prefill_seq_len - actual_prompt_len > 0'"
+    }
+  ]
+}

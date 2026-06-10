@@ -1,0 +1,27 @@
+{
+  "id": "ttnn_experimental_nlp_kv_cache_load_slice",
+  "fused_op": "ttnn.experimental.nlp_kv_cache_load_slice",
+  "category": "data_movement.slice",
+  "pattern_kind": "chain",
+  "torch_pattern": "out = inp[:, :, seq_len_start:seq_len_end]",
+  "signature": {},
+  "config_template": {
+    "seq_len_start": "{SEQ_START}",
+    "seq_len_end": "{SEQ_END}",
+    "input_shape": "[{BATCH}, {NUM_HEADS}, {MAX_SEQ_LEN}, {HEAD_DIM}]",
+    "output_shape": "[{BATCH}, {NUM_HEADS}, {SEQ_END} - {SEQ_START}, {HEAD_DIM}]",
+    "layout": "ttnn.TILE_LAYOUT"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Specialized slice along the sequence (dim=2) axis of a KV cache tensor; replaces a torch dim-2 narrow/slice on the cache. Slice bounds must be tile-aligned (multiples of 32) for TILE_LAYOUT inputs.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_nlp_kv_cache_load_slice.py"
+  ],
+  "placement_observations": []
+}

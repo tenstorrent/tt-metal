@@ -1,0 +1,27 @@
+{
+  "id": "ttnn_rpow",
+  "fused_op": "ttnn.rpow",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.pow(dim, input_tensor_a)",
+  "signature": {},
+  "config_template": {
+    "input_dtype": "ttnn.bfloat16",
+    "layout": "ttnn.TILE_LAYOUT",
+    "scalar": "{EXPONENT_SCALAR}",
+    "memory_config": "{MEMORY_CONFIG}",
+    "shape": "{N}x{C}x{H}x{W}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_notes: Scalar base raised elementwise to a tensor exponent: out = scalar ** x. Maps to ttnn.rpow(x, scalar). Taken directly from registered golden _golden_function_rpow.; ttnn_replacement: ttnn.rpow(input_tensor, {EXPONENT_SCALAR}); constraints: {'scalar_range_tested': [0.5, 10.0], 'input_value_range_tested': [-30, 30], 'accuracy': 'ULP<=8 overall; ULP<=1 for exponents < 5; PCC >= 0.99'}; fusion_notes: Unary scalar-base power; fusable into eltwise unary chains (e.g. exp(x*log(scalar)) decompositions can be replaced by a single rpow).",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary.py"
+  ],
+  "placement_observations": []
+}

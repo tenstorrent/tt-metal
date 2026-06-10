@@ -1,0 +1,57 @@
+{
+  "id": "ttnn_square",
+  "fused_op": "ttnn.square",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.square(x)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "{DIM}",
+    "layout": "ttnn.TILE_LAYOUT",
+    "memory_config": "ttnn.DRAM_MEMORY_CONFIG",
+    "queue_id": 0,
+    "output_tensor": "optional preallocated tensor"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Element-wise unary square. Golden: torch.square. Equivalent unoptimized forms also matchable: x * x, torch.pow(x, 2), x ** 2. Supports int/uint dtypes (uint16 inputs beyond 255 overflow since result is squared); supports preallocated output_tensor and queue_id.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_int32.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_uint32.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.square",
+      "tensor_role": "input",
+      "size_descriptor": "tile-aligned 4D tensor (e.g. 1x1x320x384)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG); output_tensor = ttnn.square(input_tensor)"
+    },
+    {
+      "op": "ttnn.square",
+      "tensor_role": "output",
+      "size_descriptor": "same shape as input",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: golden output compared against from_torch(..., memory_config=ttnn.DRAM_MEMORY_CONFIG); preallocated output_tensor path uses device tensor from data_gen_with_range"
+    }
+  ]
+}

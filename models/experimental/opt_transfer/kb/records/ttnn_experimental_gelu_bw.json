@@ -1,0 +1,54 @@
+{
+  "id": "ttnn_experimental_gelu_bw",
+  "fused_op": "ttnn.experimental.gelu_bw",
+  "category": "eltwise_backward",
+  "pattern_kind": "chain",
+  "torch_pattern": "pyt_y = torch.nn.functional.gelu(input_tensor); pyt_y.backward(gradient=grad_tensor); out = input_tensor.grad",
+  "signature": {},
+  "config_template": {
+    "approximate": "{APPROXIMATE:none|tanh}",
+    "dtype": "ttnn.bfloat16",
+    "layout": "ttnn.TILE_LAYOUT",
+    "memory_config": "{MEM_CONFIG:default=DRAM_INTERLEAVED}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "ttnn_replacement: ttnn.experimental.gelu_bw(grad_tensor, input_tensor, approximate={APPROXIMATE})",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_gelu_bw_main_ulp.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_gelu_bw_ulp.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.gelu_bw",
+      "tensor_role": "grad_tensor",
+      "size_descriptor": "small/elementwise (test scalars and tiles, bfloat16)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT, interleaved (default)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)"
+    },
+    {
+      "op": "ttnn.experimental.gelu_bw",
+      "tensor_role": "input_tensor",
+      "size_descriptor": "small/elementwise (test scalars and tiles, bfloat16)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT, interleaved (default)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)"
+    }
+  ]
+}

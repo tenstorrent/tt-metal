@@ -1,0 +1,40 @@
+{
+  "id": "ttnn_softsign",
+  "fused_op": "ttnn.softsign",
+  "category": "eltwise_unary_activation",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.nn.functional.softsign(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "{N}x{C}x{H}x{W}",
+    "layout": "ttnn.TILE_LAYOUT",
+    "dtype": "{DTYPE}",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Composite unary op: softsign(x) = x / (1 + |x|). Golden registered via TTNN eltwise unary golden map ('softsign': torch.nn.functional.softsign). Supports bfloat16 and bfloat8_b per unit tests; validated at pcc=0.9999. Can also fuse the manual decomposition chain x / (1 + torch.abs(x)) into a single ttnn.softsign call.; ttnn_replacement: ttnn.softsign(input_tensor)",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.softsign",
+      "tensor_role": "input",
+      "size_descriptor": "generic_tile_aligned",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT, device=device) with default (DRAM interleaved) memory config"
+    }
+  ]
+}

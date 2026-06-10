@@ -1,0 +1,45 @@
+{
+  "id": "ttnn_rms_norm_with_residual_input_tensor_1",
+  "fused_op": "ttnn.rms_norm (with residual_input_tensor)",
+  "category": "normalization",
+  "pattern_kind": "chain",
+  "torch_pattern": "input_tensor = input_tensor + residual_input_tensor\nvariance = input_tensor.to(torch.float32).pow(2).mean(-1, keepdim=True)\ninput_tensor = input_tensor * torch.rsqrt(variance + epsilon)\noutput = weight * input_tensor if weight is not None else input_tensor",
+  "signature": {},
+  "config_template": {
+    "epsilon": "{EPS}",
+    "weight": "{GAMMA_TENSOR}",
+    "residual_input_tensor": "{RESIDUAL_TENSOR}",
+    "memory_config": "{MEM_CFG} (tests reuse input's memory_config: ttnn.get_memory_config(input))",
+    "program_config": "LayerNormShardedMultiCoreProgramConfig(compute_with_storage_grid_size=device.compute_with_storage_grid_size(), block_h={BLOCK_HT}, block_w={BLOCK_WT})"
+  },
+  "weight_transform": "same as ttnn.rms_norm: 1D gamma [H] -> [1,1,1,H] tile-padded, TILE_LAYOUT",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/test_fused_demo.py",
+    "tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py",
+    "tests/ttnn/unit_tests/operations/fused/sharded_test_utils.py",
+    "tests/ttnn/unit_tests/operations/fused/test_rms_norm.py",
+    "tests/ttnn/unit_tests/operations/fused/test_rms_norm_sharded.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "rms_norm",
+      "tensor_role": "output (fused add+norm, sharded)",
+      "size_descriptor": "same shape/shard spec as input activation",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE",
+        "shard_spec_template": "output_memory_config = ttnn.get_memory_config(input) (same sharding as input)"
+      },
+      "program_config": "LayerNormShardedMultiCoreProgramConfig(compute_with_storage_grid_size=device.compute_with_storage_grid_size(), block_h=block_ht, block_w=block_wt)",
+      "condition": null,
+      "source": "sharded residual rms_norm unit test"
+    }
+  ]
+}

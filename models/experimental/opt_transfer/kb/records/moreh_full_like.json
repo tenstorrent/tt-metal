@@ -1,0 +1,66 @@
+{
+  "id": "moreh_full_like",
+  "fused_op": "moreh_full_like",
+  "category": "creation",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.full_like(input, fill_value)",
+  "signature": {},
+  "config_template": {
+    "fill_value": "{FILL_VALUE}",
+    "dtype": "{DTYPE}",
+    "layout": "{LAYOUT}",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Creates a tensor with the same shape/dtype/layout as input, filled with a scalar. Direct 1:1 replacement for torch.full_like; output dtype follows input dtype (int32 and float paths both verified bit-exact via torch.equal in tests). Output inherits input's memory_config unless overridden.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/data_movement/test_full_like.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "moreh_full_like",
+      "tensor_role": "input",
+      "size_descriptor": "arbitrary input_shape (interleaved tests)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "{LAYOUT}",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: ttnn.from_torch(torch_input, layout=layout, device=device) with default memory_config"
+    },
+    {
+      "op": "moreh_full_like",
+      "tensor_role": "input",
+      "size_descriptor": "input_shape paired with nd_shard_shape (ND-sharded tests)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "{LAYOUT}",
+        "shard_spec_template": "shard_shape={ND_SHARD_SHAPE}"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: ttnn.from_torch(..., memory_config=sharded_mem_config) parametrized over (input_shape, nd_shard_shape)"
+    },
+    {
+      "op": "moreh_full_like",
+      "tensor_role": "output",
+      "size_descriptor": "input_shape paired with nd_shard_shape (ND-sharded tests)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "{LAYOUT}",
+        "shard_spec_template": "shard_shape={ND_SHARD_SHAPE}"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: ttnn.moreh_full_like(tt_input, fill_value, memory_config=sharded_mem_config) \u2014 output shard config matches input shard config"
+    }
+  ]
+}

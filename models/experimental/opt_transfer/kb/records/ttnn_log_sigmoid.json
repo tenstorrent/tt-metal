@@ -1,0 +1,56 @@
+{
+  "id": "ttnn_log_sigmoid",
+  "fused_op": "ttnn.log_sigmoid",
+  "category": "eltwise_unary_activation",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.nn.functional.logsigmoid(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "{DIM}",
+    "dtype": "{DTYPE}",
+    "layout": "TILE_LAYOUT",
+    "optional_args": {
+      "output_tensor": "optional preallocated output tensor",
+      "queue_id": "optional command-queue id (e.g. 0)"
+    }
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Elementwise unary activation: log(sigmoid(x)). Registered golden maps 'log_sigmoid' -> torch.nn.functional.logsigmoid. Can fuse as a unary activation epilogue in op chains (e.g. matmul + log_sigmoid) or merge horizontally with other unaries sharing the same input. Supports in-place style output via output_tensor kwarg.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.log_sigmoid",
+      "tensor_role": "input",
+      "size_descriptor": "tile-aligned NHWC/4D shapes from unit tests, values in [-1, 1]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test (data_gen_with_range default memory config; no explicit memory_config at call site)"
+    },
+    {
+      "op": "ttnn.log_sigmoid",
+      "tensor_role": "output",
+      "size_descriptor": "same shape as input",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test (preallocated output_tensor via data_gen_with_range, default placement)"
+    }
+  ]
+}

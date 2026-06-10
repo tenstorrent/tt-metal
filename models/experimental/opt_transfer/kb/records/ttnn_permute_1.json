@@ -1,0 +1,39 @@
+{
+  "id": "ttnn_permute_1",
+  "fused_op": "ttnn.permute",
+  "category": "data_movement",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch_input_tensor.transpose(2, 3)",
+  "signature": {},
+  "config_template": {
+    "dims": "(0, 1, 3, 2)",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch Tensor.transpose(dim0, dim1) lowers to ttnn.permute with the two dims swapped in the identity ordering, e.g. x.transpose(2,3) -> ttnn.permute(x, (0,1,3,2)). Seen at model call sites as key transposition before attention matmul (key_layer (0,1,3,2)).",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_transpose.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_permute.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.permute",
+      "tensor_role": "input",
+      "size_descriptor": "attention key heads [B, nH, S, head_dim] -> [B, nH, head_dim, S]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "Segformer attention: nlp_create_qkv_heads_segformer(key, memory_config=ttnn.L1_MEMORY_CONFIG) then ttnn.permute(key_layer, (0, 1, 3, 2))"
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "id": "ttnn_experimental_create_qkv_heads",
+  "fused_op": "ttnn.experimental.create_qkv_heads",
+  "category": "attention/head_manipulation",
+  "pattern_kind": "horizontal_merge",
+  "torch_pattern": "q_proj, k_proj, v_proj = xqkv.split([num_q_heads * head_dim, num_kv_heads * head_dim, num_kv_heads * head_dim], dim=-1); q = q_proj.reshape(batch, seq_len, num_q_heads, head_dim).transpose(1, 2); k = k_proj.reshape(batch, seq_len, num_kv_heads, head_dim).transpose(1, 2); v = v_proj.reshape(batch, seq_len, num_kv_heads, head_dim).transpose(1, 2); k = k.transpose(-2, -1) if transpose_k_heads else k",
+  "signature": {},
+  "config_template": {
+    "num_heads": "{NUM_Q_HEADS}",
+    "num_kv_heads": "{NUM_KV_HEADS}",
+    "transpose_k_heads": "{TRANSPOSE_K}",
+    "memory_config": "ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, {OUT_SHARD_SPEC})"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_source: inferred from unit-test output-shape assertions: q.padded_shape == [batch, num_q_heads, seq_len, head_dim]; k transposed when transpose_k=True; constraints: {'input_layout': 'TILE_LAYOUT', 'input': 'fused interleaved QKV activation of shape [batch, 1, seq_len, (num_q_heads + 2*num_kv_heads) * head_dim]', 'input_memory': 'height-sharded L1 (shard spec must match output shard spec in test)', 'outputs': 'q: [batch, num_q_heads, seq_len, head_dim]; k: [batch, num_kv_heads, seq_len, head_dim] (or [batch, num_kv_heads, head_dim, seq_len] if transpose_k_heads); v: [batch, num_kv_heads, seq_len, head_dim]'}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_create_qkv_heads.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.create_qkv_heads",
+      "tensor_role": "input_qkv",
+      "size_descriptor": "[batch, 1, seq_len, (num_q_heads + 2*num_kv_heads) * head_dim]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "{IN0_SHARD_SPEC}"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: in0_t placed with in0_mem_config; out_shard_spec = in0_shard_spec implies input is height-sharded L1 with same shard spec as output"
+    },
+    {
+      "op": "ttnn.experimental.create_qkv_heads",
+      "tensor_role": "output_q_k_v",
+      "size_descriptor": "q: [batch, num_q_heads, seq_len, head_dim]; k/v: [batch, num_kv_heads, seq_len, head_dim]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "{IN0_SHARD_SPEC}"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: out_mem_config = ttnn.MemoryConfig(HEIGHT_SHARDED, BufferType.L1, in0_shard_spec)"
+    }
+  ]
+}

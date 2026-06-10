@@ -1,0 +1,54 @@
+{
+  "id": "ttnn_frac",
+  "fused_op": "ttnn.frac",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.frac(input_tensor_a)",
+  "signature": {},
+  "config_template": {
+    "input_dtype": "ttnn.bfloat16",
+    "layout": "ttnn.TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}",
+    "output_tensor": "{OPTIONAL_PREALLOCATED_OUTPUT}",
+    "queue_id": "{OPTIONAL_CQ_ID}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_source: golden; constraints: {'dtype': ['bfloat16'], 'layout': ['TILE_LAYOUT'], 'supports_preallocated_output': True, 'supports_queue_id': True}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.frac",
+      "tensor_role": "input",
+      "size_descriptor": "full_range_tensor shape={DIM_SHAPE}",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test (default ttnn.from_torch device placement, no explicit memory_config)"
+    },
+    {
+      "op": "ttnn.frac",
+      "tensor_role": "output",
+      "size_descriptor": "same as input shape={DIM_SHAPE}",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test (preallocated via data_gen_with_range, default memory_config)"
+    }
+  ]
+}

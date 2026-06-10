@@ -1,0 +1,69 @@
+{
+  "id": "ttnn_sigmoid",
+  "fused_op": "ttnn.sigmoid",
+  "category": "eltwise_unary_activation",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.sigmoid(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "vector_mode": "{VECTOR_MODE}",
+    "mode": "ttnn.SigmoidMode.FastApproximate if {APPROX_MODE} else ttnn.SigmoidMode.Accurate",
+    "output_tensor": "{OPTIONAL_PREALLOCATED_OUTPUT}",
+    "queue_id": "{CQ_ID}",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Unary eltwise; supports in-place-style preallocated output_tensor and accuracy/approx mode selection. Accurate mode validated at pcc>=0.999. Frequently appears inside larger decomposed patterns: silu (x*sigmoid(x)), quick_gelu (t*sigmoid(1.702*t)), and swiglu gating (gate*sigmoid(alpha*gate)); prefer fused ttnn.silu / fused activation when the surrounding multiply matches those shapes.; ttnn_replacement: ttnn.sigmoid(input_tensor, vector_mode={VECTOR_MODE}, mode={SIGMOID_MODE}, memory_config={MEMORY_CONFIG})",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_sigmoid_vector_modes.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.sigmoid",
+      "tensor_role": "output",
+      "size_descriptor": "activation tensor, height-shardable (H x W fits per-core L1 shard)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "ttnn.create_sharded_memory_config(shape={SHARD_SHAPE}, core_grid={CORE_GRID}, strategy=ttnn.ShardStrategy.HEIGHT, use_height_and_width_as_shard_shape=True)"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: ttnn.sigmoid(x, memory_config=sharded_memory_config) with ShardStrategy.HEIGHT"
+    },
+    {
+      "op": "ttnn.sigmoid",
+      "tensor_role": "output",
+      "size_descriptor": "small SE-block scale tensor (batch, seq_len, channels) after reshape",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: y = ttnn.sigmoid(y, memory_config=dram) in squeeze-excite path"
+    },
+    {
+      "op": "ttnn.sigmoid",
+      "tensor_role": "input",
+      "size_descriptor": "router logits (1, 1, token_count, num_experts), small last dim",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: scores = ttnn.sigmoid(logits) after ttnn.linear gate projection (default interleaved memory config)"
+    }
+  ]
+}

@@ -1,0 +1,67 @@
+{
+  "id": "ttnn_bcast",
+  "fused_op": "ttnn.bcast",
+  "category": "eltwise_binary_broadcast",
+  "pattern_kind": "chain",
+  "torch_pattern": "res = in0 + in1",
+  "signature": {},
+  "config_template": {
+    "math_op": "ttnn.BcastOpMath.ADD",
+    "dim": "ttnn.BcastOpDim.{DIM}",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": "reshape broadcast operand (in1) to bcast-compatible shape (e.g. [1, 1, 1, W] for BcastOpDim.H as in test: B_pyt.reshape(b_weights_shape)) and convert to TILE_LAYOUT",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Broadcast add along H, W, or HW; result truncated back to in0 shape per golden. Commonly used for bias-add after matmul (qa_linear: matmul -> bcast ADD H) and time-embedding add in resnet blocks.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_bcast.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_add.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.bcast",
+      "tensor_role": "output",
+      "size_descriptor": "decoder hidden states slice [batch, 1, seq_slice, hidden]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "sharded (self.sharded_memconfig / memconfig), shard spec inherited from layernorm output"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "falcon40b layernorm beta-add call sites (memory_config=self.sharded_memconfig / memconfig)"
+    },
+    {
+      "op": "ttnn.bcast",
+      "tensor_role": "output",
+      "size_descriptor": "matmul output [B, 1, seq, vocab/qa_dim]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "qa_linear call site: memory_config=model_config['QA_LINEAR_OUTPUT_MEMCFG'] (interleaved)"
+    },
+    {
+      "op": "ttnn.bcast",
+      "tensor_role": "output",
+      "size_descriptor": "resnet hidden_states [B, C, H, W] groupnorm-sized",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "inherits hidden_states.memory_config(); output immediately moved to second_gn_expected_input_sharded_memory_config"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "stable-diffusion resnetblock2d temb add call site (memory_config=hidden_states.memory_config())"
+    }
+  ]
+}

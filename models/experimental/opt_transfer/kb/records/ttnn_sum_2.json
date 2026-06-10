@@ -1,0 +1,45 @@
+{
+  "id": "ttnn_sum_2",
+  "fused_op": "ttnn.sum",
+  "category": "reduction",
+  "pattern_kind": "chain",
+  "torch_pattern": "sq = x.pow(2); s = torch.sum(sq, dim=-1, keepdim=True)  # L2-norm partial: followed by sqrt or rsqrt",
+  "signature": {},
+  "config_template": {
+    "dim": -1,
+    "keepdim": "{KEEPDIM}",
+    "exponent": 2
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Square-then-sum chain used in decomposed RMSNorm (rms_decomp: pow(2) -> sum(dim=3, keepdim) -> mul 1/W -> add eps -> pow 0.5 -> reciprocal -> mul) and L2 normalization (_l2_normalize_ttnn, _norm_weights_ttnn). Strong fusion candidate into ttnn.rms_norm / fused L2-normalize.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/deepseek/test_deepseek_moe_post_combine_reduce.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_reduction.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_reduction_h_interleaved.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_reduction_on_batch.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_reduction_program_cache.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_sum.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.sum",
+      "tensor_role": "input",
+      "size_descriptor": "hidden-state [B,S,H], reduced over H",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: _l2_normalize_ttnn explicitly does ttnn.to_memory_config(tt_tensor, ttnn.DRAM_MEMORY_CONFIG) before pow+sum"
+    }
+  ]
+}

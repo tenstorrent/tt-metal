@@ -1,0 +1,120 @@
+{
+  "id": "ttnn_conv2d",
+  "fused_op": "ttnn.conv2d",
+  "category": "convolution",
+  "pattern_kind": "chain",
+  "torch_pattern": "x = input_tensor.reshape({BATCH}, {H_IN}, {W_IN}, -1)[:, :, :, :{C_IN}].permute(0, 3, 1, 2)\nx = torch.nn.functional.pad(x.float(), ({PAD_LEFT}, {PAD_RIGHT}, {PAD_TOP}, {PAD_BOTTOM}), mode='constant', value=0)\nx = torch.nn.functional.conv2d(x, weight_tensor.float(), bias=bias_tensor.reshape(-1).float(), stride={STRIDE}, padding=(0, 0), dilation={DILATION}, groups={GROUPS})\nx = {ACTIVATION}(x)  # optional: fused via conv_config.activation (e.g. relu/silu)\nx = x.permute(0, 2, 3, 1).reshape(1, 1, {BATCH} * {H_OUT} * {W_OUT}, {C_OUT})",
+  "signature": {},
+  "config_template": {
+    "in_channels": "{C_IN}",
+    "out_channels": "{C_OUT}",
+    "batch_size": "{BATCH}",
+    "input_height": "{H_IN}",
+    "input_width": "{W_IN}",
+    "kernel_size": "({KH}, {KW})",
+    "stride": "({SH}, {SW})",
+    "padding": "({PAD_H}, {PAD_W}) or ({PAD_TOP}, {PAD_BOTTOM}, {PAD_LEFT}, {PAD_RIGHT})",
+    "dilation": "({DH}, {DW})",
+    "groups": "{GROUPS}",
+    "conv_config": "ttnn.Conv2dConfig(activation='{ACTIVATION}', act_block_h_override={ACT_BLOCK_H}, deallocate_activation={DEALLOC_ACT}, reshard_if_not_optimal={RESHARD}, enable_activation_reuse={ACT_REUSE})",
+    "compute_config": "ttnn.init_device_compute_kernel_config(device.arch(), math_fidelity={MATH_FIDELITY}, packer_l1_acc={PACKER_L1_ACC})",
+    "slice_config": "ttnn.Conv2dL1FullSliceConfig | ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices={NUM_SLICES})",
+    "dtype": "{OUT_DTYPE}",
+    "return_output_dim": true,
+    "return_weights_and_bias": true
+  },
+  "weight_transform": "Weight kept in torch OIHW shape ({C_OUT}, {C_IN}/{GROUPS}, {KH}, {KW}) and passed as a host (or to_device) ttnn tensor; ttnn.conv2d internally prepares/reorders it on first call. Bias reshaped from ({C_OUT},) to (1, 1, 1, {C_OUT}). Use return_weights_and_bias=True and write prepared tensors back (self.weight, self.bias = returned) so preparation happens only on the first invocation.",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "ttnn_replacement: output, [out_h, out_w], [prepared_w, prepared_b] = ttnn.conv2d(input_tensor=x, weight_tensor=w, bias_tensor=b, in_channels={C_IN}, out_channels={C_OUT}, batch_size={BATCH}, input_height={H_IN}, input_width={W_IN}, kernel_size={KERNEL}, stride={STRIDE}, padding={PADDING}, dilation={DILATION}, groups={GROUPS}, device=device, conv_config=conv_config, compute_config=compute_config, return_output_dim=True, return_weights_and_bias=True); fusion_notes: Activation following the conv (relu, silu, etc.) is fused into the conv via conv_config.activation instead of being emitted as a separate unary op. Asymmetric padding (4-tuple) is handled natively by ttnn.conv2d, replacing an explicit F.pad + conv2d chain in torch. Input/output are in flattened 1,1,NHW,C layout; the NCHW<->NHWC permutes+reshapes at the boundary are absorbed by the op's expected layout.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/conv/test_prepare_conv_weights.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.conv2d",
+      "tensor_role": "input_activation",
+      "size_descriptor": "large spatial activations (VAE/UNet decoder, high H*W)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth) \u2014 conv executed in DRAM width-slices",
+      "condition": {
+        "var": "input_height*input_width",
+        "op": ">",
+        "value": "L1_capacity_threshold"
+      },
+      "source": "call_site: 'hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)' immediately before ttnn.conv2d; 'slice_type=ttnn.Conv2dDRAMSliceWidth' in sliced conv wrapper"
+    },
+    {
+      "op": "ttnn.conv2d",
+      "tensor_role": "input_activation",
+      "size_descriptor": "small/medium activations that fit in L1 (ResNet bottleneck, SD transformer proj convs)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED or BLOCK_SHARDED (auto-selected; reshard_if_not_optimal=True)",
+        "shard_spec_template": "auto via conv_config; checked downstream with hidden_states.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED"
+      },
+      "program_config": "slice_config=ttnn.Conv2dL1FullSliceConfig (no DRAM slicing, full tensor resident in L1)",
+      "condition": {
+        "var": "input_height*input_width",
+        "op": "<=",
+        "value": "L1_capacity_threshold"
+      },
+      "source": "call_sites: ResNet bottleneck convs and SD proj_in/proj_out/conv_in/conv_out all pass slice_config=ttnn.Conv2dL1FullSliceConfig with conv_config(reshard_if_not_optimal=reshard_if_not_optimal)"
+    },
+    {
+      "op": "ttnn.conv2d",
+      "tensor_role": "weight",
+      "size_descriptor": "any",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "prepared/reordered by op on first call",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_sites/tests: 'tt_weight = ttnn.to_device(tt_weight, device)' then prepared weights captured via return_weights_and_bias=True and reused on subsequent calls"
+    },
+    {
+      "op": "ttnn.conv2d",
+      "tensor_role": "input_activation",
+      "size_descriptor": "early-layer convs with tall act blocks (wormhole_b0, layer1 modules)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": null
+      },
+      "program_config": "conv_config.act_block_h_override = 14*32",
+      "condition": {
+        "var": "layer_module",
+        "op": "in",
+        "value": "['layer1_module2', 'layer1_module3'] and is_wormhole_b0()"
+      },
+      "source": "call_site: 'if layer_module == \"layer1_module2\" or layer_module == \"layer1_module3\": conv_kwargs_2[\"conv_config\"].act_block_h_override = 14 * 32'"
+    },
+    {
+      "op": "ttnn.conv2d",
+      "tensor_role": "input_activation",
+      "size_descriptor": "downsample/shortcut conv, stride 1, height-sharded",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": null
+      },
+      "program_config": "conv_config.enable_activation_reuse=True",
+      "condition": {
+        "var": "height_sharding and stride",
+        "op": "==",
+        "value": "True and 1"
+      },
+      "source": "call_site: 'enable_activation_reuse=True if height_sharding and self.stride == 1 else False'"
+    }
+  ]
+}

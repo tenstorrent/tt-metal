@@ -1,0 +1,29 @@
+{
+  "id": "ttnn_global_avg_pool2d",
+  "fused_op": "ttnn.global_avg_pool2d",
+  "category": "pooling",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.nn.functional.adaptive_avg_pool2d(input_tensor, (1, 1))",
+  "signature": {},
+  "config_template": {
+    "input_layout": "ttnn.TILE_LAYOUT",
+    "input_shape": "[{N}, {H}, {W}, {C}]",
+    "output_shape": "[{N}, 1, 1, {C}]",
+    "dtype": "{DTYPE}",
+    "memory_config": "{MEMORY_CONFIG}",
+    "padding": "pad_to_tile(0.0) required when shape is not tile-aligned; unpad_from_tile([{N},1,1,{C}]) on output"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_notes: Equivalent to global average pooling over spatial dims (H, W). ttnn operates on channels-last (NHWC) tensors, so model code typically wraps the op with permute(0,2,3,1) before and permute(0,3,1,2) after; these permutes are absorbed into the layout conversion and are part of the replaceable subsequence: permute(NCHW->NHWC) -> adaptive_avg_pool2d(.,(1,1)) -> permute(NHWC->NCHW).; ttnn_replacement: ttnn.global_avg_pool2d(input_tensor); constraints: ['Input must be channels-last (NHWC); insert permute(0,2,3,1) from NCHW torch layout', 'Output is [N, 1, 1, C] channels-last; permute(0,3,1,2) to recover NCHW', 'Input should be TILE_LAYOUT; non-tile-aligned shapes need pad_to_tile(0.0) and output unpad_from_tile']",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_average_pool.py",
+    "tests/ttnn/unit_tests/operations/pool/test_global_avg_pool2d.py"
+  ],
+  "placement_observations": []
+}

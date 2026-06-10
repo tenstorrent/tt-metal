@@ -1,0 +1,43 @@
+{
+  "id": "ttnn_log",
+  "fused_op": "ttnn.log",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.log(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "{N, C, H, W}",
+    "layout": "TILE_LAYOUT",
+    "dtype": "{DTYPE}",
+    "kwargs": {
+      "fast_and_approximate_mode": "{FAST_APPROX:optional, default=False}"
+    }
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Elementwise natural logarithm. Direct 1:1 replacement for torch.log. Supports fast_and_approximate_mode flag (seen in pow-decomposition test: ttnn.log(xt, fast_and_approximate_mode=True)). Handles special values (0 -> -inf, negative -> nan, inf -> inf); golden comparison uses equal_nan=True. Fusable as unary activation into preceding compute ops via unary op chaining.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_pow_fractional.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.log",
+      "tensor_role": "input",
+      "size_descriptor": "small (1x1x32x32 single tile)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(in_data, layout=ttnn.TILE_LAYOUT, device=device) with default (DRAM interleaved) memory_config, then ttnn.log(input_tensor)"
+    }
+  ]
+}

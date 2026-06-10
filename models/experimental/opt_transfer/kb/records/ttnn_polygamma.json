@@ -1,0 +1,40 @@
+{
+  "id": "ttnn_polygamma",
+  "fused_op": "ttnn.polygamma",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.special.polygamma(n=k, input=input_tensor_a)",
+  "signature": {},
+  "config_template": {
+    "k": "{K}",
+    "dtype": "ttnn.bfloat16",
+    "layout": "ttnn.TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Unary elementwise op; golden is torch.special.polygamma(n=k, input=x). Single-op chain replacement, no weights.; ttnn_replacement: ttnn.polygamma(input_tensor, k); constraints: {'k': 'integer order n of the polygamma function, passed positionally after input', 'accuracy': 'validated to ulp_threshold=1 against torch.special.polygamma at bfloat16'}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_composite.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.polygamma",
+      "tensor_role": "input",
+      "size_descriptor": "small tiles (e.g. [1,1,32,32]) in unit tests",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) with default interleaved memory config"
+    }
+  ]
+}

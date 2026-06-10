@@ -1,0 +1,118 @@
+{
+  "id": "ttnn_view",
+  "fused_op": "ttnn.view",
+  "category": "data_movement/reshape",
+  "pattern_kind": "chain",
+  "torch_pattern": "x = x.view(new_shape)  # zero-copy metadata reshape, e.g. x.view(h, w, d); x.view(d * merge_size**2, -1); x.view(B*S, E)",
+  "signature": {},
+  "config_template": {
+    "shape": "[{DIM0}, {DIM1}, {DIM2}, {DIM3}]",
+    "notes": "shape may contain a single -1 inferred dim; total element count must be preserved; non-tile-aligned reshapes require ROW_MAJOR_LAYOUT input (call sites wrap view in to_layout(ROW_MAJOR) ... to_layout(TILE))"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_source: call_sites (ttnn.view used as 1:1 replacement for torch.Tensor.view at each site; no registered golden/test source provided); constraints: ['metadata-only when last-dim/page size compatible; otherwise must be preceded by ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)', 'element count invariant', 'frequently fused into chains: to_layout(ROW_MAJOR) -> view -> permute/transpose/to_layout(TILE)']",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "llm",
+  "confidence": "low",
+  "unit_test_refs": [],
+  "placement_observations": [
+    {
+      "op": "ttnn.view",
+      "tensor_role": "input",
+      "size_descriptor": "small decode heads tensor [1, 8, 8, 128] (q/k heads, batch=8, n_heads<=8, head_dim=128)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "llama-family attention decode QK-norm path: to_layout(ROW_MAJOR) immediately precedes ttnn.view([1,8,8,128] <-> [1,1,64,128])"
+    },
+    {
+      "op": "ttnn.view",
+      "tensor_role": "output",
+      "size_descriptor": "flattened decode heads [1, 1, 64, 128]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE (converted via to_layout immediately after view)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "attention decode: view output is re-tilized (to_layout TILE) and its memory_config captured as reshape_intermediate/output mem cfg"
+    },
+    {
+      "op": "ttnn.experimental.view",
+      "tensor_role": "input",
+      "size_descriptor": "decode q activations [1, padded_bsz, num_heads_local, qk_head_dim] (bsz~32, head_dim=192)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR",
+        "shard_spec_template": "HEIGHT_SHARDED, ShardOrientation.ROW_MAJOR (shard spec constructed inline at call site)"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "DeepSeek MLA decode: sharded q reshaped via experimental.view, then to_memory_config(L1_MEMORY_CONFIG) + tilize_with_zero_padding"
+    },
+    {
+      "op": "ttnn.experimental.view",
+      "tensor_role": "input",
+      "size_descriptor": "attention v_out [1, 4, 128, 128] decode (batch padded to 132)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR (post-untilize)",
+        "shard_spec_template": "HEIGHT_SHARDED grid=2x2 shard=[128,128]"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "DeepSeek MLA wo path: untilize -> experimental.view(1,1,bsz//mesh_cols,num_heads*v_head_dim) -> to_memory_config(L1) -> all_gather_async"
+    },
+    {
+      "op": "ttnn.experimental.view",
+      "tensor_role": "output",
+      "size_descriptor": "[1, 1, bsz//mesh_cols, num_heads*v_head_dim] pre-all-gather; post-gather becomes [1,1,32,16384] WIDTH sharded 2x8 [32,1024]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR (tilized with zero padding afterwards for wo matmul)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "DeepSeek MLA wo path comment annotations at call site"
+    },
+    {
+      "op": "ttnn.view",
+      "tensor_role": "input",
+      "size_descriptor": "vision image tokens [h*w, d] -> [h, w, d] (prefill-scale, image grid)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR (to_layout(ROW_MAJOR) immediately precedes view)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "multimodal vision pipeline: to_layout(ROW_MAJOR) -> view(h,w,d) -> permute(2,0,1) -> unsqueeze"
+    },
+    {
+      "op": "ttnn.view",
+      "tensor_role": "output",
+      "size_descriptor": "flattened MoE gate input (batch*seq, emb) \u2014 seq-length proportional",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE (inherited; downstream gate_logits explicitly moved to DRAM_MEMORY_CONFIG when retained)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "return_intermediates",
+        "op": "==",
+        "value": true
+      },
+      "source": "MoE block: ttnn.view(x, (B*S, E)) feeding gate; gate_logits to_memory_config(DRAM) only if return_intermediates else deallocate"
+    }
+  ]
+}

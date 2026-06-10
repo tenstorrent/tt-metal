@@ -1,0 +1,23 @@
+{
+  "id": "ttnn_reglu",
+  "fused_op": "ttnn.reglu",
+  "category": "glu_variant_activation",
+  "pattern_kind": "horizontal_merge",
+  "torch_pattern": "split_size = x.size(-1) // 2; tensA, tensB = torch.split(x, split_size_or_sections=[split_size, split_size], dim={DIM}); out = tensA * torch.nn.functional.relu(tensB)",
+  "signature": {},
+  "config_template": {
+    "dim": "{DIM}"
+  },
+  "weight_transform": null,
+  "source": "ttnn registered golden + tests/ttnn unit test test_unary_reglu_ttnn",
+  "usage_examples": [],
+  "applicability_notes": "constraints: {'dim': 'must be -1 or 3 (last dimension only)', 'last_dim': 'must be even (split into two equal halves)'}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_composite.py"
+  ],
+  "placement_observations": []
+}

@@ -1,0 +1,89 @@
+{
+  "id": "ttnn_experimental_group_attn_matmul",
+  "fused_op": "ttnn.experimental.group_attn_matmul",
+  "category": "attention_matmul",
+  "pattern_kind": "chain",
+  "torch_pattern": [],
+  "signature": {},
+  "config_template": {
+    "compute_with_storage_grid_size": "{GRID_X}x{GRID_Y}",
+    "memory_config": "{OUTPUT_MEMCFG}",
+    "dtype": "ttnn.bfloat16"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "constraints: {'output_dtype': 'BFLOAT16 (required per call-site comments)', 'usage_mode': 'decode-mode attention (q_len=1), Q heads grouped over fewer KV heads'}",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "llm",
+  "confidence": "low",
+  "unit_test_refs": [],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.group_attn_matmul",
+      "tensor_role": "output (pre-softmax attention scores, Q @ K^T)",
+      "size_descriptor": "decode mode: [seq_q=1, n_q_heads, batch, kv_cache_len]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE",
+        "shard_spec_template": "model_config['PRE_SOFTMAX_MM_OUTPUT_MEMCFG']"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: attn_weights = ttnn.experimental.group_attn_matmul(query_layer, key_layer_transposed, ..., memory_config=self.model_config['PRE_SOFTMAX_MM_OUTPUT_MEMCFG'], dtype=PRE_SOFTMAX_MM_OUTPUT_DTYPE  # Must be BFLOAT16)"
+    },
+    {
+      "op": "ttnn.experimental.group_attn_matmul",
+      "tensor_role": "output (post-softmax attention output, scores @ V)",
+      "size_descriptor": "decode mode: [seq_q=1, n_q_heads, batch, head_dim]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE",
+        "shard_spec_template": "model_config['POST_SOFTMAX_MM_OUTPUT_MEMCFG']"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: attn_output = ttnn.experimental.group_attn_matmul(attn_weights, value_layer, ..., memory_config=self.model_config['POST_SOFTMAX_MM_OUTPUT_MEMCFG'], dtype=POST_SOFTMAX_MM_OUTPUT_DTYPE  # Must be BFLOAT16)"
+    },
+    {
+      "op": "ttnn.experimental.group_attn_matmul",
+      "tensor_role": "input_a (query_layer / attn_weights)",
+      "size_descriptor": "decode mode activation; deallocated immediately after the matmul at every call site",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call sites: query_layer.deallocate(True) / ttnn.deallocate(attn_weights) immediately after op (short-lived L1 activations)"
+    },
+    {
+      "op": "transpose (producer)",
+      "tensor_role": "input_b (key_layer_transposed)",
+      "size_descriptor": "decode-mode transposed K cache slice",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE",
+        "shard_spec_template": "model_config['K_TRANSPOSED_OUTPUT_MEMCFG']"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: transpose producing key_layer_transposed with memory_config=self.model_config['K_TRANSPOSED_OUTPUT_MEMCFG']"
+    },
+    {
+      "op": "ttnn.experimental.group_attn_matmul",
+      "tensor_role": "compute grid",
+      "size_descriptor": "full device grid",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": "compute_with_storage_grid_size = mesh_device.compute_with_storage_grid_size() OR ttnn.CoreCoord(core_grid.x, core_grid.y)",
+      "condition": null,
+      "source": "model call sites: compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size() / ttnn.CoreCoord(self.core_grid.x, self.core_grid.y)"
+    }
+  ]
+}

@@ -1,0 +1,67 @@
+{
+  "id": "ttnn_nonzero",
+  "fused_op": "ttnn.nonzero",
+  "category": "indexing/search (data-dependent output size)",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.nonzero(torch_input_tensor, as_tuple=True)",
+  "signature": {},
+  "config_template": {
+    "memory_config": "{MEM_CONFIG}",
+    "queue_id": "{QUEUE_ID:optional, default 0}",
+    "input_layout": "ROW_MAJOR_LAYOUT",
+    "input_shape": "[1, 1, 1, {N}]"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "constraints: ['input must be rank-4 of effective shape [1,1,1,N] (1D data in last dim)', 'input layout ROW_MAJOR', 'outputs are padded to input width; valid region bounded by num_indices scalar', 'data-dependent output: not fusable downstream without a slice on num_indices']",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_non_zero.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_non_zero_indices.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.nonzero",
+      "tensor_role": "input",
+      "size_descriptor": "rank-4 [1,1,1,N], row-major, bfloat16",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device) / ttnn.Tensor(...).to(device) with default DRAM interleaved"
+    },
+    {
+      "op": "ttnn.nonzero",
+      "tensor_role": "output:num_indices",
+      "size_descriptor": "rank-4 [1,1,1,1]-like scalar holder (read via [0,0,0,0].item())",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM); ttnn.nonzero(input_tt, memory_config=mem_config)"
+    },
+    {
+      "op": "ttnn.nonzero",
+      "tensor_role": "output:indices",
+      "size_descriptor": "rank-4 [1,1,1,N] padded; valid prefix length = num_indices",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.nonzero(input_tt, memory_config=mem_config) followed by ttnn.slice(indices_tt, (0,0,0,0), (1,1,1,num_non_zeros), memory_config=mem_config)"
+    }
+  ]
+}

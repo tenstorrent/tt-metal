@@ -1,0 +1,54 @@
+{
+  "id": "ttnn_add_1",
+  "fused_op": "ttnn.add",
+  "category": "eltwise_binary_fused_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.square(x_torch + y_torch)",
+  "signature": {},
+  "config_template": {
+    "call": "ttnn.add(x_tt, y_tt, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.{UNARY_OP})])",
+    "note": "fuses a trailing elementwise unary (square/relu/etc.) into the binary add SFPU pass; replaces the contiguous chain add -> unary"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_eltwise_binary.py",
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_padding_test.py",
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_sfpu_chain.py",
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_sharded.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_repeat.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_add.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast_tcast.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_fp32.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_program_cache.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_uint32.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binaryng_fp32.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_sub.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_typecast_int.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_activation.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_pow.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "add",
+      "tensor_role": "output",
+      "size_descriptor": "test tensor [1,1,64,64] tile layout",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: z_tt_add = ttnn.add(x_tt, y_tt, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SQUARE)]) with default (DRAM interleaved) memory config"
+    }
+  ]
+}

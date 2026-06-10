@@ -1,0 +1,69 @@
+{
+  "id": "ttnn_bitwise_left_shift",
+  "fused_op": "ttnn.bitwise_left_shift",
+  "category": "eltwise_binary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.bitwise_left_shift(input_tensor_a, shift_amt)",
+  "signature": {},
+  "config_template": {
+    "dtype": "{INT_DTYPE}",
+    "layout": "ttnn.TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}",
+    "sub_core_grids": "{OPTIONAL_SUB_CORE_GRID}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Elementwise binary bitwise shift. Second operand may be a tensor (broadcast-compatible) or a Python int scalar. Inputs are integer dtypes (ttnn.int32 / ttnn.uint16); requires TILE_LAYOUT. Supports optional sub_core_grids kwarg to constrain the compute grid.; torch_pattern_source: registered_golden; ttnn_replacement: ttnn.bitwise_left_shift(input_tensor_a, shift_amt); constraints: {'input_dtypes': ['ttnn.int32', 'ttnn.uint16'], 'second_operand': 'tensor_or_int_scalar', 'layout': 'TILE_LAYOUT'}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_composite.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_int32.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binaryng_fp32.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.bitwise_left_shift",
+      "tensor_role": "input_a",
+      "size_descriptor": "small_test_shapes (e.g. [1,1,32,32]..[N,C,H,W] randint int32)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test (default memory_config via ttnn.from_torch(..., device=device), TILE_LAYOUT)"
+    },
+    {
+      "op": "ttnn.bitwise_left_shift",
+      "tensor_role": "input_b",
+      "size_descriptor": "same_shape_as_input_a_or_scalar",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test (default memory_config via ttnn.from_torch(..., device=device), TILE_LAYOUT)"
+    },
+    {
+      "op": "ttnn.bitwise_left_shift",
+      "tensor_role": "output",
+      "size_descriptor": "same_shape_as_input_a",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test (no explicit output memory_config; default interleaved)"
+    }
+  ]
+}

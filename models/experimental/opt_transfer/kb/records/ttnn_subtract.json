@@ -1,0 +1,78 @@
+{
+  "id": "ttnn_subtract",
+  "fused_op": "ttnn.subtract",
+  "category": "eltwise_binary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.sub(input_tensor_a, input_tensor_b)",
+  "signature": {},
+  "config_template": {
+    "memory_config": "{MEMORY_CONFIG}",
+    "use_legacy": null,
+    "broadcast": "supported (e.g. [B, S, D] - [B, 1, D] mean-centering)"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Elementwise binary subtract with implicit broadcasting. Observed idioms: (1) mean-centering `x - mean(x, dim, keepdim=True)` in stats-pooling / norm blocks; (2) self-subtraction `subtract(input_ids, input_ids)` to materialize a zeros tensor matching input shape/dtype for default token_type_ids.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.subtract",
+      "tensor_role": "output",
+      "size_descriptor": "generic rand bf16 shapes incl. broadcast shapes",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.subtract(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=None)"
+    },
+    {
+      "op": "ttnn.subtract",
+      "tensor_role": "output",
+      "size_descriptor": "[N, L, C] hidden states minus broadcast [N, 1, C] mean (stats-pooling activation regime)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call site: centered = ttnn.subtract(hidden_tt, mean, memory_config=ttnn.L1_MEMORY_CONFIG) in std-pooling branch"
+    },
+    {
+      "op": "ttnn.subtract",
+      "tensor_role": "input_a",
+      "size_descriptor": "[N, L, C] sequence activations (x_nlc / hidden_tt)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call site: ttnn.subtract(x_nlc, mean, memory_config=mc) within mean/std pooling chain feeding ttnn.concat with same mc"
+    },
+    {
+      "op": "ttnn.subtract",
+      "tensor_role": "input_b",
+      "size_descriptor": "[N, 1, C] reduced statistic (mean / weighted_mean), broadcast over dim=1",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call site: ttnn.subtract(x_nlc, weighted_mean, memory_config=mc) \u2014 statistic produced by ttnn.mean/ttnn.sum keepdim=True"
+    }
+  ]
+}

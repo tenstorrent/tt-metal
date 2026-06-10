@@ -1,0 +1,53 @@
+{
+  "id": "ttnn_experimental_nlp_create_qkv_heads_boltz",
+  "fused_op": "ttnn.experimental.nlp_create_qkv_heads_boltz",
+  "category": "attention_head_creation",
+  "pattern_kind": "horizontal_merge",
+  "torch_pattern": "q, k, v = torch.split(qkvg, [{NUM_HEADS}*{HEAD_DIM}, {NUM_KV_HEADS}*{HEAD_DIM}, {NUM_KV_HEADS}*{HEAD_DIM}], dim=-1); q = q.reshape({B}, {S}, {NUM_HEADS}, {HEAD_DIM}).permute(0, 2, 1, 3); k = k.reshape({B}, {S}, {NUM_KV_HEADS}, {HEAD_DIM}).permute(0, 2, 1, 3); v = v.reshape({B}, {S}, {NUM_KV_HEADS}, {HEAD_DIM}).permute(0, 2, 1, 3)",
+  "signature": {},
+  "config_template": {
+    "num_heads": "{NUM_HEADS}",
+    "num_kv_heads": "{NUM_KV_HEADS}",
+    "transpose_k_heads": false,
+    "memory_config": "{OUTPUT_MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_nlp_create_qkv_heads_boltz.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.nlp_create_qkv_heads_boltz",
+      "tensor_role": "input_qkv",
+      "size_descriptor": "fused qkv activation [B, 1, S, (num_heads + 2*num_kv_heads)*head_dim]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test (parameterized in0_mem_config; test asserts input buffer_type matches in0_mem_config, DRAM/L1 swept)"
+    },
+    {
+      "op": "ttnn.experimental.nlp_create_qkv_heads_boltz",
+      "tensor_role": "output_q_k_v",
+      "size_descriptor": "per-head tensors [B, num_heads, S, head_dim]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test (memory_config=ttnn.DRAM_MEMORY_CONFIG)"
+    }
+  ]
+}

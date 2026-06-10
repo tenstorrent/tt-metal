@@ -1,0 +1,43 @@
+{
+  "id": "ttnn_multiply_fused_unary_activation_on_input_a_1",
+  "fused_op": "ttnn.multiply (fused unary activation on input_a)",
+  "category": "eltwise_binary_fused_activation",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.mul(torch.nn.functional.silu(gate_out), up_out)",
+  "signature": {},
+  "config_template": {
+    "input_tensor_a_activation": "ttnn.UnaryOpType.SILU",
+    "memory_config": "{INPUT_A_MEMORY_CONFIG}",
+    "dtype": "ttnn.bfloat8_b"
+  },
+  "weight_transform": "none; the unary activation (SiLU) on the first operand is fused into the binary multiply kernel via input_tensor_a_activation, eliminating a separate eltwise pass",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_pow_fractional.py",
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_sharded.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_binaryng_fp32.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_mul.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.multiply",
+      "tensor_role": "output",
+      "size_descriptor": "[batch, 1, seq_len, ffn_dim] SwiGLU gated intermediate (silu(gate)*up)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: tt_gate_up = ttnn.multiply(tt_gate_out, tt_up_out, input_tensor_a_activation=ttnn.UnaryOpType.SILU, memory_config=tt_gate_out.memory_config(), dtype=ttnn.bfloat8_b) \u2014 output inherits gate memory_config, lowered precision for intermediate"
+    }
+  ]
+}

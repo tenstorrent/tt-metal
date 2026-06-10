@@ -1,0 +1,41 @@
+{
+  "id": "ttnn_max_1",
+  "fused_op": "ttnn.max",
+  "category": "reduction",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.max(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "dim": null,
+    "keepdim": "{KEEPDIM}",
+    "dtype": "{DTYPE}",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Full (all-dims) max reduction: torch.max(x) -> ttnn.max(x). When keepdim=True the golden expands to torch.max(x, dim=tuple(range(rank)), keepdim=True); ttnn.max with dim=None handles both.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/reduce/test_max.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.max",
+      "tensor_role": "input",
+      "size_descriptor": "generic test tensors, tile-aligned via fill_implicit_tile_padding",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT, device=device) default interleaved DRAM, ttnn.fill_implicit_tile_padding then ttnn.max(input_tensor)"
+    }
+  ]
+}

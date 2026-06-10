@@ -1,0 +1,71 @@
+{
+  "id": "ttnn_addcdiv",
+  "fused_op": "ttnn.addcdiv",
+  "category": "eltwise_ternary_composite",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.addcdiv(input_tensor_a, input_tensor_b, input_tensor_c, value=value)",
+  "signature": {},
+  "config_template": {
+    "input_a_shape": "{BATCH}x{CH}x{H}x{W}",
+    "input_b_shape": "{BATCH}x{CH}x{H}x{W}",
+    "input_c_shape": "{BATCH}x{CH}x{H}x{W}",
+    "value": "{SCALAR_VALUE}",
+    "dtype": "{DTYPE: bfloat16|float32}",
+    "layout": "TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "constraints: {'all_inputs_same_shape': True, 'layout': 'TILE_LAYOUT', 'nan_handling_note': 'ttnn may produce inf where torch produces nan for division by zero (e.g. 0/0 or x/0); tests normalize nan/inf mismatches before comparison'}; fusion_notes: Replaces the 3-op chain div(b,c) -> mul(value) -> add(a) with a single fused ternary op. Argument order is (input, numerator, denominator); value is a compile-time scalar attribute, default 1.",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_ternary.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_ternary_composite.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_where.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.addcdiv",
+      "tensor_role": "input_a",
+      "size_descriptor": "small_tile_multiple (e.g. 1x1x32x32)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.addcdiv",
+      "tensor_role": "input_b",
+      "size_descriptor": "small_tile_multiple (e.g. 1x1x32x32)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.addcdiv",
+      "tensor_role": "input_c",
+      "size_descriptor": "small_tile_multiple (e.g. 1x1x32x32)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)"
+    }
+  ]
+}

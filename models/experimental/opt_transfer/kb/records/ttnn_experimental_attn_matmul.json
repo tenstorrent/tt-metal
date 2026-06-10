@@ -1,0 +1,63 @@
+{
+  "id": "ttnn_experimental_attn_matmul",
+  "fused_op": "ttnn.experimental.attn_matmul",
+  "category": "matmul/attention",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.matmul(input_a.transpose(0, 2), input_b).transpose(0, 2)",
+  "signature": {},
+  "config_template": {
+    "compute_with_storage_grid_size": "ttnn.CoreCoord({GRID_X}, {GRID_Y})",
+    "memory_config": "{OUTPUT_MEMCFG}",
+    "dtype": "ttnn.bfloat16"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_notes: Pre-transposed attention matmul for decode (seq_len=1). Replaces the torch subsequence: transpose batch/q-len dims, batched matmul against per-user K^T (or V), transpose back. Used for Q@K^T (pre-softmax) and attn_weights@V (post-softmax) in decode-mode attention. input_a: [q_len(=1), q_heads, batch, head_dim], input_b: [batch, 1, head_dim, kv_len].; constraints: {'dtype': 'output dtype must be BFLOAT16 (per model call-site comments)', 'q_len': 1, 'arch_condition': 'selected when is_wormhole_b0(); otherwise group_attn_matmul is used for multi-q-head/GQA cases', 'kv_heads': 'input_b heads dim must be 1 (single KV head); use group_attn_matmul for grouped heads'}",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "llm",
+  "confidence": "low",
+  "unit_test_refs": [],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.attn_matmul",
+      "tensor_role": "output (attn_weights, Q@K^T pre-softmax)",
+      "size_descriptor": "[1, num_q_heads, batch, kv_cache_len] decode-mode, seq_len=1",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: memory_config=self.model_config['PRE_SOFTMAX_MM_OUTPUT_MEMCFG'] (Falcon decode config, L1 interleaved); dtype=model_config['PRE_SOFTMAX_MM_OUTPUT_DTYPE'] with comment 'Must be BFLOAT16'"
+    },
+    {
+      "op": "ttnn.experimental.attn_matmul",
+      "tensor_role": "output (attn_output, attn_weights@V post-softmax)",
+      "size_descriptor": "[1, num_q_heads, batch, head_dim] decode-mode, seq_len=1",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: memory_config=self.model_config['POST_SOFTMAX_MM_OUTPUT_MEMCFG'] (Falcon decode config, L1 interleaved); dtype=model_config['POST_SOFTMAX_MM_OUTPUT_DTYPE'] with comment 'Must be BFLOAT16'"
+    },
+    {
+      "op": "ttnn.experimental.attn_matmul",
+      "tensor_role": "input_a (query_layer / attn_weights)",
+      "size_descriptor": "decode-mode activation, [1, q_heads, batch, K]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: query_layer.deallocate() immediately after op indicates short-lived L1-resident activation; grid taken from full device grid (mesh_device.compute_with_storage_grid_size() or self.core_grid)"
+    }
+  ]
+}

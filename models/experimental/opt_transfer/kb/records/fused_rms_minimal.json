@@ -1,0 +1,84 @@
+{
+  "id": "fused_rms_minimal",
+  "fused_op": "fused_rms_minimal",
+  "category": "normalization_fused_ccl",
+  "pattern_kind": "chain",
+  "torch_pattern": "x = x + residual  # optional, present when residual_input_tensor is passed\nvariance = x.pow(2).mean(-1, keepdim=True)\nx = x * torch.rsqrt(variance + epsilon)\nout = x * gamma  # weight= kwarg; stats all-gathered across cluster_axis (distributed RMSNorm)",
+  "signature": {},
+  "config_template": {
+    "epsilon": "{EPS}",
+    "cluster_axis": "{CLUSTER_AXIS}",
+    "num_links": "{NUM_LINKS}",
+    "topology": "{CCL_TOPOLOGY}",
+    "program_config": "ttnn.LayerNormShardedMultiCoreProgramConfig(compute_with_storage_grid_size=({GRID_X},{GRID_Y}), subblock_w={SUBBLOCK_W}, block_h={SEQ_TILES}, block_w={DIM}//32//{NUM_CORES}, inplace=False)",
+    "memory_config": "{OUTPUT_MEMORY_CONFIG}",
+    "residual_input_tensor": "{RESIDUAL_TENSOR_OR_NONE}",
+    "weight": "{GAMMA_TENSOR}",
+    "semaphores": "{CCL_SEMAPHORE_HANDLES}"
+  },
+  "weight_transform": "gamma kept as 1-D [DIM] vector, converted to ROW_MAJOR_LAYOUT and placed in DRAM; no numerical transform; replicated across mesh devices (norm weight is not sharded along cluster_axis)",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/ccl/fusion_subtests/rms_test.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "fused_rms_minimal",
+      "tensor_role": "weight (gamma)",
+      "size_descriptor": "[DIM] norm weight vector",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test_example: gamma_tensor created with layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG immediately before fused_rms_minimal call"
+    },
+    {
+      "op": "fused_rms_minimal",
+      "tensor_role": "activation input",
+      "size_descriptor": "decode-shape activation [1, 1, SEQ, DIM/num_devices] (width-fractured across cluster_axis)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "width-sharded per ln_sharded_progcfg core grid (block_w = DIM//32//NUM_CORES per core)"
+      },
+      "program_config": "ln_sharded_progcfg (ttnn.LayerNormShardedMultiCoreProgramConfig)",
+      "condition": null,
+      "source": "call_site: tt_ccl distributed rmsnorm part 1 \u2014 input passed with ln_sharded_progcfg, cluster_axis=1"
+    },
+    {
+      "op": "fused_rms_minimal",
+      "tensor_role": "output",
+      "size_descriptor": "same shape regime as input activation",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "output_memory_config (sharded, mirrors input shard spec in tests)"
+      },
+      "program_config": "layer_norm_config (sharded program config passed positionally)",
+      "condition": null,
+      "source": "test_example: memory_config=output_memory_config kwarg on fused_rms_minimal"
+    },
+    {
+      "op": "fused_rms_minimal",
+      "tensor_role": "persistent CCL gather buffer",
+      "size_descriptor": "small stats buffer (per-device partial RMS stats, all-gathered)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: persistent_buffer = tt_ccl.all_gather_buffers.get(\"LAYERNORM\", None); semaphore from tt_ccl.gather_semaphore_handles[cluster_axis]"
+    }
+  ]
+}

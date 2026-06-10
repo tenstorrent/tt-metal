@@ -1,0 +1,93 @@
+{
+  "id": "ttnn_full",
+  "fused_op": "ttnn.full",
+  "category": "creation",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.full(input_shape, fill_value=fill_value)",
+  "signature": {},
+  "config_template": {
+    "shape": "{SHAPE}",
+    "fill_value": "{FILL_VALUE}",
+    "dtype": "{DTYPE}",
+    "layout": "{LAYOUT|default=ttnn.TILE_LAYOUT}",
+    "device": "{DEVICE}",
+    "optional_tensor": "{OPT_TENSOR|optional, preallocated output for in-place fill}",
+    "queue_id": "{CQ_ID|optional}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Constant-tensor creation op; torch-level equivalent is torch.full. Frequently the head of a scalar-division idiom in model code: ttnn.full(shape, fill_value=c) -> ttnn.reciprocal -> ttnn.mul(x, ...) which at torch level is simply x / c \u2014 a candidate for replacement by a single eltwise scalar op rather than materializing the constant tensor. Also used to create [1,1] scalar tiles for timestep/sigma broadcast in diffusion schedulers, and as mask-value source tensors for ttnn.scatter.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_eps.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_creation.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_full.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_relational.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.full",
+      "tensor_role": "output",
+      "size_descriptor": "tiny scalar tile [1,1] or [1,1,1,1] (timestep / sigma_difference broadcast constants)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "traced",
+        "op": "==",
+        "value": false
+      },
+      "source": "diffusion pipeline call sites: device=submesh_device if not traced else None \u2014 tensor created host-side when tracing, default DRAM interleaved on device otherwise"
+    },
+    {
+      "op": "ttnn.full",
+      "tensor_role": "output",
+      "size_descriptor": "full activation shape (sample.shape / tt_initial_latents.shape, e.g. latent tensor [B,C,H,W])",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "LMS/Euler scheduler call sites: ttnn.full(sample.shape, fill_value=value, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) feeding reciprocal+mul; no explicit memory_config => default DRAM interleaved"
+    },
+    {
+      "op": "ttnn.full",
+      "tensor_role": "output",
+      "size_descriptor": "small index-shaped tensor (batch, 1) used as scatter src (mask fill value)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "use_row_major",
+        "op": "==",
+        "value": true
+      },
+      "source": "scatter masking call site: ttnn.full(idx_rm.shape, mask_value, layout=ttnn.ROW_MAJOR_LAYOUT, device=work.device()); ROW_MAJOR only when use_row_major branch taken, otherwise TILE via to_layout"
+    },
+    {
+      "op": "ttnn.full",
+      "tensor_role": "output",
+      "size_descriptor": "any shape with preallocated optional_tensor",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: optional_tensor path verified to allocate no new buffer pages (in-place fill into existing device buffer)"
+    }
+  ]
+}

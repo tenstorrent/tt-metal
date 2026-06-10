@@ -1,0 +1,163 @@
+{
+  "id": "ttnn_pad",
+  "fused_op": "ttnn.pad",
+  "category": "data_movement",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch_padding = []\nfor dimension in reversed(padding):\n    torch_padding.append(dimension[0])\n    torch_padding.append(dimension[1])\ntorch.nn.functional.pad(input_tensor, pad=torch_padding, mode=\"constant\", value=value)",
+  "signature": {},
+  "config_template": {
+    "padding": "[(0, 0)] * {RANK}; padding[{DIM}] = ({PAD_BEFORE}, {PAD_AFTER})  # per-dim (before, after) pairs ordered outermost->innermost; rank <= 4",
+    "value": "{PAD_VALUE}  # 0.0 for activations/seq-len padding; -inf / -1e30 when feeding topk/softmax; 1.0 for rot-mat cos pad",
+    "memory_config": "{MEMORY_CONFIG}",
+    "use_multicore": "{USE_MULTICORE:optional,bool}"
+  },
+  "weight_transform": "torch pad list is the per-dim (before, after) pairs reversed (innermost dim first) and flattened: torch_pad = [b,a for (b,a) in reversed(ttnn_padding)]. No weight tensors involved; when padding conv weights/bias for channel alignment, out_channels padded to next multiple of 32 with zeros.",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_transpose.py",
+    "tests/ttnn/unit_tests/operations/conv/data_movement/test_fold_op.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_pad.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_pad_subcoregrids.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "pad",
+      "tensor_role": "output",
+      "size_descriptor": "NCHW conv-preprocessing activation, channel pad C->min_channels (e.g. 3->16), row-major",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.pad(activation_pyt_padded, padding=padding, value=0, memory_config=ttnn.L1_MEMORY_CONFIG) on ROW_MAJOR L1 input, followed by transpose/reshape chain"
+    },
+    {
+      "op": "pad",
+      "tensor_role": "output",
+      "size_descriptor": "conv activation (N, H, W, C) padded along H/C, large spatial extent spanning full 8x8 grid",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": "create_sharded_memory_config(shape, core_grid=ttnn.CoreGrid(y=8, x=8), strategy=ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR)"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.pad(tt_input_tensor, padding=((0, C-c), (pad_h, pad_h_right), (0, 0)), value=0, memory_config=pad_sharded_memory_config)"
+    },
+    {
+      "op": "pad",
+      "tensor_role": "input_and_output",
+      "size_descriptor": "variable-length sequence tensor padded up to a multiple (tile/chunk alignment), potentially large seq_len",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model util pad_to_multiple: x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG); ttnn.pad(x, padding, value=value, memory_config=ttnn.DRAM_MEMORY_CONFIG)"
+    },
+    {
+      "op": "pad",
+      "tensor_role": "output",
+      "size_descriptor": "attention mask [B, 1, q_len, k_len] padded on last two dims to tile-aligned q_length/k_length",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: mask_rm = ttnn.pad(mask_rm, padding, value=float(mask_value), memory_config=ttnn.DRAM_MEMORY_CONFIG); then to_layout(TILE_LAYOUT)"
+    },
+    {
+      "op": "pad",
+      "tensor_role": "output",
+      "size_descriptor": "5D conv3d activation reshaped to 4D (N, T, H*W, C), symmetric z-padding on dim 1",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: ttnn.pad(x0, [(0,0),(padding_z,padding_z),(0,0),(0,0)], 0, use_multicore=True, memory_config=ttnn.L1_MEMORY_CONFIG)"
+    },
+    {
+      "op": "pad",
+      "tensor_role": "input",
+      "size_descriptor": "pre-reduce-scatter hidden-state tensor, last-dim performance padding; only applied when penultimate dim is tile-height or larger",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "shape[-2]",
+        "op": ">=",
+        "value": 32
+      },
+      "source": "model call site: if pad_size and tensor.shape[-2] >= 32: tensor_padded = ttnn.pad(tensor, [(0,0),(0,0),(0,0),(0,pad_size)], 0) before ttnn.experimental.reduce_scatter_minimal_async (memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG)"
+    },
+    {
+      "op": "pad",
+      "tensor_role": "output",
+      "size_descriptor": "small NHWC image tensor, channel pad to CONV2D_MIN_CHANNEL_SIZE or next multiple of 32, performed before to_device",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "num_channels % 32",
+        "op": "!=",
+        "value": 0
+      },
+      "source": "segformer call site: ttnn_input_tensor = ttnn.pad(ttnn_input_tensor, padded_shape, [0,0,0,0], 0); ttnn.to_device(ttnn_input_tensor, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)"
+    },
+    {
+      "op": "pad",
+      "tensor_role": "output",
+      "size_descriptor": "decode logits [1, 1, batch, vocab], batch padded up to 32 for sampling; small batch regime",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "shape[-2]",
+        "op": "<",
+        "value": 32
+      },
+      "source": "model call site: if batch_dim < 32: logits = ttnn.pad(logits, padding=[(0,0),(0,0),(0, 32 - batch_dim),(0,0)], value=0.0) before sampling.sample"
+    },
+    {
+      "op": "pad",
+      "tensor_role": "output",
+      "size_descriptor": "topk scores last-dim pad to TOPK_MIN_WIDTH (e.g. 64) or 8192 vocab bucket, padded with -inf so padding never wins topk",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "shape[-1]",
+        "op": "<",
+        "value": 64
+      },
+      "source": "model call site: expert_scores_grouped = ttnn.pad(expert_scores_grouped, [(0,0),(0,0),(0,0),(0, TOPK_MIN_WIDTH - shape[3])], value=-float(\"inf\")) before ttnn.topk; similar vocab<8192 pad with value=-1e30 to enable multicore topk"
+    }
+  ]
+}

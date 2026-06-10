@@ -1,0 +1,194 @@
+{
+  "id": "ttnn_concat",
+  "fused_op": "ttnn.concat",
+  "category": "data_movement",
+  "pattern_kind": "horizontal_merge",
+  "torch_pattern": "torch.concat(tensors, dim)",
+  "signature": {},
+  "config_template": {
+    "dim": "{DIM}",
+    "memory_config": "{MEMORY_CONFIG}",
+    "groups": 1
+  },
+  "weight_transform": "none",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Merges N sibling tensors (branches sharing upstream producers) along {DIM}. Common fusion targets: [cls_token, patch_embeddings] prepend, [cos, sin] sinusoidal embeddings, [q_nope, q_rope] head concat, [latent, latent] CFG duplication, [upsampled, skip] UNet skip connections, KV-cache append [cache_k, k].",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_concat.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_concat.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_concat_iterative.py",
+    "tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_sharded.py",
+    "tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.concat",
+      "tensor_role": "output",
+      "size_descriptor": "per-device matmul output shards [1,1,32,size_per_device], decode-regime small",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "use_prefetcher",
+        "op": "==",
+        "value": false
+      },
+      "source": "model call site: output = ttnn.concat(outputs, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG if not use_prefetcher else ttnn.DRAM_MEMORY_CONFIG, sub_core_grids=...)"
+    },
+    {
+      "op": "ttnn.concat",
+      "tensor_role": "output",
+      "size_descriptor": "per-device matmul output shards [1,1,32,size_per_device], ring_mm/prefetcher mode",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "use_prefetcher",
+        "op": "==",
+        "value": true
+      },
+      "source": "model call site: output = ttnn.concat(outputs, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG ...) followed by ttnn.to_memory_config reshard for ring_mm"
+    },
+    {
+      "op": "ttnn.concat",
+      "tensor_role": "input",
+      "size_descriptor": "layernorm pre-allgather stats, height 32, narrow width (per-device stats columns)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: tt_pre_allgather_output = ttnn.to_memory_config(t, memory_config=ttnn.L1_MEMORY_CONFIG); tt_global_stats = ttnn.concat(tt_stats_list, -1)"
+    },
+    {
+      "op": "ttnn.concat",
+      "tensor_role": "output",
+      "size_descriptor": "global layernorm stats (32, padded_width), single-tile-row regime",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE",
+        "shard_spec_template": "WIDTH-sharded on 1 core, shard_shape=(32, {PADDED_LAST_DIM}), use_height_and_width_as_shard_shape=True"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: interleaved concat output then ttnn.to_memory_config(tt_global_stats, create_sharded_memory_config(shape=(32, padded_shape[-1]), 1-core grid, ShardStrategy.WIDTH))"
+    },
+    {
+      "op": "ttnn.concat",
+      "tensor_role": "output",
+      "size_descriptor": "ViT embeddings [batch, 1+num_patches, hidden], seq ~197-224, prefill-small",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: embedding_output = ttnn.concat([cls_token, patch_embeddings], -2, memory_config=ttnn.L1_MEMORY_CONFIG) followed by to_layout(TILE)"
+    },
+    {
+      "op": "ttnn.concat",
+      "tensor_role": "output",
+      "size_descriptor": "segformer decode-head fused hidden states, 4 NHWC feature maps concat on channels (dim=3)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: concated_tensor = ttnn.concat(all_hidden_states[::-1], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG) then to_layout(TILE, bfloat8_b)"
+    },
+    {
+      "op": "ttnn.concat",
+      "tensor_role": "output",
+      "size_descriptor": "CNN activation NHWC tensors concat on channel dim (UNet/YOLO skip-connection merge)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR",
+        "shard_spec_template": "HEIGHT-sharded, core_grid={SHARD_GRID}, use_height_and_width_as_shard_shape=True"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: output = ttnn.concat(input_tensors, dim, memory_config=output_sharded_memory_config) where output_sharded_memory_config = create_sharded_memory_config(..., strategy=ttnn.ShardStrategy.HEIGHT)"
+    },
+    {
+      "op": "ttnn.concat",
+      "tensor_role": "output",
+      "size_descriptor": "MLA decode q heads [1, bsz, heads_local, qk_nope+qk_rope] (e.g. 1,32,16,576), decode-small",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG); inputs also moved to L1 via to_memory_config beforehand"
+    },
+    {
+      "op": "ttnn.concat",
+      "tensor_role": "input",
+      "size_descriptor": "shared-expert + MoE expert outputs combined before reduce_scatter",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: shared_expert_out = ttnn.to_memory_config(shared_expert_out, ttnn.L1_MEMORY_CONFIG); combined_out = ttnn.concat([mlp_out, shared_expert_out], dim=0)"
+    },
+    {
+      "op": "ttnn.concat",
+      "tensor_role": "output",
+      "size_descriptor": "padded talker/audio embeddings [1,1,padded_seq,hidden], seq <= ~1024",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: inputs_embeds_tt = ttnn.concat([inputs_embeds_tt, pad_zeros], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.concat",
+      "tensor_role": "output",
+      "size_descriptor": "host-side / replicated position-id row tensors, batch concat dim=0",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call site: position_ids_tt built with memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=ttnn.ROW_MAJOR_LAYOUT; return ttnn.concat(position_ids_tt, dim=0)"
+    },
+    {
+      "op": "ttnn.concat",
+      "tensor_role": "input",
+      "size_descriptor": "per-group split outputs (interleaved DRAM) before final width concat",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: per_group_results items moved to ttnn.DRAM_MEMORY_CONFIG, then tt_output_tensor = ttnn.concat(per_group_results, dim=-1)"
+    }
+  ]
+}

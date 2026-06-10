@@ -1,0 +1,92 @@
+{
+  "id": "ttnn_slice_1",
+  "fused_op": "ttnn.slice",
+  "category": "data_movement",
+  "pattern_kind": "horizontal_merge",
+  "torch_pattern": "x1 = x[..., :split]; x2 = x[..., split:]  # sibling slices of one producer, e.g. u_top/u_bot row split of u_stem in test ([0,0,0,0]->[1,1,half,cols] and [0,0,half,0]->[1,1,rows,cols]); q_nope/q_rope, w1/w3, q/kv_nope/kv_rope channel splits",
+  "signature": {},
+  "config_template": {
+    "branch_i": "ttnn.slice(x, [0, 0, 0, {OFFSET_i}], [{B}, {C}, {H}, {OFFSET_i} + {WIDTH_i}], memory_config={MEM_CONFIG_i})",
+    "notes": "N sibling ttnn.slice ops over the same parent tensor partitioning one dim (rows or channels); parent typically deallocated immediately after all branch slices. Branch memory_configs may differ (e.g. q_nope interleaved, q_rope height-sharded)."
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_non_zero.py",
+    "tests/ttnn/unit_tests/operations/conv/data_movement/test_fold_op.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_slice.py",
+    "tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/test_fused_demo.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.slice",
+      "tensor_role": "output",
+      "size_descriptor": "row-split halves [1,1,{ROWS}/2,{COLS}] of a sharded layer_norm output",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "shards['left'] (height-sharded spec sized to half rows)"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: u_top = ttnn.slice(u_stem, ..., memory_config=shards['left']); u_bot = ttnn.slice(u_stem, ..., memory_config=shards['left']); ttnn.deallocate(u_stem)"
+    },
+    {
+      "op": "ttnn.slice",
+      "tensor_role": "output",
+      "size_descriptor": "decode q_rope branch [{BATCH},1,{NUM_HEADS_LOCAL},{ROPE_DIM}]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "create_sharded_memory_config(shape=({Q_ROPE_SHARD_H},{Q_ROPE_SHARD_W}), strategy=HEIGHT, use_height_and_width_as_shard_shape=True)"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "decode"
+      },
+      "source": "deepseek MLA decode: tt_q_rope = ttnn.slice(tt_q, [0,0,0,qk_nope_head_dim], ..., **q_rope_slice_config) while sibling tt_q_nope slice stays L1 interleaved"
+    },
+    {
+      "op": "ttnn.slice",
+      "tensor_role": "output",
+      "size_descriptor": "decode fused q/kv split branches [1,1,{BATCH},{SUB_DIM}], BATCH<=32",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "seq_len",
+        "op": "<=",
+        "value": 32
+      },
+      "source": "deepseek MLA decode benchmark: tt_q / tt_kv_nope / tt_kv_rope = ttnn.slice(tt_q_kv, ..., memory_config=ttnn.L1_MEMORY_CONFIG) x3 then tt_q_kv.deallocate(True)"
+    },
+    {
+      "op": "ttnn.slice",
+      "tensor_role": "output",
+      "size_descriptor": "prefill fused q/kv split branches [1,{BATCH},{SEQ},{SUB_DIM}] with large SEQ",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "prefill"
+      },
+      "source": "deepseek MLA prefill: tt_q/tt_kv_nope/tt_kv_rope slices use no memory_config (default DRAM interleaved); sibling rms_norm consumer uses memory_config=ttnn.DRAM_MEMORY_CONFIG"
+    }
+  ]
+}

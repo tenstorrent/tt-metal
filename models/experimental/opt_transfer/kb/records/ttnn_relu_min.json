@@ -1,0 +1,26 @@
+{
+  "id": "ttnn_relu_min",
+  "fused_op": "ttnn.relu_min",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.max(input_tensor_a, torch.tensor(lower_limit))",
+  "signature": {},
+  "config_template": {
+    "lower_limit": "{LOWER_LIMIT}",
+    "dtype": "{DTYPE}",
+    "layout": "ttnn.TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Unary eltwise clamp-to-minimum: out = max(x, lower_limit). Replaces torch.max(x, scalar_tensor) or torch.clamp(x, min=c) subsequences. The scalar lower_limit is passed as an op attribute, not a tensor, so the torch.tensor(lower_limit) materialization is eliminated on fusion.; constraints: {'supported_dtypes': ['bfloat16', 'int32'], 'layout': 'TILE_LAYOUT', 'lower_limit_is_scalar': True}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary.py"
+  ],
+  "placement_observations": []
+}

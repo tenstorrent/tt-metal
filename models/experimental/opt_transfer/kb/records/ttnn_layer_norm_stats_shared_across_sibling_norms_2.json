@@ -1,0 +1,45 @@
+{
+  "id": "ttnn_layer_norm_stats_shared_across_sibling_norms_2",
+  "fused_op": "ttnn.layer_norm (stats shared across sibling norms)",
+  "category": "normalization_horizontal_merge",
+  "pattern_kind": "horizontal_merge",
+  "torch_pattern": "out1 = torch.nn.functional.layer_norm(x, (x.shape[-1],), weight1, bias1, eps=epsilon)\nout2 = torch.nn.functional.layer_norm(x, (x.shape[-1],), weight2, bias2, eps=epsilon)",
+  "signature": {},
+  "config_template": {
+    "epsilon": "{EPS}",
+    "weight": "None (shared normalization computed once; per-branch gamma/beta applied as separate mul/add)",
+    "bias": "None",
+    "memory_config": "{SHARDED_MEM_CONFIG}",
+    "program_config": "{LN_SHARDED_PROGRAM_CONFIG}",
+    "compute_kernel_config": "ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4)"
+  },
+  "weight_transform": "branch weights/biases kept as separate 1D gamma/beta tensors applied after the single shared normalization (replaces N full layer_norm invocations on the same input, e.g. falcon40b ln_attn + ln_mlp)",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/test_fused_demo.py",
+    "tests/ttnn/unit_tests/operations/fused/sharded_test_utils.py",
+    "tests/ttnn/unit_tests/operations/fused/test_layer_norm.py",
+    "tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "layer_norm",
+      "tensor_role": "input_activation",
+      "size_descriptor": "falcon40b decoder replicated hidden states [32, 8192]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "BLOCK_SHARDED",
+        "shard_spec_template": "model_config['LN_ATTN_OUTPUT_MEMCFG'] / ['LN_MLP_OUTPUT_MEMCFG'] shard spec"
+      },
+      "program_config": "model_config['LN_ATTN_PROGCFG'] / model_config['LN_MLP_PROGCFG']",
+      "condition": null,
+      "source": "falcon40b decoder: two sibling ttnn.layer_norm calls on replicated_hidden_states (ln_attn, ln_mlp); optimized variant computes one block-sharded layer_norm with weight=None, bias=None and applies gamma/beta per branch"
+    }
+  ]
+}

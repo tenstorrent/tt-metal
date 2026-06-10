@@ -1,0 +1,69 @@
+{
+  "id": "ttnn_sub",
+  "fused_op": "ttnn.sub_",
+  "category": "eltwise_binary_inplace",
+  "pattern_kind": "chain",
+  "torch_pattern": "output_tensor = input_tensor_a - input_tensor_b",
+  "signature": {},
+  "config_template": {
+    "queue_id": "{QUEUE_ID}",
+    "use_legacy": "{USE_LEGACY}",
+    "activations": "{FUSED_ACTIVATIONS_OR_NONE}",
+    "input_shape": "[{N}, {C}, {H}, {W}]",
+    "dtype": "{DTYPE}",
+    "layout": "ttnn.TILE_LAYOUT"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_source: golden: def _golden_function(input_tensor_a, input_tensor_b, *args, activations=None, **kwargs): output_tensor = input_tensor_a - input_tensor_b; return apply_activations(output_tensor, activations); fusion_notes: Supports fused unary activations on the output via the 'activations' kwarg (torch pattern: act(a - b)). Common model-level chain at call sites is classifier-free guidance: text = (text - uncond) * scale; out = uncond + text, expressed as ttnn.sub_ -> ttnn.mul_ -> ttnn.add/add_, all in-place where possible.; constraints: {'in_place': True, 'output_aliases': 'input_tensor_a', 'layout': 'TILE_LAYOUT required in observed tests'}",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_typecast.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_inplace.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.sub_",
+      "tensor_role": "input_tensor_a",
+      "size_descriptor": "test tensors, TILE_LAYOUT",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG); ttnn.sub_(input_tensor_a, input_tensor_b, queue_id=0, use_legacy=False)"
+    },
+    {
+      "op": "ttnn.sub_",
+      "tensor_role": "input_tensor_b",
+      "size_descriptor": "test tensors, TILE_LAYOUT",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(..., layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)"
+    },
+    {
+      "op": "ttnn.add",
+      "tensor_role": "output (noise_pred, downstream of sub_/mul_ guidance chain)",
+      "size_descriptor": "UNet noise prediction latent (full latent resolution)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call site: noise_pred_new = ttnn.to_memory_config(noise_pred, ttnn.L1_MEMORY_CONFIG) immediately after guidance chain (sub_ -> mul_ -> add); intermediates deallocated explicitly with ttnn.deallocate"
+    }
+  ]
+}

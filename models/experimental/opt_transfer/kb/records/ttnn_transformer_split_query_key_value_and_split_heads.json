@@ -1,0 +1,139 @@
+{
+  "id": "ttnn_transformer_split_query_key_value_and_split_heads",
+  "fused_op": "ttnn.transformer.split_query_key_value_and_split_heads",
+  "category": "attention_head_manipulation",
+  "pattern_kind": "horizontal_merge",
+  "torch_pattern": "batch_size, sequence_size, hidden_size = input_tensor.shape\nhead_size = hidden_size // (num_heads + 2 * num_kv_heads)\nq_hidden = num_heads * head_size\nkv_hidden = 2 * num_kv_heads * head_size\nquery_flat = input_tensor[..., :q_hidden]\nkv_flat = input_tensor[..., q_hidden : q_hidden + kv_hidden]\nquery = query_flat.reshape(batch_size, sequence_size, num_heads, head_size)\nkv = kv_flat.reshape(batch_size, sequence_size, 2 * num_kv_heads, head_size)\nkey = kv[..., :num_kv_heads, :]\nvalue = kv[..., num_kv_heads:, :]\nquery = query.permute(0, 2, 1, 3).contiguous()\nkey = key.permute(0, 2, 1, 3).contiguous()\nvalue = value.permute(0, 2, 1, 3).contiguous()\nif transpose_key:\n    key = key.permute(0, 1, 3, 2).contiguous()",
+  "signature": {},
+  "config_template": {
+    "num_heads": "{NUM_HEADS}",
+    "num_kv_heads": "{NUM_KV_HEADS_OR_NULL}",
+    "transpose_key": "{TRUE_IF_FOLLOWED_BY_MANUAL_QK_MATMUL__FALSE_IF_FOLLOWED_BY_SDPA}",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_source: registered_golden; constraints: {'input_layout': 'TILE_LAYOUT', 'input_rank': 3, 'qkv_packing_order': 'Q heads, then K heads, then V heads along last dim', 'transpose_key_usage': 'set transpose_key=True when consumer is ttnn.matmul(q, k); set transpose_key=False when consumer is ttnn.transformer.scaled_dot_product_attention (SDPA expects K as [B,H,S,D])'}",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/transformers/test_transformer.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.transformer.split_query_key_value_and_split_heads",
+      "tensor_role": "output_qkv_heads",
+      "size_descriptor": "encoder_seq_len_moderate (BERT/ViT-style encoder attention)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "HEIGHT_SHARDED over {CORE_GRID}"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: query,key,value = split_query_key_value_and_split_heads(query_key_value, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG, num_heads=num_heads)"
+    },
+    {
+      "op": "ttnn.transformer.split_query_key_value_and_split_heads",
+      "tensor_role": "output_qkv_heads",
+      "size_descriptor": "small/interleaved activation",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: split_query_key_value_and_split_heads(query_key_value, memory_config=ttnn.L1_MEMORY_CONFIG, num_heads=num_heads) followed by ttnn.matmul(query, key)"
+    },
+    {
+      "op": "ttnn.transformer.split_query_key_value_and_split_heads",
+      "tensor_role": "output_qkv_heads",
+      "size_descriptor": "seq_len == 4096 (long-sequence diffusion/SD)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "seq_len",
+        "op": "==",
+        "value": 4096
+      },
+      "source": "call_site: memory_config=ttnn.DRAM_MEMORY_CONFIG if self.seq_len == 4096 else ttnn.L1_MEMORY_CONFIG"
+    },
+    {
+      "op": "ttnn.transformer.split_query_key_value_and_split_heads",
+      "tensor_role": "output_qkv_heads",
+      "size_descriptor": "seq_len < 4096",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "seq_len",
+        "op": "<",
+        "value": 4096
+      },
+      "source": "call_site: memory_config=ttnn.DRAM_MEMORY_CONFIG if self.seq_len == 4096 else ttnn.L1_MEMORY_CONFIG"
+    },
+    {
+      "op": "ttnn.transformer.split_query_key_value_and_split_heads",
+      "tensor_role": "input_qkv (block-sharded path)",
+      "size_descriptor": "non-interleaved sharded path (seq_len != 4096)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "BLOCK_SHARDED on grid (8, 2) via reshard_to before op; outputs L1_HEIGHT_SHARDED then resharded to HEIGHT_SHARDED on grid (2, 8)"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "call_site: qkv_out = reshard_to(qkv_out, (8, 2), BLOCK_SHARDED); split(..., memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG); query/key/value = reshard_to(..., (2, 8), HEIGHT_SHARDED)"
+    },
+    {
+      "op": "ttnn.experimental.split_query_key_value_and_split_heads",
+      "tensor_role": "output_qkv_heads",
+      "size_descriptor": "encoder activation, batch-parallel sharding",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "HEIGHT_SHARDED over device.compute_with_storage_grid_size()"
+      },
+      "program_config": "compute_with_storage_grid_size=device.compute_with_storage_grid_size()",
+      "condition": null,
+      "source": "call_site: ttnn.experimental.split_query_key_value_and_split_heads(query_key_value_output, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG, compute_with_storage_grid_size=device.compute_with_storage_grid_size(), num_heads=num_heads)"
+    },
+    {
+      "op": "ttnn.transformer.split_query_key_value_and_split_heads",
+      "tensor_role": "output_qkv_heads (Falcon-7B decode path)",
+      "size_descriptor": "MQA decode (num_kv_heads=1)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": "model_config['CREATE_QKV_HEADS_OUTPUT_MEMCFG']"
+      },
+      "program_config": "use_falcon7b_backend=True",
+      "condition": null,
+      "source": "call_site: split_query_key_value_and_split_heads(fused_query_key_value, num_heads=self.num_heads, num_kv_heads=1, transpose_key=False, memory_config=self.model_config['CREATE_QKV_HEADS_OUTPUT_MEMCFG'], use_falcon7b_backend=True)"
+    },
+    {
+      "op": "ttnn.transformer.split_query_key_value_and_split_heads",
+      "tensor_role": "output_qkv_heads (DiT/diffusion, SDPA consumer)",
+      "size_descriptor": "long visual sequence, interleaved",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": "transpose_key=False (SDPA expects K in [B,H,S,D])",
+      "condition": null,
+      "source": "call_site: q,k,v = split_query_key_value_and_split_heads(ttnn.squeeze(qkv_1BNF, 0), num_heads=self.n_local_heads, transpose_key=False) -> scaled_dot_product_attention"
+    }
+  ]
+}

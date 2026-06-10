@@ -1,0 +1,61 @@
+{
+  "id": "ttnn_experimental_all_gather_minimal_matmul_async",
+  "fused_op": "ttnn.experimental.all_gather_minimal_matmul_async",
+  "category": "ccl_compute_fusion",
+  "pattern_kind": "chain",
+  "torch_pattern": [
+    "all_gather(input, dim=tensor_parallel_axis)",
+    "matmul(gathered_input, weight)",
+    "add(bias)  # optional, present when bias_tensor is not None",
+    "fused_activation(out)  # optional, e.g. activation_fn at call sites"
+  ],
+  "signature": {},
+  "config_template": {
+    "config": "MinimalMatmulConfig(subblock_h={SUBBLOCK_H}, subblock_w={SUBBLOCK_W}, compute_with_storage_grid_size={CORE_GRID})",
+    "fused_activation": "{ACTIVATION_FN_OR_NONE}",
+    "compute_kernel_config": "{COMPUTE_KERNEL_CONFIG}",
+    "persistent_output_buffer": "{PREALLOCATED_AG_BUFFER}",
+    "multi_device_global_semaphore": "ccl_manager.get_ag_ping_pong_semaphore({TP_MESH_AXIS})",
+    "num_links": "{NUM_LINKS}",
+    "topology": "{CCL_TOPOLOGY}",
+    "cluster_axis": "{CLUSTER_AXIS}",
+    "memory_config": "{OUTPUT_MEMORY_CONFIG}"
+  },
+  "weight_transform": "identity: weight_tensor passed unmodified per device; input activations are gathered along the tensor-parallel axis before the matmul, so weight is not re-sharded by the fusion",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_source: inferred from op name and call-site argument structure (golden_src=null); decomposition is all_gather -> linear(weight, bias, activation)",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "llm",
+  "confidence": "low",
+  "unit_test_refs": [],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.all_gather_minimal_matmul_async",
+      "tensor_role": "output (all-gather intermediate)",
+      "size_descriptor": "full gathered activation [B, S, K_global]",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "MinimalMatmulConfig(subblock_h={SUBBLOCK_H}, subblock_w={SUBBLOCK_W}, compute_with_storage_grid_size={CORE_GRID})",
+      "condition": null,
+      "source": "call sites pass a pre-allocated persistent_output_buffer (ag_persistent_buffer from ccl_manager) reused across iterations; exact memory_config not visible at call site, persistence implies stable DRAM-backed allocation"
+    },
+    {
+      "op": "ttnn.experimental.all_gather_minimal_matmul_async",
+      "tensor_role": "matmul_output",
+      "size_descriptor": "unspecified",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test call site passes explicit memory_config=memory_config parameter; concrete value not resolvable from snippet"
+    }
+  ]
+}

@@ -1,0 +1,98 @@
+{
+  "id": "add",
+  "fused_op": "add_",
+  "category": "eltwise_binary_inplace",
+  "pattern_kind": "chain",
+  "torch_pattern": "output_tensor = input_tensor_a + input_tensor_b\ninput_tensor_a.copy_(output_tensor)",
+  "signature": {},
+  "config_template": {
+    "input_tensor_a": "{TENSOR_A}",
+    "input_tensor_b": "{TENSOR_B}",
+    "activations": null,
+    "use_legacy": null,
+    "notes": "in-place: result written into input_tensor_a; shapes [{N},{C},{H},{W}] must broadcast-match"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_add.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_inplace.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "add_",
+      "tensor_role": "input_a (hidden_states)",
+      "size_descriptor": "activation tensor, post-groupnorm resnet hidden states",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "SDXL UNet resnet block: hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG); hidden_states = ttnn.add_(hidden_states, temb, use_legacy=None)"
+    },
+    {
+      "op": "add_",
+      "tensor_role": "input_b (residual input_tensor)",
+      "size_descriptor": "residual branch tensor, same shape as hidden_states",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "SAME_AS_INPUT_A",
+        "shard_spec_template": "input_tensor = ttnn.to_memory_config(input_tensor, hidden_states.memory_config()) when configs differ"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "SDXL UNet resnet skip-connection: memory configs of the two operands are force-matched before ttnn.add_(hidden_states, input_tensor, use_legacy=None)"
+    },
+    {
+      "op": "add_",
+      "tensor_role": "output (hidden_states, in-place)",
+      "size_descriptor": "resnet block output activation",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "is_final_resnet_block_in_up_blocks",
+        "op": "==",
+        "value": false
+      },
+      "source": "SDXL UNet: after in-place residual add, hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG) unless module_path is the last up_blocks resnet"
+    },
+    {
+      "op": "add_",
+      "tensor_role": "input_a / input_b (out, ds_out)",
+      "size_descriptor": "resnet50 bottleneck output and downsample branch, equal shapes",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "SHARDED",
+        "shard_spec_template": "ds_out = ttnn.to_memory_config(ds_out, out.memory_config()); asserted ttnn.get_memory_config(out) == ttnn.get_memory_config(ds_out)"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "resnet50: operands must share identical (sharded) memory config before in-place fused add+relu"
+    },
+    {
+      "op": "add_",
+      "tensor_role": "input_a (base weight, in-place LoRA fusion)",
+      "size_descriptor": "static weight tensor resident on device",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "LoRA fusion: ttnn.add_(self._base_weights_device[base_key], delta) \u2014 delta added into persistent device-resident base weights"
+    }
+  ]
+}

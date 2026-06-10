@@ -1,0 +1,79 @@
+{
+  "id": "ttnn_experimental_slice_write",
+  "fused_op": "ttnn.experimental.slice_write",
+  "category": "data_movement",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch_output[slices[0], slices[1], slices[2], slices[3]] = torch_input",
+  "signature": {},
+  "config_template": {
+    "begins": "[{BEGIN_0}, {BEGIN_1}, {BEGIN_2}, {BEGIN_3}]",
+    "ends": "[{BATCH}, {NUM_HEADS}, {SEQ_LEN}, {HEAD_DIM}]",
+    "strides": "[1, 1, 1, 1]"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "In-place strided slice assignment into a pre-allocated destination tensor (e.g. KV-cache fill). Replaces torch advanced-index assignment dst[b0:e0, b1:e1, b2:e2, b3:e3] = src. Source tensor is consumed (often deallocated immediately after) while destination persists across iterations.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/data_movement/test_slice.py",
+    "tests/ttnn/unit_tests/operations/data_movement/test_slice_write.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.slice_write",
+      "tensor_role": "input (source slice)",
+      "size_descriptor": "slice-sized region [bsz, nh, seq_len, head_dim], smaller than destination",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: ttnn_input = ttnn.to_memory_config(ttnn_input, ttnn.L1_MEMORY_CONFIG) before slice_write"
+    },
+    {
+      "op": "ttnn.experimental.slice_write",
+      "tensor_role": "output (destination, written in-place)",
+      "size_descriptor": "full tensor, superset of written slice region",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: ttnn_output = ttnn.to_memory_config(ttnn_output, ttnn.DRAM_MEMORY_CONFIG) before slice_write"
+    },
+    {
+      "op": "ttnn.experimental.slice_write",
+      "tensor_role": "input (source K/V states, typecast to bfloat8_b)",
+      "size_descriptor": "[bsz, nh, seq_len, head_dim] per-step K/V states",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call_site: k_bf8 = ttnn.typecast(key_states, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG) immediately before slice_write into k_cache"
+    },
+    {
+      "op": "ttnn.experimental.slice_write",
+      "tensor_role": "output (persistent KV cache destination)",
+      "size_descriptor": "full KV cache [bsz, nh, max_seq_len, head_dim], persistent across forwards",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call_site: slice_write(k_bf8, k_cache, ...) / slice_write(v_bf8, v_cache, ...) into persistent cache; source explicitly placed in DRAM and cache outlives deallocated source"
+    }
+  ]
+}

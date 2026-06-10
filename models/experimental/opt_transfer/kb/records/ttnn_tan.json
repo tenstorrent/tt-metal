@@ -1,0 +1,31 @@
+{
+  "id": "ttnn_tan",
+  "fused_op": "ttnn.tan",
+  "category": "eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.tan(input_tensor)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "{N}x{C}x{H}x{W}",
+    "dtype": "{DTYPE}",
+    "layout": "TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}",
+    "queue_id": "{QUEUE_ID}",
+    "output_tensor": "optional preallocated output tensor"
+  },
+  "weight_transform": null,
+  "source": {
+    "golden": "name_to_golden_function['tan'] = torch.tan",
+    "test": "ttnn.tan(input_tensor, output_tensor=output_tensor, queue_id=cq_id); golden_tensor = torch.tan(in_data)"
+  },
+  "usage_examples": [],
+  "applicability_notes": "ttnn_replacement: ttnn.tan(input_tensor, output_tensor=output_tensor, queue_id=cq_id); constraints: {'accuracy_note': 'test inputs sampled in [-1, 1]; tan diverges near odd multiples of pi/2, so PCC validated only on bounded range', 'elementwise': True, 'num_inputs': 1}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py"
+  ],
+  "placement_observations": []
+}

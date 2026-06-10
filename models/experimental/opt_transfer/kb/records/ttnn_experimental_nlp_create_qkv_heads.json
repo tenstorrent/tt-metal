@@ -1,0 +1,139 @@
+{
+  "id": "ttnn_experimental_nlp_create_qkv_heads",
+  "fused_op": "ttnn.experimental.nlp_create_qkv_heads",
+  "category": "attention_head_split",
+  "pattern_kind": "horizontal_merge",
+  "torch_pattern": "head_dim = qkv.shape[-1] // (num_q_heads + 2 * num_kv_heads)\n# input: [batch, 1, seq_len, (num_q_heads + 2*num_kv_heads) * head_dim]  (from test: in0_shape = [batch, 1, seq_len, (num_q_heads + 2*num_kv_heads)*head_dim]; A = torch.randn(in0_shape))\nq, k, v = torch.split(qkv, [num_q_heads * head_dim, num_kv_heads * head_dim, num_kv_heads * head_dim], dim=-1)\nq = q.reshape(batch, seq_len, num_q_heads, head_dim).permute(0, 2, 1, 3)\nk = k.reshape(batch, seq_len, num_kv_heads, head_dim).permute(0, 2, 1, 3)\nif transpose_k_heads:\n    k = k.transpose(-2, -1)\nv = v.reshape(batch, seq_len, num_kv_heads, head_dim).permute(0, 2, 1, 3)\n# outputs: q [batch, num_q_heads, seq_len, head_dim], k/v [batch, num_kv_heads, seq_len, head_dim]",
+  "signature": {},
+  "config_template": {
+    "num_heads": "{NUM_Q_HEADS}",
+    "num_kv_heads": "{NUM_KV_HEADS}",
+    "transpose_k_heads": "{TRANSPOSE_K_HEADS:default=False}",
+    "memory_config": "{OUT_MEM_CONFIG}",
+    "notes": "Set num_kv_heads=0 and pass the same tensor when splitting heads of a single (non-fused) Q, K, or V tensor; only first return value is valid. Optional second positional input tensor supplies KV separately (read_from_input_tensor_kv). Input must be rank-4 [B, 1, S, fused_dim] in TILE_LAYOUT; unsqueeze rank-3 inputs first."
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_nlp_create_qkv_heads.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "nlp_create_qkv_heads",
+      "tensor_role": "output_q/k/v",
+      "size_descriptor": "prefill, seq_len up to model max, [1, 1, S, (nq+2*nkv)*head_dim] fused input",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "prefill"
+      },
+      "source": "llama/qwen attention prefill call sites: memory_config=ttnn.DRAM_MEMORY_CONFIG"
+    },
+    {
+      "op": "nlp_create_qkv_heads",
+      "tensor_role": "output_q/k/v",
+      "size_descriptor": "decode / small seq, [1, 1, B_or_S_small, fused_dim]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "decode"
+      },
+      "source": "decode-path call sites: memory_config=ttnn.L1_MEMORY_CONFIG (e.g. stable-diffusion fused-qkv branch, qwen decode interleaved branch)"
+    },
+    {
+      "op": "nlp_create_qkv_heads",
+      "tensor_role": "input_qkv_fused",
+      "size_descriptor": "decode, batch rows = 32-tile aligned, fused_dim columns",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "model_config['CREATE_QKV_HEADS_INPUT_MEMCFG'] (interleaved_to_sharded applied immediately before op)"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "decode"
+      },
+      "source": "falcon attention: ttnn.interleaved_to_sharded(fused_query_key_value, model_config['CREATE_QKV_HEADS_INPUT_MEMCFG'])"
+    },
+    {
+      "op": "nlp_create_qkv_heads",
+      "tensor_role": "output_q/k/v",
+      "size_descriptor": "decode, per-head sharded outputs",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "model_config['CREATE_QKV_HEADS_OUTPUT_MEMCFG'] / self._decode_qkv_split_q_out_memcfg"
+      },
+      "program_config": null,
+      "condition": {
+        "var": "mode",
+        "op": "==",
+        "value": "decode"
+      },
+      "source": "falcon attention and qwen decode sharded-split branch"
+    },
+    {
+      "op": "nlp_create_qkv_heads",
+      "tensor_role": "output_q/k/v",
+      "size_descriptor": "sharded unit test, output shard spec == input shard spec, q padded_shape [seq_len, num_q_heads, batch, head_dim]",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "HEIGHT_SHARDED",
+        "shard_spec_template": "out_shard_spec = in0_shard_spec"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, out_shard_spec)"
+    },
+    {
+      "op": "nlp_create_qkv_heads",
+      "tensor_role": "input_qkv_fused",
+      "size_descriptor": "prefill, output of qkv matmul (interleaved)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "bert/whisper-style: query_key_value = ttnn.to_memory_config(query_key_value, ttnn.L1_MEMORY_CONFIG) immediately before split; outputs to DRAM"
+    },
+    {
+      "op": "nlp_create_qkv_heads",
+      "tensor_role": "input_qkv_fused",
+      "size_descriptor": "long prefill, seq_len > MAX_QKV_MM_SEQ_LEN (input reshaped to [B, 1, S, -1] before split)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": {
+        "var": "seq_len",
+        "op": ">",
+        "value": "MAX_QKV_MM_SEQ_LEN"
+      },
+      "source": "call site: if seq_len > MAX_QKV_MM_SEQ_LEN: qkv_fused = ttnn.reshape(qkv_fused, [batch_size, 1, seq_len, -1]) then split with memory_config=cfg.score_memcfg"
+    }
+  ]
+}

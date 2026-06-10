@@ -1,0 +1,59 @@
+{
+  "id": "ttnn_ldexp",
+  "fused_op": "ttnn.ldexp",
+  "category": "eltwise_binary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.ldexp(input_tensor_a, input_tensor_b)",
+  "signature": {},
+  "config_template": {
+    "dtype": "ttnn.float32",
+    "layout": "ttnn.TILE_LAYOUT",
+    "input_shapes": [
+      "{N}",
+      "{C}",
+      "{H}",
+      "{W}"
+    ],
+    "memory_config": "{MEMORY_CONFIG}",
+    "use_legacy": null
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "fusion_notes: Binary elementwise compute op: out = input_a * 2**input_b. Replaces the contiguous torch subsequence torch.ldexp(a, b) (equivalently a * torch.exp2(b)) with a single fused ttnn binary kernel. Both inputs must be TILE_LAYOUT on device; fp32 verified in tests (use_legacy=None path).",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binaryng_fp32.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.ldexp",
+      "tensor_role": "input_a",
+      "size_descriptor": "small_test_tensor (1x4, fp32)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device) \u2014 default interleaved DRAM, no explicit memory_config"
+    },
+    {
+      "op": "ttnn.ldexp",
+      "tensor_role": "input_b",
+      "size_descriptor": "small_test_tensor (1x4, fp32)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device) \u2014 default interleaved DRAM, no explicit memory_config"
+    }
+  ]
+}

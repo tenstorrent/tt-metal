@@ -1,0 +1,50 @@
+{
+  "id": "ttnn_experimental_hc_sum_reduce",
+  "fused_op": "ttnn.experimental.hc_sum_reduce",
+  "category": "reduction",
+  "pattern_kind": "chain",
+  "torch_pattern": [],
+  "signature": {},
+  "config_template": {
+    "memory_config": "ttnn.L1_MEMORY_CONFIG",
+    "dtype": "{ACTIVATION_DTYPE}",
+    "math_fidelity": "{ELTWISE_MATH_FIDELITY}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "llm",
+  "confidence": "low",
+  "unit_test_refs": [],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.hc_sum_reduce",
+      "tensor_role": "output",
+      "size_descriptor": "mamba_ssm_intermediate (B=1 decode, hidden*expand x n_state regime)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "Mamba SSM block call site: C2 = ttnn.experimental.hc_sum_reduce(C1, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=configs['dtype']['activations'], math_fidelity=eltwise_math_fidelity)"
+    },
+    {
+      "op": "ttnn.experimental.hc_sum_reduce",
+      "tensor_role": "input",
+      "size_descriptor": "mamba_ssm_intermediate (C1, deallocated immediately after use)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "interleaved",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "Mamba SSM block call site: input C1 produced in L1 pipeline, ttnn.deallocate(C1) immediately after hc_sum_reduce indicating short-lived L1 activation"
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "id": "ttnn_addalpha_input_tensor_a_input_tensor_b_alpha",
+  "fused_op": "ttnn.addalpha(input_tensor_a, input_tensor_b, alpha)",
+  "category": "eltwise_binary_composite",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.add(input_tensor_a, input_tensor_b, alpha=alpha)",
+  "signature": {},
+  "config_template": {
+    "alpha": "{ALPHA}",
+    "dtype": "ttnn.float32 | ttnn.bfloat16",
+    "layout": "ttnn.TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "tests/ttnn/unit_tests/operations/eltwise (test_addalpha_fp32); golden registration _golden_function_addalpha",
+  "usage_examples": [],
+  "applicability_notes": "Fuses the scale-and-add chain out = a + alpha * b into a single binary eltwise op. Golden: torch.add(a, b, alpha=alpha). Verified in tests with float32 TILE_LAYOUT tensors and scalar alpha values including negative, zero, and positive (-100.0 .. 50.0).; constraints: {'inputs': 2, 'broadcastable': True, 'alpha_is_scalar': True}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binaryng_fp32.py"
+  ],
+  "placement_observations": []
+}

@@ -1,0 +1,87 @@
+{
+  "id": "ttnn_avg_pool2d",
+  "fused_op": "ttnn.avg_pool2d",
+  "category": "pooling",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.nn.functional.avg_pool2d(input_nchw, kernel_size=kernel_size, stride=stride, padding=torch_padding, ceil_mode=ceil_mode, count_include_pad=count_include_pad, divisor_override=divisor_override)",
+  "signature": {},
+  "config_template": {
+    "input_tensor": "<flattened NHWC tensor (1, 1, {N}*{H}*{W}, {C})>",
+    "batch_size": "{N}",
+    "input_h": "{H}",
+    "input_w": "{W}",
+    "channels": "{C}",
+    "kernel_size": "[{KH}, {KW}]",
+    "stride": "[{SH}, {SW}]",
+    "padding": "[{PAD_T}, {PAD_B}, {PAD_L}, {PAD_R}] or [{PAD_H}, {PAD_W}]",
+    "ceil_mode": false,
+    "count_include_pad": true,
+    "divisor_override": null,
+    "output_layout": "ttnn.TILE_LAYOUT"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "torch_pattern_notes: Input must be permuted NCHW->NHWC and flattened to (1, 1, N*H*W, C) before the ttnn call; output is returned in flattened (1, 1, N*out_H*out_W, C) format (see golden prepare_torch_pool_input / pool_output_to_flat_nhwc). Common model usage with kernel_size=[H, W], stride=[1, 1], padding=0 is equivalent to global average pooling (torch.nn.functional.adaptive_avg_pool2d(x, 1) or x.mean(dim=(2, 3), keepdim=True)).",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/data_movement/test_tilize_with_val_padding.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.avg_pool2d",
+      "tensor_role": "input",
+      "size_descriptor": "activation (1, 1, N*H*W, C) with kernel_size==[H, W] (global pooling regime)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "WIDTH_SHARDED",
+        "shard_spec_template": "create_sharded_memory_config(..., tile_layout=True, use_height_and_width_as_shard_shape=True); input moved via ttnn.to_memory_config(x, width_mem_config) immediately before the pool"
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call sites (CNN classifier heads: global avg pool with kernel_size=[x_height, x_width], stride=[1, 1], padding=[0, 0, 0, 0])"
+    },
+    {
+      "op": "ttnn.avg_pool2d",
+      "tensor_role": "output",
+      "size_descriptor": "pooled activation (1, 1, N*out_H*out_W, C)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "TILE_LAYOUT (output_layout=ttnn.TILE_LAYOUT)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "model call sites passing output_layout=ttnn.TILE_LAYOUT"
+    },
+    {
+      "op": "ttnn.avg_pool2d",
+      "tensor_role": "input",
+      "size_descriptor": "vision encoder outputs reshaped to (1, 1, N*H*W, C), strided pooling kernel_size==stride (token downsampling)",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "interleaved (default, no explicit memory_config; preceded by ttnn.permute + ttnn.reshape)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "VLM call site: ttnn.permute(x, (0,2,3,1)) -> ttnn.reshape -> ttnn.avg_pool2d(kernel_size=(k,k), stride=(k,k), padding=(0,0), ceil_mode=False)"
+    },
+    {
+      "op": "ttnn.avg_pool2d",
+      "tensor_role": "input",
+      "size_descriptor": "tiny single-channel test tensor (1, 1, h*w, 1)",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "ROW_MAJOR_LAYOUT (converted via ttnn.to_layout before pooling)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.reshape(x_tt, [1,1,h*w,1], memory_config=mem_cfg) -> ttnn.to_layout(ROW_MAJOR) -> ttnn.avg_pool2d"
+    }
+  ]
+}

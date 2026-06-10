@@ -1,0 +1,43 @@
+{
+  "id": "ttnn_experimental_paged_fused_update_cache",
+  "fused_op": "ttnn.experimental.paged_fused_update_cache",
+  "category": "kv_cache_update",
+  "pattern_kind": "horizontal_merge",
+  "torch_pattern": "k_cache[batch_indices, :, update_idxs, :] = k_heads  # paged_update_cache(keys, k_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table)\nv_cache[batch_indices, :, update_idxs, :] = v_heads  # paged_update_cache(values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table)",
+  "signature": {},
+  "config_template": {
+    "cache1_shape": "[{MAX_BATCH_SIZE}, {N_KV_HEADS} // {NUM_DEVICES}, {MAX_SEQ_LEN}, {HEAD_DIM}]",
+    "input1_shape": "[{SEQLEN}, {N_KV_HEADS}, {BSZ}, {HEAD_DIM}]",
+    "cache2_shape": "[{MAX_BATCH_SIZE}, {N_KV_HEADS} // {NUM_DEVICES}, {MAX_SEQ_LEN}, {HEAD_DIM}]",
+    "input2_shape": "[{SEQLEN}, {N_KV_HEADS}, {BSZ}, {HEAD_DIM}]",
+    "update_idxs_tensor": "ttnn.Tensor(torch.tensor({CACHE_IDXS}), ttnn.int32)",
+    "page_table": "{PAGE_TABLE_TT_OR_NONE}",
+    "skip_sentinel": -1
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "constraints: ['Both cache updates must share the same update_idxs_tensor and page_table', 'Operation is in-place on both caches (decode-mode write)', 'update_idx == -1 marks a user to skip', 'page_table is optional (fused variant callable without paging, see call_site 3)']",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "unit_test",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/transformers/test_paged_fused_update_cache.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.experimental.paged_fused_update_cache",
+      "tensor_role": "update_idxs_tensor",
+      "size_descriptor": "[num_users] int32",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "ROW_MAJOR",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test: ttnn.Tensor(torch.tensor(cache_idxs), ttnn.int32).to(device)"
+    }
+  ]
+}

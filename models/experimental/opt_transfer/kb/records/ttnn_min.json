@@ -1,0 +1,40 @@
+{
+  "id": "ttnn_min",
+  "fused_op": "ttnn.min",
+  "category": "reduction",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch_output_tensor, _ = torch.min(torch_input_tensor, dim=dim, keepdim=keepdim)",
+  "signature": {},
+  "config_template": {
+    "dim": "{DIM}",
+    "keepdim": "{KEEPDIM}",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Single-dim torch.min returns (values, indices); ttnn.min returns only values \u2014 only the values output of the torch pattern may be consumed for this rewrite to be valid. When dim is None, reduces over all dimensions (torch.min(x)). Tile padding must be handled (tests use ttnn.fill_implicit_tile_padding) so padded lanes don't pollute the min.; ttnn_replacement: output_tensor = ttnn.min(input_tensor, dim={DIM}, keepdim={KEEPDIM})",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py",
+    "tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.min",
+      "tensor_role": "input",
+      "size_descriptor": "generic test shapes, bfloat16",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT or ROW_MAJOR_LAYOUT (both supported)",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "test"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "id": "ttnn_alt_complex_rotate90",
+  "fused_op": "ttnn.alt_complex_rotate90",
+  "category": "elementwise_data_movement/rotary_embedding",
+  "pattern_kind": "chain",
+  "torch_pattern": "x = input_tensor_a.reshape(*input_tensor_a.shape[:-1], -1, 2); x_real, x_imag = x.chunk(2, dim=-1); out = torch.cat([-x_imag, x_real], dim=-1).flatten(-2)",
+  "signature": {},
+  "config_template": {
+    "input_shape": "[..., {LAST_DIM}]",
+    "constraints": {
+      "last_dim_divisible_by": 2
+    },
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "fusion_notes: Replaces a 5-op torch chain (reshape, chunk, neg, cat, flatten) with a single ttnn op. Call sites show it is the interleaved-format counterpart of rotate_half (slice-half + neg + concat); one call site notes interleaved format yields lower PCC than rotate_half, so verify accuracy when substituting.",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [],
+  "placement_observations": []
+}

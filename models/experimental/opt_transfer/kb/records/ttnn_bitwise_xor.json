@@ -1,0 +1,53 @@
+{
+  "id": "ttnn_bitwise_xor",
+  "fused_op": "ttnn.bitwise_xor",
+  "category": "eltwise_binary",
+  "pattern_kind": "chain",
+  "torch_pattern": "torch.bitwise_xor(input_tensor_a, value)",
+  "signature": {},
+  "config_template": {
+    "dtype": "ttnn.int32",
+    "layout": "ttnn.TILE_LAYOUT",
+    "memory_config": "{MEMORY_CONFIG}",
+    "sub_core_grids": "{SUB_CORE_GRID|optional}"
+  },
+  "weight_transform": null,
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "Elementwise binary bitwise XOR; supports tensor-tensor and tensor-scalar variants (second operand may be a Python int scalar). Integer dtypes only (int32 in tests). Exact equality expected vs torch golden (torch.equal).",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_int32.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.bitwise_xor",
+      "tensor_role": "input_a",
+      "size_descriptor": "generic_tiled_int32",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device) (default interleaved DRAM)"
+    },
+    {
+      "op": "ttnn.bitwise_xor",
+      "tensor_role": "input_b",
+      "size_descriptor": "generic_tiled_int32_or_scalar",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "TILE_LAYOUT",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit_test: ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device); scalar variant also exercised"
+    }
+  ]
+}

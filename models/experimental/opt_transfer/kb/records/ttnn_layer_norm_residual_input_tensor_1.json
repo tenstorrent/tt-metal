@@ -1,0 +1,72 @@
+{
+  "id": "ttnn_layer_norm_residual_input_tensor_1",
+  "fused_op": "ttnn.layer_norm(residual_input_tensor=...)",
+  "category": "normalization_fused_residual",
+  "pattern_kind": "chain",
+  "torch_pattern": "input_tensor += residual_input_tensor\ntorch.nn.functional.layer_norm(input_tensor, (input_tensor.shape[-1],), weight, bias, eps=epsilon)",
+  "signature": {},
+  "config_template": {
+    "epsilon": "{EPS}",
+    "residual_input_tensor": "ttnn.Tensor same shape as input",
+    "weight": "ttnn.Tensor[1, {HIDDEN_DIM}]",
+    "bias": "ttnn.Tensor[1, {HIDDEN_DIM}]",
+    "memory_config": "{MEM_CONFIG}",
+    "program_config": "{LN_PROGRAM_CONFIG}",
+    "compute_kernel_config": "ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4)"
+  },
+  "weight_transform": "weight/bias squeezed to 1D and cast to input dtype; residual fused as pre-add (replaces explicit ttnn.add / `hidden_states + self_output` before layer_norm)",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "",
+  "status": "in_use",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/test_fused_demo.py",
+    "tests/ttnn/unit_tests/operations/fused/sharded_test_utils.py",
+    "tests/ttnn/unit_tests/operations/fused/test_layer_norm.py",
+    "tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "layer_norm",
+      "tensor_role": "input_activation_and_residual",
+      "size_descriptor": "BERT-style [batch, seq<=384, {HIDDEN_DIM}] add+norm",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "BLOCK_SHARDED",
+        "shard_spec_template": "ttnn.ShardSpec({CORE_GRID}, [{SHARD_H}, {SHARD_W}], ttnn.ShardOrientation.ROW_MAJOR)"
+      },
+      "program_config": "config.program_configs['layernorm_program_config']",
+      "condition": null,
+      "source": "bert optimized: ttnn.layer_norm(hidden_states, residual_input_tensor=self_output, memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG)"
+    },
+    {
+      "op": "layer_norm",
+      "tensor_role": "input_activation_and_residual",
+      "size_descriptor": "embeddings / encoder add+norm, interleaved path",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": "ttnn.LayerNormDefaultProgramConfig()",
+      "condition": null,
+      "source": "bert embeddings: residual_input_tensor=position_embeddings, memory_config=ttnn.L1_MEMORY_CONFIG"
+    },
+    {
+      "op": "layer_norm",
+      "tensor_role": "output",
+      "size_descriptor": "encoder op8/op11 add+layernorm output feeding next matmul",
+      "memory_config": {
+        "buffer": "L1",
+        "layout": "per model_config OP8/OP11_LAYERNORM_OUTPUT_MEMCFG",
+        "shard_spec_template": "model_config shard spec"
+      },
+      "program_config": "model_config.get('OP8_LAYERNORM_CONFIG', ttnn.LayerNormDefaultProgramConfig())",
+      "condition": null,
+      "source": "metal BERT op8_add_layernorm / op11_add_layernorm call sites"
+    }
+  ]
+}

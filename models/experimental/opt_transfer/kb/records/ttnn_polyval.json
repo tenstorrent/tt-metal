@@ -1,0 +1,53 @@
+{
+  "id": "ttnn_polyval",
+  "fused_op": "ttnn.polyval",
+  "category": "composite_eltwise_unary",
+  "pattern_kind": "chain",
+  "torch_pattern": "result = 0.0\nfor coeff in coeffs:\n    result = result * input_tensor_a + coeff",
+  "signature": {},
+  "config_template": {
+    "input_tensor": "{INPUT}",
+    "coeffs": "{COEFFS_LIST}",
+    "memory_config": "{MEMORY_CONFIG}"
+  },
+  "weight_transform": "none: coefficients are passed as a plain Python list of scalars in highest-degree-first order (Horner ordering), exactly as they appear sequentially in the torch mul/add chain. No tensor weights to transform.",
+  "source": "mined",
+  "usage_examples": [],
+  "applicability_notes": "constraints: {'coeffs': 'non-empty list of float scalars; ordering is highest-degree coefficient first', 'input': 'single activation tensor; chain must be strictly alternating (acc * x + c) with the same input tensor x at every multiply'}",
+  "status": "supported_unused",
+  "accumulation_sensitive": false,
+  "pattern_source": "golden",
+  "confidence": "high",
+  "unit_test_refs": [
+    "tests/ttnn/unit_tests/operations/eltwise/test_binary_composite.py",
+    "tests/ttnn/unit_tests/operations/eltwise/test_polyval.py"
+  ],
+  "placement_observations": [
+    {
+      "op": "ttnn.polyval",
+      "tensor_role": "input_activation",
+      "size_descriptor": "generic test shapes, values in [-100, 100], TILE_LAYOUT",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device) with default (DRAM interleaved) memory_config; no explicit memory_config passed to polyval"
+    },
+    {
+      "op": "ttnn.polyval",
+      "tensor_role": "output",
+      "size_descriptor": "same shape as input",
+      "memory_config": {
+        "buffer": "DRAM",
+        "layout": "INTERLEAVED",
+        "shard_spec_template": null
+      },
+      "program_config": null,
+      "condition": null,
+      "source": "unit test: output memory_config not specified, defaults to DRAM interleaved"
+    }
+  ]
+}
