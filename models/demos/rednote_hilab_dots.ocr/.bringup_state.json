@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T21:29:25Z",
+  "updated_at": "2026-06-10T21:37:18Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -104,9 +104,17 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
+        "status": "done",
         "attempts": 0,
-        "notes": "OCCUPANCY REDO: per the new occupancy+convergence contract \u2014 query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid"
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_rmsnorm.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_vision_rmsnorm.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_rmsnorm.traced_ops.json",
+          "generated/profiler/reports/2026_06_10_21_33_29/ops_perf_results_2026_06_10_21_33_29.csv",
+          "generated/profiler/reports/2026_06_10_21_34_50/ops_perf_results_2026_06_10_21_34_50.csv"
+        ],
+        "notes": "OCCUPANCY REDO complete (tracy under --traced, production fp32 [1,1,896,1536] on 1x4 BH mesh; queried grid 11x10=110 cores). Baseline traced replay: interleaved ttnn.rms_norm 45.2us/device on 28/110 cores (25% occupancy - the kernel's row-per-core ceiling, M_tiles=28; single-op block, share 100%). Max-core lever A/B (one change per measurement) on the max tile-divisible shard grid 8x7=56 (gy|28, gx|48, within 11x10), honoring the recorded DRAM-in/DRAM-out block contract: i2s 15.9 + sharded LN (LayerNormShardedMultiCoreProgramConfig block_h=4, block_w=6, subblock_w=3) 11.4 + s2i 18.5 = 45.9us/device traced - lever LOSES by 0.7us: the i2s/s2i bounce eats the 4x kernel win (contract-valid wave-off: A/B showing the max-core lever loses). The 11.4us@56-core sharded-LN kernel is recorded in the forward docstring as the composition-context target for the vision_block optimization tick (keep the residual stream sharded across the whole block; per-norm bounce never pays). L1 output and L1 pin remain measured recorded hazards (downstream matmul stall QKV 97->2963us). bf8b directive trialed: block-level PCC 0.999931 (bf8b gamma+act), 0.999968 (bf8b gamma+fp32 act), 0.999945 (fp32 gamma+bf8b act) - all pass in isolation, but the recorded tower hazard governs (bf16 e2e across 42 blocks 0.9768<0.99, late-layer outliers h_absmax 1604; bf8b strictly coarser; fp32 tower margin thin at 0.990121; 6KB gamma -> no measurable perf from bf8b gamma on a data-movement-bound op) - fp32 kept at the recorded hazard per directive. No production-path change; docstring evidence updated, profile harness gained --variant sharded A/B mode. PCC test re-run: 0.999982 (unchanged), traced_ops sideguard regenerated. KB ttnn_pow (chain already fused into ttnn.rms_norm) and ttnn_rms_norm_post_all_gather (distributed-stats path; tower is replicated, no CCL) reviewed - not applicable. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999982
       },
       "real_weights": {
         "status": "done",
@@ -1105,6 +1113,12 @@
       "tick": 54,
       "ts": "2026-06-10T21:29:25Z",
       "action": "device[vision_patch_embed]",
+      "result": "ok"
+    },
+    {
+      "tick": 55,
+      "ts": "2026-06-10T21:37:18Z",
+      "action": "device[vision_rmsnorm]",
       "result": "ok"
     }
   ],

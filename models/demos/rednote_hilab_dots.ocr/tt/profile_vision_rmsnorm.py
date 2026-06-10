@@ -48,6 +48,17 @@ def _load_weight():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--traced", action="store_true")
+    parser.add_argument(
+        "--variant",
+        default="interleaved",
+        choices=["interleaved", "sharded"],
+        help=(
+            "interleaved: production DRAM-interleaved ttnn.rms_norm (28-core row-per-core path). "
+            "sharded: occupancy A/B - interleaved_to_sharded(BLOCK 8x7) -> rms_norm with "
+            "LayerNormShardedMultiCoreProgramConfig -> sharded_to_interleaved(DRAM), honoring the "
+            "block contract (DRAM-interleaved in/out; L1 output is a recorded layout-interaction hazard)."
+        ),
+    )
     args = parser.parse_args()
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
@@ -72,15 +83,56 @@ def main():
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
+        if args.variant == "sharded":
+            # Occupancy A/B: max tile-divisible shard grid for [896, 1536] fp32
+            # (M_t=28 -> gy in divisors(28)<=10 -> 7; K_t=48 -> gx in
+            # divisors(48)<=11 -> 8) = 8x7 = 56 of the 110 queried cores.
+            GX, GY = 8, 7
+            M_T, K_T = PADDED_SEQ // 32, HIDDEN // 32
+            block_h, block_w = M_T // GY, K_T // GX
+            subblock_w = 3 if block_w % 3 == 0 else 1
+            pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=(GX, GY),
+                subblock_w=subblock_w,
+                block_h=block_h,
+                block_w=block_w,
+                inplace=False,
+            )
+            shard_mc = ttnn.create_sharded_memory_config(
+                (PADDED_SEQ // GY, HIDDEN // GX),
+                core_grid=ttnn.CoreGrid(y=GY, x=GX),
+                strategy=ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            def _forward(x):
+                x_sh = ttnn.interleaved_to_sharded(x, shard_mc)
+                y_sh = ttnn.rms_norm(
+                    x_sh,
+                    epsilon=block.eps,
+                    weight=block.weight,
+                    program_config=pc,
+                    memory_config=shard_mc,
+                )
+                ttnn.deallocate(x_sh)
+                y = ttnn.sharded_to_interleaved(y_sh, ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(y_sh)
+                return y
+
+            run = _forward
+        else:
+            run = block.forward
+
         # Warmup: compile every kernel into the program cache.
         for _ in range(3):
-            out = block.forward(x_tt)
+            out = run(x_tt)
             ttnn.deallocate(out)
         ttnn.synchronize_device(mesh_device)
 
         if args.traced:
             tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-            out = block.forward(x_tt)
+            out = run(x_tt)
             ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
             # One warmup replay, then the profiled replay.
             ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
@@ -89,9 +141,9 @@ def main():
             ttnn.synchronize_device(mesh_device)
             ttnn.release_trace(mesh_device, tid)
         else:
-            out = block.forward(x_tt)
+            out = run(x_tt)
             ttnn.synchronize_device(mesh_device)
-        print("profiled iteration complete (traced=%s)" % args.traced)
+        print("profiled iteration complete (traced=%s, variant=%s)" % (args.traced, args.variant))
     finally:
         ttnn.close_mesh_device(mesh_device)
 

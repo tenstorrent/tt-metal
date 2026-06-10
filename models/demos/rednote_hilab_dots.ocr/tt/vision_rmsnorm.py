@@ -72,5 +72,22 @@ class TtVisionRMSNorm(LightweightModule):
         the norm and saves ~7.7 ms on the consuming matmuls per block. The
         width-sharded LayerNormShardedMultiCoreProgramConfig variant remains
         WORSE (69.4 us): the i2s/s2i bounce costs more than it saves.
+
+        Occupancy redo (traced tracy, fp32 [1, 1, 896, 1536], 1x4 BH mesh,
+        queried grid 11x10 = 110 cores): interleaved rms_norm = 45.2 us/device
+        on 28/110 cores (25%) — the kernel's row-per-core ceiling (M_tiles=28).
+        Max-core A/B on the 8x7=56-core max tile-divisible shard grid
+        (gy | M_t=28, gx | K_t=48), honoring the DRAM-in/DRAM-out block
+        contract: i2s 15.9 + sharded LN 11.4 + s2i 18.5 = 45.9 us/device —
+        the lever LOSES (bounce eats the 4x kernel win). The 11.4 us @ 56-core
+        sharded-LN number is the composition-context target: it pays off only
+        if the caller keeps the residual stream sharded across the whole block
+        (vision_block scope), not per-norm. bf8b trial (user directive):
+        block-level PCC 0.999931 (bf8b gamma+act) / 0.999968 (bf8b gamma only)
+        — passes in isolation, but the recorded tower hazard governs: bf16
+        e2e across 42 blocks is 0.9768 < 0.99 (late-layer outliers, h_absmax
+        1604) and bf8b is strictly coarser, while the fp32 tower margin is
+        thin (0.990121); gamma is 6 KB so bf8b gamma has no measurable perf
+        effect on a data-movement-bound op. fp32 stays.
         """
         return ttnn.rms_norm(x, epsilon=self.eps, weight=self.weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)

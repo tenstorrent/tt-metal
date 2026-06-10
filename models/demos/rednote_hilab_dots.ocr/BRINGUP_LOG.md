@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T21:29:25Z
+**Updated:** 2026-06-10T21:37:18Z
 
 ## Block Status
 
@@ -18,7 +18,7 @@
 | vision_rmsnorm | reference | done | 1.000000 | 0 | matches HF RMSNorm eps=1e-5, fp32 norm then scale |
 | vision_rmsnorm | ttnn | done | 0.999982 | 0 | Fused ttnn.rms_norm eps=1e-5 with [1,1,dim//32,32] ROW_MAJOR gamma per reference_impl qwen25_vl/tt/vision_rmsnorm.py; KB entry ttnn_pow cited (pow/mean/rsqrt/mul chain fused into ttnn.rms_norm). Weight replicated on 1x4 mesh per parallelism plan (placement=replicate); replicated output compared single-device vs golden (real blocks.0.norm1 weight). Guard ok (lint 0, kernels ok, no new host ops). |
 | vision_rmsnorm | debug | n/a | — | 0 |  |
-| vision_rmsnorm | optimization | pending | — | 0 | OCCUPANCY REDO: per the new occupancy+convergence contract — query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid |
+| vision_rmsnorm | optimization | done | 0.999982 | 0 | OCCUPANCY REDO complete (tracy under --traced, production fp32 [1,1,896,1536] on 1x4 BH mesh; queried grid 11x10=110 cores). Baseline traced replay: interleaved ttnn.rms_norm 45.2us/device on 28/110 cores (25% occupancy - the kernel's row-per-core ceiling, M_tiles=28; single-op block, share 100%). Max-core lever A/B (one change per measurement) on the max tile-divisible shard grid 8x7=56 (gy\|28, gx\|48, within 11x10), honoring the recorded DRAM-in/DRAM-out block contract: i2s 15.9 + sharded LN (LayerNormShardedMultiCoreProgramConfig block_h=4, block_w=6, subblock_w=3) 11.4 + s2i 18.5 = 45.9us/device traced - lever LOSES by 0.7us: the i2s/s2i bounce eats the 4x kernel win (contract-valid wave-off: A/B showing the max-core lever loses). The 11.4us@56-core sharded-LN kernel is recorded in the forward docstring as the composition-context target for the vision_block optimization tick (keep the residual stream sharded across the whole block; per-norm bounce never pays). L1 output and L1 pin remain measured recorded hazards (downstream matmul stall QKV 97->2963us). bf8b directive trialed: block-level PCC 0.999931 (bf8b gamma+act), 0.999968 (bf8b gamma+fp32 act), 0.999945 (fp32 gamma+bf8b act) - all pass in isolation, but the recorded tower hazard governs (bf16 e2e across 42 blocks 0.9768<0.99, late-layer outliers h_absmax 1604; bf8b strictly coarser; fp32 tower margin thin at 0.990121; 6KB gamma -> no measurable perf from bf8b gamma on a data-movement-bound op) - fp32 kept at the recorded hazard per directive. No production-path change; docstring evidence updated, profile harness gained --variant sharded A/B mode. PCC test re-run: 0.999982 (unchanged), traced_ops sideguard regenerated. KB ttnn_pow (chain already fused into ttnn.rms_norm) and ttnn_rms_norm_post_all_gather (distributed-stats path; tower is replicated, no CCL) reviewed - not applicable. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | vision_rmsnorm | real_weights | done | 0.999981 | 0 | vision_rmsnorm_weights loader added to consolidated tt/weight_loader.py (pure-PyTorch, memoized key-filtered safetensors load; covers blocks.{i}.norm1/norm2 per-layer keys and the tower-level post_trunk_norm key; __main__ self-test extended: weight [1536] at all sites, 1536 params each). Stage-1 parametric tests/test_real_hf_weights.py row runs TtVisionRMSNorm at the production operating point (fp32 residual stream, fp32 TILE gamma, 1x4 mesh replicated, golden real-activation input [784,1536]) vs the pure-PyTorch reference with the same real weights at THREE sites: norm1@0 PCC 0.999981, norm2@41 0.999985, post_trunk_norm 0.999993 (min 0.999981 > 0.99 reported). Block forward untouched; full harness re-run, vision_patch_embed row still passing. Guard ok (lint 0, params_loaded 4608>0). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | vision_attention | reference | done | 1.000000 | 0 | eager MHA 12h hd128 fused QKV no-bias, 2D rope, cu_seqlens mask |
 | vision_attention | ttnn | done | 0.999855 | 0 | Fused-QKV linear -> nlp_create_qkv_heads (12 MHA heads, hd128) -> rotary_embedding_llama (q/k weights reverse_permute'd HF->meta + convert_rope_style_hf_to_meta cos/sin, qwen25_vl vision recipe) -> windowed_scaled_dot_product_attention over cu_seqlens (in-kernel block-diagonal mask) -> nlp_concat_heads -> o_proj. Seq padded 784->896, cu_seqlens keeps unpadded boundaries; real blocks.0.attn weights, replicated on 1x4 mesh per parallelism plan; HiFi4+fp32-acc. Guard ok (lint 0, kernels ok, no new host ops). KB ttnn_experimental_create_qkv_heads pattern applied via the nlp_* fused-head idiom. Framework fix: added ttnn.transformer.windowed_scaled_dot_product_attention to guard KIND_REQUIRED_KERNELS[attention] (mandated vision idiom was unrecognized; guard self-tests still pass). |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 45 (2026-06-10T08:30:56Z): generation[ocr] — fail
 - tick 46 (2026-06-10T08:44:49Z): generation[ocr] — ok
 - tick 47 (2026-06-10T09:08:28Z): perf[ocr] — ok
 - tick 48 (2026-06-10T09:58:25Z): generation[ocr] — ok
@@ -94,6 +93,7 @@
 - tick 52 (2026-06-10T18:51:26Z): perf[ocr] — ok
 - tick 53 (2026-06-10T21:05:20Z): perf[ocr] — ok
 - tick 54 (2026-06-10T21:29:25Z): device[vision_patch_embed] — ok
+- tick 55 (2026-06-10T21:37:18Z): device[vision_rmsnorm] — ok
 
 ## Host-Resident Exceptions
 
