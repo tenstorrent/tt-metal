@@ -33,17 +33,17 @@ struct RandDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    // Metal 2.0 factory — option 3, enhanced (AdvancedImmutableProgramSpecFactoryConcept).
+    // Metal 2.0 factory — AdvancedProgramSpecFactoryConcept with the per-enqueue split (Option 3++).
     //
-    // The four-method surface IS the documentation of what's what:
-    //   - extract_immutable_info → the cache key AND the sole input to create_program_spec /
-    //     create_enqueue_invariant_args. It is the structural projection of the request (output layout + grid).
-    //     It deliberately EXCLUDES seed/from/to, so two calls that differ only in those values map to
-    //     the same cache entry — and a mutable value cannot leak into the spec, because the spec
-    //     builders never see anything but the ImmutableInfo.
-    //   - create_program_spec → the immutable blueprint (DFBs, kernels, work-units, schemas).
-    //   - create_enqueue_invariant_args → the ENQUEUE-INVARIANT run-args: the per-core work split (start_id /
-    //     num_tiles), declared invariant in the spec, set once on cache miss and retained.
+    // The method surface IS the documentation of what's what:
+    //   - extract_immutable_info → the cache key AND the sole input to create_program_artifacts. It is
+    //     the structural projection of the request (output layout + grid). It deliberately EXCLUDES
+    //     seed/from/to, so two calls that differ only in those values map to the same cache entry — and
+    //     a mutable value cannot leak into the spec, because the builder never sees anything but the
+    //     ImmutableInfo.
+    //   - create_program_artifacts → the immutable blueprint (DFBs, kernels, work-units, schemas) PLUS
+    //     the ENQUEUE-INVARIANT run-args (the per-core work split start_id / num_tiles, declared
+    //     invariant in the spec), bundled as a ProgramArtifacts. Set once on cache miss and retained.
     //   - create_per_enqueue_args → the PER-ENQUEUE run-args: the per-core RNG seed + from/to range and
     //     the output tensor. Re-applied on every dispatch via UpdateProgramRunArgs, so a new seed
     //     produces new output while the cached program is reused.
@@ -60,8 +60,7 @@ struct RandDeviceOperation {
 
         static immutable_info_t extract_immutable_info(
             const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
-        static tt::tt_metal::experimental::ProgramSpec create_program_spec(const immutable_info_t& info);
-        static tt::tt_metal::experimental::ProgramRunArgs create_enqueue_invariant_args(const immutable_info_t& info);
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(const immutable_info_t& info);
         static tt::tt_metal::experimental::ProgramRunArgs create_per_enqueue_args(
             const operation_attributes_t& attributes,
             const tensor_args_t& tensor_args,

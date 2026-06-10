@@ -1,56 +1,60 @@
 # Porting a TTNN op to Metal 2.0 — the factory recipe
 
 > Companion to the Metal 2.0 documentation set (`metal2_migration_guide.md`, `port_op_to_metal2_recipe.md`,
-> `port_op_to_metal2_ttnn_factory.md` on the documentation branch). Those docs own *how to build* a
-> `ProgramSpec` + `ProgramRunArgs` (kernels, DFBs, named args, tensor parameters). **This document owns
-> the TTNN factory shape decision**: which of the four factory concepts the op lands on, and the rule for
-> deciding — *measure dispatch time and compare, never guess*.
+> `port_op_to_metal2_ttnn_factory.md`). Those docs own *how to build* a `ProgramSpec` + `ProgramRunArgs`
+> (kernels, DFBs, named args, tensor parameters). **This document owns the TTNN factory shape decision**:
+> which factory concept the op lands on, and the rule for deciding — *measure dispatch time and compare,
+> never guess*.
 
 ## Read this first
 
-A Metal 2.0 op factory produces exactly two things: the immutable **`ProgramSpec`** (the blueprint) and
-the **`ProgramRunArgs`** (the per-execution values). The four factory concepts below are points on a
-**progressive ladder**. You climb only as far as **measured** performance forces you — each rung adds
-authoring work in exchange for a cheaper cache-hit dispatch, and on most ops the cheaper dispatch does
-not matter.
+A Metal 2.0 op factory produces a **`ProgramArtifacts`**: the immutable `ProgramSpec` (the blueprint) plus
+its `ProgramRunArgs` (the per-execution values). There are exactly **TWO concepts**, distinguished by ONE
+thing — the cache key:
 
-| rung | concept | factory methods | cache key | cache-hit work |
-|---|---|---|---|---|
-| **1 (default)** | `ProgramSpecFactoryConcept` | `create_program_spec` → `{spec, run_args}` | spec | factory re-runs; tensors refreshed (`UpdateTensorArgs`) |
-| **2** | `AdvancedProgramSpecFactoryConcept` | + `create_enqueue_invariant_args`, `create_per_enqueue_args` | spec | only per-enqueue args rebuilt + re-applied (`UpdateProgramRunArgs`) |
-| **3** | `ImmutableProgramSpecFactoryConcept` | + `extract_immutable_info` | ImmutableInfo | no spec rebuild; tensors refreshed |
-| **4** | `AdvancedImmutableProgramSpecFactoryConcept` | both | ImmutableInfo | no spec rebuild; only per-enqueue args re-applied |
+| concept | extra method | cache key | buys you |
+|---|---|---|---|
+| **`ProgramSpecFactoryConcept`** | — | the generated `ProgramSpec` | the default |
+| **`AdvancedProgramSpecFactoryConcept`** | `extract_immutable_info` | a small hashable `ImmutableInfo` | skips the spec rebuild on a hit; structurally excludes mutable values (e.g. a seed) from the key |
 
-The concepts are detected by the factory's method surface (`extract_immutable_info` ⇒ immutable-keyed;
-`create_enqueue_invariant_args` + `create_per_enqueue_args` ⇒ split). The method names are the
-documentation: a reader of the factory knows what is fixed per cache entry and what changes per dispatch.
+Within **either** concept, the enqueue-invariant fast path is an **optional, incremental** refinement —
+add a `create_per_enqueue_args` method (Audrey's "Option 2 → 2++" / "Option 3 → 3++"):
 
-**No `select_program_factory`** for single-factory ops — the framework auto-selects a single-alternative
-`program_factory_t`. **No `compute_program_hash`** for immutable-keyed ops — `extract_immutable_info` is
-the key.
+| | `create_program_artifacts` returns | `create_per_enqueue_args`? | cache-hit work |
+|---|---|---|---|
+| **degenerate** | spec + **all** run-args | absent | refresh tensor bindings (`UpdateTensorArgs`) |
+| **++** | spec + **enqueue-invariant** run-args | present (the per-dispatch rest) | re-apply only the per-enqueue set (`UpdateProgramRunArgs`) |
+
+You only move **enough** args into the invariant bundle to clear your perf target — moving one more arg
+from `create_per_enqueue_args` into `create_program_artifacts`'s run-args (and declaring it invariant in
+the spec) is a one-line, behavior-preserving optimization. **Leaving some on the table is fine.**
+
+Detected by method surface: `extract_immutable_info` ⇒ Advanced (immutable-keyed); `create_per_enqueue_args`
+⇒ ++. **No `select_program_factory`** for single-factory ops (auto-selected). **No `compute_program_hash`**
+for the Advanced concept — `extract_immutable_info` is the key.
 
 ---
 
-## Step 0 — Port to rung 1 (everyone starts here)
+## Step 0 — Port to the degenerate `ProgramSpecFactoryConcept` (everyone starts here)
 
-Any dev should be able to do this without thinking about caching at all.
+Do this without thinking about caching at all.
 
 1. Build the `ProgramSpec` and the full `ProgramRunArgs` exactly as the legacy factory built its
    descriptor (per `port_op_to_metal2_recipe.md`: CBs → DFBs, positional args → named args, tensor
    addresses → `TensorParameter` + binding). Keep kernels faithful — change *only* binding mechanisms
    (`dfb::`, `ta::`, `args::`), never logic.
-2. Return both, bundled:
+2. Return both, bundled — one method, no split:
 
 ```cpp
 struct MyOpProgramFactory {
-    static ttnn::device_operation::ProgramArtifacts create_program_spec(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args, tensor_return_value_t& out);
 };
 using program_factory_t = std::variant<MyOpProgramFactory>;
 ```
 
 3. Delete a custom `compute_program_hash` if the op has one (sanctioned device-op edit; the framework
-   hash is the cache key at rungs 1–2). Delete pybind hooks for vanished legacy entry points.
+   hashes the spec). Delete pybind hooks for vanished legacy entry points.
 4. Validate correctness (op's test suite + cache regression if it has one). **Done. Most ops stop here.**
 
 ## Step 1 — Measure before climbing (the gate, not a formality)
@@ -64,31 +68,39 @@ same machine. The discipline (skipping it produces fiction; we have produced fic
 - **Run a no-op control** to know your timer floor; measure host dispatch, not device time (migration
   shifts host cost only — kernels are unchanged).
 - **Baseline = the legacy/descriptor path for the same shape**, measured the same way the same day.
+- **Measure the realistic workload.** If a per-dispatch value (an RNG seed) is in the legacy cache key,
+  the legacy op *recompiles every call* — measure with that value VARYING, not pinned. (Real example:
+  legacy `sampling` with a pinned seed hit ≈ 33µs, but with a varying seed it recompiled every call at
+  ≈ 1 *second* — the pinned number hid a 30000× cliff.)
 
 Climbing pays only if the workload **cache-hits frequently** (enqueue loops). A cold-path or
 shape-churning op never repays factory complexity. Indicative magnitudes from the rand/matmul case
-studies (WH B0, ~64-core shapes): rung 1 hit ≈ 130–160µs (full factory re-run + full re-apply); rung
-2/4 hit ≈ 25–40µs (≈ descriptor parity at best); rung 3 only skips the spec rebuild. Your op will
-differ — **measure**.
+studies (WH B0, ~64-core shapes): degenerate hit ≈ 130–160µs (full factory re-run + full re-apply); ++
+hit ≈ 25–40µs. Your op will differ — **measure**.
 
-## Step 2 — Rung 2 if the hit cost hurts: split the run-args
+## Step 2 — "++": split off the per-enqueue args (if the hit cost hurts)
 
-Split run-args by one question: *can the value differ between two dispatches that share a cache entry?*
+Add `create_per_enqueue_args` and move the args that change per dispatch into it; leave everything else
+in `create_program_artifacts`'s run-args and declare those enqueue-invariant in the spec. Split by one
+question: *can the value differ between two dispatches that share a cache entry?*
 
-- **No** → `create_enqueue_invariant_args` (work splits, shape scalars). Declare each invariant in the
-  spec: `KernelAdvancedOptions::enqueue_invariant_runtime_args` / `_common_runtime_args`,
-  `TensorParameterAdvancedOptions::enqueue_invariant`. Applied once on miss, retained.
-- **Yes** → `create_per_enqueue_args` (tensor addresses, RNG seed, fill value). Rebuilt every dispatch.
-  Takes the mesh coordinate (per-device values, e.g. a sharded-mesh seed offset).
+- **No** (work splits, shape scalars) → keep in `create_program_artifacts`'s run-args; declare invariant
+  (`KernelAdvancedOptions::enqueue_invariant_runtime_args` / `_common_runtime_args`,
+  `TensorParameterAdvancedOptions::enqueue_invariant`). Set once on miss, retained.
+- **Yes** (tensor addresses, RNG seed, fill value) → `create_per_enqueue_args`. Rebuilt every dispatch;
+  takes the mesh coordinate (per-device values, e.g. a sharded-mesh seed offset).
 
 Miss merges both (`MergeProgramRunArgs`) + `SetProgramRunArgs`; hit re-applies only the per-enqueue set
 (`UpdateProgramRunArgs`). The runtime validates that every omitted arg was declared invariant — a
-forgotten per-enqueue value is a hard error, not stale "random" data. **Measure again.** If hit time
-hit your budget, stop.
+forgotten per-enqueue value is a hard error, not stale "random" data. **You need only move ENOUGH args
+into the invariant bundle to clear your target — leaving some on the table is fine.** Measure again; stop
+when you hit budget.
 
-## Step 3 — Rungs 3–4 if the spec rebuild still dominates: ImmutableInfo
+## Step 3 — `AdvancedProgramSpecFactoryConcept`: switch the key to ImmutableInfo
 
-If profiling shows the remaining hit cost is `create_program_spec` itself, add the immutable-keyed shape:
+Use this when (a) the remaining hit cost is the `create_program_artifacts` rebuild itself, or (b) a
+per-dispatch value is polluting the cache key (the sampling/​rand seed cliff above). Add
+`extract_immutable_info` and make `create_program_artifacts` take it:
 
 ```cpp
 struct immutable_info_t {
@@ -97,31 +109,29 @@ struct immutable_info_t {
     static constexpr auto attribute_names = std::forward_as_tuple("output_spec", "grid");
     auto attribute_values() const { return std::forward_as_tuple(output_spec, grid); }
 };
-static immutable_info_t extract_immutable_info(const operation_attributes_t&, const tensor_args_t&);
-static ProgramSpec      create_program_spec(const immutable_info_t&);              // miss-only
-static ProgramRunArgs   create_enqueue_invariant_args(const immutable_info_t&);    // miss-only
-static ProgramRunArgs   create_per_enqueue_args(attrs, tensor_args, out, coord);   // every dispatch
+static immutable_info_t      extract_immutable_info(const operation_attributes_t&, const tensor_args_t&);
+static ProgramArtifacts      create_program_artifacts(const immutable_info_t&);     // miss-only; spec + invariant args
+static ProgramRunArgs        create_per_enqueue_args(attrs, tensor_args, out, coord);  // optional "++"; every dispatch
 ```
 
-ImmutableInfo is the cache key **and** the sole input to the spec/invariant builders — a mutable value
+ImmutableInfo is the cache key **and** the sole input to `create_program_artifacts` — a mutable value
 structurally cannot leak into the key or the spec. Worked example: `rand`
 (`ttnn/cpp/ttnn/operations/rand/device/`), validated by `test_rand_different_seed_values` (one cache
-entry across seeds; different seed ⇒ different output). **Measure once more** and record before/after
-in the port report. If rung 4 still misses budget, the bottleneck is elsewhere — profile, don't tune.
+entry across seeds; different seed ⇒ different output). **Measure once more** and record before/after in
+the port report. If it still misses budget, the bottleneck is elsewhere — profile, don't tune.
 
 ## Blocked cases
 
-Multi-program / per-coord-varying ops (CCL-style), op-owned device resources (scratch `MeshTensor`s,
-`GlobalSemaphore`s), per-device seed offsets needing per-coord programs: park (the workload-factory
-family is pending) and record in the audit.
+Multi-program / per-coord-varying ops (CCL-style); op-owned device resources beyond what enqueue-invariant
+tensor args cover. Park (the workload-factory family is pending) and record in the audit.
 
 ## Port report (append to METAL2_PORT_REPORT.md)
 
 ```markdown
 ## TTNN Factory
-- Rung & concept: [1–4] [name]
-- Measurements (median/p10/p90, ≥1000 iters): legacy = __µs; rung 1 = __µs; final rung = __µs
-- Climb justification: [link table — "no climb needed" is a fine answer]
+- Concept: ProgramSpecFactoryConcept | AdvancedProgramSpecFactoryConcept; per-enqueue split: yes/no
+- Measurements (median/p10/p90, ≥1000 iters, realistic varying inputs): legacy = __µs; degenerate = __µs; final = __µs
+- Climb justification: [why this rung — "no climb needed" is a fine answer]
 - Device-op edits: [custom hash deleted; select_program_factory removed; pybind hooks removed]
 - Open items: [blockers, relaxation candidates]
 ```

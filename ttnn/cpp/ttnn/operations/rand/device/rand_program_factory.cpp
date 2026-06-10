@@ -34,10 +34,10 @@ auto get_random_seed() -> uint32_t { return distribution(rng); }
 constexpr const char* WRITER_KERNEL_PATH = "ttnn/cpp/ttnn/operations/rand/device/kernels/writer_uniform.cpp";
 constexpr const char* COMPUTE_KERNEL_PATH = "ttnn/cpp/ttnn/operations/rand/device/kernels/compute_uniform.cpp";
 
-// Work split over the output tiles — a pure function of (grid, tile count). create_program_spec and
-// create_enqueue_invariant_args derive it from the ImmutableInfo; create_per_enqueue_args re-derives the identical
-// split from the output tensor, so the per-core seed assignment lines up with the static start_id /
-// num_tiles for the same cores.
+// Work split over the output tiles — a pure function of (grid, tile count). create_program_artifacts
+// derives it from the ImmutableInfo; create_per_enqueue_args re-derives the identical split from the
+// output tensor, so the per-core seed assignment lines up with the work-split start_id / num_tiles for
+// the same cores.
 struct RandWorkSplit {
     CoreRangeSet all_cores;
     CoreRangeSet core_group_1;
@@ -76,8 +76,11 @@ RandDeviceOperation::RandProgramFactory::extract_immutable_info(
         .output_spec = std::move(output_spec), .grid = attrs.device->compute_with_storage_grid_size()};
 }
 
-// create_program_spec — the immutable blueprint. Derives ONLY from the ImmutableInfo.
-m2::ProgramSpec RandDeviceOperation::RandProgramFactory::create_program_spec(const immutable_info_t& info) {
+// create_program_artifacts — the immutable blueprint + the enqueue-invariant per-core work split
+// (start_id / num_tiles), bundled as a ProgramArtifacts. Derives ONLY from the ImmutableInfo. The work
+// split is declared enqueue-invariant in the spec, so the hit path (create_per_enqueue_args) omits it.
+ttnn::device_operation::ProgramArtifacts RandDeviceOperation::RandProgramFactory::create_program_artifacts(
+    const immutable_info_t& info) {
     const uint32_t units = info.output_spec.padded_shape().volume() / constants::TILE_HW;
     const auto ws = compute_work_split(info.grid, units);
     const DataType output_dtype = info.output_spec.data_type();
@@ -143,16 +146,9 @@ m2::ProgramSpec RandDeviceOperation::RandProgramFactory::create_program_spec(con
         .name = "rand_work",
         .kernels = {m2::KernelSpecName{"compute"}, m2::KernelSpecName{"writer"}},
         .target_nodes = ws.all_cores}};
-    return spec;
-}
 
-// create_enqueue_invariant_args — the enqueue-invariant per-core work split (start_id / num_tiles). Derived only
-// from the ImmutableInfo and declared invariant in the spec, so the hit path may omit it.
-m2::ProgramRunArgs RandDeviceOperation::RandProgramFactory::create_enqueue_invariant_args(
-    const immutable_info_t& info) {
-    const uint32_t units = info.output_spec.padded_shape().volume() / constants::TILE_HW;
-    const auto ws = compute_work_split(info.grid, units);
-
+    // Enqueue-invariant run-args: the per-core work split, bundled into the artifacts. Applied once on
+    // cache miss and retained; create_per_enqueue_args carries the rest.
     m2::ProgramRunArgs::KernelRunArgs compute_args{.kernel = m2::KernelSpecName{"compute"}};
     m2::ProgramRunArgs::KernelRunArgs writer_args{.kernel = m2::KernelSpecName{"writer"}};
     uint32_t tile_offset = 0;
@@ -162,10 +158,11 @@ m2::ProgramRunArgs RandDeviceOperation::RandProgramFactory::create_enqueue_invar
         writer_args.runtime_arg_values.push_back({core, {{"start_id", tile_offset}, {"num_tiles", n}}});
         tile_offset += n;
     }
-    m2::ProgramRunArgs args;
-    args.kernel_run_args.push_back(std::move(compute_args));
-    args.kernel_run_args.push_back(std::move(writer_args));
-    return args;
+    m2::ProgramRunArgs invariant_args;
+    invariant_args.kernel_run_args.push_back(std::move(compute_args));
+    invariant_args.kernel_run_args.push_back(std::move(writer_args));
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(invariant_args)};
 }
 
 // create_per_enqueue_args — the per-enqueue values: per-core seed + from/to range, and the output tensor.

@@ -611,12 +611,12 @@ public:
     //
     // Adapts a ProgramSpecFactoryConcept factory (Metal 2.0, single-program /
     // SPMD-flavored) for mesh dispatch. The op author writes ONLY
-    // create_program_spec, returning a single ProgramArtifacts (one ProgramSpec
+    // create_program_artifacts, returning a single ProgramArtifacts (one ProgramSpec
     // + ProgramRunArgs). The adapter stamps a Program from that spec onto
     // each mesh coordinate range covered by the workload — mirroring the
     // descriptor adapter's per-range build pattern.
     //
-    // On cache miss: the adapter calls create_program_spec, builds one Program
+    // On cache miss: the adapter calls create_program_artifacts, builds one Program
     // per coordinate range via experimental::MakeProgramFromSpec, applies
     // the initial ProgramRunArgs via SetProgramRunArgs, then resolves
     // each TensorArgument against the io_tensors enumerated from tensor_args /
@@ -725,56 +725,50 @@ public:
             auto* mesh_device = first_tensor.value().device();
             TT_FATAL(mesh_device != nullptr, "First tensor in tensor_args must be allocated on a MeshDevice");
 
-            // Method-surface traits select one of the four factory shapes (see operation_concepts.hpp):
-            //   kImmutable → cache key & spec input come from extract_immutable_info (option 3);
-            //   kSplit     → run-args are split into static (create_enqueue_invariant_args) + dynamic
-            //                (create_per_enqueue_args), re-applied partially on a hit (the "Advanced" tier).
+            // Method-surface traits (see operation_concepts.hpp):
+            //   kImmutable → cache key & create_program_artifacts input come from extract_immutable_info
+            //                (the Advanced concept).
+            //   kSplit     → the optional "++" refinement: create_program_artifacts's run-args carry only
+            //                the enqueue-invariant set; create_per_enqueue_args carries the per-dispatch
+            //                rest, merged on miss and re-applied alone on a hit.
             constexpr bool kImmutable = HasImmutableInfoExtraction<ProgramSpecFactory>;
-            constexpr bool kSplit = HasEnqueueInvariantArgSplit<ProgramSpecFactory>;
+            constexpr bool kSplit = HasPerEnqueueArgs<ProgramSpecFactory>;
 
             auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
             tt::tt_metal::distributed::MeshWorkload mesh_workload;
             std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-            if constexpr (kSplit) {
-                // Advanced tier: the immutable blueprint + the enqueue-invariant (static) run-args are
-                // built once; the per-dispatch (dynamic) run-args are built per coordinate range (so a
-                // per-device value such as a seed offset can vary across the mesh) and merged with the
-                // static set for the complete cache-miss SetProgramRunArgs.
-                tt::tt_metal::experimental::ProgramSpec spec;
-                tt::tt_metal::experimental::ProgramRunArgs static_args;
+            // create_program_artifacts always returns the spec + its run-args (the enqueue-invariant
+            // bundle when split, or the complete set when degenerate). For the Advanced concept it takes
+            // the extracted ImmutableInfo; otherwise (attrs, tensor_args, tensor_return_value).
+            auto artifacts = [&] {
                 if constexpr (kImmutable) {
-                    const auto info = ProgramSpecFactory::extract_immutable_info(attrs, tensor_args);
-                    spec = ProgramSpecFactory::create_program_spec(info);
-                    static_args = ProgramSpecFactory::create_enqueue_invariant_args(info);
+                    return ProgramSpecFactory::create_program_artifacts(
+                        ProgramSpecFactory::extract_immutable_info(attrs, tensor_args));
                 } else {
-                    spec = ProgramSpecFactory::create_program_spec(attrs, tensor_args, tensor_return_value);
-                    static_args =
-                        ProgramSpecFactory::create_enqueue_invariant_args(attrs, tensor_args, tensor_return_value);
+                    return ProgramSpecFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
                 }
+            }();
+
+            if constexpr (kSplit) {
+                // ++ : per-dispatch run-args are built per coordinate range (so a per-device value such
+                // as a seed offset can vary across the mesh) and merged with the invariant set from
+                // create_program_artifacts for the complete cache-miss SetProgramRunArgs.
                 for (const auto& range : tensor_coords.ranges()) {
                     const std::optional<ttnn::MeshCoordinate> coord(*range.begin());
                     auto dynamic_args =
                         ProgramSpecFactory::create_per_enqueue_args(attrs, tensor_args, tensor_return_value, coord);
                     std::array<tt::tt_metal::experimental::ProgramRunArgs, 1> appended{std::move(dynamic_args)};
-                    auto run_params = tt::tt_metal::experimental::MergeProgramRunArgs(static_args, appended);
-                    auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+                    auto run_params = tt::tt_metal::experimental::MergeProgramRunArgs(artifacts.run_params, appended);
+                    auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, artifacts.spec);
                     tt::tt_metal::experimental::SetProgramRunArgs(program, run_params);
-                    // The advanced hit path rebuilds the full dynamic set (incl. tensors) each dispatch,
-                    // so no tensor bindings need to be cached here.
+                    // The ++ hit path rebuilds the full per-enqueue set (incl. tensors) each dispatch, so
+                    // no tensor bindings need to be cached here.
                     shared_variables.emplace(range, shared_variables_t{});
                     mesh_workload.add_program(range, std::move(program));
                 }
             } else {
-                // Basic tier: create_program_spec returns the full ProgramArtifacts (spec + all run-args).
-                auto artifacts = [&] {
-                    if constexpr (kImmutable) {
-                        return ProgramSpecFactory::create_program_spec(
-                            ProgramSpecFactory::extract_immutable_info(attrs, tensor_args));
-                    } else {
-                        return ProgramSpecFactory::create_program_spec(attrs, tensor_args, tensor_return_value);
-                    }
-                }();
+                // Degenerate: create_program_artifacts's run-args are the complete set; apply as-is.
                 auto bindings = resolve_bindings(artifacts.run_params.tensor_args, io_mesh_tensors);
                 for (const auto& range : tensor_coords.ranges()) {
                     auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, artifacts.spec);
@@ -796,11 +790,11 @@ public:
             [[maybe_unused]] const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
-            if constexpr (HasEnqueueInvariantArgSplit<ProgramSpecFactory>) {
-                // Advanced tier: rebuild ONLY the dynamic run-args per coordinate (the per-dispatch
-                // scalars AND the tensor addresses) and re-apply them via UpdateProgramRunArgs. The
-                // static (enqueue-invariant) set stays baked from the cache-miss SetProgramRunArgs; the
-                // metal runtime validates that every omitted arg was declared enqueue-invariant.
+            if constexpr (HasPerEnqueueArgs<ProgramSpecFactory>) {
+                // ++ : rebuild ONLY the per-enqueue run-args per coordinate (the per-dispatch scalars AND
+                // the tensor addresses) and re-apply them via UpdateProgramRunArgs. The enqueue-invariant
+                // set stays baked from the cache-miss SetProgramRunArgs; the metal runtime validates that
+                // every omitted arg was declared enqueue-invariant.
                 for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                     const std::optional<ttnn::MeshCoordinate> coord(*coordinate_range.begin());
                     auto dynamic_args =
@@ -831,7 +825,7 @@ public:
         ttsl::hash::hash_t hash;
 
         // Route the cache key through the selected factory. An immutable-info-keyed factory (option 3)
-        // hashes its ImmutableInfo — the same projection that feeds create_program_spec — so a mutable
+        // hashes its ImmutableInfo — the same projection that feeds create_program_artifacts — so a mutable
         // value (e.g. an RNG seed) that is excluded from the ImmutableInfo structurally cannot enter the
         // cache key. Other factories fall back to a custom compute_program_hash if present, else the
         // default reflection hash of (op type + attributes + tensor args).
