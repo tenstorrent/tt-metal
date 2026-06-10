@@ -7,10 +7,8 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_equal
 
-FLOAT_INPUT_DTYPES = {ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b, ttnn.bfloat4_b}
 _INTEGER_OUTPUT_DTYPES = {ttnn.uint8, ttnn.uint16, ttnn.uint32, ttnn.int32}
 _UNSIGNED_INPUT_DTYPES = {ttnn.uint8, ttnn.uint16, ttnn.uint32}
-_SIGNED_OR_FLOAT_INPUT = {ttnn.int32} | FLOAT_INPUT_DTYPES
 
 # Signed 32-bit extrema: min = -2^(32-1), max = 2^(32-1) - 1 (exponent is 31, not 32).
 _INT32_MIN = -(2**31)
@@ -44,10 +42,6 @@ _CLAMP_LOW_MAGNITUDE = 1000
 
 def _output_allows_negative(tt_output_dtype):
     return tt_output_dtype == ttnn.int32
-
-
-def _input_allows_negative(tt_input_dtype):
-    return tt_input_dtype in _SIGNED_OR_FLOAT_INPUT
 
 
 def typecast_test_input_bounds(tt_input_dtype, tt_output_dtype):
