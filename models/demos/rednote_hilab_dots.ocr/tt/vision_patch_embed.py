@@ -87,12 +87,18 @@ class TtVisionPatchEmbed(LightweightModule):
 
         Returns: [num_patches, embed_dim], replicated.
         """
+        # Land the projection in L1 so the fused RMSNorm reads from L1
+        # instead of round-tripping DRAM (tracy: DRAM-interleaved handoff
+        # made LayerNormDeviceOperation ~43% of block kernel time). The
+        # intermediate is at most [896, 1536] fp32 ≈ 5.5 MB interleaved
+        # across banks — comfortably within L1.
         h = ttnn.linear(
             x,
             self.proj_weight,
             bias=self.proj_bias,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            core_grid=ttnn.CoreGrid(y=10, x=10),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        out = ttnn.rms_norm(h, epsilon=self.eps, weight=self.norm_weight)
+        out = ttnn.rms_norm(h, epsilon=self.eps, weight=self.norm_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(h)
         return out

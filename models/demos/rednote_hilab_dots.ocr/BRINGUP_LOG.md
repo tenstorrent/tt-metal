@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T04:46:04Z
+**Updated:** 2026-06-10T04:53:46Z
 
 ## Block Status
 
@@ -13,7 +13,7 @@
 | vision_patch_embed | reference | done | 1.000000 | 0 | Conv2d 14x14 s14 3->1536 + RMSNorm, flat-patch input like HF |
 | vision_patch_embed | ttnn | done | 0.999957 | 0 | Conv2d(14x14 s14)==linear over pre-flattened patches + ttnn.rms_norm eps=1e-5; weights replicated on 1x4 mesh per parallelism plan (placement=replicate); guard ok (lint 0, kernels ok, no new host ops). KB injection skipped: kb_entries_for_block crashed on malformed record (fused_op list, lib/kb.py _tokens). |
 | vision_patch_embed | debug | n/a | — | 0 |  |
-| vision_patch_embed | optimization | pending | — | 0 |  |
+| vision_patch_embed | optimization | done | 0.999858 | 0 | Tracy-driven single change: linear output pinned to L1 WITH core_grid 10x10 so the fused-bias L1 matmul variant engages (L1 alone regressed: 24-core matmul + un-fused 149us BinaryNg bias add, the optimization-skill counter-example), rms_norm reads L1, block output back to DRAM. Traced tracy at production operating point (fp32, [1,1,896,588] replicated 1x4 mesh, metal-trace captured+replayed): per-device block kernel time 103.3us -> 90.5us (-12.4%); matmul 59.5us@100c -> 53.7us@100c (bias fused), rms_norm(LayerNormDeviceOperation) 44.4us@28c -> 36.8us@28c. Top hotspot post-change MatmulDeviceOperation ~59% of block kernel time. KB entries for kind conv (ttnn_fold/ttnn_conv2d/eltwise records) target real conv kernels - block is already a collapsed conv==linear, none applicable, none used. PCC 0.999858 (>0.99) re-verified on 1x4 mesh; guard ok (lint 0, traced tracy artifact verified). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | vision_patch_embed | real_weights | pending | — | 0 |  |
 | vision_rmsnorm | reference | done | 1.000000 | 0 | matches HF RMSNorm eps=1e-5, fp32 norm then scale |
 | vision_rmsnorm | ttnn | done | 0.999982 | 0 | Fused ttnn.rms_norm eps=1e-5 with [1,1,dim//32,32] ROW_MAJOR gamma per reference_impl qwen25_vl/tt/vision_rmsnorm.py; KB entry ttnn_pow cited (pow/mean/rsqrt/mul chain fused into ttnn.rms_norm). Weight replicated on 1x4 mesh per parallelism plan (placement=replicate); replicated output compared single-device vs golden (real blocks.0.norm1 weight). Guard ok (lint 0, kernels ok, no new host ops). |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 9 (2026-06-10T03:20:47Z): device[vision_mlp] — ok
 - tick 10 (2026-06-10T03:26:43Z): device[vision_block] — ok
 - tick 11 (2026-06-10T03:32:56Z): device[patch_merger] — ok
 - tick 12 (2026-06-10T03:50:19Z): device[vision_transformer] — ok
@@ -94,6 +93,7 @@
 - tick 16 (2026-06-10T04:31:32Z): device[text_mlp] — ok
 - tick 17 (2026-06-10T04:39:45Z): device[decoder_layer] — ok
 - tick 18 (2026-06-10T04:46:04Z): device[lm_head] — ok
+- tick 19 (2026-06-10T04:53:46Z): device[vision_patch_embed] — ok
 
 ## Host-Resident Exceptions
 

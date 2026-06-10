@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T04:46:04Z",
+  "updated_at": "2026-06-10T04:53:46Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -44,8 +44,16 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_patch_embed.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_vision_patch_embed.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_vision_patch_embed.py",
+          "generated/profiler/reports/2026_06_10_04_52_37/ops_perf_results_2026_06_10_04_52_37.csv"
+        ],
+        "notes": "Tracy-driven single change: linear output pinned to L1 WITH core_grid 10x10 so the fused-bias L1 matmul variant engages (L1 alone regressed: 24-core matmul + un-fused 149us BinaryNg bias add, the optimization-skill counter-example), rms_norm reads L1, block output back to DRAM. Traced tracy at production operating point (fp32, [1,1,896,588] replicated 1x4 mesh, metal-trace captured+replayed): per-device block kernel time 103.3us -> 90.5us (-12.4%); matmul 59.5us@100c -> 53.7us@100c (bias fused), rms_norm(LayerNormDeviceOperation) 44.4us@28c -> 36.8us@28c. Top hotspot post-change MatmulDeviceOperation ~59% of block kernel time. KB entries for kind conv (ttnn_fold/ttnn_conv2d/eltwise records) target real conv kernels - block is already a collapsed conv==linear, none applicable, none used. PCC 0.999858 (>0.99) re-verified on 1x4 mesh; guard ok (lint 0, traced tracy artifact verified). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999858
       },
       "real_weights": {
         "status": "pending",
@@ -767,6 +775,12 @@
       "tick": 18,
       "ts": "2026-06-10T04:46:04Z",
       "action": "device[lm_head]",
+      "result": "ok"
+    },
+    {
+      "tick": 19,
+      "ts": "2026-06-10T04:53:46Z",
+      "action": "device[vision_patch_embed]",
       "result": "ok"
     }
   ],
