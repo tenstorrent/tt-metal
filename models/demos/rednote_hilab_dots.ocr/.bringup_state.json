@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T02:23:55Z",
+  "updated_at": "2026-06-10T02:31:43Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -178,8 +178,15 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/reference/functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/test_functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/golden/vision_block.pt"
+        ],
+        "notes": "pre-norm residual block x+attn(norm1(x)); x+mlp(norm2(x)), real blocks.0 weights",
+        "pcc": 0.9999998807907104
       },
       "ttnn": {
         "status": "pending",
@@ -211,8 +218,15 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/reference/functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/test_functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/golden/patch_merger.pt"
+        ],
+        "notes": "LayerNorm(eps=1e-6) -> view(-1,6144) -> Linear -> GELU -> Linear 6144->1536, real merger weights",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -246,8 +260,15 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/reference/functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/test_functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/golden/vision_transformer.pt"
+        ],
+        "notes": "full tower: patch_embed -> 42x block -> post_trunk_norm -> merger, all real fp32 weights, matches HF DotsVisionTransformer(bf16=False)",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -277,8 +298,15 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/reference/functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/test_functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/golden/embedding.pt"
+        ],
+        "notes": "F.embedding lookup on model.embed_tokens.weight 151936x1536, untied",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -517,6 +545,12 @@
       "tick": 2,
       "ts": "2026-06-10T02:23:55Z",
       "action": "reference[vision_patch_embed,vision_rmsnorm,vision_attention,vision_mlp]",
+      "result": "ok"
+    },
+    {
+      "tick": 3,
+      "ts": "2026-06-10T02:31:43Z",
+      "action": "reference[vision_block,patch_merger,vision_transformer,embedding]",
       "result": "ok"
     }
   ],

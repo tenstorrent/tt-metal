@@ -130,3 +130,108 @@ def vision_mlp_forward(x: torch.Tensor, state_dict: Dict[str, torch.Tensor]) -> 
     return F.linear(
         F.silu(F.linear(x, state_dict["fc1.weight"])) * F.linear(x, state_dict["fc3.weight"]), state_dict["fc2.weight"]
     )
+
+
+# ---------------------------------------------------------------------------
+# vision_block
+# ---------------------------------------------------------------------------
+def vision_block_forward(
+    x: torch.Tensor,
+    state_dict: Dict[str, torch.Tensor],
+    cu_seqlens: torch.Tensor,
+    rotary_pos_emb: torch.Tensor,
+    num_heads: int = 12,
+    eps: float = 1e-5,
+) -> torch.Tensor:
+    """DotsVisionBlock: pre-norm residual; x + attn(norm1(x)); x + mlp(norm2(x)).
+
+    state_dict keys: norm1.weight, attn.qkv.weight, attn.proj.weight,
+    norm2.weight, mlp.fc1.weight, mlp.fc2.weight, mlp.fc3.weight.
+    """
+    h = x + vision_attention_forward(
+        vision_rmsnorm_forward(x, state_dict["norm1.weight"], eps),
+        {"qkv.weight": state_dict["attn.qkv.weight"], "proj.weight": state_dict["attn.proj.weight"]},
+        cu_seqlens,
+        rotary_pos_emb,
+        num_heads=num_heads,
+    )
+    return h + vision_mlp_forward(
+        vision_rmsnorm_forward(h, state_dict["norm2.weight"], eps),
+        {
+            "fc1.weight": state_dict["mlp.fc1.weight"],
+            "fc2.weight": state_dict["mlp.fc2.weight"],
+            "fc3.weight": state_dict["mlp.fc3.weight"],
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# patch_merger
+# ---------------------------------------------------------------------------
+def patch_merger_forward(
+    x: torch.Tensor,
+    state_dict: Dict[str, torch.Tensor],
+    spatial_merge_size: int = 2,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """PatchMerger: LayerNorm(eps=1e-6) -> view(-1, C*m^2) -> Linear -> GELU -> Linear.
+
+    state_dict keys: ln_q.weight, ln_q.bias, mlp.0.weight, mlp.0.bias,
+    mlp.2.weight, mlp.2.bias.
+    """
+    dim = x.shape[-1]
+    x = F.layer_norm(x, (dim,), state_dict["ln_q.weight"], state_dict["ln_q.bias"], eps)
+    x = x.view(-1, dim * spatial_merge_size**2)
+    x = F.gelu(F.linear(x, state_dict["mlp.0.weight"], state_dict["mlp.0.bias"]))
+    return F.linear(x, state_dict["mlp.2.weight"], state_dict["mlp.2.bias"])
+
+
+# ---------------------------------------------------------------------------
+# vision_transformer (full DotsVisionTransformer)
+# ---------------------------------------------------------------------------
+def vision_transformer_forward(
+    x: torch.Tensor,
+    state_dict: Dict[str, torch.Tensor],
+    grid_thw: torch.Tensor,
+    num_layers: int = 42,
+    num_heads: int = 12,
+    eps: float = 1e-5,
+    spatial_merge_size: int = 2,
+) -> torch.Tensor:
+    """Full vision tower: patch_embed -> num_layers x vision_block ->
+    post_trunk_norm -> patch_merger.
+
+    state_dict is flat with ``vision_tower.``-stripped HF keys, e.g.
+    patch_embed.patchifier.proj.weight, blocks.0.norm1.weight, ...,
+    post_trunk_norm.weight, merger.ln_q.weight.
+    """
+    h = vision_patch_embed_forward(
+        x,
+        {
+            "proj.weight": state_dict["patch_embed.patchifier.proj.weight"],
+            "proj.bias": state_dict["patch_embed.patchifier.proj.bias"],
+            "norm.weight": state_dict["patch_embed.patchifier.norm.weight"],
+        },
+        eps=eps,
+    )
+    head_dim = h.shape[-1] // num_heads
+    rotary_pos_emb = vision_rot_pos_emb(grid_thw, head_dim=head_dim, spatial_merge_size=spatial_merge_size)
+    cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2], grid_thw[:, 0]).cumsum(
+        dim=0, dtype=torch.int32
+    )
+    cu_seqlens = F.pad(cu_seqlens, (1, 0), value=0)
+    for i in range(num_layers):
+        prefix = f"blocks.{i}."
+        block_sd = {k[len(prefix) :]: v for k, v in state_dict.items() if k.startswith(prefix)}
+        h = vision_block_forward(h, block_sd, cu_seqlens, rotary_pos_emb, num_heads=num_heads, eps=eps)
+    h = vision_rmsnorm_forward(h, state_dict["post_trunk_norm.weight"], eps)
+    merger_sd = {k[len("merger.") :]: v for k, v in state_dict.items() if k.startswith("merger.")}
+    return patch_merger_forward(h, merger_sd, spatial_merge_size=spatial_merge_size)
+
+
+# ---------------------------------------------------------------------------
+# embedding (text token embedding)
+# ---------------------------------------------------------------------------
+def embedding_forward(input_ids: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+    """Token embedding lookup: weight [vocab, hidden], untied from lm_head."""
+    return F.embedding(input_ids, weight)

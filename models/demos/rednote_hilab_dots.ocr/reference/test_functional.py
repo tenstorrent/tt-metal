@@ -137,3 +137,86 @@ def test_vision_mlp():
     p = pcc(ref, hf(x))
     _save_golden("vision_mlp", {"input": x, "output": ref, "pcc_vs_hf": p})
     assert p > 0.99, p
+
+
+BLOCK_KEYS = [
+    "norm1.weight",
+    "attn.qkv.weight",
+    "attn.proj.weight",
+    "norm2.weight",
+    "mlp.fc1.weight",
+    "mlp.fc2.weight",
+    "mlp.fc3.weight",
+]
+
+
+def test_vision_block():
+    torch.manual_seed(0)
+    sd = load_weights("vision_tower.blocks.0", BLOCK_KEYS)
+    x = torch.randn(SEQ, 1536)
+    rope = fn.vision_rot_pos_emb(GRID)
+    cu = torch.tensor([0, SEQ], dtype=torch.int32)
+    vis = _remote_module("modeling_dots_vision")
+    hf = vis.DotsVisionBlock(vision_config(), "eager")
+    hf.load_state_dict(sd)
+    ref = fn.vision_block_forward(x, sd, cu, rope, num_heads=12, eps=1e-5)
+    p = pcc(ref, hf(x, cu_seqlens=cu, rotary_pos_emb=rope))
+    _save_golden(
+        "vision_block",
+        {"input": x, "output": ref, "rotary_pos_emb": rope, "cu_seqlens": cu, "grid_thw": GRID, "pcc_vs_hf": p},
+    )
+    assert p > 0.99, p
+
+
+MERGER_KEYS = ["ln_q.weight", "ln_q.bias", "mlp.0.weight", "mlp.0.bias", "mlp.2.weight", "mlp.2.bias"]
+
+
+def test_patch_merger():
+    torch.manual_seed(0)
+    sd = load_weights("vision_tower.merger", MERGER_KEYS)
+    x = torch.randn(SEQ, 1536)
+    vis = _remote_module("modeling_dots_vision")
+    hf = vis.PatchMerger(dim=1536, context_dim=1536, spatial_merge_size=2)
+    hf.load_state_dict(sd)
+    ref = fn.patch_merger_forward(x, sd, spatial_merge_size=2, eps=1e-6)
+    p = pcc(ref, hf(x))
+    _save_golden("patch_merger", {"input": x, "output": ref, "pcc_vs_hf": p})
+    assert p > 0.99, p
+
+
+def test_vision_transformer():
+    torch.manual_seed(0)
+    idx = json.load(open(SNAP / "model.safetensors.index.json"))["weight_map"]
+    vt_keys = sorted(k for k in idx if k.startswith("vision_tower."))
+    sd = {}
+    by_file = {}
+    for k in vt_keys:
+        by_file.setdefault(idx[k], []).append(k)
+    for fname, keys in by_file.items():
+        with safe_open(SNAP / fname, framework="pt") as f:
+            for k in keys:
+                sd[k[len("vision_tower.") :]] = f.get_tensor(k).float()
+
+    x = torch.randn(SEQ, 3 * 14 * 14)
+    vis = _remote_module("modeling_dots_vision")
+    hf = vis.DotsVisionTransformer(vision_config())
+    hf.load_state_dict(sd, assign=True)
+    hf.eval()
+    with torch.no_grad():
+        hf_out = hf(x, GRID, bf16=False)
+        ref = fn.vision_transformer_forward(x, sd, GRID, num_layers=42, num_heads=12, eps=1e-5)
+    p = pcc(ref, hf_out)
+    _save_golden("vision_transformer", {"input": x, "output": ref, "grid_thw": GRID, "pcc_vs_hf": p})
+    assert p > 0.99, p
+
+
+def test_embedding():
+    torch.manual_seed(0)
+    w = load_weights("model", ["embed_tokens.weight"])["embed_tokens.weight"]
+    ids = torch.randint(0, w.shape[0], (1, 128))
+    hf = torch.nn.Embedding(w.shape[0], w.shape[1])
+    hf.weight.data.copy_(w)
+    ref = fn.embedding_forward(ids, w)
+    p = pcc(ref, hf(ids))
+    _save_golden("embedding", {"input": ids, "output": ref, "pcc_vs_hf": p})
+    assert p > 0.99, p
