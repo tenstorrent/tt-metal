@@ -1661,6 +1661,17 @@ DFB_BLOCKED_TEST_2_0(DMTest1xDFB4Bx2B_blk4, DM, DM, 4, 2, 4, 16, false)
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk4_impl, DM, DM, 1, 1, 4, 16, true)
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB2Bx2B_blk4_impl, DM, DM, 2, 2, 4, 16, true)
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB3Bx3B_blk4_impl, DM, DM, 3, 3, 4, 24, true)
+// Implicit sync at other block sizes (single-thread): same identity, exercises the ISR credit batching
+// at blk2 (8 blocks of 2) and blk8 (2 blocks of 8).
+DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk2_impl, DM, DM, 1, 1, 2, 16, true)
+DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk8_impl, DM, DM, 1, 1, 8, 16, true)
+
+// --- BLOCKED→BLOCKED (DM-DM, explicit) extra coverage: larger ring / non-pow2 block, multi-thread ---
+// 2Bx2B blk2 on a 32-entry ring → capacity 16/thread → 8 blocks of 2 per thread (more blocks/thread than
+// the 16-entry cases; NOT ring-pressure — that needs a Tensix producer with entries_per_core>num_entries).
+// 2Bx2B blk3 → non-power-of-2 block at multi-thread (guards against pow2 assumptions). Both verify identity.
+DFB_BLOCKED_TEST_2_0(DMTest1xDFB2Bx2B_blk2_e32, DM, DM, 2, 2, 2, 32, false)
+DFB_BLOCKED_TEST_2_0(DMTest1xDFB2Bx2B_blk3_e24, DM, DM, 2, 2, 3, 24, false)
 
 // Bigger entry size (2048 vs the 1024 default) — exercises larger per-block NoC bursts.
 TEST_F(MeshDeviceFixture, DMTest1xDFB1Bx1B_blk4_entry2048_2_0) {
@@ -1669,6 +1680,23 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB1Bx1B_blk4_entry2048_2_0) {
         .consumer_type = M2PorCType::DM,
         .num_producers = 1,
         .num_consumers = 1,
+        .pap = m2::DFBAccessPattern::BLOCKED,
+        .cap = m2::DFBAccessPattern::BLOCKED,
+        .implicit_sync = false,
+        .entry_size = 2048,
+        .num_entries = 16,
+        .block_size = 4,
+    };
+    run_single_dfb_program_2_0(this->devices_.at(0), params);
+}
+
+// Bigger entry size (2048), multi-thread (2Bx2B): larger per-block bursts across two sub-rings. Identity.
+TEST_F(MeshDeviceFixture, DMTest1xDFB2Bx2B_blk4_entry2048_2_0) {
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 2,
+        .num_consumers = 2,
         .pap = m2::DFBAccessPattern::BLOCKED,
         .cap = m2::DFBAccessPattern::BLOCKED,
         .implicit_sync = false,
@@ -1752,6 +1780,11 @@ DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB1Bx4A_blk4, 1, 4, 4, 16)
 // P+C ≤ 6 (2Bx4A sits at the DM cap of 6 cores).
 DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB2Bx2A_blk4, 2, 2, 4, 16)
 DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB2Bx4A_blk4, 2, 4, 4, 16)
+// Extra coverage: smaller block at P=2, and P=3 (the producer ceiling for ALL: P+C<=6, C<=4).
+// The permutation golden keys only on P and block_size (C-independent), so 3Bx1A and 3Bx3A share it.
+DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB2Bx2A_blk2, 2, 2, 2, 16)
+DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB3Bx1A_blk4, 3, 1, 4, 24)
+DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB3Bx3A_blk4, 3, 3, 4, 24)
 
 // --- STRIDED 1xX, Xx1 (DM-DM, DM-Tensix, Tensix-DM) ---
 DFB_TEST_2_0(DMTest1xDFB1Sx1S, DM, DM, 1, STRIDED, 1, STRIDED)
