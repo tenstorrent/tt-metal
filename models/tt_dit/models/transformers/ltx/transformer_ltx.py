@@ -17,6 +17,7 @@ from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
+from ....utils.tracing import traced_function
 from .attention_ltx import LTXAttention
 
 
@@ -743,6 +744,7 @@ class LTXTransformerModel(Module):
             video_padding_mask=video_padding_mask,
         )
 
+    @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
     def inner_step(
         self,
         *,
