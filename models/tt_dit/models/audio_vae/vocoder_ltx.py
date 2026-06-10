@@ -13,7 +13,7 @@ to ``(B, T, C)`` ROW_MAJOR at the device boundary for ``Conv1dViaConv3d``.
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import List, NamedTuple, Sequence
+from typing import List, Sequence
 
 import torch
 
@@ -33,15 +33,7 @@ from ...layers.audio_resample import Activation1d
 from ...layers.module import Module, ModuleList
 from ...parallel.config import ParallelFactor
 from ...parallel.manager import CCLManager
-
-
-class _TraceEntry(NamedTuple):
-    """A captured trace for one input shape: the trace id plus its persistent
-    input/output device buffers (replay copies new data into ``input``, reads ``output``)."""
-
-    trace_id: int
-    input: ttnn.Tensor
-    output: ttnn.Tensor
+from ...utils.tracing import Tracer
 
 
 class DilatedConv1d(_AlignedOutConv1d):
@@ -257,10 +249,9 @@ class Vocoder(Module):
         self.ccl_manager = ccl_manager
         self._tpad_mask_cache: dict = {}
         self._t_pad = 0  # set per-input by _host_to_device; read by _forward_device/_device_to_host
-        # forward_traced cache: input-shape -> _TraceEntry, LRU-ordered. Resident across calls so
-        # a serving endpoint with a bounded set of shape buckets replays instead of re-capturing.
-        # max_traces caps device trace_region_size usage (LRU-evict beyond it); None = unbounded.
-        self._traces: "OrderedDict[tuple, _TraceEntry]" = OrderedDict()
+        # forward_traced cache: input-shape -> Tracer, LRU-ordered; max_traces caps device trace
+        # memory (LRU-evict beyond it; None = unbounded).
+        self._traces: "OrderedDict[tuple, Tracer]" = OrderedDict()
         self._max_traces = max_traces
 
         self.conv_pre = _AlignedOutConv1d(
@@ -368,45 +359,32 @@ class Vocoder(Module):
         resident traces.
         """
         shape_key = tuple(mel_spec.shape)
-        entry = self._traces.get(shape_key)
-        if entry is not None:
-            self._traces.move_to_end(shape_key)  # LRU touch
-            self._host_to_device(mel_spec, out=entry.input)
-            ttnn.execute_trace(self.mesh_device, entry.trace_id, cq_id=0, blocking=False)
-            return self._device_to_host(entry.output)
-
-        # New shape: capture. Persistent input buffer (capture reads it, replay rewrites it).
-        trace_input = self._host_to_device(mel_spec)
-        # Warmup on a throwaway buffer: compile programs + populate the lazy caches (snake α/β
-        # shards, CCL persistent buffers, tpad masks, zeros constants) so capture sees a
-        # write-free, fully-compiled graph.
-        ttnn.synchronize_device(self.mesh_device)
-        _ = self._forward_device(self._host_to_device(mel_spec))
-        ttnn.synchronize_device(self.mesh_device)
-        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        trace_output = self._forward_device(trace_input)
-        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
-        ttnn.synchronize_device(self.mesh_device)
-        self._traces[shape_key] = _TraceEntry(trace_id, trace_input, trace_output)
-
-        if self._max_traces is not None:
-            while len(self._traces) > self._max_traces:
-                _, evicted = self._traces.popitem(last=False)  # LRU
-                ttnn.release_trace(self.mesh_device, evicted.trace_id)
-        return self._device_to_host(trace_output)
+        tracer = self._traces.get(shape_key)
+        if tracer is None:
+            # prep_run=True warms the device graph (populates the lazy snake α/β, CCL, tpad-mask
+            # and zeros caches) so the capture is write-free.
+            tracer = Tracer(self._forward_device, device=self.mesh_device, prep_run=True, clone_prep_inputs=True)
+            self._traces[shape_key] = tracer
+            if self._max_traces is not None:
+                while len(self._traces) > self._max_traces:
+                    _, evicted = self._traces.popitem(last=False)  # LRU
+                    evicted.release_trace()
+        self._traces.move_to_end(shape_key)  # LRU touch
+        # _host_to_device sets self._t_pad for this shape (read by the captured graph and the
+        # _device_to_host crop).
+        y_dev = tracer(self._host_to_device(mel_spec), tracer_blocking_execution=False, tracer_execute_on_capture=False)
+        return self._device_to_host(y_dev)
 
     def release_trace(self) -> None:
         """Free all captured traces (call on shutdown, or before re-warming a new bucket set)."""
-        for entry in self._traces.values():
-            ttnn.release_trace(self.mesh_device, entry.trace_id)
+        for tracer in self._traces.values():
+            tracer.release_trace()
         self._traces.clear()
 
-    def _host_to_device(self, mel_spec: torch.Tensor, out: ttnn.Tensor | None = None) -> ttnn.Tensor:
+    def _host_to_device(self, mel_spec: torch.Tensor) -> ttnn.Tensor:
         """Host preprocessing + upload. Returns the ROW_MAJOR full-T device tensor that
         ``_forward_device`` consumes. Split out from ``forward`` so the pure-device graph
-        can be captured for trace replay; sets ``self._t_pad`` for the device/host stages.
-        When ``out`` is given, copies into that persistent device buffer (trace replay path)
-        instead of allocating a new one."""
+        can be captured for trace replay; sets ``self._t_pad`` for the device/host stages."""
         x_t = mel_spec.transpose(2, 3) if mel_spec.dim() == 4 else mel_spec.transpose(1, 2).unsqueeze(1)
         if x_t.dim() == 4:
             assert x_t.shape[1] == 2, f"stereo input must have 2 channels, got {x_t.shape[1]}"
@@ -432,15 +410,6 @@ class Vocoder(Module):
                 x_BTC_torch = torch.nn.functional.pad(x_BTC_torch, (0, 0, 0, t_pad))
         self._t_pad = t_pad
 
-        if out is not None:
-            host_t = ttnn.from_torch(
-                x_BTC_torch,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                dtype=self.dtype,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-            ttnn.copy_host_to_device_tensor(host_t, out)
-            return out
         return ttnn.from_torch(x_BTC_torch, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
 
     def _forward_device(self, x_dev: ttnn.Tensor) -> ttnn.Tensor:
