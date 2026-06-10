@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T04:39:45Z
+**Updated:** 2026-06-10T04:46:04Z
 
 ## Block Status
 
@@ -71,7 +71,7 @@
 | decoder_layer | optimization | pending | — | 0 |  |
 | decoder_layer | real_weights | pending | — | 0 |  |
 | lm_head | reference | done | 1.000000 | 0 | untied Linear 1536->151936 no bias, real lm_head.weight, matches torch.nn.Linear |
-| lm_head | ttnn | pending | — | 0 |  |
+| lm_head | ttnn | done | 1.000000 | 0 | Untied vocab projection Linear 1536->151936 no bias as a single column-parallel ttnn.linear: weight [vocab,hidden] transposed to [hidden,vocab] and vocab-sharded ShardTensorToMesh(dim=-1) on the 1x4 mesh per parallelism plan (placement=shard vocab dim; 151936/4=37984 logits per chip, tile-divisible, no padding); replicated activation in, per-chip logit slices out, recombined on host via ConcatMeshToTensor(dim=-1) per tp-guidance (all_gather left to the generation-phase consumer). reference_impl tt_transformers/tt/lm_head.py DRAM-sharded program configs / column splits deferred to optimization. HiFi4+fp32-acc, bf16; real lm_head.weight re-loaded from checkpoint in the test; PCC 1.000000 vs golden. Guard ok (lint 0, kernels ok, no new host ops). KB entries for kind linear were attention/tensor-manipulation records (nlp_concat_heads_decode, concatenate_heads, flash_mla_prefill, narrow/split/bcast/concat, create_qkv_heads) - none applicable, none used. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | lm_head | debug | n/a | — | 0 |  |
 | lm_head | optimization | pending | — | 0 |  |
 | lm_head | real_weights | pending | — | 0 |  |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 8 (2026-06-10T03:13:53Z): device[vision_attention] — ok
 - tick 9 (2026-06-10T03:20:47Z): device[vision_mlp] — ok
 - tick 10 (2026-06-10T03:26:43Z): device[vision_block] — ok
 - tick 11 (2026-06-10T03:32:56Z): device[patch_merger] — ok
@@ -94,6 +93,7 @@
 - tick 15 (2026-06-10T04:25:05Z): device[text_attention] — ok
 - tick 16 (2026-06-10T04:31:32Z): device[text_mlp] — ok
 - tick 17 (2026-06-10T04:39:45Z): device[decoder_layer] — ok
+- tick 18 (2026-06-10T04:46:04Z): device[lm_head] — ok
 
 ## Host-Resident Exceptions
 

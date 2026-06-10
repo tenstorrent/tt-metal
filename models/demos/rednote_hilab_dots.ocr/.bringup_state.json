@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T04:39:45Z",
+  "updated_at": "2026-06-10T04:46:04Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -593,8 +593,15 @@
         "pcc": 1.0
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/lm_head.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_lm_head.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/lm_head.traced_ops.json"
+        ],
+        "notes": "Untied vocab projection Linear 1536->151936 no bias as a single column-parallel ttnn.linear: weight [vocab,hidden] transposed to [hidden,vocab] and vocab-sharded ShardTensorToMesh(dim=-1) on the 1x4 mesh per parallelism plan (placement=shard vocab dim; 151936/4=37984 logits per chip, tile-divisible, no padding); replicated activation in, per-chip logit slices out, recombined on host via ConcatMeshToTensor(dim=-1) per tp-guidance (all_gather left to the generation-phase consumer). reference_impl tt_transformers/tt/lm_head.py DRAM-sharded program configs / column splits deferred to optimization. HiFi4+fp32-acc, bf16; real lm_head.weight re-loaded from checkpoint in the test; PCC 1.000000 vs golden. Guard ok (lint 0, kernels ok, no new host ops). KB entries for kind linear were attention/tensor-manipulation records (nlp_concat_heads_decode, concatenate_heads, flash_mla_prefill, narrow/split/bcast/concat, create_qkv_heads) - none applicable, none used. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 1.0
       },
       "debug": {
         "status": "n/a",
@@ -754,6 +761,12 @@
       "tick": 17,
       "ts": "2026-06-10T04:39:45Z",
       "action": "device[decoder_layer]",
+      "result": "ok"
+    },
+    {
+      "tick": 18,
+      "ts": "2026-06-10T04:46:04Z",
+      "action": "device[lm_head]",
       "result": "ok"
     }
   ],
