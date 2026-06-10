@@ -189,13 +189,15 @@ class TTNNDotsOCRAttention(TTNNModule):
             )
 
         config = self._fallback_torch_layer.config
-        setup_key = (id(self.device), self.head_dim, config.rope_theta, 1.0)
+        rope_params = getattr(config, "rope_parameters", {}) or {}
+        rope_theta = getattr(config, "rope_theta", rope_params.get("rope_theta", 1000000.0))
+        setup_key = (id(self.device), self.head_dim, rope_theta, 1.0)
         if setup_key not in TTNNDotsOCRAttention._shared_rotary_setups:
             TTNNDotsOCRAttention._shared_rotary_setups[setup_key] = BailingRotarySetup(
                 device=self.device,
                 head_dim=self.head_dim,
                 max_seq_len=131072,
-                rope_theta=config.rope_theta,
+                rope_theta=rope_theta,
                 partial_rotary_factor=1.0,
                 rope_convention="half_half",
             )
@@ -362,6 +364,7 @@ class TTNNDotsOCRAttention(TTNNModule):
         attn_output = ttnn.reshape(attn_output, (batch_size, seq_length, self.num_attention_heads * self.head_dim))
 
         attn_output = self.o_proj(attn_output)
+        attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
         return attn_output, None
 
     def forward(

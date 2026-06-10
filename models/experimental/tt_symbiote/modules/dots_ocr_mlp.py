@@ -34,4 +34,5 @@ class TTNNDotsOCRMLP(TTNNModule):
         output = self.down_proj(gate_up)
         ttnn.deallocate(gate_up)
 
+        output = ttnn.to_memory_config(output, ttnn.L1_MEMORY_CONFIG)
         return output

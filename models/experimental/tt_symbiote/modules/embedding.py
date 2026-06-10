@@ -203,8 +203,9 @@ class TTNNBailingRotaryEmbedding(TTNNModule):
         new_layer = cls()
         new_layer._fallback_torch_layer = rotary_emb
         config = rotary_emb.config
+        rope_params = getattr(config, "rope_parameters", {}) or {}
         new_layer._head_dim = config.head_dim
-        new_layer._rope_theta = config.rope_theta
+        new_layer._rope_theta = getattr(config, "rope_theta", rope_params.get("rope_theta", 1000000.0))
         new_layer._partial_rotary_factor = getattr(config, "partial_rotary_factor", 1.0)
         new_layer._max_seq_len = config.max_position_embeddings
         new_layer._attention_scaling = rotary_emb.attention_scaling

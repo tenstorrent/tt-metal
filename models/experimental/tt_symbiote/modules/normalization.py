@@ -213,13 +213,21 @@ class TTNNDistributedRMSNorm(TTNNModule):
         tt_stats = ttnn.rms_norm_pre_all_gather(
             inp, dtype=ttnn.bfloat16, compute_kernel_config=self.compute_kernel_config
         )
-        # AllGather stats — use Ring topology for trace compatibility.
-        # Linear topology may allocate dynamic intermediates not pinned by trace.
+        # AllGather stats — use Ring topology for trace compatibility on the
+        # default path. N150x4 Wormhole cannot route the tiny RMSNorm stats
+        # ring gather from D0 to D3, so use Linear there.
+        topology = (
+            ttnn.Topology.Linear
+            if hasattr(self.device, "arch") and self.device.arch() == ttnn.Arch.WORMHOLE_B0
+            else ttnn.Topology.Ring
+        )
         tt_stats = ttnn.all_gather(
             tt_stats,
             dim=-1,
             num_links=1,
-            topology=ttnn.Topology.Ring,
+            cluster_axis=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=topology,
         )
         # Run distributed rmsnorm part 2
         eps = getattr(self.torch_layer, "variance_epsilon", getattr(self.torch_layer, "eps", 1e-6))

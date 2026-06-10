@@ -12,6 +12,14 @@ from models.experimental.tt_symbiote.core.module import TTNNModule, deallocate_w
 from models.experimental.tt_symbiote.core.run_config import trace_disabled, trace_enabled
 
 
+def _ccl_topology(device):
+    return (
+        ttnn.Topology.Linear
+        if hasattr(device, "arch") and device.arch() == ttnn.Arch.WORMHOLE_B0
+        else ttnn.Topology.Ring
+    )
+
+
 @trace_enabled
 class TTNNLinear(TTNNModule):
     """TTNN-accelerated linear layer."""
@@ -157,7 +165,7 @@ class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
             num_links=1,
             cluster_axis=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Ring,
+            topology=_ccl_topology(self.device),
         )
         if self.tt_bias is not None:
             tt_output += self.tt_bias
@@ -202,7 +210,7 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
             num_links=1,
             cluster_axis=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Ring,
+            topology=_ccl_topology(self.device),
         )
         tt_output = ttnn.all_gather(
             tt_output,
@@ -210,7 +218,7 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
             num_links=1,
             cluster_axis=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Ring,
+            topology=_ccl_topology(self.device),
         )
         if self.tt_bias is not None:
             tt_output += self.tt_bias
