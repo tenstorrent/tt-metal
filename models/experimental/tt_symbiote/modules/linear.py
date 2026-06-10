@@ -87,9 +87,8 @@ def _ccl_num_links(device) -> int:
 def _ccl_worker_kwargs(op_name: str) -> dict:
     specific_name = f"DOTS_OCR_CCL_{op_name.upper()}_NUM_WORKERS_PER_LINK"
     num_workers = os.environ.get(specific_name, os.environ.get("DOTS_OCR_CCL_NUM_WORKERS_PER_LINK"))
-    if num_workers is None:
-        return {}
-    return {"num_workers_per_link": int(num_workers)}
+    n = int(num_workers) if num_workers is not None else 2
+    return {"num_workers_per_link": n}
 
 
 def _largest_divisor_at_most(value: int, limit: int) -> int:

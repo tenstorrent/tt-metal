@@ -410,7 +410,7 @@ class TTNNDotsOCRAttention(TTNNModule):
             self.sdpa.decode_program_config = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
                 q_chunk_size=0,
-                k_chunk_size=0,
+                k_chunk_size=128,
                 exp_approx_mode=True,
             )
             self.sdpa.compute_kernel_config = ttnn.WormholeComputeKernelConfig(

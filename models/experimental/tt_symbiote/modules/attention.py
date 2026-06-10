@@ -222,13 +222,9 @@ class TTNNPagedAttentionKVCache(Cache):
         v_cache = self._tt_value_cache[layer_idx]
         page_table = self._tt_page_table
 
-        ttnn.experimental.paged_update_cache(
+        ttnn.experimental.paged_fused_update_cache(
             k_cache,
             key_states,
-            update_idxs_tensor=current_pos,
-            page_table=page_table,
-        )
-        ttnn.experimental.paged_update_cache(
             v_cache,
             value_states,
             update_idxs_tensor=current_pos,

@@ -529,8 +529,16 @@ class TTNNDotsOCRFusedGateUpColParallel(TTNNLinearLLamaIReplicatedWColSharded):
         n_global = int(weight_t.shape[-1])
         n_per_dev = math.ceil(n_global / num_tp)
 
+        # Wormhole sweep for 32x1536x4480 found the 16c (8x2) DRAM-sharded
+        # path faster than the interleaved 1D-mcast fallback. Keep other
+        # architectures on the existing config selection.
+        num_cores = (
+            16
+            if hasattr(self.device, "arch") and self.device.arch() == ttnn.Arch.WORMHOLE_B0
+            else _GATE_UP_COL_DRAM_SHARDED_NUM_CORES
+        )
         program_config = _decode_gate_up_col_dram_sharded_program_config(
-            k_per_dev=k, n_per_dev=n_per_dev, num_cores=_GATE_UP_COL_DRAM_SHARDED_NUM_CORES
+            k_per_dev=k, n_per_dev=n_per_dev, num_cores=num_cores
         )
         if program_config is None:
             # k not tile-divisible across the compute grid; keep the interleaved path.
