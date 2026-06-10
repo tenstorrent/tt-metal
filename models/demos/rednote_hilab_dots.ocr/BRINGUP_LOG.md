@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T03:57:57Z
+**Updated:** 2026-06-10T04:05:51Z
 
 ## Block Status
 
@@ -51,7 +51,7 @@
 | embedding | optimization | pending | — | 0 |  |
 | embedding | real_weights | pending | — | 0 |  |
 | text_rmsnorm | reference | done | 1.000000 | 0 | Qwen2RMSNorm eps=1e-6, fp32 variance then weight*x, real layers.0 input_layernorm weight |
-| text_rmsnorm | ttnn | pending | — | 0 |  |
+| text_rmsnorm | ttnn | done | 0.999986 | 0 | Qwen2RMSNorm eps=1e-6 via fused ttnn.rms_norm ([1,1,dim//32,32] ROW_MAJOR gamma, HiFi2+fp32-acc per reference_impl models/common/rmsnorm.py) PLUS the parallelism-plan distributed path: rms_norm_pre_all_gather -> sync ttnn.all_gather(dim=3, Topology.Linear; async deferred to optimization per tp-guidance) -> rms_norm_post_all_gather with dim-2-sharded gamma (KB ttnn_rms_norm_post_all_gather cited; KB ttnn_pow chain fused into ttnn.rms_norm). Real layers.0 input_layernorm weight; 1x4 mesh; replicated path compared single-device vs golden (PCC 0.999986), distributed path concat-on-hidden vs golden (PCC 0.999986). Guard ok (lint 0, kernels ok, no new host ops). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | text_rmsnorm | debug | n/a | — | 0 |  |
 | text_rmsnorm | optimization | pending | — | 0 |  |
 | text_rmsnorm | real_weights | pending | — | 0 |  |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 4 (2026-06-10T02:38:20Z): reference[text_rmsnorm,text_attention,text_mlp,decoder_layer] — ok
 - tick 5 (2026-06-10T02:43:31Z): reference[lm_head] — ok
 - tick 6 (2026-06-10T02:52:24Z): device[vision_patch_embed] — ok
 - tick 7 (2026-06-10T02:59:42Z): device[vision_rmsnorm] — ok
@@ -94,6 +93,7 @@
 - tick 11 (2026-06-10T03:32:56Z): device[patch_merger] — ok
 - tick 12 (2026-06-10T03:50:19Z): device[vision_transformer] — ok
 - tick 13 (2026-06-10T03:57:57Z): device[embedding] — ok
+- tick 14 (2026-06-10T04:05:51Z): device[text_rmsnorm] — ok
 
 ## Host-Resident Exceptions
 

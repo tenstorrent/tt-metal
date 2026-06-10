@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T03:57:57Z",
+  "updated_at": "2026-06-10T04:05:51Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -403,8 +403,15 @@
         "pcc": 1.0
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/text_rmsnorm.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_text_rmsnorm.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/text_rmsnorm.traced_ops.json"
+        ],
+        "notes": "Qwen2RMSNorm eps=1e-6 via fused ttnn.rms_norm ([1,1,dim//32,32] ROW_MAJOR gamma, HiFi2+fp32-acc per reference_impl models/common/rmsnorm.py) PLUS the parallelism-plan distributed path: rms_norm_pre_all_gather -> sync ttnn.all_gather(dim=3, Topology.Linear; async deferred to optimization per tp-guidance) -> rms_norm_post_all_gather with dim-2-sharded gamma (KB ttnn_rms_norm_post_all_gather cited; KB ttnn_pow chain fused into ttnn.rms_norm). Real layers.0 input_layernorm weight; 1x4 mesh; replicated path compared single-device vs golden (PCC 0.999986), distributed path concat-on-hidden vs golden (PCC 0.999986). Guard ok (lint 0, kernels ok, no new host ops). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999986
       },
       "debug": {
         "status": "n/a",
@@ -702,6 +709,12 @@
       "tick": 13,
       "ts": "2026-06-10T03:57:57Z",
       "action": "device[embedding]",
+      "result": "ok"
+    },
+    {
+      "tick": 14,
+      "ts": "2026-06-10T04:05:51Z",
+      "action": "device[text_rmsnorm]",
       "result": "ok"
     }
   ],
