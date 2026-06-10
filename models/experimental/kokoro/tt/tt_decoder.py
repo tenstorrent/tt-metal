@@ -121,6 +121,7 @@ def preprocess_tt_decoder(
     weights_dtype=ttnn.float32,
     conv_weights_dtype=ttnn.float32,
     source_stft_dtype=ttnn.float32,
+    disable_complex: bool = False,
 ) -> TTDecoderParams:
     """Upload a reference ``Decoder`` to device for :class:`TTDecoder`.
 
@@ -170,6 +171,7 @@ def preprocess_tt_decoder(
         weights_dtype=weights_dtype,
         conv_weights_dtype=conv_weights_dtype,
         source_stft_dtype=source_stft_dtype,
+        disable_complex=disable_complex,
     )
 
     return TTDecoderParams(

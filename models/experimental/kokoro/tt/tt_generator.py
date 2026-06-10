@@ -63,6 +63,11 @@ from .tt_source_module_hn_nsf import (
 from .tt_matmul_memory import (
     maybe_reshard_to_caller,
 )
+from .tt_custom_stft import (
+    TTCustomSTFT,
+    TTCustomSTFTParams,
+    preprocess_tt_custom_stft,
+)
 from .tt_torch_stft import (
     TTTorchSTFT,
     TTTorchSTFTParams,
@@ -171,7 +176,7 @@ class TTGeneratorParams:
     """Device-resident weights for :class:`TTGenerator`."""
 
     m_source: TTSourceModuleHnNSFParams
-    stft: TTTorchSTFTParams
+    stft: "TTTorchSTFTParams | TTCustomSTFTParams"
     stages: tuple[TTGeneratorUpsampleStageParams, ...]
     conv_post: TTConv1dParams
 
@@ -191,6 +196,7 @@ def preprocess_tt_generator(
     weights_dtype=ttnn.float32,
     conv_weights_dtype=ttnn.float32,
     source_stft_dtype=ttnn.float32,
+    disable_complex: bool = False,
 ) -> TTGeneratorParams:
     """Upload a reference ``Generator`` to device for :class:`TTGenerator`.
 
@@ -242,16 +248,26 @@ def preprocess_tt_generator(
         weights_dtype=source_stft_dtype,
     )
 
-    # STFT: same input length used for both transform and inverse. fp32 matrices to keep
-    # ``atan2`` of small real/imag pairs precise.
-    stft = preprocess_tt_torch_stft(
-        filter_length=int(module.stft.filter_length),
-        hop_length=hop_size,
-        win_length=int(module.stft.win_length),
-        input_length=har_time_len,
-        device=device,
-        weights_dtype=source_stft_dtype,
-    )
+    # STFT: ``disable_complex`` selects the istftnet ``disable_complex=True`` formulation
+    # (:class:`TTCustomSTFT`, conv2d/conv_transpose2d, length-agnostic, no fallback) to match a
+    # reference built with ``disable_complex=True``.  Otherwise the ``TorchSTFT`` port is used.
+    # fp32 weights keep ``atan2`` of small real/imag pairs precise either way.
+    if disable_complex:
+        stft: "TTTorchSTFTParams | TTCustomSTFTParams" = preprocess_tt_custom_stft(
+            filter_length=int(module.stft.filter_length),
+            hop_length=hop_size,
+            win_length=int(module.stft.win_length),
+            weights_dtype=source_stft_dtype,
+        )
+    else:
+        stft = preprocess_tt_torch_stft(
+            filter_length=int(module.stft.filter_length),
+            hop_length=hop_size,
+            win_length=int(module.stft.win_length),
+            input_length=har_time_len,
+            device=device,
+            weights_dtype=source_stft_dtype,
+        )
 
     stages: list[TTGeneratorUpsampleStageParams] = []
     for i in range(num_upsamples):
@@ -368,11 +384,16 @@ class TTGenerator:
             params.m_source,
             use_torch_phase_fallback=use_torch_phase_fallback,
         )
-        self._stft = TTTorchSTFT(
-            device,
-            params.stft,
-            use_torch_stft_fallback=use_torch_stft_fallback,
-        )
+        # The params type selects the STFT implementation: ``TTCustomSTFT`` (no fallback) for the
+        # istftnet ``disable_complex=True`` port, else the ``TorchSTFT`` port with its CPU fallbacks.
+        if isinstance(params.stft, TTCustomSTFTParams):
+            self._stft = TTCustomSTFT(device, params.stft)
+        else:
+            self._stft = TTTorchSTFT(
+                device,
+                params.stft,
+                use_torch_stft_fallback=use_torch_stft_fallback,
+            )
         # Keep the full harmonic-source path (SineGen + Source linear + STFT) on the same
         # precision profile as the rest of the generator to avoid mixed-fidelity phase drift.
         self._m_source.compute_kernel_config = self.compute_kernel_config
@@ -408,6 +429,7 @@ class TTGenerator:
         if len(f_shape) == 2:
             ttnn.deallocate(f0_b_t_1)
         f0_b_t_1 = f0_fp32
+        # On-device nearest upsample (matches ``nn.Upsample(scale_factor=upsample_scale_full)``).
         f0_har = _upsample_nearest_axis1(
             f0_b_t_1,
             scale=p.upsample_scale_full,

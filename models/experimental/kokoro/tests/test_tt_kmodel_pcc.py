@@ -328,6 +328,95 @@ def test_tt_kmodel_generator_no_torch_fallback_pcc(device):
 
 
 # ---------------------------------------------------------------------------
+# On-device CustomSTFT path (istftnet disable_complex=True), no fallback
+# ---------------------------------------------------------------------------
+
+
+def test_tt_kmodel_custom_stft_no_fallback_pcc(device):
+    """Full pipeline with the on-device :class:`TTCustomSTFT` port — ``disable_complex=True``.
+
+    The reference ``KModel`` is built with ``disable_complex=True``, so its vocoder STFT is the
+    conv1d/conv_transpose1d ``CustomSTFT`` (replicate pad, uniform ``1/N`` inverse, no COLA).
+    ``disable_complex=True`` runs the *faithful* device port of that exact formulation
+    (:class:`~models.experimental.kokoro.tt.tt_custom_stft.TTCustomSTFT`) — pure TTNN conv2d /
+    conv_transpose2d, no ``torch.stft`` and no CPU fallback anywhere.
+
+    No fallbacks are enabled, so the harmonic-source path (SineGen phase chain + STFT) runs entirely
+    on device and is bounded by the documented BH BF16 ceiling (sine_wavs ~0.21, near-zero STFT bin
+    phase).  The per-op fidelity of the STFT port itself is proved by ``test_tt_custom_stft_pcc.py``
+    (transform / inverse / round-trip PCC > 0.99 on random input).  This test asserts the pipeline
+    runs end-to-end, produces finite non-zero audio, and clears the no-fallback PCC floor.
+    """
+    ckpt_path = _find_checkpoint()
+    if ckpt_path is None:
+        pytest.skip("Kokoro-82M checkpoint not found locally.")
+
+    ref, params, phonemes, ref_s = _setup(ckpt_path, device)
+    y_ref = _ref_audio(ref, phonemes, ref_s)
+
+    with _zero_noise():
+        tt_model = TTKModel(
+            device,
+            ref,
+            params,
+            use_torch_stft_fallback=False,
+            use_torch_phase_fallback=False,
+            disable_complex=True,
+        )
+    y_hat = tt_model(phonemes=phonemes, ref_s=ref_s, speed=1.0, deterministic=True).audio.detach().float().squeeze()
+
+    assert y_hat.shape == y_ref.shape, (y_hat.shape, y_ref.shape)
+    assert torch.isfinite(y_hat).all(), "TTKModel (custom STFT, no fallback) produced NaN/Inf"
+    assert y_hat.abs().max().item() > 1e-3, "TTKModel (custom STFT, no fallback) produced ~zero output"
+
+    _, pcc = comp_pcc(y_ref.unsqueeze(0), y_hat.unsqueeze(0), pcc=0.0)
+    print(f"\nTTKModel custom-STFT no-fallback PCC: {pcc:.6f}  phonemes={len(phonemes)}")
+    # Same no-fallback BH BF16 floor as config A; the on-device CustomSTFT now matches the
+    # reference's STFT math exactly (no TorchSTFT-vs-CustomSTFT mismatch).
+    assert pcc > 0.25, f"PCC {pcc:.6f} is below the no-fallback minimum floor with custom STFT"
+
+
+def test_tt_kmodel_custom_stft_phase_fallback_pcc(device):
+    """On-device CustomSTFT + SineGen phase fallback — ``disable_complex=True, phase fallback=True``.
+
+    Same faithful on-device :class:`TTCustomSTFT` as the no-fallback test, but the dominant BH BF16
+    failure point — the SineGen phase chain (the small cumsum × 2π × upsample_scale that collapses
+    sine_wavs to ~0.21 PCC on device) — is moved to CPU float32 via ``use_torch_phase_fallback``.
+    The STFT itself stays entirely on device (no ``torch.stft``).  Isolating the phase fallback on
+    top of the on-device CustomSTFT quantifies how much of the no-fallback deficit is the harmonic
+    source vs the STFT (cf. the empirical sweep in this module's docstring, where SineGen is the
+    largest single delta, +0.089).
+    """
+    ckpt_path = _find_checkpoint()
+    if ckpt_path is None:
+        pytest.skip("Kokoro-82M checkpoint not found locally.")
+
+    ref, params, phonemes, ref_s = _setup(ckpt_path, device)
+    y_ref = _ref_audio(ref, phonemes, ref_s)
+
+    with _zero_noise():
+        tt_model = TTKModel(
+            device,
+            ref,
+            params,
+            use_torch_stft_fallback=False,
+            use_torch_phase_fallback=True,
+            disable_complex=True,
+        )
+    y_hat = tt_model(phonemes=phonemes, ref_s=ref_s, speed=1.0, deterministic=True).audio.detach().float().squeeze()
+
+    assert y_hat.shape == y_ref.shape, (y_hat.shape, y_ref.shape)
+    assert torch.isfinite(y_hat).all(), "TTKModel (custom STFT + phase fallback) produced NaN/Inf"
+    assert y_hat.abs().max().item() > 1e-3, "TTKModel (custom STFT + phase fallback) produced ~zero output"
+
+    _, pcc = comp_pcc(y_ref.unsqueeze(0), y_hat.unsqueeze(0), pcc=0.0)
+    print(f"\nTTKModel custom-STFT + phase-fallback PCC: {pcc:.6f}  phonemes={len(phonemes)}")
+    # Phase fallback removes the SineGen ceiling (the largest single fallback delta); with the STFT
+    # still on device this clears the SineGen-only sweep value (~0.39) by a margin.
+    assert pcc > 0.38, f"PCC {pcc:.6f} below floor with custom STFT + phase fallback"
+
+
+# ---------------------------------------------------------------------------
 # Combined stft + phase fallback path
 # ---------------------------------------------------------------------------
 
