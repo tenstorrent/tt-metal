@@ -267,3 +267,122 @@ Next lever: async CCL (~45% CCL share).
 
 Tracy artifacts: `perf/traced/vision_tower_bf16_11k_traced.csv` (step
 1), `perf/traced/vision_tower_bf16_tp4_11k_traced.csv` (final).
+
+---
+
+# Perf REDO 3 — decode fused kernels (tick 52)
+
+The decode step competes on op count (948-1213 ops/step inside the
+trace, 1-row matmuls dispatch-bound — tick-50 verdict). This pass works
+the decode fused-kernel checklist, ONE change at a time, e2e WER gate
+(`tests/test_e2e_ocr.py`, 5 samples vs HF) re-run after each step.
+Baseline re-measured: 18.17 ms/step (bench --traced --bench-replays 200).
+
+## (a)+(b) Fused fp32 rope + nlp_create_qkv_heads_decode  — KEPT
+
+- Rope collapsed from 14 ops/layer (2x slice/slice/neg/concat/mul/mul/add)
+  to 4 (matmul/mul/mul/add) applied PRE-head-split on the fused QKV row:
+  `rot = xqkv @ R` where R is the 0/±1 block-diagonal HF rotate-half
+  matrix with a ZERO v-block, then `xqkv*cos_cat + rot*sin_cat` with
+  cos=1/sin=0 over v. 0/±1 selection in an fp32 matmul is exact math —
+  the fp32 attention-sink mandate is untouched. Decode-mode
+  `rotary_embedding_llama` itself was REJECTED structurally: the kernel
+  is bf16-only (all tensors), requires the META rope convention (its
+  32x32 tile trans_mat cannot express the HF half-swap, so q/k weight
+  rows + the fp32-prefill K cache would have to flip convention), and
+  parallelizes over batch=1 -> 1 core here. The fp32 matmul-rope cuts
+  more ops with zero numerics risk.
+- `nlp_create_qkv_heads_decode` then hands k/v straight to
+  `paged_update_cache` in its HEIGHT_SHARDED [1,1,heads,hd] layout —
+  the old permute + interleaved_to_sharded pairs are gone.
+- Framework bug found + worked around: with a bf16 DRAM-interleaved
+  input, `nlp_create_qkv_heads_decode` silently ZEROES odd head rows on
+  Blackhole (bf16 sub-tile lines are 32B; DRAM NoC alignment is 64B).
+  fp32+DRAM and bf16+L1 are correct (measured with a synthetic-pattern
+  probe; nq 3 or 4, nkv 1-3 all reproduce). The block stages the bf16
+  input in L1.
+- Step (a)-as-instructed (fp32, explicit core kept): 18.17 -> 17.57 ms.
+  Gate PASS (WER 0.0000 == HF, 5/5 exact).
+
+## (c) bf16 scaled_dot_product_attention_decode, Q pre-scaled — KEPT
+
+- Q pre-scale: rope is linear in x, so 1/sqrt(head_dim) is folded into
+  the cos/sin q-section ON HOST (zero device ops); the kernel runs
+  scale=1.0 and every QK logit shrinks ±3122 -> ±276 before bf16
+  softmax sees it.
+- KV cache fp32 -> bf16 [1, 1, max_seq, hd] (kernel dtype requirement),
+  and the q3|k3|v3 replicated per-chip packing became q3|k1|v1: the
+  SDPA decode kernel maps the chip's 3 Q heads onto its single KV head
+  natively (GQA) — 44% fewer QKV weight bytes/chip, 3x less cache
+  traffic, and nkv=1 re-enables the kernel's sharded output for
+  `nlp_concat_heads_decode`. Prefill keeps the fp32 explicit core
+  (expands k1/v1 on device) and typecasts post-rope K/V into the cache.
+- Causality from the runtime cur_pos tensor (the persistent slot buffer
+  shared with paged_update_cache); the streamed [1,1,1,3200] decode
+  mask + its per-step H2D copy are deleted.
+- SDPA decode program config: 8x8 grid (kernel TT_FATALs >64
+  cores/head), q_chunk 32, k_chunk 128, HiFi2 + fp32 dest acc,
+  exp_approx_mode=False.
+- 17.57 -> 10.76 ms/step. Gate PASS (WER 0.0000 == HF, 5/5 exact, all
+  ~115 greedy argmax decisions match HF through the layer-0 sink —
+  the near-tie validation). Single-layer harness PCC vs fp32 torch
+  reference: 0.99977 (vs 0.99980 for the old fp32 explicit core).
+
+## (d) all_gather_matmul on row-parallel o_proj — KEPT (Linear form)
+
+- The fused `ttnn.experimental.all_gather_matmul_async` is
+  Ring-topology-only (tt_transformers gates it on
+  `ccl_topology == Topology.Ring`); qb's 1x4 mesh is a Linear line, so
+  the applicable form is the gather->matmul restructure: wo REPLICATED
+  full-width, the per-chip concat-heads row (384 wide, bf16) is
+  all_gathered on dim=3 into full head order, ONE matmul produces the
+  complete replicated output. The reduce_scatter+all_gather all-reduce
+  of fp32 1536-wide partials disappears (2 CCL ops -> 1 per layer,
+  prefill and decode). MLP down_proj keeps RS+AG: replicating its
+  [8960,1536] weight would cost ~770 MB/chip.
+- Wall flat (10.76 -> 10.75 ms — decode CCL is latency-bound), but
+  traced CCL kernel time/step 2275 -> 1817 us (-20%) and 28 ops/step
+  fewer. Exact-math change; kept. Weight cost +~100 MB/chip.
+- Prefill side effect: prefill_ms 267 -> ~90 (lighter QKV + single-CCL
+  o_proj).
+
+## Result
+
+| metric | tick-50 | REDO 3 | speedup |
+|---|---|---|---|
+| steady_step_ms (bench 200 replays) | 18.07 | 10.63 | 1.70x |
+| ocr() steady_step_ms | 18.08 | 10.64 | 1.70x |
+| total_ms (gate doc, 11 steps) | 321 | 237.8 | 1.35x |
+| traced kernel sum / step (dev0) | 16.14 ms | 9.03 ms | 1.79x |
+| ops/step in trace | 1213 | 679 | -44% |
+
+Target <= 12 ms/tok MET. Top-10 traced (per-GCC mean over 29 replay
+sessions, dev0, final config):
+
+| us/replay | % | calls | op |
+|---|---|---|---|
+| 5375 | 59.5% | 169 | MatmulDeviceOperation |
+| 1307 | 14.5% | 58 | AllGatherDeviceOperation |
+| 747 | 8.3% | 37 | LayerNormDeviceOperation |
+| 510 | 5.6% | 28 | ReduceScatterDeviceOperation |
+| 470 | 5.2% | 168 | BinaryNgDeviceOperation |
+| 116 | 1.3% | 28 | SdpaDecodeDeviceOperation |
+| 114 | 1.3% | 28 | UnaryDeviceOperation |
+| 102 | 1.1% | 36 | PagedUpdateCacheDeviceOperation |
+| 58 | 0.6% | 1 | UntilizeDeviceOperation |
+| 54 | 0.6% | 29 | TypecastDeviceOperation |
+
+Parity: e2e gate re-run after EACH kept step and once more on the final
+config — WER 0.0000 == HF 0.0000, 5/5 exact every time. Block tests:
+text_attention PCC 0.999050 (was 0.999049), decoder_layer 0.999944
+(was 0.999945).
+
+Remaining levers (next pass): matmul 59.5% at 169 calls/step is
+dispatch-latency floor — fusing gate/up into one wide matmul and
+QKV+rope-rot into one (2x fewer dispatches on the hot path); MLP
+all-reduce 1.8 ms CCL slice via async CCL; host floor ~1.6 ms/step
+(3 H2D copies + 1-int readback) via on-device rope-row computation
+from the slot tensor.
+
+Tracy artifact: `perf/traced/cpp_device_perf_report_kv_redo3_traced.csv`
+(traced dev0 rows, replay sessions 1-10/29, final config).

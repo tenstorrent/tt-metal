@@ -191,11 +191,9 @@ class TtOCRModel(LightweightModule):
         # Decode-trace state (perf phase): persistent per-step input buffers,
         # host-tensor caches, captured trace id + output handle. All lazy.
         self._pt_ids = None  # uint32 [1,1,1,32] RM token-id buffer
-        self._pt_cos = None  # fp32 [1,hpd,1,hd] rope cos buffer
-        self._pt_sin = None  # fp32 [1,hpd,1,hd] rope sin buffer
-        self._pt_mask = None  # fp32 [1,1,1,max_cache_seq] decode mask buffer
+        self._pt_cos = None  # fp32 [1,1,1,qkv_width] fused-rope cos_cat buffer
+        self._pt_sin = None  # fp32 [1,1,1,qkv_width] fused-rope sin_cat buffer
         self._rope_host = {}  # slot -> (cos,sin) host tiles
-        self._mask_host = {}  # slot -> host mask tile
         self._pos_host = {}  # slot -> host int32 [1]
         self._decode_trace_id = None
         self._decode_tok_out = None
@@ -326,19 +324,18 @@ class TtOCRModel(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         rot_step = self.layers[0].prepare_decode_rope(slot)
-        decode_mask = self.layers[0].prepare_decode_mask(slot, self.max_cache_seq)
         pos_host = ttnn.from_torch(torch.tensor([slot], dtype=torch.int32), dtype=ttnn.int32)
         ttnn.copy_host_to_device_tensor(pos_host, self.kv_caches[0]["pos"])  # shared by all layers
         h = x
         for layer, kv in zip(self.layers, self.kv_caches):
-            h_next = layer.forward_decode(h, kv, rot_step, decode_mask)
+            h_next = layer.forward_decode(h, kv, rot_step)
             ttnn.deallocate(h)
             h = h_next
         normed = self.final_norm(h)
         ttnn.deallocate(h)
         tok = self._lm_head_argmax(normed, 0)
         ttnn.deallocate(normed)
-        for t in (*rot_step, decode_mask):
+        for t in rot_step:
             ttnn.deallocate(t)
         return tok
 
@@ -346,29 +343,23 @@ class TtOCRModel(LightweightModule):
     # Traced decode step (perf phase, skills/perf sub-pass 1)
     # ------------------------------------------------------------------
     def _host_decode_inputs(self, slot: int):
-        """Host-side tiles for ``slot`` (cached): rope cos/sin, decode mask, pos."""
+        """Host-side tiles for ``slot`` (cached): fused-rope cos/sin rows, pos."""
         attn = self.layers[0].self_attn
         rep = ttnn.ReplicateTensorToMesh(self.mesh_device)
         if slot not in self._rope_host:
-            inv_freq = 1.0 / (1e6 ** (torch.arange(0, attn.head_dim, 2, dtype=torch.float) / attn.head_dim))
-            freqs = float(slot) * inv_freq
-            emb = torch.cat((freqs, freqs), dim=-1)
             self._rope_host[slot] = tuple(
                 ttnn.from_torch(
-                    t.reshape(1, 1, 1, attn.head_dim).expand(1, attn.heads_per_device, 1, attn.head_dim).contiguous(),
+                    t,
                     dtype=ttnn.float32,
                     layout=ttnn.TILE_LAYOUT,
                     mesh_mapper=rep,
                 )
-                for t in (emb.cos(), emb.sin())
+                for t in attn.decode_rope_rows(slot)
             )
-            mask = torch.full((1, 1, 1, self.max_cache_seq), torch.finfo(torch.float32).min / 2)
-            mask[..., : slot + 1] = 0.0
-            self._mask_host[slot] = ttnn.from_torch(mask, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, mesh_mapper=rep)
             self._pos_host[slot] = ttnn.from_torch(
                 torch.tensor([slot], dtype=torch.int32), dtype=ttnn.int32, mesh_mapper=rep
             )
-        return self._rope_host[slot], self._mask_host[slot], self._pos_host[slot]
+        return self._rope_host[slot], self._pos_host[slot]
 
     def _ensure_decode_buffers(self, hidden: int):
         """Persistent per-step input buffers (stable addresses for trace replay)."""
@@ -380,12 +371,9 @@ class TtOCRModel(LightweightModule):
         self._pt_ids = ttnn.from_torch(
             torch.zeros(1, 1, 1, 32, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, **common
         )
-        zeros = torch.zeros(1, attn.heads_per_device, 1, attn.head_dim)
+        zeros = torch.zeros(1, 1, 1, attn.qkv_width)  # fused-rope cos/sin rows
         self._pt_cos = ttnn.from_torch(zeros, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, **common)
         self._pt_sin = ttnn.from_torch(zeros, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, **common)
-        self._pt_mask = ttnn.from_torch(
-            torch.zeros(1, 1, 1, self.max_cache_seq), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, **common
-        )
 
     def _write_decode_inputs(self, token: int, slot: int):
         """Four small H2D copies into the persistent buffers (the per-step host work)."""
@@ -398,10 +386,9 @@ class TtOCRModel(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         ttnn.copy_host_to_device_tensor(ids_host, self._pt_ids)
-        (cos_h, sin_h), mask_h, pos_h = self._host_decode_inputs(slot)
+        (cos_h, sin_h), pos_h = self._host_decode_inputs(slot)
         ttnn.copy_host_to_device_tensor(cos_h, self._pt_cos)
         ttnn.copy_host_to_device_tensor(sin_h, self._pt_sin)
-        ttnn.copy_host_to_device_tensor(mask_h, self._pt_mask)
         ttnn.copy_host_to_device_tensor(pos_h, self.kv_caches[0]["pos"])  # shared by all layers
 
     def _decode_body_traced(self) -> ttnn.Tensor:
@@ -417,7 +404,7 @@ class TtOCRModel(LightweightModule):
         h = ttnn.typecast(x, ttnn.float32)
         ttnn.deallocate(x)
         for layer, kv in zip(self.layers, self.kv_caches):
-            h_next = layer.forward_decode(h, kv, (self._pt_cos, self._pt_sin), self._pt_mask)
+            h_next = layer.forward_decode(h, kv, (self._pt_cos, self._pt_sin))
             ttnn.deallocate(h)
             h = h_next
         normed = self.final_norm(h)

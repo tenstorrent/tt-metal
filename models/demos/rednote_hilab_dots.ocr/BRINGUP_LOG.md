@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T17:56:03Z
+**Updated:** 2026-06-10T18:51:26Z
 
 ## Block Status
 
@@ -80,11 +80,10 @@
 
 | Name | Input | Output | needs_ar | Generation | Perf |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| ocr | image | text | yes | done | pending |
+| ocr | image | text | yes | done | done |
 
 ## Recent Ticks
 
-- tick 42 (2026-06-10T07:58:25Z): device[text_mlp] — ok
 - tick 43 (2026-06-10T08:06:18Z): device[decoder_layer] — ok
 - tick 44 (2026-06-10T08:13:43Z): device[lm_head] — ok
 - tick 45 (2026-06-10T08:30:56Z): generation[ocr] — fail
@@ -94,6 +93,7 @@
 - tick 49 (2026-06-10T10:24:17Z): device[ocr] — ok
 - tick 50 (2026-06-10T10:50:09Z): perf[ocr] — ok
 - tick 51 (2026-06-10T11:16:02Z): device[vision_transformer] — ok
+- tick 52 (2026-06-10T18:51:26Z): perf[ocr] — ok
 
 ## Host-Resident Exceptions
 

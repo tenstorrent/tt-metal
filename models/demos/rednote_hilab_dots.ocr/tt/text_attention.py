@@ -113,21 +113,20 @@ class TtTextAttention(LightweightModule):
         hpd = num_heads // num_devices  # Q heads per device (qb 1x4: 3)
         self.heads_per_device = hpd
 
-        # kv_replication: each chip serves ONE KV-head group; replicate that
-        # head's K/V rows up to hpd so the fp32 attention core is plain MHA
-        # (q/k/v all hpd heads, no GQA broadcast).
+        # kv_replication: each chip serves ONE KV-head group and stores that
+        # head's K/V rows ONCE (q3|k1|v1 per-chip packing). Prefill expands
+        # K/V to hpd head copies on device for its MHA fp32 core; the decode
+        # SDPA kernel consumes the single KV head natively (GQA, perf REDO
+        # 3 — drops 44% of the per-chip QKV weight bytes and 3x of the KV
+        # cache traffic vs the old q3|k3|v3 replicated packing).
         per_dev_w, per_dev_b = [], []
         for d in range(num_devices):
             q_rows = slice(d * hpd * head_dim, (d + 1) * hpd * head_dim)
             g = (d * num_kv_heads) // num_devices  # this chip's KV head
             kv_rows = slice(g * head_dim, (g + 1) * head_dim)
-            wk = k_w[kv_rows].repeat(hpd, 1)
-            wv = v_w[kv_rows].repeat(hpd, 1)
-            bk = k_b[kv_rows].repeat(hpd)
-            bv = v_b[kv_rows].repeat(hpd)
-            per_dev_w.append(torch.cat([q_w[q_rows], wk, wv], dim=0))
-            per_dev_b.append(torch.cat([q_b[q_rows], bk, bv], dim=0))
-        fused_w = torch.cat(per_dev_w, dim=0)  # [N*3*hpd*hd, hidden]
+            per_dev_w.append(torch.cat([q_w[q_rows], k_w[kv_rows], v_w[kv_rows]], dim=0))
+            per_dev_b.append(torch.cat([q_b[q_rows], k_b[kv_rows], v_b[kv_rows]], dim=0))
+        fused_w = torch.cat(per_dev_w, dim=0)  # [N*(hpd+2)*hd, hidden]
         fused_b = torch.cat(per_dev_b, dim=0)
 
         shard_cols = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
@@ -150,17 +149,23 @@ class TtTextAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=shard_cols,
         )
-        # o_proj row-parallel: input rows follow the Q-head order, so a plain
-        # dim=-2 shard of W^T gives chip d the rows of its own 3 heads; the
-        # matmul yields a PARTIAL [.., hidden] sum per chip (all-reduced in
-        # forward).
+        # o_proj all_gather->matmul (perf REDO 3 lever d, Linear-topology
+        # form): the weight is REPLICATED full-width and the per-chip
+        # concat-heads activation (hpd*hd wide) is all_gathered on dim=3
+        # into the full head order, then ONE matmul yields the complete
+        # replicated output — no partial sums, so the old reduce_scatter +
+        # all_gather pair disappears (2 CCL ops -> 1, and the gathered
+        # payload is the narrow heads row, not the full-hidden partials).
+        # The fused ttnn.experimental.all_gather_matmul_async kernel itself
+        # is Ring-topology-only (tt_transformers gates it on
+        # ccl_topology == Topology.Ring); qb's 1x4 mesh is a Linear line.
         self.wo = ttnn.from_torch(
             o_w.transpose(-2, -1).reshape(1, 1, num_heads * head_dim, hidden).contiguous(),
             dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-2) if num_devices > 1 else replicate,
+            mesh_mapper=replicate,
         )
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -168,6 +173,68 @@ class TtTextAttention(LightweightModule):
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
+        )
+
+        # Decode fused-rope constant (perf REDO 3): rotate_half as ONE fp32
+        # matmul on the fused QKV row. R is block-diagonal with the HF
+        # rotate-half map per q/k head block and ZEROS over the v block, so
+        # rot = xqkv @ R gives [-x2|x1] per q/k head and 0 for v; the rope
+        # then is xqkv*cos_cat + rot*sin_cat with cos_cat=1/sin_cat=0 over v
+        # (v passes through EXACTLY). 0/±1 selection in fp32 matmul is exact
+        # math — bit-identical to the old slice/neg/concat chain — so the
+        # fp32 attention-sink mandate is untouched while 14 rope ops/layer
+        # collapse to 4 (matmul, mul, mul, add) applied pre-head-split.
+        self.qkv_width = (hpd + 2) * head_dim  # per-chip fused q|k|v row width
+        half = head_dim // 2
+        r_head = torch.zeros(head_dim, head_dim)
+        for j in range(half):
+            r_head[j + half, j] = -1.0
+            r_head[j, j + half] = 1.0
+        rot_full = torch.zeros(self.qkv_width, self.qkv_width)
+        for h in range(hpd + 1):  # q heads then the single k head; v block stays zero
+            s = h * head_dim
+            rot_full[s : s + head_dim, s : s + head_dim] = r_head
+        self.rope_rot = ttnn.from_torch(
+            rot_full.reshape(1, 1, self.qkv_width, self.qkv_width),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=replicate,
+        )
+        self.heads_l1_height_sharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+
+        # Decode SDPA (perf REDO 3 lever c): the fused bf16-only
+        # scaled_dot_product_attention_decode kernel, with Q PRE-SCALED by
+        # 1/sqrt(head_dim) (folded into the fused-rope cos/sin q-section on
+        # host — zero extra ops) and scale=1.0 in the kernel, so every QK
+        # logit shrinks from ±3122 to ±276 before bf16 softmax sees it
+        # (taming the Qwen2 attention sink). KV cache stores bf16 to feed
+        # the kernel. Gated by the e2e WER parity test like every step.
+        self.decode_q_prescale = head_dim**-0.5
+        grid = mesh_device.compute_with_storage_grid_size()
+        self.sdpa_out_mem_cfg = ttnn.create_sharded_memory_config(
+            shape=(32, head_dim),  # B=1 user -> 1 core, heads padded to a tile
+            core_grid=ttnn.num_cores_to_corerangeset(1, grid, row_wise=True),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+        # 8x8 grid: the decode kernel tree-reduces across cores per KV head,
+        # capped at 64 cores/head (the full 110-core default TT_FATALs with
+        # B=1, nkv=1). exp_approx_mode=False: exact softmax exp (±3122-sink
+        # numerics; bf16 already costs precision, don't stack approx exp).
+        self.sdpa_decode_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            q_chunk_size=32,
+            k_chunk_size=128,
+            exp_approx_mode=False,
         )
 
     # ------------------------------------------------------------------
@@ -178,13 +245,12 @@ class TtTextAttention(LightweightModule):
         """Replicated fp32 HF-convention cos/sin device tensors.
 
         cos/sin: [batch, seq, head_dim] HF-convention tables from
-        reference text_rope_cos_sin (theta=1e6). Pre-expanded to
-        [1, heads_per_device, seq, head_dim] for the explicit fp32 rope.
+        reference text_rope_cos_sin (theta=1e6). Kept [1, 1, seq, head_dim];
+        the explicit fp32 rope broadcasts them over the head dim.
         """
 
         def _to_dev(t):
-            t = t.float().reshape(1, 1, t.shape[-2], t.shape[-1])
-            t = t.expand(1, self.heads_per_device, t.shape[-2], t.shape[-1]).contiguous()
+            t = t.float().reshape(1, 1, t.shape[-2], t.shape[-1]).contiguous()
             return ttnn.from_torch(
                 t,
                 dtype=ttnn.float32,
@@ -209,77 +275,69 @@ class TtTextAttention(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-    def prepare_decode_rope(self, position: int, theta: float = 1e6):
-        """Replicated fp32 cos/sin [1, heads_per_device, 1, head_dim] for ONE position.
+    def decode_rope_rows(self, position: int, theta: float = 1e6):
+        """Host fp32 (cos_cat, sin_cat) [1, 1, 1, qkv_width] for ONE position.
 
-        Same HF-convention table as reference text_rope_cos_sin (theta=1e6).
+        Fused-rope tables over the per-chip q|k|v row: the HF-convention
+        cos/sin (theta=1e6, reference text_rope_cos_sin) tiled across the
+        2*hpd q/k head blocks, with cos=1 / sin=0 over the v block so v
+        passes through the fused rope exactly.
         """
         inv_freq = 1.0 / (theta ** (torch.arange(0, self.head_dim, 2, dtype=torch.float) / self.head_dim))
         freqs = float(position) * inv_freq
         emb = torch.cat((freqs, freqs), dim=-1)
-        cos, sin = emb.cos(), emb.sin()
+        hpd, hd = self.heads_per_device, self.head_dim
+        cos_cat = torch.ones(1, 1, 1, self.qkv_width)
+        sin_cat = torch.zeros(1, 1, 1, self.qkv_width)
+        cos_cat[..., : (hpd + 1) * hd] = emb.cos().repeat(hpd + 1)
+        sin_cat[..., : (hpd + 1) * hd] = emb.sin().repeat(hpd + 1)
+        # Q pre-scale (lever c): rope is linear in x, so scaling the cos/sin
+        # q-section scales rope(q) by exactly decode_q_prescale; the SDPA
+        # kernel then runs with scale=1.0 on ±276-magnitude logits.
+        cos_cat[..., : hpd * hd] *= self.decode_q_prescale
+        sin_cat[..., : hpd * hd] *= self.decode_q_prescale
+        return cos_cat, sin_cat
 
-        def _to_dev(t):
-            t = t.float().reshape(1, 1, 1, self.head_dim).expand(1, self.heads_per_device, 1, self.head_dim)
-            return ttnn.from_torch(
-                t.contiguous(),
+    def prepare_decode_rope(self, position: int, theta: float = 1e6):
+        """Replicated fp32 fused-rope rows (cos_cat, sin_cat) [1,1,1,qkv_width]."""
+        rows = self.decode_rope_rows(position, theta)
+        return tuple(
+            ttnn.from_torch(
+                t,
                 dtype=ttnn.float32,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
-
-        return _to_dev(cos), _to_dev(sin)
-
-    def prepare_decode_mask(self, slot: int, max_seq: int):
-        """Replicated fp32 additive row mask [1, 1, 1, max_seq]: slots > ``slot`` hidden.
-
-        The cache stores ALL max_seq slots (pad rows hold garbage K/V until a
-        later decode step overwrites them); the mask makes them unattendable.
-        """
-        mask = torch.full((1, 1, 1, max_seq), torch.finfo(torch.float32).min / 2)
-        mask[..., : slot + 1] = 0.0
-        return ttnn.from_torch(
-            mask,
-            dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            for t in rows
         )
 
     # ------------------------------------------------------------------
     # KV cache (generation phase, decode_strategy=kv_cache)
     # ------------------------------------------------------------------
     def init_kv_cache(self, max_seq_len: int):
-        """Pre-allocate persistent per-chip fp32 K/V caches [1, hpd, max_seq, hd].
+        """Pre-allocate persistent per-chip bf16 K/V caches [1, 1, max_seq, hd].
 
-        Each chip's Q-head group holds a full replicated copy of its KV
-        head's cache (kv_replication=2 -> hpd identical rows), so the decode
-        attention core stays chip-local. Buffers persist across calls;
+        Each chip stores its Q-head group's single KV head ONCE
+        (kv_replication=2 across the mesh keeps decode attention chip-local;
+        the decode SDPA kernel maps the chip's hpd Q heads onto the one KV
+        head natively — GQA). Buffers persist across calls;
         ``forward(kv_cache=...)`` refills slots 0..S-1 on each prefill.
+        bf16 storage feeds the bf16-only scaled_dot_product_attention_decode
+        kernel (perf REDO 3 lever c — gated by the e2e WER parity test).
         """
-        zeros = torch.zeros(1, self.heads_per_device, max_seq_len, self.head_dim)
+        zeros = torch.zeros(1, 1, max_seq_len, self.head_dim)
         k_cache, v_cache = (
             ttnn.from_torch(
                 zeros,
-                dtype=ttnn.float32,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
             for _ in range(2)
-        )
-        # paged_update_cache input: [1, B=1, num_heads, head_dim] HEIGHT_SHARDED L1.
-        grid = self.mesh_device.compute_with_storage_grid_size()
-        shard_grid = ttnn.num_cores_to_corerangeset(1, grid, row_wise=True)
-        update_cfg = ttnn.create_sharded_memory_config(
-            shape=(32, self.head_dim),  # heads padded to one tile
-            core_grid=shard_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            use_height_and_width_as_shard_shape=True,
         )
         # Persistent int32 [1] slot buffer (stable address for trace reuse).
         pos_tt = ttnn.from_torch(
@@ -289,7 +347,7 @@ class TtTextAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        return {"k": k_cache, "v": v_cache, "pos": pos_tt, "update_cfg": update_cfg, "max_seq": max_seq_len}
+        return {"k": k_cache, "v": v_cache, "pos": pos_tt, "max_seq": max_seq_len}
 
     # ------------------------------------------------------------------
     # Device forward (causal prefill over the full sequence)
@@ -330,23 +388,36 @@ class TtTextAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config,
         )
 
-        # Chip-local heads: 3 Q + the chip's KV head replicated to 3 (MHA core).
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+        # Chip-local heads: hpd Q heads + the chip's single KV head (q3|k1|v1
+        # packing); the MHA fp32 core below expands K/V to hpd copies.
+        q, k1, v1 = ttnn.experimental.nlp_create_qkv_heads(
             xqkv,
             num_heads=self.heads_per_device,
-            num_kv_heads=self.heads_per_device,
+            num_kv_heads=1,
             transpose_k_heads=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(xqkv)
 
-        cos, sin = rot_mats
+        cos, sin = rot_mats  # [1, 1, seq, hd] — broadcasts over the head dim
         q = self._apply_rope_fp32(q, cos, sin)
-        k = self._apply_rope_fp32(k, cos, sin)
+        k1 = self._apply_rope_fp32(k1, cos, sin)
 
         if kv_cache is not None:
-            ttnn.fill_cache(kv_cache["k"], k, 0)
-            ttnn.fill_cache(kv_cache["v"], v, 0)
+            # bf16 [1, 1, max_seq, hd] cache (decode SDPA kernel dtype);
+            # prefill attention math below stays on the fp32 k/v tensors.
+            k_bf = ttnn.typecast(k1, ttnn.bfloat16)
+            v_bf = ttnn.typecast(v1, ttnn.bfloat16)
+            ttnn.fill_cache(kv_cache["k"], k_bf, 0)
+            ttnn.fill_cache(kv_cache["v"], v_bf, 0)
+            ttnn.deallocate(k_bf)
+            ttnn.deallocate(v_bf)
+
+        # Expand the single KV head to hpd copies for the plain-MHA fp32 core.
+        k = ttnn.concat([k1] * self.heads_per_device, dim=1)
+        v = ttnn.concat([v1] * self.heads_per_device, dim=1)
+        ttnn.deallocate(k1)
+        ttnn.deallocate(v1)
 
         # Explicit fp32 causal attention (bf16 SDPA kernel scrambles the
         # ±3000-magnitude Qwen2 layer-0 logits — see module docstring).
@@ -377,7 +448,14 @@ class TtTextAttention(LightweightModule):
 
         attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # Row-parallel o_proj: per-chip PARTIAL sum over its 3 heads' rows.
+        # all_gather -> full o_proj matmul (lever d, see __init__): gather
+        # the per-chip heads row into the full head order, then one matmul
+        # against the replicated weight gives the complete output — no
+        # partial-sum all-reduce needed.
+        if self.num_devices > 1:
+            attn_full = ttnn.all_gather(attn, dim=3, num_links=2, topology=ttnn.Topology.Linear)
+            ttnn.deallocate(attn)
+            attn = attn_full
         out = ttnn.linear(
             attn,
             self.wo,
@@ -386,33 +464,30 @@ class TtTextAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config,
         )
         ttnn.deallocate(attn)
-
-        if self.num_devices > 1:
-            # All-reduce of the per-chip partials: reduce_scatter (each chip
-            # sums its hidden/N shard, fp32 fabric accumulation) + all_gather
-            # to re-replicate. Replaces the original all_gather + N slices +
-            # N-1 local adds (full 4*hidden payload gathered then summed on
-            # 110-core BinaryNg) — tracy tick-28 A/B: 364.8 -> 281.3 us/iter
-            # (-23%), PCC unchanged.
-            reduced = ttnn.reduce_scatter(out, dim=3, num_links=2, topology=ttnn.Topology.Linear)
-            ttnn.deallocate(out)
-            out = ttnn.all_gather(reduced, dim=3, num_links=2, topology=ttnn.Topology.Linear)
-            ttnn.deallocate(reduced)
         return out
 
     # ------------------------------------------------------------------
     # Device forward (KV-cached single-token decode step)
     # ------------------------------------------------------------------
-    def forward_decode(self, x_111H: ttnn.Tensor, kv_cache, rot_step, decode_mask: ttnn.Tensor) -> ttnn.Tensor:
+    def forward_decode(self, x_111H: ttnn.Tensor, kv_cache, rot_step) -> ttnn.Tensor:
         """One KV-cached token step: O(1) projections + attention over the cache.
 
         x_111H: [1, 1, 1, hidden] fp32 TILE_LAYOUT, replicated on the mesh.
         kv_cache: dict from init_kv_cache. ``kv_cache["pos"]`` (persistent
-            int32 [1]) must already hold this token's cache slot.
-        rot_step: (cos, sin) from prepare_decode_rope, [1, hpd, 1, hd] fp32.
-        decode_mask: from prepare_decode_mask, [1, 1, 1, max_seq] fp32.
-        Returns: [1, 1, 1, hidden] fp32, replicated (all-reduced o_proj).
+            int32 [1]) must already hold this token's cache slot; it drives
+            BOTH the cache write and SDPA causality (no mask tensor).
+        rot_step: (cos_cat, sin_cat) from prepare_decode_rope,
+            [1, 1, 1, qkv_width] fp32 fused-rope rows.
+        Returns: [1, 1, 1, hidden] fp32, replicated.
         No CCL in attention: each chip's KV-head cache copy is local.
+
+        Perf REDO 3 decode path: fused fp32 rope on the QKV row (1 matmul
+        with the 0/±1 rotate-half block matrix + 2 mul + 1 add — exact
+        math, see __init__) BEFORE the head split, then
+        ``nlp_create_qkv_heads_decode`` which hands k/v straight to
+        ``paged_update_cache`` in its HEIGHT_SHARDED [1, B=1, heads, hd]
+        layout (the old per-tensor permute + interleaved_to_sharded pairs
+        are gone).
         """
         xqkv = ttnn.linear(
             x_111H,
@@ -422,53 +497,72 @@ class TtTextAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+        cos_cat, sin_cat = rot_step
+        rot = ttnn.matmul(
             xqkv,
-            num_heads=self.heads_per_device,
-            num_kv_heads=self.heads_per_device,
-            transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        ttnn.deallocate(xqkv)
-
-        cos, sin = rot_step
-        q = self._apply_rope_fp32(q, cos, sin)  # [1, hpd, 1, hd]
-        k = self._apply_rope_fp32(k, cos, sin)
-
-        # paged_update_cache wants [1, B=1, heads, hd] HEIGHT_SHARDED L1.
-        for t, cache in ((k, kv_cache["k"]), (v, kv_cache["v"])):
-            row = ttnn.permute(t, (0, 2, 1, 3))  # [1, 1, hpd, hd]
-            ttnn.deallocate(t)
-            row_sh = ttnn.interleaved_to_sharded(row, kv_cache["update_cfg"])
-            ttnn.deallocate(row)
-            ttnn.experimental.paged_update_cache(cache, row_sh, update_idxs_tensor=kv_cache["pos"])
-            ttnn.deallocate(row_sh)
-
-        # Explicit fp32 single-row attention over the full cache window; the
-        # streamed mask hides slots beyond the current position.
-        k_t = ttnn.transpose(kv_cache["k"], -2, -1)
-        scores = ttnn.matmul(
-            q,
-            k_t,
+            self.rope_rot,
             dtype=ttnn.float32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
+        )
+        roped = ttnn.add(ttnn.multiply(xqkv, cos_cat), ttnn.multiply(rot, sin_cat))
+        ttnn.deallocate(xqkv)
+        ttnn.deallocate(rot)
+
+        # bf16 boundary for the fused decode kernels (rope above is fp32
+        # exact; q is already pre-scaled by 1/sqrt(hd) via the rope rows).
+        # L1, not DRAM: nlp_create_qkv_heads_decode reads bf16 sub-tile
+        # lines (32B) which silently drop ODD head rows from DRAM on
+        # Blackhole (64B DRAM NoC alignment — measured: head 1 of 3 comes
+        # back zero from a DRAM input, correct from L1).
+        roped_bf = ttnn.typecast(roped, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(roped)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+            roped_bf,
+            num_heads=self.heads_per_device,
+            num_kv_heads=1,
+            memory_config=self.heads_l1_height_sharded,
+        )
+        ttnn.deallocate(roped_bf)
+
+        # k/v are already [1, B=1, hpd, hd] HEIGHT_SHARDED L1 — exactly the
+        # paged_update_cache input layout.
+        ttnn.experimental.paged_update_cache(kv_cache["k"], k, update_idxs_tensor=kv_cache["pos"])
+        ttnn.experimental.paged_update_cache(kv_cache["v"], v, update_idxs_tensor=kv_cache["pos"])
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
+
+        # Fused decode attention over the cache; causality comes from the
+        # runtime cur_pos tensor (attends slots 0..pos inclusive), replacing
+        # the streamed [1,1,1,max_seq] additive mask. scale=1.0: Q was
+        # pre-scaled on host (see decode_rope_rows).
+        attn_1bqd = ttnn.transformer.scaled_dot_product_attention_decode(
+            q,
+            kv_cache["k"],
+            kv_cache["v"],
+            cur_pos_tensor=kv_cache["pos"],
+            scale=1.0,
+            program_config=self.sdpa_decode_program_config,
+            compute_kernel_config=self.sdpa_compute_kernel_config,
+            memory_config=self.sdpa_out_mem_cfg,
         )
         ttnn.deallocate(q)
-        ttnn.deallocate(k_t)
-        scores = ttnn.multiply(scores, self.scale)
-        scores = ttnn.add(scores, decode_mask)
-        probs = ttnn.softmax(scores, dim=-1, numeric_stable=True)
-        ttnn.deallocate(scores)
-        attn = ttnn.matmul(
-            probs,
-            kv_cache["v"],
-            dtype=ttnn.float32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
-        )
-        ttnn.deallocate(probs)
-        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn_ws = ttnn.experimental.nlp_concat_heads_decode(attn_1bqd, num_heads=self.heads_per_device)
+        ttnn.deallocate(attn_1bqd)
+        attn_rows = ttnn.sharded_to_interleaved(attn_ws, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(attn_ws)
+        # concat_heads_decode pads the user dim to a tile (32 rows); only
+        # row 0 is our token. Slice it back to [1, 1, 1, hpd*hd] so o_proj
+        # and the CCL all-reduce move one row, not 32.
+        attn = ttnn.slice(attn_rows, [0, 0, 0, 0], [1, 1, 1, attn_rows.shape[-1]])
+        ttnn.deallocate(attn_rows)
+        # all_gather -> full o_proj matmul (lever d, see __init__): one CCL
+        # op on the narrow bf16 heads row replaces the reduce_scatter +
+        # all_gather all-reduce of fp32 partial sums.
+        if self.num_devices > 1:
+            attn_full = ttnn.all_gather(attn, dim=3, num_links=2, topology=ttnn.Topology.Linear)
+            ttnn.deallocate(attn)
+            attn = attn_full
         out = ttnn.linear(
             attn,
             self.wo,
@@ -477,9 +571,4 @@ class TtTextAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config,
         )
         ttnn.deallocate(attn)
-        if self.num_devices > 1:
-            reduced = ttnn.reduce_scatter(out, dim=3, num_links=2, topology=ttnn.Topology.Linear)
-            ttnn.deallocate(out)
-            out = ttnn.all_gather(reduced, dim=3, num_links=2, topology=ttnn.Topology.Linear)
-            ttnn.deallocate(reduced)
         return out

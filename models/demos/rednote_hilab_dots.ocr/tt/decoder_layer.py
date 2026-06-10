@@ -144,9 +144,6 @@ class TtDecoderLayer(LightweightModule):
     def prepare_decode_rope(self, position):
         return self.self_attn.prepare_decode_rope(position)
 
-    def prepare_decode_mask(self, slot, max_seq):
-        return self.self_attn.prepare_decode_mask(slot, max_seq)
-
     def init_kv_cache(self, max_seq_len):
         return self.self_attn.init_kv_cache(max_seq_len)
 
@@ -181,18 +178,18 @@ class TtDecoderLayer(LightweightModule):
         ttnn.deallocate(ff_out)
         return out
 
-    def forward_decode(self, x_111H: ttnn.Tensor, kv_cache, rot_step, decode_mask: ttnn.Tensor) -> ttnn.Tensor:
+    def forward_decode(self, x_111H: ttnn.Tensor, kv_cache, rot_step) -> ttnn.Tensor:
         """KV-cached single-token step: same pre-norm residual wiring, seq=1.
 
-        x_111H: [1, 1, 1, hidden] fp32 TILE_LAYOUT, replicated. rot_step /
-        decode_mask from prepare_decode_rope / prepare_decode_mask;
-        kv_cache from init_kv_cache with kv_cache["pos"] already at this
-        token's slot. Norms and MLP are seq-agnostic; only the attention
-        sub-block carries a distinct decode path.
+        x_111H: [1, 1, 1, hidden] fp32 TILE_LAYOUT, replicated. rot_step
+        from prepare_decode_rope; kv_cache from init_kv_cache with
+        kv_cache["pos"] already at this token's slot (drives the cache
+        write AND SDPA-decode causality). Norms and MLP are seq-agnostic;
+        only the attention sub-block carries a distinct decode path.
         """
         res_dtype = x_111H.dtype
         attn_in = self.input_layernorm(x_111H)
-        attn_out = self.self_attn.forward_decode(attn_in, kv_cache, rot_step, decode_mask)
+        attn_out = self.self_attn.forward_decode(attn_in, kv_cache, rot_step)
         ttnn.deallocate(attn_in)
         h = ttnn.add(x_111H, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=res_dtype)
         ttnn.deallocate(attn_out)
