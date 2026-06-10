@@ -33,6 +33,7 @@ class MLP:
         mesh_config=None,
         use_throughput_experts=True,
         tokens_per_device=32,
+        expert_weight_dtype=ttnn.bfloat4_b,
     ):
         # Split state dict. MiniMax-M2's SparseMoeBlock has `gate.weight` (no bias) plus
         # a sibling `e_score_correction_bias` buffer; experts live under `experts.*`.
@@ -152,7 +153,7 @@ class MLP:
                 ccl_manager=ccl_manager,
                 mesh_config=mesh_config,
                 program_config=program_config,
-                weight_dtype=ttnn.bfloat4_b,
+                weight_dtype=expert_weight_dtype,
                 tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
             )
 
