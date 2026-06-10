@@ -41,7 +41,11 @@ from models.experimental.glm4_moe_lite.tt.layer_weights import (
     convert_decoder_layer_weights,
 )
 from models.experimental.glm4_moe_lite.tt.linear_helpers import lm_head_linear
-from models.experimental.glm4_moe_lite.tt.tt_embedding import convert_embedding_weight_to_tt, run_tt_embedding
+from models.experimental.glm4_moe_lite.tt.tt_embedding import (
+    convert_embedding_weight_to_tt,
+    prefill_embed_memory_config,
+    run_tt_embedding,
+)
 from models.experimental.glm4_moe_lite.tt.weights import LazyStateDict, load_glm_lazy_state_dict
 
 
@@ -775,7 +779,8 @@ class Glm4MoeLiteDenseOnlyTT:
             sin_matrix = ttnn.slice(self.rope["sin_matrix"], [0, 0, 0, 0], [1, 1, padded_len, rope_dim])
 
         t0 = time.perf_counter() if profile_on else 0.0
-        x = run_tt_embedding(device=self.device, token_ids=input_padded, tt_weight=self.embed_w)
+        embed_mc = prefill_embed_memory_config(seq_tokens=padded_len, hidden_dim=hidden)
+        x = run_tt_embedding(device=self.device, token_ids=input_padded, tt_weight=self.embed_w, memory_config=embed_mc)
         if x.layout != ttnn.TILE_LAYOUT:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = ttnn.reshape(x, (1, 1, padded_len, hidden))
@@ -899,7 +904,10 @@ class Glm4MoeLiteDenseOnlyTT:
             )
 
             t0 = time.perf_counter() if profile_on else 0.0
-            x = run_tt_embedding(device=self.device, token_ids=chunk_tokens, tt_weight=self.embed_w)
+            embed_mc = prefill_embed_memory_config(seq_tokens=this_chunk_padded, hidden_dim=hidden)
+            x = run_tt_embedding(
+                device=self.device, token_ids=chunk_tokens, tt_weight=self.embed_w, memory_config=embed_mc
+            )
             if x.layout != ttnn.TILE_LAYOUT:
                 x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
             x = ttnn.reshape(x, (1, 1, this_chunk_padded, hidden))
@@ -1082,7 +1090,8 @@ class Glm4MoeLiteDenseOnlyTT:
 
         # Embedding: [1, B*S_max] -> [1, 1, B*S_max, hidden].
         t0 = time.perf_counter() if profile_on else 0.0
-        x = run_tt_embedding(device=self.device, token_ids=input_concat, tt_weight=self.embed_w)
+        embed_mc = prefill_embed_memory_config(seq_tokens=batch * s_max, hidden_dim=hidden)
+        x = run_tt_embedding(device=self.device, token_ids=input_concat, tt_weight=self.embed_w, memory_config=embed_mc)
         if x.layout != ttnn.TILE_LAYOUT:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = ttnn.reshape(x, (1, 1, batch * s_max, hidden))

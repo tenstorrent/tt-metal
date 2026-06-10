@@ -10,7 +10,11 @@ import torch
 
 import ttnn
 
-from models.experimental.glm4_moe_lite.tt.tt_embedding import convert_embedding_weight_to_tt, run_tt_embedding
+from models.experimental.glm4_moe_lite.tt.tt_embedding import (
+    convert_embedding_weight_to_tt,
+    prefill_embed_memory_config,
+    run_tt_embedding,
+)
 from models.experimental.glm4_moe_lite.tt.weights import load_glm_lazy_state_dict, resolve_best_effort_snapshot_dir
 
 
@@ -68,3 +72,49 @@ def test_tt_embedding_matches_torch_for_one_token() -> None:
         assert torch.allclose(out, ref, atol=0, rtol=0), "TT embedding mismatch for token 0"
     finally:
         close_device(device)
+
+
+@pytest.mark.skipif(
+    os.environ.get("TT_ENABLE_HW_TESTS") != "1",
+    reason="Enable with TT_ENABLE_HW_TESTS=1 (requires Tenstorrent device access).",
+)
+def test_tt_embedding_l1_matches_dram_for_short_seq() -> None:
+    """L1 embedding output must match DRAM for shapes within the prefill L1 threshold."""
+    snap = resolve_best_effort_snapshot_dir("zai-org/GLM-4.7-Flash")
+    state = load_glm_lazy_state_dict(snap, num_layers=47)
+
+    embed_w = state["model.embed_tokens.weight"]
+    max_rows = int(os.environ.get("TT_EMBED_TEST_ROWS", "1024"))
+    if max_rows <= 0:
+        raise ValueError("TT_EMBED_TEST_ROWS must be > 0")
+    embed_w = embed_w[:max_rows].contiguous()
+
+    seq_len = 128
+    hidden = int(embed_w.shape[1])
+    token_ids = torch.arange(1, seq_len + 1, dtype=torch.int32).unsqueeze(0)
+    ref = torch.nn.functional.embedding(token_ids.long(), embed_w)
+
+    device = ttnn.open_mesh_device(
+        mesh_shape=ttnn.MeshShape(1, 1),
+        physical_device_ids=[0],
+        dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER),
+    )
+    try:
+        tt_w = convert_embedding_weight_to_tt(device=device, embed_weight=embed_w)
+        dram_mc = ttnn.DRAM_MEMORY_CONFIG
+        l1_mc = prefill_embed_memory_config(seq_tokens=seq_len, hidden_dim=hidden)
+        assert l1_mc == ttnn.L1_MEMORY_CONFIG, "expected L1 threshold to cover seq_len=128"
+
+        tt_dram = run_tt_embedding(device=device, token_ids=token_ids, tt_weight=tt_w, memory_config=dram_mc)
+        tt_l1 = run_tt_embedding(device=device, token_ids=token_ids, tt_weight=tt_w, memory_config=l1_mc)
+
+        out_dram = ttnn.to_torch(tt_dram).reshape(ref.shape)
+        out_l1 = ttnn.to_torch(tt_l1).reshape(ref.shape)
+        assert torch.allclose(out_dram, ref, atol=0, rtol=0), "DRAM embedding mismatch"
+        assert torch.allclose(out_l1, ref, atol=0, rtol=0), "L1 embedding mismatch"
+        assert torch.allclose(out_l1, out_dram, atol=0, rtol=0), "L1 vs DRAM embedding mismatch"
+
+        ttnn.deallocate(tt_dram, force=False)
+        ttnn.deallocate(tt_l1, force=False)
+    finally:
+        ttnn.close_mesh_device(device)

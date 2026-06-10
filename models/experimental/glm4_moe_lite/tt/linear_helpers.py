@@ -11,6 +11,7 @@ instead of capturing outer scope variables.
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -72,6 +73,28 @@ def _auto_in0_block_w(k_tiles: int) -> int:
     return 1
 
 
+def _in0_block_w_for_sharded_input(k_tiles: int, input_shard_w_tiles: int) -> int:
+    """Pick in0_block_w valid for both K-tiles and the WIDTH_SHARDED activation shard width."""
+    for candidate in (4, 3, 2, 1):
+        if k_tiles % candidate == 0 and input_shard_w_tiles % candidate == 0:
+            return candidate
+    return 1
+
+
+def _is_l1_width_sharded(tensor: ttnn.Tensor) -> bool:
+    mc = tensor.memory_config()
+    return mc.buffer_type == ttnn.BufferType.L1 and mc.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+
+
+def _shard_grid_fits_prog(sharded_tensor: ttnn.Tensor, prog_core_x: int, prog_core_y: int) -> bool:
+    """True when the activation shard grid fits inside the matmul program compute grid."""
+    spec = sharded_tensor.memory_config().shard_spec
+    if spec is None:
+        return False
+    in_x, in_y = _shard_grid_xy(spec.grid)
+    return in_x <= int(prog_core_x) and in_y <= int(prog_core_y)
+
+
 def _auto_out_subblock_w(*, per_core_N: int, per_core_M: int, fp32_dest_acc_en: bool) -> tuple[int, int]:
     """Pick output subblock geometry (h, w) within DST register limits."""
     out_subblock_h = 1
@@ -87,6 +110,42 @@ def _auto_out_subblock_w(*, per_core_N: int, per_core_M: int, fp32_dest_acc_en: 
                 out_subblock_h = cand
                 break
     return out_subblock_h, out_subblock_w
+
+
+def ensure_min_subblock_area(
+    per_core_M: int,
+    per_core_N: int,
+    *,
+    fp32_dest_acc_en: bool = False,
+    width_sharded_out: bool = False,
+) -> tuple[int, int]:
+    """Pick (out_subblock_h, out_subblock_w) with h*w >= 2 when possible.
+
+    Profiler marks 1x1 subblocks as SLOW.  WIDTH_SHARDED outputs require h==1
+    (TTNN kernel constraint); only widen along N in that case.
+    """
+    h, w = _auto_out_subblock_w(per_core_N=per_core_N, per_core_M=per_core_M, fp32_dest_acc_en=fp32_dest_acc_en)
+    if h * w >= 2:
+        if width_sharded_out and h != 1:
+            for cand in (4, 3, 2):
+                if per_core_N >= cand and per_core_N % cand == 0:
+                    return 1, cand
+            return 1, 1
+        return h, w
+    if width_sharded_out:
+        for cand in (4, 3, 2):
+            if per_core_N >= cand and per_core_N % cand == 0:
+                return 1, cand
+        return 1, 1
+    if per_core_M >= 2:
+        for cand in (4, 3, 2):
+            if per_core_M % cand == 0:
+                return cand, 1
+    if per_core_N >= 2:
+        for cand in (4, 3, 2):
+            if per_core_N % cand == 0:
+                return 1, cand
+    return h, w
 
 
 def compute_1d_prog_cfg(
@@ -137,8 +196,8 @@ def compute_1d_prog_cfg(
         out_subblock_h = int(ov.out_subblock_h) if ov.out_subblock_h is not None else 1
         out_subblock_w = int(ov.out_subblock_w)
     else:
-        out_subblock_h, out_subblock_w = _auto_out_subblock_w(
-            per_core_N=per_core_N, per_core_M=per_core_M, fp32_dest_acc_en=fp32_dest_acc_en
+        out_subblock_h, out_subblock_w = ensure_min_subblock_area(
+            per_core_M=per_core_M, per_core_N=per_core_N, fp32_dest_acc_en=fp32_dest_acc_en
         )
 
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -308,49 +367,63 @@ def compute_1d_mlp_down_prog_cfg(
     )
 
 
-def _prefill_1d_prog_and_ws_mc(device: Any, b_weight: ttnn.Tensor, m_total: int) -> tuple:
-    """1D multicast program config + WIDTH_SHARDED output MC for prefill (M > TILE_SIZE).
+def _common_ws_nc(nt_a: int, nt_b: int, max_cores: int) -> int:
+    """Largest core count ≤ max_cores that divides both N-tile counts (for sharded-in0 chains)."""
+    limit = min(int(nt_a), int(nt_b), int(max_cores))
+    for nc in range(limit, 0, -1):
+        if nt_a % nc == 0 and nt_b % nc == 0:
+            return nc
+    return 1
 
-    Grid heuristic derived from sweep (test_prefill_matmul_sweep.py) across all 6
-    GLM-4 MoE Lite prefill shapes:
-      - Largest num_cores | Nt where per_core_N % out_subblock_w == 0 for some
-        out_subblock_w ∈ {4, 3, 2}.  Avoids per_core_N=5 (only subblock_w=1,
-        severe SLOW penalty) and per_core_N=1 (no parallelism).
-      - WIDTH_SHARDED L1 output: each core writes to its own L1 bank (no NOC hop
-        during the matmul).  Sweep showed 10-15% improvement across all shapes.
+
+def _prefill_ws_grid(
+    device: Any,
+    m_total: int,
+    n_width: int,
+    *,
+    k_width: int | None = None,
+    forced_nc: int | None = None,
+) -> tuple:
+    """WIDTH_SHARDED L1 grid + memory config for prefill (M > TILE_SIZE).
+
+    Returns (core_x, core_y, best_pcn, mt, best_osw, ws_mc).
+    Shared by matmul (``_prefill_1d_prog_and_ws_mc``) and sharded RMSNorm.
+
+    When ``forced_nc`` is set, use that core count instead of the perf heuristic
+    (e.g. w_q_a grid must divide w_q_b N-tiles for matched sharded-in0).
     """
-    K = int(b_weight.shape[-2])
-    N = int(b_weight.shape[-1])
     mt = max(1, (m_total + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE)
-    kt = (K + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
-    nt = (N + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+    nt = (int(n_width) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
 
     grid = device.compute_with_storage_grid_size()
     max_x, max_y = int(grid.x), int(grid.y)
     max_cores = max_x * max_y
 
-    # Find largest nc | nt where per_core_N ≥ 2 and per_core_N has a good subblock
-    # (divisible by 4, 3, or 2).  Iterating top-down means the first hit is the winner.
     best_nc, best_pcn, best_osw = 1, nt, 1
-    for nc in range(min(nt, max_cores), 0, -1):
-        if nt % nc != 0:
-            continue
-        pcn = nt // nc
-        if pcn < 2:
-            continue
-        osw = next((w for w in (4, 3, 2) if pcn % w == 0), 1)
-        if osw >= 2:
-            best_nc, best_pcn, best_osw = nc, pcn, osw
-            break
-    # Fallback: any nc with per_core_N ≥ 2 (no subblock constraint)
-    if best_osw == 1:
+    if forced_nc is not None:
+        nc = int(forced_nc)
+        if nc > 0 and nt % nc == 0 and nc <= max_cores:
+            best_nc = nc
+            best_pcn = nt // nc
+            best_osw = next((w for w in (4, 3, 2) if best_pcn % w == 0), 1)
+    else:
         for nc in range(min(nt, max_cores), 0, -1):
-            if nt % nc == 0 and nt // nc >= 2:
-                best_nc, best_pcn = nc, nt // nc
-                best_osw = next((w for w in (4, 3, 2) if best_pcn % w == 0), 1)
+            if nt % nc != 0:
+                continue
+            pcn = nt // nc
+            if pcn < 2:
+                continue
+            osw = next((w for w in (4, 3, 2) if pcn % w == 0), 1)
+            if osw >= 2:
+                best_nc, best_pcn, best_osw = nc, pcn, osw
                 break
+        if best_osw == 1:
+            for nc in range(min(nt, max_cores), 0, -1):
+                if nt % nc == 0 and nt // nc >= 2:
+                    best_nc, best_pcn = nc, nt // nc
+                    best_osw = next((w for w in (4, 3, 2) if best_pcn % w == 0), 1)
+                    break
 
-    # Fit best_nc into the physical grid (maximize gx to spread across columns).
     core_x, core_y = 1, best_nc
     for gx in range(min(max_x, best_nc), 0, -1):
         if best_nc % gx != 0:
@@ -360,9 +433,155 @@ def _prefill_1d_prog_and_ws_mc(device: Any, b_weight: ttnn.Tensor, m_total: int)
             core_x, core_y = gx, gy
             break
 
+    out_mc = ttnn.create_sharded_memory_config(
+        shape=(1, 1, mt * ttnn.TILE_SIZE, best_pcn * ttnn.TILE_SIZE),
+        core_grid=ttnn.CoreGrid(y=core_y, x=core_x),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    return core_x, core_y, best_pcn, mt, best_osw, out_mc
+
+
+def _norm_subblock_w(block_w: int) -> int:
+    for w in (4, 3, 2, 1):
+        if block_w % w == 0:
+            return w
+    return 1
+
+
+def _shard_grid_xy(crs: ttnn.CoreRangeSet) -> tuple[int, int]:
+    min_x = min_y = 10**9
+    max_x = max_y = -1
+    for cr in crs.ranges():
+        for coord in (cr.start, cr.end):
+            min_x = min(min_x, int(coord.x))
+            max_x = max(max_x, int(coord.x))
+            min_y = min(min_y, int(coord.y))
+            max_y = max(max_y, int(coord.y))
+    return max_x - min_x + 1, max_y - min_y + 1
+
+
+def prefill_norm_config_from_width_sharded_tensor(tensor: ttnn.Tensor) -> dict:
+    """RMSNorm config matching an existing WIDTH_SHARDED L1 activation (no resharding)."""
+    mc = tensor.memory_config()
+    if mc.memory_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        raise ValueError(f"expected WIDTH_SHARDED tensor, got {mc.memory_layout}")
+    spec = mc.shard_spec
+    if spec is None:
+        raise ValueError("WIDTH_SHARDED tensor missing shard_spec")
+    shard_h, shard_w = int(spec.shape[0]), int(spec.shape[1])
+    block_h = shard_h // ttnn.TILE_SIZE
+    block_w = shard_w // ttnn.TILE_SIZE
+    core_x, core_y = _shard_grid_xy(spec.grid)
+    prog = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[core_x, core_y],
+        subblock_w=_norm_subblock_w(block_w),
+        block_h=block_h,
+        block_w=block_w,
+        inplace=False,
+    )
+    return {
+        "sharded_program_config": prog,
+        "sharded_output_config": mc,
+    }
+
+
+def prefill_width_sharded_norm_config(device: Any, m_total: int, width: int, *, ws_nc_hint: int | None = None) -> dict:
+    """RMSNorm config for WIDTH_SHARDED prefill activations (``in_sharded`` + ``out_sharded``)."""
+    core_x, core_y, best_pcn, mt, _, ws_mc = _prefill_ws_grid(device, m_total, width, forced_nc=ws_nc_hint)
+    prog = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[core_x, core_y],
+        subblock_w=_norm_subblock_w(best_pcn),
+        block_h=mt,
+        block_w=best_pcn,
+        inplace=False,
+    )
+    return {
+        "sharded_program_config": prog,
+        "sharded_output_config": ws_mc,
+    }
+
+
+def _prefill_1d_prog_and_ws_mc_matched_in0(
+    b_weight: ttnn.Tensor,
+    m_total: int,
+    sharded_in0: ttnn.Tensor,
+) -> tuple | None:
+    """1D matmul prog + WIDTH_SHARDED output MC on the same cores as sharded in0.
+
+    Returns None when N-tiles are not evenly divisible across the input shard grid
+    (caller must gather in0 and use the default output grid).
+    """
+    spec = sharded_in0.memory_config().shard_spec
+    if spec is None:
+        return None
+
+    K = int(b_weight.shape[-2])
+    N = int(b_weight.shape[-1])
+    kt = (K + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+    nt = (N + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+    mt = max(1, (m_total + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE)
+
+    num_cores = int(spec.grid.num_cores())
+    if num_cores <= 0 or nt % num_cores != 0:
+        return None
+
+    input_shard_h = int(spec.shape[0]) // ttnn.TILE_SIZE
+    input_shard_w_tiles = int(spec.shape[1]) // ttnn.TILE_SIZE
+    if input_shard_h != mt or input_shard_w_tiles * num_cores != kt:
+        return None
+
+    per_core_N = nt // num_cores
+    core_x, core_y = _shard_grid_xy(spec.grid)
+    in0_block_w = _in0_block_w_for_sharded_input(kt, input_shard_w_tiles)
+    osw = next((w for w in (4, 3, 2) if per_core_N % w == 0), 1)
+
     prog_cfg = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
-        in0_block_w=_auto_in0_block_w(kt),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=osw,
+        per_core_M=mt,
+        per_core_N=per_core_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+    out_mc = ttnn.create_sharded_memory_config(
+        shape=(1, 1, mt * ttnn.TILE_SIZE, per_core_N * ttnn.TILE_SIZE),
+        core_grid=ttnn.CoreGrid(y=core_y, x=core_x),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=spec.orientation,
+        use_height_and_width_as_shard_shape=True,
+    )
+    return prog_cfg, out_mc
+
+
+def _prefill_1d_prog_and_ws_mc(
+    device: Any,
+    b_weight: ttnn.Tensor,
+    m_total: int,
+    *,
+    sharded_in0: ttnn.Tensor | None = None,
+    ws_nc_hint: int | None = None,
+) -> tuple:
+    """1D multicast program config + WIDTH_SHARDED output MC for prefill (M > TILE_SIZE)."""
+    K = int(b_weight.shape[-2])
+    N = int(b_weight.shape[-1])
+    kt = (K + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+    core_x, core_y, best_pcn, mt, best_osw, out_mc = _prefill_ws_grid(device, m_total, N, forced_nc=ws_nc_hint)
+
+    if sharded_in0 is not None:
+        spec = sharded_in0.memory_config().shard_spec
+        input_shard_w_tiles = int(spec.shape[1]) // ttnn.TILE_SIZE
+        in0_block_w = _in0_block_w_for_sharded_input(kt, input_shard_w_tiles)
+    else:
+        in0_block_w = _auto_in0_block_w(kt)
+
+    prog_cfg = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+        in0_block_w=in0_block_w,
         out_subblock_h=1,
         out_subblock_w=best_osw,
         per_core_M=mt,
@@ -370,14 +589,6 @@ def _prefill_1d_prog_and_ws_mc(device: Any, b_weight: ttnn.Tensor, m_total: int)
         fuse_batch=True,
         fused_activation=None,
         mcast_in0=True,
-    )
-
-    out_mc = ttnn.create_sharded_memory_config(
-        shape=(1, 1, mt * ttnn.TILE_SIZE, best_pcn * ttnn.TILE_SIZE),
-        core_grid=ttnn.CoreGrid(y=core_y, x=core_x),
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
     )
     return prog_cfg, out_mc
 
@@ -388,6 +599,10 @@ def _to_l1_if_needed(a: ttnn.Tensor) -> tuple[ttnn.Tensor, bool]:
     if mc.buffer_type == ttnn.BufferType.L1 and mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
         return a, False
     return ttnn.to_memory_config(a, ttnn.L1_MEMORY_CONFIG), True
+
+
+def _is_l1_interleaved(mc: ttnn.MemoryConfig) -> bool:
+    return mc.buffer_type == ttnn.BufferType.L1 and mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
 
 
 def _prefill_linear_ws_out(
@@ -412,6 +627,8 @@ def prefill_linear_ws_out(
     compute_kernel_config: Any = None,
     memory_config: ttnn.MemoryConfig | None = None,
     return_sharded: bool = False,
+    sharded_in0: bool = False,
+    ws_nc_hint: int | None = None,
 ) -> ttnn.Tensor:
     """Prefill linear: 1D multicast program config + WIDTH_SHARDED L1 output.
 
@@ -425,14 +642,30 @@ def prefill_linear_ws_out(
     directly without gathering.  The caller owns it and must deallocate when done.
     Use this when the immediate consumer is an elementwise op (e.g. silu+mul)
     whose two inputs share the same shard spec, so no gather is needed.
+
+    When the activation is already WIDTH_SHARDED L1 (e.g. sharded RMSNorm output),
+    it is fed directly into the matmul with an ``in0_block_w`` aligned to the
+    input shard width — no ``ShardedToInterleaved`` gather on the input side.
     """
     m_total = 1
     for i in range(len(a.shape) - 1):
         m_total *= int(a.shape[i])
-    prog_cfg, ws_mc = _prefill_1d_prog_and_ws_mc(device, b, m_total)
     ckc = compute_kernel_config if compute_kernel_config is not None else _PREFILL_CKC
-    # Move activation to L1 interleaved; skip copy if the caller already did it.
-    a_l1, _copied = _to_l1_if_needed(a)
+    # WIDTH_SHARDED activations are gathered L1→L1 interleaved before matmul unless
+    # sharded_in0 is enabled (per-call or GLM4_MOE_LITE_PREFILL_SHARDED_MATMUL_IN0=1) and
+    # the activation shard grid fits inside the output program grid.
+    use_sharded_in0 = False
+    sharded_in0_enabled = sharded_in0 or os.environ.get("GLM4_MOE_LITE_PREFILL_SHARDED_MATMUL_IN0", "0").strip() == "1"
+    matched = None
+    if sharded_in0_enabled and _is_l1_width_sharded(a):
+        matched = _prefill_1d_prog_and_ws_mc_matched_in0(b, m_total, a)
+        use_sharded_in0 = matched is not None
+    if use_sharded_in0:
+        prog_cfg, ws_mc = matched
+        a_l1, _copied = a, False
+    else:
+        prog_cfg, ws_mc = _prefill_1d_prog_and_ws_mc(device, b, m_total, ws_nc_hint=ws_nc_hint)
+        a_l1, _copied = _to_l1_if_needed(a)
     out_sharded = ttnn.linear(a_l1, b, program_config=prog_cfg, memory_config=ws_mc, compute_kernel_config=ckc)
     if _copied:
         ttnn.deallocate(a_l1, force=False)
@@ -499,13 +732,21 @@ def prefill_per_head_linear(
     )
 
     ckc = compute_kernel_config if compute_kernel_config is not None else _PREFILL_CKC
-    a_l1, _copied = _to_l1_if_needed(a)
+    # Caller may already stage activations in L1 interleaved (e.g. q_nope after L1 slice).
+    a_mc = a.memory_config()
+    if _is_l1_interleaved(a_mc):
+        a_l1, _copied = a, False
+    else:
+        a_l1, _copied = _to_l1_if_needed(a)
     out_l1 = ttnn.linear(
         a_l1, b, program_config=prog_cfg, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=ckc
     )
     if _copied:
         ttnn.deallocate(a_l1, force=False)
     downstream_mc = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+    out_l1_mc = out_l1.memory_config()
+    if _is_l1_interleaved(downstream_mc) and _is_l1_interleaved(out_l1_mc):
+        return out_l1
     out = ttnn.to_memory_config(out_l1, downstream_mc)
     ttnn.deallocate(out_l1, force=False)
     return out

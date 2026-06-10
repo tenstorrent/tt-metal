@@ -28,7 +28,11 @@ from models.experimental.glm4_moe_lite.tt.layer0_tt import (
 )
 from models.experimental.glm4_moe_lite.tt.layer_weights import convert_decoder_layer_weights
 from models.experimental.glm4_moe_lite.tt.moe_tt import create_moe_runtime
-from models.experimental.glm4_moe_lite.tt.tt_embedding import convert_embedding_weight_to_tt, run_tt_embedding
+from models.experimental.glm4_moe_lite.tt.tt_embedding import (
+    convert_embedding_weight_to_tt,
+    prefill_embed_memory_config,
+    run_tt_embedding,
+)
 from models.experimental.glm4_moe_lite.tt.weights import (
     find_missing_shards,
     load_glm_lazy_state_dict,
@@ -173,7 +177,13 @@ def _run_generic_layer0_prefill_once(
 
     input_padded = torch.zeros((1, padded_len), dtype=input_ids.dtype)
     input_padded[:, :seq_len] = input_ids
-    x_embed = run_tt_embedding(device=mesh_device, token_ids=input_padded.to(torch.int32), tt_weight=embed_w)
+    embed_mc = prefill_embed_memory_config(seq_tokens=padded_len, hidden_dim=hidden)
+    x_embed = run_tt_embedding(
+        device=mesh_device,
+        token_ids=input_padded.to(torch.int32),
+        tt_weight=embed_w,
+        memory_config=embed_mc,
+    )
     if x_embed.layout != ttnn.TILE_LAYOUT:
         x_embed = ttnn.to_layout(x_embed, ttnn.TILE_LAYOUT)
     x_embed = ttnn.reshape(x_embed, (1, 1, padded_len, hidden))
@@ -272,7 +282,13 @@ def _run_generic_layers_prefill_once(
 
     input_padded = torch.zeros((1, padded_len), dtype=input_ids.dtype)
     input_padded[:, :seq_len] = input_ids
-    x = run_tt_embedding(device=mesh_device, token_ids=input_padded.to(torch.int32), tt_weight=embed_w)
+    embed_mc = prefill_embed_memory_config(seq_tokens=padded_len, hidden_dim=hidden)
+    x = run_tt_embedding(
+        device=mesh_device,
+        token_ids=input_padded.to(torch.int32),
+        tt_weight=embed_w,
+        memory_config=embed_mc,
+    )
     if x.layout != ttnn.TILE_LAYOUT:
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
     x = ttnn.reshape(x, (1, 1, padded_len, hidden))
@@ -626,6 +642,91 @@ def test_layers_through_1_moe_prefill_tp_matches_no_tp_mesh_1x4(
     )
 
 
+def _layers_moe_prefill_tp_only_run(
+    *,
+    mesh_rows: int,
+    mesh_cols: int,
+    physical_device_ids: list[int] | None,
+    monkeypatch: pytest.MonkeyPatch,
+    num_layers: int,
+) -> torch.Tensor:
+    """Run TP=1 prefill through layers [0, num_layers) once (for Tracy profiling; no no-TP pass)."""
+    if int(num_layers) < 1:
+        raise ValueError(f"num_layers must be >= 1, got {num_layers}")
+
+    snap = resolve_best_effort_snapshot_dir("zai-org/GLM-4.7-Flash")
+    missing = find_missing_shards(snap)
+    if missing:
+        pytest.skip(f"GLM snapshot missing {len(missing)} shards; run ensure_glm47_weights.sh first.")
+
+    input_ids = _input_ids_for_test()
+
+    cfg = json.loads((Path(snap) / "config.json").read_text())
+    hparams = Glm4MoeLiteHParams.from_hf_config(SimpleNamespace(**cfg))
+    hparams.validate()
+
+    cache_dir = Path(os.path.expanduser("~/.cache/ttnn/models/glm4_moe_lite/layers_moe_tp_only_profile_cache"))
+
+    num_devices = int(mesh_rows) * int(mesh_cols)
+    if num_devices <= 1:
+        pytest.skip("TP profiling requires a multi-device mesh.")
+
+    monkeypatch.setenv("GLM4_MOE_LITE_CCL_NUM_LINKS", "2")
+    monkeypatch.setenv("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear")
+    monkeypatch.setenv("GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE", "1")
+    monkeypatch.setenv("GLM4_MOE_LITE_TP", "1")
+
+    _set_fabric_config_for_mesh(num_devices)
+
+    open_kwargs: dict = {
+        "mesh_shape": ttnn.MeshShape(mesh_rows, mesh_cols),
+        "dispatch_core_config": _dispatch_core_config(),
+    }
+    if physical_device_ids is not None:
+        open_kwargs["physical_device_ids"] = physical_device_ids
+
+    mesh_device = ttnn.open_mesh_device(**open_kwargs)
+    try:
+        return _run_generic_layers_prefill_once(
+            mesh_device=mesh_device,
+            snap=Path(snap),
+            hparams=hparams,
+            input_ids=input_ids,
+            cache_dir=cache_dir,
+            num_layers=num_layers,
+            enable_moe=True,
+        )
+    finally:
+        ttnn.close_mesh_device(mesh_device)
+
+
+@pytest.mark.skipif(
+    os.environ.get("TT_ENABLE_HW_TESTS") != "1",
+    reason="Enable with TT_ENABLE_HW_TESTS=1 (requires Tenstorrent device access).",
+)
+@pytest.mark.skipif(
+    os.environ.get("TT_ENABLE_LARGE_MODEL_TESTS") != "1",
+    reason="Enable with TT_ENABLE_LARGE_MODEL_TESTS=1 (loads routed expert weights).",
+)
+@pytest.mark.skipif(
+    os.environ.get("TT_ENABLE_MULTI_DEVICE_TESTS") != "1",
+    reason="Enable with TT_ENABLE_MULTI_DEVICE_TESTS=1 (opens a multi-device mesh).",
+)
+def test_layers_through_1_moe_prefill_tp_only_mesh_1x4(monkeypatch: pytest.MonkeyPatch) -> None:
+    """TP=1 prefill through layer 1 (dense + first MoE); single pass for Tracy profiling."""
+    mesh_rows, mesh_cols = _mesh_shape_from_env(default=(1, 4))
+    if mesh_rows * mesh_cols <= 1:
+        pytest.skip(f"TT_TEST_MESH_SHAPE={mesh_rows}x{mesh_cols} is single-device; TP requires multi-device.")
+    out = _layers_moe_prefill_tp_only_run(
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        physical_device_ids=None,
+        monkeypatch=monkeypatch,
+        num_layers=2,
+    )
+    assert torch.isfinite(out).all()
+
+
 @pytest.mark.skipif(
     os.environ.get("TT_ENABLE_HW_TESTS") != "1",
     reason="Enable with TT_ENABLE_HW_TESTS=1 (requires Tenstorrent device access).",
@@ -725,3 +826,84 @@ def test_incremental_per_layer_tp_pcc_mesh_1x4(monkeypatch: pytest.MonkeyPatch) 
             )
     finally:
         ttnn.close_mesh_device(mesh_device)
+
+
+def _layer0_prefill_sharded_q_a_pcc_check(monkeypatch: pytest.MonkeyPatch, *, fuse_qkv_a: bool) -> None:
+    """Compare sharded q_a matmul→norm path vs interleaved gather baseline."""
+    snap = resolve_best_effort_snapshot_dir("zai-org/GLM-4.7-Flash")
+    missing = find_missing_shards(snap)
+    if missing:
+        pytest.skip(f"GLM snapshot missing {len(missing)} shards; run ensure_glm47_weights.sh first.")
+
+    input_ids = _input_ids_for_test()
+    seq_len = int(input_ids.shape[1])
+
+    cfg = json.loads((Path(snap) / "config.json").read_text())
+    hparams = Glm4MoeLiteHParams.from_hf_config(SimpleNamespace(**cfg))
+    hparams.validate()
+
+    cache_dir = Path(os.path.expanduser("~/.cache/ttnn/models/glm4_moe_lite/layer0_sharded_qkv_pcc_cache"))
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    if fuse_qkv_a:
+        monkeypatch.setenv("GLM4_MOE_LITE_FUSE_QKV_A", "1")
+    else:
+        monkeypatch.delenv("GLM4_MOE_LITE_FUSE_QKV_A", raising=False)
+
+    mesh_device = ttnn.open_mesh_device(
+        mesh_shape=ttnn.MeshShape(1, 1),
+        physical_device_ids=[0],
+        dispatch_core_config=_dispatch_core_config(),
+    )
+    try:
+        monkeypatch.setenv("GLM4_MOE_LITE_PREFILL_SHARDED_QKV", "0")
+        out_interleaved = _run_generic_layer0_prefill_once(
+            mesh_device=mesh_device,
+            snap=Path(snap),
+            hparams=hparams,
+            input_ids=input_ids,
+            cache_dir=cache_dir / "interleaved",
+            use_decoder_layer_weights=True,
+        )
+
+        monkeypatch.setenv("GLM4_MOE_LITE_PREFILL_SHARDED_QKV", "1")
+        out_sharded = _run_generic_layer0_prefill_once(
+            mesh_device=mesh_device,
+            snap=Path(snap),
+            hparams=hparams,
+            input_ids=input_ids,
+            cache_dir=cache_dir / "sharded",
+            use_decoder_layer_weights=True,
+        )
+    finally:
+        ttnn.close_mesh_device(mesh_device)
+
+    ok, msg = comp_pcc(out_sharded, out_interleaved, pcc=_PCC_TARGET)
+    label = "fused QKV" if fuse_qkv_a else "w_q_a"
+    assert ok, f"sharded {label} prefill diverges from interleaved baseline (seq_len={seq_len}): {msg}"
+
+
+@pytest.mark.skipif(
+    os.environ.get("TT_ENABLE_HW_TESTS") != "1",
+    reason="Enable with TT_ENABLE_HW_TESTS=1 (requires Tenstorrent device access).",
+)
+@pytest.mark.skipif(
+    os.environ.get("TT_ENABLE_LARGE_MODEL_TESTS") != "1",
+    reason="Enable with TT_ENABLE_LARGE_MODEL_TESTS=1 (loads large embedding weights).",
+)
+def test_layer0_prefill_sharded_qkv_matches_interleaved(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PCC-check sharded fused QKV→q_a norm vs interleaved gather on a 1x1 mesh."""
+    _layer0_prefill_sharded_q_a_pcc_check(monkeypatch, fuse_qkv_a=True)
+
+
+@pytest.mark.skipif(
+    os.environ.get("TT_ENABLE_HW_TESTS") != "1",
+    reason="Enable with TT_ENABLE_HW_TESTS=1 (requires Tenstorrent device access).",
+)
+@pytest.mark.skipif(
+    os.environ.get("TT_ENABLE_LARGE_MODEL_TESTS") != "1",
+    reason="Enable with TT_ENABLE_LARGE_MODEL_TESTS=1 (loads large embedding weights).",
+)
+def test_layer0_prefill_sharded_w_q_a_matches_interleaved(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PCC-check sharded w_q_a→q_a norm vs interleaved gather on a 1x1 mesh."""
+    _layer0_prefill_sharded_q_a_pcc_check(monkeypatch, fuse_qkv_a=False)
