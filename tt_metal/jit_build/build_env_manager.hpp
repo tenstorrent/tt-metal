@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "build.hpp"
+#include "jit_device_config.hpp"
 #include "impl/context/context_types.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
@@ -25,6 +26,9 @@ using ProgCoreMapping =
 struct DeviceBuildEnv {
     uint64_t build_key() const { return build_env.get_build_key(); }
     JitBuildEnv build_env;
+    // The resolved config this env was built from. Retained so up-front precompile can capture the
+    // device's build fingerprint (see jit_build_fingerprint.hpp) without re-deriving it.
+    JitDeviceConfig dev_config;
     std::vector<JitBuildState> firmware_build_states;
     std::vector<JitBuildState> kernel_build_states;
     bool firmware_precompiled = false;

@@ -219,6 +219,7 @@ void BuildEnvManager::add_build_env(
 void BuildEnvManager::add_build_env_locked(
     ChipId device_id, const JitDeviceConfig& dev_config, const llrt::RunTimeOptions& rtoptions) {
     auto& dev_build_env = device_id_to_build_env_[device_id];
+    dev_build_env.dev_config = dev_config;  // retained for build-fingerprint capture
     uint64_t build_key = compute_build_key(dev_config, rtoptions);
     auto device_kernel_defines = initialize_device_kernel_defines(dev_config);
     dev_build_env.build_env.init(build_key, dev_config, rtoptions, device_kernel_defines);
