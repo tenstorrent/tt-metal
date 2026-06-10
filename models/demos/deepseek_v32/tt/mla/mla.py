@@ -178,7 +178,7 @@ class ttMLA(_ttMLAv3):
             **self._get_mm_kwargs("o_proj", seq_len_local),
         )
         if self.tp_factor > 1:
-            out = self._tp_rs_ag(out, rs_only=False)
+            out = self._tp_rs_ag(out, rs_only=True)  # v3 epilogue: RS only, output stays TP-sharded
         return out
 
     def _tp_rs_ag(self, t, rs_only=False):

@@ -80,7 +80,8 @@ def test_sparse_mla_numerics(mesh_device):
     h, sq, skv, k = 8, 128, 512, 64
     q = torch.randn(1, h, sq, 576, dtype=torch.bfloat16)
     kvpe = torch.randn(1, 1, skv, 576, dtype=torch.bfloat16)
-    idx = torch.randint(0, skv, (1, 1, sq, k), dtype=torch.int32)
+    # Causal-valid indices: sparse_mla masks index > row_pos (op contract).
+    idx = (torch.rand(1, 1, sq, k) * (torch.arange(sq).view(sq, 1) + 1)).to(torch.int32)
     scale = 576**-0.5
 
     sel = kvpe[0, 0][idx.long()[0, 0]]
@@ -89,10 +90,20 @@ def test_sparse_mla_numerics(mesh_device):
         (torch.einsum("hsd,skd->hsk", q[0].float(), sel.float()) * scale).softmax(-1),
         sel[..., :512].float(),
     )
+    q_sharded = ttnn.from_torch(
+        q,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(None, 1)),
+    )
     out = ops.sparse_mla(
-        _dev(q, mesh_device),
+        q_sharded,
         _dev(kvpe, mesh_device),
         _dev(idx, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32),
         scale,
     )
-    assert_with_pcc(ref, ops._to_host(out)[0].float(), 0.999)
+    out_t = ttnn.to_torch(
+        out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=mesh_device.shape)
+    )[:1]
+    assert_with_pcc(ref, out_t[0].float(), 0.999)
