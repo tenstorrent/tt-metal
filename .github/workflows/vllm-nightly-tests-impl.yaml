@@ -83,7 +83,11 @@ jobs:
           #     "owner_id": "U08TJ70UFRT"
           #   },
           #
-          # Likely no tracking issue, disabled first here: https://github.com/tenstorrent/tt-metal/pull/39088
+          # Disabled due to Metal timeout in reduce-scatter async test model (failure run):
+          #   https://github.com/tenstorrent/tt-metal/actions/runs/27176391956/job/80227043847#step:17:442
+          # TODO: file a tracking issue and replace this TODO with the issue URL.
+          # Originally disabled in:
+          #   https://github.com/tenstorrent/tt-metal/pull/39088
           #   {
           #     "name": "[WH-T3K] Multi-process reduce scatter test model",
           #     "model": "models/vllm_test_utils/t3000_multiproc_test",
