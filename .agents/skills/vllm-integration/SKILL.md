@@ -100,7 +100,7 @@ The runner enforces on-device sampling (`sample_on_device_mode: all` in the TT p
 Check stages:
 
 - `sampling`: runs the canonical TT plugin pytest suite against the live server. `--sampling-profile full` runs the whole suite; `--sampling-profile smoke` runs a small integration sanity subset for slow bring-up loops.
-- `qualitative`: saves greedy and sampled completions for prompts from `models/common/readiness_check/vllm_prompts.txt`; read the outputs and judge coherence, topic, repetition, gibberish, and wrong-language drift.
+- `qualitative`: saves greedy and sampled completions for prompts from `models/common/readiness_check/vllm_prompts.txt`; read the outputs and judge coherence, topic, repetition, gibberish, and wrong-language drift. See `Output-Quality Verdicts Need A Control` below before classifying any problem as model-intrinsic.
 - `benchmark`: runs the configured synthetic workload and records TTFT P50/P99, ITL P50/P99, aggregate output throughput, and mean per-user decode t/s/u.
 
 When optimizing decode serving overhead, benchmark with the exact same runner, prompt/output lengths, `max_num_seqs`, model length, mesh, TT config, and sampling mode as the canonical or previous comparison. Report TTFT, ITL, output throughput, and mean per-user decode t/s/u before/after; compare directly to the canonical same-machine implementation when it is available.
@@ -113,9 +113,26 @@ Reproducibility-only sampling failures are out of scope when they are the only f
 
 If vLLM crashes mid-run, kill leftover `EngineCore` or `vllm.entrypoints` processes before retrying; they can hold chip locks after `tt-smi -r`.
 
+Device-profiler-enabled serving (`TT_METAL_DEVICE_PROFILER=1`) dying at EngineCore startup with Ethernet-core IO or ARC startup timeouts is a known profiler/serving conflict, not a serving regression or broken hardware: reset with `tt-smi -r`, retry once, and if it persists record the documented fallback timing evidence and move on. Likewise, transient CCL/fabric link errors immediately after a failed multi-device run need a device reset and one retry before being treated as hardware evidence.
+
 If serving behavior fails in a way that crosses the adapter, generator, cache ownership, scheduler inputs, or plugin registration path and ordinary log reading does not explain it, use `$autofix` before turning the vLLM stage into broad full-model debugging; it will run `$autodebug` if needed, then verify or refute each proposed bug before keeping any fix.
 
 Record the working server invocation in the work log, including `--max-model-len`, `--tt-config`, workload config, and any env vars that mattered. Use typed runner flags for `--max-model-len` and `--tt-config`; keep `--additional-server-args` for uncommon flags only.
+
+## Output-Quality Verdicts Need A Control
+
+Before classifying any serving-output problem as a model-quality limitation, produce matching evidence: the same prompts through the HF reference, or at minimum the full-model stage's free-running generation on comparable prompts. If serving output is materially worse than what the model produced at the full-model stage, that is a serving regression and in scope for this stage - stale trace inputs, sampler state, and cache/position handling are the usual causes, not the checkpoint.
+
+After qualitative collection, run:
+
+```bash
+python models/common/readiness_check/check_degenerate_output.py \
+  --hf-model <hf-model-id> --missing-artifacts critical --scope vllm
+```
+
+Mechanical degeneracy - doubled tokens, single-token collapse - is never a model property. The runner-side stage gate runs the same check.
+
+If the tokenizer has no chat template, say so explicitly, treat the checkpoint as a base model, and judge the qualitative outputs against continuation-style expectations; do not let chat-style prompts produce poor text that masks serving bugs.
 
 ## Evidence To Leave
 
