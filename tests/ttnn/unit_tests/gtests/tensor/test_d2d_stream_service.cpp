@@ -32,6 +32,7 @@
 
 #include "gtest/gtest.h"
 
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -148,6 +149,15 @@ D2DStreamConfig make_config(
         .receiver_worker_cores = kWorkerCores,
         .share_fabric_links = share_fabric_links,
     };
+}
+
+// DRAM-interleaved spec with an explicit dtype + layout (block-float formats
+// require TILE). Used by the multi-dtype chain tests.
+TensorSpec make_spec(const ttnn::Shape& global_shape, DataType dtype, Layout layout) {
+    return TensorSpec(
+        global_shape,
+        TensorLayout(
+            dtype, PageConfig(layout), MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt}));
 }
 
 // Run create_pair and assert the construction-time getters return sane state.
@@ -427,17 +437,29 @@ void verify_metadata_sender_write(
     }
 }
 
-// Assert the receiver backing tensor holds `value` uniformly on every coord.
-void expect_receiver_backing_equals(
-    D2DStreamServiceReceiver* receiver, const std::shared_ptr<MeshDevice>& mesh, uint32_t value) {
+// Row-major iota of `n` uint32 starting at `base`: v[i] = base + i. The sender
+// worker writes this pattern (base = fill_base + iter), so the readback catches
+// transposed pages (per-element distinct) and stale/ignored transfers (the base
+// shifts by 1 each iteration).
+std::vector<uint32_t> make_iota_u32(size_t n, uint32_t base) {
+    std::vector<uint32_t> v(n);
+    for (size_t i = 0; i < n; ++i) {
+        v[i] = base + static_cast<uint32_t>(i);
+    }
+    return v;
+}
+
+// Assert the receiver backing tensor holds the iota (base + i) on every coord.
+void expect_receiver_backing_iota(
+    D2DStreamServiceReceiver* receiver, const std::shared_ptr<MeshDevice>& mesh, uint32_t base) {
     auto mesh_buffer = receiver->get_backing_tensor().device_storage().get_mesh_buffer_leak_ownership();
     const size_t num_u32 = receiver->get_backing_tensor().buffer()->size() / sizeof(uint32_t);
-    const std::vector<uint32_t> expected(num_u32, value);
+    const std::vector<uint32_t> expected = make_iota_u32(num_u32, base);
     std::vector<uint32_t> readback;
     for (const auto& coord : receiver->get_backing_tensor().tensor_topology().mesh_coords()) {
         readback.clear();
         ReadShard(mesh->mesh_command_queue(), readback, mesh_buffer, coord);
-        EXPECT_EQ(readback, expected) << "receiver backing mismatch at " << coord << " (expected " << value << ")";
+        EXPECT_EQ(readback, expected) << "receiver backing mismatch at " << coord << " (iota base " << base << ")";
     }
 }
 
@@ -468,7 +490,7 @@ void verify_handshake(
     Finish(sender_mesh->mesh_command_queue());
     Finish(receiver_mesh->mesh_command_queue());
 
-    expect_receiver_backing_equals(receiver.get(), receiver_mesh, num_iters);
+    expect_receiver_backing_iota(receiver.get(), receiver_mesh, num_iters);
 }
 
 // Reuse check. Builds the pair ONCE (persistent service kernels launched once),
@@ -499,7 +521,7 @@ void verify_reuse(
         Finish(sender_mesh->mesh_command_queue());
         Finish(receiver_mesh->mesh_command_queue());
 
-        expect_receiver_backing_equals(receiver.get(), receiver_mesh, seed);
+        expect_receiver_backing_iota(receiver.get(), receiver_mesh, seed);
     }
 }
 
@@ -539,7 +561,7 @@ void verify_fabric_lease(
         sender->wait_for_fabric_links();
         receiver->wait_for_fabric_links();
 
-        expect_receiver_backing_equals(receiver.get(), receiver_mesh, seed);
+        expect_receiver_backing_iota(receiver.get(), receiver_mesh, seed);
     };
 
     run_round(0x1234u);
@@ -580,7 +602,7 @@ void verify_fabric_lease_stress(
     Finish(sender_mesh->mesh_command_queue());
     Finish(receiver_mesh->mesh_command_queue());
 
-    expect_receiver_backing_equals(receiver.get(), receiver_mesh, num_iters);
+    expect_receiver_backing_iota(receiver.get(), receiver_mesh, num_iters);
 }
 
 // Assert the metadata blob equals `expected` on BOTH the sender service core L1
@@ -769,17 +791,17 @@ MeshWorkload make_receiver_consumer_workload(
     return workload;
 }
 
-// Assert `output_tensor` holds `value` uniformly on every coord.
-void expect_output_tensor_equals(
-    const tt::tt_metal::Tensor& output_tensor, const std::shared_ptr<MeshDevice>& mesh, uint32_t value) {
+// Assert `output_tensor` holds the iota (base + i) on every coord.
+void expect_output_tensor_iota(
+    const tt::tt_metal::Tensor& output_tensor, const std::shared_ptr<MeshDevice>& mesh, uint32_t base) {
     auto mesh_buffer = output_tensor.device_storage().get_mesh_buffer_leak_ownership();
     const size_t num_u32 = output_tensor.buffer()->size() / sizeof(uint32_t);
-    const std::vector<uint32_t> expected(num_u32, value);
+    const std::vector<uint32_t> expected = make_iota_u32(num_u32, base);
     std::vector<uint32_t> readback;
     for (const auto& coord : output_tensor.tensor_topology().mesh_coords()) {
         readback.clear();
         ReadShard(mesh->mesh_command_queue(), readback, mesh_buffer, coord);
-        EXPECT_EQ(readback, expected) << "output tensor mismatch at " << coord << " (expected " << value << ")";
+        EXPECT_EQ(readback, expected) << "output tensor mismatch at " << coord << " (iota base " << base << ")";
     }
 }
 
@@ -818,7 +840,7 @@ void verify_receiver_consume(
     Finish(receiver_mesh->mesh_command_queue());
 
     const uint32_t final_value = kFillBase + num_iters - 1;
-    expect_output_tensor_equals(output_tensor, receiver_mesh, final_value);
+    expect_output_tensor_iota(output_tensor, receiver_mesh, final_value);
     if (metadata_size_bytes > 0) {
         expect_metadata_everywhere(
             sender.get(), receiver.get(), sender_mesh, receiver_mesh, {static_cast<uint32_t>(-1), 0u, final_value});
@@ -857,7 +879,7 @@ void verify_receiver_consume_reuse(
         Finish(sender_mesh->mesh_command_queue());
         Finish(receiver_mesh->mesh_command_queue());
 
-        expect_output_tensor_equals(output_tensor, receiver_mesh, seed);
+        expect_output_tensor_iota(output_tensor, receiver_mesh, seed);
         if (metadata_size_bytes > 0) {
             expect_metadata_everywhere(
                 sender.get(), receiver.get(), sender_mesh, receiver_mesh, {static_cast<uint32_t>(-1), 0u, seed});
@@ -961,7 +983,9 @@ std::unique_ptr<H2DStreamService> make_h2d_service(
     const TensorSpec& global_spec,
     const CoreRange& worker_cores,
     uint32_t metadata_size_bytes) {
-    const uint32_t total_bytes = static_cast<uint32_t>(global_spec.logical_shape().volume() * sizeof(uint32_t));
+    // Size the FIFO / scratch to one full packed tensor (dtype/layout-aware, so
+    // block-float TILE specs that pack exponents alongside data are covered).
+    const uint32_t total_bytes = static_cast<uint32_t>(global_spec.compute_packed_buffer_size_bytes());
     H2DStreamService::Config h2d_cfg{
         .global_spec = global_spec,
         .mapper = create_mesh_mapper(*sender_mesh, MeshMapperConfig{.placements = replicate_all(*sender_mesh)}),
@@ -976,9 +1000,9 @@ std::unique_ptr<H2DStreamService> make_h2d_service(
 
 // Push one token (uniform `value`) + its {-1,0,value} metadata through the H2D
 // service. A zero-length metadata span when disabled.
-void h2d_push_token(H2DStreamService& h2d_service, uint32_t num_u32, uint32_t value, uint32_t metadata_size_bytes) {
-    std::vector<uint32_t> token(num_u32, value);
-    const std::vector<uint32_t> meta_words = {static_cast<uint32_t>(-1), 0u, value};
+void h2d_push_token(H2DStreamService& h2d_service, uint32_t num_u32, uint32_t base, uint32_t metadata_size_bytes) {
+    const std::vector<uint32_t> token = make_iota_u32(num_u32, base);
+    const std::vector<uint32_t> meta_words = {static_cast<uint32_t>(-1), 0u, base};
     const auto bytes =
         ttsl::Span<const std::byte>(reinterpret_cast<const std::byte*>(token.data()), token.size() * sizeof(uint32_t));
     const auto meta =
@@ -1030,7 +1054,7 @@ void verify_h2d_d2d_bridge(
     Finish(receiver_mesh->mesh_command_queue());
 
     const uint32_t final_value = kFillBase + num_iters - 1;
-    expect_output_tensor_equals(output_tensor, receiver_mesh, final_value);
+    expect_output_tensor_iota(output_tensor, receiver_mesh, final_value);
     if (metadata_enabled) {
         expect_metadata_everywhere(
             sender.get(), receiver.get(), sender_mesh, receiver_mesh, {static_cast<uint32_t>(-1), 0u, final_value});
@@ -1077,12 +1101,81 @@ void verify_h2d_d2d_bridge_reuse(
         Finish(sender_mesh->mesh_command_queue());
         Finish(receiver_mesh->mesh_command_queue());
 
-        expect_output_tensor_equals(output_tensor, receiver_mesh, seed);
+        expect_output_tensor_iota(output_tensor, receiver_mesh, seed);
         if (metadata_enabled) {
             expect_metadata_everywhere(
                 sender.get(), receiver.get(), sender_mesh, receiver_mesh, {static_cast<uint32_t>(-1), 0u, seed});
         }
     }
+}
+
+// Multi-dtype chain driver (no metadata). Streams `num_iters` tokens of element
+// type T through Host -> H2D -> bridge -> D2D -> consumer -> Host and asserts the
+// final token survives byte-faithfully. Values are a rotating modular iota
+// src[i] = (iter + i) % modulus: bounded so low-precision dtypes don't saturate,
+// distinct per element, and rotated by 1 each iteration so a stale/unwritten page
+// reads back the wrong rotation. Verification compares the output tensor's
+// dequantized values against the (identically quantized) input — exact, because
+// every hop in the pipeline is a byte copy. Single-chip only so to_vector returns
+// one replica unambiguously.
+template <typename T>
+void verify_dtype_chain(
+    const std::shared_ptr<MeshDevice>& sender_mesh,
+    const std::shared_ptr<MeshDevice>& receiver_mesh,
+    const ttnn::Shape& global_shape,
+    DataType dtype,
+    Layout layout,
+    const CoreRange& worker_cores,
+    uint32_t num_iters,
+    uint32_t modulus) {
+    const auto global_spec = make_spec(global_shape, dtype, layout);
+    const uint32_t num_elems = static_cast<uint32_t>(global_shape.volume());
+
+    auto make_src = [&](uint32_t base) {
+        std::vector<T> v(num_elems);
+        for (uint32_t i = 0; i < num_elems; ++i) {
+            v[i] = static_cast<T>(static_cast<float>((base + i) % modulus));
+        }
+        return v;
+    };
+
+    auto h2d_service = make_h2d_service(sender_mesh, global_spec, worker_cores, /*metadata_size_bytes=*/0);
+
+    D2DStreamConfig cfg{
+        .global_spec = global_spec,
+        .mapper = create_mesh_mapper(*sender_mesh, MeshMapperConfig{.placements = replicate_all(*sender_mesh)}),
+        .socket_mem_config = SocketMemoryConfig{BufferType::L1, /*fifo_size=*/4096},
+        .sender_worker_cores = worker_cores,
+        .receiver_worker_cores = worker_cores,
+        .share_fabric_links = false,  // OWN mode: stream without per-transfer grants
+    };
+    auto [sender, receiver] = D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg));
+
+    auto output_tensor = tt::tt_metal::create_device_tensor(
+        receiver->get_backing_tensor().tensor_spec(),
+        receiver_mesh.get(),
+        receiver->get_backing_tensor().tensor_topology());
+
+    auto consumer_workload = make_receiver_consumer_workload(receiver.get(), receiver_mesh, output_tensor, num_iters);
+    auto bridge_workload = make_bridge_workload(
+        *h2d_service, sender.get(), sender_mesh, worker_cores, num_iters, /*metadata_size_bytes=*/0);
+    EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), consumer_workload, /*blocking=*/false);
+    EnqueueMeshWorkload(sender_mesh->mesh_command_queue(), bridge_workload, /*blocking=*/false);
+
+    auto mapper = create_mesh_mapper(*sender_mesh, MeshMapperConfig{.placements = replicate_all(*sender_mesh)});
+    tt::tt_metal::Tensor last_input;
+    for (uint32_t i = 0; i < num_iters; ++i) {
+        last_input = tt::tt_metal::Tensor::from_vector<T>(make_src(/*base=*/i), global_spec);
+        auto distributed = ttnn::distributed::distribute_tensor(last_input, *mapper);
+        h2d_service->forward_to_tensor(distributed);
+    }
+    h2d_service->barrier();
+    Finish(sender_mesh->mesh_command_queue());
+    Finish(receiver_mesh->mesh_command_queue());
+
+    const std::vector<T> expected = last_input.to_vector<T>();
+    const std::vector<T> got = output_tensor.to_vector<T>();
+    EXPECT_EQ(got, expected) << "dtype chain mismatch (dtype " << static_cast<int>(dtype) << ")";
 }
 
 // 1x1 <-> 1x1 (single chip each).
@@ -1663,6 +1756,93 @@ TEST_F(D2DStreamServiceTest, H2DtoD2DBridgeRowPair) {
     auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(0, 0));
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(1, 0));
     verify_h2d_d2d_bridge(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), kWorkerCores, /*num_iters=*/4);
+}
+
+// ===========================================================================
+// Multi-dtype tests: the full chain transferring several element types (no
+// metadata). Single-chip pair, full worker grid, 2 iterations (rotating data).
+// BFLOAT16 / FLOAT32 / UINT8 are ROW_MAJOR; BFLOAT8_B / BFLOAT4_B are block-float
+// formats that require TILE layout.
+// ===========================================================================
+
+#define D2D_DTYPE_SKIP_GUARD()                                                                         \
+    if (!service_cores_supported()) {                                                                  \
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";             \
+    }                                                                                                  \
+    const auto shape = this->mesh_device_->shape();                                                    \
+    if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {                                  \
+        GTEST_SKIP() << "Need a 2D mesh with >= 2 devices to carve distinct submeshes; got " << shape; \
+    }                                                                                                  \
+    const auto coord0 = MeshCoordinate(0, 0);                                                          \
+    const auto coord1 = (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0);                 \
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);                    \
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);                  \
+    const auto grid = receiver_mesh->compute_with_storage_grid_size();                                 \
+    const CoreRange all_cores { CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1} }
+
+TEST_F(D2DStreamServiceTest, DtypeBfloat16) {
+    D2D_DTYPE_SKIP_GUARD();
+    verify_dtype_chain<bfloat16>(
+        sender_mesh,
+        receiver_mesh,
+        ttnn::Shape({1, 1, 32, 64}),
+        DataType::BFLOAT16,
+        Layout::ROW_MAJOR,
+        all_cores,
+        /*num_iters=*/2,
+        /*modulus=*/256);
+}
+
+TEST_F(D2DStreamServiceTest, DtypeFloat32) {
+    D2D_DTYPE_SKIP_GUARD();
+    verify_dtype_chain<float>(
+        sender_mesh,
+        receiver_mesh,
+        ttnn::Shape({1, 1, 32, 64}),
+        DataType::FLOAT32,
+        Layout::ROW_MAJOR,
+        all_cores,
+        /*num_iters=*/2,
+        /*modulus=*/4096);
+}
+
+TEST_F(D2DStreamServiceTest, DtypeUint8) {
+    D2D_DTYPE_SKIP_GUARD();
+    verify_dtype_chain<uint8_t>(
+        sender_mesh,
+        receiver_mesh,
+        ttnn::Shape({1, 1, 32, 64}),
+        DataType::UINT8,
+        Layout::ROW_MAJOR,
+        all_cores,
+        /*num_iters=*/2,
+        /*modulus=*/128);
+}
+
+TEST_F(D2DStreamServiceTest, DtypeBfloat8B) {
+    D2D_DTYPE_SKIP_GUARD();
+    verify_dtype_chain<float>(
+        sender_mesh,
+        receiver_mesh,
+        ttnn::Shape({1, 1, 32, 64}),
+        DataType::BFLOAT8_B,
+        Layout::TILE,
+        all_cores,
+        /*num_iters=*/2,
+        /*modulus=*/256);
+}
+
+TEST_F(D2DStreamServiceTest, DtypeBfloat4B) {
+    D2D_DTYPE_SKIP_GUARD();
+    verify_dtype_chain<float>(
+        sender_mesh,
+        receiver_mesh,
+        ttnn::Shape({1, 1, 32, 64}),
+        DataType::BFLOAT4_B,
+        Layout::TILE,
+        all_cores,
+        /*num_iters=*/2,
+        /*modulus=*/64);
 }
 
 }  // namespace

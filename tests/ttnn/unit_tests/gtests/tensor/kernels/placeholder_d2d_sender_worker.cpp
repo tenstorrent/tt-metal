@@ -55,27 +55,32 @@ void kernel_main() {
     const uint32_t page_elems = tensor_page_size / sizeof(uint32_t);
 
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
-        // 1. Produce this iteration's slice: a uniform per-iter value across the
-        //    whole backing tensor (distinct per iter so a stuck/reused transfer
-        //    is caught by the readback).
-        const uint32_t value = fill_base + iter;
-        for (uint32_t e = 0; e < page_elems; ++e) {
-            scratch[e] = value;
-        }
+        // 1. Produce this iteration's slice as an iota: the row-major element at
+        //    global index i holds (base + i), base = fill_base + iter. Distinct per
+        //    element (so a transposed / mis-addressed page is caught) and shifted by
+        //    1 every iteration (so a stuck/reused/partially-written transfer reads
+        //    back the wrong base). Each page holds different values, so refill the
+        //    scratch CB per page and barrier before reusing it as the NoC source.
+        const uint32_t base = fill_base + iter;
         for (uint32_t p = 0; p < num_pages; ++p) {
+            const uint32_t page_base = base + p * page_elems;
+            for (uint32_t e = 0; e < page_elems; ++e) {
+                scratch[e] = page_base + e;
+            }
             noc_async_write(cb_l1_addr, backing.get_noc_addr(p), tensor_page_size);
+            noc_async_write_barrier();
         }
-        noc_async_write_barrier();
 
         // 1b. (Designated core only) write this iter's metadata blob to the sender
         //     service core's L1 metadata buffer, BEFORE acking. The data writes are
         //     already flushed (barrier above), so the scratch CB is free to reuse as
-        //     the NoC source (a CB-backed address — never a stack-local).
+        //     the NoC source (a CB-backed address — never a stack-local). The
+        //     metadata scalar is the iteration's base offset.
         if constexpr (metadata_enabled) {
             if (is_metadata_writer != 0) {
                 scratch[0] = static_cast<uint32_t>(-1);
                 scratch[1] = 0u;
-                scratch[2] = value;
+                scratch[2] = base;
                 const uint64_t md_noc = get_noc_addr(service_noc_x, service_noc_y, sender_metadata_l1_addr);
                 noc_async_write(cb_l1_addr, md_noc, metadata_size_bytes);
                 noc_async_write_barrier();
