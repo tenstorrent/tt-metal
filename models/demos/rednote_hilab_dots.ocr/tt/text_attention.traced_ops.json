@@ -4,20 +4,13 @@
   "ttnn.concat",
   "ttnn.deallocate",
   "ttnn.experimental.nlp_concat_heads",
-  "ttnn.experimental.nlp_concat_heads_decode",
   "ttnn.experimental.nlp_create_qkv_heads",
-  "ttnn.experimental.nlp_create_qkv_heads_decode",
-  "ttnn.experimental.paged_update_cache",
-  "ttnn.fill_cache",
   "ttnn.linear",
   "ttnn.matmul",
   "ttnn.multiply",
   "ttnn.neg",
-  "ttnn.sharded_to_interleaved",
   "ttnn.slice",
   "ttnn.softmax",
   "ttnn.to_string",
-  "ttnn.transformer.scaled_dot_product_attention_decode",
-  "ttnn.transpose",
-  "ttnn.typecast"
+  "ttnn.transpose"
 ]
