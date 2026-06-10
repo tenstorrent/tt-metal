@@ -64,7 +64,7 @@ else:
 SUPPORTED_REPORT_VERSION = 1
 # String so we can follow semver-like bumps (was int on an older branch). Bump when the
 # visualizer schema changes; stale DBs are deleted on import (no migration path).
-DATABASE_SCHEMA_VERSION = "2.3"
+DATABASE_SCHEMA_VERSION = "2.4"
 
 # Second and later JSON files for the same rank get operation ids shifted by this stride
 # so they do not collide (each capture must have fewer than this many ops).
@@ -231,17 +231,18 @@ def compute_tensor_lifetime_records(
     inputs_by_tid = defaultdict(list)
     dealloc_candidate_ops = defaultdict(list)
 
-    for op_id, _idx, tid in output_tensors_batch:
-        outputs_by_tid[_tid_int(tid)].append(op_id)
+    for row in output_tensors_batch:
+        op_id, tid = row[0], _tid_int(row[2])
+        outputs_by_tid[tid].append(op_id)
 
-    for op_id, _idx, tid in input_tensors_batch:
-        tid_i = _tid_int(tid)
+    for row in input_tensors_batch:
+        op_id, tid = row[0], _tid_int(row[2])
         name = id_to_name.get(op_id, "")
         if _is_tensor_deallocate_operation(name):
-            dealloc_candidate_ops[tid_i].append(op_id)
+            dealloc_candidate_ops[tid].append(op_id)
             continue
         # Last *computational* use excludes free/deallocate ops (they also list the tensor as input).
-        inputs_by_tid[tid_i].append(op_id)
+        inputs_by_tid[tid].append(op_id)
 
     stack_by_op = {row[0]: row[1] for row in stack_traces_batch}
 
@@ -499,14 +500,16 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS tensor_lifetime (
-            tensor_id int UNIQUE,
+            tensor_id int,
             producer_operation_id int,
             last_use_operation_id int,
             deallocate_operation_id int,
             producer_source_file text,
             producer_source_line int,
             last_use_source_file text,
-            last_use_source_line int
+            last_use_source_line int,
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(tensor_id, rank)
         )
     """
     )
@@ -518,7 +521,8 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
             tensor_id int,
             operation_id int,
             input_index int,
-            UNIQUE(tensor_id, operation_id, input_index)
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(tensor_id, operation_id, input_index, rank)
         )
     """
     )
@@ -530,7 +534,8 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
             tensor_id int,
             operation_id int,
             output_index int,
-            UNIQUE(tensor_id, operation_id, output_index)
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(tensor_id, operation_id, output_index, rank)
         )
     """
     )
@@ -1443,21 +1448,21 @@ def import_graph(
     if operation_arguments_batch:
         cursor.executemany("""INSERT INTO operation_arguments VALUES (?, ?, ?, ?)""", operation_arguments_batch)
     if input_tensors_batch:
-        cursor.executemany("""INSERT INTO input_tensors VALUES (?, ?, ?)""", input_tensors_batch)
-        tensor_consumers_batch = [(tid_int, op_id, idx) for op_id, idx, tid_int in input_tensors_batch]
+        cursor.executemany("""INSERT INTO input_tensors VALUES (?, ?, ?, ?)""", input_tensors_batch)
+        tensor_consumers_batch = [(tid_int, op_id, idx, rk) for op_id, idx, tid_int, rk in input_tensors_batch]
         cursor.executemany(
-            """INSERT OR IGNORE INTO tensor_consumers VALUES (?, ?, ?)""",
+            """INSERT OR IGNORE INTO tensor_consumers VALUES (?, ?, ?, ?)""",
             tensor_consumers_batch,
         )
     if output_tensors_batch:
-        cursor.executemany("""INSERT INTO output_tensors VALUES (?, ?, ?)""", output_tensors_batch)
-        tensor_producers_batch = [(tid_int, op_id, idx) for op_id, idx, tid_int in output_tensors_batch]
+        cursor.executemany("""INSERT INTO output_tensors VALUES (?, ?, ?, ?)""", output_tensors_batch)
+        tensor_producers_batch = [(tid_int, op_id, idx, rk) for op_id, idx, tid_int, rk in output_tensors_batch]
         cursor.executemany(
-            """INSERT OR IGNORE INTO tensor_producers VALUES (?, ?, ?)""",
+            """INSERT OR IGNORE INTO tensor_producers VALUES (?, ?, ?, ?)""",
             tensor_producers_batch,
         )
     if tensors_batch:
-        cursor.executemany("""INSERT OR IGNORE INTO tensors VALUES (?, ?, ?, ?, ?, ?, ?, ?)""", tensors_batch)
+        cursor.executemany("""INSERT OR IGNORE INTO tensors VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", tensors_batch)
     tensor_lifetime_records = []
     if record_tensor_lifetime:
         tensor_lifetime_records = compute_tensor_lifetime_records(
@@ -1468,6 +1473,8 @@ def import_graph(
             kept_tensor_ids,
         )
         if tensor_lifetime_records:
+            for rec in tensor_lifetime_records:
+                rec["rank"] = rank
             tl_rows = [
                 (
                     r["tensor_id"],
@@ -1478,11 +1485,12 @@ def import_graph(
                     r["producer_source_line"],
                     r["last_use_source_file"],
                     r["last_use_source_line"],
+                    r["rank"],
                 )
                 for r in tensor_lifetime_records
             ]
             cursor.executemany(
-                """INSERT OR REPLACE INTO tensor_lifetime VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT OR REPLACE INTO tensor_lifetime VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 tl_rows,
             )
     if device_tensors_batch:

@@ -81,6 +81,9 @@ _SQLITE_TABLES_WITH_RANK = (
     "stack_traces",
     "input_tensors",
     "output_tensors",
+    "tensor_lifetime",
+    "tensor_consumers",
+    "tensor_producers",
     "buffer_pages",
 )
 
@@ -359,7 +362,7 @@ class TestTensorLifetime:
         report = _make_report(single_relu_mock_graph, python_io=single_relu_python_io)
         conn, cursor = _import_to_db(report, tmp_path)
         cursor.execute(
-            "SELECT tensor_id, producer_operation_id, last_use_operation_id, deallocate_operation_id "
+            "SELECT tensor_id, producer_operation_id, last_use_operation_id, deallocate_operation_id, rank "
             "FROM tensor_lifetime ORDER BY tensor_id"
         )
         rows = {r[0]: r for r in cursor.fetchall()}
@@ -367,6 +370,7 @@ class TestTensorLifetime:
         assert rows[42][2] == 1  # tensor 42 is consumed by op 1 (ttnn::relu)
         assert rows[101][1] == 1  # tensor 101 is produced by op 1
         assert rows[101][2] is None  # tensor 101 is never consumed — orphan candidate
+        assert all(r[4] == 0 for r in rows.values())
         conn.close()
 
     def test_tensor_lifetime_table_empty_without_stack_traces(self, tmp_path, single_relu_mock_graph):
@@ -385,23 +389,23 @@ class TestTensorLifetime:
     def test_tensor_consumers_mirror_input_tensors(self, tmp_path, single_relu_mock_graph):
         report = _make_report(single_relu_mock_graph)
         conn, cursor = _import_to_db(report, tmp_path)
-        cursor.execute("SELECT operation_id, input_index, tensor_id FROM input_tensors ORDER BY tensor_id")
+        cursor.execute("SELECT operation_id, input_index, tensor_id, rank FROM input_tensors ORDER BY tensor_id")
         inp = cursor.fetchall()
-        cursor.execute("SELECT tensor_id, operation_id, input_index FROM tensor_consumers ORDER BY tensor_id")
+        cursor.execute("SELECT tensor_id, operation_id, input_index, rank FROM tensor_consumers ORDER BY tensor_id")
         tc = cursor.fetchall()
         assert len(tc) == len(inp)
-        assert {(r[2], r[0], r[1]) for r in inp} == {(r[0], r[1], r[2]) for r in tc}
+        assert {(r[2], r[0], r[1], r[3]) for r in inp} == {(r[0], r[1], r[2], r[3]) for r in tc}
         conn.close()
 
     def test_tensor_producers_mirror_output_tensors(self, tmp_path, single_relu_mock_graph):
         report = _make_report(single_relu_mock_graph)
         conn, cursor = _import_to_db(report, tmp_path)
-        cursor.execute("SELECT operation_id, output_index, tensor_id FROM output_tensors ORDER BY tensor_id")
+        cursor.execute("SELECT operation_id, output_index, tensor_id, rank FROM output_tensors ORDER BY tensor_id")
         out = cursor.fetchall()
-        cursor.execute("SELECT tensor_id, operation_id, output_index FROM tensor_producers ORDER BY tensor_id")
+        cursor.execute("SELECT tensor_id, operation_id, output_index, rank FROM tensor_producers ORDER BY tensor_id")
         tp = cursor.fetchall()
         assert len(tp) == len(out)
-        assert {(r[2], r[0], r[1]) for r in out} == {(r[0], r[1], r[2]) for r in tp}
+        assert {(r[2], r[0], r[1], r[3]) for r in out} == {(r[0], r[1], r[2], r[3]) for r in tp}
         conn.close()
 
 
