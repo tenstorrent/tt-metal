@@ -113,7 +113,10 @@ def build_final_categorization(
 
     no_emit = set(load_no_emit_tests(model_id).keys())
     skipped = load_persistent_skips(model_id)
-    graduated_set = set(graduated_set or _infer_graduated_from_disk(demo_dir, new_components))
+    if graduated_set is None:
+        graduated_set = set(_infer_graduated_from_disk(demo_dir, new_components))
+    else:
+        graduated_set = set(graduated_set)
     graduated_set -= set(skipped.keys())
     graduated_set |= set(load_alias_credits(model_id).keys())
 

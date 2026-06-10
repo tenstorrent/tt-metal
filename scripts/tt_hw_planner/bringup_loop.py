@@ -909,7 +909,7 @@ def _stub_has_graduated_from_autofill(stub_path: Path) -> bool:
         head = text[:2000]
         if "_get_torch_submodule" in head:
             return False
-        if "self._torch_module" in head or "_coerce_to_torch" in head:
+        if "self._torch_module" in head or "_coerce_to_torch" in head or "throw_exception_on_fallback" in head:
             return False
         return True
 
@@ -939,13 +939,17 @@ def _stub_has_graduated_from_autofill(stub_path: Path) -> bool:
         try:
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute):
                 f = n.func
-                if isinstance(f.value, ast.Name) and f.value.id == "self" and f.attr == "_torch_module":
+                if (
+                    isinstance(f.value, ast.Name)
+                    and f.value.id == "self"
+                    and f.attr in ("_torch_module", "torch_module")
+                ):
                     return True
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute):
                 inner = n.func.value
                 if (
                     isinstance(inner, ast.Attribute)
-                    and inner.attr == "_torch_module"
+                    and inner.attr in ("_torch_module", "torch_module")
                     and isinstance(inner.value, ast.Name)
                     and inner.value.id == "self"
                     and n.func.attr in forbidden_torch_methods
@@ -1407,6 +1411,31 @@ def test_{component_safe}(device_params, device):
 '''
 
 
+_FALLBACK_COERCE_TO_TORCH = """def _coerce_to_torch(x):
+    try:
+        import ttnn as _ttnn
+        if isinstance(x, _ttnn.Tensor):
+            import torch as _torch
+            t = _ttnn.to_torch(x)
+            # Bug Y fix (2026-05-23 live-run sam2-hiera-tiny)
+            if t.is_floating_point():
+                if t.dtype != _torch.float32:
+                    t = t.to(_torch.float32)
+            elif t.dtype != _torch.bool:
+                t = t.to(_torch.long)
+            return t
+    except Exception:
+        pass
+    if isinstance(x, tuple):
+        return tuple(_coerce_to_torch(e) for e in x)
+    if isinstance(x, list):
+        return [_coerce_to_torch(e) for e in x]
+    if isinstance(x, dict):
+        return {k: _coerce_to_torch(v) for k, v in x.items()}
+    return x
+"""
+
+
 _AUTOFILL_TORCH_TEMPLATE = '''# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
@@ -1501,44 +1530,7 @@ def _get_torch_submodule():
     return resolved
 
 
-def _coerce_to_torch(x):
-    """Recursively convert any `ttnn.Tensor` to `torch.Tensor` so the
-    HF PyTorch module can consume our inputs.
-
-    The Phase-2 PCC test passes a `ttnn.Tensor` as the primary input
-    (and the original torch kwargs for the rest). The torch reference
-    cannot consume ttnn tensors — it crashes on calls like
-    `pixel_values.to(self.projection.weight.dtype)`. This boundary
-    coercion is the cheap fix that lets every Phase-1 fallback work
-    against the same Phase-2 test as a real native port would."""
-    try:
-        import ttnn as _ttnn
-        if isinstance(x, _ttnn.Tensor):
-            import torch as _torch
-            t = _ttnn.to_torch(x)
-            # Bug Y fix (2026-05-23 live-run sam2-hiera-tiny):
-            # HF reference modules carry fp32 weights by default. When
-            # the test feeds a bf16 device tensor (the standard
-            # Blackhole dtype), the post-conversion torch tensor
-            # inherits bf16 and the HF forward raises
-            #   RuntimeError: mat1 and mat2 must have the same dtype,
-            #   but got BFloat16 and Float
-            # Promote float-typed tensors to fp32 unconditionally so
-            # the autofill safety net runs against any device dtype.
-            # Non-float (e.g. integer attention masks / token ids)
-            # tensors are passed through unchanged.
-            if t.is_floating_point() and t.dtype != _torch.float32:
-                t = t.to(_torch.float32)
-            return t
-    except Exception:
-        pass
-    if isinstance(x, tuple):
-        return tuple(_coerce_to_torch(e) for e in x)
-    if isinstance(x, list):
-        return [_coerce_to_torch(e) for e in x]
-    if isinstance(x, dict):
-        return {{k: _coerce_to_torch(v) for k, v in x.items()}}
-    return x
+{coerce_fn}
 
 
 def {component_safe}(*args, **kwargs):
@@ -1568,6 +1560,7 @@ def _render_autofill_stub(
         model_id=model_id,
         hf_reference=hf_reference or "(no HF reference resolved)",
         submodule_candidates=candidates,
+        coerce_fn=_FALLBACK_COERCE_TO_TORCH,
     )
 
 

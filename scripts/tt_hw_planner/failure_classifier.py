@@ -162,6 +162,10 @@ _CONSTRAINT_HINT_PATTERNS = [
     r"\btile.*alignment\b",
 ]
 
+_DATA_DEPENDENT_SHAPE_PATTERNS = [
+    r"all the input array dimensions except for the concatenation axis must match exactly",
+]
+
 # ITERATION_BUDGET signals come from the loop itself; the reason string
 # is constructed by auto_iterate.py and is well-known.
 _ITERATION_BUDGET_MARKERS = (
@@ -238,6 +242,13 @@ def classify_failure(
             class_name=HF_ERROR,
             confidence="high",
             reason="HF reference forward error (not a TTNN issue)",
+        )
+
+    if _matches_any(combined, _DATA_DEPENDENT_SHAPE_PATTERNS):
+        return FailureVerdict(
+            class_name=CONSTRAINT_MISMATCH,
+            confidence="medium",
+            reason="data-dependent output shape (dynamic length); not a fixable wiring bug",
         )
 
     # 3. Kernel-missing pattern + op verification: distinguishes

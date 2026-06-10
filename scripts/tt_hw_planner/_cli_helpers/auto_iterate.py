@@ -798,44 +798,49 @@ def _run_auto_iterate_loop(
         if _new_no_emit:
             print(f"  [no-emit-tests] excluding {len(_new_no_emit)} of these from the " f"candidate pool for this run")
 
-    try:
-        from ..final_categorization import parents_ready_to_recompose
-        from ..overlay_manager import persist_locked_module, remove_no_emit_test
-        from ..agentic.stale_tests import restore_stale_test
+    def _reconcile_recompose(graduated_now) -> List[str]:
+        try:
+            from ..final_categorization import parents_ready_to_recompose
+            from ..overlay_manager import persist_locked_module, remove_no_emit_test
+            from ..agentic.stale_tests import restore_stale_test
 
-        _recompose_ready = parents_ready_to_recompose(
-            model_id=MODEL,
-            demo_dir=demo_dir,
-            graduated_set=set(seed_report.get("passed_components", []) or []),
-        )
-        _recomposed_now: List[str] = []
-        for _parent in _recompose_ready:
-            _restored = restore_stale_test(demo_dir=demo_dir, component=_parent, safe_id=_safe_id(_parent))
-            remove_no_emit_test(MODEL, _parent)
-            persist_locked_module(
-                MODEL,
-                _parent,
-                reason="children all on device; recomposed as whole-module target",
+            _ready = parents_ready_to_recompose(
+                model_id=MODEL,
+                demo_dir=demo_dir,
+                graduated_set=set(graduated_now or set()),
             )
-            if _parent in retired_this_run:
-                retired_this_run[:] = [c for c in retired_this_run if c != _parent]
-            _recomposed_now.append(_parent)
+            _done: List[str] = []
+            for _parent in _ready:
+                _restored = restore_stale_test(demo_dir=demo_dir, component=_parent, safe_id=_safe_id(_parent))
+                remove_no_emit_test(MODEL, _parent)
+                persist_locked_module(
+                    MODEL,
+                    _parent,
+                    reason="children all on device; recomposed as whole-module target",
+                )
+                if _parent in retired_this_run:
+                    retired_this_run[:] = [c for c in retired_this_run if c != _parent]
+                _done.append(_parent)
+                print(
+                    f"  [recompose] `{_parent}` ready — all children on device; restored as "
+                    f"whole-module target, locked against re-decomposition"
+                    + (f" (restored {_restored.name})" if _restored else " (live stub kept)")
+                )
+            return _done
+        except Exception as _recompose_exc:
             print(
-                f"  [recompose] `{_parent}` ready — all children on device; restored as "
-                f"whole-module target, locked against re-decomposition"
-                + (f" (restored {_restored.name})" if _restored else " (live stub kept)")
+                f"  [recompose] non-fatal error: {type(_recompose_exc).__name__}: {_recompose_exc}",
+                file=sys.stderr,
             )
-        if _recomposed_now:
-            banner(
-                f"RECOMPOSE: {len(_recomposed_now)} decomposed parent(s) ready — children all on "
-                f"device; re-running seed pytest to pull them into the candidate pool"
-            )
-            seed_report = _scope_report_to_demo(_parse_pytest_report(), demo_dir)
-    except Exception as _recompose_exc:
-        print(
-            f"  [recompose] non-fatal error: {type(_recompose_exc).__name__}: {_recompose_exc}",
-            file=sys.stderr,
+            return []
+
+    _recomposed_now = _reconcile_recompose(set(seed_report.get("passed_components", []) or []))
+    if _recomposed_now:
+        banner(
+            f"RECOMPOSE: {len(_recomposed_now)} decomposed parent(s) ready — children all on "
+            f"device; re-running seed pytest to pull them into the candidate pool"
         )
+        seed_report = _scope_report_to_demo(_parse_pytest_report(), demo_dir)
 
     try:
         from ..alias_dedup import reconcile_alias_duplicates
@@ -2198,6 +2203,12 @@ def _run_auto_iterate_loop(
                     last_failures = ""
                     last_failure_details = ""
 
+        _recomp_mid = _reconcile_recompose(set(graduated_this_run))
+        if _recomp_mid:
+            banner(
+                f"AUTO-ITERATE {it}/{max_iters}: RECOMPOSE — {len(_recomp_mid)} parent(s) "
+                f"now have all children on device; re-queued: {', '.join(_recomp_mid)}"
+            )
         ungrad_now, smoke_now = _auto_iteration_blockers(MODEL)
         if target_components:
             allowed = set(target_components)

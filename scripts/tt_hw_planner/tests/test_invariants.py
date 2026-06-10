@@ -3294,7 +3294,12 @@ def test_autofill_template_coerce_to_torch_promotes_to_fp32() -> None:
     promote float tensors to fp32 inside `_coerce_to_torch`."""
     from scripts.tt_hw_planner import bringup_loop
 
-    template = bringup_loop._AUTOFILL_TORCH_TEMPLATE
+    template = bringup_loop._render_autofill_stub(
+        component_name="probe",
+        model_id="m/x",
+        hf_reference="ref",
+        discovered_submodule_path="a.b",
+    )
 
     assert "is_floating_point()" in template, (
         "autofill template must promote float tensors to fp32 in " "_coerce_to_torch (Bug Y)"

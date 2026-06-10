@@ -533,36 +533,9 @@ def emit_partial_stub(
         "    return cur\n\n"
     )
 
-    parts.append(
-        "def _coerce_to_torch(x):\n"
-        "    try:\n"
-        "        if isinstance(x, ttnn.Tensor):\n"
-        "            import torch as _torch\n"
-        "            t = ttnn.to_torch(x)\n"
-        "            # Bug Y fix (2026-05-23 live-run sam2-hiera-tiny):\n"
-        "            # HF reference modules carry fp32 weights by default.\n"
-        "            # If the test feeds a bf16 device tensor (typical on\n"
-        "            # Blackhole), the converted torch tensor inherits bf16\n"
-        "            # and the HF forward raises:\n"
-        "            #   RuntimeError: mat1 and mat2 must have the same\n"
-        "            #   dtype, but got BFloat16 and Float\n"
-        "            # Promote floating-point tensors to fp32 unconditionally\n"
-        "            # so the LLM_GAP torch-fallback `__call__` works against\n"
-        "            # any device dtype. Integer tensors (attention masks,\n"
-        "            # token ids) pass through unchanged.\n"
-        "            if t.is_floating_point() and t.dtype != _torch.float32:\n"
-        "                t = t.to(_torch.float32)\n"
-        "            return t\n"
-        "    except Exception:\n"
-        "        pass\n"
-        "    if isinstance(x, tuple):\n"
-        "        return tuple(_coerce_to_torch(e) for e in x)\n"
-        "    if isinstance(x, list):\n"
-        "        return [_coerce_to_torch(e) for e in x]\n"
-        "    if isinstance(x, dict):\n"
-        "        return {k: _coerce_to_torch(v) for k, v in x.items()}\n"
-        "    return x\n\n"
-    )
+    from .bringup_loop import _FALLBACK_COERCE_TO_TORCH
+
+    parts.append(_FALLBACK_COERCE_TO_TORCH + "\n")
 
     parts.append(f"class {cls_name}:\n")
     parts.append("    def __init__(self, device, torch_module):\n")

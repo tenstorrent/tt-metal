@@ -4747,26 +4747,17 @@ def _component_stub_path(demo_dir: Path, component: str) -> Path:
 def _build_stabilized_fallback_stub(component: str) -> str:
     safe = _safe_component_name(component)
     cls = _component_class_name(component)
+    from .bringup_loop import _FALLBACK_COERCE_TO_TORCH
+
     return (
         "import torch\n"
         "import ttnn\n"
         "\n"
-        "\n"
+        "\n" + _FALLBACK_COERCE_TO_TORCH + "\n\n"
         f"class {cls}:\n"
         "    def __init__(self, device, torch_module):\n"
         "        self.device = device\n"
         "        self.torch_module = torch_module.eval()\n"
-        "\n"
-        "    def _to_torch(self, value):\n"
-        "        if isinstance(value, ttnn.Tensor):\n"
-        "            return ttnn.to_torch(value)\n"
-        "        if isinstance(value, list):\n"
-        "            return [self._to_torch(v) for v in value]\n"
-        "        if isinstance(value, tuple):\n"
-        "            return tuple(self._to_torch(v) for v in value)\n"
-        "        if isinstance(value, dict):\n"
-        "            return {k: self._to_torch(v) for k, v in value.items()}\n"
-        "        return value\n"
         "\n"
         "    def _pick_tensor(self, value):\n"
         "        if torch.is_tensor(value):\n"
@@ -4788,8 +4779,8 @@ def _build_stabilized_fallback_stub(component: str) -> str:
         "        return None\n"
         "\n"
         "    def __call__(self, *args, **kwargs):\n"
-        "        t_args = tuple(self._to_torch(a) for a in args)\n"
-        "        t_kwargs = {k: self._to_torch(v) for k, v in kwargs.items()}\n"
+        "        t_args = tuple(_coerce_to_torch(a) for a in args)\n"
+        "        t_kwargs = {k: _coerce_to_torch(v) for k, v in kwargs.items()}\n"
         "        with ttnn.manage_config('throw_exception_on_fallback', False):\n"
         "            with ttnn.manage_config('enable_fast_runtime_mode', True):\n"
         "                out = self.torch_module(*t_args, **t_kwargs)\n"
@@ -4827,6 +4818,10 @@ def _rewrite_components_to_stable_fallback(demo_dir: Path, components: List[str]
     for comp in components:
         stub_path = _component_stub_path(demo_dir, comp)
         if not stub_path.is_file():
+            continue
+        snapshot = Path(str(stub_path) + ".last_good_native")
+        if snapshot.is_file():
+            stub_path.write_text(snapshot.read_text(encoding="utf-8"), encoding="utf-8")
             continue
         backup = stub_path.with_suffix(stub_path.suffix + ".auto_stabilize.bak")
         if not backup.exists():
@@ -9694,9 +9689,12 @@ def _cmd_up_core(args) -> int:
             format_kernel_gap_report,
         )
 
+        _final_pcc_report = _scope_report_to_demo(_parse_pytest_report(), demo_dir)
+        _pcc_validated = set(_final_pcc_report.get("passed_components", []) or [])
         _categorization = build_final_categorization(
             model_id=MODEL,
             demo_dir=demo_dir,
+            graduated_set=_pcc_validated,
         )
 
         print()
