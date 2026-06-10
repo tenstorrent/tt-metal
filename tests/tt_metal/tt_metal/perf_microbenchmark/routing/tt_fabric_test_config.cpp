@@ -551,10 +551,12 @@ static bool check_topology_filter(const ParsedTestConfig& test_config, const std
     if (filter_value == "TorusX") {
         return test_config.fabric_setup.topology == tt::tt_fabric::Topology::Torus &&
                test_config.fabric_setup.torus_config == "X";
-    } else if (filter_value == "TorusY") {
+    }
+    if (filter_value == "TorusY") {
         return test_config.fabric_setup.topology == tt::tt_fabric::Topology::Torus &&
                test_config.fabric_setup.torus_config == "Y";
-    } else if (filter_value == "TorusXY") {
+    }
+    if (filter_value == "TorusXY") {
         return test_config.fabric_setup.topology == tt::tt_fabric::Topology::Torus &&
                test_config.fabric_setup.torus_config == "XY";
     }
@@ -1105,7 +1107,7 @@ bool TestConfigBuilder::should_skip_test_on_platform(const ParsedTestConfig& tes
             LogTest,
             "Skipping test '{}' - {} topology is not compatible with a multi-mesh fabric",
             test_config.name,
-            test_config.fabric_setup.topology);
+            enchantum::to_string(test_config.fabric_setup.topology));
         return true;
     }
     return false;
