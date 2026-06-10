@@ -322,8 +322,9 @@ def _min_speech_tokens(text: str) -> int:
 # The model's free-run PCC (~0.79) causes accumulated errors that collapse the
 # semantic code distribution to a single repeated value after ~200 tokens (~20 words).
 # Keeping each chunk ≤ _CHUNK_MAX_WORDS prevents that collapse.
-_CHUNK_THRESHOLD_WORDS = 9999
-_CHUNK_MAX_WORDS = 20
+_CHUNK_THRESHOLD_WORDS = 100  # threshold for text_max_seq_len > 4096 (long context)
+_CHUNK_THRESHOLD_WORDS_SHORT = 200  # threshold for text_max_seq_len <= 4096 (short context)
+_CHUNK_MAX_WORDS = 200
 
 
 def _split_into_chunks(text: str, max_words: int = _CHUNK_MAX_WORDS) -> list[str]:
@@ -453,10 +454,11 @@ def run_text_mode(
     AR degeneration (semantic-code collapse) that occurs after ~200 acoustic tokens when
     running in free-run mode with PCC ≈ 0.79.
 
-    Chunking is only enabled when text_max_seq_len > 4096 (i.e. the paged KV cache is in
-    use).  At text_max_seq_len <= 4096 the context fits in a single pass without degeneration.
+    Chunking thresholds:
+      - text_max_seq_len > 4096  (long context / paged KV): chunk at > 35 words
+      - text_max_seq_len <= 4096 (short context):           chunk at > 200 words
     """
-    chunk_threshold = _CHUNK_THRESHOLD_WORDS if text_max_seq_len > 4096 else 9999
+    chunk_threshold = _CHUNK_THRESHOLD_WORDS if text_max_seq_len > 4096 else _CHUNK_THRESHOLD_WORDS_SHORT
     if len(text.split()) > chunk_threshold:
         _run_chunked_text_mode(pipe, text, voice, seed, sample_rate, out_path)
         return
