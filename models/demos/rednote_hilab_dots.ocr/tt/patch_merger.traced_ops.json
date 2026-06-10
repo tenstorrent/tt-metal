@@ -4,5 +4,6 @@
   "ttnn.layer_norm",
   "ttnn.linear",
   "ttnn.reshape",
-  "ttnn.to_layout"
+  "ttnn.to_layout",
+  "ttnn.to_memory_config"
 ]

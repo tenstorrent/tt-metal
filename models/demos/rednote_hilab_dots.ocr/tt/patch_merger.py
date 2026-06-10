@@ -102,6 +102,10 @@ class TtPatchMerger(LightweightModule):
         x = ttnn.reshape(x, (-1, self.merged_dim))
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
+        # Tracy: the up-projection keeps the default heuristic (96-core
+        # DRAM-output fused-bias path; forcing core_grid 10x10 + L1 output
+        # measured WORSE, 431.9 -> 448.8us — fp32 [224,6144] is matmul-bound,
+        # not write-bound).
         h = ttnn.linear(
             x,
             self.w1,
@@ -111,13 +115,24 @@ class TtPatchMerger(LightweightModule):
         )
         ttnn.deallocate(x)
         # KB ttnn_gelu: exact (erf) GELU, standalone after the linear.
+        # Writes DRAM so the next matmul is DRAM-fed (large L1-interleaved
+        # matmul operands stall the kernel, see vision_block notes).
         h = ttnn.gelu(h, fast_and_approximate_mode=False, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Tracy-driven: the down-projection's default heuristic ran at only
+        # 48 cores (249.6us). core_grid 10x10 + L1 output engages the
+        # fused-bias L1 matmul variant on a fuller grid (vision_patch_embed
+        # recipe): 142.4us @ 70 cores.
         out = ttnn.linear(
             h,
             self.w2,
             bias=self.b2,
+            core_grid=ttnn.CoreGrid(y=10, x=10),
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(h)
-        return out
+        # Block-output contract: hand the (small, [seq/m^2, out]) result back
+        # in DRAM interleaved like the other tower blocks.
+        out_dram = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(out)
+        return out_dram

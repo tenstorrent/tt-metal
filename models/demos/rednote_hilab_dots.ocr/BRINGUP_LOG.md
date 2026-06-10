@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T05:25:23Z
+**Updated:** 2026-06-10T05:35:01Z
 
 ## Block Status
 
@@ -38,7 +38,7 @@
 | patch_merger | reference | done | 1.000000 | 0 | LayerNorm(eps=1e-6) -> view(-1,6144) -> Linear -> GELU -> Linear 6144->1536, real merger weights |
 | patch_merger | ttnn | done | 0.999992 | 0 | LayerNorm(eps=1e-6, gamma+beta TILE [1,32,dim] per llama_layernorm.py) -> ROW_MAJOR reshape workaround (tilized ttnn.reshape hang, issue #29932, qwen25_vl recipe) [784,1536]->[196,6144] -> ttnn.linear+bias -> ttnn.gelu(fast_and_approximate_mode=False) -> ttnn.linear+bias 6144->1536, mirroring reference_impl qwen25_vl/tt/patch_merger.py with dots.ocr deltas (LayerNorm-with-bias instead of RMSNorm; biased Linears). KB ttnn_gelu cited (exact erf GELU standalone after linear; entry notes fused-into-matmul activation cost PCC). HiFi4+fp32-acc; real vision_tower.merger weights, replicated on 1x4 mesh per parallelism plan (placement=replicate); replicated output compared single-device vs golden. Guard ok (lint 0, kernels ok, no new host ops). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | patch_merger | debug | n/a | — | 0 |  |
-| patch_merger | optimization | pending | — | 0 |  |
+| patch_merger | optimization | done | 0.999992 | 0 | Tracy-driven single change: down-projection ttnn.linear given core_grid 10x10 + L1 output so the fused-bias L1 matmul variant engages on a fuller grid (vision_patch_embed recipe; default heuristic ran it at only 48 cores), with a 5.3us to_memory_config copy back to DRAM preserving the block-output contract. Traced tracy at the production operating point (fp32 [1,1,896,1536] replicated 1x4 mesh, metal-trace captured+replayed): per-device block kernel time 921.1 -> 815.4us (-11.5%); down-proj matmul 249.6us@48c -> 141.7us@70c (-43%). Up-projection kept default DRAM heuristic: forcing core_grid+L1 there measured WORSE (431.9 -> 448.8us, fp32 compute-bound) and was reverted. gelu stays DRAM-out so the down matmul is DRAM-fed (vision_block L1-interleaved-into-matmul stall). Top hotspot post-change MatmulDeviceOperation (up-proj 6144x6144) 425.9us 52.2% of block kernel time at 96c, fp32 HiFi4 compute-bound - no per-block lever left without precision risk. KB entries for kind mlp reviewed: ttnn_gelu already applied in ttnn phase (exact erf standalone; fuse-into-matmul variant rejected for PCC per entry note); ttnn_silu_2/ttnn_mul_1 (SwiGLU) and ttnn_concat/ttnn_fold n/a to LayerNorm->Linear->GELU->Linear - none newly applied. PCC 0.999992 (>0.99, unchanged) re-verified on 1x4 mesh; traced_ops sidecar regenerated (+ttnn.to_memory_config). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | patch_merger | real_weights | pending | — | 0 |  |
 | vision_transformer | reference | done | 1.000000 | 0 | full tower: patch_embed -> 42x block -> post_trunk_norm -> merger, all real fp32 weights, matches HF DotsVisionTransformer(bf16=False) |
 | vision_transformer | ttnn | done | 0.990121 | 0 | Full tower composition of done sub-blocks: TtVisionPatchEmbed -> 42x TtVisionBlock -> TtVisionRMSNorm(post_trunk_norm) -> TtPatchMerger, mirroring reference_impl qwen25_vl/tt/model.py. All real fp32 vision_tower weights, replicated on 1x4 mesh per parallelism plan (placement=replicate); seq padded 784->896, host rope/cu_seqlens per hybrid_notes. Numerics: bf16 end-to-end compounded rounding across 42 blocks (PCC 0.9768) amplified by late-layer outlier channels (h_absmax up to 1604), so the tower runs an fp32 residual stream + fp32 weights/activations with a high-precision attention path (fp32 fused QKV via nlp_create_qkv_heads fp32, explicit fp32 HF-convention rope via slice/neg/concat/mul/add, bf16 only at the bf16-only windowed-SDPA kernel boundary; o_proj fp32). Found+worked around: ttnn.rms_norm fp32 ROW_MAJOR gamma is misread on device (PCC ~0) -> fp32 gammas use TILE [1,1,1,dim]. PCC 0.990121 — thin margin over 0.99; per-block isolation PCC 0.99999+, deficit is amplified early-layer SDPA-core bf16 noise (bf16-only kernel). bf16 paths of the four modified sub-block files re-verified: patch_embed 0.999957, rmsnorm 0.999982, attention 0.999855, block 0.999958 — all unchanged. Guard ok (lint 0, kernels ok, no new host ops). KB entries for kind other were generic eltwise/scatter records — none applicable, none used. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 14 (2026-06-10T04:05:51Z): device[text_rmsnorm] — ok
 - tick 15 (2026-06-10T04:25:05Z): device[text_attention] — ok
 - tick 16 (2026-06-10T04:31:32Z): device[text_mlp] — ok
 - tick 17 (2026-06-10T04:39:45Z): device[decoder_layer] — ok
@@ -94,6 +93,7 @@
 - tick 21 (2026-06-10T05:09:51Z): device[vision_attention] — ok
 - tick 22 (2026-06-10T05:17:43Z): device[vision_mlp] — ok
 - tick 23 (2026-06-10T05:25:23Z): device[vision_block] — ok
+- tick 24 (2026-06-10T05:35:01Z): device[patch_merger] — ok
 
 ## Host-Resident Exceptions
 

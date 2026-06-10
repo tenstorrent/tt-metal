@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T05:25:23Z",
+  "updated_at": "2026-06-10T05:35:01Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -319,8 +319,16 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/patch_merger.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_patch_merger.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_patch_merger.py",
+          "generated/profiler/reports/2026_06_10_05_33_34/ops_perf_results_2026_06_10_05_33_34.csv"
+        ],
+        "notes": "Tracy-driven single change: down-projection ttnn.linear given core_grid 10x10 + L1 output so the fused-bias L1 matmul variant engages on a fuller grid (vision_patch_embed recipe; default heuristic ran it at only 48 cores), with a 5.3us to_memory_config copy back to DRAM preserving the block-output contract. Traced tracy at the production operating point (fp32 [1,1,896,1536] replicated 1x4 mesh, metal-trace captured+replayed): per-device block kernel time 921.1 -> 815.4us (-11.5%); down-proj matmul 249.6us@48c -> 141.7us@70c (-43%). Up-projection kept default DRAM heuristic: forcing core_grid+L1 there measured WORSE (431.9 -> 448.8us, fp32 compute-bound) and was reverted. gelu stays DRAM-out so the down matmul is DRAM-fed (vision_block L1-interleaved-into-matmul stall). Top hotspot post-change MatmulDeviceOperation (up-proj 6144x6144) 425.9us 52.2% of block kernel time at 96c, fp32 HiFi4 compute-bound - no per-block lever left without precision risk. KB entries for kind mlp reviewed: ttnn_gelu already applied in ttnn phase (exact erf standalone; fuse-into-matmul variant rejected for PCC per entry note); ttnn_silu_2/ttnn_mul_1 (SwiGLU) and ttnn_concat/ttnn_fold n/a to LayerNorm->Linear->GELU->Linear - none newly applied. PCC 0.999992 (>0.99, unchanged) re-verified on 1x4 mesh; traced_ops sidecar regenerated (+ttnn.to_memory_config). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999992
       },
       "real_weights": {
         "status": "pending",
@@ -837,6 +845,12 @@
       "tick": 23,
       "ts": "2026-06-10T05:25:23Z",
       "action": "device[vision_block]",
+      "result": "ok"
+    },
+    {
+      "tick": 24,
+      "ts": "2026-06-10T05:35:01Z",
+      "action": "device[patch_merger]",
       "result": "ok"
     }
   ],
