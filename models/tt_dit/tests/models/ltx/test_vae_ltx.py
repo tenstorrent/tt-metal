@@ -325,10 +325,7 @@ _LTX_DECODER_MESH_MULTI_ONLY_IDS = [
 
 # (num_frames, height, width): H/W divisible by 64; (num_frames - 1) % 8 == 0 for VAE.
 _LTX_DECODER_SHAPE_PARAMS = [
-    pytest.param(17, 128, 256, id="17f_128x256"),  # smoke — fast on 2x4
-    pytest.param(9, 512, 832, id="9f_512x832"),  # ~480p latent grid
-    pytest.param(17, 544, 960, id="17f_544x960"),  # stage-1 half of 1080p (544x960)
-    pytest.param(9, 1088, 1920, id="9f_1088x1920"),  # 1080p production (modest T)
+    pytest.param(145, 1088, 1920, id="145f_1088x1920"),  # 1080p production (19 latent frames)
 ]
 
 _LTX_DECODER_2K_SHAPE_PARAMS = [
