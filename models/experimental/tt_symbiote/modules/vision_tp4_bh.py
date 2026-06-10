@@ -637,7 +637,13 @@ def init_attn_tp4_bh_configs(
         out_dtype=ttnn.bfloat8_b,
         l1_resident_bytes_per_core=x_resident + qkv_resident,
     )
-    attn._bh_tp4_o_pc = bh_tp4_o_proj_pc(device, seq_len=seq_len, ctx_dim=ctx_dim)
+    # Arch dispatch: WH (N150×4) uses the hardware-swept ``wh_tp4_o_proj_pc``
+    # (obh=11); BH keeps ``bh_tp4_o_proj_pc``. Direct ``bh_tp4_o_proj_pc`` on WH
+    # falls through to the generic search (out_block_h=1, 44 outer-M passes,
+    # ~4× slower).
+    from models.experimental.tt_symbiote.modules.vision_tp4 import tp4_o_proj_pc
+
+    attn._bh_tp4_o_pc = tp4_o_proj_pc(device, seq_len=seq_len, ctx_dim=ctx_dim)
     attn._bh_tp4_sdpa_pc = bh_tp4_sdpa_pc(device)
     attn._bh_tp4_seq_len = seq_len
 
@@ -664,10 +670,16 @@ def init_mlp_tp4_bh_configs(
     """Attach hardware-swept matmul program configs to a TP4 MLP module."""
     device = mlp.device
     itp = int(mlp._intermediate_size) // int(mlp._tp_ndev)
-    gate_up = bh_tp4_mlp_gate_up_pc(device)
+    # Arch dispatch: WH (N150×4) uses the hardware-swept ``wh_tp4_*`` configs,
+    # BH (P150×4) keeps the ``bh_tp4_*`` ones. Direct ``bh_tp4_mlp_down_pc`` on
+    # WH falls through to the generic search (out_block_h=1, ~3.4× slower than
+    # the swept obh=11). gate/up are already at the swept obh=11 either way.
+    from models.experimental.tt_symbiote.modules.vision_tp4 import tp4_mlp_down_pc, tp4_mlp_gate_up_pc
+
+    gate_up = tp4_mlp_gate_up_pc(device)
     mlp._bh_tp4_gate_pc = gate_up or bh_tp4_vision_mlp_pc(device, seq_len, hidden, itp)
     mlp._bh_tp4_up_pc = gate_up or bh_tp4_vision_mlp_pc(device, seq_len, hidden, itp)
-    mlp._bh_tp4_down_pc = bh_tp4_mlp_down_pc(device, seq_len=seq_len, itp=itp) or bh_tp4_vision_mlp_pc(
+    mlp._bh_tp4_down_pc = tp4_mlp_down_pc(device, seq_len=seq_len, itp=itp) or bh_tp4_vision_mlp_pc(
         device, seq_len, itp, hidden
     )
 
