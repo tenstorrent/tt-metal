@@ -77,10 +77,13 @@ class TtVisionTransformer(LightweightModule):
         dtype=ttnn.bfloat16,
         eps=1e-5,
         spatial_merge_size=2,
+        tp_degree=1,
     ):
         super().__init__()
         self.mesh_device = mesh_device
         self.num_layers = num_layers
+        self.dtype = dtype
+        self.tp_degree = tp_degree
 
         self.patch_embed = TtVisionPatchEmbed(
             mesh_device,
@@ -96,7 +99,9 @@ class TtVisionTransformer(LightweightModule):
         for i in range(num_layers):
             prefix = f"blocks.{i}."
             block_sd = {k[len(prefix) :]: v for k, v in state_dict.items() if k.startswith(prefix)}
-            self.blocks.append(TtVisionBlock(mesh_device, block_sd, num_heads=num_heads, dtype=dtype, eps=eps))
+            self.blocks.append(
+                TtVisionBlock(mesh_device, block_sd, num_heads=num_heads, dtype=dtype, eps=eps, tp_degree=tp_degree)
+            )
         self.post_trunk_norm = TtVisionRMSNorm(
             mesh_device, {"weight": state_dict["post_trunk_norm.weight"]}, dtype=dtype, eps=eps
         )
@@ -120,13 +125,14 @@ class TtVisionTransformer(LightweightModule):
         ``seq / m^2`` merge only padding and are sliced off by the caller.
         """
         embedded = self.patch_embed(x_11SP)
-        # Carry the residual stream in fp32: per-block sub-ops accumulate in
-        # fp32 (HiFi4 + fp32 dest acc), but 42 bf16 residual adds compound
-        # rounding error below the PCC bar. With ``dtype=ttnn.float32``
-        # weights and an fp32 input the stream is fp32 end-to-end (only the
-        # bf16-only rope/SDPA attention core dips to bf16); for a bf16
-        # caller the typecast upgrades the skip-connection accumulator.
-        if embedded.dtype != ttnn.float32:
+        # Residual-stream dtype follows the configured tower dtype. The
+        # fp32 config carries the stream in fp32 (per-block sub-ops already
+        # accumulate in fp32 via HiFi4 + fp32 dest acc; 42 bf16 residual
+        # adds compound rounding below the 0.99 block-PCC bar). The bf16
+        # production config (optimization REDO) keeps the stream bf16
+        # end-to-end: tower PCC ~0.977 is accepted because the parity gate
+        # is the E2E 5-sample WER check (TTNN==HF), which bf16 passes.
+        if self.dtype == ttnn.float32 and embedded.dtype != ttnn.float32:
             h = ttnn.typecast(embedded, ttnn.float32)
             ttnn.deallocate(embedded)
         else:

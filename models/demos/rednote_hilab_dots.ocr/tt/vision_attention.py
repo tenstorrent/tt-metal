@@ -54,10 +54,18 @@ class TtVisionAttention(LightweightModule):
         dtype: on-device weight/activation dtype.
     """
 
-    def __init__(self, mesh_device, state_dict, num_heads=12, dtype=ttnn.bfloat16):
+    def __init__(self, mesh_device, state_dict, num_heads=12, dtype=ttnn.bfloat16, tp_degree=1):
         super().__init__()
         self.mesh_device = mesh_device
         self.num_heads = num_heads
+        # Head-parallel TP (optimization REDO A/B): split the 12 heads across
+        # the 1x4 line (3 heads/chip). QKV columns are re-blocked per chip and
+        # column-sharded; o_proj rows are sharded so each chip's partial sum is
+        # combined with reduce_scatter+all_gather. tp_degree=1 = replicate.
+        # bf16 path only (the fp32 high-precision path keeps replicate).
+        self.tp_degree = tp_degree
+        assert tp_degree == 1 or num_heads % tp_degree == 0, "heads must split evenly across chips"
+        self.num_local_heads = num_heads // tp_degree
         # fp32 weights select the high-precision path: fp32 fused QKV +
         # explicit fp32 HF-convention rope, with bf16 only at the (bf16-only)
         # windowed-SDPA kernel boundary. Used by the 42-layer full tower,
@@ -84,21 +92,45 @@ class TtVisionAttention(LightweightModule):
             qkv_w = torch.cat([q_w, k_w, v_w], dim=0)
         # Transpose for x @ W^T; fused columns stay q|k|v with contiguous
         # heads — exactly the nlp_create_qkv_heads input contract.
+        wqkv_t = qkv_w.transpose(-2, -1).reshape(1, 1, dim, 3 * dim).contiguous()
+        wo_t = proj_w.transpose(-2, -1).reshape(1, 1, dim, dim).contiguous()
+        if self.tp_degree > 1:
+            # Re-block QKV columns per chip: [q_c | k_c | v_c] for chip c so
+            # the dim=-1 shard hands each chip a self-contained fused QKV of
+            # its num_local_heads (heads are whole per chip; head order is
+            # globally preserved chip-major).
+            d_local = dim // self.tp_degree
+            qb, kb, vb = wqkv_t[..., :dim], wqkv_t[..., dim : 2 * dim], wqkv_t[..., 2 * dim :]
+            wqkv_t = torch.cat(
+                [
+                    torch.cat(
+                        [b[..., c * d_local : (c + 1) * d_local] for b in (qb, kb, vb)],
+                        dim=-1,
+                    )
+                    for c in range(self.tp_degree)
+                ],
+                dim=-1,
+            ).contiguous()
+            qkv_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
+            # o_proj rows follow the same chip-major head order — plain row shard.
+            wo_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-2)
+        else:
+            qkv_mapper = wo_mapper = replicate
         self.wqkv = ttnn.from_torch(
-            qkv_w.transpose(-2, -1).reshape(1, 1, dim, 3 * dim).contiguous(),
+            wqkv_t,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=replicate,
+            mesh_mapper=qkv_mapper,
         )
         self.wo = ttnn.from_torch(
-            proj_w.transpose(-2, -1).reshape(1, 1, dim, dim).contiguous(),
+            wo_t,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=replicate,
+            mesh_mapper=wo_mapper,
         )
         # Single-tile transformation matrix for rotary_embedding_llama prefill.
         self.trans_mat = ttnn.from_torch(
@@ -116,6 +148,22 @@ class TtVisionAttention(LightweightModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # SDPA-only config (optimization REDO, tracy-driven): at the 11k-token
+        # document shape windowed SDPA was 86.9% of tower kernel time with the
+        # kernel's 32x32 default chunks (62.7 ms/call). HiFi2 + fp32 dest acc
+        # + 256x256 chunks on the full 11x10 grid measures 10.3 ms/call (6.1x);
+        # bf16 dest acc (9.7 ms) was rejected — accumulating softmax*V over
+        # 11k tokens in bf16 is the precision hazard fp32_dest_acc exists for.
+        # E2E gate (5-sample WER vs HF) re-validated after the change.
+        self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        grid = mesh_device.compute_with_storage_grid_size()
+        self.sdpa_grid = ttnn.CoreCoord(grid.x, grid.y)
 
     # ------------------------------------------------------------------
     # Host-side input preparation (rope tables / cu_seqlens stay on host —
@@ -226,8 +274,8 @@ class TtVisionAttention(LightweightModule):
 
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             xqkv,
-            num_heads=self.num_heads,
-            num_kv_heads=self.num_heads,
+            num_heads=self.num_local_heads,
+            num_kv_heads=self.num_local_heads,
             transpose_k_heads=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -245,13 +293,29 @@ class TtVisionAttention(LightweightModule):
             q = ttnn.experimental.rotary_embedding_llama(q, cos, sin, self.trans_mat, is_decode_mode=False)
             k = ttnn.experimental.rotary_embedding_llama(k, cos, sin, self.trans_mat, is_decode_mode=False)
 
+        # Seq-adaptive chunks: 256x256 amortizes K/V reloads at document scale
+        # (11k tokens); small gate-size inputs keep 64x64 so the 110-core grid
+        # still gets >= seq/64*heads work units. The fp32 high-precision path
+        # keeps the kernel defaults (HiFi4, 32x32): its tower PCC margin is
+        # 0.9901 vs the 0.99 bar and is not re-tuned here.
+        if self.high_precision:
+            sdpa_cfg, sdpa_pc = self.compute_kernel_config, None
+        else:
+            chunk = 256 if x_11SH.shape[-2] >= 2048 else 64
+            sdpa_cfg = self.sdpa_compute_kernel_config
+            sdpa_pc = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.sdpa_grid,
+                q_chunk_size=chunk,
+                k_chunk_size=chunk,
+            )
         attn = ttnn.transformer.windowed_scaled_dot_product_attention(
             q,
             k,
             v,
             cu_seqlens,
             scale=self.scale,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=sdpa_cfg,
+            program_config=sdpa_pc,
         )
         ttnn.deallocate(q)
         ttnn.deallocate(k)
@@ -273,4 +337,11 @@ class TtVisionAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config,
         )
         ttnn.deallocate(attn)
+        if self.tp_degree > 1:
+            # Row-parallel o_proj produced per-chip PARTIAL sums — all-reduce
+            # back to replicated (reduce_scatter + all_gather on the 1x4 line).
+            part = ttnn.reduce_scatter(out, dim=3, topology=ttnn.Topology.Linear)
+            ttnn.deallocate(out)
+            out = ttnn.all_gather(part, dim=3, topology=ttnn.Topology.Linear)
+            ttnn.deallocate(part)
         return out

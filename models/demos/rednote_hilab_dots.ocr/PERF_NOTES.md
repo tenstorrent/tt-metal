@@ -219,3 +219,51 @@ the 4 H2D copies + readback chain to cut the ~6 ms host floor.
 
 Tracy artifact: `perf/traced/cpp_device_perf_report_kv_dtype_traced.csv`
 (traced dev0 rows + names, final dtype config, replay sessions 1-8/29).
+
+---
+
+# Vision tower optimization REDO — bf16 + SDPA tuning + head-parallel TP (tick 51)
+
+Component pass (`vision_transformer`), measured at the 11k-token
+production shape (`/tmp/demo_image1_cropped.jpg`, seq 11224 -> padded
+11264, grid [1,92,122]); old single-chip bf16 reference 754 ms, target
+<= 900 ms. Parity gate is the E2E 5-sample WER test (block PCC is
+informational).
+
+## Step 1 — bf16 activations+weights
+
+Tower dtype fp32 -> bf16 (HiFi4 + fp32_dest_acc on all matmuls).
+Untraced wall: 3073 ms. Traced == untraced (3073) — compute-bound, not
+dispatch. Tracy: WindowedSDPA 2630 ms = 86.9% of kernel time
+(62.6 ms/call x 42, kernel defaults: 32x32 chunks, HiFi4+fp32acc).
+
+Targeted change: SDPA chunks 256x256 on the full 11x10 grid + HiFi2 +
+fp32_dest_acc (microbench: 62.7 -> 10.3 ms; bf16 dest acc 9.7 ms
+rejected — softmax*V over 11k tokens accumulates in bf16). Chunks are
+seq-adaptive (64 below 2048); fp32 high-precision path keeps kernel
+defaults (PCC margin 0.9901). Result: 889 ms untraced, kernel sum 779
+ms (SDPA 49.7%, Matmul 35.4%). Block PCC bf16 0.9821; E2E WER 0.0000
+== HF, 5/5 exact.
+
+## Step 2 — A/B head-parallel TP vs replicate
+
+TP4: QKV columns re-blocked per chip (3 heads/chip, dim=-1 shard),
+o_proj row-shard + reduce_scatter+all_gather; MLP col/row parallel,
+all-reduce after down. CCL bench at [1,1,11264,1536] bf16: all_gather
+1.31 ms, reduce_scatter 1.23 ms (~5 ms CCL/block vs ~12 ms compute
+saved).
+
+| 11k tokens, untraced wall | replicate | TP4 |
+|---|---|---|
+| median ms | 889 | 485.9 |
+
+TP4 kept (`tp_degree=4` in ocr_model; degenerates to 1 on a single
+device). Block PCC TP4 0.9852. E2E WER 0.0000 == HF, 5/5 exact, gate
+re-passed after each step.
+
+Final kernel profile (TP4, dev0): 470.6 ms — AllGather 23.4%,
+WindowedSDPA 23.0% (2.57 ms/call), ReduceScatter 21.6%, Matmul 19.7%.
+Next lever: async CCL (~45% CCL share).
+
+Tracy artifacts: `perf/traced/vision_tower_bf16_11k_traced.csv` (step
+1), `perf/traced/vision_tower_bf16_tp4_11k_traced.csv` (final).

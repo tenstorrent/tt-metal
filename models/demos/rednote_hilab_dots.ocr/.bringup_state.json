@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T10:50:09Z",
+  "updated_at": "2026-06-10T11:16:02Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -418,9 +418,20 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
+        "status": "done",
         "attempts": 0,
-        "notes": "REDO (dtype+TP): 1) bf16 activations+weights, fp32_dest_acc, fp32 only per measured hazard (target <=900ms at 11k tokens; old single-chip bf16 = 754ms untraced). 2) After dtype lands, A/B head-parallel TP (12 heads -> 3/chip + col/row MLP w/ reduce_scatter+all_gather) vs replicate at 11k tokens; keep the measured winner; e2e parity gate after each step."
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_transformer.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_attention.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_mlp.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_block.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/ocr_model.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_vision_transformer.py",
+          "models/demos/rednote_hilab_dots.ocr/perf/traced/vision_tower_bf16_11k_traced.csv",
+          "models/demos/rednote_hilab_dots.ocr/perf/traced/vision_tower_bf16_tp4_11k_traced.csv"
+        ],
+        "notes": "REDO done, both steps. Step1 dtype: tower fp32->bf16 acts+weights (HiFi4+fp32acc matmuls); 11k-token shape (/tmp/demo_image1_cropped.jpg seq 11224) 3073ms, tracy traced==untraced (compute-bound), WindowedSDPA 86.9% (62.6ms/call, kernel default 32x32 chunks). Fix: SDPA HiFi2+fp32acc q256k256 on 11x10 grid (bf16 dest acc rejected: bf16 softmax*V accumulation over 11k tokens) -> 889ms untraced, kernel 779ms, target<=900 met; fp32 high-precision path keeps kernel defaults (0.9901 margin untouched). Step2 TP A/B: head-parallel TP4 (QKV col-shard chip-blocked 3 heads/chip, o_proj row-shard, MLP col/row, RS+AG all-reduce; CCL 1.3ms/op) 485.9ms vs replicate 889ms -> TP4 kept in ocr_model (degenerates tp=1 single device). E2E parity gate (5-sample WER vs HF) PASSED after EACH step: 0.0000==HF, 5/5 exact; block PCC informational 0.9821 bf16 / 0.9852 TP4 (gate redefined to E2E per redo). Sub-block bf16 PCC unchanged (attn 0.999824 mlp 0.999999 block 0.999955); lint 0 all touched. Final tracy 470.6ms kernel: AllGather 23.4%, SDPA 23.0%, RS 21.6%, Matmul 19.7% \u2014 next lever async CCL. Dispatched inline (no Agent tool in tick context); worker contract followed.",
+        "pcc": 0.985151
       },
       "real_weights": {
         "status": "done",
@@ -1170,6 +1181,12 @@
       "tick": 50,
       "ts": "2026-06-10T10:50:09Z",
       "action": "perf[ocr]",
+      "result": "ok"
+    },
+    {
+      "tick": 51,
+      "ts": "2026-06-10T11:16:02Z",
+      "action": "device[vision_transformer]",
       "result": "ok"
     }
   ],

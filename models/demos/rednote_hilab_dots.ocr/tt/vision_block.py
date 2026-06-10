@@ -56,7 +56,7 @@ class TtVisionBlock(LightweightModule):
         eps: RMSNorm epsilon (dots.ocr vision uses 1e-5).
     """
 
-    def __init__(self, mesh_device, state_dict, num_heads=12, dtype=ttnn.bfloat16, eps=1e-5):
+    def __init__(self, mesh_device, state_dict, num_heads=12, dtype=ttnn.bfloat16, eps=1e-5, tp_degree=1):
         super().__init__()
         self.mesh_device = mesh_device
 
@@ -66,6 +66,7 @@ class TtVisionBlock(LightweightModule):
             {"qkv.weight": state_dict["attn.qkv.weight"], "proj.weight": state_dict["attn.proj.weight"]},
             num_heads=num_heads,
             dtype=dtype,
+            tp_degree=tp_degree,
         )
         self.norm2 = TtVisionRMSNorm(mesh_device, {"weight": state_dict["norm2.weight"]}, dtype=dtype, eps=eps)
         self.mlp = TtVisionMLP(
@@ -76,6 +77,7 @@ class TtVisionBlock(LightweightModule):
                 "fc3.weight": state_dict["mlp.fc3.weight"],
             },
             dtype=dtype,
+            tp_degree=tp_degree,
         )
 
     # Host-side input prep delegates to the attention sub-block (rope tables

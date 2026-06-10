@@ -1,22 +1,32 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Tracy harness for TtVisionTransformer at the PRODUCTION operating point.
+"""Tracy / wall-clock harness for TtVisionTransformer.
 
-Production context (tests/test_vision_transformer.py): the full fp32 vision
-tower (patch_embed -> 42x block -> post_trunk_norm -> merger) runs once per
-image on a replicated [1, 1, 896, 588] pre-flattened patch tensor on the 1x4
-mesh (784 patches padded to 896 rows, hidden 1536, 12 heads x head_dim 128,
-windowed SDPA over cu_seqlens), with ALL real fp32 vision_tower weights.
+Two operating points:
+
+- default: the golden 784-patch input (gate-size doc, padded to 896 rows);
+- ``--image PATH``: PRODUCTION document scale — the image is preprocessed
+  with the checkpoint's Qwen2VL image processor exactly as ocr_model.py
+  does (e.g. /tmp/demo_image1_cropped.jpg -> ~11k vision tokens).
+
+``--dtype {bf16,fp32}`` selects the tower config: bf16 weights+activations
+(production, optimization REDO) or the fp32 high-precision path.
 
 Run under tracy:
     python -m tracy -p -v -r --op-support-count 20000 \
-        models/demos/rednote_hilab_dots.ocr/tt/profile_vision_transformer.py --traced
+        models/demos/rednote_hilab_dots.ocr/tt/profile_vision_transformer.py \
+        --traced --dtype bf16 --image /tmp/demo_image1_cropped.jpg
+
+Run for wall clock only:
+    python models/demos/rednote_hilab_dots.ocr/tt/profile_vision_transformer.py \
+        --dtype bf16 --image /tmp/demo_image1_cropped.jpg --iters 5
 """
 
 import argparse
 import importlib.util
 import json
 import sys
+import time
 from pathlib import Path
 
 import torch
@@ -60,10 +70,28 @@ def _load_vision_tower_weights():
     return out
 
 
+def _load_inputs(image_path):
+    """(x [seq, 588], grid_thw [1,3]) — golden tensor or HF-preprocessed image."""
+    if image_path is None:
+        golden = torch.load(MODEL_DIR / "reference" / "golden" / "vision_transformer.pt")
+        return golden["input"], golden["grid_thw"]
+    from PIL import Image
+    from transformers import AutoImageProcessor
+
+    proc = AutoImageProcessor.from_pretrained(REPO, trust_remote_code=True)
+    vis = proc(images=[Image.open(image_path).convert("RGB")], return_tensors="pt")
+    return vis["pixel_values"].float(), vis["image_grid_thw"]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--traced", action="store_true")
+    parser.add_argument("--dtype", choices=["bf16", "fp32"], default="bf16")
+    parser.add_argument("--image", default=None, help="production image (e.g. /tmp/demo_image1_cropped.jpg)")
+    parser.add_argument("--iters", type=int, default=3, help="timed untraced iterations")
+    parser.add_argument("--tp", type=int, default=1, help="head-parallel TP degree (1=replicate, 4=3 heads/chip)")
     args = parser.parse_args()
+    dtype = ttnn.bfloat16 if args.dtype == "bf16" else ttnn.float32
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     mesh_device = ttnn.open_mesh_device(
@@ -72,15 +100,14 @@ def main():
         trace_region_size=400_000_000,
     )
     try:
-        golden = torch.load(MODEL_DIR / "reference" / "golden" / "vision_transformer.pt")
-        x, grid_thw = golden["input"], golden["grid_thw"]
+        x, grid_thw = _load_inputs(args.image)
         seq, patch_dim = x.shape
         num_heads = 12
         spatial_merge_size = 2
+        print(f"input: seq={seq} patch_dim={patch_dim} grid_thw={grid_thw.tolist()} dtype={args.dtype} tp={args.tp}")
 
         sd = _load_vision_tower_weights()
-        # Production dtype: fp32 residual stream + fp32 weights (see tt module docs).
-        model = TtVisionTransformer(mesh_device, sd, num_layers=42, num_heads=num_heads, dtype=ttnn.float32)
+        model = TtVisionTransformer(mesh_device, sd, num_layers=42, num_heads=num_heads, dtype=dtype, tp_degree=args.tp)
 
         head_dim = sd["blocks.0.attn.qkv.weight"].shape[-1] // num_heads
         rope = _ref.vision_rot_pos_emb(grid_thw, head_dim=head_dim, spatial_merge_size=spatial_merge_size)
@@ -95,7 +122,7 @@ def main():
         # Persistent input buffer: stable address for trace replay.
         x_tt = ttnn.from_torch(
             x_pad.reshape(1, 1, padded_seq, patch_dim),
-            dtype=ttnn.float32,
+            dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -110,19 +137,29 @@ def main():
             ttnn.deallocate(out)
         ttnn.synchronize_device(mesh_device)
 
+        # Untraced wall-clock (the tower runs once per image in production).
+        times = []
+        for _ in range(max(1, args.iters)):
+            t0 = time.perf_counter()
+            out = model.forward(x_tt, rot_mats, cu_tt)
+            ttnn.synchronize_device(mesh_device)
+            times.append((time.perf_counter() - t0) * 1000)
+            ttnn.deallocate(out)
+        times.sort()
+        print(f"untraced wall ms: min={times[0]:.1f} median={times[len(times)//2]:.1f} max={times[-1]:.1f}")
+
         if args.traced:
             tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
             out = model.forward(x_tt, rot_mats, cu_tt)
             ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
-            # One warmup replay, then the profiled replay.
+            # One warmup replay, then the timed/profiled replay.
             ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
             ttnn.synchronize_device(mesh_device)
+            t0 = time.perf_counter()
             ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
             ttnn.synchronize_device(mesh_device)
+            print(f"traced wall ms: {(time.perf_counter() - t0) * 1000:.1f}")
             ttnn.release_trace(mesh_device, tid)
-        else:
-            out = model.forward(x_tt, rot_mats, cu_tt)
-            ttnn.synchronize_device(mesh_device)
         print("profiled iteration complete (traced=%s)" % args.traced)
     finally:
         ttnn.close_mesh_device(mesh_device)

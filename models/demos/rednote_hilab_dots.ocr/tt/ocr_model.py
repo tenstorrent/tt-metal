@@ -123,13 +123,25 @@ class TtOCRModel(LightweightModule):
         self.chat_template = chat_template
         self.spatial_merge_size = 2
 
-        # Vision tower: fp32 residual stream, all weights replicated.
+        # Vision tower: bf16 activations + weights (optimization REDO). The
+        # HF checkpoint is bf16, so bf16 weights hold checkpoint values
+        # exactly; matmuls keep HiFi4 + fp32_dest_acc. Block-level PCC dips
+        # to ~0.977 over 42 layers, but the run-once tower feeds an
+        # embedding splice and greedy decode — the E2E 5-sample WER gate
+        # (TTNN==HF exact) passes at bf16, halving weight bytes (~2.5 GB ->
+        # ~1.26 GB/chip) and removing 4 fp32 typecasts + the fp32 rope chain
+        # per block at 11k-token document scale. Head-parallel TP across the
+        # 1x4 line (3 heads/chip + col/row MLP, reduce_scatter+all_gather)
+        # measured 485.7 ms vs 889 ms replicate at the 11k-token production
+        # shape — measured winner kept; E2E 5-sample WER gate re-passed.
+        tp = mesh_device.get_num_devices() if hasattr(mesh_device, "get_num_devices") else 1
         self.vision = TtVisionTransformer(
             mesh_device,
             wl.vision_transformer_weights(num_layers=num_vision_layers),
             num_layers=num_vision_layers,
             num_heads=12,
-            dtype=ttnn.float32,
+            dtype=ttnn.bfloat16,
+            tp_degree=tp if tp in (2, 4) else 1,
         )
         # Text token embedding (embedding component): bf16 hidden-sharded table.
         self.embedding = TtEmbedding(mesh_device, wl.embedding_weights())
@@ -216,7 +228,7 @@ class TtOCRModel(LightweightModule):
         x_pad = torch.cat([pixel_values, torch.zeros(padded_seq - seq, patch_dim)], dim=0)
         x_tt = ttnn.from_torch(
             x_pad.reshape(1, 1, padded_seq, patch_dim),
-            dtype=ttnn.float32,
+            dtype=ttnn.bfloat16,  # match the bf16 tower (no on-device typecast)
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
