@@ -68,6 +68,7 @@ Compare full-model behavior against the HuggingFace reference with real weights.
 - free-running autoregressive generation, with human review of coherence and failure modes;
 - paged or positional KV-cache behavior;
 - deterministic greedy behavior for repeated identical inputs;
+- logits output by the ported model on a given prompt being deterministic across repeated runs and batch positions
 - sequence lengths tested and any measured capacity limits;
 - watcher, fallback, or runtime-integrity checks appropriate to the environment.
 
@@ -123,7 +124,7 @@ Final full-model evidence should show:
 - state-dict mapping, tied-embedding behavior if relevant, and real-weight loading behavior;
 - KV-cache, page-table or position handling, prompt lengths, and repeated decode reuse;
 - full-model accuracy and qualitative generation evidence;
-- determinism or repeated-run coverage appropriate to the implementation risk;
+- determinism or repeated-run coverage appropriate to the implementation risk, including logit reproducibility across runs and batch positions;
 - watcher/fallback/runtime-integrity status;
 - full-model prefill and decode performance;
 - sequence limits and remaining risks;

@@ -109,6 +109,8 @@ When optimizing decode serving overhead, benchmark with the exact same runner, p
 
 For final vLLM-integration evidence, use `--sampling-profile full`. Use `--sampling-profile smoke` for faster inner-loop iteration. For batch-1 MoE bring-up loops, `--sampling-profile smoke` is acceptable as the final sampling gate and `full` may be skipped entirely because it is very slow in that regime.
 
+When determinism tests fail in vLLM, validate that logits output by the model for a given prompt are reproducible across runs and batch positions. Check both standalone model and running through vllm.
+
 Reproducibility-only sampling failures are out of scope when they are the only failures. Typical names include `test_top1_is_greedy`, `test_topk`, `test_uniform_seed_deterministic`, `test_specific_seed_reproducible`, `test_same_seeds_reproduce_across_batches`, `test_*_mixed_batch`, and `test_mixed_params_batch`. Correctness failures, missing logprobs, crashes, gibberish output, or wrong logprob values remain in scope.
 
 If vLLM crashes mid-run, kill leftover `EngineCore` or `vllm.entrypoints` processes before retrying; they can hold chip locks after `tt-smi -r`.
@@ -143,6 +145,7 @@ Final vLLM integration evidence should show:
 - Plugin registration path and architecture name.
 - Exact successful `run_vllm_server` invocation.
 - Capability flags with evidence: no unproven `supports_async_decode=True`, no prefix-caching claim without tests, and on-device sampling verified for the measured mode.
+- Logit-determinism evidence through vLLM, with run-to-run and cross-batch-position reproducibility checks and standalone baseline comparison.
 - Sampling test results, with any reproducibility-only failures separated from real failures.
 - Qualitative greedy and sampled serving-output verdict.
 - Serving benchmark workload config.
