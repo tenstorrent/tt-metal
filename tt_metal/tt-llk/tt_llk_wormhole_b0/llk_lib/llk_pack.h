@@ -405,17 +405,15 @@ inline void _llk_pack_init_(
 }
 
 /**
- * @brief Tear down the packer after a pack op by restoring the PAC X counter.
+ * @brief No-op teardown after a pack op.
  *
- * Resets the packer X counter to the full-face value for the given face geometry, undoing the X
- * counter set in @ref _llk_pack_init_.
+ * The packer x-start/x-end is transient and reprogrammed by each operation's init (see tt-llk#1036),
+ * so there is nothing to restore here.
  *
- * @param face_r_dim: Number of rows per face used to size the restored X counter.
  * @note Call @ref _llk_pack_init_ before this function.
  */
-inline void _llk_pack_uninit_(const std::uint32_t face_r_dim)
+inline void _llk_pack_uninit_()
 {
-    TT_SETADCXX(p_setadc::PAC, face_r_dim * FACE_C_DIM - 1, 0x0);
 }
 
 /**

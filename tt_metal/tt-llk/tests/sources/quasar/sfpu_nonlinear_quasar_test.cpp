@@ -78,7 +78,7 @@ const bool is_int_fpu_en = false;
 #include "cmath_common.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
-#include "llk_math_eltwise_unary_sfpu_common.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "params.h"
 
 // Include all necessary SFPU headers
@@ -103,9 +103,9 @@ struct sfpu_op_dispatcher;
 template <>
 struct sfpu_op_dispatcher<SfpuType::exponential>
 {
-    static void call(int tile_idx, int num_sfpu_iterations)
+    static void call(int tile_idx)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_exp_<true>, tile_idx, num_sfpu_iterations);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_exp_<true, SFPU_ITERATIONS>, tile_idx);
     }
 };
 
@@ -117,96 +117,96 @@ struct sfpu_op_dispatcher<SfpuType::gelu>
         _init_gelu_();
     }
 
-    static void call(int tile_idx, int num_sfpu_iterations)
+    static void call(int tile_idx)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_gelu_, tile_idx, num_sfpu_iterations);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_gelu_<SFPU_ITERATIONS>, tile_idx);
     }
 };
 
 template <>
 struct sfpu_op_dispatcher<SfpuType::relu>
 {
-    static void call(int tile_idx, int num_sfpu_iterations)
+    static void call(int tile_idx)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_relu_, tile_idx, num_sfpu_iterations);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_relu_<SFPU_ITERATIONS>, tile_idx);
     }
 };
 
 template <>
 struct sfpu_op_dispatcher<SfpuType::reciprocal>
 {
-    static void call(int tile_idx, int num_sfpu_iterations)
+    static void call(int tile_idx)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_reciprocal_<true>, tile_idx, num_sfpu_iterations);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_reciprocal_<true, SFPU_ITERATIONS>, tile_idx);
     }
 };
 
 template <>
 struct sfpu_op_dispatcher<SfpuType::sqrt>
 {
-    static void call(int tile_idx, int num_sfpu_iterations)
+    static void call(int tile_idx)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_sqrt_<true>, tile_idx, num_sfpu_iterations);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_sqrt_<true, SFPU_ITERATIONS>, tile_idx);
     }
 };
 
 template <>
 struct sfpu_op_dispatcher<SfpuType::tanh>
 {
-    static void call(int tile_idx, int num_sfpu_iterations)
+    static void call(int tile_idx)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_tanh_<true>, tile_idx, num_sfpu_iterations);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_tanh_<true, SFPU_ITERATIONS>, tile_idx);
     }
 };
 
 template <>
 struct sfpu_op_dispatcher<SfpuType::sigmoid>
 {
-    static void call(int tile_idx, int num_sfpu_iterations)
+    static void call(int tile_idx)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_sigmoid_, tile_idx, num_sfpu_iterations);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_sigmoid_<SFPU_ITERATIONS>, tile_idx);
     }
 };
 
 template <>
 struct sfpu_op_dispatcher<SfpuType::silu>
 {
-    static void call(int tile_idx, int num_sfpu_iterations)
+    static void call(int tile_idx)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_silu_, tile_idx, num_sfpu_iterations);
+        _llk_math_eltwise_unary_sfpu_params_(_calculate_silu_<SFPU_ITERATIONS>, tile_idx);
     }
 };
 
 // Convert constexpr SFPU_UNARY_OPERATION to template parameter using tag dispatch
-inline void call_sfpu_operation_quasar(int tile_idx, int num_sfpu_iterations)
+inline void call_sfpu_operation_quasar(int tile_idx)
 {
     // The compiler should optimize this to a direct call based on SFPU_UNARY_OPERATION
     constexpr SfpuType op = SFPU_UNARY_OPERATION;
     switch (op)
     {
         case SfpuType::exponential:
-            sfpu_op_dispatcher<SfpuType::exponential>::call(tile_idx, num_sfpu_iterations);
+            sfpu_op_dispatcher<SfpuType::exponential>::call(tile_idx);
             break;
         case SfpuType::gelu:
-            sfpu_op_dispatcher<SfpuType::gelu>::call(tile_idx, num_sfpu_iterations);
+            sfpu_op_dispatcher<SfpuType::gelu>::call(tile_idx);
             break;
         case SfpuType::relu:
-            sfpu_op_dispatcher<SfpuType::relu>::call(tile_idx, num_sfpu_iterations);
+            sfpu_op_dispatcher<SfpuType::relu>::call(tile_idx);
             break;
         case SfpuType::reciprocal:
-            sfpu_op_dispatcher<SfpuType::reciprocal>::call(tile_idx, num_sfpu_iterations);
+            sfpu_op_dispatcher<SfpuType::reciprocal>::call(tile_idx);
             break;
         case SfpuType::sqrt:
-            sfpu_op_dispatcher<SfpuType::sqrt>::call(tile_idx, num_sfpu_iterations);
+            sfpu_op_dispatcher<SfpuType::sqrt>::call(tile_idx);
             break;
         case SfpuType::tanh:
-            sfpu_op_dispatcher<SfpuType::tanh>::call(tile_idx, num_sfpu_iterations);
+            sfpu_op_dispatcher<SfpuType::tanh>::call(tile_idx);
             break;
         case SfpuType::sigmoid:
-            sfpu_op_dispatcher<SfpuType::sigmoid>::call(tile_idx, num_sfpu_iterations);
+            sfpu_op_dispatcher<SfpuType::sigmoid>::call(tile_idx);
             break;
         case SfpuType::silu:
-            sfpu_op_dispatcher<SfpuType::silu>::call(tile_idx, num_sfpu_iterations);
+            sfpu_op_dispatcher<SfpuType::silu>::call(tile_idx);
             break;
         default:
             break;
@@ -246,8 +246,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     DataFormat src_format = static_cast<DataFormat>(formats.math);
     _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, is_int_fpu_en>(src_format, src_format);
 
-    std::uint32_t num_sfpu_iterations = params.TEST_FACE_R_DIM / ckernel::math::SFP_ROWS;
-
     if (!unpack_to_dest)
     {
         const std::uint32_t num_rows = params.num_faces * params.TEST_FACE_R_DIM;
@@ -267,7 +265,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Apply SFPU operation to all tiles using compile-time dispatch
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        call_sfpu_operation_quasar(static_cast<int>(params.DST_INDEX + i), static_cast<int>(num_sfpu_iterations));
+        call_sfpu_operation_quasar(static_cast<int>(params.DST_INDEX + i));
     }
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();

@@ -3,8 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Test for eltwise binary operations with reuse_dest on Quasar.
-
-
 import pytest
 import torch
 from helpers.format_config import DataFormat
@@ -67,6 +65,9 @@ TILE_DIMENSIONS = [32, 32]
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
             DataFormat.MxFp4,
+            DataFormat.MxInt8,
+            DataFormat.MxInt4,
+            DataFormat.MxInt2,
         ],
     ),
     mathop=[
@@ -188,9 +189,25 @@ def test_eltwise_binary_reuse_dest_quasar(
         src_B_t = quantize_mx_tensor_chunked(
             src_B_t.to(torch.bfloat16), formats.input_format
         )
-    golden_tensor = torch.zeros(tile_cnt_output * tile_elements, dtype=torch_format)
 
-    internal_dtype = torch.bfloat16 if use_mx else torch_format
+    # On Quasar with IMPLIED_MATH_FORMAT=Yes the HW dest accumulator's physical
+    # storage is implied from the SrcA tag: Float16 input → FP16A (S1E5M10);
+    # Float16_b and plain MX inputs → BF16 (S1E8M7). Match that here so the
+    # golden's multi-tile accumulation rounds the same way as HW. The pack
+    # stage widens dest to (sign, 8-bit exp, 23-bit mantissa) without a bf16
+    # detour, so the post-loop tensor is kept in fp32 — feeding bf16 into the
+    # MX quantize would discard 3 mantissa bits the HW preserves.
+    if use_mx:
+        internal_dtype = (
+            torch.float16
+            if formats.input_format == DataFormat.Float16
+            else torch.bfloat16
+        )
+        golden_dtype = torch.float32
+    else:
+        internal_dtype = torch_format
+        golden_dtype = torch_format
+    golden_tensor = torch.zeros(tile_cnt_output * tile_elements, dtype=golden_dtype)
 
     eltwise_golden = (
         EltwiseBinaryGolden()
@@ -248,7 +265,7 @@ def test_eltwise_binary_reuse_dest_quasar(
                 else:
                     dest = srcA * srcB
 
-        golden_tensor[out_start : out_start + tile_elements] = dest.to(torch_format)
+        golden_tensor[out_start : out_start + tile_elements] = dest.to(golden_dtype)
 
     configuration = TestConfig(
         "sources/quasar/eltwise_binary_reuse_dest_quasar_test.cpp",
@@ -307,14 +324,6 @@ def test_eltwise_binary_reuse_dest_quasar(
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    # Quantize golden tensor if output format is MX format
-    if formats.output_format.is_mx_format():
-        golden_tensor = quantize_mx_tensor_chunked(
-            golden_tensor.to(torch.bfloat16), formats.output_format
-        ).to(torch_format)
-
-    test_passed = passed_test(
-        golden_tensor, res_tensor, formats.output_format, print_errors=False
-    )
-
-    assert test_passed, "Assert against golden failed"
+    assert passed_test(
+        golden_tensor, res_tensor, formats.output_format
+    ), "Assert against golden failed"
