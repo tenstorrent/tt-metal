@@ -37,8 +37,6 @@
 
 #include <cstdint>
 
-#define SDPA_DEBUG_DPRINT 1  // TEMP: remove before committing a passing state
-
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
@@ -49,9 +47,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"
-#ifdef SDPA_DEBUG_DPRINT
-#include "api/debug/dprint.h"
-#endif
 
 namespace ckl = compute_kernel_lib;
 
@@ -270,10 +265,6 @@ void kernel_main() {
                 ckl::AddBinary<Dst::D0, Dst::D2, Dst::D0>{},
                 ckl::PackTile<cb_running_sum>{});
 
-#ifdef SDPA_DEBUG_DPRINT
-            cb_wait_front(cb_probs, 1);
-            DPRINT_PACK(DPRINT << "P  kb: " << TSLICE(cb_probs, 0, SliceRange::hw0_32_16()) << ENDL());
-#endif
             // ---- Phase 9: PV = P @ V; pops P and V ----
             ckl::matmul_block<
                 /*transpose=*/false,
@@ -289,12 +280,6 @@ void kernel_main() {
                 probs_buf,  // interm unused (num_k_blocks == 1)
                 ckl::MatmulBlockShape::of(cur_cq, n_sub_w, 1, sw, cur_ckv, 1));
 
-#ifdef SDPA_DEBUG_DPRINT
-            cb_wait_front(cb_pv, 1);
-            DPRINT_PACK(
-                DPRINT << "PV kb r0: " << SETPRECISION(6) << FIXED()
-                       << TSLICE(cb_pv, 0, SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1}) << ENDL());
-#endif
             // ---- Phase 10: O = alpha*O + PV on SFPU (fp32-exact); pops alpha.
             //      Same-CB read/write needs 2-block cb_o_acc. ----
             ckl::eltwise_chain(
@@ -313,41 +298,6 @@ void kernel_main() {
                 ckl::PackTile<cb_o_acc, OutputLifecycle::Bulk>{});
         }
 
-#ifdef SDPA_DEBUG_DPRINT
-        // Clean copy of O col0 (row0) into a single-buffered fp32 scratch (cb 29,
-        // free here) so the print is from the fresh write pointer, not the stale
-        // ping-pong front. Same for l into cb 30.
-        ckl::eltwise_chain(
-            cur_cq,
-            ckl::CopyTile<
-                cb_o_acc,
-                Dst::D0,
-                InputLifecycle::HeldBulk,
-                ckl::CopyTileReconfig::Input,
-                OperandKind::Block>{},
-            ckl::PackTile<cb_cur_max_full>{});
-        cb_wait_front(cb_cur_max_full, 1);
-        DPRINT_PACK(
-            DPRINT << "O0: " << SETPRECISION(6) << FIXED()
-                   << TSLICE(cb_cur_max_full, 0, SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1})
-                   << ENDL());
-        cb_pop_front(cb_cur_max_full, cur_cq);
-        ckl::eltwise_chain(
-            cur_cq,
-            ckl::CopyTile<
-                cb_running_sum,
-                Dst::D0,
-                InputLifecycle::HeldBulk,
-                ckl::CopyTileReconfig::Input,
-                OperandKind::Block>{},
-            ckl::PackTile<cb_m_full>{});
-        cb_wait_front(cb_m_full, 1);
-        DPRINT_PACK(
-            DPRINT << "L0: " << SETPRECISION(6) << FIXED()
-                   << TSLICE(cb_m_full, 0, SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1}) << ENDL());
-        cb_pop_front(cb_m_full, cur_cq);
-#endif
-
         // ---- Phase 11: inv = recip(bcast-Col(l)) as a FULL fp32 tile ----
         // UnaryBcast of a Float32 CB unpacks to DEST (fp32-exact, no FPU
         // truncation); recip runs on SFPU over the full tile. Result: per-Q-row
@@ -357,13 +307,6 @@ void kernel_main() {
             ckl::UnaryBcast<BroadcastDim::Col, cb_running_sum, InputLifecycle::Streaming>{},
             ckl::Recip<>{},
             ckl::PackTile<cb_inv_sum>{});
-
-#ifdef SDPA_DEBUG_DPRINT
-        cb_wait_front(cb_inv_sum, 1);
-        DPRINT_PACK(
-            DPRINT << "INV: " << SETPRECISION(9) << FIXED() << TSLICE(cb_inv_sum, 0, SliceRange::hw0_32_16())
-                   << ENDL());
-#endif
 
         // ---- Phase 12: out = O * inv on SFPU (fp32-exact), pack -> output dtype ----
         // copy_tile of Float32 CBs is unpack-to-dest (exact); MulBinary is SFPU

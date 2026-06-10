@@ -233,17 +233,48 @@ def create_program_descriptor(
         runtime_args=writer_rt,
         config=ttnn.WriterConfigDescriptor(),
     )
+    compute_config = ttnn.ComputeConfigDescriptor(
+        math_fidelity=compute_kernel_config.math_fidelity,
+        fp32_dest_acc_en=compute_kernel_config.fp32_dest_acc_en,
+        math_approx_mode=compute_kernel_config.math_approx_mode,
+        dst_full_sync_en=compute_kernel_config.dst_full_sync_en,
+    )
+
+    # Per-CB unpack-to-DEST mode. With the framework default (UnpackToDestMode.Default)
+    # a Float32 CB is unpacked through the 16-bit SrcA/SrcB datapath, so copy_tile of an
+    # fp32 CB into DEST silently truncates fp32 -> fp16 (base_types.hpp: "Default mode
+    # enables all dataformats EXCEPT Float32 to be unpacked into Dest"). That truncated
+    # exactly the P@V accumulator O (cb_pv fp32-exact, but cb_o_acc held O at fp16
+    # precision), the dominant single-bf16-ulp flip source on near-uniform attention
+    # (Refinement 5). UnpackToDestFp32 on every Float32 CB makes the whole stat/accumulator
+    # copy_tile path fp32-exact, as the kernel's design comment intends. The bf16 input
+    # CBs (Q/K/V/mask, scaler tiles) stay Default — only acc_fmt==Float32 CBs flip.
+    if acc_fmt == ttnn.float32:
+        NUM_CBS = 32
+        modes = [ttnn.UnpackToDestMode.Default] * NUM_CBS
+        fp32_cbs = [
+            CB_PV,
+            CB_O_ACC,
+            CB_CUR_SUM,
+            CB_PREV_MAX,
+            CB_RUNNING_MAX,
+            CB_ALPHA,
+            CB_RUNNING_SUM,
+            CB_INV_SUM,
+            CB_SCORES,
+            CB_CUR_MAX_FULL,
+            CB_M_FULL,
+        ]
+        for idx in fp32_cbs:
+            modes[idx] = ttnn.UnpackToDestMode.UnpackToDestFp32
+        compute_config.unpack_to_dest_mode = modes
+
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_compute.cpp"),
         core_ranges=full_grid,
         compile_time_args=compute_ct_args,
         runtime_args=compute_rt,
-        config=ttnn.ComputeConfigDescriptor(
-            math_fidelity=compute_kernel_config.math_fidelity,
-            fp32_dest_acc_en=compute_kernel_config.fp32_dest_acc_en,
-            math_approx_mode=compute_kernel_config.math_approx_mode,
-            dst_full_sync_en=compute_kernel_config.dst_full_sync_en,
-        ),
+        config=compute_config,
     )
 
     return ttnn.ProgramDescriptor(
