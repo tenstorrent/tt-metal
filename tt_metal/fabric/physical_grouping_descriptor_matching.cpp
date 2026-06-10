@@ -1695,20 +1695,23 @@ std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor
     }
 
     std::vector<std::unordered_set<tt::tt_metal::AsicID>> all_asic_id_sets;
-    std::set<std::set<tt::tt_metal::AsicID>> seen_asic_sets;
-    for (const auto& flat_mesh : flat_meshes) {
-        for (const auto& result :
-             solve_for_many_groupings_to_psd(flat_mesh, physical_graph, physical_system_descriptor)) {
-            if (!result.success) {
+    if (!flat_meshes.empty()) {
+        auto heterogeneous_results =
+            solve_for_many_groupings_to_psd_heterogeneous(flat_meshes, physical_graph, physical_system_descriptor);
+
+        for (const auto& grouping : flat_meshes) {
+            auto it = heterogeneous_results.find(&grouping);
+            if (it == heterogeneous_results.end()) {
                 continue;
             }
-            std::unordered_set<tt::tt_metal::AsicID> asic_set;
-            for (const auto& [target_node, asic_id] : result.target_to_global) {
-                asic_set.insert(asic_id);
-            }
-            std::set<tt::tt_metal::AsicID> asic_set_key(asic_set.begin(), asic_set.end());
-            if (seen_asic_sets.insert(std::move(asic_set_key)).second) {
-                all_asic_id_sets.push_back(std::move(asic_set));
+            for (const auto& result : it->second) {
+                if (result.success) {
+                    std::unordered_set<tt::tt_metal::AsicID> asic_set;
+                    for (const auto& [target_node, asic_id] : result.target_to_global) {
+                        asic_set.insert(asic_id);
+                    }
+                    all_asic_id_sets.push_back(std::move(asic_set));
+                }
             }
         }
     }

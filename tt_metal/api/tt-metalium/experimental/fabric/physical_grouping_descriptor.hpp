@@ -139,11 +139,11 @@ public:
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         std::vector<std::string>& errors_out) const;
 
-    // Find all possible ASIC IDs that could appear in any valid mapping of the input `groupings` to the physical
-    // system descriptor.
-    // Returns a vector of unordered_sets. Each element is one complete valid mapping: the set of ASIC IDs used
-    // across all of the input groupings for that mapping (grouping type is not distinguished in the set).
-    // Returns an empty vector if no valid combined mapping exists.
+    // Find one maximal disjoint packing of the input `groupings` on the physical system descriptor.
+    // Returns a vector of unordered_sets. Each element is one mesh footprint (ASIC IDs for a single placement).
+    // No two elements share an ASIC. When multiple PGD grouping variants are provided, the variant with the
+    // highest total ASIC coverage is chosen; alternatives are not mixed in the same packing.
+    // Returns an empty vector if no valid packing exists.
     std::vector<std::unordered_set<tt::tt_metal::AsicID>> find_all_in_psd(
         const std::vector<GroupingInfo>& groupings,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
