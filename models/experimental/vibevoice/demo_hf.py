@@ -26,6 +26,7 @@ from models.experimental.vibevoice.common.config import (
     VOICES_DIR,
 )
 from models.experimental.vibevoice.common.model_utils import ensure_model_weights
+from models.experimental.vibevoice.common.resource_utils import ensure_demo_resources
 
 
 def main():
@@ -63,6 +64,7 @@ def main():
     args = parser.parse_args()
 
     try:
+        ensure_demo_resources()
         args.model_path = str(ensure_model_weights(args.model_path))
     except Exception as exc:
         print(f"[demo_hf] ERROR: {exc}", file=sys.stderr)

@@ -4,7 +4,7 @@
 """
 End-to-end generate() PCC test — reference vs TTNN.
 
-Uses the same 1p_short.txt + voice prompt as test_inference_short.py.
+Uses the same 1p_vibevoice.txt + voice prompt as test_inference_short.py.
 Compares concatenated speech waveform PCC (target >= 0.95; tighten toward 0.99 as
 generator/CFG parity improves).
 """
@@ -16,11 +16,8 @@ import pytest
 import torch
 
 from models.common.utility_functions import comp_pcc
-from models.experimental.vibevoice.common.config import (
-    MODEL_PATH,
-    DEFAULT_TXT_PATH,
-    VOICES_DIR,
-)
+from models.experimental.vibevoice.common.config import MODEL_PATH, DEFAULT_TXT_PATH, VOICES_DIR
+from models.experimental.vibevoice.common.resource_utils import load_script
 from models.experimental.vibevoice.tt.ttnn_vibevoice_model import TTVibeVoiceModel
 
 _VIBEVOICE_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -36,14 +33,12 @@ CFG_SCALE = 1.3
 NUM_DIFFUSION_STEPS = 10
 SPEECH_PCC = 0.99
 TOKEN_MATCH = 0.99
-# Cap AR steps for CI; remove or raise for full 1p_short parity runs.
+# Cap AR steps for CI; remove or raise for full demo-script parity runs.
 MAX_NEW_TOKENS = 128
 
 
 def _load_script() -> str:
-    assert _TEXT_PATH.is_file()
-    with open(_TEXT_PATH, encoding="utf-8") as f:
-        return f.read().strip().replace("\u2019", "'")
+    return load_script(_TEXT_PATH)
 
 
 def _voice_path() -> str:
