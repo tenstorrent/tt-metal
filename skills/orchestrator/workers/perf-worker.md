@@ -204,3 +204,15 @@ decode-mode `rotary_embedding_llama`, `scaled_dot_product_attention_decode`
 (when activations fit bf16 — pre-scale Q to tame attention sinks before
 rejecting it), and `all_gather_matmul` for row-parallel projections.
 "Already passing" is not a reason to skip; record measured deltas.
+
+## Precision budget
+
+The gate is the spec (PCC >= 0.99 + e2e parity), not the bring-up
+margin. Reporting PCC 0.9999 means precision headroom is being paid
+for in DRAM traffic and kernel time — spend it down strategically:
+weights first (bf8/bf16), then activations stage-by-stage, in DESCENDING
+bytes-touched order. One change at a time, parity gate after each;
+revert what breaks the gate. Keep extra precision ONLY where a
+measured hazard demands it (recorded in notes — e.g. attention-sink
+softmax, deep-stack residual accumulation). "Above the gate" is the
+target band, not "as accurate as possible".
