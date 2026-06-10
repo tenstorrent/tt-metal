@@ -25,16 +25,8 @@
  *
  * @param operandA: The input0 operand circular buffer
  * @param operandB: The input1 operand circular buffer
- * @param reg_data_format_override: when not DataFormat::Invalid, both unpackers use this as the
- *   source-register (unpacker output) format instead of the generated unpack_dst_format[]. The L1
- *   buffer descriptors are unaffected. jit_build's format inference is op-agnostic (per-CB) and so
- *   cannot pick the matmul-only 2x format; the Quasar matmul path supplies it here to store MxFp4
- *   inputs as the 2x-packed MxFp4_2x_B register format. Non-matmul callers pass Invalid (default).
  */
-inline void llk_unpack_hw_configure(
-    const std::uint32_t unpA_operand,
-    const std::uint32_t unpB_operand,
-    const DataFormat reg_data_format_override = DataFormat::Invalid) {
+inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand) {
     const std::uint32_t unpA_operand_id = get_operand_id(unpA_operand);
     const std::uint32_t unpB_operand_id = get_operand_id(unpB_operand);
 
@@ -65,12 +57,8 @@ inline void llk_unpack_hw_configure(
     }
 
     tdma_descriptor_t td_val_A, td_val_B;
-    td_val_A.reg_data_format = static_cast<std::uint8_t>(
-        reg_data_format_override != DataFormat::Invalid ? reg_data_format_override
-                                                        : static_cast<DataFormat>(unpack_dst_format[unpA_operand_id]));
-    td_val_B.reg_data_format = static_cast<std::uint8_t>(
-        reg_data_format_override != DataFormat::Invalid ? reg_data_format_override
-                                                        : static_cast<DataFormat>(unpack_dst_format[unpB_operand_id]));
+    td_val_A.reg_data_format = static_cast<std::uint8_t>(unpack_dst_format[unpA_operand_id]);
+    td_val_B.reg_data_format = static_cast<std::uint8_t>(unpack_dst_format[unpB_operand_id]);
 
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A, td_val_B);
 }

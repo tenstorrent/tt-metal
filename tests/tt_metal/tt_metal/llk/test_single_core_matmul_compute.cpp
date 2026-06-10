@@ -74,6 +74,7 @@ struct BlockedMatmulConfig {
     tt::DataFormat in1_fmt = tt::DataFormat::Float16_b;
     tt::DataFormat out_fmt = tt::DataFormat::Float16_b;
     bool fp32_dest_acc_en = false;
+    bool enable_2x_src_format = false;
 };
 
 void create_CBs_for_fused_matmul(
@@ -827,7 +828,10 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
             "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/multi_block_compute.cpp",
             core,
             tt_metal::experimental::quasar::QuasarComputeConfig{
-                .num_threads_per_cluster = 1, .compile_args = compute_compile_args, .defines = compute_defines});
+                .num_threads_per_cluster = 1,
+                .enable_2x_src_format = cfg.enable_2x_src_format,
+                .compile_args = compute_compile_args,
+                .defines = compute_defines});
 
         tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
             program_, in0_id, reader_kernel, compute_kernel);
@@ -1011,21 +1015,20 @@ TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreMultiBlockL1AccComputeMatmul) {
     }
 }
 
-// MXFP4-input variant of the multi-block matmul (Quasar-only; the fixture skips on other archs).
-// Baseline for the MxFp4_2x register-format path: inputs are staged as plain MxFp4 in L1 and the
-// unpacker expands them to the BF16 family in src regs (NON-2x). Output is Float16_b so the
-// per-element + PCC comparison path applies. The MxFp4_2x test will reuse this config and only
-// flip the unpack src-register format + enable EN_X2 once the compute API exposes those knobs.
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixTestSingleCoreMultiBlockComputeMatmulMxFp4) {
+// MxFp4_2x variant: same as above but opts into the 2x-packed src-register format. jit_build emits
+// MxFp4_2x_B as the unpack_dst_format for the MxFp4 inputs (ENABLE_2X_SRC_FORMAT) so the matmul runs
+// the EN_X2 traversal. No compute-API/kernel changes vs the baseline — the format alone drives it.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixTestSingleCoreMultiBlockComputeMatmulMxFp4X2) {
     unit_tests::compute::matmul::BlockedMatmulConfig config{
-        .M = 2,
-        .K = 2,
-        .N = 2,
-        .num_blocks = 4,
+        .M = 1,
+        .K = 1,
+        .N = 1,
+        .num_blocks = 1,
         .packer_l1_acc = false,
         .in0_fmt = tt::DataFormat::MxFp4,
         .in1_fmt = tt::DataFormat::MxFp4,
-        .out_fmt = tt::DataFormat::Float16_b};
+        .out_fmt = tt::DataFormat::Float16_b,
+        .enable_2x_src_format = true};
     ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->devices_.at(0), config));
 }
 
