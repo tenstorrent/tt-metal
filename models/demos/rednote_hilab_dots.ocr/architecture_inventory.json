@@ -1,0 +1,137 @@
+{
+  "components": [
+    {
+      "name": "vision_patch_embed",
+      "kind": "conv",
+      "depends_on": [],
+      "reference_impl": "models/demos/qwen25_vl/tt/model.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null},
+      "notes": "Conv2d 14x14 stride 14 (3->1536) + RMSNorm(eps=1e-5); temporal_patch_size=1 so plain 2D conv. placement=replicate (vision tower run-once per input; fits in DRAM budget; replication deletes boundary CCL into TP decoder)."
+    },
+    {
+      "name": "vision_rmsnorm",
+      "kind": "norm",
+      "depends_on": [],
+      "reference_impl": "models/demos/qwen25_vl/tt/vision_rmsnorm.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null},
+      "notes": "RMSNorm dim=1536 eps=1e-5 (block norms) and eps=1e-6 (merger ln_q is LayerNorm). placement=replicate."
+    },
+    {
+      "name": "vision_attention",
+      "kind": "attention",
+      "depends_on": ["vision_rmsnorm"],
+      "reference_impl": "models/demos/qwen25_vl/tt/vision_attention.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null},
+      "notes": "MHA 12 heads, head_dim 128, fused QKV (no bias, use_bias=false), 2D rotary pos emb, full (non-causal, non-windowed) attention with cu_seqlens block mask. placement=replicate; rot_pos_emb/cu_seqlens computed on host like qwen25_vl."
+    },
+    {
+      "name": "vision_mlp",
+      "kind": "mlp",
+      "depends_on": ["vision_rmsnorm"],
+      "reference_impl": "models/demos/qwen25_vl/tt/vision_mlp.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null},
+      "notes": "SwiGLU fc1/fc3->fc2, 1536->4224->1536, no bias. placement=replicate."
+    },
+    {
+      "name": "vision_block",
+      "kind": "decoder_layer",
+      "depends_on": ["vision_attention", "vision_mlp", "vision_rmsnorm"],
+      "reference_impl": "models/demos/qwen25_vl/tt/vision_block.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null},
+      "notes": "Pre-norm residual block: x + attn(norm1(x)); x + mlp(norm2(x)). 42 layers, all full attention (no window/full alternation unlike qwen25_vl). placement=replicate."
+    },
+    {
+      "name": "patch_merger",
+      "kind": "mlp",
+      "depends_on": ["vision_block"],
+      "reference_impl": "models/demos/qwen25_vl/tt/patch_merger.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null},
+      "notes": "LayerNorm(1536, eps=1e-6) -> view(-1, 6144) -> Linear 6144->6144 -> GELU -> Linear 6144->1536. spatial_merge_size=2. placement=replicate."
+    },
+    {
+      "name": "vision_transformer",
+      "kind": "other",
+      "depends_on": ["vision_patch_embed", "vision_block", "patch_merger"],
+      "reference_impl": "models/demos/qwen25_vl/tt/model.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null},
+      "notes": "Full DotsVisionTransformer: patch_embed -> 42x vision_block -> post_trunk_norm -> merger. ~1.26B params bf16 ~2.5GB. placement=replicate (run-once per image; replicated output feeds column-parallel decoder with no CCL)."
+    },
+    {
+      "name": "embedding",
+      "kind": "embedding",
+      "depends_on": [],
+      "reference_impl": "models/tt_transformers/tt/embedding.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null},
+      "notes": "vocab 151936 x 1536, untied from lm_head. placement=shard (per-token cadence); shard vocab dim with all-reduce, tt_transformers pattern. Image embeds scattered into text embeds at image_token_id=151665 positions."
+    },
+    {
+      "name": "text_rmsnorm",
+      "kind": "norm",
+      "depends_on": [],
+      "reference_impl": "models/common/rmsnorm.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null},
+      "notes": "RMSNorm dim=1536 eps=1e-6. placement=shard (distributed norm per tt_transformers distributed_norm.py); weights replicated."
+    },
+    {
+      "name": "text_attention",
+      "kind": "attention",
+      "depends_on": ["text_rmsnorm"],
+      "reference_impl": "models/tt_transformers/tt/attention.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null},
+      "notes": "Qwen2-style GQA: 12 Q heads, 2 KV heads, head_dim 128, QKV bias=true, o_proj no bias, RoPE theta=1e6, 28 layers. placement=shard 4-way (3 Q heads/chip); kv_replication=2 (each KV head replicated on 2 chips so SDPA stays chip-local; do NOT copy divisibility assert)."
+    },
+    {
+      "name": "text_mlp",
+      "kind": "mlp",
+      "depends_on": ["text_rmsnorm"],
+      "reference_impl": "models/tt_transformers/tt/mlp.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null},
+      "notes": "SwiGLU 1536->8960->1536 no bias. placement=shard (gate/up column-parallel, down row-parallel + all-reduce)."
+    },
+    {
+      "name": "decoder_layer",
+      "kind": "decoder_layer",
+      "depends_on": ["text_attention", "text_mlp", "text_rmsnorm"],
+      "reference_impl": "models/tt_transformers/tt/decoder.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null},
+      "notes": "Pre-norm: input_layernorm -> attn -> residual; post_attention_layernorm -> mlp -> residual. 28 layers. placement=shard."
+    },
+    {
+      "name": "lm_head",
+      "kind": "linear",
+      "depends_on": ["decoder_layer"],
+      "reference_impl": "models/tt_transformers/tt/lm_head.py",
+      "host_resident": {"allowed": false, "justification": null, "reference_link": null},
+      "notes": "1536 -> 151936, no bias, untied. placement=shard vocab dim; concat logits on host or all_gather."
+    }
+  ],
+  "use_cases": [
+    {
+      "name": "ocr",
+      "description": "Document OCR / layout parsing: image plus text prompt in, structured text (markdown/JSON) out via autoregressive decode.",
+      "input_modality": "image",
+      "output_modality": "text",
+      "components_used": [
+        "vision_patch_embed",
+        "vision_rmsnorm",
+        "vision_attention",
+        "vision_mlp",
+        "vision_block",
+        "patch_merger",
+        "vision_transformer",
+        "embedding",
+        "text_rmsnorm",
+        "text_attention",
+        "text_mlp",
+        "decoder_layer",
+        "lm_head"
+      ],
+      "needs_ar": true,
+      "needs_audio_out": false,
+      "hf_class": "DotsOCRForCausalLM",
+      "validation_metric": "wer",
+      "validation_threshold": "HF + 0.05",
+      "hybrid_notes": "Image preprocessing (resize, patchify, grid_thw) and tokenizer/chat-template stay on HF host; rot_pos_emb tables and cu_seqlens computed on host."
+    }
+  ]
+}

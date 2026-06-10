@@ -5,16 +5,487 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T00:12:02Z",
-  "components": [],
-  "use_cases": [],
+  "updated_at": "2026-06-10T02:15:14Z",
+  "components": [
+    {
+      "name": "vision_patch_embed",
+      "kind": "conv",
+      "depends_on": [],
+      "reference_impl": "models/demos/qwen25_vl/tt/model.py",
+      "host_resident": {
+        "allowed": false,
+        "justification": null,
+        "reference_link": null
+      },
+      "reference": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "ttnn": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "debug": {
+        "status": "n/a",
+        "attempts": 0
+      },
+      "optimization": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "real_weights": {
+        "status": "pending",
+        "attempts": 0
+      }
+    },
+    {
+      "name": "vision_rmsnorm",
+      "kind": "norm",
+      "depends_on": [],
+      "reference_impl": "models/demos/qwen25_vl/tt/vision_rmsnorm.py",
+      "host_resident": {
+        "allowed": false,
+        "justification": null,
+        "reference_link": null
+      },
+      "reference": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "ttnn": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "debug": {
+        "status": "n/a",
+        "attempts": 0
+      },
+      "optimization": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "real_weights": {
+        "status": "pending",
+        "attempts": 0
+      }
+    },
+    {
+      "name": "vision_attention",
+      "kind": "attention",
+      "depends_on": [
+        "vision_rmsnorm"
+      ],
+      "reference_impl": "models/demos/qwen25_vl/tt/vision_attention.py",
+      "host_resident": {
+        "allowed": false,
+        "justification": null,
+        "reference_link": null
+      },
+      "reference": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "ttnn": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "debug": {
+        "status": "n/a",
+        "attempts": 0
+      },
+      "optimization": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "real_weights": {
+        "status": "pending",
+        "attempts": 0
+      }
+    },
+    {
+      "name": "vision_mlp",
+      "kind": "mlp",
+      "depends_on": [
+        "vision_rmsnorm"
+      ],
+      "reference_impl": "models/demos/qwen25_vl/tt/vision_mlp.py",
+      "host_resident": {
+        "allowed": false,
+        "justification": null,
+        "reference_link": null
+      },
+      "reference": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "ttnn": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "debug": {
+        "status": "n/a",
+        "attempts": 0
+      },
+      "optimization": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "real_weights": {
+        "status": "pending",
+        "attempts": 0
+      }
+    },
+    {
+      "name": "vision_block",
+      "kind": "decoder_layer",
+      "depends_on": [
+        "vision_attention",
+        "vision_mlp",
+        "vision_rmsnorm"
+      ],
+      "reference_impl": "models/demos/qwen25_vl/tt/vision_block.py",
+      "host_resident": {
+        "allowed": false,
+        "justification": null,
+        "reference_link": null
+      },
+      "reference": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "ttnn": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "debug": {
+        "status": "n/a",
+        "attempts": 0
+      },
+      "optimization": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "real_weights": {
+        "status": "pending",
+        "attempts": 0
+      }
+    },
+    {
+      "name": "patch_merger",
+      "kind": "mlp",
+      "depends_on": [
+        "vision_block"
+      ],
+      "reference_impl": "models/demos/qwen25_vl/tt/patch_merger.py",
+      "host_resident": {
+        "allowed": false,
+        "justification": null,
+        "reference_link": null
+      },
+      "reference": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "ttnn": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "debug": {
+        "status": "n/a",
+        "attempts": 0
+      },
+      "optimization": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "real_weights": {
+        "status": "pending",
+        "attempts": 0
+      }
+    },
+    {
+      "name": "vision_transformer",
+      "kind": "other",
+      "depends_on": [
+        "vision_patch_embed",
+        "vision_block",
+        "patch_merger"
+      ],
+      "reference_impl": "models/demos/qwen25_vl/tt/model.py",
+      "host_resident": {
+        "allowed": false,
+        "justification": null,
+        "reference_link": null
+      },
+      "reference": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "ttnn": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "debug": {
+        "status": "n/a",
+        "attempts": 0
+      },
+      "optimization": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "real_weights": {
+        "status": "pending",
+        "attempts": 0
+      }
+    },
+    {
+      "name": "embedding",
+      "kind": "embedding",
+      "depends_on": [],
+      "reference_impl": "models/tt_transformers/tt/embedding.py",
+      "host_resident": {
+        "allowed": false,
+        "justification": null,
+        "reference_link": null
+      },
+      "reference": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "ttnn": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "debug": {
+        "status": "n/a",
+        "attempts": 0
+      },
+      "optimization": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "real_weights": {
+        "status": "pending",
+        "attempts": 0
+      }
+    },
+    {
+      "name": "text_rmsnorm",
+      "kind": "norm",
+      "depends_on": [],
+      "reference_impl": "models/common/rmsnorm.py",
+      "host_resident": {
+        "allowed": false,
+        "justification": null,
+        "reference_link": null
+      },
+      "reference": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "ttnn": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "debug": {
+        "status": "n/a",
+        "attempts": 0
+      },
+      "optimization": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "real_weights": {
+        "status": "pending",
+        "attempts": 0
+      }
+    },
+    {
+      "name": "text_attention",
+      "kind": "attention",
+      "depends_on": [
+        "text_rmsnorm"
+      ],
+      "reference_impl": "models/tt_transformers/tt/attention.py",
+      "host_resident": {
+        "allowed": false,
+        "justification": null,
+        "reference_link": null
+      },
+      "reference": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "ttnn": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "debug": {
+        "status": "n/a",
+        "attempts": 0
+      },
+      "optimization": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "real_weights": {
+        "status": "pending",
+        "attempts": 0
+      }
+    },
+    {
+      "name": "text_mlp",
+      "kind": "mlp",
+      "depends_on": [
+        "text_rmsnorm"
+      ],
+      "reference_impl": "models/tt_transformers/tt/mlp.py",
+      "host_resident": {
+        "allowed": false,
+        "justification": null,
+        "reference_link": null
+      },
+      "reference": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "ttnn": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "debug": {
+        "status": "n/a",
+        "attempts": 0
+      },
+      "optimization": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "real_weights": {
+        "status": "pending",
+        "attempts": 0
+      }
+    },
+    {
+      "name": "decoder_layer",
+      "kind": "decoder_layer",
+      "depends_on": [
+        "text_attention",
+        "text_mlp",
+        "text_rmsnorm"
+      ],
+      "reference_impl": "models/tt_transformers/tt/decoder.py",
+      "host_resident": {
+        "allowed": false,
+        "justification": null,
+        "reference_link": null
+      },
+      "reference": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "ttnn": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "debug": {
+        "status": "n/a",
+        "attempts": 0
+      },
+      "optimization": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "real_weights": {
+        "status": "pending",
+        "attempts": 0
+      }
+    },
+    {
+      "name": "lm_head",
+      "kind": "linear",
+      "depends_on": [
+        "decoder_layer"
+      ],
+      "reference_impl": "models/tt_transformers/tt/lm_head.py",
+      "host_resident": {
+        "allowed": false,
+        "justification": null,
+        "reference_link": null
+      },
+      "reference": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "ttnn": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "debug": {
+        "status": "n/a",
+        "attempts": 0
+      },
+      "optimization": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "real_weights": {
+        "status": "pending",
+        "attempts": 0
+      }
+    }
+  ],
+  "use_cases": [
+    {
+      "name": "ocr",
+      "description": "Document OCR / layout parsing: image plus text prompt in, structured text (markdown/JSON) out via autoregressive decode.",
+      "input_modality": "image",
+      "output_modality": "text",
+      "components_used": [
+        "vision_patch_embed",
+        "vision_rmsnorm",
+        "vision_attention",
+        "vision_mlp",
+        "vision_block",
+        "patch_merger",
+        "vision_transformer",
+        "embedding",
+        "text_rmsnorm",
+        "text_attention",
+        "text_mlp",
+        "decoder_layer",
+        "lm_head"
+      ],
+      "needs_ar": true,
+      "needs_audio_out": false,
+      "hf_class": "DotsOCRForCausalLM",
+      "validation_metric": "wer",
+      "validation_threshold": "HF + 0.05",
+      "hybrid_notes": "Image preprocessing (resize, patchify, grid_thw) and tokenizer/chat-template stay on HF host; rot_pos_emb tables and cu_seqlens computed on host.",
+      "generation": {
+        "status": "pending",
+        "attempts": 0
+      },
+      "perf": {
+        "status": "pending",
+        "attempts": 0
+      }
+    }
+  ],
   "locks": {
     "device": {
       "held_by": null,
       "held_since": null
     }
   },
-  "tick_log": [],
+  "tick_log": [
+    {
+      "tick": 1,
+      "ts": "2026-06-10T02:15:14Z",
+      "action": "architecture[all]",
+      "result": "ok"
+    }
+  ],
   "config": {
     "max_parallel_reference": 4,
     "max_attempts_per_phase": 10,
