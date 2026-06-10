@@ -318,6 +318,9 @@ class VoxtralTTAudioTokenizer:
                 # kernel_w(7) * 1024ch * 2B = 14336B > 8192B NOC burst on the height-sharded conv
                 # reader; split in_channels (1024 -> 512) so each coalesced read fits (7*512*2=7168B).
                 input_channel_splits=2,
+                # Keep conv partials height-sharded through input-split add; deshard once per
+                # output split before interleaved channel concat (single-core sharded concat N/A).
+                keep_sharded_splits=True,
                 weight_dtype=self._weight_dtype,
                 activations_dtype=self._dtype,
                 output_dtype=self._dtype,
