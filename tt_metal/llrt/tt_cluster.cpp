@@ -487,6 +487,11 @@ void Cluster::start_driver(umd::DeviceParams& device_params) const {
         for (const auto& mmio_device_id : mmio_device_ids) {
             futures.emplace_back(tt_metal::detail::async([this, mmio_device_id]() {
                 bool include_dram_tlbs = (this->target_type_ == TargetDevice::Silicon);
+                // 4G TLB windows are a scarce per-chip resource; skip the DRAM ones when
+                // sharing the chip with another BAR4 consumer (e.g. tt-bh-linux console).
+                if (std::getenv("TT_METAL_SKIP_DRAM_TLBS")) {
+                    include_dram_tlbs = false;
+                }
                 if (this->target_type_ == TargetDevice::Simulator && rtoptions_.get_simulator_enabled()) {
                     // Functional ttsim (libttsim.so) does not model BH DRAM TLBs and crashes if they
                     // are configured. RTL sim uses a directory simulator path and still needs them.
