@@ -157,13 +157,17 @@ def validate(q, k, v, *, attention_mask=None, scale=None):
 
 
 def _default_compute_kernel_config(dtype):
-    """Defaults preserve Phase 0 behavior exactly for bfloat16 (HiFi2 +
-    fp32 DEST acc, no approx, half-sync). float32 inputs default to HiFi4 +
-    fp32 DEST — per matmul_block_helpers.hpp, the only correct pairing for
-    fp32 matmul inputs (no prior behavior existed for fp32, so no drift).
+    """bf16/bf8b default to HiFi3 + fp32 DEST acc (no approx, half-sync).
+    Refinement 3: HiFi2 skips the SrcB low-mantissa phase, so the rowsum l
+    and P@V consume the packed probs at different effective precision —
+    near-uniform attention (long-context mask=none) then misses tolerance
+    (probe_009/010/012: V=ones invariant off by 7% at HiFi2, exact at HiFi3
+    with fp32 probs CB). float32 inputs default to HiFi4 + fp32 DEST — per
+    matmul_block_helpers.hpp, the only correct pairing for fp32 matmul
+    inputs.
     """
     return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4 if dtype == ttnn.float32 else ttnn.MathFidelity.HiFi2,
+        math_fidelity=ttnn.MathFidelity.HiFi4 if dtype == ttnn.float32 else ttnn.MathFidelity.HiFi3,
         fp32_dest_acc_en=True,
         math_approx_mode=False,
         dst_full_sync_en=False,

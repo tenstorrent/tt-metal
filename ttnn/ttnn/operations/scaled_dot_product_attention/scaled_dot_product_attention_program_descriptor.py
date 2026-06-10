@@ -85,12 +85,14 @@ def create_program_descriptor(
     has_mask = mask is not None
     mask_is_per_head = has_mask and list(mask.shape)[1] == H
 
-    # Input/probs/output CB formats follow the input dtype (validate() enforces
+    # Input/output CB formats follow the input dtype (validate() enforces
     # Q/K/V/mask dtype equality, and output dtype == query dtype). Stat /
-    # accumulator intermediates follow fp32_dest_acc_en: Float32 when the fp32
-    # DEST accumulation crosses those CBs (default), Float16_b otherwise —
-    # packing a 16-bit DEST into Float32 CBs corrupts values (probe_007: pcc
-    # ~0.41 at every fidelity). Reduce-scaler tiles stay bfloat16 (helper fill).
+    # accumulator intermediates AND cb_probs follow fp32_dest_acc_en: Float32
+    # when the fp32 DEST accumulation crosses those CBs (default), Float16_b
+    # otherwise — packing a 16-bit DEST into Float32 CBs corrupts values
+    # (probe_007: pcc ~0.41 at every fidelity). cb_probs at input dtype was the
+    # Refinement 3 long-context precision miss: quantized probs made rowsum l
+    # and P@V inconsistent (probe_012). Reduce-scaler tiles stay bfloat16.
     in_fmt = q.dtype
     t_in = ttnn.tile_size(in_fmt)
     t_bf = ttnn.tile_size(ttnn.bfloat16)

@@ -121,12 +121,16 @@ def _tensors(device, dtype=ttnn.bfloat16):
     return t(), t(), t()
 
 
-def test_default_config_matches_explicit_hifi2(device):
-    """Passing nothing == passing the documented defaults (HiFi2 + fp32 dest)."""
+def test_default_config_matches_explicit_hifi3(device):
+    """Passing nothing == passing the documented defaults (HiFi3 + fp32 dest).
+
+    Refinement 3 moved the bf16/bf8b default from HiFi2 to HiFi3 (HiFi2's
+    skipped SrcB low-mantissa phase made rowsum l and P@V inconsistent).
+    """
     q, k, v = _tensors(device)
     out_default = ttnn.to_torch(scaled_dot_product_attention(q, k, v))
     config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=ttnn.MathFidelity.HiFi3,
         fp32_dest_acc_en=True,
         math_approx_mode=False,
         dst_full_sync_en=False,
