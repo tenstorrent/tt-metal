@@ -31,10 +31,6 @@ constexpr std::uint32_t ROWS_PER_LOAD = 4;
 constexpr std::uint32_t AVG_SHIFT_AMOUNT = 5;     // 2^5 = 32
 constexpr std::uint32_t AVG_SHIFT_MASK   = 0xfff; // Mask for shift instruction encoding
 
-// FP16B representation of 1/32 = 0.03125
-constexpr std::uint32_t FP16B_ONE_OVER_32_HIGH = 0x3D00;
-constexpr std::uint32_t FP16B_ONE_OVER_32_LOW  = 0x0000;
-
 // Constants for MAX reduction
 constexpr std::uint32_t ROWS_PER_TILE = 64;
 constexpr std::uint32_t ROWS_PER_FACE = 16;
@@ -83,13 +79,16 @@ inline void convert_int_representation_inplace(std::uint32_t reg, std::uint32_t 
  * @param face_addr Base address of face
  * @param column_offset Column offset for the current iteration, load all rows for even columns (0) or odd columns (2) of the face
  */
-template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits>
+template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, std::uint32_t DST_LREG_BASE = p_sfpu::LREG0>
 inline void load_face_data(std::uint32_t face_addr, std::uint32_t column_offset)
 {
-    TT_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, face_addr + column_offset);                     // rows 0-3
-    TT_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, face_addr + column_offset + ROWS_PER_LOAD);     // rows 4-7
-    TT_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, face_addr + column_offset + 2 * ROWS_PER_LOAD); // rows 8-11
-    TT_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, face_addr + column_offset + 3 * ROWS_PER_LOAD); // rows 12-15
+    // Load the 4 row-groups into DST_LREG_BASE..DST_LREG_BASE+3. DST_LREG_BASE defaults to LREG0, but
+    // callers can target LREG4 to feed a recorded swap buffer that operates on LREG4-7 directly, avoiding
+    // a redundant LREG0-3 -> LREG4-7 shuffle.
+    TT_SFPLOAD_EXT<clear_high_bits>(DST_LREG_BASE + 0, INSTRUCTION_MODE, ADDR_MOD_7, face_addr + column_offset);                     // rows 0-3
+    TT_SFPLOAD_EXT<clear_high_bits>(DST_LREG_BASE + 1, INSTRUCTION_MODE, ADDR_MOD_7, face_addr + column_offset + ROWS_PER_LOAD);     // rows 4-7
+    TT_SFPLOAD_EXT<clear_high_bits>(DST_LREG_BASE + 2, INSTRUCTION_MODE, ADDR_MOD_7, face_addr + column_offset + 2 * ROWS_PER_LOAD); // rows 8-11
+    TT_SFPLOAD_EXT<clear_high_bits>(DST_LREG_BASE + 3, INSTRUCTION_MODE, ADDR_MOD_7, face_addr + column_offset + 3 * ROWS_PER_LOAD); // rows 12-15
 }
 
 /**
@@ -165,20 +164,24 @@ inline void perform_int_average()
     }
 }
 
+// Programmable float constant register holding 1/32 (0.03125) for float AVG. Preloaded once by
+// init_reduce_sum_avg (only when pool_type == AVG and the format is float), so perform_float_average
+// avoids rebuilding the constant via two SFPLOADI on every column group. Maps to LREG12 on Blackhole
+// (sfpi::vConstFloatPrgm0); the float reduce path does not use the UInt16 high-bit mask, so this
+// register is free to hold the constant across the whole reduce.
+constexpr std::uint32_t AVG_RECIP_REG = p_sfpu::LREG12;
+
 /**
  * @brief Perform floating-point averaging (multiply by 1/32)
  *
  * For a 32x32 tile, each column sum represents the sum of exactly 32 values (one per row).
- * This function divides by 32 by multiplying by the constant 1/32 (0.03125).
+ * This function divides by 32 by multiplying by the constant 1/32 (0.03125), which
+ * init_reduce_sum_avg() preloaded into AVG_RECIP_REG (sfpi::vConstFloatPrgm0).
  */
 inline void perform_float_average()
 {
-    // Load 1/32 constant (0.03125) into LREG1 for float division
-    TTI_SFPLOADI(p_sfpu::LREG1, 8, FP16B_ONE_OVER_32_HIGH); // Load 0.03125 as FP16B high part
-    TTI_SFPLOADI(p_sfpu::LREG1, 10, FP16B_ONE_OVER_32_LOW); // Load 0.03125 as FP16B low part
-
-    // Multiply by 1/32 (divide by 32) - works for both float and integer formats
-    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+    // Multiply by 1/32 (divide by 32) using the preloaded constant register.
+    TTI_SFPMUL(p_sfpu::LREG0, AVG_RECIP_REG, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
 }
 
 template <PoolType pool_type, InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool pack_low16>
@@ -614,12 +617,11 @@ inline void perform_reduce_row_max(std::uint32_t block_ct_dim, std::uint32_t blo
 {
     constexpr bool is_int32 = (INSTRUCTION_MODE == InstrModLoadStore::INT32);
 
-    // The column-reduce Int32 init (init_reduce_max_min_int32) sets SFPCONFIG bit 8,
-    // which changes the SFPSWAP comparison direction. Row-reduce needs the default MAX
-    // direction (bit 8 = 0), so reset the SFPU config register here.
-    // This is needed for both Int32 and FP32 paths to ensure consistent behavior
-    // regardless of which init was called.
-    _init_sfpu_config_reg();
+    // Row-reduce needs the default MAX SFPSWAP direction (SFPCONFIG bit 8 = 0). That default is already
+    // established once by the paired init (_init_reduce_ -> init_reduce_max_min for the MAX pool type,
+    // which calls _init_sfpu_config_reg() and does not set bit 8), so we no longer reset the config
+    // register on every row-max call here. The only init that flips bit 8 is the column MIN / Int32
+    // (sign-magnitude) MAX/MIN path, which is never the init paired with a row-MAX calculate.
 
     record_horizontal_reduce_max();
 
@@ -1036,7 +1038,7 @@ inline void init_reduce_max_min(std::uint32_t num_cols)
  *
  * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, INT32_2S_COMP, LO16, DEFAULT (FP32, FP16B)
  */
-template <InstrModLoadStore INSTRUCTION_MODE>
+template <InstrModLoadStore INSTRUCTION_MODE, PoolType pool_type>
 inline void init_reduce_sum_avg()
 {
     _init_sfpu_config_reg();
@@ -1044,6 +1046,16 @@ inline void init_reduce_sum_avg()
     // Determine if integer or float mode based on INSTRUCTION_MODE
     constexpr bool is_integer_mode =
         (INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP || INSTRUCTION_MODE == InstrModLoadStore::LO16);
+
+    // Float AVG divides by 32 by multiplying by 1/32. Preload that constant once here (only when it is
+    // actually needed: float AVG) into the programmable float const register AVG_RECIP_REG so
+    // perform_float_average() collapses to a single SFPMUL instead of rebuilding the constant with two
+    // SFPLOADI on every column group. Integer AVG uses perform_int_average (shift) and pays nothing; SUM
+    // never averages, so it pays nothing either.
+    if constexpr (pool_type == PoolType::AVG && !is_integer_mode)
+    {
+        sfpi::vConstFloatPrgm0 = 0.03125f;
+    }
 
     // Record two replay buffers:
     // Positions 0-5: Full tree reduce (both LREG groups, interleaved for latency hiding)
@@ -1149,18 +1161,14 @@ inline void calculate_reduce_max_min_uint16()
         // max/min of its 16 rows is left in the top 4 rows.
         for (std::uint32_t i = 0; i < NUM_FACES; i++)
         {
-            load_face_data<INSTRUCTION_MODE, clear_high_bits>(FACE_ADDRS[j][i], COLUMN_OFFSETS[i]); // masked load into LREG0-3
-
-            // Move the four masked row-groups into LREG4-7 where the recorded swap buffer reduces them.
-            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
-            TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG5, 0);
-            TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG6, 0);
-            TTI_SFPMOV(0, p_sfpu::LREG3, p_sfpu::LREG7, 0);
+            // Masked load straight into LREG4-7, where the recorded swap buffer reduces them. Loading
+            // directly into the target registers eliminates the four LREG0-3 -> LREG4-7 moves (and the
+            // post-reduce LREG4 -> LREG0 move) that the previous LREG0-3 load required.
+            load_face_data<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG4>(FACE_ADDRS[j][i], COLUMN_OFFSETS[i]);
 
             lltt::replay(0, 3); // compare-and-swap reduce LREG4-7 -> LREG4
 
-            TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
-            TT_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, FACE_ADDRS[j][i] + COLUMN_OFFSETS[i]);
+            TT_SFPSTORE(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, FACE_ADDRS[j][i] + COLUMN_OFFSETS[i]);
         }
 
         // Load the partial max/min (top 4 rows) of the two vertically adjacent faces into LREG0-3.
@@ -1366,7 +1374,7 @@ inline void _init_reduce_(std::uint32_t block_ct_dim = 1)
     }
     else if constexpr (pool_type == PoolType::SUM || pool_type == PoolType::AVG)
     {
-        init_reduce_sum_avg<INSTRUCTION_MODE>();
+        init_reduce_sum_avg<INSTRUCTION_MODE, pool_type>();
     }
     else
     {
