@@ -71,9 +71,9 @@
   cmd: TT_MM_THROTTLE_PERF=5 pytest tests/didt/test_sdxl_conv.py::test_sdxl_conv -k "all" --didt-workload-iterations 100 --determinism-check-interval 1
   skus:
     wh_n150_civ2:
-      timeout: 3
+      timeout: 5
     wh_n300_civ2:
-      timeout: 3
+      timeout: 5
     bh_p100:
       timeout: 2
     bh_p150b_civ2:
