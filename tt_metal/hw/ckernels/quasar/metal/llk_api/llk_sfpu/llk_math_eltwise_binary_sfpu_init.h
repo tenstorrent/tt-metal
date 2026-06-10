@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include <utility>
+
 #include "llk_defs.h"
-#include "llk_math_eltwise_unary_sfpu_common.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
 
 /*
  * Quasar binary SFPU init wrappers
