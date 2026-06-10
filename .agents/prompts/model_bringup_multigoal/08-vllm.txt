@@ -1,5 +1,7 @@
 /goal Use $vllm-integration for the HF_MODEL datatype-selected optimized full model in the current tt-metal checkout.
 
+As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
+
 This goal creates the vLLM state for the repo-local TTNN autoport pipeline. Start from the completed datatype-sweep stage and work on models/autoports/<model>/tt/generator_vllm.py plus vLLM TT plugin registration.
 
 Goal completion requirements:

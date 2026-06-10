@@ -43,6 +43,11 @@ returned token to the next step *instead of* its own prediction. The
 readiness check just passes `TokenAccuracy.collect_predicted_tokens` as
 this callback.
 
+The teacher-forcing runner requests traced decode by default by calling
+`generate(..., enable_trace=True)`. Implementations should honor this by
+using their traced decode path when available and should use
+`enable_trace=False` as the explicit bringup/debug fallback.
+
 If `next_input is None`, the generator feeds its own prediction back
 (HF-style autoregressive generation).
 """
@@ -197,9 +202,12 @@ class Generator(ABC):
         possibly-forced next inputs.
 
         Sampling must be greedy/argmax for readiness compatibility. The
-        ``**kwargs`` slot is reserved for per-model extras (e.g.
-        ``stop_on_eos`` toggles); implementations should ignore unknown
-        kwargs.
+        teacher-forcing runner passes ``enable_trace=True`` by default;
+        implementations should use that flag to request traced decode and
+        should honor ``enable_trace=False`` for trace-debug fallback runs.
+        The remaining ``**kwargs`` slot is reserved for per-model extras
+        (e.g. ``stop_on_eos`` toggles); implementations should ignore
+        unknown kwargs.
         """
 
     @abstractmethod
