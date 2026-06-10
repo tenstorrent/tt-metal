@@ -167,6 +167,18 @@ SHAPES = [
     (64, 6144, 1536, 12, 9, True, "to_out"),  # double-block to_out prompt
     (2048, 6144, 9216, 12, 9, True, "plain"),  # double-block ff1 spatial
     (64, 6144, 9216, 12, 9, True, "plain"),  # double-block ff1 prompt
+    # -------------------------------------------------------------------------
+    # Flux2 WH 4×8 ring — merged spatial+prompt shapes (2026-06-09)
+    # -------------------------------------------------------------------------
+    # 1024 res: merged M = 1024+512 = 1536, proj_mlp (ColParallel)
+    (1536, 6144, 4608, 8, 9, False, "plain"),  # merged proj_mlp 1024 res
+    # 2048 res: merged M = 4096+512 = 4608, proj_mlp (ColParallel)
+    (4608, 6144, 4608, 8, 9, False, "plain"),  # merged proj_mlp 2048 res
+    # 2048 res non-merged shapes that need configs
+    (4096, 6144, 2304, 8, 9, False, "plain"),  # spatial qkv 2048 res
+    (4096, 6144, 4608, 8, 9, False, "plain"),  # spatial proj_mlp 2048 res
+    (4096, 6144, 128, 8, 9, False, "plain"),  # spatial proj_out 2048 res
+    (4096, 128, 768, 8, 9, False, "plain"),  # x_embedder 2048 res
 ]
 
 SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{'agmm' if agmm else 'mm'}_{uc}" for M, K, N, cgx, cgy, agmm, uc in SHAPES]

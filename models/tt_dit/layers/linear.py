@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 
 import torch
 
@@ -16,6 +17,39 @@ MATH_FIDELITY = {
     ttnn.bfloat16: ttnn.MathFidelity.HiFi2,
     ttnn.float32: ttnn.MathFidelity.HiFi4,
 }
+
+# FSDP weight all-gathers can transfer the sharded weight in bfloat8_b instead of
+# bfloat16, halving the gather traffic (the dominant cost on WH Galaxy where
+# weights are re-gathered every denoising step). The bf8 copy is created once
+# (during eager warmup) and cached on the module, so the typecast stays out of
+# the captured denoising trace. Activations remain bf16.
+#
+# This is enabled selectively per layer via the `fsdp_gather_bf8` constructor arg
+# (set True for feed-forward/MLP weights, which dominate the gather cost and are
+# robust to bf8; left False for precision-sensitive attention QKV/out weights).
+# TT_FSDP_BF8 is a tri-state override of the per-layer flags:
+#   "1" -> force bf8 ON for ALL FSDP layers, "0" -> force bf8 OFF everywhere
+#   (unset) -> honor each layer's fsdp_gather_bf8 flag.
+_FSDP_BF8_ENV = os.environ.get("TT_FSDP_BF8")
+
+
+def _fsdp_weight_for_gather(module):
+    """Return the (possibly bf8) sharded weight to feed into the FSDP all-gather.
+
+    Uses bf8 when the global override is set or the module opted in via
+    ``fsdp_gather_bf8=True``. Caches the bf8-converted weight on the module so the
+    typecast runs once (eager warmup) and is reused by every traced denoising step.
+    """
+    w = module.weight.data
+    if _FSDP_BF8_ENV == "0":
+        return w
+    if not (_FSDP_BF8_ENV == "1" or getattr(module, "fsdp_gather_bf8", False)):
+        return w
+    cached = getattr(module, "_weight_bf8", None)
+    if cached is None:
+        cached = ttnn.typecast(w, ttnn.bfloat8_b)
+        module._weight_bf8 = cached
+    return cached
 
 
 class Linear(Module):
@@ -125,6 +159,7 @@ class ColParallelLinear(Module):
         fsdp_mesh_axis=None,
         ccl_manager=None,
         chunks=None,
+        fsdp_gather_bf8=False,
     ):
         super().__init__()
 
@@ -143,6 +178,7 @@ class ColParallelLinear(Module):
         self.fsdp_mesh_axis = fsdp_mesh_axis
         self.ccl_manager = ccl_manager
         self.chunks = chunks
+        self.fsdp_gather_bf8 = fsdp_gather_bf8
 
         if self.fsdp_mesh_axis is not None:
             assert self.mesh_axis != self.fsdp_mesh_axis
@@ -203,7 +239,7 @@ class ColParallelLinear(Module):
         If chunks is set, returns a list of tensors split along the output dimension.
         """
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
-            unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
+            unsqueezed_weight = ttnn.unsqueeze_to_4D(_fsdp_weight_for_gather(self))
             weight = self.ccl_manager.all_gather_persistent_buffer(
                 unsqueezed_weight, dim=2, mesh_axis=self.fsdp_mesh_axis
             )
@@ -314,6 +350,7 @@ class RowParallelLinear(Module):
         mesh_axis=0,
         fsdp_mesh_axis=None,
         ccl_manager=None,
+        fsdp_gather_bf8=False,
     ):
         super().__init__()
 
@@ -323,6 +360,7 @@ class RowParallelLinear(Module):
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
         self.ccl_manager = ccl_manager
+        self.fsdp_gather_bf8 = fsdp_gather_bf8
 
         if self.fsdp_mesh_axis is not None:
             assert self.mesh_axis != self.fsdp_mesh_axis
@@ -379,7 +417,7 @@ class RowParallelLinear(Module):
         Return output fractured on columns.
         """
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
-            unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
+            unsqueezed_weight = ttnn.unsqueeze_to_4D(_fsdp_weight_for_gather(self))
             weight = self.ccl_manager.all_gather_persistent_buffer(
                 unsqueezed_weight, dim=3, mesh_axis=self.fsdp_mesh_axis
             )
@@ -426,7 +464,7 @@ class RowParallelLinear(Module):
         extra CCL ops entirely.
         """
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
-            unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
+            unsqueezed_weight = ttnn.unsqueeze_to_4D(_fsdp_weight_for_gather(self))
             weight = self.ccl_manager.all_gather_persistent_buffer(
                 unsqueezed_weight, dim=3, mesh_axis=self.fsdp_mesh_axis
             )

@@ -144,6 +144,8 @@ grid_89_configs = {
     (128, 3072, 384): (2, 4, 4),
     (5632, 3072, 4096): (8, 8, 8),
     (5632, 2048, 3072): (8, 8, 4),
+    (1536, 6144, 4608): (8, 8, 10),
+    (4608, 6144, 4608): (6, 12, 10),
     (128, 1536, 2048): (4, 4, 4),
     (128, 1024, 1536): (2, 4, 4),
     (9472, 5120, 1280): (8, 8, 8),
@@ -449,6 +451,12 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic
         config_tuple = config_tuple[:3]
 
     if config_tuple is None:
+        import os as _os
+
+        if _os.environ.get("TT_DEBUG_MM_SHAPES"):
+            print(
+                f"[MM_MISS] grid=({grid_x},{grid_y}) shape=({M},{K},{N}) heuristic={use_heuristic} k_shards={num_k_shards}"
+            )
         if default_block_size is not None:
             assert (
                 not use_heuristic and num_k_shards == -1

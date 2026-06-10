@@ -155,6 +155,7 @@ class TransformerBlock(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
+            fsdp_gather_bf8=True,
         )
 
         self.norm2_context = None
@@ -180,6 +181,7 @@ class TransformerBlock(Module):
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 fsdp_mesh_axis=fsdp_mesh_axis,
                 ccl_manager=ccl_manager,
+                fsdp_gather_bf8=True,
             )
 
         self.ff_compute_kernel_config = ttnn.init_device_compute_kernel_config(
