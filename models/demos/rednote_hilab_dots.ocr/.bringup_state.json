@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T06:40:18Z",
+  "updated_at": "2026-06-10T06:46:52Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -56,8 +56,15 @@
         "pcc": 0.999858
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/weight_loader.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_real_hf_weights.py"
+        ],
+        "notes": "Consolidated tt/weight_loader.py created (pure-PyTorch, prefix-filtered safetensors load with memoized cache, count_params helper, __main__ self-test: proj.weight [1536,3,14,14], proj.bias [1536], norm.weight [1536], 906240 params). Stage-1 parametric tests/test_real_hf_weights.py runs the block at the production operating point (fp32, real preprocessed-image patches from golden input, 1x4 mesh replicated) vs the pure-PyTorch reference with the same real weights: PCC 0.999981 (>0.99). Block forward untouched; guard ok (lint 0, params_loaded 906240>0). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999981,
+        "params_loaded": 906240
       }
     },
     {
@@ -950,6 +957,12 @@
       "tick": 31,
       "ts": "2026-06-10T06:40:18Z",
       "action": "device[lm_head]",
+      "result": "ok"
+    },
+    {
+      "tick": 32,
+      "ts": "2026-06-10T06:46:52Z",
+      "action": "device[vision_patch_embed]",
       "result": "ok"
     }
   ],

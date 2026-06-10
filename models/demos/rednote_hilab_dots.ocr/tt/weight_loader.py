@@ -1,0 +1,88 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+"""Pure-PyTorch HF weight loader for rednote-hilab/dots.ocr.
+
+One function per block kind; each returns a nested state_dict shaped
+exactly as the corresponding TTNN module ``__init__`` expects. No TTNN,
+no device touches, no I/O outside :func:`load_hf_state_dict`.
+
+The checkpoint is fp32, sharded over two safetensors files (~3B params),
+so loaders pull only the keys under a prefix rather than the whole dict.
+"""
+
+import json
+from pathlib import Path
+from typing import Dict, Iterable, Optional
+
+import torch
+
+MODEL_ID = "rednote-hilab/dots.ocr"
+VISION_PATCH_EMBED_PREFIX = "vision_tower.patch_embed.patchifier"
+
+_CHECKPOINT_CACHE: Dict[str, torch.Tensor] = {}
+
+
+def checkpoint_dir() -> Path:
+    """Local HF snapshot dir (downloads only on first call, cached after)."""
+    from huggingface_hub import snapshot_download
+
+    return Path(snapshot_download(MODEL_ID, allow_patterns=["*.json", "*.safetensors"]))
+
+
+def load_hf_state_dict(prefix: Optional[str] = None, keys: Optional[Iterable[str]] = None) -> Dict[str, torch.Tensor]:
+    """Flat {full_hf_key: fp32 tensor} dict, filtered by prefix or explicit keys.
+
+    Results are memoized per key, so per-block loaders can call this freely.
+    """
+    from safetensors import safe_open
+
+    snap = checkpoint_dir()
+    weight_map = json.load(open(snap / "model.safetensors.index.json"))["weight_map"]
+    if keys is not None:
+        wanted = list(keys)
+    elif prefix is not None:
+        wanted = [k for k in weight_map if k.startswith(prefix)]
+    else:
+        wanted = list(weight_map)
+
+    missing = [k for k in wanted if k not in _CHECKPOINT_CACHE]
+    by_shard: Dict[str, list] = {}
+    for k in missing:
+        by_shard.setdefault(weight_map[k], []).append(k)
+    for shard, shard_keys in by_shard.items():
+        with safe_open(snap / shard, framework="pt") as f:
+            for k in shard_keys:
+                _CHECKPOINT_CACHE[k] = f.get_tensor(k).float()
+    return {k: _CHECKPOINT_CACHE[k] for k in wanted}
+
+
+def _strip(hf_sd: Dict[str, torch.Tensor], prefix: str) -> Dict[str, torch.Tensor]:
+    return {k[len(prefix) + 1 :]: v for k, v in hf_sd.items() if k.startswith(prefix + ".")}
+
+
+def vision_patch_embed_weights(hf_sd: Optional[Dict[str, torch.Tensor]] = None) -> Dict[str, torch.Tensor]:
+    """State dict for TtVisionPatchEmbed: proj.weight [E,C,P,P], proj.bias [E], norm.weight [E]."""
+    if hf_sd is None:
+        hf_sd = load_hf_state_dict(prefix=VISION_PATCH_EMBED_PREFIX)
+    sd = _strip(hf_sd, VISION_PATCH_EMBED_PREFIX)
+    return {"proj.weight": sd["proj.weight"], "proj.bias": sd["proj.bias"], "norm.weight": sd["norm.weight"]}
+
+
+def count_params(sd) -> int:
+    """Tensor-leaf element count of a (possibly nested) state dict."""
+    if isinstance(sd, torch.Tensor):
+        return sd.numel()
+    if isinstance(sd, dict):
+        return sum(count_params(v) for v in sd.values())
+    if isinstance(sd, (list, tuple)):
+        return sum(count_params(v) for v in sd)
+    return 0
+
+
+if __name__ == "__main__":
+    sd = vision_patch_embed_weights()
+    n = count_params(sd)
+    assert sd["proj.weight"].shape == (1536, 3, 14, 14), sd["proj.weight"].shape
+    assert sd["proj.bias"].shape == (1536,), sd["proj.bias"].shape
+    assert sd["norm.weight"].shape == (1536,), sd["norm.weight"].shape
+    print(f"vision_patch_embed: {len(sd)} tensors, {n} params OK")
