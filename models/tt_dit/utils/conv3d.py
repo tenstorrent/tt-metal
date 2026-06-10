@@ -619,15 +619,20 @@ def _walk_conv3d_modules(module: Module):
 
 
 def conv3d_blocking_hash(module: Module) -> str:
-    """Build a cache key suffix from C_in_block values of all conv3d layers.
+    """Build a cache key suffix from the per-conv weight-prep state of all conv3d layers.
 
-    prepare_conv3d_weights reshapes weights by C_in_block, so cached weights
-    are only valid for the same blocking configuration.
+    Cached weights depend on C_in_block (prepare_conv3d_weights reshapes by it) and, for
+    depth-to-space convs, depth_to_space_stride (they reorder output channels at load). The
+    stride is appended only when set, so keys for modules without any depth-to-space conv are
+    byte-identical to the pre-reorder scheme and their existing caches stay valid.
     """
-    cin_blocks = [str(m.conv_config.C_in_block) for m in _walk_conv3d_modules(module)]
-    if not cin_blocks:
+    parts = []
+    for m in _walk_conv3d_modules(module):
+        dts = getattr(m, "depth_to_space_stride", None)
+        parts.append(str(m.conv_config.C_in_block) if dts is None else f"{m.conv_config.C_in_block}:{dts}")
+    if not parts:
         return ""
-    return "cin" + hashlib.sha256("_".join(cin_blocks).encode()).hexdigest()[:8]
+    return "cin" + hashlib.sha256("_".join(parts).encode()).hexdigest()[:8]
 
 
 def count_convs(module: Module) -> int:
