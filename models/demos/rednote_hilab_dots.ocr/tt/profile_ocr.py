@@ -13,6 +13,13 @@ Untraced baseline:
 Traced (sub-pass 1) + tracy (sub-pass 2):
     python -m tracy -p -v -r --op-support-count 20000 -n ocr_traced \
         models/demos/rednote_hilab_dots.ocr/tt/profile_ocr.py --traced
+
+Wall-clock steady-state A/B (e.g. weight-dtype experiments): time N pure
+trace replays back-to-back at advancing cache slots, host tiles prebuilt
+so every timed step is exactly the production hot path (4 H2D copies +
+execute_trace + 1-int readback):
+    python models/demos/rednote_hilab_dots.ocr/tt/profile_ocr.py \
+        --traced --bench-replays 200
 """
 
 import argparse
@@ -45,7 +52,9 @@ def main():
     p.add_argument("--max-new-tokens", type=int, default=24)
     p.add_argument("--num-timed", type=int, default=2)
     p.add_argument("--traced", action="store_true")
+    p.add_argument("--bench-replays", type=int, default=0, help="time N pure trace replays (requires --traced)")
     args = p.parse_args()
+    assert not args.bench_replays or args.traced, "--bench-replays requires --traced"
 
     from PIL import Image
 
@@ -71,6 +80,29 @@ def main():
         warm_text = model.ocr(image, max_new_tokens=args.max_new_tokens, use_trace=args.traced, step_callback=cb)
         warm_ms = (time.perf_counter() - t0) * 1000.0
         print(f"warmup total_ms={warm_ms:.1f} text={warm_text!r}")
+
+        if args.bench_replays:
+            # Steady-state wall-clock bench: the warmup call captured the
+            # trace; drive N replays at fresh advancing slots. Prebuild the
+            # per-slot host tiles OUTSIDE the timed loop so each timed step
+            # is exactly the production hot path.
+            hidden, tok, start_slot = 1536, 100, 256
+            for i in range(args.bench_replays):
+                model._host_decode_inputs(start_slot + i)
+            lat = []
+            for i in range(args.bench_replays):
+                t0 = time.perf_counter()
+                tok_out, kind = model._decode_step_traced(tok, start_slot + i, hidden)
+                lat.append((time.perf_counter() - t0) * 1000.0)
+                assert kind == "replay", f"bench step {i} was {kind}, not replay"
+            lat_sorted = sorted(lat)
+            n = len(lat_sorted)
+            print(
+                f"BENCH replays={n} median_ms={median(lat):.2f} mean_ms={sum(lat)/n:.2f} "
+                f"p10_ms={lat_sorted[n//10]:.2f} p90_ms={lat_sorted[(9*n)//10]:.2f} "
+                f"min_ms={lat_sorted[0]:.2f} max_ms={lat_sorted[-1]:.2f}"
+            )
+            return
 
         totals, texts = [], []
         for i in range(args.num_timed):

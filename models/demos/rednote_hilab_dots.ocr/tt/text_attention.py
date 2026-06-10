@@ -77,15 +77,24 @@ class TtTextAttention(LightweightModule):
         num_heads: Q heads (dots.ocr text: 12, head_dim 128).
         num_kv_heads: KV heads (dots.ocr text: 2; kv_replication onto the
             chips of each Q-head group, then up to heads_per_device).
-        dtype: on-device weight/activation dtype (fp32 default — see module
-            docstring; bf16 loses the softmax to logit quantization).
+        dtype: on-device ACTIVATION dtype (fp32 default — see module
+            docstring; bf16 activations lose the softmax to logit
+            quantization).
+        weight_dtype: QKV/o_proj weight+bias storage dtype (None -> dtype).
+            The HF checkpoint is bf16, so bf16 storage holds the exact
+            checkpoint values — the ±3122 attention-sink mitigation lives in
+            the fp32 ACTIVATIONS/accumulation, not in weight storage. The
+            decode step is DRAM weight-streaming bound, so halving weight
+            bytes is the perf-phase lever; the fp32 attention core, fp32 KV
+            cache and HiFi4 + fp32 accumulation are unchanged.
     """
 
-    def __init__(self, mesh_device, state_dict, num_heads=12, num_kv_heads=2, dtype=ttnn.float32):
+    def __init__(self, mesh_device, state_dict, num_heads=12, num_kv_heads=2, dtype=ttnn.float32, weight_dtype=None):
         super().__init__()
         self.mesh_device = mesh_device
         num_devices = mesh_device.get_num_devices()
         self.num_devices = num_devices
+        weight_dtype = weight_dtype or dtype
 
         q_w = state_dict["q_proj.weight"]  # [nh*hd, hidden]
         k_w = state_dict["k_proj.weight"]  # [nkv*hd, hidden]
@@ -127,7 +136,7 @@ class TtTextAttention(LightweightModule):
         # exactly its pre-packed q|k|v slice (column-parallel QKV).
         self.wqkv = ttnn.from_torch(
             fused_w.transpose(-2, -1).reshape(1, 1, hidden, -1).contiguous(),
-            dtype=dtype,
+            dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -135,7 +144,7 @@ class TtTextAttention(LightweightModule):
         )
         self.bqkv = ttnn.from_torch(
             fused_b.reshape(1, 1, 1, -1),
-            dtype=dtype,
+            dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -147,7 +156,7 @@ class TtTextAttention(LightweightModule):
         # forward).
         self.wo = ttnn.from_torch(
             o_w.transpose(-2, -1).reshape(1, 1, num_heads * head_dim, hidden).contiguous(),
-            dtype=dtype,
+            dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,

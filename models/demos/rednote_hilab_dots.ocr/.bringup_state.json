@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T10:34:27Z",
+  "updated_at": "2026-06-10T10:50:09Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -847,17 +847,28 @@
         "wer": 0.0
       },
       "perf": {
-        "status": "pending",
+        "status": "done",
         "attempts": 0,
-        "notes": "REDO 2 (decode dtype): weights bf16/bf8 with fp32 activations/accum in attention (sink-safe); keep traced step; target <= 12 ms/tok; parity gate unchanged"
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/text_attention.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/text_mlp.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/decoder_layer.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/ocr_model.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_ocr.py",
+          "models/demos/rednote_hilab_dots.ocr/PERF_NOTES.md",
+          "models/demos/rednote_hilab_dots.ocr/perf/traced/cpp_device_perf_report_kv_dtype_traced.csv"
+        ],
+        "notes": "REDO 2 (decode weight dtype) complete: QKV/o_proj fp32->bf16 and MLP gate/up bf16->bf8 (down bf16, lm_head fp32, fp32 attention activations/accum + fp32 KV cache unchanged), each step re-validated against the e2e gate (WER 0.0000 vs HF 0.0000, 5/5 exact). Wall-clock A/B over 200 traced replays: 18.03 -> 18.07 ms/tok (flat, within noise); traced tracy kernel sum 17.14 -> 16.14 ms/replay per-GCC; matmul slice flat at 8.6 ms over 197 calls. DRAM-bound-on-fp32-weights hypothesis REJECTED with traced evidence: 1-row decode matmuls are dispatch/latency bound; dtype lever exhausted (kept: parity-neutral, frees ~250 MB/chip). <=12 ms/tok needs host-floor (~6 ms) + fused-op work (fused rotary, fused silu-mul, all-reduce); see PERF_NOTES.md tick-50 section. Guard parity re-run PASS.",
+        "steady_step_ms": 18.07,
+        "speedup": 1.0
       },
       "decode_strategy": "kv_cache"
     }
   ],
   "locks": {
     "device": {
-      "held_by": "tick-50",
-      "held_since": "2026-06-10T10:30:51Z"
+      "held_by": null,
+      "held_since": null
     }
   },
   "tick_log": [
@@ -1153,6 +1164,12 @@
       "tick": 49,
       "ts": "2026-06-10T10:24:17Z",
       "action": "device[ocr]",
+      "result": "ok"
+    },
+    {
+      "tick": 50,
+      "ts": "2026-06-10T10:50:09Z",
+      "action": "perf[ocr]",
       "result": "ok"
     }
   ],

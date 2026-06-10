@@ -133,11 +133,16 @@ class TtOCRModel(LightweightModule):
         )
         # Text token embedding (embedding component): bf16 hidden-sharded table.
         self.embedding = TtEmbedding(mesh_device, wl.embedding_weights())
-        # Decoder stack: fp32-mandatory attention path (Qwen2 attention sink).
-        # MLP weights bf16 (perf-phase targeted opt): the decode step is
-        # weight-bandwidth bound and gate/up/down are its hottest matmuls
-        # (28 x ~126 us fp32); bf16 matches HF's own bf16 weights, fp32
-        # activations + fp32 accumulate stay (e2e WER gate re-validated).
+        # Decoder stack: fp32-mandatory attention ACTIVATION path (Qwen2
+        # attention sink: ±3122 logits live in q/k/softmax, the fp32 core +
+        # fp32 KV cache + HiFi4/fp32-acc stay). Weight STORAGE is bf16
+        # (perf-phase decode-dtype pass): the decode step is DRAM-bound on
+        # weight streaming and the HF checkpoint is itself bf16, so bf16
+        # QKV/o_proj + down storage holds the exact checkpoint values at
+        # half the bytes; gate/up go further to bfloat8_b (block-fp8) —
+        # both steps re-validated against the e2e WER gate (0.0 vs HF,
+        # 5/5 samples exact). down_proj stays bf16 (contraction back into
+        # the residual stream; not re-tried at bf8 — one lever at a time).
         self.layers = [
             TtDecoderLayer(
                 mesh_device,
@@ -146,6 +151,8 @@ class TtOCRModel(LightweightModule):
                 num_kv_heads=2,
                 dtype=ttnn.float32,
                 mlp_dtype=ttnn.bfloat16,
+                attn_weight_dtype=ttnn.bfloat16,
+                mlp_gate_up_dtype=ttnn.bfloat8_b,
             )
             for i in range(num_text_layers)
         ]

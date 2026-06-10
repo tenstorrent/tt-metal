@@ -41,9 +41,13 @@ class TtTextMLP(LightweightModule):
             [8960, 1536], "down_proj.weight": [1536, 8960]} torch tensors
             (HF keys model.layers.N.mlp.*).
         dtype: on-device weight/activation dtype.
+        gate_up_dtype: gate/up weight storage override (None -> dtype) —
+            perf-phase knob for trying bfloat8_b on the two column-parallel
+            branches while down_proj (the contraction back into the residual
+            stream) keeps ``dtype``.
     """
 
-    def __init__(self, mesh_device, state_dict, dtype=ttnn.bfloat16):
+    def __init__(self, mesh_device, state_dict, dtype=ttnn.bfloat16, gate_up_dtype=None):
         super().__init__()
         self.mesh_device = mesh_device
         num_devices = mesh_device.get_num_devices()
@@ -57,19 +61,20 @@ class TtTextMLP(LightweightModule):
         # gate/up column-parallel on the OUTPUT feature dim, down
         # row-parallel on the INPUT feature dim (per-chip rows match the
         # per-chip silu*mul slice, so the matmul yields a PARTIAL sum).
-        def as_weight(name, mapper):
+        def as_weight(name, mapper, w_dtype):
             return ttnn.from_torch(
                 state_dict[name].transpose(-2, -1).contiguous(),
-                dtype=dtype,
+                dtype=w_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=mapper if num_devices > 1 else replicate,
             )
 
-        self.w1 = as_weight("gate_proj.weight", shard_cols)  # [hidden, inter/N]
-        self.w3 = as_weight("up_proj.weight", shard_cols)  # [hidden, inter/N]
-        self.w2 = as_weight("down_proj.weight", shard_rows)  # [inter/N, hidden]
+        gate_up_dtype = gate_up_dtype or dtype
+        self.w1 = as_weight("gate_proj.weight", shard_cols, gate_up_dtype)  # [hidden, inter/N]
+        self.w3 = as_weight("up_proj.weight", shard_cols, gate_up_dtype)  # [hidden, inter/N]
+        self.w2 = as_weight("down_proj.weight", shard_rows, dtype)  # [inter/N, hidden]
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),

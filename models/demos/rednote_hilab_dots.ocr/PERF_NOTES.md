@@ -155,3 +155,67 @@ honest small win, kept (e2e WER gate passes, all 5 samples exact).
 
 Tracy artifact: `perf/traced/cpp_device_perf_report_kv_traced.csv`
 (traced dev0 rows + op names; final bf16-MLP config, 29 replays).
+
+---
+
+# Perf REDO 2 — decode weight dtype (tick 50)
+
+Hypothesis: the traced step (18.08 ms wall) is DRAM-bound on fp32
+weights; convert decode-path weights to bf16 (QKV/o_proj — bf16 holds
+the bf16-checkpoint values exactly) and bf8 where the parity gate
+allows, KEEPING fp32 attention activations/accumulation and fp32 KV
+cache (the ±3122 attention-sink mitigation lives in activations, not
+weight storage). lm_head stays fp32 (argmax near-tie exactness,
+generation-phase decision).
+
+Steps, each re-validated against the e2e gate (`tests/test_e2e_ocr.py`):
+
+1. QKV/o_proj fp32 -> bf16 (`weight_dtype` knob in text_attention).
+   Gate PASS, WER 0.0000 vs HF 0.0000, 5/5 exact.
+2. gate/up bf16 -> bf8 (`gate_up_dtype` knob in text_mlp; down stays
+   bf16). Gate PASS, WER 0.0000 vs HF 0.0000, 5/5 exact. Kept.
+
+Wall-clock A/B (`profile_ocr.py --traced --bench-replays 200` — new
+bench mode times 200 pure replays at advancing slots, host tiles
+prebuilt; trace recaptured per run):
+
+| metric (200 replays, dev0) | fp32 attn + bf16 MLP | bf16 attn + bf8 g/u | delta |
+|---|---|---|---|
+| median ms/replay | 18.03 | 18.07 | flat |
+| mean ms/replay | 18.08 | 18.11 | flat |
+| traced kernel sum (29 replays, per-GCC mean) | 17.14 | 16.14 | -1.0 |
+| MatmulDeviceOperation | 8.70 ms (50.7%) | 8.64 ms (53.5%) | flat |
+
+Top-10 traced (final config, per-GCC mean across 29 replays, dev0):
+
+| us/replay | % | calls | op |
+|---|---|---|---|
+| 8636 | 53.5% | 197 | MatmulDeviceOperation |
+| 1280 | 7.9% | 58 | AllGatherDeviceOperation |
+| 1146 | 7.1% | 57 | LayerNormDeviceOperation |
+| 995 | 6.2% | 56 | ReduceScatterDeviceOperation |
+| 983 | 6.1% | 308 | BinaryNgDeviceOperation |
+| 859 | 5.3% | 28 | SoftmaxDeviceOperation |
+| 788 | 4.9% | 84 | TransposeDeviceOperation |
+| 461 | 2.9% | 28 | NlpCreateHeadsDeviceOperation |
+| 273 | 1.7% | 56 | PagedUpdateCacheDeviceOperation |
+| 171 | 1.1% | 84 | UnaryDeviceOperation |
+
+Verdict: hypothesis REJECTED with evidence — halving (bf16) and
+quartering (bf8) the decode weight bytes moved wall 0%, matmul kernels
+<1%. The 1-row matmuls are dispatch/latency dominated, not
+weight-streaming dominated; the dtype lever is exhausted. (Note: prior
+PERF_NOTES kernel sums 12.17/11.92 were per-session means over
+TRUNCATED tracy sessions; the per-GCC method here is truncation-robust
+— 1213 ops/replay, sums 17.14/16.14 baseline/after on the same basis.)
+The dtype changes are kept (parity-neutral, strictly less DRAM
+residency, frees ~250 MB/chip).
+
+Target <= 12 ms/tok NOT reached: floor is matmul dispatch latency
+(197 matmuls/step) + CCL 14% + host ~6 ms. Next levers (next pass):
+fused rotary (12 host-built slices/layer -> 1 op), fused
+silu-mul/residual (BinaryNg 308 calls), all-reduce primitive, folding
+the 4 H2D copies + readback chain to cut the ~6 ms host floor.
+
+Tracy artifact: `perf/traced/cpp_device_perf_report_kv_dtype_traced.csv`
+(traced dev0 rows + names, final dtype config, replay sessions 1-8/29).
