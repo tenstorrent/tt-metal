@@ -249,6 +249,8 @@ jobs:
       product: tt-metalium
       build-type: 'ASan'
       enable-kernel-ccache: true
+    secrets:
+      REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}
 
   ttnn-examples:
     needs: [ asan-build, find-changed-files ]
@@ -270,6 +272,8 @@ jobs:
       product: tt-nn
       build-type: 'ASan'
       enable-kernel-ccache: true
+    secrets:
+      REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}
 
   # A quick check that parses the models charts in README.md and models/README.md
   # and ensures that models attributes are in sync.
