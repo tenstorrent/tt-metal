@@ -1231,3 +1231,28 @@ Closed the requested gaps. Final LLK test suite (all GREEN on Blackhole silicon)
   - `./build_metal.sh --release`: PASS.
   - `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/experimental/test_topk_xl.py -q`:
     PASS (21 passed).
+
+### 2026-06-10 — support non-multiple input row lengths
+- Removed the `N % K == 0` validation requirement. The op now supports arbitrary row length `N`
+  within the existing constraints (`N >= K`, `N <= 131072`, K in `{512, 1024, 2048}`).
+- Host program factory now computes:
+  - `num_chunks = div_up(N, K)`;
+  - `tail_elements = N - (num_chunks - 1) * K`;
+  - `tail_chunk_bytes = tail_elements * sizeof(input_element)`.
+- Reader still streams a fixed `tiles_per_sequence` CB pages per chunk so the compute contract stays
+  unchanged, but the final chunk only reads `tail_chunk_bytes`. Unread bytes in the final chunk are
+  never consumed by compute.
+- Compute now passes the active element count to the existing `topk_xl_copy_tile<K>` LLK wrapper:
+  - full chunks use `K`;
+  - the final chunk uses `tail_elements`;
+  - the copy LLK already clears inactive lanes to negative infinity, so padded lanes sort last for
+    `largest=true` without LLK changes.
+- Index base logic remains `chunk * K`, which is correct for the logical row-major input offset of
+  each chunk, including the partial final chunk.
+- Added coverage for:
+  - `N = K + 1` and `N = 2K - 1` for K=512/1024/2048;
+  - non-multiple large rows with winning indices above 65535 for K=512/1024/2048.
+- Validation:
+  - `./build_metal.sh --release`: PASS.
+  - `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/experimental/test_topk_xl.py -q`:
+    PASS (30 passed).

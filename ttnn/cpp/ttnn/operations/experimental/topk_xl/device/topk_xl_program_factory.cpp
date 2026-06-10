@@ -36,7 +36,8 @@ TopkXLProgramFactory::cached_program_t TopkXLProgramFactory::create(
     const uint32_t k = operation_attributes.k;
     const uint32_t n = shape[shape.rank() - 1];
     const uint32_t num_rows = flattened_rows_excluding_last_dim(shape);
-    const uint32_t num_chunks = n / k;
+    const uint32_t num_chunks = tt::div_up(n, k);
+    const uint32_t tail_elements = n - ((num_chunks - 1) * k);
     const uint32_t tiles_per_sequence = (k + tt::constants::TILE_HW - 1) / tt::constants::TILE_HW;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
@@ -49,6 +50,7 @@ TopkXLProgramFactory::cached_program_t TopkXLProgramFactory::create(
     constexpr uint32_t cb_indices_scratch = tt::CBIndex::c_2;
 
     const uint32_t input_chunk_bytes = k * input.element_size();
+    const uint32_t input_tail_chunk_bytes = tail_elements * input.element_size();
     const uint32_t input_row_bytes = n * input.element_size();
     const uint32_t input_tile_bytes = tt::constants::TILE_HW * input.element_size();
     constexpr uint32_t row_slice_elements = tt::constants::FACE_WIDTH;
@@ -77,7 +79,13 @@ TopkXLProgramFactory::cached_program_t TopkXLProgramFactory::create(
     tt::tt_metal::CreateCircularBuffer(program, all_cores, indices_scratch_cb_config);
 
     std::vector<uint32_t> reader_compile_args = {
-        cb_in, num_chunks, input_chunk_bytes, input_row_bytes, input_tile_bytes, tiles_per_sequence};
+        cb_in,
+        num_chunks,
+        input_chunk_bytes,
+        input_tail_chunk_bytes,
+        input_row_bytes,
+        input_tile_bytes,
+        tiles_per_sequence};
     tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(reader_compile_args);
 
     auto reader_kernel = tt::tt_metal::CreateKernel(
@@ -89,7 +97,7 @@ TopkXLProgramFactory::cached_program_t TopkXLProgramFactory::create(
             .noc = tt::tt_metal::NOC::NOC_0,
             .compile_args = reader_compile_args});
 
-    std::vector<uint32_t> compute_compile_args = {cb_in, cb_indices, num_chunks, k};
+    std::vector<uint32_t> compute_compile_args = {cb_in, cb_indices, num_chunks, tail_elements, k};
     auto compute_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/topk_xl/device/kernels/compute.cpp",

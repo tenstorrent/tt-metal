@@ -70,12 +70,13 @@ FORCE_INLINE void init_chunk_base(uint32_t chunk) {
 }
 
 template <uint32_t K>
-FORCE_INLINE void process_chunk(CircularBuffer& input_cb, uint32_t dst_base, uint32_t chunk, bool ascending) {
+FORCE_INLINE void process_chunk(
+    CircularBuffer& input_cb, uint32_t dst_base, uint32_t chunk, uint32_t active_elements, bool ascending) {
     constexpr uint32_t tiles_per_sequence = (K + 1023u) / 1024u;
     const uint32_t input_cb_id = input_cb.get_cb_id();
     input_cb.wait_front(tiles_per_sequence);
     topk_xl_copy_tile_init(input_cb_id);
-    topk_xl_copy_tile<K>(input_cb_id, dst_base, 0, K);
+    topk_xl_copy_tile<K>(input_cb_id, dst_base, 0, active_elements);
     input_cb.pop_front(tiles_per_sequence);
 
     topk_xl_add_lsb_indices_init();
@@ -96,9 +97,11 @@ void kernel_main() {
     constexpr uint32_t input_cb = get_compile_time_arg_val(0);
     constexpr uint32_t indices_cb = get_compile_time_arg_val(1);
     constexpr uint32_t num_chunks = get_compile_time_arg_val(2);
-    constexpr uint32_t K = get_compile_time_arg_val(3);
+    constexpr uint32_t tail_elements = get_compile_time_arg_val(3);
+    constexpr uint32_t K = get_compile_time_arg_val(4);
 
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
+    static_assert(tail_elements >= 1 && tail_elements <= K, "tail_elements must be in [1, K]");
     constexpr uint32_t tiles_per_sequence = (K + 1023u) / 1024u;
     constexpr uint32_t sequence_tiles = tiles_per_sequence * 2u;
     constexpr uint32_t slot0 = 0;
@@ -113,7 +116,8 @@ void kernel_main() {
     for (uint32_t row = 0; row < num_rows; ++row) {
         tile_regs_acquire();
 
-        process_chunk<K>(input_cb_obj, slot0, 0, false);
+        constexpr uint32_t first_chunk_elements = (num_chunks == 1) ? tail_elements : K;
+        process_chunk<K>(input_cb_obj, slot0, 0, first_chunk_elements, false);
 
         if (num_chunks == 1) {
             topk_xl_init<K, false>();
@@ -121,7 +125,8 @@ void kernel_main() {
         }
 
         for (uint32_t chunk = 1; chunk < num_chunks; ++chunk) {
-            process_chunk<K>(input_cb_obj, slot1, chunk, true);
+            const uint32_t active_elements = (chunk + 1 == num_chunks) ? tail_elements : K;
+            process_chunk<K>(input_cb_obj, slot1, chunk, active_elements, true);
 
             topk_xl_init<K, false>();
             topk_xl_merge<K, false>(slot0);

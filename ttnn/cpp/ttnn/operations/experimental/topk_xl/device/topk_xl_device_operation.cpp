@@ -33,7 +33,6 @@ void TopkXLDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(shape.rank() >= 1, "topk_xl input must have rank >= 1");
     const uint32_t n = shape[shape.rank() - 1];
     TT_FATAL(n >= attrs.k, "topk_xl input last dimension {} must be >= k {}", n, attrs.k);
-    TT_FATAL(n % attrs.k == 0, "topk_xl initial implementation requires N % k == 0; got N={}, k={}", n, attrs.k);
     constexpr uint32_t max_row_elements = 131072;
     TT_FATAL(
         n <= max_row_elements,
