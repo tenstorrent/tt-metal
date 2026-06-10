@@ -93,7 +93,7 @@ void kernel_main() {
 
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     [[maybe_unused]] constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
-    [[maybe_unused]] constexpr uint32_t num_shared_experts = get_named_compile_time_arg_val("num_shared_experts");
+    constexpr uint32_t num_shared_experts = get_named_compile_time_arg_val("num_shared_experts");
     constexpr uint32_t shared_expert_tp_factor = get_named_compile_time_arg_val("shared_expert_tp_factor");
 
     constexpr auto activation_type =
@@ -167,6 +167,7 @@ void kernel_main() {
     [[maybe_unused]] constexpr uint32_t num_a2a_steps_per_iter = num_cores;
 
     constexpr uint32_t tiles_per_step = Cfg::in2_tiles_per_step;
+    constexpr uint32_t tiles_per_step_shared = Cfg::in2_tiles_per_step_shared;
 
     //-------------------------------------------------------------------------
     // Compute
@@ -255,7 +256,13 @@ void kernel_main() {
             //---------------------------------------------------------------------
             // Compute in @ {W0,W1}
             //---------------------------------------------------------------------
-            for (uint32_t tile_id = 0; tile_id < tiles_per_step; tile_id += 2) {
+            // Shared experts are TP-split + front-packed: produce only the real TpNt prefix
+            // (dm0 reads the matching shortened W0/W1), then zero-fill the rest of the full
+            // tiles_per_step stride below. The unchanged full W2 walk then contracts real×real
+            // in the prefix and (zero in2)×(front-packed zero W2) past it.
+            const bool is_shared_expert = expert_id >= num_experts - num_shared_experts;
+            const uint32_t prod_tiles_per_step = is_shared_expert ? tiles_per_step_shared : tiles_per_step;
+            for (uint32_t tile_id = 0; tile_id < prod_tiles_per_step; tile_id += 2) {
                 uint32_t in0_index = use_second_half_buffer ? num_w0_w1_tiles_h : 0;
 
                 tile_regs_acquire();
@@ -325,6 +332,21 @@ void kernel_main() {
                 tile_regs_release();
             }
 
+            // Zero-fill the unproduced tail [prod_tiles_per_step, tiles_per_step) of this core's in2
+            // stride for shared experts, so the full W2 walk reads zeros there (annihilated by the
+            // front-packed zero W2 rows) rather than stale data from a prior expert.
+            if (is_shared_expert) {
+                tile_regs_acquire();
+                fill_tile_init();
+                fill_tile(0, 0.0f);
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t tile_id = prod_tiles_per_step; tile_id < tiles_per_step; ++tile_id) {
+                    pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2, /*output_tile_index=*/tile_id);
+                }
+                tile_regs_release();
+            }
+
             // Signal to DM1 that the output from this core is ready
             cb_reserve_back(cb_c2w_rdy, 1);
             cb_push_back(cb_c2w_rdy, 1);
@@ -353,13 +375,6 @@ void kernel_main() {
                 tile_regs_acquire();
 
                 uint32_t w2_k_tracker = 0;
-                // Shared experts contract the FULL Nt K-extent, identical to routed experts. Their
-                // W0/W1 and W2 weights are zero-padded to full Nt (add_shared_expert_weights), so the
-                // padding K rows/cols contribute zero and the full ring walk is correct. The TpNt
-                // work-distribution optimization (shortening the contraction) is deferred: a partial
-                // walk over zero-padded weights selects a core-relative window, not the real [0,TpNt)
-                // slice, so it is incorrect. Realizing it requires a true TpNt ring geometry -- see
-                // the shared-expert-tp design note.
                 for (uint32_t block_id = 0; block_id < w2_blocks_per_a2a_iter; ++block_id) {
                     cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
                     for (uint32_t k = 0; k < w2_tiles_per_block; k += w2_tiles_per_iter_w) {
