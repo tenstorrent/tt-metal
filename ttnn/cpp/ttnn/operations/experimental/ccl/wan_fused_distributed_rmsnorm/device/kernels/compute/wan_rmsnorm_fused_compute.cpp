@@ -531,19 +531,39 @@ void kernel_main() {
                         // ----- Sub-phase 3a: matmul(intermediate, trans_mat) → rotated -----
                         reconfig_data_format(transformation_mat_cb, intermediate_cb);
                         pack_reconfig_data_format(rotated_input_cb);
-                        mm_init_short(intermediate_cb, transformation_mat_cb);
+                        // Block matmul: rotate a whole block of tiles in ONE call —
+                        // rt_dim=block_size tiles of intermediate, each multiplied by the
+                        // single 32x32 transformation tile (kt_dim=ct_dim=1). One
+                        // unpack+math dispatch per block instead of block_size per-tile
+                        // matmul_tiles calls. intermediate_cb is padded to a block_size
+                        // multiple (P_WEIGHT pushes full block_size/block), so rt_dim is
+                        // always block_size; the RoPE finalize only consumes the valid
+                        // tiles, so any padding rows packed here are never used.
+                        mm_block_init_short(
+                            intermediate_cb,
+                            transformation_mat_cb,
+                            /*transpose=*/0,
+                            /*ct_dim=*/1,
+                            /*rt_dim=*/block_size,
+                            /*kt_dim=*/1);
                         for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-                            // Don't pop intermediate — Phase 3b needs to read it again.
+                            // Don't pop intermediate — the RoPE finalize re-reads it.
                             cb_wait_front(intermediate_cb, col_tile + block_size);
                             cb_reserve_back(rotated_input_cb, block_size);
-                            // Standard acquire→math→commit→wait→pack→release.
                             tile_regs_acquire();
-                            for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                                matmul_tiles(intermediate_cb, transformation_mat_cb, col_tile + i, 0, i);
-                            }
+                            matmul_block(
+                                intermediate_cb,
+                                transformation_mat_cb,
+                                /*in0_idx=*/col_tile,
+                                /*in1_idx=*/0,
+                                /*idst=*/0,
+                                /*transpose=*/0,
+                                /*ct_dim=*/1,
+                                /*rt_dim=*/block_size,
+                                /*kt_dim=*/1);
                             tile_regs_commit();
                             tile_regs_wait();
-                            for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+                            for (uint32_t i = 0; i < block_size; i++) {
                                 pack_tile(i, rotated_input_cb);
                             }
                             tile_regs_release();
@@ -587,8 +607,12 @@ void kernel_main() {
                                     (per_head_rope != 0) ? (col_tile + i) : ((rope_base + i) % head_dim_tiles);
                                 mul_tiles(intermediate_cb, rope_cos_cb, i, rope_idx, i);
                             }
-                            // rotate(x)*sin + dst -> dst (FPU accumulate: acc_to_dest=true)
-                            binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(rotated_input_cb, rope_sin_cb, true);
+                            // rotate(x)*sin + dst -> dst (FPU accumulate: acc_to_dest=true).
+                            // full_init=false: operand formats match the x*cos mul above
+                            // (intermediate/rotated both fp32, cos/sin both bf16), so the
+                            // unpacker AB config is already valid — only the math init
+                            // re-runs to flip acc_to_dest. Skips a redundant unpack init.
+                            binary_tiles_init<false, EltwiseBinaryType::ELWMUL>(rotated_input_cb, rope_sin_cb, true);
                             uint32_t valid = 0;
                             for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                                 const uint32_t rope_idx =
