@@ -78,7 +78,7 @@ const bool is_int_fpu_en = false;
 #include "cmath_common.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 #include "params.h"
 #include "sfpu/ckernel_sfpu_square.h"
 

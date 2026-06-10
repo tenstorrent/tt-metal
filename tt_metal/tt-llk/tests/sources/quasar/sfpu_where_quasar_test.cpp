@@ -79,9 +79,9 @@ const bool is_int_fpu_en = false;
 #include "cfg_defines.h"
 #include "cmath_common.h"
 #include "llk_math_common.h"
-#include "llk_math_eltwise_ternary_sfpu_macros.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_sfpu/ckernel_sfpu_where.h"
+#include "llk_sfpu/llk_math_eltwise_ternary_sfpu_macros.h"
 #include "params.h"
 
 using namespace ckernel;

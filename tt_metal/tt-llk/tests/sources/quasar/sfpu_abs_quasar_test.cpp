@@ -89,7 +89,7 @@ const bool is_int_fpu_en = false;
 #include "experimental/ckernel_sfpu_abs.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 #include "params.h"
 
 using namespace ckernel;
