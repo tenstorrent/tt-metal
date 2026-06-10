@@ -212,7 +212,7 @@ class WeightBridge:
     1. ``WeightBridge(...)`` -- cheap, non-blocking; validates args.
     2. ``bridge.connect()`` -- both ranks call once; handshakes and
        opens the ``MeshSocket``. Blocks until the peer also calls it.
-    3. ``transfer_state`` / ``send_state`` / ``recv_state`` -- moves
+    3. ``transfer_weights`` / ``send_state`` / ``recv_state`` -- moves
        the weights; may be called multiple times.
     4. ``bridge.barrier()`` -- optional post-transfer fence.
 
@@ -332,7 +332,7 @@ class WeightBridge:
         )
         self._socket = ttnn.MeshSocket(self.device, socket_config)
 
-    def transfer_state(
+    def transfer_weights(
         self,
         source: Optional[dict[str, "ttnn.Tensor"]] = None,
     ) -> Optional[dict[str, "ttnn.Tensor"]]:
@@ -347,11 +347,11 @@ class WeightBridge:
         """
         if self.role == _ROLE_TTML:
             if source is None:
-                raise ValueError("WeightBridge.transfer_state on ttml rank requires source=hf_dict")
+                raise ValueError("WeightBridge.transfer_weights on ttml rank requires source=hf_dict")
             self.send_state(source)
             return None
         if source is not None:
-            raise ValueError("WeightBridge.transfer_state on ttt rank must not pass source=...")
+            raise ValueError("WeightBridge.transfer_weights on ttt rank must not pass source=...")
         return self.recv_state()
 
     def send_state(self, hf_dict: dict[str, "ttnn.Tensor"]) -> None:
