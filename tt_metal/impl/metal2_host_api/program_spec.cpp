@@ -320,6 +320,18 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
             bool has_consumer = false;
         };
         std::unordered_map<std::string, AccessorBindingInfo> accessor_bindings;
+        // Track, per DFB, which endpoint roles this kernel has already bound. Within a kernel a DFB
+        // may be bound at most once per role; the only multi-binding form is the self-loop pair (one
+        // PRODUCER + one CONSUMER, whose accessor names may differ). A second binding of the same
+        // role under a different accessor name is the forbidden "one buffer, two names" aliasing
+        // (see the check below). Scoped to the kernel so it resets per iteration — a DFB legitimately
+        // carries different accessor names on different kernels (producer 'out', consumer 'in'), so
+        // this must not be global.
+        struct DFBBoundRoles {
+            bool has_producer = false;
+            bool has_consumer = false;
+        };
+        std::unordered_map<DFBSpecName, DFBBoundRoles> dfb_bound_roles;
         for (const auto& dfb_binding : kernel.dfb_bindings) {
             auto [it, inserted] = accessor_bindings.try_emplace(
                 dfb_binding.accessor_name, AccessorBindingInfo{dfb_binding.dfb_spec_name});
@@ -349,6 +361,28 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 is_producer ? "PRODUCER" : "CONSUMER",
                 dfb_binding.accessor_name);
             seen_this_type = true;
+
+            // Forbid binding the same DFB twice in the same role within this kernel (e.g. two CONSUMER
+            // bindings under different accessor names). The legitimate multi-binding form is the
+            // self-loop pair — one PRODUCER + one CONSUMER — which this allows regardless of whether
+            // the two bindings share an accessor name. The same-role same-name case is already caught
+            // above (duplicate {PRODUCER,CONSUMER} binding for accessor_name); this closes the
+            // different-name gap. "One buffer, two names" in kernel code must be a handle alias
+            // (constexpr auto x = dfb::y) over a single binding, not a second binding — two accessors /
+            // DataflowBuffer objects for one FIFO break the object<->DFB identity that device-side
+            // debug tooling relies on.
+            DFBBoundRoles& bound_roles = dfb_bound_roles[dfb_binding.dfb_spec_name];
+            bool& role_already_bound = is_producer ? bound_roles.has_producer : bound_roles.has_consumer;
+            TT_FATAL(
+                !role_already_bound,
+                "Kernel '{}' has two {} bindings to DFB '{}' under different accessor names. Within a "
+                "kernel a DFB may be bound at most once per role (the only multi-binding form is the "
+                "self-loop pair: one PRODUCER + one CONSUMER). To refer to one buffer by multiple names "
+                "in kernel code, alias the handle (constexpr auto x = dfb::y) instead of adding a second binding.",
+                kernel.unique_id,
+                is_producer ? "PRODUCER" : "CONSUMER",
+                dfb_binding.dfb_spec_name);
+            role_already_bound = true;
 
             // Referential integrity: the DFB must exist
             TT_FATAL(

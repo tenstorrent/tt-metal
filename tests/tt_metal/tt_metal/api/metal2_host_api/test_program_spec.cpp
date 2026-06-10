@@ -218,6 +218,56 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopWithSharedLocalAccessorNameSucceeds) {
     EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
+TEST_F(ProgramSpecTestQuasar, SelfLoopWithDistinctAccessorNamesSucceeds) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    // A producer+consumer self-loop on one DFB may use DISTINCT accessor names ('p'/'c'): it binds
+    // one PRODUCER and one CONSUMER (different roles), which is the sanctioned multi-binding form.
+    // Only a second binding of the SAME role under a different name is forbidden.
+    auto kernel = MakeMinimalDMKernel("kernel");
+    auto dfb = MakeMinimalDFB("dfb");
+    kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "p"));
+    kernel.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "c"));
+
+    spec.kernels = {kernel};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
+
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+}
+
+TEST_F(ProgramSpecTestQuasar, DFBBoundTwiceInSameRoleUnderDifferentNamesFails) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    // The wrong port of the legacy "one buffer, two names" CB-alias idiom: one kernel binds the
+    // same DFB twice in the SAME role (here two CONSUMER bindings) under different accessor names,
+    // yielding two accessors / DataflowBuffer objects for one FIFO. Forbidden — the right port is a
+    // kernel-side handle alias over a single binding. (A producer+consumer self-loop is a different,
+    // legitimate multi-binding and stays legal — see SelfLoopWithDistinctAccessorNamesSucceeds.)
+    auto producer = MakeMinimalDMKernel("producer");
+    auto consumer = MakeMinimalDMKernel("consumer");
+    auto dfb = MakeMinimalDFB("dfb");
+
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in_a"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in_b"));
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("has two CONSUMER bindings to DFB 'dfb' under different accessor names")));
+}
+
 TEST_F(ProgramSpecTestQuasar, InvalidLocalAccessorNameFails) {
     NodeCoord node{0, 0};
 
