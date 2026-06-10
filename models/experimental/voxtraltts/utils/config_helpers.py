@@ -34,11 +34,11 @@ COMPUTE_KERNEL_CONFIG_VOXTRAL_SEMANTIC = ttnn.WormholeComputeKernelConfig(
     dst_full_sync_en=False,
 )
 
-# Audio tokenizer transformer matmuls/SDPA: HiFi4 + fp32 dest acc (weights stay BFP8 in default preset).
+# Audio tokenizer transformer matmuls/SDPA: HiFi2 (matches conv/RMSNorm; weights stay BFP8 in default preset).
 COMPUTE_KERNEL_CONFIG_VOXTRAL_AUDIO_TOKENIZER = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_fidelity=ttnn.MathFidelity.HiFi2,
     math_approx_mode=False,
-    fp32_dest_acc_en=True,
+    fp32_dest_acc_en=False,
     packer_l1_acc=True,
 )
 
