@@ -205,6 +205,33 @@ def text_rmsnorm_weights(
     return {"weight": hf_sd[key]}
 
 
+def text_attention_weights(
+    layer_idx: int = 0, hf_sd: Optional[Dict[str, torch.Tensor]] = None
+) -> Dict[str, torch.Tensor]:
+    """State dict for TtTextAttention: q/k/v_proj.weight+bias, o_proj.weight (no bias).
+
+    HF keys live under ``model.layers.{layer_idx}.self_attn`` (Qwen2 GQA:
+    q_proj [1536, 1536] + bias, k/v_proj [256, 1536] + bias — 2 KV heads x
+    head_dim 128 — o_proj [1536, 1536] bias-free). The TTNN module does its
+    own fused-QKV repack and kv_replication; the loader hands over the raw
+    HF per-projection tensors exactly as ``TtTextAttention.__init__`` expects.
+    """
+    prefix = f"model.layers.{layer_idx}.self_attn"
+    names = [
+        "q_proj.weight",
+        "q_proj.bias",
+        "k_proj.weight",
+        "k_proj.bias",
+        "v_proj.weight",
+        "v_proj.bias",
+        "o_proj.weight",
+    ]
+    keys = [f"{prefix}.{n}" for n in names]
+    if hf_sd is None:
+        hf_sd = load_hf_state_dict(keys=keys)
+    return {n: hf_sd[f"{prefix}.{n}"] for n in names}
+
+
 def count_params(sd) -> int:
     """Tensor-leaf element count of a (possibly nested) state dict."""
     if isinstance(sd, torch.Tensor):
@@ -281,3 +308,15 @@ if __name__ == "__main__":
         tsd = text_rmsnorm_weights(layer_idx=idx, which=which)
         assert tsd["weight"].shape == (1536,), (which, idx, tsd["weight"].shape)
     print(f"text_rmsnorm: input/post_attention/final_norm OK, {count_params(tsd)} params each")
+
+    for idx in (0, TEXT_NUM_LAYERS - 1):
+        tasd = text_attention_weights(layer_idx=idx)
+        assert tasd["q_proj.weight"].shape == (1536, 1536), (idx, tasd["q_proj.weight"].shape)
+        assert tasd["q_proj.bias"].shape == (1536,), (idx, tasd["q_proj.bias"].shape)
+        assert tasd["k_proj.weight"].shape == (256, 1536), (idx, tasd["k_proj.weight"].shape)
+        assert tasd["k_proj.bias"].shape == (256,), (idx, tasd["k_proj.bias"].shape)
+        assert tasd["v_proj.weight"].shape == (256, 1536), (idx, tasd["v_proj.weight"].shape)
+        assert tasd["v_proj.bias"].shape == (256,), (idx, tasd["v_proj.bias"].shape)
+        assert tasd["o_proj.weight"].shape == (1536, 1536), (idx, tasd["o_proj.weight"].shape)
+        assert len(tasd) == 7, (idx, sorted(tasd))
+    print(f"text_attention: layers.0/layers.{TEXT_NUM_LAYERS - 1} OK, {count_params(tasd)} params each")

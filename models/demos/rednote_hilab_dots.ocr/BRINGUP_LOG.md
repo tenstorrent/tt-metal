@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T07:44:32Z
+**Updated:** 2026-06-10T07:52:31Z
 
 ## Block Status
 
@@ -59,7 +59,7 @@
 | text_attention | ttnn | done | 0.999047 | 0 | Fused per-chip QKV ttnn.linear(+bias) -> nlp_create_qkv_heads (3 Q + KV replicated to 3, MHA core) -> explicit fp32 HF-convention rope (slice/neg/concat/mul/add, vision-tower recipe) -> explicit fp32 causal core matmul QK^T * scale + additive triu mask -> ttnn.softmax(numeric_stable) -> matmul PV -> nlp_concat_heads -> row-parallel o_proj + sync all_gather all-reduce. bf16 SDPA rejected by measurement: layer-0 logits reach +-3122 (std 664, Qwen2 attention sink); per-stage isolation showed q/k/v+rope 0.9999+ but bf16 SDPA core 0.9265 (0.92-0.97 across program configs), so the whole path runs fp32 (HiFi4 + fp32 acc; SDPA kernel is bf16-only) -- guard satisfied via softmax alternative. kv_replication=2 per parallelism plan via per-chip KV row repeat; 1x4 mesh; replicated all-reduced output vs golden. Guard ok (lint 0, kernels ok, no new host ops). KB entries reviewed (nlp_create_qkv_heads idiom applied); decode/KV-cache deferred to generation phase. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | text_attention | debug | n/a | — | 0 |  |
 | text_attention | optimization | done | 0.999049 | 0 | Tracy-driven single change: o_proj partial-sum all-reduce swapped from sync all_gather(4*hidden) + 3 slices + 3 local adds to ttnn.reduce_scatter(dim=3) + ttnn.all_gather(dim=3) (Topology.Linear, fp32 fabric accumulation) — the tp-guidance optimization-phase CCL swap. Traced tracy at the production operating point (fp32 [1,1,128,1536] replicated 1x4 mesh, real layers.0 weights, golden rope/causal mask, metal-trace captured+replayed): per-device block kernel time 327.8 -> 247.8 us (-24.4%); CCL 127.3 (all_gather) -> 91.8 us (48.9 reduce_scatter + 42.9 all_gather), BinaryNg 49.7 -> 24.3 us (local adds gone), Slice 25.6 -> 6.9 us. Wall-clock A/B over 200 traced replays 364.8 -> 281.3 us/iter (-22.9%). Top hotspot post-change MatmulDeviceOperation 85.5us 34.5% (QKV/QK^T/PV/o_proj fp32 HiFi4 tiny per-chip shapes 16-48c). KB entries for kind attention reviewed (ttnn_bcast_2 scale-bcast n/a: scale+mask cost 9.8us total; ttnn_eq mask-building n/a host mask; create_qkv_heads idiom already applied) - none applicable, none used. PCC 0.999049 (>0.99, +2e-6 vs sync baseline); composition insurance test_decoder_layer 0.999944 (was 0.999943). traced_ops sidecar regenerated (+reduce_scatter, -local slices/adds). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
-| text_attention | real_weights | pending | — | 0 |  |
+| text_attention | real_weights | done | 0.999049 | 0 | text_attention_weights loader added to consolidated tt/weight_loader.py (pure-PyTorch, memoized key-filtered safetensors load of model.layers.{i}.self_attn.*: q_proj [1536,1536]+bias, k/v_proj [256,1536]+bias (2 KV heads x hd128), o_proj [1536,1536] bias-free; raw HF per-projection tensors handed over exactly as TtTextAttention.__init__ expects - the module does its own fused-QKV repack and kv_replication; 5507072 params/layer; __main__ self-test extended layers.0/layers.27, all 7 shapes asserted). Stage-1 parametric tests/test_real_hf_weights.py row runs TtTextAttention at the production operating point (fp32 explicit-attention path - layer-0 logits +-3122, bf16 SDPA ~0.92 - TP-sharded 1x4 mesh: 3 Q heads/chip, kv_replication=2, row-parallel o_proj + reduce_scatter/all_gather all-reduce; golden real post-input_layernorm activation [1,128,1536] + golden rope tables theta=1e6) vs the pure-PyTorch reference with the same real weights at TWO sites: layers.0 PCC 0.999049, layers.27 0.999918 (min 0.999049 > 0.99 reported). Block forward untouched; full harness re-run, all 10 rows passing (9 prior rows unchanged). Guard ok (lint 0, params_loaded 11014144>0). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | text_mlp | reference | done | 1.000000 | 0 | Qwen2 SwiGLU 1536->8960->1536 no bias, real layers.0 weights |
 | text_mlp | ttnn | done | 0.999991 | 0 | Qwen2 SwiGLU down(silu(gate(x))*up(x)) 1536->8960->1536 no bias: two sibling ttnn.linear branches + explicit ttnn.silu + ttnn.mul + row-parallel down ttnn.linear, mirroring reference_impl models/tt_transformers/tt/mlp.py (KB ttnn_silu_2 cited; KB ttnn_mul_1 fused input_tensor_a_activations=[SILU] variant deferred to optimization since the mlp guard requires a traced silu/gelu kernel). Parallelism plan placement=shard implemented: gate/up column-parallel ShardTensorToMesh(dim=-1) (per-chip intermediate 8960/4=2240), down row-parallel (dim=-2) with per-chip PARTIAL sums combined by sync all_gather(dim=3, Topology.Linear) + local adds (same all-reduce idiom as text_attention o_proj; async CCL deferred to optimization per tp-guidance). HiFi4+fp32-acc, bf16; real model.layers.0.mlp weights re-loaded from checkpoint in the test; all-reduced replicated output compared single-device vs golden. Guard ok (lint 0, kernels ok, no new host ops). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | text_mlp | debug | n/a | — | 0 |  |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 31 (2026-06-10T06:40:18Z): device[lm_head] — ok
 - tick 32 (2026-06-10T06:46:52Z): device[vision_patch_embed] — ok
 - tick 33 (2026-06-10T06:53:44Z): device[vision_rmsnorm] — ok
 - tick 34 (2026-06-10T06:59:50Z): device[vision_attention] — ok
@@ -94,6 +93,7 @@
 - tick 38 (2026-06-10T07:28:34Z): device[vision_transformer] — ok
 - tick 39 (2026-06-10T07:36:26Z): device[embedding] — ok
 - tick 40 (2026-06-10T07:44:32Z): device[text_rmsnorm] — ok
+- tick 41 (2026-06-10T07:52:31Z): device[text_attention] — ok
 
 ## Host-Resident Exceptions
 

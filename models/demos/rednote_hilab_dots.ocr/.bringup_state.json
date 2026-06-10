@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T07:44:32Z",
+  "updated_at": "2026-06-10T07:52:31Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -612,8 +612,15 @@
         "pcc": 0.999049
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/weight_loader.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_real_hf_weights.py"
+        ],
+        "notes": "text_attention_weights loader added to consolidated tt/weight_loader.py (pure-PyTorch, memoized key-filtered safetensors load of model.layers.{i}.self_attn.*: q_proj [1536,1536]+bias, k/v_proj [256,1536]+bias (2 KV heads x hd128), o_proj [1536,1536] bias-free; raw HF per-projection tensors handed over exactly as TtTextAttention.__init__ expects - the module does its own fused-QKV repack and kv_replication; 5507072 params/layer; __main__ self-test extended layers.0/layers.27, all 7 shapes asserted). Stage-1 parametric tests/test_real_hf_weights.py row runs TtTextAttention at the production operating point (fp32 explicit-attention path - layer-0 logits +-3122, bf16 SDPA ~0.92 - TP-sharded 1x4 mesh: 3 Q heads/chip, kv_replication=2, row-parallel o_proj + reduce_scatter/all_gather all-reduce; golden real post-input_layernorm activation [1,128,1536] + golden rope tables theta=1e6) vs the pure-PyTorch reference with the same real weights at TWO sites: layers.0 PCC 0.999049, layers.27 0.999918 (min 0.999049 > 0.99 reported). Block forward untouched; full harness re-run, all 10 rows passing (9 prior rows unchanged). Guard ok (lint 0, params_loaded 11014144>0). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999049,
+        "params_loaded": 11014144
       }
     },
     {
@@ -1067,6 +1074,12 @@
       "tick": 40,
       "ts": "2026-06-10T07:44:32Z",
       "action": "device[text_rmsnorm]",
+      "result": "ok"
+    },
+    {
+      "tick": 41,
+      "ts": "2026-06-10T07:52:31Z",
+      "action": "device[text_attention]",
       "result": "ok"
     }
   ],
