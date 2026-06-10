@@ -436,7 +436,7 @@ protected:
         // On the Quasar simulator, place the exec buffer just above the test's bank data so it stays below the issue
         // queue. Tests whose data alone reaches the issue queue are skipped, so any test that runs has room left for
         // its exec buffer.
-        const uint32_t bank_data_bytes = dram_data_size_words_ * sizeof(uint32_t) + DEVICE_DATA_SIZE;
+        const uint32_t bank_data_bytes = dram_data_size_words_ * sizeof(uint32_t) + QUASAR_SIMULATION_DEVICE_DATA_SIZE;
         return tt::align(dram_base_ + bank_data_bytes, 1u << DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE);
     }
 
@@ -2726,16 +2726,14 @@ public:
 
         const uint32_t host_align = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
 
-        // write_prefetcher_cmd: streaming-store cmd to hugepage (WH/BH) or DRAM bank 0 (Quasar),
-        // then write one FetchQ entry via TLB.
-        // cmd_size_bytes must be a multiple of 64 (host alignment) and cmd_size_entry is the
-        // pre-computed FetchQ value (may have MSB stall flag set for exec_buf).
+        // write_prefetcher_cmd: streaming-store cmd to hugepage (WH/BH) or DRAM (Quasar), then write one FetchQ entry
+        // via TLB. cmd_size_bytes must be a multiple of 64 (host alignment) and cmd_size_entry is the pre-computed
+        // FetchQ value (may have MSB stall flag set for exec_buf).
         auto write_prefetcher_cmd = [&](const uint32_t* src, uint32_t cmd_size_bytes, uint32_t cmd_size_entry) {
             if (Common::is_quasar_sim()) {
-                // DRAM path: write commands to DRAM at QUASAR_SIMULATION_ISSUE_QUEUE_BASE. Wrap to base on overflow.
-                if (dram_write_offset + cmd_size_bytes > Common::QUASAR_SIMULATION_ISSUE_QUEUE_SIZE) {
-                    dram_write_offset = 0;
-                }
+                TT_FATAL(
+                    dram_write_offset + cmd_size_bytes <= Common::QUASAR_SIMULATION_ISSUE_QUEUE_SIZE,
+                    "SD prefetch: command stream exceeds QUASAR_SIMULATION_ISSUE_QUEUE_SIZE");
                 tt::tt_metal::detail::WriteToDeviceDRAMChannel(
                     this->device_,
                     0,
