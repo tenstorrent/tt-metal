@@ -116,6 +116,7 @@ void kernel_main() {
 
     const uint32_t stick_size_bytes = W_size_bytes;
 
+    Noc noc;
     CircularBuffer cb_in(cb_in0);
     CircularBuffer cb_out(cb_out0);
 
