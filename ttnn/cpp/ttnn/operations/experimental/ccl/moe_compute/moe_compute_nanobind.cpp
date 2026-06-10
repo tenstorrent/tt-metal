@@ -66,8 +66,11 @@ void bind_moe_compute(nb::module_& mod) {
 
         - ``output_height_shard_dim``: Number of token-parallel (height) cores used
           for the combine output. The width (data-parallel) core count is auto-derived
-          from ``hidden_size``. Use ``auto_output_width_shard_dim(hidden_size)`` from
-          ``moe_compute_utils`` to compute the recommended value.
+          from ``hidden_size`` and the matmul ring size (``bh_ring_size`` on BH, 12 on WH):
+          largest divisor d of ``hidden_tiles`` with d <= 4 and ``ring_n % d == 0``.
+          Use ``auto_output_width_shard_dim(hidden_size, matmul_ring_size=...)`` from
+          ``moe_compute_utils`` (with ``effective_matmul_ring_size``) so test tensors
+          match the device op.
 
         **Bias support (optional)**
 
@@ -96,7 +99,7 @@ void bind_moe_compute(nb::module_& mod) {
           ``prepare_w2_tensor_with_bias``
         - Shard maps: ``get_weight_core_shard_maps(mesh_device, hidden_size, intermediate_size)``
         - Memory configs: ``get_weight_mem_configs(...)``
-        - Output shard dim: ``auto_output_width_shard_dim(hidden_size)``
+        - Output shard dim: ``auto_output_width_shard_dim(hidden_size, matmul_ring_size=...)``
 
         These functions are kept in sync with the test suite and can be used as
         "executable documentation" for the layout contract; they are not a required

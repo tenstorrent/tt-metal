@@ -178,9 +178,12 @@ void reduce_c() {
     compute_kernel_lib::reduce<
         pool_type,
         reduce_dim,
+        in0_cb,
+        scale_cb,
+        out_cb,
         compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop,
         compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
-        in0_cb, scale_cb, out_cb, compute_kernel_lib::ReduceInputBlockShape::of(rows, cols));
+        compute_kernel_lib::ReduceInputBlockShape::of(rows, cols));
     UNPACK(tensix_sync());  // Workaround for issue #9370
 }
 

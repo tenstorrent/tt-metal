@@ -71,11 +71,10 @@ sfpi_inline void calculate_div_int32_body(
 
     // Compute correction value in float32.
     sfpi::vFloat correction_f = r_f * inv_b_f;
-    sfpi::vInt b1 = b >> 23;
-    sfpi::vInt correction = sfpi::float_to_uint16(correction_f, sfpi::RoundMode::NearestEven);
+    sfpi::vMag correction = sfpi::convert<sfpi::vUInt16>(correction_f, sfpi::RoundMode::NearestEven);
 
     // Compute tmp = correction * b.
-    b1 = sfpi::fractional_mul(correction, b1);
+    sfpi::vInt b1 = sfpi::fractional_mul(correction, b >> 23);
     sfpi::vInt tmp_hi = sfpi::fractional_mul(correction, b, sfpi::FractionalHalf::High);
     sfpi::vInt tmp_lo = sfpi::fractional_mul(correction, b);
     tmp_hi += b1;

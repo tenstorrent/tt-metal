@@ -4,17 +4,26 @@
 
 #include "embeddings_rm_program_factory.hpp"
 #include "embedding_program_factory_common.hpp"
+
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
 
 namespace ttnn::prim {
 
-EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
+using namespace tt;
+using namespace tt::tt_metal;
+
+tt::tt_metal::ProgramDescriptor EmbeddingsRMProgramFactory::create_descriptor(
     const EmbeddingParams& operation_attributes, const EmbeddingInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& a = tensor_args.input_tensor_arg;
     const auto& weights = tensor_args.weight_arg;
     auto& output = tensor_return_value;
     const auto& embeddings_type = operation_attributes.embeddings_type;
     const auto& pad_token = operation_attributes.pad_token;
+
+    ProgramDescriptor desc;
 
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
@@ -31,7 +40,6 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program{};
 
     bool output_sharded = is_sharded(output.buffer()->buffer_layout());
 
@@ -60,7 +68,7 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
-    uint32_t num_blocks_per_core_group_1, num_blocks_per_core_group_2;
+    uint32_t num_blocks_per_core_group_1 = 0, num_blocks_per_core_group_2 = 0;
     CoreRangeSet all_cores, core_group_1, core_group_2;
     bool row_major = false;
     if (output_sharded) {
@@ -113,34 +121,55 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
         uint32_t buffering_size = (num_blocks_per_core_group_1 > 1 || num_blocks_per_core_group_2 > 1) ? 2 : 1;
         out_cb_size = buffering_size * chunk_size;
     }
-    tt::tt_metal::CircularBufferConfig cb_out_config =
-        tt::tt_metal::CircularBufferConfig(out_cb_size, {{out_cb_index, weights_cb_data_format}})
-            .set_page_size(out_cb_index, chunk_size);
+    CBDescriptor out_cb_desc{
+        .total_size = out_cb_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = out_cb_index,
+            .data_format = weights_cb_data_format,
+            .page_size = chunk_size,
+        }}},
+    };
     if (output_sharded) {
-        cb_out_config.set_globally_allocated_address(*out_buffer);
+        out_cb_desc.buffer = out_buffer;
     }
-    auto cb_out = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
+    desc.cbs.push_back(std::move(out_cb_desc));
 
     constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
     uint32_t index_page_size = round_up_to_mul32(input_element_size_bytes);
-    tt::tt_metal::CircularBufferConfig cb_src1_config =
-        tt::tt_metal::CircularBufferConfig(block_height * index_page_size, {{src1_cb_index, input_cb_data_format}})
-            .set_page_size(src1_cb_index, block_height * index_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = block_height * index_page_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = src1_cb_index,
+            .data_format = input_cb_data_format,
+            .page_size = block_height * index_page_size,
+        }}},
+    });
 
     constexpr uint32_t src2_cb_index = tt::CBIndex::c_2;
     if (embeddings_type == EmbeddingsType::PADDED) {
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
-        tt::tt_metal::CircularBufferConfig cb_src2_config =
-            tt::tt_metal::CircularBufferConfig(cache_page_size, {{src2_cb_index, weights_cb_data_format}})
-                .set_page_size(src2_cb_index, cache_page_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = cache_page_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = src2_cb_index,
+                .data_format = weights_cb_data_format,
+                .page_size = cache_page_size,
+            }}},
+        });
     } else if (embeddings_type == EmbeddingsType::BINARY) {
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
-        tt::tt_metal::CircularBufferConfig cb_src2_config =
-            tt::tt_metal::CircularBufferConfig(2 * cache_page_size, {{src2_cb_index, weights_cb_data_format}})
-                .set_page_size(src2_cb_index, cache_page_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = 2 * cache_page_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = src2_cb_index,
+                .data_format = weights_cb_data_format,
+                .page_size = cache_page_size,
+            }}},
+        });
     }
 
     // Create Kernels
@@ -166,17 +195,19 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
         embeddings_index_type = EmbeddingsIndexType::UINT32;
     }
 
-    std::map<std::string, std::string> embedding_defines = {
+    KernelDescriptor::Defines embedding_defines = {
         {enchantum::to_string(embeddings_type).data(), "1"}, {enchantum::to_string(embeddings_index_type).data(), "1"}};
 
-    auto reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(embedding_compile_time_args);
+    reader_desc.defines = embedding_defines;
+    reader_desc.config = ReaderConfigDescriptor{};
 
     // Writer
-    tt::tt_metal::KernelHandle writer_kernel_id = 0;
+    std::optional<KernelDescriptor> writer_desc;
     if (!output_sharded) {
         if (use_chunked) {
             std::vector<uint32_t> writer_compile_time_args = {
@@ -187,48 +218,39 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
                 (std::uint32_t)last_chunk_size};
             tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
-            writer_kernel_id = tt::tt_metal::CreateKernel(
-                program,
-                "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_rm_writer_chunked.cpp",
-                all_cores,
-                tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+            KernelDescriptor w;
+            w.kernel_source =
+                "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_rm_writer_chunked.cpp";
+            w.source_type = KernelDescriptor::SourceType::FILE_PATH;
+            w.core_ranges = all_cores;
+            w.compile_time_args = std::move(writer_compile_time_args);
+            w.config = WriterConfigDescriptor{};
+            writer_desc = std::move(w);
         } else {
             std::vector<uint32_t> writer_compile_time_args = {
                 (std::uint32_t)out_cb_index, (std::uint32_t)output_page_size};
             tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
-            writer_kernel_id = tt::tt_metal::CreateKernel(
-                program,
-                "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
-                all_cores,
-                tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+            KernelDescriptor w;
+            w.kernel_source = "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp";
+            w.source_type = KernelDescriptor::SourceType::FILE_PATH;
+            w.core_ranges = all_cores;
+            w.compile_time_args = std::move(writer_compile_time_args);
+            w.config = WriterConfigDescriptor{};
+            writer_desc = std::move(w);
         }
     }
 
     uint32_t input_offset = 0;
 
     auto cores = corerange_to_cores(all_cores, std::nullopt, row_major);
-    std::vector<uint32_t> reader_runtime_args = {
-        (std::uint32_t)a.buffer()->address(),
-        (std::uint32_t)weights.buffer()->address(),
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-    };
-    if (embeddings_type == EmbeddingsType::PADDED) {
-        reader_runtime_args.push_back(pad_token.value());
-    }
-    std::vector<uint32_t> writer_runtime_args;
-    if (use_chunked) {
-        writer_runtime_args = {
-            (std::uint32_t)output.buffer()->address(), (std::uint32_t)0, (std::uint32_t)0};
-    } else {
-        writer_runtime_args = {
-            (std::uint32_t)output.buffer()->address(),
-            (std::uint32_t)output_page_size,
-            (std::uint32_t)0,
-            (std::uint32_t)0};
+    auto* a_buffer = a.buffer();
+    auto* weights_buffer = weights.buffer();
+    auto* output_buffer = output.buffer();
+
+    reader_desc.runtime_args.reserve(cores.size());
+    if (writer_desc.has_value()) {
+        writer_desc->runtime_args.reserve(cores.size());
     }
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
@@ -238,74 +260,39 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
 
         // Reader
         {
-            reader_runtime_args[2] = input_offset / num_blocks_per_batch;
-            reader_runtime_args[3] =
-                tt::round_down(input_offset % num_blocks_per_batch, block_height) * input_element_size_bytes;
-            reader_runtime_args[4] = local_num_blocks;
-            reader_runtime_args[5] = input_offset % num_blocks_per_batch % block_height;
-            tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+            KernelDescriptor::RTArgList reader_args;
+            reader_args.push_back(a_buffer);
+            reader_args.push_back(weights_buffer);
+            reader_args.push_back(input_offset / num_blocks_per_batch);
+            reader_args.push_back(
+                tt::round_down(input_offset % num_blocks_per_batch, block_height) * input_element_size_bytes);
+            reader_args.push_back(local_num_blocks);
+            reader_args.push_back(input_offset % num_blocks_per_batch % block_height);
+            if (embeddings_type == EmbeddingsType::PADDED) {
+                reader_args.push_back(pad_token.value());
+            }
+            reader_desc.emplace_runtime_args(core, reader_args);
         }
 
         // Writer
         if (!output_sharded) {
             if (use_chunked) {
-                writer_runtime_args[1] = local_num_blocks;
-                writer_runtime_args[2] = input_offset;
+                writer_desc->emplace_runtime_args(core, {output_buffer, local_num_blocks, input_offset});
             } else {
-                writer_runtime_args[2] = local_num_blocks;
-                writer_runtime_args[3] = input_offset;
+                writer_desc->emplace_runtime_args(
+                    core, {output_buffer, static_cast<uint32_t>(output_page_size), local_num_blocks, input_offset});
             }
-            tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
         }
 
         input_offset += local_num_blocks;
     }
 
-    return cached_program_t{
-        std::move(program),
-        {.reader_kernel_id = reader_kernel_id,
-         .writer_kernel_id = writer_kernel_id,
-         .cores = cores,
-         .cb_out = cb_out,
-         .output_sharded = output_sharded}};
-}
-
-void EmbeddingsRMProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const EmbeddingParams& /*operation_attributes*/,
-    const EmbeddingInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    auto& program = cached_program.program;
-    const auto& shared_variables = cached_program.shared_variables;
-    const auto& reader_kernel_id = shared_variables.reader_kernel_id;
-    const auto& writer_kernel_id = shared_variables.writer_kernel_id;
-    const auto& cores = shared_variables.cores;
-    const auto& cb_out = shared_variables.cb_out;
-    const auto& output_sharded = shared_variables.output_sharded;
-
-    auto* output_buffer = tensor_return_value.buffer();
-    auto output_buffer_address = output_buffer->address();
-    auto input_buffer_address = tensor_args.input_tensor_arg.buffer()->address();
-    auto weights_buffer_address = tensor_args.weight_arg.buffer()->address();
-
-    if (output_sharded) {
-        UpdateDynamicCircularBufferAddress(program, cb_out, *output_buffer);
+    desc.kernels.push_back(std::move(reader_desc));
+    if (writer_desc.has_value()) {
+        desc.kernels.push_back(std::move(*writer_desc));
     }
 
-    auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
-    auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
-
-    for (const auto& core : cores) {
-        {
-            auto& runtime_args = reader_runtime_args[core.x][core.y];
-            runtime_args[0] = input_buffer_address;
-            runtime_args[1] = weights_buffer_address;
-        }
-
-        if (!output_sharded) {
-            auto& runtime_args = writer_runtime_args[core.x][core.y];
-            runtime_args[0] = output_buffer_address;
-        }
-    }
+    return desc;
 }
+
 }  // namespace ttnn::prim
