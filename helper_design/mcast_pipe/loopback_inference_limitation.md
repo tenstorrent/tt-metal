@@ -1,6 +1,12 @@
 # mcast `Pipe` — the loopback-to-self inference limitation (Round 2)
 
-**TL;DR:** Whether a sender that sits *inside* its broadcast box also receives its own
+> **RESOLVED in Round 3 (2026-06-10).** Loopback is now inferred per `send()` as
+> `sender_in_rect && src != dst` — the recipient-count proxy below is gone, `area()` is
+> deleted, and conv-WS is migrated. The matmul/conv-WS collision dissolves because the only
+> in-box sender that must NOT loopback is one whose copy is already in place (`src == dst`).
+> See `changelog.md` Round 3. The text below is kept as the Round-2 rationale.
+
+**TL;DR (Round 2):** Whether a sender that sits *inside* its broadcast box also receives its own
 broadcast (INCLUDE_SRC loopback) vs. does not (EXCLUDE_SRC) is a **use-case property that
 geometry + the active/recipient count cannot infer**. Round 2 chose to keep the helper
 knob-free and leave the one kernel that needs the un-inferable case

@@ -7,18 +7,20 @@
 # topology matrix to decide F1 (flush vs barrier), F3 (loopback), F2 (flag vs counter) by
 # measurement. Correctness = each receiver's DRAM shard == the broadcast payload, bit-exact.
 #
-# HARDCODED virtualization offset for THIS machine (Blackhole p150a, COORDINATE_VIRTUALIZATION):
-#   worker logical (lx, ly) -> virtual NoC (lx + 1, ly + 2)   [VIRTUAL_TENSIX_START_X/Y]
-# Not portable across arches / harvesting layouts — bake-off scaffold only.
-
 import os
 import torch
 import pytest
 import ttnn
 from loguru import logger
 
-VIRT_X, VIRT_Y = 1, 2  # Blackhole p150a worker virtualization offset
 TILE_BYTES = 32 * 32 * 2  # bf16 tile
+
+
+def _virt(device, lx, ly):
+    """Logical worker -> virtual NoC coords (firmware-dependent; never hardcode the offset)."""
+    c = device.worker_core_from_logical_core(ttnn.CoreCoord(lx, ly))
+    return c.x, c.y
+
 
 KERNEL_DIR = "tests/ttnn/unit_tests/kernel_lib/kernels"
 
@@ -87,8 +89,9 @@ def _run_pipe(device, variant, recv_rect, sender_logical, payload_tiles, n_iters
     )
 
     # ---- virtual mcast rectangle ----
-    vx0, vy0, vx1, vy1 = rx0 + VIRT_X, ry0 + VIRT_Y, rx1 + VIRT_X, ry1 + VIRT_Y
-    sender_vx, sender_vy = sx + VIRT_X, sy + VIRT_Y
+    vx0, vy0 = _virt(device, rx0, ry0)
+    vx1, vy1 = _virt(device, rx1, ry1)
+    sender_vx, sender_vy = _virt(device, sx, sy)
 
     # ---- CBs (both on union so index->addr map is identical across all cores) ----
     cb_src, cb_dst = 0, 1
@@ -240,8 +243,9 @@ def _run_f3(device, mode_include, rect_len, payload_tiles, n_iters):
     sender_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
     recv_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(0, R - 1))])
 
-    vx0, vy0, vx1, vy1 = 0 + VIRT_X, 0 + VIRT_Y, 0 + VIRT_X, (R - 1) + VIRT_Y
-    sender_vx, sender_vy = 0 + VIRT_X, 0 + VIRT_Y
+    vx0, vy0 = _virt(device, 0, 0)
+    vx1, vy1 = _virt(device, 0, R - 1)
+    sender_vx, sender_vy = vx0, vy0
 
     cb_src, cb_dst = 0, 1
     cbs = [

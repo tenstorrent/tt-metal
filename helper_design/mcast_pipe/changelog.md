@@ -78,3 +78,54 @@ a synthetic unit case is a follow-up.
 
 **Phase 3 result: 11 kernels migrated to the new API (all mapped tests green), 1 (conv-WS)
 intentionally kept raw + documented.** All on BH p150a, single parametrization each.
+
+## Round 3 (2026-06-10) — loopback from src/dst aliasing; area() retired
+
+- **Trigger (user):** the `num_active == area()` membership proxy is "crooked" (coordinate-space
+  contract + integer aliasing). Discussion ground truth: the R6 block-sharded kernel proves the
+  mode is per-core and resolves as membership ∧ buffer-aliasing — and an in-box-but-inactive
+  sender takes INCLUDE harmlessly (self-write = dead store into landing memory nobody reads).
+- **New rule (per send, no knob):** `loopback iff sender_in_rect_() && src_l1 != dst_l1`.
+  `src == dst` means the sender's copy is already in place (matmul in0, R6 extract path) — an
+  overlapping self-loopback is unspecified. The flag mcast rides the same mode (INV4);
+  `send_signal()` (no data) stays EXCLUDE.
+- **Count convention:** `num_active_cores` NEVER counts the sender; loopback paths add +1
+  internally (API counts self there). Degenerate self-only guard is `num_active == 0 && in box`.
+- **`McastRect::area()` deleted** — the rect is pure routing geometry again.
+- **conv-WS becomes expressible** (recipient, src != dst → INCLUDE): migration is the natural
+  next step; not done this round.
+- **Out of inference reach:** loopback FLAG with src == dst data (R6 role-flip extract arm —
+  flag INCLUDE, data EXCLUDE). Stays raw.
+- **Harness fix:** test_mcast_pipe.py used hardcoded VIRT_X/Y=(1,2); machine firmware now maps
+  worker (0,0)→virtual(18,18) (translated coords) — every test mcast targeted empty coords →
+  hang even at smoke. Now uses `device.worker_core_from_logical_core` (the binding DOES exist).
+- **Verification (BH p150a):** unit 45/45 PASS; mapped tests of all 11 migrated kernels green
+  (matmul 1d+2d, topk, conv HS+BS conv_features 48 each, gn legacy+welford, sharded-LN ×32,
+  deepseek sampling). conv-WS raw untouched.
+
+### Round 3 — conv-WS migrated (12th kernel)
+
+- `activation_reader_width_sharded`: round-robin self-gather data+flag broadcast → one
+  `Pipe::send()` (re-applied round-1 diff under the inferred-mode API; PRE_HANDSHAKE=false;
+  readiness counter + receiver-branch ack stay raw, they count num_mcast_cores not readers).
+- **Bug found via WS mapped test (PCC 0.92):** WS factory swaps the rect start/end for NOC1
+  (`conv2d_op_width_sharded_program_factory.cpp:355`); `sender_in_rect_()` assumed x0<=x1 →
+  EXCLUDE inferred → sender skipped its own copy. Fix: normalize bounds in the membership test
+  (the mcast address keeps NoC ordering). Loopback inference was unreachable before the
+  src!=dst rule, so round-2 kernels could never hit swapped rects with INCLUDE.
+- Verified: conv WS 48/48 (PCC 0.9975 == raw); unit 45/45; matmul 1d + 2d green after the
+  sender_in_rect_ change.
+
+### Round 3 — R6 role-flip migrated: matmul block-sharded in0 sender_receiver (13th kernel)
+
+- Two faces on every grid core: ONE sender Pipe (PRE_HANDSHAKE, num_active = num_dests-1
+  in-grid / num_dests out-of-grid; factory guarantees num_dests==num_cores) + a per-round
+  receiver Pipe (`single_core(remote_sender[block_id])` — the ack target rotates).
+- The mode table that blocked Round 2 falls out of the src!=dst rule: extract (src==dst) ->
+  EXCLUDE n-1; non-extract -> INCLUDE n; out-of-grid -> EXCLUDE n; the raw flag-INCLUDE arm is
+  matched by send()'s local VALID set; sender no longer waits its own flag (always-true wait
+  dropped). Top-of-loop INVALID reset stays raw — clears the stale VALID from own sender round.
+- In-grid single-core collapses to Pipe's degenerate local copy (no handshake/flush), same as raw.
+- ~110 lines of open-coded mcast removed. Verified: in0_in1_bias_sharded + sharded_matmul
+  suites, 270 tests green, 29 JIT config variants of the kernel dispatched fresh. Untested:
+  fused-op (multi-device CCL).
