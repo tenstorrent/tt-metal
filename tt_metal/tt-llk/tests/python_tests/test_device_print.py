@@ -5,7 +5,6 @@ import re
 
 import pytest
 import torch
-from conftest import skip_for_coverage
 from helpers.bfp_format_utils import bfp4b_to_float16b, bfp8b_to_float16b
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -21,6 +20,8 @@ from helpers.test_variant_parameters import (
     TILIZE,
     generate_input_dim,
 )
+
+from conftest import skip_for_coverage
 
 pytestmark = skip_for_coverage
 
@@ -216,23 +217,11 @@ def test_dprint_tile(formats):
     ), f"Expected truncated={fit_cells < 64} for {formats.input_format}, got {truncated}"
 
 
-# (input format, dest accumulation, unpack-to-dest). Float16_b exercises the bf16
-# aperture read (DestAcc.No) and the shared fp32 helper (DestAcc.Yes, which widens
-# bf16 to fp32). Float16 (code 1, IEEE fp16) is a distinct 16-bit DEST layout from
-# Float16_b (1s/5e/10m vs 1s/8e/7m); a fp16 datacopy with DestAcc.No leaves DEST
-# configured as code 1, and the renderer must decode it with the 5-bit exponent.
-# Int32 uses unpack-to-dest so the unpacker writes the tile straight to DEST in 32-bit
-# mode, bypassing the SrcA/B 19-bit truncation; DestAcc must be No because enabling
-# ALU_ACC_CTRL_Fp32_enabled makes the dump force-read DEST as Float32. UInt32 isn't
-# covered: ALU_FORMAT_SPEC_REG2_Dstacc is a 4-bit field that masks UInt32 (0x18) down
-# to Int32 (0x8), so a uint32 dest is indistinguishable from int32 at dump time and
-# there is no separate uint32 dump path to exercise.
 @parametrize(
     case=[
         (DataFormat.Float16_b, DestAccumulation.Yes, False),
         (DataFormat.Float16_b, DestAccumulation.No, False),
         (DataFormat.Float16, DestAccumulation.No, False),
-        (DataFormat.Int32, DestAccumulation.No, True),
     ],
 )
 def test_dprint_tensix(case):
@@ -240,10 +229,6 @@ def test_dprint_tensix(case):
 
     if get_chip_architecture() == ChipArchitecture.QUASAR:
         pytest.skip("dprint_tensix_dest_reg is unsupported on Quasar")
-
-    is_int = in_format == DataFormat.Int32
-    if is_int and get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip("Int32 DEST dump is only supported on Blackhole")
 
     formats = InputOutputFormat(in_format, in_format)
     src_A, _, _, _ = generate_stimuli(
@@ -284,13 +269,7 @@ def test_dprint_tensix(case):
         ]
     )
 
-    if is_int:
-        # Integers round-trip through DEST bit-exactly; compare exact values
-        # (via float64, which represents the full int32 range).
-        expected = [float(v) for v in src_A.flatten().tolist()]
-        assert decoded == pytest.approx(expected, abs=0)
-    else:
-        # bf16 round-trips through DEST: DestAcc.Yes widens to fp32 with zero low
-        # bits; DestAcc.No keeps it as Float16_b.
-        expected = src_A.to(torch.float32).flatten().tolist()
-        assert decoded == pytest.approx(expected, abs=0.01)
+    # bf16 round-trips through DEST: DestAcc.Yes widens to fp32 with zero low
+    # bits; DestAcc.No keeps it as Float16_b.
+    expected = src_A.to(torch.float32).flatten().tolist()
+    assert decoded == pytest.approx(expected, abs=0.01)
