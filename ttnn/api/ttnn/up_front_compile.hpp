@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace tt::tt_metal {
@@ -83,11 +84,19 @@ public:
     // Borrowed pointers to every collected program (valid until clear()).
     std::vector<tt::tt_metal::Program*> program_pointers();
 
+    // Borrowed pointers to programs whose hash has NOT yet been claimed for compile,
+    // marking those hashes claimed. The streaming compiler calls this in a loop while
+    // collection is still in progress, so each program is JIT-compiled exactly once even
+    // as new programs keep arriving. Thread-safe. (unordered_map keeps element pointers
+    // stable across concurrent inserts/rehash, so the returned Program* stay valid.)
+    std::vector<tt::tt_metal::Program*> claim_uncompiled();
+
 private:
     ProgramCollector() = default;
 
     mutable std::mutex mutex_;
     std::unordered_map<std::uint64_t, tt::tt_metal::distributed::MeshWorkload> programs_;
+    std::unordered_set<std::uint64_t> claimed_;  // hashes already handed to a compile pass
     std::size_t total_collected_ = 0;
     std::uint64_t synthetic_key_ = 0;  // for hash==0 (cache-disabled) fallback
 };
@@ -127,5 +136,17 @@ void end_collect();
 // shares one build key, so one compile warms the whole mesh. max_workers<=0 uses
 // the hardware concurrency. If clear, the collected programs are released after.
 CompileStats parallel_compile(tt::tt_metal::distributed::MeshDevice* device, int max_workers = 0, bool clear = true);
+
+// Streaming variant of parallel_compile, for OVERLAPPING compile with an in-progress collect.
+// start_streaming_compile launches a background manager thread + worker pool that repeatedly
+// claims newly-collected (uncompiled) programs and JIT-compiles them, so kernel compilation runs
+// CONCURRENTLY with a collect pass that is still building programs on the same device. Build and
+// compile touch disjoint state — build constructs Program objects + computes hashes (no cache
+// writes), compile only adds per-kernel files to the on-disk cache — and distinct programs compile
+// independently, so this is safe (validated by phase-0 spike). Call finish_streaming_compile at
+// collect end to stop feeding, drain the remainder, join, and return the totals. Only ONE streaming
+// session at a time (there is a single process-wide ProgramCollector). Does NOT clear the collector.
+void start_streaming_compile(tt::tt_metal::distributed::MeshDevice* device, int max_workers = 0);
+CompileStats finish_streaming_compile();
 
 }  // namespace ttnn::up_front_compile

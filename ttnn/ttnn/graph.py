@@ -37,6 +37,8 @@ from ttnn._ttnn.graph import (
     up_front_num_collected,
     up_front_clear,
     up_front_compile,
+    up_front_start_streaming_compile,
+    up_front_finish_streaming_compile,
 )
 
 from ttnn.graph_report import (

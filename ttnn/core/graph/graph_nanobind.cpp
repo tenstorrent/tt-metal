@@ -441,6 +441,36 @@ void py_graph_module(nb::module_& m) {
         max_workers<=0 uses hardware concurrency (note: the build executor saturates
         ~4 workers, so higher buys little). The GIL is released for the duration.
         )doc");
+
+    m.def(
+        "up_front_start_streaming_compile",
+        [](tt::tt_metal::distributed::MeshDevice* device, int max_workers) {
+            ttnn::up_front_compile::start_streaming_compile(device, max_workers);
+        },
+        nb::arg("device"),
+        nb::arg("max_workers") = 0,
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(up_front_start_streaming_compile(device, max_workers=0) -> None
+
+        Launch a background pool that JIT-compiles collected programs AS THEY ARRIVE, so
+        compilation overlaps an in-progress collect pass instead of running after it. Pair with
+        a per-test begin_collect(clear=False)/end_collect() accumulation and call
+        up_front_finish_streaming_compile() at session end to drain + join. Only one streaming
+        session at a time. The GIL is released so the pool runs concurrently with collection.
+        )doc");
+
+    m.def(
+        "up_front_finish_streaming_compile",
+        []() {
+            auto s = ttnn::up_front_compile::finish_streaming_compile();
+            return std::make_tuple(s.num_programs, s.num_errors, s.max_workers, s.wall_seconds);
+        },
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(up_front_finish_streaming_compile() -> (num_programs, num_errors, max_workers, wall_seconds)
+
+        Stop feeding the streaming pool started by up_front_start_streaming_compile, compile any
+        remaining collected programs, join the background thread, and return the totals.
+        )doc");
 }
 
 }  // namespace ttnn::graph
