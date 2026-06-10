@@ -32,7 +32,7 @@ models/autoports/<model>/doc/datatype_sweep/top1_perf_pareto.png
 models/autoports/<model>/doc/datatype_sweep/top5_perf_pareto.png
 ```
 
-The README should lead with the selected config, top-1, top-5, top-100, TTFT, decode t/s/u, and the exact acceptance thresholds.
+The README should lead with the selected config, top-1, top-5, top-100, TTFT, trace-verified teacher-forcing decode t/s/u, and the exact acceptance thresholds.
 
 ## Baseline
 
@@ -40,10 +40,12 @@ Start from the completed optimized full model. Run and record the current baseli
 
 - readiness reference provenance, preferably AIME24 with chat template and `--gen-len 100`;
 - `run_prefill_check` and `run_teacher_forcing` top-1/top-5/top-100;
-- prefill TTFT and decode t/s/u from the readiness runner, generator metrics, or the model's benchmark harness;
+- prefill TTFT and trace-verified teacher-forcing decode t/s/u from the readiness runner, generator metrics, or the model's benchmark harness;
 - the active dtype policy for weights, norms, residual stream, CCL activations, KV cache, logits, sampling, and MoE routing.
 
 If an existing reference has fewer than 100 generated tokens, regenerate the main readiness reference with 100 generated tokens unless a concrete model or memory limit prevents it.
+
+Teacher-forcing decode performance is valid only when the measured path uses traced decode. Eager/untraced teacher-forcing results may be used for temporary correctness debugging, but they are not acceptable sweep evidence and must not be used to rank candidates, draw Pareto charts, or select the fastest passing config. If traced teacher forcing fails, fix tracing before continuing the sweep.
 
 ## Default Search
 
@@ -87,7 +89,7 @@ Every kept candidate must be validated with full-model accuracy. For each evalua
 - weight dtype groups and layer ranges;
 - activation, CCL, and KV-cache dtype choices;
 - top-1, top-5, top-100, token count, and reference path;
-- TTFT, decode t/s/u, and any fallback timing source;
+- TTFT, trace-verified decode t/s/u, and the evidence that the teacher-forcing decode path was traced;
 - whether this config passed the user-specified accuracy bar;
 - exact command, branch/commit, hardware, mesh, and environment notes.
 
@@ -98,7 +100,7 @@ Use matplotlib/pyplot to generate two elegant, delightful Pareto charts:
 - `top1_perf_pareto.png`: x-axis top-1 accuracy, y-axis performance.
 - `top5_perf_pareto.png`: x-axis top-5 accuracy, y-axis performance.
 
-Use decode t/s/u as the default performance metric. If only latency is available, convert to a higher-is-better performance metric or clearly label the axis.
+Use trace-verified teacher-forcing decode t/s/u as the default performance metric. If only traced latency is available, convert to a higher-is-better performance metric or clearly label the axis. Do not plot eager/untraced decode performance as a Pareto candidate.
 
 Plot every evaluated full-model config as a point. Fit or draw the non-dominated Pareto frontier through the evaluated points. Mark the selected config in red. Draw a vertical dotted line whose x-intercept is the minimum allowed accuracy level for that chart. Label or annotate enough points that the selected tradeoff and rejected candidates are clear without reading the raw JSON. Show these prominently in the README.md.
 

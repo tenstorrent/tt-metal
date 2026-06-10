@@ -30,7 +30,7 @@ Read the HuggingFace reference model and the reports for the working TTNN blocks
 
 Keep setup-time work outside the hot runtime path: weight conversion, dtype choices, tensor layout preparation, cache construction, and tokenizer loading should not be hidden inside a measured prefill or decode forward.
 
-Avoid hidden host fallback in a single prefill or decode pass. If host work is still needed between decode steps, make it explicit and measure its impact. The final decode path must use traced TTNN execution; eager decode is acceptable only as an intermediate bring-up path. When adding trace capture/replay or debugging trace execution failures, use `$tt-enable-tracing`.
+Avoid hidden host fallback in a single prefill or decode pass. If host work is still needed between decode steps, make it explicit and measure its impact. The final decode path must use traced TTNN execution; eager decode is acceptable only as an intermediate bring-up path. Teacher-forcing readiness must run through traced decode; an eager teacher-forcing pass is debugging evidence, not completion evidence. When adding trace capture/replay or debugging trace execution failures, use `$tt-enable-tracing`.
 
 As you add some new operations beyond the decoder modules you started with use the $multichip and $optimize and skills as necessary to match the any multi-chip sharding and keep the full model optimized. A tip: for this kind of optimization it's ok to run a version of the model that only has one layer of each kind present in the model (e.g. some models have some layers with windowed / full attention, others have some layers with mlp / moe etc). This reduces the running time. Tracy in particular has limited hardware capture buffers and can generally not capture a full model in one pass without extra calls to dump the profiler data anyway, so breaking the model up like this during optimization passes is best practice. Your final report should include a tt-perf-report these reduced-layer-count versions of the model.
 
@@ -52,10 +52,10 @@ Expose both API levels with signatures along these lines:
 ```python
 def prefill_forward(tokens, *, page_table, kv_cache, prompt_lens, ...): ...
 def decode_forward(tokens, start_pos, *, page_table, kv_cache, ...): ...
-def generate(prompt_token_ids, max_new_tokens, *, next_input=None, **kwargs): ...
+def generate(prompt_token_ids, max_new_tokens, *, next_input=None, enable_trace=True, **kwargs): ...
 ```
 
-The exact arguments can vary by model, but keep them keyword-friendly and explicit. The high-level `generate` path should be a thin deterministic loop over the low-level methods.
+The exact arguments can vary by model, but keep them keyword-friendly and explicit. `enable_trace` must be an explicit keyword on `generate`; accepting it only through `**kwargs` is not enough because the readiness teacher-forcing runner requires traced decode. The high-level `generate` path should be a thin deterministic loop over the low-level methods.
 
 Make cache ownership explicit. Standalone generation often owns its cache internally; serving or other external callers may need to pass an already-allocated cache and page table. Do not bake in assumptions that prevent either mode unless the project contract intentionally does so.
 
@@ -106,11 +106,11 @@ Measure warmed full-model prefill and decode behavior, not just block latency. I
 The figures you must report are:
 
 - prefill time-to-first-token at a representative prompt length;
-- decode tokens/sec/user over a representative generation window;
+- trace-verified decode tokens/sec/user over a representative generation window;
 - traced decode latency;
 - any material host/device gap or setup overhead discovered while measuring.
 
-Measure the reported batch-1 TTFT and decode t/s/u with the same workload shape the serving benchmark uses (prompt 128 / generate 128 unless the project specifies otherwise), separate from the accuracy workload, and record the workload shape next to every number. This keeps full-model and vLLM serving numbers directly comparable in later stages.
+Measure the reported batch-1 TTFT and trace-verified decode t/s/u with the same workload shape the serving benchmark uses (prompt 128 / generate 128 unless the project specifies otherwise), separate from the accuracy workload, and record the workload shape next to every number. This keeps full-model and vLLM serving numbers directly comparable in later stages.
 
 If performance regresses badly from block-level evidence, inspect data movement between embeddings, blocks, final norm, LM head, and sampling before changing precision.
 

@@ -7,6 +7,8 @@ description: "Enable or debug TTNN trace capture and replay for models, decoders
 
 Use this skill when adding TTNN trace capture/replay or when an existing traced path fails. Trace replay is usually the difference between a good device implementation and a usable inference path: the device kernels may be fast, but eager Python/TTNN dispatch between many ops can dominate decode.
 
+For the readiness harness, teacher-forcing decode must always use traced decode. Do not treat an eager teacher-forcing pass as acceptable evidence for optimized full-model or datatype-sweep performance; fix trace capture/replay first.
+
 ## Useful References
 
 Read only what helps the current task:
