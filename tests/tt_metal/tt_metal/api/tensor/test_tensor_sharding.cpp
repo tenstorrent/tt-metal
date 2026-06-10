@@ -227,6 +227,17 @@ TEST_F(MemoryConfigEqualityTest, WithShardSpecUpdatesLegacyFieldWithoutDroppingN
     EXPECT_EQ(updated, expected);
 }
 
+TEST_F(MemoryConfigEqualityTest, WithShardSpecPreservesPerCoreAllocation) {
+    MemoryConfig legacy_config(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec_a_);
+    experimental::per_core_allocation::set_per_core_allocation(legacy_config, true);
+
+    auto updated = legacy_config.with_shard_spec(shard_spec_b_);
+
+    EXPECT_FALSE(updated.created_with_nd_shard_spec());
+    EXPECT_TRUE(experimental::per_core_allocation::is_per_core_allocation(updated));
+    EXPECT_EQ(updated.shard_spec(), std::optional<ShardSpec>(shard_spec_b_));
+}
+
 TEST_F(MemoryConfigEqualityTest, LegacyShardCreatedIgnoresNdField) {
     // Two configs both created with legacy shard_spec should compare equal on shard_spec alone,
     // even if one has an nd_shard_spec prepopulated and the other does not.
