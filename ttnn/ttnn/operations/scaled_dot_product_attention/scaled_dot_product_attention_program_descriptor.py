@@ -132,7 +132,7 @@ def create_program_descriptor(
         cb(CB_OUT_TILES, 2 * c_q * Dt, t_in, in_fmt),
         cb(CB_SCORES, c_q * c_kv, t_acc, acc_fmt),
         cb(CB_SCORES_SCALED, c_q * c_kv, t_acc, acc_fmt),
-        cb(CB_PROBS, c_q * c_kv, t_in, in_fmt),
+        cb(CB_PROBS, c_q * c_kv, t_acc, acc_fmt),
         cb(CB_PV, c_q * Dt, t_acc, acc_fmt),
         cb(CB_O_ACC, 2 * c_q * Dt, t_acc, acc_fmt),
     ]
