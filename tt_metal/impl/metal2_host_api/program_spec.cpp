@@ -491,7 +491,8 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
     // (the DFB resolves its L1 address from that parameter's TensorArgument at runtime) even when no
     // kernel binds the parameter directly. Count that as a use so the completeness check below doesn't
     // reject a borrowed-only parameter. Existence of the referent is validated separately in the
-    // borrowed-DFB checks; remote DFBs don't carry borrowed_from.
+    // borrowed-DFB checks. Only local DFBs are walked here: borrowed memory is a local-L1 feature,
+    // so spec.dataflow_buffers is the relevant set (remote DFBs are runtime-unsupported).
     for (const auto& dfb : spec.dataflow_buffers) {
         if (dfb.borrowed_from.has_value()) {
             collected.tensor_parameter_users[*dfb.borrowed_from];  // register as used (no kernel user)
