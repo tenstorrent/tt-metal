@@ -9,13 +9,10 @@
 
 namespace ttnn::device_operation {
 
-// Build product of a Metal 2.0 op factory: the immutable ProgramSpec plus the
-// mutable ProgramRunArgs. Returned by a ProgramSpecFactoryConcept factory's
-// create_program_spec method; the framework adapter stamps a Program out of
-// this artifact onto each mesh coordinate range of the workload.
-//
-// A future MeshWorkloadSpecFactoryConcept will return a different (multi-program)
-// artifact type for ops whose programs vary across the mesh.
+// Build product of a Metal 2.0 op factory's create_program_artifacts: the immutable ProgramSpec plus
+// the run-args bundled with it (the enqueue-invariant set when the factory also provides
+// create_per_enqueue_args, or the complete set in the degenerate case). The framework merges these with
+// the per-enqueue set on a cache miss and retains them across hits.
 struct ProgramArtifacts {
     tt::tt_metal::experimental::ProgramSpec spec;
     tt::tt_metal::experimental::ProgramRunArgs run_params;

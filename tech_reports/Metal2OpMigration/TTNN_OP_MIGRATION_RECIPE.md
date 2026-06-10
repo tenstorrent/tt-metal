@@ -33,6 +33,20 @@ Detected by method surface: `extract_immutable_info` ⇒ Advanced (immutable-key
 ⇒ ++. **No `select_program_factory`** for single-factory ops (auto-selected). **No `compute_program_hash`**
 for the Advanced concept — `extract_immutable_info` is the key.
 
+> ### 🚪👹 Never write a custom hash. The boogeyman will eat you.
+>
+> A Metal 2.0 op **must not** define a custom `compute_program_hash`, and must not hand-roll the key by any
+> other means — e.g. an `attribute_values()` that omits a field to "hide" it from the hash. Both are
+> custom hashes wearing a disguise, and both let a mutable value silently corrupt the cache.
+>
+> **The legitimate need** — "I want value X (a seed, a runtime scalar) OUT of the cache key" — has exactly
+> one sanctioned answer: **climb to `AdvancedProgramSpecFactoryConcept` and define an `immutable_info_t`
+> struct that simply doesn't contain X.** Option 3 *bounds* you to do it the safe way: the struct you
+> declare *is* the key, the builder receives *only* that struct, so X cannot leak into either the key or
+> the spec — not by oversight, not ever. You get correctness by construction instead of by discipline.
+>
+> If you catch yourself reaching for a custom hash, stop and write the `immutable_info_t` instead.
+
 ---
 
 ## Step 0 — Port to the degenerate `ProgramSpecFactoryConcept` (everyone starts here)
