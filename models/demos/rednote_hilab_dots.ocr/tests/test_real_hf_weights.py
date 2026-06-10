@@ -35,6 +35,7 @@ ref = _load_module("dots_ocr_reference_functional", MODEL_DIR / "reference" / "f
 _patch_embed_mod = _load_module("dots_ocr_tt_vision_patch_embed", MODEL_DIR / "tt" / "vision_patch_embed.py")
 _vision_rmsnorm_mod = _load_module("dots_ocr_tt_vision_rmsnorm", MODEL_DIR / "tt" / "vision_rmsnorm.py")
 _vision_attention_mod = _load_module("dots_ocr_tt_vision_attention", MODEL_DIR / "tt" / "vision_attention.py")
+_vision_mlp_mod = _load_module("dots_ocr_tt_vision_mlp", MODEL_DIR / "tt" / "vision_mlp.py")
 
 
 def _pcc(a, b):
@@ -135,10 +136,43 @@ def _t_vision_attention(mesh_device) -> tuple[float, int]:
     return min(pccs), n_params
 
 
+def _t_vision_mlp(mesh_device) -> tuple[float, int]:
+    # Real SwiGLU fc1/fc2/fc3 weights from two sites (blocks.0, blocks.41)
+    # exercise the per-layer loader index; PCC gated on each, min reported.
+    # Production-distribution input: the golden's real post-norm2 activation
+    # (the MLP consumes the RMSNorm output directly, so this is exactly what
+    # the block sees in production).
+    golden = torch.load(MODEL_DIR / "reference" / "golden" / "vision_mlp.pt")
+    x = golden["input"]  # [784, 1536]
+    pccs, n_params = [], 0
+    for layer_idx in (0, wl.VISION_NUM_BLOCKS - 1):
+        sd = wl.vision_mlp_weights(layer_idx=layer_idx)
+        n_params += wl.count_params(sd)
+        ref_out = ref.vision_mlp_forward(x, sd)
+        # Production operating point: the vision tower runs an fp32 residual
+        # stream with fp32 weights/activations (vision_transformer ttnn phase).
+        block = _vision_mlp_mod.TtVisionMLP(mesh_device, sd, dtype=ttnn.float32)
+        x_tt = ttnn.from_torch(
+            x,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        out = ttnn.to_torch(ttnn.get_device_tensors(block.forward(x_tt))[0]).float()
+        assert out.shape == ref_out.shape, f"blocks.{layer_idx}: {out.shape} != {ref_out.shape}"
+        pcc = _pcc(ref_out, out)
+        print(f"  vision_mlp[blocks.{layer_idx}] PCC = {pcc:.6f}")
+        pccs.append(pcc)
+    return min(pccs), n_params
+
+
 BLOCKS = [
     ("vision_patch_embed", _t_vision_patch_embed),
     ("vision_rmsnorm", _t_vision_rmsnorm),
     ("vision_attention", _t_vision_attention),
+    ("vision_mlp", _t_vision_mlp),
 ]
 
 

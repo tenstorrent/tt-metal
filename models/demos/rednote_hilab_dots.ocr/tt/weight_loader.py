@@ -101,6 +101,15 @@ def vision_attention_weights(
     return {"qkv.weight": hf_sd[keys[0]], "proj.weight": hf_sd[keys[1]]}
 
 
+def vision_mlp_weights(layer_idx: int = 0, hf_sd: Optional[Dict[str, torch.Tensor]] = None) -> Dict[str, torch.Tensor]:
+    """State dict for TtVisionMLP: fc1/fc3.weight [hidden, dim], fc2.weight [dim, hidden] (SwiGLU, no biases)."""
+    prefix = f"{VISION_TOWER_PREFIX}.blocks.{layer_idx}.mlp"
+    keys = [f"{prefix}.fc1.weight", f"{prefix}.fc2.weight", f"{prefix}.fc3.weight"]
+    if hf_sd is None:
+        hf_sd = load_hf_state_dict(keys=keys)
+    return {"fc1.weight": hf_sd[keys[0]], "fc2.weight": hf_sd[keys[1]], "fc3.weight": hf_sd[keys[2]]}
+
+
 def count_params(sd) -> int:
     """Tensor-leaf element count of a (possibly nested) state dict."""
     if isinstance(sd, torch.Tensor):
@@ -130,3 +139,10 @@ if __name__ == "__main__":
         assert asd["qkv.weight"].shape == (3 * 1536, 1536), (idx, asd["qkv.weight"].shape)
         assert asd["proj.weight"].shape == (1536, 1536), (idx, asd["proj.weight"].shape)
     print(f"vision_attention: blocks.0/blocks.{VISION_NUM_BLOCKS - 1} OK, {count_params(asd)} params each")
+
+    for idx in (0, VISION_NUM_BLOCKS - 1):
+        msd = vision_mlp_weights(layer_idx=idx)
+        assert msd["fc1.weight"].shape == (4224, 1536), (idx, msd["fc1.weight"].shape)
+        assert msd["fc2.weight"].shape == (1536, 4224), (idx, msd["fc2.weight"].shape)
+        assert msd["fc3.weight"].shape == (4224, 1536), (idx, msd["fc3.weight"].shape)
+    print(f"vision_mlp: blocks.0/blocks.{VISION_NUM_BLOCKS - 1} OK, {count_params(msd)} params each")
