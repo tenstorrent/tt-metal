@@ -16,7 +16,7 @@ analyzer  →  [ writer → tester → refiner ] × up to 3 cycles  →  optimiz
 
 - **analyzer** (`llk-analyzer.md`) — one-shot. Produces `codegen/artifacts/{op}_analysis.md` covering arch research, target-pattern survey, instruction mapping, solution approach, and format applicability.
 - **writer** (`llk-kernel-writer.md`) — transcribes the analysis into a kernel file and compile-checks.
-- **tester** (`llk-tester.md`) — writes/extends tests and runs them, with an **internal 10-attempt** compile+test fix loop. Returns `PASS` or `STUCK`.
+- **tester** (`llk-tester.md`) — writes/extends tests and runs them, with an **internal 10-attempt** compile+test fix loop. Returns `PASS`, `STUCK`, or `ENV_ERROR` (infrastructure broken — never routed to the refiner).
 - **refiner** (`llk-analysis-refiner.md`) — invoked only when the writer fails compile or the tester returns `STUCK`. Archives the failed attempt, rewrites the analysis in place, returns `REFINED` or `ESCALATE`.
 - **Loop cap: 3 writer-tester cycles**. Cycles 1 and 2 can hand off to the refiner; cycle 3 cannot (the refiner itself caps at v2 = 2 refinements = 3 total cycles). If cycle 3 still fails, the run is reported `failed`.
 - **optimizer** and **format** only run on success.
@@ -70,6 +70,7 @@ export START_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 export RUN_ID=$(date +%Y-%m-%d)_{kernel}_{arch}_$(head -c 4 /dev/urandom | xxd -p)
 export LOG_DIR=/proj_sw/user_dev/llk_code_gen/quasar/$RUN_ID
 export GIT_COMMIT=$(git -C "$WORKTREE_DIR" rev-parse HEAD 2>/dev/null || echo "unknown")
+export CODEGEN_VERSION=$(cat codegen/agents/quasar/VERSION 2>/dev/null | tr -d '[:space:]' || echo "")
 mkdir -p $LOG_DIR/instructions
 ```
 
@@ -172,6 +173,7 @@ python codegen/scripts/run_json_writer.py init \
     --model "$MODEL" \
     --run-type "$RUN_TYPE" \
     --git-commit "$GIT_COMMIT" \
+    --version "$CODEGEN_VERSION" \
     --phases-total 1 \
     --pipeline-steps "$PIPELINE_STEPS_JSON"
 
@@ -354,8 +356,9 @@ Agent tool:
     register layouts, and format constraints. Follow the
     llk-arch-lookup skill (via Skill tool) for Confluence fetches.
 
-    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O. All paths in this
-    prompt resolve inside the worktree, not the source branch. Never write outside it.
+    WORKTREE_DIR: {WORKTREE_DIR} — cd into {WORKTREE_DIR}/tt_metal/tt-llk before any
+    file I/O. All paths in this prompt resolve there, not in the source branch.
+    Never write outside the worktree.
     LOG_DIR: {LOG_DIR}
 ```
 
@@ -412,6 +415,13 @@ while CYCLE <= MAX_CYCLES:
         if result == PASS:
             phase_end(CYCLE, "passed")
             break                                   # -> Step 3 (optimizer)
+        if result == ENV_ERROR:
+            # Infrastructure, not the kernel. Refinement cannot fix a broken
+            # simulator — do NOT consume a cycle or invoke the refiner.
+            phase_end(CYCLE, "failed")
+            OBSTACLE = tester diagnosis
+            finalize("failed", "test_failure")    # obstacle carries the infra cause
+            return
         # tester STUCK
         phase_end(CYCLE, "failed")
         if CYCLE == MAX_CYCLES:
@@ -471,8 +481,9 @@ Agent tool:
     refined analysis; do not reintroduce approaches from the prior failed
     attempt (archived under codegen/artifacts/{op}_failed_attempt_v*/).
 
-    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O. All paths in this
-    prompt resolve inside the worktree, not the source branch. Never write outside it.
+    WORKTREE_DIR: {WORKTREE_DIR} — cd into {WORKTREE_DIR}/tt_metal/tt-llk before any
+    file I/O. All paths in this prompt resolve there, not in the source branch.
+    Never write outside the worktree.
     LOG_DIR: {LOG_DIR}
 ```
 
@@ -545,11 +556,11 @@ Agent tool:
     On attempt 10's failure, return STUCK — the orchestrator will route to the
     refiner.
 
-    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O.
+    WORKTREE_DIR: {WORKTREE_DIR} — cd into {WORKTREE_DIR}/tt_metal/tt-llk before any file I/O.
     LOG_DIR: {LOG_DIR}
 ```
 
-Wait for the tester to return `PASS` or `STUCK`.
+Wait for the tester to return `PASS`, `STUCK`, or `ENV_ERROR`.
 
 **Metrics from the tester's report** (the agent reports attempts used, variants, formats tested, test files created):
 - `COMPILATION_ATTEMPTS += tester_compile_count`
@@ -601,6 +612,29 @@ bash codegen/scripts/refresh_cost.sh
 If `CYCLE == MAX_CYCLES` (3): jump to Step 5 with `status=failed`, `final-result=test_failure`.
 Otherwise: go to Step 2c (refiner).
 
+**If tester reports ENV_ERROR** (infrastructure broken — simulator down, flock timeout, missing venv; the kernel is not implicated):
+```bash
+python codegen/scripts/run_json_writer.py failure \
+    --log-dir "$LOG_DIR" \
+    --step "tester_cycle_${CYCLE}" \
+    --agent "tester" \
+    --type "infra_error" \
+    --message "${TESTER_ENV_DIAGNOSIS}" \
+    --resolved "false"
+
+python codegen/scripts/run_json_writer.py phase-end \
+    --log-dir "$LOG_DIR" \
+    --phase "${CYCLE}" \
+    --test-result "failed" \
+    --compilation-attempts "${PHASE_COMPILES}" \
+    --debug-cycles "${PHASE_DEBUGS}" \
+    --test-details "ENV_ERROR: ${TESTER_ENV_DIAGNOSIS}" \
+    --compile-errors-json "${PHASE_COMPILE_ERRORS_JSON}"
+
+bash codegen/scripts/refresh_cost.sh
+```
+Set `OBSTACLE` to the tester's diagnosis and jump to Step 5 with `status=failed`, `final-result=test_failure` (finalize only accepts success/compile_error/test_failure; the `infra_error` failure entry plus `obstacle` carry the real cause). Do **not** invoke the refiner — refinement cannot fix a broken environment, and burning a cycle on it just wastes the cap.
+
 ### Step 2c: Refiner (only for CYCLE ∈ {1, 2})
 
 **LIVE LOG — advance to refiner:**
@@ -641,6 +675,7 @@ Agent tool:
     Original analysis: codegen/artifacts/{op}_analysis.md
     Tester log: {LOG_DIR}/agent_tester_cycle${CYCLE}.md
     Writer log: {LOG_DIR}/agent_writer_cycle${CYCLE}.md
+    Raw test output: {LOG_DIR}/test_logs_cycle${CYCLE}/ (compile.log, run.log — full untruncated pytest stream)
     Test files: ${TEST_FILES}
     Previous failure: ${FAILURE_SUMMARY}
 
@@ -648,7 +683,7 @@ Agent tool:
     Archive the failed attempt, identify the structural error in the analysis,
     rewrite the impeached sections in place, and return REFINED or ESCALATE.
 
-    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O.
+    WORKTREE_DIR: {WORKTREE_DIR} — cd into {WORKTREE_DIR}/tt_metal/tt-llk before any file I/O.
     LOG_DIR: {LOG_DIR}
 ```
 
@@ -749,7 +784,7 @@ Agent tool:
     buffers without breaking correctness. If optimization fails, revert to the
     pre-optimization version.
 
-    WORKTREE_DIR: {WORKTREE_DIR} — cd here before any file I/O.
+    WORKTREE_DIR: {WORKTREE_DIR} — cd into {WORKTREE_DIR}/tt_metal/tt-llk before any file I/O.
     LOG_DIR: {LOG_DIR}
 ```
 
@@ -920,6 +955,8 @@ missing logs are visible rather than silently absent):
 - `agent_tester_cycle2.md`, `agent_tester_cycle3.md` (only when those cycles ran)
 - `agent_analysis_refiner_v1.md`, `agent_analysis_refiner_v2.md` (only when the refiner ran)
 - `agent_optimizer.md` (only if the optimizer was invoked)
+- `test_logs_cycle{N}/compile.log` + `run.log` (full untruncated test output — written live by `run_test.sh --log-dir`; one dir per cycle that reached the tester)
+- `test_logs_optimizer/run.log` (only if the optimizer ran tests)
 
 Each agent log MUST follow the structured template defined in the agent
 playbooks — **Assumptions**, **Reasoning summary**, **Decisions & trade-offs**,
@@ -1078,8 +1115,8 @@ Commands & tools summary:
   tester:
     Tool histogram: Bash×28, Read×14, Edit×6, Write×2
     Key bash:
-      - CHIP_ARCH=quasar pytest --compile-producer -n 15 test_fill_quasar.py
-      - flock --timeout 900 /tmp/tt-llk-test-simulator.lock bash "$SIM_SCRIPT"
+      - bash "$WORKTREE_DIR/tt_metal/tt-llk/.claude/scripts/run_test.sh" compile --worktree "$WORKTREE_DIR/tt_metal/tt-llk" --arch quasar --test test_fill_quasar.py
+      - bash "$WORKTREE_DIR/tt_metal/tt-llk/.claude/scripts/run_test.sh" simulate --worktree "$WORKTREE_DIR/tt_metal/tt-llk" --arch quasar --test test_fill_quasar.py --maxfail 0
   (full per-agent detail in {LOG_DIR}/transcripts/NN_{slug}_{tools,commands}.md)
 ----------------------------------------
 Formats Tested:
@@ -1161,25 +1198,31 @@ source ../tests/.venv/bin/activate
 CHIP_ARCH={target_arch} python scripts/compiler.py {path_to_test_source} \
     -t "PARAM(...)" -r "PARAM(...)" -v
 
-# Functional tests — use run_llk_tests.sh (handles flock, venv, simulator path).
+# Functional tests — use .claude/scripts/run_test.sh (handles flock, venv,
+# simulator path, stale-process cleanup, and a hang watchdog). Never call
+# pytest or flock directly.
 # Count variants (determines --maxfail from the 2.1 table in llk-tester.md).
-VARIANT_COUNT=$(bash {WORKTREE_DIR}/codegen/scripts/run_llk_tests.sh count \
-    --worktree {WORKTREE_DIR} --arch quasar --test test_{kernel_name}_quasar.py)
+VARIANT_COUNT=$(bash {WORKTREE_DIR}/tt_metal/tt-llk/.claude/scripts/run_test.sh count \
+    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch quasar --test test_{kernel_name}_quasar.py)
 
 # Compile-producer step (parallel, no flock).
-bash {WORKTREE_DIR}/codegen/scripts/run_llk_tests.sh compile \
-    --worktree {WORKTREE_DIR} --arch quasar --test test_{kernel_name}_quasar.py
+bash {WORKTREE_DIR}/tt_metal/tt-llk/.claude/scripts/run_test.sh compile \
+    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch quasar --test test_{kernel_name}_quasar.py
 
-# Simulator-consumer step (flock-serialised, blocks until done).
+# Simulator-consumer step (flock-serialised per arch, blocks until done).
 # Invoke via Bash tool with timeout: 1800000 — never run_in_background.
-bash {WORKTREE_DIR}/codegen/scripts/run_llk_tests.sh simulate \
-    --worktree {WORKTREE_DIR} --arch quasar --test test_{kernel_name}_quasar.py \
-    --maxfail 5   # omit for verification runs
+bash {WORKTREE_DIR}/tt_metal/tt-llk/.claude/scripts/run_test.sh simulate \
+    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch quasar --test test_{kernel_name}_quasar.py \
+    --maxfail 5 \
+    --log-dir "$LOG_DIR/test_logs_cycle${CYCLE}"   # --maxfail 0 for verification runs; --log-dir
+                                                   # persists the full pytest stream under LOG_DIR
 TEST_EXIT=$?
 
-# Or compile + simulate in one call (exit 2=compile fail, exit 1=test fail, exit 0=pass):
-bash {WORKTREE_DIR}/codegen/scripts/run_llk_tests.sh run \
-    --worktree {WORKTREE_DIR} --arch quasar --test test_{kernel_name}_quasar.py
+# Or compile + simulate in one call:
+# exit 0=pass, 1=test fail, 2=compile fail, 3=env error, 5=hang (watchdog).
+# The script tails with a "=== RUN_LLK_TESTS_VERDICT ===" line on stderr.
+bash {WORKTREE_DIR}/tt_metal/tt-llk/.claude/scripts/run_test.sh run \
+    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch quasar --test test_{kernel_name}_quasar.py
 
 # List available tests
 ls ../tests/python_tests/quasar/test_*_quasar.py

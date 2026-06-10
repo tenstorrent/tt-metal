@@ -25,7 +25,7 @@ Required:
 - **TESTER_LOG_PATH** — `{LOG_DIR}/agent_tester_cycle{N}.md` (the failing cycle's tester log)
 - **WRITER_LOG_PATH** — `{LOG_DIR}/agent_writer_cycle{N}.md` (the failing cycle's writer log)
 - **TEST_FILES** — list of test source/python files the tester used or created
-- **WORKTREE_DIR** — `cd` here before any file I/O
+- **WORKTREE_DIR** — `cd "$WORKTREE_DIR/tt_metal/tt-llk"` before any file I/O
 - **LOG_DIR** — where to write the self-log
 
 ---

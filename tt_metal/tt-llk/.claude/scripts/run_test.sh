@@ -38,11 +38,12 @@
 #   --no-split        Skip compile-producer step; run pytest --run-simulator without
 #                     --compile-consumer (combined compile+run in one pytest invocation).
 #                     Use for issue-solver tests that don't pre-build ELFs.
-#   --log-dir  DIR    DEBUG-ONLY. When set, append combined stdout+stderr from each
-#                     phase to <DIR>/compile.log and <DIR>/run.log (created if missing).
-#                     Output still streams to the terminal as usual; the file is only
-#                     so you can scroll back through long verification runs and see
-#                     in-timeline what happened. Default: no log file.
+#   --log-dir  DIR    When set, append combined stdout+stderr from each phase to
+#                     <DIR>/compile.log and <DIR>/run.log (created if missing).
+#                     Output still streams to the terminal as usual; the file keeps
+#                     the full untruncated stream (Bash-tool output is truncated on
+#                     long runs). Codegen agents always pass this with their LOG_DIR;
+#                     manual runs may omit it. Default: no log file.
 #   --progress        Manual-debug aid: emit a periodic `[progress]` status line to
 #                     stderr during the compile and simulate phases (elapsed time;
 #                     in simulate also the age of the last output line). Off by
