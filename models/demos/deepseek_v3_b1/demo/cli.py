@@ -171,6 +171,51 @@ def create_parser() -> argparse.ArgumentParser:
         default=True,
         help="Enable speculative decode; use --no-enable-speculative-decode for base decode",
     )
+    parser.add_argument(
+        "--decoder-only",
+        action="store_true",
+        help="16-proc base decode only: exactly ONE KV-generating dense decoder (stage 1); "
+        "all other decoder stages become passthroughs. Requires --no-enable-speculative-decode.",
+    )
+    parser.add_argument(
+        "--migration-cmd-queue",
+        type=str,
+        default=None,
+        help="Migration endpoint shmem cmd queue (e.g. /smoke_ep0_cmd). When set together with "
+        "--migration-table-queue/--migration-resp-queue, the KV-owning rank builds the chunk "
+        "table from its live KV cache, exports it to --migration-table-path, and sends it to "
+        "the (already-running) migration endpoint. See migration_table_hook.py.",
+    )
+    parser.add_argument("--migration-table-queue", type=str, default=None, help="Migration endpoint shmem table queue.")
+    parser.add_argument("--migration-resp-queue", type=str, default=None, help="Migration endpoint shmem resp queue.")
+    parser.add_argument(
+        "--migration-table-path",
+        type=str,
+        default="/tmp/decoder_kv_table.pb",
+        help="Where the KV chunk table protobuf is exported (chip sidecar at <path>.chips).",
+    )
+    parser.add_argument(
+        "--migration-max-seq-len",
+        type=int,
+        default=None,
+        help="max_sequence_length for the exported table. Default: per-device seq len × sp rows "
+        "derived from the KV tensor at hook time.",
+    )
+    parser.add_argument(
+        "--migration-validate-positions",
+        type=int,
+        default=32,
+        help="How many positions per slot the post-migration byte-compare covers "
+        "(pairs (0,1) and (2,3)). Set to the test's prompt length.",
+    )
+    parser.add_argument(
+        "--migration-done-file",
+        type=str,
+        default=None,
+        help="When set, the KV-owning rank polls for this sentinel (written by the scheduler "
+        "test after its slot 0->1 migration) and then pulls the KV cache to host and "
+        "byte-compares slot 0 vs slot 1. Result written to <file>.result.",
+    )
 
     return parser
 
@@ -204,6 +249,9 @@ def run_demo(
     sram_hot_experts_ceiling: int = 64,
     bspm_dir: Path | None = None,
     bspm_budget: float = 3.5,
+    decoder_only: bool = False,
+    migration_done_file: str | None = None,
+    migration_validate_positions: int = 32,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
     configure_runtime_env(enable_sram_hot_experts=enable_sram_hot_experts)
@@ -235,6 +283,8 @@ def run_demo(
             sram_hot_experts_ceiling=sram_hot_experts_ceiling,
             bspm_dir=bspm_dir,
             bspm_budget=bspm_budget,
+            decoder_only=decoder_only,
+            on_kv_cache_ready=on_kv_cache_ready,
         )
 
         my_mesh_id = mesh_device.get_system_mesh_id()
@@ -270,22 +320,48 @@ def run_demo(
             logger.info("Output ({} tokens): {}", len(generated_tokens), generated_text)
 
         if launch_only and my_mesh_id == 0:
-            # Keep process/pipeline alive until user interrupts
-            # Only runs on mesh 0, all other processes wait for a barrier
-            logger.info("Pipeline launched; keeping sockets alive until interrupted.")
-            try:
-                while True:
-                    time.sleep(3600)
-            except KeyboardInterrupt:
-                logger.info("Shutting down launch-only pipeline after interrupt.")
+            # Keep process/pipeline alive until user interrupts — or, when
+            # --migration-done-file is set, until the scheduler test writes its
+            # DONE sentinel (mesh 0 then exits the loop; barrier below releases
+            # every rank into normal teardown so the KV pull can run).
+            if migration_done_file:
+                logger.info("Pipeline launched; waiting for migration DONE sentinel {}", migration_done_file)
+                while not os.path.exists(migration_done_file):
+                    time.sleep(1)
+                logger.info("Migration DONE sentinel observed; tearing down for KV validation.")
+            else:
+                logger.info("Pipeline launched; keeping sockets alive until interrupted.")
+                try:
+                    while True:
+                        time.sleep(3600)
+                except KeyboardInterrupt:
+                    logger.info("Shutting down launch-only pipeline after interrupt.")
 
         model_pipeline.barrier()
 
-        logger.info("Pod pipeline complete - terminating now...")
-        model_pipeline.terminate()
+        # Migration byte-validation — slow-dispatch KV pull with the pipeline
+        # still ALIVE (terminate is skipped entirely: its dummy-token roundtrip
+        # races the scheduler's socket teardown and deadlocks). The process
+        # exits without a clean pipeline teardown — acceptable for this test.
+        if migration_done_file:
+            logger.info("Running migration byte-validation (pipeline alive, slow dispatch)...")
+            from models.demos.deepseek_v3_b1.demo.migration_table_hook import validate_kv_migration
+
+            validate_kv_migration(
+                model_pipeline.pipeline,
+                mesh_device,
+                done_file=migration_done_file,
+                positions=migration_validate_positions,
+            )
+        else:
+            logger.info("Pod pipeline complete - terminating now...")
+            model_pipeline.terminate()
 
 
 def validate_args(args):
+    # `parser` was referenced here without being defined (NameError on any
+    # invalid-args path). Build one locally for clean error reporting.
+    parser = create_parser()
     if args.weights == "real":
         if args.cache_path is None:
             parser.error("--cache-path is required when --weights real")
@@ -310,11 +386,32 @@ def validate_args(args):
 
 
 def main(argv: list[str] | None = None) -> int:
+    import ttnn
+
     ttnn.init_distributed_context()
     parser = create_parser()
     args = parser.parse_args(argv)
 
     validate_args(args)
+
+    # Optional migration-layer table hook: when the three queue names are set,
+    # the KV-owning rank builds + exports the chunk table from its live KV
+    # cache and delivers it to the (already-running) migration endpoint.
+    on_kv_cache_ready = None
+    if args.migration_cmd_queue or args.migration_table_queue or args.migration_resp_queue:
+        if not (args.migration_cmd_queue and args.migration_table_queue and args.migration_resp_queue):
+            parser.error("--migration-cmd-queue/--migration-table-queue/--migration-resp-queue must be set together")
+        from models.demos.deepseek_v3_b1.demo.migration_table_hook import make_on_kv_cache_ready
+
+        on_kv_cache_ready = make_on_kv_cache_ready(
+            cmd_queue=args.migration_cmd_queue,
+            table_queue=args.migration_table_queue,
+            resp_queue=args.migration_resp_queue,
+            table_path=args.migration_table_path,
+            num_layers=1,  # decoder-only config: a single KV-generating layer
+            max_seq_len=args.migration_max_seq_len,
+            num_slots=args.num_slots,
+        )
 
     run_demo(
         prompt=args.prompt,
@@ -339,6 +436,10 @@ def main(argv: list[str] | None = None) -> int:
         sram_hot_experts_ceiling=args.sram_hot_experts_ceiling,
         bspm_dir=args.bspm_dir,
         bspm_budget=args.bspm_budget,
+        decoder_only=args.decoder_only,
+        on_kv_cache_ready=on_kv_cache_ready,
+        migration_done_file=args.migration_done_file,
+        migration_validate_positions=args.migration_validate_positions,
     )
     print(end="", file=sys.stdout, flush=True)
     return 0

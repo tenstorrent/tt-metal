@@ -985,16 +985,17 @@ class DecoderStage(StageKind):
         num_sp = self._state["num_sp"]
         mesh_rows, mesh_cols = mesh_device.shape
 
-        ttnn.synchronize_device(mesh_device)
+        # ttnn.synchronize_device(mesh_device)
 
         # KV cache mapper is ShardTensor2dMesh(dims=(2, None)): sharded along seq (dim 2)
         # over rows, replicated over cols. ConcatMesh2dToTensor(dims=(2, 0)) concats seq
         # along rows and stacks the replicated col copies along dim 0; slice to dedupe.
+        print("Calling to_torch")
         composed = ttnn.to_torch(
             ttnn_kv_cache,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(mesh_rows, mesh_cols), dims=(2, 0)),
         )
-
+        print("to_torch done")
         # TP-axis (cols) is replicated, so each `num_slots` block along dim 0 should be
         # byte-identical. Mismatches mean a write landed on one TP replica but not all.
         for col_idx in range(1, mesh_cols):

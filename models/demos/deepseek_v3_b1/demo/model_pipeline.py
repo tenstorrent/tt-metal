@@ -58,6 +58,7 @@ class ModelPipeline:
         bspm_dir: Path | None = None,
         bspm_variant: str = "B",
         bspm_budget: float = 3.5,
+        decoder_only: bool = False,
     ):
         logger.info(
             "Initializing DeepSeek V3 B1 pod pipeline (weights={}, lm_head_fp32={}, lm_head_persistent_mode={}, speculative_decode={})",
@@ -157,6 +158,7 @@ class ModelPipeline:
             enable_mtp=enable_speculative_decode,
             enable_speculative_decode=enable_speculative_decode,
             num_slots=num_slots,
+            decoder_only=decoder_only,
         )
         if config.num_stages != num_procs:
             raise RuntimeError(f"Pipeline configuration has {config.num_stages} stages but {num_procs} processes")

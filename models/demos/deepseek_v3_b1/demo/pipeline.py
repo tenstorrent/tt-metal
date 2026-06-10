@@ -339,6 +339,56 @@ def create_single_pod_spec_decode_no_decoder_pipeline_configuration(
     )
 
 
+def create_single_pod_single_decoder_pipeline_configuration(
+    weight_provider: WeightProvider,
+    *,
+    fp32_dest_acc_en: bool = True,
+    persistent_mode: bool = True,
+    dense_layer_id_override: int | None = None,
+    num_slots: int = 64,
+) -> PipelineConfiguration:
+    """16-stage single-pod with exactly ONE KV-generating decoder (base decode, no spec/MTP):
+
+        0: SpecLMHeadWithEmbedding (fused embed + LM head, base-decode mode)
+        1: DenseDecoderStage(layer 0)   <-- the only stage that allocates a KV cache
+        2..15: Passthrough(ACTIVATION_W_TOKEN_META)
+
+    Same stage/mesh positions as the production single-pod spec-decode layout
+    (first decoder on mesh 1 — the migration master's expected slot), with the
+    other decoders swapped to passthroughs. Modeled on
+    create_single_pod_spec_decode_no_decoder_pipeline_configuration's supported
+    base-decode shape. Use --no-enable-speculative-decode; pass num_layers=1 to
+    any downstream consumer (e.g. the migration chunk table).
+    """
+    dense_id = dense_layer_id_override if dense_layer_id_override is not None else 0
+
+    def stage_0(device: ttnn.MeshDevice) -> StageKind:
+        return SpecLMHeadWithEmbeddingStage(
+            embedding_weights=weight_provider.load_embedding(device),
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+            spec_weights=weight_provider.load_lm_head(device),  # base decode: LM head fills the spec slot
+        )
+
+    def stage_1(device: ttnn.MeshDevice) -> StageKind:
+        return DenseDecoderStage(
+            weights=weight_provider.load_dense_layer(layer_id=dense_id, device=device),
+            layer_idx=dense_id,
+            num_slots=num_slots,
+        )
+
+    def passthrough_stage(device: ttnn.MeshDevice) -> StageKind:
+        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
+
+    return PipelineConfiguration(
+        {
+            0: stage_0,
+            1: stage_1,
+            **{i: passthrough_stage for i in range(2, 16)},
+        }
+    )
+
+
 def create_sp4_pipeline_configuration(
     weight_provider: WeightProvider,
     *,
@@ -434,9 +484,17 @@ def create_pipeline_configuration_from_num_procs(
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
     num_slots: int = 64,
+    decoder_only: bool = False,
 ) -> PipelineConfiguration:
-    """Pick topology from process count (4 -> single_galaxy, 16 -> single_pod, 64 -> sp4)."""
+    """Pick topology from process count (4 -> single_galaxy, 16 -> single_pod, 64 -> sp4).
+
+    decoder_only (16-proc, base decode only): exactly one KV-generating dense
+    decoder on stage 1; all other decoder stages become passthroughs. See
+    create_single_pod_single_decoder_pipeline_configuration.
+    """
     if num_procs == 4:
+        if decoder_only:
+            raise ValueError("decoder_only is only supported for the 16-proc single-pod config")
         return create_single_galaxy_pipeline_configuration(
             weight_provider,
             fp32_dest_acc_en=fp32_dest_acc_en,
@@ -444,6 +502,16 @@ def create_pipeline_configuration_from_num_procs(
             enable_mtp=enable_mtp,
         )
     if num_procs == 16:
+        if decoder_only:
+            if enable_speculative_decode or enable_mtp:
+                raise ValueError("decoder_only requires base decode — run with --no-enable-speculative-decode")
+            return create_single_pod_single_decoder_pipeline_configuration(
+                weight_provider,
+                fp32_dest_acc_en=fp32_dest_acc_en,
+                persistent_mode=persistent_mode,
+                dense_layer_id_override=dense_layer_id_override,
+                num_slots=num_slots,
+            )
         if enable_speculative_decode:
             assert enable_mtp, "16-proc pipeline currently requires enable_mtp=True and uses the spec decode topology"
         return create_single_pod_spec_decode_pipeline_configuration(
@@ -457,6 +525,8 @@ def create_pipeline_configuration_from_num_procs(
             num_slots=num_slots,
         )
     if num_procs == 64:
+        if decoder_only:
+            raise ValueError("decoder_only is only supported for the 16-proc single-pod config")
         return create_sp4_pipeline_configuration(
             weight_provider,
             fp32_dest_acc_en=fp32_dest_acc_en,
@@ -566,6 +636,12 @@ class Pipeline:
     def kv_cache(self):
         """Return the KV cache tensor if this rank's stage exposes one, else None."""
         return getattr(self._stage_kind, "kv_cache", None)
+
+    def get_kv_cache_host(self):
+        """Pull this stage's KV cache to host (decoder stages only, else None).
+        Caller must hold a fast-dispatch context — see DecoderStage.get_kv_cache_host."""
+        fn = getattr(self._stage_kind, "get_kv_cache_host", None)
+        return fn() if fn is not None else None
 
     def layer_idx(self) -> int | None:
         """Return this rank's decoder layer index, or None if the stage isn't a decoder.
