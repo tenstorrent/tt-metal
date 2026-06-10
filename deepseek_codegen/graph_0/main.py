@@ -3735,19 +3735,15 @@ def _main(activations, weights):
         ),
     )
     ttnn.deallocate(ttnn_reshape_61, False)
-    ttnn_reshape_62 = ttnn.reshape(
+    # E_attn iter6: collapse reshape_62 -> permute([1,2,0,3]) into a 3D transpose(0,1)
+    # on the 3D bmm out. matmul_10 [16,32,128] -> [32,16,128] -> reshape_63 [32,2048].
+    ttnn_permute_34 = ttnn.transpose(
         ttnn_matmul_10,
-        [16, 32, 1, 128],
+        0,
+        1,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1, None),
     )
     ttnn.deallocate(ttnn_matmul_10, False)
-    ttnn_permute_34 = ttnn.permute(
-        ttnn_reshape_62,
-        [1, 2, 0, 3],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1, None),
-        pad_value=0.0,
-    )
-    ttnn.deallocate(ttnn_reshape_62, False)
     ttnn_reshape_63 = ttnn.reshape(
         ttnn_permute_34,
         [32, 2048],
@@ -4774,19 +4770,14 @@ def _main(activations, weights):
         ),
     )
     ttnn.deallocate(ttnn_reshape_112, False)
-    ttnn_reshape_113 = ttnn.reshape(
+    # E_attn iter6: collapse reshape_113 -> permute([1,2,0,3]) into transpose(0,1).
+    ttnn_permute_43 = ttnn.transpose(
         ttnn_matmul_25,
-        [16, 32, 1, 128],
+        0,
+        1,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1, None),
     )
     ttnn.deallocate(ttnn_matmul_25, False)
-    ttnn_permute_43 = ttnn.permute(
-        ttnn_reshape_113,
-        [1, 2, 0, 3],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1, None),
-        pad_value=0.0,
-    )
-    ttnn.deallocate(ttnn_reshape_113, False)
     ttnn_reshape_114 = ttnn.reshape(
         ttnn_permute_43,
         [32, 2048],
