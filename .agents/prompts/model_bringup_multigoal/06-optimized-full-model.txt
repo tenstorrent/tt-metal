@@ -18,7 +18,7 @@ Goal completion requirements:
 - models/autoports/<model>/doc/optimized_full_model/README.md and work_log.md summarize commands, before/after accuracy and perf, mesh/optimization decisions, tt-perf-report conclusions, limitations, and exact artifacts.
 - The relevant checklist items in the $optimize skill have been completed with evidence, excluding final full-model datatype frontier selection that belongs to $datatype-sweep.
 - Fully-traced decode path from token in to token out including on-device sampling (via models.common.sampling) that supports top-k/top-p as well as greedy sampling
-- run_prefill_check and run_teacher_forcing report top-1, top-5, and top-100 for prefill and decode using the AIME24 chat-template reference; expected bar is top-5 >= 98% and top-100 = 100% unless a model-specific issue or evidence justifies otherwise.
-- Prefill TTFT and decode t/s/u reported for batch 1 inference reported at the top of README.md
+- run_prefill_check and run_teacher_forcing meet top-5 >= 98% and top-100 = 100% on the AIME24 chat-template reference unless model-specific evidence justifies otherwise.
+- Prefill TTFT and decode t/s/u for batch-1 inference reported at the top of README.md
 
 Do not mark this goal blocked because PCC, trace replay, watcher, profiler, CCL, cache, MoE, or validation currently fails; those are expected bringup work. Before blocking, isolate the smallest repro, compare against optimized single-chip, try a concrete fix/refutation loop, and use $autofix for subtle PCC, mesh/CCL, cache, or routed-expert bugs unless unavailable. Blocking requires evidence that continued agent debugging is no longer meaningful.

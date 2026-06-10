@@ -61,8 +61,8 @@ repos:
       language: system
       types: [file]
     - id: check-agent-prompt-lengths
-      name: check .agents/prompts lengths (<=4096 chars)
-      entry: python3 scripts/check_agent_prompt_lengths.py --max-chars 4096
+      name: check .agents/prompts goal objective lengths (<=4000 chars substituted)
+      entry: python3 scripts/check_agent_prompt_lengths.py
       language: system
       files: ^\.agents/prompts/
     - id: validate-metalium-includes
