@@ -226,6 +226,12 @@ WeightCoreShardMaps get_weight_core_shard_maps(
     const uint32_t n_dram_banks = static_cast<uint32_t>(in0_core_coords.size());
 
     const bool is_blackhole = mesh_device->arch() == tt::ARCH::BLACKHOLE;
+    if (is_blackhole) {
+        TT_FATAL(
+            bh_ring_size == 8 || bh_ring_size == 12 || bh_ring_size == 16,
+            "bh_ring_size ({}) must be 8, 12, or 16 on BLACKHOLE",
+            bh_ring_size);
+    }
     const uint32_t target_ring_size = is_blackhole ? bh_ring_size : n_dram_banks;
 
     // Ring ordering: sort the DRAM-bank logical core coords by (y, x) descending.
@@ -253,6 +259,8 @@ WeightCoreShardMaps get_weight_core_shard_maps(
     dram_core_ranges.reserve(n_dram_banks);
 
     for (uint32_t ring_pos = 0; ring_pos < target_ring_size; ++ring_pos) {
+        // First n_dram_banks ring positions map to real DRAM-bank-adjacent cores;
+        // positions beyond that are synthetic (HEIGHT_SHARDED regroups onto n_dram_banks physical shards).
         if (ring_pos < n_dram_banks) {
             const uint32_t dram_bank_id = ring_to_dram_bank[ring_pos];
             const ttnn::CoreCoord dram_core(dram_bank_id, 0);
