@@ -163,6 +163,33 @@ Preserve the multichip decoder's data-layout contract across the stack. If the d
 
 Sometimes you will encounter a ttnn limitation or a bug. If, for example, you try an optimization and find that L1 buffers overlap (insufficient L1 space) do not take this as an excuse to give up on that optimization entirely. Instead, dive in to the code of the op and its shapes and configs and understand how you can reduce the L1 requirements in this part of the model. Or perhaps your specific shapes is not supported by the op and you need another one. Or the op does not support padding -> change the model contract so the tensors are manually padded in torch before conversion - all these things are in scope. If the failure crosses several ops, kernels, layouts, or planner/runtime boundaries and you are not making progress, use `$autofix`; it will run `$autodebug` if needed, then verify or refute each proposed bug before keeping any fix. Solve problems. Be curious. Be tenacious. Be creative. Be brilliant!
 
+## Performance Accounting
+
+Every optimized decode result must reconcile three numbers from the same run:
+
+1. Theoretical roofline: the bytes the measured path must move per token (weights at their stored dtypes plus KV-cache reads) divided by the aggregate DRAM bandwidth of the chips used.
+2. Device-time decode: per-token device time from your own signposted `tt-perf-report` window.
+3. End-to-end decode: warmed measured ms/token from the host.
+
+Report all three and attribute the gaps: end-to-end = device time + dispatch gap + host work. Every non-device term must be either optimized away or attributed to a named ttnn/runtime/API limitation with evidence. "The device math is fast but the loop is slow" is an unfinished optimization, not a result; a large unexplained gap between device time and end-to-end usually means an untraced path, per-step synchronization, host readback, or input-refresh overhead.
+
+The roofline fraction achieved varies legitimately by architecture - modules built from many small ops sit lower - so the explanation, not a fixed percentage, is the requirement. Name the limitations precisely; they feed the ttnn improvement backlog.
+
+When optimizing a complete model or serving path, also write `doc/<stage>/perf_summary.json` with this shape:
+
+```json
+{
+  "workload": {"prompt_len": 128, "gen_len": 128, "batch": 1},
+  "ttft_ms": 0.0,
+  "decode_ms_per_token_e2e": 0.0,
+  "decode_ms_per_token_device": 0.0,
+  "roofline_ms_per_token_estimate": 0.0,
+  "named_limitations": ["..."]
+}
+```
+
+Report TTFT honestly in `perf_summary.json` even when prefill optimization is deferred by project policy; deferred is a recorded state, not a hidden one.
+
 ## Evidence To Leave
 
 Final optimized evidence checklist - these items MUST be completed:

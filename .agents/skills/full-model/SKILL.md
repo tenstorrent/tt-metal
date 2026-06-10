@@ -157,6 +157,17 @@ Add a focused split-sampling trace test before marking the stage complete:
 
 Build the fast probe before any repeated debugging loop: a reduced full-model variant (one layer of each kind, short generation, real tensor/cache/page-table shapes, and the real terminal path) with a documented runtime of a couple of minutes or less. Repeating a multi-minute all-layer pass to answer single-bit questions wastes the budget the debugging loop needs; the probe pays for itself within a few iterations. This probe is for debugging only. Final correctness and performance evidence still comes from the complete all-layer model.
 
+Free-running comparison must be strong enough to catch feedback bugs; teacher forcing cannot see them by construction (it overrides the token-feedback path every step). Use several prompts and the longest feasible generation - at least 64-128 tokens when runtime allows - not a single short continuation. Then run:
+
+```bash
+python models/common/readiness_check/check_degenerate_output.py \
+  --hf-model <hf-model-id> --missing-artifacts critical --scope autoregressive
+```
+
+and include its verdict in the stage evidence. Mechanical degeneracy - doubled tokens, single-token collapse - is a decode-loop bug, never a model property. The runner-side stage gate runs the same check.
+
+Build the fast probe before any repeated debugging loop: a reduced variant (one layer of each kind, short generation, real shapes) with a documented runtime of a couple of minutes or less. Repeating a multi-minute full-model pass to answer single-bit questions wastes the budget the debugging loop needs; the probe pays for itself within a few iterations.
+
 When full-model accuracy is poor, debug the new wrapper first: embeddings, final norm, LM head/tied weights, positions, masks, cache indexing, prompt lengths, page tables, and sampling all commonly fail outside the decoder itself. If the failure spans several of these boundaries and the causal chain is unclear, use `$autofix`; it will run `$autodebug` if needed, then verify or refute each proposed bug before keeping any fix. Escalate back into decoder precision or fidelity only when evidence points there.
 
 When an accuracy failure appears to follow a dtype, cache dtype, math fidelity, or CCL payload change, treat that as a precision-policy diagnosis, not as a root cause. Write down the whole active policy first: activation dtype, every weight dtype group, math fidelity per projection, cache dtype, CCL payload dtype, page/block size, cache layout, page-table policy, and decode update op. Then run controls that can distinguish a true cache/kernel defect from a policy-margin problem:
