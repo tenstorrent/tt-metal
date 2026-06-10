@@ -303,6 +303,30 @@ def parse_args() -> argparse.Namespace:
             "failure so a disabled guardrail cannot pass silently."
         ),
     )
+    parser.add_argument(
+        "--check-retries",
+        type=int,
+        default=1,
+        help=(
+            "Remediation goals to run when a stage's <prompt>.check.sh fails "
+            "before recording the failure (default: 1)."
+        ),
+    )
+    parser.add_argument(
+        "--no-checks",
+        action="store_true",
+        help="Skip <prompt>.check.sh verification scripts entirely.",
+    )
+    parser.add_argument(
+        "--check-error-policy",
+        choices=("stop", "continue"),
+        default="stop",
+        help=(
+            "What to do when a check script itself is broken (exit outside "
+            "0/1/2 after one retry). Default: stop the pipeline as an infra "
+            "failure so a disabled guardrail cannot pass silently."
+        ),
+    )
     parser.add_argument("--approval-policy", default="never")
     parser.add_argument("--sandbox", default="danger-full-access")
     parser.add_argument("--model")
@@ -1213,6 +1237,11 @@ def main() -> int:
         write_manifest_header(manifest, repo, home, codex_bin, args, replacements, model_dir)
     elif model_dir and not manifest_values.get("model_dir"):
         append_manifest(manifest, [f"model_dir={model_dir}"])
+
+    # Validate every prompt up front so an over-long or malformed late-stage
+    # prompt cannot kill a run hours in.
+    for prompt_path in args.prompt_files:
+        objective_from_prompt(load_prompt(prompt_path, replacements))
 
     # Validate every prompt up front so an over-long or malformed late-stage
     # prompt cannot kill a run hours in.
