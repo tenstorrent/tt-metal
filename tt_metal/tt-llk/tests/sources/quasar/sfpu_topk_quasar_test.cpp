@@ -173,8 +173,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr int end_step            = 0;
     constexpr int start_step          = 0;
 
-    // Semaphore sync for MATH <-> PACK back-pressure across iterations
-    _llk_math_pack_sync_init_<dest_sync>();
+    // Dest dvalid sync chain: FPU (datacopy) -> SFPU (topk) -> PACK. Math thread owns
+    // both the FPU and SFPU clients.
+    set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+    set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
 
     const std::uint32_t math_data_types[NUM_STAGES] = {formats.math, TOPK_INDEX_FORMAT};
 
@@ -193,10 +195,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             for (int current_tile_pair_idx = 0; current_tile_pair_idx < num_pairs; ++current_tile_pair_idx)
             {
-                // Wait for PACK to finish previous iteration before writing to DEST
-                _llk_math_wait_for_dest_available_();
-
-                // Datacopy 4 tiles (2 value + 2 index) from SRC to DEST
+                // Datacopy 4 tiles (2 value + 2 index) from SRC to DEST; the FPU dvalid
+                // wait gates the writes until pack releases the bank.
                 const std::uint32_t num_rows = 4 * FACE_R_DIM;
 
                 for (Stage stage : {Stage::Values, Stage::Indices})
@@ -213,6 +213,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_math_eltwise_unary_datacopy_(num_rows, first_tile_in_pair_idx);
                     _llk_math_eltwise_unary_datacopy_(num_rows, second_tile_in_pair_idx);
                 }
+
+                // All 4 tiles are in dest: release the FPU dvalid to the SFPU client.
+                _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
 
                 // The index datacopy above intentionally leaves ALU_FORMAT_SPEC_REG set
                 // to Int16. Restore the value format before the SFPU network; the TopK
@@ -244,8 +247,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         dst_index, TOPK_SORT_DIRECTION, current_iteration, TOPK_K, TOPK_LOGK, 1 /* skip_second */);
                 }
 
-                // Semaphore post + bank flip (matching Blackhole pattern - no dvalid)
-                _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                // Release the SFPU dvalid to the PACK client.
+                wait_sfpu_idle();
+                _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
             } // Pipeline loop.
         } // Iteration loop.
     } // current_tile_row loop.
@@ -275,10 +279,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const std::uint32_t buf_desc_id = 8;
 
-    // Initialize packer dest base to bank 0 so the first pack doesn't read from
-    // whatever bank a previous kernel binary left the packer pointing at on the
-    // shared simulator session.
-    _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
+    // Dest dvalid sync chain: FPU (datacopy) -> SFPU (topk) -> PACK.
+    set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
 
     // Init the PACK -> UNPACK L1 write-back semaphore (see TOPK_L1_WB_SEM).
     // Max pending posts = pairs in one iteration (<= 8 for [32,1024]); 15 is the HW max.
@@ -297,9 +299,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             for (int current_tile_pair_idx = 0; current_tile_pair_idx < num_pairs; ++current_tile_pair_idx)
             {
-                // Wait for MATH to finish this iteration before packing
-                _llk_packer_wait_for_math_done_();
-
+                // PACR stalls on the SFPU dvalid; no explicit math-done wait needed.
                 for (Stage stage : {Stage::Values, Stage::Indices})
                 {
                     const int stage_index               = static_cast<int>(stage);
@@ -342,8 +342,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                 } // Stage loop.
 
-                // Pure semaphore sync: zeros bank, decrements semaphore, flips bank, updates packer dest
-                _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
+                // Clear the PACK dvalid, zero the consumed bank, and flip the packer dest bank.
+                _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 
                 if (!last_iter)
                 {
