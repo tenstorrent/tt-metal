@@ -18,15 +18,24 @@
 //   9  PV     = P @ V                                           [matmul_block]
 //   10 O      = alpha * O + PV      (SFPU, 2-block cb_o_acc)    [eltwise_chain]
 // After the last KV block:
-//   11 inv    = bcast-Col(l) -> recip (full fp32 tile)          [eltwise_chain]
-//   12 out    = O * inv  -> bf16   (SFPU mul, fp32-exact)       [eltwise_chain]
+//   11 inv    = recip(bcast-Col(l)) + 1 Newton step (full fp32 tile)  [eltwise_chain]
+//   12 out    = O * inv  -> bf16   (SFPU mul, fp32-exact)             [eltwise_chain]
 // The whole stat path (max/alpha/P/l/O-rescale/normalize) deliberately avoids the
 // FPU (Refinement 5): FPU operands truncate fp32 to ~tf32 (~0.25 bf16-ulp per
 // operand), which flipped ~1-2% of outputs by one bf16 ulp on near-uniform-
 // attention inputs. m_prev/m/alpha are FULL fp32 tiles (cb_prev_max/cb_m_full/
-// cb_alpha); UnaryBcast/CopyTile of Float32 CBs use unpack-to-dest (fp32-exact,
-// UnpackToDestEn); Sub/Max/Mul/Add run on SFPU (fp32 RNE). FPU remains only for
-// the matmuls (HiFi3) and the two reduces. Residual: exp/recip SFPU ulp + pack RNE.
+// cb_alpha); UnaryBcast/CopyTile of Float32 CBs use unpack-to-dest (fp32-exact).
+// THIS REQUIRES the descriptor to set UnpackToDestMode::UnpackToDestFp32 on every
+// copy-fed Float32 CB (cb_pv, cb_o_acc, cb_alpha, cb_running_sum, cb_inv_sum,
+// cb_scores, cb_cur_sum, cb_prev_max, cb_running_max, cb_cur_max_full, cb_m_full):
+// with the framework Default mode a Float32 CB unpacks through the 16-bit SrcA/SrcB
+// datapath, silently truncating copy_tile to fp16 — that was the dominant flip source
+// (cb_pv fp32-exact, but cb_o_acc held the P@V accumulator O at fp16; Refinement 5).
+// cb_probs/cb_scores_scaled stay Default (they feed the FPU reduce/matmul, which
+// require SrcB unpack — UnpackToDestFp32 there corrupts the matmul). Sub/Max/Mul/Add
+// run on SFPU (fp32 RNE). FPU remains only for the matmuls (HiFi3) and the two
+// reduces. The bare SFPU reciprocal carries ~3.6e-5 relative error, so Phase 11 adds
+// one Newton step inv<-inv*(2-l*inv) (relative error -> ~1e-9). Residual: exp SFPU ulp.
 // Statistics (m, l, alpha) are per-Q-row column tiles (Col0 valid); fp32 DEST
 // accumulation throughout (FP32_DEST_ACC_EN, HiFi2 — DEST limit 4 tiles; all
 // matmul subblocks are 1 x <=4 tiles).
@@ -298,14 +307,22 @@ void kernel_main() {
                 ckl::PackTile<cb_o_acc, OutputLifecycle::Bulk>{});
         }
 
-        // ---- Phase 11: inv = recip(bcast-Col(l)) as a FULL fp32 tile ----
-        // UnaryBcast of a Float32 CB unpacks to DEST (fp32-exact, no FPU
-        // truncation); recip runs on SFPU over the full tile. Result: per-Q-row
-        // 1/l replicated across all 32 columns, packed fp32 to cb_inv_sum.
+        // ---- Phase 11: inv = recip(bcast-Col(l)) as a FULL fp32 tile, then ----
+        // one Newton–Raphson refinement: inv <- inv * (2 - l*inv). The raw SFPU
+        // reciprocal carries ~3.6e-5 relative error (probe: recip(512) returned
+        // 0.001953054 vs exact 0.001953125) — large enough to flip ~1.5% of
+        // near-uniform-attention outputs by one bf16 ulp. One Newton step squares
+        // the relative error (~1e-9), making O*inv effectively exact at fp32.
+        // UnaryBcast of a Float32 CB unpacks to DEST fp32-exact (UnpackToDestFp32);
+        // all of recip/mul/sub run on the SFPU over the full tile.
         ckl::eltwise_chain(
             cur_cq,
-            ckl::UnaryBcast<BroadcastDim::Col, cb_running_sum, InputLifecycle::Streaming>{},
-            ckl::Recip<>{},
+            ckl::UnaryBcast<BroadcastDim::Col, cb_running_sum, InputLifecycle::Streaming>{},  // D0 = l
+            ckl::CopyDest<Dst::D0, Dst::D1>{},                                                // D1 = l
+            ckl::Recip<Dst::D1>{},                                                            // D1 = inv0 ~ 1/l
+            ckl::MulBinary<Dst::D0, Dst::D1, Dst::D2>{},                                      // D2 = l*inv0
+            ckl::RsubUnary<Dst::D2>{0x40000000u},         // D2 = 2 - l*inv0  (2.0f bits)
+            ckl::MulBinary<Dst::D1, Dst::D2, Dst::D0>{},  // D0 = inv0*(2 - l*inv0)
             ckl::PackTile<cb_inv_sum>{});
 
         // ---- Phase 12: out = O * inv on SFPU (fp32-exact), pack -> output dtype ----
