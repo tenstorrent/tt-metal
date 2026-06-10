@@ -2,13 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Compute for indexer_score. Per work unit (QC q-tile-rows x kw k-tiles):
-//   acc[r,c](fp32) = sum_h relu(q[h,s0+r,:] @ k[c0+c,:]^T) * w[h,s0+r]
+// Compute for indexer_score. Per work unit (q_tiles_per_unit q-tile-rows x
+// k_tiles_in_unit k-tiles):
+//   acc[r,c](fp32) = sum_h relu(q[h,row,:] @ k[col,:]^T) * w[h,row]
 //   tile on the causal diagonal: += -inf strict upper triangle; past it: full -inf
 //   pack_untilize acc -> bf16 row-major out, (r, c) row-major order
-// Heads stream in HB groups, HP rows per DEST subblock (fp32, half sync; HP
-// from determine_largest_subblock_size on the host). q/w stay resident per
-// group when HB == Hi.
+// Heads stream in heads_per_group groups, heads_per_dest_pass rows per DEST
+// subblock (fp32, half sync; sized by determine_largest_subblock_size on the
+// host). q/w stay resident per group when all heads fit.
 
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
@@ -32,72 +33,80 @@ constexpr uint32_t cb_mul = tt::CBIndex::c_25;
 constexpr uint32_t cb_acc = tt::CBIndex::c_26;
 constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
-constexpr uint32_t HP = get_compile_time_arg_val(8);  // qk subblock height (head rows per DEST pass)
-constexpr bool stream_heads = HB < Hi;
+constexpr uint32_t heads_per_dest_pass = get_compile_time_arg_val(8);  // qk subblock height (head rows per DEST pass)
+constexpr bool stream_heads = heads_per_group < num_heads;
+
+constexpr uint32_t q_group_tiles = heads_per_group * q_tiles_per_unit * head_dim_tiles;
+constexpr uint32_t w_group_tiles = num_heads * q_tiles_per_unit;
+constexpr uint32_t k_chunk_tiles = k_tiles_per_unit * head_dim_tiles;
 
 /**
- * qk_cb = relu(q_cb[hp..hp+HP) of row r @ k_cb col c^T): one HP-head subblock.
- * q blocks are [QC][HB][Dt] so the HP head rows stride Dt - one matmul_block.
+ * qk_cb = relu(q_cb[head_offset..+heads_per_dest_pass) of row r @ k_cb col c^T): one subblock.
+ * q blocks are [q_tiles_per_unit][heads_per_group][head_dim_tiles] so the
+ * subblock's head rows stride head_dim_tiles - one matmul_block.
  */
 template <uint32_t q_cb, uint32_t k_cb, uint32_t qk_cb>
-void relu_qk_subblock(uint32_t hp, uint32_t r, uint32_t c) {
-    // Precondition: q_cb has HB*QC*Dt produced (resident), k_cb has kw*Dt produced (resident)
-    // Postcondition: qk_cb has HP produced
+void relu_qk_subblock(uint32_t head_offset, uint32_t r, uint32_t c) {
+    // Precondition: q_cb has a q group produced (resident), k_cb has the k chunk produced (resident)
+    // Postcondition: qk_cb has heads_per_dest_pass produced
     reconfig_data_format(q_cb, k_cb);
     pack_reconfig_data_format(qk_cb);
-    mm_block_init_short(q_cb, k_cb, 1 /*transpose k*/, 1 /*ct_dim*/, HP /*rt_dim*/, Dt /*kt_dim*/);
+    mm_block_init_short(
+        q_cb, k_cb, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass /*rt_dim*/, head_dim_tiles /*kt_dim*/);
     tile_regs_acquire();
-    const uint32_t in0_base = (r * HB + hp) * Dt;
-    for (uint32_t d = 0; d < Dt; ++d) {
-        matmul_block(q_cb, k_cb, in0_base + d, c * Dt + d, 0, 1 /*transpose k*/, 1, HP, Dt);
+    const uint32_t q_base = (r * heads_per_group + head_offset) * head_dim_tiles;
+    for (uint32_t d = 0; d < head_dim_tiles; ++d) {
+        matmul_block(
+            q_cb, k_cb, q_base + d, c * head_dim_tiles + d, 0, 1 /*transpose k*/, 1, heads_per_dest_pass,
+            head_dim_tiles);
     }
-    for (uint32_t h = 0; h < HP; ++h) {
+    for (uint32_t h = 0; h < heads_per_dest_pass; ++h) {
         relu_tile(h);
     }
     tile_regs_commit();
-    cb_reserve_back(qk_cb, HP);
+    cb_reserve_back(qk_cb, heads_per_dest_pass);
     tile_regs_wait();
-    for (uint32_t h = 0; h < HP; ++h) {
+    for (uint32_t h = 0; h < heads_per_dest_pass; ++h) {
         pack_tile(h, qk_cb);
     }
     tile_regs_release();
-    cb_push_back(qk_cb, HP);
+    cb_push_back(qk_cb, heads_per_dest_pass);
 }
 
 /**
- * mul_cb[h] = qk_cb[h] * bcast_cols(w_cb[r*Hi + hb + hp + h]) for one HP pass
+ * mul_cb[h] = qk_cb[h] * bcast_cols(w_cb[w_base + h]) for one DEST pass
  */
 template <uint32_t qk_cb, uint32_t w_cb, uint32_t mul_cb>
 void mul_gates_pass(uint32_t w_base) {
-    // Precondition: qk_cb has HP produced, w_cb has Hi*QC produced (resident, [QC][Hi])
-    // Postcondition: qk_cb has HP consumed, mul_cb has HP produced
-    cb_wait_front(qk_cb, HP);
+    // Precondition: qk_cb has heads_per_dest_pass produced, w_cb has the w group produced (resident)
+    // Postcondition: qk_cb has heads_per_dest_pass consumed, mul_cb has heads_per_dest_pass produced
+    cb_wait_front(qk_cb, heads_per_dest_pass);
     reconfig_data_format(qk_cb, w_cb);
     pack_reconfig_data_format(mul_cb);
     mul_bcast_cols_init_short(qk_cb, w_cb);
-    cb_reserve_back(mul_cb, HP);
+    cb_reserve_back(mul_cb, heads_per_dest_pass);
     tile_regs_acquire();
-    for (uint32_t h = 0; h < HP; ++h) {
+    for (uint32_t h = 0; h < heads_per_dest_pass; ++h) {
         mul_tiles_bcast_cols(qk_cb, w_cb, h, w_base + h, h);
     }
     tile_regs_commit();
     tile_regs_wait();
-    for (uint32_t h = 0; h < HP; ++h) {
+    for (uint32_t h = 0; h < heads_per_dest_pass; ++h) {
         pack_tile(h, mul_cb);
     }
     tile_regs_release();
-    cb_push_back(mul_cb, HP);
-    cb_pop_front(qk_cb, HP);
+    cb_push_back(mul_cb, heads_per_dest_pass);
+    cb_pop_front(qk_cb, heads_per_dest_pass);
 }
 
 /**
- * acc_cb (ring of unit tiles) += mul_cb[0..HP); when first, primed from mul_cb[0].
+ * acc_cb (ring of unit tiles) += mul_cb[0..heads_per_dest_pass); when first, primed from mul_cb[0].
  */
 template <uint32_t mul_cb, uint32_t acc_cb>
 void accumulate_pass(bool first) {
-    // Precondition: mul_cb has HP produced, acc front is this unit tile (unless first)
-    // Postcondition: mul_cb has HP consumed, acc has this unit tile at back
-    cb_wait_front(mul_cb, HP);
+    // Precondition: mul_cb has heads_per_dest_pass produced, acc front is this unit tile (unless first)
+    // Postcondition: mul_cb has heads_per_dest_pass consumed, acc has this unit tile at back
+    cb_wait_front(mul_cb, heads_per_dest_pass);
     pack_reconfig_data_format(acc_cb);
     uint32_t h = 0;
     if (first) {
@@ -115,7 +124,7 @@ void accumulate_pass(bool first) {
     }
     reconfig_data_format(acc_cb, mul_cb);
     add_tiles_init(acc_cb, mul_cb);
-    for (; h < HP; ++h) {
+    for (; h < heads_per_dest_pass; ++h) {
         cb_wait_front(acc_cb, 1);
         tile_regs_acquire();
         add_tiles(acc_cb, mul_cb, 0, h, 0);
@@ -127,7 +136,7 @@ void accumulate_pass(bool first) {
         tile_regs_release();
         cb_push_back(acc_cb, 1);
     }
-    cb_pop_front(mul_cb, HP);
+    cb_pop_front(mul_cb, heads_per_dest_pass);
 }
 
 /**
@@ -177,7 +186,8 @@ void kernel_main() {
         return;
     }
 
-    mm_block_init(cb_q, cb_k, cb_qk, 1 /*transpose k*/, 1 /*ct_dim*/, HP /*rt_dim*/, Dt /*kt_dim*/);
+    mm_block_init(
+        cb_q, cb_k, cb_qk, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass /*rt_dim*/, head_dim_tiles /*kt_dim*/);
     relu_tile_init();
     cb_wait_front(cb_mask, 2);
 
@@ -187,48 +197,48 @@ void kernel_main() {
     bool have_group = false;
     for (uint32_t i = 0; i < flat_count; ++i) {
         if (!have_group) {
-            cb_wait_front(cb_w, Hi * QC);
+            cb_wait_front(cb_w, w_group_tiles);
             if constexpr (!stream_heads) {
-                cb_wait_front(cb_q, Hi * QC * Dt);
+                cb_wait_front(cb_q, num_heads * q_tiles_per_unit * head_dim_tiles);
             }
             have_group = true;
         }
-        const uint32_t kw = span.kw();
-        cb_wait_front(cb_k, KC * Dt);  // full chunk pushed even when kw < KC (ring alignment)
+        const uint32_t k_tiles_in_unit = span.k_tiles();
+        cb_wait_front(cb_k, k_chunk_tiles);  // full chunk pushed even on edge units (ring alignment)
 
         // each tile completes all head groups before the next, so cb_acc holds
         // exactly one in-flight tile (the serial L1 acc is the known perf TODO)
-        for (uint32_t r = 0; r < QC; ++r) {
-            const uint32_t diag = chunk_t + span.s0() + r;
-            for (uint32_t c = 0; c < kw; ++c) {
-                for (uint32_t hb = 0; hb < Hi; hb += HB) {
+        for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
+            const uint32_t diag_tile = chunk_start_tiles + span.q_tile_start() + r;
+            for (uint32_t c = 0; c < k_tiles_in_unit; ++c) {
+                for (uint32_t group_start = 0; group_start < num_heads; group_start += heads_per_group) {
                     if constexpr (stream_heads) {
-                        cb_wait_front(cb_q, HB * QC * Dt);
+                        cb_wait_front(cb_q, q_group_tiles);
                     }
-                    for (uint32_t hp = 0; hp < HB; hp += HP) {
-                        relu_qk_subblock<cb_q, cb_k, cb_qk>(hp, r, c);
-                        mul_gates_pass<cb_qk, cb_w, cb_mul>(r * Hi + hb + hp);
-                        accumulate_pass<cb_mul, cb_acc>(hb == 0 && hp == 0);
+                    for (uint32_t head = 0; head < heads_per_group; head += heads_per_dest_pass) {
+                        relu_qk_subblock<cb_q, cb_k, cb_qk>(head, r, c);
+                        mul_gates_pass<cb_qk, cb_w, cb_mul>(r * num_heads + group_start + head);
+                        accumulate_pass<cb_mul, cb_acc>(group_start == 0 && head == 0);
                     }
                     if constexpr (stream_heads) {
-                        cb_pop_front(cb_q, HB * QC * Dt);
+                        cb_pop_front(cb_q, q_group_tiles);
                     }
                 }
-                const uint32_t t = span.c0() + c;
-                if (t == diag) {
+                const uint32_t k_tile = span.k_tile_start() + c;
+                if (k_tile == diag_tile) {
                     add_mask<cb_acc, cb_mask>(0);
-                } else if (t > diag) {
+                } else if (k_tile > diag_tile) {
                     add_mask<cb_acc, cb_mask>(1);
                 }
                 untilize_to_out<cb_acc, cb_out>();
             }
         }
-        cb_pop_front(cb_k, KC * Dt);
+        cb_pop_front(cb_k, k_chunk_tiles);
 
         if (span.advance()) {
-            cb_pop_front(cb_w, Hi * QC);
+            cb_pop_front(cb_w, w_group_tiles);
             if constexpr (!stream_heads) {
-                cb_pop_front(cb_q, Hi * QC * Dt);
+                cb_pop_front(cb_q, num_heads * q_tiles_per_unit * head_dim_tiles);
             }
             have_group = false;
         }

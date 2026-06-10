@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Reader for indexer_score: walks this core's flat span of causal-valid work
-// units (QC q-tile-rows x kw k-tiles). On a new q-row-group pushes the
-// resident w group (Hi*QC tiles) and, when all heads fit, the resident q
-// group (Hi*QC*Dt). With HB < Hi the q head-group blocks (HB*QC*Dt) stream
-// per unit instead. Per unit pushes the k chunk (kw*Dt). Builds the [diag,
+// units (q_tiles_per_unit q-tile-rows x up-to-k_tiles_per_unit k-tiles). On a
+// new q-row-group pushes the resident w group and, when all heads fit, the
+// resident q group. With heads_per_group < num_heads the q head-group blocks
+// stream per tile instead. Per unit pushes the k chunk. Builds the [diag,
 // full] -inf mask tiles once.
 
 #include "api/dataflow/dataflow_api.h"
@@ -23,7 +23,11 @@ constexpr uint32_t cb_w = tt::CBIndex::c_2;
 constexpr uint32_t cb_mask = tt::CBIndex::c_3;
 
 constexpr uint32_t tile_bytes = get_tile_size(cb_q);
-constexpr bool stream_heads = HB < Hi;
+constexpr bool stream_heads = heads_per_group < num_heads;
+
+constexpr uint32_t q_group_tiles = heads_per_group * q_tiles_per_unit * head_dim_tiles;
+constexpr uint32_t w_group_tiles = num_heads * q_tiles_per_unit;
+constexpr uint32_t k_chunk_tiles = k_tiles_per_unit * head_dim_tiles;
 
 /**
  * Stamp the diag (strict-upper) and full -inf mask tiles (chunk_start is
@@ -37,59 +41,63 @@ inline void build_mask_tiles(Noc noc) {
     cb.push_back(2);
 }
 
-/** Read q head-group block hb of group g: [QC][HB][Dt] (heads contiguous per
- *  row so HP head rows stride Dt for matmul_block), tile id = h*Sqt*Dt + s*Dt + d. */
+/** Read the q head-group block starting at head first_head for the group at q-tile-row q_row_start:
+ *  [q_tiles_per_unit][heads_per_group][head_dim_tiles] (heads contiguous per row so a DEST pass's
+ *  head rows stride head_dim_tiles for matmul_block), tile id = h*q_len_tiles*head_dim_tiles + s*head_dim_tiles + d. */
 template <typename QAcc>
-inline void read_q_block(Noc noc, const QAcc& q_acc, uint32_t s0, uint32_t hb) {
+inline void read_q_block(Noc noc, const QAcc& q_acc, uint32_t q_row_start, uint32_t first_head) {
     CircularBuffer cb(cb_q);
-    cb.reserve_back(HB * QC * Dt);
+    cb.reserve_back(q_group_tiles);
     uint32_t ptr = cb.get_write_ptr();
-    for (uint32_t r = 0; r < QC; ++r) {
-        for (uint32_t h = hb; h < hb + HB; ++h) {
-            const uint32_t base = h * Sqt * Dt + (s0 + r) * Dt;
-            for (uint32_t d = 0; d < Dt; ++d) {
+    for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
+        for (uint32_t h = first_head; h < first_head + heads_per_group; ++h) {
+            const uint32_t base = h * q_len_tiles * head_dim_tiles + (q_row_start + r) * head_dim_tiles;
+            for (uint32_t d = 0; d < head_dim_tiles; ++d) {
                 noc.async_read(q_acc, CoreLocalMem<uint32_t>(ptr), tile_bytes, {.page_id = base + d}, {});
                 ptr += tile_bytes;
             }
         }
     }
     noc.async_read_barrier();
-    cb.push_back(HB * QC * Dt);
+    cb.push_back(q_group_tiles);
 }
 
-/** Read the resident w group: [QC][Hi], tile id = h*Sqt + s. */
+/** Read the resident w group: [q_tiles_per_unit][num_heads], tile id = h*q_len_tiles + s. */
 template <typename WAcc>
-inline void read_w_group(Noc noc, const WAcc& w_acc, uint32_t s0) {
+inline void read_w_group(Noc noc, const WAcc& w_acc, uint32_t q_row_start) {
     CircularBuffer cb(cb_w);
-    cb.reserve_back(Hi * QC);
+    cb.reserve_back(w_group_tiles);
     uint32_t ptr = cb.get_write_ptr();
-    for (uint32_t r = 0; r < QC; ++r) {
-        for (uint32_t h = 0; h < Hi; ++h) {
-            noc.async_read(w_acc, CoreLocalMem<uint32_t>(ptr), tile_bytes, {.page_id = h * Sqt + s0 + r}, {});
+    for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
+        for (uint32_t h = 0; h < num_heads; ++h) {
+            noc.async_read(
+                w_acc, CoreLocalMem<uint32_t>(ptr), tile_bytes, {.page_id = h * q_len_tiles + q_row_start + r}, {});
             ptr += tile_bytes;
         }
     }
     noc.async_read_barrier();
-    cb.push_back(Hi * QC);
+    cb.push_back(w_group_tiles);
 }
 
-/** Read k chunk [kw][Dt] starting at k-tile c0, tile id = t*Dt + d.
- *  Always reserves/pushes the full KC*Dt so the 2-chunk ring stays half-aligned
- *  (a kw-sized push would wrap mid-block and overflow the CB); the kw..KC tail
- *  is left unread and never consumed. */
+/** Read k chunk [k_tiles_in_unit][head_dim_tiles] starting at k_tile_start, tile id = t*head_dim_tiles + d.
+ *  Always reserves/pushes the full k_tiles_per_unit*head_dim_tiles so the 2-chunk ring stays
+ *  half-aligned (a partial push would wrap mid-block and overflow the CB); the unread tail
+ *  is never consumed. */
 template <typename KAcc>
-inline void read_k_chunk(Noc noc, const KAcc& k_acc, uint32_t c0, uint32_t kw) {
+inline void read_k_chunk(Noc noc, const KAcc& k_acc, uint32_t k_tile_start, uint32_t k_tiles_in_unit) {
     CircularBuffer cb(cb_k);
-    cb.reserve_back(KC * Dt);
+    cb.reserve_back(k_chunk_tiles);
     uint32_t ptr = cb.get_write_ptr();
-    for (uint32_t c = 0; c < kw; ++c) {
-        for (uint32_t d = 0; d < Dt; ++d) {
-            noc.async_read(k_acc, CoreLocalMem<uint32_t>(ptr), tile_bytes, {.page_id = (c0 + c) * Dt + d}, {});
+    for (uint32_t c = 0; c < k_tiles_in_unit; ++c) {
+        for (uint32_t d = 0; d < head_dim_tiles; ++d) {
+            noc.async_read(
+                k_acc, CoreLocalMem<uint32_t>(ptr), tile_bytes, {.page_id = (k_tile_start + c) * head_dim_tiles + d},
+                {});
             ptr += tile_bytes;
         }
     }
     noc.async_read_barrier();
-    cb.push_back(KC * Dt);
+    cb.push_back(k_chunk_tiles);
 }
 
 void kernel_main() {
@@ -116,18 +124,18 @@ void kernel_main() {
     bool need_group = true;
     for (uint32_t i = 0; i < flat_count; ++i) {
         if (need_group) {
-            read_w_group(noc, w_acc, span.s0());
+            read_w_group(noc, w_acc, span.q_tile_start());
             if constexpr (!stream_heads) {
-                read_q_block(noc, q_acc, span.s0(), 0);
+                read_q_block(noc, q_acc, span.q_tile_start(), 0);
             }
             need_group = false;
         }
-        read_k_chunk(noc, k_acc, span.c0(), span.kw());
+        read_k_chunk(noc, k_acc, span.k_tile_start(), span.k_tiles());
         if constexpr (stream_heads) {
-            // compute completes one tile at a time, streaming all head blocks per tile
-            for (uint32_t rc = 0; rc < QC * span.kw(); ++rc) {
-                for (uint32_t hb = 0; hb < Hi; hb += HB) {
-                    read_q_block(noc, q_acc, span.s0(), hb);
+            // compute completes one tile at a time, streaming all head groups per tile
+            for (uint32_t rc = 0; rc < q_tiles_per_unit * span.k_tiles(); ++rc) {
+                for (uint32_t first_head = 0; first_head < num_heads; first_head += heads_per_group) {
+                    read_q_block(noc, q_acc, span.q_tile_start(), first_head);
                 }
             }
         }

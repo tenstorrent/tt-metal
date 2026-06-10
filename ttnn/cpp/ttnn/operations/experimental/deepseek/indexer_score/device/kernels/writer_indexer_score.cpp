@@ -5,7 +5,8 @@
 // Writer for indexer_score. Pops untilized 32x32 bf16 tiles and scatters
 // their 32 rows as 64 B fragments into the row-major output (page = row,
 // fragments are 64 B aligned). The owner of a row's last valid tile fills
-// the row tail [valid(s)*32, T) with -inf so skipped tiles never read junk.
+// the row tail [num_valid_k_tiles(row)*32, T) with -inf so skipped tiles
+// never read junk.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -30,9 +31,9 @@ inline uint32_t fill_inf_scratch() {
     return CircularBuffer(cb_scratch).get_write_ptr();
 }
 
-/** Scatter one untilized tile's rows into output rows of q-tile-row s, column tile t. */
+/** Scatter one untilized tile's rows into output rows of q-tile-row q_row, column tile k_tile. */
 template <typename OutAcc>
-inline void write_tile(Noc noc, const OutAcc& out_acc, uint32_t s, uint32_t t) {
+inline void write_tile(Noc noc, const OutAcc& out_acc, uint32_t q_row, uint32_t k_tile) {
     CircularBuffer cb(cb_out);
     cb.wait_front(1);
     uint32_t src = cb.get_read_ptr();
@@ -42,19 +43,19 @@ inline void write_tile(Noc noc, const OutAcc& out_acc, uint32_t s, uint32_t t) {
             out_acc,
             frag_bytes,
             {},
-            {.page_id = s * tt::constants::TILE_HEIGHT + r, .offset_bytes = t * frag_bytes});
+            {.page_id = q_row * tt::constants::TILE_HEIGHT + r, .offset_bytes = k_tile * frag_bytes});
         src += frag_bytes;
     }
     noc.async_write_barrier();
     cb.pop_front(1);
 }
 
-/** Fill row tail [valid(s)*32, T) of q-tile-row s with -inf from the L1 scratch tile. */
+/** Fill row tail [num_valid_k_tiles(q_row)*32, T) of q-tile-row q_row with -inf from the L1 scratch tile. */
 template <typename OutAcc>
-inline void fill_row_tail(Noc noc, const OutAcc& out_acc, uint32_t scratch, uint32_t s) {
-    const uint32_t tail_bytes_total = (Tt - valid(s)) * frag_bytes;
+inline void fill_row_tail(Noc noc, const OutAcc& out_acc, uint32_t scratch, uint32_t q_row) {
+    const uint32_t tail_bytes_total = (k_len_tiles - num_valid_k_tiles(q_row)) * frag_bytes;
     for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
-        uint32_t off = valid(s) * frag_bytes;
+        uint32_t off = num_valid_k_tiles(q_row) * frag_bytes;
         uint32_t left = tail_bytes_total;
         while (left > 0) {
             const uint32_t n = left < scratch_bytes ? left : scratch_bytes;
@@ -63,7 +64,7 @@ inline void fill_row_tail(Noc noc, const OutAcc& out_acc, uint32_t scratch, uint
                 out_acc,
                 n,
                 {},
-                {.page_id = s * tt::constants::TILE_HEIGHT + r, .offset_bytes = off});
+                {.page_id = q_row * tt::constants::TILE_HEIGHT + r, .offset_bytes = off});
             off += n;
             left -= n;
         }
@@ -88,16 +89,16 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < flat_count; ++i) {
         // compute emits unit tiles in (r, c) row-major order
-        for (uint32_t r = 0; r < QC; ++r) {
-            for (uint32_t c = 0; c < span.kw(); ++c) {
-                write_tile(noc, out_acc, span.s0() + r, span.c0() + c);
+        for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
+            for (uint32_t c = 0; c < span.k_tiles(); ++c) {
+                write_tile(noc, out_acc, span.q_tile_start() + r, span.k_tile_start() + c);
             }
         }
         if (span.last_in_group()) {
-            for (uint32_t r = 0; r < QC; ++r) {
-                const uint32_t s = span.s0() + r;
-                if (valid(s) < Tt) {
-                    fill_row_tail(noc, out_acc, scratch, s);
+            for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
+                const uint32_t q_row = span.q_tile_start() + r;
+                if (num_valid_k_tiles(q_row) < k_len_tiles) {
+                    fill_row_tail(noc, out_acc, scratch, q_row);
                 }
             }
         }
