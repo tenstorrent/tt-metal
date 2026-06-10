@@ -83,6 +83,31 @@ def test_indexer_score_glx_chunked(device, heads, dim, sq, t, chunk_start):
     assert (ref[~masked] < 0).any()
 
 
+@pytest.mark.parametrize("sp_rank", [0, 7], ids=["rank0", "rank7"])
+def test_indexer_score_production(device, sp_rank):
+    """GLX chunked prefill with the production knobs."""
+    # q_chunk=64 with all heads resident doubles q/w/acc CBs to ~2 MB > L1
+    cfg = ttnn.IndexerScoreProgramConfig(
+        q_chunk_size=32,
+        k_chunk_size=512,
+        head_group_size=0,  # all 64 heads resident
+    )
+    chunk_start = GLX_HISTORY + sp_rank * GLX_SQ
+    g = torch.Generator().manual_seed(42)
+    q = torch.randn(1, GLX_HEADS, GLX_SQ, GLX_DIM, generator=g, dtype=torch.bfloat16)
+    k = torch.randn(1, 1, GLX_T, GLX_DIM, generator=g, dtype=torch.bfloat16)
+    w = torch.randn(1, GLX_HEADS, GLX_SQ, 1, generator=g, dtype=torch.bfloat16)
+
+    out = indexer_score(q, k, w, chunk_start, device, program_config=cfg)
+    ref = indexer_score_ref(q, k, w, chunk_start)
+
+    masked = ref == float("-inf")
+    assert torch.equal(out <= torch.finfo(torch.bfloat16).min, masked)
+    a, b = out[~masked].flatten().float(), ref[~masked].flatten().float()
+    pcc = torch.corrcoef(torch.stack([a, b]))[0, 1].item()
+    assert pcc >= 0.999, f"PCC {pcc} < 0.999"
+
+
 @pytest.mark.parametrize(
     "q_chunk, k_chunk, head_group",
     [
