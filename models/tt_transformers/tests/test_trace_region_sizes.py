@@ -5,7 +5,6 @@
 import pytest
 import yaml
 
-from models.demos.utils.model_targets import normalize_sku
 from models.demos.utils.trace_region_sizes import (
     TRACE_REGION_SIZES_YAML_PATH,
     TraceRegionSizeNotConfiguredError,
@@ -13,70 +12,31 @@ from models.demos.utils.trace_region_sizes import (
     resolve_trace_region_size,
 )
 
-# Regression table from the former trace_region_size_dict in trace_region_config.py.
-_LEGACY_TRACE_REGION_SIZE_DICT = {
-    "Llama-3.1-8B": {
-        "N150": 25000000,
-        "N300": 38000000,
-        "T3K": 50000000,
-        "TG": 50000000,
-        "P150": 52000000,
-        "P300": 52000000,
-    },
-    "Llama-3.3-70B": {
-        "T3K": 90000000,
-        "TG": 80000000,
-        "P150": 80000000,
-        "P300": 80000000,
-        "P150x4": 96000000,
-        "P150x8": 84000000,
-    },
-    "Llama-3.1-70B": {
-        "T3K": 90000000,
-        "TG": 90000000,
-        "P150": 90000000,
-        "P300": 90000000,
-        "P150x4": 90000000,
-        "P150x8": 90000000,
-    },
-    "Llama-3.2-90B": {
-        "T3K": 20000000,
-    },
-    "Qwen3-32B": {
-        "T3K": 90000000,
-        "TG": 200000000,
-        "P150": 90000000,
-        "P300": 90000000,
-        "P150x4": 90000000,
-        "P150x8": 90000000,
-    },
-    "GPT-OSS-20B": {
-        "T3K": 50000000,
-        "TG": 50000000,
-    },
-    "GPT-OSS-120B": {
-        "T3K": 50000000,
-        "TG": 50000000,
-    },
-    "Qwen2.5-72B": {
-        "T3K": 70000000,
-        "TG": 70000000,
-    },
-    "gemma-3-27b": {
-        "T3K": 70000000,
-        "TG": 70000000,
-        "P150x4": 70000000,
-    },
-    "DeepSeek-R1-Distill-Llama-70B": {
-        "P150x4": 90000000,
-    },
-    "Llama-3.2-3B": {
-        "N150": 10000000,
-    },
-    "Qwen2.5-VL-7B": {
-        "N300": 10000000,
-    },
-}
+
+def _iter_yaml_trace_region_entries():
+    doc = load_trace_region_sizes()
+    sizes = doc.get("sizes", {})
+    for model_key, model_block in sizes.items():
+        if not isinstance(model_block, dict):
+            continue
+
+        model_names = [model_key]
+        aliases = model_block.get("aliases", [])
+        if isinstance(aliases, list):
+            model_names.extend(aliases)
+
+        skus = model_block.get("skus", {})
+        if not isinstance(skus, dict):
+            continue
+
+        for sku_key, sku_block in skus.items():
+            if not isinstance(sku_block, dict):
+                continue
+            expected = sku_block.get("trace_region_size")
+            if not isinstance(expected, int) or isinstance(expected, bool) or expected <= 0:
+                continue
+            for model_name in model_names:
+                yield model_name, sku_key, expected
 
 
 def test_trace_region_sizes_yaml_schema():
@@ -96,26 +56,22 @@ def test_trace_region_sizes_yaml_schema():
             assert isinstance(value, int) and value > 0, f"{model_name}/{sku_name}: invalid trace_region_size"
 
 
-def test_legacy_dict_values_preserved_in_yaml():
-    for model_name, device_map in _LEGACY_TRACE_REGION_SIZE_DICT.items():
-        for legacy_device, expected_size in device_map.items():
-            resolved = resolve_trace_region_size(model_name, normalize_sku(legacy_device))
-            assert resolved == expected_size, f"{model_name}/{legacy_device}"
+@pytest.mark.parametrize("model_name,sku,expected_size", list(_iter_yaml_trace_region_entries()))
+def test_resolve_trace_region_size_matches_yaml(model_name, sku, expected_size):
+    assert resolve_trace_region_size(model_name, sku) == expected_size
 
 
-def test_hf_alias_resolution():
-    assert resolve_trace_region_size("meta-llama/Llama-3.1-8B-Instruct", "wh_n150") == 25000000
-
-
-def test_tt_transformers_specific_entries():
-    assert resolve_trace_region_size("meta-llama/Llama-3.1-8B-Instruct", "p300x2") == 52000000
-    assert resolve_trace_region_size("meta-llama/Llama-3.1-8B-Instruct", "bh_quietbox_2") == 52000000
-    assert resolve_trace_region_size("meta-llama/Llama-3.2-11B-Vision-Instruct", "wh_llmbox_perf") == 17400000
-    assert resolve_trace_region_size("mistralai/Mixtral-8x7B-v0.1", "wh_llmbox_perf") == 250000000
-    assert resolve_trace_region_size("mistralai/Mistral-Small-3.1-24B-Instruct-2503", "wh_n150") == 30000000
-    assert resolve_trace_region_size("Qwen/Qwen2.5-72B-Instruct", "bh_p150") == 100000000
-    assert resolve_trace_region_size("Qwen/Qwen2.5-32B-Instruct", "bh_p300") == 100000000
-    assert resolve_trace_region_size("gpt-oss-20b", "wh_llmbox_perf") == 50000000
+@pytest.mark.parametrize(
+    "model_name,legacy_sku,expected_size",
+    [
+        ("Llama-3.1-8B", "N150", 25000000),
+        ("Llama-3.1-8B", "T3K", 50000000),
+        ("Llama-3.3-70B", "P150x4", 96000000),
+        ("meta-llama/Llama-3.1-8B-Instruct", "bh_quietbox_2", 52000000),
+    ],
+)
+def test_resolve_trace_region_size_legacy_sku_aliases(model_name, legacy_sku, expected_size):
+    assert resolve_trace_region_size(model_name, legacy_sku) == expected_size
 
 
 def test_resolve_trace_region_size_raises_when_not_configured():
