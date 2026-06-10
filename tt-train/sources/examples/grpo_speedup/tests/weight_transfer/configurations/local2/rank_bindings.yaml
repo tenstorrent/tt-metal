@@ -13,16 +13,25 @@
 # declaring fewer chips trips
 # `TopologyMapper: Fabric node ID not yet assigned for ASIC id ...`.
 #
-# Used layout: the application opens a [1, 1] sub-mesh at offset (0, 0),
-# so only chip 0 of each board does any work. The reason we under-use the
-# board is that the tt-transformers multi-device weight-update path
-# (Attention/MLP/Embedding/LMHead for num_devices_per_group > 1) is not yet
-# implemented, so Transformer.update_weights only works on a single-chip
-# mesh today. Once the multi-device update paths land, this can move back
-# to [1, 4] or [2, 4].
+# Used layout (asymmetric):
+#   - Rank 0 (TTML) opens the full [1, 2] sub-mesh -- both chips of board 0
+#     participate in the ttml model's forward / generate, DDP across the
+#     pair.
+#   - Rank 1 (TTT)  opens only a [1, 1] sub-mesh at offset (0, 0) so every
+#     ``Transformer.update_weights`` dispatch hits the
+#     num_devices_per_group == 1 fast path. The multi-device update paths
+#     (Attention/MLP/Embedding/LMHead for num_devices_per_group > 1) are
+#     still TODO; once they land, this side can move back to [1, 2] or
+#     larger.
 #
-#   board0-chip0   (rank 0, TTML)   [board0-chip1 declared but idle]
-#   board1-chip0   (rank 1, TTT )   [board1-chip1 declared but idle]
+# ``WeightBridge`` handles the asymmetric pair by exchanging mesh shapes
+# during ``connect()`` and resolving to a single (0, 0) -> (0, 0)
+# ``SocketConnection`` (see ``utils/weight_bridge.py``).
+#
+#   board0-chip0   (rank 0, TTML, sends from this chip)
+#   board0-chip1   (rank 0, TTML, idle during weight transfer)
+#   board1-chip0   (rank 1, TTT,  receives here)
+#   board1-chip1   (rank 1, TTT,  declared but never opened)
 
 rank_bindings:
   - rank: 0
