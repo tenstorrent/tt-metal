@@ -125,6 +125,12 @@ jobs:
           echo "repository=$REPOSITORY" >> $GITHUB_OUTPUT
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
+      - name: Extract allocation configuration from SKU
+        run: |
+          pip3 install PyYAML
+          python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_${{ inputs.sp-config }}" \
+            > /tmp/allocation-spec.yaml
+
       - name: Create allocation for ${{ matrix.test-group.name }}
         id: allocation
         uses: ./.github/actions/ttop-create-allocation
@@ -132,8 +138,7 @@ jobs:
         with:
           allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
           namespace: ttop-ci
-          spec: |
-            ${{ needs.load-test-matrix.outputs.allocation_spec }}
+          specFile: /tmp/allocation-spec.yaml
 
       - name: Get Allocation data
         uses: ./.github/actions/ttop-get-allocation-data
