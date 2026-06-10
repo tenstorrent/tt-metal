@@ -2046,9 +2046,10 @@ std::pair<int, int> estimate_fabric_transfer_cycles(
 
     // Convert ns -> device clock cycles
     const double cycles_per_ns = static_cast<double>(clock_rate_mhz) / 1000.0;
+    // TODO: latency is temporarily disabled from roofline
     return {
         static_cast<int>(std::ceil(bandwidth_ns * cycles_per_ns)),
-        static_cast<int>(std::ceil(latency_ns * cycles_per_ns))};
+        static_cast<int>(std::ceil(latency_ns * cycles_per_ns * 0))};
 }
 
 }  // namespace ttnn::ccl
