@@ -1,6 +1,9 @@
 [
   "ttnn.all_gather",
+  "ttnn.deallocate",
+  "ttnn.interleaved_to_sharded",
   "ttnn.rms_norm",
   "ttnn.rms_norm_post_all_gather",
-  "ttnn.rms_norm_pre_all_gather"
+  "ttnn.rms_norm_pre_all_gather",
+  "ttnn.sharded_to_interleaved"
 ]

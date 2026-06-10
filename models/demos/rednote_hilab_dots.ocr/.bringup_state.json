@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T05:54:11Z",
+  "updated_at": "2026-06-10T06:05:07Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -482,8 +482,16 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/text_rmsnorm.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_text_rmsnorm.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_text_rmsnorm.py",
+          "generated/profiler/reports/2026_06_10_06_03_51/ops_perf_results_2026_06_10_06_03_51.csv"
+        ],
+        "notes": "Tracy-driven single change: replicated-path ttnn.rms_norm switched from default DRAM-interleaved (4-core row-tile-capped LayerNorm kernel at seq 128) to WIDTH-SHARDED 4x3 grid (12 cores, block_w=4, LayerNormShardedMultiCoreProgramConfig) with an i2s/s2i bounce that keeps the DRAM-interleaved block-output contract (both decoder_layer consumers are matmuls; tick-23 L1-interleaved-into-matmul stall counter-example forbids an L1 pin). Shape-gated (tile-aligned seq, dim tiles %12==0, per-core shard <=256KB) with deterministic shape-keyed config cache; non-qualifying shapes (decode seq=1) fall back to the fused interleaved path. Traced tracy at the production operating point (fp32 [1,1,128,1536] replicated 1x4 mesh, metal-trace captured+replayed, 2 replay sessions): per-device block kernel time 21.1us -> 16.5us (-22%); LayerNormDeviceOperation 21.1us@4c -> 8.2us@12c, +i2s 3.8us +s2i 4.5us@12c. Wall-clock A/B over 200 traced replays, 2 reps each: 24.4/24.3 -> 21.1/21.1 us/iter (-13.4%); grids 8x6 (24.4), 8x3 (22.6), 6x2 (21.7), 2x3 (26.0) all measured worse than 4x3. Top hotspot post-change LayerNormDeviceOperation ~50% of block kernel time at 12c. KB entries for kind norm reviewed: ttnn_pow chain already fused into ttnn.rms_norm (cited in ttnn phase); ttnn_rms_norm_post_all_gather targets the distributed pre/post path which is NOT on the decoder_layer hot path (residual stream is replicated) - async all_gather swap deferred to generation/perf phases; none newly applied. PCC re-verified: text_rmsnorm replicated 0.999985, distributed 0.999986 (>0.99); composition insurance: test_decoder_layer PCC 0.999943 (was 0.999936) - no stall introduced. traced_ops sidecar regenerated (+interleaved_to_sharded/sharded_to_interleaved). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999985
       },
       "real_weights": {
         "status": "pending",
@@ -879,6 +887,12 @@
       "tick": 26,
       "ts": "2026-06-10T05:54:11Z",
       "action": "device[embedding]",
+      "result": "ok"
+    },
+    {
+      "tick": 27,
+      "ts": "2026-06-10T06:05:07Z",
+      "action": "device[text_rmsnorm]",
       "result": "ok"
     }
   ],
