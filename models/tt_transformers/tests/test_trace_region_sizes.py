@@ -9,11 +9,8 @@ from models.demos.utils.model_targets import normalize_sku
 from models.demos.utils.trace_region_sizes import (
     TRACE_REGION_SIZES_YAML_PATH,
     TraceRegionSizeNotConfiguredError,
-    apply_trace_region_override,
-    is_trace_region_size_placeholder,
     load_trace_region_sizes,
     resolve_trace_region_size,
-    should_apply_trace_region_override,
 )
 
 # Regression table from the former trace_region_size_dict in trace_region_config.py.
@@ -119,32 +116,6 @@ def test_tt_transformers_specific_entries():
     assert resolve_trace_region_size("Qwen/Qwen2.5-72B-Instruct", "bh_p150") == 100000000
     assert resolve_trace_region_size("Qwen/Qwen2.5-32B-Instruct", "bh_p300") == 100000000
     assert resolve_trace_region_size("gpt-oss-20b", "wh_llmbox_perf") == 50000000
-
-
-def test_is_trace_region_size_placeholder():
-    assert is_trace_region_size_placeholder(None)
-    assert not is_trace_region_size_placeholder(50_000_000)
-    assert not is_trace_region_size_placeholder(216580672)
-    assert not is_trace_region_size_placeholder(102000000)
-
-
-def test_should_apply_trace_region_override():
-    override_size = 80000000
-    assert should_apply_trace_region_override({}, override_size)
-    assert should_apply_trace_region_override({"trace_region_size": None}, override_size)
-    assert not should_apply_trace_region_override({"trace_region_size": 216580672}, override_size)
-    assert not should_apply_trace_region_override({"trace_region_size": 102000000}, override_size)
-    assert not should_apply_trace_region_override({}, None)
-
-
-def test_apply_trace_region_override():
-    device_params = {"trace_region_size": 216580672}
-    assert apply_trace_region_override(device_params, 80000000) == 216580672
-    assert device_params["trace_region_size"] == 216580672
-
-    device_params = {}
-    assert apply_trace_region_override(device_params, 52000000) == 52000000
-    assert device_params["trace_region_size"] == 52000000
 
 
 def test_resolve_trace_region_size_raises_when_not_configured():
