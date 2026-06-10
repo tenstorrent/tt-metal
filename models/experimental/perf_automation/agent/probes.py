@@ -254,7 +254,9 @@ def preflight_collect(
         cmd, cwd=Path(tt_metal_root), env=env or dict(os.environ), capture_output=True, text=True, timeout=120
     )
     out = (proc.stdout or "") + (proc.stderr or "")
-    m = re.search(r"(\d+)\s+tests? collected", out) or re.search(r"(\d+)/\d+ tests collected", out)
+    # "1/5 tests collected" must win over the bare form ("5 tests collected"
+    # is a substring of it and reports the WRONG number when -k deselects).
+    m = re.search(r"(\d+)/\d+ tests collected", out) or re.search(r"(\d+)\s+tests? collected", out)
     n = int(m.group(1)) if m else 0
     if proc.returncode != 0 or n == 0:
         tail = "\n".join(out.splitlines()[-8:])

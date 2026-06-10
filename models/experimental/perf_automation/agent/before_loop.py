@@ -268,6 +268,8 @@ def before_loop(
         available_cores=env["worker_cores"],
         run_profiled=run_profiled_factory(perf_rel, case),
     )
+    # Persist the tagged buckets for the loop: ROUTE reads this, not the CSVs.
+    (Path(run.profiles_dir) / "baseline_profile.json").write_text(json.dumps(profile, indent=2, sort_keys=True))
     stages.done(
         f"device {profile['device_ms']:.3f} ms · wall {profile['wall_ms']:.0f} ms "
         f"· {len(profile['buckets'])} buckets"

@@ -199,3 +199,10 @@ def test_check_dependencies_reports_missing(monkeypatch):
     monkeypatch.setattr(shutil, "which", lambda name: None)
     missing = check_dependencies()
     assert any("tt-perf-report" in m for m in missing)
+
+
+def test_baseline_profile_json_persisted(tmp_path, model_root):
+    """ROUTE reads the tagged buckets from profiles/baseline_profile.json, not the CSVs."""
+    result = _run(tmp_path, model_root)
+    prof = json.loads((Path(result["run_dir"]) / "profiles" / "baseline_profile.json").read_text())
+    assert prof["buckets"] and "device_ms" in prof
