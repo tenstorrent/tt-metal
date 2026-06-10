@@ -192,6 +192,17 @@ def pad_input_ids_and_positions_for_tt_prefill(
 
 
 def open_devstral_demo_mesh(mesh_width: int):
+    # Validate the requested topology up front rather than silently clamping: a clamped run looks
+    # successful (sharding/cache/perf all report normally) while quietly executing on fewer devices.
+    if mesh_width < 1:
+        raise ValueError(f"--mesh-width must be >= 1, got {mesh_width}.")
+    num_devices = ttnn.get_num_devices()
+    if mesh_width > num_devices:
+        raise ValueError(
+            f"--mesh-width {mesh_width} requested but only {num_devices} device(s) are visible. "
+            f"Reduce --mesh-width or expose more devices."
+        )
+
     # Multi-chip: enable fabric before open; 2 CQs on BH multi-chip decode.
     if mesh_width > 1:
         ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
@@ -686,10 +697,16 @@ def tt_read_decode_traced_hidden(
     mesh_device,
     batch_slot: int = 0,
 ) -> ttnn.Tensor:
-    """Owned copy for CPU LM head (caller deallocates); to_memory_config instead of clone."""
+    """Owned copy for CPU LM head (caller deallocates).
+
+    ``to_memory_config`` returns the input tensor unchanged when it is already in DRAM, which would
+    hand out the trace-owned ``output_hidden`` itself; the caller then deallocates it, freeing a tensor
+    the trace still writes on every replay (and ``tt_release_decode_trace`` would double-free). Clone so
+    the returned tensor is genuinely owned by the caller.
+    """
     if ctx.output_hidden is None:
         raise RuntimeError("Decode trace did not retain hidden states.")
-    return ttnn.to_memory_config(ctx.output_hidden, ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.clone(ctx.output_hidden, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
 def image_token_placeholder_positions(input_ids_1row: torch.Tensor, image_token_id: int) -> torch.LongTensor:

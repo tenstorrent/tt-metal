@@ -579,7 +579,7 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
         pad_token_id = int(pad_token_id)
 
     need = int(config.max_context_tokens) + int(config.max_new_tokens) + 2048
-    mesh_device = open_devstral_demo_mesh(max(1, min(config.mesh_width, ttnn.get_num_devices())))
+    mesh_device = open_devstral_demo_mesh(config.mesh_width)
     try:
         dtype_tt = ttnn.bfloat16
         if config.max_seq_len is None:

@@ -329,7 +329,12 @@ def run_hf(
             torch.cuda.manual_seed_all(seed)
 
     with torch.inference_mode():
-        model.generate(**inputs, max_new_tokens=max_new_tokens)
+        generated_ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
+
+    prompt_len = inputs["input_ids"].shape[1]
+    answer_ids = generated_ids[0, prompt_len:]
+    answer_text = processor.decode(answer_ids, skip_special_tokens=True)
+    print(answer_text)
 
 
 def _devstral_bh_qb_decoders_precision(args):
@@ -448,7 +453,7 @@ def run_tt(
             f"block_size {_paged_block_size}, max_num_blocks {_max_num_blocks}, max_seq {max_seq}."
         )
 
-    mesh_device = _tt_demo.open_devstral_demo_mesh(max(1, min(mesh_width, ttnn.get_num_devices())))
+    mesh_device = _tt_demo.open_devstral_demo_mesh(mesh_width)
     page_table_tt = None  # bound here so the cleanup `finally` is safe if model build raises early
     try:
         dtype_tt = ttnn.bfloat16

@@ -305,7 +305,7 @@ def main():
     os.environ["HF_MODEL"] = args.model_id
     apply_devstral_hf_trust_patches()
 
-    mesh_device = open_devstral_demo_mesh(max(1, min(args.mesh_width, ttnn.get_num_devices())))
+    mesh_device = open_devstral_demo_mesh(args.mesh_width)
     try:
         dtype_tt = ttnn.bfloat16
 
