@@ -136,13 +136,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
     }
 
-    const int num_sfpu_iterations = params.TEST_FACE_R_DIM >> 1; // SFP_ROWS == 2
-
     _llk_math_eltwise_sfpu_init_();
 
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        SFPU_CALL_FN(dest_sync, is_fp32_dest_acc_en, _calculate_square_, params.DST_INDEX + i, VectorMode::RC, num_sfpu_iterations);
+        SFPU_CALL(dest_sync, is_fp32_dest_acc_en, _calculate_square_, (SFPU_ITERATIONS), params.DST_INDEX + i, VectorMode::RC);
     }
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();

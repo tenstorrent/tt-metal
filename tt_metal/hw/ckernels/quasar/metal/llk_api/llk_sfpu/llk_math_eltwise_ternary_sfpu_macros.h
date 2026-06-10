@@ -52,7 +52,7 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_and_call_(
         dst_index_in1,
         dst_index_in2,
         dst_index_out,
-        static_cast<int>(vector_mode),
+        vector_mode,
         std::forward<Args>(args)...);
 }
 

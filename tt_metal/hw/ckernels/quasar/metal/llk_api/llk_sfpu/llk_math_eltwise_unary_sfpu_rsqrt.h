@@ -24,7 +24,8 @@ template <
 inline void llk_math_eltwise_unary_sfpu_rsqrt(uint dst_index) {
     static_assert(FAST_APPROX == false, "Non-default FAST_APPROX (true) not supported in Quasar rsqrt");
     static_assert(legacy_compat == false, "Non-default legacy_compat (true) not supported in Quasar rsqrt");
-    SFPU_CALL_FN(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_rsqrt, dst_index, VectorMode::RC, ITERATIONS);
+    static_assert(is_fp32_dest_acc_en == false, "Non-default is_fp32_dest_acc_en (true) not supported in Quasar rsqrt");
+    SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_rsqrt, (ITERATIONS), dst_index, VectorMode::RC);
 }
 
 }  // namespace ckernel
