@@ -9,7 +9,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "sfpu/ckernel_sfpu_converter.h"  // Converter::as_float
+#include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_conversions.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
