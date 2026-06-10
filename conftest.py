@@ -421,7 +421,7 @@ def device(request, device_params):
     import ttnn
 
     # Check if file/test wants module-scoped device
-    if request.node.get_closest_marker("use_module_device"):
+    if request.node.get_closest_marker("use_module_device") and not request.node.get_closest_marker("use_function_device"):
         # device_params will be non-empty if test uses parametrized device_params,
         # which conflicts with module-scoped device (can't vary device config per test)
         if device_params:

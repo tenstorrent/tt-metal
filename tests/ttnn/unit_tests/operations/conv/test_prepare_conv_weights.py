@@ -9,6 +9,8 @@ import pytest
 from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 import ttnn
 
+pytestmark = pytest.mark.use_module_device
+
 
 def prepare_conv_weights_func(
     batch_size,

@@ -6,8 +6,9 @@ import pytest
 from tests.ttnn.nightly.unit_tests.operations.conv.test_conv2d import run_conv, torch_tensor_map, HS, WS, BS
 import ttnn
 
+pytestmark = pytest.mark.use_module_device({"l1_small_size": 16384})
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+
 @pytest.mark.parametrize("stride", [2])
 @pytest.mark.parametrize("batch_size", [2])
 @pytest.mark.parametrize(
@@ -177,6 +178,7 @@ SliceHeight = ttnn.Conv2dDRAMSliceHeight
 SliceWidth = ttnn.Conv2dDRAMSliceWidth
 
 
+@pytest.mark.use_function_device
 @pytest.mark.parametrize(
     "input_layout, dtype",
     [[ttnn.TILE_LAYOUT, ttnn.bfloat8_b], [ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16]],

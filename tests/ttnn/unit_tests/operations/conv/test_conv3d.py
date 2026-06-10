@@ -7,6 +7,8 @@ import torch
 import pytest
 import ttnn
 import torch.nn as nn
+
+pytestmark = pytest.mark.use_module_device
 from tests.ttnn.utils_for_testing import check_with_pcc
 from models.common.utility_functions import skip_for_blackhole, skip_with_watcher
 
