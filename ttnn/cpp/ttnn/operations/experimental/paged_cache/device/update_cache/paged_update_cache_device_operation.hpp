@@ -6,10 +6,15 @@
 
 #include <optional>
 #include <variant>
+#include <vector>
+
+#include <tt_stl/reflection.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "paged_update_cache_device_operation_types.hpp"
 #include "paged_update_cache_program_factory.hpp"
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -34,6 +39,16 @@ struct PagedUpdateCacheDeviceOperation {
 
     static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
+
+    // update_idxs is excluded from the program hash (so decode steps that differ only in position
+    // cache-hit). The cache-write offsets it determines (cache_start_id, tile_update_offset_B) are
+    // DYNAMIC and re-applied to the cached program on every dispatch. Returns empty in index-tensor
+    // mode (positions read on-device) and for coords excluded from a mesh dispatch.
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::experimental::prim
