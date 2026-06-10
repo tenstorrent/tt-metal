@@ -16,7 +16,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_slow_dispatch
+from models.common.utility_functions import is_blackhole, is_slow_dispatch
 from models.demos.deepseek_v3_b1.demo.runtime import TokenCodec, create_model
 from models.demos.deepseek_v3_b1.model import DeepSeekV3
 
@@ -30,6 +30,8 @@ def test_prefill_and_decode(
     prompt_length: int,
     num_decode_steps: int,
 ) -> None:
+    if is_blackhole():
+        pytest.skip("Disabled on blackhole: see #46552")
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
 
