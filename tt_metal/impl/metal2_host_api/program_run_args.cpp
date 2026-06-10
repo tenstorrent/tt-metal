@@ -1074,7 +1074,7 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
             }
             bool any_supplied = false;
             for (const auto& handle : binding_handles) {
-                if (tensor_by_param.count(handle.tensor_parameter_name) > 0) {
+                if (tensor_by_param.contains(handle.tensor_parameter_name)) {
                     any_supplied = true;
                     break;
                 }

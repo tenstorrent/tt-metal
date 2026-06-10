@@ -657,7 +657,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             kernel.runtime_arg_schema.runtime_arg_names.begin(), kernel.runtime_arg_schema.runtime_arg_names.end());
         for (const auto& name : kernel.advanced_options.enqueue_invariant_runtime_args) {
             TT_FATAL(
-                declared_rtas.count(name) > 0,
+                declared_rtas.contains(name),
                 "KernelSpec '{}' marks runtime arg '{}' enqueue-loop invariant, but it is not a declared named runtime "
                 "arg (runtime_arg_schema.runtime_arg_names). Only named runtime args can be marked invariant; "
                 "positional varargs cannot.",
@@ -669,7 +669,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             kernel.runtime_arg_schema.common_runtime_arg_names.end());
         for (const auto& name : kernel.advanced_options.enqueue_invariant_common_runtime_args) {
             TT_FATAL(
-                declared_crtas.count(name) > 0,
+                declared_crtas.contains(name),
                 "KernelSpec '{}' marks common runtime arg '{}' enqueue-loop invariant, but it is not a declared named "
                 "common runtime arg (runtime_arg_schema.common_runtime_arg_names). Only named common runtime args can "
                 "be marked invariant; positional varargs cannot.",

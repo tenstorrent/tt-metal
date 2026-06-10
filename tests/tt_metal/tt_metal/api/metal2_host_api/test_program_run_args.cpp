@@ -1897,7 +1897,7 @@ TEST_F(ProgramRunArgsTestGen1, MatchPaddedShapeOnly_DynamicWinsWhenBothSet) {
 
 TEST_F(ProgramRunArgsTestQuasar, InvariantRuntimeArgNameMustBeDeclaredFails) {
     NodeCoord node{0, 0};
-    ProgramSpec spec = MakeSpecWithNamedArgs(node, /*rtas=*/{"real_rta"}, /*crtas=*/{});
+    ProgramSpec spec = MakeSpecWithNamedArgs(node, /*named_rtas=*/{"real_rta"}, /*named_crtas=*/{});
     spec.kernels[0].advanced_options.enqueue_invariant_runtime_args = {"not_declared"};
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
@@ -1906,7 +1906,7 @@ TEST_F(ProgramRunArgsTestQuasar, InvariantRuntimeArgNameMustBeDeclaredFails) {
 
 TEST_F(ProgramRunArgsTestQuasar, InvariantCommonRuntimeArgNameMustBeDeclaredFails) {
     NodeCoord node{0, 0};
-    ProgramSpec spec = MakeSpecWithNamedArgs(node, /*rtas=*/{}, /*crtas=*/{"real_crta"});
+    ProgramSpec spec = MakeSpecWithNamedArgs(node, /*named_rtas=*/{}, /*named_crtas=*/{"real_crta"});
     spec.kernels[0].advanced_options.enqueue_invariant_common_runtime_args = {"not_declared"};
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
