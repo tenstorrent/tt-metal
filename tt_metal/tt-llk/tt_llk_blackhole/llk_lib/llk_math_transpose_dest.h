@@ -40,8 +40,10 @@ inline void transpose_dest_32b()
     // the SrcA format switching approach to control MOVD2B/MOVB2D behavior.
     TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 1);
 
-    // Disable zero flag to prevent mantissa flushing when exponent bits are 0.
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+    // The 32b hi16/lo16 MOV sequence must not flush datums with a zero low byte; own the Src
+    // zero-substitution flag via the math state tracker. Asserted here (execute) so it survives any
+    // llk_math_hw_configure that ran after the init; skip-if-set keeps it cheap (tt-llk #960/#966).
+    math::_configure_mov_ops_zero_flag_state_();
 
     // Transpose all the low 16 bit elements of all faces and put them in SrcA.
     // Eventually Dest=0, SrcA=0.
@@ -136,10 +138,10 @@ inline void transpose_dest_32b()
         TTI_MOVA2D(p_mov::DEST_32B_LOW, 56, ADDR_MOD_1, p_mova2d::MOV_8_ROWS, 56);
     }
 
-    // Restore config state
+    // Restore config state (the Src zero-substitution flag stays in the MOV_OPS state set above;
+    // the next op's init/reconfig re-establishes its own state - tt-llk #960/#966).
     TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
 }
 
 // Notes on these template parameters:

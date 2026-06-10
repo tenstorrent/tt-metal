@@ -721,34 +721,7 @@ __attribute__((noinline, optimize("no-jump-tables"))) bool is_unpacker_format_co
     }
 }
 
-/**
- * @brief Whether the Src zero-substitution flag (ALU_ACC_CTRL_Zero_Flag_disabled_src) must be
- *        disabled for the given unpacker destination formats.
- *
- * While the flag is clear (its reset state), MOVA2D / MOVB2D flush any SrcA/SrcB datum whose low
- * 8 bits are zero to 0 (FlushDenormals; see MOVA2D.md `if (FlushDenormals && !(SrcAVal & 0xff))`).
- * For the floating-point Src layout the low 8 bits hold the exponent, and a zero exponent denotes a
- * subnormal, which the HW does not support and therefore rounds to zero.
- *
- * UInt16 is the HW "Integer 16" format and the only 16-bit integer unpacker destination format. It
- * shares the Src bit layout, so its low byte is the integer's low magnitude bits, NOT an exponent.
- * A legitimate value such as 256 (0x0100) has a zero low byte and would be silently flushed to 0,
- * destroying the high magnitude bits. Setting the flag (writing 1) suppresses the flush so 16-bit
- * integer data survives the move into Dst.
- *
- * @param unpA_dst_format Destination data format of operand A.
- * @param unpB_dst_format Destination data format of operand B.
- * @return true when either operand converts to UInt16, in which case the flag must be disabled.
- *
- * @note ISA: Blackhole/TensixTile/TensixCoprocessor/MOVA2D.md (FlushDenormals branch) and
- *       SrcASrcB.md (the "Integer 16" note). Rationale tracked in tt-llk #960.
- */
-inline bool requires_disabled_src_zero_flag(const std::uint32_t unpA_dst_format, const std::uint32_t unpB_dst_format)
-{
-    return (unpA_dst_format == static_cast<std::uint32_t>(DataFormat::UInt16)) || (unpB_dst_format == static_cast<std::uint32_t>(DataFormat::UInt16));
-}
-
-template <bool is_fp32_dest_acc_en, bool row_pool = false, bool fpu_srnd_en = false, bool pack_srnd_en = false, bool disable_src_zero_flag = false>
+template <bool is_fp32_dest_acc_en, bool row_pool = false, bool fpu_srnd_en = false, bool pack_srnd_en = false>
 inline void configure_unpack_AB(
     const std::uint32_t unpA_src_format,
     const std::uint32_t unpB_src_format,
@@ -839,10 +812,9 @@ inline void configure_unpack_AB(
 
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, alu_mask>(alu_payload.val);
 
-    // Disable the Src zero-substitution flag when unpacking to UInt16 (16-bit integer), otherwise
-    // values with a zero low byte are flushed to 0; see requires_disabled_src_zero_flag() (tt-llk #960).
-    bool disable_src_zero_flag_val = disable_src_zero_flag || requires_disabled_src_zero_flag(unpA_dst_format, unpB_dst_format);
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable_src_zero_flag_val ? 1 : 0);
+    // NOTE: ALU_ACC_CTRL_Zero_Flag_disabled_src is no longer configured here. It is a math-ALU
+    // concern (only MOVA2D/MOVB2D/ELW/MVMUL read it) and is owned by the math-side data-format
+    // state tracker; see ckernel::math::_configure_*_zero_flag_state_ (tt-llk #960/#966).
 
     // Set FP8 E4M3 mode, bit is accessible by unpacker/packer
     cfg_reg_rmw_tensix<THCON_SEC0_REG1_Unp_LF8_4b_exp_RMW>(((unpA_src_format & 0x1F) == (std::uint32_t)DataFormat::Fp8_e4m3) ? 1 : 0);

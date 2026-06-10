@@ -102,6 +102,13 @@ inline void _configure_mov_ops_zero_flag_state_()
     _set_src_zero_flag_(true);
 }
 
+// Invalidate the tracked state after code path that writes the flag directly (bypassing the
+// tracker), so the next configurator re-applies regardless of the skip-if-set fast path.
+inline void _invalidate_src_zero_flag_state_()
+{
+    src_zero_flag_state = SrcZeroFlagState::UNCONFIGURED;
+}
+
 inline void reset_counters(const std::uint32_t setrwc)
 {
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, setrwc);
