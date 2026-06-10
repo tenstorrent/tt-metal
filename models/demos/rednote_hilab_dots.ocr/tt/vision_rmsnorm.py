@@ -59,15 +59,18 @@ class TtVisionRMSNorm(LightweightModule):
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """x: [..., dim] TILE_LAYOUT, replicated across the mesh.
 
-        Returns: same shape, replicated, L1 interleaved.
+        Returns: same shape, replicated, DRAM interleaved.
 
-        Tracy-driven placement (optimization phase): pinning the norm output
-        to L1 interleaved cuts the kernel's DRAM write and lands the
-        activation where the consumer (residual add / QKV linear) reads it
-        fast — measured 51.2 -> 38.4 us/iter (-25%) at the production fp32
-        [1, 1, 896, 1536] operating point on the 1x4 mesh. The width-sharded
-        LayerNormShardedMultiCoreProgramConfig variant was measured WORSE
-        (69.4 us): the interleaved_to_sharded/sharded_to_interleaved bounce
-        around a single op costs more than it saves.
+        Tracy-driven placement (vision_block optimization phase): the norm
+        output MUST stay DRAM interleaved. The earlier per-block isolation
+        win (L1 pin, 51.2 -> 38.4 us/iter on the lone norm kernel) reverses
+        catastrophically in composition: a 5.5 MB fp32 [1, 1, 896, 1536] L1
+        interleaved activation stalls every downstream ttnn.linear (QKV 97 ->
+        2963 us, fc1/fc3 178 -> ~2650 us at the production operating point) —
+        the optimization skill's "never pin a LARGE activation to L1 in front
+        of a matmul" layout-interaction stall. DRAM output costs +14 us on
+        the norm and saves ~7.7 ms on the consuming matmuls per block. The
+        width-sharded LayerNormShardedMultiCoreProgramConfig variant remains
+        WORSE (69.4 us): the i2s/s2i bounce costs more than it saves.
         """
-        return ttnn.rms_norm(x, epsilon=self.eps, weight=self.weight, memory_config=ttnn.L1_MEMORY_CONFIG)
+        return ttnn.rms_norm(x, epsilon=self.eps, weight=self.weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)

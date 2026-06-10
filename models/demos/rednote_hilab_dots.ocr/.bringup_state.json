@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T05:17:43Z",
+  "updated_at": "2026-06-10T05:25:23Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -264,8 +264,16 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_block.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_rmsnorm.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_vision_block.py",
+          "generated/profiler/reports/2026_06_10_05_24_03/ops_perf_results_2026_06_10_05_24_03.csv"
+        ],
+        "notes": "Tracy-driven single change: reverted vision_rmsnorm output L1 pin to DRAM interleaved. Composed-block traced tracy (metal-trace captured+replayed, fp32 [1,1,896,1536] replicated 1x4 mesh, production operating point) exposed a layout-interaction stall invisible in sub-block isolation: 5.5MB fp32 L1-interleaved norm output stalls every consuming ttnn.linear (QKV 2963us, fc1 2650us, fc3 2637us vs 97-134us for DRAM-fed o_proj/fc2) - the skill's 'never pin a LARGE activation to L1 before a matmul' counter-example; rmsnorm's earlier isolated -25% win reverses ~25x in composition. Per-device block kernel time 9632.5 -> 1943.7us (-79.8%); QKV 199, fc1 172, fc3 174, norms 66->90us (+24 expected DRAM write). Top hotspot post-change MatmulDeviceOperation 775.8us 39.9%, SDPA 439.4us 22.6%, BinaryNg 347us 17.9%. No KB entries for decoder_layer. PCC re-verified: vision_block 0.999958, vision_rmsnorm 0.999982 (both unchanged). Guard ok. Dispatched inline (no Agent tool in tick context).",
+        "pcc": 0.999958
       },
       "real_weights": {
         "status": "pending",
@@ -823,6 +831,12 @@
       "tick": 22,
       "ts": "2026-06-10T05:17:43Z",
       "action": "device[vision_mlp]",
+      "result": "ok"
+    },
+    {
+      "tick": 23,
+      "ts": "2026-06-10T05:25:23Z",
+      "action": "device[vision_block]",
       "result": "ok"
     }
   ],
