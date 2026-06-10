@@ -35,9 +35,10 @@ host loader builds one per-chip fused QKV slice (KV rows replicated up to
 the chip's Q-head count, q|k|v) per device and shards the concatenation
 with ``ShardTensorToMesh(dim=-1)``; o_proj is row-parallel (``dim=-2``)
 and its per-chip PARTIAL sums are combined with a sync all-reduce
-(``ttnn.all_gather`` along width + local adds — async variants are an
-optimization-phase swap per tp-guidance). On a single device the sharding
-degenerates to the replicated full computation and the CCL is skipped.
+(``ttnn.reduce_scatter`` + ``ttnn.all_gather``, fp32 fabric accumulation;
+swapped from all_gather + local adds in the optimization phase per
+tp-guidance). On a single device the sharding degenerates to the
+replicated full computation and the CCL is skipped.
 """
 
 import torch
@@ -271,17 +272,14 @@ class TtTextAttention(LightweightModule):
         ttnn.deallocate(attn)
 
         if self.num_devices > 1:
-            # Sync all-reduce: gather the N partials along width, then add
-            # them locally (async reduce_scatter/all_gather is the
-            # optimization-phase swap per tp-guidance).
-            hidden = out.shape[-1]
-            gathered = ttnn.all_gather(out, dim=3, topology=ttnn.Topology.Linear)
+            # All-reduce of the per-chip partials: reduce_scatter (each chip
+            # sums its hidden/N shard, fp32 fabric accumulation) + all_gather
+            # to re-replicate. Replaces the original all_gather + N slices +
+            # N-1 local adds (full 4*hidden payload gathered then summed on
+            # 110-core BinaryNg) — tracy tick-28 A/B: 364.8 -> 281.3 us/iter
+            # (-23%), PCC unchanged.
+            reduced = ttnn.reduce_scatter(out, dim=3, topology=ttnn.Topology.Linear)
             ttnn.deallocate(out)
-            shape = gathered.shape
-            out = ttnn.slice(gathered, [0, 0, 0, 0], [shape[0], shape[1], shape[2], hidden])
-            for d in range(1, self.num_devices):
-                part = ttnn.slice(gathered, [0, 0, 0, d * hidden], [shape[0], shape[1], shape[2], (d + 1) * hidden])
-                out = ttnn.add(out, part)
-                ttnn.deallocate(part)
-            ttnn.deallocate(gathered)
+            out = ttnn.all_gather(reduced, dim=3, topology=ttnn.Topology.Linear)
+            ttnn.deallocate(reduced)
         return out

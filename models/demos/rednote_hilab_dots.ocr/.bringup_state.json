@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T06:05:07Z",
+  "updated_at": "2026-06-10T06:14:27Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -537,8 +537,16 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/text_attention.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_text_attention.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_text_attention.py",
+          "generated/profiler/reports/2026_06_10_06_12_44/ops_perf_results_2026_06_10_06_12_44.csv"
+        ],
+        "notes": "Tracy-driven single change: o_proj partial-sum all-reduce swapped from sync all_gather(4*hidden) + 3 slices + 3 local adds to ttnn.reduce_scatter(dim=3) + ttnn.all_gather(dim=3) (Topology.Linear, fp32 fabric accumulation) \u2014 the tp-guidance optimization-phase CCL swap. Traced tracy at the production operating point (fp32 [1,1,128,1536] replicated 1x4 mesh, real layers.0 weights, golden rope/causal mask, metal-trace captured+replayed): per-device block kernel time 327.8 -> 247.8 us (-24.4%); CCL 127.3 (all_gather) -> 91.8 us (48.9 reduce_scatter + 42.9 all_gather), BinaryNg 49.7 -> 24.3 us (local adds gone), Slice 25.6 -> 6.9 us. Wall-clock A/B over 200 traced replays 364.8 -> 281.3 us/iter (-22.9%). Top hotspot post-change MatmulDeviceOperation 85.5us 34.5% (QKV/QK^T/PV/o_proj fp32 HiFi4 tiny per-chip shapes 16-48c). KB entries for kind attention reviewed (ttnn_bcast_2 scale-bcast n/a: scale+mask cost 9.8us total; ttnn_eq mask-building n/a host mask; create_qkv_heads idiom already applied) - none applicable, none used. PCC 0.999049 (>0.99, +2e-6 vs sync baseline); composition insurance test_decoder_layer 0.999944 (was 0.999943). traced_ops sidecar regenerated (+reduce_scatter, -local slices/adds). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999049
       },
       "real_weights": {
         "status": "pending",
@@ -893,6 +901,12 @@
       "tick": 27,
       "ts": "2026-06-10T06:05:07Z",
       "action": "device[text_rmsnorm]",
+      "result": "ok"
+    },
+    {
+      "tick": 28,
+      "ts": "2026-06-10T06:14:27Z",
+      "action": "device[text_attention]",
       "result": "ok"
     }
   ],

@@ -9,6 +9,7 @@
   "ttnn.matmul",
   "ttnn.multiply",
   "ttnn.neg",
+  "ttnn.reduce_scatter",
   "ttnn.slice",
   "ttnn.softmax",
   "ttnn.to_string",
