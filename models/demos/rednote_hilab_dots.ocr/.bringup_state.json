@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T20:32:08Z",
+  "updated_at": "2026-06-10T21:05:20Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -858,9 +858,18 @@
         "wer": 0.0
       },
       "perf": {
-        "status": "pending",
+        "status": "done",
         "attempts": 0,
-        "notes": "REDO 4 (precision budget): gate is PCC>=0.99 + WER parity, current 0.9999 is overkill. Spend precision down strategically per stage, one change at a time, e2e parity after each: fp32 residual stream -> bf16; fp32 lm_head path -> bf16 acts/bf8 weights; remaining fp32 rope/QK chain -> bf16 (pre-scaled-Q already tames sinks); attention softmax LAST (drop fp32 only if parity holds incl. near-ties); bf8 weights wherever PCC>=0.99. Target <=8 ms/tok; revert any step that breaks WER 0.0 or PCC<0.99."
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/ocr_model.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/text_attention.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/lm_head.py",
+          "models/demos/rednote_hilab_dots.ocr/PERF_NOTES.md",
+          "models/demos/rednote_hilab_dots.ocr/perf/traced/cpp_device_perf_report_kv_redo4_traced.csv"
+        ],
+        "notes": "REDO 4 complete (precision budget, baseline 10.68 ms/step re-measured): spent PCC headroom in descending bytes-touched order, ONE change at a time, e2e WER gate (5/5 exact vs HF) re-run after EACH step. Kept: (1) bf16 decode residual stream (norms/adds/MLP acts; embedding row is bf16 already); (2a) lm_head weights fp32->bf8b (233->58 MB/chip/step; logits PINNED fp32 out, HiFi4+fp32 acc \u2014 the generation-phase near-tie flip did not reproduce under KV-cache decode, gate 5/5 exact); (2b) lm_head acts bf16; (3) decode rope/QK chain bf16 (pre-scaled Q tames sinks; typecast op deleted, rope add lands in L1 to keep the Blackhole DRAM-align workaround); (4a/4b) down + QKV/o_proj bf16->bf8b \u2014 wall-flat (1-row matmuls dispatch-bound, tick-50 verdict) but parity-neutral, frees ~330 MB/chip. Reverted: bf16 norm gammas (wall 9.41->9.78). Kept fp32 (measured hazards): prefill attention/softmax (Qwen2 +-3122 sink, bf16 core PCC 0.92), lm_head logits + accumulation. Result: 10.68->9.40 ms/step bench, ocr() steady 9.39, traced kernel sum 9.03->8.35 ms (matmul 54.4%, 169 calls/step dispatch floor; CCL 20.6% latency-bound; host ~1 ms). Target <=8 ms/tok NOT met \u2014 dtype lever exhausted; next levers are structural (fuse gate/up, QKV+rope-rot, async CCL, on-device rope). Block PCCs 0.99905/0.99997/0.99994; e2e gate re-passed on final config. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "steady_step_ms": 9.4,
+        "speedup": 1.14
       },
       "decode_strategy": "kv_cache"
     }
@@ -1181,6 +1190,12 @@
     {
       "tick": 52,
       "ts": "2026-06-10T18:51:26Z",
+      "action": "perf[ocr]",
+      "result": "ok"
+    },
+    {
+      "tick": 53,
+      "ts": "2026-06-10T21:05:20Z",
       "action": "perf[ocr]",
       "result": "ok"
     }

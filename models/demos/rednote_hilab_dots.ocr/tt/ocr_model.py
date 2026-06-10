@@ -145,16 +145,17 @@ class TtOCRModel(LightweightModule):
         )
         # Text token embedding (embedding component): bf16 hidden-sharded table.
         self.embedding = TtEmbedding(mesh_device, wl.embedding_weights())
-        # Decoder stack: fp32-mandatory attention ACTIVATION path (Qwen2
-        # attention sink: ±3122 logits live in q/k/softmax, the fp32 core +
-        # fp32 KV cache + HiFi4/fp32-acc stay). Weight STORAGE is bf16
-        # (perf-phase decode-dtype pass): the decode step is DRAM-bound on
-        # weight streaming and the HF checkpoint is itself bf16, so bf16
-        # QKV/o_proj + down storage holds the exact checkpoint values at
-        # half the bytes; gate/up go further to bfloat8_b (block-fp8) —
-        # both steps re-validated against the e2e WER gate (0.0 vs HF,
-        # 5/5 samples exact). down_proj stays bf16 (contraction back into
-        # the residual stream; not re-tried at bf8 — one lever at a time).
+        # Decoder stack precision budget (perf REDO 4; PCC gate 0.99 + e2e
+        # WER parity, one change at a time): prefill keeps the fp32-mandatory
+        # attention ACTIVATION path (Qwen2 attention sink: ±3122 logits in
+        # q/k/softmax — the measured hazard that earns its fp32) and fp32
+        # norms/residual; the DECODE step runs a bf16 residual stream, bf16
+        # rope/QK chain (Q pre-scaled tames the sink before the bf16 SDPA)
+        # and bf16 KV cache. Weight STORAGE: MLP gate/up/down bfloat8_b
+        # (block-fp8; HiFi4 + fp32 dest acc), QKV/o_proj bf16 (exact
+        # bf16-checkpoint values feeding the sink-sensitive prefill chain).
+        # Every step here re-validated against the e2e WER gate (0.0 vs HF,
+        # 5/5 samples exact).
         self.layers = [
             TtDecoderLayer(
                 mesh_device,
@@ -162,22 +163,28 @@ class TtOCRModel(LightweightModule):
                 num_heads=12,
                 num_kv_heads=2,
                 dtype=ttnn.float32,
-                mlp_dtype=ttnn.bfloat16,
-                attn_weight_dtype=ttnn.bfloat16,
+                mlp_dtype=ttnn.bfloat8_b,
+                attn_weight_dtype=ttnn.bfloat8_b,
                 mlp_gate_up_dtype=ttnn.bfloat8_b,
             )
             for i in range(num_text_layers)
         ]
-        # Stack-level final norm (text_rmsnorm component, model.norm).
+        # Stack-level final norm (text_rmsnorm component, model.norm). fp32
+        # TILE gamma kept: bf16 ROW_MAJOR gammas measured WORSE on the bf16
+        # decode rows (9.41 -> 9.78 ms/step, REDO 4 A/B) — reverted.
         self.final_norm = TtTextRMSNorm(
             mesh_device, wl.text_rmsnorm_weights(which="final_norm"), dtype=ttnn.float32, eps=1e-6
         )
-        # Untied vocab projection (lm_head component), vocab-sharded. fp32
-        # weights instead of the block's bf8b default: greedy decode rides on
-        # exact argmax and reduced-precision logits flip near-tie tokens (e2e
-        # showed one subword flip vs HF at bf8b AND one at bf16 — fp32 logits
-        # remove the quantization tie-break entirely); the perf phase owns speed.
-        self.lm_head = TtLMHead(mesh_device, wl.lm_head_weights(), dtype=ttnn.float32)
+        # Untied vocab projection (lm_head component), vocab-sharded. bf8b
+        # weights (perf REDO 4 precision budget): the per-chip 1536->37984
+        # matmul is DRAM weight-streaming bound (fp32 233 MB/chip/step at
+        # 627 us/step — the largest bytes-touched item in the decode step).
+        # The generation-phase near-tie flip seen at bf8b/bf16 under the OLD
+        # full-seq host-argmax pipeline did NOT reproduce under the KV-cache
+        # decode: the e2e WER gate (5/5 samples exact vs HF — every greedy
+        # argmax decision) re-passed on this exact config. HiFi4 + fp32 dest
+        # acc keeps the accumulation exact; logits leave the matmul fp32.
+        self.lm_head = TtLMHead(mesh_device, wl.lm_head_weights(), dtype=ttnn.bfloat8_b)
         # Persistent per-layer fp32 KV caches (decode_strategy=kv_cache):
         # allocated once; prefill refills slots 0..P32-1 each call, decode
         # steps overwrite one slot per token. Buffers persist across calls
@@ -191,8 +198,8 @@ class TtOCRModel(LightweightModule):
         # Decode-trace state (perf phase): persistent per-step input buffers,
         # host-tensor caches, captured trace id + output handle. All lazy.
         self._pt_ids = None  # uint32 [1,1,1,32] RM token-id buffer
-        self._pt_cos = None  # fp32 [1,1,1,qkv_width] fused-rope cos_cat buffer
-        self._pt_sin = None  # fp32 [1,1,1,qkv_width] fused-rope sin_cat buffer
+        self._pt_cos = None  # bf16 [1,1,1,qkv_width] fused-rope cos_cat buffer
+        self._pt_sin = None  # bf16 [1,1,1,qkv_width] fused-rope sin_cat buffer
         self._rope_host = {}  # slot -> (cos,sin) host tiles
         self._pos_host = {}  # slot -> host int32 [1]
         self._decode_trace_id = None
@@ -315,9 +322,12 @@ class TtOCRModel(LightweightModule):
     def _decode_step(self, token: int, slot: int) -> int:
         """One KV-cached token step at cache slot/position ``slot``; returns next token."""
         emb = self._embed_tokens([token])[0]
+        # bf16 residual stream (perf REDO 4 precision budget): the embedding
+        # table is bf16, so the bf16 row holds the exact table values; the
+        # decode residual/norm/MLP stream runs bf16 end to end (gate-checked).
         x = ttnn.from_torch(
             emb.reshape(1, 1, 1, -1).float(),
-            dtype=ttnn.float32,
+            dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -331,6 +341,9 @@ class TtOCRModel(LightweightModule):
             h_next = layer.forward_decode(h, kv, rot_step)
             ttnn.deallocate(h)
             h = h_next
+        # bf16 lm_head acts (perf REDO 4): final norm + vocab matmul consume
+        # the bf16 residual row directly; logits leave the matmul fp32
+        # (HiFi4 + fp32 dest acc) so the greedy argmax sees exact sums.
         normed = self.final_norm(h)
         ttnn.deallocate(h)
         tok = self._lm_head_argmax(normed, 0)
@@ -350,7 +363,7 @@ class TtOCRModel(LightweightModule):
             self._rope_host[slot] = tuple(
                 ttnn.from_torch(
                     t,
-                    dtype=ttnn.float32,
+                    dtype=ttnn.bfloat16,  # bf16 rope/QK chain (perf REDO 4)
                     layout=ttnn.TILE_LAYOUT,
                     mesh_mapper=rep,
                 )
@@ -372,8 +385,8 @@ class TtOCRModel(LightweightModule):
             torch.zeros(1, 1, 1, 32, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, **common
         )
         zeros = torch.zeros(1, 1, 1, attn.qkv_width)  # fused-rope cos/sin rows
-        self._pt_cos = ttnn.from_torch(zeros, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, **common)
-        self._pt_sin = ttnn.from_torch(zeros, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, **common)
+        self._pt_cos = ttnn.from_torch(zeros, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, **common)
+        self._pt_sin = ttnn.from_torch(zeros, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, **common)
 
     def _write_decode_inputs(self, token: int, slot: int):
         """Four small H2D copies into the persistent buffers (the per-step host work)."""
@@ -401,12 +414,15 @@ class TtOCRModel(LightweightModule):
         e = self.embedding.forward(self._pt_ids)  # [1, 1, 32, H] bf16 TILE, replicated
         x = ttnn.slice(e, [0, 0, 0, 0], [1, 1, 1, e.shape[-1]])
         ttnn.deallocate(e)
-        h = ttnn.typecast(x, ttnn.float32)
-        ttnn.deallocate(x)
+        # bf16 residual stream (perf REDO 4): the embedding row IS bf16 —
+        # no typecast; layers carry the bf16 dtype through norms/adds/MLP.
+        h = x
         for layer, kv in zip(self.layers, self.kv_caches):
             h_next = layer.forward_decode(h, kv, (self._pt_cos, self._pt_sin))
             ttnn.deallocate(h)
             h = h_next
+        # bf16 lm_head acts (perf REDO 4): no fp32 re-entry; logits still
+        # leave the vocab matmul fp32 for exact greedy argmax.
         normed = self.final_norm(h)
         ttnn.deallocate(h)
         logits = self.lm_head.forward(normed)  # [1, 1, 1, vocab/N] fp32, vocab-sharded

@@ -79,12 +79,15 @@ class TtLMHead(LightweightModule):
         """x: [1, 1, seq, hidden] TILE_LAYOUT, replicated across the mesh.
 
         Returns: [1, 1, seq, vocab/N] per chip — logits sharded on the vocab
-        dim. Recombine with ``ConcatMeshToTensor(dim=-1)`` on host (or an
+        dim, ALWAYS fp32 (greedy argmax near-tie exactness is independent of
+        the weight storage dtype; HiFi4 + fp32 dest acc accumulate exactly).
+        Recombine with ``ConcatMeshToTensor(dim=-1)`` on host (or an
         ``all_gather`` if a later consumer needs replicated logits on device).
         """
         return ttnn.linear(
             x,
             self.weight,
+            dtype=ttnn.float32,
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

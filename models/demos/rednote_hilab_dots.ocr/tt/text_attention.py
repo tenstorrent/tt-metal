@@ -194,9 +194,11 @@ class TtTextAttention(LightweightModule):
         for h in range(hpd + 1):  # q heads then the single k head; v block stays zero
             s = h * head_dim
             rot_full[s : s + head_dim, s : s + head_dim] = r_head
+        # bf16 storage (perf REDO 4): 0/±1 entries are exact in bf16; the
+        # decode rope/QK chain runs bf16 end to end (Q pre-scaled, gate-checked).
         self.rope_rot = ttnn.from_torch(
             rot_full.reshape(1, 1, self.qkv_width, self.qkv_width),
-            dtype=ttnn.float32,
+            dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -299,12 +301,12 @@ class TtTextAttention(LightweightModule):
         return cos_cat, sin_cat
 
     def prepare_decode_rope(self, position: int, theta: float = 1e6):
-        """Replicated fp32 fused-rope rows (cos_cat, sin_cat) [1,1,1,qkv_width]."""
+        """Replicated bf16 fused-rope rows (cos_cat, sin_cat) [1,1,1,qkv_width]."""
         rows = self.decode_rope_rows(position, theta)
         return tuple(
             ttnn.from_torch(
                 t,
-                dtype=ttnn.float32,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -489,11 +491,17 @@ class TtTextAttention(LightweightModule):
         layout (the old per-tensor permute + interleaved_to_sharded pairs
         are gone).
         """
+        # bf16 rope/QK chain (perf REDO 4 precision budget): the QKV matmul
+        # accumulates in fp32 dest regs (HiFi4) and rounds ONCE to bf16; the
+        # fused rope (0/±1 rotate-half matmul + mul/mul/add) runs bf16 with
+        # Q pre-scaled by 1/sqrt(hd) in the cos/sin rows, so the bf16 SDPA
+        # sees the same ±276-magnitude logits as before. The old fp32 chain
+        # + separate bf16 typecast op are gone (gate-checked, WER 0.0 5/5).
         xqkv = ttnn.linear(
             x_111H,
             self.wqkv,
             bias=self.bqkv,
-            dtype=ttnn.float32,
+            dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
@@ -501,22 +509,21 @@ class TtTextAttention(LightweightModule):
         rot = ttnn.matmul(
             xqkv,
             self.rope_rot,
-            dtype=ttnn.float32,
+            dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
-        roped = ttnn.add(ttnn.multiply(xqkv, cos_cat), ttnn.multiply(rot, sin_cat))
+        # L1, not DRAM, for the heads-decode input: nlp_create_qkv_heads_decode
+        # reads bf16 sub-tile lines (32B) which silently drop ODD head rows
+        # from DRAM on Blackhole (64B DRAM NoC alignment — measured: head 1
+        # of 3 comes back zero from a DRAM input, correct from L1).
+        roped_bf = ttnn.add(
+            ttnn.multiply(xqkv, cos_cat),
+            ttnn.multiply(rot, sin_cat),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
         ttnn.deallocate(xqkv)
         ttnn.deallocate(rot)
-
-        # bf16 boundary for the fused decode kernels (rope above is fp32
-        # exact; q is already pre-scaled by 1/sqrt(hd) via the rope rows).
-        # L1, not DRAM: nlp_create_qkv_heads_decode reads bf16 sub-tile
-        # lines (32B) which silently drop ODD head rows from DRAM on
-        # Blackhole (64B DRAM NoC alignment — measured: head 1 of 3 comes
-        # back zero from a DRAM input, correct from L1).
-        roped_bf = ttnn.typecast(roped, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(roped)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
             roped_bf,
             num_heads=self.heads_per_device,

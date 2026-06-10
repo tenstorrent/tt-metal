@@ -386,3 +386,69 @@ from the slot tensor.
 
 Tracy artifact: `perf/traced/cpp_device_perf_report_kv_redo3_traced.csv`
 (traced dev0 rows, replay sessions 1-10/29, final config).
+
+---
+
+# Perf REDO 4 — precision budget (tick 53)
+
+The parity gate is PCC >= 0.99 + e2e WER 0.0; the decode step was running
+0.999+ everywhere — headroom paid for in DRAM traffic and kernel time.
+This pass spends it down in descending bytes-touched order, ONE change at
+a time, e2e WER gate (5 samples vs HF) re-run after each; baseline
+re-measured 10.68 ms/step (bench --traced --bench-replays 200).
+
+| step (decode path) | gate | bench ms/step |
+|---|---|---|
+| 0. baseline (tick-52 config) | — | 10.68 |
+| 1. fp32 residual stream -> bf16 (norms/adds/MLP acts; lm_head re-entered fp32) | PASS 5/5 | — |
+| 2a. lm_head weights fp32 -> bf8b (233 -> 58 MB/chip/step; logits pinned fp32 out) | PASS 5/5 | — |
+| 2b. lm_head acts -> bf16 (drop fp32 re-entry; logits stay fp32) | PASS 5/5 | — |
+| 3. rope/QK chain -> bf16 (xqkv/rot/cos/sin; typecast op deleted; add lands in L1) | PASS 5/5 | 9.41 |
+| 4a. down_proj weights bf16 -> bf8b | PASS 5/5 | flat |
+| 4b. QKV/o_proj weights bf16 -> bf8b | PASS 5/5 | 9.41 |
+| (revert) norm gammas bf16 — wall REGRESSED 9.41 -> 9.78, reverted | PASS 5/5 | 9.78 -> 9.40 |
+
+Kept fp32 (measured hazards, recorded): prefill attention activations +
+softmax (Qwen2 ±3122 sink — bf16 core PCC ~0.92 on file); lm_head logits
+output + fp32 dest acc (greedy argmax near-ties); decode-step accumulation
+(HiFi4/HiFi2 + fp32 dest acc everywhere). 4a/4b were wall-flat (1-row
+matmuls dispatch-bound, tick-50 verdict) but kept: parity-neutral and
+free ~330 MB/chip.
+
+| metric | tick-52 | REDO 4 | speedup |
+|---|---|---|---|
+| steady_step_ms (bench 200 replays) | 10.68 | 9.40 | 1.14x |
+| ocr() steady_step_ms | 10.64 | 9.39 | 1.13x |
+| total_ms (gate doc, 11 steps) | 237.8 | 226.3 | 1.05x |
+| traced kernel sum / step (dev0, per-GCC mean, 29 sessions) | 9.03 ms | 8.35 ms | 1.08x |
+
+Top-10 traced (final config, per-GCC mean over 29 replay sessions, dev0):
+
+| us/replay | % | calls | op |
+|---|---|---|---|
+| 4544 | 54.4% | 169 | MatmulDeviceOperation |
+| 1268 | 15.2% | 58 | AllGatherDeviceOperation |
+| 1045 | 12.5% | 57 | LayerNormDeviceOperation |
+| 447 | 5.4% | 28 | ReduceScatterDeviceOperation |
+| 428 | 5.1% | 168 | BinaryNgDeviceOperation |
+| 155 | 1.9% | 56 | PagedUpdateCacheDeviceOperation |
+| 116 | 1.4% | 28 | SdpaDecodeDeviceOperation |
+| 80 | 1.0% | 28 | UnaryDeviceOperation |
+| 58 | 0.7% | 1 | UntilizeDeviceOperation |
+| 57 | 0.7% | 28 | NLPCreateQKVHeadsDecodeDeviceOperation |
+
+Block PCC on the touched blocks: text_attention 0.999050, lm_head
+0.999969, decoder_layer 0.999944 — all >= 0.99 with margin.
+
+Target <= 8 ms/tok NOT met (9.40): the dtype lever is now exhausted —
+matmul 54% at 169 calls/step is dispatch-latency floor, CCL 20% is
+latency-bound, host floor ~1 ms. Remaining levers (next pass, all
+structural): fuse gate/up into one wide matmul and QKV+rope-rot into one
+(-56 dispatches/step), async CCL / all-reduce primitive for the MLP
+all-reduce, on-device rope-row compute from the slot tensor to drop the
+cos/sin H2D copies. LayerNorm 12.5% on bf16 rows runs the fp32-gamma slow
+path; bf16 gammas measured WORSE at wall (dispatch) — interleaved-norm
+kernel work, not config.
+
+Tracy artifact: `perf/traced/cpp_device_perf_report_kv_redo4_traced.csv`
+(traced dev0 rows + names, final config, replay sessions 1-10/29).
