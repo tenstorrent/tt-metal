@@ -88,30 +88,29 @@ inline void _llk_pack_(const std::uint32_t start_math_dest_tile_idx, const std::
     // be programmable with users offset idx
 
     // Set Source (math destination) counter to face index offset
-    // Set dst (l1 output) counter to face index offset
-    if (tensor_shape.total_num_faces() == NUM_FACES) // Using full tiles
-    {
-        TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, start_math_dest_tile_idx);
-        TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, start_l1_tile_idx);
-    }
-    else // Using tiny-tiles
+    // Set Dest (l1 output) counter to face index offset
+    std::uint32_t math_dest_tile_idx = start_math_dest_tile_idx;
+    std::uint32_t l1_tile_idx        = start_l1_tile_idx;
+
+    if (tensor_shape.total_num_faces() != NUM_FACES) // using tiny-tiles
     {
         // For face_r_dim >= 8, dest is dense with tiles. For face_r_dim < 8, dest is sparse and tiles are placed every 8 rows.
         // HW defined tiny-tile is registered with 1 face. To map to SW defined tile with different faces, the indices must be multiplied to get the correct
         // offset.
         if (tensor_shape.face_r_dim < (FACE_R_DIM >> 1))
         {
-            TT_SET_SRC_TILE_FACE_ROW_IDX(
-                p_set_inc_sel::TILE_SEL,
-                p_pacr::PACK0,
-                start_math_dest_tile_idx * tensor_shape.total_num_faces() * (FACE_R_DIM >> (rows_log2(tensor_shape.face_r_dim) + 1)));
+            math_dest_tile_idx *= tensor_shape.total_num_faces() * (FACE_R_DIM >> (rows_log2(tensor_shape.face_r_dim) + 1));
         }
         else
         {
-            TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, start_math_dest_tile_idx * tensor_shape.total_num_faces());
+            math_dest_tile_idx *= tensor_shape.total_num_faces();
         }
-        TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, start_l1_tile_idx * tensor_shape.total_num_faces());
+        l1_tile_idx *= tensor_shape.total_num_faces();
     }
+
+    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, math_dest_tile_idx);
+    TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, l1_tile_idx);
+
     // Runs MOP
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
 }
