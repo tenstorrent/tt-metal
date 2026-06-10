@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T21:16:43Z",
+  "updated_at": "2026-06-10T21:29:25Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -44,9 +44,16 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
+        "status": "done",
         "attempts": 0,
-        "notes": "OCCUPANCY REDO: per the new occupancy+convergence contract \u2014 query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid"
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_patch_embed.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_vision_patch_embed.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_patch_embed.traced_ops.json",
+          "generated/profiler/reports/2026_06_10_21_28_03/ops_perf_results_2026_06_10_21_28_03.csv"
+        ],
+        "notes": "OCCUPANCY REDO complete (tracy under --traced, production fp32 [896,588] on 1x4 BH mesh; queried grid 11x10=110 cores). Baseline: matmul 53.5us@100/110 cores (hardcoded 10x10 grid) + interleaved rms_norm 36.8us@28/110 (25% occupancy, row-per-core fallback) = 90.3us/device kernel time. Changes (one per measurement): (1) projection matmul -> 2D-mcast program config writing BLOCK_SHARDED L1 output on the max divisible grid 8x7=56 cores (N_tiles=48 -> gx<=8, M_tiles=28 -> gy<=7), in0_block_w=full K (19 tiles; beat ibw=1 by 8% measured); (2) sharded rms_norm consumes the shard via LayerNormShardedMultiCoreProgramConfig (block_h=4, block_w=6, subblock_w=3): 36.8->12.3us, 3x; (3) L1-resident handoff per batch-1 contract: sharded_to_interleaved -> L1 instead of DRAM (85.8->76.7us/iter traced replay A/B); (4) explicit HiFi4+fp32_dest_acc+packer_l1_acc on both program-config ops \u2014 required: without it the 42-block tower PCC fell to 0.989274 (<0.99); with it tower PCC 0.990769 > pre-change 0.990121 and block PCC 0.999998 (was 0.999957). Final: 67.3us/device (-25%); traced-replay wall 104.2->~77us/iter. Top-5 occupancy: Matmul 44.8us@56/110 (51%, share 67%), LayerNorm 12.3us@56/110 (51%, 18%), ShardedToInterleaved 10.2us@56/110 (51%, 15%). <70% occupancy justified by measured rejection: 8x7 is the max tile-divisible shard grid; the 110-core interleaved alternative (CoreGrid 11x10) measured SLOWER (matmul 53.5us, LN 36.8us); M-padding 896->1120 for gy=10 rejected by analysis (pad+slice-back data movement cancels the ~5us matmul gain and changes the block contract). Grid derived from queried compute_with_storage_grid_size with divisibility fallback (PCC test 784-row/bf16 path exercises 8x5=40-core grid, PCC 0.999998). out_subblock constraint found: out_subblock_h>1 requires out_subblock_w==per_core_N (TT_FATAL). KB ttnn_fold reviewed \u2014 patchify already collapsed host-side onto the linear; not applicable. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999998
       },
       "real_weights": {
         "status": "done",
@@ -1092,6 +1099,12 @@
       "tick": 53,
       "ts": "2026-06-10T21:05:20Z",
       "action": "perf[ocr]",
+      "result": "ok"
+    },
+    {
+      "tick": 54,
+      "ts": "2026-06-10T21:29:25Z",
+      "action": "device[vision_patch_embed]",
       "result": "ok"
     }
   ],

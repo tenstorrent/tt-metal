@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T21:16:43Z
+**Updated:** 2026-06-10T21:29:25Z
 
 ## Block Status
 
@@ -13,7 +13,7 @@
 | vision_patch_embed | reference | done | 1.000000 | 0 | Conv2d 14x14 s14 3->1536 + RMSNorm, flat-patch input like HF |
 | vision_patch_embed | ttnn | done | 0.999957 | 0 | Conv2d(14x14 s14)==linear over pre-flattened patches + ttnn.rms_norm eps=1e-5; weights replicated on 1x4 mesh per parallelism plan (placement=replicate); guard ok (lint 0, kernels ok, no new host ops). KB injection skipped: kb_entries_for_block crashed on malformed record (fused_op list, lib/kb.py _tokens). |
 | vision_patch_embed | debug | n/a | — | 0 |  |
-| vision_patch_embed | optimization | pending | — | 0 | OCCUPANCY REDO: per the new occupancy+convergence contract — query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid |
+| vision_patch_embed | optimization | done | 0.999998 | 0 | OCCUPANCY REDO complete (tracy under --traced, production fp32 [896,588] on 1x4 BH mesh; queried grid 11x10=110 cores). Baseline: matmul 53.5us@100/110 cores (hardcoded 10x10 grid) + interleaved rms_norm 36.8us@28/110 (25% occupancy, row-per-core fallback) = 90.3us/device kernel time. Changes (one per measurement): (1) projection matmul -> 2D-mcast program config writing BLOCK_SHARDED L1 output on the max divisible grid 8x7=56 cores (N_tiles=48 -> gx<=8, M_tiles=28 -> gy<=7), in0_block_w=full K (19 tiles; beat ibw=1 by 8% measured); (2) sharded rms_norm consumes the shard via LayerNormShardedMultiCoreProgramConfig (block_h=4, block_w=6, subblock_w=3): 36.8->12.3us, 3x; (3) L1-resident handoff per batch-1 contract: sharded_to_interleaved -> L1 instead of DRAM (85.8->76.7us/iter traced replay A/B); (4) explicit HiFi4+fp32_dest_acc+packer_l1_acc on both program-config ops — required: without it the 42-block tower PCC fell to 0.989274 (<0.99); with it tower PCC 0.990769 > pre-change 0.990121 and block PCC 0.999998 (was 0.999957). Final: 67.3us/device (-25%); traced-replay wall 104.2->~77us/iter. Top-5 occupancy: Matmul 44.8us@56/110 (51%, share 67%), LayerNorm 12.3us@56/110 (51%, 18%), ShardedToInterleaved 10.2us@56/110 (51%, 15%). <70% occupancy justified by measured rejection: 8x7 is the max tile-divisible shard grid; the 110-core interleaved alternative (CoreGrid 11x10) measured SLOWER (matmul 53.5us, LN 36.8us); M-padding 896->1120 for gy=10 rejected by analysis (pad+slice-back data movement cancels the ~5us matmul gain and changes the block contract). Grid derived from queried compute_with_storage_grid_size with divisibility fallback (PCC test 784-row/bf16 path exercises 8x5=40-core grid, PCC 0.999998). out_subblock constraint found: out_subblock_h>1 requires out_subblock_w==per_core_N (TT_FATAL). KB ttnn_fold reviewed — patchify already collapsed host-side onto the linear; not applicable. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | vision_patch_embed | real_weights | done | 0.999981 | 0 | Consolidated tt/weight_loader.py created (pure-PyTorch, prefix-filtered safetensors load with memoized cache, count_params helper, __main__ self-test: proj.weight [1536,3,14,14], proj.bias [1536], norm.weight [1536], 906240 params). Stage-1 parametric tests/test_real_hf_weights.py runs the block at the production operating point (fp32, real preprocessed-image patches from golden input, 1x4 mesh replicated) vs the pure-PyTorch reference with the same real weights: PCC 0.999981 (>0.99). Block forward untouched; guard ok (lint 0, params_loaded 906240>0). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | vision_rmsnorm | reference | done | 1.000000 | 0 | matches HF RMSNorm eps=1e-5, fp32 norm then scale |
 | vision_rmsnorm | ttnn | done | 0.999982 | 0 | Fused ttnn.rms_norm eps=1e-5 with [1,1,dim//32,32] ROW_MAJOR gamma per reference_impl qwen25_vl/tt/vision_rmsnorm.py; KB entry ttnn_pow cited (pow/mean/rsqrt/mul chain fused into ttnn.rms_norm). Weight replicated on 1x4 mesh per parallelism plan (placement=replicate); replicated output compared single-device vs golden (real blocks.0.norm1 weight). Guard ok (lint 0, kernels ok, no new host ops). |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 44 (2026-06-10T08:13:43Z): device[lm_head] — ok
 - tick 45 (2026-06-10T08:30:56Z): generation[ocr] — fail
 - tick 46 (2026-06-10T08:44:49Z): generation[ocr] — ok
 - tick 47 (2026-06-10T09:08:28Z): perf[ocr] — ok
@@ -94,6 +93,7 @@
 - tick 51 (2026-06-10T11:16:02Z): device[vision_transformer] — ok
 - tick 52 (2026-06-10T18:51:26Z): perf[ocr] — ok
 - tick 53 (2026-06-10T21:05:20Z): perf[ocr] — ok
+- tick 54 (2026-06-10T21:29:25Z): device[vision_patch_embed] — ok
 
 ## Host-Resident Exceptions
 
