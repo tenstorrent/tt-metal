@@ -16,7 +16,7 @@ struct SDPABackwardQParams {
 
 struct SDPABackwardQInputs {
     const ttnn::Tensor& grad_output;               // Gradient w.r.t. output
-    const ttnn::Tensor& attn_output;               // sdap forward output (needed for gradients)
+    const ttnn::Tensor& attn_output;               // sdpa forward output (needed for gradients)
     const ttnn::Tensor& query;                     // Input Q (needed for gradients)
     const ttnn::Tensor& key;                       // Input K (needed for gradients)
     const ttnn::Tensor& value;                     // Input V (needed for gradients)
