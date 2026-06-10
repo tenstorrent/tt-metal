@@ -133,7 +133,8 @@ def validate(path: Path) -> bool:
             sku = device_info.get("sku")
             card_type = device_info.get("card_type")
             if not sku:
-                print("  WARN  device_info['sku'] is absent — SKU was not passed to enrichment script")
+                print("  FAIL  device_info['sku'] is absent — SKU was not passed to enrichment script")
+                passed = False
             else:
                 print(f"  OK    device_info['sku'] = {sku!r}")
             if not card_type:
