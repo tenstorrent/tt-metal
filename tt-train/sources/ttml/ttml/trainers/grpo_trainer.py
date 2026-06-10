@@ -190,9 +190,9 @@ def upload_micro_advantages(adv_np: np.ndarray, mapper: Any, num_devices: int) -
     Returns a ``ttnn.Tensor`` of global shape ``[mb, 1]`` (per device
     ``[mb_local, 1]``), ready to broadcast-multiply the per-completion loss.
     """
-mb = adv_np.shape[0]
-assert mb % num_devices == 0, f"micro-batch size ({mb}) must be divisible by num_devices ({num_devices})"
-mb_local = mb // num_devices
+    mb = adv_np.shape[0]
+    assert mb % num_devices == 0, f"micro-batch size ({mb}) must be divisible by num_devices ({num_devices})"
+    mb_local = mb // num_devices
     adv_4d = adv_np.reshape(mb, 1, 1, 1).astype(np.float32)
     adv_ttml = ttml.autograd.Tensor.from_numpy(adv_4d, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
     adv_rm = ttnn.to_layout(adv_ttml.get_value(), ttnn.Layout.ROW_MAJOR)
@@ -405,15 +405,15 @@ class GRPOTrainer:
                 f"by the number of devices ({num_devices}) so each micro-batch shards evenly along axis 0"
             )
 
-total_prompts = min(grpo_cfg.prompts_to_train, len(self.dataset))
-if total_prompts % grpo_cfg.prompts_per_batch != 0:
-    raise ValueError(
-        f"prompts_to_train ({total_prompts}) must be divisible by prompts_per_batch ({grpo_cfg.prompts_per_batch}) "
-        "to avoid a ragged final batch that can break micro-batch sharding"
-    )
-dataset = self.dataset.select(range(total_prompts))
-prompts = [tokenizer.encode(row["prompt"]) for row in dataset]
-extra_columns = {k: list(dataset[k]) for k in dataset.column_names if k != "prompt"}
+        total_prompts = min(grpo_cfg.prompts_to_train, len(self.dataset))
+        if total_prompts % grpo_cfg.prompts_per_batch != 0:
+            raise ValueError(
+                f"prompts_to_train ({total_prompts}) must be divisible by prompts_per_batch ({grpo_cfg.prompts_per_batch}) "
+                "to avoid a ragged final batch that can break micro-batch sharding"
+            )
+        dataset = self.dataset.select(range(total_prompts))
+        prompts = [tokenizer.encode(row["prompt"]) for row in dataset]
+        extra_columns = {k: list(dataset[k]) for k in dataset.column_names if k != "prompt"}
 
         num_batches = 0
         num_steps = 0

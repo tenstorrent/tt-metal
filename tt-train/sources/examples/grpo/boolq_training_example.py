@@ -80,7 +80,7 @@ def parse_args():
     parser.add_argument(
         "--seed",
         type=int,
-        default=None,
+        default=42,
         help="RNG seed for reproducible runs. If omitted, seed defaults to 42.",
     )
     # Accept (and ignore) extra flags passed by launch scripts (e.g. --model,
@@ -91,8 +91,6 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    if args.seed is None:
-        args.seed = 42
     seed_everything(args.seed)
 
     model_id = "meta-llama/Llama-3.2-1B-Instruct"
