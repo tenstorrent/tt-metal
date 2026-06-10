@@ -3217,50 +3217,10 @@ def _main(activations, weights):
         dtype=ttnn.DataType.BFLOAT16,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
-    # Restore the original cos/sin source for the remaining RoPE sites that still
-    # use the addcmul-style chain (sites 3-6 will be migrated incrementally).
-    ttnn_embedding_1 = ttnn.embedding(
-        ttnn_to_layout_107,
-        ce_cache__main["main_const_eval_13"],
-        padding_idx=None,
-        layout=ttnn.Layout.TILE,
-        dtype=ttnn.DataType.BFLOAT16,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
+    # E_attn iter2: removed dead legacy cos/sin embedding chain (embedding_1 →
+    # reshape_24 → slice_74/76 → typecast_45/46). All 6 RoPE sites use the doubled
+    # _rope_cos_pos/_rope_sin_pos tables; typecast_45/46 had no consumer.
     ttnn.deallocate(ttnn_to_layout_107, False)
-    ttnn_reshape_24 = ttnn.reshape(
-        ttnn_embedding_1,
-        [1, 1, 1, 32, 2],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_embedding_1, False)
-    ttnn_slice_74 = ttnn.slice(
-        ttnn_reshape_24,
-        [0, 0, 0, 0, 0],
-        [1, 1, 1, 32, 1],
-        [1, 1, 1, 1, 1],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn_typecast_45 = ttnn.typecast(
-        ttnn_slice_74,
-        ttnn.DataType.FLOAT32,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_slice_74, False)
-    ttnn_slice_76 = ttnn.slice(
-        ttnn_reshape_24,
-        [0, 0, 0, 0, 1],
-        [1, 1, 1, 32, 2],
-        [1, 1, 1, 1, 1],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_reshape_24, False)
-    ttnn_typecast_46 = ttnn.typecast(
-        ttnn_slice_76,
-        ttnn.DataType.FLOAT32,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_slice_76, False)
     # [1, 64] → [1, 1, 1, 64] for per-site repeat to whatever seq_len each site needs.
     _rope_cos_pos_4d = ttnn.reshape(
         _rope_cos_pos,
@@ -4718,10 +4678,6 @@ def _main(activations, weights):
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
     ttnn.deallocate(_rope5_out, False)
-    # Final dealloc of the now-unused cos/sin source tensors (originally consumed
-    # by the addcmul chain; with all 6 sites migrated, these can be released).
-    ttnn.deallocate(ttnn_typecast_45, False)
-    ttnn.deallocate(ttnn_typecast_46, False)
     ttnn_to_memory_config_5 = ttnn.to_memory_config(
         ttnn_reshape_104,
         ttnn.MemoryConfig(
