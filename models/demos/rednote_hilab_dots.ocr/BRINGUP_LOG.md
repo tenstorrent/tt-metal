@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T03:13:53Z
+**Updated:** 2026-06-10T03:20:47Z
 
 ## Block Status
 
@@ -26,7 +26,7 @@
 | vision_attention | optimization | pending | — | 0 |  |
 | vision_attention | real_weights | pending | — | 0 |  |
 | vision_mlp | reference | done | 1.000000 | 0 | SwiGLU fc1/fc3->fc2 no bias |
-| vision_mlp | ttnn | pending | — | 0 |  |
+| vision_mlp | ttnn | done | 0.999999 | 0 | SwiGLU fc2(silu(fc1(x))*fc3(x)) 1536->4224->1536 no bias: two sibling ttnn.linear branches + explicit ttnn.silu + ttnn.mul + down ttnn.linear (KB ttnn_silu_2 cited; KB ttnn_mul_1 fused input_tensor_a_activations=[SILU] variant deferred to optimization phase since the mlp guard requires a traced silu/gelu kernel). HiFi4+fp32-acc; real blocks.0.mlp weights, replicated on 1x4 mesh per parallelism plan (placement=replicate), single-device copy vs golden. Guard ok (lint 0, kernels ok, no new host ops). |
 | vision_mlp | debug | n/a | — | 0 |  |
 | vision_mlp | optimization | pending | — | 0 |  |
 | vision_mlp | real_weights | pending | — | 0 |  |
@@ -92,6 +92,7 @@
 - tick 6 (2026-06-10T02:52:24Z): device[vision_patch_embed] — ok
 - tick 7 (2026-06-10T02:59:42Z): device[vision_rmsnorm] — ok
 - tick 8 (2026-06-10T03:13:53Z): device[vision_attention] — ok
+- tick 9 (2026-06-10T03:20:47Z): device[vision_mlp] — ok
 
 ## Host-Resident Exceptions
 

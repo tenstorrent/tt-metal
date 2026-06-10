@@ -1,0 +1,6 @@
+[
+  "ttnn.deallocate",
+  "ttnn.linear",
+  "ttnn.multiply",
+  "ttnn.silu"
+]
