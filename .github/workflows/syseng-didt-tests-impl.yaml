@@ -1,4 +1,4 @@
-name: "[internal] syseng unit tests impl"
+name: "[internal] syseng didt tests impl"
 
 on:
   workflow_call:
@@ -22,7 +22,7 @@ jobs:
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/syseng_unit_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/syseng_didt_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -41,7 +41,7 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "unit"
+            "integration"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
         run: |
@@ -50,7 +50,7 @@ jobs:
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
 
-  syseng-unit-tests:
+  syseng-didt-tests:
     needs: load-test-matrix
     strategy:
       fail-fast: false

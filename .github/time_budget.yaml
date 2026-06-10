@@ -289,7 +289,7 @@ umd:
     wh_galaxy_perf: 35
 
 syseng:
-  unit:
+  integration:
     wh_n150_civ2: 34
     wh_n300_civ2: 36
     bh_p100: 18

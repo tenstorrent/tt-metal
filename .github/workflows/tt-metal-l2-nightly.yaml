@@ -323,13 +323,13 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  syseng-unit-tests:
+  syseng-didt-tests:
     needs: [ build-artifact, generate-arch-matrix]
     if: |
       (github.event_name == 'schedule' || inputs.run_didt_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
     secrets: inherit
-    uses: ./.github/workflows/syseng-unit-tests-impl.yaml
+    uses: ./.github/workflows/syseng-didt-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
