@@ -5,10 +5,11 @@ on:
     - cron: "0 * * * *"  # top of every hour; each digest's slot is gated by its schedule
   workflow_dispatch:
     inputs:
-      force:
-        description: "run every team now, ignoring their schedule"
-        type: boolean
-        default: false
+      digest:
+        description: "which digest to run now (manual runs ignore the schedule and skip Slack)"
+        type: choice
+        default: all
+        options: [all, disaggregated-prefill]  # keep in sync with the matrix below
 
 permissions:
   actions: read
@@ -41,15 +42,21 @@ jobs:
         with:
           python-version: "3.12"
 
+      # Digest selection lives here, not on the job's `if`: the `matrix` context
+      # is unavailable in a job-level `if` (evaluated before matrix expansion).
+      # On manual dispatch, run only the selected digest; scheduled runs cover all.
+      # Non-selected legs skip this step, so the steps below (gated on `produced`)
+      # skip too.
       - name: Generate digest
         id: digest
+        if: github.event_name != 'workflow_dispatch' || inputs.digest == 'all' || inputs.digest == matrix.name
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 .github/scripts/ci_digest.py --out-dir out \
             --name "${{ matrix.name }}" \
             --schedule "${{ matrix.schedule }}" \
-            --workflows ${{ join(matrix.workflows, ' ') }} ${{ inputs.force && '--force' || '' }}
+            --workflows ${{ join(matrix.workflows, ' ') }} ${{ github.event_name == 'workflow_dispatch' && '--force' || '' }}
           shopt -s nullglob
           files=(out/ci-digest-*.md)
           if [ ${#files[@]} -gt 0 ]; then
@@ -67,8 +74,16 @@ jobs:
           name: ci-digest-${{ matrix.name }}-${{ github.run_id }}
           path: out/
 
+      # Single source of the Slack gate: post only for scheduled runs of a
+      # digest that produced output and has a channel. Both Slack steps below
+      # key off this step's `go` output (empty when this step is skipped).
+      - name: Gate Slack notification
+        id: notify
+        if: steps.digest.outputs.produced == 'true' && matrix.slack_channel != '' && github.event_name != 'workflow_dispatch'
+        run: echo "go=true" >> "$GITHUB_OUTPUT"
+
       - name: Resolve this job's id
-        if: steps.digest.outputs.produced == 'true' && matrix.slack_channel != ''
+        if: steps.notify.outputs.go == 'true'
         id: jobid
         uses: tenstorrent/tt-github-actions/.github/actions/job_id@main
         with:
@@ -77,7 +92,7 @@ jobs:
       # #summary-<job_id> anchors directly to this job's step summary on the
       # run-attempt page; if the anchor ever drifts it still opens the page.
       - name: Notify Slack
-        if: steps.digest.outputs.produced == 'true' && matrix.slack_channel != ''
+        if: steps.notify.outputs.go == 'true'
         uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
         with:
           method: chat.postMessage
