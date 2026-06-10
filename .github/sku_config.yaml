@@ -194,19 +194,13 @@ skus:
       - pipeline-perf
       - in-service
 
-  bh_deskbox:
-    runs_on:
-      - BH-DeskBox
-      - pipeline-functional
-      - in-service
-
   bh_loudbox_civ2_viommu:
     runs_on:
       - tt-ubuntu-2204-BH-LoudBox-viommu-stable
 
   bh_quietbox_2:
     runs_on:
-      - BH-QB-GE
+      - BH-Quietbox-2
       - pipeline-perf
       - in-service
 
@@ -239,3 +233,15 @@ skus:
       match_labels:
         exabox.tenstorrent.com/purpose: ci-metal
         exabox.tenstorrent.com/superpod: A29
+
+  # Synthetic CPU SKUs for ttsim simulator jobs. Tests using these SKUs run on
+  # ubuntu-latest; the impl is expected to invoke .github/actions/setup-ttsim
+  # gated on `startsWith(sku, 'sim_')` to download the matching libttsim_<arch>.so
+  # and export the simulator env vars. The arch suffix on the SKU name selects
+  # the ttsim binary (sim_wormhole_b0 → libttsim_wh.so, sim_blackhole → libttsim_bh.so).
+  sim_wormhole_b0:
+    runs_on:
+      - ubuntu-latest
+  sim_blackhole:
+    runs_on:
+      - ubuntu-latest

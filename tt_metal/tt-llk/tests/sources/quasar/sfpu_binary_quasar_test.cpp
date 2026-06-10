@@ -80,8 +80,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     DataFormat src_format = static_cast<DataFormat>(formats.math);
     _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false>(src_format, src_format);
 
-    const std::uint32_t num_sfpu_iterations = params.TEST_FACE_R_DIM / ckernel::math::SFP_ROWS;
-
     _llk_math_eltwise_sfpu_init_();
 
     constexpr int tile_stride = NUM_FACES * FACE_R_DIM;
@@ -90,23 +88,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int out_offset      = params.DST_TILE_IDX * tile_stride;
 
 #if defined(SFPU_INT_OP_MUL)
-    _llk_math_eltwise_binary_sfpu_params_<false>(
-        _mul_int32_<false, 8>, 0, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
+    _llk_math_eltwise_binary_sfpu_params_(_mul_int32_<false, 8>, in0_offset, in1_offset, out_offset);
 #elif defined(SFPU_INT_OP_GT)
-    _llk_math_eltwise_binary_sfpu_params_<false>(
-        calculate_binary_comp_int32<false, 8, SfpuType::gt>, 0, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
+    _llk_math_eltwise_binary_sfpu_params_(
+        calculate_binary_comp_int32<false, 8, SfpuType::gt>, in0_offset, in1_offset, out_offset);
 #elif defined(SFPU_INT_OP_LT)
-    _llk_math_eltwise_binary_sfpu_params_<false>(
-        calculate_binary_comp_int32<false, 8, SfpuType::lt>, 0, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
+    _llk_math_eltwise_binary_sfpu_params_(
+        calculate_binary_comp_int32<false, 8, SfpuType::lt>, in0_offset, in1_offset, out_offset);
 #elif defined(SFPU_INT_OP_LE)
-    _llk_math_eltwise_binary_sfpu_params_<false>(
-        calculate_binary_comp_int32<false, 8, SfpuType::le>, 0, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
+    _llk_math_eltwise_binary_sfpu_params_(
+        calculate_binary_comp_int32<false, 8, SfpuType::le>, in0_offset, in1_offset, out_offset);
 #elif defined(SFPU_INT_OP_GE)
-    _llk_math_eltwise_binary_sfpu_params_<false>(
-        calculate_binary_comp_int32<false, 8, SfpuType::ge>, 0, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
+    _llk_math_eltwise_binary_sfpu_params_(
+        calculate_binary_comp_int32<false, 8, SfpuType::ge>, in0_offset, in1_offset, out_offset);
 #else
-    _llk_math_eltwise_binary_sfpu_params_<false>(
-        _add_int_<false, 8, 0, false>, 0, src_format, num_sfpu_iterations, in0_offset, in1_offset, out_offset);
+    _llk_math_eltwise_binary_sfpu_params_(
+        _add_int_<false, 8, DataFormat::Int32, 0, false>, in0_offset, in1_offset, out_offset);
 #endif
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();

@@ -7,39 +7,37 @@
 #include <cstdint>
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include <tt-metalium/constants.hpp>
 #include "api/debug/assert.h"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
 
 template <uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {
     return ((512 / num_readers) * (1024 + 128)) / tile_bytes;
 }
 
-void fill_zeros_async(uint32_t write_addr, uint32_t tile_bytes) {
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    // Fill tile with zeros
-    uint32_t bytes_left = tile_bytes;
-    for (;;) {
-        uint32_t read_size = bytes_left > MEM_ZEROS_SIZE ? MEM_ZEROS_SIZE : bytes_left;
-        noc_async_read(zeros_noc_addr, write_addr, read_size);
-        write_addr += read_size;
-        bytes_left -= read_size;
-        if (bytes_left == 0) {
-            break;
-        }
-    }
+inline void fill_zeros_async(const Noc& noc, uint32_t cb_id, uint32_t tile_bytes, uint32_t offset_bytes = 0) {
+    CircularBuffer cb(cb_id);
+    noc.async_write_zeros(cb, tile_bytes, {.offset_bytes = offset_bytes});
 }
 
 template <uint32_t tile_bytes, bool wait_for_barrier = true>
-void fill_tile_zeros(uint32_t cb_id, uint32_t tile_id) {
+void fill_tile_zeros(const Noc& noc, uint32_t cb_id, uint32_t tile_id) {
     static_assert(tile_bytes % 4 == 0, "tile_bytes must be a multiple of 4");
 
-    uint32_t write_addr = get_write_ptr(cb_id) + tile_id * tile_bytes;
-    fill_zeros_async(write_addr, tile_bytes);
+    fill_zeros_async(noc, cb_id, tile_bytes, tile_id * tile_bytes);
     if (wait_for_barrier) {
-        noc_async_read_barrier();
+        noc.write_zeros_l1_barrier();
     }
+}
+
+// Convenience overload for callers that don't already have a Noc instance in scope.
+template <uint32_t tile_bytes, bool wait_for_barrier = true>
+void fill_tile_zeros(uint32_t cb_id, uint32_t tile_id) {
+    Noc noc;
+    fill_tile_zeros<tile_bytes, wait_for_barrier>(noc, cb_id, tile_id);
 }
 
 // capacity_t = 0 means "no wrap" (legacy / unbounded cache).  Nonzero means the cache
@@ -150,6 +148,7 @@ uint32_t read_chunk_with_padding(
     uint32_t outer_ptr_stride = transpose ? tile_bytes : dst_cols * tile_bytes;
     uint32_t inner_ptr_stride = transpose ? tile_bytes * dst_rows : tile_bytes;
 
+    Noc noc;
     uint32_t barrier_count = 0;
     for (uint32_t row = 0; row < src_rows; ++row) {
         uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
@@ -173,10 +172,13 @@ uint32_t read_chunk_with_padding(
                 continue;
             }
             uint32_t tile_id = transpose ? col * dst_rows + row : row * dst_cols + col;
-            fill_tile_zeros<tile_bytes, false>(cb_id, tile_id);
+            fill_tile_zeros<tile_bytes, false>(noc, cb_id, tile_id);
         }
     }
+    // NOC reads and async_write_zeros use the same completion path on WH/BH but different
+    // paths on Quasar (NOC channels vs iDMA). Issue both — second is a no-op on WH/BH.
     noc_async_read_barrier();
+    noc.write_zeros_l1_barrier();
 
     if constexpr (push_num_tiles) {
         cb_push_back(cb_id, num_tiles);
@@ -204,6 +206,7 @@ FORCE_INLINE void read_q_subblock(
     cb_reserve_back(cb_id, sb_tiles);
     const uint32_t base_write_ptr = get_write_ptr(cb_id);
 
+    Noc noc;
     uint32_t barrier_count = 0;
     for (uint32_t row = sb_start_row; row < sb_start_row + subblock_h; ++row) {
         const uint32_t local_row = row - sb_start_row;
@@ -220,17 +223,20 @@ FORCE_INLINE void read_q_subblock(
             }
             // Zero-pad extra columns (src_cols < dst_cols case)
             for (uint32_t col = src_cols; col < dst_cols; ++col) {
-                fill_tile_zeros<tile_bytes, false>(cb_id, local_row * dst_cols + col);
+                fill_tile_zeros<tile_bytes, false>(noc, cb_id, local_row * dst_cols + col);
             }
         } else {
             // Entire row is padding
             for (uint32_t col = 0; col < dst_cols; ++col) {
-                fill_tile_zeros<tile_bytes, false>(cb_id, local_row * dst_cols + col);
+                fill_tile_zeros<tile_bytes, false>(noc, cb_id, local_row * dst_cols + col);
             }
         }
     }
 
+    // NOC reads and async_write_zeros use the same completion path on WH/BH but different
+    // paths on Quasar (NOC channels vs iDMA). Issue both — second is a no-op on WH/BH.
     noc_async_read_barrier();
+    noc.write_zeros_l1_barrier();
     cb_push_back(cb_id, sb_tiles);
 }
 
@@ -278,16 +284,20 @@ void read_paged_chunk_with_padding(
     }
 
     // Zero out the padding
+    Noc noc;
     for (uint32_t row = 0; row < dst_rows; ++row) {
         for (uint32_t col = 0; col < dst_cols; ++col) {
             if (row < src_rows && col < src_cols) {
                 continue;
             }
             uint32_t tile_id = transpose ? col * dst_rows + row : row * dst_cols + col;
-            fill_zeros_async(base_write_ptr + tile_id * tile_bytes, tile_bytes);
+            fill_zeros_async(noc, cb_id, tile_bytes, tile_id * tile_bytes);
         }
     }
+    // NOC reads and async_write_zeros use the same completion path on WH/BH but different
+    // paths on Quasar (NOC channels vs iDMA). Issue both — second is a no-op on WH/BH.
     noc_async_read_barrier();
+    noc.write_zeros_l1_barrier();
     cb_push_back(cb_id, num_tiles);
 }
 
@@ -464,8 +474,111 @@ void fill_causal_diagonal_tile_bf16(uint32_t cb_id, uint32_t tile_id) {
 }
 
 /**
+ * Fill a bf16 tile with a diagonal-edge mask pattern relative to `boundary_col = row + diagonal_offset`:
+ *   - leading edge (leading_edge=true):  col c is -inf if c < boundary_col
+ *   - trailing edge (leading_edge=false): col c is -inf if c > boundary_col
+ */
+template <uint32_t tile_bytes, int32_t diagonal_offset = 0, bool leading_edge = true>
+void fill_diagonal_edge_tile_bf16(uint32_t cb_id, uint32_t tile_id) {
+    fill_tile_zeros<tile_bytes>(cb_id, tile_id);
+
+    constexpr uint32_t neginf_bf16 = 0xFF80;
+    constexpr uint32_t bf16_per_uint32 = 2;
+    constexpr uint32_t uint32_per_face_row = tt::constants::FACE_WIDTH / bf16_per_uint32;  // 8
+    constexpr uint32_t uint32_per_face = tt::constants::FACE_HW / bf16_per_uint32;         // 128
+
+    volatile tt_l1_ptr uint32_t* ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+
+    constexpr uint32_t face_offsets[4] = {
+        0,
+        uint32_per_face,
+        2 * uint32_per_face,
+        3 * uint32_per_face,
+    };
+    constexpr uint32_t face_row_starts[4] = {0, 0, 16, 16};
+    constexpr uint32_t face_col_starts[4] = {0, 16, 0, 16};
+
+    for (uint32_t f = 0; f < 4; f++) {
+        const uint32_t face_base = face_offsets[f];
+        const uint32_t row_start = face_row_starts[f];
+        const uint32_t col_start = face_col_starts[f];
+        for (uint32_t row = 0; row < tt::constants::FACE_HEIGHT; row++) {
+            const uint32_t global_row = row_start + row;
+            const int32_t boundary_col = static_cast<int32_t>(global_row) + diagonal_offset;
+            const uint32_t row_base = face_base + row * uint32_per_face_row;
+            for (uint32_t word = 0; word < uint32_per_face_row; word++) {
+                const int32_t col0 = static_cast<int32_t>(col_start + word * bf16_per_uint32);
+                const int32_t col1 = col0 + 1;
+                uint32_t mask_word = 0;
+                if constexpr (leading_edge) {
+                    if (col0 < boundary_col) {
+                        mask_word |= neginf_bf16;
+                    }
+                    if (col1 < boundary_col) {
+                        mask_word |= neginf_bf16 << 16;
+                    }
+                } else {
+                    if (col0 > boundary_col) {
+                        mask_word |= neginf_bf16;
+                    }
+                    if (col1 > boundary_col) {
+                        mask_word |= neginf_bf16 << 16;
+                    }
+                }
+                if (mask_word != 0) {
+                    ptr[row_base + word] = mask_word;
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Emit the four sliding-window edge tiles (trailing_primary, leading_prev, leading_current,
+ * trailing_next) starting at `start_tile_idx` in the mask CB.
+ *
+ * The per-tile diagonal offsets place each edge's transition at the correct sub-tile column.
+ * `leading_remainder`/`trailing_remainder` are the window edges' positions within a 32-row tile;
+ * when they are 0 the window is tile-aligned and the prev/next straddle tiles go unused. The
+ * causal window has only a leading (left) edge — its trailing tile reuses the plain causal diagonal.
+ *
+ * NOTE: this is per-row *stamp* geometry (floor + remainder), intentionally distinct from the
+ * ceil-based loop bounds in SlidingWindowLoopGeometry. See sliding_window_geometry.hpp.
+ */
+template <uint32_t sliding_window_size, bool is_causal_lw, uint32_t cb_mask_in, uint32_t tile_bytes>
+void fill_sliding_window_edge_tiles(uint32_t start_tile_idx) {
+    constexpr uint32_t half_window = sliding_window_size / 2;
+    constexpr uint32_t leading_remainder =
+        is_causal_lw ? (sliding_window_size % tt::constants::TILE_HEIGHT) : (half_window % tt::constants::TILE_HEIGHT);
+    constexpr uint32_t trailing_remainder = is_causal_lw ? 0 : (half_window % tt::constants::TILE_HEIGHT);
+    constexpr int32_t leading_prev_offset =
+        is_causal_lw ? (leading_remainder == 0 ? 1 : static_cast<int32_t>(33 - leading_remainder))
+                     : (leading_remainder == 0 ? 0 : static_cast<int32_t>(32 - leading_remainder));
+    constexpr int32_t leading_current_offset =
+        is_causal_lw ? (leading_remainder == 0 ? 1 : 1 - static_cast<int32_t>(leading_remainder))
+                     : (leading_remainder == 0 ? 0 : -static_cast<int32_t>(leading_remainder));
+    constexpr int32_t trailing_primary_offset = static_cast<int32_t>(trailing_remainder);
+    constexpr int32_t trailing_next_offset = static_cast<int32_t>(trailing_remainder) - 32;
+
+    // Tile 0: trailing/right edge. Causal uses the normal causal diagonal.
+    fill_diagonal_edge_tile_bf16<tile_bytes, trailing_primary_offset, /*leading_edge=*/false>(
+        cb_mask_in, start_tile_idx);
+    // Tile 1/2: left edge when it straddles two K tiles; tile 1 is unused for aligned windows.
+    fill_diagonal_edge_tile_bf16<tile_bytes, leading_prev_offset, /*leading_edge=*/true>(
+        cb_mask_in, start_tile_idx + 1);
+    fill_diagonal_edge_tile_bf16<tile_bytes, leading_current_offset, /*leading_edge=*/true>(
+        cb_mask_in, start_tile_idx + 2);
+    // Tile 3: non-causal right edge when it straddles into the next K tile; unused for causal/aligned windows.
+    fill_diagonal_edge_tile_bf16<tile_bytes, trailing_next_offset, /*leading_edge=*/false>(
+        cb_mask_in, start_tile_idx + 3);
+}
+
+/**
  * Generate lightweight mask tiles into a single CB for ring joint SDPA.
- * Layout: [neginf_tile(0)] [causal_diag_tile?(1)] [global_n_partial_tile?] [joint_l_partial_tile?]
+ * Layout without sliding: [neginf_tile(0)] [causal_diag_tile?] [global_n_partial_tile?] [joint_l_partial_tile?]
+ * Layout with sliding:    [neginf_tile(0)] [trailing_primary(1)] [leading_prev(2)]
+ *                         [leading_current(3)] [trailing_next(4)] [partial tiles...]
  * Tiles are pushed once and stay permanently fronted for the entire kernel lifetime.
  *
  * @tparam global_n_partial_col  Column within tile where global_n padding starts (0 = tile-aligned, no partial)
@@ -473,11 +586,18 @@ void fill_causal_diagonal_tile_bf16(uint32_t cb_id, uint32_t tile_id) {
  * @tparam cb_mask_in            CB to generate mask tiles into (must be constexpr for get_tile_size)
  * @tparam is_causal_lw          Whether to include the causal diagonal tile
  */
-template <uint32_t global_n_partial_col, uint32_t joint_l_partial_col, uint32_t cb_mask_in, bool is_causal_lw = false>
+template <
+    uint32_t global_n_partial_col,
+    uint32_t joint_l_partial_col,
+    uint32_t cb_mask_in,
+    bool is_causal_lw = false,
+    uint32_t sliding_window_size = 0>
 void generate_lightweight_mask_tiles() {
     constexpr uint32_t partial_mask_tiles = (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
-    constexpr uint32_t causal_diag_tiles = is_causal_lw ? 1 : 0;
-    constexpr uint32_t total_mask_tiles = 1 + causal_diag_tiles + partial_mask_tiles;
+    constexpr bool has_sliding_window = sliding_window_size > 0;
+    constexpr uint32_t sliding_diag_tiles = has_sliding_window ? kSlidingWindowEdgeTiles : 0;
+    constexpr uint32_t causal_diag_tiles = (!has_sliding_window && is_causal_lw) ? 1 : 0;
+    constexpr uint32_t total_mask_tiles = 1 + sliding_diag_tiles + causal_diag_tiles + partial_mask_tiles;
     constexpr uint32_t mask_tile_size_bytes = get_tile_size(cb_mask_in);
 
     cb_reserve_back(cb_mask_in, total_mask_tiles);
@@ -487,8 +607,10 @@ void generate_lightweight_mask_tiles() {
 
     uint32_t tile_idx = 1;
 
-    // Tile 1 (if causal): causal diagonal tile
-    if constexpr (is_causal_lw) {
+    if constexpr (has_sliding_window) {
+        fill_sliding_window_edge_tiles<sliding_window_size, is_causal_lw, cb_mask_in, mask_tile_size_bytes>(tile_idx);
+        tile_idx += kSlidingWindowEdgeTiles;
+    } else if constexpr (is_causal_lw) {
         fill_causal_diagonal_tile_bf16<mask_tile_size_bytes>(cb_mask_in, tile_idx++);
     }
 
@@ -963,17 +1085,21 @@ inline void zero_fill_block(
     uint32_t num_rows,
     uint32_t cols,
     uint32_t dst_row_origin,
+    uint32_t dst_cb_id,
     uint32_t dst_addr,
     uint32_t outer_stride,
     uint32_t inner_stride) {
+    uint32_t page_size;
+    if constexpr (has_get_aligned_page_size_v<ReaderType>) {
+        page_size = reader.get_aligned_page_size();
+    } else {
+        page_size = reader.page_size;
+    }
+    Noc noc;
     for (uint32_t r = 0; r < num_rows; ++r) {
         uint32_t dst = dst_addr + (dst_row_origin + r) * outer_stride;
         for (uint32_t col = 0; col < cols; ++col) {
-            if constexpr (has_get_aligned_page_size_v<ReaderType>) {
-                fill_zeros_async(dst, reader.get_aligned_page_size());
-            } else {
-                fill_zeros_async(dst, reader.page_size);
-            }
+            fill_zeros_async(noc, dst_cb_id, page_size, dst - dst_addr);
             dst += inner_stride;
         }
     }
@@ -1053,6 +1179,7 @@ struct CatAddrGenerator {
     void issue_reads(
         const Slice& slice,
         uint32_t /*end_seq_tile*/,
+        uint32_t dst_cb_id,
         uint32_t dst_addr,
         uint32_t outer_stride,
         uint32_t inner_stride,
@@ -1086,7 +1213,14 @@ struct CatAddrGenerator {
         const uint32_t s1_end = std::min(d2_end, gap_end);
         if (s1_start < s1_end) {
             zero_fill_block(
-                first_reader, s1_end - s1_start, cols, s1_start - d2_start, dst_addr, outer_stride, inner_stride);
+                first_reader,
+                s1_end - s1_start,
+                cols,
+                s1_start - d2_start,
+                dst_cb_id,
+                dst_addr,
+                outer_stride,
+                inner_stride);
         }
         // Segment 2: second tensor (d2 shifted by first_seq_padded).
         const uint32_t s2_start = std::max(d2_start, gap_end);
@@ -1109,7 +1243,14 @@ struct CatAddrGenerator {
         const uint32_t s3_start = std::max(d2_start, second_end);
         if (s3_start < d2_end) {
             zero_fill_block(
-                first_reader, d2_end - s3_start, cols, s3_start - d2_start, dst_addr, outer_stride, inner_stride);
+                first_reader,
+                d2_end - s3_start,
+                cols,
+                s3_start - d2_start,
+                dst_cb_id,
+                dst_addr,
+                outer_stride,
+                inner_stride);
         }
     }
 
@@ -1177,6 +1318,7 @@ struct PaddedAddrGenerator {
     void issue_reads(
         const Slice& slice,
         uint32_t end_seq_tile,
+        uint32_t dst_cb_id,
         uint32_t dst_addr,
         uint32_t outer_stride,
         uint32_t inner_stride,
@@ -1208,6 +1350,7 @@ struct PaddedAddrGenerator {
             rows - valid_rows,
             cols,
             /*dst_row_origin=*/valid_rows,
+            dst_cb_id,
             dst_addr,
             outer_stride,
             inner_stride);
@@ -1274,6 +1417,7 @@ __attribute__((noinline)) void fetch_block(
     const CatAddrGeneratorType& cat_addr_generator,
     const Slice& src_slice,
     const uint32_t end_seq_tile,
+    const uint32_t dst_cb_id,
     const uint32_t dst_addr,
     const uint32_t tile_bytes,
     const bool transpose,
@@ -1284,8 +1428,13 @@ __attribute__((noinline)) void fetch_block(
     const uint32_t inner_ptr_stride = transpose ? tile_bytes * src_rows : tile_bytes;
 
     cat_addr_generator.issue_reads(
-        src_slice, end_seq_tile, dst_addr, outer_ptr_stride, inner_ptr_stride, barrier_threshold);
+        src_slice, end_seq_tile, dst_cb_id, dst_addr, outer_ptr_stride, inner_ptr_stride, barrier_threshold);
+    // issue_reads internally emits noc_async_read (NOC) AND zero_fill_block → async_write_zeros
+    // (iDMA on Quasar). NOC reads and async_write_zeros use the same completion path on WH/BH
+    // but different paths on Quasar. Issue both — second is a no-op on WH/BH.
+    Noc noc;
     noc_async_read_barrier();
+    noc.write_zeros_l1_barrier();
 }
 
 template <typename CatAddrGeneratorType>
@@ -1300,7 +1449,14 @@ void read_block(
     const uint32_t num_tiles = src_slice.get_d2_size() * src_slice.get_d3_size();
     cb_reserve_back(cb_id, num_tiles);
     fetch_block(
-        cat_addr_generator, src_slice, end_seq_tile, get_write_ptr(cb_id), tile_bytes, transpose, barrier_threshold);
+        cat_addr_generator,
+        src_slice,
+        end_seq_tile,
+        cb_id,
+        get_write_ptr(cb_id),
+        tile_bytes,
+        transpose,
+        barrier_threshold);
     cb_push_back(cb_id, num_tiles);
 }
 

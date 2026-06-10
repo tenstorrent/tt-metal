@@ -42,6 +42,7 @@ from ttnn.experimental.moe_compute_utils import (
     get_weight_core_shard_maps,
     get_weight_mem_configs,
     auto_output_width_shard_dim,
+    get_tilize_drain_core,
 )
 
 # Reuse 6U test helpers verbatim. The intent is that this single-card test
@@ -157,11 +158,8 @@ def _run_moe_compute_single_card_test(
     # Drain tilize core: the op uses `max_tilize_cores[0]` from the per-arch layout
     # table (`get_layout()` in moe_compute_program_factory.cpp). WH full-grid -> (6,9);
     # BH 11x10 -> (10,9). Harvested grids are skipped above, so y>=10 always holds here.
-    if arch == ttnn.device.Arch.BLACKHOLE:
-        tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(10, 9), ttnn.CoreCoord(10, 9))})
-    else:
-        # WORMHOLE_B0 (other archs are skipped above).
-        tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(6, 9), ttnn.CoreCoord(6, 9))})
+    drain_core_coord = get_tilize_drain_core()
+    tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(drain_core_coord, drain_core_coord)})
 
     expert_mapping = gen_expert_mapping(
         num_devices, num_replicated_devices, cluster_axis, experts, experts_per_cluster, experts_per_device

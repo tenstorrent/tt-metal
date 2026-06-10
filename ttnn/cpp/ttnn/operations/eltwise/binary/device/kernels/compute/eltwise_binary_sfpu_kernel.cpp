@@ -52,7 +52,7 @@ void kernel_main() {
     unary_op_init_common(cb_in0, cb_out0);
 
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+    PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {

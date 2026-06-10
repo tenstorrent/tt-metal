@@ -1,11 +1,10 @@
 name: "(Galaxy) DeepSeek Prefill tests"
 
 on:
-
   workflow_dispatch:
     inputs:
       test-type:
-        description: 'Select which tests to run'
+        description: "Select which tests to run"
         required: true
         type: choice
         options:
@@ -13,8 +12,15 @@ on:
           - module
           - moe_gate
           - mla
+          - mla_chunked
+          - kv_cache_table
           - prefill_block
           - prefill_transformer
+          - kimi_mla
+          - kimi_moe
+          - kimi_prefill_block
+          - prefill_block_determinism
+          - prefill_transformer_determinism
         default: 'all'
       platform:
         required: false
@@ -44,18 +50,24 @@ on:
     - cron: "0 5 * * *" # Run at 5:00 AM UTC every day
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   Galaxy-DeepSeek-Prefill-tests:
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     secrets: inherit
     uses: ./.github/workflows/galaxy-deepseek-prefill-tests-impl.yaml
     with:
