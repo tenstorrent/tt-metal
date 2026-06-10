@@ -283,7 +283,7 @@ inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, Ten
     }
     else if constexpr (TRANSPOSE_EN)
     {
-        _llk_unpack_unary_operand_transpose_mop_config_<UNP_SEL, IS_32b_DEST_EN>(buf_desc_id, num_tiles);
+        _llk_unpack_unary_operand_transpose_mop_config_<UNP_SEL, IS_32b_DEST_EN>(buf_desc_id, num_tiles, tensor_shape);
     }
     else
     {
