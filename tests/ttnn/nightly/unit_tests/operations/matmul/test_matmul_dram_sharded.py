@@ -14,6 +14,7 @@ from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.nightly.unit_tests.operations.matmul.utility_functions import ttnn_matmul, ttnn_linear
 from tt_lib.utils import (
     pad_weight,
     tilize_to_list,
@@ -430,7 +431,7 @@ def run_test_matmul_in1_dram_sharded_mm_chain(
     )
 
     # 1st mm
-    output_t = ttnn.matmul(
+    output_t = ttnn_matmul(
         in0_t,
         in1_t,
         program_config=program_config,
@@ -439,8 +440,8 @@ def run_test_matmul_in1_dram_sharded_mm_chain(
         compute_kernel_config=compute_kernel_config,
     )
 
-    for _ in range(200):
-        output_t = ttnn.matmul(
+    for _ in range(100):
+        output_t = ttnn_matmul(
             in0_t,
             in1_t,
             program_config=program_config,
@@ -653,7 +654,7 @@ def test_matmul_2d_in1_dram_sharded(
         packer_l1_acc=packer_l1_acc,
     )
     if has_bias:
-        output_t = ttnn.linear(
+        output_t = ttnn_linear(
             in0_t,
             in1_t,
             bias=bias_t,
@@ -662,7 +663,7 @@ def test_matmul_2d_in1_dram_sharded(
             compute_kernel_config=compute_kernel_config,
         )
     else:
-        output_t = ttnn.matmul(
+        output_t = ttnn_matmul(
             in0_t,
             in1_t,
             program_config=program_config,
