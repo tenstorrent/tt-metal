@@ -161,7 +161,7 @@ class RMSNorm(LightweightModule):
         )
 
         if in_sharded and not out_sharded:
-            return ttnn.sharded_to_interleaved(x)
+            return ttnn.sharded_to_interleaved(x, memory_config=output_mem_config or ttnn.DRAM_MEMORY_CONFIG)
         else:
             if output_mem_config is not None:
                 x = ttnn.to_memory_config(x, output_mem_config)

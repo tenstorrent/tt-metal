@@ -136,8 +136,19 @@ class VoxtralTTAttention:
         if self.compute_kernel_config is not None:
             _lin_kw["compute_kernel_config"] = self.compute_kernel_config
 
-        _wqkv_kw = dict(_lin_kw)
+        # 1D-mcast configs (per_core_M=2) require ≥2 fused M-tiles after fuse_batch.
+        # M-tiles = prod(batch_dims) × ceil(seq / TILE_SIZE). Auto-fall-back for bsz=1.
+        _use_1d_mcast = True
         if self.wqkv_program_config is not None:
+            _hs_shape = list(hidden_states.shape)
+            _m_tiles = math.ceil(_hs_shape[-2] / ttnn.TILE_SIZE)
+            for d in _hs_shape[:-2]:
+                _m_tiles *= d
+            if _m_tiles < 2:
+                _use_1d_mcast = False
+
+        _wqkv_kw = dict(_lin_kw)
+        if self.wqkv_program_config is not None and _use_1d_mcast:
             _wqkv_kw["program_config"] = self.wqkv_program_config
 
         if self.wqkv_in0_shard_mem_config is not None:
@@ -289,7 +300,7 @@ class VoxtralTTAttention:
         )
 
         _wo_kw = dict(_lin_kw)
-        if self.wo_program_config is not None:
+        if self.wo_program_config is not None and _use_1d_mcast:
             _wo_kw["program_config"] = self.wo_program_config
         out = ttnn.linear(attn_out, self.wo, **_wo_kw)
         ttnn.deallocate(attn_out)
