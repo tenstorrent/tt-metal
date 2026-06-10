@@ -20,9 +20,9 @@
 
 ### verbosity setup python
 
-Setup console environment with help of command from table below
+Set the console verbosity using the commands in the table below.
 
-**Note:** Status message like PASSED / FAILED will be visible anyway
+**Note:** Status messages like PASSED / FAILED will still be visible.
 
 | level | command | filtering |
 | --- | --- | --- |
