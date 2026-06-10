@@ -1,0 +1,98 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Numerics for the missing-op workarounds vs reference_cpu (status.md step 2).
+
+IndexerCPU runs its functional path (use_fp8_path=False) — same path the
+single-chip port matched. Non-interleaved RoPE stays a host pre-step (F1).
+topk equality is per-row index-set overlap, not PCC: ties may reorder.
+"""
+
+import pytest
+import torch
+
+import ttnn
+from models.demos.deepseek_v32.reference_cpu.model import IndexerCPU, ModelArgs
+from models.demos.deepseek_v32.reference_cpu.utils import apply_rotary_emb, precompute_freqs_cis
+from models.demos.deepseek_v32.reference_cpu.weights import init_random
+from models.demos.deepseek_v32.tt import ops
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
+LOGITS_PCC = 0.99
+
+
+def _dev(t, mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
+    return ttnn.from_torch(
+        t, device=mesh_device, layout=layout, dtype=dtype, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
+@pytest.mark.parametrize("seq", [128], ids=["s128"])
+def test_indexer_logits_numerics(mesh_device, seq):
+    args = ModelArgs(max_batch_size=1)
+    torch.manual_seed(42)
+    idx_cpu = IndexerCPU(args, use_fp8_path=False).eval()
+    init_random(idx_cpu)
+
+    x = torch.randn(1, seq, args.dim, dtype=torch.bfloat16)
+    qr = torch.randn(1, seq, args.q_lora_rank, dtype=torch.bfloat16)
+    freqs_cis = precompute_freqs_cis(args)[:seq]
+    mask = torch.full((seq, seq), float("-inf")).triu_(1)
+    with torch.no_grad():
+        _, ref_score = idx_cpu(x, qr, 0, freqs_cis, mask)  # [1, S, S], mask included
+
+        # Device-op inputs (host stems mirror IndexerCPU; on-device stems are step 3).
+        q = idx_cpu.wq_b(qr).view(1, seq, args.index_n_heads, args.index_head_dim)
+        q_pe, q_nope = torch.split(q, [64, args.index_head_dim - 64], dim=-1)
+        q = torch.cat([apply_rotary_emb(q_pe, freqs_cis, interleaved=False), q_nope], dim=-1)
+        k = idx_cpu.k_norm(idx_cpu.wk(x))
+        k_pe, k_nope = torch.split(k, [64, args.index_head_dim - 64], dim=-1)
+        k = torch.cat([apply_rotary_emb(k_pe.unsqueeze(2), freqs_cis, interleaved=False).squeeze(2), k_nope], dim=-1)
+        w = idx_cpu.weights_proj(x.float()) * args.index_n_heads**-0.5 * idx_cpu.softmax_scale
+
+    logits = ops.indexer_logits(
+        _dev(q.permute(0, 2, 1, 3), mesh_device),
+        _dev(k.unsqueeze(1), mesh_device),
+        _dev(w.unsqueeze(1), mesh_device),
+    )
+    got = ops._to_host(logits)[0, 0] + mask
+    assert_with_pcc(ref_score[0].float(), got.float(), LOGITS_PCC)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
+@pytest.mark.parametrize("skv,k", [(512, 64), (4096, 2048)], ids=["k64", "k2048"])
+def test_topk_indices_match(mesh_device, skv, k):
+    torch.manual_seed(0)
+    logits = torch.randn(1, 1, 128, skv, dtype=torch.bfloat16)
+    got = ops._to_host(ops.topk_indices(_dev(logits, mesh_device), k)).long()[0, 0]
+    want = torch.topk(logits.float(), k, dim=-1).indices[0, 0]
+    overlap = torch.tensor([len(set(g.tolist()) & set(w.tolist())) for g, w in zip(got, want)]).float() / k
+    # bf16 ties at the k-th score swap boundary entries — a band that grows with k
+    # (~0.5% on random logits). Allow max(2 indices, 1%) per row.
+    assert overlap.min() >= 1 - max(2 / k, 0.01), f"min row overlap {overlap.min():.4f}"
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
+def test_sparse_mla_numerics(mesh_device):
+    torch.manual_seed(1)
+    h, sq, skv, k = 8, 128, 512, 64
+    q = torch.randn(1, h, sq, 576, dtype=torch.bfloat16)
+    kvpe = torch.randn(1, 1, skv, 576, dtype=torch.bfloat16)
+    idx = torch.randint(0, skv, (1, 1, sq, k), dtype=torch.int32)
+    scale = 576**-0.5
+
+    sel = kvpe[0, 0][idx.long()[0, 0]]
+    ref = torch.einsum(
+        "hsk,skc->hsc",
+        (torch.einsum("hsd,skd->hsk", q[0].float(), sel.float()) * scale).softmax(-1),
+        sel[..., :512].float(),
+    )
+    out = ops.sparse_mla(
+        _dev(q, mesh_device),
+        _dev(kvpe, mesh_device),
+        _dev(idx, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32),
+        scale,
+    )
+    assert_with_pcc(ref, ops._to_host(out)[0].float(), 0.999)
