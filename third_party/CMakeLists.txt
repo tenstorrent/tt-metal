@@ -146,16 +146,18 @@ CPMAddPackage(
 # googletest
 ############################################################################################################################
 
-CPMAddPackage(
-    NAME GTest
-    GITHUB_REPOSITORY google/googletest
-    GIT_TAG v1.13.0
-    VERSION 1.13.0
-    OPTIONS
-        "INSTALL_GTEST OFF"
-        "BUILD_SHARED_LIBS OFF"
-)
-CPMRegisterPackage("googletest" "1.13.0")
+if(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)
+    CPMAddPackage(
+        NAME GTest
+        GITHUB_REPOSITORY google/googletest
+        GIT_TAG v1.13.0
+        VERSION 1.13.0
+        OPTIONS
+            "INSTALL_GTEST OFF"
+            "BUILD_SHARED_LIBS OFF"
+    )
+    CPMRegisterPackage("googletest" "1.13.0")
+endif()
 
 ############################################################################################################################
 # boost-ext reflect : https://github.com/boost-ext/reflect
