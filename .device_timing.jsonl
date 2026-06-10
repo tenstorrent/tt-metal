@@ -65,3 +65,4 @@
 {"source":"tt-probe","pid":2022802,"started_at_ms":1781109563553,"wait_ms":256,"run_ms":16308,"test_path":"groupnorm_sc_N_1_HW_C","exit_code":0}
 {"source":"tt-probe","pid":2024433,"started_at_ms":1781109697326,"wait_ms":253,"run_ms":41168,"test_path":"groupnorm_sc_N_1_HW_C","exit_code":2}
 {"source":"tt-probe","pid":2026272,"started_at_ms":1781110063271,"wait_ms":259,"run_ms":17704,"test_path":"groupnorm_sc_N_1_HW_C","exit_code":0}
+{"source":"run_safe_pytest","pid":2028007,"started_at_ms":1781110191871,"wait_ms":1,"run_ms":61465,"test_path":"tests/ttnn/unit_tests/operations/groupnorm_sc_N_1_HW_C/test_groupnorm_sc_N_1_HW_C_refinement3.py","exit_code":0}
