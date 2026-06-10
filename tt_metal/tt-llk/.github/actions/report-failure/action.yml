@@ -59,7 +59,7 @@ runs:
           echo 'EOF'
         } >> $GITHUB_OUTPUT
     - name: Send Slack notification
-      uses: slackapi/slack-github-action@v2.1.1
+      uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
       with:
         method: chat.postMessage
         token: ${{ inputs.slack_bot_token }}
