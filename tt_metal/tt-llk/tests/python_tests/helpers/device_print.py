@@ -38,6 +38,17 @@ _STRING_INFO_LAYOUT: dict[int, tuple[int, str]] = {
 }
 
 
+def _elf_class(elf_path: str) -> int:
+    """Return the ELF class (32 or 64) from the EI_CLASS byte of the ELF header.
+    The native ttexalens ElfFile no longer exposes elfclass directly."""
+    with open(elf_path, "rb") as f:
+        header = f.read(5)
+    if header[:4] != b"\x7fELF":
+        raise ValueError(f"{elf_path} is not an ELF file")
+    # e_ident[EI_CLASS]: 1 = ELFCLASS32, 2 = ELFCLASS64.
+    return 64 if header[4] == 2 else 32
+
+
 # Aux struct (device_print_common.h): wpos:4 | rpos:4 | risc_state[N]:N padded
 # up to 4-byte boundary | lock:4. N = PROCESSOR_COUNT, which varies per arch.
 def aux_size_for(processor_count: int) -> int:
@@ -295,16 +306,17 @@ class ElfStrings:
         try:
             elf = parse_elf(elf_path, require_debug_symbols=False)
             self._parsed_elf = elf
-            self.pointer_size = elf.elf.elfclass // 8
+            elfclass = _elf_class(elf_path)
+            self.pointer_size = elfclass // 8
             self.type_table = _type_table_for(self.pointer_size)
             self._info_record_size, self._info_unpack_fmt = _STRING_INFO_LAYOUT[
-                elf.elf.elfclass
+                elfclass
             ]
-            strings = elf.sections.get(".device_print_strings")
+            strings = elf.get_section_by_name(".device_print_strings")
             if strings is not None:
                 self._strings_addr = strings.address
                 self._strings_data = bytes(strings.data)
-            info = elf.sections.get(".device_print_strings_info")
+            info = elf.get_section_by_name(".device_print_strings_info")
             if info is not None:
                 self._info_addr = info.address
                 self._info_data = bytes(info.data)
@@ -327,7 +339,10 @@ class ElfStrings:
             try:
                 die = self._parsed_elf.find_die_by_name(enum_name)
                 if die is not None:
-                    result = [(int(c.value), c.name) for c in die.iter_children()]
+                    result = [
+                        (int(c.get_constant_value()), c.name)
+                        for c in die.iter_children()
+                    ]
             except Exception:
                 result = None
         self._enum_cache[enum_name] = result
