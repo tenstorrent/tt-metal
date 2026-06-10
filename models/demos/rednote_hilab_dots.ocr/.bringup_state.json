@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T02:15:14Z",
+  "updated_at": "2026-06-10T02:23:55Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -18,8 +18,15 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/reference/functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/test_functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/golden/vision_patch_embed.pt"
+        ],
+        "notes": "Conv2d 14x14 s14 3->1536 + RMSNorm, flat-patch input like HF",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -49,8 +56,15 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/reference/functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/test_functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/golden/vision_rmsnorm.pt"
+        ],
+        "notes": "matches HF RMSNorm eps=1e-5, fp32 norm then scale",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -82,8 +96,15 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/reference/functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/test_functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/golden/vision_attention.pt"
+        ],
+        "notes": "eager MHA 12h hd128 fused QKV no-bias, 2D rope, cu_seqlens mask",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -115,8 +136,15 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/reference/functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/test_functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/golden/vision_mlp.pt"
+        ],
+        "notes": "SwiGLU fc1/fc3->fc2 no bias",
+        "pcc": 0.9999998807907104
       },
       "ttnn": {
         "status": "pending",
@@ -483,6 +511,12 @@
       "tick": 1,
       "ts": "2026-06-10T02:15:14Z",
       "action": "architecture[all]",
+      "result": "ok"
+    },
+    {
+      "tick": 2,
+      "ts": "2026-06-10T02:23:55Z",
+      "action": "reference[vision_patch_embed,vision_rmsnorm,vision_attention,vision_mlp]",
       "result": "ok"
     }
   ],

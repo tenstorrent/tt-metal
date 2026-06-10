@@ -4,28 +4,28 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T02:15:14Z
+**Updated:** 2026-06-10T02:23:55Z
 
 ## Block Status
 
 | Block | Phase | Status | PCC | Attempts | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| vision_patch_embed | reference | pending | — | 0 |  |
+| vision_patch_embed | reference | done | 1.000000 | 0 | Conv2d 14x14 s14 3->1536 + RMSNorm, flat-patch input like HF |
 | vision_patch_embed | ttnn | pending | — | 0 |  |
 | vision_patch_embed | debug | n/a | — | 0 |  |
 | vision_patch_embed | optimization | pending | — | 0 |  |
 | vision_patch_embed | real_weights | pending | — | 0 |  |
-| vision_rmsnorm | reference | pending | — | 0 |  |
+| vision_rmsnorm | reference | done | 1.000000 | 0 | matches HF RMSNorm eps=1e-5, fp32 norm then scale |
 | vision_rmsnorm | ttnn | pending | — | 0 |  |
 | vision_rmsnorm | debug | n/a | — | 0 |  |
 | vision_rmsnorm | optimization | pending | — | 0 |  |
 | vision_rmsnorm | real_weights | pending | — | 0 |  |
-| vision_attention | reference | pending | — | 0 |  |
+| vision_attention | reference | done | 1.000000 | 0 | eager MHA 12h hd128 fused QKV no-bias, 2D rope, cu_seqlens mask |
 | vision_attention | ttnn | pending | — | 0 |  |
 | vision_attention | debug | n/a | — | 0 |  |
 | vision_attention | optimization | pending | — | 0 |  |
 | vision_attention | real_weights | pending | — | 0 |  |
-| vision_mlp | reference | pending | — | 0 |  |
+| vision_mlp | reference | done | 1.000000 | 0 | SwiGLU fc1/fc3->fc2 no bias |
 | vision_mlp | ttnn | pending | — | 0 |  |
 | vision_mlp | debug | n/a | — | 0 |  |
 | vision_mlp | optimization | pending | — | 0 |  |
@@ -85,6 +85,7 @@
 ## Recent Ticks
 
 - tick 1 (2026-06-10T02:15:14Z): architecture[all] — ok
+- tick 2 (2026-06-10T02:23:55Z): reference[vision_patch_embed,vision_rmsnorm,vision_attention,vision_mlp] — ok
 
 ## Host-Resident Exceptions
 
