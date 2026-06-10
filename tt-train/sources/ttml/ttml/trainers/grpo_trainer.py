@@ -405,9 +405,15 @@ class GRPOTrainer:
                 f"by the number of devices ({num_devices}) so each micro-batch shards evenly along axis 0"
             )
 
-        dataset = self.dataset.select(range(min(grpo_cfg.prompts_to_train, len(self.dataset))))
-        prompts = [tokenizer.encode(row["prompt"]) for row in dataset]
-        extra_columns = {k: list(dataset[k]) for k in dataset.column_names if k != "prompt"}
+total_prompts = min(grpo_cfg.prompts_to_train, len(self.dataset))
+if total_prompts % grpo_cfg.prompts_per_batch != 0:
+    raise ValueError(
+        f"prompts_to_train ({total_prompts}) must be divisible by prompts_per_batch ({grpo_cfg.prompts_per_batch}) "
+        "to avoid a ragged final batch that can break micro-batch sharding"
+    )
+dataset = self.dataset.select(range(total_prompts))
+prompts = [tokenizer.encode(row["prompt"]) for row in dataset]
+extra_columns = {k: list(dataset[k]) for k in dataset.column_names if k != "prompt"}
 
         num_batches = 0
         num_steps = 0
