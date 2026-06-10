@@ -13,6 +13,9 @@ namespace cluster {
 
 tt::tt_metal::ClusterType get_cluster_type();
 std::string serialize_cluster_descriptor();
+bool get_enable_2_erisc_mode();
+uint64_t get_build_key();
+void capture_jit_build_fingerprint(const std::string& path);
 
 }  // namespace cluster
 

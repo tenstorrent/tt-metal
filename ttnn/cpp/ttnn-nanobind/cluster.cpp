@@ -52,6 +52,64 @@ void bind_ttnn_cluster(nb::module_& mod) {
                 >>> descriptor_path = ttnn.cluster.serialize_cluster_descriptor()
                 >>> print(f"Cluster descriptor saved to: {descriptor_path}")
         )doc");
+
+    mod.def(
+        "get_enable_2_erisc_mode",
+        &ttnn::cluster::get_enable_2_erisc_mode,
+        R"doc(
+            Get the resolved multi-erisc (2-ERISC) mode flag for the current run.
+
+            This is the value after firmware-capability resolution (arch/firmware-driven downgrades
+            applied), which is hashed into the JIT build_key. Capture it on a real device to replay
+            under a mock/sim collect via TT_METAL_FORCE_2_ERISC_MODE so the build_key matches.
+
+            Returns:
+                bool: The resolved enable_2_erisc_mode value.
+
+            Example:
+                >>> import ttnn
+                >>> erisc2 = ttnn.cluster.get_enable_2_erisc_mode()
+        )doc");
+
+    mod.def(
+        "get_build_key",
+        &ttnn::cluster::get_build_key,
+        R"doc(
+            Get the JIT build_key for the open device (default device 0).
+
+            The on-disk JIT cache is keyed by this value. Read it on a real device and under a
+            mock/sim target to verify up-front that an up-front precompile's fingerprint produces
+            the SAME key the real run will use (otherwise the warmed cache won't be hit). Requires
+            a device to have been opened.
+
+            Returns:
+                int: The resolved build_key.
+
+            Example:
+                >>> import ttnn
+                >>> key = ttnn.cluster.get_build_key()
+        )doc");
+
+    mod.def(
+        "capture_jit_build_fingerprint",
+        &ttnn::cluster::capture_jit_build_fingerprint,
+        nb::arg("path"),
+        R"doc(
+            Capture device 0's JIT build fingerprint to a file (for up-front precompile).
+
+            Serializes the build-determining values a hardware-free (mock/sim) build resolves
+            differently from the real fast-dispatch run (num_l1_banks, dispatch core type/axis,
+            resolved 2-erisc). Call on a REAL device; replay it under a mock/sim target via the env
+            var TT_METAL_JIT_BUILD_FINGERPRINT so the warmed cache is keyed identically to the real
+            run. A single artifact replacing per-field force knobs. Requires a device to be open.
+
+            Args:
+                path (str): Filesystem path to write the fingerprint to.
+
+            Example:
+                >>> import ttnn
+                >>> ttnn.cluster.capture_jit_build_fingerprint("/tmp/fp.txt")
+        )doc");
 }
 
 }  // namespace

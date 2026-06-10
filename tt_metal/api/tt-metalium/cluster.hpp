@@ -62,4 +62,43 @@ tt::tt_metal::ClusterType GetClusterType();
  */
 std::string SerializeClusterDescriptor();
 
+/**
+ * @brief Get the resolved multi-erisc (2-ERISC) mode flag for the current run.
+ *
+ * This is the value AFTER firmware-capability resolution (see firmware_capability.cpp): it reflects
+ * any arch/firmware-driven downgrade, not just the requested default. It is hashed into the JIT
+ * build_key (get_compile_hash_string), so an up-front precompile collect on a mock/sim target must
+ * replay this exact value to produce a matching cache. Mock cannot re-derive it (no eth-firmware
+ * query), so it is captured from a real device and replayed via TT_METAL_FORCE_2_ERISC_MODE.
+ *
+ * @return bool The resolved enable_2_erisc_mode value.
+ */
+bool GetEnable2EriscMode();
+
+/**
+ * @brief Get the JIT build_key for an open device (default device 0).
+ *
+ * The build_key is what the on-disk JIT cache is keyed by (compute_build_key: dispatch core
+ * type/axis, num hw cqs, harvesting, and the compile-hash string). Reading it on a real device vs.
+ * under a mock/sim target lets an up-front precompile verify — before doing any work — that its
+ * mock fingerprint produces the SAME key the real run will use; if not, the warmed cache won't be
+ * hit. Requires the device's build env to exist (i.e. a device has been opened).
+ *
+ * @return uint64_t The resolved build_key for the device.
+ */
+uint64_t GetBuildKey();
+
+/**
+ * @brief Capture device 0's JIT build fingerprint to a file for up-front precompile.
+ *
+ * Serializes the build-determining device values that a hardware-free (mock/sim) build resolves
+ * differently from the real fast-dispatch run (num_l1_banks, dispatch core type/axis, resolved
+ * 2-erisc). Call on a REAL device; the precompile runner then points the mock at the file via
+ * TT_METAL_JIT_BUILD_FINGERPRINT so the warm cache is keyed identically. A single artifact replacing
+ * per-field TT_METAL_FORCE_* knobs. Requires a device's build env to exist.
+ *
+ * @param path Filesystem path to write the fingerprint to.
+ */
+void CaptureJitBuildFingerprint(const std::string& path);
+
 }  // namespace tt::tt_metal
