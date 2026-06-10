@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import math
+import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -336,30 +338,133 @@ class VoxtralTTSPipeline:
         # hidden stays on device (ttnn.Tensor) throughout the AR loop; acoustic model reads it via
         # forward_from_tt. Convert to torch only for debug trace (hidden_tt_to_torch).
         page_table = self._build_page_table(S_prompt + max_tokens)
-        last_hidden_tt = self.text.prefill_from_embeds(inputs_embeds_tt, start_pos=0, page_table=page_table)
-        if inputs_embeds_tt.is_allocated():
-            ttnn.deallocate(inputs_embeds_tt)
-        del inputs_embeds_cpu  # allow CPU memory to be reclaimed
-        if debug is not None:
-            debug.set("text.prefill.hidden", self.text.hidden_tt_to_torch(last_hidden_tt))
         cfg_alpha = torch.tensor(ACOUSTIC_CFG_ALPHA_DEFAULT, dtype=torch.bfloat16)
+        cfg_scalar = float(cfg_alpha.item())
         generated_codes: list[torch.Tensor] = []
         current_pos = S_prompt
 
-        cfg_scalar = float(cfg_alpha.item())
+        # Optional traced decode (opt-in via VOXTRAL_DECODE_TRACE): capture the 26-layer text-decode
+        # step (+ on-device rope gather) ONCE and replay it via execute_trace, removing the per-op
+        # host-dispatch gaps that dominate RTF. The SAME text trace is reused for BOTH prefill (a
+        # per-token decode over the voice-padded prompt) AND the AR decode loop. The acoustic FM Euler
+        # core gets its own trace. 2CQ (VOXTRAL_DECODE_TRACE_2CQ) overlaps input staging with replay.
+        # Debug path reads per-step hiddens to host, so trace is disabled when return_debug is set.
+        from models.experimental.voxtraltts.demo.decode_trace_2cq import (
+            AcousticFMBuffers,
+            TracedAcousticFM,
+            TracedTextDecode,
+            VoxtralDecodeBuffers,
+            VoxtralDecodeTrace2CQ,
+            decode_trace_2cq_enabled,
+            decode_trace_enabled,
+            signal_decode_step_done,
+            stage_acoustic_inputs,
+            stage_decode_inputs,
+        )
+
+        _use_trace = decode_trace_enabled() and debug is None
+        _trace = _bufs = _dec2cq = None
+        _ac_trace = _ac_bufs = None
+        _captured = _ac_captured = False
+        _cluster_shape = self.text.inner.args.cluster_shape
+        _dim = int(self.text.inner.args.dim)
+        if _use_trace:
+            _bufs = VoxtralDecodeBuffers.create(
+                self.mesh_device,
+                _dim,
+                _cluster_shape,
+                self.text.inner.rope_setup,
+                0,  # seed pos 0 (prefill start); overwritten by per-token staging
+                torch.zeros(_dim, dtype=torch.bfloat16),
+            )
+            _trace = TracedTextDecode(self.text, _bufs, page_table, self.mesh_device)
+            _dec2cq = (
+                VoxtralDecodeTrace2CQ.create(self.mesh_device, _bufs, _cluster_shape)
+                if decode_trace_2cq_enabled()
+                else None
+            )
+            # Acoustic FM trace (the 78%/step bottleneck). Traces the Euler-FM core; semantic +
+            # end-audio + concat stay outside (data-dependent host branch). Staged on CQ0.
+            _ac_bufs = AcousticFMBuffers.create(self.mesh_device, self.acoustic, 1, _dim)
+            _ac_trace = TracedAcousticFM(self.acoustic, _ac_bufs, cfg_scalar, self.mesh_device)
+
+        # ── Prefill ──────────────────────────────────────────────────────────────────────────
+        # Traced: prefill is itself a per-token DECODE loop over the prompt, so it REUSES the text
+        # trace (capture on prompt token 0, replay for the rest) — building the KV cache at positions
+        # 0..S-1. Untraced: the standard prefill_from_embeds path.
+        if _use_trace:
+            inputs_embeds_host = inputs_embeds_cpu.reshape(S_prompt, _dim)
+            last_hidden_tt = None
+            for i in range(S_prompt):
+                stage_decode_inputs(_dec2cq, _bufs, self.mesh_device, _cluster_shape, inputs_embeds_host[i], i)
+                if not _captured:
+                    _pf_compile = _trace.compile()
+                    if _pf_compile is not None and _pf_compile.is_allocated():
+                        ttnn.deallocate(_pf_compile)
+                    _trace.capture()
+                    _captured = True
+                    last_hidden_tt = _trace.hidden_dev
+                else:
+                    last_hidden_tt = _trace.execute(blocking=False)
+                ttnn.synchronize_device(self.mesh_device)
+                signal_decode_step_done(_dec2cq)
+            if inputs_embeds_tt.is_allocated():
+                ttnn.deallocate(inputs_embeds_tt)
+        else:
+            last_hidden_tt = self.text.prefill_from_embeds(inputs_embeds_tt, start_pos=0, page_table=page_table)
+            if inputs_embeds_tt.is_allocated():
+                ttnn.deallocate(inputs_embeds_tt)
+        del inputs_embeds_cpu  # allow CPU memory to be reclaimed
+        if debug is not None:
+            debug.set("text.prefill.hidden", self.text.hidden_tt_to_torch(last_hidden_tt))
+
         for step_idx in range(max_tokens):
             if debug is not None:
                 last_hidden = self.text.hidden_tt_to_torch(last_hidden_tt)
                 debug.set(f"step.{step_idx}.text.hidden_in", last_hidden)
             # TT-native acoustic forward — no CPU round-trip per step
-            llm_tile = self._acoustic_hidden_tile_copy(last_hidden_tt)
-            noise_tt = self.acoustic.fm_noise_tt(1, acoustic_fm_noise_seed(seed, step_idx))
-            codes_tt = self.acoustic.forward(llm_tile, noise_tt, cfg_scalar)
-            ttnn.deallocate(llm_tile)
-            ttnn.deallocate(noise_tt)
-            ac_out = ttnn.to_torch(codes_tt).long().reshape(1, -1)
-            ttnn.deallocate(codes_tt)
-            audio_codes = ac_out.to(torch.long)
+            _timing = os.environ.get("VOXTRAL_TRACE_TIMING") == "1"
+            if _timing:
+                ttnn.synchronize_device(self.mesh_device)
+                _t0 = time.perf_counter()
+            _noise_seed = acoustic_fm_noise_seed(seed, step_idx)
+            if _use_trace:
+                # Traced acoustic FM core (the 78%/step bottleneck). Stage hidden+noise into the
+                # persistent buffers, replay the Euler-FM trace, then finalize codes (semantic argmax +
+                # end-audio mask + concat) outside the trace. ``out_dev`` is persistent → consumed by
+                # codes_from_fm here before the next replay.
+                stage_acoustic_inputs(self, self.acoustic, _ac_bufs, last_hidden_tt, _noise_seed)
+                if not _ac_captured:
+                    _ac_compile = _ac_trace.compile()
+                    if _ac_compile is not None and _ac_compile.is_allocated():
+                        ttnn.deallocate(_ac_compile)
+                    _ac_trace.capture()
+                    _ac_captured = True
+                    acoustic_tt = _ac_trace.out_dev
+                else:
+                    acoustic_tt = _ac_trace.execute(blocking=False)
+                ttnn.synchronize_device(self.mesh_device)
+                # Copy the FM trace output out of the (persistent, trace-region) buffer BEFORE the
+                # finalize runs — codes_from_fm's semantic matmul allocates, and with an active trace
+                # that would clobber the trace output (TT_THROW "Tensor is not allocated" at concat).
+                acoustic_safe = ttnn.clone(acoustic_tt)
+                codes_tt = self.acoustic.codes_from_fm(_ac_bufs.llm_dev, acoustic_safe)
+                if acoustic_safe.is_allocated():
+                    ttnn.deallocate(acoustic_safe)
+                ac_out = ttnn.to_torch(codes_tt).long().reshape(1, -1)
+                ttnn.deallocate(codes_tt)
+                audio_codes = ac_out.to(torch.long)
+            else:
+                llm_tile = self._acoustic_hidden_tile_copy(last_hidden_tt)
+                noise_tt = self.acoustic.fm_noise_tt(1, _noise_seed)
+                codes_tt = self.acoustic.forward(llm_tile, noise_tt, cfg_scalar)
+                ttnn.deallocate(llm_tile)
+                ttnn.deallocate(noise_tt)
+                ac_out = ttnn.to_torch(codes_tt).long().reshape(1, -1)
+                ttnn.deallocate(codes_tt)
+                audio_codes = ac_out.to(torch.long)
+            if _timing:
+                _t_ac = (time.perf_counter() - _t0) * 1000.0
             if debug is not None:
                 debug.set(f"step.{step_idx}.acoustic.codes", audio_codes.squeeze(0))
                 sem_tile = self._acoustic_hidden_tile_copy(last_hidden_tt)
@@ -375,22 +480,76 @@ class VoxtralTTSPipeline:
             if not fixed_step_count and int(audio_codes[0, 0].item()) == self.end_audio_id:
                 break
 
-            # MM embed: use on-device embedding table (saves 6 KB upload + CPU F.embedding per step).
-            mm_embed_tt = self._audio_codes_to_mm_embed_device(audio_codes)
-            next_hidden_tt = self.text._decode_single_token_to_tt(mm_embed_tt, current_pos, page_table=page_table)
-            if mm_embed_tt.is_allocated():
-                ttnn.deallocate(mm_embed_tt)
-            if last_hidden_tt.is_allocated():
-                ttnn.deallocate(last_hidden_tt)
-            last_hidden_tt = next_hidden_tt
-            ttnn.synchronize_device(self.mesh_device)
+            if _use_trace:
+                # Stage (embed, pos, rot_idxs) into the persistent buffers (CQ1 when 2CQ on), then
+                # compile+capture on the first step and replay thereafter. ``hidden_dev`` is a
+                # persistent buffer the next iteration's acoustic copy consumes before the next replay.
+                mm_embed_host = self._audio_codes_to_mm_embed(audio_codes)  # torch [dim]
+                if _timing:
+                    _ts = time.perf_counter()
+                stage_decode_inputs(_dec2cq, _bufs, self.mesh_device, _cluster_shape, mm_embed_host, current_pos)
+                if _timing:
+                    ttnn.synchronize_device(self.mesh_device)
+                    _t_stage = (time.perf_counter() - _ts) * 1000.0
+                    _te = time.perf_counter()
+                if not _captured:
+                    out_compile = _trace.compile()
+                    if out_compile is not None and out_compile.is_allocated():
+                        ttnn.deallocate(out_compile)
+                    _trace.capture()
+                    _captured = True
+                    next_hidden_tt = _trace.hidden_dev
+                else:
+                    next_hidden_tt = _trace.execute(blocking=False)
+                # Per-step sync: without it the non-blocking execute_trace + CQ1 staging events
+                # queue unbounded and stall ~1s/step under 2CQ.
+                ttnn.synchronize_device(self.mesh_device)
+                signal_decode_step_done(_dec2cq)
+                # Free the previous hidden only if it is NOT the persistent trace output (the prefill
+                # hidden on the first traced step is a one-off and must be freed; hidden_dev is reused).
+                if (
+                    last_hidden_tt is not None
+                    and last_hidden_tt is not _trace.hidden_dev
+                    and last_hidden_tt.is_allocated()
+                ):
+                    ttnn.deallocate(last_hidden_tt)
+                last_hidden_tt = next_hidden_tt
+                if _timing:
+                    ttnn.synchronize_device(self.mesh_device)
+                    _t_exec = (time.perf_counter() - _te) * 1000.0
+                    if step_idx < 10:
+                        from loguru import logger as _lg
+
+                        _lg.info(
+                            f"[trace-timing] step{step_idx} acoustic={_t_ac:.0f}ms "
+                            f"stage={_t_stage:.0f}ms textdecode={_t_exec:.0f}ms"
+                        )
+            else:
+                # MM embed: use on-device embedding table (saves 6 KB upload + CPU F.embedding per step).
+                mm_embed_tt = self._audio_codes_to_mm_embed_device(audio_codes)
+                next_hidden_tt = self.text._decode_single_token_to_tt(mm_embed_tt, current_pos, page_table=page_table)
+                if mm_embed_tt.is_allocated():
+                    ttnn.deallocate(mm_embed_tt)
+                if last_hidden_tt.is_allocated():
+                    ttnn.deallocate(last_hidden_tt)
+                last_hidden_tt = next_hidden_tt
+                ttnn.synchronize_device(self.mesh_device)
             if debug is not None:
                 debug.set(f"step.{step_idx}.text.hidden_out", self.text.hidden_tt_to_torch(last_hidden_tt))
             current_pos += 1
 
         ttnn.synchronize_device(self.mesh_device)
         if last_hidden_tt is not None and last_hidden_tt.is_allocated():
-            ttnn.deallocate(last_hidden_tt)
+            ttnn.deallocate(last_hidden_tt)  # frees the persistent trace hidden_dev too (same tensor)
+        if _trace is not None:
+            _trace.hidden_dev = None  # already freed above; avoid double-free
+            _trace.release()
+        if _bufs is not None:
+            _bufs.deallocate()
+        if _ac_trace is not None:
+            _ac_trace.release()
+        if _ac_bufs is not None:
+            _ac_bufs.deallocate()
         if page_table is not None and page_table.is_allocated():
             ttnn.deallocate(page_table)
 
@@ -570,6 +729,15 @@ class VoxtralTTSPipeline:
             ttnn.deallocate(work)
             return tile_hidden
         return work
+
+    def _acoustic_hidden_host_torch(self, llm_hidden_tt: ttnn.Tensor) -> torch.Tensor:
+        """Host ``[bsz, 1, dim]`` bf16 hidden tile (the 4D->3D host reshape from
+        ``_acoustic_hidden_tile_copy``), for staging into the acoustic FM trace's persistent input."""
+        work = ttnn.to_memory_config(llm_hidden_tt, ttnn.DRAM_MEMORY_CONFIG)
+        host = ttnn.to_torch(work).to(torch.bfloat16)
+        ttnn.deallocate(work)
+        dim = int(host.shape[-1])
+        return host[:, 0, 0, :dim].unsqueeze(1).contiguous()  # [bsz, 1, dim]
 
     def forward_tts_generation_trace(
         self,

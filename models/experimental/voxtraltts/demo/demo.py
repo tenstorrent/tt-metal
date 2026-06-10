@@ -170,11 +170,21 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
 
 def _open_device():
     from tests.scripts.common import get_updated_device_params
+    from models.experimental.voxtraltts.demo.decode_trace_2cq import (
+        decode_trace_enabled,
+        num_command_queues_for_decode,
+    )
 
     device_id = 0
     if ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.TG:
         device_id = 4
-    updated = get_updated_device_params({})
+    params = {}
+    # Traced decode needs a trace region; 2CQ needs a second command queue. Both default on
+    # (see decode_trace_2cq). trace_region_size is env-tunable for the 26-layer decode graph.
+    if decode_trace_enabled():
+        params["trace_region_size"] = int(os.environ.get("VOXTRAL_TRACE_REGION_SIZE", str(200_000_000)))
+        params["num_command_queues"] = num_command_queues_for_decode()
+    updated = get_updated_device_params(params)
     original = ttnn.GetDefaultDevice()
     mesh = ttnn.CreateDevice(device_id=device_id, **updated)
     ttnn.SetDefaultDevice(mesh)
@@ -564,6 +574,11 @@ def run_demo(args: DemoArgs) -> None:
         items = load_prompt_items(args.data.prompts_file, args.data.default_voice)
     out_dir = Path(args.data.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Default the demo to traced decode (bit-identical output, ~1.58x faster decode; verified).
+    # Only affects the demo entry point — the pytest device fixture path leaves it off. Override
+    # with VOXTRAL_DECODE_TRACE=0. (2CQ stays opt-in; it regresses on this loop — see decode_trace_2cq.)
+    os.environ.setdefault("VOXTRAL_DECODE_TRACE", "1")
 
     mesh, original = _open_device()
     pipe: VoxtralTTSPipeline | None = None

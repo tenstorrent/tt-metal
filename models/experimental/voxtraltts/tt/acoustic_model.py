@@ -614,17 +614,24 @@ class VoxtralTTAcousticModel:
         that exact stream, so both ODEs start from identical noise. ``ttnn.randn`` is a *different*
         RNG and desyncs the FM start, dropping acoustic-code agreement to ~chance.
         """
-        g = torch.Generator().manual_seed(int(seed))
-        noise = torch.randn(bsz, self.n_acoustic_out, generator=g, dtype=torch.bfloat16).reshape(
-            bsz, 1, self.n_acoustic_out
-        )
         return ttnn.from_torch(
-            noise,
+            self.fm_noise_host_torch(bsz, seed),
             device=self.mesh_device,
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=self._fm_dram_mem_config,
         )
+
+    def fm_noise_host_torch(self, bsz: int, seed: int) -> torch.Tensor:
+        """Host ``[bsz, 1, n_acoustic]`` bf16 FM noise (seeded torch RNG). For trace input staging."""
+        g = torch.Generator().manual_seed(int(seed))
+        return torch.randn(bsz, self.n_acoustic_out, generator=g, dtype=torch.bfloat16).reshape(
+            bsz, 1, self.n_acoustic_out
+        )
+
+    def fm_noise_host_tt(self, bsz: int, seed: int) -> ttnn.Tensor:
+        """Host (no device) ttnn noise tensor matching the FM noise buffer spec — for copy_host_to_device."""
+        return ttnn.from_torch(self.fm_noise_host_torch(bsz, seed), dtype=self.dtype, layout=ttnn.TILE_LAYOUT)
 
     def fm_pre_round_scaled_tt(self, sampled_tt: ttnn.Tensor) -> ttnn.Tensor:
         """Clamp → scale FSQ values on device (fp32), pre-``round``."""
@@ -659,7 +666,28 @@ class VoxtralTTAcousticModel:
         owned_tile = llm_tile is not llm_hidden_tt
         bsz = int(llm_tile.shape[0])
 
-        llm_sem = ttnn.typecast(llm_tile, ttnn.float32, memory_config=self._matmul_act_mem_config)
+        acoustic_tt = self._fm_decode_codes_tt(llm_tile, noise_tt, cfg_scalar)
+        codes = self._codes_from_fm(llm_tile, acoustic_tt, bsz)
+        if owned_tile and llm_tile.is_allocated():
+            ttnn.deallocate(llm_tile)
+        return codes
+
+    def fm_decode_codes_tt(self, llm_hidden_tt: ttnn.Tensor, noise_tt: ttnn.Tensor, cfg_scalar: float) -> ttnn.Tensor:
+        """Public alias for the traceable Euler-FM core (semantic + end-audio handling stay outside)."""
+        return self._fm_decode_codes_tt(llm_hidden_tt, noise_tt, cfg_scalar)
+
+    def codes_from_fm(self, llm_hidden_tt: ttnn.Tensor, acoustic_tt: ttnn.Tensor) -> ttnn.Tensor:
+        """Finalize discrete codes from a (possibly trace-produced) acoustic tensor: semantic argmax,
+        end-audio masking, concat. Untraced (per-frame data-dependent host ``is_end`` branch)."""
+        llm_tile = self._llm_hidden_tile_bf16(llm_hidden_tt)
+        codes = self._codes_from_fm(llm_tile, acoustic_tt, int(llm_tile.shape[0]))
+        if llm_tile is not llm_hidden_tt and llm_tile.is_allocated():
+            ttnn.deallocate(llm_tile)
+        return codes
+
+    def _codes_from_fm(self, llm_tile: ttnn.Tensor, acoustic_tt: ttnn.Tensor, bsz: int) -> ttnn.Tensor:
+        """Semantic argmax + end-audio mask + concat with the FM acoustic codes -> discrete codes."""
+        llm_sem = ttnn.typecast(llm_tile, ttnn.float32, memory_config=self._semantic_dram_mem_config)
         masked_logits = self.semantic_logits_tt(llm_sem)
         if llm_sem is not llm_tile and llm_sem.is_allocated():
             ttnn.deallocate(llm_sem)
@@ -669,10 +697,6 @@ class VoxtralTTAcousticModel:
         ttnn.deallocate(sem_idx)
         semantic_code_tt = ttnn.typecast(semantic_code_tt, ttnn.uint32)
         semantic_code_tt = ttnn.to_layout(semantic_code_tt, ttnn.TILE_LAYOUT, memory_config=self._fm_dram_mem_config)
-
-        acoustic_tt = self._fm_decode_codes_tt(llm_tile, noise_tt, cfg_scalar)
-        if owned_tile and llm_tile.is_allocated():
-            ttnn.deallocate(llm_tile)
 
         is_end = ttnn.eq(semantic_code_tt, self._end_audio_token_id_tt)
 
