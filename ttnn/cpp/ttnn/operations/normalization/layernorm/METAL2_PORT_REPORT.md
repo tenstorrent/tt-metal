@@ -1,169 +1,195 @@
 # Metal 2.0 Port Report — layernorm (`LayerNormDeviceOperation`)
 
-**Outcome: grounded stop (successful capitulation).** Scope-tight inventory + plan completed
-for the multi-core (interleaved) factory; **no code changed.** The factory's atomic port unit
-(factory body + all 10 runtime-selectable kernel sources, coupled through one shared
-`named_compile_time_args` table) exceeds a faithful one-pass port, and no shippable sub-factory
-subset exists. This is the recipe's
-[explicitly-sanctioned grounded stop](port_op_to_metal2_recipe.md#when-the-discipline-doesnt-fit)
-for an over-large single-factory unit — same success tier as a finished port.
+**Status: IN PROGRESS — host fully ported & C++-GREEN; non-welford/non-large/tile paths VALIDATED ON
+DEVICE; remaining kernels (welford/large/rm) pending.**
+Porting the multi-core (interleaved) `LayerNormMultiCoreProgramFactory` to `ProgramSpecFactoryConcept`.
+The sharded factory stays on the legacy `ProgramDescriptor` concept (mixed-concept `program_factory_t`
+variant is legal; disjoint kernels).
 
-Build: not run (no code changed). Tests: not run.
+**On-device validation (Wormhole B0, after the card was reset):**
+- `test_layer_norm[bf16, use_welford=False, w=64, h=32]` — **PASS** (base path: tile input, no
+  gamma/beta/residual; exercises host spec build → framework validation → kernel JIT → device → PCC).
+- `test_layer_norm_with_weight_bias_and_residual_input[bf16, use_welford=False, w=64, h=32]` — **PASS**
+  (fused-pre-add + gamma + beta; validates the `#ifdef FUSE_PRE_ADD/FUSE_GAMMA/FUSE_BETA`
+  conditional-binding gating and the tensor bindings end-to-end).
 
-See `METAL2_PORT_PLAN.md` for the full multi-core inventory, construction blueprint, and the
-stop rationale ([§Grounded stop](METAL2_PORT_PLAN.md)).
+Two spec-validation fixes were needed to get there (both genuine Metal-2.0-vs-legacy semantics, see
+Friction): gating the `cb_accumulate` unpack entry on its binding condition, and deriving
+`unpack_to_dest_mode` for every consumed Float32 DFB (not just the special ones). These are the only
+two iterations the base/fused paths required after the C++ build went green.
 
----
+> Replaces the prior dogfood's grounded-stop report (preserved in git history). That pass stopped on
+> one-pass *size* budget after producing the inventory + blueprint in `METAL2_PORT_PLAN.md`. This pass
+> executed the port from that blueprint as an interactive primary session.
 
-## Successful failure (the grounded stop)
+## Where this pass got to
 
-- **Op / factory:** `ttnn/cpp/ttnn/operations/normalization/layernorm/`, both
-  `LayerNormMultiCoreProgramFactory` (`device/layernorm_op_multi_core.cpp`) and
-  `LayerNormShardedProgramFactory` (deferred, larger).
-- **Why a one-pass faithful port is not achievable:**
-  - The multi-core factory selects its kernel **source file** at runtime (reader 4-way
-    `.cpp:484-497`, writer 2-way `:633-637`, compute 4-way `:541-549`) → **10 selectable
-    sources, ~3,200 kernel lines**. Per the recipe's atomic-unit rule, all flip together; the
-    coupling is concrete: **one `named_compile_time_args` table** (`cb_named_args`, `.cpp:448-481`,
-    24 CB entries + 4 alias-flag scalars) is shared verbatim across all three
-    `KernelDescriptor`s, several entries conditionally remapped.
-  - **No shippable subset:** `create_program_spec` is invoked by the framework for every
-    attribute combination, and the tests parametrize `use_welford=[True,False]` plus exercise
-    large-tensor / row-major / fused-pre-add / gamma+beta. A factory converting only the
-    default path would mis-dispatch or fail on the welford/large/rm paths the tests drive. The
-    "port the common path only" sub-target the recipe warns against does not build here.
-  - The sharded factory (~2,000 host lines + ~13 mcast kernels + 3 semaphores + mcast topology)
-    is larger still.
-- **What the off-rules change would have been:** none off-rules. The *mechanism* is fully
-  covered by the catalog (Multi-variant factories, Conditional bindings, Aliased DFBs,
-  Same-FIFO aliasing, DFB-handle-direct-to-LLK). The blocker is purely one-pass
-  size/faithfulness budget vs. the ~30-min-per-stuck-point / single-pass posture the recipe
-  sets — exactly the sanctioned grounded-stop trigger.
-- **Prior art:** a prior clean-room agent reached the same conclusion on this op (recorded on
-  branch `akertesz/porting-experiment-accumulation-jun10`: *"layernorm — grounded stop … the
-  op's runtime kernel-source selection forces atomic conversion of factory + all variants; too
-  large for a one-pass port"*). This pass independently re-derived it and added the full
-  multi-core inventory + construction blueprint so the eventual multi-pass port has a running
-  start.
+**Done and verified (C++ host build GREEN — `ttnncpp` + `unit_tests_ttnn` link clean):**
+- `device/layernorm_op_multi_core.cpp` — `create_descriptor` → `create_program_spec` returning
+  `ProgramArtifacts`. The shared `cb_named_args` table dissolved into per-KernelSpec `dfb_bindings`;
+  21 DataflowBufferSpecs built conditionally (incl. welford-fp32 aliased DFBs via `alias_with`,
+  borrowed recip LUT via `borrowed_from`); TensorParameters + TensorBindings replace the
+  buffer-address RTAs and `TensorAccessorArgs` plumbing; named CTAs/RTAs; per-node `KernelRunArgs`;
+  `WorkUnitSpec`; `ProgramRunArgs`. `core_range_set` parameter dropped, production default inlined.
+- `device/layernorm_device_operation.hpp` — multi-core factory now declares `create_program_spec`.
+- `layernorm_nanobind.cpp` — multi-core `create_descriptor` pybind hook removed (see Handoff points).
 
-## TTNN ProgramFactory
+**Kernels converted AND device-validated (the two passing tests above JIT-compile and run these):**
+- `device/kernels/dataflow/layernorm_dataflow_utils.h` — `CircularBuffer&` → `DataflowBuffer&`;
+  `use<CircularBuffer::AddrSelector::READ_PTR>` dropped (bare DFB source is read-ptr by construction).
+- `device/kernels/dataflow/reader_unary_interleaved_ln.cpp` — full conversion (named args, `ta::`/`dfb::`,
+  `#ifdef WELFORD_FP32_ALIAS`-gated alias). Exercised on the base + fused/gamma/beta paths.
+- `device/kernels/dataflow/writer_unary_interleaved_start_id_blocked.cpp` — full conversion.
+- `device/kernels/compute/layernorm.cpp` — full conversion incl. the `#ifdef FUSE_*`/`RMSNORM`/
+  `TILIZE_IN`/`UNTILIZE_OUT` gating of every conditionally-bound DFB reference.
 
-### Concept realized
-Not realized (grounded stop). Inherited target confirmed correct: `ProgramSpecFactoryConcept`
-(single-program, no op-owned device resources, strict tensor matching). No disagreement with
-the audit's choice.
+**Converted but NOT yet device-validated (no test path hit them yet):**
+- `device/kernels/dataflow/writer_unary_interleaved_start_id_blocked_rm_output.cpp` (RM writer; the
+  row-major *input* paths also need the compute-side `TILIZE_IN`/`UNTILIZE_OUT` which `layernorm.cpp`
+  has, but a row-major test wasn't run this session).
 
-### Device-op-class edits
-- Custom `compute_program_hash` deleted: **none** (none exists; the `compute_program_hash`
-  static at `layernorm_nanobind.cpp:253` is a Python test hook on the framework default, not an
-  override — confirms audit).
-- Pybind entry points removed: **none** (no code changed). **When ported,** the port *will*
-  force dropping the `core_range_set` parameter and deleting both `create_descriptor` pybind
-  hooks (`layernorm_nanobind.cpp:322` multi-core, `:363` sharded) per ttnn-factory **exception
-  3** — see Handoff points.
+**Remaining kernel conversions (mechanical, follow the validated pattern — see PLAN checklist):**
+- compute: `layernorm_welford.cpp`, `layernorm_large_tensor.cpp`, `layernorm_large_tensor_welford.cpp`.
+- readers: `reader_unary_interleaved_ln_large_tensor.cpp`, `..._large_tensor_welford.cpp`, `..._rm_gb.cpp`.
+- `layernorm_compute_utils.h` needs **no change** (its helpers take `uint32_t` CB ids; `dfb::name`
+  converts implicitly).
 
-### Open items
-- Relaxation candidate (do **not** apply during port): `validate_on_program_cache_miss`
-  enforces strict `padded_shape` matching between input/residual and gamma/beta padded-width
-  equality. A future `match_padded_shape_only`-style relaxation might widen cache equivalence —
-  unverified; flagged by the audit, not a port-time call.
+## Environment / workspace-bootstrap notes (cost real time; not the port)
 
-## Handoff points
+The fresh worktree was not a ready-to-build/test environment. In order: (1) **git submodules were
+uninitialized** — cmake configure failed until `git submodule update --init --recursive`; (2) the
+**first clean build** (`build_metal.sh --build-tests`) is required and slow; (3) running pytest needs
+the **Python bindings** (`_ttnn.so`) which a `cmake --build --target ttnncpp` does NOT produce — a full
+`cmake --build` is required, and it lands `_ttnn.so` in `build_Release/ttnn/` but does NOT copy it into
+the package dir, so `ttnn/ttnn/_ttnn.so` had to be symlinked; (4) `import ttnn` then needed `tracy`
+(`tools/`) and `graphviz` etc. — only present in the **main checkout's `python_env` venv**, so tests
+run as `PYTHONPATH=<wt>/ttnn:<wt>:<wt>/tools <main>/python_env/bin/python3 -m pytest …` (the recipe's
+"PYTHONPATH=$(pwd)" assumes an editable install that a bare worktree doesn't have). The device was also
+**hung (`deadc0de`)** at first and needed a reset (done by the invoker). **Suggested:** the workspace-setup
+doc should cover the worktree case explicitly (submodules, full build for `_ttnn.so` + the package-dir
+symlink, the venv to borrow, and the composite PYTHONPATH).
 
-1. **Pybind surface to remove when ported (API surface: removed entry point).** Both factories
-   expose a `create_descriptor(... , core_range_set)` pybind hook returning a
-   `ProgramDescriptor` (`ttnn/cpp/ttnn/operations/normalization/layernorm/layernorm_nanobind.cpp:322`
-   multi-core, `:363` sharded; the `core_range_set` kwarg is declared at `:333` / `:374`). The
-   Metal 2.0 `create_program_spec` signature cannot carry `core_range_set`, and the
-   `ProgramDescriptor` return is exactly what the port eliminates → both hooks must be deleted
-   and the production default (`default_core_range(device)`) inlined. *User-visible:* downstream
-   Python (tests/notebooks/tooling) calling `...create_descriptor(...)` must be updated. Owner:
-   layernorm op owner. Not done here (no code changed) — flagged for the porting PR.
-
-2. **Device 2.0 `get_tile_size(cb_id)` holdovers (do NOT absorb into the port).** The audit
-   tables ~13 `get_tile_size(cb_id)` call sites across the layernorm dataflow kernels (e.g.
-   `reader_unary_interleaved_ln.cpp:108,114,118,122`; `writer_unary_interleaved_start_id_blocked.cpp:25`).
-   These are a Device 2.0 cleanup (`cb_obj.get_tile_size()` member form), routed to the
-   Device 2.0 track. During a Metal 2.0 port they cross the boundary fine via
-   `dfb::name → uint32_t` implicit conversion, so they don't block — but the kernel-side
-   whitelist forbids the port doing the member-form cleanup. Owner: Device 2.0 track. (See
-   Friction: the two docs disagree on whether `get_tile_size` has a member form.)
-
-3. **Dead reader RTA (op owner, not port).** `reader_unary_interleaved_ln.cpp:33` documents
-   arg[4] `packed_one_value` as legacy/unused; the host still computes and passes it
-   (`layernorm_op_multi_core.cpp:553-554,591`). Owner: layernorm op owner.
-
-## Successes
-
-- **The atomic-unit / runtime-source-selection guidance fired exactly as intended.** The
-  recipe's [Legacy inventory — "Runtime kernel-source selection"](port_op_to_metal2_recipe.md#legacy-inventory)
-  bullet ("the factory and **all** of its selectable sources convert together — there is no
-  'port the common path only' sub-target that builds … size the effort against that") is
-  precisely the lens that made the multi-core factory's true size visible and justified the
-  grounded stop. Applied to `layernorm_op_multi_core.cpp:484-549`. This is a doc section worth
-  keeping verbatim — it converted a tempting "just port the default path" trap into a correct
-  stop.
-- **The grounded-stop off-ramp framing is well-calibrated.** Knowing a clean stop is "same
-  success tier as a finished port" made it possible to spend the budget on a *complete*
-  inventory + construction blueprint (the high-value artifact) rather than burning it forcing
-  partial code that wouldn't build. Catalog cross-refs (Aliased DFBs vs Same-FIFO aliasing
-  distinction) resolved the `cb_x_welford` classification cleanly before any code was at stake.
-
-## Friction
+## Friction (captured live)
 
 ### Gaps
-- **No guidance on a factory with a *shared* `named_compile_time_args` table across multiple
-  `KernelDescriptor`s.** The recipe's spec-shape default ("one KernelSpec per KernelDescriptor,
-  per-KernelSpec bindings") tells you bindings are per-kernel in Metal 2.0 — but the legacy
-  layernorm factory hands *the same 24-entry `cb_named_args` table to all three kernels*
-  (`layernorm_op_multi_core.cpp:625,641,652`), with entries conditionally remapped per path.
-  The migration is "dissolve the shared table into per-KernelSpec `dfb_bindings`," but no doc
-  section names this shared-CB-table → per-kernel-bindings dissolution as a recognizable
-  pattern. It is the single biggest structural transform in this op and the main driver of the
-  atomic coupling. **Suggested:** a patterns-catalog entry "Dissolving a shared named-CTA CB
-  table into per-KernelSpec bindings."
-- **`get_tile_size(cb_id)` member-form ambiguity (carried from the audit's own recipe-notes).**
-  The audit notes the Device 2.0 migration guide keeps `get_tile_size(cb_id)` verbatim in
-  *migrated* example code (no `cb.get_tile_size()` member shown), while the prereq check lists
-  it as a holdover with a member-form replacement. A porter can't tell from the docs whether
-  these sites are "leave as free function (crosses fine via `dfb::`)" or "route to Device 2.0
-  track for member-form." This bit at inventory time. **Suggested:** reconcile the two docs and
-  state explicitly that during a *Metal 2.0* port the free function is acceptable (it takes
-  `dfb::name` by implicit conversion) and only the Device 2.0 track does member-form.
+- **No in-tree reference port.** The only landed `create_program_spec` example (`accumulation`/`ema`) is
+  on a *sibling* branch (`akertesz/porting-experiment-accumulation-jun10`), reachable via `git show`.
+  Anchoring on it was high-leverage; the recipe's "optional reference port" note should mention it may
+  not be on the porter's branch and give the `git show <branch>:<path>` form.
+- **`CircularBuffer`-specific NoC helpers have no `DataflowBuffer` equivalent — "object swap, methods
+  unchanged" undersells this.** `CircularBuffer` carries `AddrSelector` / `CircularBufferView` /
+  `use<AddrSelector::READ_PTR>(cb)` (`circular_buffer.h:25,156-168`) that do **not** exist for
+  `DataflowBuffer`. `layernorm_dataflow_utils.h::write_row_major_block_from_cb` used
+  `noc.async_write(use<…READ_PTR>(cb_out_rm), …)`. The correct conversion *drops* the wrapper —
+  `noc_traits_t<DataflowBuffer>::src_addr` is `get_read_ptr()` (`dataflow_buffer.h:188-194`), so a bare
+  DFB as the `async_write` source is read-ptr-sourced. Clean once known, but not a literal method swap.
+- **Conditional DFB binding forces a preprocessor define where legacy used only a CTA.** The compute
+  kernels gate gamma/beta/fusion via the `do_gamma`/`do_beta` *CTAs* (`if constexpr`). But `cb_gamma`/
+  `cb_beta`/`cb_fusion` are conditionally-bound DFBs, so their `dfb::<name>` references must be removed
+  by the **preprocessor** (an `if constexpr(false)` branch is still name-looked-up). The port therefore
+  emits `FUSE_GAMMA`/`FUSE_BETA` *defines* to the compute kernel (legacy emitted them only to the
+  reader) and converts the relevant `if constexpr(do_gamma)` blocks to `#ifdef FUSE_GAMMA`. Same logic
+  applies to the welford-fp32 aliases (new `WELFORD_FP32_ALIAS` / `WELFORD_STATE_FP32_ALIAS` defines).
+  This is the [Conditional / optional DFB bindings] pattern, but the recipe/catalog frame it around DFBs
+  that were *already* `#ifdef`-gated in legacy; the gamma/beta case is a CTA→define *promotion* the docs
+  don't call out. **Suggested:** catalog note — "a conditionally-bound DFB whose legacy gate was a CTA
+  (`if constexpr`) must be promoted to a `#define` gate."
+- **Path-dependent DFB producer (cb_in in the ROW_MAJOR path).** `cb_in`'s producer is the *reader* on
+  the TILE path but *compute* (via `tilize`) on the ROW_MAJOR path (the reader fills `cb_in_rm` instead).
+  A 1:1 "reader produces cb_in" binding is wrong for RM. The port branches the binding on
+  `input_is_row_major`. The role-map inventory must be taken *per kernel-source-selection path*, not once
+  for the op — the recipe's runtime-source-selection note implies this but doesn't stress the
+  producer-can-move consequence.
+
+- **`unpack_to_dest_mode` entries must name a DFB the compute kernel actually binds.** Legacy set
+  `unpack_to_dest_mode[c_26] = Fp32` whenever `float32_reduction`, regardless of whether CB 26
+  (`cb_accumulate`) was configured — harmless for an array indexed by CB id. Metal 2.0 validates
+  (`program_spec.cpp:799`, `bound_dfbs.contains(dfb_name)`) that every `unpack_to_dest_mode` key is a
+  DFB bound to that kernel, so the entry must be gated on the same condition as the binding
+  (`large_tensor_needed && !use_welford`). Caught on the first base-path device test. **Suggested:**
+  catalog/recipe note — "unpack_to_dest_mode (and any per-DFB compute config) must be gated on the
+  DFB's binding condition, not just the numerical condition the legacy array used."
 
 ### Confusion
-- **Audit per-binding bullets vs. per-factory classification.** The audit's flat per-binding
-  bullet list classifies input/residual/output as *both* "Case 1 (interleaved)" and "clean
-  borrowed-memory DFB (sharded)" for the *same* `TensorParameter` name. The audit's own
-  recipe-notes already flag this; confirming from the porter's seat: the Per-DeviceOperation
-  attribution table is what disambiguates, and a porter should read that table first, not the
-  bullets. Minor — the audit handled it well; noting that the friction is real for the next
-  porter who reads top-to-bottom.
-- **"Default to porting factories one at a time, autonomously" vs. an over-large *single*
-  factory.** The recipe strongly frames multi-factory ops as "port one factory, ship it, the
-  rest is remaining work" — which reads as *every* op decomposes into shippable single-factory
-  units. layernorm is the counterexample: even one factory's unit is too large for one pass.
-  The recipe *does* cover this (the size-grounded-stop sentence in Legacy inventory), but the
-  two messages sit far apart and the optimistic "one factory is shippable" framing dominates.
-  **Suggested:** add a forward-reference from the atomic-unit note to the size-grounded-stop
-  sentence, so a porter sizing a big factory sees the escape hatch in the same breath as the
-  "you don't have to do the whole op" encouragement.
+- The dogfood role-map (delegated) mislabeled a couple of compute CTA slots (e.g. welford `TILE_SIZE` vs
+  `tile_width`); the *legacy host* `compute_args` order is authoritative. Cross-checking the delegated
+  inventory against the host source caught it. Worth a recipe note: trust the host emission order over a
+  reconstructed kernel-side reading for CTA positions.
+
+## Handoff points
+1. **Removed pybind surface (API surface: removed entry point).** `LayerNormMultiCoreProgramFactory`'s
+   `create_descriptor(... core_range_set)` hook was deleted from
+   `ttnn/cpp/ttnn/operations/normalization/layernorm/layernorm_nanobind.cpp` (was ~:322). It returned a
+   `ProgramDescriptor`, which the Metal 2.0 factory no longer produces. Downstream Python callers of
+   `LayerNormMultiCoreProgramFactory.create_descriptor` must migrate. The **sharded** factory's
+   `create_descriptor` hook (~:363) is intentionally **kept** (sharded stays legacy). Owner: layernorm op
+   owner / TTNN. (Per invoker: TTNN will address the underlying problem on top of this work.)
+2. **Device 2.0 `get_tile_size(cb_id)` holdovers — NOT absorbed.** The ported kernels keep the free-function
+   `get_tile_size(dfb::name)` form (crosses the boundary via the `DFBAccessor → uint32_t` implicit
+   conversion). The member-form cleanup is the Device 2.0 track's, per the audit. Owner: Device 2.0 track.
+3. **Dead reader RTA dropped.** The legacy `packed_one_value` reader RTA (documented unused) is gone with
+   the RTA→named conversion. (The legacy kernel comment already flagged it as unused.) Owner: op owner —
+   informational only.
+
+4. **CRITICAL — the reciprocal LUT should be a plain `TensorBinding` (Case 2), NOT a `borrowed_from`
+   DFB.** The audit classified the welford reciprocal LUT (legacy CB 25) as "clean — borrowed-memory
+   DFB" and "No Case 2 bindings," and the port followed that onto `DataflowBufferSpec::borrowed_from`.
+   Both classifications are wrong, and tracing the provenance gives a clean fix:
+   - **Provenance: it is an op INPUT tensor.** `tensor_args.recip_tensor`
+     (`layernorm_device_operation_types.hpp:34`), created caller-side by
+     `ttnn.create_layer_norm_reciprocals(device, core_range_set, w)` and passed into `ttnn.layer_norm`.
+     It is **not op-owned** (the factory allocates nothing) and **not device-generated** — a host-computed,
+     L1-resident, per-core read-only LUT. The port *already* declares it as a `TensorParameter`
+     (`PARAM_RECIP`, host line ~859) with a `TensorArgument` (~940), because `borrowed_from` references
+     it. The borrowed DFB built on top of that parameter is the redundant, wrong step.
+   - **It is not a dataflow buffer in any sense** — verified across all three welford computes
+     (`layernorm_welford.cpp:106`, `layernorm_large_tensor_welford.cpp:398`,
+     `layernorm_sharded_welford.cpp:229`): every access is `get_pointer_to_cb_data(cb_reciprocals, 0)`
+     then raw dereference. **No `wait_front`/`pop_front`/`reserve_back`/`push_back` anywhere, and no
+     kernel produces it.** Reading an input tensor by raw base pointer is precisely a **Case 2** access —
+     so the audit's "No Case 2 bindings" is wrong for this binding.
+   - **Right model (no Buffer binding needed):** drop the borrowed DFB; bind `PARAM_RECIP` to the compute
+     kernel as a `TensorBinding` (`ta::recip`); kernel-side replace `get_pointer_to_cb_data(cb_reciprocals)`
+     with `TensorAccessor(ta::recip)` + `get_bank_base_address(...)` (the sanctioned Case-2 bridge,
+     kernel-side whitelist rule 5), then index the LUT. This eliminates the borrowed DFB, the
+     producer-invariant stress, AND the need for a Buffer-binding type — it uses only TensorBinding +
+     the existing Case-2 bridge. (A **Buffer** binding would be right only for op-*owned* scratch; this
+     is an input tensor, so TensorBinding is the correct home. Borys's "no buffers in ops" preference is
+     satisfied by construction.)
+   - **What this port does instead, and why it may not even validate:** it binds the borrowed DFB
+     **consumer-only** (no producer — there is none to invent), stressing the DFB endpoint invariant
+     ([`dataflow_buffer_spec.hpp:40-48`](../../../../../../tt_metal/api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp)).
+     **Unverified this session** (the welford path that binds it wasn't run): if the validator enforces
+     ≥1 producer for borrowed DFBs, the current port's welford path fails here — and the fix is the
+     TensorBinding rewrite above, not a producer hack.
+   - **One detail to confirm in the rewrite:** that `get_bank_base_address` on this L1, per-core LUT
+     yields the local shard's base pointer the kernel expects (the legacy CB-borrow got it from the
+     per-core borrowed buffer). Verifiable; expected to hold for an L1 tensor over the compute grid.
+   - **Audit/recipe action:** a read-only **input** LUT read by raw pointer is a **Case 2 TensorBinding**,
+     not a "clean borrowed DFB." The audit's borrowed-memory-DFB classification should be reserved for
+     genuine FIFO-on-borrowed-memory cases (e.g. sharded input/output the kernel `wait_front`s), not
+     pointer-addressed input LUTs. Owner: audit/recipe maintainers + Metal 2.0 framework.
+
+## Successes
+- **The accumulation reference port + the API headers were sufficient to author the entire host in one
+  pass; it compiled with only 5 trivial `-Werror` unused-variable fixes** (the legacy buffer-address
+  locals, now dead because addresses flow through TensorBindings). The patterns catalog's Aliased-DFBs vs
+  Same-FIFO distinction and the Conditional-bindings pattern were exactly the lenses needed for the
+  welford-fp32 aliasing and the gamma/beta gating.
+- **The atomic-unit framing held but the C++/kernel split made it tractable:** because kernel sources are
+  referenced by path and JIT-compiled at runtime, the *host* compiles and validates independently of the
+  kernels — so the large host rewrite could be checkpointed green before the kernel slog, and kernels can
+  be converted/validated path-by-path rather than all-or-nothing. Worth adding to the recipe: the C++
+  build validates the host; kernel correctness is gated at test (device) time.
 
 ## Open items for downstream
-
-- **Cross-op kernel touches:** none. All 10 multi-core sources + 2 shared headers are
-  layernorm-owned (in-family); donor headers (`kernel_lib/`, `kernel/`, `kernel_util/`) are
-  out-of-scope shared-lib/framework and Device-2.0-clean.
-- **The eventual multi-pass port should reuse `METAL2_PORT_PLAN.md`'s blueprint:** the
-  multi-core inventory (kernels/CBs/tensors/work-split), the Dropped-Plumbing table, the
-  per-branch source-selection map, and the welford-fp32 aliasing classification are all
-  construction-ready. A reasonable multi-pass split: (a) non-welford tile-input path
-  (`layernorm.cpp` + `layernorm_large_tensor.cpp` + default reader/writer); (b) welford paths
-  (`layernorm_welford.cpp` + `layernorm_large_tensor_welford.cpp` + welford reader, aliased
-  DFBs); (c) row-major paths (`TILIZE_IN`/`UNTILIZE_OUT`, rm writer, `rm_gb` reader) — though
-  note all three sub-passes must land before the factory can flip, since they share one
-  `create_program_spec`. The split is for *reviewer/effort* tractability, not separate shipping.
-- **Sharded factory** is a separate, larger port (semaphores, mcast, pre/post-allgather, reshard).
-- **Test coverage note:** `tests/ttnn/unit_tests/operations/fused/test_layer_norm.py` (15 tests,
-  `use_welford` parametrized) is the multi-core gate; sharded/distributed tests
-  (`test_layer_norm_sharded.py`, `test_distributed_layernorm*.py`) gate the sharded factory.
+- **Cross-op kernel touches:** none — all sources + headers are layernorm-owned.
+- **Remaining kernel conversions** (above) follow the validated pattern; the welford compute kernels carry
+  the subtle aliasing (`cb_x_welford` producer is reader on non-fused-TILE, compute on fused or RM;
+  `cb_ex_welford`/`cb_ex2_welford` self-loops under `WELFORD_STATE_FP32_ALIAS`).
+- **Reciprocal LUT should be a Buffer binding, not a DFB** — see **Handoff point 4** (elevated to a
+  critical finding). It binds consumer-only today (a deliberate DFB abuse); the welford path is the
+  first to exercise it and will answer whether the validator even accepts a producer-less borrowed DFB.
+- **RM-input + welford + fp32-alias** is a rare combo whose welford-compute `TILIZE_IN` support is unverified;
+  the host binds `cb_x_welford` as a compute self-loop there. Confirm against the welford compute kernel.
+- **Sharded factory** remains a separate, larger port.

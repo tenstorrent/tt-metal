@@ -16,23 +16,20 @@
 // This kernel drains cb_out_rm and writes each row as a single NOC write:
 //   one write per (tile-block row) pair  =  TILE_H writes per block.
 //
-// Compile-time args:
-//   CTA[0]    = block_size  (block size in tiles)
-//   CTA[1..N] = TensorAccessorArgs for output (ROW_MAJOR, page_size = W * elem_size_bytes)
-//   CTA[last] = elem_size_bytes
+// Metal 2.0 bindings (see the program factory):
+//   DFBs   : cb_out_rm (consumed)
+//   Tensors: output (ROW_MAJOR, page_size = W * elem_size_bytes)
+//   CTAs   : block_size, elem_size_bytes
+//   RTAs   : Wt, num_tile_rows, start_tile_row, H_logical
 //
-// Runtime args:
-//   arg[0] = dst_addr          (output base address)
-//   arg[1] = Wt                (width in tiles)
-//   arg[2] = num_tile_rows     (number of tile-rows assigned to this core)
-//   arg[3] = start_tile_row    (starting tile-row index for this core, in tiles)
-//   arg[4] = H_logical         (total valid rows — skip writes beyond this to avoid OOB DRAM writes)
+// The legacy dst_addr buffer-address RTA is now a TensorBinding (TensorAccessor(ta::output)).
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/kernel_args.h"
 #include <tt-metalium/constants.hpp>
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "layernorm_dataflow_utils.h"
@@ -41,25 +38,21 @@ namespace generic = norm::kernel_util::generic;
 namespace layernorm_dataflow_utils = norm::layernorm::device::kernels::dataflow;
 
 void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t Wt = get_arg_val<uint32_t>(1);
-    const uint32_t num_tile_rows = get_arg_val<uint32_t>(2);
-    const uint32_t start_tile_row = get_arg_val<uint32_t>(3);
-    const uint32_t H_logical = get_arg_val<uint32_t>(4);
+    const uint32_t Wt = get_arg(args::Wt);
+    const uint32_t num_tile_rows = get_arg(args::num_tile_rows);
+    const uint32_t start_tile_row = get_arg(args::start_tile_row);
+    const uint32_t H_logical = get_arg(args::H_logical);
 
-    constexpr uint32_t block_size = get_compile_time_arg_val(0);
-    constexpr auto dst_args = TensorAccessorArgs<1>();
-    constexpr uint32_t elem_size_bytes = get_compile_time_arg_val(dst_args.next_compile_time_args_offset());
-
-    constexpr uint32_t cb_id_out_rm = get_named_compile_time_arg_val("cb_out_rm");
+    constexpr uint32_t block_size = get_arg(args::block_size);
+    constexpr uint32_t elem_size_bytes = get_arg(args::elem_size_bytes);
 
     constexpr uint32_t TILE_H = tt::constants::TILE_HEIGHT;
     constexpr uint32_t TILE_W = tt::constants::TILE_WIDTH;
 
-    const auto dst_a = TensorAccessor(dst_args, dst_addr);
+    const auto dst_a = TensorAccessor(ta::output);
 
     Noc noc;
-    CircularBuffer cb_out_rm(cb_id_out_rm);
+    DataflowBuffer cb_out_rm(dfb::cb_out_rm);
 
     constexpr uint32_t block_row_stride_bytes = block_size * TILE_W * elem_size_bytes;
     constexpr uint32_t tile_width_bytes = TILE_W * elem_size_bytes;

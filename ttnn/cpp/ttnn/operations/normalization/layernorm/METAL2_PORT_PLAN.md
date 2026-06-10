@@ -308,24 +308,41 @@ This factory is larger than the multi-core unit and is its own multi-pass effort
 
 ---
 
-## Grounded stop
+## Realized port (this pass — supersedes the prior grounded stop)
 
-**Decision: grounded stop after inventory + planning; no code changed.** Rationale, against the
-recipe's [§When the discipline doesn't fit](port_op_to_metal2_recipe.md#when-the-discipline-doesnt-fit)
-and the [atomic-unit size note](port_op_to_metal2_recipe.md#legacy-inventory):
+The prior dogfood grounded-stopped here on one-pass *size* budget. This pass executed the port
+from the blueprint above as an interactive primary session. Status (see `METAL2_PORT_REPORT.md`
+for the full record, friction, and handoffs):
 
-1. The recipe's atomic unit is *one factory + every runtime-selectable source*. The multi-core
-   factory's unit is 10 kernel sources (~3,200 lines) + a 843-line branchy host body, coupled
-   atomically through one shared `named_compile_time_args` table.
-2. **No tractable sub-factory subset exists.** `create_program_spec` is called by the framework
-   for *all* attribute combinations; tests exercise welford / large-tensor / row-major /
-   fused-pre-add / gamma+beta, so a factory that handles only a subset of sources cannot ship
-   (it would mis-dispatch or fail on the untested-by-it path). The "port the common path only"
-   sub-target the recipe warns about does not build here.
-3. This is the recipe's explicitly-sanctioned outcome: *"if a single factory's unit is still
-   too large to port faithfully in one pass, that is a legitimate grounded stop — surface it."*
-   The mechanism is fully covered by the catalog (Multi-variant, Conditional, Aliased DFBs,
-   Same-FIFO); the blocker is one-pass size/faithfulness budget, not a missing capability.
+- **Host: complete and C++-build GREEN.** `create_descriptor` → `create_program_spec` returning
+  `ProgramArtifacts`; the shared `cb_named_args` table dissolved into per-KernelSpec `dfb_bindings`;
+  all DataflowBufferSpecs (conditional + welford-fp32 `alias_with` cliques + borrowed recip);
+  TensorParameters/Bindings; named CTAs/RTAs; per-node `KernelRunArgs`; `WorkUnitSpec`. The
+  `core_range_set` parameter dropped; the multi-core `create_descriptor` pybind hook removed.
+  `device/layernorm_device_operation.hpp` declares `create_program_spec`. Verified by a clean
+  `ttnncpp` + `unit_tests_ttnn` link.
+- **Kernels: base path + RM writer + shared header converted; welford/large readers+computes and
+  the rm_gb reader remain** (mechanical, same validated pattern — see the report's checklist).
+- **Confirmed against the actual API (no capability gap — the prior stop was a one-shot-vehicle
+  limitation, not a real one):** every mechanism the blueprint anticipated is expressible —
+  per-KernelSpec DFB bindings, `alias_with`, `borrowed_from`, conditional bindings (with the
+  CTA→`#define` promotion the report notes), `to_compute_hardware_config`/`unpack_to_dest_mode`,
+  the `DataflowBuffer` kernel-side swap (incl. the `use<READ_PTR>`→bare-DFB-source resolution).
 
-The deliverable is this plan (a construction-ready blueprint for the eventual multi-pass port)
-plus `METAL2_PORT_REPORT.md`. No file under the op directory was modified.
+### Binding-model refinements discovered during construction (not in the original blueprint)
+- **`cb_in` producer is path-dependent:** reader on the TILE path, but *compute* (via `tilize`) on
+  the ROW_MAJOR path — the reader fills `cb_in_rm` there. Bindings branch on `input_is_row_major`.
+- **`cb_x_welford` producer moves by path:** reader (non-fused TILE), compute self-loop (fused, or
+  ROW_MAJOR non-fused). Alias group stays bound to one kernel set as required.
+- **Conditional gamma/beta DFBs need `#define` gates** (`FUSE_GAMMA`/`FUSE_BETA` emitted to the
+  compute kernel, not just the reader): legacy gated them with the `do_gamma`/`do_beta` CTAs via
+  `if constexpr`, which still name-looks-up the unbound `dfb::cb_gamma`. New
+  `WELFORD_FP32_ALIAS` / `WELFORD_STATE_FP32_ALIAS` defines play the same role for the alias DFBs.
+
+### Remaining to reach a fully GREEN device test pass
+1. Convert: `layernorm_welford.cpp`, `layernorm_large_tensor.cpp`, `layernorm_large_tensor_welford.cpp`
+   (compute); `reader_unary_interleaved_ln_large_tensor.cpp`, `..._large_tensor_welford.cpp`,
+   `..._rm_gb.cpp` (readers). (`layernorm_compute_utils.h` needs no change.)
+2. Per-path pytest: base → welford → large-tensor → row-major → fused-pre-add → gamma/beta, in
+   `tests/ttnn/unit_tests/operations/fused/test_layer_norm.py`. Resolve the borrowed-read-only-DFB
+   producer question (recip LUT) if the validator flags it.
