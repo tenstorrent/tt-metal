@@ -42,8 +42,10 @@ def _run(device, B, T_pad, C, K, stride, mesh_mapper=None, mesh_composer=None):
     logger.info(f"B={B} T_pad={T_pad} C={C} K={K} stride={stride} -> {pcc_msg}")
 
 
-# Smoke shapes: small, fast, single-device. Covers C padding (16/24/48), strides, K.
+# Smoke shapes: small, fast, single-device. Covers C padding (1/2/16/24/48), strides, K.
 SMOKE = [
+    (1, 256, 1, 12, 1),  # C<TILE padding path (HannUp uses C=1), small T
+    (1, 256, 2, 12, 1),  # C<TILE padding path (HannUp uses C=2), small T
     (1, 256, 64, 12, 1),
     (1, 256, 64, 12, 2),
     (1, 512, 32, 12, 1),
@@ -101,7 +103,15 @@ HANNUP = [(1, 19228, 29, 1), (2, 19228, 29, 1)]
 
 # (C, T_pad, K, stride) -> single-device, B=1. Tail (T_pad > 30k) marked slow.
 PROD = [(c, t, k, s) for (c, t, k, s) in (STAGE_B + STAGE_C)] + [
-    pytest.param(c, t, k, s, marks=pytest.mark.skip(reason="C<TILE handled by smoke; HannUp C=1/2 padding case"))
+    pytest.param(
+        c,
+        t,
+        k,
+        s,
+        marks=pytest.mark.skip(
+            reason="C=1/2 padding path covered by smoke; HannUp T=19228 tail redundant with prod-tail"
+        ),
+    )
     for (c, t, k, s) in HANNUP
 ]
 
