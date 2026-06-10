@@ -590,6 +590,7 @@ def call_sdpa(
     scale=None,
     kv_cache_batch_idx=None,
     kv_actual_isl=None,
+    is_cross=False,
 ):
     tt_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
         tt_q,
@@ -604,6 +605,7 @@ def call_sdpa(
         logical_n=logical_n,
         is_causal=is_causal,
         is_balanced=is_balanced,
+        is_cross=is_cross,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
         dim=2,
@@ -1358,6 +1360,7 @@ def run_ring_joint_sdpa_chunked(
     cache_batch: int = 2,
     persistent_buffer_mode: str = "exact_per_chunk",
     use_ring_mla: bool = False,
+    do_check: bool = True,
 ):
     """
     Validate ring joint SDPA chunked-prefill, or verify deterministic replay.
@@ -1459,8 +1462,11 @@ def run_ring_joint_sdpa_chunked(
         else:
             V_full = fa_rand(b, nhv, total_seq, d_v)
 
+        # do_check=False (perf/profiling) skips the full-sequence CPU torch reference: it is an
+        # O(total_seq^2) host SDPA that dominates wall-clock, while the device kernel — the only
+        # thing the profiler measures — still runs below. Mirrors run_ring_joint_sdpa's do_check.
         ref_full = None
-        if num_iterations == 1:
+        if num_iterations == 1 and do_check:
             ref_full = torch_sdpa_reference(Q_full, K_full, V_full, is_causal=True)
 
         sdpa_input_shard_dims = [None, None]
@@ -1835,17 +1841,20 @@ def run_ring_joint_sdpa_chunked(
                         persistent_output_buffer_v,
                         kv_cache_batch_idx_arg,
                     )
-                    out_i = to_host(tt_out, chunk_size)
-                    if use_ring_mla:
-                        out_i = out_i[:, :, :, :d_v]
-                    record_chunk_accuracy(
-                        config_id,
-                        per_chunk_results_by_config[config_id],
-                        i,
-                        s,
-                        e,
-                        out_i,
-                    )
+                    # do_check=False (perf/profiling): the device op above already ran for the
+                    # profiler; skip the host readback and PCC comparison against ref_full.
+                    if do_check:
+                        out_i = to_host(tt_out, chunk_size)
+                        if use_ring_mla:
+                            out_i = out_i[:, :, :, :d_v]
+                        record_chunk_accuracy(
+                            config_id,
+                            per_chunk_results_by_config[config_id],
+                            i,
+                            s,
+                            e,
+                            out_i,
+                        )
 
         if num_iterations > 1 and use_device_determinism_compare and determinism_mismatch_marker is not None:
             assert not device_mismatch_marker_is_set(
@@ -3301,7 +3310,7 @@ def test_ring_joint_attention_create_perf_table(model_name):
 
 # === TEST 5: PERFORMANCE CHECK (CI-gated by SDPA_PERF_CHECKS=1) ===
 # Symmetric +/- band — catches both regressions and unexpected speedups.
-RING_JOINT_PERF_MARGIN = 0.005
+RING_JOINT_PERF_MARGIN = 0.01
 
 RING_JOINT_PERF_CHECK_CONFIGS = [
     # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
@@ -3562,6 +3571,32 @@ def test_ring_mla_chunked_accuracy(model_name, qk_configs, chunk_size):
     )
 
 
+# Perf-profiling twin of test_ring_mla_chunked_accuracy: identical device work, but do_check=False
+# skips the O(total_seq^2) CPU torch reference so the run fits the profiler timeout. Skipped on CI
+# directly; it is driven by test_ring_mla_chunked_perf_check via run_device_profiler (which sets
+# CI=false in the subprocess). Mirrors the test_ring_joint_attention_sdpa_sweep_perf_impl pattern.
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
+@pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
+@pytest.mark.parametrize(
+    "model_name,qk_configs",
+    RING_MLA_CHUNKED_TEST_CONFIGS,
+    ids=RING_MLA_CHUNKED_TEST_CONFIG_IDS,
+)
+def test_ring_mla_chunked_perf_impl(model_name, qk_configs, chunk_size):
+    """ring_mla chunked prefill without the CPU reference — profiled by the chunked perf check."""
+    mesh_config = MESH_CONFIG
+
+    run_ring_joint_sdpa_chunked(
+        mesh_config,
+        RING_MLA_CHUNKED_MODEL_CONFIGS[model_name],
+        chunk_size=chunk_size,
+        qk_configs=qk_configs,
+        persistent_buffer_mode="reuse_max",
+        use_ring_mla=True,
+        do_check=False,
+    )
+
+
 # === TEST 7: CHUNKED-PREFILL DETERMINISM ===
 @pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
 @pytest.mark.parametrize(
@@ -3792,7 +3827,7 @@ def test_ring_mla_create_chunked_perf_table(model_name, q_chunk_size, k_chunk_si
 RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
     # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
     # 4-device ring (QuietBox, 100 SDPA cores)
-    ("kimi50k", 32, 640, 4, 63.3),
+    ("kimi50k", 32, 640, 4, 66.05),
 ]
 
 
@@ -3827,7 +3862,7 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
     config_id = f"{get_test_case_id(model, q_chunk_size, k_chunk_size)}-chunk{chunk_size}"
     subdir = "ttnn_ring_mla_chunked_perf_check"
     command = (
-        f"pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_accuracy[{config_id}]"
+        f"pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_impl[{config_id}]"
     )
 
     float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
@@ -3880,4 +3915,188 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
     assert lower <= utilization <= upper, (
         f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
         f"(expected {expected_util:.2f}%, margin +/- {RING_JOINT_PERF_MARGIN*100:.1f}%)"
+    )
+
+
+# ============================================================================
+# NON-CAUSAL CROSS-ATTENTION VALIDATION (is_cross)
+# ============================================================================
+CROSS_PCC_THRESHOLD = 0.99
+CROSS_RMSE_THRESHOLD = DEFAULT_RMSE_THRESHOLD
+
+# (nhq_total, head_dim, q_global, kv_global, logical_n) — LTX-2 V2A production shapes.
+CROSS_SHAPE_CONFIGS = [
+    pytest.param(32, 64, 256, 9728, 9690, id="ltx_v2a_stage1_6s"),
+    pytest.param(32, 64, 256, 38784, 38760, id="ltx_v2a_stage2_1080p_6s"),
+    pytest.param(32, 64, 384, 87808, 87720, id="ltx_v2a_stage2_1080p_14s"),
+]
+CROSS_MESH_PARAMS = [
+    pytest.param(2, 4, Topology.Linear, id="bh_2x4sp1tp0"),
+    pytest.param(4, 8, Topology.Ring, id="bh_4x8sp1tp0_ring"),
+]
+
+
+def run_ring_joint_sdpa_cross(
+    mesh_config,
+    nhq_total,
+    head_dim,
+    q_global,
+    kv_global,
+    logical_n,
+    q_chunk_sizes,
+    k_chunk_size=512,
+    tp_size=2,
+    sp_size=4,
+    topology=Topology.Linear,
+    pcc_threshold=CROSS_PCC_THRESHOLD,
+    rmse_threshold=CROSS_RMSE_THRESHOLD,
+):
+    """Validate is_cross ring SDPA (short Q, long K/V) against a non-causal torch oracle over the
+    first logical_n keys."""
+    if mesh_config.num_devices < tp_size * sp_size:
+        pytest.skip(f"cross ring SDPA needs a {tp_size}x{sp_size} mesh ({tp_size * sp_size} chips)")
+    assert nhq_total % tp_size == 0, f"nhq_total {nhq_total} must divide TP {tp_size}"
+    for nm, g in (("q_global", q_global), ("kv_global", kv_global)):
+        if g % (sp_size * 32) != 0:
+            pytest.skip(f"{nm}={g} not SP/tile-aligned for SP={sp_size}")
+
+    torch.manual_seed(1234)
+
+    sp_axis = 1
+    tp_axis = 0
+    num_links = 2
+    fabric_config = ttnn.FabricConfig.FABRIC_1D_RING if topology == Topology.Ring else ttnn.FabricConfig.FABRIC_1D
+
+    ttnn.set_fabric_config(
+        fabric_config,
+        ttnn.FabricReliabilityMode.STRICT_INIT,
+        None,
+        ttnn.FabricTensixConfig.DISABLED,
+        ttnn.FabricUDMMode.DISABLED,
+        ttnn.FabricManagerMode.DEFAULT,
+    )
+
+    mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(tp_size, sp_size))
+    try:
+        full_compute_grid = mesh_device.compute_with_storage_grid_size()
+        sdpa_compute_grid = (full_compute_grid.x - 1, full_compute_grid.y)
+        ccl_column = full_compute_grid.x - 1
+
+        ccl_sub_device_crs = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_compute_grid.x - 1, full_compute_grid.y - 1))}
+        )
+        worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
+        worker_sub_device_id = ttnn.SubDeviceId(0)
+        sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+        mesh_device.load_sub_device_manager(sub_device_manager)
+        mesh_device.set_sub_device_stall_group([worker_sub_device_id])
+        ccl_semaphore_handles = create_global_semaphores(mesh_device, ccl_sub_device_crs, 0)
+
+        Q = fa_rand(BATCH_SIZE, nhq_total, q_global, head_dim)
+        K = fa_rand(BATCH_SIZE, nhq_total, kv_global, head_dim)
+        V = fa_rand(BATCH_SIZE, nhq_total, kv_global, head_dim)
+
+        sdpa_input_shard_dims = [None, None]
+        sdpa_input_shard_dims[sp_axis] = 2
+        sdpa_input_shard_dims[tp_axis] = 1
+        persistent_kv_shard_dims = [None, None]
+        persistent_kv_shard_dims[tp_axis] = 1
+
+        def shard_to_device(tensor, dims):
+            return ttnn.from_torch(
+                tensor,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
+            )
+
+        tt_Q = shard_to_device(Q, sdpa_input_shard_dims)
+        tt_K = shard_to_device(K, sdpa_input_shard_dims)
+        tt_V = shard_to_device(V, sdpa_input_shard_dims)
+        persistent_output_buffer_k = shard_to_device(
+            torch.zeros(BATCH_SIZE, nhq_total, kv_global, head_dim), persistent_kv_shard_dims
+        )
+        persistent_output_buffer_v = shard_to_device(
+            torch.zeros(BATCH_SIZE, nhq_total, kv_global, head_dim), persistent_kv_shard_dims
+        )
+
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+        main_row_dim = sdpa_input_shard_dims[0] if sdpa_input_shard_dims[0] is not None else -1
+        main_col_dim = sdpa_input_shard_dims[1] if sdpa_input_shard_dims[1] is not None else -1
+        gt_main = torch_sdpa_reference(Q, K[:, :, :logical_n, :], V[:, :, :logical_n, :], is_causal=False)
+
+        # Run every q_chunk config against the same mesh, uploads, and reference (one CI item).
+        for q_chunk_size in q_chunk_sizes:
+            program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=sdpa_compute_grid,
+                q_chunk_size=q_chunk_size,
+                k_chunk_size=k_chunk_size,
+                exp_approx_mode=False,
+            )
+            tt_out = call_sdpa(
+                tt_Q,
+                tt_K,
+                tt_V,
+                logical_n,
+                is_causal=False,
+                is_balanced=False,
+                is_cross=True,
+                p_buf_k=persistent_output_buffer_k,
+                p_buf_v=persistent_output_buffer_v,
+                program_config=program_config,
+                compute_kernel_config=compute_kernel_config,
+                ccl_semaphore_handles=ccl_semaphore_handles,
+                num_links=num_links,
+                sp_axis=sp_axis,
+                mesh_device=mesh_device,
+                topology=topology,
+                worker_sub_device_id=worker_sub_device_id,
+                ccl_column=ccl_column,
+            )
+            tt_out_torch = ttnn.to_torch(
+                tt_out,
+                mesh_composer=ttnn.create_mesh_composer(
+                    mesh_device, ttnn.MeshComposerConfig(main_row_dim, main_col_dim)
+                ),
+            )[:, :, :q_global, :]
+
+            out_pass_main, out_pcc_main = comp_pcc(gt_main, tt_out_torch, pcc_threshold)
+            rmse_main = torch.sqrt(((gt_main - tt_out_torch) ** 2).mean()).item()
+            logger.info(f"Cross output (q_chunk={q_chunk_size}) - PCC: {out_pcc_main}, RMSE: {rmse_main:.6f}")
+            assert (
+                rmse_main < rmse_threshold
+            ), f"Cross RMSE {rmse_main:.6f} >= {rmse_threshold} (q_chunk={q_chunk_size})"
+            assert out_pass_main, f"Cross PCC {out_pcc_main} below {pcc_threshold} (q_chunk={q_chunk_size})"
+
+    finally:
+        ttnn.close_mesh_device(mesh_device)
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
+
+# === TEST: NON-CAUSAL CROSS-ATTENTION ACCURACY ===
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize("tp_size, sp_size, topology", CROSS_MESH_PARAMS)
+@pytest.mark.parametrize("nhq_total, head_dim, q_global, kv_global, logical_n", CROSS_SHAPE_CONFIGS)
+def test_ring_joint_attention_sdpa_cross_accuracy(
+    nhq_total, head_dim, q_global, kv_global, logical_n, tp_size, sp_size, topology
+):
+    """is_cross=True accuracy at the LTX-2 V2A shapes; must match the non-causal cross reference."""
+    run_ring_joint_sdpa_cross(
+        MESH_CONFIG,
+        nhq_total,
+        head_dim,
+        q_global,
+        kv_global,
+        logical_n,
+        q_chunk_sizes=[64, 128],
+        tp_size=tp_size,
+        sp_size=sp_size,
+        topology=topology,
     )

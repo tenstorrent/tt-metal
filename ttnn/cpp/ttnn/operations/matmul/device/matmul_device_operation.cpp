@@ -12,6 +12,7 @@
 #include "tt-metalium/hal_types.hpp"
 #include "tt-metalium/experimental/global_circular_buffer.hpp"
 #include "tt-metalium/work_split.hpp"
+#include "tt_stl/reflection.hpp"
 #include "tt_stl/unreachable.hpp"
 
 namespace ttnn::prim {
@@ -117,9 +118,12 @@ void validate_matmul_tile_constraints(
 }
 
 void validate_matmul_block_and_subblock_configuration(
-    const MatmulParams& attributes, const operations::matmul::MatmulProgramConfig& chosen_program_config) {
+    const MatmulParams& attributes,
+    const ttnn::Shape& a_shape_padded,
+    const tt::tt_metal::Tile& in0_tile,
+    const operations::matmul::MatmulProgramConfig& chosen_program_config) {
     std::visit(
-        [&attributes](const auto& program_config) {
+        [&attributes, &a_shape_padded, &in0_tile](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (
                 std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreProgramConfig> ||
@@ -135,6 +139,13 @@ void validate_matmul_block_and_subblock_configuration(
                 std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig> ||
                 std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig> ||
                 std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                TT_FATAL(program_config.in0_block_w != 0, "in0_block_w is 0, which is not valid");
+                const uint32_t Kt = a_shape_padded[-1] / in0_tile.get_width();
+                TT_FATAL(
+                    Kt % program_config.in0_block_w == 0,
+                    "Kt ({}) must be divisible by in0_block_w ({})",
+                    Kt,
+                    program_config.in0_block_w);
                 TT_FATAL(program_config.out_subblock_h != 0, "out_subblock_h is 0, which is not valid");
                 TT_FATAL(program_config.out_subblock_w != 0, "out_subblock_w is 0, which is not valid");
                 if constexpr (
@@ -287,9 +298,19 @@ void validate_matmul_sharded_operand_grids_within_program_compute_grid(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
-                const auto& grid = program_config.compute_with_storage_grid_size;
-                check_tensor_in_grid(input_tensor_a, grid);
-                check_tensor_in_grid(input_tensor_b, grid);
+                // When an input is sharded, the factory uses shard_spec.grid directly as all_cores
+                // and ignores compute_with_storage_grid_size entirely. Validating the shard grid
+                // against the origin-anchored compute_with_storage_grid_size rectangle incorrectly
+                // rejects grids that don't start at (0,0) (e.g. column 1 in a multi-chain fused op).
+                // The only physical constraint is that the shard grid fits within the device grid.
+                // For non-sharded inputs the config grid drives split_work_to_cores, so the
+                // origin-anchored check is still correct there.
+                const auto& config_grid = program_config.compute_with_storage_grid_size;
+                const auto device_grid = input_tensor_a.device()->compute_with_storage_grid_size();
+                auto effective_grid_a = input_tensor_a.memory_config().is_sharded() ? device_grid : config_grid;
+                auto effective_grid_b = input_tensor_b.memory_config().is_sharded() ? device_grid : config_grid;
+                check_tensor_in_grid(input_tensor_a, effective_grid_a);
+                check_tensor_in_grid(input_tensor_b, effective_grid_b);
             }
         },
         chosen_program_config);
@@ -297,6 +318,7 @@ void validate_matmul_sharded_operand_grids_within_program_compute_grid(
 
 void validate_matmul_work_distribution_and_gather_ring_topology(
     const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
     const ttnn::Shape& a_shape_padded,
     const ttnn::Shape& b_shape_padded,
     const tt::tt_metal::Tile& in0_tile,
@@ -396,16 +418,52 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
+                // The factory selects all_cores from the first available shard spec: in0, then in1,
+                // then output. Any of those can produce an offset grid (e.g. column 1 in a fused
+                // chain). Use the device grid as the extent whenever any operand is sharded so we
+                // don't incorrectly reject those grids against the origin-anchored config rect.
+                const auto device_extent = input_tensor_a.device()->compute_with_storage_grid_size();
+                const bool any_sharded = input_tensor_a.memory_config().is_sharded() ||
+                                         input_tensor_b.memory_config().is_sharded() || output_mem_config.is_sharded();
+                const auto effective_extent =
+                    any_sharded ? device_extent : program_config.compute_with_storage_grid_size;
                 check_output_shard_grid_within_extent(
-                    output_mem_config,
-                    program_config.compute_with_storage_grid_size,
-                    "MatmulMultiCoreReuseProgramConfig");
+                    output_mem_config, effective_extent, "MatmulMultiCoreReuseProgramConfig");
             } else {
                 (void)transpose_a;
                 (void)transpose_b;
             }
         },
         chosen_program_config);
+}
+
+void validate_matmul_fused_operations(
+    const std::optional<const Tensor>& optional_bias,
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& fused_activation,
+    const operations::matmul::MatmulProgramConfig& chosen_program_config) {
+    // Determine which fused operations the chosen program config supports.
+    bool config_supports_fused_ops = false;
+    std::visit(
+        [&config_supports_fused_ops](const auto& program_config) {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            // MatmulMultiCoreProgramConfig and MatmulMultiCoreReuseProgramConfig have no
+            // bias / fused_activation kernel paths. Other configs support both; gather_in0
+            // on 1D multicast rejects bias separately in its dedicated check below.
+            config_supports_fused_ops =
+                !std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreProgramConfig> &&
+                !std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig>;
+        },
+        chosen_program_config);
+
+    // Reject bias or activation if the selected config does not support them.
+    TT_FATAL(
+        !optional_bias.has_value() || config_supports_fused_ops,
+        "Bias is not supported for this matmul program config: {}",
+        ttsl::get_active_type_name_in_variant(chosen_program_config));
+    TT_FATAL(
+        !fused_activation.has_value() || config_supports_fused_ops,
+        "Fused activation is not supported for this matmul program config: {}",
+        ttsl::get_active_type_name_in_variant(chosen_program_config));
 }
 
 bool get_broadcast_batch(
@@ -757,13 +815,14 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         chosen_program_config, input_tensor_a.device()->compute_with_storage_grid_size());
 
     validate_matmul_tile_constraints(input_tensor_a, input_tensor_b, in0_tile, in1_tile, chosen_program_config);
-    validate_matmul_block_and_subblock_configuration(attributes, chosen_program_config);
-
     validate_matmul_compute_grid_and_per_core_dims(input_tensor_a, chosen_program_config);
+    validate_matmul_block_and_subblock_configuration(attributes, a_shape_padded, in0_tile, chosen_program_config);
+    validate_matmul_fused_operations(optional_bias, attributes.user_fused_activation, chosen_program_config);
     validate_matmul_sharded_operand_grids_within_program_compute_grid(
         input_tensor_a, input_tensor_b, chosen_program_config);
     validate_matmul_work_distribution_and_gather_ring_topology(
         input_tensor_a,
+        input_tensor_b,
         a_shape_padded,
         b_shape_padded,
         in0_tile,
@@ -934,7 +993,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
                 chosen_program_config),
             "Untilize out is not supported for this program config: {}",
-            typeid(chosen_program_config).name());
+            ttsl::get_active_type_name_in_variant(chosen_program_config));
     }
 
     using namespace tt;
@@ -1385,10 +1444,17 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                 if (input_tensor_b.memory_config().is_sharded()) {
                     TT_FATAL(!program_config.transpose_mcast, "Transpose MCAST not supported when input B is sharded");
                     auto tensor_b_memory_layout = input_tensor_b.memory_config().memory_layout();
+                    // ND_SHARDED in1 in DRAM is read via the generic TensorAccessor path: the program
+                    // factory's in1_is_sharded only covers WIDTH/HEIGHT, so ND falls through to the
+                    // interleaved-style reader, which addresses the NdShardSpec layout from the accessor
+                    // args. The width/height-specific validation below is gated on those layouts, so ND
+                    // DRAM in1 skips it (no shard_spec() access).
+                    const bool in1_is_nd_dram = tensor_b_memory_layout == TensorMemoryLayout::ND_SHARDED &&
+                                                input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
                     TT_FATAL(
                         tensor_b_memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-                            tensor_b_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
-                        "Input B memory layout must be WIDTH_SHARDED or HEIGHT_SHARDED, got: {}",
+                            tensor_b_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || in1_is_nd_dram,
+                        "Input B memory layout must be WIDTH_SHARDED, HEIGHT_SHARDED, or DRAM ND_SHARDED, got: {}",
                         tensor_b_memory_layout);
                     if (tensor_b_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
                         // Height-sharded in1 is only supported for DRAM batched matmuls
@@ -1627,14 +1693,6 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
                     "Output memory layout must be INTERLEAVED, got: {}",
                     attributes.output_mem_config.memory_layout());
-            }
-            if constexpr (
-                std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig> ||
-                std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig> ||
-                std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                TT_FATAL(
-                    (a_shape_padded[-1] / in0_tile.get_width()) % program_config.in0_block_w == 0,
-                    "Kt must be divisible by in0_block_w");
             }
         },
         chosen_program_config);

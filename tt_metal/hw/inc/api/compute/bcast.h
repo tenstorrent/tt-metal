@@ -112,7 +112,7 @@ ALWI void unary_bcast_uninit(uint32_t icb) {
                                        (dst_format == (std::uint32_t)DataFormat::UInt32) ||
                                        (dst_format == (std::uint32_t)DataFormat::Int32);
 
-    UNPACK((llk_unpack_A_uninit<bcast_type>(icb)));
+    UNPACK((llk_unpack_A_uninit<bcast_type>()));
 
     if (enable_unpack_to_dest) {
         MATH((llk_math_eltwise_unary_datacopy_uninit<bcast_type, true>()));
@@ -121,7 +121,7 @@ ALWI void unary_bcast_uninit(uint32_t icb) {
     }
 #endif
 #else
-    UNPACK((llk_unpack_A_uninit<bcast_type>(icb)));
+    UNPACK((llk_unpack_A_uninit<bcast_type>()));
     // Quasar's llk_math_eltwise_unary_datacopy_uninit is a no-op for both unpack_to_dest values,
     // so no runtime dispatch on dst format is needed here.
     MATH((llk_math_eltwise_unary_datacopy_uninit<bcast_type>()));

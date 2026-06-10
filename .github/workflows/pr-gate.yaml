@@ -192,6 +192,7 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-metalium
       upload-coverage: false
+      enable-kernel-ccache: true
   ttnn-smoke-tests:
     needs: [asan-build, find-changed-files]
     if: ${{
@@ -213,6 +214,7 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-nn
       upload-coverage: false
+      enable-kernel-ccache: true
 
   build-docs:
     if: >-
@@ -246,6 +248,8 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-metalium
       build-type: 'ASan'
+      enable-kernel-ccache: true
+    secrets: inherit
 
   ttnn-examples:
     needs: [ asan-build, find-changed-files ]
@@ -266,6 +270,8 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-nn
       build-type: 'ASan'
+      enable-kernel-ccache: true
+    secrets: inherit
 
   # A quick check that parses the models charts in README.md and models/README.md
   # and ensures that models attributes are in sync.

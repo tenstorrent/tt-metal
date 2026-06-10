@@ -104,6 +104,9 @@ DATACOPY_FORMATS = input_output_formats(
         DataFormat.Float16_b,
         DataFormat.Float16,
         DataFormat.MxFp4,
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
     ]
 )
 ALL_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
@@ -204,5 +207,7 @@ def test_eltwise_unary_datacopy_quasar(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
     ), "Assert against golden failed"

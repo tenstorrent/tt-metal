@@ -80,7 +80,7 @@ template <
     bool is_fp32_dest_acc_en,
     MathFidelity math_fidelity,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_acc = true) {
+inline void llk_math_eltwise_binary(std::uint32_t dst_index, const bool clear_fp32_dst_acc = true) {
     constexpr auto effective_math_fidelity = get_effective_math_fidelity<eltwise_binary_type, math_fidelity>();
 
     WAYPOINT("MBIW");
@@ -126,7 +126,7 @@ template <
 inline void llk_math_eltwise_binary(
     const std::uint32_t operand_A,
     [[maybe_unused]] const std::uint32_t operand_B,
-    uint dst_index,
+    std::uint32_t dst_index,
     const bool clear_fp32_dst_acc) {
     static_assert(
         eltwise_binary_type == EltwiseBinaryType::ELWMUL || math_fidelity == MathFidelity::LoFi,
