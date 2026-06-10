@@ -1,5 +1,11 @@
 # `mcast_pipe` rollout — migration report
 
+> **Round 3 update (2026-06-10):** loopback inference is now `sender_in_rect && src != dst`
+> (no membership/count proxy, `area()` deleted, NOC1-swapped rect bounds normalized).
+> Migrated count is now **13**: conv-WS (`activation_reader_width_sharded`) and the R6
+> matmul block-sharded `in0_sender_receiver` (two Pipe faces per core) are on the helper.
+> See `helper_design/mcast_pipe/changelog.md` Round 3 for details and verification.
+
 Helper: `ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp` (`dataflow_kernel_lib::Pipe`). Mode: **run-all**
 (every failure reverted, tree stays green, one report). Host machine: **single-chip Blackhole p150a**.
 Baseline commit: `90120bf` (Phase 1). All migration commits are atomic, per-kernel, and bisectable.

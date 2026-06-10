@@ -22,23 +22,27 @@
 // -----------------------------------------------------------------------------
 // The caller does NOT pick a multicast mode. It states two quantities and the Pipe
 // infers everything else:
-//   * `McastRect` is PURE GEOMETRY — the broadcast bounding box. `area()` is the box core
-//     count, used ONLY to decide loopback (below); it is NOT a transfer count.
-//   * `num_active_cores` is the RECIPIENT count — the cores the NoC actually writes to. It is
-//     the `num_dsts` for both the data and the flag mcast, and the R->S handshake ACK count.
-//     (For the migrated ops these coincide; a future op where ACKs < recipients — conv-1D
-//     weights — would need a third count and is out of scope.)
+//   * `McastRect` is PURE GEOMETRY — the broadcast bounding box; it is NOT a transfer count.
+//   * `num_active_cores` is the RECIPIENT count EXCLUDING the sender. It is the `num_dsts` for
+//     both the data and the flag mcast (+1 internally on the loopback path, which counts self),
+//     and the R->S handshake ACK count. (For the migrated ops these coincide; a future op where
+//     ACKs < recipients — conv-1D weights — would need a third count and is out of scope.)
 //
-// The EXCLUDE_SRC vs INCLUDE_SRC (loopback) choice is INFERRED AT RUNTIME, no caller input:
-//   loopback (INCLUDE_SRC) iff the sender's own core lies in the box AND it is itself a
-//   recipient, i.e. `sender_in_rect_() && num_active_cores == area()`. `my_x`/`my_y` are read
+// The EXCLUDE_SRC vs INCLUDE_SRC (loopback) choice is INFERRED per send(), no caller input:
+//   loopback (INCLUDE_SRC) iff `sender_in_rect_() && src != dst`. `my_x`/`my_y` are read
 //   in the Pipe's `noc_` index space, the same space the rect uses (IR1).
-//   * sender OUTSIDE box                         -> plain multicast    (EXCLUDE_SRC)
-//   * sender INSIDE box, IS a recipient (==area) -> loopback multicast (INCLUDE_SRC, own copy)
-//   * sender INSIDE box, NOT a recipient (<area) -> plain multicast    (EXCLUDE_SRC) — e.g.
-//       matmul in0: the sender holds the block as its source and must not self-overwrite.
-//       Geometry alone cannot tell this from the loopback case; the recipient count does.
-//   * num_active_cores == 1 & loopback           -> self-only: local copy (loopback-to-1 hangs)
+//   * sender OUTSIDE box                  -> plain multicast (EXCLUDE_SRC)
+//   * sender INSIDE box, src != dst       -> loopback multicast (INCLUDE_SRC): if the sender is
+//       a recipient (conv-WS self-gather) this IS its own copy; if it is in the box but inactive
+//       the self-write is a dead store into landing memory nobody reads — harmless either way.
+//   * sender INSIDE box, src == dst       -> plain multicast (EXCLUDE_SRC): its copy is already
+//       in place (matmul in0, R6 extract path); an overlapping self-loopback is unspecified.
+//   * num_active_cores == 0 & in box      -> self-only: local copy (loopback to just self hangs)
+//   The flag mcast rides the SAME mode as the data mcast of that send() (INV4 single path);
+//   send_signal() has no data so it is always EXCLUDE_SRC. `num_active_cores` never counts the
+//   sender; the loopback path adds the +1 for the self-write internally.
+//   OUT of inference reach: a sender that needs the loopback FLAG with src == dst (R6 role-flip
+//   extract path: flag INCLUDE, data EXCLUDE) — stays raw this round.
 //
 // All style choices are decided by the on-device bake-off (helper_design/mcast_pipe/
 // style_bakeoff.md), not by argument:
@@ -87,9 +91,8 @@ enum class Staging { Flag, Counter };
 
 // -----------------------------------------------------------------------------
 // A multicast destination rectangle, in NoC (virtual) coordinates. PURE GEOMETRY: the
-// broadcast bounding box. `area()` is the box core count, used ONLY to decide loopback
-// (sender-is-a-recipient when num_active_cores == area). The transfer/ACK count is the
-// separate `num_active_cores` ctor arg — NOT the area.
+// broadcast bounding box. The transfer/ACK count is the separate `num_active_cores` ctor
+// arg — NOT the area.
 //
 //   SENDER side  : the receiver rectangle.
 //   RECEIVER side: {sender_x, sender_y} 1x1 — points back at the sender (the target of the
@@ -103,9 +106,6 @@ struct McastRect {
 
     // Receiver-side helper: a degenerate 1x1 rect pointing at the sender core.
     static constexpr McastRect single_core(uint32_t x, uint32_t y) { return McastRect{x, y, x, y}; }
-
-    // Box core count — used only to decide loopback (sender is a recipient iff num_active == area).
-    constexpr uint32_t area() const { return (x1 - x0 + 1) * (y1 - y0 + 1); }
 };
 
 // -----------------------------------------------------------------------------
@@ -117,10 +117,11 @@ template <
     bool LINK = true>                 // F4 linking (constexpr)
 class Pipe {
 public:
-    // `dest`             — receiver rectangle (geometry only; area = data-mcast population).
-    // `num_active_cores` — handshake participant count (R->S ACKs the sender waits for, and
-    //                      the degenerate self-only trigger). On the RECEIVER side this is
-    //                      unused (receivers never multicast); pass 1 by convention.
+    // `dest`             — receiver rectangle (geometry only).
+    // `num_active_cores` — handshake participant count (R->S ACKs the sender waits for, and the
+    //                      EXCLUDE-path num_dests). NEVER counts the sender — the loopback path
+    //                      adds its own +1. On the RECEIVER side this is unused (receivers never
+    //                      multicast); pass 1 by convention.
     Pipe(
         const Noc& noc,
         const McastRect& dest,
@@ -136,10 +137,9 @@ public:
     //   raise flag                          — data-before-flag, same VC (INV4); reset owned (H11)
     //   fence                               — flush (F1); atomic-barrier on the counter path
     void send(uint32_t src_l1, uint32_t dst_l1, uint32_t size) {
-        // Self-only degenerate: the sender is the only recipient (loopback path with 1 dest).
-        // Loopback data+flag mcast to 1 dest is unspecified (may hang, H5) — collapse to a local
-        // copy and skip the handshake/fence.
-        if (num_active_cores_ <= 1 && loopback_()) {
+        // Self-only degenerate: no receivers, sender alone in its own box (loopback with just
+        // self is unspecified, may hang, H5) — collapse to a local copy, skip handshake/fence.
+        if (num_active_cores_ == 0 && sender_in_rect_()) {
             local_copy_(src_l1, dst_l1, size);
             return;
         }
@@ -147,8 +147,11 @@ public:
             consumed_.wait(num_active_cores_);
             consumed_.set(0);
         }
-        send_data_(src_l1, dst_l1, size);
-        raise_flag_();
+        // Loopback iff the sender is in the box AND lands its own copy somewhere else than its
+        // source (src == dst means the copy is already in place; never self-overwrite in place).
+        const bool loopback = sender_in_rect_() && src_l1 != dst_l1;
+        send_data_(src_l1, dst_l1, size, loopback);
+        raise_flag_(VALID, loopback);  // flag rides the same mode as the data (INV4 single path)
         fence_();
     }
 
@@ -198,33 +201,30 @@ public:
 private:
     // ---- is the sender's own core inside the receiver rect? (IR1: compare in noc_'s space) ----
     // `my_x`/`my_y` are the core's own NoC coords for this noc index — the same coordinate space
-    // the rect uses.
+    // the rect uses. NOC1 rects arrive with start/end swapped (NoC addressing order), so the
+    // membership test must normalize the bounds rather than assume x0<=x1, y0<=y1.
     bool sender_in_rect_() const {
         const uint32_t mx = my_x[noc_.get_noc_id()];
         const uint32_t my = my_y[noc_.get_noc_id()];
-        return mx >= dest_.x0 && mx <= dest_.x1 && my >= dest_.y0 && my <= dest_.y1;
+        const uint32_t xlo = dest_.x0 < dest_.x1 ? dest_.x0 : dest_.x1;
+        const uint32_t xhi = dest_.x0 < dest_.x1 ? dest_.x1 : dest_.x0;
+        const uint32_t ylo = dest_.y0 < dest_.y1 ? dest_.y0 : dest_.y1;
+        const uint32_t yhi = dest_.y0 < dest_.y1 ? dest_.y1 : dest_.y0;
+        return mx >= xlo && mx <= xhi && my >= ylo && my <= yhi;
     }
 
-    // ---- loopback (INCLUDE_SRC) vs plain (EXCLUDE_SRC) decision ----
-    // INCLUDE_SRC iff the sender is in the box AND it is itself one of the recipients — i.e. the
-    // recipient count `num_active_cores` fills the whole box. The subtle case this guards: a sender
-    // that sits INSIDE its broadcast box but is NOT a recipient (matmul in0 — it already holds the
-    // block as its mcast source and must not self-overwrite). There `num_active_cores < area`, so we
-    // correctly pick EXCLUDE_SRC even though `sender_in_rect_()` is true. Geometry alone cannot tell
-    // these apart; the recipient count is what disambiguates.
-    bool loopback_() const { return sender_in_rect_() && num_active_cores_ == dest_.area(); }
-
     // ---- data multicast (degenerate self-only already short-circuited in send()) ----
-    // num_dsts is the RECIPIENT count (`num_active_cores`) — the cores the NoC actually writes to,
-    // which excludes the sender on the EXCLUDE path even when it sits inside the box.
-    void send_data_(uint32_t src_l1, uint32_t dst_l1, uint32_t size) {
+    // `num_active_cores` never counts the sender; the loopback path adds the +1 for the
+    // self-write (the API counts self there). EXCLUDE writes `num_active_cores` cores even
+    // when the sender sits inside the box.
+    void send_data_(uint32_t src_l1, uint32_t dst_l1, uint32_t size, bool loopback) {
         const uint64_t dst_noc =
             ::get_noc_multicast_addr(dest_.x0, dest_.y0, dest_.x1, dest_.y1, dst_l1, noc_.get_noc_id());
-        const uint32_t num_dsts = num_active_cores_;
-        if (loopback_()) {
-            noc_async_write_multicast_loopback_src(src_l1, dst_noc, size, num_dsts, /*linked=*/LINK, noc_.get_noc_id());
+        if (loopback) {
+            noc_async_write_multicast_loopback_src(
+                src_l1, dst_noc, size, num_active_cores_ + 1, /*linked=*/LINK, noc_.get_noc_id());
         } else {
-            noc_async_write_multicast(src_l1, dst_noc, size, num_dsts, /*linked=*/LINK, noc_.get_noc_id());
+            noc_async_write_multicast(src_l1, dst_noc, size, num_active_cores_, /*linked=*/LINK, noc_.get_noc_id());
         }
         if constexpr (!LINK) {
             // Unlinked fallback: a barrier must separate data and flag (H10 / F4 unlinked arm).
@@ -233,19 +233,19 @@ private:
     }
 
     // ---- raise the data-ready flag (or a control flag with a payload) ----
-    void raise_flag_(uint32_t value = VALID) {
-        const uint32_t num_dsts = num_active_cores_;
+    // `loopback` mirrors the data mcast of the same send() (INV4: same path); send_signal()
+    // has no data, so its flag is always EXCLUDE_SRC.
+    void raise_flag_(uint32_t value = VALID, bool loopback = false) {
         if constexpr (STAGING == Staging::Counter) {
-            data_ready_.inc_multicast(noc_, dest_.x0, dest_.y0, dest_.x1, dest_.y1, value, num_dsts);
+            data_ready_.inc_multicast(noc_, dest_.x0, dest_.y0, dest_.x1, dest_.y1, value, num_active_cores_);
         } else {
             data_ready_.set(value);
-            // Loopback vs plain inferred at runtime, same as the data mcast (INV4: same path).
-            if (loopback_()) {
+            if (loopback) {
                 data_ready_.set_multicast<Noc::McastMode::INCLUDE_SRC>(
-                    noc_, dest_.x0, dest_.y0, dest_.x1, dest_.y1, num_dsts, /*linked=*/false);
+                    noc_, dest_.x0, dest_.y0, dest_.x1, dest_.y1, num_active_cores_ + 1, /*linked=*/false);
             } else {
                 data_ready_.set_multicast<Noc::McastMode::EXCLUDE_SRC>(
-                    noc_, dest_.x0, dest_.y0, dest_.x1, dest_.y1, num_dsts, /*linked=*/false);
+                    noc_, dest_.x0, dest_.y0, dest_.x1, dest_.y1, num_active_cores_, /*linked=*/false);
             }
         }
     }
