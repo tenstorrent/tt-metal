@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 import torch
+import torch.nn.functional as F
 
 import ttnn
 
@@ -38,6 +39,7 @@ _vision_attention_mod = _load_module("dots_ocr_tt_vision_attention", MODEL_DIR /
 _vision_mlp_mod = _load_module("dots_ocr_tt_vision_mlp", MODEL_DIR / "tt" / "vision_mlp.py")
 _vision_block_mod = _load_module("dots_ocr_tt_vision_block", MODEL_DIR / "tt" / "vision_block.py")
 _patch_merger_mod = _load_module("dots_ocr_tt_patch_merger", MODEL_DIR / "tt" / "patch_merger.py")
+_vision_transformer_mod = _load_module("dots_ocr_tt_vision_transformer", MODEL_DIR / "tt" / "vision_transformer.py")
 
 
 def _pcc(a, b):
@@ -234,6 +236,53 @@ def _t_patch_merger(mesh_device) -> tuple[float, int]:
     return _pcc(ref_out, out), wl.count_params(sd)
 
 
+def _t_vision_transformer(mesh_device) -> tuple[float, int]:
+    # Full 42-layer tower (patch_embed -> blocks -> post_trunk_norm -> merger)
+    # through the composed vision_transformer_weights loader — the sub-model
+    # gate runs at the PRODUCTION layer count since the fp32 tower already
+    # cleared 0.99 in its ttnn-phase test (thin-margin block; a reduced
+    # config would not exercise the compounding it is gated on).
+    # Production-distribution input: the golden's real preprocessed image
+    # patches + grid_thw; reference recomputed with the loader's weights so
+    # the loader mapping itself is what is validated. Production operating
+    # point: fp32 residual stream + fp32 weights, 1x4 mesh replicated.
+    golden = torch.load(MODEL_DIR / "reference" / "golden" / "vision_transformer.pt")
+    x, grid_thw = golden["input"], golden["grid_thw"]
+    seq, patch_dim = x.shape
+    num_heads, spatial_merge_size = 12, 2
+    sd = wl.vision_transformer_weights()
+    ref_out = ref.vision_transformer_forward(x, sd, grid_thw, num_layers=wl.VISION_NUM_BLOCKS)
+
+    model = _vision_transformer_mod.TtVisionTransformer(
+        mesh_device, sd, num_layers=wl.VISION_NUM_BLOCKS, num_heads=num_heads, dtype=ttnn.float32
+    )
+    # Host-side rope tables + UNPADDED window boundaries (hybrid_notes).
+    head_dim = sd["blocks.0.attn.qkv.weight"].shape[-1] // num_heads
+    rope = ref.vision_rot_pos_emb(grid_thw, head_dim=head_dim, spatial_merge_size=spatial_merge_size)
+    cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2], grid_thw[:, 0]).cumsum(
+        dim=0, dtype=torch.int32
+    )
+    cu_seqlens = F.pad(cu_seqlens, (1, 0), value=0)
+    padded_seq = ((seq + 127) // 128) * 128
+    x_pad = torch.cat([x, torch.zeros(padded_seq - seq, patch_dim)], dim=0)
+    x_tt = ttnn.from_torch(
+        x_pad.reshape(1, 1, padded_seq, patch_dim),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    rot_mats = model.prepare_rope(rope, padded_seq)
+    cu_tt = model.prepare_cu_seqlens(cu_seqlens)
+    out_tt = model.forward(x_tt, rot_mats, cu_tt)
+    # Replicated output: one device's copy, sliced to the unpadded merged rows.
+    merged_seq = seq // spatial_merge_size**2
+    out = ttnn.to_torch(ttnn.get_device_tensors(out_tt)[0]).float()[:merged_seq]
+    assert out.shape == ref_out.shape, f"{out.shape} != {ref_out.shape}"
+    return _pcc(ref_out, out), wl.count_params(sd)
+
+
 BLOCKS = [
     ("vision_patch_embed", _t_vision_patch_embed),
     ("vision_rmsnorm", _t_vision_rmsnorm),
@@ -241,6 +290,7 @@ BLOCKS = [
     ("vision_mlp", _t_vision_mlp),
     ("vision_block", _t_vision_block),
     ("patch_merger", _t_patch_merger),
+    ("vision_transformer", _t_vision_transformer),
 ]
 
 

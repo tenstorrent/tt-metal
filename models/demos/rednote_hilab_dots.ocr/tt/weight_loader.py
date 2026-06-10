@@ -147,6 +147,29 @@ def patch_merger_weights(hf_sd: Optional[Dict[str, torch.Tensor]] = None) -> Dic
     return {k: sd[k] for k in names}
 
 
+def vision_transformer_weights(
+    num_layers: int = VISION_NUM_BLOCKS, hf_sd: Optional[Dict[str, torch.Tensor]] = None
+) -> Dict[str, torch.Tensor]:
+    """Flat state dict for TtVisionTransformer (``vision_tower.`` prefix stripped).
+
+    Keys: patch_embed.patchifier.{proj.weight,proj.bias,norm.weight},
+    blocks.{i}.{norm1,attn.qkv,attn.proj,norm2,mlp.fc1,mlp.fc2,mlp.fc3}.weight,
+    post_trunk_norm.weight, merger.{ln_q,mlp.0,mlp.2}.{weight,bias} — exactly
+    the flat shape TtVisionTransformer.__init__ expects. Composes the
+    per-kind loaders so layer indexing never leaks past them; ``num_layers``
+    (production default 42) powers both the reduced-config harness and the
+    full-config gate without code duplication.
+    """
+    out = {f"patch_embed.patchifier.{k}": v for k, v in vision_patch_embed_weights(hf_sd=hf_sd).items()}
+    for i in range(num_layers):
+        for k, v in vision_block_weights(layer_idx=i, hf_sd=hf_sd).items():
+            out[f"blocks.{i}.{k}"] = v
+    out["post_trunk_norm.weight"] = vision_rmsnorm_weights(which="post_trunk_norm", hf_sd=hf_sd)["weight"]
+    for k, v in patch_merger_weights(hf_sd=hf_sd).items():
+        out[f"merger.{k}"] = v
+    return out
+
+
 def count_params(sd) -> int:
     """Tensor-leaf element count of a (possibly nested) state dict."""
     if isinstance(sd, torch.Tensor):
@@ -201,3 +224,11 @@ if __name__ == "__main__":
     assert psd["mlp.2.weight"].shape == (1536, 6144), psd["mlp.2.weight"].shape
     assert psd["mlp.2.bias"].shape == (1536,), psd["mlp.2.bias"].shape
     print(f"patch_merger: {len(psd)} tensors, {count_params(psd)} params OK")
+
+    vt = vision_transformer_weights()
+    assert len(vt) == 3 + 7 * VISION_NUM_BLOCKS + 1 + 6, len(vt)
+    assert vt["patch_embed.patchifier.proj.weight"].shape == (1536, 3, 14, 14)
+    assert vt[f"blocks.{VISION_NUM_BLOCKS - 1}.mlp.fc2.weight"].shape == (1536, 4224)
+    assert vt["post_trunk_norm.weight"].shape == (1536,)
+    assert vt["merger.mlp.2.weight"].shape == (1536, 6144)
+    print(f"vision_transformer: {len(vt)} tensors, {count_params(vt)} params OK")

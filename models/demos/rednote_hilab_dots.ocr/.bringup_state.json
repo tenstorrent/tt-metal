@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T07:19:34Z",
+  "updated_at": "2026-06-10T07:28:34Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -430,8 +430,15 @@
         "pcc": 0.990121
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/weight_loader.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_real_hf_weights.py"
+        ],
+        "notes": "vision_transformer_weights composed full-tower loader added to consolidated tt/weight_loader.py (pure-PyTorch; flat vision_tower.-stripped dict of 304 tensors exactly as TtVisionTransformer.__init__ expects: patch_embed.patchifier.* + blocks.{0..41}.* + post_trunk_norm.weight + merger.*; composes the per-kind loaders so layer indexing never leaks past them; num_layers kwarg powers reduced and full config; __main__ self-test extended: 304 tensors, 1262091264 params, key shapes asserted). Stage-1 parametric tests/test_real_hf_weights.py row runs the FULL 42-layer TtVisionTransformer at the production operating point (fp32 residual stream + fp32 weights with the high-precision attention path, 1x4 mesh replicated, golden real preprocessed-image patches [784,588] padded to 896 + grid_thw with host rope/cu_seqlens) vs the pure-PyTorch vision_transformer_forward recomputed with the SAME loader-built weights, so the loader mapping itself is validated end-to-end: PCC 0.990121 (>0.99, matches the ttnn/optimization-phase tower PCC exactly - thin margin is the known early-layer bf16-only-SDPA noise, not a loader defect; sub-model gated at production layer count since the fp32 tower already cleared 0.99 there and a reduced config would not exercise the compounding). Block forward untouched; full harness re-run, all 7 rows passing (vision_patch_embed/vision_rmsnorm/vision_attention/vision_mlp/vision_block/patch_merger unchanged). Guard ok (lint 0, params_loaded 1262091264>0). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.990121,
+        "params_loaded": 1262091264
       }
     },
     {
@@ -1028,6 +1035,12 @@
       "tick": 37,
       "ts": "2026-06-10T07:19:34Z",
       "action": "device[patch_merger]",
+      "result": "ok"
+    },
+    {
+      "tick": 38,
+      "ts": "2026-06-10T07:28:34Z",
+      "action": "device[vision_transformer]",
       "result": "ok"
     }
   ],
