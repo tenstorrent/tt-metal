@@ -40,3 +40,11 @@
 - **Golden test progress**: 663 passed / 0 failed / 120 xfailed (was 654/9/120) — zero supported_fail across the suite. Unit tests 288 passed / 160 skipped. Regression suite 39/39.
 - **Issues encountered**: Verifier residual model (FPU O·inv truncation + recip alone) insufficient; SFPU Typecast in fp32 DEST corrupts pack; int-op bit-rounding in fp32 DEST gave non-monotone threshold (0.125 ulp). TSLICE on held same-CB-read/write CBs shows stale fills on TR2 (pop pointers per-TRISC).
 - **Tests added**: test_scaled_dot_product_attention_flip_rate.py (15 cases: exact-mean grid, Newton recip power-of-two, flip-budget per distribution), probes 014–032.
+
+## Refinement 4 — Non-tile-aligned shapes
+- **Date**: 2026-06-10
+- **What was done**: Added `w_non_aligned` + `h_non_aligned` to SUPPORTED["alignment"]; dropped validate()'s S_kv tile-alignment gate. Descriptor derives all tile counts from `padded_shape` (logical shapes only drive validate/scale). Padded S_kv columns (zero-padded K rows → score cols of 0, corrupting rowmax and rowsum) are handled exactly as the verifier specified — reusing the mask plumbing: the reader prepares a pad-mask row once (c_kv_last bf16 tiles, 0 in valid cols / −1e9 in the last KV tile's pad cols; CB 4, pushed once, never popped) and the compute adds it to scale·S(+mask) on the last KV block only (DestReuseBinary, Row-indexed, HeldBulk) before the running-max update. Padded D / S_q need no fix: zero D cols add 0 to QK^T and P@V; garbage Q-pad rows are sliced host-side. CB formats unchanged; bf16 pad CB mixes with the in_fmt mask CB (per-element srca reconfig per outer iter; hoist disabled by math-MOP non-uniformity).
+- **Accuracy achieved**: bf16 randn pcc ≥ 0.99999, rel_rms 0.0018–0.0048 on (1,1,47,64)/(1,1,32,50)/(1,1,50,50); all 30 new unit cases (10 non-aligned shapes × mask modes, fp32/bf8b causal, explicit scale, deterministic pad-leak traps) pass under both --dev and production.
+- **Golden test progress**: test_golden.py 744/744 — was 624 passed / 120 xfail; all 120 alignment cells flipped, zero xfail remains in the universe. Regression suite green; zero xpass_drift.
+- **Issues encountered**: None — first probe passed.
+- **Tests added**: test_scaled_dot_product_attention_non_aligned.py (30 cases incl. uniform-attention mean trap and rowmax sign trap), probe_042.

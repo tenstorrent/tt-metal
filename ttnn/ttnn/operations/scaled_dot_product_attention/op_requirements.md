@@ -118,10 +118,19 @@ the way (full SFPU stat path) but only halved rms; lever (3) (Newton step on rec
 RNE — ties differ from torch only at exact bf16 midpoints (measure ~0 for random
 data). Flip rates: 0.2–1.0% (pre-fix 2–6%).
 
-### [ ] Refinement 4 — Non-tile-aligned shapes
+### [x] Refinement 4 — Non-tile-aligned shapes
 
 **Goal**: add `"w_non_aligned"` and `"h_non_aligned"` to `SUPPORTED["alignment"]` (40 xfail cells, incl. non-aligned + GQA/MQA/cross combos). Standalone, algorithm-fundamental: padded S_kv columns corrupt rowmax (MAX reduce sees pad) and rowsum (exp(pad − m) ≠ 0), so edge KV tiles need a −∞-style additive pad mask before the max, and padded D / S_q rows need zero-fill on the P@V/output path; non-aligned S_kv also requires lifting `validate()`'s S_kv gate.
 
 **Verifier notes**: last — touches the score path that Refinements 1/3 stabilize, and 9 of the 40 cells also need GQA/MQA (Refinement 2). Not "pad-and-go": the pad mask must enter before the running-max update, exactly like the user mask path (reuse the mask CB plumbing with a generated pad tile).
 
 **Done when**: every alignment-axis xfail cell passes; tile_aligned cells unchanged.
+
+**Outcome (2026-06-10, full)**: w_non_aligned + h_non_aligned in SUPPORTED; golden
+test_golden.py 744/744 (was 624 passed / 120 xfail — every alignment cell flipped,
+zero xfail left in the universe); unit + regression suites green. Exactly as the
+verifier prescribed: reader generates a bf16 pad-mask row (0 valid / −1e9 pad cols,
+prepared once, never popped), compute adds it to scale·S(+mask) on the last KV block
+via the existing mask plumbing (DestReuseBinary Row/HeldBulk) before the rowmax;
+tile counts from padded_shape; S_q/D padding needs no fix (zero-pad benign). S_kv
+validate() gate dropped. rel_rms 0.0018–0.0048 bf16 on the canonical shapes.
