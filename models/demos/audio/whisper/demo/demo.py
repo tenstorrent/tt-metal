@@ -903,6 +903,7 @@ def test_demo_for_conditional_generation(
             ml_model_name=model_repo.split("/")[-1],
             ml_model_type="audio",
             batch_size=total_batch,
+            input_sequence_length=1500,
         )
 
     if should_check_perf:
