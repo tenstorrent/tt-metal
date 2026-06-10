@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T03:26:43Z",
+  "updated_at": "2026-06-10T03:32:56Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -264,8 +264,15 @@
         "pcc": 1.0
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/patch_merger.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_patch_merger.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/patch_merger.traced_ops.json"
+        ],
+        "notes": "LayerNorm(eps=1e-6, gamma+beta TILE [1,32,dim] per llama_layernorm.py) -> ROW_MAJOR reshape workaround (tilized ttnn.reshape hang, issue #29932, qwen25_vl recipe) [784,1536]->[196,6144] -> ttnn.linear+bias -> ttnn.gelu(fast_and_approximate_mode=False) -> ttnn.linear+bias 6144->1536, mirroring reference_impl qwen25_vl/tt/patch_merger.py with dots.ocr deltas (LayerNorm-with-bias instead of RMSNorm; biased Linears). KB ttnn_gelu cited (exact erf GELU standalone after linear; entry notes fused-into-matmul activation cost PCC). HiFi4+fp32-acc; real vision_tower.merger weights, replicated on 1x4 mesh per parallelism plan (placement=replicate); replicated output compared single-device vs golden. Guard ok (lint 0, kernels ok, no new host ops). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999992
       },
       "debug": {
         "status": "n/a",
@@ -663,6 +670,12 @@
       "tick": 10,
       "ts": "2026-06-10T03:26:43Z",
       "action": "device[vision_block]",
+      "result": "ok"
+    },
+    {
+      "tick": 11,
+      "ts": "2026-06-10T03:32:56Z",
+      "action": "device[patch_merger]",
       "result": "ok"
     }
   ],

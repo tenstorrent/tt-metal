@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T03:26:43Z
+**Updated:** 2026-06-10T03:32:56Z
 
 ## Block Status
 
@@ -36,7 +36,7 @@
 | vision_block | optimization | pending | — | 0 |  |
 | vision_block | real_weights | pending | — | 0 |  |
 | patch_merger | reference | done | 1.000000 | 0 | LayerNorm(eps=1e-6) -> view(-1,6144) -> Linear -> GELU -> Linear 6144->1536, real merger weights |
-| patch_merger | ttnn | pending | — | 0 |  |
+| patch_merger | ttnn | done | 0.999992 | 0 | LayerNorm(eps=1e-6, gamma+beta TILE [1,32,dim] per llama_layernorm.py) -> ROW_MAJOR reshape workaround (tilized ttnn.reshape hang, issue #29932, qwen25_vl recipe) [784,1536]->[196,6144] -> ttnn.linear+bias -> ttnn.gelu(fast_and_approximate_mode=False) -> ttnn.linear+bias 6144->1536, mirroring reference_impl qwen25_vl/tt/patch_merger.py with dots.ocr deltas (LayerNorm-with-bias instead of RMSNorm; biased Linears). KB ttnn_gelu cited (exact erf GELU standalone after linear; entry notes fused-into-matmul activation cost PCC). HiFi4+fp32-acc; real vision_tower.merger weights, replicated on 1x4 mesh per parallelism plan (placement=replicate); replicated output compared single-device vs golden. Guard ok (lint 0, kernels ok, no new host ops). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | patch_merger | debug | n/a | — | 0 |  |
 | patch_merger | optimization | pending | — | 0 |  |
 | patch_merger | real_weights | pending | — | 0 |  |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 1 (2026-06-10T02:15:14Z): architecture[all] — ok
 - tick 2 (2026-06-10T02:23:55Z): reference[vision_patch_embed,vision_rmsnorm,vision_attention,vision_mlp] — ok
 - tick 3 (2026-06-10T02:31:43Z): reference[vision_block,patch_merger,vision_transformer,embedding] — ok
 - tick 4 (2026-06-10T02:38:20Z): reference[text_rmsnorm,text_attention,text_mlp,decoder_layer] — ok
@@ -94,6 +93,7 @@
 - tick 8 (2026-06-10T03:13:53Z): device[vision_attention] — ok
 - tick 9 (2026-06-10T03:20:47Z): device[vision_mlp] — ok
 - tick 10 (2026-06-10T03:26:43Z): device[vision_block] — ok
+- tick 11 (2026-06-10T03:32:56Z): device[patch_merger] — ok
 
 ## Host-Resident Exceptions
 

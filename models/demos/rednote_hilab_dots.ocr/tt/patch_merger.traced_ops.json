@@ -1,0 +1,8 @@
+[
+  "ttnn.deallocate",
+  "ttnn.gelu",
+  "ttnn.layer_norm",
+  "ttnn.linear",
+  "ttnn.reshape",
+  "ttnn.to_layout"
+]
