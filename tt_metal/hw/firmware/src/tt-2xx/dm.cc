@@ -46,7 +46,8 @@ thread_local uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 thread_local uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 thread_local uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
-bool trigger_cache_invalidation = false;
+volatile uint32_t cache_invalidation_seq = 0;
+thread_local uint32_t last_cache_invalidation_seq = 0;
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
 thread_local uint32_t rta_count __attribute__((used));
@@ -277,7 +278,9 @@ extern "C" uint32_t _start1() {
                 uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
 
                 // Tell all other DMs to invalidate their portion of the l2 cache
-                trigger_cache_invalidation = true;
+                // by swapping between 0 and 1
+                cache_invalidation_seq = 1 - cache_invalidation_seq;
+                flush_l2_cache_line((uintptr_t)&cache_invalidation_seq);
                 // Flush and save DM0's stack to SRAM
                 extern thread_local uint32_t __stack_base_lwm[];
                 uintptr_t stack_bottom = reinterpret_cast<uintptr_t>(__stack_base_lwm);
@@ -287,8 +290,6 @@ extern "C" uint32_t _start1() {
                 // Trigger the invalidation of the DM cache. This call will wait until all DMs
                 // invalidate their portion of the l2 cache.
                 invalidate_cache_all(hartid);
-                // Turn off the flag to trigger the cache invalidation
-                trigger_cache_invalidation = false;
 
                 run_triscs(enables);
 
@@ -398,7 +399,8 @@ extern "C" uint32_t _start1() {
         while (true) {
             // If DM0 triggers the cache invalidation before the next kernel is run.
             // This will occur before DM0 sends the GO message to the subordinate.
-            if (trigger_cache_invalidation) {
+            uint32_t seq = cache_invalidation_seq;
+            if (seq != last_cache_invalidation_seq) {
                 // Flush and save the subordinate's stack to SRAM
                 extern thread_local uint32_t __stack_base_lwm[];
                 uintptr_t stack_bottom = reinterpret_cast<uintptr_t>(__stack_base_lwm);
@@ -408,6 +410,7 @@ extern "C" uint32_t _start1() {
                 // Trigger the invalidation of the subordinate's cache. This call will wait until all DMs
                 // invalidate their portion of the l2 cache.
                 invalidate_cache_all(hartid);
+                last_cache_invalidation_seq = seq;
             }
             if (*((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) == RUN_SYNC_MSG_GO ||
                 *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) == RUN_SYNC_MSG_LOAD) {
