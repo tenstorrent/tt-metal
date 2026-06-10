@@ -630,13 +630,17 @@ def test_gpt_oss_demo(
         _SEQLEN_SWEEP_LENS = [1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072]
         for i, (sweep_file, step_len) in enumerate(zip(seqlen_sweep_files, _SEQLEN_SWEEP_LENS)):
             if step_len > actual_max_seq_len:
-                logger.info(f"Seqlen sweep step {i} ({step_len // 1024}k) skipped: exceeds mesh cap of {actual_max_seq_len // 1024}k")
+                logger.info(
+                    f"Seqlen sweep step {i} ({step_len // 1024}k) skipped: exceeds mesh cap of {actual_max_seq_len // 1024}k"
+                )
                 continue
             step_prompts, _ = load_inputs(sweep_file, num_real_users, instruct=False)
             repeat_batch_prompts.append(step_prompts)
     else:
         for i in range(repeat_batches):
-            repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
+            repeat_batch_prompts.append(
+                [input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))]
+            )
 
     num_tokens_generated_decode = []
 
