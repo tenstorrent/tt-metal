@@ -127,9 +127,9 @@ def resolve_paged_attention_mode(
     return paged_attention
 
 
-def resolve_hf_rope_mode(hf_model_identifier: str, use_hf_rope: bool) -> bool:
-    if use_hf_rope:
-        return True
+def resolve_hf_rope_mode(hf_model_identifier: str, use_hf_rope):
+    if use_hf_rope is not None:
+        return use_hf_rope
 
     # Phi-1 has been more stable on the HF rotary path during Wormhole bring-up.
     if "phi-1" in hf_model_identifier.lower():

@@ -103,7 +103,10 @@ def pytest_addoption(parser):
     )
     parser.addoption(
         "--use_hf_rope",
-        action="store_true",
-        default=False,
-        help="Whether to use HF-style rope, if not passed, the default mllama will be used",
+        action="store",
+        nargs="?",
+        const=True,
+        default=None,
+        type=_cli_bool,
+        help="Whether to use HF-style rope. Accepts --use_hf_rope, --use_hf_rope 1, or --use_hf_rope 0",
     )
