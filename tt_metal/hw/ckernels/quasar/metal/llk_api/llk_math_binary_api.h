@@ -27,6 +27,10 @@
  * @param operand_B: Logical dataflow buffer id for input B
  * @param acc_to_dest: Flag to control if the result should be accumulated with the current dest
  *     (NONE broadcast path only).
+ *
+ * @note On the unpack thread (T0): for binary_reuse_dest == NONE pair with @ref llk_unpack_AB_init; for
+ *       DEST_TO_SRCA/DEST_TO_SRCB pair with @ref llk_unpack_A_init. On the pack thread, pair with @ref llk_pack_init.
+ * @ref llk_math_eltwise_binary is the matching execute call on this thread.
  */
 template <
     EltwiseBinaryType eltwise_binary_type,
@@ -73,6 +77,8 @@ inline void llk_math_eltwise_binary_init(
  * If dest reg in float16 mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in full mode
  * If dest reg in float32 mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
  * @param clear_fp32_dst_acc: Determines if FP32 clear should be used before dest-reuse.
+ *
+ * @note Call @ref llk_math_eltwise_binary_init with matching template args before this function.
  */
 template <
     EltwiseBinaryType eltwise_binary_type,
@@ -116,6 +122,8 @@ inline void llk_math_eltwise_binary(std::uint32_t dst_index, const bool clear_fp
  * If dest reg in float16 mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in full mode
  * If dest reg in float32 mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
  * @param clear_fp32_dst_acc: Determines if FP32 clear should be used before dest-reuse.
+ *
+ * @note Call @ref llk_math_eltwise_binary_init with matching template args before this function.
  */
 template <
     EltwiseBinaryType eltwise_binary_type,

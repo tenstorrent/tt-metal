@@ -62,6 +62,9 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
     }
 }
 
+/**
+ * @brief No-op on Quasar; kept for API parity with arches that toggle the math remap path.
+ */
 inline void llk_math_reconfig_remap(const bool /*remap_enable*/) {}
 
 /**

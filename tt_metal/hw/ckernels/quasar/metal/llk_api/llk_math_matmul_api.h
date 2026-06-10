@@ -25,6 +25,10 @@
 * Input 0 * Input 1 -> SrcB * SrcA
 * Input 0 dim = [rt_dim, 1], Input 1 dim = [1, ct_dim]
 * Output is a matrix block of dimension [rt_dim, ct_dim]
+*
+* @note On the unpack thread, pair with @ref llk_unpack_AB_matmul_init (T0); on the pack thread, pair with
+*       @ref llk_pack_init (T2).
+* @ref llk_math_matmul_tile or @ref llk_math_matmul_block runs the configured matmul on this thread.
 */
 template <ckernel::MathFidelity math_fidelity>
 inline void llk_math_matmul_init(
@@ -50,6 +54,8 @@ inline void llk_math_matmul_init(
  * This function performs the matrix multiply operation of Input 0 * Input 1 -> SrcB * SrcA,
  * Input 0 = 1 tile -> SrcB reg, Input 1 = 1 tile -> SrcA reg,
  * Output = 1 tile -> Dst reg at specified dst_index
+ *
+ * @note Call @ref llk_math_matmul_init with matching template args before this function.
  */
 inline void llk_math_matmul_tile(const std::uint32_t dst_index) { _llk_math_matmul_tile_(dst_index); }
 
@@ -68,6 +74,7 @@ inline void llk_math_matmul_tile(const std::uint32_t dst_index) { _llk_math_matm
  * This function does not iterate over kt_dim, must iterate over kt_dim externally to this function
  * Dest index is always assumed to start at 0 for this operation
  *
+ * @note Call @ref llk_math_matmul_init with matching template args before this function.
  */
 inline void llk_math_matmul_block(const std::uint32_t ct_dim, const std::uint32_t rt_dim) {
     _llk_math_matmul_block_(ct_dim, rt_dim);

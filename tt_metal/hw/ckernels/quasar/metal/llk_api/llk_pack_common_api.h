@@ -62,7 +62,12 @@ inline bool should_reconfig_pack_in_data_format(const std::uint32_t old_output, 
 }
 
 /**
+ * @brief Reconfigure the packer input data format to that of a new output operand.
+ *
  * Reprograms packer THCON IN_DATA_FORMAT only (gasket); L1 format stays in buffer descriptors.
+ *
+ * @tparam EN_32BIT_DEST: Unused on Quasar; kept for API parity
+ * @param new_output: The new output DataFlow Buffer identifier whose formats are programmed
  */
 template <[[maybe_unused]] bool EN_32BIT_DEST>
 inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
@@ -70,6 +75,15 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     _llk_pack_reconfig_data_format_<p_pacr::PACK0>(pack_src_format[output_id], pack_dst_format[output_id]);
 }
 
+/**
+ * @brief Reconfigure the packer input data format from an old output operand to a new one.
+ *
+ * Silent no-op when the old and new outputs already share both src and dst formats.
+ *
+ * @tparam EN_32BIT_DEST: Unused on Quasar; kept for API parity
+ * @param old_output: The currently programmed output DataFlow Buffer identifier
+ * @param new_output: The new output DataFlow Buffer identifier to switch to
+ */
 template <bool EN_32BIT_DEST>
 inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const std::uint32_t new_output) {
     if (!should_reconfig_pack_in_data_format(old_output, new_output)) {
@@ -123,6 +137,10 @@ TT_ALWAYS_INLINE void llk_pack_relu_config(const std::uint32_t config) {
     _llk_pack_relu_config_<p_pacr::PACK0, false /* EN_32B_DEST */>(ckernel::ReluConfig::from_packed(config));
 }
 
+/**
+ * @brief Configure packer ReLU at runtime from a ReluConfig.
+ * @param relu_config Packer ReLU configuration (type and threshold).
+ */
 TT_ALWAYS_INLINE void llk_pack_relu_config(const ckernel::ReluConfig& relu_config) {
     _llk_pack_relu_config_<p_pacr::PACK0, false /* EN_32B_DEST */>(relu_config);
 }

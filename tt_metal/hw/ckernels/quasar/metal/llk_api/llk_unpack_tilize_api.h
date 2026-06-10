@@ -20,6 +20,8 @@
  * @param operand       The input dataflow buffer identifier.
  * @param full_ct_dim   Number of tiles in a full row of the input tensor.
  * @param block_ct_dim  Number of tiles per MOP invocation (defaults to 1).
+ *
+ * @ref llk_unpack_tilize_block is the matching execute call on this thread.
  */
 inline void llk_unpack_tilize_init(
     const std::uint32_t operand, const std::uint32_t full_ct_dim, const std::uint32_t block_ct_dim = 1) {
@@ -38,6 +40,8 @@ inline void llk_unpack_tilize_init(
  * @param operand          The input dataflow buffer identifier.
  * @param block_c_tiles    Number of tiles in one block row (must match BLOCK_CT_DIM from init).
  * @param input_tile_index Starting tile index (encodes row offset via block_c_tiles stride).
+ *
+ * @note Call @ref llk_unpack_tilize_init before this function.
  */
 inline void llk_unpack_tilize_block(
     const std::uint32_t operand, const std::uint32_t block_c_tiles, const std::uint32_t input_tile_index = 0) {

@@ -22,6 +22,9 @@
  * @param operandA: The input operand Data Flow Buffer identifier
  * @param operandB: The scaler input operand Data Flow Buffer identifier
  *
+ * @note On the unpack thread, pair with @ref llk_unpack_AB_reduce_init (T0); on the pack thread, pair with
+ *       @ref llk_pack_reduce_mask_config (T2).
+ * @ref llk_math_reduce is the matching execute call on this thread.
  */
 template <PoolType pool_type, ReduceDim reduce_dim, const bool EN_32BIT_DEST, ckernel::MathFidelity math_fidelity>
 inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32_t operandB) {
@@ -39,5 +42,7 @@ inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32
  * @brief Perform a reduce operation
  *
  * @param dst_index: Tile index into the destination register.
+ *
+ * @note Call @ref llk_math_reduce_init with matching template args before this function.
  */
 inline void llk_math_reduce(const std::uint32_t dst_index) { _llk_math_reduce_(dst_index); }
