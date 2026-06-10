@@ -228,7 +228,8 @@ using namespace ckernel;
 // This must be done BEFORE including the TopK LLK API header.
 #define DST_SYNC_MODE  dest_sync
 #define DST_ACCUM_MODE is_fp32_dest_acc_en
-#include "llk_sfpu/llk_math_eltwise_unary_sfpu_topk.h"
+#include "llk_sfpu/ckernel_sfpu_topk.h"
+#include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 #undef DST_SYNC_MODE
 #undef DST_ACCUM_MODE
 
@@ -249,7 +250,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr int start_phase         = 0;
     constexpr int end_step            = 0;
     constexpr int start_step          = 0;
-    constexpr int vector_mode         = (int)VectorMode::RC_custom;
+    constexpr VectorMode vector_mode  = VectorMode::RC_custom;
 
     const std::uint32_t math_data_types[NUM_STAGES] = {formats.math, ckernel::to_underlying(DataFormat::UInt16)};
 

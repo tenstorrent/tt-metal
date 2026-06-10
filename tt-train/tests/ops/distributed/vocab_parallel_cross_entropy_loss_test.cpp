@@ -80,6 +80,65 @@ xt::xarray<float> cross_entropy_grad_reference(
     return grad;
 }
 
+// Reference forward (per-position, no reduction): [B, 1, S, 1] of
+// log_normalizer − target_logit, the value vocab_parallel_cross_entropy_loss
+// returns under ReduceType::NONE.
+xt::xarray<float> cross_entropy_loss_reference_per_position(
+    const xt::xarray<float>& logits, const xt::xarray<uint32_t>& targets) {
+    const uint32_t B = static_cast<uint32_t>(logits.shape(0));
+    const uint32_t S = static_cast<uint32_t>(logits.shape(2));
+    const uint32_t V = static_cast<uint32_t>(logits.shape(3));
+
+    xt::xarray<float> per_pos = xt::zeros<float>({B, 1U, S, 1U});
+    for (uint32_t b = 0; b < B; ++b) {
+        for (uint32_t s = 0; s < S; ++s) {
+            float row_max = -std::numeric_limits<float>::infinity();
+            for (uint32_t v = 0; v < V; ++v) {
+                row_max = std::max(row_max, logits(b, 0U, s, v));
+            }
+            float exp_sum = 0.0F;
+            for (uint32_t v = 0; v < V; ++v) {
+                exp_sum += std::exp(logits(b, 0U, s, v) - row_max);
+            }
+            float log_norm = row_max + std::log(exp_sum);
+            float target_logit = logits(b, 0U, s, targets(b, s));
+            per_pos(b, 0U, s, 0U) = log_norm - target_logit;
+        }
+    }
+    return per_pos;
+}
+
+// Reference backward for ReduceType::NONE:
+//   dL/dx_k = (softmax_k − onehot_k) * grad_per_pos[b,0,s,0]
+// (no 1/N factor; the per-position upstream grad carries any weighting).
+xt::xarray<float> cross_entropy_grad_reference_per_position(
+    const xt::xarray<float>& logits, const xt::xarray<uint32_t>& targets, const xt::xarray<float>& grad_per_pos) {
+    const uint32_t B = static_cast<uint32_t>(logits.shape(0));
+    const uint32_t S = static_cast<uint32_t>(logits.shape(2));
+    const uint32_t V = static_cast<uint32_t>(logits.shape(3));
+
+    xt::xarray<float> grad = xt::zeros<float>(logits.shape());
+    for (uint32_t b = 0; b < B; ++b) {
+        for (uint32_t s = 0; s < S; ++s) {
+            float row_max = -std::numeric_limits<float>::infinity();
+            for (uint32_t v = 0; v < V; ++v) {
+                row_max = std::max(row_max, logits(b, 0U, s, v));
+            }
+            float exp_sum = 0.0F;
+            for (uint32_t v = 0; v < V; ++v) {
+                exp_sum += std::exp(logits(b, 0U, s, v) - row_max);
+            }
+            const float g = grad_per_pos(b, 0U, s, 0U);
+            for (uint32_t v = 0; v < V; ++v) {
+                float sm = std::exp(logits(b, 0U, s, v) - row_max) / exp_sum;
+                float oh = (v == targets(b, s)) ? 1.0F : 0.0F;
+                grad(b, 0U, s, v) = (sm - oh) * g;
+            }
+        }
+    }
+    return grad;
+}
+
 }  // namespace
 
 class ShardedCrossEntropyLossTest : public ::testing::Test {
@@ -537,4 +596,182 @@ TEST_F(ShardedCrossEntropyLossTest, MatchesNonShardedImplementationExplicitClust
 
     EXPECT_TRUE(xt::allclose(sharded_grad_xt[0], ref_shard0, 3e-2F, 1e-2F));
     EXPECT_TRUE(xt::allclose(sharded_grad_xt[1], ref_shard1, 3e-2F, 1e-2F));
+}
+
+// ReduceType::NONE forward: the op should return [B,1,S,1] with the same
+// per-position log_normalizer − target_logit value the SFT trainer's masked
+// cross-entropy path consumes when it calls cross_entropy_loss(NONE).
+TEST_F(ShardedCrossEntropyLossTest, ForwardNoneReductionMatchesPerPosition) {
+    SKIP_FOR_WATCHER();
+
+    using namespace ttml;
+
+    auto* device = &autograd::ctx().get_device();
+    const uint32_t B = 2U, S = 32U;
+    const uint32_t local_V = 128U;
+    const uint32_t full_V = local_V * 2U;
+
+    std::mt19937 gen(11);
+    xt::xarray<float> logits_xt = xt::empty<float>({B, 1U, S, full_V});
+    std::uniform_real_distribution<float> dist(-3.0F, 3.0F);
+    for (auto& v : logits_xt) {
+        v = dist(gen);
+    }
+
+    xt::xarray<uint32_t> targets_xt = xt::zeros<uint32_t>({B, S});
+    std::uniform_int_distribution<uint32_t> idx_dist(0U, full_V - 1U);
+    for (uint32_t b = 0; b < B; ++b) {
+        for (uint32_t s = 0; s < S; ++s) {
+            targets_xt(b, s) = idx_dist(gen);
+        }
+    }
+
+    auto shard_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
+    auto logits_dev =
+        core::from_xtensor<float, ttnn::DataType::BFLOAT16>(logits_xt, device, ttnn::Layout::TILE, shard_mapper.get());
+
+    auto replicate_mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+    auto targets_dev = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
+        targets_xt, device, ttnn::Layout::ROW_MAJOR, replicate_mapper.get());
+
+    auto logits_ptr = autograd::create_tensor(logits_dev, true);
+    auto targets_ptr = autograd::create_tensor(targets_dev, false);
+
+    auto loss = ops::distributed::vocab_parallel_cross_entropy_loss(
+        logits_ptr, targets_ptr, /*cluster_axis=*/std::nullopt, ops::ReduceType::NONE);
+
+    // Per-position output is replicated across TP devices.  Each shard's local
+    // copy should equal the full reference per-position tensor.
+    auto loss_xt = core::to_xtensor<float>(loss->get_value(), core::IdentityComposer{});
+    auto expected = cross_entropy_loss_reference_per_position(logits_xt, targets_xt);
+
+    EXPECT_TRUE(xt::allclose(loss_xt[0], expected, 3e-2F, 5e-2F));
+    EXPECT_TRUE(xt::allclose(loss_xt[1], expected, 3e-2F, 5e-2F));
+}
+
+// ReduceType::NONE backward: with a non-uniform per-position upstream grad,
+// the resulting logits gradient should match (softmax − onehot) * grad
+// elementwise — i.e. no implicit 1/N, and the per-position weighting
+// broadcasts across the local vocab shard.
+TEST_F(ShardedCrossEntropyLossTest, BackwardNoneReductionAppliesPerPositionGrad) {
+    SKIP_FOR_WATCHER();
+
+    using namespace ttml;
+
+    auto* device = &autograd::ctx().get_device();
+    const uint32_t B = 2U, S = 32U;
+    const uint32_t local_V = 128U;
+    const uint32_t full_V = local_V * 2U;
+
+    std::mt19937 gen(13);
+    xt::xarray<float> logits_xt = xt::empty<float>({B, 1U, S, full_V});
+    std::uniform_real_distribution<float> dist(-3.0F, 3.0F);
+    for (auto& v : logits_xt) {
+        v = dist(gen);
+    }
+
+    xt::xarray<uint32_t> targets_xt = xt::zeros<uint32_t>({B, S});
+    std::uniform_int_distribution<uint32_t> idx_dist(0U, full_V - 1U);
+    for (uint32_t b = 0; b < B; ++b) {
+        for (uint32_t s = 0; s < S; ++s) {
+            targets_xt(b, s) = idx_dist(gen);
+        }
+    }
+
+    // Non-uniform per-position upstream grad — exercises the [B,1,S,1] →
+    // [B,1,S,V/tp] broadcast in the backward multiply.  Mimics the result of
+    // `loss * batch.loss_mask` in SFTTrainer: most positions weighted 1.0,
+    // a few zeroed out (prompt/padding), then re-normalised.
+    xt::xarray<float> grad_per_pos = xt::ones<float>({B, 1U, S, 1U});
+    for (uint32_t b = 0; b < B; ++b) {
+        grad_per_pos(b, 0U, 0U, 0U) = 0.0F;
+        grad_per_pos(b, 0U, 1U, 0U) = 0.0F;
+    }
+    grad_per_pos *= static_cast<float>(B * S) / static_cast<float>(xt::sum(grad_per_pos)());
+
+    auto shard_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
+    auto logits_dev =
+        core::from_xtensor<float, ttnn::DataType::BFLOAT16>(logits_xt, device, ttnn::Layout::TILE, shard_mapper.get());
+
+    auto replicate_mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+    auto targets_dev = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
+        targets_xt, device, ttnn::Layout::ROW_MAJOR, replicate_mapper.get());
+
+    auto logits_ptr = autograd::create_tensor(logits_dev, true);
+    auto targets_ptr = autograd::create_tensor(targets_dev, false);
+
+    auto loss = ops::distributed::vocab_parallel_cross_entropy_loss(
+        logits_ptr, targets_ptr, /*cluster_axis=*/std::nullopt, ops::ReduceType::NONE);
+
+    auto grad_dev = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+        grad_per_pos, device, ttnn::Layout::TILE, replicate_mapper.get());
+    loss->set_grad(grad_dev);
+    loss->backward();
+
+    ASSERT_TRUE(core::is_tensor_initialized(logits_ptr->get_grad()));
+
+    auto grad_xtensors = core::to_xtensor<float>(logits_ptr->get_grad(), core::IdentityComposer{});
+    auto expected_grad = cross_entropy_grad_reference_per_position(logits_xt, targets_xt, grad_per_pos);
+
+    auto expected_shard0 = xt::view(expected_grad, xt::all(), xt::all(), xt::all(), xt::range(0, local_V));
+    auto expected_shard1 = xt::view(expected_grad, xt::all(), xt::all(), xt::all(), xt::range(local_V, full_V));
+
+    EXPECT_TRUE(xt::allclose(grad_xtensors[0], expected_shard0, 3e-2F, 1e-2F));
+    EXPECT_TRUE(xt::allclose(grad_xtensors[1], expected_shard1, 3e-2F, 1e-2F));
+}
+
+// Equivalence sanity-check between the two reductions: explicitly summing the
+// NONE-mode per-position output and dividing by N must match the MEAN-mode
+// scalar to within bf16 noise.  Catches accidental rescaling drift in either
+// branch.
+TEST_F(ShardedCrossEntropyLossTest, NoneReductionSummedMatchesMean) {
+    SKIP_FOR_WATCHER();
+
+    using namespace ttml;
+
+    auto* device = &autograd::ctx().get_device();
+    const uint32_t B = 2U, S = 32U;
+    const uint32_t local_V = 128U;
+    const uint32_t full_V = local_V * 2U;
+
+    std::mt19937 gen(17);
+    xt::xarray<float> logits_xt = xt::empty<float>({B, 1U, S, full_V});
+    std::uniform_real_distribution<float> dist(-3.0F, 3.0F);
+    for (auto& v : logits_xt) {
+        v = dist(gen);
+    }
+
+    xt::xarray<uint32_t> targets_xt = xt::zeros<uint32_t>({B, S});
+    std::uniform_int_distribution<uint32_t> idx_dist(0U, full_V - 1U);
+    for (uint32_t b = 0; b < B; ++b) {
+        for (uint32_t s = 0; s < S; ++s) {
+            targets_xt(b, s) = idx_dist(gen);
+        }
+    }
+
+    auto shard_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
+    auto replicate_mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+
+    auto make_logits = [&]() {
+        auto dev = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+            logits_xt, device, ttnn::Layout::TILE, shard_mapper.get());
+        return autograd::create_tensor(dev, true);
+    };
+    auto make_targets = [&]() {
+        auto dev = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
+            targets_xt, device, ttnn::Layout::ROW_MAJOR, replicate_mapper.get());
+        return autograd::create_tensor(dev, false);
+    };
+
+    auto mean_loss = ops::distributed::vocab_parallel_cross_entropy_loss(
+        make_logits(), make_targets(), /*cluster_axis=*/std::nullopt, ops::ReduceType::MEAN);
+    auto none_loss = ops::distributed::vocab_parallel_cross_entropy_loss(
+        make_logits(), make_targets(), /*cluster_axis=*/std::nullopt, ops::ReduceType::NONE);
+
+    auto mean_xt = core::to_xtensor<float>(mean_loss->get_value(), core::IdentityComposer{});
+    auto none_xt = core::to_xtensor<float>(none_loss->get_value(), core::IdentityComposer{});
+
+    const float mean_val = mean_xt[0](0, 0, 0, 0);
+    const float none_summed = static_cast<float>(xt::sum(none_xt[0])()) / static_cast<float>(B * S);
+    EXPECT_NEAR(mean_val, none_summed, 5e-2F);
 }

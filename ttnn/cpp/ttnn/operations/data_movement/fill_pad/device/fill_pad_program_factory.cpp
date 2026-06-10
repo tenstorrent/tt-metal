@@ -4,6 +4,7 @@
 
 #include "fill_pad_program_factory.hpp"
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -14,7 +15,9 @@
 
 namespace ttnn::prim {
 
-FillPadProgramFactory::cached_program_t FillPadProgramFactory::create(
+using namespace tt::tt_metal;
+
+tt::tt_metal::ProgramDescriptor FillPadProgramFactory::create_descriptor(
     const FillPadParams& operation_attributes, const FillPadInputs& tensor_args, Tensor& /*tensor_return_value*/) {
     const Tensor& input_tensor = tensor_args.input;
     TT_FATAL(
@@ -25,9 +28,9 @@ FillPadProgramFactory::cached_program_t FillPadProgramFactory::create(
         "FillPadProgramFactory: unsupported dtype {}",
         input_tensor.dtype());
 
-    const float fill_value = operation_attributes.fill_value;
+    const tt::tt_metal::PadValue& fill_value = operation_attributes.fill_value;
     tt::tt_metal::IDevice* device = input_tensor.device();
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    ProgramDescriptor desc;
 
     const tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::tt_metal::Buffer* tens_buffer = input_tensor.buffer();
@@ -92,47 +95,64 @@ FillPadProgramFactory::cached_program_t FillPadProgramFactory::create(
     constexpr uint32_t cb_data_out_idx = tt::CBIndex::c_16;
 
     // CB[0]: data in, double-buffered (reader → compute)
-    {
-        const tt::tt_metal::CircularBufferConfig cb_config =
-            tt::tt_metal::CircularBufferConfig(tile_bytes * 2, {{cb_data_in_idx, cb_data_format}})
-                .set_page_size(cb_data_in_idx, tile_bytes);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
-    }
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = tile_bytes * 2,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = cb_data_in_idx,
+            .data_format = cb_data_format,
+            .page_size = tile_bytes,
+        }}},
+    });
 
     // CB[1]: right mask, capacity=1 (writer → compute, persistent; only when has_right_pad)
     if (has_right_pad) {
-        const tt::tt_metal::CircularBufferConfig cb_config =
-            tt::tt_metal::CircularBufferConfig(tile_bytes, {{cb_right_mask_idx, cb_data_format}})
-                .set_page_size(cb_right_mask_idx, tile_bytes);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = tile_bytes,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = cb_right_mask_idx,
+                .data_format = cb_data_format,
+                .page_size = tile_bytes,
+            }}},
+        });
     }
 
     // CB[2]: bottom mask, capacity=1 (writer → compute, persistent; only when has_bottom_pad)
     if (has_bottom_pad) {
-        const tt::tt_metal::CircularBufferConfig cb_config =
-            tt::tt_metal::CircularBufferConfig(tile_bytes, {{cb_bot_mask_idx, cb_data_format}})
-                .set_page_size(cb_bot_mask_idx, tile_bytes);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = tile_bytes,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = cb_bot_mask_idx,
+                .data_format = cb_data_format,
+                .page_size = tile_bytes,
+            }}},
+        });
     }
 
     // CB[16]: data out, double-buffered (compute → writer)
-    {
-        const tt::tt_metal::CircularBufferConfig cb_config =
-            tt::tt_metal::CircularBufferConfig(tile_bytes * 2, {{cb_data_out_idx, cb_data_format}})
-                .set_page_size(cb_data_out_idx, tile_bytes);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
-    }
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = tile_bytes * 2,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = cb_data_out_idx,
+            .data_format = cb_data_format,
+            .page_size = tile_bytes,
+        }}},
+    });
 
     // ---- Kernel defines ----
-    std::map<std::string, std::string> kernel_defines;
-    kernel_defines["MASK_ELEM_UINT"] = (input_element_size_bytes == 2) ? "uint16_t" : "uint32_t";
-    kernel_defines["MASK_VALUE"] = is_fp32 ? "0x3F800000u" : is_float_type ? "0x3F80u" : "1u";
-    kernel_defines["FILL_PAD_DATA_FMT"] = detail::get_where_data_fmt(input_tensor.dtype());
+    KernelDescriptor::Defines kernel_defines;
+    kernel_defines.emplace_back("MASK_ELEM_UINT", (input_element_size_bytes == 2) ? "uint16_t" : "uint32_t");
+    kernel_defines.emplace_back("MASK_VALUE", is_fp32 ? "0x3F800000u" : is_float_type ? "0x3F80u" : "1u");
+    kernel_defines.emplace_back("FILL_PAD_DATA_FMT", detail::get_where_data_fmt(input_tensor.dtype()));
     if (!is_float_type) {
-        kernel_defines["FILL_PAD_FILL_DATA_FMT"] = fmt::format("DataFormat::{}", cb_data_format);
+        kernel_defines.emplace_back("FILL_PAD_FILL_DATA_FMT", fmt::format("DataFormat::{}", cb_data_format));
     }
-    kernel_defines["FILL_PAD_FILL_FN"] = is_float_type ? "fill_tile_bitcast" : "fill_tile_int<FILL_PAD_FILL_DATA_FMT>";
-    kernel_defines["FILL_PAD_FILL_ARG"] = "fill_bits";
+    kernel_defines.emplace_back(
+        "FILL_PAD_FILL_FN", is_float_type ? "fill_tile_bitcast" : "fill_tile_int<FILL_PAD_FILL_DATA_FMT>");
+    kernel_defines.emplace_back("FILL_PAD_FILL_ARG", "fill_bits");
 
     // ---- Reader CT args ----
     // [0] W_tiles, [1] H_tiles, [2] N_slices, [3] has_right_pad, [4] has_bottom_pad,
@@ -175,7 +195,7 @@ FillPadProgramFactory::cached_program_t FillPadProgramFactory::create(
     // [0] W_tiles, [1] H_tiles, [2] has_right_pad, [3] has_bottom_pad,
     // [4] elem_size, [5] fill_bits, [6] cb_data_in=0, [7] cb_right_mask=1,
     // [8] cb_bot_mask=2, [9] cb_data_out=16
-    const std::vector<uint32_t> compute_ct = {
+    std::vector<uint32_t> compute_ct = {
         W_tiles,
         H_tiles,
         has_right_pad,
@@ -189,17 +209,23 @@ FillPadProgramFactory::cached_program_t FillPadProgramFactory::create(
     };
 
     // ---- Kernel creation ----
-    const tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_reader.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_ct, kernel_defines));
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_reader.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_ct);
+    reader_desc.defines = kernel_defines;
+    reader_desc.config = ReaderConfigDescriptor{};
 
-    const tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_writer.cpp",
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_ct, kernel_defines));
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_writer.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_ct);
+    writer_desc.defines = kernel_defines;
+    writer_desc.config = WriterConfigDescriptor{};
 
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
@@ -209,22 +235,26 @@ FillPadProgramFactory::cached_program_t FillPadProgramFactory::create(
         unpack_to_dest_mode[cb_bot_mask_idx] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
-    const tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/compute/fill_pad_compute.cpp",
-        all_cores,
-        tt::tt_metal::ComputeConfig{
-            .fp32_dest_acc_en = need_fp32_dest_acc,
-            .unpack_to_dest_mode = unpack_to_dest_mode,
-            .compile_args = compute_ct,
-            .defines = kernel_defines,
-        });
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/compute/fill_pad_compute.cpp";
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = all_cores;
+    compute_desc.compile_time_args = std::move(compute_ct);
+    compute_desc.defines = std::move(kernel_defines);
+    compute_desc.config = ComputeConfigDescriptor{
+        .fp32_dest_acc_en = need_fp32_dest_acc,
+        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+    };
 
     // ---- Per-core runtime args ----
     // Each core's global range [work_start, work_start + num_work) is intersected with the three
     // global blocks to produce per-phase (start, num) pairs. Phases with num==0 are skipped in the
     // kernels.
     const std::vector<CoreCoord> cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
+    reader_desc.runtime_args.reserve(cores.size());
+    writer_desc.runtime_args.reserve(cores.size());
+    compute_desc.runtime_args.reserve(cores.size());
     uint32_t work_start = 0;
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores[i];
@@ -259,57 +289,25 @@ FillPadProgramFactory::cached_program_t FillPadProgramFactory::create(
         clip_to_phase_block(T_right, T_bottom, start_bottom, num_bottom);
         clip_to_phase_block(T_right + T_bottom, T_corner, start_corner, num_corner);
 
-        const std::vector<uint32_t> rt_args = {
-            static_cast<uint32_t>(tens_buffer->address()),
-            start_right,
-            num_right,
-            start_bottom,
-            num_bottom,
-            start_corner,
-            num_corner,
-        };
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, rt_args);
-        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, rt_args);
+        reader_desc.emplace_runtime_args(
+            core, {tens_buffer, start_right, num_right, start_bottom, num_bottom, start_corner, num_corner});
+        writer_desc.emplace_runtime_args(
+            core, {tens_buffer, start_right, num_right, start_bottom, num_bottom, start_corner, num_corner});
 
         // Compute RT: per-phase counts; starts are not needed (CBs are FIFO).
-        tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, {num_right, num_bottom, num_corner});
+        compute_desc.emplace_runtime_args(core, {num_right, num_bottom, num_corner});
 
         work_start = work_end;
     }
 
-    return cached_program_t{
-        std::move(program),
-        shared_variables_t{
-            .reader_kernel_id = reader_kernel_id,
-            .writer_kernel_id = writer_kernel_id,
-            .compute_kernel_id = compute_kernel_id,
-            .cores = cores,
-        }};
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc));
+
+    return desc;
 }
 
-void FillPadProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const FillPadParams& /*operation_attributes*/,
-    const FillPadInputs& tensor_args,
-    Tensor& /*tensor_return_value*/) {
-    const Tensor& input_tensor = tensor_args.input;
-    tt::tt_metal::Buffer* tens_buffer = input_tensor.buffer();
-
-    tt::tt_metal::Program& program = cached_program.program;
-    const tt::tt_metal::KernelHandle reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    const tt::tt_metal::KernelHandle writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    const auto& cores = cached_program.shared_variables.cores;
-
-    auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
-    auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
-
-    for (const auto& core : cores) {
-        reader_runtime_args[core.x][core.y][0] = tens_buffer->address();
-        writer_runtime_args[core.x][core.y][0] = tens_buffer->address();
-    }
-}
-
-FillPadL1ShardedProgramFactory::cached_program_t FillPadL1ShardedProgramFactory::create(
+tt::tt_metal::ProgramDescriptor FillPadL1ShardedProgramFactory::create_descriptor(
     const FillPadParams& operation_attributes, const FillPadInputs& tensor_args, Tensor& /*tensor_return_value*/) {
     const Tensor& input_tensor = tensor_args.input;
     TT_FATAL(
@@ -320,9 +318,9 @@ FillPadL1ShardedProgramFactory::cached_program_t FillPadL1ShardedProgramFactory:
         "FillPadL1ShardedProgramFactory: unsupported dtype {}",
         input_tensor.dtype());
 
-    const float fill_value = operation_attributes.fill_value;
+    const tt::tt_metal::PadValue& fill_value = operation_attributes.fill_value;
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    ProgramDescriptor desc;
 
     const tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::tt_metal::Buffer* tens_buffer = input_tensor.buffer();
@@ -473,67 +471,94 @@ FillPadL1ShardedProgramFactory::cached_program_t FillPadL1ShardedProgramFactory:
     constexpr uint32_t cb_data_out_idx = tt::CBIndex::c_16;
 
     // ---- Circular buffers (all active cores) ----
-    {
-        const tt::tt_metal::CircularBufferConfig cb_config =
-            tt::tt_metal::CircularBufferConfig(tile_bytes * 2, {{cb_data_in_idx, cb_data_format}})
-                .set_page_size(cb_data_in_idx, tile_bytes);
-        tt::tt_metal::CreateCircularBuffer(program, all_active_set, cb_config);
-    }
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = tile_bytes * 2,
+        .core_ranges = all_active_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = cb_data_in_idx,
+            .data_format = cb_data_format,
+            .page_size = tile_bytes,
+        }}},
+    });
     if (has_right_pad) {
-        const tt::tt_metal::CircularBufferConfig cb_config =
-            tt::tt_metal::CircularBufferConfig(tile_bytes, {{cb_right_mask_idx, cb_data_format}})
-                .set_page_size(cb_right_mask_idx, tile_bytes);
-        tt::tt_metal::CreateCircularBuffer(program, all_active_set, cb_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = tile_bytes,
+            .core_ranges = all_active_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = cb_right_mask_idx,
+                .data_format = cb_data_format,
+                .page_size = tile_bytes,
+            }}},
+        });
     }
     if (has_bottom_pad) {
-        const tt::tt_metal::CircularBufferConfig cb_config =
-            tt::tt_metal::CircularBufferConfig(tile_bytes, {{cb_bot_mask_idx, cb_data_format}})
-                .set_page_size(cb_bot_mask_idx, tile_bytes);
-        tt::tt_metal::CreateCircularBuffer(program, all_active_set, cb_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = tile_bytes,
+            .core_ranges = all_active_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = cb_bot_mask_idx,
+                .data_format = cb_data_format,
+                .page_size = tile_bytes,
+            }}},
+        });
     }
-    {
-        const tt::tt_metal::CircularBufferConfig cb_config =
-            tt::tt_metal::CircularBufferConfig(tile_bytes * 2, {{cb_data_out_idx, cb_data_format}})
-                .set_page_size(cb_data_out_idx, tile_bytes);
-        tt::tt_metal::CreateCircularBuffer(program, all_active_set, cb_config);
-    }
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = tile_bytes * 2,
+        .core_ranges = all_active_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = cb_data_out_idx,
+            .data_format = cb_data_format,
+            .page_size = tile_bytes,
+        }}},
+    });
 
     // ---- Kernel defines ----
-    std::map<std::string, std::string> kernel_defines;
-    kernel_defines["MASK_ELEM_UINT"] = (input_element_size_bytes == 2) ? "uint16_t" : "uint32_t";
-    kernel_defines["MASK_VALUE"] = is_fp32 ? "0x3F800000u" : is_float_type ? "0x3F80u" : "1u";
-    kernel_defines["FILL_PAD_DATA_FMT"] = detail::get_where_data_fmt(input_tensor.dtype());
+    KernelDescriptor::Defines kernel_defines;
+    kernel_defines.emplace_back("MASK_ELEM_UINT", (input_element_size_bytes == 2) ? "uint16_t" : "uint32_t");
+    kernel_defines.emplace_back("MASK_VALUE", is_fp32 ? "0x3F800000u" : is_float_type ? "0x3F80u" : "1u");
+    kernel_defines.emplace_back("FILL_PAD_DATA_FMT", detail::get_where_data_fmt(input_tensor.dtype()));
     if (!is_float_type) {
-        kernel_defines["FILL_PAD_FILL_DATA_FMT"] = fmt::format("DataFormat::{}", cb_data_format);
+        kernel_defines.emplace_back("FILL_PAD_FILL_DATA_FMT", fmt::format("DataFormat::{}", cb_data_format));
     }
-    kernel_defines["FILL_PAD_FILL_FN"] = is_float_type ? "fill_tile_bitcast" : "fill_tile_int<FILL_PAD_FILL_DATA_FMT>";
-    kernel_defines["FILL_PAD_FILL_ARG"] = "fill_bits";
+    kernel_defines.emplace_back(
+        "FILL_PAD_FILL_FN", is_float_type ? "fill_tile_bitcast" : "fill_tile_int<FILL_PAD_FILL_DATA_FMT>");
+    kernel_defines.emplace_back("FILL_PAD_FILL_ARG", "fill_bits");
 
     // ---- Reader kernels (one per has_right_pad value) ----
     // CT: [0] W_tiles, [1] has_right_pad, [2] elem_size, [3] cb_data_in
-    std::array<tt::tt_metal::KernelHandle, 2> reader_kernel_ids = {0, 0};
+    // Track descriptor indices so per-core runtime args can target the right kernel below.
+    std::array<int, 2> reader_kernel_idx = {-1, -1};
     for (uint32_t rp_idx = 0; rp_idx <= 1; ++rp_idx) {
         if (rw_ranges[rp_idx].empty()) {
             continue;
         }
-        const std::vector<uint32_t> reader_ct = {
+        KernelDescriptor reader_desc;
+        reader_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_sharded_reader.cpp";
+        reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        reader_desc.core_ranges = CoreRangeSet(rw_ranges[rp_idx]);
+        reader_desc.compile_time_args = {
             W_tiles, rp_idx, input_element_size_bytes, static_cast<uint32_t>(cb_data_in_idx)};
-        reader_kernel_ids[rp_idx] = tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_sharded_reader.cpp",
-            CoreRangeSet(rw_ranges[rp_idx]),
-            tt::tt_metal::ReaderDataMovementConfig(reader_ct, kernel_defines));
+        reader_desc.defines = kernel_defines;
+        reader_desc.config = ReaderConfigDescriptor{};
+        reader_kernel_idx[rp_idx] = static_cast<int>(desc.kernels.size());
+        desc.kernels.push_back(std::move(reader_desc));
     }
 
     // ---- Writer kernels (one per has_right_pad value) ----
     // CT: [0] W_tiles, [1] has_right_pad, [2] W_mod32, [3] H_mod32,
     //     [4] cb_right_mask, [5] cb_bot_mask, [6] cb_data_out
-    std::array<tt::tt_metal::KernelHandle, 2> writer_kernel_ids = {0, 0};
+    std::array<int, 2> writer_kernel_idx = {-1, -1};
     for (uint32_t rp_idx = 0; rp_idx <= 1; ++rp_idx) {
         if (rw_ranges[rp_idx].empty()) {
             continue;
         }
-        const std::vector<uint32_t> writer_ct = {
+        KernelDescriptor writer_desc;
+        writer_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_sharded_writer.cpp";
+        writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        writer_desc.core_ranges = CoreRangeSet(rw_ranges[rp_idx]);
+        writer_desc.compile_time_args = {
             W_tiles,
             rp_idx,
             W_mod32,
@@ -541,11 +566,10 @@ FillPadL1ShardedProgramFactory::cached_program_t FillPadL1ShardedProgramFactory:
             static_cast<uint32_t>(cb_right_mask_idx),
             static_cast<uint32_t>(cb_bot_mask_idx),
             static_cast<uint32_t>(cb_data_out_idx)};
-        writer_kernel_ids[rp_idx] = tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_sharded_writer.cpp",
-            CoreRangeSet(rw_ranges[rp_idx]),
-            tt::tt_metal::WriterDataMovementConfig(writer_ct, kernel_defines));
+        writer_desc.defines = kernel_defines;
+        writer_desc.config = WriterConfigDescriptor{};
+        writer_kernel_idx[rp_idx] = static_cast<int>(desc.kernels.size());
+        desc.kernels.push_back(std::move(writer_desc));
     }
 
     // ---- Compute kernel unpack-to-dest mode ----
@@ -561,10 +585,14 @@ FillPadL1ShardedProgramFactory::cached_program_t FillPadL1ShardedProgramFactory:
     // CT: [0] W_tiles (= effective_W for this group), [1] H_tiles, [2] has_right_pad, [3] has_bottom_pad,
     //     [4] elem_size, [5] fill_bits, [6] cb_data_in, [7] cb_right_mask,
     //     [8] cb_bot_mask, [9] cb_data_out
-    std::map<ComputeKey, tt::tt_metal::KernelHandle> compute_kernel_map;
-    std::vector<tt::tt_metal::KernelHandle> compute_kernel_ids_vec;
+    std::map<ComputeKey, int> compute_kernel_idx_map;
     for (auto& [key, ranges] : compute_ranges) {
-        const std::vector<uint32_t> compute_ct = {
+        KernelDescriptor compute_desc;
+        compute_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/compute/fill_pad_compute.cpp";
+        compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        compute_desc.core_ranges = CoreRangeSet(ranges);
+        compute_desc.compile_time_args = {
             key.effective_W,
             key.H,
             key.has_right_pad,
@@ -575,31 +603,23 @@ FillPadL1ShardedProgramFactory::cached_program_t FillPadL1ShardedProgramFactory:
             static_cast<uint32_t>(cb_right_mask_idx),
             static_cast<uint32_t>(cb_bot_mask_idx),
             static_cast<uint32_t>(cb_data_out_idx)};
-        const tt::tt_metal::KernelHandle h = tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/compute/fill_pad_compute.cpp",
-            CoreRangeSet(ranges),
-            tt::tt_metal::ComputeConfig{
-                .fp32_dest_acc_en = need_fp32_dest_acc,
-                .unpack_to_dest_mode = unpack_to_dest_mode,
-                .compile_args = compute_ct,
-                .defines = kernel_defines});
-        compute_kernel_map[key] = h;
-        compute_kernel_ids_vec.push_back(h);
+        compute_desc.defines = kernel_defines;
+        compute_desc.config = ComputeConfigDescriptor{
+            .fp32_dest_acc_en = need_fp32_dest_acc,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
+        };
+        compute_kernel_idx_map[key] = static_cast<int>(desc.kernels.size());
+        desc.kernels.push_back(std::move(compute_desc));
     }
 
     // ---- Per-core runtime args ----
     // RT layout: [0] buf_addr, [1] shard_H_tiles, [2] has_bottom_pad_core, [3] num_work,
     //            [4] local_right_col
-    const uint32_t buf_addr = static_cast<uint32_t>(tens_buffer->address());
-    std::vector<CoreCoord> active_coords;
-    std::vector<uint32_t> active_has_right_pad;
-
     for (const auto& ci : active) {
-        const std::vector<uint32_t> rt = {
-            buf_addr, ci.shard_H_tiles, ci.has_bottom_pad, ci.num_work, ci.local_right_col};
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_ids[ci.has_right_pad], ci.coord, rt);
-        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_ids[ci.has_right_pad], ci.coord, rt);
+        desc.kernels[reader_kernel_idx[ci.has_right_pad]].emplace_runtime_args(
+            ci.coord, {tens_buffer, ci.shard_H_tiles, ci.has_bottom_pad, ci.num_work, ci.local_right_col});
+        desc.kernels[writer_kernel_idx[ci.has_right_pad]].emplace_runtime_args(
+            ci.coord, {tens_buffer, ci.shard_H_tiles, ci.has_bottom_pad, ci.num_work, ci.local_right_col});
 
         // Compute RT: (num_right, num_bottom, num_corner) per the unified phase layout.
         // The sharded reader/writer push tiles in the same order (right, bottom, corner),
@@ -618,51 +638,11 @@ FillPadL1ShardedProgramFactory::cached_program_t FillPadL1ShardedProgramFactory:
             num_bottom = ci.local_valid_w;
         }
         const uint32_t key_H = ci.has_bottom_pad ? ci.shard_H_tiles : pages_per_shard_y;
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            compute_kernel_map.at({ci.has_right_pad, ci.has_bottom_pad, key_H, ci.local_valid_w}),
-            ci.coord,
-            {num_right, num_bottom, num_corner});
-        active_coords.push_back(ci.coord);
-        active_has_right_pad.push_back(ci.has_right_pad);
+        const int ck_idx = compute_kernel_idx_map.at({ci.has_right_pad, ci.has_bottom_pad, key_H, ci.local_valid_w});
+        desc.kernels[ck_idx].emplace_runtime_args(ci.coord, {num_right, num_bottom, num_corner});
     }
 
-    return cached_program_t{
-        std::move(program),
-        shared_variables_t{
-            .reader_kernel_ids = reader_kernel_ids,
-            .writer_kernel_ids = writer_kernel_ids,
-            .compute_kernel_ids = std::move(compute_kernel_ids_vec),
-            .active_cores = std::move(active_coords),
-            .active_core_has_right_pad = std::move(active_has_right_pad),
-        }};
-}
-
-void FillPadL1ShardedProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const FillPadParams& /*operation_attributes*/,
-    const FillPadInputs& tensor_args,
-    Tensor& /*tensor_return_value*/) {
-    const uint32_t buf_addr = static_cast<uint32_t>(tensor_args.input.buffer()->address());
-
-    tt::tt_metal::Program& program = cached_program.program;
-    const auto& sv = cached_program.shared_variables;
-
-    for (uint32_t rp_idx = 0; rp_idx <= 1; ++rp_idx) {
-        if (sv.reader_kernel_ids[rp_idx] == 0) {
-            continue;
-        }
-        auto& rrt = GetRuntimeArgs(program, sv.reader_kernel_ids[rp_idx]);
-        auto& wrt = GetRuntimeArgs(program, sv.writer_kernel_ids[rp_idx]);
-        for (uint32_t i = 0; i < sv.active_cores.size(); ++i) {
-            if (sv.active_core_has_right_pad[i] != rp_idx) {
-                continue;
-            }
-            const CoreCoord& core = sv.active_cores[i];
-            rrt[core.x][core.y][0] = buf_addr;
-            wrt[core.x][core.y][0] = buf_addr;
-        }
-    }
+    return desc;
 }
 
 }  // namespace ttnn::prim

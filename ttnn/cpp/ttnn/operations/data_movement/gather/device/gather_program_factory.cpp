@@ -159,14 +159,19 @@ ProgramDescriptor GatherDeviceOperation::SingleRowSingleCore::create_descriptor(
     for (const auto& [group, work_per_core] : work_groups) {
         for (const auto& range : group.ranges()) {
             for (const auto& core : range) {
-                reader_desc.runtime_args.emplace_back(
-                    core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        input_index_tensor_buffer->address(), work_per_core, tile_width, tile_height, id});
-                writer_desc.runtime_args.emplace_back(
-                    core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        input_tensor_buffer->address(), output_tensor_buffer->address(), work_per_core, id});
+                if (work_per_core > 0) {
+                    // Active core: register Buffer* bindings for fast cache-hit patching.
+                    reader_desc.emplace_runtime_args(
+                        core, {input_index_tensor_buffer, work_per_core, tile_width, tile_height, id});
+                    writer_desc.emplace_runtime_args(
+                        core, {input_tensor_buffer, output_tensor_buffer, work_per_core, id});
+                } else {
+                    // Idle core (work_per_core == 0): the kernel short-circuits, so no
+                    // BufferBinding is registered — that would force a GetRuntimeArgs
+                    // lookup on every cache hit for a core that never reads/writes.
+                    reader_desc.emplace_runtime_args(core, {0u, 0u, tile_width, tile_height, id});
+                    writer_desc.emplace_runtime_args(core, {0u, 0u, 0u, id});
+                }
                 id++;
             }
         }
@@ -313,14 +318,17 @@ ProgramDescriptor GatherDeviceOperation::SingleRowMultiCore::create_descriptor(
     for (const auto& [group, work_per_core] : work_groups) {
         for (const auto& range : group.ranges()) {
             for (const auto& core : range) {
-                reader_desc.runtime_args.emplace_back(
-                    core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        input_index_tensor_buffer->address(), work_per_core, tile_width, tile_height, id});
-                writer_desc.runtime_args.emplace_back(
-                    core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        input_tensor_buffer->address(), output_tensor_buffer->address(), work_per_core, id});
+                if (work_per_core > 0) {
+                    reader_desc.emplace_runtime_args(
+                        core, {input_index_tensor_buffer, work_per_core, tile_width, tile_height, id});
+                    writer_desc.emplace_runtime_args(
+                        core, {input_tensor_buffer, output_tensor_buffer, work_per_core, id});
+                } else {
+                    // Idle core: skip BufferBinding so cache-hit patching doesn't iterate
+                    // bindings that the kernel ignores (work_per_core == 0 short-circuits).
+                    reader_desc.emplace_runtime_args(core, {0u, 0u, tile_width, tile_height, id});
+                    writer_desc.emplace_runtime_args(core, {0u, 0u, 0u, id});
+                }
                 id++;
             }
         }

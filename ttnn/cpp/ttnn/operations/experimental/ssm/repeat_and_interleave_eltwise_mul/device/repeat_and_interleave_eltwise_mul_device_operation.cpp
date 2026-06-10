@@ -5,6 +5,7 @@
 #include "repeat_and_interleave_eltwise_mul_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -108,32 +109,6 @@ Tensor RepeatAndInterleaveEltwiseMulDeviceOperation::create_output_tensors(
         return *tensor_args.preallocated_output;
     }
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.a.device());
-}
-
-ttsl::hash::hash_t RepeatAndInterleaveEltwiseMulDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor_a = tensor_args.a;
-    const auto& input_tensor_b = tensor_args.b;
-    const auto& input_shape_a = input_tensor_a.padded_shape();
-    const auto& input_shape_b = input_tensor_b.padded_shape();
-    // Determine compile-time defines based on shapes
-    bool repeat_in0 = (input_shape_a[-1] == TILE_WIDTH);
-    bool repeat_interleave_in1 = (input_shape_b[-1] == HIDDEN_SIZE);
-
-    operation::Hash hash = operation::hash_operation<RepeatAndInterleaveEltwiseMulDeviceOperation>(
-        args,
-        input_tensor_a.dtype(),
-        input_tensor_b.dtype(),
-        input_tensor_a.memory_config(),
-        input_tensor_b.memory_config(),
-        args.memory_config,
-        args.math_fidelity,
-        input_shape_a.volume(),
-        input_shape_b.volume(),
-        repeat_in0,
-        repeat_interleave_in1);
-
-    return hash;
 }
 
 }  // namespace ttnn::experimental::prim

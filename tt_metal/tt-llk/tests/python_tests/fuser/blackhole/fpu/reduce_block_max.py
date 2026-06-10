@@ -12,10 +12,12 @@ from fuser.fused_loop import FusedLoop, LoopTileByTile
 from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
 from helpers.golden_generators import ReduceBlockMaxRowGolden, get_golden_generator
+from helpers.llk_params import ReduceDimension
 
 
 class ReduceBlockMaxFpu(Fpu):
     loop: FusedLoop = LoopTileByTile()
+    reduce_dim: ReduceDimension = ReduceDimension.Row
 
     def init(
         self,

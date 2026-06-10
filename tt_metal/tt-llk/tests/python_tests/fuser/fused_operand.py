@@ -2,12 +2,16 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 import torch
 from helpers.llk_params import DataFormat, PartialFace, format_dict, format_tile_sizes
-from helpers.stimuli_generator import generate_random_face
+from helpers.stimuli_generator import (
+    StimuliSpec,
+    default_spec_for_format,
+    generate_face,
+)
 from helpers.tile_constants import (
     DEFAULT_TILE_C_DIM,
     DEFAULT_TILE_R_DIM,
@@ -24,8 +28,10 @@ class Operand:
     name: str
     dimensions: Tuple[int, int]
     data_format: DataFormat
-    tile_shape: TileShape = construct_tile_shape(
-        (DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM)
+    tile_shape: TileShape = field(
+        default_factory=lambda: construct_tile_shape(
+            (DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM)
+        )
     )
     l1_address: Optional[int] = None
     is_output: bool = False
@@ -38,6 +44,9 @@ class Operand:
     tile_count_x: Optional[int] = None
     tile_count_y: Optional[int] = None
     tile_size: Optional[int] = None
+    acc_atol: float = 0.0
+    acc_rtol: float = 0.0
+    acc_pcc: float = 1.0
 
     def __post_init__(self):
         self.tile_count_x = self.dimensions[1] // self.tile_shape.total_col_dim()
@@ -71,14 +80,16 @@ class Operand:
         faces_needed = self.tile_count * self.tile_shape.total_num_faces()
         faces_data = []
 
+        if self.const_value is not None:
+            spec = StimuliSpec.constant(self.const_value)
+        else:
+            spec = default_spec_for_format(self.data_format)
+
         for _ in range(faces_needed):
-            face = generate_random_face(
+            face = generate_face(
+                spec=spec,
                 stimuli_format=self.data_format,
-                const_value=self.const_value,
-                const_face=self.const_value is not None,
-                sfpu=self.sfpu,
                 face_r_dim=self.tile_shape.face_r_dim,
-                negative_values=False,
             )
             faces_data.extend(face.tolist())
 
@@ -162,6 +173,12 @@ class Operand:
                 self.raw_data,
                 dimensions=self.dimensions,
                 stimuli_format=self.data_format,
+                num_faces=self.tile_shape.total_num_faces(),
+                face_r_dim=self.tile_shape.face_r_dim,
+                tile_dimensions=[
+                    self.tile_shape.total_row_dim(),
+                    self.tile_shape.total_col_dim(),
+                ],
             ).flatten()
             if self.is_input()
             else torch.zeros(self.dimensions).flatten()
@@ -213,16 +230,25 @@ class OperandRegistry:
         dimensions: Tuple[int, int],
         data_format: DataFormat,
         const_value: Optional[float] = None,
+        tile_dimensions: Optional[Tuple[int, int]] = None,
     ) -> Operand:
+        tile_shape = (
+            construct_tile_shape(tuple(tile_dimensions))
+            if tile_dimensions is not None
+            else construct_tile_shape((DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM))
+        )
+
         if name in self.operands:
             operand = self.operands[name]
-            if (dimensions is not None and dimensions != operand.dimensions) or (
-                data_format is not None and data_format != operand.data_format
+            if (
+                (dimensions is not None and dimensions != operand.dimensions)
+                or (data_format is not None and data_format != operand.data_format)
+                or tile_shape != operand.tile_shape
             ):
                 raise ValueError(
                     f"Operand '{name}' exists with different parameters: "
-                    f"requested dimensions={dimensions}, data_format={data_format}; "
-                    f"existing dimensions={operand.dimensions}, data_format={operand.data_format}"
+                    f"requested dimensions={dimensions}, data_format={data_format}, tile_shape={tile_shape}; "
+                    f"existing dimensions={operand.dimensions}, data_format={operand.data_format}, tile_shape={operand.tile_shape}"
                 )
 
             return operand
@@ -231,6 +257,7 @@ class OperandRegistry:
             name=name,
             dimensions=dimensions,
             data_format=data_format,
+            tile_shape=tile_shape,
             is_output=False,
             const_value=const_value,
         )
@@ -320,7 +347,12 @@ class OperandRegistry:
             tile_cnt = output.tile_count
             tile_elements = output.tile_shape.total_tile_size()
 
-            read_bytes_cnt = output_format.num_bytes_per_tile(tile_elements) * tile_cnt
+            # Tiles are packed densely in L1 (no full-32x32 padding for tiny tiles),
+            # so the read stride must match the operand's actual per-tile size. For
+            # full 32x32 tiles this equals format_tile_sizes, so existing tests are
+            # unaffected.
+            tile_stride_bytes = output_format.num_bytes_per_tile(tile_elements)
+            read_bytes_cnt = tile_stride_bytes * tile_cnt
             read_data = read_from_device(
                 location, output.l1_address, num_bytes=read_bytes_cnt
             )
@@ -332,6 +364,7 @@ class OperandRegistry:
                 sfpu=False,
                 num_faces=output.tile_shape.total_num_faces(),
                 face_r_dim=output.tile_shape.face_r_dim,
+                tile_stride_bytes=tile_stride_bytes,
             )
 
             torch_format = format_dict[output_format]
@@ -341,6 +374,12 @@ class OperandRegistry:
                 tilized_tensor,
                 stimuli_format=output_format,
                 dimensions=output_dimensions,
+                num_faces=output.tile_shape.total_num_faces(),
+                face_r_dim=output.tile_shape.face_r_dim,
+                tile_dimensions=[
+                    output.tile_shape.total_row_dim(),
+                    output.tile_shape.total_col_dim(),
+                ],
             )
 
             output._raw_data = raw_tensor

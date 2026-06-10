@@ -314,6 +314,10 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     };
     tt::tt_metal::TensorAccessorArgs(*in0_buffer).append_to(in0_sender_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*sparsity_buffer).append_to(in0_sender_compile_time_args);
+    // num_batch_compute (== nnz when supplied). The sender uses this to validate, on-device, that
+    // count_nonzero(sparsity) matches the loop count baked into the receiver/compute kernels, failing
+    // loudly instead of deadlocking. See https://github.com/tenstorrent/tt-metal/issues/45943.
+    in0_sender_compile_time_args.push_back((std::uint32_t)num_batch_compute);
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // READER

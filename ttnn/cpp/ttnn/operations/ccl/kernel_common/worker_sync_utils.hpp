@@ -5,12 +5,18 @@
 #pragma once
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "api/debug/assert.h"
 #include "api/debug/dprint.h"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <array>
 
 // Called by the master worker to synchronize with the slave workers
+//
+// Device 2.0 migration: consumes raw L1 addresses and uses legacy noc_semaphore_* primitives.
+// These semaphores are local (created via tt_metal::CreateSemaphore), and OpSignaler already does
+// the id to address translation via get_semaphore(id) on the kernel side before calling this helper.
+// TODO(#45846): refactor to take an id-based interface.
 FORCE_INLINE void master_sync_slaves(
 
     /* Used to get slave worker's sem addrs */
@@ -30,8 +36,7 @@ FORCE_INLINE void master_sync_slaves(
     if (num_workers_to_sync > 1) {
         master_l1_semaphore_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sync_sem_addr);
         noc_semaphore_wait(master_l1_semaphore_addr, num_workers_to_sync - 1);
-        // DPRINT << "MASTER SYNCED WITH SLAVES" << ENDL();
-        // DEVICE_PRINT("MASTER SYNCED WITH SLAVES\n");
+        // DPRINT("MASTER SYNCED WITH SLAVES\n");
     }
 
     // Send signal to op
@@ -48,8 +53,7 @@ FORCE_INLINE void master_sync_slaves(
             fused_op_sem_addr);
         noc_semaphore_inc(remote_fused_op_l1_semaphore_addr, 1);
     }
-    // DPRINT << "MASTER SIGNALED REMOTE OP" << ENDL();
-    // DEVICE_PRINT("MASTER SIGNALED REMOTE OP\n");
+    // DPRINT("MASTER SIGNALED REMOTE OP\n");
 
     if (num_workers_to_sync > 1) {
         // Clear the master semaphore, so that it can be used again
@@ -61,27 +65,26 @@ FORCE_INLINE void master_sync_slaves(
             uint64_t remote_slave_l1_sem_addr =
                 get_noc_addr(worker_noc_coords[i * 2], worker_noc_coords[i * 2 + 1], worker_sync_sem_addr);
             noc_semaphore_inc(remote_slave_l1_sem_addr, 1);
-            // DPRINT << "MASTER CLEAREED A SLAVE SEMAPHORE" << ENDL();
-            // DEVICE_PRINT("MASTER CLEAREED A SLAVE SEMAPHORE\n");
+            // DPRINT("MASTER CLEAREED A SLAVE SEMAPHORE\n");
         }
     }
 }
 
 // Called by the slave worker to synchronize with the master worker
+//
+// Device 2.0 migration: TODO(#45846): refactor to take an id-based interface (see master_sync_slaves note above).
 FORCE_INLINE void slave_sync_master(const uint32_t* worker_noc_coords, const uint32_t worker_sync_sem_addr) {
     // Signal the master that the slave has finished its work
     uint64_t remote_master_l1_semaphore_addr =
         get_noc_addr(worker_noc_coords[0], worker_noc_coords[1], worker_sync_sem_addr);
     noc_semaphore_inc(remote_master_l1_semaphore_addr, 1);
-    // DPRINT << "SLAVE SYNCED WITH MASTER" << ENDL();
-    // DEVICE_PRINT("SLAVE SYNCED WITH MASTER\n");
+    // DPRINT("SLAVE SYNCED WITH MASTER\n");
 
     // Wait for the master to signal that this slave is ready to continue
     volatile tt_l1_ptr uint32_t* slave_l1_semaphore_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sync_sem_addr);
     noc_semaphore_wait(slave_l1_semaphore_addr, 1);
-    // DPRINT << "SLAVE SEMAPHORE CLEARED BY MASTER" << ENDL();
-    // DEVICE_PRINT("SLAVE SEMAPHORE CLEARED BY MASTER\n");
+    // DPRINT("SLAVE SEMAPHORE CLEARED BY MASTER\n");
 
     // Clear the slave semaphore, so that it can be used again
     noc_semaphore_set(slave_l1_semaphore_addr, 0);
@@ -205,7 +208,7 @@ struct MatmulOpReceiver {
     std::array<uint32_t, num_directions> ring_idxs = {};
     std::array<uint32_t, num_directions> start_page_idxs = {};
     std::array<bool, num_directions> is_clockwise_dirs = {};
-    std::array<volatile tt_l1_ptr uint32_t*, num_directions> signal_op_semaphore_addr_ptrs = {};
+    std::array<uint32_t, num_directions> signal_op_semaphore_ids = {};
     uint32_t curr_dir = 0;
     uint32_t curr_transfer_idx = 0;
 
@@ -230,10 +233,8 @@ struct MatmulOpReceiver {
         uint32_t is_clockwise_direction = get_arg_val<uint32_t>(rt_args_idx++);
 
         if (this->wait_for_op_signal) {
-            this->signal_op_semaphore_addr_ptrs[0] =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(rt_args_idx++)));
-            this->signal_op_semaphore_addr_ptrs[1] =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(rt_args_idx++)));
+            this->signal_op_semaphore_ids[0] = get_arg_val<uint32_t>(rt_args_idx++);
+            this->signal_op_semaphore_ids[1] = get_arg_val<uint32_t>(rt_args_idx++);
         }
 
         this->num_tensor_slices = this->num_transfers * this->num_directions;
@@ -282,7 +283,7 @@ struct MatmulOpReceiver {
 
             // Wait for a semaphore signal to start processing the tensor slice
             if (this->wait_for_op_signal) {
-                noc_semaphore_wait_min(this->signal_op_semaphore_addr_ptrs[this->curr_dir], tensor_slice_cnt + 1);
+                Semaphore<>(this->signal_op_semaphore_ids[this->curr_dir]).wait_min(tensor_slice_cnt + 1);
             }
 
             // Update the relevant internal states
@@ -320,7 +321,7 @@ struct MatmulOpReceiver {
             // Wait for a semaphore signal to start processing the tensor slice
             if (this->wait_for_op_signal && block_id == sender_id) {
                 uint32_t tensor_slice_cnt = (this->curr_transfer_idx) / this->num_directions;
-                noc_semaphore_wait_min(this->signal_op_semaphore_addr_ptrs[this->curr_dir], 1);
+                Semaphore<>(this->signal_op_semaphore_ids[this->curr_dir]).wait_min(1);
             }
 
             this->curr_transfer_idx++;
@@ -331,7 +332,7 @@ struct MatmulOpReceiver {
 };
 
 struct ReduceScatterOpReceiver {
-    volatile tt_l1_ptr uint32_t* signal_op_semaphore_addr_ptr;
+    uint32_t signal_op_semaphore_id = 0;
 
     bool initialized = false;
 
@@ -339,14 +340,13 @@ struct ReduceScatterOpReceiver {
 
     ReduceScatterOpReceiver(uint32_t& rt_args_idx) {
         // Runtime args
-        this->signal_op_semaphore_addr_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(rt_args_idx++)));
+        this->signal_op_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
 
         this->initialized = true;
     }
 
     void wait_for_matmul_batch(const uint32_t& batch_idx) {
         ASSERT(this->initialized);
-        noc_semaphore_wait_min(this->signal_op_semaphore_addr_ptr, batch_idx + 1);
+        Semaphore<>(this->signal_op_semaphore_id).wait_min(batch_idx + 1);
     }
 };

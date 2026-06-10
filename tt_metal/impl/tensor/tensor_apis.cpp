@@ -17,6 +17,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
+#include "tt_metal/distributed/mesh_device_view_impl.hpp"
 #include <tt_stl/concepts.hpp>
 #include <tt_stl/small_vector.hpp>
 
@@ -169,13 +170,25 @@ void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& h
 
     if (use_pinned) {
         auto* mesh_device = mesh_buffer->device();
+        const auto& view = mesh_device->get_view();
         std::vector<distributed::ShardDataTransfer> transfers;
         transfers.reserve(distributed_host_buffer.shard_coords().size());
         bool any_pinned = false;
 
         for (const auto& coord : distributed_host_buffer.shard_coords()) {
+            // get_shard yields a buffer only for shards owned by this host, so remote chips are
+            // never pinned or added to the transfer list -- the transfer is a no-op for them here.
             auto buf = distributed_host_buffer.get_shard(coord);
             if (buf) {
+                // The host buffer's distribution must agree with the device's: host memory can only
+                // be pinned to MMIO devices local to this process, so a populated shard for a coord
+                // the device owns on another host must never reach try_pin (which would fault while
+                // resolving the remote device).
+                TT_FATAL(
+                    view.impl().is_local(coord),
+                    "Host buffer holds a shard for device coordinate {}, but that device is not local "
+                    "to this host; host memory can only be pinned to MMIO devices owned by this process.",
+                    coord);
                 auto coord_range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
                 HostBuffer pinned_buf(*buf);
                 auto pinned_memory = experimental::PinnedMemoryCache::instance().try_pin(
@@ -345,15 +358,28 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
         ::tt::tt_metal::CMAKE_UNIQUE_NAMESPACE::should_use_pinned_write_path(*mesh_device, data_to_write.size());
 
     if (use_pinned) {
-        auto full_range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(mesh_device->shape()));
+        // Replication fans a single 1x1 host shard out to the whole mesh, but only the chips owned
+        // by this host can be pinned/written; restrict the pin and the transfers to those so the
+        // remote coordinates are a complete no-op here.
+        const auto& view = mesh_device->get_view();
+        std::vector<distributed::MeshCoordinate> local_coords;
+        distributed::MeshCoordinateRangeSet local_range;
+        for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
+            if (view.impl().is_local(coord)) {
+                local_coords.push_back(coord);
+                local_range.merge(distributed::MeshCoordinateRange(coord, coord));
+            }
+        }
+
         HostBuffer pinned_buffer(*host_buffer);
-        auto pinned_memory = experimental::PinnedMemoryCache::instance().try_pin(
-            *mesh_device, full_range, pinned_buffer, /*map_to_noc=*/true);
+        auto pinned_memory = local_coords.empty() ? nullptr
+                                                  : experimental::PinnedMemoryCache::instance().try_pin(
+                                                        *mesh_device, local_range, pinned_buffer, /*map_to_noc=*/true);
 
         if (pinned_memory) {
             std::vector<distributed::ShardDataTransfer> transfers;
-            transfers.reserve(mesh_device->shape().mesh_size());
-            for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
+            transfers.reserve(local_coords.size());
+            for (const auto& coord : local_coords) {
                 auto xfer = distributed::ShardDataTransfer{coord}
                                 .host_data(const_cast<void*>(static_cast<const void*>(data_to_write.data())))
                                 .region(BufferRegion(0, data_to_write.size()));
@@ -414,13 +440,25 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
 
     if (use_pinned) {
         auto* mesh_device = mesh_buffer->device();
+        const auto& view = mesh_device->get_view();
         std::vector<distributed::ShardDataTransfer> transfers;
         transfers.reserve(distributed_host_buffer.shard_coords().size());
         bool any_pinned = false;
 
         for (const auto& coord : distributed_host_buffer.shard_coords()) {
+            // get_shard yields a buffer only for shards owned by this host, so remote chips are
+            // never pinned or added to the transfer list -- the transfer is a no-op for them here.
             auto buf = distributed_host_buffer.get_shard(coord);
             if (buf) {
+                // The host buffer's distribution must agree with the device's: host memory can only
+                // be pinned to MMIO devices local to this process, so a populated shard for a coord
+                // the device owns on another host must never reach try_pin (which would fault while
+                // resolving the remote device).
+                TT_FATAL(
+                    view.impl().is_local(coord),
+                    "Host buffer holds a shard for device coordinate {}, but that device is not local "
+                    "to this host; host memory can only be pinned to MMIO devices owned by this process.",
+                    coord);
                 auto coord_range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
                 HostBuffer pinned_buf(*buf);
                 auto pinned_memory = experimental::PinnedMemoryCache::instance().try_pin(
@@ -538,6 +576,17 @@ HostTensor to_layout_impl<tensor_impl::bfloat8_b>(const HostTensor& tensor, Layo
 template <>
 HostTensor to_layout_impl<tensor_impl::bfloat4_b>(const HostTensor& tensor, Layout target_layout) {
     return to_layout_bfloat_impl<tensor_impl::bfloat4_b>(tensor, target_layout);
+}
+
+template <>
+HostTensor to_layout_impl<float8_e4m3>(const HostTensor& tensor, Layout target_layout) {
+    // FP8_E4M3 is constrained to ROW_MAJOR layout in tensor_spec.cpp, so the source tensor
+    // is already ROW_MAJOR by construction. The only legal call is therefore ROW_MAJOR ->
+    // ROW_MAJOR (a no-op); any other target layout is a caller error.
+    if (target_layout == Layout::ROW_MAJOR) {
+        return tensor;
+    }
+    TT_THROW("to_layout: FP8_E4M3 only supports ROW_MAJOR layout (got target {})", target_layout);
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -838,6 +887,14 @@ HostTensor pad_impl<tensor_impl::bfloat4_b>(
     return pad_bfloat4_b(tensor, output_padded_shape, input_tensor_start, pad_value);
 }
 
+template <>
+HostTensor pad_impl<float8_e4m3>(const HostTensor&, const tt::tt_metal::Shape&, const tt::tt_metal::Shape&, float) {
+    // FP8_E4M3 host-side pad is not wired up; no current op needs it. The generic body
+    // would actually compile (float8_e4m3 is a 1-byte trivially-copyable type with a float
+    // constructor), but leaving this as an explicit throw documents the intentional scope.
+    TT_THROW("pad: FP8_E4M3 is not supported");
+}
+
 template <typename T>
 HostTensor unpad_impl(
     const HostTensor& tensor,
@@ -910,6 +967,12 @@ HostTensor unpad_impl<tensor_impl::bfloat4_b>(
     const tt::tt_metal::Shape& output_tensor_start,
     const tt::tt_metal::Shape& output_tensor_end) {
     return unpad_bfloat4_b(tensor, output_tensor_start, output_tensor_end);
+}
+
+template <>
+HostTensor unpad_impl<float8_e4m3>(const HostTensor&, const tt::tt_metal::Shape&, const tt::tt_metal::Shape&) {
+    // See pad_impl<float8_e4m3>: not wired up, no current op needs it.
+    TT_THROW("unpad: FP8_E4M3 is not supported");
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -1022,6 +1085,27 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
     const tt::tt_metal::TensorSpec& input_tensor_spec, const tt::tt_metal::DistributedHostBuffer& input_buffer) {
     if constexpr (std::is_same_v<SrcType, DstType>) {
         return input_buffer;
+    } else if constexpr (std::is_same_v<SrcType, float8_e4m3> || std::is_same_v<DstType, float8_e4m3>) {
+        // FP8_E4M3 only has a direct bridge to/from FLOAT32 (operator float() and the float
+        // constructor in float8.hpp). Other dtypes would need a float pivot, which is not wired
+        // up yet because the only host-side consumer today is the print path in tensor_impl.cpp,
+        // which already converts through FLOAT32. Add the broader lattice when a use case appears.
+        if constexpr (
+            (std::is_same_v<SrcType, float8_e4m3> && std::is_same_v<DstType, float>) ||
+            (std::is_same_v<SrcType, float> && std::is_same_v<DstType, float8_e4m3>)) {
+            auto transform_fn = [&](const tt::tt_metal::HostBuffer& buffer) {
+                auto data = buffer.view_as<const SrcType>();
+                std::vector<DstType> output_vector(data.size());
+                std::transform(data.begin(), data.end(), output_vector.begin(), [](SrcType value) {
+                    return static_cast<DstType>(value);
+                });
+                return tt::tt_metal::HostBuffer(std::move(output_vector));
+            };
+            return input_buffer.transform(transform_fn);
+        } else {
+            TT_THROW("to_dtype: FP8_E4M3 cross-type conversion is only supported to/from FLOAT32");
+            return input_buffer;  // unreachable, satisfies return type
+        }
     } else if constexpr (std::is_same_v<DstType, bfloat4_tag> || std::is_same_v<DstType, bfloat8_tag>) {
         auto transform_fn = [&](const tt::tt_metal::HostBuffer& buffer) {
             ttsl::Span<const SrcType> data = buffer.view_as<const SrcType>();
@@ -1090,6 +1174,7 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
                 case DataType::UINT16: return with_src_and_dst.operator()<SrcType, uint16_t>();
                 case DataType::UINT32: return with_src_and_dst.operator()<SrcType, uint32_t>();
                 case DataType::INT32: return with_src_and_dst.operator()<SrcType, int32_t>();
+                case DataType::FP8_E4M3: return with_src_and_dst.operator()<SrcType, float8_e4m3>();
                 case DataType::INVALID: TT_THROW("Unsupported data type conversion requested. Source type is invalid!");
             }
             TT_THROW("Unreachable");
@@ -1104,6 +1189,7 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
             case DataType::UINT16: return with_src.operator()<uint16_t>();
             case DataType::UINT32: return with_src.operator()<uint32_t>();
             case DataType::INT32: return with_src.operator()<int32_t>();
+            case DataType::FP8_E4M3: return with_src.operator()<float8_e4m3>();
             case DataType::INVALID: TT_THROW("Unsupported data type conversion requested. Source type is invalid!");
         }
         TT_THROW("Unreachable");

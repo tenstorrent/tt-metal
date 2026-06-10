@@ -16,18 +16,15 @@
 #include "api/compute/common.h"
 #endif
 
-#ifdef ARCH_QUASAR
 #include "experimental/kernel_args.h"
+
+#ifdef ARCH_QUASAR
 #include "risc_common.h"
 thread_local extern uint32_t rta_count;
 thread_local extern uint32_t crta_count;
-#define RTA_CRTA_GET_RTA(N) get_vararg(N)
-#define RTA_CRTA_GET_CRTA(N) get_common_vararg(N)
 #else
 extern uint32_t rta_count;
 extern uint32_t crta_count;
-#define RTA_CRTA_GET_RTA(N) get_arg_val<uint32_t>(N)
-#define RTA_CRTA_GET_CRTA(N) get_common_arg_val<uint32_t>(N)
 #endif
 
 // Helper: Signal completion to dispatcher before assert hangs the kernel
@@ -54,10 +51,10 @@ static FORCE_INLINE void signal_completion_before_assert() {
 // Helper: trigger bounds-check assert by accessing arg beyond bounds
 static FORCE_INLINE void trigger_bounds_check_assert() {
 #ifdef MAX_RTA_IDX
-    volatile uint32_t rta = RTA_CRTA_GET_RTA(MAX_RTA_IDX);
+    volatile uint32_t rta = get_vararg(MAX_RTA_IDX);
 #endif
 #ifdef MAX_CRTA_IDX
-    volatile uint32_t crta = RTA_CRTA_GET_CRTA(MAX_CRTA_IDX);
+    volatile uint32_t crta = get_common_vararg(MAX_CRTA_IDX);
 #endif
 }
 
@@ -68,13 +65,13 @@ static FORCE_INLINE void write_args_to_l1(uint32_t l1_write_addr) {
     ptr[1] = crta_count;
 
     for (size_t i = 0; i < rta_count; i++) {
-        ptr[i + 2] = RTA_CRTA_GET_RTA(i);
+        ptr[i + 2] = get_vararg(i);
     }
     for (size_t i = 0; i < crta_count; i++) {
-        ptr[i + rta_count + 2] = RTA_CRTA_GET_CRTA(i);
+        ptr[i + rta_count + 2] = get_common_vararg(i);
     }
 
-#ifdef ARCH_QUASAR
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
     flush_l2_cache_line(reinterpret_cast<uintptr_t>(ptr.get_address()));
 #endif
 }
@@ -113,11 +110,11 @@ void core_agnostic_main() {
     write_args_to_l1(l1_scratch_addr);
 #endif
 
-#else  // Non-Quasar DM (BRISC/NCRISC)
+#else  // Non-Quasar DM (BRISC/NCRISC) - Metal 2.0 named CTAs
 
 #if !defined(MAX_RTA_IDX) && !defined(MAX_CRTA_IDX)
-    // Validation test: L1 scratch address is the first compile-time arg
-    constexpr uint32_t l1_scratch_addr = get_compile_time_arg_val(0);
+    // Validation test: L1 scratch address is bound as a named compile-time arg
+    constexpr uint32_t l1_scratch_addr = get_arg(args::l1_scratch_addr);
     write_args_to_l1(l1_scratch_addr);
 #endif
 
@@ -134,11 +131,7 @@ void core_agnostic_main() {
 void core_agnostic_main() {
     UNPACK({
 #if !defined(MAX_RTA_IDX) && !defined(MAX_CRTA_IDX)
-#ifdef ARCH_QUASAR
         write_args_to_l1(get_arg(args::l1_scratch_addr));
-#else
-        write_args_to_l1(get_compile_time_arg_val(0));
-#endif
 #else
         signal_completion_before_assert();
         trigger_bounds_check_assert();

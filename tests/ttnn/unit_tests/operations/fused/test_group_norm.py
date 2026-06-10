@@ -1153,6 +1153,54 @@ def test_group_norm_negative_tests(
         )
 
 
+def test_group_norm_rejects_host_input_mask(device):
+    input_tensor = ttnn.empty((1, 1, 32, 320), device=device)
+    input_mask = ttnn.create_group_norm_input_mask(320, 32, 1, ttnn.DataType.BFLOAT16)
+
+    with pytest.raises(RuntimeError, match="Input mask must be on device"):
+        ttnn.group_norm(
+            input_tensor,
+            num_groups=32,
+            input_mask=input_mask,
+            core_grid=ttnn.CoreGrid(y=1, x=1),
+            inplace=False,
+        )
+
+
+def test_group_norm_rejects_host_negative_mask(device):
+    grid_size = ttnn.CoreGrid(y=1, x=1)
+    torch_input_tensor = torch.rand((1, 320, 32, 32), dtype=torch.bfloat16)
+    input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(1, 1, 32 * 32, 320)
+    input_tensor = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    input_mask = ttnn.create_group_norm_input_mask(320, 32, grid_size.x, ttnn.DataType.BFLOAT16)
+    input_mask = ttnn.to_device(input_mask, device)
+    negative_mask = ttnn.create_group_norm_input_negative_mask(320, 32, grid_size.x, ttnn.DataType.BFLOAT16)
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    shard_spec = ttnn.ShardSpec(shard_grid, (32 * 32, 320), ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    input_tensor = ttnn.to_memory_config(input_tensor, memory_config=sharded_mem_config)
+
+    with pytest.raises(RuntimeError, match="Negative mask must be on device"):
+        ttnn.group_norm(
+            input_tensor,
+            num_groups=32,
+            input_mask=input_mask,
+            negative_mask=negative_mask,
+            memory_config=sharded_mem_config,
+            core_grid=grid_size,
+        )
+
+
 @pytest.mark.parametrize("N, C, H, W, num_groups", DRAM_GRID_SIZE_SHAPES)
 @pytest.mark.parametrize("specify_grid", [True])
 def test_group_norm_dram_grid_size(device, N, C, H, W, num_groups, specify_grid):

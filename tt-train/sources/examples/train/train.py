@@ -103,19 +103,28 @@ class TrainingConfig(BaseTrainingConfig):
 
 
 def build_mesh(device_config: DeviceConfig) -> ttml.Mesh:
-    """Construct a named mesh from `device_config`; axis names follow the C++ DP→TP order."""
+    """Construct a named mesh from `device_config`; axis names follow the C++ `(dp → fsdp → tp)` order.
+
+    First enabled name claims axis 0, the next claims axis 1, etc. — matching PyTorch FSDP2's HSDP
+    convention (replicate/`dp` outermost, shard/`fsdp` inner). A line mesh (≤1 dim > 1) needs exactly
+    one of enable_ddp/enable_fsdp/enable_tp. HSDP+TP (a full 3D mesh) is not supported by the
+    dataloader batch sharding below.
+    """
     shape = tuple(int(s) for s in device_config.mesh_shape)
     n = len(shape)
     nontrivial = [i for i, s in enumerate(shape) if s > 1]
     is_line = len(nontrivial) <= 1
-    enabled = (
-        ("dp" if device_config.enable_ddp else None),
-        ("tp" if device_config.enable_tp else None),
-    )
-    enabled_names = tuple(name for name in enabled if name is not None)
 
-    # ttml.Mesh requires a name per axis; "_i" is a placeholder for axes
-    # not assigned to DP or TP.
+    # Ordered (dp → fsdp → tp): maps mesh axis index → parallelism name.
+    enabled_names: list[str] = []
+    if device_config.enable_ddp:
+        enabled_names.append("dp")
+    if device_config.enable_fsdp:
+        enabled_names.append("fsdp")
+    if device_config.enable_tp:
+        enabled_names.append("tp")
+
+    # ttml.Mesh requires a name per axis; "_i" is a placeholder for unassigned axes.
     axis_names = [f"_{i}" for i in range(n)]
     if not enabled_names:
         return ttml.Mesh(shape, tuple(axis_names))
@@ -123,13 +132,17 @@ def build_mesh(device_config: DeviceConfig) -> ttml.Mesh:
     if is_line:
         if len(enabled_names) != 1:
             raise ValueError(
-                f"Line mesh {shape} requires exactly one of enable_ddp / enable_tp; got enabled={enabled_names}"
+                f"Line mesh {shape} requires exactly one of enable_ddp / enable_fsdp / enable_tp; "
+                f"got enabled={enabled_names}"
             )
         active = nontrivial[0] if nontrivial else 0
         axis_names[active] = enabled_names[0]
     else:
         if len(enabled_names) != n:
-            raise ValueError(f"2D mesh {shape} requires both axes assigned (DP and TP). Got enabled={enabled_names}")
+            raise ValueError(
+                f"Mesh {shape} requires {n} parallelisms enabled "
+                f"(any subset of enable_ddp / enable_fsdp / enable_tp); got enabled={enabled_names}"
+            )
         for i, name in enumerate(enabled_names):
             axis_names[i] = name
     return ttml.Mesh(shape, tuple(axis_names))
@@ -469,6 +482,15 @@ def run_training(
     if args.track_memory:
         MemoryUsageTracker.snapshot("MODEL_CREATION")
 
+    # FSDP: shard params across the "fsdp" axis (per-block + root) BEFORE building the optimizer, so
+    # its state is sized against the sharded shapes. The trainer keeps enable_fsdp off (it must not
+    # re-shard); gradient sync stays callback-driven — ttml.sync_gradients skips the fsdp axis, which
+    # FSDP reduce-scatters in backward.
+    if device_cfg.enable_fsdp:
+        for block in model.blocks:
+            ttml.fsdp.fully_shard(block)
+        ttml.fsdp.fully_shard(model)
+
     optimizer = create_optimizer(model, yaml_config)
     if args.track_memory:
         MemoryUsageTracker.snapshot("OPTIMIZER_CREATION")
@@ -482,7 +504,24 @@ def run_training(
         )
 
     mesh = ttml.mesh()
-    mapper = mesh.axis_mapper("dp", tdim=0) if (mesh.has_axis("dp") and mesh.axis_size("dp") > 1) else None
+    # Shard the batch across the data-parallel axes (dp and/or fsdp): one axis → shard along it;
+    # HSDP (both) → each device gets a unique B/(D*F) slice; HSDP+TP is unsupported.
+    data_axes = [a for a in ("dp", "fsdp") if mesh.has_axis(a) and mesh.axis_size(a) > 1]
+    if len(data_axes) == 1:
+        mapper = mesh.axis_mapper(data_axes[0], tdim=0)
+    elif len(data_axes) >= 2:
+        if mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
+            raise NotImplementedError("HSDP + TP batch sharding is not supported.")
+        flat_size = int(np.prod([mesh.axis_size(a) for a in data_axes]))
+        if training_cfg.batch_size % flat_size != 0:
+            raise ValueError(
+                f"HSDP batch sharding requires batch_size ({training_cfg.batch_size}) to be "
+                f"divisible by D*F ({flat_size}); got data_axes={data_axes}."
+            )
+        device = ttml.autograd.AutoContext.get_instance().get_device()
+        mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0, None)
+    else:
+        mapper = None
     collate = partial(causal_lm_collate_fn, seq_len=seq_len, mapper=mapper)
     dataloader = InMemoryDataloader(dataset, collate, batch_size=training_cfg.batch_size, shuffle=True, drop_last=True)
 
@@ -505,8 +544,8 @@ def run_training(
     if args.track_memory:
         callbacks.append(MemoryTrackerCallback())
 
-    if training_cfg.use_clip_grad_norm and device_cfg.enable_tp:
-        raise ValueError("Clip grad norm is not supported with TP")
+    if training_cfg.use_clip_grad_norm and (device_cfg.enable_tp or device_cfg.enable_fsdp):
+        raise ValueError("Clip grad norm is not supported with TP or FSDP")
 
     saver, loader = build_checkpoint_io(tokenizer, model_cfg)
 
@@ -529,8 +568,14 @@ def run_training(
         disable_progress_bar=True,
     )
 
-    # TODO: investigate why we need fused cross_entropy_loss for training to work.
+    # Fused mean cross-entropy over every token (this is pretraining — there's no prompt/padding
+    # loss mask, so the trainer's default masked path doesn't apply). Under TP the LM head emits
+    # vocab-sharded logits, so route through vocab-parallel cross-entropy on the "tp" axis.
     def _causal_lm_loss(logits, batch):
+        if mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
+            return ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
+                logits, batch.labels, cluster_axis=mesh.axis_index("tp"), reduce=ttml.ops.ReduceType.MEAN
+            )
         return ttml.ops.loss.cross_entropy_loss(logits, batch.labels, ttml.ops.ReduceType.MEAN)
 
     trainer = SFTTrainer(
@@ -786,13 +831,14 @@ def main() -> None:
 
     device_cfg = DeviceConfig(yaml_config)
 
-    # TP-sharded parameter tensors don't round-trip through our pickle format,
-    # so reject checkpoint flags upfront under TP.
-    if device_cfg.enable_tp:
+    # TP/FSDP-sharded parameter tensors don't round-trip through our pickle format (it would store
+    # per-rank shards, not full tensors), so reject checkpoint flags upfront under either.
+    if device_cfg.enable_tp or device_cfg.enable_fsdp:
+        sharding = "tensor parallelism" if device_cfg.enable_tp else "FSDP"
         if args.checkpoint_dir:
-            raise ValueError("--checkpoint-dir is not supported with tensor parallelism")
+            raise ValueError(f"--checkpoint-dir is not supported with {sharding}")
         if args.resume:
-            raise ValueError("--resume is not supported with tensor parallelism")
+            raise ValueError(f"--resume is not supported with {sharding}")
 
     mesh = build_mesh(device_cfg)
     ttml.open_device_mesh(mesh, tuple(device_cfg.device_ids) if device_cfg.device_ids else None)

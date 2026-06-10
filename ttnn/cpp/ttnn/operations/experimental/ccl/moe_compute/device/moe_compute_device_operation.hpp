@@ -48,15 +48,18 @@ std::vector<Tensor> moe_compute(
     uint32_t output_height_shard_dim,
     uint32_t intermediate_size,
     bool has_bias,
-    uint32_t cluster_axis,
+    const std::optional<uint32_t>& cluster_axis,
     const std::optional<tt::tt_fabric::Topology>& topology,
     const std::optional<uint32_t>& num_links,
     const std::optional<CoreRangeSet>& mux_core_range_set,
     const std::optional<ttnn::MemoryConfig>& output_memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore,
-    const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type = std::nullopt);
+    const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type = std::nullopt,
+    bool compute_only = false,
+    const std::optional<uint32_t>& bh_ring_size = std::nullopt);
 
 using ttnn::experimental::prim::get_moe_combine_cores;
+using ttnn::experimental::prim::get_moe_worker_mcast_bounding_box;
 
 }  // namespace ttnn::prim

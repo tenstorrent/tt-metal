@@ -4,7 +4,7 @@
 
 #include <fmt/ranges.h>
 #include <tt_stl/fmt.hpp>
-#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
+#include "impl/dataflow_buffer/dataflow_buffer.hpp"
 
 #include <algorithm>
 
@@ -634,7 +634,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
             config.pap == dfb::AccessPattern::STRIDED && config.cap == dfb::AccessPattern::STRIDED,
             "Intra-tensix DFBs require STRIDED access for both producer (packer) and consumer (unpacker)");
         TT_FATAL(
-            !config.enable_implicit_sync,
+            !config.enable_producer_implicit_sync && !config.enable_consumer_implicit_sync,
             "Intra-tensix DFBs do not support implicit sync (ISR-based credits)");
     }
 
@@ -1277,9 +1277,11 @@ void ProgramImpl::finalize_single_dfb_config(
     }
 
     // Allocate transaction IDs and compute ISR descriptor fields when implicit sync is enabled.
-    // Only done on the first core processed for this DFB because txn IDs are core-invariant
-    if (config.enable_implicit_sync && dfb->groups.empty()) {
-        if (!producer_is_tensix_only) {
+    // Only done on the first core processed for this DFB because txn IDs are core-invariant.
+    // Producer and consumer sides are checked independently — the underlying hardware mechanism
+    // is per-side (separate IE_1/IE_2 masks driving separate ISR handlers).
+    if (dfb->groups.empty()) {
+        if (config.enable_producer_implicit_sync && !producer_is_tensix_only) {
             uint8_t num_prod_txn_ids = compute_optimal_txn_id_count(
                 config.num_entries, config.num_producers, num_producer_tcs,
                 /*consumes_all=*/false);
@@ -1302,7 +1304,7 @@ void ProgramImpl::finalize_single_dfb_config(
                 dfb->producer_txn_descriptor.num_entries_per_txn_id_per_tc);
         }
 
-        if (!consumer_is_tensix_only) {
+        if (config.enable_consumer_implicit_sync && !consumer_is_tensix_only) {
             const bool consumes_all = (config.cap == ::dfb::AccessPattern::ALL);
             uint8_t num_cons_txn_ids = compute_optimal_txn_id_count(
                 config.num_entries, config.num_consumers, num_consumer_tcs,
@@ -1352,6 +1354,12 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
 
     uint64_t base_dfb_address = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     for (auto& dfb : this->dataflow_buffers_) {
+        // Alias secondaries share the primary's L1 address; skip allocation here
+        // and propagate the address inline after the primary is processed below.
+        if (dfb->alias_primary_id.has_value()) {
+            continue;
+        }
+
         uint32_t alloc_addr;
         if (dfb->borrows_memory()) {
             // Use the address latched by set_borrowed_memory_base_addr()
@@ -1390,6 +1398,19 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
             for (auto& [core, addr] : dfb->groups[gi].l1_by_core) {
                 addr = alloc_addr;
                 dfb->core_lookup_.emplace(core, std::make_pair(gi, alloc_addr));
+            }
+        }
+
+        // Propagate this primary's address to all alias secondaries immediately,
+        // so they share the same L1 region without an additional allocator call.
+        for (uint32_t sec_id : dfb->alias_secondary_ids) {
+            auto& sec = this->dataflow_buffers_[sec_id];
+            sec->core_lookup_.clear();
+            for (size_t gi = 0; gi < sec->groups.size(); gi++) {
+                for (auto& [core, addr] : sec->groups[gi].l1_by_core) {
+                    addr = alloc_addr;
+                    sec->core_lookup_.emplace(core, std::make_pair(gi, alloc_addr));
+                }
             }
         }
     }
@@ -1514,11 +1535,15 @@ std::vector<CoreRange> ProgramImpl::dataflow_buffers_unique_coreranges() const {
 
 void ProgramImpl::set_dfb_data_fmt_and_tile(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const {
     // ZoneScoped;
+    // Match detail::ProgramImpl::set_cb_data_fmt_and_tile: DFB logical ids map to CBIndex slots for HLK unpack/pack.
     for (const auto& logical_cr : crs) {
         const auto& dfbs_on_core = this->dataflow_buffers_on_corerange(logical_cr);
         for (const auto& dfb : dfbs_on_core) {
-            build_options.set_cb_data_fmt_and_tile(
-                static_cast<CBIndex>(dfb->id), dfb->config.data_format, dfb->config.tile);
+            const CBIndex cb_index = static_cast<CBIndex>(dfb->id);
+            const DataFormat data_format = dfb->config.data_format;
+            const auto& tile_opt = dfb->config.tile;
+            const auto& unpack_geom = dfb->config.unpack_face_geometry;
+            build_options.set_cb_data_fmt_tile_and_face_geometry(cb_index, data_format, tile_opt, unpack_geom);
         }
     }
 }

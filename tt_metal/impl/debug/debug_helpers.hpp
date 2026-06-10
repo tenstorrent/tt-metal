@@ -9,6 +9,7 @@
 #include <vector>
 #include <cctype>
 #include <cstdio>
+#include <enchantum/enchantum.hpp>
 #include <fmt/core.h>
 #include <fmt/ranges.h>
 
@@ -23,6 +24,7 @@
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 #include "llrt/hal.hpp"
+#include "internal/tt-2xx/quasar/error_handling.h"
 #include "internal/tt-2xx/quasar/overlay/remapper_common.hpp"
 
 namespace tt::tt_metal {
@@ -79,13 +81,6 @@ inline static CoreDescriptorSet GetAllCores(
     return dispatch_cores;
 }
 
-inline uint64_t GetDprintBufAddr(ChipId device_id, const CoreCoord& virtual_core, int risc_id) {
-    auto core_type = llrt::get_core_type(device_id, virtual_core);
-    uint64_t addr = tt::tt_metal::MetalContext::instance().hal().get_dev_noc_addr(
-        core_type, tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
-    return addr + (sizeof(DebugPrintMemLayout) * risc_id);
-}
-
 inline uint64_t GetDevicePrintBufAddr(ChipId device_id, const CoreCoord& virtual_core) {
     return tt::tt_metal::MetalContext::instance().hal().get_dev_noc_addr(
         llrt::get_core_type(device_id, virtual_core), tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
@@ -137,11 +132,20 @@ inline std::string get_debug_assert_message(
         case dev_msgs::DebugAssertRtaOutOfBounds: return "accessed unique runtime arg index out of bounds.";
         case dev_msgs::DebugAssertCrtaOutOfBounds: return "accessed common runtime arg index out of bounds.";
         case dev_msgs::DebugAssertHwFault:
-            return fmt::format(
-                "hardware fault occurred at PC 0x{:x}. Cause: 0x{:x}, faulting address or instruction: 0x{:08x}",
-                line_num,
-                hw_fault_info & 0xffffffff,
-                (hw_fault_info >> 32) & 0xffffffff);
+            if ((hw_fault_info & 0xffffffff) <= 7) {
+                return fmt::format(
+                    "hardware fault occurred at PC 0x{:x}. Cause: {}, faulting address or instruction: 0x{:08x}",
+                    line_num,
+                    enchantum::to_string(static_cast<DmErrors>(hw_fault_info & 0xffffffff)),
+                    (hw_fault_info >> 32) & 0xffffffff);
+            } else {
+                return fmt::format(
+                    "hardware fault occurred with cause: {}, additional code: 0x{:08x}, faulting address or "
+                    "instruction: 0x{:08x}",
+                    enchantum::to_string(static_cast<TriscErrors>((hw_fault_info >> 8) & 0x3f)),
+                    hw_fault_info & 0xff,
+                    (hw_fault_info >> 32) & 0xffffffff);
+            }
         default: return "";
     }
 }

@@ -3,34 +3,32 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/kernel_args.h"
 #include "api/dataflow/endpoints.h"
 #include "api/debug/dprint.h"
 
 // L1 to L1 send
 void kernel_main() {
-    // Compile-time arguments
-    constexpr uint32_t mst_base_addr = get_compile_time_arg_val(0);
-    constexpr uint32_t sub_base_addr = get_compile_time_arg_val(1);
-    constexpr uint32_t num_of_transactions = get_compile_time_arg_val(2);
-    constexpr uint32_t pages_per_transaction = get_compile_time_arg_val(3);
-    constexpr uint32_t bytes_per_page = get_compile_time_arg_val(4);
-    constexpr uint32_t test_id = get_compile_time_arg_val(5);
-    constexpr uint32_t num_subordinates = get_compile_time_arg_val(6);
-    constexpr bool is_linked = get_compile_time_arg_val(7);
-    constexpr bool loopback = get_compile_time_arg_val(8);
-    uint32_t start_x = get_compile_time_arg_val(9);
-    uint32_t start_y = get_compile_time_arg_val(10);
-    uint32_t end_x = get_compile_time_arg_val(11);
-    uint32_t end_y = get_compile_time_arg_val(12);
+    constexpr uint32_t mst_base_addr = get_arg(args::mst_base_addr);
+    constexpr uint32_t sub_base_addr = get_arg(args::sub_base_addr);
+    constexpr uint32_t bytes_per_page = get_arg(args::bytes_per_page);
+    constexpr uint32_t test_id = get_arg(args::test_id);
+    constexpr uint32_t num_subordinates = get_arg(args::num_subordinates);
+    constexpr bool is_linked = get_arg(args::is_linked);
+    constexpr bool loopback = get_arg(args::loopback);
+    uint32_t start_x = get_arg(args::start_x);
+    uint32_t start_y = get_arg(args::start_y);
+    uint32_t end_x = get_arg(args::end_x);
+    uint32_t end_y = get_arg(args::end_y);
 
     // Specific for Multicast Schemes
-    constexpr uint32_t multicast_scheme_type = get_compile_time_arg_val(13);
-    constexpr uint32_t sub_grid_size_x = get_compile_time_arg_val(14);
-    constexpr uint32_t sub_grid_size_y = get_compile_time_arg_val(15);
+    constexpr uint32_t multicast_scheme_type = get_arg(args::mcast_scheme_type);
+    constexpr uint32_t sub_grid_size_x = get_arg(args::sub_grid_size_x);
+    constexpr uint32_t sub_grid_size_y = get_arg(args::sub_grid_size_y);
 
-    // Derivative values
-    constexpr uint32_t bytes_per_transaction = pages_per_transaction * bytes_per_page;
-    constexpr uint32_t bytes = bytes_per_transaction * num_of_transactions;
+    const uint32_t num_of_transactions = get_arg(args::num_of_transactions);
+    const uint32_t pages_per_transaction = get_arg(args::pages_per_transaction);
+    const uint32_t bytes_per_transaction = pages_per_transaction * bytes_per_page;
 
     if (noc_index == 1) {
         std::swap(start_x, end_x);
@@ -41,47 +39,34 @@ void kernel_main() {
     UnicastEndpoint unicast_endpoint;
     MulticastEndpoint multicast_endpoint;
 
-    constexpr Noc::McastMode include_src =
-        loopback ? Noc::McastMode::INCLUDE_SRC : Noc::McastMode::EXCLUDE_SRC;
+    constexpr NocOptions mcast_opts = loopback ? NocOptions::MCAST_INCL_SRC : NocOptions::DEFAULT;
 
-    {
-        DeviceZoneScopedN("RISCV0");
-
-        for (uint32_t i = 0; i < num_of_transactions - 1; i++) {
-            noc.async_write_multicast<include_src>(
-                unicast_endpoint,
-                multicast_endpoint,
-                bytes_per_transaction,
-                num_subordinates,
-                {
-                    .addr = mst_base_addr,
-                },
-                {
-                    .noc_x_start = start_x,
-                    .noc_y_start = start_y,
-                    .noc_x_end = end_x,
-                    .noc_y_end = end_y,
-                    .addr = sub_base_addr,
-                },
-                is_linked);
-        }
-        // Last packet is sent separately to unlink the transaction,
-        // so the next one can use the VC and do its own path reservation
-        noc.async_write_multicast<include_src>(
+    auto do_mcast = [&](bool linked) {
+        noc.async_write_multicast<mcast_opts>(
             unicast_endpoint,
             multicast_endpoint,
             bytes_per_transaction,
             num_subordinates,
-            {
-                .addr = mst_base_addr,
-            },
+            {.addr = mst_base_addr},
             {
                 .noc_x_start = start_x,
                 .noc_y_start = start_y,
                 .noc_x_end = end_x,
                 .noc_y_end = end_y,
                 .addr = sub_base_addr,
-            });
+            },
+            linked);
+    };
+
+    {
+        DeviceZoneScopedN("RISCV0");
+
+        for (uint32_t i = 0; i < num_of_transactions - 1; i++) {
+            do_mcast(is_linked);
+        }
+        // Last packet is sent separately to unlink the transaction,
+        // so the next one can use the VC and do its own path reservation
+        do_mcast(false);
         noc.async_write_barrier();
     }
 

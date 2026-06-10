@@ -1535,9 +1535,6 @@ def test_untilize_multi_core_buffer_type_variations(
     input_memory_layout,
     output_memory_layout,
 ):
-    if input_buffer_type == ttnn.BufferType.DRAM and input_memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
-        pytest.skip("Untilize multicore does not support input DRAM sharded")
-
     height_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
         (128, 512),

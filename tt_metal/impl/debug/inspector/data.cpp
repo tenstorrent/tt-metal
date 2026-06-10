@@ -564,7 +564,6 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     RT(arc_debug_buffer_size);
     RT(validate_kernel_binaries);
     RT(record_noc_transfers);
-    RT(use_device_print);
 
     // Timeouts
     RT_CUSTOM("timeout_duration_for_operations", fmt::format("{}s", rt.get_timeout_duration_for_operations().count()));

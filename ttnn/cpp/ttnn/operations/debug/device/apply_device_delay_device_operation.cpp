@@ -7,12 +7,12 @@
 #include <cstddef>
 
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/program.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::debug {
@@ -56,49 +56,36 @@ ApplyDeviceDelayDeviceOperation::tensor_return_value_t ApplyDeviceDelayDeviceOpe
     return std::vector<ttnn::Tensor>{};
 }
 
-ApplyDeviceDelayDeviceOperation::ApplyDeviceDelayMeshWorkload::cached_mesh_workload_t
-ApplyDeviceDelayDeviceOperation::ApplyDeviceDelayMeshWorkload::create_mesh_workload(
+tt::tt_metal::ProgramDescriptor ApplyDeviceDelayDeviceOperation::create_descriptor(
     const operation_attributes_t& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-
-    log_info(tt::LogAlways, "Creating delay mesh workload");
-    for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
-        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_variables.emplace(coord, cached_program.shared_variables);
-    }
-    log_info(tt::LogAlways, "Created delay mesh workload");
-    return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
-}
-
-ttnn::device_operation::CachedProgram<ApplyDeviceDelayDeviceOperation::ApplyDeviceDelayMeshWorkload::shared_variables_t>
-ApplyDeviceDelayDeviceOperation::ApplyDeviceDelayMeshWorkload::create_at(
-    const operation_attributes_t& operation_attributes,
-    const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& /*tensor_args*/,
-    tensor_return_value_t& /*tensor_return_value*/) {
+    tensor_return_value_t& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    TT_FATAL(
+        mesh_dispatch_coordinate.has_value(),
+        "ApplyDeviceDelayDeviceOperation::create_descriptor requires a mesh dispatch coordinate");
+    const ttnn::MeshCoordinate& mesh_coordinate = mesh_dispatch_coordinate.value();
     log_info(tt::LogAlways, "Creating delay program at mesh coordinate: {}", mesh_coordinate);
-    tt::tt_metal::Program program{};
-    auto subdevice_cores = corerange_to_cores(operation_attributes.worker_core_range_set);
-    auto kernel_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/debug/device/kernels/dataflow/device_delay_spin.cpp",
-        subdevice_cores.at(0),
-        DataMovementConfig{.compile_args = {operation_attributes.delays[mesh_coordinate[0]][mesh_coordinate[1]]}});
-    log_info(tt::LogAlways, "Created delay program at mesh coordinate: {}", mesh_coordinate);
-    return {std::move(program), shared_variables_t{.kernel_id = kernel_id}};
-}
 
-void ApplyDeviceDelayDeviceOperation::ApplyDeviceDelayMeshWorkload::override_runtime_arguments(
-    cached_mesh_workload_t& /*cached_workload*/,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& /*tensor_args*/,
-    tensor_return_value_t& /*tensor_return_value*/) {
-    // No runtime arguments to override for this operation since delay cycles are compile-time
+    tt::tt_metal::ProgramDescriptor desc;
+
+    const auto subdevice_cores = corerange_to_cores(operation_attributes.worker_core_range_set);
+    const CoreCoord target_core = subdevice_cores.at(0);
+    const CoreRangeSet kernel_core_range_set{CoreRange(target_core, target_core)};
+
+    tt::tt_metal::KernelDescriptor kernel_desc;
+    kernel_desc.kernel_source = "ttnn/cpp/ttnn/operations/debug/device/kernels/dataflow/device_delay_spin.cpp";
+    kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    kernel_desc.core_ranges = kernel_core_range_set;
+    kernel_desc.compile_time_args = {operation_attributes.delays[mesh_coordinate[0]][mesh_coordinate[1]]};
+    // Default DataMovementConfig (RISCV_0 / NOC_0) preserves the original CreateKernel(... DataMovementConfig{...})
+    // call.
+    kernel_desc.config = tt::tt_metal::DataMovementConfigDescriptor{};
+
+    desc.kernels.push_back(std::move(kernel_desc));
+
+    log_info(tt::LogAlways, "Created delay program at mesh coordinate: {}", mesh_coordinate);
+    return desc;
 }
 
 }  // namespace ttnn::operations::debug

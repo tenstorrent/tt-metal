@@ -1462,7 +1462,7 @@ int TopologyMapper::get_mpi_rank_for_mesh_host_rank(MeshId mesh_id, MeshHostRank
 
 void TopologyMapper::print_logical_adjacency_map(
     const ::tt::tt_metal::experimental::tt_fabric::LogicalMultiMeshGraph& multi_mesh_graph) const {
-    log_info(tt::LogFabric, "TopologyMapper: Logical Multi-Mesh Adjacency Map:");
+    log_trace(tt::LogFabric, "TopologyMapper: Logical Multi-Mesh Adjacency Map:");
 
     // Print adjacency maps using topology solver's print functions (includes degree histograms)
     multi_mesh_graph.mesh_level_graph_.print_adjacency_map("Logical Mesh-Level Graph", true);
@@ -1473,7 +1473,7 @@ void TopologyMapper::print_logical_adjacency_map(
 
 void TopologyMapper::print_physical_adjacency_map(
     const ::tt::tt_metal::experimental::tt_fabric::PhysicalMultiMeshGraph& multi_mesh_graph) const {
-    log_info(tt::LogFabric, "TopologyMapper: Physical Multi-Mesh Adjacency Map:");
+    log_trace(tt::LogFabric, "TopologyMapper: Physical Multi-Mesh Adjacency Map:");
 
     // Print adjacency maps using topology solver's print functions (includes degree histograms)
     multi_mesh_graph.mesh_level_graph_.print_adjacency_map("Physical Mesh-Level Graph", true);
