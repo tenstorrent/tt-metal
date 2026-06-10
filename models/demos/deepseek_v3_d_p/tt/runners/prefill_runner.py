@@ -289,16 +289,6 @@ def main() -> None:
         )
         send_kv_chunk_table(table_path)
 
-        # Per-layer LayerAck: the runner bumps a counter once per layer; the scheduler
-        # reads the delta (the ack carries no payload) and drives the migration worker.
-        # ttnn.InterProcessCounterChannel owns a named POSIX shm segment the scheduler
-        # connects to via shm_layer_ack_name(service_id).
-        service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
-        ack_shm_name = f"/tt_prefill_layer_acks_{service_id}"
-        ack_channel = ttnn.InterProcessCounterChannel(ack_shm_name)
-        pipeline.set_layer_ack_channel(ack_channel)
-        logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
-
     if os.environ.get("PREFILL_STANDALONE", "0") == "1":
         # Truly standalone: file input, no H2D socket service at all.
         logger.info("Setup complete, running standalone loop (file input, no socket)")
@@ -328,6 +318,15 @@ def main() -> None:
             f"[h2d] exported descriptor service_id={service_id!r} -> {descriptor_path}; "
             f"run prefill_h2d_producer.py (or the scheduler) in another process to drive token pushes."
         )
+
+        # Per-layer LayerAck: the runner bumps a counter once per layer; the scheduler
+        # reads the delta (the ack carries no payload) and drives the migration worker.
+        # ttnn.InterProcessCounterChannel owns a named POSIX shm segment the scheduler
+        # connects to via shm_layer_ack_name(service_id).
+        ack_shm_name = f"/tt_prefill_layer_acks_{service_id}"
+        ack_channel = ttnn.InterProcessCounterChannel(ack_shm_name)
+        pipeline.set_layer_ack_channel(ack_channel)
+        logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
 
         logger.info("Setup complete, entering request loop")
         run_request_loop(pipeline, h2d_service)
