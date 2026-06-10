@@ -17,10 +17,9 @@ from transformers import AutoTokenizer
 from ttml.common.config import DeviceConfig, TrainingConfig, TransformerConfig, get_model_config, load_config
 from ttml.common.utils import get_tt_metal_runtime_root
 from ttml.trainers import GRPOTrainer, TrainerCallback, get_grpo_config
-from utils.llama_completer import LlamaCompletionCtx
-from utils.llama_completer import LlamaGRPOCompleter
-from utils.qwen3_completer import Qwen3CompletionCtx
-from utils.qwen3_completer import Qwen3GRPOCompleter
+from utils.llama_completer import LlamaCompletionCtx, LlamaGRPOCompleter
+from utils.qwen3_completer import Qwen3CompletionCtx, Qwen3GRPOCompleter
+from utils.llama_completer_stub import LlamaGRPOCompleter
 
 try:
     import wandb
@@ -179,7 +178,7 @@ def parse_args():
         default=None,
         help="HuggingFace model ID or local path. Overrides the per-model default " "(qwen3 default: Qwen/Qwen3-32B).",
     )
-    parser.add_argument(
+        help="HuggingFace model ID or local path. Overrides the per-model default (qwen3 default: Qwen/Qwen3-32B).",
         "--max_seq_len",
         type=int,
         default=2048,

@@ -14,27 +14,29 @@
 # so UMD's topology discovery sees all chips it would naturally find on the
 # board.
 #
-# Used layout: the application opens a [1, 1] sub-mesh on each side (only
-# chip 0 of the board, the PCIe-reachable one). The second chip on each
-# board sits idle but is still required to be declared here so UMD's eth
-# walk doesn't trip on it. We deliberately under-use T3K because the
-# tt-transformers multi-device weight-update path (Attention.update for
-# num_devices_per_group > 1, MLP.update's replicated -> 2D-sharded mesh
-# projection) is not yet implemented; a 1x1 sub-mesh keeps every
-# Transformer.update_weights dispatch on the single-device fast path.
+# Used layout (asymmetric):
+#   - Rank 0 (TTML) opens the full [1, 2] sub-mesh -- both chips of board 0
+#     participate in the ttml model.
+#   - Rank 1 (TTT)  opens only a [1, 1] sub-mesh at offset (0, 0) (chip 0 of
+#     board 1, the PCIe-reachable one). The second chip is declared so
+#     UMD's eth walk has a mapping for it, but it stays idle. The reason
+#     for the asymmetry is that the tt-transformers multi-device
+#     weight-update path (Attention.update for num_devices_per_group > 1,
+#     MLP.update's replicated -> 2D-sharded mesh projection) is not yet
+#     implemented; a [1, 1] sub-mesh on the ttt side keeps every
+#     Transformer.update_weights dispatch on the single-device fast path.
 #
 #   - Rank 0 owns mesh_id 0 -- board 0 (TT_VISIBLE_DEVICES="0"). TTML side.
 #   - Rank 1 owns mesh_id 1 -- board 1 (TT_VISIBLE_DEVICES="1"). TTT  side.
 #   - The FABRIC graph wires the two halves together so
-#     ttnn.experimental.send_async/recv_async (used by WeightBridge) can route
-#     over the eth links between the two boards.
+#     ttnn.experimental.send_async/recv_async (used by WeightBridge) can
+#     route over the eth links between the two boards.
 #
-# Pairs with device_config.mesh_shape=[1, 1] + device_ids=[0] on the ttml
+# Pairs with device_config.mesh_shape=[1, 2] + device_ids=[0, 1] on the ttml
 # rank, and ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 1),
-# offset=ttnn.MeshCoordinate(0, 0)) on the ttt rank. Both submeshes must be
-# the same shape: WeightBridge pairs sender (row, col) -> receiver (row,
-# col) and asserts the manifest's sender shape equals the receiver's mesh
-# shape.
+# offset=ttnn.MeshCoordinate(0, 0)) on the ttt rank. WeightBridge handles
+# the asymmetric pairing by exchanging mesh shapes during ``connect()`` and
+# resolving to a single (0, 0) -> (0, 0) ``SocketConnection``.
 
 mesh_descriptors {
   name: "M0"
