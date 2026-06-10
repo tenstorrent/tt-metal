@@ -23,8 +23,8 @@ import ttnn
 
 GLX_HEADS, GLX_DIM = 64, 128
 GLX_SQ = 640  # queries per device (5120 chunk / SP=8)
-GLX_T = 55296  # all-gathered keys, tile-aligned
-GLX_HISTORY = GLX_T - 8 * GLX_SQ  # 50176 keys visible to every query
+GLX_T = 56320  # all-gathered keys: 50K history + 5K chunk = 55K, tile-aligned
+GLX_HISTORY = GLX_T - 8 * GLX_SQ  # 51200 keys visible to every query
 
 
 def indexer_score_ref(q, k, w, chunk_start):

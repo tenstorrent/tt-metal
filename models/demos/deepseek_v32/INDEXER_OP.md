@@ -133,8 +133,7 @@ align). Later: `valid_len` contract with top-k to skip the fill entirely.
 
 Single-chip, `sp_rank ∈ {0,7}` boundary cases via `chunk_start`; −inf maps
 exact, visible PCC ≥ 0.999 (0.99 with bfp8 k); negative weights so padding
-can't hide. Mini case Sq=64/T=256 first. Note: test constants need fixing,
-`GLX_T 55296 → 56320`, history `50176 → 51200`.
+can't hide. Mini case Sq=64/T=256 first.
 
 ## Status
 
@@ -143,7 +142,7 @@ Branch: `skrstic/dsa_indexer_score_op`.
 - [x] torch reference + test (`tests/nightly/blackhole/sdpa/test_indexer_score.py`)
 - [x] skeleton op, validation, RM out spec, nanobind, CMake; empty factory
 - [x] design (this doc); visualizations `indexer_score_viz.html`, `indexer_core0_viz.html`
-- [ ] fix test dims 55296 → 56320
+- [x] test dims 55296 → 56320
 - [ ] program factory: flat valid-tile deal + runtime args
 - [ ] kernels: reader / compute (head-blocked, l1-acc, mask) / writer (−inf tails)
 - [ ] row-major top-k (separate); negative-weights topk-safety test
