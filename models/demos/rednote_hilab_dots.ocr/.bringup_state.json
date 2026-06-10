@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T10:29:59Z",
+  "updated_at": "2026-06-10T10:31:30Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -418,16 +418,9 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "done",
+        "status": "pending",
         "attempts": 0,
-        "artifacts": [
-          "models/demos/rednote_hilab_dots.ocr/tt/vision_block.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/vision_transformer.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/profile_vision_transformer.py",
-          "generated/profiler/reports/2026_06_10_05_44_32/ops_perf_results_2026_06_10_05_44_32.csv"
-        ],
-        "notes": "Tracy-driven single change: the two residual ttnn.add ops in vision_block pinned to L1 interleaved (DRAM -> L1_MEMORY_CONFIG). Composed-tower traced tracy (metal-trace captured+replayed, fp32 [1,1,896,588] patches replicated 1x4 mesh, all 42 blocks + patch_embed + post_trunk_norm + merger, production operating point) showed the adds running DRAM+DRAM->DRAM at 44.2us vs 13.8us for the same-sized L1 BinaryNg in the rope chain; their only consumers are RMSNorm reads and the next add - never a matmul - so the pin avoids the tick-23 L1-interleaved-into-matmul stall counter-example. Per-device tower kernel time 81.89 -> 79.34 ms (-3.1%): residual adds 3.716 -> 1.841 ms (-50%), LayerNorm 3.911 -> 3.227 ms (L1 reads), Matmul 33.1ms and SDPA 18.6ms unchanged (no stall introduced). Top hotspot post-change MatmulDeviceOperation 33.2ms 41.8% of tower kernel time (QKV/fc1/fc3 181us@110c, fc2 133us@100c, o_proj 97us@100c, fp32 HiFi4 compute-bound - per-block ticks already concluded no lever without precision risk); SDPA 23.4% bf16-only fused kernel. KB entries for kind other (tosa_scatter/acosh/elu eltwise records) n/a to a composition block - none used. PCC re-verified: vision_transformer 0.990121 (>0.99, unchanged), vision_block 0.999958 (unchanged); traced_ops sidecars regenerated. Guard ok (lint 0 on vision_transformer.py and vision_block.py, traced tracy artifact verified). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
-        "pcc": 0.990121
+        "notes": "REDO (dtype): fp32 tower is atypical/slow (3.49s vs 754ms bf16 single-chip). Standard recipe: bf16 activations+weights, fp32-dest-acc, fp32 softmax only where sinks demand; gate = e2e parity (TTNN==HF), not per-block PCC alone."
       },
       "real_weights": {
         "status": "done",
@@ -863,8 +856,8 @@
   ],
   "locks": {
     "device": {
-      "held_by": null,
-      "held_since": null
+      "held_by": "tick-50",
+      "held_since": "2026-06-10T10:30:51Z"
     }
   },
   "tick_log": [
