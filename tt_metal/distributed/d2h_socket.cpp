@@ -625,6 +625,9 @@ std::unique_ptr<D2HSocket> D2HSocket::connect_from_descriptor(const HDSocketDesc
         std::make_unique<PCIeCoreWriter>(desc.device_id, desc.virtual_core_x, desc.virtual_core_y);
     socket->pcie_writer_ = socket->pcie_writer_instance_->get_pcie_writer();
 
+    // Restore connector-mutable state left behind by any prior driver process.
+    // First connector after owner-init sees an all-zero struct (version stamped
+    // by the owner), which matches a fresh socket.
     TT_FATAL(
         desc.connector_state_offset + sizeof(HDSocketConnectorState) <= desc.shm_size,
         "Descriptor connector_state_offset out of range for SHM size {}.",
@@ -637,6 +640,10 @@ std::unique_ptr<D2HSocket> D2HSocket::connect_from_descriptor(const HDSocketDesc
         "HDSocketConnectorState version mismatch: got {}, expected {}.",
         socket->connector_state_->version,
         kHDSocketConnectorStateVersion);
+    // Capture the prior process's clean_shutdown before overwriting it. A 0 here
+    // means the previous connector exited without running its destructor (crash,
+    // _exit, kill); callers can query had_clean_prior_shutdown() to react (e.g.
+    // call discard_pending_pages() to drop stale data).
     socket->prior_clean_shutdown_ = (socket->connector_state_->clean_shutdown != 0);
     if (!socket->prior_clean_shutdown_) {
         log_warning(
@@ -649,8 +656,11 @@ std::unique_ptr<D2HSocket> D2HSocket::connect_from_descriptor(const HDSocketDesc
     socket->fifo_curr_size_ = socket->connector_state_->fifo_curr_size;
     socket->bytes_acked_ = socket->connector_state_->bytes_acked;
     socket->read_ptr_ = socket->connector_state_->read_ptr;
+    // bytes_sent_ is the cached copy of the device-written counter that already
+    // lives in SHM. Read it live so wait_for_bytes() sees fresh data immediately.
     socket->bytes_sent_ = socket->bytes_sent_ptr_[0];
 
+    // Reconcile the device-side bytes_acked with the restored SHM value.
     // A previous connector can advance bytes_acked/read_ptr in SHM and then exit between that update
     // and notify_sender (PCIe write to the device's config buffer), leaving
     // the device's bytes_acked behind. Without this, the device kernel may
