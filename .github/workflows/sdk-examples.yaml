@@ -27,6 +27,7 @@ on:
 
 jobs:
   sdk-examples:
+    environment: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'mainline' || '' }}
     runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner) }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
