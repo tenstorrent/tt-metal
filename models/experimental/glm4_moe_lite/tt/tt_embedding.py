@@ -3,12 +3,19 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Optional
 
 import torch
 
 import ttnn
+
+
+def _prefill_embed_l1_max_bytes() -> int:
+    """Max bf16 activation bytes for L1 embedding output (S=128, H=2048 → 512 KiB)."""
+    raw = os.environ.get("GLM4_MOE_LITE_PREFILL_EMBED_L1_MAX_BYTES", "").strip()
+    return int(raw) if raw else 512 * 1024
 
 
 def convert_embedding_weight_to_tt(
@@ -39,12 +46,23 @@ def convert_embedding_weight_to_tt(
     )
 
 
+def prefill_embed_memory_config(*, seq_tokens: int, hidden_dim: int) -> ttnn.MemoryConfig:
+    """Pick embedding output memory: L1 when small enough to skip DRAM→L1 copy at decoder entry."""
+    if os.environ.get("GLM4_MOE_LITE_PREFILL_EMBED_L1", "1").strip() == "0":
+        return ttnn.DRAM_MEMORY_CONFIG
+    act_bytes = int(seq_tokens) * int(hidden_dim) * 2  # bf16
+    if act_bytes <= _prefill_embed_l1_max_bytes():
+        return ttnn.L1_MEMORY_CONFIG
+    return ttnn.DRAM_MEMORY_CONFIG
+
+
 def run_tt_embedding(
     *,
     device,
     token_ids: torch.Tensor,
     tt_weight: ttnn.Tensor,
     output_layout: ttnn.Layout = ttnn.TILE_LAYOUT,
+    memory_config: ttnn.MemoryConfig | None = None,
 ) -> ttnn.Tensor:
     """
     Run embedding lookup on TT.
@@ -71,4 +89,5 @@ def run_tt_embedding(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(device) if device.__class__.__name__ == "MeshDevice" else None,
     )
-    return ttnn.embedding(tt_ids, tt_weight, layout=output_layout, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    out_mc = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+    return ttnn.embedding(tt_ids, tt_weight, layout=output_layout, memory_config=out_mc)

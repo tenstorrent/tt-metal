@@ -14,10 +14,22 @@ from loguru import logger
 import ttnn
 from models.experimental.glm4_moe_lite.tt.attention_decode import flash_mla_and_output, kv_cache_update, q_projection
 from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
-from models.experimental.glm4_moe_lite.tt.linear_helpers import prefill_linear_ws_out, prefill_per_head_linear
+from models.experimental.glm4_moe_lite.tt.linear_helpers import (
+    _is_l1_interleaved,
+    _to_l1_if_needed,
+    prefill_linear_ws_out,
+    prefill_norm_config_from_width_sharded_tensor,
+    prefill_per_head_linear,
+    prefill_width_sharded_norm_config,
+)
 from models.experimental.glm4_moe_lite.tt.mlp_decode import dense_mlp_forward, moe_mlp_forward
 from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig
-from models.experimental.glm4_moe_lite.fused_ops.q_split_heads import q_split_heads
+from models.experimental.glm4_moe_lite.fused_ops.q_split_heads import (
+    prefill_q_heads_memory_config,
+    prefill_q_nlp_input_memory_config,
+    prefill_q_slice_memory_config,
+    q_split_heads,
+)
 
 _SIGNPOST_ENABLED = os.environ.get("GLM4_MOE_LITE_SIGNPOST", "").strip() == "1"
 if _SIGNPOST_ENABLED:
@@ -634,12 +646,14 @@ def run_decoder_layer_prefill_update_cache_tt(
         )
 
     fuse_shared_gate_up = os.environ.get("GLM4_MOE_LITE_FUSE_SHARED_GATE_UP", "1").strip() != "0"
+    prefill_sharded_qkv = os.environ.get("GLM4_MOE_LITE_PREFILL_SHARDED_QKV", "1").strip() != "0"
 
     def _mlp_linear(
         a: ttnn.Tensor,
         b: ttnn.Tensor,
         memory_config: ttnn.MemoryConfig | None = None,
         skip_gather: bool = False,
+        sharded_in0: bool = False,
     ) -> ttnn.Tensor:
         m_total = 1
         for i in range(len(a.shape) - 1):
@@ -655,9 +669,16 @@ def run_decoder_layer_prefill_update_cache_tt(
                 compute_kernel_config=mlp_compute_kernel_config,
                 memory_config=memory_config,
                 return_sharded=skip_gather,
+                sharded_in0=sharded_in0,
             )
         if b_batch > 1 and m_total > ttnn.TILE_SIZE:
-            return prefill_per_head_linear(a, b, device=device, compute_kernel_config=mlp_compute_kernel_config)
+            return prefill_per_head_linear(
+                a,
+                b,
+                device=device,
+                compute_kernel_config=mlp_compute_kernel_config,
+                memory_config=memory_config,
+            )
         if mlp_compute_kernel_config is None:
             return ttnn.linear(a, b)
         return ttnn.linear(a, b, compute_kernel_config=mlp_compute_kernel_config)
@@ -710,7 +731,7 @@ def run_decoder_layer_prefill_update_cache_tt(
         ttnn.deallocate(out, force=False)
         return out_reduced
 
-    x_embed = ttnn.to_memory_config(x_embed, ttnn.L1_MEMORY_CONFIG)
+    x_embed, _ = _to_l1_if_needed(x_embed)
     residual = x_embed
     t0 = time.perf_counter() if profile is not None else 0.0
     x = w.input_layernorm(x_embed, mode="prefill")  # [1,1,S,hidden]
@@ -723,42 +744,110 @@ def run_decoder_layer_prefill_update_cache_tt(
     kv = None
     # Token-wise linears operate on [1,1,B*S_pad,...] (total_seq tokens).
     w_q_kv_a = getattr(w, "w_q_kv_a", None)
+    use_sharded_q_a = prefill_sharded_qkv and not (tp_enabled and not attn_dp)
+    q_lora = int(hparams.q_lora_rank)
+
+    def _run_sharded_q_a_norm(q_a_in: ttnn.Tensor, *, from_fused_slice: bool) -> ttnn.Tensor:
+        qa_norm_cfg = prefill_width_sharded_norm_config(device, total_seq, q_lora)
+        if from_fused_slice:
+            # Slice of fused [T, q_lora+kvpe] may use a sub-grid of the parent shard layout.
+            q_a_in = ttnn.to_memory_config(q_a_in, qa_norm_cfg["sharded_output_config"])
+        elif q_a_in.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+            # Standalone w_q_a matmul: run norm on the matmul's native shard spec (no gather).
+            tensor_norm_cfg = prefill_norm_config_from_width_sharded_tensor(q_a_in)
+            qa_norm_cfg["sharded_program_config"] = tensor_norm_cfg["sharded_program_config"]
+            qa_norm_cfg["sharded_output_config"] = tensor_norm_cfg["sharded_output_config"]
+        else:
+            q_a_in = ttnn.to_memory_config(q_a_in, qa_norm_cfg["sharded_output_config"])
+        return w.q_a_layernorm(
+            q_a_in,
+            mode="prefill",
+            in_sharded=True,
+            out_sharded=True,
+            norm_config=qa_norm_cfg,
+        )
+
     if w_q_kv_a is not None:
         if tp_enabled and not attn_dp:
             qkv = _tp_row_parallel_linear_from_replicated(x, w_q_kv_a)  # [1,1,T,q_lora_rank+kvpe_dim]
         else:
-            qkv = _mlp_linear(x, w_q_kv_a)  # [1,1,T,q_lora_rank+kvpe_dim]
-        q_a = ttnn.slice(qkv, [0, 0, 0, 0], [1, 1, total_seq, int(hparams.q_lora_rank)])
-        kv = ttnn.slice(
-            qkv,
-            [0, 0, 0, int(hparams.q_lora_rank)],
-            [1, 1, total_seq, int(hparams.q_lora_rank) + kvpe_dim],
-        )
+            qkv = _mlp_linear(x, w_q_kv_a, skip_gather=use_sharded_q_a)  # [1,1,T,q_lora_rank+kvpe_dim]
+        q_a = ttnn.slice(qkv, [0, 0, 0, 0], [1, 1, total_seq, q_lora])
+        kv = ttnn.slice(qkv, [0, 0, 0, q_lora], [1, 1, total_seq, q_lora + kvpe_dim])
         ttnn.deallocate(qkv, force=False)
+        if use_sharded_q_a:
+            q_a = _run_sharded_q_a_norm(q_a, from_fused_slice=True)
+            kv = ttnn.to_memory_config(kv, ttnn.DRAM_MEMORY_CONFIG)
     else:
         if tp_enabled and not attn_dp:
             q_a = _tp_row_parallel_linear_from_replicated(x, w.w_q_a)  # [1,1,T,q_lora_rank]
         else:
-            q_a = _mlp_linear(x, w.w_q_a, memory_config=ttnn.L1_MEMORY_CONFIG)  # [1,1,T,q_lora_rank]
-    q_a = w.q_a_layernorm(q_a, mode="prefill")
+            q_a = _mlp_linear(
+                x,
+                w.w_q_a,
+                skip_gather=use_sharded_q_a,
+                memory_config=ttnn.L1_MEMORY_CONFIG if not use_sharded_q_a else None,
+            )
+    if not use_sharded_q_a:
+        q_a = w.q_a_layernorm(q_a, mode="prefill")
+    elif w_q_kv_a is None:
+        q_a = _run_sharded_q_a_norm(q_a, from_fused_slice=False)
+    qk_head_dim = int(hparams.qk_head_dim)
     if tp_enabled and not attn_dp:
         q = _tp_row_parallel_linear_from_replicated(q_a, w.w_q_b)  # [1,1,T,H*qk_head_dim]
+    elif use_sharded_q_a:
+        # Fast 80-core w_q_b beats sharded-in0 on 8-core grid (~15 μs vs ~57 μs device).
+        # Gather q_a in (~1 μs), matmul, then gather output once into nlp in0 MC.
+        q = _mlp_linear(
+            q_a,
+            w.w_q_b,
+            skip_gather=False,
+            memory_config=prefill_q_nlp_input_memory_config(
+                seq_tokens=total_seq,
+                fused_q_dim=num_heads * qk_head_dim,
+            ),
+        )
     else:
         q = _mlp_linear(q_a, w.w_q_b)  # [1,1,T,H*qk_head_dim]
     ttnn.deallocate(q_a, force=False)
 
+    q_heads_mc = prefill_q_heads_memory_config(
+        num_heads=num_heads,
+        seq_tokens=total_seq,
+        head_dim=qk_head_dim,
+    )
     q = q_split_heads(
         q,
         num_heads=num_heads,
-        head_dim=int(hparams.qk_head_dim),
+        head_dim=qk_head_dim,
         total_seq=total_seq,
         batch=batch,
         seq_len=seq_len,
         device=device,
+        memory_config=q_heads_mc,
     )  # [B,H,S_pad,qk_head_dim]
-    q_nope = ttnn.slice(q, [0, 0, 0, 0], [batch, num_heads, seq_len, int(hparams.qk_nope_head_dim)])
+    # Full Q [1,H,S,576] exceeds 1 MiB L1 budget; slices fit (q_nope ~960 KiB, q_rope ~320 KiB).
+    q_nope_mc = prefill_q_slice_memory_config(
+        num_heads=num_heads,
+        seq_tokens=seq_len,
+        slice_dim=int(hparams.qk_nope_head_dim),
+    )
+    q_rope_mc = prefill_q_slice_memory_config(
+        num_heads=num_heads,
+        seq_tokens=seq_len,
+        slice_dim=int(hparams.qk_rope_head_dim),
+    )
+    q_nope = ttnn.slice(
+        q,
+        [0, 0, 0, 0],
+        [batch, num_heads, seq_len, int(hparams.qk_nope_head_dim)],
+        memory_config=q_nope_mc,
+    )
     q_rope = ttnn.slice(
-        q, [0, 0, 0, int(hparams.qk_nope_head_dim)], [batch, num_heads, seq_len, int(hparams.qk_head_dim)]
+        q,
+        [0, 0, 0, int(hparams.qk_nope_head_dim)],
+        [batch, num_heads, seq_len, qk_head_dim],
+        memory_config=q_rope_mc,
     )
     ttnn.deallocate(q, force=False)
 
@@ -777,8 +866,14 @@ def run_decoder_layer_prefill_update_cache_tt(
     # Loop over batch: each [1,H,S,D] matmul matches the serial-path shape exactly.
     # This is fast because the matmul is small — the big batching wins come from
     # the token-wise linears and MoE which stay on flat [1,1,B*S,hidden].
+    # Keep kv_b1 output in L1: prefill_per_head_linear writes L1 then gathers to
+    # memory_config; DRAM default causes an extra CopyDeviceOperation (~1.7 ms).
+    kv_b1_out_mc = q_nope_mc if _is_l1_interleaved(q_nope_mc) else ttnn.L1_MEMORY_CONFIG
     if batch > 1:
-        kv_b1_fn = _tp_row_parallel_linear_from_replicated if use_tp_kv_b1 else _mlp_linear
+        if use_tp_kv_b1:
+            kv_b1_fn = _tp_row_parallel_linear_from_replicated
+        else:
+            kv_b1_fn = lambda a, b: _mlp_linear(a, b, memory_config=kv_b1_out_mc)
         q_nope_parts = []
         for bi in range(batch):
             q_bi = ttnn.slice(q_nope, [bi, 0, 0, 0], [bi + 1, num_heads, seq_len, int(hparams.qk_nope_head_dim)])
@@ -792,7 +887,7 @@ def run_decoder_layer_prefill_update_cache_tt(
         if use_tp_kv_b1:
             q_nope = _tp_row_parallel_linear_from_replicated(q_nope, w.w_kv_b1)
         else:
-            q_nope = _mlp_linear(q_nope, w.w_kv_b1)
+            q_nope = _mlp_linear(q_nope, w.w_kv_b1, memory_config=kv_b1_out_mc)
     _profile_add(profile, "q_path_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     # ---- KVPE for the prompt -> fill cache ----
@@ -808,15 +903,26 @@ def run_decoder_layer_prefill_update_cache_tt(
     # RoPE and KV cache fill.
     kv = ttnn.reshape(kv, (batch, 1, seq_len, kvpe_dim))
 
-    kv_nope = ttnn.slice(kv, [0, 0, 0, 0], [batch, 1, seq_len, int(hparams.kv_lora_rank)])
-    kv_rope = ttnn.slice(kv, [0, 0, 0, int(hparams.kv_lora_rank)], [batch, 1, seq_len, kvpe_dim])
+    kv_l1_mc = ttnn.L1_MEMORY_CONFIG
+    kv_nope = ttnn.slice(
+        kv,
+        [0, 0, 0, 0],
+        [batch, 1, seq_len, int(hparams.kv_lora_rank)],
+        memory_config=kv_l1_mc,
+    )
+    kv_rope = ttnn.slice(
+        kv,
+        [0, 0, 0, int(hparams.kv_lora_rank)],
+        [batch, 1, seq_len, kvpe_dim],
+        memory_config=kv_l1_mc,
+    )
     ttnn.deallocate(kv, force=False)
 
-    _kv_nope_dram = kv_nope
-    _kv_nope_l1 = ttnn.to_memory_config(kv_nope, ttnn.L1_MEMORY_CONFIG)
-    ttnn.deallocate(_kv_nope_dram, force=False)
-    kv_nope = w.kv_a_layernorm(_kv_nope_l1, mode="prefill")
-    ttnn.deallocate(_kv_nope_l1, force=False)
+    kv_nope_in, _kv_nope_copied = _to_l1_if_needed(kv_nope)
+    if _kv_nope_copied:
+        ttnn.deallocate(kv_nope, force=False)
+    kv_nope = w.kv_a_layernorm(kv_nope_in, mode="prefill")
+    ttnn.deallocate(kv_nope_in, force=False)
 
     # RoPE ops require BF16.
     if q_rope.dtype != ttnn.bfloat16:
@@ -844,7 +950,8 @@ def run_decoder_layer_prefill_update_cache_tt(
     ttnn.deallocate(q_nope, force=False)
     ttnn.deallocate(q_rope, force=False)
 
-    kvpe = ttnn.concat([kv_nope, kv_rope], dim=-1)  # [B,1,S_pad,kvpe_dim]
+    # kvpe is small (~144 KiB at S=128); keep L1 interleaved for flash_mla_prefill K reads.
+    kvpe = ttnn.concat([kv_nope, kv_rope], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
     ttnn.deallocate(kv_nope, force=False)
     ttnn.deallocate(kv_rope, force=False)
 
@@ -946,7 +1053,7 @@ def run_decoder_layer_prefill_update_cache_tt(
     attn_latent = ttnn.slice(attn_latent, [0, 0, 0, 0], [batch, num_heads, seq_len, int(hparams.kv_lora_rank)])
 
     t0 = time.perf_counter() if profile is not None else 0.0
-    use_nlp_concat = os.environ.get("GLM4_MOE_LITE_NLP_CONCAT_HEADS", "").strip() == "1"
+    use_nlp_concat = os.environ.get("GLM4_MOE_LITE_NLP_CONCAT_HEADS", "1").strip() != "0"
     head_parallel_kvb2 = (
         os.environ.get("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2", "").strip() == "1" and tp_enabled and tp_size > 1
     )
@@ -956,10 +1063,12 @@ def run_decoder_layer_prefill_update_cache_tt(
         heads_per_dev = num_heads // tp_size
         flat_dim = heads_per_dev * int(hparams.v_head_dim)
 
+        kv_b2_out_mc = ttnn.L1_MEMORY_CONFIG
+
         def _kvb2_head_parallel_prefill(a_latent: ttnn.Tensor) -> ttnn.Tensor:
             # a_latent: [1, H, S, kv_lora]
             a_part = ttnn.mesh_partition(a_latent, dim=1, cluster_axis=tp_axis)
-            v_local = _mlp_linear(a_part, w.w_kv_b2)
+            v_local = _mlp_linear(a_part, w.w_kv_b2, memory_config=kv_b2_out_mc)
             ttnn.deallocate(a_part, force=False)
             if use_nlp_concat:
                 v_local = ttnn.experimental.nlp_concat_heads(v_local)
@@ -982,7 +1091,7 @@ def run_decoder_layer_prefill_update_cache_tt(
             v = _kvb2_head_parallel_prefill(attn_latent)
             ttnn.deallocate(attn_latent, force=False)
 
-        attn_out_partial = _mlp_linear(v, w.w_o)
+        attn_out_partial = _mlp_linear(v, w.w_o, skip_gather=True)
         ttnn.deallocate(v, force=False)
         attn_out_reduced = ttnn.all_reduce(
             attn_out_partial,
@@ -1011,7 +1120,7 @@ def run_decoder_layer_prefill_update_cache_tt(
             if tp_enabled and not attn_dp:
                 v = _tp_row_parallel_linear_from_replicated(attn_latent, w.w_kv_b2)
             else:
-                v = _mlp_linear(attn_latent, w.w_kv_b2)
+                v = _mlp_linear(attn_latent, w.w_kv_b2, memory_config=ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(attn_latent, force=False)
 
         # Flatten back from [B,H,S_pad,v_head_dim] to [1,1,B*S_pad,H*v_head_dim]
@@ -1047,11 +1156,20 @@ def run_decoder_layer_prefill_update_cache_tt(
         t0 = time.perf_counter() if profile is not None else 0.0
         # DRAM-sharded weights are incompatible with regular ttnn.linear (prefill).
         # Convert to interleaved via host round-trip if needed.
-        _gate_w = _ensure_interleaved(w.w_mlp_gate)
-        _up_w = _ensure_interleaved(w.w_mlp_up)
         _down_w = _ensure_interleaved(w.w_mlp_down)
-        gate = _mlp_linear(x, _gate_w, skip_gather=True)
-        up = _mlp_linear(x, _up_w, skip_gather=True)
+        if fuse_shared_gate_up and w.w_mlp_gate_up is not None:
+            _gate_up_w = _ensure_interleaved(w.w_mlp_gate_up)
+            gate_up = _mlp_linear(x, _gate_up_w, skip_gather=True)
+            _batch = int(gate_up.shape[2])
+            _inter = int(gate_up.shape[3]) // 2
+            gate = ttnn.slice(gate_up, [0, 0, 0, 0], [1, 1, _batch, _inter])
+            up = ttnn.slice(gate_up, [0, 0, 0, _inter], [1, 1, _batch, _inter * 2])
+            ttnn.deallocate(gate_up, force=False)
+        else:
+            _gate_w = _ensure_interleaved(w.w_mlp_gate)
+            _up_w = _ensure_interleaved(w.w_mlp_up)
+            gate = _mlp_linear(x, _gate_w, skip_gather=True)
+            up = _mlp_linear(x, _up_w, skip_gather=True)
         ttnn.deallocate(x, force=False)
 
         # gate and up are WIDTH_SHARDED L1; ttnn.mul with fused silu works on
