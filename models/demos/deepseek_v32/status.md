@@ -13,7 +13,7 @@ MLA layer.
 1. **Start from the existing v3 op and modify it**.
 2. Keep track of issues and learning points.
 3. K cache stays in the same format so that it doesn't affect decode downstream.
-4. TopK needs Row-major input.
+4. ~~TopK needs Row-major input.~~ CORRECTED 2026-06-10: ttnn.topk asserts TILE input (topk_device_operation.cpp:152), verified on Blackhole.
 5. PCC truth is the CPU reference (reference_cpu), not v3 — v3.2 output is not assumed to match v3.
 6. Weights: start from random initialization, move to pretrained later. Pretrained MLA loading already exists in reference_cpu; torch→ttnn conversion + sharding exists in v3 (_convert_and_cache_weights / build_ttnn_cache) and is reused.
 7. Always follow tensor shapes — document the shape (and sharding) of every input/output/intermediate; CPU reference shapes are normative.
@@ -39,7 +39,8 @@ MLA layer.
    - CPU outputs cached at $DEEPSEEK_V32_MLA_REF_CACHE (default /tmp/deepseek_v32_mla_ref_cache), keyed by tag+seq+seed.
    - Device side keeps the HF config (shape-asserted vs ModelArgs); RoPE equivalence interleaved↔reference proven in single-chip spec D5.
    - First hardware runs (1x4, passthrough): pipeline runs e2e clean on QuietBox; seq2k output PCC 0.785, seq256 0.889 — diagnosed, not an MLA bug: ModelArgs.max_seq_len was set to seq_len, which disables YaRN (max_seq_len ≤ original 4096) in the CPU reference while v3's device tables (HF DeepseekV3YarnRotaryEmbedding) always apply YaRN; freqs and softmax mscale² (1.87x) diverge. Host check confirmed. Fix: keep max_seq_len=16384, refs re-cached (cache tag includes max_seq_len).
-   - **After fix, seq256 PASSES: output PCC 0.9991, KVPE kv 0.99989 / pe 0.99990** — weight mapping, RoPE convention, sp=1 harness all confirmed working. seq2k rerun in flight.
+   - **After fix, step 1 DONE — both pass on 1x4 QuietBox: seq256 output PCC 0.9991, seq2k 0.9986, KVPE ~0.9999** — weight mapping, RoPE convention, sp=1 harness all confirmed. seq2k cold run 431s (cached ref cuts CPU part on reruns).
+5. **Done (step 2 shape contracts):** tt/ops.py + tests/test_ops_shapes.py — all 5 shape tests pass on 1x4 QuietBox (8.5s): indexer_logits composed from ttnn matmul/relu/permute (on device); topk via ttnn.topk — works on device at k=2048, TILE input, host fallback never triggered; sparse_mla CPU fallback. Numerics tests vs reference_cpu next, then wiring into ttMLA (step 3).
    - Gotcha: don't pipe pytest through tail — swallows exit code; log to file, check $?.
 4. **Next (proposed, to agree on — no implementation until agreed):**
    1. Rewire tests/test_mla.py to use reference_cpu (MLACPU) as the PCC truth instead of the v3 reference — v3.2 and v3 outputs are not assumed to match, even for the passthrough. Reuse v3's run_mla_inference for the device side only; one set of random torch weights mapped into both the v3 ttMLA dict format and MLACPU; cache CPU reference outputs on disk (pattern exists in reference_tt_single_chip/test_model.py). Mesh shape parametrized; bring-up config = QuietBox 4x Blackhole.
@@ -54,7 +55,7 @@ MLA layer.
 
 ## Issues
 1. No fused indexing op in ttnn (fp8_index + causal mask)
-2. ttnn.topk exists (last dim, bf16, needs row-major input) but k=2048 is untested
+2. ~~ttnn.topk k=2048 untested~~ RESOLVED 2026-06-10: works on Blackhole at k=2048 (TILE input, shape test green)
 3. No sparse attention in ttnn
 4. Missing non-interleaved RoPE op
 5. v3 composition files hardcode ttMLA/TtPrefillBlock — forced copies in v32; fix by upstreaming injection params (tt/README.md)
@@ -64,7 +65,7 @@ MLA layer.
 ttnn-shaped equivalents of the fused references (DeepGEMM fp8_mqa_logits, FlashMLA sparse fwd). All activations [1, B, S_local, ·] TILE bf16 like v3; indexer replicated across TP, S sharded on SP (spec-multichip §3.6). B=1 prefill.
 
 1. `indexer_logits(q, k, w) -> logits` — q [1,B,Sq,H_idx*D_idx] (H=64, D=128), k [1,B,Skv,D_idx], w [1,B,Sq,H_idx] (fp32 weights_proj out). Out [1,B,Sq,Skv] bf16 (fp8 inputs later). Causal window per row (DeepGEMM ks/ke), no materialized mask. Workaround: per-head matmul + ReLU + weighted head-sum + causal mask add. CPU fallback for non-interleaved rope (F1).
-2. `topk_indices(logits, k=2048) -> indices` — row-major in, out [1,B,Sq,k] uint32, padded with last valid where Skv<k. Workaround: ttnn.topk (untested at k=2048); else host. K cache format untouched (agreement 3).
+2. `topk_indices(logits, k=2048) -> indices` — TILE in (corrected agreement 4), out [1,B,Sq,k] uint32, padded with last valid where Skv<k. Workaround: ttnn.topk; host fallback. K cache format untouched (agreement 3).
 3. `sparse_mla(q, kvpe_cache, indices, scale) -> out` — q [1,H,Sq,576] absorbed; kvpe [1,1,Skv,576]; indices [1,B,Sq,2048]; out [1,H,Sq,512]; indices replace causal mask (FlashMLA contract). Workaround: gather (embedding-style) + chunked dense SDPA; stub: dense ring MLA (valid Sq≤2048).
 
 Shape tests are the first deliverable per op; numerics vs reference_cpu after.
