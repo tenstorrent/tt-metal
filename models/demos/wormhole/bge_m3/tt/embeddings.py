@@ -152,7 +152,6 @@ class BgeM3Embedding(LightweightModule):
             main = ttnn.add(word_embeddings, token_type_embeddings)
             ttnn.deallocate(word_embeddings)
             ttnn.deallocate(token_type_embeddings)
-            word_embeddings = None  # noqa: F841
 
         if defer_position_add:
             main = ttnn.unsqueeze(main, dim=1)

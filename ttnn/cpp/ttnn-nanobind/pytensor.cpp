@@ -7,11 +7,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <functional>
 #include <optional>
 #include <string>
-#include <thread>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -1743,7 +1741,7 @@ void pytensor_module(nb::module_& mod) {
     mod.def(
         "copy_device_to_torch",
         [](const ttnn::Tensor& device_tensor,
-           nb::ndarray<nb::pytorch> dest,
+           const nb::ndarray<nb::pytorch>& dest,
            std::optional<ttnn::QueueId> cq_id,
            bool blocking) {
             using namespace CMAKE_UNIQUE_NAMESPACE;
@@ -1752,6 +1750,28 @@ void pytensor_module(nb::module_& mod) {
                 device_tensor.storage_type() == StorageType::DEVICE,
                 "copy_device_to_torch requires a device tensor, got {}",
                 device_tensor.storage_type());
+
+            // The DMA/readback writes raw bytes into dest.data() assuming a
+            // contiguous CPU buffer. Reject non-CPU or non-contiguous dest up
+            // front -- otherwise we would silently corrupt memory or crash.
+            TT_FATAL(
+                dest.device_type() == nb::device::cpu::value,
+                "copy_device_to_torch requires a CPU dest tensor (device_type {})",
+                dest.device_type());
+            {
+                // Contiguity check: strides (in elements) must match a C-order
+                // walk of the shape. nb::ndarray exposes strides in elements.
+                int64_t expected = 1;
+                bool contiguous = true;
+                for (size_t k = dest.ndim(); k-- > 0;) {
+                    if (dest.shape(k) > 1 && dest.stride(k) != expected) {
+                        contiguous = false;
+                        break;
+                    }
+                    expected *= static_cast<int64_t>(dest.shape(k));
+                }
+                TT_FATAL(contiguous, "copy_device_to_torch requires a contiguous dest tensor");
+            }
 
             // Bytes-per-shard from the tensor spec (covers padding/tile alignment).
             const auto& spec = device_tensor.tensor_spec();

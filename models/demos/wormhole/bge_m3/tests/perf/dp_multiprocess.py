@@ -62,6 +62,8 @@ def _worker(
     try:
         os.sched_setaffinity(0, affinity)
     except (OSError, AttributeError):
+        # CPU pinning is best-effort; platforms without sched_setaffinity (or
+        # with a restricted cpuset) just run unpinned.
         pass
 
     try:
@@ -155,8 +157,10 @@ def _worker(
         try:
             ttnn.synchronize_device(device)
             ttnn.close_device(device)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            # Teardown is best-effort -- a failed close shouldn't mask results.
+            # Surface it on stderr for debugging without failing the worker.
+            print(f"[chip {chip_id}] device teardown error (ignored): {exc}", file=sys.stderr)
 
         result_dict[chip_id] = {
             "chip": chip_id,
@@ -267,7 +271,6 @@ def _orchestrate(args: argparse.Namespace) -> None:
     global_batch = batch_size * len(oks)
     # Throughput is gated by the SLOWEST chip (all run in lockstep after barrier).
     slowest_median = max(r["iter_sec_median"] for r in oks)
-    slowest_mean = max(r["iter_sec"] for r in oks)
     fastest_min = min(r["iter_sec_min"] for r in oks)
 
     emb_per_sec_median = global_batch / slowest_median

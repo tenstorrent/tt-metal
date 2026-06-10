@@ -11,6 +11,7 @@ under the ``bge_m3_*`` names that existing consumers expect.
 from models.demos.wormhole.bge_m3.tt.optimizations import (
     _linear_activation_memory_config,
     _matmul_core_grid,
+    _mlp_wi_minimal_matmul_config,
     _mlp_wi_output_memory_config,
     _mlp_wo_output_memory_config,
     attention_output_compute_kernel_config,
@@ -43,9 +44,7 @@ bge_m3_layernorm_compute_kernel_config = layernorm_compute_kernel_config
 
 
 # Program configs
-from models.demos.wormhole.bge_m3.tt.optimizations import (  # noqa: E402
-    _mlp_wi_minimal_matmul_config as bge_m3_mlp_wi_minimal_matmul_config,
-)
+bge_m3_mlp_wi_minimal_matmul_config = _mlp_wi_minimal_matmul_config
 
 
 # Sequence chunk limits
