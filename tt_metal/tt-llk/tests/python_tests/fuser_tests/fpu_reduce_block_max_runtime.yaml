@@ -1,3 +1,6 @@
+# Same as fpu_reduce_block_max but the unpacker is configured at runtime
+# instead of compile time.
+
 dest_acc: true
 
 operands:

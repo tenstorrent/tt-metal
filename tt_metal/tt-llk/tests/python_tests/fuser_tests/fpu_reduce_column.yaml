@@ -1,3 +1,5 @@
+# Column reduce that sums across rows with FP32 accumulation.
+
 dest_acc: true
 
 operands:

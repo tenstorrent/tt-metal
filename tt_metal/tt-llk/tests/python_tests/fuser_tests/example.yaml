@@ -1,3 +1,8 @@
+# Stress test that chains five fused operations together to exercise as many
+# fuser features as possible: datacopy with fill, tilize with SFPU ops,
+# elwadd with transpose, two matmul stages with SFPU chains, dest accumulation,
+# looping, broadcast scalar, acc_to_dest, SyncFull, and mixed formats.
+
 dest_acc: true
 loop_factor: 16
 

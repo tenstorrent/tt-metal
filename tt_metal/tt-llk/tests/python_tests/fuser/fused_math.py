@@ -50,21 +50,13 @@ class ComputePipeline:
         return math_units
 
     def _all_same_operand_formats(self, ops: List[ComputeNode]) -> bool:
-        if len(ops) <= 1:
-            return True
-        first = ops[0]
-        for cu in ops[1:]:
-            if (cu.src_a is not None) != (first.src_a is not None):
-                return False
-            if (cu.src_b is not None) != (first.src_b is not None):
-                return False
-            if cu.src_a is not None and first.src_a is not None:
-                if cu.src_a.data_format != first.src_a.data_format:
-                    return False
-            if cu.src_b is not None and first.src_b is not None:
-                if cu.src_b.data_format != first.src_b.data_format:
-                    return False
-        return True
+        def signature(op: ComputeNode):
+            return (
+                op.src_a.data_format if op.src_a is not None else None,
+                op.src_b.data_format if op.src_b is not None else None,
+            )
+
+        return len({signature(op) for op in ops}) <= 1
 
     def _batch_loop(
         self,

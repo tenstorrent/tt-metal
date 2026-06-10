@@ -1,3 +1,5 @@
+# Matrix multiply that bypasses the MOP sequencer.
+
 supported_archs: ["wormhole"]
 
 operands:

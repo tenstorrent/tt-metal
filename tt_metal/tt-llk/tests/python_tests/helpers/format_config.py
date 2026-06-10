@@ -106,7 +106,7 @@ class DataFormat(Enum):
             DataFormat.UInt8,
         }
 
-    def is_int8_format(self) -> bool:
+    def needs_int8_math_config(self) -> bool:
         """Checks if the format requires int8 math mode in the ALU."""
         return self in {DataFormat.Int8, DataFormat.UInt8, DataFormat.Int32}
 

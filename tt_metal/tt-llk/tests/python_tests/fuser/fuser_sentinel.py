@@ -307,7 +307,8 @@ class FuserSentinel:
         if srca_changed:
             to_from_int8 = (
                 "true"
-                if self._unpack_A_src.is_int8_format() or new_A_src.is_int8_format()
+                if self._unpack_A_src.needs_int8_math_config()
+                or new_A_src.needs_int8_math_config()
                 else "false"
             )
             code += (
@@ -325,7 +326,8 @@ class FuserSentinel:
             if srcb_tile_size is not None:
                 to_from_int8 = (
                     "true"
-                    if self._unpack_B_src.is_int8_format() or new_B_src.is_int8_format()
+                    if self._unpack_B_src.needs_int8_math_config()
+                    or new_B_src.needs_int8_math_config()
                     else "false"
                 )
                 code += (
@@ -394,7 +396,8 @@ class FuserSentinel:
 
         to_from_int8 = (
             "true"
-            if self._math_format.is_int8_format() or new_math.is_int8_format()
+            if self._math_format.needs_int8_math_config()
+            or new_math.needs_int8_math_config()
             else "false"
         )
         dest_acc = config.dest_acc.cpp_enum_value

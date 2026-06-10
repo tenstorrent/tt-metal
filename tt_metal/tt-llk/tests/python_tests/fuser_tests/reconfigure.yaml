@@ -1,3 +1,7 @@
+# Three stages that each use different data formats, forcing the unpack, math,
+# and pack pipelines to reconfigure between every stage. Goes from Float16_b
+# through Bfp8_b to Float32.
+
 dest_acc: true
 
 operands:

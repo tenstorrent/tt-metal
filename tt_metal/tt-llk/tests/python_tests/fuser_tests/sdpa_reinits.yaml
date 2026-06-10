@@ -1,3 +1,6 @@
+# Four operations that mimic an SDPA sequence: matmul, block max reduce,
+# column broadcast elwadd, and matmul again. Each stage uses a different
+# unpacker type, so the init and uninit transitions all get exercised.
 
 operands:
   - name: "input_A"

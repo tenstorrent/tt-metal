@@ -1,3 +1,6 @@
+# One elwadd packed into two separate outputs with different formats.
+# The first output is plain Float16, the second is Float32 with zero relu.
+
 dest_acc: true
 
 operands:

@@ -1,3 +1,6 @@
+# Mish activation fused into a single operation: x * tanh(log(1 + exp(x))).
+# Chains datacopy, exp, log1p, tanh, and elwmul with dest to srcB reuse.
+
 operands:
   - name: "input_A"
     dims: [256, 256]

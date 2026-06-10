@@ -1,3 +1,5 @@
+# Scalar reduce that sums all elements in each tile down to one value.
+
 operands:
   - name: "input_A"
     dims: [256, 256]

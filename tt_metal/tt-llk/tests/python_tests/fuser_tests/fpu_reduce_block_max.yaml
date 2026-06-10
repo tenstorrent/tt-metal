@@ -1,3 +1,5 @@
+# Block max reduce. Source B is all ones as the identity scale.
+
 dest_acc: true
 
 operands:

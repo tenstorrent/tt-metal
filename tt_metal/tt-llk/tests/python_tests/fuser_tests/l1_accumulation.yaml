@@ -1,3 +1,5 @@
+# Element-wise add where the packer accumulates results in L1 across iterations.
+
 operands:
   - name: "input_A"
     dims: [128, 128]

@@ -1,3 +1,5 @@
+# Column reduce with max pooling.
+
 operands:
   - name: "input_A"
     dims: [64, 64]
