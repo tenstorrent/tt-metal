@@ -68,17 +68,15 @@ def test_experts_prefill_vs_hf(mesh_device, device_params, seq_len, reset_seeds)
         state[f"{e}.w3.weight"] = w3[e]
         state[f"{e}.w2.weight"] = w2[e]
 
-    # gpt-oss default core grids assume TP-sharded dims; at TP=1 the down projection's
-    # N=hidden(3072)->Nt=96 needs a grid that divides 96 to stay rectangular. (8,6)=48
-    # divides both 96 (down) and 48 (gate/up intermediate=1536).
-    program_config = GPTOSSProgramConfig(prefill_gate_up_cores=(8, 6), prefill_down_cores=(8, 6))
+    # Default program config: the experts config auto-snaps core grids to divide Nt
+    # at TP=1 (gpt-oss defaults assume TP-sharded dims).
     experts = Experts(
         mesh_device=mesh_device,
         config=expert_config,
         state_dict=state,
         ccl_manager=ccl_manager,
         mesh_config=mesh_config,
-        program_config=program_config,
+        program_config=GPTOSSProgramConfig(),
         weight_dtype=ttnn.bfloat8_b,  # isolate logic from bfp4 quantization
     )
 

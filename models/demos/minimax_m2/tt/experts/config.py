@@ -12,6 +12,26 @@ from dataclasses import dataclass
 import ttnn
 
 
+def _grid_dividing(nt: int, fallback: tuple[int, int], max_dim: int = 8) -> tuple[int, int]:
+    """Pick a rectangular core grid (cx, cy), cx,cy <= max_dim, whose core count
+    DIVIDES nt, maximizing utilization.
+
+    The sparse_matmul in0-mcast requires num_blocks_x == num_cores (rectangular):
+    per_core_N = ceil(nt / cores) and num_blocks_x = ceil(nt / per_core_N), which
+    only equals `cores` when cores | nt. gpt-oss's fixed grids assume TP-sharded
+    dims; under different TP (e.g. TP=1, nt=96) a fixed grid like (5,6)=30 does NOT
+    divide nt and the kernel asserts. Auto-selecting a dividing grid makes the
+    experts run correctly at any TP (perf tuning is separate).
+    """
+    best = None
+    for cy in range(1, max_dim + 1):
+        for cx in range(1, max_dim + 1):
+            c = cx * cy
+            if nt % c == 0 and (best is None or c > best[0]):
+                best = (c, cx, cy)
+    return (best[1], best[2]) if best is not None else fallback
+
+
 @dataclass
 class ExpertConfig:
     """Core expert configuration - model agnostic.
@@ -136,6 +156,11 @@ class ProgramConfig:
         core_x, core_y = cores
         num_cores = core_x * core_y
         Nt = int(math.ceil(n / 32))
+        # Preserve tuned grids when they divide Nt; otherwise snap to a dividing grid
+        # so the sparse_matmul stays rectangular at any TP (e.g. TP=1, Nt=96).
+        if Nt % num_cores != 0:
+            core_x, core_y = _grid_dividing(Nt, fallback=cores, max_dim=8)
+            num_cores = core_x * core_y
         # Ceiling division: per_core_N = ceil(Nt / num_cores). The kernel then
         # computes num_blocks_x = ceil(Nt / per_core_N) and asserts it fits in
         # num_cores. Using floor division here breaks when Nt is not a multiple
