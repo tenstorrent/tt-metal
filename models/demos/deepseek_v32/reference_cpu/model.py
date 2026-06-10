@@ -425,8 +425,10 @@ class MLACPU(nn.Module):
         self.kv_cache[:bsz, start_pos:end_pos] = kv
         self.pe_cache[:bsz, start_pos:end_pos] = k_pe.squeeze(2)
 
-        if mask is not None:
+        if mask is not None and start_pos == 0:
             # ----- Prefill / MHA: materialize per-head K and V via wkv_b -----
+            # Chunked prefill (start_pos > 0, mask [S, end_pos]) takes the decode/MQA
+            # branch below: K/V come from the caches, mask keeps chunk causality.
             q = torch.cat([q_nope, q_pe], dim=-1)  # [B, S, H, qk_head_dim]
             kv_b = self.wkv_b(kv)  # [B, S, H * (nope + v)]
             kv_b = kv_b.view(bsz, seqlen, self.n_heads, self.qk_nope_head_dim + self.v_head_dim)
