@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T04:25:05Z",
+  "updated_at": "2026-06-10T04:31:32Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -497,8 +497,15 @@
         "pcc": 1.0
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/text_mlp.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_text_mlp.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/text_mlp.traced_ops.json"
+        ],
+        "notes": "Qwen2 SwiGLU down(silu(gate(x))*up(x)) 1536->8960->1536 no bias: two sibling ttnn.linear branches + explicit ttnn.silu + ttnn.mul + row-parallel down ttnn.linear, mirroring reference_impl models/tt_transformers/tt/mlp.py (KB ttnn_silu_2 cited; KB ttnn_mul_1 fused input_tensor_a_activations=[SILU] variant deferred to optimization since the mlp guard requires a traced silu/gelu kernel). Parallelism plan placement=shard implemented: gate/up column-parallel ShardTensorToMesh(dim=-1) (per-chip intermediate 8960/4=2240), down row-parallel (dim=-2) with per-chip PARTIAL sums combined by sync all_gather(dim=3, Topology.Linear) + local adds (same all-reduce idiom as text_attention o_proj; async CCL deferred to optimization per tp-guidance). HiFi4+fp32-acc, bf16; real model.layers.0.mlp weights re-loaded from checkpoint in the test; all-reduced replicated output compared single-device vs golden. Guard ok (lint 0, kernels ok, no new host ops). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999991
       },
       "debug": {
         "status": "n/a",
@@ -728,6 +735,12 @@
       "tick": 15,
       "ts": "2026-06-10T04:25:05Z",
       "action": "device[text_attention]",
+      "result": "ok"
+    },
+    {
+      "tick": 16,
+      "ts": "2026-06-10T04:31:32Z",
+      "action": "device[text_mlp]",
       "result": "ok"
     }
   ],

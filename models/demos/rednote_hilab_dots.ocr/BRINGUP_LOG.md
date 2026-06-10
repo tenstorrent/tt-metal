@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T04:25:05Z
+**Updated:** 2026-06-10T04:31:32Z
 
 ## Block Status
 
@@ -61,7 +61,7 @@
 | text_attention | optimization | pending | — | 0 |  |
 | text_attention | real_weights | pending | — | 0 |  |
 | text_mlp | reference | done | 1.000000 | 0 | Qwen2 SwiGLU 1536->8960->1536 no bias, real layers.0 weights |
-| text_mlp | ttnn | pending | — | 0 |  |
+| text_mlp | ttnn | done | 0.999991 | 0 | Qwen2 SwiGLU down(silu(gate(x))*up(x)) 1536->8960->1536 no bias: two sibling ttnn.linear branches + explicit ttnn.silu + ttnn.mul + row-parallel down ttnn.linear, mirroring reference_impl models/tt_transformers/tt/mlp.py (KB ttnn_silu_2 cited; KB ttnn_mul_1 fused input_tensor_a_activations=[SILU] variant deferred to optimization since the mlp guard requires a traced silu/gelu kernel). Parallelism plan placement=shard implemented: gate/up column-parallel ShardTensorToMesh(dim=-1) (per-chip intermediate 8960/4=2240), down row-parallel (dim=-2) with per-chip PARTIAL sums combined by sync all_gather(dim=3, Topology.Linear) + local adds (same all-reduce idiom as text_attention o_proj; async CCL deferred to optimization per tp-guidance). HiFi4+fp32-acc, bf16; real model.layers.0.mlp weights re-loaded from checkpoint in the test; all-reduced replicated output compared single-device vs golden. Guard ok (lint 0, kernels ok, no new host ops). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | text_mlp | debug | n/a | — | 0 |  |
 | text_mlp | optimization | pending | — | 0 |  |
 | text_mlp | real_weights | pending | — | 0 |  |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 6 (2026-06-10T02:52:24Z): device[vision_patch_embed] — ok
 - tick 7 (2026-06-10T02:59:42Z): device[vision_rmsnorm] — ok
 - tick 8 (2026-06-10T03:13:53Z): device[vision_attention] — ok
 - tick 9 (2026-06-10T03:20:47Z): device[vision_mlp] — ok
@@ -94,6 +93,7 @@
 - tick 13 (2026-06-10T03:57:57Z): device[embedding] — ok
 - tick 14 (2026-06-10T04:05:51Z): device[text_rmsnorm] — ok
 - tick 15 (2026-06-10T04:25:05Z): device[text_attention] — ok
+- tick 16 (2026-06-10T04:31:32Z): device[text_mlp] — ok
 
 ## Host-Resident Exceptions
 
