@@ -278,8 +278,8 @@ class TtTextAttention(LightweightModule):
             # N-1 local adds (full 4*hidden payload gathered then summed on
             # 110-core BinaryNg) — tracy tick-28 A/B: 364.8 -> 281.3 us/iter
             # (-23%), PCC unchanged.
-            reduced = ttnn.reduce_scatter(out, dim=3, topology=ttnn.Topology.Linear)
+            reduced = ttnn.reduce_scatter(out, dim=3, num_links=2, topology=ttnn.Topology.Linear)
             ttnn.deallocate(out)
-            out = ttnn.all_gather(reduced, dim=3, topology=ttnn.Topology.Linear)
+            out = ttnn.all_gather(reduced, dim=3, num_links=2, topology=ttnn.Topology.Linear)
             ttnn.deallocate(reduced)
         return out

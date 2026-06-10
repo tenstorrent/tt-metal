@@ -102,6 +102,9 @@ class TtTextMLP(LightweightModule):
         ttnn.deallocate(up)
 
         # Row-parallel down_proj: per-chip PARTIAL sum over its 2240 rows.
+        # Core grid is at its structural cap (N_t=48 -> 48 cores; explicit
+        # core_grid 10x10 measured WORSE in composed-decoder tracy, tick-30:
+        # 69.5 -> 98.4 us; reverted).
         out = ttnn.linear(
             h,
             self.w2,
@@ -119,8 +122,8 @@ class TtTextMLP(LightweightModule):
             # (tick-28); tracy tick-29 A/B on this block: per-device kernel
             # 368.5 -> 287.5 us (-22%), CCL cluster 171.9 -> 90.6 us, PCC
             # unchanged.
-            reduced = ttnn.reduce_scatter(out, dim=3, topology=ttnn.Topology.Linear)
+            reduced = ttnn.reduce_scatter(out, dim=3, num_links=2, topology=ttnn.Topology.Linear)
             ttnn.deallocate(out)
-            out = ttnn.all_gather(reduced, dim=3, topology=ttnn.Topology.Linear)
+            out = ttnn.all_gather(reduced, dim=3, num_links=2, topology=ttnn.Topology.Linear)
             ttnn.deallocate(reduced)
         return out

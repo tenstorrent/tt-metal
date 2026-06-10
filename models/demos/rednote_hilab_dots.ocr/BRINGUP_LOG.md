@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T06:22:15Z
+**Updated:** 2026-06-10T06:33:07Z
 
 ## Block Status
 
@@ -68,7 +68,7 @@
 | decoder_layer | reference | done | 1.000000 | 0 | Qwen2DecoderLayer pre-norm residual x+attn(ln1(x)); h+mlp(ln2(h)), real layers.0 weights |
 | decoder_layer | ttnn | done | 0.999936 | 0 | Pre-norm residual composition of done sub-blocks: TtTextRMSNorm(input_layernorm, eps=1e-6) -> TtTextAttention (fused per-chip QKV+bias, 12Q/2KV hd128, kv_replication=2, fp32 HF rope + fp32 explicit causal core, row-parallel o_proj + sync all-reduce) -> ttnn.add residual -> TtTextRMSNorm(post_attention_layernorm) -> TtTextMLP (SwiGLU 1536->8960->1536, column/row-parallel + sync all-reduce) -> ttnn.add residual, mirroring reference_impl models/tt_transformers/tt/decoder.py TransformerBlock. Whole layer fp32 (attention path fp32-mandatory: layer-0 logits +-3122, bf16 core PCC ~0.92; fp32 gammas TILE [1,1,1,dim]); residual stream keeps input dtype for chained-caller precision control. Real model.layers.0 weights re-loaded from checkpoint; replicated all-reduced output compared single-device vs golden. Guard ok (lint 0, kernels ok, no new host ops). No KB entries returned for decoder_layer. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | decoder_layer | debug | n/a | — | 0 |  |
-| decoder_layer | optimization | pending | — | 0 |  |
+| decoder_layer | optimization | done | 0.999945 | 0 | Tracy-driven CCL link change: num_links=2 on all four sync CCL calls (reduce_scatter+all_gather in text_attention o_proj and text_mlp down_proj all-reduce; qb smoke tests validate 2 links), plus the attention-residual ttnn.add pinned to L1 (consumers are RMSNorm + add, never a matmul - vision tick-25 recipe; block output stays DRAM). Traced tracy at the production operating point (fp32 [1,1,128,1536] replicated 1x4 mesh, real layers.0 weights, metal-trace captured+replayed): per-device layer kernel time 584.9 -> 518.1 us (-11.4%); ReduceScatter 91.4->57.4us, AllGather 86.2->59.1us, BinaryNg 51.9->47.2us, Matmul 265.9us unchanged (no stall introduced). Wall-clock A/B over 200 traced replays x2 reps: 622.5 -> 555.2/557.6 us/iter (-10.8%). Rejected by measurement: down_proj core_grid 10x10 (69.5 -> 98.4us, still 48c - N_t=48 structurally caps the grid; reverted). Matmul cluster (51.3% post-change) at fp32 HiFi4 per-chip structural ceiling per tick-28/29; async TT_CCL semaphore machinery deferred to generation/perf phases. No KB entries for decoder_layer. PCC re-verified: decoder_layer 0.999945 (was 0.999936), text_mlp 0.999989, text_attention 0.999049 (all >0.99); traced_ops sidecar regenerated. Guard ok (lint 0 on all three touched files, traced tracy artifact verified). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | decoder_layer | real_weights | pending | — | 0 |  |
 | lm_head | reference | done | 1.000000 | 0 | untied Linear 1536->151936 no bias, real lm_head.weight, matches torch.nn.Linear |
 | lm_head | ttnn | done | 1.000000 | 0 | Untied vocab projection Linear 1536->151936 no bias as a single column-parallel ttnn.linear: weight [vocab,hidden] transposed to [hidden,vocab] and vocab-sharded ShardTensorToMesh(dim=-1) on the 1x4 mesh per parallelism plan (placement=shard vocab dim; 151936/4=37984 logits per chip, tile-divisible, no padding); replicated activation in, per-chip logit slices out, recombined on host via ConcatMeshToTensor(dim=-1) per tp-guidance (all_gather left to the generation-phase consumer). reference_impl tt_transformers/tt/lm_head.py DRAM-sharded program configs / column splits deferred to optimization. HiFi4+fp32-acc, bf16; real lm_head.weight re-loaded from checkpoint in the test; PCC 1.000000 vs golden. Guard ok (lint 0, kernels ok, no new host ops). KB entries for kind linear were attention/tensor-manipulation records (nlp_concat_heads_decode, concatenate_heads, flash_mla_prefill, narrow/split/bcast/concat, create_qkv_heads) - none applicable, none used. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 20 (2026-06-10T05:01:30Z): device[vision_rmsnorm] — ok
 - tick 21 (2026-06-10T05:09:51Z): device[vision_attention] — ok
 - tick 22 (2026-06-10T05:17:43Z): device[vision_mlp] — ok
 - tick 23 (2026-06-10T05:25:23Z): device[vision_block] — ok
@@ -94,6 +93,7 @@
 - tick 27 (2026-06-10T06:05:07Z): device[text_rmsnorm] — ok
 - tick 28 (2026-06-10T06:14:27Z): device[text_attention] — ok
 - tick 29 (2026-06-10T06:22:15Z): device[text_mlp] — ok
+- tick 30 (2026-06-10T06:33:07Z): device[decoder_layer] — ok
 
 ## Host-Resident Exceptions
 

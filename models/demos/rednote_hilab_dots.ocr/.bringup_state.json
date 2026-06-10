@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T06:22:15Z",
+  "updated_at": "2026-06-10T06:33:07Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -649,8 +649,17 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/decoder_layer.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/text_mlp.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/text_attention.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_decoder_layer.py",
+          "generated/profiler/reports/2026_06_10_06_30_09/ops_perf_results_2026_06_10_06_30_09.csv"
+        ],
+        "notes": "Tracy-driven CCL link change: num_links=2 on all four sync CCL calls (reduce_scatter+all_gather in text_attention o_proj and text_mlp down_proj all-reduce; qb smoke tests validate 2 links), plus the attention-residual ttnn.add pinned to L1 (consumers are RMSNorm + add, never a matmul - vision tick-25 recipe; block output stays DRAM). Traced tracy at the production operating point (fp32 [1,1,128,1536] replicated 1x4 mesh, real layers.0 weights, metal-trace captured+replayed): per-device layer kernel time 584.9 -> 518.1 us (-11.4%); ReduceScatter 91.4->57.4us, AllGather 86.2->59.1us, BinaryNg 51.9->47.2us, Matmul 265.9us unchanged (no stall introduced). Wall-clock A/B over 200 traced replays x2 reps: 622.5 -> 555.2/557.6 us/iter (-10.8%). Rejected by measurement: down_proj core_grid 10x10 (69.5 -> 98.4us, still 48c - N_t=48 structurally caps the grid; reverted). Matmul cluster (51.3% post-change) at fp32 HiFi4 per-chip structural ceiling per tick-28/29; async TT_CCL semaphore machinery deferred to generation/perf phases. No KB entries for decoder_layer. PCC re-verified: decoder_layer 0.999945 (was 0.999936), text_mlp 0.999989, text_attention 0.999049 (all >0.99); traced_ops sidecar regenerated. Guard ok (lint 0 on all three touched files, traced tracy artifact verified). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999945
       },
       "real_weights": {
         "status": "pending",
@@ -921,6 +930,12 @@
       "tick": 29,
       "ts": "2026-06-10T06:22:15Z",
       "action": "device[text_mlp]",
+      "result": "ok"
+    },
+    {
+      "tick": 30,
+      "ts": "2026-06-10T06:33:07Z",
+      "action": "device[decoder_layer]",
       "result": "ok"
     }
   ],

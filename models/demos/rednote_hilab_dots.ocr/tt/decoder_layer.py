@@ -127,7 +127,12 @@ class TtDecoderLayer(LightweightModule):
         attn_in = self.input_layernorm(x_11SH)
         attn_out = self.self_attn(attn_in, rot_mats, causal_mask)
         ttnn.deallocate(attn_in)
-        h = ttnn.add(x_11SH, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=res_dtype)
+        # Residual adds pinned to L1: their consumers are the RMSNorms and the
+        # next add — never a matmul — so the L1-interleaved-into-matmul stall
+        # (vision tick-23 counter-example) cannot occur; same recipe as the
+        # vision_block residual pin (tick-25, adds -50%). Block output stays
+        # DRAM (block-output contract).
+        h = ttnn.add(x_11SH, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=res_dtype)
         ttnn.deallocate(attn_out)
 
         ff_in = self.post_attention_layernorm(h)
