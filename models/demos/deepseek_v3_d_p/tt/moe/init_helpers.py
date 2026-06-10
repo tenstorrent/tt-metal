@@ -501,9 +501,8 @@ def initialize_test_inputs(
     weights_shape = (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
     indices_shape = (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
 
-    # Softmax matches real router output (non-negative, sums to 1) and keeps the
-    # denominator strictly positive; a signed-randn sum can hit 0 in bf16 -> Inf.
-    weights = torch.softmax(torch.randn(weights_shape).float(), dim=-1).to(torch.bfloat16)
+    weights = torch.randn(weights_shape, dtype=torch.bfloat16)
+    weights = weights / weights.sum(dim=-1, keepdim=True)  # Normalize so topk sums to 1
     indices = torch.randint(0, num_routed_experts, indices_shape, dtype=torch.int32)
 
     # Validate expert activations
