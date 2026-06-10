@@ -244,6 +244,12 @@ inline void init_env(int& argc, char**& argv) {
     static std::once_flag mpi_once;
 
     std::call_once(mpi_once, [&] {
+        // Print backtrace before MPI_Init_thread: if MPI aborts the process
+        // (the default MPI_ERRORS_ARE_FATAL behavior), the TT_THROW below
+        // never fires, so this is the only way to see who triggered MPI init.
+        std::fprintf(stderr, "MPI init from:\n%s", tt::assert::backtrace_to_string(64, 2, "  ").c_str());
+        std::fflush(stderr);
+
         int provided = 0;
         if (MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided) != MPI_SUCCESS) {
             TT_THROW("MPI_Init_thread failed");
