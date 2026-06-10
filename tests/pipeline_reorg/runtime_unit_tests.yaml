@@ -321,6 +321,8 @@
   skus:
     bh_quietbox:
       timeout: 5
+    bh_loudbox:
+      timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -331,6 +333,8 @@
     TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='UnitMeshRandomProgramTraceFixture.ActiveEthTestProgramsTrace'
   skus:
     bh_quietbox:
+      timeout: 10
+    bh_loudbox:
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
