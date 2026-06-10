@@ -1,5 +1,7 @@
 /goal Use $multichip and $optimize for the HF_MODEL full model in the current tt-metal checkout.
 
+As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
+
 This goal creates the optimized-full-model state for the repo-local TTNN autoport pipeline. Start from the completed full model and optimize the complete model/generator path across the target mesh; do not begin vLLM integration work in this goal.
 
 Goal completion requirements:
@@ -19,6 +21,4 @@ Goal completion requirements:
 - run_prefill_check and run_teacher_forcing report top-1, top-5, and top-100 for prefill and decode using the AIME24 chat-template reference; expected bar is top-5 >= 98% and top-100 = 100% unless a model-specific issue or evidence justifies otherwise.
 - Prefill TTFT and decode t/s/u reported for batch 1 inference reported at the top of README.md
 
-Do not mark this goal blocked just because PCC, trace replay, watcher, profiler, CCL, cache, MoE or other validation currently fails. Those failures are expected bringup work. Before marking blocked, isolate the failure to the smallest reproducible component, compare against the optimized single-chip baseline, try a concrete fix/refutation loop, and for subtle PCC, mesh/CCL, cache, or routed-expert bugs use $autofix or document why those skills could not be used. A blocked result requires evidence that continued debugging by the agent is no longer meaningful, not merely that a requirement is still failing.
-
-Above all: take your time. Sit with it for a moment. The above sounds like a lot but *we are not in any kind of hurry* here - we have all the time we need! So let's make a careful step by step plan and work through it one item at a time ticking things off as we go. When we come to problems we'll figure them out, update the plan and keep on going.
+Do not mark this goal blocked because PCC, trace replay, watcher, profiler, CCL, cache, MoE, or validation currently fails; those are expected bringup work. Before blocking, isolate the smallest repro, compare against optimized single-chip, try a concrete fix/refutation loop, and use $autofix for subtle PCC, mesh/CCL, cache, or routed-expert bugs unless unavailable. Blocking requires evidence that continued agent debugging is no longer meaningful.

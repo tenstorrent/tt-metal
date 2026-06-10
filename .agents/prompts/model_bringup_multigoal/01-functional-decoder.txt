@@ -2,6 +2,8 @@
 
 As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
 
+As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
+
 This goal creates the functional-decoder state for the repo-local TTNN autoport pipeline. Work only on the functional decoder under models/autoports/<model>; do not begin optimized-decoder, multichip-decoder, full-model, or vLLM work in this goal.
 
 Goal completion requirements:
