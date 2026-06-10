@@ -2,171 +2,227 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-VibeVoice TTNN demo.
+VibeVoice TTNN demo — run inference and compare against website golden audio.
 
-Loads TTVibeVoiceModel, runs generate(), writes output WAV files.
-The VibeVoiceProcessor (HF) and WAV writing (soundfile) stay here — NOT in tt/.
+Defaults to the shortest golden clip with a local text script (1p_CH2EN /
+resources/text/1p_Ch2EN.txt vs resources/golden/1p_CH2EN.wav from
+https://microsoft.github.io/VibeVoice/).
 
-Usage:
-    export PYTHONPATH=$(pwd)
-    python models/experimental/vibevoice/demo_ttnn.py \
-        --text "Hello, how are you today?" \
-        --voice models/experimental/vibevoice/resources/voices/en-Alice_woman.wav \
-        --output_dir /tmp/vv_out
+Usage (from tt-metal root):
+    python models/experimental/vibevoice/demo_ttnn.py
+    python models/experimental/vibevoice/demo_ttnn.py --demo 2p_goat
+    python models/experimental/vibevoice/demo_ttnn.py --max_new_tokens 128
 """
 
+from __future__ import annotations
+
 import argparse
+import shutil
 import sys
 from pathlib import Path
 
 import torch
 import ttnn
 
-from models.experimental.vibevoice.common.config import (
-    DEFAULT_TXT_PATH,
-    MODEL_PATH,
-    QWEN_TOKENIZER,
-    VOICES_DIR,
+from models.experimental.vibevoice.common.golden_audio_utils import (
+    MINIMAL_GOLDEN_DEMO_ID,
+    download_golden_demo,
+    get_golden_demo,
+    minimal_golden_demo,
+    text_path_for_demo,
 )
 from models.experimental.vibevoice.common.model_utils import ensure_model_weights
-from models.experimental.vibevoice.common.resource_utils import ensure_demo_resources
+from models.experimental.vibevoice.common.resource_utils import ensure_demo_resources, load_script
 from models.experimental.vibevoice.tt.ttnn_vibevoice_model import TTVibeVoiceModel
 
+_VV_ROOT = Path(__file__).resolve().parent
+for _p in (_VV_ROOT / "reference", _VV_ROOT.parent.parent.parent):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
-def _load_audio(wav_path: str, target_sr: int = 24000) -> torch.Tensor:
-    """Load and resample WAV file to mono float32 tensor [T]."""
-    try:
-        import soundfile as sf
+SR = 24000
 
-        data, sr = sf.read(wav_path, dtype="float32")
-        if data.ndim > 1:
-            data = data.mean(axis=1)
-        if sr != target_sr:
-            try:
-                import resampy
 
-                data = resampy.resample(data, sr, target_sr)
-            except ImportError:
-                from scipy.signal import resample_poly
+def _write_wav(path: Path, audio_1d: torch.Tensor) -> None:
+    import soundfile as sf
 
-                gcd = __import__("math").gcd(target_sr, sr)
-                data = resample_poly(data, target_sr // gcd, sr // gcd)
-        return torch.tensor(data, dtype=torch.float32)
-    except ImportError:
-        # fallback: torchaudio
+    sf.write(str(path), audio_1d.detach().to(torch.float32).numpy(), SR)
+
+
+def _load_wav(path: Path) -> torch.Tensor:
+    import soundfile as sf
+
+    data, file_sr = sf.read(str(path), dtype="float32")
+    if data.ndim > 1:
+        data = data.mean(axis=1)
+    wav = torch.tensor(data, dtype=torch.float32)
+    if file_sr != SR:
         import torchaudio
 
-        wav, sr = torchaudio.load(wav_path)
-        if wav.shape[0] > 1:
-            wav = wav.mean(dim=0, keepdim=True)
-        if sr != target_sr:
-            wav = torchaudio.functional.resample(wav, sr, target_sr)
-        return wav.squeeze(0)
+        wav = torchaudio.functional.resample(wav.unsqueeze(0), file_sr, SR).squeeze(0)
+    return wav
 
 
-def _write_wav(path: str, audio: torch.Tensor, sr: int = 24000):
+def _voice_path() -> str:
+    from models.experimental.vibevoice.common.config import VOICES_DIR
+
+    p = VOICES_DIR / "en-Alice_woman.wav"
+    return str(p) if p.is_file() else str(next(VOICES_DIR.glob("*.wav")))
+
+
+def _compare_audio(golden: torch.Tensor, tt: torch.Tensor) -> dict:
+    dur_g = golden.numel() / SR
+    dur_t = tt.numel() / SR
+    n = min(golden.numel(), tt.numel())
+    prefix_rms = (golden[:n] - tt[:n]).pow(2).mean().sqrt().item()
+    log_mel_l1 = float("nan")
     try:
-        import soundfile as sf
-
-        sf.write(path, audio.numpy(), sr)
-    except ImportError:
         import torchaudio
 
-        torchaudio.save(path, audio.unsqueeze(0), sr)
+        mel = torchaudio.transforms.MelSpectrogram(sample_rate=SR, n_fft=1024, hop_length=256, n_mels=80)
+        lm_g = torch.log(mel(golden[:n]) + 1e-5)
+        lm_t = torch.log(mel(tt[:n]) + 1e-5)
+        log_mel_l1 = (lm_g - lm_t).abs().mean().item()
+    except (ImportError, OSError):
+        pass
+    return {
+        "golden_sec": dur_g,
+        "tt_sec": dur_t,
+        "duration_ratio": dur_t / dur_g if dur_g > 0 else float("nan"),
+        "prefix_rms": prefix_rms,
+        "log_mel_l1": log_mel_l1,
+    }
 
 
-def _load_tokenizer_and_encode(text: str, model_path: str) -> torch.Tensor:
-    """Tokenize text using Qwen tokenizer. Returns [1, S] LongTensor."""
-    from transformers import AutoTokenizer
+def main() -> int:
+    ap = argparse.ArgumentParser(description="VibeVoice TTNN demo vs website golden audio")
+    ap.add_argument(
+        "--demo",
+        default=None,
+        help=f"Golden demo id (default: shortest with text, usually {MINIMAL_GOLDEN_DEMO_ID})",
+    )
+    ap.add_argument("--output_dir", default="/tmp/vv_ttnn_out")
+    ap.add_argument("--model_path", default=None, help="VibeVoice checkpoint (auto-download if omitted)")
+    ap.add_argument("--voice", default=None, help="Voice cloning WAV (default: en-Alice_woman)")
+    ap.add_argument("--cfg_scale", type=float, default=1.3)
+    ap.add_argument("--num_steps", type=int, default=10)
+    ap.add_argument(
+        "--max_new_tokens",
+        type=int,
+        default=None,
+        help="Optional AR cap (default: until EOS)",
+    )
+    ap.add_argument("--seed", type=int, default=0)
+    args = ap.parse_args()
 
-    tok = AutoTokenizer.from_pretrained(QWEN_TOKENIZER, trust_remote_code=True)
-    ids = tok.encode(text, return_tensors="pt")  # [1, S]
-    return ids
+    demo_entry = get_golden_demo(args.demo) if args.demo else minimal_golden_demo()
+    demo_id = demo_entry.id
+    golden_wav = download_golden_demo(demo_id)
+    text_path = text_path_for_demo(demo_id)
 
-
-def main():
-    parser = argparse.ArgumentParser(description="VibeVoice TTNN demo")
-    parser.add_argument("--text", type=str, default=None, help="Text to synthesize")
-    parser.add_argument("--text_file", type=str, default=str(DEFAULT_TXT_PATH))
-    parser.add_argument("--voice", type=str, default=str(VOICES_DIR / "en-Alice_woman.wav"))
-    parser.add_argument("--output_dir", type=str, default="/tmp/vv_ttnn_out")
-    parser.add_argument("--model_path", type=str, default=MODEL_PATH)
-    parser.add_argument("--cfg_scale", type=float, default=1.3)
-    parser.add_argument("--num_steps", type=int, default=10)
-    parser.add_argument("--max_new_tokens", type=int, default=512)
-    args = parser.parse_args()
+    out_dir = Path(args.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         ensure_demo_resources()
-        args.model_path = str(ensure_model_weights(args.model_path))
+        model_path = str(ensure_model_weights(args.model_path))
     except Exception as exc:
         print(f"[demo_ttnn] ERROR: {exc}", file=sys.stderr)
-        print("[demo_ttnn] Set VIBEVOICE_MODEL_PATH or pass --model_path", file=sys.stderr)
-        sys.exit(1)
+        return 1
 
-    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    script = load_script(text_path)
+    voice = args.voice or _voice_path()
 
-    # ── Open device ───────────────────────────────────────────────────────
-    print("[demo_ttnn] Opening device...")
-    mesh_device = ttnn.open_device(device_id=0, l1_small_size=32768)
+    print(f"[demo_ttnn] demo={demo_id}  text={text_path.name}  golden={golden_wav.name}")
+    print(f"[demo_ttnn] {demo_entry.website_title} ({demo_entry.website_section})")
 
+    from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
+
+    processor = VibeVoiceProcessor.from_pretrained(model_path)
+    inputs = processor(
+        text=[script],
+        voice_samples=[[voice]],
+        padding=True,
+        return_tensors="pt",
+        return_attention_mask=True,
+    )
+    prefill_len = inputs["input_ids"].shape[1]
+
+    # Voice prefill embeds on CPU (avoids long-waveform acoustic encode on device L1).
+    from vibevoice.modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
+
+    ref_prefill = VibeVoiceForConditionalGenerationInference.from_pretrained(
+        model_path,
+        torch_dtype=torch.float32,
+        device_map="cpu",
+        attn_implementation="sdpa",
+    )
+    ref_prefill.eval()
+    with torch.no_grad():
+        _, prefill_embeds = ref_prefill._process_speech_inputs(
+            inputs["speech_tensors"].to(ref_prefill.dtype),
+            inputs["speech_masks"],
+        )
+    speech_scale = ref_prefill.model.speech_scaling_factor.item()
+    speech_bias = ref_prefill.model.speech_bias_factor.item()
+    del ref_prefill
+
+    mesh = ttnn.open_device(device_id=0, l1_small_size=32768)
     try:
-        # ── Load model ────────────────────────────────────────────────────
-        print("[demo_ttnn] Loading TTVibeVoiceModel from checkpoint...")
-        model = TTVibeVoiceModel.from_checkpoint(
-            mesh_device=mesh_device,
-            model_path=args.model_path,
+        print("[demo_ttnn] Loading TTVibeVoiceModel...")
+        tt_model = TTVibeVoiceModel.from_checkpoint(
+            mesh,
+            model_path,
             cfg_scale=args.cfg_scale,
             num_diffusion_steps=args.num_steps,
         )
-        print("[demo_ttnn] Model loaded.")
+        tt_model.set_speech_scale_bias(speech_scale, speech_bias)
 
-        # ── Prepare inputs ────────────────────────────────────────────────
-        text = args.text
-        if text is None:
-            with open(args.text_file) as f:
-                text = f.read().strip()
-        print(f"[demo_ttnn] Text: {text[:100]}...")
-
-        # Tokenize
-        input_ids = _load_tokenizer_and_encode(text, args.model_path)  # [1, S]
-
-        # Load voice audio
-        print(f"[demo_ttnn] Loading voice from {args.voice}")
-        voice_audio = _load_audio(args.voice)  # [T]
-        voice_audio_4d = voice_audio.view(1, 1, 1, -1).to(torch.bfloat16)
-        voice_audio_tt = ttnn.as_tensor(
-            voice_audio_4d,
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # ── Generate ──────────────────────────────────────────────────────
-        print("[demo_ttnn] Generating...")
-        output = model.generate(
-            input_ids=input_ids,
-            voice_audio_tt=voice_audio_tt,
+        torch.manual_seed(args.seed)
+        print("[demo_ttnn] TT generate...")
+        tt_out = tt_model.generate(
+            input_ids=inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
+            speech_input_mask=inputs["speech_input_mask"],
+            prefill_speech_embeds=prefill_embeds,
+            tokenizer=processor.tokenizer,
             cfg_scale=args.cfg_scale,
             num_diffusion_steps=args.num_steps,
             max_new_tokens=args.max_new_tokens,
         )
-
-        # ── Write outputs ─────────────────────────────────────────────────
-        print(f"[demo_ttnn] Generated {len(output.speech_outputs)} speech segment(s)")
-        for i, wav in enumerate(output.speech_outputs):
-            out_path = str(Path(args.output_dir) / f"output_{i:03d}.wav")
-            _write_wav(out_path, wav.cpu().float())
-            print(f"[demo_ttnn] Wrote {out_path}")
-
-        if not output.speech_outputs:
-            print("[demo_ttnn] No speech outputs generated (check token constraint config).")
-
+        tt_speech = tt_out.speech_outputs[0].to(torch.float32).reshape(-1)
+        tt_gen = tt_out.sequences[0, prefill_len:]
     finally:
-        ttnn.close_device(mesh_device)
-        print("[demo_ttnn] Device closed.")
+        ttnn.close_device(mesh)
+
+    tt_path = out_dir / "tt.wav"
+    golden_out = out_dir / "golden.wav"
+    _write_wav(tt_path, tt_speech)
+    shutil.copy2(golden_wav, golden_out)
+
+    golden = _load_wav(golden_wav)
+    metrics = _compare_audio(golden, tt_speech)
+
+    mel_msg = (
+        f"log-mel L1={metrics['log_mel_l1']:.4f}"
+        if metrics["log_mel_l1"] == metrics["log_mel_l1"]
+        else f"prefix RMS={metrics['prefix_rms']:.4f}"
+    )
+    print(
+        f"[demo_ttnn] TT:  {tt_gen.numel()} AR tokens, {metrics['tt_sec']:.2f}s → {tt_path}\n"
+        f"[demo_ttnn] Golden: {metrics['golden_sec']:.2f}s → {golden_out}\n"
+        f"[demo_ttnn] Compare (prefix {min(golden.numel(), tt_speech.numel())/SR:.2f}s): "
+        f"{mel_msg}  duration ratio={metrics['duration_ratio']:.3f}"
+    )
+    if abs(metrics["duration_ratio"] - 1.0) > 0.05:
+        print(
+            "[demo_ttnn] note: duration differs from golden — website audio used a fixed Microsoft "
+            "demo run; TT free-running LM may stop at a different EOS step."
+        )
+
+    print(f"[demo_ttnn] DONE → {out_dir}/tt.wav  vs  {out_dir}/golden.wav")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
