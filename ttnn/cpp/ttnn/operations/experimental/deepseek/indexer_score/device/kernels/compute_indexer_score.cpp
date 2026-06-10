@@ -16,7 +16,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_unary/relu.h"
+#include "api/compute/pack.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/cb_api.h"
@@ -41,7 +41,8 @@ constexpr uint32_t w_group_tiles = num_heads * q_tiles_per_unit;
 constexpr uint32_t k_chunk_tiles = k_tiles_per_unit * head_dim_tiles;
 
 /**
- * qk_cb = relu(q_cb[head_offset..+heads_per_dest_pass) of row r @ k_cb col c^T): one subblock.
+ * qk_cb = relu(q_cb[head_offset..+heads_per_dest_pass) of row r @ k_cb col c^T): one subblock;
+ * relu applied by the packer on the way out of DEST.
  * q blocks are [q_tiles_per_unit][heads_per_group][head_dim_tiles] so the
  * subblock's head rows stride head_dim_tiles - one matmul_block.
  */
@@ -60,15 +61,15 @@ void relu_qk_subblock(uint32_t head_offset, uint32_t r, uint32_t c) {
             q_cb, k_cb, q_base + d, c * head_dim_tiles + d, 0, 1 /*transpose k*/, 1, heads_per_dest_pass,
             head_dim_tiles);
     }
-    for (uint32_t h = 0; h < heads_per_dest_pass; ++h) {
-        relu_tile(h);
-    }
     tile_regs_commit();
     cb_reserve_back(qk_cb, heads_per_dest_pass);
     tile_regs_wait();
+    // relu in the packer; every other pack must stay linear (negative gates, -inf masks)
+    pack_relu_config(ReluConfig::zero());
     for (uint32_t h = 0; h < heads_per_dest_pass; ++h) {
         pack_tile(h, qk_cb);
     }
+    pack_relu_config(ReluConfig::none());
     tile_regs_release();
     cb_push_back(qk_cb, heads_per_dest_pass);
 }
@@ -188,7 +189,6 @@ void kernel_main() {
 
     mm_block_init(
         cb_q, cb_k, cb_qk, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass /*rt_dim*/, head_dim_tiles /*kt_dim*/);
-    relu_tile_init();
     cb_wait_front(cb_mask, 2);
 
     WorkUnitSpan span;
