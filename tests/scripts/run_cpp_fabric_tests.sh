@@ -12,6 +12,7 @@ if [[ -z "$ARCH_NAME" ]]; then
     exit 1
 fi
 
+export TT_METAL_CLEAR_L1=1
 
 cd $TT_METAL_HOME
 
