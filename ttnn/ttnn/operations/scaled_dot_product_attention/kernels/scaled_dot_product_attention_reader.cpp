@@ -4,6 +4,7 @@
 // Flash Attention reader (NCRISC / NoC0).
 //
 // Per work unit (b, h, q_chunk):
+//   0. GQA/MQA head mapping: Q head h reads KV head h / (H / H_kv); MHA is the H_kv == H case
 //   1. push the Q chunk once (cur_cq * Dt tiles, retained by compute across the KV loop)
 //   2. stream Nkv KV blocks: K-transposed tiles (Dt x cur_ckv, tile-order (d, n)),
 //      V tiles (cur_ckv x Dt, row-major), mask tiles (cur_cq x cur_ckv, when HAS_MASK)
@@ -26,8 +27,11 @@ void kernel_main() {
     constexpr uint32_t c_kv_last = get_compile_time_arg_val(9);
     constexpr bool HAS_MASK = get_compile_time_arg_val(10) != 0;
     constexpr bool MASK_PER_HEAD = get_compile_time_arg_val(11) != 0;
+    constexpr uint32_t H_kv = get_compile_time_arg_val(12);  // KV heads (== H for MHA, < H for GQA, 1 for MQA)
 
-    constexpr auto q_args = TensorAccessorArgs<12>();
+    constexpr uint32_t HEAD_RATIO = H / H_kv;  // validate() enforces H % H_kv == 0
+
+    constexpr auto q_args = TensorAccessorArgs<13>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -68,8 +72,12 @@ void kernel_main() {
         const uint32_t cur_cq = (qc == Nq - 1) ? c_q_last : c_q;
         const uint32_t q_row0 = qc * c_q;
 
-        // Phase 0 head: H_kv == H, so K/V share the bh head index.
-        const uint32_t qkv_head_base = bh * Skv_t * Dt;  // K/V tile base for this head
+        // GQA/MQA head mapping: Q head h reads KV head h / (H / H_kv).
+        // MHA (H_kv == H) degenerates to kv_bh == bh.
+        const uint32_t b = bh / H;
+        const uint32_t h = bh % H;
+        const uint32_t kv_bh = b * H_kv + h / HEAD_RATIO;
+        const uint32_t kv_head_base = kv_bh * Skv_t * Dt;  // K/V tile base for this head
         const uint32_t q_head_base = bh * Sq_t * Dt;
 
         // 1. Q chunk: cur_cq * Dt tiles, row-major (r, d).
@@ -98,7 +106,7 @@ void kernel_main() {
             uint32_t l1_addr = get_write_ptr(cb_kt_tiles);
             for (uint32_t d = 0; d < Dt; ++d) {
                 for (uint32_t n = 0; n < cur_ckv; ++n) {
-                    noc_async_read_tile(qkv_head_base + (n0 + n) * Dt + d, k_accessor, l1_addr);
+                    noc_async_read_tile(kv_head_base + (n0 + n) * Dt + d, k_accessor, l1_addr);
                     l1_addr += tile_bytes;
                 }
             }
@@ -110,7 +118,7 @@ void kernel_main() {
             l1_addr = get_write_ptr(cb_v_tiles);
             for (uint32_t n = 0; n < cur_ckv; ++n) {
                 for (uint32_t d = 0; d < Dt; ++d) {
-                    noc_async_read_tile(qkv_head_base + (n0 + n) * Dt + d, v_accessor, l1_addr);
+                    noc_async_read_tile(kv_head_base + (n0 + n) * Dt + d, v_accessor, l1_addr);
                     l1_addr += tile_bytes;
                 }
             }
@@ -119,9 +127,7 @@ void kernel_main() {
 
             // Mask tiles: row-major (r, n) over [q_row0, q_row0+cur_cq) x [n0, n0+cur_ckv).
             if constexpr (HAS_MASK) {
-                const uint32_t b = bh / H;
-                const uint32_t h = bh % H;
-                const uint32_t mask_head = MASK_PER_HEAD ? (b * H + h) : b;
+                const uint32_t mask_head = MASK_PER_HEAD ? bh : b;  // mask indexes Q heads, not KV heads
                 const uint32_t mask_base = mask_head * Sq_t * Skv_t;
                 cb_reserve_back(cb_mask_tiles, cur_cq * cur_ckv);
                 l1_addr = get_write_ptr(cb_mask_tiles);

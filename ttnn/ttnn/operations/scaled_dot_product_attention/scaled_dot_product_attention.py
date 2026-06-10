@@ -72,7 +72,7 @@ SUPPORTED = {
     "layout": [ttnn.TILE_LAYOUT],
     "alignment": ["tile_aligned"],
     "attention_kind": ["self", "cross"],
-    "kv_heads_mode": ["mha"],
+    "kv_heads_mode": ["mha", "gqa", "mqa"],
     "mask_mode": ["none", "causal"],
     "scale_mode": ["auto", "explicit"],
 }

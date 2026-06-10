@@ -153,6 +153,7 @@ def create_program_descriptor(
         c_kv_last,
         1 if has_mask else 0,
         1 if mask_is_per_head else 0,
+        H_kv,  # GQA/MQA: Q head h -> KV head h / (H // H_kv); == H for MHA
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(q).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(k).get_compile_time_args())
