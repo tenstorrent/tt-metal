@@ -28,8 +28,8 @@ Required:
 - **TARGET_ARCH** — e.g. `quasar`
 - **KERNEL_PATH** — path to the generated/modified kernel file (e.g. `tt_llk_quasar/common/inc/sfpu/ckernel_sfpu_sigmoid.h`)
 - **FLOW** — `new-kernel` | `issue-fix`
-- **WORKTREE_DIR** — `cd` here before any file I/O; all paths below resolve inside the worktree
-- **LOG_DIR** — where to write the self-log
+- **WORKTREE_DIR** — `cd "$WORKTREE_DIR/tt_metal/tt-llk"` before any file I/O; all paths below resolve there
+- **LOG_DIR** — where to write the self-log, dashboard breadcrumbs (§4.1), and persisted test output (`--log-dir`)
 
 Flow-specific:
 - (**new-kernel**) **SPEC_PATH** — the planner/analyzer output at `codegen/artifacts/{kernel}_analysis.md` (or `_phase{N}_spec.md`) — contains the recommended test format list and golden reference
@@ -254,8 +254,8 @@ For non-SFPU kernel tests (math, pack, unpack) the datacopy path is part of what
 Before spending the first `ATTEMPT` on a real run, verify the Python test parses and parametrizes cleanly:
 
 ```bash
-bash {WORKTREE_DIR}/codegen/scripts/run_llk_tests.sh count \
-    --worktree {WORKTREE_DIR} --arch {arch} --test test_{op}_{arch}.py
+bash {WORKTREE_DIR}/tt_metal/tt-llk/.claude/scripts/run_test.sh count \
+    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch {arch} --test test_{op}_{arch}.py
 ```
 
 The `count` command uses `--compile-producer` internally — conftest skips hardware init without it and dies with `RuntimeError: No Tenstorrent devices were detected` on simulator-only hosts.
@@ -308,13 +308,13 @@ Inside a `<<'EOF'` heredoc the single quotes and brackets are literal — no esc
 
 For substring filters without commas/brackets, `-k` works fine: `-k "exp_quasar and not integer"`.
 
-**`--maxfail` — scale with variant count.**
+**`--maxfail` — scale with variant count.** The script defaults to `--maxfail 10` when the flag is omitted; pass `--maxfail 0` to run the full matrix with no failure cap.
 
 First, count the variants (free — `--co` runs no tests):
 
 ```bash
-VARIANT_COUNT=$(bash {WORKTREE_DIR}/codegen/scripts/run_llk_tests.sh count \
-    --worktree {WORKTREE_DIR} --arch {arch} --test test_{op}_{arch}.py)
+VARIANT_COUNT=$(bash {WORKTREE_DIR}/tt_metal/tt-llk/.claude/scripts/run_test.sh count \
+    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch {arch} --test test_{op}_{arch}.py)
 echo "Variants: $VARIANT_COUNT"
 ```
 
@@ -322,11 +322,11 @@ The `count` command uses `--compile-producer` internally — see 1A.9 for why th
 
 | Variant count | `--maxfail` | Why |
 |---|---|---|
-| **≤12** | omit (full matrix) | Small pool; the full failure pattern is cheap. Each variant takes seconds, and the complete picture beats partial info. |
+| **≤12** | `--maxfail 0` (full matrix) | Small pool; the full failure pattern is cheap. Each variant takes seconds, and the complete picture beats partial info. |
 | **13–40** | `--maxfail=5` | Five failures is plenty to classify (uniform / format-specific / `dest_acc`-specific / MX-specific). Running the remainder adds minutes and no new signal when failures share a signature. |
 | **>40** | `--maxfail=3` | Large matrix; three failures almost always classifies the bug. |
 
-**Always drop `--maxfail` on the verification attempt** (the one you expect to pass) — you must confirm no variant regressed.
+**Always pass `--maxfail 0` on the verification attempt** (the one you expect to pass) — you must confirm no variant regressed.
 
 **Never use `-x`.** It stops after the first failure, which gives zero pattern signal — you cannot tell whether the bug hits all variants or just one format. `--maxfail=N` is the fail-fast primitive for this workflow, not `-x`.
 
@@ -335,8 +335,9 @@ Rationale for keeping the full matrix inside one pytest session (rather than re-
 ### 2.2 — Compile producer (no flock, parallel)
 
 ```bash
-bash {WORKTREE_DIR}/codegen/scripts/run_llk_tests.sh compile \
-    --worktree {WORKTREE_DIR} --arch {arch} --test test_{op}_{arch}.py
+bash {WORKTREE_DIR}/tt_metal/tt-llk/.claude/scripts/run_test.sh compile \
+    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch {arch} --test test_{op}_{arch}.py \
+    --log-dir {LOG_DIR}/test_logs_cycle{N}
 COMPILE_EXIT=$?
 ```
 
@@ -346,45 +347,51 @@ Rules:
 
 ### 2.3 — Simulator consumer (flock-wrapped, no xdist)
 
-Pick `--maxfail` per 2.1's table (omit entirely for ≤12 variants; drop it on the verification attempt).
+Pick `--maxfail` per 2.1's table.
 
-**Use `run_llk_tests.sh simulate` — it handles flock, stale-process cleanup, and temp-file lifecycle internally.** Never call `pytest --run-simulator` directly; the inline `flock … bash -c '…'` with the `'"'"'` escape trick has been observed to exit 1 silently with zero output in this environment (verified 2026-04-21).
+**Use `run_test.sh simulate` — it handles flock, stale-process cleanup, and temp-file lifecycle internally.** Never call `pytest --run-simulator` directly; the inline `flock … bash -c '…'` with the `'"'"'` escape trick has been observed to exit 1 silently with zero output in this environment (verified 2026-04-21).
 
 Example for a mid-size matrix using `--maxfail 5`:
 
 ```bash
-bash {WORKTREE_DIR}/codegen/scripts/run_llk_tests.sh simulate \
-    --worktree {WORKTREE_DIR} --arch {arch} --test test_{op}_{arch}.py \
-    --maxfail 5
+bash {WORKTREE_DIR}/tt_metal/tt-llk/.claude/scripts/run_test.sh simulate \
+    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch {arch} --test test_{op}_{arch}.py \
+    --maxfail 5 --log-dir {LOG_DIR}/test_logs_cycle{N}
 TEST_EXIT=$?
 ```
 
 For a **single specific variant**, use `--test-id`. Single-quotes, brackets, and commas in the ID are safe — the script handles quoting internally:
 
 ```bash
-bash {WORKTREE_DIR}/codegen/scripts/run_llk_tests.sh simulate \
-    --worktree {WORKTREE_DIR} --arch {arch} --test test_{op}_{arch}.py \
-    --test-id "test_{op}_{arch}.py::test_{op}_{arch}[formats_dest_acc_sync_implied_math_input_dims:(InputOutputFormat[Float16_b,Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, <ImpliedMathFormat.No: 'false'>, [32, 32])]"
+bash {WORKTREE_DIR}/tt_metal/tt-llk/.claude/scripts/run_test.sh simulate \
+    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch {arch} --test test_{op}_{arch}.py \
+    --test-id "test_{op}_{arch}.py::test_{op}_{arch}[formats_dest_acc_sync_implied_math_input_dims:(InputOutputFormat[Float16_b,Float16_b], <DestAccumulation.No: False>, <DestSync.Full: 'SyncFull'>, <ImpliedMathFormat.No: 'false'>, [32, 32])]" \
+    --log-dir {LOG_DIR}/test_logs_cycle{N}
 TEST_EXIT=$?
 ```
 
 For a substring filter without commas/brackets, use `--k`:
 
 ```bash
-bash {WORKTREE_DIR}/codegen/scripts/run_llk_tests.sh simulate \
-    --worktree {WORKTREE_DIR} --arch {arch} --test test_{op}_{arch}.py \
-    --k "exp_quasar and not integer"
+bash {WORKTREE_DIR}/tt_metal/tt-llk/.claude/scripts/run_test.sh simulate \
+    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch {arch} --test test_{op}_{arch}.py \
+    --k "exp_quasar and not integer" --log-dir {LOG_DIR}/test_logs_cycle{N}
 TEST_EXIT=$?
 ```
 
 Exit codes from the script:
 - `0` — all tests passed
 - `1` — one or more tests failed (DATA_MISMATCH, TIMEOUT, ASSERTION)
-- `3` — environment error: flock timed out or no pytest output produced (`ENV_ERROR`)
+- `2` — compile step failed (only from the `run` command)
+- `3` — environment error: flock timed out, venv missing, simulator port stuck (`ENV_ERROR`)
+- `4` — usage error (bad/missing options) — fix your invocation; does not count as an `ATTEMPT`
+- `5` — `HANG`: the watchdog saw no simulator output for 120s, killed the consumer tree, and printed a `RUN_LLK_TESTS_HANG` block. Triage via the R1 sibling smoke (§3.3): sibling hangs too → `ENV_ERROR`; sibling passes → `TIMEOUT`-category kernel bug, continue the fix loop.
+
+The script also prints a final `=== RUN_LLK_TESTS_VERDICT === <PASS|FAIL|COMPILE_FAIL|ENV_ERROR|BAD_ARGS|HANG> ...` line to stderr — tail the output for it instead of scanning the full pytest stream. Simulator access is serialised per-arch via `/tmp/tt-llk-test-{arch}.lock`; the script owns the lock, never flock manually.
 
 #### 2.3.1 — Execution model (Bash tool) — MANDATORY
 
-The `run_llk_tests.sh simulate` call is **synchronous and foreground**. Orchestrator agents that spawn this tester have no way to wake it from a backgrounded Bash — if you background the call, your turn ends, the parent cannot resume you, and the whole run hangs waiting for a process it can no longer observe. Every tester invocation that has hung to date did exactly this.
+The `run_test.sh simulate` call is **synchronous and foreground**. Orchestrator agents that spawn this tester have no way to wake it from a backgrounded Bash — if you background the call, your turn ends, the parent cannot resume you, and the whole run hangs waiting for a process it can no longer observe. Every tester invocation that has hung to date did exactly this.
 
 Rules — non-negotiable:
 
@@ -400,8 +407,8 @@ Rules for `simulate`:
 - **Use `--timeout=600`, not `--timeout=300`.** First cold simulator start takes ~50s; a second start immediately after a prior run can exceed 300s — 600s eliminates spurious `TIMEOUT` categorisations without slowing healthy runs.
 - **Never** pass `--jobs` to `simulate` (xdist is not supported under the simulator; the script never passes `-n` to the consumer).
 - **Never use `-x`** — see 2.1. Use `--maxfail N` to cap wasted simulator time while preserving the failure-pattern signal.
-- **Verification run = no `--maxfail`.** Once you believe the fix works, run the full matrix to confirm no variant regressed.
 - `-rN` is passed internally by the script — it gives a short summary line per failure that you grep in Step 2.4.
+- **Always pass `--log-dir {LOG_DIR}/test_logs_cycle{N}`** (compile and simulate). The Bash tool truncates long output; `compile.log` / `run.log` keep the full stream for the refiner and humans, appending across attempts within a cycle.
 - `compile` runs the full matrix (no `-k` filter). `simulate` may use `--k` for subset runs, and will find the ELFs the producer built since those were built for the full matrix.
 
 ### 2.4 — Parse aggregate failures
@@ -561,6 +568,18 @@ Exception: if the fix is a single conceptual change that requires touching two p
 
 After editing, re-run Step 2. Increment `ATTEMPT` only when the test actually runs — editing does not consume an attempt, running does.
 
+### 4.1 — Attempt breadcrumbs (MANDATORY, after every attempt)
+
+Immediately after reading `TEST_EXIT` — before you start diagnosing — leave two breadcrumbs:
+
+1. **Dashboard message** so the live run shows attempt progress instead of a stale step-start line:
+```bash
+python {WORKTREE_DIR}/tt_metal/tt-llk/codegen/scripts/run_json_writer.py message \
+    --log-dir {LOG_DIR} \
+    --message "Tester attempt {N}/10 — {category} on {variant or 'all'}; {one-line hypothesis or 'verifying'}"
+```
+2. **Incremental fix log**: append the attempt block (template in Self-Logging) to `{LOG_DIR}/agent_tester_cycle{N}.md` NOW, not at the end. A tester that crashes or is killed at attempt 7 must leave attempts 1–7 on disk — those blocks are the refiner's primary forensic input, and reconstructing them from memory after a crash is impossible.
+
 ---
 
 ## Step 5: Report
@@ -593,7 +612,22 @@ Fix log:
   ...
   Attempt 10: ...
 Hypothesis: {best guess at the root cause you could not fix}
+Raw output: {LOG_DIR}/test_logs_cycle{N}/run.log (full pytest stream, all attempts)
 Recommended next step: {e.g. "instruction X behaves differently than doc claims — escalate to human", "format Y is not supported on this arch — drop from spec"}
+```
+
+### On ENV_ERROR
+
+When the environment is broken (`run_test.sh` exit 3, a hang that the sibling smoke also reproduces, missing venv/simulator), the kernel is innocent. Do **not** return STUCK — STUCK routes to the refiner, which would rewrite a sound analysis to fix an infrastructure problem.
+
+```
+ENV_ERROR
+  Kernel: {KERNEL_NAME}
+  Flow: {new-kernel | issue-fix}
+  Attempts used: {N}/10  (env failures do not consume attempts)
+  Diagnosis: {first meaningful infrastructure error line — flock timeout, lsof output, missing path}
+  Evidence: {sibling smoke result or run_test.sh verdict line}
+Recommended next step: {e.g. "restart the simulator", "free port 5556", "rebuild tests/.venv"}
 ```
 
 Whatever the outcome, the kernel path and test paths must be stated literally so downstream steps / humans can inspect.
@@ -603,7 +637,7 @@ Whatever the outcome, the kernel path and test paths must be stated literally so
 ## Key Rules (non-negotiable)
 
 1. **10 runs, hard cap.** The counter is an invariant, not a guideline.
-2. **Always use `run_llk_tests.sh simulate` (never call `pytest --run-simulator` directly), and always invoke it SYNCHRONOUSLY via the Bash tool with `timeout: 1800000` — never `run_in_background: true`, never `&`, never a Monitor-based "wait".** The script owns flock, stale-process cleanup, and temp-file lifecycle; the inline `bash -c '…'` form with `'"'"'` escapes fails silently in this env; backgrounded calls hang the whole pipeline because the parent orchestrator cannot resume you once your turn ends. See 2.3.1 for execution-model rules that are non-negotiable.
+2. **Always use `run_test.sh simulate` (never `pytest --run-simulator` directly), invoked synchronously via the Bash tool with `timeout: 1800000`.** Full execution-model rules in 2.3.1 — they are non-negotiable.
 3. **One fix per attempt.** Batch fixes hide which edit broke things.
 4. **Fix the kernel, not the test** (except when the issue explicitly says the test is wrong in the `issue-fix` flow).
 5. **Prefer extending an existing multi-op test** over creating a new file. Copy patterns exactly; do not reinvent boilerplate.
@@ -612,7 +646,7 @@ Whatever the outcome, the kernel path and test paths must be stated literally so
 8. **SFPU tests always use `unpack_to_dest=True`.** Filter the format matrix to bit-width-matched combinations only (`non-32-bit + dest_acc=No` and `32-bit + dest_acc=Yes`). The C++ test needs no datacopy branch. For non-SFPU tests, apply `unpack_to_dest = (input.is_32_bit() == (dest_acc == Yes))`; getting it wrong produces silent all-zeros.
 9. **Sources in order of authority** when debugging: existing working code on the target arch > Confluence ISA pages > `assembly.yaml` > reference-arch code. Never guess from training data.
 10. **If the same signature repeats twice, stop iterating on targeted fixes.** The bug is structural.
-11. **Scale `--maxfail` to matrix size (see 2.1); never use `-x`.** `-x` stops after one failure, leaving you blind to whether the bug is uniform or variant-specific. `--maxfail=N` preserves the pattern signal while capping wasted simulator time on large matrices. Drop `--maxfail` on the verification attempt.
+11. **Scale `--maxfail` to matrix size (see 2.1); never use `-x`.** `-x` stops after one failure, leaving you blind to whether the bug is uniform or variant-specific. `--maxfail 0` on the verification attempt.
 12. **`--timeout=600` on the simulator consumer, not `--timeout=300`.** Simulator warmup after a prior run can exceed 300s; 600s eliminates the spurious-`TIMEOUT` failure mode without slowing healthy runs (pytest's timeout is a ceiling, not a floor). See 2.3.
 13. **Use `{WORKTREE_DIR}/...` absolute paths, not `../tests/...`.** The agent may be invoked from any CWD; absolute paths remove the hidden assumption that CWD is `codegen/`.
 14. **Contradiction check before every hypothesis (§3.0.a).** If a prior attempt passed while executing the code path you're about to indict, the hypothesis is disproven — not weakened. Re-read the fix log before drafting; don't explain contradictions away as "simulator non-determinism" without a testable mechanism. Uniform signatures across every variant rarely come from kernel arithmetic; they usually come from harness, sync, or environment.
@@ -622,7 +656,7 @@ Whatever the outcome, the kernel path and test paths must be stated literally so
 
 ## Self-Logging (MANDATORY — STRUCTURED TEMPLATE)
 
-**Before returning, write `{LOG_DIR}/agent_tester_cycle{N}.md` using the `Write` tool**, where `{N}` is the cycle number passed in this prompt. Never write to `agent_tester.md` directly — each cycle must produce its own file so prior cycles' logs are not overwritten.
+**Write `{LOG_DIR}/agent_tester_cycle{N}.md` incrementally**, where `{N}` is the cycle number passed in this prompt: create it with the section skeleton when you start, append each fix-log attempt block as it happens (§4.1), and fill the remaining narrative sections before returning. Never write to `agent_tester.md` directly — each cycle must produce its own file so prior cycles' logs are not overwritten.
 The file MUST contain the sections below in order. The orchestrator's Step 5f
 concatenates the structured sections from every agent log into the final run
 report; missing sections break the report. Raw chronology (assistant text +
@@ -691,8 +725,8 @@ it matters for the dashboard. On STUCK, all 10 blocks MUST be present.
 ## Commands run (summary)
 Curated. Full transcript is in `{LOG_DIR}/transcripts/NN_{slug}_commands.md`.
 Include at minimum: the collection-only smoke check, each `--compile-producer`
-run, each `flock`+simulator run (cite `TEST_EXIT`), and the verification run
-(no `--maxfail`).
+run, each `run_test.sh simulate` run (cite `TEST_EXIT`), and the verification run
+(`--maxfail 0`).
 
 ## Artifacts read / written
 - **Read** (files): spec, existing tests you modeled on, sibling kernels you

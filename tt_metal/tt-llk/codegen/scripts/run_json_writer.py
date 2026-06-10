@@ -522,7 +522,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Semantic version (major.minor.patch) of the pipeline producing this "
-            "run. Optional; defaults to null. Quasar codegen omits it."
+            "run. Optional; defaults to null."
         ),
     )
     init.add_argument("--reference-arch", default=None)
