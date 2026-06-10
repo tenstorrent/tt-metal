@@ -77,9 +77,10 @@ def run(
     # Extract positional non-tensor args dropped by build_op_kwargs
     # interleaved_to_sharded(input, output_mem_cfg, tensor_memory_layout, shard_orientation, output_dtype)
     pos_args = extract_positional_args(kwargs)
-    arg1 = pos_args.get(1, None)
+    arg1_raw = pos_args.get(1, None)
+    arg1 = arg1_raw
     if isinstance(arg1, dict):
-        arg1 = dict_to_memory_config(arg1)
+        arg1 = dict_to_memory_config(arg1)  # None for a non-MemoryConfig dict (e.g. a CoreCoord grid)
 
     # arg3 = TensorMemoryLayout, arg4 = ShardOrientation, arg5 = output DataType
     arg3 = pos_args.get(3, None)
@@ -99,6 +100,45 @@ def run(
         output_memory_config = arg1
     elif output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
+
+    # Grid call form: interleaved_to_sharded(input, grid, shard_shape, scheme,
+    # orientation, dtype). Here arg1 is a CoreCoord grid (not a MemoryConfig) and
+    # the traced output_memory_config may be interleaved -> "Output memory config
+    # must be sharded". Reconstruct the sharded config from grid + arg2 shard_shape
+    # + scheme(arg3) + orientation(arg4) ONLY when we don't already have a sharded
+    # output config (don't override the configs that already carry one).
+    _have_sharded_out = (
+        output_memory_config is not None
+        and getattr(output_memory_config, "is_sharded", None) is not None
+        and output_memory_config.is_sharded()
+    )
+    # Use the RAW kwargs dict for arg1: parse_dict_value returns None for a
+    # CoreCoord dict, so pos_args[1] can't carry the grid form.
+    _arg1_dict = kwargs.get("arg1")
+    if not _have_sharded_out and isinstance(_arg1_dict, dict) and _arg1_dict.get("type") == "CoreCoord":
+        import re as _re_i2s
+
+        def _enum_from_repr(d, enum_cls):
+            # The traced scheme/orientation are {'type':..,'repr':'TensorMemoryLayout.BLOCK_SHARDED'}
+            # dicts that parse_dict_value can't resolve; map the repr's last token to the enum.
+            if not isinstance(d, dict):
+                return None
+            return getattr(enum_cls, str(d.get("repr", "")).rsplit(".", 1)[-1], None)
+
+        _scheme = _enum_from_repr(kwargs.get("arg3"), ttnn.TensorMemoryLayout)
+        _orient = _enum_from_repr(kwargs.get("arg4"), ttnn.ShardOrientation)
+        _gm = _re_i2s.match(r"(\d+)\s*-\s*(\d+)", str(_arg1_dict.get("value", "")))
+        _arg2 = pos_args.get(2, None)
+        if _gm and isinstance(_arg2, (list, tuple)) and len(_arg2) == 2 and _scheme is not None and _orient is not None:
+            gx, gy = int(_gm.group(1)), int(_gm.group(2))
+            grid_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))])
+            shard_spec = ttnn.ShardSpec(grid_crs, [int(_arg2[0]), int(_arg2[1])], _orient)
+            output_memory_config = ttnn.MemoryConfig(_scheme, ttnn.BufferType.L1, shard_spec)
+            arg3 = None  # scheme/orientation now baked into the MemoryConfig
+            arg4 = None
+            if arg5 is not None and "output_dtype" not in op_kwargs:
+                op_kwargs["output_dtype"] = arg5
+                arg5 = None
 
     # Handle tuple input_a_shape
     if isinstance(input_a_shape, (tuple, list)):

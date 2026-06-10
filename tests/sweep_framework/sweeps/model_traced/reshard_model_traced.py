@@ -107,6 +107,26 @@ def invalidate_vector(test_vector) -> tuple:
     real models trace exactly these, so rejecting them here drops valid master
     configs (they'd show up as "missing" in validation).
     """
+    # Cross-arch grids: a config traced on a wider chip (e.g. Blackhole's ~11x10)
+    # can carry a shard grid whose cores (x>7 or y>7) don't physically exist on a
+    # Wormhole chip (8x8) -> "Expected number of shards N <= total L1 banks 64".
+    # Such a config can't run on Wormhole at all (it belongs on its own arch), so
+    # mark it unreconstructable here. Gate to Wormhole so Blackhole — where these
+    # cores DO exist — keeps them valid.
+    import os as _os
+
+    if "wormhole" in _os.environ.get("ARCH_NAME", "").lower():
+        for _ck in ("input_a_memory_config", "output_memory_config"):
+            _mc = test_vector.get(_ck)
+            _ss = _mc.get("data", {}).get("shard_spec") if isinstance(_mc, dict) else None
+            for _r in (_ss or {}).get("grid", []) if isinstance(_ss, dict) else []:
+                _end = _r.get("end", {}) if isinstance(_r, dict) else {}
+                if int(_end.get("x", 0)) > 7 or int(_end.get("y", 0)) > 7:
+                    return (
+                        True,
+                        f"{_ck} shard grid uses cores beyond Wormhole's 8x8 (x/y>7); cross-arch (e.g. Blackhole) config",
+                    )
+
     layout = test_vector.get("input_a_layout")
     if layout is not None and "ROW_MAJOR" in str(layout):
         return False, None

@@ -75,6 +75,12 @@ def run(
 
     # V2 loader uses input_tensor_* naming for this op; fall back to named params
     input_a_dtype = kwargs.get("input_tensor_dtype", input_a_dtype)
+    # ttnn.max_pool2d only accepts a BFLOAT16 input (TT_FATAL "input.dtype() ==
+    # DataType::BFLOAT16"). The model necessarily fed it bf16; a traced bf8_b/other
+    # dtype is a storage/trace artifact, so run the op on bf16 (the golden is
+    # computed in float32 regardless, so the comparison is unaffected).
+    if input_a_dtype != ttnn.bfloat16:
+        input_a_dtype = ttnn.bfloat16
     input_a_layout = kwargs.get("input_tensor_layout", input_a_layout)
     input_a_memory_config = kwargs.get("input_tensor_memory_config", input_a_memory_config)
     input_a_tensor_placement = kwargs.get("input_tensor_tensor_placement", kwargs.get("input_a_tensor_placement"))
@@ -136,8 +142,12 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(torch_input_shape)
 
+    # Match the op's ceil_mode (the model traces ceil_mode=True for some pools);
+    # without it the golden uses floor output dims and disagrees with ttnn's
+    # ceil-rounded output (e.g. 13x13 vs 14x14) -> shape mismatch on reshape.
+    ceil_mode = bool(kwargs.get("ceil_mode", False))
     torch_output_tensor = torch.nn.functional.max_pool2d(
-        torch_input_tensor_a, (kH, kW), stride=(stride_h, stride_w), padding=pad_h, dilation=dil_h
+        torch_input_tensor_a, (kH, kW), stride=(stride_h, stride_w), padding=pad_h, dilation=dil_h, ceil_mode=ceil_mode
     )
 
     # Convert to ttnn format: [NHW, C] -> [1, 1, N*H*W, C]
@@ -220,8 +230,11 @@ def run(
 
     # Convert TTNN output back to [N, C, H, W] format for PCC comparison.
     # TTNN max_pool2d returns [1, 1, N*outH*outW, C] — reshape to [N, outH, outW, C] then permute.
-    out_h = (H + 2 * pad_h - dil_h * (kH - 1) - 1) // stride_h + 1
-    out_w = (W + 2 * pad_w - dil_w * (kW - 1) - 1) // stride_w + 1
+    import math as _math
+
+    _round = _math.ceil if ceil_mode else _math.floor
+    out_h = _round((H + 2 * pad_h - dil_h * (kH - 1) - 1) / stride_h) + 1
+    out_w = _round((W + 2 * pad_w - dil_w * (kW - 1) - 1) / stride_w) + 1
     if result.ndim == 4 and result.shape[0] == 1 and result.shape[1] == 1:
         result = result.reshape(N, out_h, out_w, C)
     output_tensor = torch.permute(result, (0, 3, 1, 2))
