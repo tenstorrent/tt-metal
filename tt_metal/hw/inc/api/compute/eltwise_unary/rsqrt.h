@@ -45,15 +45,15 @@ ALWI void rsqrt_tile(uint32_t idst) {
 #if defined(ARCH_QUASAR)
     static_assert(!legacy_compat, "legacy_compat is not supported in Quasar rsqrt");
     static_assert(!FAST_APPROX, "FAST_APPROX is not supported in Quasar rsqrt");
-    MATH(SFPU_UNARY_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_rsqrt_, (8 /* ITERATIONS */), RC, idst));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_rsqrt_, (8 /* ITERATIONS */), idst, VectorMode::RC));
 #else
-    MATH(SFPU_UNARY_CALL_MODE(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_rsqrt,
         (APPROX, 8 /* ITERATIONS */, DST_ACCUM_MODE, FAST_APPROX, legacy_compat),
-        RC,
-        idst));
+        idst,
+        VectorMode::RC));
 #endif
 }
 

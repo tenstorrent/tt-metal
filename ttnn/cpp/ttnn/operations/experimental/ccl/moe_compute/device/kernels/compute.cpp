@@ -53,20 +53,20 @@ inline void pack_compute_activation() {};
 
 template <>
 inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SILU>() {
-    PACK(SFPU_UNARY_CALL_MODE(
+    PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_silu,
         (false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
-        RC,
-        0 /*DST_IDX*/));
-    PACK(SFPU_UNARY_CALL_MODE(
+        0 /*DST_IDX*/,
+        ::ckernel::VectorMode::RC));
+    PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_silu,
         (false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
-        RC,
-        2 /*DST_IDX*/));
+        2 /*DST_IDX*/,
+        ::ckernel::VectorMode::RC));
 
     PACK((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
@@ -101,20 +101,20 @@ inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivation
 
 template <>
 inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivationFunction::GELU>() {
-    PACK(SFPU_UNARY_CALL_MODE(
+    PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_gelu,
         (true /*APPROXIMATE*/, false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
-        RC,
-        0 /*DST_IDX*/));
-    PACK(SFPU_UNARY_CALL_MODE(
+        0 /*DST_IDX*/,
+        ::ckernel::VectorMode::RC));
+    PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_gelu,
         (true /*APPROXIMATE*/, false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
-        RC,
-        2 /*DST_IDX*/));
+        2 /*DST_IDX*/,
+        ::ckernel::VectorMode::RC));
 
     PACK((SFPU_BINARY_CALL(
         DST_SYNC_MODE,

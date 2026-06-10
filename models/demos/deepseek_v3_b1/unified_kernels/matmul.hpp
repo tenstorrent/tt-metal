@@ -171,21 +171,21 @@ struct Matmul {
 
                     // Use 2 iterations for 1x32 tiny tiles
                     if constexpr (CTArgs::fuse_sigmoid) {
-                        PACK(SFPU_UNARY_CALL_MODE(
+                        PACK(SFPU_UNARY_CALL(
                             DST_SYNC_MODE,
                             DST_ACCUM_MODE,
                             calculate_sigmoid,
                             (CTArgs::fused_activation_approx_mode, false /*is_fp32_dest_acc_en*/, 2 /*ITERATIONS*/),
-                            R,
-                            0 /*dst_index*/));
+                            0 /*dst_index*/,
+                            VectorMode::R));
                     } else {
-                        PACK(SFPU_UNARY_CALL_MODE(
+                        PACK(SFPU_UNARY_CALL(
                             DST_SYNC_MODE,
                             DST_ACCUM_MODE,
                             calculate_silu,
                             (false /*is_fp32_dest_acc_en*/, 2 /*ITERATIONS*/),
-                            R,
-                            0 /*dst_index*/));
+                            0 /*dst_index*/,
+                            VectorMode::R));
                     }
 
                     PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));

@@ -56,7 +56,7 @@ inline __attribute__((always_inline)) void _sfpu_check_and_call_(
 #define _SFPU_EXPAND(...) __VA_ARGS__
 
 /*
- * SFPU invocation macros (4 total)
+ * SFPU invocation macros (3 total)
  *
  * All paths funnel through ckernel::_sfpu_check_and_call_<DST_SYNC, DST_ACCUM>(...),
  * which performs the dst-bound LLK_ASSERT and then dispatches to
@@ -91,18 +91,6 @@ inline __attribute__((always_inline)) void _sfpu_check_and_call_(
 #define SFPU_UNARY_CALL(DST_SYNC, DST_ACCUM, FN, TEMPLATES, DST_IDX, VECTOR_MODE, ...) \
     ::ckernel::_sfpu_check_and_call_<DST_SYNC, DST_ACCUM>(                             \
         ::ckernel::sfpu::FN<_SFPU_EXPAND TEMPLATES>, DST_IDX, VECTOR_MODE, ##__VA_ARGS__)
-
-/*
- * Same as SFPU_UNARY_CALL but vector_mode is given as a `VectorMode` enumerator name
- * (RC, C, RC_custom, ...).
- *   SFPU_UNARY_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE,
- *                  calculate_erfc,   (8),     RC,        idst);
- *   SFPU_UNARY_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE,
- *                  calculate_cumsum, (false), RC_custom, dst, first);
- */
-#define SFPU_UNARY_CALL_MODE(DST_SYNC, DST_ACCUM, FN, TEMPLATES, MODE, DST_IDX, ...) \
-    ::ckernel::_sfpu_check_and_call_<DST_SYNC, DST_ACCUM>(                           \
-        ::ckernel::sfpu::FN<_SFPU_EXPAND TEMPLATES>, DST_IDX, ::ckernel::VectorMode::MODE, ##__VA_ARGS__)
 
 /*
  * Non-templated functor in `ckernel::sfpu`, runtime vector_mode expression.

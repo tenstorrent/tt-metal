@@ -37,8 +37,13 @@ ALWI void log1p_tile_init() {
 // clang-format on
 template <bool fast_and_approx = false>
 ALWI void log1p_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL_MODE(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_log1p, (APPROX, fast_and_approx, DST_ACCUM_MODE), RC, idst));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_log1p,
+        (APPROX, fast_and_approx, DST_ACCUM_MODE),
+        idst,
+        VectorMode::RC));
 }
 
 }  // namespace ckernel

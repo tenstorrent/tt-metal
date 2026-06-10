@@ -105,7 +105,7 @@ struct sfpu_op_dispatcher<SfpuType::exponential>
 {
     static void call(int tile_idx)
     {
-        SFPU_UNARY_CALL_MODE(dest_sync, is_fp32_dest_acc_en, _calculate_exp_, (true /*APPROXIMATION_MODE*/, SFPU_ITERATIONS), RC, tile_idx);
+        SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, _calculate_exp_, (true /*APPROXIMATION_MODE*/, SFPU_ITERATIONS), tile_idx, VectorMode::RC);
     }
 };
 
@@ -137,7 +137,7 @@ struct sfpu_op_dispatcher<SfpuType::reciprocal>
 {
     static void call(int tile_idx)
     {
-        SFPU_UNARY_CALL_MODE(dest_sync, is_fp32_dest_acc_en, _calculate_reciprocal_, (true /*APPROXIMATION_MODE*/, SFPU_ITERATIONS), RC, tile_idx);
+        SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, _calculate_reciprocal_, (true /*APPROXIMATION_MODE*/, SFPU_ITERATIONS), tile_idx, VectorMode::RC);
     }
 };
 
@@ -146,7 +146,7 @@ struct sfpu_op_dispatcher<SfpuType::sqrt>
 {
     static void call(int tile_idx)
     {
-        SFPU_UNARY_CALL_MODE(dest_sync, is_fp32_dest_acc_en, _calculate_sqrt_, (true /*APPROXIMATION_MODE*/, SFPU_ITERATIONS), RC, tile_idx);
+        SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, _calculate_sqrt_, (true /*APPROXIMATION_MODE*/, SFPU_ITERATIONS), tile_idx, VectorMode::RC);
     }
 };
 
@@ -155,7 +155,7 @@ struct sfpu_op_dispatcher<SfpuType::tanh>
 {
     static void call(int tile_idx)
     {
-        SFPU_UNARY_CALL_MODE(dest_sync, is_fp32_dest_acc_en, _calculate_tanh_, (true /*APPROXIMATION_MODE*/, SFPU_ITERATIONS), RC, tile_idx);
+        SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, _calculate_tanh_, (true /*APPROXIMATION_MODE*/, SFPU_ITERATIONS), tile_idx, VectorMode::RC);
     }
 };
 

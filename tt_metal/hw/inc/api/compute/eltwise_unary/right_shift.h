@@ -28,7 +28,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void right_shift_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_right_shift, (APPROX), RC, idst, param0));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_right_shift, (APPROX), idst, param0, VectorMode::RC));
 }
 
 /**

@@ -27,7 +27,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void bitwise_not_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_bitwise_not, (APPROX), RC, idst));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_bitwise_not, (APPROX), idst, VectorMode::RC));
 }
 
 /**

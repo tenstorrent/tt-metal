@@ -38,15 +38,15 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void polygamma_tile(uint32_t idst, uint32_t n_packed, uint32_t scale_packed) {
-    MATH(SFPU_UNARY_CALL_MODE(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_polygamma,
         (APPROX, DST_ACCUM_MODE),
-        RC,
         idst,
         n_packed,
-        scale_packed));
+        scale_packed,
+        VectorMode::RC));
 }
 
 /**

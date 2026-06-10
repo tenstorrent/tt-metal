@@ -29,13 +29,27 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void hardtanh_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
-    MATH(SFPU_UNARY_CALL_MODE(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_hardtanh, (APPROX, 8 /* ITERATIONS */), RC, idst, param0, param1));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_hardtanh,
+        (APPROX, 8 /* ITERATIONS */),
+        idst,
+        param0,
+        param1,
+        VectorMode::RC));
 }
 
 ALWI void hardtanh_tile_pack(uint32_t idst, uint32_t param0, uint32_t param1) {
-    PACK(SFPU_UNARY_CALL_MODE(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_hardtanh, (APPROX, 8 /* ITERATIONS */), RC, idst, param0, param1));
+    PACK(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_hardtanh,
+        (APPROX, 8 /* ITERATIONS */),
+        idst,
+        param0,
+        param1,
+        VectorMode::RC));
 }
 
 /**

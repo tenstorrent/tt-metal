@@ -84,8 +84,8 @@ ALWI void gelu_derivative_tile_init() {
 // clang-format on
 template <bool fast_and_approx = false>
 ALWI void gelu_derivative_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL_MODE(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu_derivative_polynomial, (fast_and_approx), RC, idst));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu_derivative_polynomial, (fast_and_approx), idst, VectorMode::RC));
 }
 
 #endif

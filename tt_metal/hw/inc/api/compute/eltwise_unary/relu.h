@@ -30,17 +30,23 @@ ALWI void relu_tile_init() { MATH(SFPU_UNARY_INIT(relu_min)); }
 // clang-format on
 ALWI void relu_tile(uint32_t idst) {
 #ifdef ARCH_QUASAR
-    MATH(SFPU_UNARY_CALL_MODE(
-        DST_SYNC_MODE, DST_ACCUM_MODE, _relu_min_, (SFPU_ITERATIONS /*ITERATIONS*/), RC, idst, 0 /*threshold*/));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _relu_min_,
+        (SFPU_ITERATIONS /*ITERATIONS*/),
+        idst,
+        0 /*threshold*/,
+        VectorMode::RC));
 #else
-    MATH(SFPU_UNARY_CALL_MODE(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _relu_min_,
         (sfpi::vFloat /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
-        RC,
         idst,
-        0 /*threshold*/));
+        0 /*threshold*/,
+        VectorMode::RC));
 #endif
 }
 #ifndef ARCH_QUASAR
@@ -62,35 +68,35 @@ ALWI void relu_tile(uint32_t idst) {
 // clang-format on
 
 ALWI void relu_max_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL_MODE(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _relu_max_,
         (sfpi::vFloat /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
-        RC,
         idst,
-        param0 /*threshold*/));
+        param0 /*threshold*/,
+        VectorMode::RC));
 }
 ALWI void relu_max_tile_pack(uint32_t idst, uint32_t param0) {
-    PACK(SFPU_UNARY_CALL_MODE(
+    PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _relu_max_,
         (sfpi::vFloat /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
-        RC,
         idst,
-        param0 /*threshold*/));
+        param0 /*threshold*/,
+        VectorMode::RC));
 }
 
 ALWI void relu_max_tile_int32(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL_MODE(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _relu_max_,
         (sfpi::vInt /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
-        RC,
         idst,
-        param0 /*threshold*/));
+        param0 /*threshold*/,
+        VectorMode::RC));
 }
 
 ALWI void relu_max_tile_init() { MATH(SFPU_UNARY_INIT(relu_max)); }
@@ -113,38 +119,38 @@ ALWI void relu_max_tile_init_pack() { PACK(SFPU_UNARY_INIT(relu_max)); }
  */
 // clang-format on
 ALWI void relu_min_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL_MODE(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _relu_min_,
         (sfpi::vFloat /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
-        RC,
         idst,
-        param0 /*threshold*/));
+        param0 /*threshold*/,
+        VectorMode::RC));
 }
 
 ALWI void relu_min_tile_int32(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL_MODE(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _relu_min_,
         (sfpi::vInt /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
-        RC,
         idst,
-        param0 /*threshold*/));
+        param0 /*threshold*/,
+        VectorMode::RC));
 }
 
 ALWI void relu_min_tile_init() { MATH(SFPU_UNARY_INIT(relu_min)); }
 
 ALWI void relu_tile_int32(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL_MODE(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _relu_min_,
         (sfpi::vInt /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
-        RC,
         idst,
-        0 /*threshold*/));
+        0 /*threshold*/,
+        VectorMode::RC));
 }
 
 // clang-format off
@@ -164,7 +170,7 @@ ALWI void relu_tile_int32(uint32_t idst) {
  */
 // clang-format on
 ALWI void leaky_relu_tile(uint32_t idst, uint32_t slope = 0) {
-    MATH(SFPU_UNARY_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_lrelu, (APPROX), RC, idst, slope));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_lrelu, (APPROX), idst, slope, VectorMode::RC));
 }
 
 ALWI void leaky_relu_tile_init() { MATH(SFPU_UNARY_INIT(lrelu)); }

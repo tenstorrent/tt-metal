@@ -29,8 +29,8 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void dropout_tile(uint32_t idst, uint32_t probability, uint32_t scale_factor) {
-    MATH(SFPU_UNARY_CALL_MODE(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_dropout, (APPROX), RC, idst, probability, scale_factor));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_dropout, (APPROX), idst, probability, scale_factor, VectorMode::RC));
 }
 
 /**

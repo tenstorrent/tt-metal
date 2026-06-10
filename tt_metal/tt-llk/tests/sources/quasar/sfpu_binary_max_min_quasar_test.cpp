@@ -186,29 +186,29 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // formats use the DEFAULT path (sfpmem::DEFAULT, HW derives the mode from ACC_CTRL).
     if (math_format == DataFormat::Int32)
     {
-        SFPU_UNARY_CALL_MODE(
+        SFPU_UNARY_CALL(
             dest_sync,
             is_fp32_dest_acc_en,
             calculate_binary_max_min,
             (DataFormat::Int32 /*FMT*/, IS_MAX_OP, 8 /*ITERATIONS*/),
-            RC,
             params.DST_INDEX,
             0U /*dst_index_in0*/,
             1U /*dst_index_in1*/,
-            2U /*dst_index_out*/);
+            2U /*dst_index_out*/,
+            VectorMode::RC);
     }
     else
     {
-        SFPU_UNARY_CALL_MODE(
+        SFPU_UNARY_CALL(
             dest_sync,
             is_fp32_dest_acc_en,
             calculate_binary_max_min,
             (DataFormat::Float32 /*FMT*/, IS_MAX_OP, 8 /*ITERATIONS*/),
-            RC,
             params.DST_INDEX,
             0U /*dst_index_in0*/,
             1U /*dst_index_in1*/,
-            2U /*dst_index_out*/);
+            2U /*dst_index_out*/,
+            VectorMode::RC);
     }
 
     // Hand Dest off to PACK.

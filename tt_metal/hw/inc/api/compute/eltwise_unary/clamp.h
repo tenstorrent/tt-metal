@@ -28,8 +28,15 @@ namespace ckernel {
 */
 // clang-format on
 ALWI void clamp_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
-    MATH(SFPU_UNARY_CALL_MODE(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_clamp, (APPROX, 8 /* ITERATIONS */), RC, idst, param0, param1));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_clamp,
+        (APPROX, 8 /* ITERATIONS */),
+        idst,
+        param0,
+        param1,
+        VectorMode::RC));
 }
 
 // clang-format off
@@ -48,8 +55,15 @@ ALWI void clamp_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
  */
 // clang-format on
 ALWI void clamp_tile_int32(uint32_t idst, uint32_t param0, uint32_t param1) {
-    MATH(SFPU_UNARY_CALL_MODE(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_clamp_int32, (APPROX, 8 /* ITERATIONS */), RC, idst, param0, param1));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_clamp_int32,
+        (APPROX, 8 /* ITERATIONS */),
+        idst,
+        param0,
+        param1,
+        VectorMode::RC));
 }
 
 /**
