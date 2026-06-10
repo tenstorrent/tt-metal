@@ -893,7 +893,7 @@ def test_demo(
 
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type="demo",
+            run_type="demo_perf",
             ml_model_name=model_args.base_model_name,
             ml_model_type="llm",
             device_name=tt_device_name,

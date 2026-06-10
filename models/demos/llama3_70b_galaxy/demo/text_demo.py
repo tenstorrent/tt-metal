@@ -1662,6 +1662,10 @@ def test_demo_text(
 
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"tg_llama_text_demo_prefill",
-            ml_model_name="llama70b-tg",
+            run_type="demo_perf",
+            ml_model_name=model_args.base_model_name,
+            ml_model_type="llm",
+            batch_size=batch_size,
+            input_sequence_length=len(input_prompts[0]),
+            output_sequence_length=num_tokens_generated_decode[0],
         )
