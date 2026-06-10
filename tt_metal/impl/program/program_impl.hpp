@@ -380,6 +380,14 @@ public:
         std::vector<std::string> runtime_arg_names;
         std::vector<std::string> common_runtime_arg_names;
 
+        // Precomputed name -> slot-index maps mirroring the *_names vectors above (slot = the arg's
+        // position within its dispatch-buffer section). Built once at Program construction so the
+        // hot UpdateProgramRunArgs path does O(1) lookups instead of rebuilding a map per call —
+        // that path is not bypassable via skip_validation, so per-call construction would be pure
+        // host overhead on the inner re-enqueue loop.
+        std::unordered_map<std::string, size_t> runtime_arg_name_to_slot;
+        std::unordered_map<std::string, size_t> common_runtime_arg_name_to_slot;
+
         // Vararg counts. RTA vararg count is per-node (stored post-expansion from the
         // user-facing schema, which groups nodes that share a count); CRTA vararg is a single
         // broadcast count.

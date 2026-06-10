@@ -2792,6 +2792,15 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         // addr_crta_offset; SetProgramRunArgs uses BOTH to assemble the per-enqueue CRTA buffer.
         runtime_schema.common_runtime_arg_names = user_named_crtas;
 
+        // Precompute the name -> slot-index maps so the hot UpdateProgramRunArgs path does O(1)
+        // lookups rather than rebuilding a map per call.
+        for (size_t i = 0; i < runtime_schema.runtime_arg_names.size(); ++i) {
+            runtime_schema.runtime_arg_name_to_slot.emplace(runtime_schema.runtime_arg_names[i], i);
+        }
+        for (size_t i = 0; i < runtime_schema.common_runtime_arg_names.size(); ++i) {
+            runtime_schema.common_runtime_arg_name_to_slot.emplace(runtime_schema.common_runtime_arg_names[i], i);
+        }
+
         // Enqueue-loop-invariant named args. Each is a subset of the declared named RTAs/CRTAs and
         // may be omitted from a partial UpdateProgramRunArgs call (retaining its value). Legality
         // (each invariant name actually names a declared arg) is checked in ValidateProgramSpec.

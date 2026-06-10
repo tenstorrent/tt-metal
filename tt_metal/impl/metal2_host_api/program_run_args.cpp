@@ -683,18 +683,6 @@ void UpdateTensorArgs(Program& program, const Table<TensorParamName, ProgramRunA
     AttachBorrowedDFBBuffers(program_impl, tensor_args);
 }
 
-// Build a name -> slot-index map from a declaration-ordered name list. The slot index is the
-// arg's position within its section of the dispatch buffer (named RTAs / named CRTAs are laid
-// out in declaration order; see the layout comment in SetProgramRunArgs).
-std::unordered_map<std::string, size_t> BuildArgNameToSlotIndex(const std::vector<std::string>& ordered_names) {
-    std::unordered_map<std::string, size_t> index;
-    index.reserve(ordered_names.size());
-    for (size_t i = 0; i < ordered_names.size(); ++i) {
-        index.emplace(ordered_names[i], i);
-    }
-    return index;
-}
-
 // Union the args of `src` into `dst` for a single kernel (same kernel name). Used by
 // MergeProgramRunArgs. Named RTAs (per node) and named CRTAs union by name; a given name may
 // appear in at most one input (disjoint), else error unless skip_validation. Positional varargs
@@ -993,7 +981,7 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
 
         // ---- Per-node RTA buffer: patch supplied named RTAs at their declaration-order slot ----
         if (!kernel_params.runtime_arg_values.empty()) {
-            const auto rta_index = BuildArgNameToSlotIndex(schema->runtime_arg_names);
+            const auto& rta_index = schema->runtime_arg_name_to_slot;
             for (const auto& [node, args] : kernel_params.runtime_arg_values) {
                 TT_FATAL(
                     kernel->cores_with_runtime_args().contains(node),
@@ -1043,7 +1031,7 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
             RuntimeArgsData& crta = kernel->common_runtime_args_data();
 
             if (!kernel_params.common_runtime_arg_values.empty()) {
-                const auto crta_index = BuildArgNameToSlotIndex(schema->common_runtime_arg_names);
+                const auto& crta_index = schema->common_runtime_arg_name_to_slot;
                 for (const auto& [name, value] : kernel_params.common_runtime_arg_values) {
                     const auto it = crta_index.find(name);
                     TT_FATAL(
