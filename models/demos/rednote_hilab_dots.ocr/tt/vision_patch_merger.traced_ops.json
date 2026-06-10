@@ -1,7 +1,0 @@
-[
-  "ttnn.layer_norm",
-  "ttnn.reshape",
-  "ttnn.linear",
-  "ttnn.gelu",
-  "ttnn.linear"
-]
