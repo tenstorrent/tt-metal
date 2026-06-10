@@ -147,6 +147,11 @@ void kernel_main() {
     const uint8_t out_ready_sem_injector_noc0_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_core_order_index = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_core_order_size = get_arg_val<uint32_t>(argidx++);
+    // Fabric-sender chain indices (host order: forward then backward). Read unconditionally so argidx
+    // stays aligned across all kernel variants. The chain may run decreasing (NOC_1, non-transposed),
+    // so these are not necessarily the chain tail.
+    const uint32_t forward_in0_core_order_index = get_arg_val<uint32_t>(argidx++);
+    const uint32_t backward_in0_core_order_index = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
     constexpr auto in0_args = TensorAccessorArgs<ct_arg_count>();
