@@ -280,33 +280,18 @@ TEST_F(MeshDeviceFixture, DfbSerializeGlobalHeader1Sx1S) {
     const uint32_t prefix_size = dfb_config_prefix_size(ghdr->num_dfbs);
     EXPECT_EQ(prefix_size, 92u);
     EXPECT_EQ(ghdr->dm1_remapper_blob_offset, prefix_size);
-    EXPECT_GT(ghdr->dm0_isr_blob_offset, ghdr->dm1_remapper_blob_offset);
-    EXPECT_GT(ghdr->per_dfb_layout_offset, ghdr->dm0_isr_blob_offset);
+    EXPECT_GE(ghdr->dm0_isr_blob_offset, ghdr->dm1_remapper_blob_offset);
+    EXPECT_GE(ghdr->per_dfb_layout_offset, ghdr->dm0_isr_blob_offset);
 
-    // Phase A: 8B core header + per-DFB hw-only ISR entries + trailing txn desc pool.
-    const auto* dm0_core_hdr = reinterpret_cast<const dfb_dm0_isr_blob_core_header_t*>(
-        buf.data() + ghdr->dm0_isr_blob_offset);
     EXPECT_EQ(ghdr->dm0_isr_blob_offset, prefix_size + sizeof(dfb_dm1_remapper_entry_header_t));
     EXPECT_EQ(
         ghdr->per_dfb_layout_offset,
         ghdr->dm0_isr_blob_offset +
             experimental::dfb::detail::dm0_isr_blob_region_size(dfbs));
     EXPECT_EQ(ghdr->dm0_isr_ready, 0u);
-    const auto* dm0_entry_hdr = reinterpret_cast<const dfb_dm0_isr_entry_header_t*>(
-        buf.data() + ghdr->dm0_isr_blob_offset + sizeof(dfb_dm0_isr_blob_core_header_t));
-    EXPECT_EQ(dm0_entry_hdr->num_producer_txns, dfbs[0]->producer_txn_descriptor.num_txn_ids);
-    EXPECT_EQ(dm0_entry_hdr->num_consumer_txns, dfbs[0]->consumer_txn_descriptor.num_txn_ids);
-    uint32_t expected_prod_mask = 0;
-    uint32_t expected_cons_mask = 0;
-    for (uint8_t i = 0; i < dfbs[0]->producer_txn_descriptor.num_txn_ids; ++i) {
-        expected_prod_mask |= 1u << dfbs[0]->producer_txn_descriptor.txn_ids[i];
-    }
-    for (uint8_t i = 0; i < dfbs[0]->consumer_txn_descriptor.num_txn_ids; ++i) {
-        expected_cons_mask |= 1u << dfbs[0]->consumer_txn_descriptor.txn_ids[i];
-    }
-    EXPECT_EQ(dm0_core_hdr->producer_txn_id_mask, expected_prod_mask);
-    EXPECT_EQ(dm0_core_hdr->consumer_txn_id_mask, expected_cons_mask);
-    EXPECT_EQ(sizeof(dfb_dm0_isr_hw_slot_t), 4u);
+    EXPECT_EQ(experimental::dfb::detail::dm0_isr_blob_region_size(dfbs), 0u);
+    EXPECT_EQ(ghdr->dm0_isr_blob_offset, ghdr->per_dfb_layout_offset);
+    EXPECT_EQ(sizeof(dfb_dm0_isr_txn_threshold_t), 2u);
 
     const uint16_t* offset_table =
         reinterpret_cast<const uint16_t*>(buf.data() + dfb_byte_offset_table_byte_offset());
@@ -336,6 +321,78 @@ TEST_F(MeshDeviceFixture, DfbSerializeGlobalHeader1Sx1S) {
     }
 
     experimental::dfb::detail::verify_dfb_global_header_participation(*ghdr, dfbs);
+}
+
+TEST_F(MeshDeviceFixture, DfbSerializeTxnCentricImplicitSync1Sx1S) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 16,
+        .producer_risc_mask = 0x1,
+        .num_producers = 1,
+        .pap = dfb::AccessPattern::STRIDED,
+        .consumer_risc_mask = 0x10,
+        .num_consumers = 1,
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_producer_implicit_sync = true,
+        .enable_consumer_implicit_sync = true};
+
+    Program program = CreateProgram();
+    CoreCoord logical_core = CoreCoord(0, 0);
+    experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
+    program.impl().finalize_dataflow_buffer_configs();
+    program.impl().allocate_dataflow_buffers(this->devices_.at(0)->get_devices()[0]);
+
+    const auto& dfbs = program.impl().dataflow_buffers_on_core(logical_core);
+    ASSERT_EQ(dfbs.size(), 1u);
+
+    std::vector<uint8_t> buf(4096, 0);
+    const size_t nbytes = experimental::dfb::detail::serialize_dfb_config_for_core(logical_core, dfbs, buf);
+    ASSERT_GT(nbytes, 0u);
+
+    const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(buf.data());
+    const uint32_t dm0_region = experimental::dfb::detail::dm0_isr_blob_region_size(dfbs);
+    ASSERT_GT(dm0_region, 0u);
+    EXPECT_EQ(ghdr->per_dfb_layout_offset, ghdr->dm0_isr_blob_offset + dm0_region);
+
+    const auto* dm0_core_hdr = reinterpret_cast<const dfb_dm0_isr_blob_core_header_t*>(
+        buf.data() + ghdr->dm0_isr_blob_offset);
+    uint32_t expected_prod_mask = 0;
+    uint32_t expected_cons_mask = 0;
+    for (uint8_t i = 0; i < dfbs[0]->producer_txn_descriptor.num_txn_ids; ++i) {
+        expected_prod_mask |= 1u << dfbs[0]->producer_txn_descriptor.txn_ids[i];
+    }
+    for (uint8_t i = 0; i < dfbs[0]->consumer_txn_descriptor.num_txn_ids; ++i) {
+        expected_cons_mask |= 1u << dfbs[0]->consumer_txn_descriptor.txn_ids[i];
+    }
+    EXPECT_EQ(dm0_core_hdr->producer_txn_id_mask, expected_prod_mask);
+    EXPECT_EQ(dm0_core_hdr->consumer_txn_id_mask, expected_cons_mask);
+
+    const uint32_t txn_hw_off = ghdr->dm0_isr_blob_offset + sizeof(dfb_dm0_isr_blob_core_header_t);
+    const uint32_t txn_hw_bytes = dm0_isr_txn_hw_pool_byte_size(expected_prod_mask, expected_cons_mask);
+    const uint32_t desc_pool_bytes = dm0_isr_txn_desc_pool_byte_size(expected_prod_mask, expected_cons_mask);
+    EXPECT_EQ(txn_hw_off + txn_hw_bytes + desc_pool_bytes, ghdr->per_dfb_layout_offset);
+
+    const auto* txn_threshold_table =
+        reinterpret_cast<const dfb_dm0_isr_txn_threshold_t*>(buf.data() + txn_hw_off);
+    uint32_t pending = expected_prod_mask;
+    while (pending) {
+        const uint32_t txn_id = static_cast<uint32_t>(__builtin_ctz(pending));
+        EXPECT_EQ(
+            txn_threshold_table[txn_id].threshold,
+            dfbs[0]->producer_txn_descriptor.num_entries_to_process_threshold);
+        pending &= (pending - 1u);
+    }
+    pending = expected_cons_mask;
+    while (pending) {
+        const uint32_t txn_id = static_cast<uint32_t>(__builtin_ctz(pending));
+        EXPECT_EQ(
+            txn_threshold_table[txn_id].threshold,
+            dfbs[0]->consumer_txn_descriptor.num_entries_to_process_threshold);
+        pending &= (pending - 1u);
+    }
 }
 
 TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx4SConfig) {

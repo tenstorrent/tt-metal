@@ -75,11 +75,10 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
         ...
 
     [dfb_config_base + dm0_isr_blob_offset]:
-      DM0 ISR blob — contiguous across all DFBs, read by DM0:
+      DM0 ISR blob — core-wide, read by DM0:
         [dfb_dm0_isr_blob_core_header_t(8B): precomputed producer/consumer txn IE masks]
-        [DFB0: dfb_dm0_isr_entry_header_t(4B) + dfb_dm0_isr_hw_slot_t × (num_prod + num_cons)]
-        [DFB1: ...]
-        [txn_desc_pool: dfb_dm0_txn_descriptor_image_t indexed by txn_id, trailing]
+        [txn_threshold_pool: dfb_dm0_isr_txn_threshold_t indexed by txn_id, span 0..max_txn_id]
+        [txn_desc_pool: dfb_dm0_txn_descriptor_image_t indexed by txn_id, contiguous after txn_hw_pool]
         ...
 
     [dfb_config_base + per_dfb_layout_offset]:
@@ -105,10 +104,11 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
 //     dfb_initializer_per_risc_t (0 when hart does not participate on that DFB)
 struct dfb_global_header_t {
     uint32_t dm1_remapper_blob_offset;  // → DM1 remapper blob (dfb_dm1_remapper_entry_header_t + slots per DFB)
-    uint32_t dm0_isr_blob_offset;       // → DM0 ISR blob (dfb_dm0_isr_entry_header_t + txn entries per DFB)
+    uint32_t dm0_isr_blob_offset;       // → DM0 ISR blob (core header + txn_hw_pool + txn_desc_pool)
     uint32_t per_dfb_layout_offset;     // → shared per-DFB layout (dfb_initializer_t + per_risc entries)
     uint8_t num_dfbs;                   // DFB count on this core; logical ids 0 .. num_dfbs-1
-    uint8_t dm0_isr_ready;              // 0 until DM0 finishes ISR setup + implicit_sync batch; host zeros at serialize
+    uint8_t dm0_isr_ready;              // core-wide implicit-sync ready (DM0 ISR armed); host zeros at serialize
+    uint8_t _pad[2];
     // participation_mask[h] bit i set → hartid h participates in DFB i (host-derived from risc_mask).
     uint32_t participation_mask[dfb::NUM_PARTICIPATING_HARTIDS];
 };
@@ -159,8 +159,7 @@ struct dfb_initializer_t {
     dfb_txn_id_descriptor_t producer_txn_descriptor;
     dfb_txn_id_descriptor_t consumer_txn_descriptor;
     uint8_t num_producers;
-    uint8_t implicit_sync_configured; // 0: init state, 1: configured
-    uint8_t _pad[2];                  // reserved (was dm0_blob_size; DM0 blob is now a separate global region)
+    uint8_t _pad[3];                  // reserved (was dm0_blob_size; DM0 blob is now a separate global region)
 };
 static_assert(sizeof(dfb_initializer_t) == 32, "dfb_initializer_t size changed — check field alignment");
 
@@ -214,25 +213,16 @@ struct dfb_dm1_remapper_entry_header_t {  // 4 bytes
     uint8_t _pad[3];
 } __attribute__((packed));
 
-// Core-wide header at dm0_isr_blob_offset (before per-DFB entries).
+// Core-wide header at dm0_isr_blob_offset (before txn threshold + descriptor pools).
 // Host ORs txn ids across all DFBs on this core; DM0 loads once for CMDBUF IE programming.
 struct dfb_dm0_isr_blob_core_header_t {
     uint32_t producer_txn_id_mask;
     uint32_t consumer_txn_id_mask;
 };
 
-// Per-DFB header for the DM0 ISR blob.
-struct dfb_dm0_isr_entry_header_t {  // 4 bytes
-    uint8_t num_producer_txns;
-    uint8_t num_consumer_txns;
-    uint8_t _pad[2];
-} __attribute__((packed));
-
-// CMDBUF metadata for one txn (descriptor image is host-precomputed separately).
-struct dfb_dm0_isr_txn_hw_t {
-    uint8_t txn_id;
+// CMDBUF threshold for one txn id (role/path implied by producer/consumer masks in core_hdr).
+struct dfb_dm0_isr_txn_threshold_t {
     uint8_t threshold;
-    uint8_t is_producer;  // 1 → TR_ACK CMDBUF path, 0 → WR_SENT
     uint8_t _pad;
 };
 
@@ -242,17 +232,6 @@ struct dfb_dm0_txn_descriptor_image_t {
     uint8_t tile_counters[18];
     uint8_t tiles_to_post_or_ack;  // union post/ack share offset in TxnDFBDescriptor
     uint8_t _pad[12];
-};
-
-// Legacy full slot (hw + desc); host DM0 blob uses hw-only entries + txn_id-indexed desc pool.
-struct dfb_dm0_isr_txn_slot_t {
-    dfb_dm0_isr_txn_hw_t hw;
-    dfb_dm0_txn_descriptor_image_t desc;
-};
-
-// Per-txn CMDBUF metadata in the DM0 ISR blob (descriptor images live in the trailing pool).
-struct dfb_dm0_isr_hw_slot_t {
-    dfb_dm0_isr_txn_hw_t hw;
 };
 
 // One entry per producer RISC that uses the remapper.
@@ -273,8 +252,8 @@ struct dfb_dm0_isr_hw_slot_t {
 //     [13]   = 1  (clientr_group, always 1 for DFB fan-out)
 //     [14]   = 0  (distribute, always 0)
 //
-// Device side: load_pair_raw(pair_index, clientR_val, clientL_val) writes both fields
-// directly into g_remapper_configurator's internal arrays — no bitfield manipulation needed.
+// Device side: setup_dfb_remapper() writes clientR_val/clientL_val directly to remapper HW
+// registers (no staging through g_remapper_configurator arrays).
 struct dfb_dm0_remapper_slot_t {
     uint8_t  pair_index;   // remapper pair index for this producer
     uint8_t  _pad[3];      // pad to 4-byte alignment
@@ -286,12 +265,27 @@ static_assert(sizeof(dfb_dm0_remapper_slot_t) == 16, "dfb_dm0_remapper_slot_t mu
 
 static_assert(sizeof(dfb_dm0_isr_blob_core_header_t) == 8, "dfb_dm0_isr_blob_core_header_t must be 8 bytes");
 static_assert(sizeof(dfb_dm0_txn_descriptor_image_t) == 32, "dfb_dm0_txn_descriptor_image_t must be 32 bytes");
-static_assert(sizeof(dfb_dm0_isr_txn_slot_t) == 36, "dfb_dm0_isr_txn_slot_t must be 36 bytes");
-static_assert(sizeof(dfb_dm0_isr_hw_slot_t) == 4, "dfb_dm0_isr_hw_slot_t must be 4 bytes");
+static_assert(sizeof(dfb_dm0_isr_txn_threshold_t) == 2, "dfb_dm0_isr_txn_threshold_t must be 2 bytes");
+
+// Span covers txn ids 0 .. highest set bit in (producer_mask | consumer_mask).
+inline uint32_t dm0_isr_txn_slot_span(uint32_t producer_txn_id_mask, uint32_t consumer_txn_id_mask) {
+    const uint32_t all_mask = producer_txn_id_mask | consumer_txn_id_mask;
+    if (all_mask == 0) {
+        return 0;
+    }
+    return 32u - static_cast<uint32_t>(__builtin_clz(all_mask));
+}
+
+inline uint32_t dm0_isr_txn_hw_pool_byte_size(uint32_t producer_txn_id_mask, uint32_t consumer_txn_id_mask) {
+    return dm0_isr_txn_slot_span(producer_txn_id_mask, consumer_txn_id_mask) * sizeof(dfb_dm0_isr_txn_threshold_t);
+}
+
+inline uint32_t dm0_isr_txn_desc_pool_byte_size(uint32_t producer_txn_id_mask, uint32_t consumer_txn_id_mask) {
+    return dm0_isr_txn_slot_span(producer_txn_id_mask, consumer_txn_id_mask) * sizeof(dfb_dm0_txn_descriptor_image_t);
+}
 
 static_assert(sizeof(dfb_global_header_t) == 64, "dfb_global_header_t size changed — check field alignment");
 static_assert(sizeof(dfb_dm1_remapper_entry_header_t) == 4, "dfb_dm1_remapper_entry_header_t must be 4 bytes");
-static_assert(sizeof(dfb_dm0_isr_entry_header_t) == 4, "dfb_dm0_isr_entry_header_t must be 4 bytes");
 static_assert(sizeof(TCAddressEntry) == 8, "TCAddressEntry size is incorrect");
 static_assert(sizeof(dfb_initializer_t) == 32, "dfb_initializer_t size is incorrect");
 static_assert(sizeof(dfb_initializer_per_risc_t) == 64, "dfb_initializer_per_risc_t size is incorrect");
@@ -308,6 +302,16 @@ namespace dfb {
 //   0-7:  DM0-DM7
 //   8-15: Neo0 unpack, Neo0 pack, Neo1 unpack, Neo1 pack, Neo2 unpack, Neo2 pack,
 //         Neo3 unpack, Neo3 pack
+//
+// Per-role metrics (A..J = METRIC_A..METRIC_J):
+//   DM0_ISR: A=pre_loop_sw B=subpassB_desc C=between_dfb_sw D=subpassB_l1_read
+//            E=subpassB_rocc_issue F=first_ie_rmw G=second_ie_rmw H=isr_enable
+//            I=implicit_sync_stores J=subpassB_hw
+//   DM1_RMP: A=blob_l1_read_sw B=blob_loop_ovhd C=pairs_reg_hw D=enable_remapper_hw
+//            E=first_pair_clientR_hw F=first_pair_clientL_hw G=last_pair_hw
+//            J=pairs_slots_written
+//   DM_LOCAL/TRISC: A=merged_sw B=remapper_spin C=tc_hw D=wait_all E=tc_reset_hw
+//                   F=tc_capacity_hw
 // ---------------------------------------------------------------------------
 constexpr uint8_t DFB_INIT_TIMING_NUM_SLOTS = 16;
 constexpr uint8_t DFB_INIT_TIMING_WORDS_PER_SLOT = 16;
@@ -341,6 +345,10 @@ enum DfbInitTimingWord : uint8_t {
     DFB_INIT_TIMING_W_METRIC_F = 9,
     DFB_INIT_TIMING_W_START = 10,
     DFB_INIT_TIMING_W_END = 11,
+    DFB_INIT_TIMING_W_METRIC_G = 12,
+    DFB_INIT_TIMING_W_METRIC_H = 13,
+    DFB_INIT_TIMING_W_METRIC_I = 14,
+    DFB_INIT_TIMING_W_METRIC_J = 15,
 };
 
 }  // namespace dfb

@@ -23,7 +23,6 @@ extern thread_local uint8_t g_dfb_logical_to_compact[dfb::NUM_DFBS];
 extern thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS];
 #endif
 #ifndef COMPILE_FOR_TRISC
-// TODO: make this a constant when we clean up number of txn ids
 extern volatile TxnDFBDescriptor g_txn_dfb_descriptor[32];
 extern overlay::RemapperAPI g_remapper_configurator;
 #endif

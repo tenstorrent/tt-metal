@@ -2265,13 +2265,18 @@ void LogDfbInitTimingFromL1(IDevice* device, const CoreCoord& core, const char* 
         const uint32_t metric_d = words[::dfb::DFB_INIT_TIMING_W_METRIC_D];
         const uint32_t metric_e = words[::dfb::DFB_INIT_TIMING_W_METRIC_E];
         const uint32_t metric_f = words[::dfb::DFB_INIT_TIMING_W_METRIC_F];
+        const uint32_t metric_g = words[::dfb::DFB_INIT_TIMING_W_METRIC_G];
+        const uint32_t metric_h = words[::dfb::DFB_INIT_TIMING_W_METRIC_H];
+        const uint32_t metric_i = words[::dfb::DFB_INIT_TIMING_W_METRIC_I];
+        const uint32_t metric_j = words[::dfb::DFB_INIT_TIMING_W_METRIC_J];
         const uint32_t start_time = words[::dfb::DFB_INIT_TIMING_W_START];
         const uint32_t end_time = words[::dfb::DFB_INIT_TIMING_W_END];
 
         if (role == ::dfb::DFB_INIT_TIMING_ROLE_DM0_ISR) {
             log_info(
                 tt::LogTest,
-                "  {}: e2e={} subpassA={} subpassB_desc={} subpassB_hw={} isr_ie_writes={} isr_enable={} "
+                "  {}: e2e={} pre_loop_sw={} subpassB_desc={} between_dfb_sw={} subpassB_l1_read={} "
+                "subpassB_rocc_issue={} subpassB_hw={} first_ie_rmw={} second_ie_rmw={} isr_enable={} "
                 "implicit_sync_stores={} start={} end={}",
                 kDfbInitTimingSlotNames[slot],
                 e2e,
@@ -2280,30 +2285,44 @@ void LogDfbInitTimingFromL1(IDevice* device, const CoreCoord& core, const char* 
                 metric_c,
                 metric_d,
                 metric_e,
+                metric_j,
                 metric_f,
+                metric_g,
+                metric_h,
+                metric_i,
                 start_time,
                 end_time);
         } else if (role == ::dfb::DFB_INIT_TIMING_ROLE_DM1_RMP) {
             log_info(
                 tt::LogTest,
-                "  {}: e2e={} total_rmp={} write_pairs_hw={} enable_remapper_hw={} start={} end={}",
-                kDfbInitTimingSlotNames[slot],
-                e2e,
-                metric_a,
-                metric_b,
-                metric_c,
-                start_time,
-                end_time);
-        } else {
-            log_info(
-                tt::LogTest,
-                "  {}: e2e={} merged_sw={} remapper_spin={} tc_hw={} wait_all={} start={} end={}",
+                "  {}: e2e={} blob_l1_read_sw={} blob_loop_ovhd={} pairs_reg_hw={} enable_remapper_hw={} "
+                "first_pair_clientR_hw={} first_pair_clientL_hw={} last_pair_hw={} pairs_slots_written={} "
+                "start={} end={}",
                 kDfbInitTimingSlotNames[slot],
                 e2e,
                 metric_a,
                 metric_b,
                 metric_c,
                 metric_d,
+                metric_e,
+                metric_f,
+                metric_g,
+                metric_j,
+                start_time,
+                end_time);
+        } else {
+            log_info(
+                tt::LogTest,
+                "  {}: e2e={} merged_sw={} remapper_spin={} tc_hw={} wait_all={} tc_reset_hw={} "
+                "tc_capacity_hw={} start={} end={}",
+                kDfbInitTimingSlotNames[slot],
+                e2e,
+                metric_a,
+                metric_b,
+                metric_c,
+                metric_d,
+                metric_e,
+                metric_f,
                 start_time,
                 end_time);
         }

@@ -109,10 +109,8 @@ struct DataflowBufferImpl {
     uint32_t total_size() const { return config.entry_size * config.num_entries; }
     uint32_t serialized_size() const;                  // shared per-DFB layout (dfb_initializer_t + per_risc entries)
     uint32_t dm1_remapper_blob_serialized_size() const; // DM1 blob only: entry header + remapper slots
-    uint32_t dm0_isr_blob_serialized_size() const;      // DM0 blob only: entry header + txn entries
     std::vector<uint8_t> serialize_for_core(const CoreCoord& core) const;                       // shared layout only
     std::vector<uint8_t> serialize_dm1_remapper_blob_for_core(const CoreCoord& core) const;     // DM1 remapper blob only
-    std::vector<uint8_t> serialize_dm0_isr_blob_for_core(const CoreCoord& core) const;          // DM0 ISR blob only
 
     // Returns the L1 data-buffer base address, which is identical for every core in the
     // DFB's core range (guaranteed by finalize_dataflow_buffer_configs).
@@ -137,7 +135,7 @@ void verify_dfb_per_risc_byte_offsets(
 uint32_t compute_dfb_config_serialized_size(
     const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
 
-// DM0 ISR blob region: core header + per-DFB hw entries + trailing txn desc pool.
+// DM0 ISR blob region: core header + txn_id-indexed hw pool + txn desc pool.
 uint32_t dm0_isr_blob_region_size(const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
 
 // Packs Quasar DFB config: [header | offset table | DM1 blobs | DM0 blobs | per-DFB layouts]. Returns bytes written.
