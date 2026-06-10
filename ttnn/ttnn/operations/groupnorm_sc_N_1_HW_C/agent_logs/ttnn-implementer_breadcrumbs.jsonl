@@ -1,0 +1,1 @@
+{"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/groupnorm_sc_N_1_HW_C/test_groupnorm_sc_N_1_HW_C.py::test_groupnorm_no_affine[single_tile_g1]","mode":"--dev","details":"first smoke test, no-affine single tile (1,1,32,32) g=1, PCC>=0.995","ts":"2026-06-10T12:07:11+00:00"}
