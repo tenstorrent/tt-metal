@@ -9,6 +9,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+#include <cstdlib>
 #include <map>
 #include <optional>
 #include <set>
@@ -122,6 +123,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     constexpr uint32_t in1_cb_index = CBIndex::c_1;
     constexpr uint32_t out_cb_index = CBIndex::c_2;
     constexpr uint32_t full_in0_cb_index = CBIndex::c_3;
+    constexpr uint32_t acc_cb_index = CBIndex::c_4;  // deep-plan_7: fp32 L1 K-accumulator (stream_k only)
     desc.cbs.push_back(CBDescriptor{
         .total_size = M_tiles * inA_K_tiles_per_core * in0_tile_size,
         .core_ranges = all_compute_cores_with_bbox,
@@ -163,6 +165,25 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
             .page_size = in0_tile_size,
         }}},
     });
+    // deep-plan_7 §3 STEP-5.1: NEW fp32 L1 K-accumulator CB (c_4), stream_k only. Holds the full
+    // M x N partial state (M_tiles * inB_N_tiles_per_core fp32 tiles) that the PACKER accumulates
+    // into across the K-OUTER-once loop (pack_reconfig_l1_acc). Lives ONLY on the compute-consumer
+    // cores (output_core_range_set, NOT the bbox -- orphan cores never run the streamed compute
+    // path), is NOT buffer-backed (scratch, like full_in0), and uses the Float32 (4096B) tile so
+    // the cross-slice K-reduction is lossless. Sized for ONE region (the K-OUTER-once path reserves
+    // it once and pushes it once at the very end). Non-streamed shapes skip it entirely.
+    if (stream_k) {
+        const uint32_t acc_tile_size = tt::tile_size(tt::DataFormat::Float32);  // 4096 B
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = M_tiles * inB_N_tiles_per_core * acc_tile_size,
+            .core_ranges = output_core_range_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = acc_cb_index,
+                .data_format = tt::DataFormat::Float32,
+                .page_size = acc_tile_size,
+            }}},
+        });
+    }
     // Two semaphores drive the gather:
     //   - `gather`: every sender atomically increments it on the coordinator
     //     (first) core after broadcasting its A slice.  The coordinator waits
@@ -221,6 +242,19 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         in1_cb_index,
         K_tiles * inB_N_tiles_per_core,
     };
+    // ---- Compute kernel DST-block geometry (deep-plan_6 §2.2/§5) ----
+    // out_block_h = the number of M-tiles per DST-block. The streamed compute kernel holds
+    // block_h*N_tiles_per_core live DST tiles per tile_regs_acquire; the proven fp32 DST cap on
+    // this Blackhole P150 is 8. For the streamed wide-N case (Npc>1: gate/up, SigLIP fc1/QKV)
+    // shrink out_block_h to max(1, 8/Npc) so block_h*Npc <= 8. For Npc==1 keep 8 (down/O M=288 ->
+    // num_blocks_h=2). num_blocks_h==1 (M_tiles<=8) -> compute & reader byte-identical to today.
+    uint32_t out_block_h = 8;
+    if (stream_k && inB_N_tiles_per_core > 1) {
+        out_block_h = std::max(1u, 8u / inB_N_tiles_per_core);
+    }
+    const uint32_t num_blocks_h = tt::div_up(M_tiles, out_block_h);
+    const uint32_t last_out_block_h = (M_tiles % out_block_h == 0) ? out_block_h : (M_tiles % out_block_h);
+
     const KernelDescriptor::CompileTimeArgs stream_reader_compile_time_args = {
         in0_cb_index,
         full_in0_cb_index,
@@ -241,6 +275,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         K_tiles,
         K_slice_tiles,
         inA_K_tiles_per_core,
+        num_blocks_h,  // NEW reader CT arg [19] (deep-plan_6 §2.3 M-block re-stream count)
     };
     const KernelDescriptor::CompileTimeArgs& reader_compile_time_args =
         stream_k ? stream_reader_compile_time_args : gather_reader_compile_time_args;
@@ -333,10 +368,56 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     // ---- Compute kernel ----
     //
     // Matmul over gathered full A and this core's B slice.
-    // Blocking: in0_block_w (K) = 1, out_block_h (M) = 8, out_block_w (N) = 1.
-    constexpr uint32_t out_block_h = 8;
-    const uint32_t num_blocks_h = tt::div_up(M_tiles, out_block_h);
-    const uint32_t last_out_block_h = (M_tiles % out_block_h == 0) ? out_block_h : (M_tiles % out_block_h);
+    // DST-block geometry (out_block_h / num_blocks_h / last_out_block_h) computed above next to
+    // the stream-reader CT args so the reader and compute kernel share num_blocks_h in lockstep.
+    // matmul_block PER-TILE geometry (in0_block_w / out_block_w) is 1/1 by default (byte-identical
+    // single-tile path). The §6c K-reuse/N-reuse widening EXPERIMENT can raise them via the
+    // TT_MMD_IN0_BLOCK_W / TT_MMD_OUT_BLOCK_W env knobs (host-read here, passed as compute CT
+    // [9]/[10]); in0_block_w must divide K_slice_tiles (streamed) and K_tiles (non-streamed),
+    // out_block_w must divide N_tiles_per_core. Defaults 1 leave the proven path untouched.
+    uint32_t mm_in0_block_w = 1;
+    uint32_t mm_out_block_w = 1;
+    // deep-plan_7 §3 STEP-5.2: rt_dim (DST M-block fill) -- previously hardcoded 1 in the compute
+    // kernel, now a swept CT arg [11] env-gated by TT_MMD_OUT_BLOCK_H (default 1 = byte-identical
+    // matmul_block geometry). It is clamped below to honour the <=8 fp32 DST cap (rt_dim*Npc<=8).
+    uint32_t mm_out_block_h = 1;
+    if (const char* e = std::getenv("TT_MMD_IN0_BLOCK_W")) {
+        const uint32_t v = static_cast<uint32_t>(std::atoi(e));
+        if (v >= 1) {
+            mm_in0_block_w = v;
+        }
+    }
+    if (const char* e = std::getenv("TT_MMD_OUT_BLOCK_W")) {
+        const uint32_t v = static_cast<uint32_t>(std::atoi(e));
+        if (v >= 1) {
+            mm_out_block_w = v;
+        }
+    }
+    if (const char* e = std::getenv("TT_MMD_OUT_BLOCK_H")) {
+        const uint32_t v = static_cast<uint32_t>(std::atoi(e));
+        if (v >= 1) {
+            mm_out_block_h = v;
+        }
+    }
+    // Safety: only apply widening when it divides cleanly; otherwise fall back to 1 (the kernel
+    // loops step by these values, so a non-divisor would drop K/N tiles -> wrong result).
+    const uint32_t k_inner = stream_k ? K_slice_tiles : K_tiles;
+    if (k_inner % mm_in0_block_w != 0) {
+        mm_in0_block_w = 1;
+    }
+    if (inB_N_tiles_per_core % mm_out_block_w != 0) {
+        mm_out_block_w = 1;
+    }
+    // deep-plan_7 §3 STEP-5.2 + §6 risk-11: clamp rt_dim so a single matmul_block acquire never
+    // exceeds the proven fp32 DST cap of 8 (rt_dim*Npc<=8) and never exceeds the per-M-block height
+    // (out_block_h). The kernel's inner loop is tail-safe via min(), but keep rt_dim <= out_block_h
+    // so a single block isn't over-filled. Defaults to 1 (byte-identical).
+    if (inB_N_tiles_per_core * mm_out_block_h > 8u) {
+        mm_out_block_h = std::max(1u, 8u / inB_N_tiles_per_core);
+    }
+    if (mm_out_block_h > out_block_h) {
+        mm_out_block_h = out_block_h;
+    }
 
     log_debug(
         tt::LogOp,
@@ -360,6 +441,10 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         num_blocks_h,
         static_cast<uint32_t>(stream_k ? 1u : 0u),
         stream_k ? K_slice_tiles : 1u,
+        out_block_h,     // NEW compute CT [8] (deep-plan_6 §2.2 DST M-block height)
+        mm_in0_block_w,  // NEW compute CT [9] (§6c K-reuse widen; default 1)
+        mm_out_block_w,  // NEW compute CT [10] (§6c N-reuse widen; default 1)
+        mm_out_block_h,  // NEW compute CT [11] (deep-plan_7 rt_dim M-block fill; env TT_MMD_OUT_BLOCK_H, default 1)
     };
     // PRECISION (now OPT-IN, mirroring ttnn.matmul): fp32 DST accumulation keeps the
     // K-reduction accumulating in fp32 DST instead of packing each matmul_block partial
@@ -367,15 +452,37 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     // the deep pi0.5 SigLIP-tower / Tier-4 path. It is NO LONGER hardcoded -- it is now
     // driven by the resolved compute_kernel_config threaded through the device op
     // (default OFF; opt in via a DeviceComputeKernelConfig with fp32_dest_acc_en=true).
-    // BLACKHOLE DST-CAPACITY NOTE: the compute kernel only ever holds 1 DST tile per
-    // tile_regs_acquire block (packs slot 0), so the fp32-dest-acc DST-capacity halving
-    // (8->4 tiles) is comfortably satisfied with no out_block tiling change.
+    // BLACKHOLE DST-CAPACITY NOTE (deep-plan_7 §3 STEP-3/STEP-5.8, rewritten): the NON-streamed
+    // branch holds 1 live DST tile per tile_regs_acquire (packs slot 0). The STREAMED branch is now
+    // K-slice-OUTER-once / M-block+N-INNER: it holds the FULL M x N partial state in the fp32 L1
+    // accumulator CB (c_4) that the PACKER accumulates into across the K-OUTER loop
+    // (pack_reconfig_l1_acc(s==0?0:1)); DST holds ONLY the <= block_h*N_tiles_per_core (<=8 fp32 DST
+    // cap, clamped via rt_dim) transient tiles of ONE acquire (pure micro-tiling). The M loop is
+    // tiled into num_blocks_h DST-blocks to keep each acquire <=8. For num_blocks_h==1 (M_tiles<=8:
+    // SigLIP M=8, every M<=96) the compute takes a byte-identical iter-6 single-acquire fast-path
+    // (no acc CB, no PACKER_L1_ACC). The fp32 c_4 accumulator keeps out_cb (c_2) at its bf16
+    // buffer-backed contract UNCHANGED -- there is NO output-dtype ripple.
     auto [_mf, _approx, _fp32_acc, _l1_acc, _dst_full_sync] = ttnn::get_compute_kernel_config_args(
         input_tensor_a.device()->arch(), operation_attributes.compute_kernel_config);
+    // FORCED dst_full_sync_en for the streamed MULTI-BLOCK path (deep-plan_6 §2.2 correctness):
+    // in SyncHalf mode DST is split into two banks that PING-PONG across consecutive
+    // tile_regs_acquire blocks, so the per-M-block acquires of the num_blocks_h>1 streamed loop
+    // land in alternating banks while pack reads the wrong bank -> the observed odd-M-block
+    // corruption (down M-tile 8 = 0.70, gate/up odd M-tiles = 0.58). Forcing full-sync makes DST
+    // a single contiguous bank with no cross-acquire ping-pong, recovering all M-tiles to >=0.9999.
+    // This is the same "internal force only when needed" discipline as fp32-on-stream_k; the
+    // num_blocks_h==1 path is unaffected (single acquire, no ping-pong) so it stays caller-driven.
+    const bool force_full_sync = stream_k && (num_blocks_h > 1);
+    // deep-plan_7 §3 STEP-5.5 (PACKER_L1_ACC): the iter-7 streamed K-OUTER-once path accumulates
+    // K-slice partials in the fp32 c_4 CB via pack_reconfig_l1_acc(s==0?0:1). On THIS fork the
+    // ComputeConfigDescriptor has NO packer_l1_acc field (verified: program_descriptors.hpp:98) and
+    // the kernel-internal pack_reconfig_l1_acc()/llk_pack_reconfig_l1_acc() calls are UNCONDITIONAL
+    // runtime calls (no #ifdef PACKER_L1_ACC gate exists in matmul_decode), so PACKER L1 accumulation
+    // is enabled purely by those kernel calls -- no host descriptor flag is required or available.
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = _mf,
         .fp32_dest_acc_en = _fp32_acc,
-        .dst_full_sync_en = _dst_full_sync,
+        .dst_full_sync_en = force_full_sync ? true : _dst_full_sync,
         .math_approx_mode = _approx,
     };
     desc.kernels.push_back(std::move(compute_kernel_desc));

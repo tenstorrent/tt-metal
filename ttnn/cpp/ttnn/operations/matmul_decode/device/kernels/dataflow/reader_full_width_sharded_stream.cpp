@@ -61,6 +61,13 @@ void kernel_main() {
     constexpr uint32_t K_tiles = get_compile_time_arg_val(16);               // total K-tiles
     constexpr uint32_t K_slice_tiles = get_compile_time_arg_val(17);         // K-tiles per stream step
     constexpr uint32_t inA_K_tiles_per_core = get_compile_time_arg_val(18);  // sender_K_tiles
+    // NEW CT arg [19] (deep-plan_6 §2.3): number of DST M-blocks the compute kernel tiles the
+    // M loop into. Compute consumes the full K-stream ONCE PER M-block, so the reader must
+    // re-stream all K-slices num_blocks_h times. A GLOBAL step counter gstep=mb*num_steps+s
+    // keys ALL monotonic semaphore thresholds on gstep+1 (NOT s+1) so the cumulative gather_sem
+    // left from mb=0 cannot race mb>=1 ahead. For num_blocks_h==1 gstep==s -> byte-identical to
+    // the prior single-pass reader (zero regression on every M<=96 / SigLIP M<=8 shape).
+    constexpr uint32_t num_blocks_h = get_compile_time_arg_val(19);
 
     // ---- Runtime args ----
     const uint32_t is_sender = get_arg_val<uint32_t>(0);
@@ -99,9 +106,19 @@ void kernel_main() {
     const uint32_t my_first_step = is_sender ? sender_id * steps_per_sender : 0;
     const uint32_t my_last_step = my_first_step + steps_per_sender;  // exclusive
 
+    // deep-plan_7 §3 STEP-4: K streamed ONCE. The iter-6 OUTER M-block re-stream loop is REMOVED
+    // (compute now consumes the full K-stream ONCE TOTAL via the K-OUTER-once + PACKER_L1_ACC path,
+    // iterating all M-blocks INNER per resident slice). gstep collapses to s; thresholds key on s+1
+    // -- the ORIGINAL single-pass contract. The monotonic-semaphore race iter-6 solved with gstep+1
+    // (mb=1 wait_min satisfied by mb=0's cumulative gather) is GONE BY CONSTRUCTION (no mb loop);
+    // gather_sem reaches exactly num_steps. For num_blocks_h==1 this is byte-identical to before
+    // (gstep was already == s). CT[19] num_blocks_h is now read-and-ignored (kept to avoid
+    // renumbering the reader CT list; compute still needs it at compute CT[5]). Compute consumes
+    // num_steps slices; this reader pushes num_steps slices -> lockstep (STEP-4b HANG GUARD).
+    (void)num_blocks_h;  // read-and-ignore (deep-plan_7 §STEP-4 CT[19] decision)
     for (uint32_t s = 0; s < num_steps; ++s) {
-        // Reserve the next slice slot (blocks until a slot frees -> back-pressure). Only consumer
-        // cores have a compute drainer; orphan bbox cores must NOT block on this.
+        // Reserve the next slice slot (blocks until a slot frees -> back-pressure). Only
+        // consumer cores have a compute drainer; orphan bbox cores must NOT block on this.
         if (is_consumer) {
             full_in0_cb.reserve_back(slice_tiles);
         }
@@ -113,8 +130,8 @@ void kernel_main() {
             // Copy this sender's [M_tiles, K_slice_tiles] sub-block from in0_cb into a
             // contiguous staging at full_in0_cb's write-ptr, then multicast it. The resident
             // in0_cb holds [M_tiles, inA_K_tiles_per_core] row-major; the destination slot is
-            // [M_tiles, K_slice_tiles] row-major. We multicast each M-row separately because the
-            // source rows are strided (sender_row_tiles) while the dest rows are packed.
+            // [M_tiles, K_slice_tiles] row-major. We multicast each M-row separately because
+            // the source rows are strided (sender_row_tiles) while the dest rows are packed.
             const uint32_t src_base = in0_cb.get_read_ptr();
             const uint32_t dst_base = full_in0_cb.get_write_ptr();
             for (uint32_t m = 0; m < M_tiles; ++m) {
@@ -133,20 +150,20 @@ void kernel_main() {
                      .offset_bytes = dst_off});
             }
             noc.async_write_barrier();
-            // Report this step's slice landed (monotonic: cumulative gather count == s+1).
+            // Report this step's slice landed (monotonic; cumulative gather count == s+1).
             gather_sem.up(noc, coordinator_noc_x, coordinator_noc_y, 1);
             noc.async_atomic_barrier();
         }
 
         if (is_coordinator) {
-            gather_sem.wait_min(s + 1);
+            gather_sem.wait_min(s + 1);  // <-- s+1 (was gstep+1); single-pass contract
             done_sem.set(s + 1);
             done_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
                 noc, mcast_x_start, mcast_y_start, mcast_x_end, mcast_y_end, num_receivers);
             noc.async_write_barrier();
         }
 
-        done_sem.wait_min(s + 1);
+        done_sem.wait_min(s + 1);  // <-- s+1
         if (is_consumer) {
             full_in0_cb.push_back(slice_tiles);
         }
