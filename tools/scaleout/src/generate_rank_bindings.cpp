@@ -256,11 +256,13 @@ TopologyMappingResult run_topology_mapping(
     const auto cluster_type_for_anchor = cluster.get_cluster_type();
     if (cluster_type_for_anchor == tt::tt_metal::ClusterType::GALAXY ||
         cluster_type_for_anchor == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
+        const int world_size =
+            static_cast<int>(*tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->size());
         for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
             const auto& mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
             const bool is_1d = mesh_shape[0] == 1 || mesh_shape[1] == 1;
             if (!is_1d && mesh_shape.mesh_size() % 32 == 0) {
-                const bool nw_corner_only = false;
+                const bool nw_corner_only = world_size > 1;
                 auto mesh_pinnings = get_galaxy_fixed_asic_position_pinnings_for_mesh(
                     mesh_id, mesh_shape, /*hard_pin_node_0=*/true, nw_corner_only);
                 for (const auto& [fabric_node, positions] : mesh_pinnings) {
