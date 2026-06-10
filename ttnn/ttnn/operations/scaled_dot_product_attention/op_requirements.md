@@ -92,7 +92,7 @@ changes. Deferred: 9 uniform/negative regression cells (rms 0.04–0.21, all
 output-quantization floor; static analyzer confirms no structural term remains. See
 Refinement 5.
 
-### [ ] Refinement 5 — Uniform/negative-input bf16-floor flip-rate reduction
+### [x] Refinement 5 — Uniform/negative-input bf16-floor flip-rate reduction
 
 **Goal**: move the 9 deferred `test_uniform_input` / `test_negative_input` regression
 cells (S=32–512 bf16; rms 0.04–0.21 vs 0.04, pcc up to 0.9947 vs 0.995) into passing.
@@ -106,6 +106,17 @@ fp32-exact); (2) verify packer fp32→bf16 rounding mode is RNE (torch's mode);
 (3) extra NR iteration on recip (or compute `out = O · (1/l)` with bcast on the
 already-HiFi3 FPU using `l` pre-inverted in fp32). No SUPPORTED/EXCLUSIONS changes —
 cells stay inside SUPPORTED and failing until fixed.
+
+**Outcome (2026-06-10, full)**: all 9 cells pass; regression suite 39/39, golden
+663/0/120 — zero supported_fail. Verifier's residual model was wrong: the dominant
+term was neither (a) nor (b) but the descriptor never setting
+`UnpackToDestMode::UnpackToDestFp32` — every copy_tile/UnaryBcast of a Float32 CB
+silently truncated to fp16, so the O accumulator lost mantissa each KV block
+(proved bit-for-bit by host model, probes 028–032). Lever (1) was implemented along
+the way (full SFPU stat path) but only halved rms; lever (3) (Newton step on recip,
+~3.6e-5 → ~1e-9 rel err) closed the rest. Lever (2): packer is round-half-up, not
+RNE — ties differ from torch only at exact bf16 midpoints (measure ~0 for random
+data). Flip rates: 0.2–1.0% (pre-fix 2–6%).
 
 ### [ ] Refinement 4 — Non-tile-aligned shapes
 

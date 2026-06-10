@@ -93,10 +93,10 @@ void kernel_main() {
     constexpr uint32_t sw = get_compile_time_arg_val(7);       // P@V subblock width (<= 4)
     constexpr uint32_t n_sub_w = get_compile_time_arg_val(8);  // Dt / sw
     constexpr bool HAS_MASK = get_compile_time_arg_val(9) != 0;
-    // Output dtype is bfloat16: RNE-round in DEST (SFPU typecast) before pack —
-    // the packer truncates fp32->bf16, which drops a full bf16 ulp on values
-    // sitting just below the grid (probe_015/016, Refinement 5 flip-rate fix).
-    constexpr bool OUT_IS_BF16 = get_compile_time_arg_val(10) != 0;
+    // CT arg 10 (out-is-bf16) is reserved: kept in the descriptor for ABI
+    // stability, no longer branched on (packer rounds half-up, no DEST rounding
+    // pass needed — probe_017/019).
+    [[maybe_unused]] constexpr bool OUT_IS_BF16 = get_compile_time_arg_val(10) != 0;
 
     const uint32_t start_unit = get_arg_val<uint32_t>(0);
     const uint32_t num_units = get_arg_val<uint32_t>(1);
@@ -326,47 +326,16 @@ void kernel_main() {
             ckl::PackTile<cb_inv_sum>{});
 
         // ---- Phase 12: out = O * inv on SFPU (fp32-exact), pack -> output dtype ----
-        // copy_tile of Float32 CBs is unpack-to-dest (exact); MulBinary is SFPU
-        // fp32 RNE — no FPU tf32 truncation on either operand. For bf16 output,
-        // RNE-round in DEST (SFPU typecast) first: the packer truncates.
-        if constexpr (OUT_IS_BF16) {
-            // Software RNE on the fp32 bits (t += 0x7FFF + ((t>>16)&1)); the
-            // truncating packer then drops exactly the rounded-off bits.
-            // Sign-magnitude fp32 makes the same bit trick correct for negatives.
-            ckl::eltwise_chain(
-                ckl::EltwiseShape::grid(cur_cq, Dt),
-                ckl::CopyTile<
-                    cb_o_acc,
-                    Dst::D0,
-                    InputLifecycle::Bulk,
-                    ckl::CopyTileReconfig::Input,
-                    OperandKind::Block>{},
-                ckl::CopyTile<
-                    cb_inv_sum,
-                    Dst::D1,
-                    InputLifecycle::Bulk,
-                    ckl::CopyTileReconfig::Input,
-                    OperandKind::Col>{},
-                ckl::MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
-                ckl::PackTile<cb_out_tiles>{});
-        } else {
-            ckl::eltwise_chain(
-                ckl::EltwiseShape::grid(cur_cq, Dt),
-                ckl::CopyTile<
-                    cb_o_acc,
-                    Dst::D0,
-                    InputLifecycle::Bulk,
-                    ckl::CopyTileReconfig::Input,
-                    OperandKind::Block>{},
-                ckl::CopyTile<
-                    cb_inv_sum,
-                    Dst::D1,
-                    InputLifecycle::Bulk,
-                    ckl::CopyTileReconfig::Input,
-                    OperandKind::Col>{},
-                ckl::MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
-                ckl::PackTile<cb_out_tiles>{});
-        }
+        // copy_tile of Float32 CBs is unpack-to-dest (exact, UnpackToDestFp32);
+        // MulBinary is SFPU fp32 RNE — no FPU tf32 truncation on either operand.
+        // Packer rounds half-up (probe_017/019: 0.75 up, 0.25 down, ties up) —
+        // matches torch RNE everywhere except exact bf16 ties.
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::grid(cur_cq, Dt),
+            ckl::CopyTile<cb_o_acc, Dst::D0, InputLifecycle::Bulk, ckl::CopyTileReconfig::Input, OperandKind::Block>{},
+            ckl::CopyTile<cb_inv_sum, Dst::D1, InputLifecycle::Bulk, ckl::CopyTileReconfig::Input, OperandKind::Col>{},
+            ckl::MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
+            ckl::PackTile<cb_out_tiles>{});
 
         // Release the retained Q chunk (WaitAndRetainOnLastBlock counterpart) and the
         // last m_prev block (the pop Phase 5b would have issued on a next kb).

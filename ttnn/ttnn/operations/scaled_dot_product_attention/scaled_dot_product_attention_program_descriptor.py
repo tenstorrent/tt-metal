@@ -194,8 +194,8 @@ def create_program_descriptor(
         sw,
         n_sub_w,
         1 if has_mask else 0,
-        # bf16 output: RNE-round in DEST (SFPU typecast) before pack — the
-        # packer truncates fp32->bf16 (probe_015/016, Refinement 5).
+        # CT arg 10 reserved (out-is-bf16): kernel no longer branches on it —
+        # the packer rounds half-up, no DEST rounding pass needed (probe_017/019).
         1 if in_fmt == ttnn.bfloat16 else 0,
     ]
 
