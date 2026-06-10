@@ -56,16 +56,16 @@ INPUT_TAGGERS = {
 
 
 # ---------------------------------------------------------------------------
-# 2. SUPPORTED — Phase 0
+# 2. SUPPORTED — Phase 0 + Refinement 1 (dtype / affine_dtype expansion)
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "alignment": ["tile_aligned"],
     "groups_alignment": ["aligned"],
     "affine": ["gamma_beta", "gamma_only", "no_affine"],
-    "affine_dtype": [ttnn.bfloat16],
+    "affine_dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     # TILE-given gamma/beta flow through the same host-side to_layout path
     # as ROW_MAJOR (kernel always sees TILE) — both layouts supported.
     "affine_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
@@ -145,8 +145,16 @@ def groupnorm_sc_N_1_HW_C(
     beta: ttnn.Tensor = None,
     eps: float = 1e-5,
     memory_config: ttnn.MemoryConfig = None,
+    compute_kernel_config=None,
 ) -> ttnn.Tensor:
-    """Single-core GroupNorm over (N, 1, H*W, C). Output is always TILE_LAYOUT."""
+    """Multi-core GroupNorm over (N, 1, H*W, C). Output is always TILE_LAYOUT.
+
+    compute_kernel_config: optional ttnn.WormholeComputeKernelConfig /
+    BlackholeComputeKernelConfig (math_fidelity, fp32_dest_acc_en,
+    math_approx_mode, dst_full_sync_en). Defaults reproduce the Phase-0
+    hard-coded behavior: HiFi4, fp32_dest_acc_en=False, math_approx_mode=False,
+    dst_full_sync_en=False.
+    """
     validate(input_tensor, num_groups, gamma=gamma, beta=beta, eps=eps)
 
     device = input_tensor.device()
@@ -171,7 +179,9 @@ def groupnorm_sc_N_1_HW_C(
         output_memory_config,
     )
 
-    program_descriptor = create_program_descriptor(x, g, b, output_tensor, num_groups, eps)
+    program_descriptor = create_program_descriptor(
+        x, g, b, output_tensor, num_groups, eps, compute_kernel_config=compute_kernel_config
+    )
 
     io_tensors = [x]
     if g is not None:

@@ -1,17 +1,20 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Reader for groupnorm_sc_N_1_HW_C (single-core GroupNorm over (N, 1, HW, C)).
+// Reader for groupnorm_sc_N_1_HW_C (multi-core GroupNorm over (N, 1, HW, C)).
 //
 // Startup:
 //   - push the reduce scaler tile once: 1/sqrt(HW * Cg). REDUCE_SCALAR applies
 //     the scaler twice (row then col), so SUM * (1/sqrt(N))^2 = mean.
 //   - read gamma / beta (Wt tiles each, host-tilized (1,1,1,C) -> 1 x Wt tile
 //     row) once; they persist in their CBs for the whole kernel (HeldBulk).
+//     Every core reads its own gamma/beta copy from DRAM.
 //
-// Per (n, g) group the compute kernel makes THREE streaming passes over the
-// same Ht x Wg tile slab (mean, variance, normalize), so the reader streams
-// the slab three times. Tile index: n*Ht*Wt + r*Wt + g*Wg + c.
+// Work split (interleaved-parallel): one work unit = one (n, g) group; this
+// core handles group ids [start_group, start_group + num_groups_here) with
+// n = id / G, g = id % G. Per group the compute kernel makes THREE streaming
+// passes over the same Ht x Wg tile slab (mean, variance, normalize), so the
+// reader streams the slab three times. Tile index: n*Ht*Wt + r*Wt + g*Wg + c.
 
 #include <stdint.h>
 
@@ -22,18 +25,19 @@ void kernel_main() {
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
     const uint32_t gamma_addr = get_arg_val<uint32_t>(1);
     const uint32_t beta_addr = get_arg_val<uint32_t>(2);
+    const uint32_t start_group = get_arg_val<uint32_t>(3);
+    const uint32_t num_groups_here = get_arg_val<uint32_t>(4);
 
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t Wg = get_compile_time_arg_val(2);
     constexpr uint32_t G = get_compile_time_arg_val(3);
-    constexpr uint32_t N = get_compile_time_arg_val(4);
-    constexpr bool HAS_GAMMA = get_compile_time_arg_val(5) != 0;
-    constexpr bool HAS_BETA = get_compile_time_arg_val(6) != 0;
-    constexpr uint32_t inv_sqrt_n_bits = get_compile_time_arg_val(7);
+    constexpr bool HAS_GAMMA = get_compile_time_arg_val(4) != 0;
+    constexpr bool HAS_BETA = get_compile_time_arg_val(5) != 0;
+    constexpr uint32_t inv_sqrt_n_bits = get_compile_time_arg_val(6);
 
     // Accessors declared unconditionally, chained offsets (placeholders when absent).
-    constexpr auto input_args = TensorAccessorArgs<8>();
+    constexpr auto input_args = TensorAccessorArgs<7>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
@@ -80,22 +84,27 @@ void kernel_main() {
     // Group loop: 3 streaming passes over the Ht x Wg slab per group.
     // Batched per row chunk (Wg tiles, one barrier) — cb_input_tiles is sized
     // 2*Wg pages so chunk batching preserves the double-buffered overlap.
-    for (uint32_t n = 0; n < N; ++n) {
-        for (uint32_t g = 0; g < G; ++g) {
-            const uint32_t group_base = n * Ht * Wt + g * Wg;
-            for (uint32_t pass = 0; pass < 3; ++pass) {
-                for (uint32_t r = 0; r < Ht; ++r) {
-                    const uint32_t row_base = group_base + r * Wt;
-                    cb_reserve_back(cb_input_tiles, Wg);
-                    uint32_t l1_addr = get_write_ptr(cb_input_tiles);
-                    for (uint32_t c = 0; c < Wg; ++c) {
-                        noc_async_read_tile(row_base + c, input, l1_addr);
-                        l1_addr += tile_bytes;
-                    }
-                    noc_async_read_barrier();
-                    cb_push_back(cb_input_tiles, Wg);
+    // (n, g) tracked incrementally from start_group: one div/mod at startup.
+    uint32_t n = start_group / G;
+    uint32_t g = start_group % G;
+    for (uint32_t i = 0; i < num_groups_here; ++i) {
+        const uint32_t group_base = n * Ht * Wt + g * Wg;
+        for (uint32_t pass = 0; pass < 3; ++pass) {
+            for (uint32_t r = 0; r < Ht; ++r) {
+                const uint32_t row_base = group_base + r * Wt;
+                cb_reserve_back(cb_input_tiles, Wg);
+                uint32_t l1_addr = get_write_ptr(cb_input_tiles);
+                for (uint32_t c = 0; c < Wg; ++c) {
+                    noc_async_read_tile(row_base + c, input, l1_addr);
+                    l1_addr += tile_bytes;
                 }
+                noc_async_read_barrier();
+                cb_push_back(cb_input_tiles, Wg);
             }
+        }
+        if (++g == G) {
+            g = 0;
+            ++n;
         }
     }
 }

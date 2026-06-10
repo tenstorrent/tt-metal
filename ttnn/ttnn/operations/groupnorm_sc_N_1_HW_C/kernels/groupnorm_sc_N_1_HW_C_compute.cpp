@@ -1,7 +1,11 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Compute kernel for groupnorm_sc_N_1_HW_C (single-core GroupNorm, (N,1,HW,C)).
+// Compute kernel for groupnorm_sc_N_1_HW_C (multi-core GroupNorm, (N,1,HW,C)).
+//
+// Work split: one work unit = one (n, g) group; this core handles group ids
+// [start_group, start_group + num_groups_here), g = id % G (g indexes the
+// per-group gamma/beta tile offset; n is irrelevant to compute).
 //
 // Per (n, g) group — three streaming passes over the Ht x Wg slab:
 //   Pass 1 (mean):   reduce<SUM, REDUCE_SCALAR> with scaler 1/sqrt(HW*Cg)
@@ -46,10 +50,12 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t Wg = get_compile_time_arg_val(2);
     constexpr uint32_t G = get_compile_time_arg_val(3);
-    constexpr uint32_t N = get_compile_time_arg_val(4);
-    constexpr bool HAS_GAMMA = get_compile_time_arg_val(5) != 0;
-    constexpr bool HAS_BETA = get_compile_time_arg_val(6) != 0;
-    constexpr uint32_t EPS_BITS = get_compile_time_arg_val(7);
+    constexpr bool HAS_GAMMA = get_compile_time_arg_val(4) != 0;
+    constexpr bool HAS_BETA = get_compile_time_arg_val(5) != 0;
+    constexpr uint32_t EPS_BITS = get_compile_time_arg_val(6);
+
+    const uint32_t start_group = get_arg_val<uint32_t>(0);
+    const uint32_t num_groups_here = get_arg_val<uint32_t>(1);
 
     // Stage outputs when affine stages are absent / present.
     constexpr uint32_t cb_norm_out = HAS_GAMMA ? cb_xhat : cb_output_tiles;    // 3b output
@@ -61,8 +67,10 @@ void kernel_main() {
     constexpr auto row_reduce_shape = ckl::ReduceInputBlockShape::of(1, Wg);
     constexpr auto row_shape = ckl::EltwiseShape::grid(1, Wg);
 
-    for (uint32_t n = 0; n < N; ++n) {
-        for (uint32_t g = 0; g < G; ++g) {
+    {
+        // (g tracked incrementally from start_group; one mod at startup.)
+        uint32_t g = start_group % G;
+        for (uint32_t i = 0; i < num_groups_here; ++i) {
             // ---- Pass 1: mean over the slab -> cb_mean (1 tile) ----
             ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_SCALAR>(
                 cb_input_tiles, cb_scaler, cb_mean, slab_shape);
@@ -149,6 +157,10 @@ void kernel_main() {
             // ---- group end: release per-group statistics ----
             cb_pop_front(cb_mean, 1);
             cb_pop_front(cb_var, 1);
+
+            if (++g == G) {
+                g = 0;
+            }
         }
     }
 
