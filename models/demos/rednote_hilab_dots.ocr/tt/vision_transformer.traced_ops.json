@@ -11,6 +11,7 @@
   "ttnn.neg",
   "ttnn.reshape",
   "ttnn.rms_norm",
+  "ttnn.sharded_to_interleaved",
   "ttnn.slice",
   "ttnn.to_layout",
   "ttnn.to_memory_config",

@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T21:37:18Z
+**Updated:** 2026-06-10T21:53:05Z
 
 ## Block Status
 
@@ -23,7 +23,7 @@
 | vision_attention | reference | done | 1.000000 | 0 | eager MHA 12h hd128 fused QKV no-bias, 2D rope, cu_seqlens mask |
 | vision_attention | ttnn | done | 0.999855 | 0 | Fused-QKV linear -> nlp_create_qkv_heads (12 MHA heads, hd128) -> rotary_embedding_llama (q/k weights reverse_permute'd HF->meta + convert_rope_style_hf_to_meta cos/sin, qwen25_vl vision recipe) -> windowed_scaled_dot_product_attention over cu_seqlens (in-kernel block-diagonal mask) -> nlp_concat_heads -> o_proj. Seq padded 784->896, cu_seqlens keeps unpadded boundaries; real blocks.0.attn weights, replicated on 1x4 mesh per parallelism plan; HiFi4+fp32-acc. Guard ok (lint 0, kernels ok, no new host ops). KB ttnn_experimental_create_qkv_heads pattern applied via the nlp_* fused-head idiom. Framework fix: added ttnn.transformer.windowed_scaled_dot_product_attention to guard KIND_REQUIRED_KERNELS[attention] (mandated vision idiom was unrecognized; guard self-tests still pass). |
 | vision_attention | debug | n/a | — | 0 |  |
-| vision_attention | optimization | pending | — | 0 | OCCUPANCY REDO: per the new occupancy+convergence contract — query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid |
+| vision_attention | optimization | done | 0.999693 | 0 | Occupancy REDO at the PRODUCTION posture (bf16 tower, head-parallel tp=4, 11224-token document, padded 11264): per-block harness re-pointed from the stale fp32/896/tp1 posture and profiled under tracy --traced (metal trace replay session; trace replay has no host dispatch). Block traced wall 6.69 -> 5.18 ms/call (-22.6%; 42 calls/image => ~63 ms off the tower). Levers, one change per measurement: (1) CCL num_links 1(auto)->2: reduce_scatter 1203->635 us/chip, all_gather 1260->643 us/chip (6.69->5.38 ms); num_links=4 rejected by HW (TT_FATAL: 2 eth channels per QB hop) - CCL at link ceiling, low core counts (18-36) are link-bound not core-bound. (2) bf8b-first on the single-pass vision path: wqkv/wo bfloat8_b + HiFi2 (fp32 dest acc kept) on the two projections, matmuls 770->642 us/chip (5.38->5.18 ms) + ~100 MB/chip tower weight savings; fp32 high-precision path untouched. (3) SDPA chunk A/B: q128/k256 7.95 ms, q256/k256 6.69, q512/k256 6.66 (tie), k512 CB-OOM (2.15 MB > 1.5 MB/core) - 256x256 kept, chunk lever at measured ceiling. Final traced occupancy vs 110-core grid (13x10 harvested): SDPA 53.0% share @ 110/110 cores (HiFi2, at ceiling with A/B evidence), QKV matmul 88/110 (80%), o_proj 100/110 (91%), rope/create_heads/concat_heads 110/110, CCL 26% link-bound at 2/2 links. Gates: block PCC 0.999693 (>0.99) and e2e WER parity re-run (TTNN wer=0.0 == HF wer=0.0, 5/5 samples exact). |
 | vision_attention | real_weights | done | 0.999813 | 0 | vision_attention_weights loader added to consolidated tt/weight_loader.py (pure-PyTorch, memoized key-filtered safetensors load; fused qkv.weight [4608,1536] + proj.weight [1536,1536], no bias, 9437184 params/layer). Stage-1 parametric tests/test_real_hf_weights.py row runs TtVisionAttention at the production operating point (fp32 high-precision path with explicit fp32 HF rope, bf16 only at the bf16-only windowed-SDPA kernel, 1x4 mesh replicated, golden real post-norm1 activation [784,1536] padded to 896, golden rope tables + cu_seqlens) vs the pure-PyTorch reference with the same real weights at TWO sites: blocks.0 PCC 0.999853, blocks.41 0.999813 (min 0.999813 > 0.99 reported). Block forward untouched; full harness re-run, vision_patch_embed and vision_rmsnorm rows still passing. Guard ok (lint 0, params_loaded 18874368>0). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | vision_mlp | reference | done | 1.000000 | 0 | SwiGLU fc1/fc3->fc2 no bias |
 | vision_mlp | ttnn | done | 0.999999 | 0 | SwiGLU fc2(silu(fc1(x))*fc3(x)) 1536->4224->1536 no bias: two sibling ttnn.linear branches + explicit ttnn.silu + ttnn.mul + down ttnn.linear (KB ttnn_silu_2 cited; KB ttnn_mul_1 fused input_tensor_a_activations=[SILU] variant deferred to optimization phase since the mlp guard requires a traced silu/gelu kernel). HiFi4+fp32-acc; real blocks.0.mlp weights, replicated on 1x4 mesh per parallelism plan (placement=replicate), single-device copy vs golden. Guard ok (lint 0, kernels ok, no new host ops). |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 46 (2026-06-10T08:44:49Z): generation[ocr] — ok
 - tick 47 (2026-06-10T09:08:28Z): perf[ocr] — ok
 - tick 48 (2026-06-10T09:58:25Z): generation[ocr] — ok
 - tick 49 (2026-06-10T10:24:17Z): device[ocr] — ok
@@ -94,6 +93,7 @@
 - tick 53 (2026-06-10T21:05:20Z): perf[ocr] — ok
 - tick 54 (2026-06-10T21:29:25Z): device[vision_patch_embed] — ok
 - tick 55 (2026-06-10T21:37:18Z): device[vision_rmsnorm] — ok
+- tick 56 (2026-06-10T21:53:05Z): device[vision_attention] — ok
 
 ## Host-Resident Exceptions
 

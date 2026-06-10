@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T21:37:18Z",
+  "updated_at": "2026-06-10T21:53:05Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -167,9 +167,15 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
+        "status": "done",
         "attempts": 0,
-        "notes": "OCCUPANCY REDO: per the new occupancy+convergence contract \u2014 query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid"
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_attention.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_vision_attention.py",
+          "generated/profiler/reports/2026_06_10_21_51_21/ops_perf_results_2026_06_10_21_51_21.csv"
+        ],
+        "notes": "Occupancy REDO at the PRODUCTION posture (bf16 tower, head-parallel tp=4, 11224-token document, padded 11264): per-block harness re-pointed from the stale fp32/896/tp1 posture and profiled under tracy --traced (metal trace replay session; trace replay has no host dispatch). Block traced wall 6.69 -> 5.18 ms/call (-22.6%; 42 calls/image => ~63 ms off the tower). Levers, one change per measurement: (1) CCL num_links 1(auto)->2: reduce_scatter 1203->635 us/chip, all_gather 1260->643 us/chip (6.69->5.38 ms); num_links=4 rejected by HW (TT_FATAL: 2 eth channels per QB hop) - CCL at link ceiling, low core counts (18-36) are link-bound not core-bound. (2) bf8b-first on the single-pass vision path: wqkv/wo bfloat8_b + HiFi2 (fp32 dest acc kept) on the two projections, matmuls 770->642 us/chip (5.38->5.18 ms) + ~100 MB/chip tower weight savings; fp32 high-precision path untouched. (3) SDPA chunk A/B: q128/k256 7.95 ms, q256/k256 6.69, q512/k256 6.66 (tie), k512 CB-OOM (2.15 MB > 1.5 MB/core) - 256x256 kept, chunk lever at measured ceiling. Final traced occupancy vs 110-core grid (13x10 harvested): SDPA 53.0% share @ 110/110 cores (HiFi2, at ceiling with A/B evidence), QKV matmul 88/110 (80%), o_proj 100/110 (91%), rope/create_heads/concat_heads 110/110, CCL 26% link-bound at 2/2 links. Gates: block PCC 0.999693 (>0.99) and e2e WER parity re-run (TTNN wer=0.0 == HF wer=0.0, 5/5 samples exact).",
+        "pcc": 0.999693
       },
       "real_weights": {
         "status": "done",
@@ -1119,6 +1125,12 @@
       "tick": 55,
       "ts": "2026-06-10T21:37:18Z",
       "action": "device[vision_rmsnorm]",
+      "result": "ok"
+    },
+    {
+      "tick": 56,
+      "ts": "2026-06-10T21:53:05Z",
+      "action": "device[vision_attention]",
       "result": "ok"
     }
   ],

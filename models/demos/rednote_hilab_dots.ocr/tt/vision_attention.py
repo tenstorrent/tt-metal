@@ -116,9 +116,13 @@ class TtVisionAttention(LightweightModule):
             wo_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-2)
         else:
             qkv_mapper = wo_mapper = replicate
+        # bf8b-first A/B (single-pass vision path): block-fp8 weight storage
+        # for the two projection matmuls on the bf16 path; HiFi4 + fp32 dest
+        # acc keeps accumulation exact. fp32 high-precision path untouched.
+        weight_dtype = dtype if self.high_precision else ttnn.bfloat8_b
         self.wqkv = ttnn.from_torch(
             wqkv_t,
-            dtype=dtype,
+            dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -126,7 +130,7 @@ class TtVisionAttention(LightweightModule):
         )
         self.wo = ttnn.from_torch(
             wo_t,
-            dtype=dtype,
+            dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -264,12 +268,16 @@ class TtVisionAttention(LightweightModule):
         cu_seqlens boundary are padding garbage — caller slices them off).
         """
         act_dtype = ttnn.float32 if self.high_precision else ttnn.bfloat16
+        # bf16 path: HiFi2 on the bf16-act x bf8b-weight projections (the
+        # tt_transformers standard pairing); fp32 dest acc stays on. The fp32
+        # high-precision path keeps HiFi4.
+        proj_cfg = self.compute_kernel_config if self.high_precision else self.sdpa_compute_kernel_config
         xqkv = ttnn.linear(
             x_11SH,
             self.wqkv,
             dtype=act_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=proj_cfg,
         )
 
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
@@ -301,12 +309,17 @@ class TtVisionAttention(LightweightModule):
         if self.high_precision:
             sdpa_cfg, sdpa_pc = self.compute_kernel_config, None
         else:
-            chunk = 256 if x_11SH.shape[-2] >= 2048 else 64
+            # Chunk A/B at the 11k-token production shape (occupancy REDO):
+            # q128/k256 7.95 ms, q256/k256 6.69 ms, q512/k256 6.66 ms (tie),
+            # k512 exceeds the per-core CB budget (TT_THROW 2.15 MB > 1.5 MB).
+            # 256x256 kept — chunk lever is at measured ceiling.
+            q_chunk = 256 if x_11SH.shape[-2] >= 2048 else 64
+            k_chunk = 256 if x_11SH.shape[-2] >= 2048 else 64
             sdpa_cfg = self.sdpa_compute_kernel_config
             sdpa_pc = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=self.sdpa_grid,
-                q_chunk_size=chunk,
-                k_chunk_size=chunk,
+                q_chunk_size=q_chunk,
+                k_chunk_size=k_chunk,
             )
         attn = ttnn.transformer.windowed_scaled_dot_product_attention(
             q,
@@ -334,14 +347,14 @@ class TtVisionAttention(LightweightModule):
             self.wo,
             dtype=x_11SH.dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=proj_cfg,
         )
         ttnn.deallocate(attn)
         if self.tp_degree > 1:
             # Row-parallel o_proj produced per-chip PARTIAL sums — all-reduce
             # back to replicated (reduce_scatter + all_gather on the 1x4 line).
-            part = ttnn.reduce_scatter(out, dim=3, topology=ttnn.Topology.Linear)
+            part = ttnn.reduce_scatter(out, dim=3, topology=ttnn.Topology.Linear, num_links=2)
             ttnn.deallocate(out)
-            out = ttnn.all_gather(part, dim=3, topology=ttnn.Topology.Linear)
+            out = ttnn.all_gather(part, dim=3, topology=ttnn.Topology.Linear, num_links=2)
             ttnn.deallocate(part)
         return out
