@@ -150,16 +150,15 @@ inline void calculate_sfpu_binary_div(const uint dst_index_in0, const uint dst_i
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-<<<<<<< HEAD
-        sfpi::vFloat result = in0 * sfpu_reciprocal_iter<2>(in1);
-=======
-
+        
         sfpi::vFloat r = _sfpu_reciprocal_<2>(in1);
-        sfpi::vFloat q0 = in0 * r;
-        // quotient refinement step
-        sfpi::vFloat e = in0 - q0 * in1;   // residual  (≈ Sterbenz-exact)
-        sfpi::vFloat result = q0 + e * r;  // ~correctly-rounded quotient
->>>>>>> ef31a4bb70f (Improve fp32 accuracy)
+        sfpi::vFloat result = in0 * r;
+        if constexpr (is_fp32_dest_acc_en) {
+            // Residual (Markstein) refinement: removes the double-rounding of
+            // in0 * round(1/in1) so the fp32 quotient is correctly-rounded.
+            sfpi::vFloat e = in0 - result * in1;  // residual (≈ Sterbenz-exact)
+            result = result + e * r;              // correctly-rounded quotient
+        }
 
         v_if(in1 == 0) {
             v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
