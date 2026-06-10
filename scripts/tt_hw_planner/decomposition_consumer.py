@@ -25,6 +25,28 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 
+def _emit_repo_root(demo_dir: Path) -> Path:
+    """Repo/worktree root for building a child stub's import path — the dir that
+    CONTAINS ``models/``.
+
+    ``_stub_import_path`` builds the dotted import relative to this root, so it
+    must be the repo root (yielding ``models.demos.<...>``), NOT
+    ``demo_dir.parent.parent.parent`` which is the ``models/`` dir itself and
+    yields a broken ``demos.<...>`` import that can't be imported. Found by the
+    ``models/demos`` boundary so it's robust to model nesting depth.
+    """
+    parts = demo_dir.resolve().parts
+    for i in range(len(parts) - 1):
+        if parts[i] == "models" and parts[i + 1] == "demos":
+            return Path(*parts[:i]) if i else Path(*parts[: i + 1])
+    try:
+        from .discovery import BRINGUP_ROOT
+
+        return BRINGUP_ROOT()
+    except Exception:
+        return demo_dir.parent.parent.parent
+
+
 def consume_decomposition_plan(
     *,
     model_id: str,
@@ -165,7 +187,7 @@ def consume_decomposition_plan(
                         model_id=model_id,
                         hf_reference=_hf_ref,
                         new_shape={},
-                        repo_root=demo_dir.parent.parent.parent,
+                        repo_root=_emit_repo_root(demo_dir),
                         overwrite=False,
                         discovered_submodule_path=_child.get("submodule_path"),
                     )

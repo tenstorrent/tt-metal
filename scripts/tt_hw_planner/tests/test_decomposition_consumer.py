@@ -198,6 +198,19 @@ def test_consumer_skips_parent_already_passing(tmp_path: Path, monkeypatch) -> N
     assert "parent_a" not in om.load_no_emit_tests("test/m")  # and not un-graduated
 
 
+def test_emit_repo_root_is_models_parent_not_models_dir() -> None:
+    """The child-test emitter must compute the import relative to the repo root
+    (the dir CONTAINING models/), not demo_dir.parent.parent.parent (the models/
+    dir), else the import comes out `demos.<...>` (unimportable) instead of
+    `models.demos.<...>`. Robust to model nesting depth."""
+    from scripts.tt_hw_planner.decomposition_consumer import _emit_repo_root
+
+    assert _emit_repo_root(Path("/wt/models/demos/audio/seamless")) == Path("/wt")  # depth-4
+    assert _emit_repo_root(Path("/repo/models/demos/foo")) == Path("/repo")  # depth-3
+    # NOT the models/ dir (the old bug)
+    assert _emit_repo_root(Path("/wt/models/demos/audio/seamless")) != Path("/wt/models")
+
+
 def test_reinject_re_adds_wiped_child_from_archived_plan(tmp_path: Path, monkeypatch) -> None:
     """A decomposition child wiped from bringup_status (e.g. by a re-scaffold)
     is re-added from the archived plan so its parent can recompose."""
