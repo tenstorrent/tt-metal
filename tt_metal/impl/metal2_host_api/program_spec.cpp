@@ -649,6 +649,35 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
     }
 
+    // Validate enqueue-loop-invariant named-arg declarations: each invariant name must reference a
+    // declared named RTA / CRTA. Invariance requires naming the argument, so positional varargs
+    // cannot be marked invariant.
+    for (const auto& kernel : spec.kernels) {
+        const std::unordered_set<std::string> declared_rtas(
+            kernel.runtime_arg_schema.runtime_arg_names.begin(), kernel.runtime_arg_schema.runtime_arg_names.end());
+        for (const auto& name : kernel.advanced_options.enqueue_invariant_runtime_args) {
+            TT_FATAL(
+                declared_rtas.count(name) > 0,
+                "KernelSpec '{}' marks runtime arg '{}' enqueue-loop invariant, but it is not a declared named runtime "
+                "arg (runtime_arg_schema.runtime_arg_names). Only named runtime args can be marked invariant; "
+                "positional varargs cannot.",
+                kernel.unique_id,
+                name);
+        }
+        const std::unordered_set<std::string> declared_crtas(
+            kernel.runtime_arg_schema.common_runtime_arg_names.begin(),
+            kernel.runtime_arg_schema.common_runtime_arg_names.end());
+        for (const auto& name : kernel.advanced_options.enqueue_invariant_common_runtime_args) {
+            TT_FATAL(
+                declared_crtas.count(name) > 0,
+                "KernelSpec '{}' marks common runtime arg '{}' enqueue-loop invariant, but it is not a declared named "
+                "common runtime arg (runtime_arg_schema.common_runtime_arg_names). Only named common runtime args can "
+                "be marked invariant; positional varargs cannot.",
+                kernel.unique_id,
+                name);
+        }
+    }
+
     // Validate kernel thread counts
     for (const auto& kernel : spec.kernels) {
         TT_FATAL(kernel.num_threads > 0, "KernelSpec '{}' has no threads!", kernel.unique_id);
@@ -2566,8 +2595,9 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
     for (const auto& tensor_parameter : spec.tensor_parameters) {
         const bool dyn_shape = tensor_parameter.advanced_options.dynamic_tensor_shape;
         const bool match_padded_only = tensor_parameter.advanced_options.match_padded_shape_only;
+        const bool enqueue_invariant = tensor_parameter.advanced_options.enqueue_invariant;
         program_impl->register_tensor_parameter(
-            tensor_parameter.unique_id.get(), tensor_parameter.spec, dyn_shape, match_padded_only);
+            tensor_parameter.unique_id.get(), tensor_parameter.spec, dyn_shape, match_padded_only, enqueue_invariant);
     }
 
     // Create DataflowBuffers and build name -> ID map.
@@ -2761,6 +2791,16 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         // (via tensor_binding_handles) and its slot offsets are baked into each binding handle's
         // addr_crta_offset; SetProgramRunArgs uses BOTH to assemble the per-enqueue CRTA buffer.
         runtime_schema.common_runtime_arg_names = user_named_crtas;
+
+        // Enqueue-loop-invariant named args. Each is a subset of the declared named RTAs/CRTAs and
+        // may be omitted from a partial UpdateProgramRunArgs call (retaining its value). Legality
+        // (each invariant name actually names a declared arg) is checked in ValidateProgramSpec.
+        for (const auto& name : kernel_spec.advanced_options.enqueue_invariant_runtime_args) {
+            runtime_schema.enqueue_invariant_runtime_arg_names.insert(name);
+        }
+        for (const auto& name : kernel_spec.advanced_options.enqueue_invariant_common_runtime_args) {
+            runtime_schema.enqueue_invariant_common_runtime_arg_names.insert(name);
+        }
 
         // Varargs schema now lives on KernelAdvancedOptions.
         const uint32_t num_runtime_varargs = kernel_spec.advanced_options.num_runtime_varargs;
