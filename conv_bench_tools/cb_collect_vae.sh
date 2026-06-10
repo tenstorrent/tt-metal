@@ -4,7 +4,7 @@ cd /localdev/wransom/tt-metal
 # (VAE uses DRAM activation slicing on WH to fit; harness can't express it -> these test whether BH's larger L1
 #  fits them WITHOUT slicing. Labels are out<-in.)
 VAE="CB_WEIGHTS_DTYPE=bfloat8_b CB_OUT_DTYPE=bfloat16 CB_IN_DTYPE=bfloat16 CB_FP32_ACCUM=false CB_FIDELITY=LoFi CB_L1_ACC=false CB_OUT_LAYOUT=tile CB_BIAS=true CB_ABH=none CB_BATCH=1 CB_FILTER=3 CB_PAD=1,1,1,1"
-run () { echo ">>> $1"; env MODEL=sdxl_vae LABEL="$1" $VAE $2 /tmp/cb_bench.sh 2 main helper_sbm; }
+run () { echo ">>> $1"; env MODEL=sdxl_vae LABEL="$1" $VAE $2 bash conv_bench_tools/cb_bench.sh 2 main helper_sbm helper_trm; }
 run "vae_128<-128_1024x1024_HS" "CB_IN_CH=128 CB_OUT_CH=128 CB_H=1024 CB_W=1024 CB_SHARD=HS"
 run "vae_128<-256_1024x1024_HS" "CB_IN_CH=256 CB_OUT_CH=128 CB_H=1024 CB_W=1024 CB_SHARD=HS"
 run "vae_256<-256_1024x1024_BS" "CB_IN_CH=256 CB_OUT_CH=256 CB_H=1024 CB_W=1024 CB_SHARD=BS"

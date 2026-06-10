@@ -2,7 +2,7 @@
 cd /localdev/wransom/tt-metal
 # vanilla_unet REAL config: bf16 weights, bf16 out, LoFi, fp32_accum=False, l1_acc ON, NO bias, TILE out, auto abh
 VU="CB_WEIGHTS_DTYPE=bfloat16 CB_OUT_DTYPE=bfloat16 CB_IN_DTYPE=bfloat16 CB_FP32_ACCUM=false CB_FIDELITY=LoFi CB_L1_ACC=true CB_OUT_LAYOUT=tile CB_BIAS=false CB_ABH=none CB_BATCH=1 CB_FILTER=3 CB_PAD=1,1,1,1"
-run () { echo ">>> $1"; env MODEL=vanilla_unet LABEL="$1" $VU $2 /tmp/cb_bench.sh 2 main helper_sbm; }
+run () { echo ">>> $1"; env MODEL=vanilla_unet LABEL="$1" $VU $2 bash conv_bench_tools/cb_bench.sh 2 main helper_sbm helper_trm; }
 run "vu_32<-3_480x640_HS"     "CB_IN_CH=3   CB_OUT_CH=32  CB_H=480 CB_W=640 CB_SHARD=HS"
 run "vu_32<-32_480x640_HS"    "CB_IN_CH=32  CB_OUT_CH=32  CB_H=480 CB_W=640 CB_SHARD=HS"
 run "vu_64<-32_240x320_HS"    "CB_IN_CH=32  CB_OUT_CH=64  CB_H=240 CB_W=320 CB_SHARD=HS"

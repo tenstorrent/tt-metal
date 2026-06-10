@@ -6,13 +6,13 @@ REPS="$1"; shift; MODES="$*"
 for MODE in $MODES; do
   durs=""
   for r in $(seq 1 "$REPS"); do
-    env TT_CONV_BENCH_MODE="$MODE" timeout 500 python -m tracy -r -p -v -m pytest \
+    env TT_CONV_BENCH_MODE="$MODE" TT_CONV_BENCH_FORCE_TRM="$( [ "$MODE" = helper_trm ] && echo 1 )" timeout 500 python -m tracy -r -p -v -m pytest \
       tests/ttnn/unit_tests/operations/conv/test_conv_bench.py > /tmp/cb_last.log 2>&1
     d=$(python /tmp/cb_warm_conv.py 2>/dev/null); durs="$durs $d"
   done
   used=$(grep -oE "USING out_subblock=[0-9]+x[0-9]+" /tmp/cb_last.log | head -1 | grep -oE "[0-9]+x[0-9]+")
   sbm=$(grep -oE "SubblockMajor=[0-9]+x[0-9]+" /tmp/cb_last.log | head -1 | grep -oE "[0-9]+x[0-9]+")
-  trm=$(grep -oE "TileRowMajor=[0-9]+x[0-9]+" /tmp/cb_last.log | head -1 | grep -oE "[0-9]+x[0-9]+")
+   trm=$(grep -oE "trm_pin=true" /tmp/cb_last.log | head -1)
   pM=$(grep -oE "per_core_M=[0-9]+" /tmp/cb_last.log | head -1 | grep -oE "[0-9]+")
   pN=$(grep -oE "per_core_N=[0-9]+" /tmp/cb_last.log | head -1 | grep -oE "[0-9]+")
   pcc=$(grep -iE "PCC = " /tmp/cb_last.log | grep -oE "[0-9]\.[0-9]{4,}" | head -1)

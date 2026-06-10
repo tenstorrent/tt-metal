@@ -2,7 +2,7 @@
 cd /localdev/wransom/tt-metal
 # resnet50 REAL config: bf8 weights, bf16 out, LoFi, fp32_accum=False, packer_l1_acc ON, TILE output, bias
 RN="CB_WEIGHTS_DTYPE=bfloat8_b CB_OUT_DTYPE=bfloat16 CB_IN_DTYPE=bfloat16 CB_FP32_ACCUM=false CB_FIDELITY=LoFi CB_L1_ACC=true CB_OUT_LAYOUT=tile CB_BIAS=true"
-run () { echo ">>> $1"; env MODEL=resnet50 LABEL="$1" $RN $2 /tmp/cb_bench.sh 2 main helper_sbm; }
+run () { echo ">>> $1"; env MODEL=resnet50 LABEL="$1" $RN $2 bash conv_bench_tools/cb_bench.sh 2 main helper_sbm helper_trm; }
 run "rn50_L1_64<-64_56x56_s1_HS"      "CB_BATCH=20 CB_OUT_CH=64  CB_IN_CH=64   CB_H=56 CB_W=56 CB_FILTER=3 CB_STRIDE=1 CB_PAD=1,1,1,1 CB_SHARD=HS"
 run "rn50_L2a_128<-128_56x56_s2_HS"   "CB_BATCH=20 CB_OUT_CH=128 CB_IN_CH=128  CB_H=56 CB_W=56 CB_FILTER=3 CB_STRIDE=2 CB_PAD=1,1,1,1 CB_SHARD=HS"
 run "rn50_L2b_128<-128_28x28_s1_HS"   "CB_BATCH=20 CB_OUT_CH=128 CB_IN_CH=128  CB_H=28 CB_W=28 CB_FILTER=3 CB_STRIDE=1 CB_PAD=1,1,1,1 CB_SHARD=HS"

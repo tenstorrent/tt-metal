@@ -295,7 +295,7 @@ void kernel_main() {
 
             if constexpr (pack_relu) {
                 // for each output block we start we relu disabled so that intermediate results are not relu'd
-                PACK((llk_pack_relu_config(ReluType::NO_RELU)));
+                PACK((llk_pack_relu_config(ReluConfig::none())));
             }
             if constexpr (partials_cb_uses_output) {
                 UNPACK(partials_cb_read_ptr = get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr;)
@@ -309,7 +309,7 @@ void kernel_main() {
                         if constexpr (pack_relu && !fuse_bias) {
                             if (last_inner_dim_block) {
                                 // if last block we pack the final result with relu enabled
-                                PACK((llk_pack_relu_config(ReluType::NO_RELU)));
+                                PACK((llk_pack_relu_config(ReluConfig::none())));
                             }
                         }
                         if constexpr (packer_l1_acc) {
@@ -341,7 +341,7 @@ void kernel_main() {
                     if constexpr (pack_relu && !fuse_bias) {
                         if (last_inner_dim_block) {
                             // if last block we pack the final result with relu enabled
-                            PACK((llk_pack_relu_config(ReluType::NO_RELU)));
+                            PACK((llk_pack_relu_config(ReluConfig::none())));
                         }
                     }
                     if constexpr (packer_l1_acc) {
@@ -407,7 +407,7 @@ void kernel_main() {
                     if constexpr (!fuse_bias) {
                         if constexpr (pack_relu) {
                             // if last block we pack the final result with relu enabled
-                            PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+                            PACK((llk_pack_relu_config(ReluConfig::zero())));
                         }
                         curr_matmul_out_cb = mm_out_cb_id;
                     }
@@ -575,7 +575,7 @@ void kernel_main() {
             if constexpr (fuse_bias) {
                 if constexpr (pack_relu) {
                     // if last block we pack the final result with relu enabled
-                    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+                    PACK((llk_pack_relu_config(ReluConfig::zero())));
                 }
                 pack_reconfig_data_format(matmul_partials_cb, untilize_mode_out_cb_id);
                 if constexpr (packer_l1_acc) {
@@ -631,7 +631,7 @@ void kernel_main() {
                     pack_reconfig_l1_acc(0);
                 }
                 if constexpr (pack_relu) {
-                    PACK((llk_pack_relu_config(ReluType::NO_RELU)));
+                    PACK((llk_pack_relu_config(ReluConfig::none())));
                 }
                 if constexpr (!fuse_bias) {
                     reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);

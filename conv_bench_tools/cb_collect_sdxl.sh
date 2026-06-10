@@ -4,7 +4,7 @@ cd /localdev/wransom/tt-metal
 # NOTE: SDXL uses a custom 5x8 BS core_grid + act_block_w_div slicing (not expressible here) -> these are
 # n150-native auto-grid baselines for the real shapes; big-channel convs may OOM (model slices to fit).
 SD="CB_WEIGHTS_DTYPE=bfloat8_b CB_OUT_DTYPE=bfloat16 CB_IN_DTYPE=bfloat16 CB_FP32_ACCUM=false CB_FIDELITY=HiFi2 CB_L1_ACC=false CB_OUT_LAYOUT=tile CB_BIAS=true CB_SHARD=BS CB_ABH=none CB_FILTER=3 CB_PAD=1,1,1,1 CB_BATCH=1"
-run () { echo ">>> $1"; env MODEL=sdxl_unet LABEL="$1" $SD $2 /tmp/cb_bench.sh 2 main helper_sbm; }
+run () { echo ">>> $1"; env MODEL=sdxl_unet LABEL="$1" $SD $2 bash conv_bench_tools/cb_bench.sh 2 main helper_sbm helper_trm; }
 run "sdxl_384<-1152_128x128_s1"  "CB_IN_CH=1152 CB_OUT_CH=384  CB_H=128 CB_W=128 CB_STRIDE=1"
 run "sdxl_768<-1152_64x64_s1"    "CB_IN_CH=1152 CB_OUT_CH=768  CB_H=64  CB_W=64  CB_STRIDE=1"
 run "sdxl_1536<-1536_16x16_s1"   "CB_IN_CH=1536 CB_OUT_CH=1536 CB_H=16  CB_W=16  CB_STRIDE=1"
