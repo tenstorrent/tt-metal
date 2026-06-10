@@ -211,16 +211,15 @@ public:
         };
 
         // Quasar TENSIX uses two buffers: the compute (TRISC) processors first, then the DM
-        // processors, each sized DPRINT_BUFFER_SIZE * (its processor count). The compute buffer's
-        // processors are offset by the DM count in the core's global processor index space (DM
-        // processors occupy global indices 0..dm_count-1, compute the rest).
+        // processors. The compute buffer's processors are offset by the DM count in the core's
+        // global processor index space (DM processors occupy global indices 0..dm_count-1, compute the rest).
         if (hal.get_arch() == tt::ARCH::QUASAR && programmable_core_type == HalProgrammableCoreType::TENSIX) {
             const uint16_t dm_count = static_cast<uint16_t>(hal.get_processor_types_count(
                 programmable_core_type, static_cast<uint32_t>(HalProcessorClassType::DM)));
             const uint16_t compute_count = static_cast<uint16_t>(hal.get_processor_types_count(
                 programmable_core_type, static_cast<uint32_t>(HalProcessorClassType::COMPUTE)));
-            const uint16_t compute_size = static_cast<uint16_t>(DPRINT_BUFFER_SIZE * compute_count);
-            const uint16_t dm_size = static_cast<uint16_t>(DPRINT_BUFFER_SIZE * dm_count);
+            const uint16_t compute_size = 3264;
+            const uint16_t dm_size = 1632;
             TT_FATAL(
                 static_cast<uint32_t>(compute_size) + dm_size == structure_size,
                 "Quasar TENSIX DPRINT buffer split (compute {} + DM {}) doesn't match region size {}",

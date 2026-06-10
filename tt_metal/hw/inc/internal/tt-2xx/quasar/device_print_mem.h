@@ -28,7 +28,7 @@ struct DevicePrintMemoryLayout {
     static constexpr size_t buffer_size_triscs = DEVICE_PRINT_BUFFER_SIZE;
 #endif
 #if !defined(DEVICE_PRINT_BUFFER_SIZE2)
-    static constexpr size_t buffer_size_dms = 3264;
+    static constexpr size_t buffer_size_dms = 1632;
 #else
     static constexpr size_t buffer_size_dms = DEVICE_PRINT_BUFFER_SIZE2;
 #endif
