@@ -58,7 +58,7 @@ Parse the positional `<hf_id>` and optional `--device <name>` (default
 `n150`). Then:
 
 ```bash
-cd /local/ttuser/ssinghal/tt-metal
+cd /home/ttuser/ssinghal/tt-metal
 source python_env/bin/activate
 export PYTHONPATH=$(pwd) && export TT_METAL_HOME=$(pwd)
 
@@ -186,7 +186,7 @@ The user can inspect any in-progress bringup without invoking `/bringup`:
 - **State file already exists on first-run.** Refuse with the message
   shown above; tell the user to use `--resume`.
 - **Unknown device name.** `device_info` raises `UnknownDeviceError`.
-  Halt and print the supported names: `n150`, `n300`, `p150`, `t3k`, `tg`.
+  Halt and print the supported names: `n150`, `n300`, `p150`, `qb`, `t3k`, `tg`.
 - **SchemaError on resume.** `load_state` raises `SchemaError`. Do not
   enter `/loop`. Print the error and let the user inspect the state file.
 - **Empty `--justify` or `--reference-link` on `--skip`.** `state.skip`

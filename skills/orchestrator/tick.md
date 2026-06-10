@@ -24,7 +24,7 @@ directory under `models/demos/` that holds `.bringup_state.json` and
 ## Step 1: Load state
 
 ```bash
-cd /local/ttuser/ssinghal/tt-metal
+cd /home/ttuser/ssinghal/tt-metal
 source python_env/bin/activate
 export PYTHONPATH=$(pwd) && export TT_METAL_HOME=$(pwd)
 python -c "
@@ -74,6 +74,22 @@ Every dispatch uses `Agent(subagent_type="general-purpose", prompt=
 <worker.md contents> + "\n\n## Spec:\n" + json.dumps(spec))`. The spec
 shape is documented in each worker file.
 
+### Multi-device targets
+
+Resolve once per tick:
+
+```python
+from skills.orchestrator.lib.device import device_info
+dinfo = device_info(state["device"])
+```
+
+If `dinfo["num_devices"] > 1`: add `"mesh_shape": list(dinfo["mesh_shape"])`
+and `"num_devices": dinfo["num_devices"]` to EVERY spec built below, and
+append the contents of `skills/orchestrator/workers/tp-guidance.md` to EVERY
+worker prompt dispatched this tick (after the worker.md contents, before the
+`## Spec:` line). tp-guidance.md scopes itself per phase — do not tailor it
+per worker. If `num_devices == 1`, change nothing.
+
 ### phase == "architecture"
 
 ONE Agent call with `workers/architecture-worker.md`. Spec:
@@ -110,7 +126,8 @@ Then ONE Agent call with `workers/<result['worker']>-worker.md`. Only
 one device worker per tick. The spec is JSON-serialized after a
 `## Spec:` line. Common base fields: `phase=result["worker"]`,
 `model_slug`, `model_id`, `device`, `arch_name`, `config`,
-`hf_checkpoint_path`. Worker-specific additions:
+`hf_checkpoint_path`, plus `mesh_shape` and `num_devices` when
+`num_devices > 1` (see §Multi-device targets). Worker-specific additions:
 
 - `ttnn` / `debug` / `optimization` / `real_weights` (per-component):
   `block=result["block"]`, the component's `reference_impl`,

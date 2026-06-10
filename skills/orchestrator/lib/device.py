@@ -3,7 +3,7 @@
 Three distinct responsibilities, kept separate within this module:
 
 1. DEVICE_REGISTRY — static data table mapping user-facing device names
-   (n150/n300/p150/t3k/tg) to arch + mesh_shape + num_devices.
+   (n150/n300/p150/qb/t3k/tg) to arch + mesh_shape + num_devices.
 2. extract_defaults(reference_path) — greps a reference TTNN model folder
    for known device-init constants and returns them as a dict.
 3. tt_smi_reset() — wraps `tt-smi -r` and returns the exit code without
@@ -28,6 +28,7 @@ DEVICE_REGISTRY: dict[str, dict] = {
     "n150": {"arch": "wormhole_b0", "mesh_shape": (1, 1), "num_devices": 1},
     "n300": {"arch": "wormhole_b0", "mesh_shape": (1, 2), "num_devices": 2},
     "p150": {"arch": "blackhole", "mesh_shape": (1, 1), "num_devices": 1},
+    "qb": {"arch": "blackhole", "mesh_shape": (1, 4), "num_devices": 4},
     "t3k": {"arch": "wormhole_b0", "mesh_shape": (1, 8), "num_devices": 8},
     "tg": {"arch": "wormhole_b0", "mesh_shape": (8, 4), "num_devices": 32},
 }

@@ -30,12 +30,18 @@ dispatching prompt. Fields:
   "model_id": "<e.g. Qwen/Qwen3-TTS-12Hz-1.7B-Base>",
   "device": "<e.g. n150>",
   "arch_name": "<e.g. wormhole_b0>",
+  "mesh_shape": [1, 4],
+  "num_devices": 4,
   "reference_impl": "<path to reference TTNN model, e.g. models/demos/llama3_70b_galaxy>",
   "depends_on_status": {"<dep>": "done", "...": "..."},
   "config": {},
   "history": {"attempts": 0, "last_error": null}
 }
 ```
+
+`mesh_shape` / `num_devices` are present only for multi-device targets;
+when present, the dispatching prompt also includes a "Multi-Device
+(Tensor-Parallel) Guidance" section that governs device and sharding code.
 
 ## Output result format
 

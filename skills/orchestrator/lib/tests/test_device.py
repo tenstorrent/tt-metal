@@ -24,7 +24,7 @@ from skills.orchestrator.lib.device import (
 
 
 def test_registry_has_expected_devices():
-    assert set(DEVICE_REGISTRY) == {"n150", "n300", "p150", "t3k", "tg"}
+    assert set(DEVICE_REGISTRY) == {"n150", "n300", "p150", "qb", "t3k", "tg"}
 
 
 def test_device_info_returns_copy():
@@ -44,6 +44,18 @@ def test_device_info_blackhole_arch():
 
 def test_device_info_t3k_mesh_shape():
     assert device_info("t3k")["mesh_shape"] == (1, 8)
+
+
+def test_device_info_qb_arch():
+    assert device_info("qb")["arch"] == "blackhole"
+
+
+def test_device_info_qb_mesh_shape():
+    assert device_info("qb")["mesh_shape"] == (1, 4)
+
+
+def test_device_info_qb_num_devices():
+    assert device_info("qb")["num_devices"] == 4
 
 
 # ---------------------------------------------------------------------------
