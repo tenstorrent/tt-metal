@@ -99,8 +99,8 @@ def gelu_tanh_decomposed(x: ttnn.Tensor) -> ttnn.Tensor:
     # This unfused decomposition is higher precision than the fused tanh-LUT GELU
     # (ttnn.UnaryOpType.GELU, True) and recovers PCC on the Wan text embedder, which
     # regressed when the fused LUT path was introduced. The cube is computed as
-    # x * x * x (not ttnn.pow(x, 3)): pow uses exp(3 * log(x)) internally and returns
-    # NaN for negative inputs, the very failure mode the fused LUT path was added to avoid.
+    # x * x * x (instead of ttnn.pow(x, 3)) to keep the decomposition explicit and
+    # avoid relying on ttnn.pow implementation details.
     sqrt_2_over_pi = math.sqrt(2.0 / math.pi)
     x_cubed = ttnn.multiply(ttnn.multiply(x, x), x)
     inner = ttnn.add(x, ttnn.multiply(x_cubed, 0.044715))
