@@ -572,9 +572,6 @@
     bh_p300:
       timeout: 55
       tier: 1
-    wh_llmbox:
-      timeout: 120
-      tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
