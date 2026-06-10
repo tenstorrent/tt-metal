@@ -776,8 +776,12 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // Rules enforced:
     //   - Every entry references a DFB the kernel binds.
     //   - No duplicate entries for the same DFB.
-    //   - UnpackToDestFp32 is allowed only when the (CONSUMER + FP32 + fp32_dest_acc_en)
-    //     triple holds for that DFB binding.
+    //   - UnpackToDestFp32 is rejected only when it is INCOHERENT (fp32_dest_acc_en=false —
+    //     Dest is 16-bit and can't hold full FP32). Setting it where it is merely INERT (a
+    //     non-CONSUMER binding or a non-Float32 DFB) is tolerated: the LLK ignores the mode
+    //     there, and legacy ops commonly set it unconditionally across dtypes. (Failing to set
+    //     it where it IS meaningful is the harmful direction — caught by the require-an-entry
+    //     rule below, not here.)
     //   - When the triple holds for a DFB, an explicit entry is REQUIRED — the two
     //     values have very different runtime semantics, so we surface the choice in source.
     //   - Default is silently assumed everywhere else (no entry required, no busywork).
@@ -787,14 +791,10 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
         const auto& compute_config = std::get<ComputeHardwareConfig>(kernel.hw_config);
 
-        // Index the kernel's DFB bindings: which are bound, which are consumed.
+        // Index the kernel's DFB bindings: which DFBs it binds.
         std::unordered_set<DFBSpecName> bound_dfbs;
-        std::unordered_set<DFBSpecName> consumed_dfbs;
         for (const auto& binding : kernel.dfb_bindings) {
             bound_dfbs.insert(binding.dfb_spec_name);
-            if (binding.endpoint_type == DFBEndpointType::CONSUMER) {
-                consumed_dfbs.insert(binding.dfb_spec_name);
-            }
         }
 
         // Validate each user-supplied entry, tracking which DFBs got an explicit
@@ -813,28 +813,10 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             if (mode == UnpackToDestMode::Default) {
                 continue;  // Default is always allowed.
             }
-            // mode == UnpackToDestFp32 — require the meaningfulness triple.
-            TT_FATAL(
-                consumed_dfbs.contains(dfb_name),
-                "Kernel '{}' unpack_to_dest_mode entry for DFB '{}' specifies UnpackToDestFp32, "
-                "but the kernel does not have a CONSUMER endpoint on this DFB. UnpackToDestFp32 "
-                "configures the unpack path, which is only exercised by consumer bindings. "
-                "Use Default or omit the entry.",
-                kernel.unique_id,
-                dfb_name);
-            // If data_format_metadata isn't set, the separate "compute endpoint requires
-            // data_format_metadata" check (below) will fail. Defer to that check.
-            const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(dfb_name);
-            if (!dfb_spec->data_format_metadata.has_value()) {
-                continue;
-            }
-            TT_FATAL(
-                dfb_spec->data_format_metadata.value() == tt::DataFormat::Float32,
-                "Kernel '{}' unpack_to_dest_mode entry for DFB '{}' specifies UnpackToDestFp32, "
-                "but the DFB data format is not Float32. UnpackToDestFp32 is only meaningful for "
-                "FP32 data. Use Default or omit the entry.",
-                kernel.unique_id,
-                dfb_name);
+            // mode == UnpackToDestFp32. Inert where the kernel doesn't consume the DFB or the DFB
+            // isn't Float32 — the LLK ignores the mode there, so we don't reject (legacy ops set it
+            // unconditionally). Reject only the incoherent case: full-precision FP32 in Dest is
+            // impossible without fp32_dest_acc_en (otherwise Dest is 16-bit).
             TT_FATAL(
                 compute_config.fp32_dest_acc_en,
                 "Kernel '{}' unpack_to_dest_mode entry for DFB '{}' specifies UnpackToDestFp32, "
