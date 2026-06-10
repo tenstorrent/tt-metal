@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T04:53:46Z",
+  "updated_at": "2026-06-10T05:01:30Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -97,8 +97,16 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_rmsnorm.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_vision_rmsnorm.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_vision_rmsnorm.py",
+          "generated/profiler/reports/2026_06_10_05_00_04/ops_perf_results_2026_06_10_05_00_04.csv"
+        ],
+        "notes": "Tracy-driven single change: ttnn.rms_norm output pinned to L1 interleaved (memory_config=L1_MEMORY_CONFIG), cutting the kernel's DRAM write. Traced tracy at the production operating point (fp32 [1,1,896,1536] replicated 1x4 mesh, metal-trace captured+replayed, 2 replay sessions): per-device LayerNormDeviceOperation kernel time 44.3-46.2us@28c -> 29.9-32.9us@28c (-~29%); wall-clock A/B over 200 traced replays 51.2 -> 38.4 us/iter (-25%). Width-sharded LayerNormShardedMultiCoreProgramConfig alternative (48c, 8x6 grid) measured WORSE (69.4 us/iter): i2s/s2i bounce around a single op costs more than it saves; rejected. Block is a single op, so top_hotspot share=1.0 by construction; 28-core count is the row-tile cap (896/32). KB entries for kind norm reviewed: ttnn_pow chain already fused into ttnn.rms_norm (cited in ttnn phase); ttnn_rms_norm_post_all_gather distributed-stats entries target sharded-TP norms - vision tower is placement=replicate, not applicable, none used. PCC 0.999982 (>0.99, unchanged) re-verified on 1x4 mesh; traced_ops sidecar regenerated (ttnn.rms_norm only). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999982
       },
       "real_weights": {
         "status": "pending",
@@ -781,6 +789,12 @@
       "tick": 19,
       "ts": "2026-06-10T04:53:46Z",
       "action": "device[vision_patch_embed]",
+      "result": "ok"
+    },
+    {
+      "tick": 20,
+      "ts": "2026-06-10T05:01:30Z",
+      "action": "device[vision_rmsnorm]",
       "result": "ok"
     }
   ],

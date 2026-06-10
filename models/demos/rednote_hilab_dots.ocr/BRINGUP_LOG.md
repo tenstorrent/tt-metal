@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T04:53:46Z
+**Updated:** 2026-06-10T05:01:30Z
 
 ## Block Status
 
@@ -18,7 +18,7 @@
 | vision_rmsnorm | reference | done | 1.000000 | 0 | matches HF RMSNorm eps=1e-5, fp32 norm then scale |
 | vision_rmsnorm | ttnn | done | 0.999982 | 0 | Fused ttnn.rms_norm eps=1e-5 with [1,1,dim//32,32] ROW_MAJOR gamma per reference_impl qwen25_vl/tt/vision_rmsnorm.py; KB entry ttnn_pow cited (pow/mean/rsqrt/mul chain fused into ttnn.rms_norm). Weight replicated on 1x4 mesh per parallelism plan (placement=replicate); replicated output compared single-device vs golden (real blocks.0.norm1 weight). Guard ok (lint 0, kernels ok, no new host ops). |
 | vision_rmsnorm | debug | n/a | — | 0 |  |
-| vision_rmsnorm | optimization | pending | — | 0 |  |
+| vision_rmsnorm | optimization | done | 0.999982 | 0 | Tracy-driven single change: ttnn.rms_norm output pinned to L1 interleaved (memory_config=L1_MEMORY_CONFIG), cutting the kernel's DRAM write. Traced tracy at the production operating point (fp32 [1,1,896,1536] replicated 1x4 mesh, metal-trace captured+replayed, 2 replay sessions): per-device LayerNormDeviceOperation kernel time 44.3-46.2us@28c -> 29.9-32.9us@28c (-~29%); wall-clock A/B over 200 traced replays 51.2 -> 38.4 us/iter (-25%). Width-sharded LayerNormShardedMultiCoreProgramConfig alternative (48c, 8x6 grid) measured WORSE (69.4 us/iter): i2s/s2i bounce around a single op costs more than it saves; rejected. Block is a single op, so top_hotspot share=1.0 by construction; 28-core count is the row-tile cap (896/32). KB entries for kind norm reviewed: ttnn_pow chain already fused into ttnn.rms_norm (cited in ttnn phase); ttnn_rms_norm_post_all_gather distributed-stats entries target sharded-TP norms - vision tower is placement=replicate, not applicable, none used. PCC 0.999982 (>0.99, unchanged) re-verified on 1x4 mesh; traced_ops sidecar regenerated (ttnn.rms_norm only). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | vision_rmsnorm | real_weights | pending | — | 0 |  |
 | vision_attention | reference | done | 1.000000 | 0 | eager MHA 12h hd128 fused QKV no-bias, 2D rope, cu_seqlens mask |
 | vision_attention | ttnn | done | 0.999855 | 0 | Fused-QKV linear -> nlp_create_qkv_heads (12 MHA heads, hd128) -> rotary_embedding_llama (q/k weights reverse_permute'd HF->meta + convert_rope_style_hf_to_meta cos/sin, qwen25_vl vision recipe) -> windowed_scaled_dot_product_attention over cu_seqlens (in-kernel block-diagonal mask) -> nlp_concat_heads -> o_proj. Seq padded 784->896, cu_seqlens keeps unpadded boundaries; real blocks.0.attn weights, replicated on 1x4 mesh per parallelism plan; HiFi4+fp32-acc. Guard ok (lint 0, kernels ok, no new host ops). KB ttnn_experimental_create_qkv_heads pattern applied via the nlp_* fused-head idiom. Framework fix: added ttnn.transformer.windowed_scaled_dot_product_attention to guard KIND_REQUIRED_KERNELS[attention] (mandated vision idiom was unrecognized; guard self-tests still pass). |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 10 (2026-06-10T03:26:43Z): device[vision_block] — ok
 - tick 11 (2026-06-10T03:32:56Z): device[patch_merger] — ok
 - tick 12 (2026-06-10T03:50:19Z): device[vision_transformer] — ok
 - tick 13 (2026-06-10T03:57:57Z): device[embedding] — ok
@@ -94,6 +93,7 @@
 - tick 17 (2026-06-10T04:39:45Z): device[decoder_layer] — ok
 - tick 18 (2026-06-10T04:46:04Z): device[lm_head] — ok
 - tick 19 (2026-06-10T04:53:46Z): device[vision_patch_embed] — ok
+- tick 20 (2026-06-10T05:01:30Z): device[vision_rmsnorm] — ok
 
 ## Host-Resident Exceptions
 
