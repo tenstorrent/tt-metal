@@ -63,11 +63,11 @@ void kernel_main() {
             scratch_offsets[i] = i * scratch_cb_page_size;
         }
 
-        // Local NoC coordinates for the scratch->dest loopback reads.
+        // Local NoC coordinates for the scratch->dest reads.
         UnicastEndpoint self_ep;
         const uint32_t my_noc_x = my_x[noc.get_noc_id()];
         const uint32_t my_noc_y = my_y[noc.get_noc_id()];
-        // Base L1 address of the scratch CB (resolved once for relative offset math).
+        // Base L1 address of the scratch CB
         const uint32_t scratch_l1_base = cb_in1.get_write_ptr();
 
         uint32_t dest_off = 0;         // running offset into cb_in0
