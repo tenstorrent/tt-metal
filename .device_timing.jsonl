@@ -24,3 +24,4 @@
 {"source":"run_safe_pytest","pid":1184523,"started_at_ms":1781078020781,"wait_ms":2,"run_ms":71808,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_precision_matrix.py","exit_code":1}
 {"source":"run_safe_pytest","pid":1187059,"started_at_ms":1781078126158,"wait_ms":2,"run_ms":71692,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_precision_matrix.py","exit_code":1}
 {"source":"run_safe_pytest","pid":1190013,"started_at_ms":1781078240054,"wait_ms":2,"run_ms":71129,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_precision_matrix.py","exit_code":0}
+{"source":"run_safe_pytest","pid":1193154,"started_at_ms":1781078381257,"wait_ms":2,"run_ms":11950,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_regression.py","exit_code":1}
