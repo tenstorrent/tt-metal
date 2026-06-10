@@ -32,8 +32,15 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void div_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL_MODE(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_div_int32, (APPROX, 8 /* ITERATIONS */), RC, idst0, idst1, odst)));
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_div_int32,
+        (APPROX, 8 /* ITERATIONS */),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::RC)));
 }
 
 /**

@@ -822,15 +822,15 @@ template <
     int ITERATIONS = 8>
 ALWI void max_reduce_with_indices(uint32_t idst, uint32_t idst_idx, uint32_t chunk = 0) {
     static_assert(num_rows <= 32, "num_rows must be <= 32");
-    MATH((SFPU_BINARY_CALL_MODE(
+    MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_max_pool_with_indices,
         (true /* APPROXIMATE */, DST_ACCUM_MODE, num_rows, ITERATIONS, layout, accumulate),
-        RC,
         idst,
         idst_idx,
         0 /* DST out unused, but required for _llk_math_eltwise_binary_sfpu_params_ */,
+        VectorMode::RC,
         chunk)));
 }
 
@@ -939,15 +939,15 @@ ALWI void sfpu_add_top_row(uint32_t dst_tile_0, uint32_t dst_tile_1, uint32_t ds
         format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32,
         "Unsupported data format. Supported formats: Float32, Int32, UInt32");
 
-    MATH((SFPU_BINARY_CALL_MODE(
+    MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_add_top_row,
         (format),
-        RC_custom,
         dst_tile_0,
         dst_tile_1,
-        dst_tile_out)));
+        dst_tile_out,
+        VectorMode::RC_custom)));
 }
 
 /**

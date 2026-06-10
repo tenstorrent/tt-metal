@@ -57,25 +57,25 @@ ALWI void rel_int_tile_dispatch(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format. Supported: Int32, UInt32, UInt16");
     if constexpr (data_format == DataFormat::Int32) {
-        SFPU_BINARY_CALL_MODE(
+        SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_binary_comp_int32,
             (APPROX, 8 /* ITERATIONS */, OP),
-            RC,
             idst0,
             idst1,
-            odst);
+            odst,
+            VectorMode::RC);
     } else {
-        SFPU_BINARY_CALL_MODE(
+        SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_binary_comp_uint,
             (APPROX, 8 /* ITERATIONS */, OP, data_format),
-            RC,
             idst0,
             idst1,
-            odst);
+            odst,
+            VectorMode::RC);
     }
 }
 

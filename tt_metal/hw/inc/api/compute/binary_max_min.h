@@ -32,15 +32,15 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void binary_max_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL_MODE(
+    MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binary_max_min_int32,
         (true /* IS_MAX */, false /* IS_UNSIGNED */),
-        RC,
         idst0,
         idst1,
-        odst)));
+        odst,
+        VectorMode::RC)));
 }
 
 /**
@@ -71,15 +71,15 @@ ALWI void binary_max_int32_tile_init() {
  */
 // clang-format on
 ALWI void binary_max_uint32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL_MODE(
+    MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binary_max_min_int32,
         (true /* IS_MAX */, true /* IS_UNSIGNED */),
-        RC,
         idst0,
         idst1,
-        odst)));
+        odst,
+        VectorMode::RC)));
 }
 
 /**
@@ -146,15 +146,15 @@ ALWI void binary_max_tile_init() { MATH((SFPU_BINARY_INIT_FN(max, sfpu::binary_m
  */
 // clang-format on
 ALWI void binary_min_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL_MODE(
+    MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binary_max_min_int32,
         (false /* IS_MAX */, false /* IS_UNSIGNED */),
-        RC,
         idst0,
         idst1,
-        odst)));
+        odst,
+        VectorMode::RC)));
 }
 
 /**
@@ -185,15 +185,15 @@ ALWI void binary_min_int32_tile_init() {
  */
 // clang-format on
 ALWI void binary_min_uint32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL_MODE(
+    MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binary_max_min_int32,
         (false /* IS_MAX */, true /* IS_UNSIGNED */),
-        RC,
         idst0,
         idst1,
-        odst)));
+        odst,
+        VectorMode::RC)));
 }
 
 /**

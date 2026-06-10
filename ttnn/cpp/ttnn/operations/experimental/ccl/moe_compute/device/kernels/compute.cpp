@@ -68,24 +68,24 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
         RC,
         2 /*DST_IDX*/));
 
-    PACK((SFPU_BINARY_CALL_MODE(
+    PACK((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
         (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/),
-        RC,
         0 /*DST_IN0*/,
         1 /*DST_IN1*/,
-        0 /*DST_OUT*/)));
-    PACK((SFPU_BINARY_CALL_MODE(
+        0 /*DST_OUT*/,
+        ::ckernel::VectorMode::RC)));
+    PACK((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
         (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/),
-        RC,
         2 /*DST_IN0*/,
         3 /*DST_IN1*/,
-        2 /*DST_OUT*/)));
+        2 /*DST_OUT*/,
+        ::ckernel::VectorMode::RC)));
 };
 
 template <>
@@ -116,24 +116,24 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
         RC,
         2 /*DST_IDX*/));
 
-    PACK((SFPU_BINARY_CALL_MODE(
+    PACK((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
         (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/),
-        RC,
         0 /*DST_IN0*/,
         1 /*DST_IN1*/,
-        0 /*DST_OUT*/)));
-    PACK((SFPU_BINARY_CALL_MODE(
+        0 /*DST_OUT*/,
+        ::ckernel::VectorMode::RC)));
+    PACK((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
         (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/),
-        RC,
         2 /*DST_IN0*/,
         3 /*DST_IN1*/,
-        2 /*DST_OUT*/)));
+        2 /*DST_OUT*/,
+        ::ckernel::VectorMode::RC)));
 };
 
 }  // namespace detail

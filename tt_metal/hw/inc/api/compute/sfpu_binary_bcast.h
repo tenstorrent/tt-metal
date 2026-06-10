@@ -76,39 +76,39 @@ ALWI void sfpu_mul_bcast_col_init() { sfpu_bcast_col_init(); }
 // the standalone helper used to set up by hand, plus the dst-bound LLK_ASSERTs in
 // `_sfpu_binary_check_and_call_`.
 ALWI void sfpu_sub_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
-    MATH((SFPU_BINARY_CALL_MODE(
+    MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_sfpu_binary_bcast_full_tile_,
         (ckernel::BinaryOp::SUB, ckernel::BroadcastType::COL),
-        None,
         dst_data_idx,
         dst_col_vec_idx,
-        dst_data_idx)));
+        dst_data_idx,
+        VectorMode::None)));
 }
 
 ALWI void sfpu_add_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
-    MATH((SFPU_BINARY_CALL_MODE(
+    MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_sfpu_binary_bcast_full_tile_,
         (ckernel::BinaryOp::ADD, ckernel::BroadcastType::COL),
-        None,
         dst_data_idx,
         dst_col_vec_idx,
-        dst_data_idx)));
+        dst_data_idx,
+        VectorMode::None)));
 }
 
 ALWI void sfpu_mul_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
-    MATH((SFPU_BINARY_CALL_MODE(
+    MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_sfpu_binary_bcast_full_tile_,
         (ckernel::BinaryOp::MUL, ckernel::BroadcastType::COL),
-        None,
         dst_data_idx,
         dst_col_vec_idx,
-        dst_data_idx)));
+        dst_data_idx,
+        VectorMode::None)));
 }
 
 // ============================================================================
@@ -164,39 +164,39 @@ ALWI void sfpu_mul_bcast_row_init() { sfpu_bcast_row_init(); }
  */
 // clang-format on
 ALWI void sfpu_sub_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
-    MATH((SFPU_BINARY_CALL_MODE(
+    MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_sfpu_binary_bcast_full_tile_,
         (ckernel::BinaryOp::SUB, ckernel::BroadcastType::ROW),
-        None,
         dst_data_idx,
         dst_row_vec_idx,
-        dst_data_idx)));
+        dst_data_idx,
+        VectorMode::None)));
 }
 
 ALWI void sfpu_add_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
-    MATH((SFPU_BINARY_CALL_MODE(
+    MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_sfpu_binary_bcast_full_tile_,
         (ckernel::BinaryOp::ADD, ckernel::BroadcastType::ROW),
-        None,
         dst_data_idx,
         dst_row_vec_idx,
-        dst_data_idx)));
+        dst_data_idx,
+        VectorMode::None)));
 }
 
 ALWI void sfpu_mul_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
-    MATH((SFPU_BINARY_CALL_MODE(
+    MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_sfpu_binary_bcast_full_tile_,
         (ckernel::BinaryOp::MUL, ckernel::BroadcastType::ROW),
-        None,
         dst_data_idx,
         dst_row_vec_idx,
-        dst_data_idx)));
+        dst_data_idx,
+        VectorMode::None)));
 }
 
 // ============================================================================

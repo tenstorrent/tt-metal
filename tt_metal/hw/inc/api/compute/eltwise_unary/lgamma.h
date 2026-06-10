@@ -63,15 +63,15 @@ ALWI void lgamma_stirling_tile_init() {
 
 // clang-format on
 ALWI void lgamma_stirling_float_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2) {
-    MATH(SFPU_BINARY_CALL_MODE(
+    MATH(SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_lgamma_stirling_fp32,
         (APPROX, DST_ACCUM_MODE),
-        RC,
         idst0,
         idst1,
-        idst2));
+        idst2,
+        VectorMode::RC));
 }
 
 /**
