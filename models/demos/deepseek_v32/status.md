@@ -56,13 +56,13 @@ MLA layer.
 **Step 4 — chunked prefill (in flight)**
 1. Extend MLACPU decode branch to accept an intra-chunk causal mask (mask=None today → no within-chunk causality; blocks chunk-loop truth).
 2. Chunked e2e harness: chunk loop, get_rope_tensors_indexed, chunked ttMLA construction; tests slice-3 wiring at 4k cache + 1k chunks (cold truth ~1h, cache once).
-3. Scale gate: 50k cache + 1k chunks overnight (cached truth); 5k chunks once fused kernels land (agreement 15).
+3. POSTPONED (2026-06-10): scale gate 50k cache + 1k chunks overnight (cached truth); 5k chunks once fused kernels land (agreement 15).
 
 **Functional gaps (blocking production)**
 4. 2x2 SP×TP mesh — indexer needs full sequence per chip (seq AG or distributed topk); sparse_mla prefix read needs SP-aware gathering.
 5. Pretrained weights — V3.2 checkpoint (indexer weights) into conftest; reuse reference_cpu loading + v3 conversion/sharding.
 6. Device-side indexer stems — q/k/weights projections on device; non-interleaved RoPE op (F1 still host).
-7. fp8/Hadamard parity — bring-up runs functional path; deployed selection differs (~boundary-band indices).
+7. RESOLVED as decision (2026-06-10): fp8/Hadamard parity — follow v3 cache format (kvpe bfloat8_b); ttnn has no fp8 matching DeepSeek's official implementation, so the functional path is the contract; truth stays use_fp8_path=False/simulate_fp8=False.
 
 **Host fallbacks → device ops (perf debt; contracts in tt/ops.py + Missing op APIs)**
 8. sparse_mla gather+SDPA — full host fallback per layer (biggest copy/compute hit); needs sparse gather + SDPA-with-indices, per-row valid length + start_pos.
