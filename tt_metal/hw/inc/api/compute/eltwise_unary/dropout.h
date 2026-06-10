@@ -37,7 +37,7 @@ ALWI void dropout_tile(uint32_t idst, uint32_t probability, uint32_t scale_facto
  * This init should be called once in kernel
  */
 ALWI void dropout_kernel_init(uint32_t seed = 0) {
-    MATH(SFPU_INIT_CB_ARGS(dropout, sfpu::dropout_init, (APPROX), seed));
+    MATH(SFPU_UNARY_INIT_FN_ARGS(dropout, sfpu::dropout_init, (APPROX), seed));
 }
 
 }  // namespace ckernel

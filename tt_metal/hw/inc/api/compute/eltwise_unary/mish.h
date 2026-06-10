@@ -45,7 +45,7 @@ ALWI void mish_tile(uint32_t idst) {
  */
 template <bool APPROXIMATION_MODE>
 ALWI void mish_tile_init() {
-    MATH(SFPU_INIT_CB(mish, sfpu::mish_init, (APPROXIMATION_MODE, DST_ACCUM_MODE)));
+    MATH(SFPU_UNARY_INIT_FN(mish, sfpu::mish_init, (APPROXIMATION_MODE, DST_ACCUM_MODE)));
 }
 
 }  // namespace ckernel

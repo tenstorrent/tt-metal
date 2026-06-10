@@ -38,7 +38,7 @@ ALWI void fmod_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 /**
  * Please refer to documentation for fmod_int32_tile.
  */
-ALWI void fmod_int32_tile_init() { MATH((SFPU_BINARY_INIT_CB(fmod_int32, sfpu::fmod_int32_init, (APPROX)))); }
+ALWI void fmod_int32_tile_init() { MATH((SFPU_BINARY_INIT_FN(fmod_int32, sfpu::fmod_int32_init, (APPROX)))); }
 
 // BF16, FP32
 
@@ -73,6 +73,6 @@ ALWI void fmod_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 /**
  * Please refer to documentation for fmod_binary_tile.
  */
-ALWI void fmod_binary_tile_init() { MATH((SFPU_BINARY_INIT_CB(unused, sfpu::fmod_binary_init, (APPROX)))); }
+ALWI void fmod_binary_tile_init() { MATH((SFPU_BINARY_INIT_FN(unused, sfpu::fmod_binary_init, (APPROX)))); }
 
 }  // namespace ckernel

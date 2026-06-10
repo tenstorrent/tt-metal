@@ -48,7 +48,7 @@ ALWI void binary_max_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  */
 ALWI void binary_max_int32_tile_init() {
     MATH((
-        SFPU_BINARY_INIT_CB(max_int32, sfpu::binary_max_min_int32_init, (true /* IS_MAX */, false /* IS_UNSIGNED */))));
+        SFPU_BINARY_INIT_FN(max_int32, sfpu::binary_max_min_int32_init, (true /* IS_MAX */, false /* IS_UNSIGNED */))));
 }
 
 // clang-format off
@@ -87,7 +87,7 @@ ALWI void binary_max_uint32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) 
  */
 ALWI void binary_max_uint32_tile_init() {
     MATH((
-        SFPU_BINARY_INIT_CB(max_uint32, sfpu::binary_max_min_int32_init, (true /* IS_MAX */, true /* IS_UNSIGNED */))));
+        SFPU_BINARY_INIT_FN(max_uint32, sfpu::binary_max_min_int32_init, (true /* IS_MAX */, true /* IS_UNSIGNED */))));
 }
 
 // clang-format off
@@ -124,7 +124,7 @@ ALWI void binary_max_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorM
 /**
  * Please refer to documentation.
  */
-ALWI void binary_max_tile_init() { MATH((SFPU_BINARY_INIT_CB(max, sfpu::binary_max_min_init, (true /* IS_MAX */)))); }
+ALWI void binary_max_tile_init() { MATH((SFPU_BINARY_INIT_FN(max, sfpu::binary_max_min_init, (true /* IS_MAX */)))); }
 
 // clang-format off
 /**
@@ -161,7 +161,7 @@ ALWI void binary_min_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * Please refer to documentation.
  */
 ALWI void binary_min_int32_tile_init() {
-    MATH((SFPU_BINARY_INIT_CB(
+    MATH((SFPU_BINARY_INIT_FN(
         min_int32, sfpu::binary_max_min_int32_init, (false /* IS_MAX */, false /* IS_UNSIGNED */))));
 }
 
@@ -200,7 +200,7 @@ ALWI void binary_min_uint32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) 
  * Please refer to documentation.
  */
 ALWI void binary_min_uint32_tile_init() {
-    MATH((SFPU_BINARY_INIT_CB(
+    MATH((SFPU_BINARY_INIT_FN(
         min_uint32, sfpu::binary_max_min_int32_init, (false /* IS_MAX */, true /* IS_UNSIGNED */))));
 }
 
@@ -238,6 +238,6 @@ ALWI void binary_min_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorM
 /**
  * Please refer to documentation.
  */
-ALWI void binary_min_tile_init() { MATH((SFPU_BINARY_INIT_CB(min, sfpu::binary_max_min_init, (false /* IS_MAX */)))); }
+ALWI void binary_min_tile_init() { MATH((SFPU_BINARY_INIT_FN(min, sfpu::binary_max_min_init, (false /* IS_MAX */)))); }
 
 }  // namespace ckernel

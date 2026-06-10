@@ -45,7 +45,7 @@ inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivation
 
 template <>
 inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SILU>() {
-    PACK(SFPU_INIT_CB(silu, sfpu::silu_init, (true /*APPROXIMATE*/)));
+    PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (true /*APPROXIMATE*/)));
 };
 
 template <ttnn::experimental::prim::detail::MoEActivationFunction activation>

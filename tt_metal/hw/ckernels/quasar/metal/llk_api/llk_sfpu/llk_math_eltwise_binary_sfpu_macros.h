@@ -166,21 +166,22 @@ inline __attribute__((always_inline)) void _sfpu_binary_check_and_call_(
 
 /*
  * Init with a non-templated callback.
- *   SFPU_BINARY_INIT_FN(lcm, sfpu::calculate_sfpu_lcm_init);
+ *   SFPU_BINARY_INIT_FN_NO_ARGS(lcm, sfpu::calculate_sfpu_lcm_init);
  */
-#define SFPU_BINARY_INIT_FN(OP, INIT_CB) ::ckernel::llk_math_eltwise_binary_sfpu_init<::ckernel::SfpuType::OP>(INIT_CB)
+#define SFPU_BINARY_INIT_FN_NO_ARGS(OP, INIT_FN) \
+    ::ckernel::llk_math_eltwise_binary_sfpu_init<::ckernel::SfpuType::OP>(INIT_FN)
 
 /*
  * Init with a templated callback.
- *   SFPU_BINARY_INIT_CB(mul_int32, sfpu::mul_int32_init, (APPROXIMATE));
+ *   SFPU_BINARY_INIT_FN(mul_int32, sfpu::mul_int32_init, (APPROXIMATE));
  */
-#define SFPU_BINARY_INIT_CB(OP, INIT_CB, TEMPLATES) \
-    ::ckernel::llk_math_eltwise_binary_sfpu_init<::ckernel::SfpuType::OP>(INIT_CB<_SFPU_BIN_EXPAND TEMPLATES>)
+#define SFPU_BINARY_INIT_FN(OP, INIT_FN, TEMPLATES) \
+    ::ckernel::llk_math_eltwise_binary_sfpu_init<::ckernel::SfpuType::OP>(INIT_FN<_SFPU_BIN_EXPAND TEMPLATES>)
 
 /*
  * Init with a templated callback and extra runtime arguments.
- *   SFPU_BINARY_INIT_CB_ARGS(add_fp32, sfpu::add_init, (APPROX), scale);
+ *   SFPU_BINARY_INIT_FN_ARGS(add_fp32, sfpu::add_init, (APPROX), scale);
  */
-#define SFPU_BINARY_INIT_CB_ARGS(OP, INIT_CB, TEMPLATES, ...)              \
+#define SFPU_BINARY_INIT_FN_ARGS(OP, INIT_FN, TEMPLATES, ...)              \
     ::ckernel::llk_math_eltwise_binary_sfpu_init<::ckernel::SfpuType::OP>( \
-        INIT_CB<_SFPU_BIN_EXPAND TEMPLATES>, ##__VA_ARGS__)
+        INIT_FN<_SFPU_BIN_EXPAND TEMPLATES>, ##__VA_ARGS__)

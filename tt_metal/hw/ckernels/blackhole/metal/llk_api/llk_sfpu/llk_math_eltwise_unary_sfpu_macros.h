@@ -155,15 +155,15 @@ inline __attribute__((always_inline)) void _sfpu_check_and_call_(
 
 /*
  * Init with a templated callback.
- *   SFPU_INIT_CB(erf, sfpu::erf_init, (APPROXIMATE));
- *   SFPU_INIT_CB(log, sfpu::log_init, (APPROX, fp32, FAST));
+ *   SFPU_UNARY_INIT_FN(erf, sfpu::erf_init, (APPROXIMATE));
+ *   SFPU_UNARY_INIT_FN(log, sfpu::log_init, (APPROX, fp32, FAST));
  */
-#define SFPU_INIT_CB(OP, INIT_CB, TEMPLATES) \
-    ::ckernel::llk_math_eltwise_unary_sfpu_init<::SfpuType::OP>(INIT_CB<_SFPU_EXPAND TEMPLATES>)
+#define SFPU_UNARY_INIT_FN(OP, INIT_FN, TEMPLATES) \
+    ::ckernel::llk_math_eltwise_unary_sfpu_init<::SfpuType::OP>(INIT_FN<_SFPU_EXPAND TEMPLATES>)
 
 /*
  * Init with a templated callback and extra runtime arguments.
- *   SFPU_INIT_CB_ARGS(exponential, sfpu::exp_init, (APPROX), scale, clamp_neg);
+ *   SFPU_UNARY_INIT_FN_ARGS(exponential, sfpu::exp_init, (APPROX), scale, clamp_neg);
  */
-#define SFPU_INIT_CB_ARGS(OP, INIT_CB, TEMPLATES, ...) \
-    ::ckernel::llk_math_eltwise_unary_sfpu_init<::SfpuType::OP>(INIT_CB<_SFPU_EXPAND TEMPLATES>, ##__VA_ARGS__)
+#define SFPU_UNARY_INIT_FN_ARGS(OP, INIT_FN, TEMPLATES, ...) \
+    ::ckernel::llk_math_eltwise_unary_sfpu_init<::SfpuType::OP>(INIT_FN<_SFPU_EXPAND TEMPLATES>, ##__VA_ARGS__)

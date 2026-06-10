@@ -32,6 +32,6 @@ ALWI void i1_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void i1_tile_init() { MATH(SFPU_INIT_CB(i1, sfpu::i1_init, (APPROX))); }
+ALWI void i1_tile_init() { MATH(SFPU_UNARY_INIT_FN(i1, sfpu::i1_init, (APPROX))); }
 
 }  // namespace ckernel

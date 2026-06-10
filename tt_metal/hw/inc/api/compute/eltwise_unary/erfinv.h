@@ -32,5 +32,5 @@ ALWI void erfinv_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void erfinv_tile_init() { MATH(SFPU_INIT_CB(erfinv, sfpu::erfinv_init, (APPROX))); }
+ALWI void erfinv_tile_init() { MATH(SFPU_UNARY_INIT_FN(erfinv, sfpu::erfinv_init, (APPROX))); }
 }  // namespace ckernel

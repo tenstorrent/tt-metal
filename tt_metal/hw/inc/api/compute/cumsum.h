@@ -41,7 +41,7 @@ ALWI void cumsum_tile(uint32_t idst, bool first = true) {
  */
 ALWI void cumsum_tile_init() {
     // There is only non APPROXIMATE implementation
-    MATH(SFPU_INIT_CB(cumsum, sfpu::cumsum_init, (false /* APPROXIMATE */)));
+    MATH(SFPU_UNARY_INIT_FN(cumsum, sfpu::cumsum_init, (false /* APPROXIMATE */)));
 }
 
 }  // namespace ckernel

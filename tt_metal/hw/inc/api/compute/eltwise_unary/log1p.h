@@ -18,7 +18,7 @@ namespace ckernel {
 
 template <bool fast_and_approx = false>
 ALWI void log1p_tile_init() {
-    MATH(SFPU_INIT_CB(log1p, sfpu::log1p_init, (APPROX, fast_and_approx, DST_ACCUM_MODE)));
+    MATH(SFPU_UNARY_INIT_FN(log1p, sfpu::log1p_init, (APPROX, fast_and_approx, DST_ACCUM_MODE)));
 }
 
 // clang-format off

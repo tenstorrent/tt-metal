@@ -21,7 +21,7 @@ namespace ckernel {
  */
 template <bool fast_and_approx = true>
 ALWI void erf_tile_init() {
-    MATH(SFPU_INIT_CB(erf, sfpu::erf_init, (fast_and_approx)));
+    MATH(SFPU_UNARY_INIT_FN(erf, sfpu::erf_init, (fast_and_approx)));
 }
 
 // clang-format off
@@ -48,7 +48,7 @@ ALWI void erf_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void erfc_tile_init() { MATH(SFPU_INIT_CB(erfc, sfpu::erfc_init, (true /*APPROXIMATION_MODE*/))); }
+ALWI void erfc_tile_init() { MATH(SFPU_UNARY_INIT_FN(erfc, sfpu::erfc_init, (true /*APPROXIMATION_MODE*/))); }
 
 // clang-format off
 /**

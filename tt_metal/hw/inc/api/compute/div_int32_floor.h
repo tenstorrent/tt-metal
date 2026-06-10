@@ -56,7 +56,7 @@ ALWI void div_int32_trunc_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void div_int32_floor_tile_init() { MATH((SFPU_BINARY_INIT_CB(div_int32_floor, sfpu::div_floor_init, (APPROX)))); }
-ALWI void div_int32_trunc_tile_init() { MATH((SFPU_BINARY_INIT_CB(div_int32_trunc, sfpu::div_trunc_init, (APPROX)))); }
+ALWI void div_int32_floor_tile_init() { MATH((SFPU_BINARY_INIT_FN(div_int32_floor, sfpu::div_floor_init, (APPROX)))); }
+ALWI void div_int32_trunc_tile_init() { MATH((SFPU_BINARY_INIT_FN(div_int32_trunc, sfpu::div_trunc_init, (APPROX)))); }
 
 }  // namespace ckernel

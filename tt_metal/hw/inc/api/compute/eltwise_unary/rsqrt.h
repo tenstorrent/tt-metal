@@ -17,7 +17,7 @@ namespace ckernel {
  */
 template <bool legacy_compat = false>
 ALWI void rsqrt_tile_init() {
-    MATH(SFPU_INIT_CB(rsqrt, sfpu::rsqrt_init, (APPROX, legacy_compat)));
+    MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::rsqrt_init, (APPROX, legacy_compat)));
 }
 
 // clang-format off

@@ -60,7 +60,7 @@ ALWI void where_tile_init() {
 #ifdef ARCH_QUASAR
     MATH((llk_math_eltwise_ternary_sfpu_where_init<APPROX>()));
 #else
-    MATH((SFPU_TERNARY_INIT_CB(where, sfpu::_init_where_, (APPROX))));
+    MATH((SFPU_TERNARY_INIT_FN(where, sfpu::_init_where_, (APPROX))));
 #endif
 }
 

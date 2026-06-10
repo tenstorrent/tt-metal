@@ -35,6 +35,6 @@ ALWI void rand_tile(uint32_t idst, uint32_t from, uint32_t scale) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rand_tile_init(uint32_t seed = 0) { MATH(SFPU_INIT_CB_ARGS(unused, sfpu::rand_init, (APPROX), seed)); }
+ALWI void rand_tile_init(uint32_t seed = 0) { MATH(SFPU_UNARY_INIT_FN_ARGS(unused, sfpu::rand_init, (APPROX), seed)); }
 
 }  // namespace ckernel

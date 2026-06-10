@@ -166,22 +166,22 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_and_call_(
 
 /*
  * Init with a non-templated callback.
- *   SFPU_TERNARY_INIT_FN(some_op, sfpu::some_init);
+ *   SFPU_TERNARY_INIT_FN_NO_ARGS(some_op, sfpu::some_init);
  */
-#define SFPU_TERNARY_INIT_FN(OP, INIT_CB) \
-    ::ckernel::llk_math_eltwise_ternary_sfpu_init<::ckernel::SfpuType::OP>(INIT_CB)
+#define SFPU_TERNARY_INIT_FN_NO_ARGS(OP, INIT_FN) \
+    ::ckernel::llk_math_eltwise_ternary_sfpu_init<::ckernel::SfpuType::OP>(INIT_FN)
 
 /*
  * Init with a templated callback.
- *   SFPU_TERNARY_INIT_CB(where, sfpu::_init_where_, (APPROXIMATE));
+ *   SFPU_TERNARY_INIT_FN(where, sfpu::_init_where_, (APPROXIMATE));
  */
-#define SFPU_TERNARY_INIT_CB(OP, INIT_CB, TEMPLATES) \
-    ::ckernel::llk_math_eltwise_ternary_sfpu_init<::ckernel::SfpuType::OP>(INIT_CB<_SFPU_TERN_EXPAND TEMPLATES>)
+#define SFPU_TERNARY_INIT_FN(OP, INIT_FN, TEMPLATES) \
+    ::ckernel::llk_math_eltwise_ternary_sfpu_init<::ckernel::SfpuType::OP>(INIT_FN<_SFPU_TERN_EXPAND TEMPLATES>)
 
 /*
  * Init with a templated callback and extra runtime arguments.
- *   SFPU_TERNARY_INIT_CB_ARGS(some_op, sfpu::some_init, (APPROX), arg0, arg1);
+ *   SFPU_TERNARY_INIT_FN_ARGS(some_op, sfpu::some_init, (APPROX), arg0, arg1);
  */
-#define SFPU_TERNARY_INIT_CB_ARGS(OP, INIT_CB, TEMPLATES, ...)              \
+#define SFPU_TERNARY_INIT_FN_ARGS(OP, INIT_FN, TEMPLATES, ...)              \
     ::ckernel::llk_math_eltwise_ternary_sfpu_init<::ckernel::SfpuType::OP>( \
-        INIT_CB<_SFPU_TERN_EXPAND TEMPLATES>, ##__VA_ARGS__)
+        INIT_FN<_SFPU_TERN_EXPAND TEMPLATES>, ##__VA_ARGS__)

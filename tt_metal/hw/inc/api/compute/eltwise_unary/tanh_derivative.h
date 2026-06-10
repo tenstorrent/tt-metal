@@ -17,7 +17,7 @@ namespace ckernel {
  */
 template <bool fast_and_approx = false>
 ALWI void tanh_derivative_tile_init() {
-    MATH(SFPU_INIT_CB(tanh_derivative, sfpu::tanh_derivative_sech2_init, (fast_and_approx)));
+    MATH(SFPU_UNARY_INIT_FN(tanh_derivative, sfpu::tanh_derivative_sech2_init, (fast_and_approx)));
 }
 
 // clang-format off

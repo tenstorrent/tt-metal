@@ -44,7 +44,7 @@ ALWI void xlogy_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * Please refer to documentation for any_init.
  */
 ALWI void xlogy_binary_tile_init() {
-    MATH((SFPU_BINARY_INIT_CB(unused, sfpu::sfpu_binary_init, (APPROX, BinaryOp::XLOGY))));
+    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, BinaryOp::XLOGY))));
 }
 
 }  // namespace ckernel

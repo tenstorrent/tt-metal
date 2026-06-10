@@ -33,6 +33,6 @@ ALWI void xielu_tile(uint32_t idst, uint32_t alpha_p, uint32_t alpha_n) {
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_xielu, (APPROX, DST_ACCUM_MODE), RC, idst, alpha_p, alpha_n));
 }
 
-ALWI void xielu_tile_init() { MATH(SFPU_INIT_CB(xielu, sfpu::xielu_init, (APPROX))); }
+ALWI void xielu_tile_init() { MATH(SFPU_UNARY_INIT_FN(xielu, sfpu::xielu_init, (APPROX))); }
 
 }  // namespace ckernel

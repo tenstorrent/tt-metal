@@ -281,7 +281,7 @@ struct DRAMStreamingMatmul {
             }
 
             if constexpr (CTArgs::fuse_silu) {
-                PACK(SFPU_INIT_CB(silu, sfpu::silu_init, (true /*APPROXIMATE*/)));
+                PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (true /*APPROXIMATE*/)));
             } else {
                 pack_block_contiguous_init(CTArgs::cb_out);
             }

@@ -36,7 +36,7 @@ ALWI void fmod_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
  * Please refer to documentation for any_init.
  */
 ALWI void fmod_tile_init(uint32_t param0, uint32_t param1) {
-    MATH(SFPU_INIT_CB_ARGS(fmod, sfpu::init_fmod, (APPROX), param0, param1));
+    MATH(SFPU_UNARY_INIT_FN_ARGS(fmod, sfpu::init_fmod, (APPROX), param0, param1));
 }
 
 }  // namespace ckernel

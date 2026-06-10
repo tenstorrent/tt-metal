@@ -71,9 +71,9 @@ ALWI void mul_int_tile_init() {
     MATH((llk_math_eltwise_binary_sfpu_mul_int_init<APPROX, data_format>()));
 #else
     if constexpr (data_format == DataFormat::UInt16) {
-        MATH((SFPU_BINARY_INIT_CB(mul_uint16, sfpu::_init_mul_int_, (APPROX))));
+        MATH((SFPU_BINARY_INIT_FN(mul_uint16, sfpu::_init_mul_int_, (APPROX))));
     } else {
-        MATH((SFPU_BINARY_INIT_CB(mul_int32, sfpu::mul_int32_init, (APPROX))));
+        MATH((SFPU_BINARY_INIT_FN(mul_int32, sfpu::mul_int32_init, (APPROX))));
     }
 #endif
 }

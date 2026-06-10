@@ -15,7 +15,7 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rdiv_tile_init() { MATH(SFPU_INIT_CB(rdiv, sfpu::rdiv_init, (APPROX))); }
+ALWI void rdiv_tile_init() { MATH(SFPU_UNARY_INIT_FN(rdiv, sfpu::rdiv_init, (APPROX))); }
 
 // clang-format off
 /**

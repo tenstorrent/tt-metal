@@ -37,6 +37,6 @@ ALWI void lcm_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void lcm_tile_init() { MATH((SFPU_BINARY_INIT_FN(lcm, sfpu::calculate_sfpu_lcm_init))); }
+ALWI void lcm_tile_init() { MATH((SFPU_BINARY_INIT_FN_NO_ARGS(lcm, sfpu::calculate_sfpu_lcm_init))); }
 
 }  // namespace ckernel

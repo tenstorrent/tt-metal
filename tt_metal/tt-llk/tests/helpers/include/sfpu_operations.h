@@ -434,15 +434,15 @@ void call_binary_sfpu_operation_init()
         BINOP == BinaryOp::XLOGY)
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
-        SFPU_BINARY_INIT_CB(add1, sfpu_binary_init, (APPROXIMATION_MODE, BINOP));
+        SFPU_BINARY_INIT_FN(add1, sfpu_binary_init, (APPROXIMATION_MODE, BINOP));
     }
     else if constexpr (BINOP == BinaryOp::POW)
     {
-        SFPU_BINARY_INIT_CB(power, sfpu_binary_init, (APPROXIMATION_MODE, BINOP));
+        SFPU_BINARY_INIT_FN(power, sfpu_binary_init, (APPROXIMATION_MODE, BINOP));
     }
     else if constexpr (BINOP == BinaryOp::ADD_TOP_ROW)
     {
-        SFPU_BINARY_INIT_FN(add1, init_add_top_row);
+        SFPU_BINARY_INIT_FN_NO_ARGS(add1, init_add_top_row);
     }
     else if constexpr (BINOP == BinaryOp::RSHFT || BINOP == BinaryOp::LOGICAL_RSHFT)
     {

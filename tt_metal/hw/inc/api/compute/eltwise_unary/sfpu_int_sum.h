@@ -12,7 +12,7 @@
 
 namespace ckernel {
 
-ALWI void sfpu_sum_int_init() { MATH(SFPU_INIT_CB(unused, sfpu::sum_int_init, (APPROX))); }
+ALWI void sfpu_sum_int_init() { MATH(SFPU_UNARY_INIT_FN(unused, sfpu::sum_int_init, (APPROX))); }
 
 ALWI void sfpu_sum_int_col(uint32_t idst) {
     MATH(SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sum_int_col, (APPROX), idst, VectorMode::R));

@@ -35,7 +35,7 @@ template <
     uint32_t scale = 0x3F800000,
     InputClamping input_clamping = InputClamping::ClampToNegative>
 ALWI void exp_tile_init() {
-    MATH(SFPU_INIT_CB(
+    MATH(SFPU_UNARY_INIT_FN(
         exponential,
         sfpu::exp_init,
         (approx, scale, (input_clamping == InputClamping::ClampToNegative), DST_ACCUM_MODE)));

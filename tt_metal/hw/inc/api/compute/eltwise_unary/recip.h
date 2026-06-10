@@ -16,7 +16,7 @@ namespace ckernel {
  */
 template <bool legacy_compat = true>
 ALWI void recip_tile_init() {
-    MATH(SFPU_INIT_CB(reciprocal, sfpu::recip_init, (APPROX, DST_ACCUM_MODE, legacy_compat)));
+    MATH(SFPU_UNARY_INIT_FN(reciprocal, sfpu::recip_init, (APPROX, DST_ACCUM_MODE, legacy_compat)));
 }
 // clang-format off
 /**

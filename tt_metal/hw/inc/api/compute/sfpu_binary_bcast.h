@@ -32,7 +32,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void sfpu_bcast_col_init() {
-    MATH((SFPU_BINARY_INIT_CB(unused, sfpu::_sfpu_binary_bcast_init_, (ckernel::BroadcastType::COL))));
+    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::_sfpu_binary_bcast_init_, (ckernel::BroadcastType::COL))));
 }
 
 ALWI void sfpu_sub_bcast_col_init() { sfpu_bcast_col_init(); }
@@ -125,7 +125,7 @@ ALWI void sfpu_mul_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
  */
 // clang-format on
 ALWI void sfpu_bcast_row_init() {
-    MATH((SFPU_BINARY_INIT_CB(unused, sfpu::_sfpu_binary_bcast_init_, (ckernel::BroadcastType::ROW))));
+    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::_sfpu_binary_bcast_init_, (ckernel::BroadcastType::ROW))));
 }
 
 ALWI void sfpu_sub_bcast_row_init() { sfpu_bcast_row_init(); }

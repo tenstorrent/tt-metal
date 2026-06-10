@@ -55,6 +55,6 @@ ALWI void addcdiv_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void addcdiv_tile_init() { MATH((SFPU_TERNARY_INIT_CB(addcdiv, sfpu::init_addcdiv, (APPROX)))); }
+ALWI void addcdiv_tile_init() { MATH((SFPU_TERNARY_INIT_FN(addcdiv, sfpu::init_addcdiv, (APPROX)))); }
 
 }  // namespace ckernel

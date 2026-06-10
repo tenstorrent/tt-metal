@@ -198,7 +198,7 @@ ALWI void div_binary_tile_init() {
 #ifdef ARCH_QUASAR
     MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX, ckernel::BinaryOp::DIV>()));
 #else
-    MATH((SFPU_BINARY_INIT_CB(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::DIV))));
+    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::DIV))));
 #endif
 }
 
@@ -206,24 +206,24 @@ ALWI void mul_binary_tile_init() {
 #ifdef ARCH_QUASAR
     MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX, ckernel::BinaryOp::MUL>()));
 #else
-    MATH((SFPU_BINARY_INIT_CB(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::MUL))));
+    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::MUL))));
 #endif
 }
 
 #ifndef ARCH_QUASAR
 ALWI void add_binary_tile_init() {
-    MATH((SFPU_BINARY_INIT_CB(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::ADD))));
+    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::ADD))));
 }
 
 ALWI void sub_binary_tile_init() {
-    MATH((SFPU_BINARY_INIT_CB(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::SUB))));
+    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::SUB))));
 }
 
 ALWI void rsub_binary_tile_init() {
-    MATH((SFPU_BINARY_INIT_CB(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::RSUB))));
+    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::RSUB))));
 }
 
-ALWI void power_binary_tile_init() { MATH((SFPU_BINARY_INIT_CB(unused, sfpu::sfpu_binary_pow_init, (APPROX)))); }
+ALWI void power_binary_tile_init() { MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_pow_init, (APPROX)))); }
 
 ALWI void eq_binary_tile_init() { MATH((SFPU_BINARY_INIT(eq))); }
 

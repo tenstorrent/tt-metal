@@ -19,12 +19,12 @@ namespace ckernel {
  */
 template <bool fast_and_approx = true>
 ALWI void gelu_tile_init() {
-    MATH(SFPU_INIT_CB(gelu, sfpu::gelu_init, (fast_and_approx, DST_ACCUM_MODE)));
+    MATH(SFPU_UNARY_INIT_FN(gelu, sfpu::gelu_init, (fast_and_approx, DST_ACCUM_MODE)));
 }
 
 template <bool fast_and_approx = true>
 ALWI void gelu_tile_init_pack() {
-    PACK(SFPU_INIT_CB(gelu, sfpu::gelu_init, (fast_and_approx, DST_ACCUM_MODE)));
+    PACK(SFPU_UNARY_INIT_FN(gelu, sfpu::gelu_init, (fast_and_approx, DST_ACCUM_MODE)));
 }
 
 // clang-format off
@@ -59,7 +59,7 @@ ALWI void gelu_tile_pack(uint32_t idst) {
  */
 template <bool fast_and_approx = false>
 ALWI void gelu_derivative_tile_init() {
-    MATH(SFPU_INIT_CB(gelu_derivative, sfpu::gelu_derivative_polynomial_init, (fast_and_approx)));
+    MATH(SFPU_UNARY_INIT_FN(gelu_derivative, sfpu::gelu_derivative_polynomial_init, (fast_and_approx)));
 }
 
 // clang-format off

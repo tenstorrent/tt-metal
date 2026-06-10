@@ -15,7 +15,7 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sin_tile_init() { MATH(SFPU_INIT_CB(sine, ckernel::sfpu::sine_init, (APPROX))); }
+ALWI void sin_tile_init() { MATH(SFPU_UNARY_INIT_FN(sine, ckernel::sfpu::sine_init, (APPROX))); }
 
 // clang-format off
 /**
@@ -44,7 +44,7 @@ ALWI void sin_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void cos_tile_init() { MATH(SFPU_INIT_CB(cosine, ckernel::sfpu::cosine_init, (APPROX))); }
+ALWI void cos_tile_init() { MATH(SFPU_UNARY_INIT_FN(cosine, ckernel::sfpu::cosine_init, (APPROX))); }
 
 // clang-format off
 /**
@@ -73,7 +73,7 @@ ALWI void cos_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void acosh_tile_init() { MATH(SFPU_INIT_CB(acosh, ckernel::sfpu::init_inverse_hyperbolic, (APPROX))); }
+ALWI void acosh_tile_init() { MATH(SFPU_UNARY_INIT_FN(acosh, ckernel::sfpu::init_inverse_hyperbolic, (APPROX))); }
 
 // clang-format off
 /**
@@ -96,7 +96,7 @@ ALWI void acosh_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void tan_tile_init() { MATH(SFPU_INIT_CB(tan, ckernel::sfpu::tangent_init, (APPROX))); }
+ALWI void tan_tile_init() { MATH(SFPU_UNARY_INIT_FN(tan, ckernel::sfpu::tangent_init, (APPROX))); }
 
 // clang-format off
 /**
@@ -125,7 +125,7 @@ ALWI void tan_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void asinh_tile_init() { MATH(SFPU_INIT_CB(asinh, ckernel::sfpu::init_inverse_hyperbolic, (APPROX))); }
+ALWI void asinh_tile_init() { MATH(SFPU_UNARY_INIT_FN(asinh, ckernel::sfpu::init_inverse_hyperbolic, (APPROX))); }
 
 // clang-format off
 /**
@@ -148,7 +148,7 @@ ALWI void asinh_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void atanh_tile_init() { MATH(SFPU_INIT_CB(atanh, ckernel::sfpu::init_atanh, (APPROX))); }
+ALWI void atanh_tile_init() { MATH(SFPU_UNARY_INIT_FN(atanh, ckernel::sfpu::init_atanh, (APPROX))); }
 
 // clang-format off
 /**
@@ -230,7 +230,7 @@ ALWI void atan_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void atan_tile_init() { MATH(SFPU_INIT_CB(atan, sfpu::atan_init, (true /*APPROXIMATION_MODE*/))); }
+ALWI void atan_tile_init() { MATH(SFPU_UNARY_INIT_FN(atan, sfpu::atan_init, (true /*APPROXIMATION_MODE*/))); }
 
 // clang-format off
 /**
@@ -264,7 +264,7 @@ ALWI void acos_tile_init() { MATH(SFPU_INIT(acos)); }
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void cosh_tile_init() { MATH(SFPU_INIT_CB(cosh, ckernel::sfpu::cosh_init, (APPROX, DST_ACCUM_MODE))); }
+ALWI void cosh_tile_init() { MATH(SFPU_UNARY_INIT_FN(cosh, ckernel::sfpu::cosh_init, (APPROX, DST_ACCUM_MODE))); }
 
 // clang-format off
 /**
@@ -293,7 +293,7 @@ ALWI void cosh_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sinh_tile_init() { MATH(SFPU_INIT_CB(sinh, ckernel::sfpu::sinh_init, (APPROX, DST_ACCUM_MODE))); }
+ALWI void sinh_tile_init() { MATH(SFPU_UNARY_INIT_FN(sinh, ckernel::sfpu::sinh_init, (APPROX, DST_ACCUM_MODE))); }
 
 // clang-format off
 /**

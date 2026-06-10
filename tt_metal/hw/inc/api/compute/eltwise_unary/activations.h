@@ -54,9 +54,9 @@ ALWI void hardsigmoid_tile_pack(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void hardsigmoid_tile_init() { MATH(SFPU_INIT_CB(hardsigmoid, sfpu::hardsigmoid_init, (APPROX))); }
+ALWI void hardsigmoid_tile_init() { MATH(SFPU_UNARY_INIT_FN(hardsigmoid, sfpu::hardsigmoid_init, (APPROX))); }
 
-ALWI void hardsigmoid_tile_init_pack() { PACK(SFPU_INIT_CB(hardsigmoid, sfpu::hardsigmoid_init, (APPROX))); }
+ALWI void hardsigmoid_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(hardsigmoid, sfpu::hardsigmoid_init, (APPROX))); }
 
 // clang-format off
 /**
@@ -78,7 +78,7 @@ ALWI void softsign_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void softsign_tile_init() { MATH(SFPU_INIT_CB(softsign, sfpu::init_softsign, (APPROX))); }
+ALWI void softsign_tile_init() { MATH(SFPU_UNARY_INIT_FN(softsign, sfpu::init_softsign, (APPROX))); }
 
 // clang-format off
 /**
