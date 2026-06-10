@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T05:01:30Z",
+  "updated_at": "2026-06-10T05:09:51Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -152,8 +152,16 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_attention.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_vision_attention.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_vision_attention.py",
+          "generated/profiler/reports/2026_06_10_05_08_04/ops_perf_results_2026_06_10_05_08_04.csv"
+        ],
+        "notes": "Tracy-driven single change: fp32 explicit HF rope chain (slice/neg/concat/mul/add) pinned to L1 interleaved ([1,12,896,128] fp32 ~5.5MB), boundary typecasts kept DRAM (windowed SDPA TT_FATALs on non-DRAM operands - first attempt with L1 typecasts crashed, fixed). Traced tracy at the production operating point (fp32 high-precision path, [1,1,896,1536] replicated 1x4 mesh, metal-trace captured+replayed): per-device block kernel time 1360.2 -> 1172.1 us (-13.8%); BinaryNg 255.7->140.0us, Concat 57.3->21.3us, Unary 29.5->10.3us, Slice 78.6->61.4us, Typecast 89.9->73.1us; SDPA/Matmul unchanged. Top hotspot post-change WindowedScaledDotProductAttention 444.0us 37.9% - bf16-only fused kernel at 110 cores, no per-block lever beyond it. KB entries for kind attention reviewed (ttnn_bcast_2 scale-bcast and ttnn_eq mask-building n/a: scale+mask are in-kernel in windowed SDPA; create_qkv_heads idiom already applied in ttnn phase) - none applicable, none used. PCC re-verified both paths: bf16 0.999855 (pytest), fp32 production path 0.999853 (>0.99). Guard ok (lint 0, traced tracy artifact verified). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999855
       },
       "real_weights": {
         "status": "pending",
@@ -795,6 +803,12 @@
       "tick": 20,
       "ts": "2026-06-10T05:01:30Z",
       "action": "device[vision_rmsnorm]",
+      "result": "ok"
+    },
+    {
+      "tick": 21,
+      "ts": "2026-06-10T05:09:51Z",
+      "action": "device[vision_attention]",
       "result": "ok"
     }
   ],

@@ -178,17 +178,27 @@ class TtVisionAttention(LightweightModule):
 
         t / cos / sin: [1, num_heads, padded_seq, head_dim] fp32 TILE.
         rotate_half(t) = concat(-t[..., d/2:], t[..., :d/2]).
+
+        Every intermediate is pinned to L1 interleaved ([1,12,896,128] fp32 is
+        ~5.5 MB — comfortably interleaved across the 110-core grid): tracy
+        showed the DRAM-default chain at ~512 us/block, L1 pinning is the
+        single biggest lever after the bf16-only SDPA kernel.
         """
+        L1 = ttnn.L1_MEMORY_CONFIG
         shape = t.shape
         half = self.head_dim // 2
-        t1 = ttnn.slice(t, [0, 0, 0, 0], [shape[0], shape[1], shape[2], half])
-        t2 = ttnn.slice(t, [0, 0, 0, half], [shape[0], shape[1], shape[2], self.head_dim])
-        neg_t2 = ttnn.neg(t2)
+        t1 = ttnn.slice(t, [0, 0, 0, 0], [shape[0], shape[1], shape[2], half], memory_config=L1)
+        t2 = ttnn.slice(t, [0, 0, 0, half], [shape[0], shape[1], shape[2], self.head_dim], memory_config=L1)
+        neg_t2 = ttnn.neg(t2, memory_config=L1)
         ttnn.deallocate(t2)
-        rot = ttnn.concat([neg_t2, t1], dim=-1)
+        rot = ttnn.concat([neg_t2, t1], dim=-1, memory_config=L1)
         ttnn.deallocate(neg_t2)
         ttnn.deallocate(t1)
-        out = ttnn.add(ttnn.multiply(t, cos), ttnn.multiply(rot, sin))
+        out = ttnn.add(
+            ttnn.multiply(t, cos, memory_config=L1),
+            ttnn.multiply(rot, sin, memory_config=L1),
+            memory_config=L1,
+        )
         ttnn.deallocate(rot)
         ttnn.deallocate(t)
         return out
@@ -222,11 +232,12 @@ class TtVisionAttention(LightweightModule):
 
         cos, sin = rot_mats
         if self.high_precision:
-            # fp32 explicit rope, then drop to bf16 only for the bf16-only
-            # windowed-SDPA kernel.
-            q = ttnn.typecast(self._apply_rope_fp32(q, cos, sin), ttnn.bfloat16)
-            k = ttnn.typecast(self._apply_rope_fp32(k, cos, sin), ttnn.bfloat16)
-            v = ttnn.typecast(v, ttnn.bfloat16)
+            # fp32 explicit rope (L1-pinned chain), then drop to bf16 only for
+            # the bf16-only windowed-SDPA kernel. The boundary typecasts MUST
+            # output DRAM: windowed SDPA TT_FATALs on non-DRAM operands.
+            q = ttnn.typecast(self._apply_rope_fp32(q, cos, sin), ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            k = ttnn.typecast(self._apply_rope_fp32(k, cos, sin), ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            v = ttnn.typecast(v, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
             q = ttnn.experimental.rotary_embedding_llama(q, cos, sin, self.trans_mat, is_decode_mode=False)
             k = ttnn.experimental.rotary_embedding_llama(k, cos, sin, self.trans_mat, is_decode_mode=False)
