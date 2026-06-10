@@ -1,0 +1,22 @@
+# XTTS-v2 reference model dependencies.
+#
+# These were validated against tt-metal's python_env (torch 2.11.0+cpu, py3.10)
+# and produce working CPU synthesis. NOTE: coqui-tts is incompatible with
+# transformers 5.x (it imports `isin_mps_friendly`, removed in 5.x), so this
+# pins transformers to the last 4.x line. Installing these DOWNGRADES the
+# shared env's transformers from 5.x and may break tt-metal's own
+# transformers-5 models (Llama, etc.); restore with `transformers==5.10.2`
+# and `huggingface_hub==1.18.0` if needed.
+#
+# CPU torch stack: install torchaudio/torchcodec from the PyTorch CPU index,
+# otherwise pip pulls CUDA builds that fail to load on a CPU-only box:
+#   pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+#
+# System dependency (not pip-installable): FFmpeg, required by torchcodec.
+#   sudo apt-get install -y ffmpeg
+
+coqui-tts==0.27.5
+transformers==4.57.6
+huggingface_hub==0.36.2
+torchaudio==2.11.0+cpu
+torchcodec==0.14.0+cpu
