@@ -46,9 +46,6 @@ def _run_io_loop(
     service.barrier()
 
     for i in range(num_iters):
-        # on each iteration: generate a random source tensor,
-        # copy it to backing tensor on device, read_from_tensor() (tensor or bytes) to host,
-        # barrier, assert readback matches expected host tensor
         gen = torch.Generator()
         gen.manual_seed(i)
         src_torch = torch.randint(low=0, high=_RANDINT_HIGH, size=shape_list, dtype=_DTYPE_TORCH, generator=gen)

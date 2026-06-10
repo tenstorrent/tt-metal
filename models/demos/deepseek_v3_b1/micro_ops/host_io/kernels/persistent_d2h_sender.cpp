@@ -47,31 +47,25 @@ constexpr uint32_t metadata_l1_addr = get_compile_time_arg_val(18);
 constexpr auto input_tensor_accessor_args = TensorAccessorArgs<19>();
 
 void kernel_main() {
-    auto input_tensor_accessor = TensorAccessor(
-        input_tensor_accessor_args,
-        input_tensor_addr);  // device-side object that maps page index -> NOC address for that buffer
+    auto input_tensor_accessor = TensorAccessor(input_tensor_accessor_args, input_tensor_addr);
 
-    SocketSenderInterface sender_socket = create_sender_socket_interface(
-        socket_config_addr);  // loads D2H socket state from L1 on service core so that the sender kernel can push data
-                              // into the host FIFO over PCie
+    SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
     set_sender_socket_page_size(sender_socket, socket_page_size);
 
-    const uint32_t write_addr_hi = sender_socket.d2h.data_addr_hi;  // high 32 bits of host FIFO PCIe address
-    const uint32_t pcie_xy_enc = sender_socket.d2h.pcie_xy_enc;     // NOC encoding of the PCIe endpoint
+    const uint32_t write_addr_hi = sender_socket.d2h.data_addr_hi;
+    const uint32_t pcie_xy_enc = sender_socket.d2h.pcie_xy_enc;
 
-    const uint32_t cb_l1_addr = get_write_ptr(
-        scratch_buffer_cb_index);  // single-slot scratch CB; use the write pointer consistently across PCIe-in and
-                                   // NoC-out since no producer/consumer split exists in this kernel
+    // Single-slot scratch CB; use the write pointer consistently across PCIe-in and
+    // NoC-out since no producer/consumer split exists in this kernel.
+    const uint32_t cb_l1_addr = get_write_ptr(scratch_buffer_cb_index);
 
-    volatile tt_l1_ptr uint32_t* termination_semaphore = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-        termination_semaphore_addr);  // converts compile-time L1 address into a pointer to the L1 location on the
-                                      // service core
+    volatile tt_l1_ptr uint32_t* termination_semaphore =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
 
     noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
 
     uint64_t worker_mcast_addr = 0;
-    if constexpr (worker_sync_enabled) {  // if worker_sync_enabled is true, then we need to multicast the data ready
-                                          // semaphore to the worker cores
+    if constexpr (worker_sync_enabled) {
         worker_mcast_addr = get_noc_multicast_addr(
             worker_mcast_noc_x_start,
             worker_mcast_noc_y_start,
@@ -80,12 +74,11 @@ void kernel_main() {
             transfer_done_sem_addr);
     }
 
-    // write_ack_ptr is a pointer to the L1 location on the service core that stores the write ack counter
     volatile tt_l1_ptr uint32_t* write_ack_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_ack_counter_addr);
     uint32_t last_write_ack = 0;
 
     bool terminated = false;
-    while (!terminated) {  // main loop that runs until the termination semaphore is signaled
+    while (!terminated) {
         if constexpr (worker_sync_enabled) {
             // Phase 1: unlock backing DRAM for worker writes this iteration. The
             // workers' transfer_done global semaphore starts at 0 (= locked) so they
