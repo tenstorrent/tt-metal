@@ -38,15 +38,15 @@ inline void _llk_math_eltwise_unary_datacopy_mop_config_(
     {
         if constexpr (IS_32b_DEST_EN)
         {
-            return TT_OP_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, addr_mod, 0);
+            return TT_OP_ELWADD(0 /*clear_dvalid*/, 0 /*dest_accum_en*/, p_elwise::SRCB_NO_BCAST, addr_mod, 0 /*dst*/);
         }
         else if constexpr (DATA_COPY_TYPE == DataCopyType::A2D)
         {
-            return TT_OP_MOVA2D(0, 0, addr_mod, mov_rows_instn, 0);
+            return TT_OP_MOVA2D(0 /*dest_32b_lo*/, 0 /*src*/, addr_mod, mov_rows_instn, 0 /*dst*/);
         }
         else
         {
-            return TT_OP_MOVB2D(0, 0, addr_mod, mov_rows_instn, 0, 0);
+            return TT_OP_MOVB2D(0 /*dest_32b_lo*/, 0 /*src*/, addr_mod, mov_rows_instn, 0 /*bcast_datum0*/, 0 /*dst*/);
         }
     };
 
@@ -57,7 +57,8 @@ inline void _llk_math_eltwise_unary_datacopy_mop_config_(
                                                                                 : p_cleardvalid::CLR_SRCB_VLD;
 
     // clear srcA and srcB dvalid
-    temp.set_end_op(TT_OP_CLEARDVALID(CLR_SRC_VLD, 0, 0, 0, 0, 0));
+    temp.set_end_op(
+        TT_OP_CLEARDVALID(CLR_SRC_VLD, 0 /*cleardvalid_S*/, 0 /*dest_dvalid_reset*/, 0 /*dest_dvalid_client_bank_reset*/, 0 /*dest_pulse_last*/, 0 /*reset*/));
 
     temp.set_last_inner_loop_instr(datacopy_func(ADDR_MOD_1));
 

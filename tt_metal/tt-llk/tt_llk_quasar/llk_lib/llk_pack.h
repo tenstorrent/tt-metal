@@ -32,7 +32,7 @@ inline void _llk_pack_mop_config_(const std::uint8_t buf_desc_id, const std::uin
 
     // RT: Use defines to remove these constexpr, and replace with a single TT_OP_PACR_FACE_INC
     std::uint32_t pack_instrn;
-    pack_instrn = TT_OP_PACR0_TILE_INC(1 /*Dest Tile Idx*/, 0 /*Src Tile Idx*/, buf_desc_id, 0);
+    pack_instrn = TT_OP_PACR0_TILE_INC(1 /*Dst_Tile_Idx_Inc*/, 0 /*Src_Tile_Idx_Inc*/, buf_desc_id, 0 /*ClrDatValid*/);
 
     std::uint32_t incr_to_next_face;
     if (tensor_shape.total_num_faces() < NUM_FACES && tensor_shape.face_r_dim < (FACE_R_DIM >> 1)) // Using sparse tiling: jump to the next index w/ tile
@@ -41,7 +41,7 @@ inline void _llk_pack_mop_config_(const std::uint8_t buf_desc_id, const std::uin
     }
     else // Using dense tiling: just increment to the next tile
     {
-        incr_to_next_face = TT_OP_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, 1);
+        incr_to_next_face = TT_OP_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, 1 /*Value*/);
     }
 
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, pack_instrn, incr_to_next_face);
