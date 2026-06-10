@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T04:05:51Z",
+  "updated_at": "2026-06-10T04:25:05Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -450,8 +450,15 @@
         "pcc": 1.0
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/text_attention.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_text_attention.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/text_attention.traced_ops.json"
+        ],
+        "notes": "Fused per-chip QKV ttnn.linear(+bias) -> nlp_create_qkv_heads (3 Q + KV replicated to 3, MHA core) -> explicit fp32 HF-convention rope (slice/neg/concat/mul/add, vision-tower recipe) -> explicit fp32 causal core matmul QK^T * scale + additive triu mask -> ttnn.softmax(numeric_stable) -> matmul PV -> nlp_concat_heads -> row-parallel o_proj + sync all_gather all-reduce. bf16 SDPA rejected by measurement: layer-0 logits reach +-3122 (std 664, Qwen2 attention sink); per-stage isolation showed q/k/v+rope 0.9999+ but bf16 SDPA core 0.9265 (0.92-0.97 across program configs), so the whole path runs fp32 (HiFi4 + fp32 acc; SDPA kernel is bf16-only) -- guard satisfied via softmax alternative. kv_replication=2 per parallelism plan via per-chip KV row repeat; 1x4 mesh; replicated all-reduced output vs golden. Guard ok (lint 0, kernels ok, no new host ops). KB entries reviewed (nlp_create_qkv_heads idiom applied); decode/KV-cache deferred to generation phase. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999047
       },
       "debug": {
         "status": "n/a",
@@ -715,6 +722,12 @@
       "tick": 14,
       "ts": "2026-06-10T04:05:51Z",
       "action": "device[text_rmsnorm]",
+      "result": "ok"
+    },
+    {
+      "tick": 15,
+      "ts": "2026-06-10T04:25:05Z",
+      "action": "device[text_attention]",
       "result": "ok"
     }
   ],
