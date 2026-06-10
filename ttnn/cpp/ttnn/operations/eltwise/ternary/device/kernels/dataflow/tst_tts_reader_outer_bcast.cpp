@@ -52,14 +52,14 @@ void kernel_main() {
     //     cb_pred.reserve_back(srcA_num_tiles);
     //     cb_pred.push_back(srcA_num_tiles);
     // #else
-    const uint32_t src0_tile_bytes = get_tile_size(predicate_cb);
+    const uint32_t src0_tile_bytes = cb_pred.get_tile_size();
     const auto s0 = TensorAccessor(src0_args, src0_addr);
     // #endif
     // #if SRC_SHARDED_B
     //     cb_b.reserve_back(srcB_num_tiles);
     //     cb_b.push_back(srcB_num_tiles);
     // #else
-    const uint32_t src1_tile_bytes = get_tile_size(src_b_cb);
+    const uint32_t src1_tile_bytes = cb_b.get_tile_size();
     const auto s1 = TensorAccessor(src1_args, src1_addr);
     // #endif
 

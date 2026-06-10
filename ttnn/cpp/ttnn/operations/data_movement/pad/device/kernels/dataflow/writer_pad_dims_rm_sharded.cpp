@@ -40,22 +40,8 @@ inline __attribute__((always_inline)) void fill_pad_cb_with_val(
 inline __attribute__((always_inline)) void fill_pad_cb_with_zero(
     Noc& noc, const uint32_t cb_id, const uint32_t num_bytes_risc, uint32_t num_noc_transfer) {
     CircularBuffer cb(cb_id);
-    uint32_t pad_val_addr = cb.get_write_ptr();
-    uint32_t l1_write_addr = pad_val_addr;
-
-    for (uint32_t i = 0; i < num_noc_transfer; ++i) {
-        CoreLocalMem<uint32_t> dst(l1_write_addr);
-        noc.async_read(
-            UnicastEndpoint{},
-            dst,
-            num_bytes_risc,
-            {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
-             .noc_y = (uint32_t)my_y[noc.get_noc_id()],
-             .addr = MEM_ZEROS_BASE},
-            {.offset_bytes = 0});
-        l1_write_addr += num_bytes_risc;
-    }
-    noc.async_read_barrier();
+    noc.async_write_zeros(cb, num_bytes_risc * num_noc_transfer);
+    noc.write_zeros_l1_barrier();
 }
 
 void kernel_main() {

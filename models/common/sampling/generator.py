@@ -13,7 +13,11 @@ from loguru import logger
 
 import ttnn
 
-from ._utils import clamp, is_default_value, split_list
+from ._utils import clamp
+from ._utils import compact_debug_list as _compact_debug_list
+from ._utils import is_default_value, is_llama33_70b_model
+from ._utils import log_sampling_debug as _log_sampling_debug
+from ._utils import split_list
 from .tt_penalties import TTPenalties
 from .tt_sampling import TTSampling
 
@@ -99,6 +103,7 @@ class SamplingGenerator:
         self.mesh_device = mesh_device
         self.cq_id = cq_id
         self.args = args
+        self._sampling_debug_enabled = is_llama33_70b_model(args)
         self.sub_core_grids = getattr(args, "sub_core_grids", None)
         self.enable_internal_trace = enable_internal_trace
 
@@ -255,6 +260,22 @@ class SamplingGenerator:
                 sampling_params.presence_penalty, sampling_params.frequency_penalty, sampling_params.repetition_penalty
             )
         self._log_probs_active = self.tt_sampling.log_probs_calculator.enable_log_probs
+        _log_sampling_debug(
+            self._sampling_debug_enabled,
+            "SamplingGenerator reset params",
+            empty_slots=_compact_debug_list(empty_slots),
+            force_argmax=self.tt_sampling.force_argmax_sampling,
+            force_argmax_changed=self.tt_sampling.force_argmax_sampling != old_force_argmax_sampling,
+            penalties_active=self._penalties_active,
+            log_probs_active=self._log_probs_active,
+            temperature=_compact_debug_list(sampling_params.temperature),
+            top_k=_compact_debug_list(sampling_params.top_k),
+            top_p=_compact_debug_list(sampling_params.top_p),
+            presence_penalty=_compact_debug_list(sampling_params.presence_penalty),
+            frequency_penalty=_compact_debug_list(sampling_params.frequency_penalty),
+            repetition_penalty=_compact_debug_list(sampling_params.repetition_penalty),
+            seed=_compact_debug_list(getattr(sampling_params, "seed", None)),
+        )
 
     def _validate_trace_inputs(self, slot, logits: ttnn.Tensor, tt_out_tok: Optional[ttnn.Tensor]):
         if slot["input"] is None or slot["output"] is None:
@@ -370,6 +391,17 @@ class SamplingGenerator:
         # run them directly so trace replay cannot observe stale seed state.
         use_internal_trace = (
             enable_trace and self.enable_internal_trace and not self.seed_manager.has_active_request_seed()
+        )
+        _log_sampling_debug(
+            self._sampling_debug_enabled,
+            "SamplingGenerator sample",
+            enable_trace=enable_trace,
+            use_internal_trace=use_internal_trace,
+            penalties_on=penalties_on,
+            log_probs_on=log_probs_on,
+            force_argmax=force_argmax,
+            logits_shape=list(logits.shape),
+            tt_out_tok_shape=list(tt_out_tok.shape) if tt_out_tok is not None else None,
         )
 
         if not use_internal_trace:
@@ -593,6 +625,7 @@ class SeedManager:
         # Pre-allocate RNG objects; actual request seeds are set via reset_seed().
         self.rngs = [random.Random(secrets.randbits(64)) for _ in range(max_batch_size)]
         self.tt_sampling = tt_sampling
+        self._sampling_debug_enabled = getattr(tt_sampling, "_sampling_debug_enabled", False)
         # True when at least one user slot has a non-None request seed.
         self._seed_active = False
         # Set to True by reset_seed() so the next get_new_values() pushes
@@ -732,6 +765,19 @@ class SeedManager:
     def has_active_request_seed(self) -> bool:
         return self._active_request_seed
 
+    def _debug_state(self, slots=None):
+        if slots is None:
+            slots = range(self.max_batch_size)
+        state = []
+        for slot in slots:
+            slot = int(slot)
+            if slot < 0 or slot >= self.max_batch_size:
+                continue
+            seed = self.seeds[slot]
+            if seed is not None:
+                state.append((slot, seed))
+        return _compact_debug_list(state)
+
     def apply_slot_remap(self, remap):
         """Reindex RNG state after batch condense.
 
@@ -744,7 +790,17 @@ class SeedManager:
             return
         moves = [(int(remap[i]), i) for i in range(len(remap)) if int(remap[i]) != i]
         if not moves:
+            _log_sampling_debug(
+                self._sampling_debug_enabled, "SeedManager slot remap identity", seed_active=self._seed_active
+            )
             return
+        # Snapshot the state we're about to overwrite.
+        _log_sampling_debug(
+            self._sampling_debug_enabled,
+            "SeedManager slot remap",
+            moves=_compact_debug_list(moves),
+            state_before=self._debug_state(),
+        )
         old_seeds = list(self.seeds)
         old_counters = list(self.seed_counters)
         old_rngs = list(self.rngs)
@@ -761,6 +817,12 @@ class SeedManager:
             self.seeds[old_slot] = None
             self.seed_counters[old_slot] = 0
         self._seed_active = any(s is not None for s in self.seeds)
+        _log_sampling_debug(
+            self._sampling_debug_enabled,
+            "SeedManager slot remap done",
+            seed_active=self._seed_active,
+            state_after=self._debug_state(),
+        )
 
     def reset_seed(self, seeds, user_ids):
         """Update RNG state for the given user slots after a prefill.
@@ -770,6 +832,14 @@ class SeedManager:
                 or None (treated as all unseeded).
             user_ids: Batch slot indices being prefilled.
         """
+        user_ids = [int(user) for user in user_ids]
+        _log_sampling_debug(
+            self._sampling_debug_enabled,
+            "SeedManager reset prefill",
+            user_ids=_compact_debug_list(user_ids),
+            requested_seeds=_compact_debug_list(seeds),
+            state_before=self._debug_state(user_ids),
+        )
         for i, user in enumerate(user_ids):
             slot = int(user)
             seed = self._seed_from_slot_params(seeds, i)
@@ -781,6 +851,12 @@ class SeedManager:
                 self.rngs[slot].seed(int(seed))
         self._seed_active = any(s is not None for s in self.seeds)
         self._reseted = True
+        _log_sampling_debug(
+            self._sampling_debug_enabled,
+            "SeedManager reset prefill done",
+            seed_active=self._seed_active,
+            state_after=self._debug_state(user_ids),
+        )
 
     def get_new_values(self, empty_slots=None, replicate_seeds=False):
         """Generate and push new seed values to the device.
@@ -822,6 +898,16 @@ class SeedManager:
                 new_seeds = [MAX_UINT32] * self.max_batch_size
                 self._needs_skip = False
             else:
+                # State 3 (steady): device already has SKIP, rand_tile
+                # advances on its own, so no host-to-device copy is needed.
+                _log_sampling_debug(
+                    self._sampling_debug_enabled,
+                    "SeedManager seed update skipped",
+                    active_slots=_compact_debug_list(empty_slots),
+                    seed_active=self._seed_active,
+                    reseted=self._reseted,
+                    needs_skip=self._needs_skip,
+                )
                 return
         else:
             new_seeds = [
@@ -831,6 +917,18 @@ class SeedManager:
             if replicate_seeds:
                 assert len(empty_slots) == 1, "Cannot replicate seeds if empty_slots is not length 1"
                 new_seeds = self.max_batch_size * [new_seeds[empty_slots[0]]]
+
+        _log_sampling_debug(
+            self._sampling_debug_enabled,
+            "SeedManager seed update",
+            active_slots=_compact_debug_list(empty_slots),
+            replicate_seeds=replicate_seeds,
+            seed_active=self._seed_active,
+            reseted=self._reseted,
+            needs_skip=self._needs_skip,
+            new_device_seeds=_compact_debug_list(new_seeds),
+            state_after_counter_advance=self._debug_state(empty_slots),
+        )
 
         new_seed_tt = ttnn.from_torch(
             torch.tensor(new_seeds), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._seed_mapper
