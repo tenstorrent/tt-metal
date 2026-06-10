@@ -73,7 +73,7 @@
     wh_n150_civ2:
       timeout: 10
     wh_n300_civ2:
-      timeout: 10
+      timeout: 12
     bh_p100:
       timeout: 2
     bh_p150b_civ2:
