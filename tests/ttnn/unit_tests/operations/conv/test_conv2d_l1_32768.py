@@ -4,7 +4,7 @@
 
 import pytest
 import ttnn
-from tests.ttnn.unit_tests.operations.conv.test_conv2d_common import run_conv, torch_tensor_map
+from tests.ttnn.nightly.unit_tests.operations.conv.test_conv2d import run_conv, torch_tensor_map
 
 pytestmark = pytest.mark.use_module_device({"l1_small_size": 32768})
 
