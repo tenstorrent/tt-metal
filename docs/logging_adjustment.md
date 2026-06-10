@@ -105,7 +105,7 @@ all C++ log output is redirected to that file instead of stdout/the console
 
 ### TT_LOGGER_TYPES
 
-To filter log messages by type, concat them within `TT_LOGGER_TYPES` environment variable:
+To filter log messages by type, set the `TT_LOGGER_TYPES` environment variable to a concatenated list of type names (no separators):
 Always, Test, Timer, Device, Distributed, LLRuntime, Loader, BuildKernels, Verif, Op, Dispatch, Fabric, Metal, TTNN, MetalTrace, Inspector, UMD, EmulationDriver
 ```bash
 export TT_LOGGER_TYPES=OpTTNN     # only Op + TTNN (+ Always) logs
