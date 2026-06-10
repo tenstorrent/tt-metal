@@ -71,6 +71,29 @@ class _Stages:
             fh.write(json.dumps(row) + "\n")
 
 
+def check_dependencies() -> list[str]:
+    """Verify the two hard tool dependencies BEFORE any stage runs.
+
+    tt-perf-report is needed by every profile (stage-2 REFINE runs it even in
+    mock-tracy mode); claude-agent-sdk is needed by the discovery sub-agent and
+    the lead review gate. Returns actionable messages for anything missing."""
+    import importlib.util
+    import shutil as _shutil
+
+    missing: list[str] = []
+    if _shutil.which("tt-perf-report") is None:
+        missing.append(
+            "tt-perf-report not on PATH — install it in your tt-metal python env: "
+            "pip install tt-perf-report (see requirements-agent.txt)"
+        )
+    if importlib.util.find_spec("claude_agent_sdk") is None:
+        missing.append(
+            "claude-agent-sdk not importable — install it in your tt-metal python "
+            "env: pip install claude-agent-sdk (see requirements-agent.txt)"
+        )
+    return missing
+
+
 # ---- mock boundaries (test ladder / no hardware) ----------------------------
 
 
@@ -318,6 +341,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--mock-model-files", action="store_true")
     ap.add_argument("--mock-tracy", action="store_true")
     args = ap.parse_args(argv)
+
+    missing = check_dependencies()
+    if missing:
+        for m in missing:
+            print(f"MISSING DEPENDENCY: {m}", file=sys.stderr)
+        return 1
 
     config = {
         k: getattr(args, k)

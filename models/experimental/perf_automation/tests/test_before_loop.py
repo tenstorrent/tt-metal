@@ -188,3 +188,14 @@ def test_default_metric_is_device_time(tmp_path, model_root):
     total = sum(b["device_ms"] for b in result["profile"]["buckets"])
     assert abs(state["metric"]["baseline"] - total) < 1e-3
     assert state["metric"]["baseline"] < result["profile"]["wall_ms"]
+
+
+def test_check_dependencies_reports_missing(monkeypatch):
+    import shutil
+
+    from agent.before_loop import check_dependencies
+
+    assert check_dependencies() == []  # this env has both
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    missing = check_dependencies()
+    assert any("tt-perf-report" in m for m in missing)
