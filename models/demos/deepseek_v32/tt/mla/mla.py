@@ -95,18 +95,32 @@ class ttMLA(_ttMLAv3):
 
     def forward(self, hidden_states, rope_tensors, kvpe_cache, **kwargs):
         seq_len_local = hidden_states.shape[2]
-        if seq_len_local * self.sp_factor <= self.index_args.index_topk or not self.indexer_weights:
+        kv_isl = kwargs.get("kv_actual_isl")
+        end_pos = (kv_isl or 0) + seq_len_local * self.sp_factor
+        if end_pos <= self.index_args.index_topk or not self.indexer_weights:
             return super().forward(hidden_states, rope_tensors, kvpe_cache, **kwargs)
-        if self.sp_factor != 1 or kwargs.get("kv_actual_isl") is not None:
-            raise NotImplementedError("DSA bring-up: sp=1 single-shot only (status.md step 3)")
+        if self.sp_factor != 1:
+            raise NotImplementedError("DSA bring-up: sp=1 only (status.md step 4)")
 
-        indices = self._indexer_topk(hidden_states, seq_len_local)
+        indices = self._indexer_topk(hidden_states, seq_len_local, start_pos=kv_isl or 0)
         return self._dsa_forward(hidden_states, rope_tensors, kvpe_cache, indices, **kwargs)
 
-    def _dsa_forward(self, hidden_states, rope_tensors, kvpe_cache, indices, cache_layer_idx=0, **_):
-        """v3 single-shot forward with ring SDPA replaced by sparse_mla (latent V)."""
+    def _dsa_forward(
+        self,
+        hidden_states,
+        rope_tensors,
+        kvpe_cache,
+        indices,
+        cache_layer_idx=0,
+        kv_actual_isl=None,
+        cache_user_id=0,
+        **_,
+    ):
+        """v3 forward with ring SDPA replaced by sparse_mla (latent V); single-shot or chunked."""
         seq_len_local = hidden_states.shape[2]
         num_heads_local = self.num_heads // self.tp_factor
+        is_chunked = kv_actual_isl is not None
+        start_pos = kv_actual_isl or 0
 
         # Q stem (v3 forward lines 683..758)
         q = ttnn.linear(
@@ -141,7 +155,7 @@ class ttMLA(_ttMLAv3):
             compute_kernel_config=self.default_compute_kernel_config,
             **self._get_mm_kwargs("wkv_b1", seq_len_local),
         )
-        q_rope = self._apply_rope(q_rope, rope_tensors, None)
+        q_rope = self._apply_rope(q_rope, rope_tensors, kv_actual_isl)
         q = ttnn.concat([q_nope, q_rope], dim=-1)  # absorbed [1, H, S, 576]
         ttnn.deallocate(q_nope)
         ttnn.deallocate(q_rope)
@@ -167,14 +181,38 @@ class ttMLA(_ttMLAv3):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.default_compute_kernel_config,
         )
-        kv_rope = self._apply_rope(kv_rope, rope_tensors, None)
+        kv_rope = self._apply_rope(kv_rope, rope_tensors, kv_actual_isl)
         kvpe = ttnn.concat([kv_nope, kv_rope], dim=-1)
         ttnn.deallocate(kv_rope)
         kvpe_b8 = ttnn.typecast(kvpe, dtype=ttnn.bfloat8_b)
-        ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, kvpe_b8, cache_layer_idx)
+        if not is_chunked:
+            ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, kvpe_b8, cache_layer_idx)
+            kvpe_prefix = kvpe
+        else:
+            # Same cache write as v3 _chunked_attn; attention reads the populated prefix.
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                kvpe_cache,
+                kvpe_b8,
+                slot_idx=cache_user_id,
+                layer_idx=cache_layer_idx,
+                num_layers=self.layer_num,
+                kv_actual_global=kv_actual_isl,
+                cluster_axis=self.sp_axis,
+            )
+            slot = cache_user_id * self.layer_num + cache_layer_idx
+            prefix = ttnn.to_torch(ttnn.get_device_tensors(kvpe_cache)[0])[
+                slot : slot + 1, :, : start_pos + seq_len_local
+            ]
+            kvpe_prefix = ttnn.from_torch(
+                prefix.to(torch.bfloat16),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
 
         # Sparse attention over selected latents (replaces ring SDPA); latent out [1,H,S,512]
-        attn_out = ops.sparse_mla(q, kvpe, indices, self.scale)
+        attn_out = ops.sparse_mla(q, kvpe_prefix, indices, self.scale, start_pos=start_pos)
 
         # wkv_b2 AFTER attention (chunked-path style), then v3 epilogue
         attn_out = ttnn.linear(
