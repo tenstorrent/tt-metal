@@ -1,0 +1,4 @@
+timestamp,model,label,batch,in_ch,out_ch,H,W,filter,stride,shard,abh,fp32_accum,bias,mode,per_core_M,per_core_N,sbm,trm,used,median_ns,min_ns,max_ns,n,spread_pct,pcc,status
+2026-06-10T21:14:47,vanilla_unet,vu288_abh128,1,288,288,60,80,3,,HS,128,false,false,main,4,9,,,,202622,202550,202693,2,0.1,0.9998435438337168,ok
+2026-06-10T21:15:08,vanilla_unet,vu288_abh128,1,288,288,60,80,3,,HS,128,false,false,helper_sbm,4,9,,,,202506,202340,202673,2,0.2,0.9998435438337168,ok
+2026-06-10T21:15:28,vanilla_unet,vu288_abh128,1,288,288,60,80,3,,HS,128,false,false,helper_trm,4,9,,,,202065,201993,202137,2,0.1,0.9998435438337168,ok
