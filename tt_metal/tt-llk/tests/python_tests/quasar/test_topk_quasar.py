@@ -373,6 +373,8 @@ def run_topk_quasar_case(
         [32, 128],
         [64, 128],
         [256, 128],
+        [32, 256],
+        [32, 512],
         [32, 1024],
     ],
     K=[32],
@@ -390,11 +392,6 @@ def test_topk_quasar(
         pytest.skip(
             "Stable sort is currently broken in LLK API."
         )  # TODO: Check tenstorrent/tt-metal#33492 and remove this once fixed.
-
-    if input_dimensions == [32, 1024]:
-        pytest.skip(
-            "Skipping 32x1024 TopK on Quasar due to observed index/value mismatches in the multi-iteration path."
-        )
 
     run_topk_quasar_case(
         formats,
