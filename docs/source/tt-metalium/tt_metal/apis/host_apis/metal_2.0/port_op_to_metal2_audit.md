@@ -97,6 +97,7 @@ For the op in scope, work through the audit in seven subjects, in order: **[Prer
 | TensorAccessor convertibility (Case 2: convertible vs exotic) | **FYI-U** | team only |
 | Out-of-directory coupling & donor shape analysis | **FYI-U** | team only |
 | Tensor-parameter relaxation candidates (fallible) | **FYI-U** | team only |
+| Incidental code anomalies — dead RTAs, dead-but-hashed attributes, suspicious constants | **FYI-U** | team only |
 
 **The four roles:**
 - **GATE** — blocks the port (an unmet prereq, an UNSUPPORTED feature, or a framework-stubbed factory concept). On PASS, the porter brief carries a one-line "cleared"; on FAIL, *no brief is issued* (there is no port) and the detail routes to the owning team. Always complete every check even after a GATE fails — the report captures everything the port will eventually need.
@@ -122,15 +123,15 @@ Confirm the op's program-factory code populates a `ProgramDescriptor` and uses `
 - **Green**: op uses the `ProgramDescriptor` API.
 - **Red (GATE)**: op uses the imperative `host_api.hpp` builder API (not `ProgramDescriptor`). Record the prereq gap — `ProgramDescriptor` migration is a **prerequisite to Metal 2.0 porting**, a substantial standalone body of work with TTNN-infrastructure implications, addressed in its own PR. **Do not attempt the migration as part of this audit, do not bundle it with anything, do not propose a partial conversion.** Continue with Check 2 and the remaining subjects — the feature-compatibility, TensorAccessor, call-surface, and other scans still produce useful findings (some features may need attention regardless of which API the op is currently on; others will only become relevant after the prereq lands).
 
-**Check 2 (GATE): Device 2.0 Data Movement migration — own *and* donor kernels.**
+**Check 2 (GATE): Device 2.0 Data Movement migration — every kernel the op uses.**
 
-Confirm all kernel-side data-movement code this op exercises is Device 2.0 compliant — both the op's **own** kernels and any **donor** kernels it calls into. See the [Device 2.0 Data Movement migration guide](../../kernel_apis/data_movement/device_api_migration_guide.md) for what compliance entails. (Donor coupling is inventoried in full under [Out-of-directory coupling](#out-of-directory-coupling); the *gating* judgment lives here.)
+Confirm **every kernel this op exercises** is Device 2.0 compliant — **regardless of where the kernel file lives**. The op's own kernels, shared kernel-library code, in-family shared kernels, and borrowed/donor kernels from other families all count equally; location does not change the gate. What matters is whether the op's program factory instantiates or calls into the kernel. (An op may own *no* kernels of its own and file-path-instantiate all of them from a shared pool — those instantiated kernels are still fully subject to this gate; treat them as the op's effective kernels here.) See the [Device 2.0 Data Movement migration guide](../../kernel_apis/data_movement/device_api_migration_guide.md) for what compliance entails. The *coupling* that borrowing induces is inventoried under [Out-of-directory coupling](#out-of-directory-coupling); the *gating* judgment lives here.
 
-- **Green**: kernels — own and donor — are Device 2.0 compliant.
-- **Yellow — substantively compliant with isolated legacy holdovers** (non-blocking; folds into the port). Kernel uses `experimental::Noc`, `experimental::CircularBuffer`, etc. for the bulk of operations and has a small number of isolated legacy holdovers from the **CB-index-keyed free-function family**: free functions taking a `uint32_t` CB index where the corresponding Device-2.0 wrapper object is already in scope at the call site. The family includes (non-exhaustively) `get_read_ptr(cb_id)`, `get_write_ptr(cb_id)`, `get_tile_size(cb_id)`, and similar `cb_*` helpers in the same shape. The defining characteristic is the *shape* — single CB-index argument, wrapper already in scope — not the specific function name; if you encounter a free function in that shape, treat it as a holdover.
+- **Green**: every kernel the op uses — wherever it lives — is Device 2.0 compliant.
+- **Yellow — substantively compliant with isolated legacy holdovers** (structurally portable; the holdover is Device 2.0 cleanup, *not* port scope). Kernel uses `experimental::Noc`, `experimental::CircularBuffer`, etc. for the bulk of operations and has a small number of isolated legacy holdovers from the **CB-index-keyed free-function family**: free functions taking a `uint32_t` CB index where the corresponding Device-2.0 wrapper object is already in scope at the call site. The family includes (non-exhaustively) `get_read_ptr(cb_id)`, `get_write_ptr(cb_id)`, `get_tile_size(cb_id)`, and similar `cb_*` helpers in the same shape. The defining characteristic is the *shape* — single CB-index argument, wrapper already in scope — not the specific function name; if you encounter a free function in that shape, treat it as a holdover.
 
-  Each holdover is a 1-line mechanical replacement (e.g. `get_read_ptr(cb_id)` → `cb_obj.get_read_ptr()`). Because the kernel is *already structurally Device 2.0* — the wrapper objects are in scope, so the Metal 2.0 binding tokens attach cleanly — these holdovers do **not** block the port; fold them in as port-time cleanup. Report yellow with `file:line` for each holdover. The yellow tier applies when the holdovers are isolated within a kernel that otherwise consistently uses the wrappers; absolute count is a heuristic, not a rule.
-- **Red (GATE)**: kernels — own or donor — broadly use legacy Device 1.0 idioms (raw `noc_async_read`, manual CB index management, `InterleavedAddrGen` / `ShardedAddrGen` / `InterleavedAddrGenFast` / `InterleavedPow2AddrGen*`, raw sem addresses, etc.). **The port is blocked** until the Device 2.0 migration lands; route the exact violations to the team that owns Device 2.0 migration. For a **donor** on pre-Device-2.0 idioms, the donor must migrate before this op can be ported — record which donor file and which kernel, so the dependency is schedulable.
+  Each holdover is a 1-line mechanical replacement (e.g. `get_read_ptr(cb_id)` → `cb_obj.get_read_ptr()`), and because the kernel is *already structurally Device 2.0* — the wrapper objects are in scope, so the Metal 2.0 binding tokens attach cleanly — an isolated holdover does **not** structurally block the port. **But the port must not absorb it.** A Device 2.0 fix is out of port scope even when it's a single line (the [kernel-side whitelist](port_op_to_metal2_recipe.md#kernel-side-whitelist) lets the port touch no Device 2.0 idioms — the port does not scoop up stray holdovers). Report each holdover with `file:line` and route it to the Device 2.0 effort, to be cleaned on the Device 2.0 track rather than folded into the port diff. The yellow tier applies when the holdovers are isolated within a kernel that otherwise consistently uses the wrappers; absolute count is a heuristic, not a rule.
+- **Red (GATE)**: any kernel the op uses — own, shared-library, in-family shared, or cross-family donor — broadly uses legacy Device 1.0 idioms (raw `noc_async_read`, manual CB index management, `InterleavedAddrGen` / `ShardedAddrGen` / `InterleavedAddrGenFast` / `InterleavedPow2AddrGen*`, raw sem addresses, etc.). **The port is blocked** until that kernel's Device 2.0 migration lands; route the exact violations to the team that owns Device 2.0 migration, naming the kernel file (and, for a borrowed/donor kernel, its owning family) so the dependency is schedulable.
 
 **Why Device 2.0 gates the port.** Device 2.0 cleanup is *not* on the [kernel-side whitelist](port_op_to_metal2_recipe.md#kernel-side-whitelist) of sanctioned port-time changes, and — more fundamentally — the Metal 2.0 binding tokens (`dfb::name`, `sem::name`, `ta::name`) attach to the Device 2.0 wrapper objects. A kernel still on Device 1.0 idioms has nothing for those tokens to bind to, so it cannot take the whitelisted Metal 2.0 swaps. Device 2.0 is therefore a hard structural prerequisite, on par with the `ProgramDescriptor` migration. (The isolated-holdover YELLOW above is the one carve-out, and only because the wrappers are *already in scope* there — the kernel is structurally Device 2.0 and the tokens attach.)
 
@@ -185,6 +186,7 @@ Both shapes resolve **at port time** — neither waits for a framework feature.
 - **Descriptor form** (the in-scope case for `ProgramDescriptor`-API ops): `KernelDescriptor::runtime_args` or `runtime_common_args` initializers containing the address expression directly. E.g. `kd.runtime_args = {{core_coord, {input_buffer->address(), num_pages}}};`.
 - **Imperative form** (only in ProgramDescriptor-prereq RED ops, but record matches since the eventual port still needs them): `SetRuntimeArgs` / `SetCommonRuntimeArgs` argument lists containing the address expression.
 - **Helper-function form**: a function takes a `Buffer*` / `Buffer&` and injects its address into an arg vector (`args.push_back(...)`, in-place vector init, named accumulator). Read the helper body — it often hides the bypass.
+- **`Buffer*`-binding form** (descriptor API): the factory pushes a `Buffer*` (the pointer object itself, *not* `->address()`) into `KernelDescriptor::RTArgList` / `emplace_runtime_args`. The framework auto-registers these as `BufferBinding`s and **patches them on cache hits**, so this shape is *correct-on-cache-hit today* — it is **not** the silent-wrong hazard. (It's the framework's interim hack for plugging the stale-pointer hole in `ProgramDescriptor` ports; the Metal 2.0 typed binding supersedes it.) **Still enumerate it** — the kernel consumes a raw `uint32_t` base, so it is **Case 1** (re-express via `TensorParameter`) — but record it as routine port work, not a correctness hazard. Enumerating *all* pointer arguments is the point; just don't over-state the urgency of this one.
 
 For each `TensorParameter`, cross-check: does the same buffer also appear in an RTA address argument? If yes, the binding is at least Case 1 (Case 2 only on confirmed-exotic).
 
@@ -222,7 +224,7 @@ The Device 2.0 → Metal 2.0 sequencing rule applies: ops must complete Device 2
 2. **`ttnn/cpp/ttnn/kernel_lib/`** — official shared kernel library; lib team handles internally.
 3. **`ttnn/cpp/ttnn/kernel/`** (singular) — a second shared-kernel pool. Treat as shared-lib class.
 4. **`ttnn/cpp/ttnn/operations/kernel_helper_functions/`** — small shared utility pool.
-5. **In-family shared** — kernels within the same op family. In-family escapes don't block the port; port the family together.
+5. **In-family shared** — kernels within the same op family. In-family escapes don't *gate* the Metal 2.0 port; you port the family together. (This concerns the Metal 2.0 *syntax* rewrite, not Device 2.0 — in-family kernels remain fully subject to the [Device 2.0 gate](#prerequisites), which is location-independent.)
 6. **Cross-family donor** — kernels in another op family's directory.
 
 **Per-call shape analysis.** For each donor file consumed by the op, identify which public functions the op's kernels actually call, and classify each by the shape of the resource handles in its signature.
@@ -249,13 +251,13 @@ One donor file can have multiple functions with different shapes — classify pe
 
 Status roll-up uses ✓ / ⚠ / ✗ / ⭐. The star is reserved for entries that create scheduling blockers — Shape 4 (donor pre-Device-2.0, the donor-side Device 2.0 gate per [Prerequisites § Check 2](#prerequisites)) and `CircularBuffer&` (op-by-op friction). Other ✗/⚠ items are workable today or need donor work, but don't sequence-block.
 
-**Borrowed kernel files (file-path kernel instantiation).** Separate from the function-call escapes inventoried above: list every kernel `.cpp` file the op's program factory `CreateKernel`s whose source path lies outside the op's own directory. For each, record:
+**Borrowed kernel files (file-path kernel instantiation).** Separate from the function-call escapes inventoried above: list every kernel `.cpp` file the op's program factory instantiates whose source it does **not** own — anything from a shared pool, in-family or cross-family. (Some ops own *none* of their kernels and instantiate every one from a shared pool — list them all.) For each, record:
 
 - The kernel file's path.
-- The owning op family (donor).
-- Whether the file is also `CreateKernel`'d by other ops (broadly-shared dataflow kernel) or appears to be a one-off borrow.
+- The owning op family (or shared pool).
+- Whether the file is also instantiated by other ops (broadly-shared) or is a one-off borrow — and, where cheap to determine, *which* other ops.
 
-This signal **does not gate the port** — the borrowed kernel works today. The coupling is about *future modification*: if the donor op modifies its kernel during its own Metal 2.0 port, the borrowing op's instantiation site may break or need to follow. Report this so porters and planners can see where multi-op coordination might be needed. Surface it in the audit even when the function-call escape roll-up is `✓ clean` — file-path escape is independent.
+This signal **does not gate the port**, but it induces a **port-the-family-together coupling that must be reported**. A shared kernel's Metal 2.0 rewrite (CB→DFB, named-token bindings, etc.) is a *single* rewrite: every op that instantiates that kernel must adopt it in the same change, or the co-borrowers break the instant one op migrates in isolation. So the set of ops sharing a kernel forms a Metal 2.0 **port-together set** — report that set (or as much of it as is cheap to find) so planners can sequence the shared rewrite as one unit. Surface this even when the function-call escape roll-up is `✓ clean` — file-path coupling is independent. (This is distinct from the [Device 2.0 gate](#prerequisites), which applies to every one of these kernels regardless of coupling.)
 
 ### Custom program hash
 
@@ -280,6 +282,8 @@ A residual subject for signals that don't belong to any of the other subjects. T
 Metal 2.0 **supports** RTA varargs via the kernel-side vararg mechanism, so this does not gate — it is a porter heads-up. Report the kernel and the recognition site (`file:line`), and note that the port will choose between named RTAs (the recommended endpoint — one named RTA per legacy positional argument) and Metal 2.0's RTA vararg mechanism (only when the kernel genuinely loop-retrieves with a runtime-varying index, per the recipe's [kernel-side whitelist rule 4](port_op_to_metal2_recipe.md#kernel-side-whitelist)).
 
 **Not to be confused with CTA varargs**, which **do** gate the port (caught by the [CTA varargs Appendix A entry](#variable-count-compile-time-arguments-cta-varargs--unsupported)): kernels that loop over `get_compile_time_arg_val(i)` with a runtime-varying `i`, or ops whose `tensor_args_t` carries a variable-count container like `std::vector<Tensor>`.
+
+**Incidental code anomalies (FYI-U).** While reading the op you will sometimes notice latent issues that are neither audit findings nor the porter's to fix — a dead/unused RTA, an attribute the factory forces or ignores yet still feeds to `compute_program_hash`, a suspicious hardcoded constant. Record these in the report's **Misc anomalies** section: team-only, non-gating, *not* porter-actionable (they route to the op owner, never into the port diff). Don't go hunting for them — just note what you happen to see while auditing.
 
 ### Factory concept
 
@@ -363,13 +367,13 @@ Port Type → Option map: **1** = `MinimizeCacheHitCost` (basic or advanced); **
 ## Gate detail
 
 - **ProgramDescriptor:** <GREEN — or — RED with the imperative-API calls that disqualify, plus the "separate ongoing effort; expected outcome for legacy ops; unblocks when the migration lands" framing.>
-- **Device 2.0 (own + donor):** <GREEN — or — YELLOW (isolated CB-index holdovers; fold into the port, table below) — or — RED with exact violations @ `file:line`, routed to the Device 2.0 team. For a donor, name the donor file + kernel.>
+- **Device 2.0 (every kernel used):** <GREEN — or — YELLOW (isolated CB-index holdovers; routed to the Device 2.0 effort, *not* folded into the port; table below) — or — RED with exact violations @ `file:line`, routed to the Device 2.0 team. Name the kernel file and, for a borrowed/donor kernel, its owning family.>
 
   | File | Line | Call | Wrapper in scope |
   |---|---|---|---|
   | `<path>` | `<n>` | `<call>` | `<wrapper>` |
 
-- **Feature compatibility:** every Appendix A entry, in order. `N/A` when the feature category is absent (not a vacuous GREEN). UNSUPPORTED hits (incl. CTA varargs) get an H4 detail block with signal, `file:line` sites, and expected resolution. For `address_offset`, surface the runtime-team-consultation message verbatim per the entry's Action field.
+- **Feature compatibility:** every Appendix A entry, in order. Per-row status: `N/A` when the feature category is absent — *including an UNSUPPORTED feature the op doesn't use* (not a vacuous GREEN); `GREEN` only for a LANDED feature actually in use and clean; `RED` for an UNSUPPORTED feature in use. UNSUPPORTED hits (incl. CTA varargs) get an H4 detail block with signal, `file:line` sites, and expected resolution. For `address_offset`, surface the runtime-team-consultation message verbatim per the entry's Action field.
 
   | Feature | Status | Notes |
   |---|---|---|
@@ -402,6 +406,10 @@ Port Type → Option map: **1** = `MinimizeCacheHitCost` (basic or advanced); **
 - **TensorAccessor convertibility** (per Case-2 binding): convertible / genuinely exotic.
 - **Out-of-directory coupling & donor shape:** the full by-shape inventory (op-level roll-up, summary table, per-call detail, borrowed kernel files).
 - **Relaxation candidates** (mined from the custom hash before deletion): **FALLIBLE — candidates to verify**, default strict.
+
+## Misc anomalies  *(omit if none; team-only, non-gating)*
+
+<Latent code issues noticed while auditing that are neither audit gates nor porter work — dead/unused RTAs, attributes forced or ignored in the factory yet still fed to `compute_program_hash`, suspicious hardcoded constants, and the like. One bullet each with `file:line`. These route to the op owner; the port does not act on them.>
 
 ## Per-DeviceOperation attribution  *(when bundled)*
 
@@ -449,7 +457,13 @@ Implement `<concept>` · caching strategy `<strategy>` (→ [`port_op_to_metal2_
 
 #### N/A vs. GREEN
 
-If an Appendix A entry's *precondition* is absent from the op (e.g. the op uses no semaphores at all, so `Non-zero semaphore initial value` cannot fire), report the row as `N/A` rather than a vacuous `GREEN`. Use `N/A` only when the entire feature category is absent; a present-but-clean feature is a `GREEN`.
+Per row, the status is one of three:
+
+- **`N/A`** — the feature's precondition is absent from the op (the op uses no semaphores, so `Non-zero semaphore initial value` cannot fire; the op has no variable-count CTAs, so the CTA-varargs entry cannot fire; etc.). **An UNSUPPORTED feature the op simply doesn't use is `N/A`, *not* `GREEN`** — the gate didn't fire because the feature is *absent*, so there is nothing to "pass." This is the common mismark: don't GREEN an absent gate-feature.
+- **`GREEN`** — a **LANDED** feature *is* present and clean (e.g. a borrowed-memory DFB in use, translated via `borrowed_from`).
+- **`RED`** — an UNSUPPORTED feature is present.
+
+In short: reserve `GREEN` for a feature actually *in use* and supported; an absent feature is `N/A`, whatever its tier. (The *subject's* overall roll-up may still read "GREEN — no gate fired"; that's the subject verdict, distinct from these per-row labels.)
 
 For UNSUPPORTED feature-detail blocks, the **Expected resolution** is usually a short paraphrase of the entry's Status field — e.g. "not yet supported in Metal 2.0; port will be possible once GlobalCircularBuffer support lands on `KernelSpec` / `DataflowBufferSpec`." For the `address_offset` entry specifically, surface the runtime-team-consultation message verbatim per the entry's Action field.
 
