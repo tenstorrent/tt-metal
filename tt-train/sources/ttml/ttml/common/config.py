@@ -118,7 +118,7 @@ class TransformerConfig:
 
 
 @dataclass
-class SchedulerConfig:
+class SpeedrunSchedulerConfig:
     """Configuration for learning rate scheduler."""
 
     max_lr: float = 0.001
@@ -132,7 +132,7 @@ class SchedulerConfig:
     beta1_warmup_steps: int = 0
 
     @classmethod
-    def from_yaml(cls, yaml_config: dict) -> "SchedulerConfig":
+    def from_yaml(cls, yaml_config: dict) -> "SpeedrunSchedulerConfig":
         sc = yaml_config.get("scheduler_config", {})
         tc = yaml_config.get("training_config", {})
         return cls(

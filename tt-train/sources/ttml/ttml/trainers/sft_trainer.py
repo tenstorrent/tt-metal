@@ -319,6 +319,7 @@ class SFTTrainer:
         try:
             self._callbacks.remove(cb)
         except ValueError:
+            # cb is not registered — removal is idempotent, so a missing entry is a no-op.
             pass
 
     # ------------------------------------------------------------------

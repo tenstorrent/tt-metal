@@ -21,17 +21,13 @@ from __future__ import annotations
 import argparse
 import math
 import os
-import pickle
 import random
-import re
 import sys
 import time
-from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable, Literal, NamedTuple
+from typing import Any, Callable
 
-import ml_dtypes
 import numpy as np
 import yaml
 
@@ -39,9 +35,8 @@ import ttnn
 from ttnn.device import is_blackhole, is_wormhole_b0
 import ttml
 import ttml.common.muon_optimizer
-from ttml.common.config import DeviceConfig, SchedulerConfig, TrainingConfig as BaseTrainingConfig, load_config
+from ttml.common.config import DeviceConfig, SpeedrunSchedulerConfig, TrainingConfig as BaseTrainingConfig, load_config
 from ttml.common.data import CharTokenizer, build_causal_mask
-from ttml.common.profiler_utils import profiler_marker
 from ttml.common.schedulers import SpeedrunScheduler
 from ttml.common.utils import (
     create_optimizer,
@@ -50,35 +45,35 @@ from ttml.common.utils import (
     round_up_to_tile,
     summary,
 )
-from ttml.datasets import Batch, InMemoryDataloader, causal_lm_collate_fn
-from ttml.models.deepseek import DeepSeek, DeepSeekConfig
-from ttml.models.deepseek.flops import calculate_flops_per_token as _deepseek_flops
-from ttml.models.llama import Llama, LlamaConfig, LlamaRopeScalingConfig
-from ttml.models.llama.flops import calculate_flops_per_token as _llama_flops
-from ttml.models.nanogpt import NanoGPT, NanoGPTConfig, NanoGPTExperimentalConfig, create_nanogpt
-from ttml.models.nanogpt.flops import calculate_flops_per_token as _gpt2_flops
-from ttml.models.qwen3 import Qwen3, Qwen3Config, Qwen3RopeScalingConfig
-from ttml.models.qwen3.flops import calculate_flops_per_token as _qwen3_flops
+from ttml.datasets import InMemoryDataloader, causal_lm_collate_fn
 from ttml.trainers import SFTConfig, SFTTrainer, TrainerCallback
 
-import moe_activation_logger
+from formatting import HEADER_WIDTH, print_footer, print_header, shorten_home
+from model_builders import FLOPS_REGISTRY, Model, ModelConfig, create_model, parse_model_config
+from callbacks import (
+    AverageLossCallback,
+    DDPCallback,
+    MemoryTrackerCallback,
+    MoECallback,
+    ThroughputCallback,
+)
+from checkpointing import (
+    build_checkpoint_io,
+    find_latest_checkpoint,
+    load_for_inference,
+    peek_checkpoint,
+    prefixed,
+)
+from cli import parse_args
 
 # Side effect: registers the Muon optimizer with ttml's optimizer factory so
 # YAML configs can name it.
 ttml.common.muon_optimizer.register()
 
-Model = NanoGPT | Llama | DeepSeek | Qwen3
 MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
 
-FLOPS_REGISTRY: dict[str, Callable] = {
-    "deepseek": _deepseek_flops,
-    "gpt2": _gpt2_flops,
-    "llama": _llama_flops,
-    "qwen3": _qwen3_flops,
-}
 
-
-# ── Config dataclasses ────────────────────────────────────────────────────────
+# ── Training config ───────────────────────────────────────────────────────────
 
 
 class TrainingConfig(BaseTrainingConfig):
@@ -102,328 +97,6 @@ class TrainingConfig(BaseTrainingConfig):
         # Legacy field names kept alive for callers that still read them.
         self.num_epochs = self.epochs
         self.model_save_interval = self.save_every
-
-
-# Per-model spec dataclasses. Each is set as `ModelConfig.spec` by the
-# corresponding parser in MODEL_ADAPTERS and read by the corresponding builder.
-
-
-@dataclass
-class _GPT2Spec:
-    bias: bool = True
-    positional_embedding_type: Literal["trainable", "fixed"] = "trainable"
-    use_composite_layernorm: bool = False
-
-
-@dataclass
-class _LlamaSpec:
-    num_groups: int = 3
-    theta: float = 500000.0
-    intermediate_dim: int | None = None
-    scaling_factor: float = 0.0
-    high_freq_factor: float = 4.0
-    low_freq_factor: float = 1.0
-    original_context_length: int = 0
-
-
-@dataclass
-class _DeepSeekSpec:
-    theta: float = 10000.0
-    inter_dim: int | None = None
-    moe_inter_dim: int = 256
-    n_dense_layers: int = 2
-    n_routed_experts: int = 8
-    n_shared_experts: int = 1
-    n_activated_experts: int = 2
-    n_expert_groups: int = 2
-    n_limited_groups: int = 1
-    score_func: str = "sigmoid"
-    route_scale: float = 2.5
-    q_lora_rank: int = 256
-    kv_lora_rank: int = 128
-    qk_nope_head_dim: int = 64
-    qk_rope_head_dim: int = 32
-    v_head_dim: int = 64
-
-
-@dataclass
-class _Qwen3Spec:
-    num_groups: int = 3
-    theta: float = 1000000.0
-    intermediate_dim: int | None = None
-    head_dim: int | None = None
-    attention_bias: bool = False
-    scaling_factor: float = 0.0
-    high_freq_factor: float = 4.0
-    low_freq_factor: float = 1.0
-    original_context_length: int = 0
-
-
-ModelSpec = _GPT2Spec | _LlamaSpec | _DeepSeekSpec | _Qwen3Spec
-
-
-@dataclass
-class ModelConfig:
-    """Common model fields + a `spec` set to one of the per-model spec dataclasses."""
-
-    model_type: str = "gpt2"
-    model_path: str = ""
-    vocab_size: int = 0
-    embedding_dim: int = 384
-    num_blocks: int = 6
-    num_heads: int = 6
-    dropout_prob: float = 0.2
-    max_sequence_length: int = 256
-    runner_type: ttml.models.RunnerType = ttml.models.RunnerType.Default
-    weight_tying: ttml.models.WeightTyingType = ttml.models.WeightTyingType.Disabled
-    spec: ModelSpec | None = None
-
-
-# ── Models ────────────────────────────────────────────────────────────────────
-
-# Qwen3 published RMS-norm epsilon.
-_QWEN3_RMS_NORM_EPS = 1e-6
-
-
-def _default_mlp_inter_dim(embedding_dim: int) -> int:
-    """Default MLP intermediate dim: 8/3 × embedding_dim, rounded up to a 256-multiple."""
-    return ((4 * embedding_dim * 2) // 3 + 255) // 256 * 256
-
-
-def _parse_gpt2(tc: dict) -> _GPT2Spec:
-    spec = _GPT2Spec()
-    spec.bias = tc.get("bias", spec.bias)
-    spec.positional_embedding_type = tc.get("positional_embedding_type", spec.positional_embedding_type)
-    if "experimental" in tc:
-        exp = tc["experimental"]
-        spec.use_composite_layernorm = exp.get("use_composite_layernorm", spec.use_composite_layernorm)
-    return spec
-
-
-def _build_gpt2(cfg: ModelConfig, use_tp: bool) -> Model:
-    if use_tp:
-        raise ValueError("model_type=gpt2 has no TP path; use model_type=llama for DP+TP")
-    assert isinstance(cfg.spec, _GPT2Spec)
-    spec = cfg.spec
-    exp = NanoGPTExperimentalConfig(use_composite_layernorm=spec.use_composite_layernorm)
-    return create_nanogpt(
-        NanoGPTConfig(
-            vocab_size=cfg.vocab_size,
-            block_size=cfg.max_sequence_length,
-            n_embd=cfg.embedding_dim,
-            n_layer=cfg.num_blocks,
-            n_head=cfg.num_heads,
-            dropout=cfg.dropout_prob,
-            bias=spec.bias,
-            runner_type=cfg.runner_type,
-            weight_tying=cfg.weight_tying,
-            positional_embedding_type=spec.positional_embedding_type,
-            experimental=exp,
-        )
-    )
-
-
-def _parse_llama(tc: dict) -> _LlamaSpec:
-    spec = _LlamaSpec()
-    spec.num_groups = tc.get("num_groups", spec.num_groups)
-    spec.theta = tc.get("theta", spec.theta)
-    spec.intermediate_dim = tc.get("intermediate_dim", spec.intermediate_dim)
-    if "rope_scaling" in tc:
-        rope = tc["rope_scaling"]
-        spec.scaling_factor = rope.get("scaling_factor", spec.scaling_factor)
-        spec.high_freq_factor = rope.get("high_freq_factor", spec.high_freq_factor)
-        spec.low_freq_factor = rope.get("low_freq_factor", spec.low_freq_factor)
-        spec.original_context_length = rope.get("original_context_length", spec.original_context_length)
-    return spec
-
-
-def _build_llama(cfg: ModelConfig, use_tp: bool) -> Model:
-    assert isinstance(cfg.spec, _LlamaSpec)
-    spec = cfg.spec
-    if spec.num_groups <= 0:
-        raise ValueError("num_groups must be a positive integer")
-    if cfg.num_heads % spec.num_groups != 0:
-        raise ValueError("num_heads must be divisible by num_groups")
-    return Llama(
-        LlamaConfig(
-            hidden_size=cfg.embedding_dim,
-            intermediate_size=spec.intermediate_dim,
-            num_hidden_layers=cfg.num_blocks,
-            num_attention_heads=cfg.num_heads,
-            num_key_value_heads=spec.num_groups,
-            vocab_size=cfg.vocab_size,
-            max_position_embeddings=cfg.max_sequence_length,
-            rope_theta=spec.theta,
-            attention_dropout=cfg.dropout_prob,
-            mlp_dropout=cfg.dropout_prob,
-            runner_type=cfg.runner_type,
-            weight_tying=cfg.weight_tying,
-            rope_scaling=LlamaRopeScalingConfig(
-                scaling_factor=spec.scaling_factor,
-                high_freq_factor=spec.high_freq_factor,
-                low_freq_factor=spec.low_freq_factor,
-                original_context_length=spec.original_context_length,
-            ),
-            use_tp=use_tp,
-        )
-    )
-
-
-def _parse_deepseek(tc: dict) -> _DeepSeekSpec:
-    spec = _DeepSeekSpec()
-    spec.theta = tc.get("theta", spec.theta)
-    spec.inter_dim = tc.get("inter_dim", spec.inter_dim)
-    spec.moe_inter_dim = tc.get("moe_inter_dim", spec.moe_inter_dim)
-    spec.n_dense_layers = tc.get("n_dense_layers", spec.n_dense_layers)
-    spec.n_routed_experts = tc.get("n_routed_experts", spec.n_routed_experts)
-    spec.n_shared_experts = tc.get("n_shared_experts", spec.n_shared_experts)
-    spec.n_activated_experts = tc.get("n_activated_experts", spec.n_activated_experts)
-    spec.n_expert_groups = tc.get("n_expert_groups", spec.n_expert_groups)
-    spec.n_limited_groups = tc.get("n_limited_groups", spec.n_limited_groups)
-    spec.score_func = tc.get("score_func", spec.score_func)
-    spec.route_scale = tc.get("route_scale", spec.route_scale)
-    spec.q_lora_rank = tc.get("q_lora_rank", spec.q_lora_rank)
-    spec.kv_lora_rank = tc.get("kv_lora_rank", spec.kv_lora_rank)
-    spec.qk_nope_head_dim = tc.get("qk_nope_head_dim", spec.qk_nope_head_dim)
-    spec.qk_rope_head_dim = tc.get("qk_rope_head_dim", spec.qk_rope_head_dim)
-    spec.v_head_dim = tc.get("v_head_dim", spec.v_head_dim)
-    return spec
-
-
-def _build_deepseek(cfg: ModelConfig, use_tp: bool) -> Model:
-    if use_tp:
-        raise ValueError("model_type=deepseek has no TP path; use model_type=llama for DP+TP")
-    assert isinstance(cfg.spec, _DeepSeekSpec)
-    spec = cfg.spec
-    inter_dim = spec.inter_dim or _default_mlp_inter_dim(cfg.embedding_dim)
-    return DeepSeek(
-        DeepSeekConfig(
-            vocab_size=cfg.vocab_size,
-            dim=cfg.embedding_dim,
-            inter_dim=inter_dim,
-            moe_inter_dim=spec.moe_inter_dim,
-            n_layers=cfg.num_blocks,
-            n_dense_layers=spec.n_dense_layers,
-            n_heads=cfg.num_heads,
-            n_routed_experts=spec.n_routed_experts,
-            n_shared_experts=spec.n_shared_experts,
-            n_activated_experts=spec.n_activated_experts,
-            n_expert_groups=spec.n_expert_groups,
-            n_limited_groups=spec.n_limited_groups,
-            score_func=spec.score_func,
-            route_scale=spec.route_scale,
-            q_lora_rank=spec.q_lora_rank,
-            kv_lora_rank=spec.kv_lora_rank,
-            qk_nope_head_dim=spec.qk_nope_head_dim,
-            qk_rope_head_dim=spec.qk_rope_head_dim,
-            v_head_dim=spec.v_head_dim,
-            max_seq_len=cfg.max_sequence_length,
-            rope_theta=spec.theta,
-            runner_type=cfg.runner_type,
-        )
-    )
-
-
-def _parse_qwen3(tc: dict) -> _Qwen3Spec:
-    spec = _Qwen3Spec()
-    spec.num_groups = tc.get("num_groups", spec.num_groups)
-    spec.theta = tc.get("theta", spec.theta)
-    spec.intermediate_dim = tc.get("intermediate_dim", spec.intermediate_dim)
-    spec.head_dim = tc.get("head_dim", spec.head_dim)
-    spec.attention_bias = tc.get("attention_bias", spec.attention_bias)
-    if "rope_scaling" in tc:
-        rope = tc["rope_scaling"]
-        spec.scaling_factor = rope.get("scaling_factor", spec.scaling_factor)
-        spec.high_freq_factor = rope.get("high_freq_factor", spec.high_freq_factor)
-        spec.low_freq_factor = rope.get("low_freq_factor", spec.low_freq_factor)
-        spec.original_context_length = rope.get("original_context_length", spec.original_context_length)
-    return spec
-
-
-def _build_qwen3(cfg: ModelConfig, use_tp: bool) -> Model:
-    if use_tp:
-        raise ValueError("model_type=qwen3 has no TP path; use model_type=llama for DP+TP")
-    assert isinstance(cfg.spec, _Qwen3Spec)
-    spec = cfg.spec
-    head_dim = spec.head_dim or cfg.embedding_dim // cfg.num_heads
-    intermediate = spec.intermediate_dim or _default_mlp_inter_dim(cfg.embedding_dim)
-    return Qwen3(
-        Qwen3Config(
-            hidden_size=cfg.embedding_dim,
-            intermediate_size=intermediate,
-            num_hidden_layers=cfg.num_blocks,
-            num_attention_heads=cfg.num_heads,
-            num_key_value_heads=spec.num_groups,
-            head_dim=head_dim,
-            vocab_size=cfg.vocab_size,
-            max_position_embeddings=cfg.max_sequence_length,
-            rms_norm_eps=_QWEN3_RMS_NORM_EPS,
-            attention_bias=spec.attention_bias,
-            attention_dropout=cfg.dropout_prob,
-            rope_theta=spec.theta,
-            runner_type=cfg.runner_type,
-            weight_tying=cfg.weight_tying,
-            rope_scaling=Qwen3RopeScalingConfig(
-                scaling_factor=spec.scaling_factor,
-                high_freq_factor=spec.high_freq_factor,
-                low_freq_factor=spec.low_freq_factor,
-                original_context_length=spec.original_context_length,
-            ),
-        )
-    )
-
-
-ParseFn = Callable[[dict], ModelSpec]
-BuildFn = Callable[[ModelConfig, bool], Model]
-
-
-class ModelAdapter(NamedTuple):
-    # parse builds a spec from YAML; build consumes `cfg` + `cfg.spec`
-    # and returns the constructed model.
-    parse: ParseFn
-    build: BuildFn
-
-
-MODEL_ADAPTERS: dict[str, ModelAdapter] = {
-    "gpt2": ModelAdapter(_parse_gpt2, _build_gpt2),
-    "llama": ModelAdapter(_parse_llama, _build_llama),
-    "deepseek": ModelAdapter(_parse_deepseek, _build_deepseek),
-    "qwen3": ModelAdapter(_parse_qwen3, _build_qwen3),
-}
-
-
-def parse_model_config(yaml_config: dict) -> ModelConfig:
-    """Parse YAML into a ModelConfig: common fields directly, model-specific via MODEL_ADAPTERS."""
-    transformer_config = yaml_config.get("transformer_config", {})
-    cfg = ModelConfig()
-
-    cfg.model_type = transformer_config.get("model_type", cfg.model_type)
-    cfg.model_path = transformer_config.get("model_path", cfg.model_path)
-    cfg.vocab_size = transformer_config.get("vocab_size", cfg.vocab_size)
-    cfg.embedding_dim = transformer_config.get("embedding_dim", cfg.embedding_dim)
-    cfg.num_blocks = transformer_config.get("num_blocks", cfg.num_blocks)
-    cfg.num_heads = transformer_config.get("num_heads", cfg.num_heads)
-    cfg.dropout_prob = transformer_config.get("dropout_prob", cfg.dropout_prob)
-    cfg.max_sequence_length = transformer_config.get("max_sequence_length", cfg.max_sequence_length)
-
-    if "runner_type" in transformer_config:
-        cfg.runner_type = ttml.models.RunnerType.from_string(transformer_config["runner_type"])
-    if "weight_tying" in transformer_config:
-        cfg.weight_tying = ttml.models.WeightTyingType.from_string(transformer_config["weight_tying"])
-
-    adapter = MODEL_ADAPTERS.get(cfg.model_type)
-    if adapter is None:
-        raise ValueError(f"Unsupported model type: {cfg.model_type}")
-    cfg.spec = adapter.parse(transformer_config)
-    return cfg
-
-
-def create_model(cfg: ModelConfig, use_tp: bool = False) -> Model:
-    """Dispatch on `cfg.model_type` to the registered builder."""
-    adapter = MODEL_ADAPTERS.get(cfg.model_type)
-    if adapter is None:
-        raise ValueError(f"Unsupported model type: {cfg.model_type}")
-    return adapter.build(cfg, use_tp)
 
 
 # ── Mesh / device ─────────────────────────────────────────────────────────────
@@ -470,95 +143,6 @@ def _device_arch_name() -> str:
     if is_blackhole(device):
         return "blackhole"
     return "unknown"
-
-
-_HEADER_WIDTH = 70
-# Content wraps within a 2-space margin on each side of the table.
-_CONTENT_WIDTH = _HEADER_WIDTH - 4
-
-
-def _print_banner(title: str) -> None:
-    print("═" * _HEADER_WIDTH)
-    print(f"  {title}")
-    print("═" * _HEADER_WIDTH)
-
-
-# Break a long value after whitespace or a path-like separator (/ . _ -), keeping the
-# separator on the preceding line so paths and config names wrap at natural boundaries.
-_WRAP_PIECE = re.compile(r"[^\s/._-]*[\s/._-]+|[^\s/._-]+")
-
-
-def _wrap(text: str, width: int) -> list[str]:
-    """Wrap `text` to `width`, preferring separator boundaries; hard-breaks tokens too long to fit. Always ≥1 line."""
-    if len(text) <= width:
-        return [text]
-    lines, cur = [], ""
-    for piece in _WRAP_PIECE.findall(text):
-        if cur and len(cur) + len(piece) > width:
-            lines.append(cur)
-            cur = piece
-        else:
-            cur += piece
-        while len(cur) > width:  # oversized spaceless token: hard-break at the edge
-            lines.append(cur[:width])
-            cur = cur[width:]
-    if cur:
-        lines.append(cur)
-    return [line.rstrip() for line in lines]
-
-
-def _print_section(name: str, fields: list[tuple[str, str]] | str, label_width: int | None = None) -> None:
-    """Emit `── NAME ──…─` divider, then 2-space-indented `key  value` rows (or bare lines if `fields` is a string).
-
-    Content wraps within a 2-space margin on both sides: string fields wrap back to the left indent,
-    kv values wrap back to the column where the value starts. When `label_width` is provided, the key
-    column is right-justified to that width — used to align value columns across multiple sections.
-    """
-    prefix = f"── {name.upper()} "
-    print()
-    print(prefix + "─" * (_HEADER_WIDTH - len(prefix)))
-    if isinstance(fields, str):
-        for line in fields.split("\n"):
-            for chunk in _wrap(line, _CONTENT_WIDTH):
-                print(f"  {chunk}")
-        return
-    if not fields:
-        return
-    width = label_width if label_width is not None else max(len(k) for k, _ in fields)
-    value_width = max(1, _CONTENT_WIDTH - width - 2)  # minus label column + 2-space gap
-    for label, value in fields:
-        chunks = _wrap(value, value_width)
-        print(f"  {label.rjust(width)}  {chunks[0]}")
-        for chunk in chunks[1:]:
-            print(f"  {' ' * width}  {chunk}")
-
-
-def _print_header_close() -> None:
-    print()
-    print("═" * _HEADER_WIDTH)
-    print()
-
-
-def print_header(title: str, sections: list[tuple[str, list[tuple[str, str]] | str]]) -> None:
-    """Print the full opening banner: title, then each section sharing one label width so values align vertically."""
-    kv_widths = [max(len(k) for k, _ in fields) for _, fields in sections if isinstance(fields, list) and fields]
-    width = max(kv_widths) if kv_widths else 0
-    _print_banner(title)
-    for name, fields in sections:
-        _print_section(name, fields, label_width=width)
-    _print_header_close()
-
-
-def print_footer(title: str, fields: list[tuple[str, str]]) -> None:
-    """Closing banner mirroring `_print_banner`: title rule, aligned `key  value` rows, closing rule."""
-    width = max((len(k) for k, _ in fields), default=0)
-    print()
-    print("═" * _HEADER_WIDTH)
-    print(f"  {title}")
-    for label, value in fields:
-        print(f"  {label.rjust(width)}  {value}")
-    print("═" * _HEADER_WIDTH)
-    print()
 
 
 def get_device_peak_tflops_bf16() -> float:
@@ -617,13 +201,15 @@ def build_dataset(data_path: str, seq_len: int, vocab_size: int) -> tuple[Causal
             )
         return CausalLMDataset(tokens, seq_len), None
 
-    if vocab_size > 0:
-        raise ValueError(
-            f"Plain text data ({data_path}) uses character tokenization, which auto-detects "
-            f"vocab_size. Remove vocab_size from the model config (or set it to 0)."
-        )
     text = Path(data_path).read_text(encoding="utf-8")
     tokenizer = CharTokenizer(text)
+    # Char tokenization auto-detects vocab_size, so the config should leave it 0. On resume the
+    # config carries the checkpoint's (raw) vocab, which must match the freshly-detected one.
+    if vocab_size not in (0, tokenizer.vocab_size):
+        raise ValueError(
+            f"Plain text data ({data_path}) auto-detects vocab_size={tokenizer.vocab_size}, "
+            f"but the model config has vocab_size={vocab_size} (set it to 0 to auto-detect)."
+        )
     tokens = np.array(tokenizer.encode(text), dtype=np.uint32)
     return CausalLMDataset(tokens, seq_len), tokenizer
 
@@ -641,7 +227,7 @@ def build_lr_schedule(training_cfg: TrainingConfig, optimizer: Any, max_steps: i
     if training_cfg.scheduler_type == "warmup_linear":
         warmup_steps = int(max_steps * _WARMUP_LINEAR_WARMUP_FRACTION)
         sched = SpeedrunScheduler(
-            SchedulerConfig(
+            SpeedrunSchedulerConfig(
                 max_lr=base_lr,
                 min_lr=base_lr * _WARMUP_LINEAR_MIN_LR_FRACTION,
                 warmup_steps=warmup_steps,
@@ -652,260 +238,6 @@ def build_lr_schedule(training_cfg: TrainingConfig, optimizer: Any, max_steps: i
         return sched.lr_at
 
     return lambda _step: base_lr
-
-
-# ── Callbacks ─────────────────────────────────────────────────────────────────
-
-
-class DDPCallback(TrainerCallback):
-    """All-reduce gradients across the `dp` mesh axis before each optimizer step."""
-
-    def on_before_optimizer_step(self, trainer: SFTTrainer) -> None:
-        ttml.sync_gradients(trainer.model.parameters())
-
-
-class ThroughputCallback(TrainerCallback):
-    """Print wall-clock TPS / TFLOPS / MFU every `log_interval` steps."""
-
-    def __init__(self, flops_per_token: float, peak_tflops: float, log_interval: int = 1) -> None:
-        self._flops_per_token = flops_per_token
-        self._peak_tflops = peak_tflops
-        self._log_interval = max(1, int(log_interval))
-        self._step_start: float | None = None
-        self._tokens_in_step: int = 0
-        self._dp_size: int = 1
-
-    def on_train_begin(self, trainer: SFTTrainer) -> None:
-        mesh = ttml.mesh()
-        self._dp_size = mesh.axis_size("dp") if mesh.has_axis("dp") else 1
-        self._step_start = time.time()
-        self._tokens_in_step = 0
-
-    def on_after_forward(self, trainer: SFTTrainer, batch: Batch, loss: float) -> None:
-        shape = batch.input_ids.shape()
-        # Per-rank micro-shard tokens × dp_size = global tokens processed this step.
-        self._tokens_in_step += int(shape[0]) * int(shape[-1]) * self._dp_size
-
-    def on_step_end(self, trainer: SFTTrainer, step: int, step_loss: float = 0.0, *args: Any, **kwargs: Any) -> None:
-        if step % self._log_interval != 0 or self._step_start is None:
-            self._step_start = time.time()
-            self._tokens_in_step = 0
-            return
-        now = time.time()
-        elapsed_ms = (now - self._step_start) * 1000.0
-        tps = self._tokens_in_step / max(1e-6, elapsed_ms / 1000.0)
-        line = f"Step: {step}, Loss: {step_loss:.6f}, Time: {elapsed_ms:.2f} ms, TPS: {tps:.0f}"
-        if self._flops_per_token > 0 and elapsed_ms > 0:
-            achieved = tps * self._flops_per_token / 1e12
-            line += f", TFLOPS: {achieved:.3g}"
-            if self._peak_tflops > 0:
-                mfu = achieved / self._peak_tflops * 100.0
-                line += f", MFU: {mfu:.3g}%"
-        print(line)
-        self._step_start = now
-        self._tokens_in_step = 0
-
-
-class MemoryTrackerCallback(TrainerCallback):
-    """Capture FORWARD_PASS / BACKWARD_PASS / FIRST_ITERATION_COMPLETE snapshots over step 1, then deregister."""
-
-    def __init__(self) -> None:
-        self._guard: Any | None = None
-
-    def on_train_begin(self, trainer: SFTTrainer) -> None:
-        self._guard = MemoryUsageTracker.begin_capture()
-
-    def on_after_forward(self, trainer: SFTTrainer, batch: Batch, loss: float) -> None:
-        MemoryUsageTracker.snapshot("FORWARD_PASS")
-
-    def on_after_backward(self, trainer: SFTTrainer, batch: Batch) -> None:
-        MemoryUsageTracker.snapshot("BACKWARD_PASS")
-
-    def on_step_end(self, trainer: SFTTrainer, step: int, *args: Any, **kwargs: Any) -> None:
-        MemoryUsageTracker.end_capture("FIRST_ITERATION_COMPLETE")
-        MemoryUsageTracker.print_memory_usage()
-        MemoryUsageTracker.clear()
-        if self._guard is not None:
-            self._guard.release()
-            self._guard = None
-        trainer.remove_callback(self)
-
-
-class MoECallback(TrainerCallback):
-    """DeepSeek-only: update expert routing bias each step; optionally log per-expert activation probs to CSV."""
-
-    def __init__(self, log_path: str | None = None) -> None:
-        self._log_path = log_path
-
-    def on_step_end(self, trainer: SFTTrainer, step: int, *args: Any, **kwargs: Any) -> None:
-        if not hasattr(trainer.model, "get_moe_layers"):
-            return
-        moe_layers = trainer.model.get_moe_layers()
-        # Log BEFORE update_expert_bias: update resets the underlying _token_counts buffer,
-        # which the logger reads to compute activation probabilities.
-        if self._log_path and moe_activation_logger.should_log_step(step):
-            moe_activation_logger.log_step_expert_balance(self._log_path, step, moe_layers)
-        for layer in moe_layers:
-            layer.update_expert_bias()
-
-
-class _AverageLossCallback(TrainerCallback):
-    """Running mean of `step_loss` for the final-summary `Average loss` line."""
-
-    def __init__(self) -> None:
-        self.sum: float = 0.0
-        self.count: int = 0
-
-    def on_step_end(self, trainer: SFTTrainer, step: int, step_loss: float = 0.0, *args: Any, **kwargs: Any) -> None:
-        self.sum += step_loss
-        self.count += 1
-
-    @property
-    def average(self) -> float:
-        return self.sum / max(1, self.count)
-
-
-class ProfilerStepMarker(TrainerCallback):
-    """Emit a per-step `iteration_<n>` marker, plus one-time `compilation_finished` after step 1."""
-
-    def __init__(self) -> None:
-        self._first: bool = True
-
-    def on_step_end(self, trainer: SFTTrainer, step: int, *args: Any, **kwargs: Any) -> None:
-        profiler_marker(None, f"iteration_{step}", dump_results=True)
-        if self._first:
-            profiler_marker(None, "compilation_finished")
-            self._first = False
-
-
-# ── Checkpoint I/O ────────────────────────────────────────────────────────────
-
-
-def _serialize_params(model: Model) -> dict:
-    """Serialize parameters into a pickle-friendly dict: float32 arrays + layout metadata per param."""
-    state = {}
-    for name, param in model.parameters().items():
-        layout = param.tensor.get_value().get_layout()
-        arr = param.tensor.to_numpy(ttnn.DataType.FLOAT32)
-        state[name] = {
-            "data": arr,
-            "layout": layout.value if hasattr(layout, "value") else str(layout),
-            "shape": arr.shape,
-        }
-    return state
-
-
-def _restore_params(params: dict, model_state: dict) -> None:
-    """Restore params from a `_serialize_params` dict into a parameter map (cast back to bf16)."""
-    restored = set()
-    for name, item in model_state.items():
-        if name not in params:
-            continue
-        arr, layout_str = (item["data"], item.get("layout", "TILE")) if isinstance(item, dict) else (item, "TILE")
-        layout = ttnn.Layout.ROW_MAJOR if "ROW_MAJOR" in str(layout_str) else ttnn.Layout.TILE
-        tensor = ttml.autograd.Tensor.from_numpy(
-            arr.astype(ml_dtypes.bfloat16), layout=layout, new_type=ttnn.DataType.BFLOAT16
-        )
-        params[name].assign(tensor)
-        restored.add(name)
-
-    missing = set(params) - restored  # in model, not restored → left at init (dangerous)
-    unexpected = set(model_state) - set(params)  # in checkpoint, not in model → ignored
-    if missing or unexpected:
-        print(
-            f"  [warn] checkpoint restore mismatch: "
-            f"{len(missing)} model param(s) left at init "
-            f"({sorted(missing)[:3]}{'…' if len(missing) > 3 else ''}), "
-            f"{len(unexpected)} checkpoint param(s) ignored"
-        )
-
-
-def build_checkpoint_io(
-    tokenizer: CharTokenizer | None,
-    model_cfg: ModelConfig,
-) -> tuple[Callable[[SFTTrainer, str], None], Callable[[SFTTrainer, str], int]]:
-    """Return `(saver, loader)` closures. Saver writes step+params+tokenizer+model_config; loader restores params and returns step."""
-
-    def saver(trainer: SFTTrainer, path: str) -> None:
-        if not path.endswith(".pkl"):
-            path = path + ".pkl"
-        with open(path, "wb") as f:
-            pickle.dump(
-                {
-                    "step": trainer.step,
-                    "model_state": _serialize_params(trainer.model),
-                    "tokenizer": tokenizer,
-                    "model_config": model_cfg,
-                },
-                f,
-            )
-        print(f"  Saved checkpoint to {path}")
-
-    def loader(trainer: SFTTrainer, path: str) -> int:
-        with open(path, "rb") as f:
-            ckpt = pickle.load(f)
-        _restore_params(trainer.model.parameters(), ckpt["model_state"])
-        return int(ckpt["step"])
-
-    return saver, loader
-
-
-def _shorten_home(path: str) -> str:
-    """Replace the user's home directory prefix in `path` with `~` for display."""
-    home = str(Path.home())
-    if path == home:
-        return "~"
-    if path.startswith(home + os.sep):
-        return "~" + path[len(home) :]
-    return path
-
-
-def _prefixed(prefix: str, suffix: str) -> str:
-    """Join with `_` when prefix is non-empty; bare `suffix` otherwise. Matches SFTTrainer's convention."""
-    return f"{prefix}_{suffix}" if prefix else suffix
-
-
-def find_latest_checkpoint(checkpoint_dir: str, checkpoint_prefix: str = "") -> str | None:
-    """Highest-step `<prefix>_step_*.pkl` (or `step_*.pkl` if prefix empty) under `checkpoint_dir`. `<prefix>_final.pkl` wins ties."""
-    directory = Path(checkpoint_dir)
-    step_glob = _prefixed(checkpoint_prefix, "step_*.pkl")
-    final_name = _prefixed(checkpoint_prefix, "final.pkl")
-    files = list(directory.glob(step_glob))
-    final_path = directory / final_name
-    if final_path.exists():
-        files.append(final_path)
-    if not files:
-        return None
-
-    def step_of(p: Path) -> float:
-        if p.name == final_name:
-            return float("inf")
-        m = re.search(r"step_(\d+)\.pkl$", p.name)
-        return int(m.group(1)) if m else -1
-
-    return str(max(files, key=step_of))
-
-
-def _peek_checkpoint(path: str) -> tuple[int, ModelConfig]:
-    """Read `(step, model_config)` from a checkpoint without restoring params or creating a model."""
-    with open(path, "rb") as f:
-        ckpt = pickle.load(f)
-    return int(ckpt["step"]), ckpt["model_config"]
-
-
-def load_for_inference(
-    path: str,
-) -> tuple[Model, CharTokenizer, ModelConfig, int]:
-    """Restore `(model, tokenizer, model_cfg, step)` from a checkpoint. Used to seed inference mode."""
-    with open(path, "rb") as f:
-        ckpt = pickle.load(f)
-    model_cfg: ModelConfig = ckpt["model_config"]
-    tokenizer: CharTokenizer = ckpt["tokenizer"]
-    step = int(ckpt["step"])
-
-    model = create_model(model_cfg, use_tp=False)
-    _restore_params(model.parameters(), ckpt["model_state"])
-    return model, tokenizer, model_cfg, step
 
 
 # ── Inference ─────────────────────────────────────────────────────────────────
@@ -944,25 +276,32 @@ def _extract_last_step_logits(logits: ttml.autograd.Tensor) -> ttml.autograd.Ten
     return ttml.autograd.create_tensor(last, requires_grad=False)
 
 
+def _vocab_pad_mask(padded_vocab: int, vocab_size: int) -> Any:
+    """Additive mask `[1, 1, 1, padded_vocab]` that drives the tile-padding columns `[vocab_size:]` to -inf.
+
+    Constant for a given `(padded_vocab, vocab_size)`, so callers build it once and reuse it across
+    sampling steps rather than re-transferring it to device every token.
+    """
+    bias_np = np.zeros((1, 1, 1, padded_vocab), dtype=np.float32)
+    bias_np[..., vocab_size:] = -1e9
+    return ttml.autograd.Tensor.from_numpy(
+        bias_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
+    ).get_value()
+
+
 def _sample_next_token(
     last_logits: ttml.autograd.Tensor,
     vocab_size: int,
     temperature: float,
     top_k: int,
+    pad_mask: Any | None = None,
 ) -> int:
     """Pick the next token id. Argmax when `temperature ≈ 0`; otherwise top-k filter + temperature-scaled sample."""
     # Logits span the tile-padded vocab; columns >= the real vocab_size are padding slots with
-    # arbitrary values. Bias them to -inf so neither argmax nor sampling can select an out-of-range
-    # id — instead of clamping a bad id after the fact. last_logits is always [1, 1, 1, vocab].
-    logits = last_logits.get_value()
-    padded_vocab = logits.shape[3]
-    if padded_vocab > vocab_size:
-        bias_np = np.zeros((1, 1, 1, padded_vocab), dtype=np.float32)
-        bias_np[..., vocab_size:] = -1e9
-        bias = ttml.autograd.Tensor.from_numpy(
-            bias_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
-        ).get_value()
-        last_logits = ttml.autograd.create_tensor(ttnn.add(logits, bias), requires_grad=False)
+    # arbitrary values. `pad_mask` (when the vocab is padded) biases them to -inf so neither argmax
+    # nor sampling can select an out-of-range id. last_logits is always [1, 1, 1, vocab].
+    if pad_mask is not None:
+        last_logits = ttml.autograd.create_tensor(ttnn.add(last_logits.get_value(), pad_mask), requires_grad=False)
 
     if temperature < 0.01:
         argmax = ttnn.argmax(last_logits.get_value(), dim=3, keepdim=True)
@@ -1021,6 +360,9 @@ def generate(
     )
 
     vocab_size = tokenizer.vocab_size
+    # Built lazily on the first step (the padded logit width is only known after a forward) and
+    # reused across steps; it survives the per-step reset_graph below like `mask` does.
+    pad_mask: Any | None = None
     start = time.time()
     first_token_s = 0.0
     for step in range(max_new_tokens):
@@ -1030,7 +372,9 @@ def generate(
         logits = model(model_input, mask_for_model)
 
         last_logits = _extract_last_step_logits(logits)
-        next_id = _sample_next_token(last_logits, vocab_size, temperature, top_k)
+        if pad_mask is None and last_logits.get_value().shape[3] > vocab_size:
+            pad_mask = _vocab_pad_mask(last_logits.get_value().shape[3], vocab_size)
+        next_id = _sample_next_token(last_logits, vocab_size, temperature, top_k, pad_mask)
 
         running.append(next_id)
         generated.append(next_id)
@@ -1078,16 +422,15 @@ def run_training(
     device_cfg: DeviceConfig,
 ) -> None:
     """Build dataset/model/optimizer/callbacks/trainer from configs + CLI overrides, then run training."""
+    mem_guard = None
     if args.track_memory:
+        # Open the capture here so the setup snapshots below land in one session; held for the
+        # whole run (release ends the capture), and MemoryTrackerCallback closes it after step 1.
+        mem_guard = MemoryUsageTracker.begin_capture()
         MemoryUsageTracker.snapshot("ENTRY")
 
     # Silent setup: gather everything, then emit a single header block before training.
     data_path = _resolve_data_path(training_cfg)
-    seq_len = model_cfg.max_sequence_length
-    dataset, tokenizer = build_dataset(data_path, seq_len, model_cfg.vocab_size)
-
-    raw_vocab = tokenizer.vocab_size if tokenizer is not None else model_cfg.vocab_size
-    model_cfg.vocab_size = round_up_to_tile(raw_vocab, 32)
 
     resume_path = None
     if not args.fresh:
@@ -1099,10 +442,19 @@ def run_training(
     resume_step: int | None = None
     if resume_path:
         try:
-            resume_step, model_cfg = _peek_checkpoint(resume_path)
-            seq_len = model_cfg.max_sequence_length
+            resume_step, model_cfg = peek_checkpoint(resume_path)
         except Exception:
             resume_path = None
+
+    # model_cfg is now final (the checkpoint's on resume), so build the dataset from its
+    # seq_len — dataset windowing must match the model and collate_fn(seq_len=...) below.
+    seq_len = model_cfg.max_sequence_length
+    dataset, tokenizer = build_dataset(data_path, seq_len, model_cfg.vocab_size)
+
+    # Char data auto-detects its vocab (config leaves it 0); record the real size so the model
+    # and checkpoint use it. Pre-tokenized data already has vocab_size from the config.
+    if tokenizer is not None:
+        model_cfg.vocab_size = tokenizer.vocab_size
 
     model = create_model(model_cfg, use_tp=device_cfg.enable_tp)
     if args.print_summary:
@@ -1146,13 +498,12 @@ def run_training(
 
     # Metrics.
     callbacks.append(ThroughputCallback(flops_per_token, peak_tflops, log_interval=1))
-    avg_loss_cb = _AverageLossCallback()
+    avg_loss_cb = AverageLossCallback()
     callbacks.append(avg_loss_cb)
 
-    # Diagnostics / profiling (profiler last, so its per-step marker closes a full iteration).
+    # Diagnostics.
     if args.track_memory:
         callbacks.append(MemoryTrackerCallback())
-    callbacks.append(ProfilerStepMarker())
 
     if training_cfg.use_clip_grad_norm and device_cfg.enable_tp:
         raise ValueError("Clip grad norm is not supported with TP")
@@ -1200,8 +551,9 @@ def run_training(
         trainer.load_checkpoint(resume_path)
 
     # ─ Build header sections ─
-    if raw_vocab and raw_vocab != model_cfg.vocab_size:
-        vocab_str = f"{raw_vocab} chars → {model_cfg.vocab_size} padded"
+    padded_vocab = round_up_to_tile(model_cfg.vocab_size, 32)
+    if model_cfg.vocab_size != padded_vocab:
+        vocab_str = f"{model_cfg.vocab_size} → {padded_vocab} padded"
     else:
         vocab_str = f"{model_cfg.vocab_size}"
 
@@ -1259,10 +611,10 @@ def run_training(
 
     ckpt_lines: list[str] = []
     if args.checkpoint_dir:
-        ckpt_pattern = os.path.join(args.checkpoint_dir, _prefixed(args.checkpoint_prefix, "step_*.pkl"))
-        ckpt_lines.append(f"save every {training_cfg.model_save_interval} → {_shorten_home(ckpt_pattern)}")
+        ckpt_pattern = os.path.join(args.checkpoint_dir, prefixed(args.checkpoint_prefix, "step_*.pkl"))
+        ckpt_lines.append(f"save every {training_cfg.model_save_interval} → {shorten_home(ckpt_pattern)}")
     if resume_path:
-        ckpt_lines.append(f"resume {_shorten_home(resume_path)} @ step {resume_step}")
+        ckpt_lines.append(f"resume {shorten_home(resume_path)} @ step {resume_step}")
 
     diag_lines: list[str] = []
     if args.track_memory:
@@ -1274,7 +626,7 @@ def run_training(
         (
             "data",
             [
-                ("path", _shorten_home(data_path)),
+                ("path", shorten_home(data_path)),
                 ("samples", f"{len(dataset):,}"),
                 ("vocab", vocab_str),
             ],
@@ -1296,7 +648,7 @@ def run_training(
     elapsed = time.time() - start
 
     if args.checkpoint_dir:
-        final_path = os.path.join(args.checkpoint_dir, _prefixed(args.checkpoint_prefix, "final.pkl"))
+        final_path = os.path.join(args.checkpoint_dir, prefixed(args.checkpoint_prefix, "final.pkl"))
         os.makedirs(args.checkpoint_dir, exist_ok=True)
         saver(trainer, final_path)
 
@@ -1319,9 +671,10 @@ def run_inference(args: argparse.Namespace, seed: int) -> None:
     )
 
     total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
+    padded_vocab = round_up_to_tile(model_cfg.vocab_size, 32)
     vocab_str = (
-        f"{tokenizer.vocab_size} → {model_cfg.vocab_size} padded"
-        if tokenizer.vocab_size != model_cfg.vocab_size
+        f"{tokenizer.vocab_size} → {padded_vocab} padded"
+        if tokenizer.vocab_size != padded_vocab
         else str(model_cfg.vocab_size)
     )
 
@@ -1329,7 +682,7 @@ def run_inference(args: argparse.Namespace, seed: int) -> None:
         (
             "checkpoint",
             [
-                ("path", _shorten_home(args.model_path)),
+                ("path", shorten_home(args.model_path)),
                 ("step", f"{loaded_step:,}"),
             ],
         ),
@@ -1378,7 +731,7 @@ def run_inference(args: argparse.Namespace, seed: int) -> None:
     )
 
     output_divider = "── OUTPUT "
-    print(output_divider + "─" * (_HEADER_WIDTH - len(output_divider)))
+    print(output_divider + "─" * (HEADER_WIDTH - len(output_divider)))
     print(text)
 
     n = args.max_new_tokens
@@ -1389,142 +742,6 @@ def run_inference(args: argparse.Namespace, seed: int) -> None:
         f"{model_cfg.model_type} · generated",
         [("tokens", f"{n:,}"), ("time", f"{elapsed:.2f} s"), ("speed", speed)],
     )
-
-
-# ── CLI ───────────────────────────────────────────────────────────────────────
-
-
-def _build_parser() -> argparse.ArgumentParser:
-    """Build the argparse parser with grouped help + back-compat aliases for old train_nanogpt.py callers."""
-    p = argparse.ArgumentParser(description="NanoGPT/Llama/DeepSeek/Qwen3 training (SFTTrainer)")
-
-    g = p.add_argument_group("Config & data")
-    g.add_argument(
-        "-c",
-        "--config",
-        type=str,
-        default="training_shakespeare_nanogpt_char.yaml",
-        help="Path to training config YAML",
-    )
-    g.add_argument(
-        "--data-path", dest="data_path", type=str, default="", help="Override training data path (default: from config)"
-    )
-    g.add_argument(
-        "--sequence-length",
-        dest="sequence_length",
-        type=int,
-        default=None,
-        help="Override sequence length (default: from config)",
-    )
-
-    g = p.add_argument_group("Training overrides")
-    g.add_argument("--batch-size", dest="batch_size", type=int, default=None, help="Override batch size")
-    g.add_argument("--max-steps", dest="max_steps", type=int, default=None, help="Override max training steps")
-    g.add_argument("--epochs", type=int, default=None, help="Override number of epochs")
-    g.add_argument(
-        "--max-grad-norm",
-        dest="max_grad_norm",
-        type=float,
-        default=None,
-        help="Enable gradient clipping with this max-norm",
-    )
-
-    g = p.add_argument_group("Checkpointing")
-    g.add_argument(
-        "--checkpoint-dir", dest="checkpoint_dir", type=str, default="", help="Directory for saving/loading checkpoints"
-    )
-    g.add_argument(
-        "--checkpoint-prefix",
-        dest="checkpoint_prefix",
-        type=str,
-        default="nano_gpt",
-        help="Prefix for checkpoint filenames",
-    )
-    g.add_argument("--resume", type=str, default="", help="Specific checkpoint to resume from (default: auto-detect)")
-    g.add_argument("--fresh", action="store_true", help="Skip resume; train from scratch")
-
-    g = p.add_argument_group("Inference")
-    g.add_argument("--model-path", dest="model_path", type=str, default="", help="Checkpoint to load for inference")
-    g.add_argument("--prompt", type=str, default="", help="Prompt text; with --model-path triggers inference mode")
-    g.add_argument("--max-new-tokens", dest="max_new_tokens", type=int, default=300, help="Tokens to generate")
-    g.add_argument("--temperature", type=float, default=0.8, help="Sampling temperature (0=greedy)")
-    g.add_argument("--top-k", dest="top_k", type=int, default=40, help="Top-k sampling (0=disabled)")
-
-    g = p.add_argument_group("Diagnostics")
-    g.add_argument("--track-memory", dest="track_memory", action="store_true", help="Enable memory tracking callbacks")
-    g.add_argument(
-        "--print-summary", dest="print_summary", action="store_true", help="Print model layer-by-layer summary"
-    )
-    g.add_argument(
-        "--log-expert-activations",
-        dest="log_expert_activations",
-        type=str,
-        default=None,
-        help="DeepSeek-only: CSV path for per-step expert activation probabilities",
-    )
-
-    # Silent underscore aliases for old train_nanogpt.py callers. Same dest as the
-    # canonical hyphen flag; SUPPRESS hides them from --help.
-    for flag, dest, type_name in (
-        ("--data_path", "data_path", "str"),
-        ("--sequence_length", "sequence_length", "int"),
-        ("--batch_size", "batch_size", "int"),
-        ("--max_steps", "max_steps", "int"),
-        ("--checkpoint_dir", "checkpoint_dir", "str"),
-        ("--checkpoint_prefix", "checkpoint_prefix", "str"),
-        ("--max_new_tokens", "max_new_tokens", "int"),
-        ("--top_k", "top_k", "int"),
-        ("--model_path", "model_path", "str"),
-    ):
-        p.add_argument(
-            flag, dest=dest, type={"str": str, "int": int}[type_name], default=argparse.SUPPRESS, help=argparse.SUPPRESS
-        )
-    p.add_argument(
-        "--track_memory", dest="track_memory", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS
-    )
-    p.add_argument(
-        "--print_summary", dest="print_summary", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS
-    )
-
-    # Deprecated renames — mapped to the canonical name in _apply_backcompat with a stderr warning.
-    p.add_argument("--num_epochs", type=int, default=None, help=argparse.SUPPRESS)
-    p.add_argument("--clip_grad_norm", type=float, default=None, help=argparse.SUPPRESS)
-    p.add_argument("--model_save_path", type=str, default="", help=argparse.SUPPRESS)
-
-    return p
-
-
-def _apply_backcompat(args: argparse.Namespace) -> None:
-    """Translate deprecated flags into canonical (with stderr warnings) and validate inference-mode flag pairing."""
-    if args.num_epochs is not None:
-        print("warning: --num_epochs is deprecated; use --epochs", file=sys.stderr)
-        if args.epochs is None:
-            args.epochs = args.num_epochs
-    if args.clip_grad_norm is not None:
-        print("warning: --clip_grad_norm is deprecated; use --max-grad-norm", file=sys.stderr)
-        if args.max_grad_norm is None:
-            args.max_grad_norm = args.clip_grad_norm
-    if args.model_save_path:
-        if args.checkpoint_dir:
-            raise SystemExit("error: --model_save_path and --checkpoint-dir are mutually exclusive")
-        print(
-            "warning: --model_save_path is deprecated; use --checkpoint-dir + --checkpoint-prefix",
-            file=sys.stderr,
-        )
-        dirpart = os.path.dirname(args.model_save_path) or "."
-        basepart = os.path.basename(args.model_save_path) or "nano_gpt"
-        args.checkpoint_dir = dirpart
-        args.checkpoint_prefix = basepart
-
-    if bool(args.prompt) ^ bool(args.model_path):
-        missing = "--model-path" if args.prompt else "--prompt"
-        raise SystemExit(f"error: inference mode requires both --prompt and --model-path (missing: {missing})")
-
-
-def parse_args() -> argparse.Namespace:
-    args = _build_parser().parse_args()
-    _apply_backcompat(args)
-    return args
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────

@@ -3,14 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Learning rate and optimizer parameter schedulers."""
-from ttml.common.config import SchedulerConfig
+from ttml.common.config import SpeedrunSchedulerConfig
 from typing import Optional
 
 
 class SpeedrunScheduler:
     """Linear warmup -> optional hold -> linear decay; optional beta1 warmup."""
 
-    def __init__(self, cfg: SchedulerConfig):
+    def __init__(self, cfg: SpeedrunSchedulerConfig):
         self.cfg = cfg
 
     def lr_at(self, step: int) -> float:
@@ -34,11 +34,7 @@ class SpeedrunScheduler:
             return peak + (min_lr - peak) * frac
 
     def beta1_at(self, step: int) -> Optional[float]:
-        if (
-            self.cfg.beta1_start is None
-            or self.cfg.beta1_end is None
-            or self.cfg.beta1_warmup_steps <= 0
-        ):
+        if self.cfg.beta1_start is None or self.cfg.beta1_end is None or self.cfg.beta1_warmup_steps <= 0:
             return None
         s = min(step, self.cfg.beta1_warmup_steps)
         t = s / float(self.cfg.beta1_warmup_steps)
