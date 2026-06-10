@@ -226,9 +226,10 @@ void kernel_main() {
     }
 
     // Bidirectional multicast handshake (hs_ = handshake): each device increments the init/exit
-    // semaphore on every other dispatch-axis device exactly once. Per-slot hop range is chosen by the
-    // NEIGHBOR'S position along the dispatch axis: the forward slot covers the (len-1-pos) devices
-    // ahead, the backward slot the pos devices behind — together exactly dispatch_devices-1 peers.
+    // semaphore on every other dispatch-axis device exactly once. Per-slot hop range is chosen by THIS
+    // device's position (hs_axis_pos) along the dispatch axis: the forward slot covers the (len-1-pos)
+    // devices ahead, the backward slot the pos devices behind — together exactly dispatch_devices-1
+    // peers. The neighbor's position only selects which slot (forward vs backward), not the range.
     // (FABRIC_2D dispatch is always a Linear axis here; no FABRIC_2D ring config exists.)
     constexpr bool hs_is_cols = (axis == ReplicateGroup::COLS);
     constexpr uint32_t hs_axis_pos =
@@ -260,8 +261,11 @@ void kernel_main() {
         hs_ranges[i] = is_forward ? static_cast<uint8_t>(hs_pos_range) : static_cast<uint8_t>(hs_neg_range);
     }
 
-    auto dispatch_2d_mcast_handshake = [&](uint64_t sem_addr) {
-        const auto cmd = tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sem_addr, 1, true};
+    // flush=true holds the receiver EDM's atomic-inc until this sender's prior fabric writes to that chip
+    // commit (needed at exit to order the inc behind payload/metadata). init passes flush=false: it is the
+    // first fabric traffic, so there are no prior writes to order against — matching the FABRIC_1D path.
+    auto dispatch_2d_mcast_handshake = [&](uint64_t sem_addr, bool flush) {
+        const auto cmd = tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sem_addr, 1, flush};
         tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
             fabric_connections, sem_route_id, cmd, hs_starts, hs_ranges);
     };
@@ -277,7 +281,7 @@ void kernel_main() {
     // Init semaphore exchange
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
 #ifdef FABRIC_2D
-    dispatch_2d_mcast_handshake(init_noc_semaphore_addr);
+    dispatch_2d_mcast_handshake(init_noc_semaphore_addr, /*flush=*/false);
 #else
     send_init_semaphore_to_configured_targets<
         linearized_mesh_coord,
@@ -492,15 +496,16 @@ void kernel_main() {
         // not be observed before our prior fabric writes (payload + metadata) to that chip have landed,
         // or a peer could see sem-reached-threshold before the data is in DRAM. The two paths enforce
         // this differently:
-        //   - FABRIC_2D: the noc_async_write_barrier() above drains local writes; the 2D multicast
-        //     handshake has no flush parameter.
+        //   - FABRIC_2D: the noc_async_write_barrier() above drains local writes, and the 2D multicast
+        //     handshake is issued with flush=true so the receiver EDM also holds the atomic-inc until our
+        //     prior fabric writes commit (init uses flush=false: no prior writes to order against).
         //   - FABRIC_1D (#else): send_init_semaphore_to_configured_targets is called with /*flush=*/true
         //     so the receiver EDM holds the atomic-inc until our prior writes commit (the init handshake
         //     uses the default flush=false since it has no prior writes to order against).
         {
             const uint64_t exit_noc_semaphore_addr = get_noc_addr(exit_semaphore_address);
 #ifdef FABRIC_2D
-            dispatch_2d_mcast_handshake(exit_noc_semaphore_addr);
+            dispatch_2d_mcast_handshake(exit_noc_semaphore_addr, /*flush=*/true);
 #else
             send_init_semaphore_to_configured_targets<
                 linearized_mesh_coord,
