@@ -13,14 +13,6 @@ from models.common.utility_functions import skip_for_blackhole, skip_with_watche
 pytestmark = pytest.mark.use_module_device
 
 
-@pytest.fixture(autouse=True)
-def clear_program_cache(device):
-    """Release L1_SMALL halo config tensor allocations between tests."""
-    yield
-    device.disable_and_clear_program_cache()
-    device.enable_program_cache()
-
-
 def _out_size(in_size, pad, stride, k, dilation):
     effective_k = (dilation * (k - 1)) + 1
     return (in_size + 2 * pad - effective_k) // stride + 1
