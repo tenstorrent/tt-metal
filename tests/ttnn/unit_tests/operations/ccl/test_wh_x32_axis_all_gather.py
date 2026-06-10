@@ -17,7 +17,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("cluster_axis", [0, 1])
-def test_wh_galaxy_axis_all_gather(mesh_device, cluster_axis):
+def test_wh_x32_axis_all_gather(mesh_device, cluster_axis):
     rows, cols = tuple(mesh_device.shape)
     axis_len = (rows, cols)[cluster_axis]
 
