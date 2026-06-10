@@ -660,7 +660,8 @@ std::unique_ptr<D2HSocket> D2HSocket::connect_from_descriptor(const HDSocketDesc
     // lives in SHM. Read it live so wait_for_bytes() sees fresh data immediately.
     socket->bytes_sent_ = socket->bytes_sent_ptr_[0];
 
-    // Reconcile the device-side bytes_acked with the restored SHM value.
+    // Reconcile the device-side bytes_acked with the restored SHM value. The
+    // previous driver process may have died between pop_bytes (SHM flushed)
     // A previous connector can advance bytes_acked/read_ptr in SHM and then exit between that update
     // and notify_sender (PCIe write to the device's config buffer), leaving
     // the device's bytes_acked behind. Without this, the device kernel may

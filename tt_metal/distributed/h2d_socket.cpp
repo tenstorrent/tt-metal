@@ -514,11 +514,7 @@ void H2DSocket::set_page_size(uint32_t page_size) {
 }
 
 void H2DSocket::barrier(std::optional<uint32_t> timeout_ms) {
-    // Sync bytes_sent_ from SHM so a separate connector process's pushes are visible.
-    // Mirror of D2HSocket::barrier's refresh_connector_read_state: refresh both
-    // before and inside the wait loop. Refreshing only once lets the owner observe a
-    // stale bytes_sent_ and return from barrier() before the connector's latest
-    // pushes have been acknowledged by the device.
+    // Re-sync bytes_sent_ from connector SHM each iteration (mirrors D2HSocket::barrier).
     auto refresh_connector_write_state = [this]() {
         if (connector_state_) {
             tt_driver_atomics::mfence();
