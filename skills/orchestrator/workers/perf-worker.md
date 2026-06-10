@@ -193,3 +193,14 @@ Use the standard JSON last-line contract. Pre-pend prose with:
 - Traced replay ms (if sub-pass 1 applied)
 - Targeted optimization attempted + result
 - Whether the e2e test still passes
+
+## Decode fused-kernel checklist (AR use cases)
+
+The decode step competes on op count. After tracing, audit per-layer
+decode ops against the decode-specific fused kernels and apply each
+where shapes allow (parity gate after each):
+`nlp_create_qkv_heads_decode` / `nlp_concat_heads_decode`,
+decode-mode `rotary_embedding_llama`, `scaled_dot_product_attention_decode`
+(when activations fit bf16 — pre-scale Q to tame attention sinks before
+rejecting it), and `all_gather_matmul` for row-parallel projections.
+"Already passing" is not a reason to skip; record measured deltas.
