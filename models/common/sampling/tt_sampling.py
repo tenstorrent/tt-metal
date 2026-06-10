@@ -86,6 +86,50 @@ class TTSampling(LightweightModule):
     def force_argmax_sampling(self) -> bool:
         return self._force_argmax_sampling
 
+    @property
+    def has_mixed_deterministic_rows(self) -> bool:
+        return self._has_mixed_deterministic_rows
+
+    def _deterministic_row_mask(self, k, p, temp):
+        def _as_list(values):
+            if isinstance(values, torch.Tensor):
+                return values.flatten().tolist()
+            if isinstance(values, (list, tuple)):
+                return list(values)
+            return [values]
+
+        k_values = _as_list(k)
+        p_values = _as_list(p)
+        temp_values = _as_list(temp)
+        target_len = max(len(k_values), len(p_values), len(temp_values))
+
+        def _expand(values):
+            if len(values) == target_len:
+                return values
+            if len(values) == 1:
+                return values * target_len
+            raise ValueError(
+                f"Cannot align sampling params of lengths {len(k_values)}, {len(p_values)}, {len(temp_values)}"
+            )
+
+        k_values = _expand(k_values)
+        p_values = _expand(p_values)
+        temp_values = _expand(temp_values)
+        mask = [
+            int(k_value) == 1 and float(temp_value) == 1.0 and float(p_value) in (0.0, 1.0)
+            for k_value, p_value, temp_value in zip(k_values, p_values, temp_values)
+        ]
+        return mask
+
+    def _update_deterministic_row_state(self, k, p, temp):
+        self._deterministic_row_mask_host = self._deterministic_row_mask(k, p, temp)
+        chunk_size = self.max_batch_size
+        chunks = [
+            self._deterministic_row_mask_host[i : i + chunk_size]
+            for i in range(0, len(self._deterministic_row_mask_host), chunk_size)
+        ]
+        self._has_mixed_deterministic_rows = any(any(chunk) and not all(chunk) for chunk in chunks)
+
     def __init__(
         self,
         mesh_device,
@@ -192,6 +236,7 @@ class TTSampling(LightweightModule):
             temp = torch.ones(total_param_size)
 
         self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
+        self._update_deterministic_row_state(k, p, temp)
 
         # Create sampling parameter tensors on device
         # When _sampling_dp > 1, dims=(0, None) shards the [128] tensor across 4 rows → [32] per row
@@ -233,7 +278,7 @@ class TTSampling(LightweightModule):
         # When sampling_dp > 1, shard across rows so each row gets its own slice.
         # user_ids tensor: core routing only (32 per row, replicated).
         self.seeds_tt_tensor = ttnn.from_torch(
-            torch.arange(total_param_size).to(torch.uint32),
+            torch.full((total_param_size,), torch.iinfo(torch.uint32).max, dtype=torch.uint32),
             device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -372,9 +417,11 @@ class TTSampling(LightweightModule):
         enable_log_probs: bool | list[bool] = None,
         num_logprobs: int | list[int] = None,
         empty_slots: list[int] | None = None,
+        allow_force_argmax: bool = True,
     ):
         """Update sampling parameters (k, p, temperature, logprobs) dynamically."""
-        self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
+        self._force_argmax_sampling = allow_force_argmax and self._is_force_argmax_sampling(k, p, temp)
+        self._update_deterministic_row_state(k, p, temp)
         if not self._force_argmax_sampling:
             # When _sampling_dp > 1, create multi-device host tensors so
             # copy_host_to_device_tensor writes per-row shards correctly.
@@ -412,6 +459,7 @@ class TTSampling(LightweightModule):
         self.log_probs_calculator.set_log_probs_mode(
             enable_log_probs, num_logprobs=num_logprobs, empty_slots=empty_slots
         )
+
 
     def forward(
         self,

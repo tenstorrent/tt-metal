@@ -90,6 +90,28 @@ def test_seed_counter_position_alignment_skips_out_of_bounds_slots():
     assert seed_manager.seed_counters == [6, 0, 0, 0]
 
 
+def test_slot_indexed_seed_reset_aligns_decode_position():
+    seed_manager = _make_host_only_seed_manager()
+
+    assert seed_manager.reset_seed_from_slots_if_needed([None, 42], [1])
+    seed_manager.align_seed_counters_to_positions([None, 42], [1], [0, 8], offset=1)
+
+    assert seed_manager.seeds == [None, 42, None, None]
+    assert seed_manager.seed_counters == [0, 9, 0, 0]
+
+
+def test_slot_indexed_seed_reset_clears_inactive_padded_slots():
+    seed_manager = _make_host_only_seed_manager()
+
+    seed_manager.reset_seed_from_slots([11, 22, 33, 44], None)
+    assert seed_manager._seed_active
+
+    assert seed_manager.reset_seed_from_slots_if_needed([None, None, None, None], [0, 1, 2, 3])
+
+    assert seed_manager.seeds == [None, None, None, None]
+    assert not seed_manager._seed_active
+
+
 def test_broadcast_sampling_params_preserves_none_list_fields():
     params = SamplingParams(temperature=[1.0, 1.0], top_k=[1, 1], top_p=[1.0, 1.0], seed=[None, 42])
 
@@ -107,6 +129,45 @@ def test_format_sampling_params_uses_device_argmax_sentinel_for_greedy_rows():
     assert params.temperature[0] == 1.0
     assert params.top_k[0] == 1
     assert params.top_p[0] == 0.0
+
+
+def test_format_sampling_params_top_one_is_deterministic_with_nonzero_temperature():
+    params = format_sampling_params(
+        SamplingParams(temperature=2.0, top_k=1, top_p=0.95),
+        max_batch_size=32,
+    )
+
+    assert params.temperature[0] == 1.0
+    assert params.top_k[0] == 1
+    assert params.top_p[0] == 0.0
+
+
+
+def test_format_sampling_params_flattens_high_temperature_floor():
+    params = format_sampling_params(
+        SamplingParams(temperature=5.0, top_k=32, top_p=1.0),
+        max_batch_size=32,
+    )
+
+    assert params.temperature[0] == 0.02
+    assert params.top_k[0] == 32
+    assert params.top_p[0] == 1.0
+
+
+def test_format_sampling_params_broadcasts_scalar_seed_zero():
+    params = SamplingParams(temperature=1.0, top_k=32, top_p=0.95, seed=0)
+
+    formatted = format_sampling_params(params, max_batch_size=32)
+
+    assert formatted.seed == [0] * 32
+
+
+def test_format_sampling_params_pads_multi_seed_list_with_none():
+    params = SamplingParams(temperature=[1.0, 1.0], top_k=[32, 32], top_p=[0.95, 0.95], seed=[0, 7])
+
+    formatted = format_sampling_params(params, max_batch_size=32)
+
+    assert formatted.seed[:4] == [0, 7, None, None]
 
 
 def _skip_if_not_galaxy(mesh_device):

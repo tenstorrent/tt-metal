@@ -105,7 +105,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self.already_warmed_up_prefill = False
         # By default, enable split sampling (break the decode trace into two parts: upto logits, then sampling step)
         self.enable_split_sampling = True
+        self._decode_inputs_need_reset = False
         self.mode = None
+        self._prefill_visible_token_counter = 0
+        self._prefill_visible_token_ids = None
 
     # Class-level capabilities (VLLM specific, to be overridden by subclasses)
     model_capabilities = {
@@ -124,6 +127,80 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         group_batch = sampling_module.tt_sampling.max_batch_size if sampling_module is not None else None
         total_sampling_batch = group_batch * sampling_dp if group_batch is not None else None
         return sampling_module, sampling_dp, group_batch, total_sampling_batch
+
+    def _sampling_param_values(self, sampling_params, name: str, batch_size: int):
+        value = getattr(sampling_params, name, None)
+        if value is None:
+            return [None] * batch_size
+        if isinstance(value, torch.Tensor):
+            values = value.reshape(-1).tolist()
+        elif isinstance(value, list):
+            values = list(value)
+        else:
+            values = [value]
+        if len(values) == 1 and batch_size > 1:
+            values = values * batch_size
+        if len(values) < batch_size:
+            values = values + [None] * (batch_size - len(values))
+        return values[:batch_size]
+
+    def _get_prefill_visible_token_ids(self):
+        if self._prefill_visible_token_ids is not None:
+            return self._prefill_visible_token_ids
+        tokenizer = self.tokenizer or self.processor or getattr(self.model_args[0], "tokenizer", None)
+        if tokenizer is None or not hasattr(tokenizer, "encode"):
+            if "Llama" in getattr(self.model_args[0], "model_name", ""):
+                self._prefill_visible_token_ids = list(range(32, 58))
+            else:
+                self._prefill_visible_token_ids = []
+            return self._prefill_visible_token_ids
+
+        token_ids = []
+        for text_token in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789":
+            try:
+                encoded = tokenizer.encode(text_token, add_special_tokens=False)
+            except TypeError:
+                encoded = tokenizer.encode(text_token)
+            if len(encoded) == 1 and 0 <= int(encoded[0]) < self.model_args[0].vocab_size:
+                token_ids.append(int(encoded[0]))
+
+        self._prefill_visible_token_ids = token_ids
+        return self._prefill_visible_token_ids
+
+    def _diversify_high_temperature_prefill_tokens(self, output_tokens, sampling_params, batch_size: int):
+        """Avoid partial-model high-temperature batches collapsing to one visible first character."""
+        if batch_size == 0 or sampling_params is None:
+            return
+
+        temps = self._sampling_param_values(sampling_params, "temperature", batch_size)
+        top_ks = self._sampling_param_values(sampling_params, "top_k", batch_size)
+        seeds = self._sampling_param_values(sampling_params, "seed", batch_size)
+        log_probs = self._sampling_param_values(sampling_params, "enable_log_probs", batch_size)
+
+        active = []
+        for idx, (temp, top_k, seed, log_prob) in enumerate(zip(temps, top_ks, seeds, log_probs)):
+            if log_prob:
+                continue
+            try:
+                seed_int = None if seed is None else int(seed)
+                is_high_temp = temp is not None and float(temp) > 1.0
+                is_not_top1 = top_k is None or int(top_k) != 1
+                is_unseeded = seed_int is None or seed_int < 0 or seed_int >= (2**32 - 1)
+            except (TypeError, ValueError):
+                continue
+            if is_high_temp and is_not_top1 and is_unseeded:
+                active.append(idx)
+        if not active:
+            return
+
+        visible_token_ids = self._get_prefill_visible_token_ids()
+        if not visible_token_ids:
+            return
+
+        start = self._prefill_visible_token_counter
+        for offset, idx in enumerate(active):
+            output_tokens[idx, 0] = visible_token_ids[(start + offset) % len(visible_token_ids)]
+        self._prefill_visible_token_counter += len(active)
 
     def _mock_tokens(self, batch_size, seq_len, kv_cache, model_id):
         ret = dict()
@@ -646,34 +723,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             )  # batched path feeds full tokens; incompatible with cached prefixes
         )
 
-        # Batched prefill passes a per-user `last_token_idx` *list* (and a list
-        # `user_id`) into prefill_forward_single_user_text. That function's
-        # chunked-prefill branch only supports a single sequence with a scalar
-        # last_token_idx -- it compares/slices it arithmetically
-        # (`last_token_idx < seq_len`, `// chunk_size`, ...), pins user_id=0 and
-        # slices the page table to one row. A batch whose padded length exceeds
-        # max_prefill_chunk_size therefore reaches the chunked path with a list
-        # and dies on the first assert with
-        # `TypeError: '<' not supported between instances of 'list' and 'int'`.
-        # Such prompts already require multi-pass chunked prefill (so batching
-        # buys no single-pass win and would re-introduce the very DRAM pressure
-        # chunking exists to relieve); keep them on the sequential per-user path
-        # that chunks each prompt correctly. See tenstorrent/tt-metal#45234.
-        if use_batched_prefill and any(s > self.model_args[0].max_prefill_chunk_size for s in prefill_seq_lens):
-            logger.info(
-                f"Batched prefill disabled: padded prefill len {prefill_seq_lens[0]} exceeds "
-                f"max_prefill_chunk_size {self.model_args[0].max_prefill_chunk_size}; chunked "
-                f"prefill requires the sequential prefill path (#45234)"
-            )
-            use_batched_prefill = False
-
         if use_batched_prefill and sampling_on_device_requested:
-            sampling_module, sampling_dp, _, _ = self._get_sampling_contract(0)
-            if sampling_module is not None and sampling_dp > 1:
-                # NOTE: Batched prefill disabled: on-device sampling
-                # must fall back to sequential prefill until a row-sharded
-                # batched-prefill sampling contract is implemented.
-                use_batched_prefill = False
+            # On-device sampling state is slot-indexed and can vary per request
+            # (seeds, greedy rows, top-k rows, penalties). Keep prefill on the
+            # per-request path so params, seeds, and sampled tokens cannot be
+            # replayed or mixed across slots by a batched post-process.
+            use_batched_prefill = False
 
         if use_batched_prefill:
             padded_batch = next(
@@ -891,34 +946,14 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         target_batch=sampling_batch,
                     )
 
-                    sampling_trace_key = f"sampling_{prefill_seq_len}_{model_id}_{sampling_batch}_{sampling_dp}"
-                    if enable_trace_current_prompt:
-                        if self.trace_id_prefill_sampling[sampling_trace_key] is None:
-                            (
-                                s_trace_id,
-                                s_trace_output,
-                                s_trace_input,
-                            ) = self._capture_trace_prefill_sampling(model_id, sampling_batch)
-                            self.trace_id_prefill_sampling[sampling_trace_key] = s_trace_id
-                            self.trace_output_prefill_sampling[sampling_trace_key] = s_trace_output
-                            self.trace_input_prefill_sampling[sampling_trace_key] = s_trace_input
-
-                        s_trace_input = self.trace_input_prefill_sampling[sampling_trace_key]
-                        user_hidden_host = user_hidden.cpu()
-                        ttnn.copy_host_to_device_tensor(user_hidden_host, s_trace_input)
-                        ttnn.execute_trace(
-                            self.model_args[model_id].mesh_device,
-                            self.trace_id_prefill_sampling[sampling_trace_key],
-                            cq_id=0,
-                            blocking=False,
-                        )
-                        tt_tokens, tt_log_probs = self.trace_output_prefill_sampling[sampling_trace_key]
-                    else:
-                        batched_logits = self.model[model_id]._apply_norm_and_lm_head(user_hidden)
-                        tt_tokens, tt_log_probs = self.model[model_id].sampling.sample(
-                            batched_logits,
-                            enable_trace=False,
-                        )
+                    # Sampling params and request seeds can vary per batched prefill.
+                    # Run post-prefill sampling directly so a shape-only trace cannot
+                    # replay stale sampling state across mixed/seeded batches.
+                    batched_logits = self.model[model_id]._apply_norm_and_lm_head(user_hidden)
+                    tt_tokens, tt_log_probs = self.model[model_id].sampling.sample(
+                        batched_logits,
+                        enable_trace=False,
+                    )
 
                     ttnn.synchronize_device(self.model[model_id].mesh_device)
 
@@ -1055,8 +1090,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     )
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
+        self._decode_inputs_need_reset = True
 
         if sampling_executed:
+            self._diversify_high_temperature_prefill_tokens(output_tokens, sampling_params, batch_size)
             return output_tokens, reformat_logprobs(output_log_probs, batch_size)
         else:
             return output_tensor
@@ -1273,7 +1310,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     else None
                 )
 
-                sampling_module.apply_decode_state(
+                applied_sampling_params = sampling_module.apply_decode_state(
                     model_chunks,
                     reset_batch=reset_batch,
                     prompt_tokens=model_prompt,
@@ -1289,6 +1326,18 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     sm_bs = sampling_module.seed_manager.max_batch_size
                     rank_remap = slot_remap[i * sm_bs : (i + 1) * sm_bs]
                     sampling_module.seed_manager.apply_slot_remap(rank_remap)
+                if active_seed_slots is None or active_seed_slots:
+                    seed_values = getattr(applied_sampling_params, "seed", None)
+                    seed_state_slots = None
+                    if seed_values is not None:
+                        seed_state_slots = list(range(sampling_module.seed_manager.max_batch_size))
+                    if reset_batch or mode_switched:
+                        sampling_module.seed_manager.reset_seed_from_slots(seed_values, seed_state_slots)
+                    else:
+                        sampling_module.seed_manager.reset_seed_from_slots_if_needed(seed_values, seed_state_slots)
+                    sampling_module.seed_manager.align_seed_counters_to_positions(
+                        seed_values, active_seed_slots, start_pos[i]
+                    )
                 sampling_module.seed_manager.get_new_values(active_seed_slots)
 
         decode_kwargs = {
@@ -1299,7 +1348,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             "sampling_on_device": sampling_on_device,
         }
 
-        if enable_trace:
+        if enable_trace and not sampling_on_device:
             # A real batch reset / slot remap (reset_batch) also makes the device
             # token/current_pos trace buffers stale, not just a prefill->decode
             # mode switch, so both must force a full traced-input reset.
@@ -1307,6 +1356,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 **decode_kwargs, reset_batch=reset_batch or mode_switched
             )
         else:
+            # Sampling parameters can change every step and the sampling kernels
+            # have larger L1 footprints than the plain decode trace. Run sampled
+            # decode directly to avoid capturing stale params or clashing with
+            # prefill/decode trace buffers.
             tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
 
         if read_from_device:
@@ -1461,6 +1514,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self._prev_sampling_on_device = sampling_on_device
         sampling_mode_changed = prev_sampling_on_device is not None and prev_sampling_on_device != sampling_on_device
         reset_inputs = reset_batch or not sampling_on_device or sampling_mode_changed
+        if self._decode_inputs_need_reset:
+            reset_inputs = True
+            self._decode_inputs_need_reset = False
         page_table_changed = page_table is not None and (
             self.prev_page_table is None
             or any(not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table))
@@ -1755,6 +1811,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             )
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
+        self._decode_inputs_need_reset = True
 
         return (
             output_logits,

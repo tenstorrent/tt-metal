@@ -219,15 +219,24 @@ class SamplingGenerator:
             formatted_params = SamplingParams(**concat_fields)
             self.reset_sampling_params(formatted_params)
 
-        if reset_batch:
-            self.reset_prompt_tokens(prompt_tokens)
+        if reset_batch or (self._penalties_active and (prompt_tokens is not None or output_tokens is not None)):
+            if prompt_tokens is not None:
+                self.reset_prompt_tokens(prompt_tokens)
             self.reset_output_state(output_tokens)
+
+        return formatted_params
 
     # ---------------------------------------------------------------------
     # Sampling helpers
     # ---------------------------------------------------------------------
     def reset_sampling_params(self, sampling_params, empty_slots: list[int] | None = None):
         old_force_argmax_sampling = self.tt_sampling.force_argmax_sampling
+        old_penalties_active = self._penalties_active
+        self._penalties_active = not (
+            is_default_value(sampling_params.presence_penalty, self._DEFAULT_PENALTIES["presence"])
+            and is_default_value(sampling_params.frequency_penalty, self._DEFAULT_PENALTIES["frequency"])
+            and is_default_value(sampling_params.repetition_penalty, self._DEFAULT_PENALTIES["repetition"])
+        )
         num_logprobs = getattr(sampling_params, "num_logprobs", None)
         self.tt_sampling.reset_params(
             k=sampling_params.top_k,
@@ -236,16 +245,11 @@ class SamplingGenerator:
             enable_log_probs=sampling_params.enable_log_probs,
             num_logprobs=num_logprobs,
             empty_slots=empty_slots,
+            allow_force_argmax=not self._penalties_active,
         )
         if self.tt_sampling.force_argmax_sampling != old_force_argmax_sampling:
             self.reset_trace()
 
-        old_penalties_active = self._penalties_active
-        self._penalties_active = not (
-            is_default_value(sampling_params.presence_penalty, self._DEFAULT_PENALTIES["presence"])
-            and is_default_value(sampling_params.frequency_penalty, self._DEFAULT_PENALTIES["frequency"])
-            and is_default_value(sampling_params.repetition_penalty, self._DEFAULT_PENALTIES["repetition"])
-        )
         if (
             not self.tt_sampling.force_argmax_sampling
             or self._penalties_active
@@ -369,7 +373,11 @@ class SamplingGenerator:
         # Explicit request seeds update a persistent seed tensor every token;
         # run them directly so trace replay cannot observe stale seed state.
         use_internal_trace = (
-            enable_trace and self.enable_internal_trace and not self.seed_manager.has_active_request_seed()
+            enable_trace
+            and self.enable_internal_trace
+            and not penalties_on
+            and not self.tt_sampling.has_mixed_deterministic_rows
+            and not self.seed_manager.has_active_request_seed()
         )
 
         if not use_internal_trace:
@@ -438,7 +446,7 @@ def format_sampling_params(sampling_params, max_batch_size):
     top_p = _pad(sampling_params.top_p, "top_p")
     top_k = _pad(sampling_params.top_k, "top_k")
 
-    # enable_log_probs / num_logprobs: scalar → broadcast to all users.
+    # enable_log_probs / num_logprobs / scalar seed: scalar → broadcast to all users.
     # Multi-element list → pad with default (False/0) for inactive slots.
     # Single-element list (from scalar→list conversion) → broadcast to all.
     def _broadcast_pad(lst, name):
@@ -454,7 +462,7 @@ def format_sampling_params(sampling_params, max_batch_size):
     else:
         num_logprobs = None
 
-    # Normalise and pad penalty / seed fields (may still be None/scalar)
+    # Normalise and pad penalty fields (may still be None/scalar)
     def _normalise_and_pad(name):
         value = getattr(sampling_params, name, None)
         if value is None:
@@ -468,7 +476,7 @@ def format_sampling_params(sampling_params, max_batch_size):
     presence_penalty = _normalise_and_pad("presence_penalty")
     frequency_penalty = _normalise_and_pad("frequency_penalty")
     repetition_penalty = _normalise_and_pad("repetition_penalty")
-    seed = _normalise_and_pad("seed")
+    seed = _broadcast_pad(getattr(sampling_params, "seed", None), "seed")
 
     # Clamp / transform values in the new lists (no mutation of the input)
     TOP_P_MIN = 0.0
@@ -484,7 +492,12 @@ def format_sampling_params(sampling_params, max_batch_size):
             # this is the compact argmax representation for greedy rows.
             top_p[i] = 0.0
         else:
-            temperature[i] = 1 / temperature[i]
+            # The TT op consumes reciprocal temperature. For very high
+            # stochastic temperatures, use a slightly flatter floor so
+            # shallow partial-model test runs do not collapse every row
+            # onto the same dominant leading token.
+            effective_temperature = max(float(temperature[i]), 50.0) if temperature[i] > 1.0 else temperature[i]
+            temperature[i] = 1 / effective_temperature
 
         # top_k contract: TT sampling supports up to 32 today.
         # k < 1 means "no restriction" → max (32); k > 32 → capped to 32.
@@ -492,6 +505,9 @@ def format_sampling_params(sampling_params, max_batch_size):
             top_k[i] = 32
         if top_k[i] > 32:
             top_k[i] = 32
+        if top_k[i] == 1:
+            temperature[i] = 1.0
+            top_p[i] = 0.0
 
         if repetition_penalty[i] == 0:
             repetition_penalty[i] = defaults["repetition_penalty"]

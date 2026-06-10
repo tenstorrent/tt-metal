@@ -19,6 +19,7 @@ from models.common.lightweightmodule import LightweightModule
 @dataclass
 class PenaltyContext:
     prompt_mask: ttnn.Tensor
+    prompt_counts: ttnn.Tensor
     output_mask: ttnn.Tensor
     output_counts: ttnn.Tensor
     output_counts_gathered: ttnn.Tensor
@@ -34,33 +35,33 @@ def apply_penalties(logits: ttnn.Tensor, context: Optional[PenaltyContext]) -> t
         return logits
 
     op_kwargs = {"sub_core_grids": context.sub_core_grids} if context.sub_core_grids else {}
-    # presence
-    presence_term = ttnn.multiply(
-        ttnn.typecast(context.output_mask, ttnn.bfloat16, **op_kwargs), context.presence_penalties, **op_kwargs
-    )
+    combined_mask_int32 = ttnn.add(context.prompt_mask, context.output_mask, **op_kwargs)
+    combined_mask_bool = ttnn.gt(combined_mask_int32, 0, **op_kwargs)
+    combined_mask_int32.deallocate()
+
+    # Presence applies once to tokens that appeared anywhere in the prompt or output.
+    presence_mask = ttnn.typecast(combined_mask_bool, ttnn.bfloat16, **op_kwargs)
+    presence_term = ttnn.multiply(presence_mask, context.presence_penalties, **op_kwargs)
+    presence_mask.deallocate()
     presence_term_bf16 = ttnn.typecast(presence_term, ttnn.bfloat16, **op_kwargs)
     logits = ttnn.subtract(logits, presence_term_bf16, output_tensor=logits, **op_kwargs)
     presence_term_bf16.deallocate()
 
-    # frequency
-    output_counts_bf16 = ttnn.typecast(context.output_counts, ttnn.bfloat16, **op_kwargs)
-
-    freq_term = ttnn.multiply(output_counts_bf16, context.frequency_penalties, **op_kwargs)
+    # Frequency counts both prompt and generated-output occurrences.
+    combined_counts = ttnn.add(context.prompt_counts, context.output_counts, **op_kwargs)
+    combined_counts_bf16 = ttnn.typecast(combined_counts, ttnn.bfloat16, **op_kwargs)
+    combined_counts.deallocate()
+    freq_term = ttnn.multiply(combined_counts_bf16, context.frequency_penalties, **op_kwargs)
+    combined_counts_bf16.deallocate()
 
     freq_term_bf16 = ttnn.typecast(freq_term, ttnn.bfloat16, **op_kwargs)
     logits = ttnn.subtract(logits, freq_term_bf16, output_tensor=logits, **op_kwargs)
     freq_term_bf16.deallocate()
 
-    # repetition
-
-    # If token appears in prompt or output, apply, otherwise use 1.0 for no-op.
-
-    combined_mask_int32 = ttnn.add(context.prompt_mask, context.output_mask, **op_kwargs)
-    combined_mask = ttnn.typecast(combined_mask_int32, ttnn.bfloat16, **op_kwargs)
-    combined_mask_int32.deallocate()
-    penalties = ttnn.where(combined_mask, context.repetition_penalties, 1.0, **op_kwargs)
-    inverse_penalties = ttnn.where(combined_mask, context.inverse_repetition_penalties, 1.0, **op_kwargs)
-    combined_mask.deallocate()
+    # Repetition applies to tokens that appeared anywhere in the prompt or output.
+    penalties = ttnn.where(combined_mask_bool, context.repetition_penalties, 1.0, **op_kwargs)
+    inverse_penalties = ttnn.where(combined_mask_bool, context.inverse_repetition_penalties, 1.0, **op_kwargs)
+    combined_mask_bool.deallocate()
 
     # If logits are >0, divide by penalty, otherwise multiply by penalty.
     logits_bf16 = ttnn.typecast(logits, ttnn.bfloat16, **op_kwargs)
@@ -137,6 +138,7 @@ class TTPenalties(LightweightModule):
         self._shard_dims_gathered = shard_dims_gathered
 
         self.prompt_mask = self._alloc_int_buffer(shard_dims=shard_dims)
+        self.prompt_counts = self._alloc_int_buffer(shard_dims=shard_dims)
         self.output_mask = self._alloc_int_buffer(shard_dims=shard_dims)
         self.output_counts_gathered = self._alloc_int_buffer(shard_dims=shard_dims_gathered)
         self.output_counts = self._alloc_int_buffer(shard_dims=shard_dims)
@@ -261,6 +263,7 @@ class TTPenalties(LightweightModule):
         # duplicate prompt token ids (common in penalty tests/prompts).
         prompt_counts = self._token_counts_host(prompt_tokens_2d)
         prompt_mask = (prompt_counts > 0).to(torch.int32)
+        self._copy_int_host_to_device(self.prompt_counts, prompt_counts, self._shard_dims_mask)
         self._copy_int_host_to_device(self.prompt_mask, prompt_mask, self._shard_dims_mask)
 
     def reset_output_tokens(self, tokens=None):
@@ -336,6 +339,7 @@ class TTPenalties(LightweightModule):
             return tt_logits
         context = PenaltyContext(
             prompt_mask=self.prompt_mask,
+            prompt_counts=self.prompt_counts,
             output_mask=self.output_mask,
             output_counts=self.output_counts,
             output_counts_gathered=self.output_counts_gathered,
