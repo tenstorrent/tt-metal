@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T23:08:15Z
+**Updated:** 2026-06-10T23:20:37Z
 
 ## Block Status
 
@@ -48,7 +48,7 @@
 | embedding | reference | done | 1.000000 | 0 | F.embedding lookup on model.embed_tokens.weight 151936x1536, untied |
 | embedding | ttnn | done | 1.000000 | 0 | Single ttnn.embedding lookup (KB ttnn_embedding cited: uint32 ROW_MAJOR indices [1,1,1,128], table [1,1,151936,1536] ROW_MAJOR DRAM, TILE_LAYOUT output) + ttnn.unsqueeze_to_4D + ttnn.all_gather(dim=3, Topology.Linear). Parallelism plan placement=shard implemented via the reference_impl tt_transformers/tt/embedding.py pattern: table sharded on the HIDDEN dim across the 1x4 mesh (ShardTensorToMesh dim=-1), per-device hidden slices recombined by all_gather into a replicated activation — the plan's 'shard vocab dim' wording deviates from the named tt_transformers pattern (vocab shard would need index offset/masking ttnn.embedding lacks); hidden-dim shard delta documented in the block docstring. Real model.embed_tokens.weight (untied) loaded from checkpoint in the test; replicated output compared single-device vs golden ids/output. Guard ok (lint 0, kernels ok, no new host ops). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | embedding | debug | n/a | — | 0 |  |
-| embedding | optimization | pending | — | 0 | OCCUPANCY REDO: per the new occupancy+convergence contract — query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid |
+| embedding | optimization | done | 1.000000 | 0 | OCCUPANCY REDO complete at BOTH production shapes (tracy; decode ids [1,1,1,32] under --traced metal trace replay matching the production traced token step, prefill ids [1,1,1,2816] eager matching the untraced production prefill; 1x4 BH mesh, queried grid 11x10=110). Harness re-pointed from the stale seq=128 golden shape (--seq/--num-links/--placement A/B flags). Baseline decode: all_gather 15.5us/chip @5-6c (80.4% share, hidden-dim-shard recombine) + single-core embedding lookup 3.8us (19.6%) = 19.3us/chip. Levers, one per measurement: (1) all_gather num_links 1->2 (recorded 2/2-eth QB HW ceiling): prefill 331->167us/chip (~2x, wire-bound) but decode only 15.5->14.6us (-6%, latency-bound at the 96KB payload) - kept as the shard-path parameter; (2) table placement shard->REPLICATE (tp-guidance 'embedding (small models)' row; 467MB bf16/chip of 34GB DRAM): deletes the CCL outright - decode 18.4->9.2 us/chip (-52%), prefill 180.9->45.2us/chip (-75% vs best sharded). Replicate is the new production default; shard+num_links path kept behind placement='shard' for DRAM-tight configs. Final occupancy vs 110-core grid: EmbeddingsDeviceOperation is the only device op (unsqueeze_to_4D is metadata) - 88/110 cores (80%) at prefill (one core per 32-row output tile, kernel's row-tile axis), 1/110 at decode's single row tile - the kernel ceiling for that shape (no program-config lever exists; occupancy evidence: same kernel takes 88c when row tiles exist). Gates: block PCC 1.000000 (golden test re-run, traced_ops sideguard regenerated - all_gather dropped from the production graph), real-weights row PCC 1.000000 (233373696 params), e2e WER parity re-run PASS (TTNN wer=0.0 == HF wer=0.0, drift 0.0, tolerance 0.05; no dtype change so the long-AR drift gate is not triggered - placement only). bf8b-first reviewed: bfloat8_b requires TILE layout, ttnn.embedding requires the ROW_MAJOR table idiom - not applicable, table stays bf16. KB ttnn_embedding cited (uint32 ROW_MAJOR ids/TILE output idiom already in place); ttnn_embedding_1/_bw, rotary/bcast/cos entries not applicable. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | embedding | real_weights | done | 1.000000 | 0 | embedding_weights loader added to consolidated tt/weight_loader.py (pure-PyTorch, memoized key-filtered safetensors load of model.embed_tokens.weight [151936,1536], untied from lm_head — tie_word_embeddings false, no shared-tensor helper; __main__ self-test extended: 233373696 params, shape asserted). Stage-1 parametric tests/test_real_hf_weights.py row runs TtEmbedding at the production operating point (bf16 table hidden-dim-sharded ShardTensorToMesh dim=-1 on the 1x4 mesh, uint32 ROW_MAJOR golden real prompt token ids [1,128] replicated, all_gather recombine, one device's replicated copy compared) vs the pure-PyTorch embedding_forward reference with the same real weights: PCC 1.000000 (>0.99). Block forward untouched; full harness re-run, all 8 rows passing (vision rows unchanged). Guard ok (lint 0, params_loaded 233373696>0). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | text_rmsnorm | reference | done | 1.000000 | 0 | Qwen2RMSNorm eps=1e-6, fp32 variance then weight*x, real layers.0 input_layernorm weight |
 | text_rmsnorm | ttnn | done | 0.999986 | 0 | Qwen2RMSNorm eps=1e-6 via fused ttnn.rms_norm ([1,1,dim//32,32] ROW_MAJOR gamma, HiFi2+fp32-acc per reference_impl models/common/rmsnorm.py) PLUS the parallelism-plan distributed path: rms_norm_pre_all_gather -> sync ttnn.all_gather(dim=3, Topology.Linear; async deferred to optimization per tp-guidance) -> rms_norm_post_all_gather with dim-2-sharded gamma (KB ttnn_rms_norm_post_all_gather cited; KB ttnn_pow chain fused into ttnn.rms_norm). Real layers.0 input_layernorm weight; 1x4 mesh; replicated path compared single-device vs golden (PCC 0.999986), distributed path concat-on-hidden vs golden (PCC 0.999986). Guard ok (lint 0, kernels ok, no new host ops). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 51 (2026-06-10T11:16:02Z): device[vision_transformer] — ok
 - tick 52 (2026-06-10T18:51:26Z): perf[ocr] — ok
 - tick 53 (2026-06-10T21:05:20Z): perf[ocr] — ok
 - tick 54 (2026-06-10T21:29:25Z): device[vision_patch_embed] — ok
@@ -94,6 +93,7 @@
 - tick 58 (2026-06-10T22:25:08Z): device[vision_block] — ok
 - tick 59 (2026-06-10T22:43:29Z): device[patch_merger] — ok
 - tick 60 (2026-06-10T23:08:15Z): device[vision_transformer] — ok
+- tick 61 (2026-06-10T23:20:37Z): device[embedding] — ok
 
 ## Host-Resident Exceptions
 

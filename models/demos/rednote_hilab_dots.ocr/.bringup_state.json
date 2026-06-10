@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T23:08:15Z",
+  "updated_at": "2026-06-10T23:20:37Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -478,9 +478,17 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
+        "status": "done",
         "attempts": 0,
-        "notes": "OCCUPANCY REDO: per the new occupancy+convergence contract \u2014 query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid"
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/embedding.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_embedding.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/embedding.traced_ops.json",
+          "generated/profiler/reports/2026_06_10_23_16_18/ops_perf_results_2026_06_10_23_16_18.csv",
+          "generated/profiler/reports/2026_06_10_23_16_25/ops_perf_results_2026_06_10_23_16_25.csv"
+        ],
+        "notes": "OCCUPANCY REDO complete at BOTH production shapes (tracy; decode ids [1,1,1,32] under --traced metal trace replay matching the production traced token step, prefill ids [1,1,1,2816] eager matching the untraced production prefill; 1x4 BH mesh, queried grid 11x10=110). Harness re-pointed from the stale seq=128 golden shape (--seq/--num-links/--placement A/B flags). Baseline decode: all_gather 15.5us/chip @5-6c (80.4% share, hidden-dim-shard recombine) + single-core embedding lookup 3.8us (19.6%) = 19.3us/chip. Levers, one per measurement: (1) all_gather num_links 1->2 (recorded 2/2-eth QB HW ceiling): prefill 331->167us/chip (~2x, wire-bound) but decode only 15.5->14.6us (-6%, latency-bound at the 96KB payload) - kept as the shard-path parameter; (2) table placement shard->REPLICATE (tp-guidance 'embedding (small models)' row; 467MB bf16/chip of 34GB DRAM): deletes the CCL outright - decode 18.4->9.2 us/chip (-52%), prefill 180.9->45.2us/chip (-75% vs best sharded). Replicate is the new production default; shard+num_links path kept behind placement='shard' for DRAM-tight configs. Final occupancy vs 110-core grid: EmbeddingsDeviceOperation is the only device op (unsqueeze_to_4D is metadata) - 88/110 cores (80%) at prefill (one core per 32-row output tile, kernel's row-tile axis), 1/110 at decode's single row tile - the kernel ceiling for that shape (no program-config lever exists; occupancy evidence: same kernel takes 88c when row tiles exist). Gates: block PCC 1.000000 (golden test re-run, traced_ops sideguard regenerated - all_gather dropped from the production graph), real-weights row PCC 1.000000 (233373696 params), e2e WER parity re-run PASS (TTNN wer=0.0 == HF wer=0.0, drift 0.0, tolerance 0.05; no dtype change so the long-AR drift gate is not triggered - placement only). bf8b-first reviewed: bfloat8_b requires TILE layout, ttnn.embedding requires the ROW_MAJOR table idiom - not applicable, table stays bf16. KB ttnn_embedding cited (uint32 ROW_MAJOR ids/TILE output idiom already in place); ttnn_embedding_1/_bw, rotary/bcast/cos entries not applicable. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 1.0
       },
       "real_weights": {
         "status": "done",
@@ -1183,6 +1191,12 @@
       "tick": 60,
       "ts": "2026-06-10T23:08:15Z",
       "action": "device[vision_transformer]",
+      "result": "ok"
+    },
+    {
+      "tick": 61,
+      "ts": "2026-06-10T23:20:37Z",
+      "action": "device[embedding]",
       "result": "ok"
     }
   ],

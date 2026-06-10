@@ -1,16 +1,21 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Tracy harness for TtEmbedding at the PRODUCTION operating point.
+"""Tracy harness for TtEmbedding at the PRODUCTION operating points.
 
-Production context (reference/test_functional.py golden + tt_transformers
-convention): the text token embedding looks up a [1, 1, 1, 128] uint32
-replicated id tensor in the hidden-dim-sharded [1, 1, 151936, 1536] table on
-the 1x4 mesh, then all_gathers the per-device hidden slices back to a
-replicated [1, 1, 128, 1536] activation (Topology.Linear, FABRIC_1D).
+The embedding has TWO production shapes (ocr_model.py):
+
+- decode (hot path, inside the metal-traced token step): the persistent id
+  buffer is [1, 1, 1, 32] uint32 replicated; lookup on the hidden-dim-sharded
+  [1, 1, 151936, 1536] table -> [1, 1, 32, 1536] -> all_gather(dim=3) back to
+  a replicated row (Topology.Linear, FABRIC_1D). Profile with --seq 32
+  --traced (the step runs under metal trace in production).
+- prefill (run once per image): real prompts are ~2.8k tokens, padded to a
+  tile multiple -> ids [1, 1, 1, 2816]. Profile with --seq 2816.
 
 Run under tracy:
     python -m tracy -p -v -r --op-support-count 20000 \
-        models/demos/rednote_hilab_dots.ocr/tt/profile_embedding.py --traced
+        models/demos/rednote_hilab_dots.ocr/tt/profile_embedding.py \
+        --traced --seq 32
 """
 
 import argparse
@@ -31,7 +36,7 @@ sys.modules[_spec.name] = _mod
 _spec.loader.exec_module(_mod)
 TtEmbedding = _mod.TtEmbedding
 
-SEQ = 128  # golden prompt length (reference/golden/embedding.pt ids [1, 128])
+SEQ = 32  # production decode posture: persistent [1, 1, 1, 32] id buffer
 
 
 def _load_embed_weight():
@@ -48,6 +53,11 @@ def _load_embed_weight():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--traced", action="store_true")
+    parser.add_argument("--seq", type=int, default=SEQ, help="id-row width: 32 decode posture, 2816 prefill")
+    parser.add_argument("--num-links", type=int, default=None, help="override TtEmbedding all_gather links (A/B)")
+    parser.add_argument(
+        "--placement", choices=["replicate", "shard"], default=None, help="table placement A/B (default: block default)"
+    )
     args = parser.parse_args()
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
@@ -57,10 +67,15 @@ def main():
         trace_region_size=25_000_000,
     )
     try:
-        block = TtEmbedding(mesh_device, {"weight": _load_embed_weight()})
+        kwargs = {}
+        if args.num_links is not None:
+            kwargs["num_links"] = args.num_links
+        if args.placement is not None:
+            kwargs["placement"] = args.placement
+        block = TtEmbedding(mesh_device, {"weight": _load_embed_weight()}, **kwargs)
 
         torch.manual_seed(0)
-        ids = torch.randint(0, 151936, (1, 1, 1, SEQ), dtype=torch.int32)
+        ids = torch.randint(0, 151936, (1, 1, 1, args.seq), dtype=torch.int32)
         # Persistent input buffer: stable address for trace replay.
         ids_tt = ttnn.from_torch(
             ids,

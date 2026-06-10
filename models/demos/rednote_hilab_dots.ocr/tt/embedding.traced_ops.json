@@ -1,5 +1,4 @@
 [
-  "ttnn.all_gather",
   "ttnn.embedding",
   "ttnn.unsqueeze_to_4D"
 ]
