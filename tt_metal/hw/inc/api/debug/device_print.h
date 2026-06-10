@@ -1405,7 +1405,8 @@ void acquire_lock() {
 #else
         auto processor_index = internal_::get_hw_thread_idx();
 #endif
-        auto risc_state = device_print_buffer->aux.risc_state[processor_index];
+        auto risc_state =
+            device_print_buffer->aux.risc_state[processor_index - DevicePrintBufferType::processor_offset];
         if (risc_state != DevicePrintRiscCoreState::PrintingDisabled) {
             if (risc_state == DevicePrintRiscCoreState::KernelNotPrinted) {
                 uint32_t launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
@@ -1423,7 +1424,8 @@ void acquire_lock() {
                 formatting::device_print_type<decltype(header_value)>::serialize(
                     device_print_buffer_ptr, 0, header_value);
                 device_print_buffer->aux.wpos += sizeof(new_kernel_message);
-                device_print_buffer->aux.risc_state[processor_index] = DevicePrintRiscCoreState::KernelPrinted;
+                device_print_buffer->aux.risc_state[processor_index - DevicePrintBufferType::processor_offset] =
+                    DevicePrintRiscCoreState::KernelPrinted;
             }
         }
     }
@@ -1437,8 +1439,10 @@ void update_kernel_finished() {
 #else
     auto processor_index = internal_::get_hw_thread_idx();
 #endif
-    if (device_print_buffer->aux.risc_state[processor_index] != DevicePrintRiscCoreState::PrintingDisabled) {
-        device_print_buffer->aux.risc_state[processor_index] = DevicePrintRiscCoreState::KernelNotPrinted;
+    if (device_print_buffer->aux.risc_state[processor_index - DevicePrintBufferType::processor_offset] !=
+        DevicePrintRiscCoreState::PrintingDisabled) {
+        device_print_buffer->aux.risc_state[processor_index - DevicePrintBufferType::processor_offset] =
+            DevicePrintRiscCoreState::KernelNotPrinted;
     }
 }
 
