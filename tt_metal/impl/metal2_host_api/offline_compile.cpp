@@ -102,11 +102,10 @@ void CompileProgramSpecOffline(
             "for offline compilation.",
             devices.size());
     }
-    // Kernel binaries are keyed by build_key (a hash of dispatch config, num CQs, and build
-    // flags), not by physical chip. Devices that share a build_key share the same binary cache,
-    // so a single compile covers all of them. A homogeneous mesh shares one build_key; meshes
-    // whose devices resolve to different build_keys (e.g. differing harvesting masks when
-    // coordinate virtualization is disabled) are not covered by compiling on one device.
+    // CompileProgram needs a mutable IDevice*, but we only hold a const MeshDevice&; get_devices()
+    // is const-qualified yet returns non-const IDevice*, so it is how we obtain a device to compile
+    // on. Compiling on devices[0] aligns with the runtime JIT path, which compiles each program
+    // once against MeshDevice::build_id() (== reference_device() == devices[0]), not per chip.
     IDevice* device = devices[0];
 
     // Compile via the real on-device CompileProgram path: this writes ELFs to the JIT cache and
