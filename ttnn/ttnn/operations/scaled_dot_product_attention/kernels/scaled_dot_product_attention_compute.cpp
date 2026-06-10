@@ -16,8 +16,13 @@
 //   9  PV     = P @ V                                           [matmul_block]
 //   10 O      = alpha (.) O + PV                                [eltwise_chain, 2-block cb_o_acc]
 // After the last KV block:
-//   11 inv    = 1 / l                                           [eltwise_chain]
-//   12 out    = O (.) inv  -> bf16                              [eltwise_chain]
+//   11 inv    = bcast-Col(l) -> recip (full fp32 tile)          [eltwise_chain]
+//   12 out    = O (.) inv  -> bf16   (SFPU mul, fp32-exact)     [eltwise_chain]
+// Phases 11/12 deliberately avoid the FPU (Refinement 5): FPU operands truncate
+// fp32 to ~tf32 (~0.25 bf16-ulp per operand), which flipped ~1-2% of outputs by
+// one bf16 ulp on near-uniform-attention inputs. UnaryBcast/CopyTile of Float32
+// CBs use unpack-to-dest (fp32-exact, UnpackToDestEn); MulBinary runs on SFPU
+// (fp32 RNE). Only residual: recip_tile ~1 fp32 ulp + pack RNE.
 // Statistics (m, l, alpha) are per-Q-row column tiles (Col0 valid); fp32 DEST
 // accumulation throughout (FP32_DEST_ACC_EN, HiFi2 — DEST limit 4 tiles; all
 // matmul subblocks are 1 x <=4 tiles).
@@ -37,6 +42,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -273,27 +279,24 @@ void kernel_main() {
                 ckl::PackTile<cb_o_acc, OutputLifecycle::Bulk>{});
         }
 
-        // ---- Phase 11: inv = 1 / l ----
+        // ---- Phase 11: inv = recip(bcast-Col(l)) as a FULL fp32 tile ----
+        // UnaryBcast of a Float32 CB unpacks to DEST (fp32-exact, no FPU
+        // truncation); recip runs on SFPU over the full tile. Result: per-Q-row
+        // 1/l replicated across all 32 columns, packed fp32 to cb_inv_sum.
         ckl::eltwise_chain(
             cur_cq,
-            ckl::CopyTile<cb_running_sum, Dst::D0, InputLifecycle::Streaming>{},
+            ckl::UnaryBcast<BroadcastDim::Col, cb_running_sum, InputLifecycle::Streaming>{},
             ckl::Recip<>{},
             ckl::PackTile<cb_inv_sum>{});
 
-        // ---- Phase 12: out = O (.) inv -> bf16 ----
+        // ---- Phase 12: out = O * inv on SFPU (fp32-exact), pack -> output dtype ----
+        // copy_tile of Float32 CBs is unpack-to-dest (exact); MulBinary is SFPU
+        // fp32 RNE — no FPU tf32 truncation on either operand.
         ckl::eltwise_chain(
             ckl::EltwiseShape::grid(cur_cq, Dt),
-            ckl::BinaryFpu<
-                cb_o_acc,
-                cb_inv_sum,
-                BinaryFpuOp::Mul,
-                BroadcastDim::Col,
-                InputLifecycle::Bulk,
-                InputLifecycle::Bulk,
-                ckl::BinaryDataFormatReconfig::Input,
-                Dst::D0,
-                OperandKind::Block,
-                OperandKind::Col>{},
+            ckl::CopyTile<cb_o_acc, Dst::D0, InputLifecycle::Bulk, ckl::CopyTileReconfig::Input, OperandKind::Block>{},
+            ckl::CopyTile<cb_inv_sum, Dst::D1, InputLifecycle::Bulk, ckl::CopyTileReconfig::Input, OperandKind::Col>{},
+            ckl::MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
             ckl::PackTile<cb_out_tiles>{});
 
         // Release the retained Q chunk (WaitAndRetainOnLastBlock counterpart) and the
