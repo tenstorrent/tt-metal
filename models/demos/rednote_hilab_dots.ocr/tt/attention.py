@@ -190,36 +190,20 @@ class TtAttention(LightweightModule):
         # ---- Cached-decode RoPE tables (full max_seq_len, indexed per step) ----
         # The prefill path above uses the per-seq_len cos/sin baked at construction
         # for the FULL-causal forward. The cached AR decode path projects ONE token
-        # at position cur_pos and needs cos/sin at THAT position only. We keep the
-        # full [max_seq, head_dim] tables on host and slice the single row per step
-        # (uploaded as a [1, 1, 1, head_dim] tile). decode_cos/decode_sin are passed
+        # at position cur_pos and needs cos/sin at THAT position only.
+        #
+        # UNTRACED decode (forward_decode / forward_decode_sharded -- the PCC
+        # guardrail's reference path) keeps the full [max_seq, head_dim] tables on
+        # host and slices the single row per step (uploaded as a [1,1,1,head_dim]
+        # tile). The TRACED decode path no longer uploads cos/sin at all: the LM
+        # assembly keeps the cos/sin tables device-resident and gathers the current
+        # position's row ONCE per step (ttnn.embedding), passing the shared row into
+        # every layer's forward_decode_traced -- so there is no per-layer cos/sin
+        # H2D (the former ~0.96 ms/step host tail). decode_cos/decode_sin are passed
         # from the LM assembly (built once for the whole trunk at max_seq_len).
         self._decode_cos_host = decode_cos  # torch [max_seq, head_dim] or None
         self._decode_sin_host = decode_sin
         self._decode_max_seq = None if decode_cos is None else decode_cos.shape[0]
-
-        # Persistent single-row cos/sin decode buffers (stable address for metal
-        # trace replay). Updated in place each decode step via
-        # copy_host_to_device_tensor before trace execution, so the captured
-        # trace reads the correct per-position RoPE without rebaking kernel args.
-        self._persistent_decode_cos = None
-        self._persistent_decode_sin = None
-        if decode_cos is not None:
-            zero_row = torch.zeros(1, 1, 1, self.head_dim, dtype=torch.float32)
-            self._persistent_decode_cos = ttnn.from_torch(
-                zero_row,
-                device=device,
-                dtype=self._dtype,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            self._persistent_decode_sin = ttnn.from_torch(
-                zero_row,
-                device=device,
-                dtype=self._dtype,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
 
         # Flash-decode SDPA program config. The default core allocation over-
         # subscribes the tree-reduction on this device for a single short cache
@@ -272,15 +256,6 @@ class TtAttention(LightweightModule):
                     memory_config=_sc.create_dram_sharded_mem_config(device, o_k, o_n),
                     mesh_mapper=mesh_mapper,
                 )
-
-    def write_decode_rope(self, pos: int) -> None:
-        """Stream the cos/sin row for ``pos`` into the persistent decode buffers."""
-        cos_row = self._decode_cos_host[pos].reshape(1, 1, 1, self.head_dim)
-        sin_row = self._decode_sin_host[pos].reshape(1, 1, 1, self.head_dim)
-        cos_host = ttnn.from_torch(cos_row, dtype=self._dtype, layout=ttnn.TILE_LAYOUT)
-        sin_host = ttnn.from_torch(sin_row, dtype=self._dtype, layout=ttnn.TILE_LAYOUT)
-        ttnn.copy_host_to_device_tensor(cos_host, self._persistent_decode_cos)
-        ttnn.copy_host_to_device_tensor(sin_host, self._persistent_decode_sin)
 
     def _rotate_half(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """rotate_half(x) = cat(-x[..., d/2:], x[..., :d/2]) on the last dim."""
@@ -556,21 +531,23 @@ class TtAttention(LightweightModule):
             memory_config=ttnn.L1_MEMORY_CONFIG,  # keep decode intermediate in L1
         )
 
-    def forward_decode_traced(self, x: ttnn.Tensor, kv_cache, layer_idx: int) -> ttnn.Tensor:
+    def forward_decode_traced(self, x: ttnn.Tensor, kv_cache, layer_idx: int, cos_tt, sin_tt) -> ttnn.Tensor:
         """Trace-capturable single-token decode.
 
         Identical maths to :meth:`forward_decode` but reads the decode position
         ENTIRELY from device memory (the KV-cache persistent ``pos_tt`` for both
-        the cache update and SDPA ``cur_pos_tensor``) and the RoPE cos/sin from
-        this layer's persistent decode buffers. No Python int is baked into any
-        kernel arg, so one captured metal trace replays at every position once the
-        host streams ``pos`` / cos / sin into the persistent buffers before replay.
+        the cache update and SDPA ``cur_pos_tensor``) and applies the RoPE cos/sin
+        passed in by the LM (gathered once per step from the device-resident
+        tables, shared across all layers). No Python int is baked into any kernel
+        arg and no cos/sin is uploaded per layer, so one captured metal trace
+        replays at every position once the host streams ``pos`` (and the RoPE
+        position index) into the persistent buffers before replay.
         """
         nh, nkv, hd = self.num_heads, self.num_kv_heads, self.head_dim
         q, k, v = self._qkv_proj_heads(x, 1)  # q [1,nh,1,hd], k/v [1,nkv,1,hd]
 
-        q = self._rope_with(q, self._persistent_decode_cos, self._persistent_decode_sin)
-        k = self._rope_with(k, self._persistent_decode_cos, self._persistent_decode_sin)
+        q = self._rope_with(q, cos_tt, sin_tt)
+        k = self._rope_with(k, cos_tt, sin_tt)
 
         # Write K/V at the device-held position (persistent pos_tt), then read cache.
         pos_tt = kv_cache.get_persistent_pos_buffer()
@@ -677,16 +654,18 @@ class TtAttention(LightweightModule):
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-    def forward_decode_traced_sharded(self, x: ttnn.Tensor, kv_cache, layer_idx: int) -> ttnn.Tensor:
-        """Trace-capturable sharded decode (DRAM-sharded qkv/o). x: [1, hidden]."""
+    def forward_decode_traced_sharded(self, x: ttnn.Tensor, kv_cache, layer_idx: int, cos_tt, sin_tt) -> ttnn.Tensor:
+        """Trace-capturable sharded decode (DRAM-sharded qkv/o). x: [1, hidden].
+
+        ``cos_tt`` / ``sin_tt`` are the device-resident RoPE row gathered once per
+        step at the LM level and shared across all layers (no per-layer cos/sin H2D).
+        """
         if self._dec_qkv is not None:
             q, k, v = self._qkv_proj_heads_sharded(x)
         else:
             q, k, v = self._qkv_proj_heads(x, 1)
         pos_tt = kv_cache.get_persistent_pos_buffer()
-        attn = self._attn_core_decode(
-            q, k, v, kv_cache, layer_idx, pos_tt, self._persistent_decode_cos, self._persistent_decode_sin
-        )
+        attn = self._attn_core_decode(q, k, v, kv_cache, layer_idx, pos_tt, cos_tt, sin_tt)
         return self._o_decode(attn)
 
     def forward_decode_sharded(self, x: ttnn.Tensor, pos: int, kv_cache, layer_idx: int) -> ttnn.Tensor:

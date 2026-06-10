@@ -226,21 +226,23 @@ class TtDecoderLayer(LightweightModule):
         x = ttnn.add(x, mlp_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         return x
 
-    def forward_decode_traced(self, x: ttnn.Tensor, kv_cache, layer_idx: int) -> ttnn.Tensor:
+    def forward_decode_traced(self, x: ttnn.Tensor, kv_cache, layer_idx: int, cos_tt, sin_tt) -> ttnn.Tensor:
         """Trace-capturable single-token decode (position read from device memory).
 
         Identical maths to :meth:`forward_decode` but uses the attention's
         ``forward_decode_traced`` path so no Python int is baked into kernel args.
+        ``cos_tt`` / ``sin_tt`` are the device-resident RoPE cos/sin row for this
+        step, gathered ONCE at the LM level and shared across all layers.
         """
         if self.sharded_decode:
             norm_in = self._sharded_norm(self.input_layernorm, x, self.self_attn._dec_qkv_cores)
-            attn_out = self.self_attn.forward_decode_traced_sharded(norm_in, kv_cache, layer_idx)
+            attn_out = self.self_attn.forward_decode_traced_sharded(norm_in, kv_cache, layer_idx, cos_tt, sin_tt)
             x = ttnn.add(x, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
             norm_in2 = self._sharded_norm(self.post_attention_layernorm, x, self.mlp._dec_gu_cores)
             mlp_out = self.mlp.forward_decode(norm_in2)
             x = ttnn.add(x, mlp_out, memory_config=ttnn.L1_MEMORY_CONFIG)
             return x
-        attn_out = self.self_attn.forward_decode_traced(self.input_layernorm(x), kv_cache, layer_idx)
+        attn_out = self.self_attn.forward_decode_traced(self.input_layernorm(x), kv_cache, layer_idx, cos_tt, sin_tt)
         x = ttnn.add(x, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         mlp_out = self.mlp(self.post_attention_layernorm(x))
         x = ttnn.add(x, mlp_out, memory_config=ttnn.L1_MEMORY_CONFIG)

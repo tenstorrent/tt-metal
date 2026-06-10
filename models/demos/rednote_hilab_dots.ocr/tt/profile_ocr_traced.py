@@ -22,7 +22,8 @@ reused on replay; no fresh persistent allocation happens once a trace is armed.
 
 Per-image / per-generation replay then only streams new data into the persistent
 buffers (copy_host_to_device_tensor into the vision-input / prefill-input / decode
-embed buffers, and write_pos / write_decode_rope for decode) and calls execute_trace.
+embed buffers, and write_decode_pos -- the pos + a single RoPE position index;
+the cos/sin tables are device-resident and gathered on device) and calls execute_trace.
 
 Usage::
 

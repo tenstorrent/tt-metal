@@ -152,6 +152,46 @@ class TtLanguageModel(LightweightModule):
         self.max_seq_len = int(max_seq_len) if max_seq_len is not None else int(seq_len)
         decode_cos, decode_sin = _build_rope_tables(self.max_seq_len, head_dim, rope_theta)
 
+        # ---- Device-resident decode RoPE tables (gathered on device per step) ----
+        # The full [max_seq, head_dim] cos/sin tables are IDENTICAL across all
+        # layers, so instead of uploading the per-position cos/sin row to every
+        # layer's persistent buffer each step (write_decode_rope x num_layers ->
+        # ~0.96 ms/step host tail), we keep the whole tables resident on device
+        # (ROW_MAJOR DRAM, ttnn.embedding-friendly) and gather the current
+        # position's row ONCE per step with a device op (ttnn.embedding over a
+        # persistent [1,1] uint32 position index). The single gathered cos/sin row
+        # is then shared into all layers. This removes the per-layer cos/sin H2D
+        # entirely; only a 1-element position-index H2D remains per step (which is
+        # in fact reused from the gather index written by write_decode_pos).
+        is_mesh_device = device.__class__.__name__ == "MeshDevice"
+        rope_mesh_mapper = ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None
+        self._decode_cos_table = ttnn.from_torch(
+            decode_cos,  # [max_seq, head_dim]
+            device=device,
+            dtype=dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=rope_mesh_mapper,
+        )
+        self._decode_sin_table = ttnn.from_torch(
+            decode_sin,
+            device=device,
+            dtype=dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=rope_mesh_mapper,
+        )
+        # Persistent [1,1] uint32 position index (stable address for trace replay):
+        # write_decode_pos streams the current decode position here, and the
+        # captured trace's ttnn.embedding gather reads it to select the cos/sin row.
+        self._persistent_rope_pos = ttnn.from_torch(
+            torch.zeros(1, 1, dtype=torch.int32),
+            device=device,
+            dtype=ttnn.uint32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=rope_mesh_mapper,
+        )
+
         self.embed_tokens = TtEmbedding(
             device=device,
             weight=state_dict["embed_tokens.weight"],
@@ -282,16 +322,32 @@ class TtLanguageModel(LightweightModule):
         return ttnn.argmax(logits_rm, dim=-1, keepdim=True, use_multicore=True)
 
     def write_decode_pos(self, pos: int, kv_cache):
-        """Stream ``pos`` into all per-step persistent buffers (RoPE + kv_cache).
+        """Stream ``pos`` into the per-step persistent buffers (RoPE + kv_cache).
 
         Call before executing the captured decode trace at ``pos``. Updates the
         KV cache's persistent position buffer (used as both the cache
-        ``update_idxs_tensor`` and the SDPA ``cur_pos_tensor``) and every layer's
-        persistent RoPE cos/sin buffers.
+        ``update_idxs_tensor`` and the SDPA ``cur_pos_tensor``) and the single
+        persistent RoPE position-index buffer (the device-resident cos/sin tables
+        are gathered at this index inside the trace -- no per-layer cos/sin H2D).
         """
         kv_cache.write_pos(int(pos))
-        for layer in self.layers:
-            layer.self_attn.write_decode_rope(int(pos))
+        host_idx = ttnn.from_torch(torch.full((1, 1), int(pos), dtype=torch.int32), dtype=ttnn.uint32)
+        ttnn.copy_host_to_device_tensor(host_idx, self._persistent_rope_pos)
+
+    def _gather_decode_rope(self):
+        """Gather the current position's cos/sin row from the device-resident
+        tables, ONCE per step (shared by all layers).
+
+        Reads the persistent [1,1] uint32 position index (written by
+        ``write_decode_pos``) entirely on device -- trace-safe, no per-step
+        ``from_torch``. Returns ``(cos, sin)`` each ``[1, 1, 1, head_dim]`` TILE,
+        broadcastable over the query's ``[1, nh, 1, head_dim]`` layout.
+        """
+        cos = ttnn.embedding(self._persistent_rope_pos, self._decode_cos_table, layout=ttnn.TILE_LAYOUT)
+        sin = ttnn.embedding(self._persistent_rope_pos, self._decode_sin_table, layout=ttnn.TILE_LAYOUT)
+        cos = ttnn.reshape(cos, (1, 1, 1, self.head_dim))
+        sin = ttnn.reshape(sin, (1, 1, 1, self.head_dim))
+        return cos, sin
 
     def decode_step_traced(self, hidden: ttnn.Tensor, kv_cache, return_logits: bool = True):
         """Trace-capturable cached decode step (position read from device memory).
@@ -310,8 +366,10 @@ class TtLanguageModel(LightweightModule):
         ~2.3 ms logits D2H that previously ran in the host tail (the host argmax is
         deterministic greedy, so it picks the same token as on-device argmax).
         """
+        # Gather this step's cos/sin row ONCE on device (shared by all layers).
+        cos_tt, sin_tt = self._gather_decode_rope()
         for layer_idx, layer in enumerate(self.layers):
-            hidden = layer.forward_decode_traced(hidden, kv_cache, layer_idx)
+            hidden = layer.forward_decode_traced(hidden, kv_cache, layer_idx, cos_tt, sin_tt)
         hidden = self.norm(hidden)
         logits = self.lm_head(hidden)
         if return_logits:

@@ -300,3 +300,36 @@ than even the host cast, so the realized win (−2.98 ms) slightly exceeds the D
 The graph-zone `decode_traced_ms` reported by `profile_ocr_traced.py` does NOT reflect
 this win (the saving is in the host tail, outside that zone) — the new
 `decode_full_step_ms` field added to the SUMMARY line is the honest per-token metric.
+
+## Sub-pass 6: device-resident decode RoPE (drop per-layer cos/sin H2D)
+
+After the on-device argmax killed the logits D2H, `decompose_decode.py` showed the next
+host-tail item was the per-step RoPE cos/sin H2D: `write_decode_pos` called
+`write_decode_rope(pos)` on **every one of the 28 layers**, each doing
+`from_torch(cos_row) + from_torch(sin_row) + 2× copy_host_to_device_tensor` into that
+layer's persistent `[1,1,1,head_dim]` decode buffers — **56 tiny H2D copies/step ≈ 0.96 ms**.
+
+But the RoPE cos/sin row for a position is **identical across all 28 layers** (one shared
+table). So the per-layer upload was fully redundant. The fix keeps the full
+`[max_seq, head_dim]` cos/sin tables **device-resident** (ROW_MAJOR DRAM, built once in
+`TtLanguageModel.__init__`) and gathers the current position's row **once per step on
+device** via `ttnn.embedding` over a persistent `[1,1]` uint32 position index (written by
+`write_decode_pos`, trace-safe — the captured trace reads it at a stable address). The
+single gathered `[1,1,1,head_dim]` cos/sin pair is threaded into every layer's
+`forward_decode_traced` / `forward_decode_traced_sharded`. `write_decode_rope` and the
+per-layer persistent cos/sin buffers are gone; the untraced `forward_decode` PCC-reference
+path still host-slices (unchanged).
+
+| metric | per-layer cos/sin H2D (28×) | device-resident gather | delta |
+| --- | --- | --- | --- |
+| `pos_rope_h2d_ms` (decompose, isolated) | 0.978 ms | **0.017 ms** | **−0.96 ms (→ ~0)** |
+| full decode step (in-process A/B, same trace, median-of-runs) | 16.96 ms | **16.00 ms** | **−0.96 ms (−5.7%)** |
+| in-trace device replay (decompose p50) | 14.61 ms | 14.53 ms | within noise (gather is free) |
+| decode-step guardrail PCC (vs reference) | 0.999448 | 0.999448 | unchanged |
+| decode-step guardrail PCC (traced vs untraced) | 1.000000 | **1.000000** | exact |
+| OCR text (32 tok vs HF) | exact | **exact (token-identical)** | `**TABLE II** – ODDS RATIO OF HODGKIN LYMPHOMA…` |
+
+The full ~0.96 ms per-layer RoPE H2D tail is recovered. The on-device gather costs two
+`ttnn.embedding` ops/step (~free on the device replay). RoPE is now fully device-resident
+and trace-safe: per step only a 1-element position index is uploaded (the gather index),
+shared by all layers — no per-layer cos/sin H2D.

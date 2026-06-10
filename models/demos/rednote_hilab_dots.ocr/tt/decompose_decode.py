@@ -17,8 +17,10 @@ warm, p50 over many steps:
                       work between replays (tight loop on the captured trace).
   2. logits_d2h_ms  : ttnn.to_torch(traced_logits)  -- the [1, vocab=151936] D2H.
   3. argmax_ms      : host torch.argmax over the [vocab] logits (+ EOS check).
-  4. pos_rope_h2d_ms: write_decode_pos = pos H2D (kv_cache.write_pos) + per-layer
-                      RoPE cos/sin H2D (write_decode_rope x num_layers).
+  4. pos_rope_h2d_ms: write_decode_pos = pos H2D (kv_cache.write_pos) + a single
+                      RoPE position-index H2D. The cos/sin tables are now
+                      device-resident and gathered on device per step (no per-layer
+                      cos/sin H2D), so this component is ~0 beyond the pos write.
   5. embed_h2d_ms   : write_embed = single token embed row H2D.
   6. full_step_ms   : the real per-step loop body (write_embed + write_decode_pos
                       + execute_trace + sync + to_torch + argmax) -- should ≈ 16.4.
