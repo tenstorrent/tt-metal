@@ -233,15 +233,7 @@ skus:
         exabox.tenstorrent.com/purpose: ci-metal
       topologyKeys:
               - exabox.tenstorrent.com/quad
-      mgd: |-
-        mesh_descriptors {
-          name: \"M0\"
-          arch: BLACKHOLE
-          device_topology { dims: [ 32,4 ] dim_types: [ RING,RING ] }
-          host_topology   { dims: [ 4,1 ] }
-          channels { count: 2 policy: RELAXED }
-        }
-        top_level_instance { mesh { mesh_descriptor: \"M0\" mesh_id: 0 } }
+      mgd_file: models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto
 
   bh_sp4:
     runs_on:

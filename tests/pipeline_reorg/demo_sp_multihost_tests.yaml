@@ -47,17 +47,17 @@
 
 - name: "Demo Test with Perf Metrics (DeepSeek V3 B1 Supercluster 4 aka Superpod 1)"
   cmd: |
-    echo "============= SP1 superpod: allocation hosts + tt-run new mode ============="
-    TTRUN_DIR=/ci/ttrun
+    echo "============= SP1 superpod: allocation hostfile + rev_c rank configs ============="
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
-    DEEPSEEK_MGD="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto"
-    HOSTS=$(awk -F= '{print $2}' "${TTRUN_DIR}/rankfile" | awk '{print $1}' | paste -sd,)
+    SCALEOUT_CONFIG_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/rev_c"
+    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_binding_single_pod.yaml" .
+    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_file_single_pod" .
 
+    PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
     LOGURU_LEVEL=DEBUG TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
-      --mesh-graph-descriptor "${DEEPSEEK_MGD}" \
-      --hosts "${HOSTS}" \
-      --mpi-args "--bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
+      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=rev_c_rank_file_single_pod --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
+      --rank-binding rev_c_rank_binding_single_pod.yaml \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 4096 \
         --no-stop-at-eos \
@@ -74,17 +74,17 @@
 
 - name: "Stress Test (DeepSeek V3 B1 Supercluster 4 aka Superpod 1)"
   cmd: |
-    echo "============= SP1 superpod: allocation hosts + tt-run new mode ============="
-    TTRUN_DIR=/ci/ttrun
+    echo "============= SP1 superpod: allocation hostfile + rev_c rank configs ============="
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
-    DEEPSEEK_MGD="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto"
-    HOSTS=$(awk -F= '{print $2}' "${TTRUN_DIR}/rankfile" | awk '{print $1}' | paste -sd,)
+    SCALEOUT_CONFIG_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/rev_c"
+    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_binding_single_pod.yaml" .
+    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_file_single_pod" .
 
+    PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
-      --mesh-graph-descriptor "${DEEPSEEK_MGD}" \
-      --hosts "${HOSTS}" \
-      --mpi-args "--bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
+      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=rev_c_rank_file_single_pod --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
+      --rank-binding rev_c_rank_binding_single_pod.yaml \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 128000 \
         --repeat-generations 2 \

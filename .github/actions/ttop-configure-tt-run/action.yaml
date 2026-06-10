@@ -67,15 +67,26 @@ runs:
       shell: bash
       id: mgd
       run: |
-        echo "Creating MGD spec file..."
-        printf "%s" "${{ inputs.mgd }}" | sudo tee ${{ inputs.directory }}/mgd.textproto
+        ALLOC_PATH="${{ inputs.allocationConfigPath }}"
+        DIR="${{ inputs.directory }}"
+
+        if [ -n "${{ inputs.mgd }}" ]; then
+          echo "Writing MGD from workflow input..."
+          printf "%s" "${{ inputs.mgd }}" | sudo tee "$DIR/mgd.textproto" > /dev/null
+        elif [ -n "$ALLOC_PATH" ] && [ -f "$ALLOC_PATH/mgd.textproto" ]; then
+          echo "Using mgd.textproto from $ALLOC_PATH"
+          sudo cp "$ALLOC_PATH/mgd.textproto" "$DIR/mgd.textproto"
+        else
+          echo "Creating empty MGD spec file..."
+          sudo tee "$DIR/mgd.textproto" < /dev/null > /dev/null
+        fi
 
         # If mgd is empty and mgdFile is not - assign the mgdFile to mesh_graph_desc_path
         if [ -z "${{ inputs.mgd }}" ] && [ -n "${{ inputs.mgdFile }}" ]; then
           echo "No MGD spec provided but MGD file path given. Will use ${{ inputs.mgdFile }} as mesh_graph_desc_path in rank_bindings.yaml"
           echo "mesh_graph_desc_path=${{ inputs.mgdFile }}" >> $GITHUB_OUTPUT
         else
-          echo "mesh_graph_desc_path=${{ inputs.directory }}/mgd.textproto" >> $GITHUB_OUTPUT
+          echo "mesh_graph_desc_path=$DIR/mgd.textproto" >> $GITHUB_OUTPUT
         fi
 
     - name: Create rank bindings file

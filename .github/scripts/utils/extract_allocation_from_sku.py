@@ -7,6 +7,19 @@ import os
 import argparse
 
 
+def _load_allocation_mgd(allocation, repo_root):
+    if "mgd" in allocation:
+        return allocation["mgd"]
+    if "mgd_file" in allocation:
+        mgd_path = os.path.join(repo_root, allocation["mgd_file"])
+        if not os.path.exists(mgd_path):
+            print(f"::error::allocation.mgd_file not found at {mgd_path}", file=sys.stderr)
+            sys.exit(1)
+        with open(mgd_path, "r", encoding="utf-8") as f:
+            return f.read()
+    return ""
+
+
 def main():
     parser = argparse.ArgumentParser(description="Extract allocation configuration from SKU config file.")
     parser.add_argument("sku_name", help="Name of the SKU to extract")
@@ -65,8 +78,7 @@ def main():
     # If --mgd-only flag is set, extract and print only MGD content
     if args.mgd_only:
         allocation = skus[sku_name].get("allocation", {})
-        mgd_content = allocation.get("mgd", "")
-        print(mgd_content)
+        print(_load_allocation_mgd(allocation, repo_root), end="")
         sys.exit(0)
 
     if "allocation" not in skus[sku_name]:
@@ -97,10 +109,9 @@ def main():
             lines.append(f"  - {key}")
 
     # Add MGD section if present
-    if "mgd" in allocation:
+    mgd_content = _load_allocation_mgd(allocation, repo_root)
+    if mgd_content:
         lines.append("mgd: |")
-        mgd_content = allocation["mgd"]
-        # Add 2-space indentation to each line of MGD content
         for line in mgd_content.splitlines():
             lines.append(f"  {line}")
 
