@@ -73,11 +73,13 @@ class Linear(Module):
         if "bias" in state:
             state["bias"] = state["bias"].reshape(1, -1)
 
-    def forward(self, x: ttnn.Tensor, compute_kernel_config=None, dtype=None, default_block_size=None) -> ttnn.Tensor:
+    def forward(
+        self, x: ttnn.Tensor, compute_kernel_config=None, dtype=None, default_block_size=None, use_1d_fallback=False
+    ) -> ttnn.Tensor:
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], self.weight.data.padded_shape[-1]
         core_grid = get_matmul_core_grid(self.mesh_device)
 
-        if M <= 64:  # TEMPORARY for FLUX2: Branch B: 1D mcast_in0 matmul for small-M shapes
+        if use_1d_fallback and M <= 64:  # TEMPORARY for FLUX2: Branch B: 1D mcast_in0 matmul for small-M shapes
             program_config = get_1d_matmul_config(M, K, N, core_grid)
             output = ttnn.linear(
                 x,
@@ -211,6 +213,7 @@ class ColParallelLinear(Module):
         parallel_config=None,
         dtype=None,
         use_heuristic_mmcfg=False,
+        use_1d_fallback=False,
     ) -> ttnn.Tensor | list[ttnn.Tensor]:
         """
         Expects x to be replicated.
@@ -290,7 +293,7 @@ class ColParallelLinear(Module):
                 )
                 return [_apply_activation_fn(o, self.activation_fn) for o in outputs]
 
-            if M <= 128:  # TEMPORARY for FLUX2: Branch B: 1D mcast_in0 matmul for small-M shapes
+            if use_1d_fallback and M <= 128:  # TEMPORARY for FLUX2: Branch B: 1D mcast_in0 matmul for small-M shapes
                 program_config = get_1d_matmul_config(M, K, N, core_grid)
                 output = ttnn.linear(
                     x,
