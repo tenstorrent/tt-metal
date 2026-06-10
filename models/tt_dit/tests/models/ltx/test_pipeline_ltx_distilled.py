@@ -216,7 +216,9 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
     # Default to the committed real girl-clip latent (39 KB fp16 fixture, dumped from a real gen
     # via LTX_DUMP_AUDIO_LATENT) so the decode runs on actual content with no transformer/gemma.
     # AUDIO_LATENT overrides (.npy or .pt); a seeded-random latent is the fallback if neither.
-    _lat = os.environ.get("AUDIO_LATENT") or os.path.join(os.path.dirname(__file__), "fixtures", "girl_audio_latent.npy")
+    _lat = os.environ.get("AUDIO_LATENT") or os.path.join(
+        os.path.dirname(__file__), "fixtures", "girl_audio_latent.npy"
+    )
     if os.path.exists(_lat):
         latent = (torch.from_numpy(np.load(_lat)) if _lat.endswith(".npy") else torch.load(_lat)).float()
     else:
@@ -270,7 +272,11 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
         _ao._USE_CONV1D_DEPTHWISE = False
         w_mac = pipeline.tt_vocoder_with_bwe(mel).squeeze(0).float()
         with torch.no_grad():
-            w_torch = _build_torch_stage_c_real(default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors"))(mel.float()).squeeze(0).float()
+            w_torch = (
+                _build_torch_stage_c_real(default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors"))(mel.float())
+                .squeeze(0)
+                .float()
+            )
         _save(w_conv, "girl_audio_conv1d.wav")
         _save(w_mac, "girl_audio_mac.wav")
         _save(w_torch, "girl_audio_torch.wav")
