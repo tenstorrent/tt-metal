@@ -467,7 +467,6 @@ def run_fold_sharded_test(device, act_shape, stride_h, stride_w, padding, core_g
         tt_out.deallocate()
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "act_shape,stride_h,stride_w,padding, core_grid",
     [
