@@ -6,7 +6,7 @@ on:
       test-category:
         required: true
         type: string
-        description: "Choices: 'smoke', 'unit', 'model'"
+        description: "Choice of 'smoke', 'unit', 'model'. Maps to category with train_ prefix via tests/pipeline_reorg/tt_metal_l2_tests.yaml."
       docker-image:
         required: true
         type: string
