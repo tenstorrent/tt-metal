@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DeepGEMM fused indexer (fp8_mqa_logits) — how it works</title>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"
+  onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'\\(',right:'\\)',display:false}]});"></script>
+
+<style>
+  :root { --q:#1565c0; --qbg:#e3f2fd; --k:#2e7d32; --kbg:#e6ffe6; --w:#b06f00; --wbg:#fff3e0;
+          --s:#6a1b9a; --sbg:#f3e5f5; --ink:#1c1c1c; --muted:#666; }
+  body { font-family:-apple-system,"Segoe UI",Roboto,Arial,sans-serif; color:var(--ink); margin:0; background:#fafafa; }
+  main { max-width:1100px; margin:0 auto; padding:24px 32px 80px; }
+  h1 { font-size:1.5em; margin-bottom:0; } h2 { font-size:1.2em; margin-top:2.2em; border-bottom:1px solid #ddd; padding-bottom:4px; }
+  h3 { font-size:1.02em; }
+  .sub { color:var(--muted); margin-top:4px; font-size:.95em; }
+  table { border-collapse:collapse; width:100%; font-size:.9em; }
+  th,td { border:1px solid #ddd; padding:6px 10px; text-align:left; vertical-align:top; }
+  th { background:#f0f0f0; }
+  code,pre { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.9em; }
+  pre { background:#272822; color:#f8f8f2; padding:14px 18px; border-radius:8px; overflow-x:auto; line-height:1.45; }
+  pre .c { color:#88846f; } pre .k { color:#f92672; } pre .f { color:#66d9ef; } pre .s { color:#e6db74; }
+  .fr { background:#fff; border:1px solid #e0e0e0; border-radius:8px; padding:6px 18px; margin:10px 0; }
+  .note { background:var(--sbg); border-left:4px solid var(--s); padding:8px 14px; border-radius:0 6px 6px 0; font-size:.93em; }
+  .warn { background:#fff3e0; border-left:4px solid var(--w); padding:8px 14px; border-radius:0 6px 6px 0; font-size:.93em; }
+  .pill { display:inline-block; padding:1px 10px; border-radius:10px; font-size:.85em; border:1px solid; margin-right:6px; }
+  .pq { background:var(--qbg); color:var(--q); } .pk { background:var(--kbg); color:var(--k); }
+  .pw { background:var(--wbg); color:var(--w); } .ps { background:var(--sbg); color:var(--s); }
+
+  /* ---- pipeline animation ---- */
+  .pipe { background:#fff; border:1px solid #e0e0e0; border-radius:8px; padding:18px; }
+  .lane { display:flex; align-items:center; margin:10px 0; gap:8px; }
+  .lane .who { width:170px; font-size:.85em; color:var(--muted); flex:none; }
+  .slot { flex:1; height:30px; border-radius:5px; position:relative; overflow:hidden; background:#f0f0f0; }
+  .bar { position:absolute; top:3px; bottom:3px; border-radius:4px; opacity:.9; animation:slide 6s linear infinite; }
+  .tq { background:var(--qbg); border:1px solid var(--q); } .tk { background:var(--kbg); border:1px solid var(--k); }
+  .tm { background:var(--sbg); border:1px solid var(--s); }
+  @keyframes slide { from { transform:translateX(-110%);} to { transform:translateX(720%);} }
+  @media (prefers-reduced-motion: reduce) { .bar { animation:none; left:10%; } }
+  .legendrow { font-size:.85em; color:var(--muted); margin-top:6px; }
+  .swatch { display:inline-block; width:22px; height:12px; border-radius:3px; vertical-align:middle; margin:0 4px 0 12px; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>DeepGEMM fused indexer — <code>fp8_mqa_logits</code></h1>
+<p class="sub">The deployed GPU implementation of the DeepSeek-V3.2 “lightning indexer” score
+(<code>I[s,t] = Σ_h relu(q·k)·w · s_k</code>). Sources: <code>csrc/apis/attention.hpp</code> (host API),
+<code>deep_gemm/include/deep_gemm/impls/sm90_fp8_mqa_logits.cuh</code> (Hopper kernel; SM100/FP4 variants exist),
+reference semantics in <code>tests/test_attention.py::ref_fp8_mqa_logits</code>.
+DeepGEMM calls the op <b>MQA logits</b>: one shared key (MQA-style), many query heads, output is logits — top-k is <b>not</b> fused.</p>
+
+<h2>1. API</h2>
+<h3>Prefill / dense: <code>fp8_fp4_mqa_logits(q, kv, weights, ks, ke, …) → logits</code></h3>
+<table>
+<tr><th></th><th>Tensor</th><th>Shape / dtype</th><th>Meaning</th></tr>
+<tr><td><span class="pill pq">in</span></td><td><code>q</code></td><td><code>[S, H, D]</code> fp8_e4m3 (+ optional fp4 SF)</td><td>indexer queries; H ∈ {32, 64}, D ∈ {32, 64, 128}</td></tr>
+<tr><td><span class="pill pk">in</span></td><td><code>kv = (k_fp8, k_scale)</code></td><td><code>[T, D]</code> fp8 + <code>[T]</code> fp32</td><td>single-head keys + per-token dequant scale</td></tr>
+<tr><td><span class="pill pw">in</span></td><td><code>weights</code></td><td><code>[S, H]</code> fp32</td><td>folded per-head gate (gate·H<sup>-½</sup>·s_q·D<sup>-½</sup>)</td></tr>
+<tr><td><span class="pill ps">in</span></td><td><code>cu_seq_len_k_start / _end</code></td><td><code>[S]</code> int32</td><td><b>per-query</b> visible key window [ks, ke) — causality and context-parallel chunking are expressed here, not via mask tensor</td></tr>
+<tr><td></td><td><code>clean_logits</code></td><td>bool</td><td>fill out-of-window with −∞ in a follow-up kernel</td></tr>
+<tr><td></td><td><code>max_seqlen_k</code></td><td>int</td><td>&gt;0 → compressed: row s stores window-relative cols [0, ke−ks)</td></tr>
+<tr><td><span class="pill ps">out</span></td><td><code>logits</code></td><td><code>[S, T]</code> fp32/bf16</td><td>the indexer score; feeds external top-k</td></tr>
+</table>
+
+<h3>Decode / paged: <code>fp8_paged_mqa_logits(q, fused_kv_cache, weights, context_lens, block_table, schedule_meta, …)</code></h3>
+<p>Same math; cache layout <code>[num_blocks, block_kv∈{32,64}, 1, D+4]</code> — fp8 keys and fp32 scale fused per block.
+<code>q</code> is <code>[B, next_n, H, D]</code> (MTP), <code>schedule_meta = get_paged_mqa_logits_metadata(context_lens, block_kv, num_sms)</code>
+load-balances variable context lengths over SMs; output <code>[B·next_n, max_context_len]</code>.</p>
+
+<h2>2. Semantics</h2>
+<div class="fr">$$ \mathrm{logits}[s,t]=\Big(\sum_{h=1}^{H}\mathrm{relu}\big(\langle q_{s,h},\,k_t\rangle\big)\cdot w_{s,h}\Big)\cdot s_k[t]
+\quad \text{for } ks_s \le t < ke_s,\ \ -\infty \text{ otherwise} $$</div>
+<pre><span class="c"># exact reference (tests/test_attention.py)</span>
+score  = einsum(<span class="s">'shd,td->hst'</span>, q.float(), k.float())
+logits = (score.relu() * weights.T[:, :, None]).sum(dim=0) <span class="c"># [S,T]</span>
+logits = logits.masked_fill(~(ks[:,None] &lt;= t) | ~(t &lt; ke[:,None]), -inf)</pre>
+
+<h2>3. Kernel: one fused GEMM with the head axis folded away</h2>
+<p>The fusion trick: \(QK^\top\) is launched as one GEMM with \(M = S\!\cdot\!H\), \(N = T\), \(K = D\) —
+heads stacked into rows — but heads never reach memory: relu·w·Σ over H runs in registers
+on the GEMM accumulator before the [BLOCK_Q × BLOCK_KV] tile is stored.</p>
+
+<pre><span class="c"># persistent grid: each SM strides over query blocks; warp-specialized producer/consumer.</span>
+BLOCK_QH, BLOCK_KV = 128, 256;  BLOCK_Q = 128 // H
+
+<span class="k">if</span> warp.is_producer:                              <span class="c"># TMA warp</span>
+  <span class="k">for</span> qb <span class="k">in</span> myblocks(sm_idx, kNumSMs):
+    tma(Q[qb], W[qb])                               <span class="c"># double-buffered Q stages</span>
+    win = [min(ks[qb]) // 4 * 4, max(ke[qb])]       <span class="c"># only the visible KV window!</span>
+    <span class="k">for</span> kv <span class="k">in</span> blocks(win, BLOCK_KV): tma(K[kv], s_k[kv])   <span class="c"># kNumKVStages-deep pipeline</span>
+<span class="k">else</span>:                                              <span class="c"># math warpgroups</span>
+  <span class="k">for</span> qb <span class="k">in</span> myblocks(...):
+    w = ld_shared(W[qb])
+    <span class="k">for</span> kv <span class="k">in</span> window_blocks:
+      acc = wgmma(K_smem, Q_smem)                       <span class="c"># [BLOCK_KV, BLOCK_Q*H] (KV=M, QH=N)</span>
+      logit = relu(acc).mul(w).sum(heads) * s_k         <span class="c"># registers + 2 shfl_xor</span>
+      <span class="k">if</span> ks[s] <= t < ke[s]: logits[s, t] = logit     <span class="c"># predicated store</span></pre>
+
+<div class="note"><b>A/B swap:</b> KV is the M-side, Q·H the N-side, so each warp owns 16 KV rows; the H heads
+of one query land in one lane → head reduction = in-thread adds + 2 <code>shfl_xor</code>, no smem trip.
+<b>Window:</b> the GEMM loop runs only over <code>[min ks, max ke)</code> of the block — DSA causality/sparsity
+becomes skipped tiles (TFLOPS scales with valid keys); −∞ fill is a separate tiny <code>clean_logits</code> kernel.</div>
+
+<h2>4. Pipeline (steady state)</h2>
+<div class="pipe">
+  <div class="lane"><div class="who">TMA warp (producer)</div><div class="slot">
+    <span class="bar tq" style="left:0;width:9%"></span><span class="bar tk" style="left:11%;width:8%;animation-delay:.4s"></span>
+    <span class="bar tk" style="left:21%;width:8%;animation-delay:.8s"></span><span class="bar tk" style="left:31%;width:8%;animation-delay:1.2s"></span></div></div>
+  <div class="lane"><div class="who">WGMMA (2 warpgroups)</div><div class="slot">
+    <span class="bar tm" style="left:14%;width:9%;animation-delay:.6s"></span><span class="bar tm" style="left:24%;width:9%;animation-delay:1s"></span>
+    <span class="bar tm" style="left:34%;width:9%;animation-delay:1.4s"></span></div></div>
+  <div class="lane"><div class="who">relu·w·Σ + store</div><div class="slot">
+    <span class="bar ts tm" style="left:25%;width:7%;animation-delay:1.1s"></span><span class="bar tm" style="left:35%;width:7%;animation-delay:1.5s"></span></div></div>
+  <div class="legendrow">barriers: full/empty per stage<span class="swatch" style="background:var(--qbg);border:1px solid var(--q)"></span>Q+weights load
+  <span class="swatch" style="background:var(--kbg);border:1px solid var(--k)"></span>KV+scale load
+  <span class="swatch" style="background:var(--sbg);border:1px solid var(--s)"></span>compute</div>
+</div>
+
+<h2>5. Where the op sits in the indexer diagram (§A.3)</h2>
+<p>Assume <code>fp8_fp4_mqa_logits</code> exists. It replaces the entire <b>score block</b> of the indexer diagram —
+the fan-in of the three lanes plus masking. Everything upstream stays the projection front-end (TT or PyTorch); top-k stays downstream.
+Batch is folded: rows are <code>B·S</code>.</p>
+<div style="background:#fff;border:1px solid #e0e0e0;border-radius:8px;padding:12px;overflow-x:auto">
+<pre class="mermaid" style="background:none;color:inherit;padding:0">
+flowchart TD
+    QQ["Q lane: wq_b, rope-first, Hadamard, act_quant<br/>q_fp8 (B*S, 64, 128)"]
+    WC["W lane: weights_proj * 64^-0.5 * s_q * 128^-0.5<br/>weights (B*S, 64) fp32"]
+    KC[("K lane: k_cache fp8 (T, 128)<br/>k_scale (T)")]
+    KS["window ints replace the causal mask:<br/>ks = 0, ke = start_pos + s + 1"]
+    OP["fp8_fp4_mqa_logits (fused, on device):<br/>sum_h relu(q.k) * w * s_k over the window<br/>clean_logits: outside window = -inf"]
+    QQ --> OP
+    WC --> OP
+    KC --> OP
+    KS --> OP
+    OP -->|"logits (B*S, T)"| TK["topk(kappa) - separate op"]
+    TK -->|"(B*S, kappa)"| OUT["topk_indices to sparse attention"]
+
+    classDef q fill:#e3f2fd,stroke:#1565c0,color:#000
+    classDef w fill:#fff3e0,stroke:#b06f00,color:#000
+    classDef k fill:#e6ffe6,stroke:#2e7d32,color:#000
+    classDef s fill:#f3e5f5,stroke:#6a1a9a,color:#000
+    class QQ q
+    class WC w
+    class KC,KS k
+    class OP,TK,OUT s
+</pre>
+</div>
+<table>
+<tr><th>Diagram node (§A.3)</th><th>API argument</th><th>Note</th></tr>
+<tr><td>q_fp8 (B,S,64,128)</td><td><code>q [S',64,128]</code></td><td>S′ = B·S; H=64, D=128 satisfy op constraints exactly</td></tr>
+<tr><td>weights (B,S,64,1)</td><td><code>weights [S',64]</code> fp32</td><td>same folded gate (incl. s_q) — drop trailing 1</td></tr>
+<tr><td>k_cache / k_scale_cache</td><td><code>kv = (k_fp8 [T,128], k_scale [T])</code></td><td>cache read [:T] is the op input — no repeat over heads</td></tr>
+<tr><td>causal mask + mask add</td><td><code>ks/ke [S']</code> + <code>clean_logits</code></td><td>mask tensor disappears; window ints; −∞ fill fused</td></tr>
+<tr><td>index_score (B,S,T) → topk</td><td><code>logits [S',T]</code> → external topk</td><td>identical contract; decode uses the paged variant</td></tr>
+</table>
+<p class="sub">What the op does <b>not</b> cover: wq_b/wk/weights_proj projections, LayerNorm, non-interleaved RoPE, Hadamard,
+act_quant, cache write, top-k. Hadamard is optional once both q and k skip it (orthogonal-invariant dot product).</p>
+
+<h2>6. Mapping to the TT port</h2>
+<table>
+<tr><th>DeepGEMM</th><th>TT scaffold (spec §3.6)</th></tr>
+<tr><td>ks/ke per-query window (causality + CP chunking)</td><td>same contract for SP shards — no mask tensor</td></tr>
+<tr><td>fused H-reduction in registers</td><td><code>indexer_score</code> op: matmul + relu + w·Σ before tile store</td></tr>
+<tr><td>fp8 + per-token scale</td><td>bf8_b stands in; <code>weights</code> stays the folded gate input</td></tr>
+<tr><td>logits → external <code>topk</code></td><td>identical: top-k stays a separate op</td></tr>
+</table>
+
+</main>
+<script type="module">
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+mermaid.initialize({ startOnLoad: true, theme: "neutral", flowchart: { curve: "basis" } });
+</script>
+</body>
+</html>

@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chunked Prefill in DeepSeek-V3 MLA (tt-metal) — PR #46345</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel2: #1c2330; --border: #30363d;
+    --text: #c9d1d9; --muted: #8b949e; --accent: #58a6ff; --accent2: #7ee787;
+    --warn: #f0883e; --pink: #ff7b72; --purple: #d2a8ff; --yellow: #e3b341;
+    --code-bg: #0b0f16;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.65; font-size: 16px;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 40px 24px 80px; }
+  header.hero { border-bottom: 1px solid var(--border); padding-bottom: 28px; margin-bottom: 36px; }
+  h1 { font-size: 2.1rem; margin: 0 0 8px; letter-spacing: -0.5px; }
+  h1 .sub { color: var(--accent); }
+  .tagline { color: var(--muted); font-size: 1.05rem; margin: 0; }
+  .meta-row { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 10px; }
+  .filepath, .prlink {
+    display: inline-block; font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.82rem; background: var(--code-bg); border: 1px solid var(--border);
+    padding: 6px 12px; border-radius: 6px; color: var(--accent2); text-decoration: none;
+  }
+  .prlink { color: var(--accent); }
+  .prlink:hover { border-color: var(--accent); }
+  h2 { font-size: 1.5rem; margin: 48px 0 16px; border-top: 1px solid var(--border); padding-top: 28px; }
+  h2 .num {
+    display: inline-block; width: 30px; height: 30px; line-height: 30px; text-align: center;
+    background: var(--accent); color: #0d1117; border-radius: 7px; font-size: 0.95rem;
+    margin-right: 10px; font-weight: 700;
+  }
+  h3 { font-size: 1.18rem; margin: 28px 0 10px; color: var(--purple); }
+  p { margin: 12px 0; }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 0.86em;
+    background: var(--code-bg); padding: 2px 6px; border-radius: 5px; color: var(--accent2);
+    border: 1px solid var(--border);
+  }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px 18px; overflow-x: auto; font-size: 0.82rem; line-height: 1.55; margin: 16px 0;
+  }
+  pre code { background: none; border: none; padding: 0; color: var(--text); }
+  .tok-c { color: var(--muted); font-style: italic; }
+  .tok-k { color: var(--pink); }
+  .tok-f { color: var(--purple); }
+  .tok-s { color: var(--accent2); }
+  .tok-n { color: var(--yellow); }
+  .callout { border-left: 4px solid var(--accent); background: var(--panel); padding: 14px 18px; border-radius: 0 8px 8px 0; margin: 18px 0; }
+  .callout.warn { border-color: var(--warn); }
+  .callout.good { border-color: var(--accent2); }
+  .callout .lbl { font-weight: 700; color: var(--accent); display:block; margin-bottom: 4px; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.5px;}
+  .callout.warn .lbl { color: var(--warn); }
+  .callout.good .lbl { color: var(--accent2); }
+  table { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 0.88rem; }
+  th, td { border: 1px solid var(--border); padding: 9px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--panel2); color: var(--accent); font-weight: 600; }
+  td code { font-size: 0.82em; }
+  .pill { display:inline-block; font-size: 0.72rem; padding: 2px 9px; border-radius: 20px; background: var(--panel2); border: 1px solid var(--border); color: var(--muted); margin-right: 6px; font-family: monospace; }
+  .diagram { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin: 20px 0; overflow-x: auto; }
+  .diagram pre { background: none; border: none; margin: 0; font-size: 0.76rem; color: var(--text); }
+  .toc { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px 24px; margin-bottom: 16px; }
+  .toc ol { margin: 8px 0 0; padding-left: 22px; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  .ftag { font-family: monospace; font-size: 0.8rem; color: var(--warn); }
+  footer { margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.85rem; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; }
+  .card h4 { margin: 0 0 6px; color: var(--accent2); font-size: 1rem; }
+  .card p { margin: 6px 0; font-size: 0.9rem; color: var(--muted); }
+  .banner { background: linear-gradient(90deg, rgba(88,166,255,0.12), rgba(126,231,135,0.06)); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; margin: 18px 0; font-size: 0.92rem; }
+
+  /* ===== animated figures ===== */
+  .fig { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px; margin: 20px 0; }
+  .fig .cap { color: var(--muted); font-size: 0.8rem; margin-top: 12px; text-align: center; }
+  @media (prefers-reduced-motion: reduce) { .fig, .fig * { animation: none !important; opacity: 1 !important; } }
+
+  /* cache-fill animation (§3) */
+  .cf-bar { position: relative; height: 46px; background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .cf-chunk { position: absolute; top: 0; height: 100%; opacity: 0; border-right: 1px solid var(--border); }
+  .cf-chunk.c0 { left: 0;    width: 42%; background: rgba(88,166,255,0.40);  animation: cf0 9s infinite; }
+  .cf-chunk.c1 { left: 42%;  width: 42%; background: rgba(126,231,135,0.35); animation: cf1 9s infinite; }
+  .cf-chunk.c2 { left: 84%;  width: 13%; background: rgba(210,168,255,0.40); animation: cf2 9s infinite; }
+  .cf-pad { position: absolute; top: 0; right: 0; width: 3%; height: 100%;
+            background: repeating-linear-gradient(45deg, transparent 0 4px, rgba(139,148,158,0.3) 4px 8px); }
+  .cf-q { position: absolute; bottom: 0; left: 0; height: 5px; background: var(--accent2); animation: cfq 9s infinite; }
+  @keyframes cf0 { 0% {opacity:0} 6%,100% {opacity:1} }
+  @keyframes cf1 { 0%,33% {opacity:0} 39%,100% {opacity:1} }
+  @keyframes cf2 { 0%,66% {opacity:0} 72%,100% {opacity:1} }
+  @keyframes cfq { 0% {width:0} 8%,33% {width:42%} 41%,66% {width:84%} 74%,100% {width:97%} }
+  .cf-lbls { position: relative; height: 1.6em; margin-top: 8px; font-family: monospace; font-size: 0.78rem; color: var(--muted); }
+  .cf-lbls span { position: absolute; left: 0; opacity: 0; }
+  .cf-lbls .l0 { animation: lb0 9s infinite; } .cf-lbls .l1 { animation: lb1 9s infinite; } .cf-lbls .l2 { animation: lb2 9s infinite; }
+  @keyframes lb0 { 0%,2% {opacity:0} 6%,30% {opacity:1} 34%,100% {opacity:0} }
+  @keyframes lb1 { 0%,35% {opacity:0} 39%,63% {opacity:1} 67%,100% {opacity:0} }
+  @keyframes lb2 { 0%,68% {opacity:0} 72%,97% {opacity:1} 100% {opacity:0} }
+
+  /* ring_mla animation (§5): Q stays put, KV shard color rotates one device per phase */
+  .ring-row { display: flex; gap: 18px; justify-content: center; align-items: center; flex-wrap: wrap; }
+  .dev { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; text-align: center; font-family: monospace; font-size: 0.78rem; color: var(--muted); }
+  .dev .q { display: block; margin-bottom: 6px; color: var(--accent); }
+  .dev .kv { display: block; width: 72px; height: 18px; border-radius: 4px; animation: rkv 8s infinite; }
+  .dev.d1 .kv { animation-delay: -6s; } .dev.d2 .kv { animation-delay: -4s; } .dev.d3 .kv { animation-delay: -2s; }
+  @keyframes rkv { 0%,24% {background:#58a6ff} 25%,49% {background:#7ee787} 50%,74% {background:#d2a8ff} 75%,100% {background:#f0883e} }
+  .ring-arrows { display: flex; justify-content: center; gap: 72px; margin-top: 8px; color: var(--warn); font-size: 0.85rem; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100% {opacity:0.35} 50% {opacity:1} }
+
+  /* block-cyclic mid-slab write animation (§6) */
+  .bc-grid { display: grid; grid-template-columns: 64px repeat(3, 1fr); gap: 5px; font-family: monospace; font-size: 0.75rem; }
+  .bc-grid .h { color: var(--muted); align-self: center; text-align: center; }
+  .bc-cell { background: var(--code-bg); border: 1px solid var(--border); border-radius: 5px; text-align: center; padding: 8px 0; color: var(--muted); }
+  .bc-cell.old { background: rgba(88,166,255,0.25); color: var(--text); }
+  .bc-cell.new { animation: bcw 6s infinite; }
+  .bc-cell.n0 { animation-delay: 0s; } .bc-cell.n1 { animation-delay: 0.4s; } .bc-cell.n2 { animation-delay: 0.8s; } .bc-cell.n3 { animation-delay: 1.2s; }
+  @keyframes bcw { 0% {background: var(--code-bg)} 10%,70% {background: rgba(240,136,62,0.55); color:#fff} 100% {background: rgba(240,136,62,0.25)} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>Chunked Prefill in <span class="sub">DeepSeek-V3 MLA</span></h1>
+  <p class="tagline">How the chunked-prefill model path works in the Tenstorrent MLA — introduced by PR&nbsp;#46345, now merged to <code>main</code>.</p>
+  <div class="meta-row">
+    <span class="filepath">models/demos/deepseek_v3_d_p/tt/mla/mla.py</span>
+    <a class="prlink" href="https://github.com/tenstorrent/tt-metal/pull/46345">PR&nbsp;#46345 · ipotkonjak-tt</a>
+    <span class="filepath">merged to main as 92814d57026 · resolves #46349</span>
+  </div>
+</header>
+
+<div class="banner">
+  <strong>Status.</strong> PR&nbsp;#46345 is <strong>merged to <code>main</code></strong> (commit
+  <code>92814d57026</code>, "deepseek_v3_d_p MLA: chunked-prefill model path + unified test"). It adds a genuine
+  chunked-prefill mode to <code>ttMLA</code>: the prompt is processed in sequential chunks across multiple
+  <code>forward()</code> calls. This report describes the merged code. The three "other" chunking notions
+  (FlashAttention tiling, zigzag SP split, decode-chunk alignment) still exist on the single-shot path and are
+  summarized at the end.
+</div>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#what">What chunked prefill is &amp; why</a></li>
+    <li><a href="#trigger">How the mode is selected — <code>kv_actual_isl</code></a></li>
+    <li><a href="#loop">The chunk loop: one forward per chunk</a></li>
+    <li><a href="#twopaths">Two paths through <code>forward()</code></a></li>
+    <li><a href="#chunkedattn">Inside <code>_chunked_attn</code>: update_padded_kv_cache + ring_mla</a></li>
+    <li><a href="#layout">The block-cyclic cache layout &amp; rotation</a></li>
+    <li><a href="#rope">Indexed RoPE — rotation that matches the cache</a></li>
+    <li><a href="#buffers">Per-mode buffers &amp; multi-user slots</a></li>
+    <li><a href="#test">The unified test driver</a></li>
+    <li><a href="#other">Appendix: the other three "chunk" notions</a></li>
+    <li><a href="#summary">Summary &amp; open TODOs</a></li>
+  </ol>
+</div>
+
+<section id="what">
+<h2><span class="num">1</span>What chunked prefill is &amp; why</h2>
+<p>
+  <strong>Chunked prefill</strong> means feeding a long prompt to the model in <em>fixed-size pieces</em> (chunks of
+  <code>chunk_size_global</code> tokens, e.g. 5120) over several forward steps, instead of one giant pass. Each step:
+</p>
+<ol>
+  <li>computes Q/KV for its chunk,</li>
+  <li><strong>appends</strong> the chunk's compressed KV to a persistent KV cache, and</li>
+  <li>runs attention of the new chunk's queries against the <em>entire valid prefix so far</em> (everything already in the cache + this chunk).</li>
+</ol>
+<p>Why this matters for MLA prefill:</p>
+<div class="grid2">
+  <div class="card"><h4>Bounded activation memory</h4><p>A 50k-token prompt never materializes as one 50k activation. Peak SRAM/DRAM is set by the chunk size, not the prompt length.</p></div>
+  <div class="card"><h4>Prefix reuse</h4><p>A prefilled prefix can stay in the cache; later chunks extend it. The cache is the source of truth, so requests can resume.</p></div>
+  <div class="card"><h4>Multi-user batching</h4><p>The cache batch dim is user-major (<code>cache_user_id</code>), so independent users' chunks interleave through the same MLA without cross-contamination.</p></div>
+  <div class="card"><h4>Disaggregation-friendly</h4><p>This is the <code>_d_p</code> (disaggregated-prefill) demo; chunk-at-a-time prefill maps naturally onto a prefill server that streams KV to a decode server.</p></div>
+</div>
+<p>
+  The three device ops it needs —
+  <code>update_padded_kv_cache</code>, <code>rotary_embedding_indexed</code>, and <code>ring_mla</code> — are all upstream.
+</p>
+</section>
+
+<section id="trigger">
+<h2><span class="num">2</span>How the mode is selected — <code>kv_actual_isl</code></h2>
+<p>The mode is fixed at <strong>construction</strong> and re-asserted on <strong>every call</strong>:</p>
+<ul>
+  <li><span class="pill">init</span> <code>ttMLA(..., is_chunked=True, slot_num=N, layer_num=61)</code> — picks the buffer set and binds the RoPE op.</li>
+  <li><span class="pill">call</span> <code>forward(..., kv_actual_isl=K, cache_user_id=u)</code> — passing <code>kv_actual_isl</code> (not <code>None</code>) <em>is</em> the chunked signal.</li>
+</ul>
+<p>
+  <code>kv_actual_isl</code> = <strong>the cumulative number of valid KV tokens already in the cache before this chunk</strong>
+  (0 for the very first chunk). It is the single runtime value that drives the on-device cache-write offset, the RoPE
+  rotation, and the causal masking — keeping all three consistent.
+</p>
+<pre><code><span class="tok-c"># forward() — mode detect + guard (mla.py)</span>
+is_chunked = kv_actual_isl <span class="tok-k">is not</span> <span class="tok-k">None</span>
+<span class="tok-k">assert</span> is_chunked == self.is_chunked, (
+    <span class="tok-s">f"forward mode (is_chunked=..., from kv_actual_isl) does not match construction "</span>
+    <span class="tok-s">f"(self.is_chunked=...); the required ring buffers are not allocated"</span>
+)
+
+<span class="tok-c"># Cache batch dim is user-major: each user reserves layer_num contiguous slots.</span>
+<span class="tok-k">assert</span> cache_user_id &lt; self.slot_num
+cache_batch_idx = cache_user_id * self.layer_num + cache_layer_idx</code></pre>
+<div class="callout">
+  <span class="lbl">Why bind the mode at init</span>
+  The ring buffers differ between modes and are <strong>pre-allocated</strong> in <code>__init__</code> to avoid paying DRAM
+  for the set you won't use. So a per-call mode that disagrees with construction would reference buffers that don't exist —
+  hence the hard assert.
+</div>
+</section>
+
+<section id="loop">
+<h2><span class="num">3</span>The chunk loop: one <code>forward()</code> per chunk</h2>
+<p>
+  MLA itself processes <strong>one chunk per call</strong>. The <em>loop</em> over chunks lives in the caller (here, the
+  test driver <code>test_mla_chunked_prefill</code>). The essential pattern — note how <code>kv_actual</code> accumulates:
+</p>
+<pre><code><span class="tok-k">for</span> i <span class="tok-k">in</span> range(n_iters):
+    <span class="tok-k">for</span> u <span class="tok-k">in</span> range(num_users):          <span class="tok-c"># users interleave -> exercises slot isolation</span>
+        isl       = group[u][i]              <span class="tok-c"># this chunk's valid token count</span>
+        kv_actual = prefill_len + sum(group[u][:i])   <span class="tok-c"># valid tokens already cached</span>
+
+        tt_out = mla_tt.<span class="tok-f">forward</span>(
+            hidden_states=tt_h,              <span class="tok-c"># this chunk, [1,1,chunk_size_global,H]</span>
+            rope_tensors=indexed_rope,       <span class="tok-c"># built ONCE for the whole cache</span>
+            kvpe_cache=tt_kvpe_cache,        <span class="tok-c"># persistent across iters</span>
+            kv_actual_isl=kv_actual,         <span class="tok-c"># <- the chunked signal + offset</span>
+            cache_user_id=u,
+        )</code></pre>
+<div class="diagram"><pre>  prompt = 12000 tokens, chunk_size_global = 5120
+
+  iter 0:  kv_actual=0     ┌── chunk 0 (5120) ──┐                          write → cache[0:5120]
+           attend: Q[0:5120] × K[0:5120]                                   (causal)
+
+  iter 1:  kv_actual=5120              ┌── chunk 1 (5120) ──┐              write → cache[5120:10240]
+           attend: Q[5120:10240] × K[0:10240]                             (sees full prefix)
+
+  iter 2:  kv_actual=10240                        ┌─ chunk 2 (1760+pad) ─┐ write → cache[10240:...]
+           attend: Q[10240:12000] × K[0:12000]
+
+           kv_actual is NOT always a multiple of chunk_size_global  →  "rotated" / mid-slab case
+                                                                        (handled on-device, see §5)</pre></div>
+<div class="fig" aria-hidden="true">
+  <div class="cf-bar">
+    <div class="cf-chunk c0"></div><div class="cf-chunk c1"></div><div class="cf-chunk c2"></div>
+    <div class="cf-pad"></div>
+    <div class="cf-q"></div>
+  </div>
+  <div class="cf-lbls">
+    <span class="l0">iter 0 · kv_actual_isl=0 · Q[0:5120] × K[0:5120]</span>
+    <span class="l1">iter 1 · kv_actual_isl=5120 · Q[5120:10240] × K[0:10240]</span>
+    <span class="l2">iter 2 · kv_actual_isl=10240 · Q[10240:12000] × K[0:12000] (tail = pad)</span>
+  </div>
+  <div class="cap">The KV cache fills one chunk per <code>forward()</code>; the green underline is the prefix the new
+  chunk's queries attend over — always everything written so far. Hatched tail = padding, masked by causality.</div>
+</div>
+<div class="fig" id="fig100k">
+  <div style="display:flex;justify-content:space-between;font-family:monospace;font-size:0.78rem;color:var(--muted);margin-bottom:6px;">
+    <span id="hk-iter">iter 0 / 20</span>
+    <span id="hk-stats">cached 0k · attend Q[5k] × K[0 .. 5k]</span>
+  </div>
+  <div class="cf-bar" style="height:40px" id="hk-bar">
+    <div id="hk-q" style="position:absolute;bottom:0;left:0;height:5px;background:var(--accent2);width:0"></div>
+  </div>
+  <div style="position:relative;height:1.3em;font-family:monospace;font-size:0.7rem;color:var(--muted)">
+    <span style="position:absolute;left:0">0</span><span style="position:absolute;left:24%">25k</span>
+    <span style="position:absolute;left:49%">50k</span><span style="position:absolute;left:74%">75k</span>
+    <span style="position:absolute;right:0">100k</span>
+  </div>
+  <div style="margin-top:10px;font-family:monospace;font-size:0.78rem;color:var(--muted)">
+    per-step activation (always one 5k chunk):
+    <span style="display:inline-block;width:5%;height:9px;background:var(--accent2);border-radius:3px"></span>
+    &nbsp;·&nbsp; attention span this step: <span id="hk-span" style="display:inline-block;width:0;height:9px;background:rgba(88,166,255,0.5);border-radius:3px;vertical-align:middle"></span>
+  </div>
+  <div class="cap">100k-token prompt, <code>chunk_size_global</code>=5k → 20 forwards. Each step materializes
+  <b>activations for only its 5k chunk</b> (green floor — Q, hidden states, attention output are all 5k tall),
+  writes <code>cache[kv_actual : kv_actual+5k]</code>, then ring-attends Q[5k] × K[0 .. kv_actual+5k] (blue span).
+  E.g. iter 12: 5k new queries × 60k cached keys. The 60k side is <b>streamed</b> — flash-tiled inside
+  <code>ring_mla</code> (k_chunk_size tiles, online softmax) and rotated shard-by-shard around the SP ring — so the
+  per-step memory stays ~5k while per-step compute grows linearly with the prefix. The single-shot path would instead
+  materialize all 100k activations at once — that DRAM/L1 footprint, not attention span, is what bounds it.</div>
+</div>
+<script>
+(function () {
+  const N = 20, STEP_MS = 420, bar = document.getElementById('hk-bar');
+  const cells = [];
+  const colors = ['rgba(88,166,255,0.40)', 'rgba(126,231,135,0.35)', 'rgba(210,168,255,0.40)', 'rgba(240,136,62,0.35)'];
+  for (let i = 0; i < N; i++) {
+    const d = document.createElement('div');
+    d.style.cssText = 'position:absolute;top:0;height:100%;border-right:1px solid var(--border);opacity:0;transition:opacity .25s;' +
+      'left:' + (i * 5) + '%;width:5%;background:' + colors[i % 4];
+    bar.appendChild(d); cells.push(d);
+  }
+  const q = document.getElementById('hk-q'), it = document.getElementById('hk-iter'),
+        st = document.getElementById('hk-stats'), span = document.getElementById('hk-span');
+  let i = 0;
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function tick() {
+    if (i === 0) cells.forEach(c => c.style.opacity = 0);
+    cells[i].style.opacity = 1;
+    const end = (i + 1) * 5;
+    q.style.width = end + '%';
+    span.style.width = (end * 1.6) + 'px';
+    it.textContent = 'iter ' + i + ' / ' + N;
+    st.textContent = 'cached ' + (i * 5) + 'k · attend Q[5k] × K[0 .. ' + end + 'k] (streamed)';
+    i = (i + 1) % N;
+  }
+  if (reduced) { cells.forEach(c => c.style.opacity = 1); q.style.width = '100%'; it.textContent = 'iter 19 / 20'; }
+  else { tick(); setInterval(tick, STEP_MS); }
+})();
+</script>
+<p>
+  Chunks need not be full: an iter's <code>isl</code> can be a partial chunk (tile-aligned, &le; <code>chunk_size_global</code>).
+  When <code>kv_actual</code> is not a multiple of <code>chunk_size_global</code>, the cache write lands <em>mid-slab</em> — the
+  "rotated" case that <code>update_padded_kv_cache</code> and indexed RoPE resolve on-device.
+</p>
+</section>
+
+<section id="twopaths">
+<h2><span class="num">4</span>Two paths through <code>forward()</code></h2>
+<p>
+  The single-shot path is intact; the <strong>chunked</strong> path sits beside it. They
+  <strong>share</strong> the Q/KV projection + RoPE prologue and the <code>nlp_concat_heads</code> + <code>o_proj</code>
+  epilogue. They differ in exactly three places:
+</p>
+<table>
+  <tr><th>Stage</th><th>Single-shot (<code>is_chunked=False</code>)</th><th>Chunked (<code>is_chunked=True</code>)</th></tr>
+  <tr>
+    <td><strong>RoPE op</strong><br><code>self._apply_rope</code></td>
+    <td><code>rotary_embedding_llama</code><br><span class="ftag">_apply_rope_one_shot</span> · natural order</td>
+    <td><code>deepseek_prefill.rotary_embedding_indexed</code><br><span class="ftag">_apply_rope_padded</span> · offset from <code>kv_actual_global</code></td>
+  </tr>
+  <tr>
+    <td><strong>Cache write</strong></td>
+    <td><code>kv_cache.fill_cache_for_user_</code> (whole local slot) + <code>zero_cache_padding_zigzag</code></td>
+    <td><code>deepseek_prefill.update_padded_kv_cache</code> (per-chip offset, on-device)</td>
+  </tr>
+  <tr>
+    <td><strong>Attention op</strong></td>
+    <td><code>ring_joint_scaled_dot_product_attention</code><br>V <em>pre-materialized</em> (wkv_b2 before attn)</td>
+    <td><code>ring_mla</code><br>V materialized <em>in-op</em> from latent KV (wkv_b2 after attn)</td>
+  </tr>
+</table>
+<p>The RoPE op is bound once at init so <code>forward</code> never re-decides:</p>
+<pre><code><span class="tok-c"># __init__</span>
+self._apply_rope = self._apply_rope_padded <span class="tok-k">if</span> is_chunked <span class="tok-k">else</span> self._apply_rope_one_shot
+<span class="tok-c"># ... later in forward, both q-rope and kv-rope just call:</span>
+tt_q_rope  = self.<span class="tok-f">_apply_rope</span>(tt_q_rope,  rope_tensors, kv_actual_isl)
+tt_kv_rope = self.<span class="tok-f">_apply_rope</span>(tt_kv_rope, rope_tensors, kv_actual_isl)</code></pre>
+<div class="callout good">
+  <span class="lbl">Where wkv_b2 moves — and why</span>
+  In single-shot, V is built up front (<code>wkv_b2</code> → <code>tt_v_embedding</code>) and fed to SDPA. In chunked,
+  <code>ring_mla</code> reads V as the first <code>kv_lora_rank</code> columns of the <em>latent</em> KV cache and
+  materializes it inside the op, so attention runs in the compact <code>kv_lora_rank</code> space and
+  <code>wkv_b2</code> is applied to the (smaller) attention output <em>afterwards</em>. Less data through the ring.
+</div>
+</section>
+
+<section id="chunkedattn">
+<h2><span class="num">5</span>Inside <code>_chunked_attn</code>: write-then-attend</h2>
+<p>The chunked branch delegates to <code>_chunked_attn</code>, which is two ops plus the deferred <code>wkv_b2</code>:</p>
+<pre><code><span class="tok-k">def</span> <span class="tok-f">_chunked_attn</span>(self, *, tt_q, tt_kvpe, kvpe_cache, kv_actual_isl,
+                  cache_batch_idx, cache_layer_idx, cache_user_id, seq_len_local, ...):
+    <span class="tok-k">assert not</span> self.is_balanced   <span class="tok-c"># chunked requires is_balanced=False</span>
+    chunk_size_global = seq_len_local * self.sp_factor
+    <span class="tok-k">assert</span> chunk_size_global % (TILE_SIZE * self.sp_factor) == <span class="tok-n">0</span>
+    <span class="tok-k">assert</span> kv_actual_isl % TILE_SIZE == <span class="tok-n">0</span>
+
+    <span class="tok-c"># 1) WRITE: append this chunk to the cache at each chip's on-device offset</span>
+    ttnn.experimental.deepseek_prefill.<span class="tok-f">update_padded_kv_cache</span>(
+        kvpe_cache, tt_kvpe,
+        slot_idx=cache_user_id, layer_idx=cache_layer_idx, num_layers=self.layer_num,
+        kv_actual_global=kv_actual_isl, cluster_axis=self.sp_axis,
+    )
+
+    <span class="tok-c"># 2) ATTEND: ring_mla over the populated prefix; V materialized in-op from latent KV</span>
+    attn_out, _ = ttnn.transformer.<span class="tok-f">ring_mla</span>(
+        tt_q, kvpe_cache,
+        persistent_output_buffer_kv=self._chunked_kv_buf,
+        head_dim_v=self.kv_lora_rank,
+        logical_n=kv_actual_isl + chunk_size_global,   <span class="tok-c"># prior valid + this chunk</span>
+        program_config=self.<span class="tok-f">_get_sdpa_program_config</span>(seq_len_local),
+        scale=self.scale, dim=<span class="tok-n">2</span>, cluster_axis=self.sp_axis,
+        kv_cache_batch_idx=cache_batch_idx,            <span class="tok-c"># this user/layer's slot</span>
+        kv_actual_isl=kv_actual_isl,                   <span class="tok-c"># rotation/causality offset</span>
+        ... )
+
+    <span class="tok-c"># 3) EXPAND: latent V (kv_lora_rank) -> v_head_dim per head</span>
+    attn_out = ttnn.<span class="tok-f">linear</span>(attn_out, self.wkv_b2_weight, ...)
+    <span class="tok-k">return</span> attn_out</code></pre>
+<div class="fig" aria-hidden="true">
+  <div class="ring-row">
+    <div class="dev d0"><span class="q">D0 · Q shard 0</span><span class="kv"></span></div>
+    <div class="dev d1"><span class="q">D1 · Q shard 1</span><span class="kv"></span></div>
+    <div class="dev d2"><span class="q">D2 · Q shard 2</span><span class="kv"></span></div>
+    <div class="dev d3"><span class="q">D3 · Q shard 3</span><span class="kv"></span></div>
+  </div>
+  <div class="ring-arrows"><span>→</span><span>→</span><span>→</span><span>↩</span></div>
+  <div class="cap"><code>ring_mla</code> across the SP axis (sp=4): each device's <strong>queries stay put</strong> while
+  the latent KVPE shards (colored bars) rotate one hop per step — after <code>sp</code> steps every query has attended over
+  all valid keys. The rightmost shard wraps back to D0.</div>
+</div>
+<p>
+  A nice property the code highlights: the <strong>chunk-aligned case is just the degenerate</strong>
+  <code>kv_actual_isl = n · chunk_size_global</code> of the same code — there <code>update_padded_kv_cache</code> reduces to a
+  uniform per-chip write and indexed RoPE/SDPA reduce to natural order. One path, no special-casing.
+</p>
+<div class="callout warn">
+  <span class="lbl">Constraints baked into the asserts</span>
+  <code>chunk_size_global</code> must be a multiple of <code>TILE_SIZE · sp_factor</code>, and <code>kv_actual_isl</code> must
+  be tile-aligned. Also chunked prefill currently requires <code>is_balanced=False</code> (no zigzag) and does not yet
+  support the <code>on_layer_complete</code> migration callback.
+</div>
+</section>
+
+<section id="layout">
+<h2><span class="num">6</span>The block-cyclic cache layout &amp; "rotation"</h2>
+<p>
+  KV for a chunk spans <code>chunk_size_global</code> tokens that must be split across <code>sp_factor</code> chips. The cache
+  uses a <strong>block-cyclic, slab-major</strong> layout: the per-chip chunk is <code>chunk_local = chunk_size_global / sp</code>,
+  and an SP-contiguous shard of the cache's seq dim hands chip <em>c</em> blocks <code>c, c+sp, c+2sp, …</code>. The writer
+  kernel (<code>update_padded_kv_cache</code>) and the host helpers mirror each other exactly:
+</p>
+<pre><code><span class="tok-c"># utils.py — the inverse of the writer, used to validate the device cache</span>
+<span class="tok-k">def</span> <span class="tok-f">blockcyclic_positions</span>(sp, chunk_size_global, seq_len_cache):
+    seq_len_local = seq_len_cache // sp
+    chunk_local   = chunk_size_global // sp
+    c  = torch.arange(sp).repeat_interleave(seq_len_local)
+    lr = torch.arange(seq_len_local).repeat(sp)
+    slab, off = lr // chunk_local, lr % chunk_local
+    <span class="tok-k">return</span> slab * chunk_size_global + c * chunk_local + off   <span class="tok-c"># global pos of each shard row</span></code></pre>
+<p>
+  <strong>Rotation / mid-slab.</strong> When <code>kv_actual_isl</code> is <em>not</em> on a chunk boundary, the new chunk's
+  tokens don't start at the same local offset on every chip. <code>rotated_chip_positions</code> reproduces the writer's
+  decision per chip:
+</p>
+<div class="diagram"><pre>  sp=4, chunk_local=C, kv_actual_isl somewhere mid-slab:
+
+  boundary_slab = kv_actual // chunk_size_global
+  boundary_chip = (kv_actual // chunk_local) % sp
+  boundary_off  = kv_actual %  chunk_local
+
+  chip c  <  boundary_chip :  update_idxt = (boundary_slab+1)*C      (already past -> next slab)
+  chip c  == boundary_chip :  update_idxt =  boundary_slab*C + off   (straddles the boundary)
+  chip c  >  boundary_chip :  update_idxt =  boundary_slab*C         (still on current slab)
+
+  cell (chip c, local row lr) holds global position:
+        (lr // C) * chunk_size_global  +  c * C  +  (lr % C)
+
+  The union over all (c, lr) tiles [kv_actual, kv_actual + chunk_size_global) exactly,
+  so the first `valid` positions are contiguous real tokens and the rest are pad
+  (masked by causality) — no separate "new_actual_isl" plumbing needed.</pre></div>
+<div class="fig" aria-hidden="true">
+  <div class="bc-grid">
+    <div class="h"></div><div class="h">slab 0</div><div class="h">slab 1</div><div class="h">slab 2</div>
+    <div class="h">chip 0</div><div class="bc-cell old">blk 0</div><div class="bc-cell old">blk 4</div><div class="bc-cell new n3">blk 8</div>
+    <div class="h">chip 1</div><div class="bc-cell old">blk 1</div><div class="bc-cell new n0">blk 5</div><div class="bc-cell">blk 9</div>
+    <div class="h">chip 2</div><div class="bc-cell old">blk 2</div><div class="bc-cell new n1">blk 6</div><div class="bc-cell">blk 10</div>
+    <div class="h">chip 3</div><div class="bc-cell old">blk 3</div><div class="bc-cell new n2">blk 7</div><div class="bc-cell">blk 11</div>
+  </div>
+  <div class="cap">Mid-slab ("rotated") write, sp=4: blue blocks 0–4 are already valid (<code>kv_actual_isl</code> ends
+  inside slab 1), so the new chunk lands as blocks 5–8 — chips 1–3 finish slab 1 while chip 0, already past the boundary,
+  starts slab 2. The pulse order is the global token order; chip 1 is the boundary chip.</div>
+</div>
+<div class="callout">
+  <span class="lbl">The point of block-cyclic</span>
+  It lets a <em>plain</em> SP shard of dim-2 give each chip exactly the rows it owns, with the newest chunk landing at the
+  right per-chip offset — so the cache write, the RoPE table, and the ring-attention read all agree on which global
+  position lives in which cache cell.
+</div>
+</section>
+
+<section id="rope">
+<h2><span class="num">7</span>Indexed RoPE — rotation that matches the cache</h2>
+<p>
+  Single-shot RoPE rotates a contiguous, natural-order sequence. In chunked mode the cache is block-cyclic and the chunk
+  may be mid-slab, so the cos/sin tables must be arranged the <em>same way</em>. <code>RotarySetup.get_rope_tensors_indexed</code>
+  builds the rope values for the <strong>entire cache once</strong>, block-cyclic-reordered and SP-sharded:
+</p>
+<pre><code><span class="tok-k">def</span> <span class="tok-f">get_rope_tensors_indexed</span>(self, cache_seq_len_global, chunk_size_global):
+    <span class="tok-k">assert not</span> self.is_balanced
+    chunk_local = chunk_size_global // self.sp_factor
+    cos, sin = <span class="tok-f">get_cos_sin_matrix</span>(self.hf_config)
+    cos = cos[..., :cache_seq_len_global, :]; sin = sin[..., :cache_seq_len_global, :]
+    <span class="tok-c"># same block-cyclic layout as the KV cache writes into:</span>
+    cos = <span class="tok-f">block_cyclic_reorder</span>(cos, chunk_local, self.sp_factor, seq_dim=<span class="tok-n">2</span>)
+    sin = <span class="tok-f">block_cyclic_reorder</span>(sin, chunk_local, self.sp_factor, seq_dim=<span class="tok-n">2</span>)
+    <span class="tok-c"># SP-shard on seq dim; rotary_embedding_indexed derives this chunk's start row</span>
+    <span class="tok-c"># on-device from kv_actual_global -> reuse the SAME tensors across all chunks.</span>
+    ...</code></pre>
+<p>
+  Then <code>_apply_rope_padded</code> simply passes the live <code>kv_actual_global</code> to the indexed op; the op derives
+  each chip's contiguous read offset using the same <code>update_idxt</code> math as the cache writer, so the queries/keys
+  of this chunk get rotated by their <em>true global positions</em>, including the boundary chip's older-then-wrap rows.
+</p>
+<pre><code><span class="tok-k">def</span> <span class="tok-f">_apply_rope_padded</span>(self, t, rope_tensors, kv_actual_isl):
+    <span class="tok-k">return</span> ttnn.experimental.deepseek_prefill.<span class="tok-f">rotary_embedding_indexed</span>(
+        t, rope_tensors[<span class="tok-s">"cos_matrix"</span>], rope_tensors[<span class="tok-s">"sin_matrix"</span>], rope_tensors[<span class="tok-s">"trans_matrix"</span>],
+        kv_actual_global=kv_actual_isl, cluster_axis=self.sp_axis,
+    )</code></pre>
+<div class="callout good">
+  <span class="lbl">One table, every chunk</span>
+  Because the offset is a single on-device runtime arg, the (expensive) whole-cache cos/sin tensors are built once and
+  reused for every chunk and every user — only <code>kv_actual_global</code> varies between calls.
+</div>
+</section>
+
+<section id="buffers">
+<h2><span class="num">8</span>Per-mode buffers &amp; multi-user slots</h2>
+<p>
+  The two attention ops need disjoint ring buffers, so <code>__init__</code> allocates only the configured mode's set:
+</p>
+<table>
+  <tr><th>Mode</th><th>Buffers allocated</th></tr>
+  <tr><td><code>is_chunked=True</code></td><td>one combined <code>_chunked_kv_buf</code> of shape <code>(slot_num·layer_num, 1, seq_len, kv_lora_rank+qk_rope_head_dim)</code> — K and V both come from this single latent buffer</td></tr>
+  <tr><td><code>is_chunked=False</code></td><td><code>persistent_k_output_buffer</code>, <code>persistent_v_output_buffer</code>, and the dummy <code>joint_q/kv/v</code> tensors</td></tr>
+</table>
+<p>
+  <strong>Multi-user, user-major cache.</strong> <code>init_kvpe_cache(..., num_users=N)</code> now sizes the cache batch dim
+  to <code>num_users · num_layers</code>, and the flat slot index is <code>cache_user_id · layer_num + cache_layer_idx</code>.
+  Each user's layers stay contiguous; <code>cache_user_id</code> picks the slot, so interleaving users through one MLA can't
+  cross-contaminate.
+</p>
+<div class="callout warn">
+  <span class="lbl">TODOs flagged in the merged code (DRAM)</span>
+  <ol style="margin:6px 0 0 0;">
+    <li>These ring buffers are <em>scratch</em>, not per-layer state — with one <code>ttMLA</code> per layer they're re-allocated every layer (wasted DRAM scaling with depth). They should be hoisted to a shared owner.</li>
+    <li><code>_chunked_kv_buf</code> is allocated for the <em>full</em> batch because <code>ring_mla</code>'s <code>TT_FATAL</code> forces gathered-KV batch == cache batch, even though it only ever gathers into one slot. Relaxing the op would make this a batch-1 buffer.</li>
+  </ol>
+</div>
+</section>
+
+<section id="test">
+<h2><span class="num">9</span>The unified test driver</h2>
+<p>
+  <code>tests/test_mla.py::test_mla_chunked_prefill</code> is a single driver crossed over <strong>three independent axes</strong>:
+</p>
+<table>
+  <tr><th>Axis</th><th>Values</th></tr>
+  <tr><td><strong>Scenario</strong></td><td>sp=8 <em>rotation-edge</em> patterns (each isolates one edge); <code>maxedge</code> (chip-aligned + mid-chip straddle + multi-slab in 3 iters); <code>production</code>/<code>deep</code>-prefix; <code>multi-user</code> (incl. padded <code>maxedge-multiuser</code>)</td></tr>
+  <tr><td><strong>Mesh</strong></td><td>e.g. 2×2, 8×4, line — no longer baked into a case</td></tr>
+  <tr><td><strong>Reference</strong></td><td><code>cpu</code> (torch MLA, k_pe in Meta basis) · <code>trace</code> (GPU ground-truth, HF basis, deepseek-only, needs <code>DEEPSEEK_MLA_TRACE_DIR</code>) · <code>func</code>/None (random, finite-output check)</td></tr>
+</table>
+<p>
+  Checks: per-iter and full-prefix output PCC, plus a per-user <strong>KV-cache</strong> check (<code>k_nope</code> directly;
+  <code>k_pe</code> Meta-aligned for the trace basis). <strong>Variants:</strong> the config-driven driver runs both
+  <code>deepseek_v3_d_p</code> (128 heads) and <code>kimi_k2_6</code> (64 heads) — same <code>kvpe=576</code>; Kimi runs on the
+  random-weights, non-trace path only.
+</p>
+<p>
+  Reported validation: 2×2 CPU rotation + multi-user PCC&nbsp;≥&nbsp;0.996 (cache ≈ 0.9998); single-step 8×4 vs GPU trace —
+  output 0.9941, <code>k_nope</code> 0.99986, <code>k_pe</code> 0.99994 after Meta-interleave. Galaxy / Blackhole-e2e / T3000-e2e
+  chunked MLA jobs pass.
+</p>
+<p>
+  Test-only helpers live in <code>utils/chunked_prefill_utils.py</code> (GPU-trace I/O, <code>partition_iters</code> for
+  multi-user, <code>cpu_mla_reference</code>) — kept <strong>off</strong> the model import path since they pull the reference
+  model + safetensors. Pure-torch layout helpers (<code>block_cyclic_reorder</code>, <code>rotated_chip_positions</code>,
+  <code>blockcyclic_positions</code>, <code>blockcyclic_cache_host</code>) live in <code>tt/mla/utils.py</code>.
+</p>
+</section>
+
+<section id="other">
+<h2><span class="num">10</span>Appendix: the other three "chunk" notions</h2>
+<p>These predate the chunked-prefill change and still apply (mostly to the single-shot path). Don't confuse them with chunked prefill:</p>
+<div class="grid2">
+  <div class="card">
+    <h4>① FlashAttention tiling</h4>
+    <p><code>q_chunk_size</code> / <code>k_chunk_size</code> in <code>_get_sdpa_program_config</code> (shared by both ring SDPA and ring_mla). Tiles the attention matrix so it never fully materializes. Kernel-level.</p>
+  </div>
+  <div class="card">
+    <h4>② Zigzag SP chunking</h4>
+    <p><code>create_balanced_chunk_order</code>: split the prompt into <code>2·sp_factor</code> chunks, interleave across SP devices to balance the causal triangle. <strong>Disabled in chunked mode</strong> (<code>is_balanced=False</code> required).</p>
+  </div>
+  <div class="card">
+    <h4>③ Decode-chunk alignment</h4>
+    <p><code>DECODE_CHUNK_ALIGN = 128</code> + <code>zero_cache_padding_zigzag</code>: pad/zero the cache to a 128-token boundary so the downstream decode server reads clean KV. Single-shot path only.</p>
+  </div>
+  <div class="card">
+    <h4>(bonus) KV chunk address table</h4>
+    <p>Disaggregation stores KV in DRAM as fixed-size chunks for migration. Lives in the pipeline/tests, not <code>mla.py</code>.</p>
+  </div>
+</div>
+</section>
+
+<section id="summary">
+<h2><span class="num">11</span>Summary &amp; open TODOs</h2>
+<table>
+  <tr><th>Aspect</th><th>Chunked prefill (merged, #46345)</th></tr>
+  <tr><td>Selected by</td><td><code>is_chunked=True</code> at init + <code>kv_actual_isl != None</code> per call</td></tr>
+  <tr><td>Unit of work</td><td>one chunk of <code>chunk_size_global</code> tokens per <code>forward()</code>; caller loops</td></tr>
+  <tr><td>Cache write</td><td><code>update_padded_kv_cache</code> (on-device per-chip offset from <code>kv_actual_global</code>)</td></tr>
+  <tr><td>Attention</td><td><code>ring_mla</code> — V materialized in-op from latent KV; <code>wkv_b2</code> applied after</td></tr>
+  <tr><td>RoPE</td><td><code>rotary_embedding_indexed</code> over a once-built, block-cyclic, SP-sharded cos/sin table</td></tr>
+  <tr><td>Layout</td><td>block-cyclic / slab-major; user-major batch (<code>cache_user_id·layer_num + cache_layer_idx</code>)</td></tr>
+  <tr><td>Constraints</td><td><code>is_balanced=False</code>; no <code>on_layer_complete</code>; <code>chunk_size_global % (TILE·sp)==0</code>; <code>kv_actual_isl</code> tile-aligned</td></tr>
+</table>
+<div class="callout warn">
+  <span class="lbl">Known TODOs carried in the code</span>
+  Hoist the per-layer scratch ring buffers to a shared owner; relax <code>ring_mla</code> so <code>_chunked_kv_buf</code> can be
+  batch-1 instead of full-batch.
+</div>
+<div class="callout good">
+  <span class="lbl">One-sentence takeaway</span>
+  PR&nbsp;#46345 (now on <code>main</code>) makes <code>ttMLA</code> prefill <strong>one chunk at a time</strong>: each <code>forward()</code> appends its
+  chunk's latent KV to a block-cyclic cache via <code>update_padded_kv_cache</code> and attends over the whole valid prefix
+  with <code>ring_mla</code> + indexed RoPE — all driven by a single cumulative offset, <code>kv_actual_isl</code>.
+</div>
+</section>
+
+<footer>
+  Generated from PR&nbsp;<a class="prlink" style="padding:1px 6px" href="https://github.com/tenstorrent/tt-metal/pull/46345">#46345</a>,
+  merged to <code>main</code> as commit <code>92814d57026</code>: diffs to
+  <code>tt/mla/mla.py</code>, <code>tt/mla/rope.py</code>, <code>tt/mla/utils.py</code>,
+  <code>utils/chunked_prefill_utils.py</code>, <code>utils/kv_cache_utils.py</code>, and <code>tests/test_mla.py</code>.
+  Code excerpts are condensed for readability; see the merged code for exact lines.
+</footer>
+
+</div>
+</body>
+</html>

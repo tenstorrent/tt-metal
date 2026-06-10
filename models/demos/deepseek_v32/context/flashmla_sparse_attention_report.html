@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FlashMLA sparse attention — how it works</title>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"
+  onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'\\(',right:'\\)',display:false}]});"></script>
+
+<style>
+  :root { --q:#1565c0; --qbg:#e3f2fd; --k:#2e7d32; --kbg:#e6ffe6; --w:#b06f00; --wbg:#fff3e0;
+          --s:#6a1b9a; --sbg:#f3e5f5; --ink:#1c1c1c; --muted:#666; }
+  body { font-family:-apple-system,"Segoe UI",Roboto,Arial,sans-serif; color:var(--ink); margin:0; background:#fafafa; }
+  main { max-width:1100px; margin:0 auto; padding:24px 32px 80px; }
+  h1 { font-size:1.5em; margin-bottom:0; } h2 { font-size:1.2em; margin-top:2.2em; border-bottom:1px solid #ddd; padding-bottom:4px; }
+  h3 { font-size:1.02em; }
+  .sub { color:var(--muted); margin-top:4px; font-size:.95em; }
+  table { border-collapse:collapse; width:100%; font-size:.9em; }
+  th,td { border:1px solid #ddd; padding:6px 10px; text-align:left; vertical-align:top; }
+  th { background:#f0f0f0; }
+  code,pre { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:.9em; }
+  pre { background:#272822; color:#f8f8f2; padding:14px 18px; border-radius:8px; overflow-x:auto; line-height:1.45; }
+  pre .c { color:#88846f; } pre .k { color:#f92672; } pre .s { color:#e6db74; }
+  .fr { background:#fff; border:1px solid #e0e0e0; border-radius:8px; padding:6px 18px; margin:10px 0; }
+  .note { background:var(--sbg); border-left:4px solid var(--s); padding:8px 14px; border-radius:0 6px 6px 0; font-size:.93em; }
+  .pill { display:inline-block; padding:1px 10px; border-radius:10px; font-size:.85em; border:1px solid; margin-right:6px; }
+  .pq { background:var(--qbg); color:var(--q); } .pk { background:var(--kbg); color:var(--k); }
+  .ps { background:var(--sbg); color:var(--s); } .pw { background:var(--wbg); color:var(--w); }
+
+  /* token layout strip */
+  .strip { display:flex; height:42px; border:1px solid #ccc; border-radius:6px; overflow:hidden; font-size:.78em; text-align:center; color:#222; }
+  .strip div { display:flex; align-items:center; justify-content:center; border-right:1px solid #ccc; }
+
+  /* pipeline animation */
+  .pipe { background:#fff; border:1px solid #e0e0e0; border-radius:8px; padding:18px; }
+  .lane { display:flex; align-items:center; margin:10px 0; gap:8px; }
+  .lane .who { width:240px; font-size:.85em; color:var(--muted); flex:none; }
+  .slot { flex:1; height:28px; border-radius:5px; position:relative; overflow:hidden; background:#f0f0f0; }
+  .bar { position:absolute; top:3px; bottom:3px; width:9%; border-radius:4px; opacity:.9; animation:slide 6s linear infinite; }
+  .tq { background:var(--qbg); border:1px solid var(--q); } .tk { background:var(--kbg); border:1px solid var(--k); }
+  .tm { background:var(--sbg); border:1px solid var(--s); } .tw { background:var(--wbg); border:1px solid var(--w); }
+  @keyframes slide { from { transform:translateX(-120%);} to { transform:translateX(1200%);} }
+  @media (prefers-reduced-motion: reduce) { .bar { animation:none; left:10%; } }
+  .legendrow { font-size:.85em; color:var(--muted); margin-top:6px; }
+  .swatch { display:inline-block; width:22px; height:12px; border-radius:3px; vertical-align:middle; margin:0 4px 0 12px; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>FlashMLA sparse attention</h1>
+<p class="sub">DeepSeek's deployed DSA attention kernels: <code>flash_mla_sparse_fwd</code> (prefill, bf16) and
+<code>flash_mla_with_kvcache(indices=…)</code> (decode, fp8 paged cache). Sources:
+<code>flash_mla/flash_mla_interface.py</code>, <code>csrc/sm90/prefill/sparse/phase1.cuh</code>,
+<code>tests/ref.py</code>, <code>docs/20250929-hopper-fp8-sparse-deep-dive.md</code>.
+The contract that matters: <b>top-k indices replace the mask</b> — attention runs over κ gathered tokens, never length T; complexity O(S·κ·H·D).</p>
+
+<h2>1. API</h2>
+<h3>Prefill: <code>flash_mla_sparse_fwd(q, kv, indices, sm_scale, d_v=512) → (out, max_logits, lse)</code></h3>
+<table>
+<tr><th></th><th>Tensor</th><th>Shape / dtype</th><th>Notes</th></tr>
+<tr><td><span class="pill pq">in</span></td><td><code>q</code></td><td><code>[S, H, 576]</code> bf16</td><td>576 = latent 512 + rope 64; H = 128 (kernel halves it: 64/CTA)</td></tr>
+<tr><td><span class="pill pk">in</span></td><td><code>kv</code></td><td><code>[T, 1, 576]</code> bf16</td><td>single shared latent (MQA) — V := first 512 dims of K</td></tr>
+<tr><td><span class="pill ps">in</span></td><td><code>indices</code></td><td><code>[S, 1, κ]</code> int32</td><td>per-query top-k; invalid = −1 or ≥ T</td></tr>
+<tr><td><span class="pill ps">in</span></td><td><code>topk_length</code></td><td><code>[S]</code> int32 (opt)</td><td>ragged κ per query — only first κᵢ used</td></tr>
+<tr><td><span class="pill pw">in</span></td><td><code>attn_sink</code></td><td><code>[H]</code> fp32 (opt)</td><td>out ×= exp(lse)/(exp(lse)+exp(sink))</td></tr>
+<tr><td><span class="pill pq">out</span></td><td><code>out, max_logits, lse</code></td><td><code>[S,H,512]</code> bf16, 2×<code>[S,H]</code> fp32</td><td>lse/max_logits enable cross-shard (ring/SP) merging</td></tr>
+</table>
+<p>No causal flag: causality is already inside the indices (the indexer only proposes past tokens).</p>
+
+<h3>Decode: <code>flash_mla_with_kvcache(q, k_cache, indices=…, topk_length=…, attn_sink=…, extra_k_cache=…)</code></h3>
+<p><code>q [B, s_q, H, 576]</code>; fp8 paged cache <code>[num_blocks, 64, 1, 656 B]</code>; <code>indices [B, s_q, κ]</code> flat token id = page·block_size + offset (block_table not needed); returns <code>out [B, s_q, H, 512]</code> + lse. Split-K over κ across SMs; metadata reused via <code>FlashMLASchedMeta</code>. <code>extra_k_cache/extra_indices</code> attend to a second cache.</p>
+<div class="strip">
+<div style="flex:5;background:var(--kbg)">512 × fp8 latent NoPE — 4 tiles of 128</div>
+<div style="flex:0.6;background:var(--wbg)">4 × fp32 scale</div>
+<div style="flex:1.3;background:var(--qbg)">64 × bf16 RoPE (never quantized)</div>
+</div>
+<p class="sub">656-byte fp8 token format. In-kernel: fp8→bf16 dequant (×scale) then bf16 MMA for QK and PV.</p>
+
+<h2>2. Semantics (tests/ref.py)</h2>
+<div class="fr">$$ P_{s,h,j}=\sigma\,\langle q_{s,h},\,kv[\,\mathrm{idx}_{s,j}\,]\rangle,\quad P_{s,h,j}=-\infty\ \text{if idx invalid};\qquad
+O = \mathrm{softmax}_j(P)\cdot kv[\mathrm{idx}][:512],\ \ \mathrm{lse}=\log\!\sum_j e^{P} $$</div>
+<pre>g = kv[indices.clamp(0)]                    <span class="c"># [S, κ, 576] — gather</span>
+P = q.float() @ g.mT * sm_scale; P[invalid] = -inf
+out = softmax(P, -1) @ g[..., :512]; lse = logsumexp(P, -1)</pre>
+
+<h2>3. Kernel (SM90 prefill): gather is the producer, attention never sees T</h2>
+<p>Grid = S·(H/64) CTAs (one per query token × 64-head half); 3 warpgroups, κ consumed in B_TOPK = 64-token blocks, double-buffered:</p>
+<pre><span class="c"># producer WG2 (128 thr = 16 groups × 8): replaces TMA — KV is gathered, not contiguous</span>
+<span class="k">for</span> blk <span class="k">in</span> topk_blocks(κ, 64, step=2):
+  t = ldg(indices[s, blk*64 + row]); valid = 0 &lt;= t &lt; T            <span class="c"># int gather</span>
+  cp_async_128b(smem[buf][row], kv + t*stride, pred=valid)          <span class="c"># 2 bufs × 9 tiles (64×64)</span>
+  smem.is_valid[buf][row] = valid; mbarrier.arrive()
+
+<span class="c"># consumers WG0+WG1 (64 heads, head-dim split, sM/sS exchanged via smem)</span>
+<span class="k">for</span> blk <span class="k">in</span> topk_blocks:
+  P  = wgmma(sQ, sK[blk])                                <span class="c"># [64h, 64tok]</span>
+  P  = valid ? P*scale : -inf                            <span class="c"># mask, base-2 exp</span>
+  m,l,O = online_softmax_rescale(P, m, l, O)             <span class="c"># classic flash recurrence</span>
+  O += wgmma(S, sV_local) + wgmma(sS_other, sV_remote)   <span class="c"># V = K[:512], split L/R</span>
+out = O / l;  lse = log l + m;  store(out, lse, max_logits)</pre>
+<div class="note"><b>Invalid slots</b> become −∞ before softmax (zero weight, exact); the predicate also kills the load (no IMA).
+<b>Decode adds:</b> fp8 dequant on CUDA cores is slower than the MMAs, so two 64-head CTAs in a cluster each dequant <i>half</i>
+the tokens and swap via distributed smem (<i>crossover</i>) — 410 TFLOPS vs 250 without. Plus split-K over κ with lse-merge.</div>
+
+<h2>4. Pipeline (steady state, prefill)</h2>
+<div class="pipe">
+  <div class="lane"><div class="who">WG2: ldg idx + cp.async gather</div><div class="slot">
+    <span class="bar tk" style="left:0"></span><span class="bar tk" style="left:11%;animation-delay:.5s"></span><span class="bar tk" style="left:22%;animation-delay:1s"></span></div></div>
+  <div class="lane"><div class="who">WG0/1: QKᵀ wgmma</div><div class="slot">
+    <span class="bar tq" style="left:12%;animation-delay:.6s"></span><span class="bar tq" style="left:23%;animation-delay:1.1s"></span></div></div>
+  <div class="lane"><div class="who">mask→softmax→rescale (sM swap)</div><div class="slot">
+    <span class="bar tm" style="left:22%;animation-delay:1.1s"></span><span class="bar tm" style="left:33%;animation-delay:1.6s"></span></div></div>
+  <div class="lane"><div class="who">P·V wgmma (local + remote S)</div><div class="slot">
+    <span class="bar tw" style="left:30%;animation-delay:1.5s"></span><span class="bar tw" style="left:41%;animation-delay:2s"></span></div></div>
+  <div class="legendrow"><span class="swatch" style="background:var(--kbg);border:1px solid var(--k)"></span>gather
+    <span class="swatch" style="background:var(--qbg);border:1px solid var(--q)"></span>QK
+    <span class="swatch" style="background:var(--sbg);border:1px solid var(--s)"></span>softmax
+    <span class="swatch" style="background:var(--wbg);border:1px solid var(--w)"></span>PV</div>
+</div>
+
+<h2>5. Mapping to the TT <code>ring_sparse_attention</code> scaffold (spec §3.6)</h2>
+<table>
+<tr><th>FlashMLA</th><th>TT scaffold</th></tr>
+<tr><td>indices in, no masks, no causal flag</td><td>same contract: indexer top-k → attention; mask materialization era ends</td></tr>
+<tr><td>gather-as-producer over latent KV (576/656 B)</td><td>per-shard gather of SP-local indices replaces ring KV streaming</td></tr>
+<tr><td>lse + max_logits outputs</td><td>the cross-shard combiner: per-shard partial attention + lse-merge = ring/split-K analogue</td></tr>
+<tr><td>invalid −1 + topk_length</td><td>ragged windows on SP shards (T<sub>local</sub> &lt; κ)</td></tr>
+<tr><td>V = K[:512] (latent, no wkv_b)</td><td>attention in latent space; wkv_b2 after — chunked path in v3 donor already does this</td></tr>
+</table>
+
+</main>
+</body>
+</html>
