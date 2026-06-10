@@ -62,7 +62,16 @@ void kernel_main() {
 
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         for (uint32_t tap = 0; tap < K; ++tap) {
-            compute_kernel_lib::tilize<block_w_tiles, act_cb, tilized_cb>(block_h_tiles);
+            // Lossless: this is the fp32 numerical baseline (replaces an all-fp32 MAC path);
+            // the default Fast mode truncates fp32→tf32 during tilize.
+            compute_kernel_lib::tilize<
+                block_w_tiles,
+                act_cb,
+                tilized_cb,
+                compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
+                compute_kernel_lib::tilize_config::Fp32Mode::Lossless>(block_h_tiles);
             mul_and_accumulate<block_num_tiles>(tilized_cb, scalar_cb, out_cb, tap);
         }
         // out_cb now holds the accumulated tiled block; untilize to row-major for the writer.
