@@ -7,8 +7,8 @@
 #include <optional>
 #include <tuple>
 #include <variant>
-#include <vector>
 
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/metal2_artifacts.hpp"
@@ -26,16 +26,6 @@ struct RandDeviceOperation {
         const float to;
         uint32_t seed;
         ttsl::SmallVector<bool> mesh_dim_is_sharded;
-
-        // seed/from/to are PER-ENQUEUE values (Metal 2.0): they are carried by
-        // create_per_enqueue_run_args and re-applied on every dispatch via UpdateProgramRunArgs. They
-        // are deliberately EXCLUDED from attribute_values() so the framework's program hash treats two
-        // calls that differ only in seed/from/to as a CACHE HIT (a single cached program), rather than
-        // recompiling per seed. `device` is FIRST so the framework can discover the mesh device via
-        // get_first_object_of_type over attribute_values() — rand has no input tensor.
-        static constexpr auto attribute_names =
-            std::forward_as_tuple("device", "shape", "dtype", "layout", "memory_config");
-        auto attribute_values() const { return std::forward_as_tuple(device, shape, dtype, layout, memory_config); }
     };
 
     struct tensor_args_t {};
@@ -43,28 +33,45 @@ struct RandDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    // Metal 2.0 factory (ProgramSpecFactoryWithPerEnqueueArgsConcept).
+    // Metal 2.0 factory — option 3, enhanced (AdvancedImmutableProgramSpecFactoryConcept).
     //
-    // create_program_spec builds the immutable ProgramSpec and the ENQUEUE-INVARIANT run-args (the
-    // per-core work split: start_id / num_tiles), declaring those args invariant in the spec. They are
-    // applied once on cache miss and retained across enqueues.
+    // The four-method surface IS the documentation of what's what:
+    //   - extract_immutable_info → the cache key AND the sole input to create_program_spec /
+    //     create_static_args. It is the structural projection of the request (output layout + grid).
+    //     It deliberately EXCLUDES seed/from/to, so two calls that differ only in those values map to
+    //     the same cache entry — and a mutable value cannot leak into the spec, because the spec
+    //     builders never see anything but the ImmutableInfo.
+    //   - create_program_spec → the immutable blueprint (DFBs, kernels, work-units, schemas).
+    //   - create_static_args → the ENQUEUE-INVARIANT run-args: the per-core work split (start_id /
+    //     num_tiles), declared invariant in the spec, set once on cache miss and retained.
+    //   - create_dynamic_args → the PER-ENQUEUE run-args: the per-core RNG seed + from/to range and
+    //     the output tensor. Re-applied on every dispatch via UpdateProgramRunArgs, so a new seed
+    //     produces new output while the cached program is reused.
     //
-    // create_per_enqueue_run_args carries the PER-ENQUEUE values: the per-core RNG seed and the
-    // from/to range, plus the output tensor binding. The framework merges these with the invariant set
-    // for the cache-miss SetProgramRunArgs, and on every cache hit re-applies ONLY this set via
-    // UpdateProgramRunArgs — so a different seed produces different output while the program is reused.
-    //
-    // This replaces the legacy descriptor + get_dynamic_runtime_args + descriptor-patching machinery
-    // that rand previously used to refresh the seed on a cache hit.
+    // This replaces the legacy descriptor + get_dynamic_runtime_args + descriptor-patching machinery.
     struct RandProgramFactory {
-        static ttnn::device_operation::ProgramArtifacts create_program_spec(
-            const operation_attributes_t& attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output);
-        static tt::tt_metal::experimental::ProgramRunArgs create_per_enqueue_run_args(
-            const operation_attributes_t& attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output);
+        struct immutable_info_t {
+            tt::tt_metal::TensorSpec output_spec;
+            CoreCoord grid;
+
+            static constexpr auto attribute_names = std::forward_as_tuple("output_spec", "grid");
+            auto attribute_values() const { return std::forward_as_tuple(output_spec, grid); }
+        };
+
+        static immutable_info_t extract_immutable_info(
+            const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
+        static tt::tt_metal::experimental::ProgramSpec create_program_spec(const immutable_info_t& info);
+        static tt::tt_metal::experimental::ProgramRunArgs create_static_args(const immutable_info_t& info);
+        static tt::tt_metal::experimental::ProgramRunArgs create_dynamic_args(
+            const operation_attributes_t& attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
     };
 
     using program_factory_t = std::variant<RandProgramFactory>;
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+    // No select_program_factory: program_factory_t is a single alternative, so the framework selects it
+    // automatically. No compute_program_hash: the cache key is the factory's ImmutableInfo.
 
     static void validate_inputs(const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);

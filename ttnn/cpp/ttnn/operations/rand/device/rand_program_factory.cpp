@@ -2,10 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <bit>
+#include <cstdint>
 #include <ctime>
 #include <filesystem>
 #include <limits>
 #include <random>
+#include <vector>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -20,6 +22,7 @@ namespace ttnn::operations::rand {
 using namespace tt;
 using namespace tt::tt_metal;
 namespace m2 = tt::tt_metal::experimental;
+using immutable_info_t = RandDeviceOperation::RandProgramFactory::immutable_info_t;
 
 namespace {
 
@@ -31,10 +34,10 @@ auto get_random_seed() -> uint32_t { return distribution(rng); }
 constexpr const char* WRITER_KERNEL_PATH = "ttnn/cpp/ttnn/operations/rand/device/kernels/writer_uniform.cpp";
 constexpr const char* COMPUTE_KERNEL_PATH = "ttnn/cpp/ttnn/operations/rand/device/kernels/compute_uniform.cpp";
 
-// Work split over the output tiles. Derived only from the output tensor + the device grid (the
-// immutable program structure), so create_program_spec (which bakes the per-core start_id/num_tiles as
-// enqueue-invariant) and create_per_enqueue_run_args (which walks the same core list to assign seeds)
-// produce a consistent core enumeration.
+// Work split over the output tiles — a pure function of (grid, tile count). create_program_spec and
+// create_static_args derive it from the ImmutableInfo; create_dynamic_args re-derives the identical
+// split from the output tensor, so the per-core seed assignment lines up with the static start_id /
+// num_tiles for the same cores.
 struct RandWorkSplit {
     CoreRangeSet all_cores;
     CoreRangeSet core_group_1;
@@ -44,9 +47,7 @@ struct RandWorkSplit {
     std::vector<CoreCoord> cores;
 };
 
-RandWorkSplit compute_rand_work_split(RandDeviceOperation::tensor_return_value_t& output) {
-    auto grid = output.device()->compute_with_storage_grid_size();
-    uint32_t units_to_divide = output.physical_volume() / constants::TILE_HW;
+RandWorkSplit compute_work_split(const CoreCoord& grid, uint32_t units_to_divide) {
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
         split_work_to_cores(grid, units_to_divide);
     auto cores = grid_to_cores(num_cores, grid.x, grid.y);
@@ -63,36 +64,26 @@ uint32_t units_for_core(const RandWorkSplit& ws, const CoreCoord& core) {
     TT_THROW("Core not in specified core ranges");
 }
 
-// Per-core seed. seed == 0 means "non-deterministic": draw a fresh host seed each call (so repeated
-// calls differ). seed != 0 means "deterministic": seed + core_index, so the same seed reproduces the
-// same output (and a different seed changes it). The legacy per-DEVICE seed offset for sharded meshes
-// is not expressible on the single-program ProgramSpec path (one spec stamped across the mesh) — that
-// case needs a multi-program workload concept; see create_per_enqueue_run_args.
-uint32_t rand_seed_for_core(const RandDeviceOperation::operation_attributes_t& attrs, int i) {
-    return attrs.seed != 0 ? attrs.seed + static_cast<uint32_t>(i) : get_random_seed();
-}
-
 }  // namespace
 
-RandDeviceOperation::program_factory_t RandDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return RandProgramFactory{};
+// extract_immutable_info — the cache key + sole input to the spec/static builders. The structural
+// projection of the request: output layout + compute grid. Excludes seed/from/to (those are dynamic).
+RandDeviceOperation::RandProgramFactory::immutable_info_t
+RandDeviceOperation::RandProgramFactory::extract_immutable_info(
+    const operation_attributes_t& attrs, const tensor_args_t& /*tensor_args*/) {
+    TensorSpec output_spec(attrs.shape, TensorLayout(attrs.dtype, PageConfig(attrs.layout), attrs.memory_config));
+    return immutable_info_t{
+        .output_spec = std::move(output_spec), .grid = attrs.device->compute_with_storage_grid_size()};
 }
 
-// ===================================================================================
-// create_program_spec — the immutable spec + the ENQUEUE-INVARIANT run-args (per-core work split).
-// Runs on cache miss. start_id / num_tiles are declared enqueue-invariant so the hit path may omit
-// them (they are retained from this miss-time SetProgramRunArgs).
-// ===================================================================================
-ttnn::device_operation::ProgramArtifacts RandDeviceOperation::RandProgramFactory::create_program_spec(
-    const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensor_args*/, tensor_return_value_t& output) {
-    const auto ws = compute_rand_work_split(output);
-    const DataType output_dtype = output.dtype();
+// create_program_spec — the immutable blueprint. Derives ONLY from the ImmutableInfo.
+m2::ProgramSpec RandDeviceOperation::RandProgramFactory::create_program_spec(const immutable_info_t& info) {
+    const uint32_t units = info.output_spec.padded_shape().volume() / constants::TILE_HW;
+    const auto ws = compute_work_split(info.grid, units);
+    const DataType output_dtype = info.output_spec.data_type();
     const auto out_data_format = datatype_to_dataformat_converter(output_dtype);
     constexpr auto fp32_format = tt::DataFormat::Float32;
 
-    // Two DFBs: an fp32 intermediate produced by compute, and an output-dtype scratch the writer
-    // narrows into (bound both producer and consumer on the writer so it has both endpoints).
     m2::DataflowBufferSpec intermed_dfb{
         .unique_id = m2::DFBSpecName{"rand_tiles"},
         .entry_size = tile_size(fp32_format),
@@ -146,56 +137,80 @@ ttnn::device_operation::ProgramArtifacts RandDeviceOperation::RandProgramFactory
     spec.name = "rand";
     spec.kernels = {std::move(compute_kernel), std::move(writer_kernel)};
     spec.dataflow_buffers = {std::move(intermed_dfb), std::move(out_dfb)};
-    // The output tensor is per-enqueue (its address is refreshed each dispatch), so it is NOT declared
-    // enqueue-invariant.
     spec.tensor_parameters = {
-        m2::TensorParameter{.unique_id = m2::TensorParamName{"output"}, .spec = output.tensor_spec()}};
+        m2::TensorParameter{.unique_id = m2::TensorParamName{"output"}, .spec = info.output_spec}};
     spec.work_units = {m2::WorkUnitSpec{
         .name = "rand_work",
         .kernels = {m2::KernelSpecName{"compute"}, m2::KernelSpecName{"writer"}},
         .target_nodes = ws.all_cores}};
-
-    // Enqueue-invariant run-args: the per-core work split, identical for every dispatch sharing this
-    // cache entry. Applied once on miss and retained thereafter.
-    m2::ProgramRunArgs::KernelRunArgs compute_inv{.kernel = m2::KernelSpecName{"compute"}};
-    m2::ProgramRunArgs::KernelRunArgs writer_inv{.kernel = m2::KernelSpecName{"writer"}};
-    uint32_t tile_offset = 0;
-    for (const auto& core : ws.cores) {
-        const uint32_t units = units_for_core(ws, core);
-        compute_inv.runtime_arg_values.push_back({core, {{"start_id", tile_offset}, {"num_tiles", units}}});
-        writer_inv.runtime_arg_values.push_back({core, {{"start_id", tile_offset}, {"num_tiles", units}}});
-        tile_offset += units;
-    }
-    m2::ProgramRunArgs invariant_run_args;
-    invariant_run_args.kernel_run_args.push_back(std::move(compute_inv));
-    invariant_run_args.kernel_run_args.push_back(std::move(writer_inv));
-
-    return ttnn::device_operation::ProgramArtifacts{
-        .spec = std::move(spec), .run_params = std::move(invariant_run_args)};
+    return spec;
 }
 
-// ===================================================================================
-// create_per_enqueue_run_args — the PER-ENQUEUE values: per-core seed + from/to, and the output
-// tensor binding. Merged with the invariant set on cache miss; re-applied alone (UpdateProgramRunArgs)
-// on every cache hit, so a new seed yields new output while the cached program is reused.
-// ===================================================================================
-m2::ProgramRunArgs RandDeviceOperation::RandProgramFactory::create_per_enqueue_run_args(
-    const operation_attributes_t& attributes, const tensor_args_t& /*tensor_args*/, tensor_return_value_t& output) {
-    const auto ws = compute_rand_work_split(output);
-    const float eps = 1e-6f;
-    const uint32_t from_bits = std::bit_cast<uint32_t>(attributes.from);
-    const uint32_t to_bits = std::bit_cast<uint32_t>(attributes.to - eps);
+// create_static_args — the enqueue-invariant per-core work split (start_id / num_tiles). Derived only
+// from the ImmutableInfo and declared invariant in the spec, so the hit path may omit it.
+m2::ProgramRunArgs RandDeviceOperation::RandProgramFactory::create_static_args(const immutable_info_t& info) {
+    const uint32_t units = info.output_spec.padded_shape().volume() / constants::TILE_HW;
+    const auto ws = compute_work_split(info.grid, units);
 
-    m2::ProgramRunArgs::KernelRunArgs compute_dyn{.kernel = m2::KernelSpecName{"compute"}};
-    for (int i = 0; i < static_cast<int>(ws.cores.size()); ++i) {
-        const uint32_t seed = rand_seed_for_core(attributes, i);
-        compute_dyn.runtime_arg_values.push_back({ws.cores[i], {{"seed", seed}, {"from", from_bits}, {"to", to_bits}}});
+    m2::ProgramRunArgs::KernelRunArgs compute_args{.kernel = m2::KernelSpecName{"compute"}};
+    m2::ProgramRunArgs::KernelRunArgs writer_args{.kernel = m2::KernelSpecName{"writer"}};
+    uint32_t tile_offset = 0;
+    for (const auto& core : ws.cores) {
+        const uint32_t n = units_for_core(ws, core);
+        compute_args.runtime_arg_values.push_back({core, {{"start_id", tile_offset}, {"num_tiles", n}}});
+        writer_args.runtime_arg_values.push_back({core, {{"start_id", tile_offset}, {"num_tiles", n}}});
+        tile_offset += n;
     }
-    // (The writer kernel's only per-enqueue input is the output tensor binding below; its start_id /
-    // num_tiles are enqueue-invariant, so it needs no per-enqueue KernelRunArgs entry.)
+    m2::ProgramRunArgs args;
+    args.kernel_run_args.push_back(std::move(compute_args));
+    args.kernel_run_args.push_back(std::move(writer_args));
+    return args;
+}
+
+// create_dynamic_args — the per-enqueue values: per-core seed + from/to range, and the output tensor.
+// Re-applied on every dispatch via UpdateProgramRunArgs. The per-coordinate seed offset gives distinct
+// streams across a sharded mesh.
+m2::ProgramRunArgs RandDeviceOperation::RandProgramFactory::create_dynamic_args(
+    const operation_attributes_t& attrs,
+    const tensor_args_t& /*tensor_args*/,
+    tensor_return_value_t& output,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    const uint32_t units = output.physical_volume() / constants::TILE_HW;
+    const auto grid = output.device()->compute_with_storage_grid_size();
+    const auto ws = compute_work_split(grid, units);
+
+    // Per-device seed offset on a sharded mesh, so each device produces a distinct stream.
+    uint32_t device_seed_offset = 0;
+    const auto& shard_mask = attrs.mesh_dim_is_sharded;
+    if (!shard_mask.empty()) {
+        const ttnn::MeshCoordinate mesh_coordinate =
+            mesh_dispatch_coordinate.value_or(ttnn::MeshCoordinate::zero_coordinate(attrs.device->shape().dims()));
+        const auto& mesh_shape = attrs.device->shape();
+        size_t shard_linear_idx = 0;
+        size_t shard_stride = 1;
+        for (int i = static_cast<int>(shard_mask.size()) - 1; i >= 0; --i) {
+            if (shard_mask[i]) {
+                shard_linear_idx += mesh_coordinate[i] * shard_stride;
+                shard_stride *= mesh_shape[i];
+            }
+        }
+        device_seed_offset = static_cast<uint32_t>(shard_linear_idx) * static_cast<uint32_t>(ws.cores.size());
+    }
+
+    const float eps = 1e-6f;
+    const uint32_t from_bits = std::bit_cast<uint32_t>(attrs.from);
+    const uint32_t to_bits = std::bit_cast<uint32_t>(attrs.to - eps);
+
+    m2::ProgramRunArgs::KernelRunArgs compute_args{.kernel = m2::KernelSpecName{"compute"}};
+    for (int i = 0; i < static_cast<int>(ws.cores.size()); ++i) {
+        const uint32_t seed =
+            attrs.seed != 0 ? attrs.seed + static_cast<uint32_t>(i) + device_seed_offset : get_random_seed();
+        compute_args.runtime_arg_values.push_back(
+            {ws.cores[i], {{"seed", seed}, {"from", from_bits}, {"to", to_bits}}});
+    }
 
     m2::ProgramRunArgs args;
-    args.kernel_run_args.push_back(std::move(compute_dyn));
+    args.kernel_run_args.push_back(std::move(compute_args));
     args.tensor_args.emplace(
         m2::TensorParamName{"output"}, m2::ProgramRunArgs::TensorArgument{std::cref(output.mesh_tensor())});
     return args;

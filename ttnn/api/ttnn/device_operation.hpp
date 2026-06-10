@@ -245,7 +245,9 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
                 using AdaptedMeshWorkloadFactory = mesh_device_operation_t::template DescriptorMeshWorkloadAdapter<T>;
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
             },
-            [&]<ProgramSpecFactoryConcept T>(const T&) {
+            [&]<Metal2SpecFactoryConcept T>(const T&) {
+                // All four Metal 2.0 spec factory shapes (basic/advanced x spec-keyed/immutable-keyed)
+                // route to the one ProgramSpec adapter, which branches on the factory's method surface.
                 using AdaptedMeshWorkloadFactory =
                     mesh_device_operation_t::template ProgramSpecMeshWorkloadFactoryAdapter<T>;
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
