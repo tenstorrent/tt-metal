@@ -421,7 +421,7 @@ def test_preprocess_detok_shim_torch_hints_opt_in(monkeypatch):
         use_trace=False,
     )
     try:
-        codes = "".join(f"<|audio_code_{i}|>" for i in range(300))
+        codes = "".join(f"<|audio_code_{i}|>" for i in range(150))
         out = handler._decode_audio_codes_to_latents(codes)
         assert out is not None
         assert tuple(out.shape) == (1, 1500, 64)
