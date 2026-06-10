@@ -190,9 +190,9 @@ def upload_micro_advantages(adv_np: np.ndarray, mapper: Any, num_devices: int) -
     Returns a ``ttnn.Tensor`` of global shape ``[mb, 1]`` (per device
     ``[mb_local, 1]``), ready to broadcast-multiply the per-completion loss.
     """
-    mb = adv_np.shape[0]
-    assert mb % num_devices == 0, "micro_batch_size must be divisible by num_devices"
-    mb_local = mb // num_devices
+mb = adv_np.shape[0]
+assert mb % num_devices == 0, f"micro-batch size ({mb}) must be divisible by num_devices ({num_devices})"
+mb_local = mb // num_devices
     adv_4d = adv_np.reshape(mb, 1, 1, 1).astype(np.float32)
     adv_ttml = ttml.autograd.Tensor.from_numpy(adv_4d, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
     adv_rm = ttnn.to_layout(adv_ttml.get_value(), ttnn.Layout.ROW_MAJOR)
