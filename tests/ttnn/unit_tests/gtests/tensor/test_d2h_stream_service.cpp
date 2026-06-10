@@ -78,10 +78,6 @@ std::vector<uint8_t> make_metadata_pattern(uint32_t iter, uint32_t metadata_size
     return out;
 }
 
-// Stage the per-iter metadata as the device-produced source: the same blob is
-// written (replicated) to every worker core's metadata L1. The metadata master worker
-// reads its own local copy and writes it to the service-core staging region, and
-// the sender ships it to the host alongside the payload.
 void write_worker_metadata(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const tt::tt_metal::D2HStreamService& service,
@@ -141,11 +137,6 @@ tt::tt_metal::distributed::MeshWorkload build_d2h_worker_workload(
                           .set_page_size(scratch_cb_index, page_size);
         tt::tt_metal::CreateCircularBuffer(program, tt::tt_metal::CoreRangeSet(worker_cores), cb_cfg);
 
-        // Every worker core runs the same kernel. The only role difference is the
-        // is_master runtime arg: when inline metadata is enabled the master core
-        // fans the replicated metadata in to the service core before acking. There
-        // is no inter-worker cross-talk — the sender waits for all acks before it
-        // streams, so the master writing metadata before its own ack is sufficient.
         const bool metadata_enabled = service.metadata_size_bytes() > 0;
         const uint32_t metadata_size = metadata_enabled ? service.metadata_size_bytes() : 0u;
         const uint32_t worker_metadata_l1_addr =
@@ -240,9 +231,6 @@ void run_d2h_worker_sync_case(
     const auto expected = make_worker_fill_pattern(kFillSeed, page_size, num_pages);
 
     for (uint32_t iter = 0; iter < num_iterations; ++iter) {
-        // Stage the per-iter metadata onto the worker cores (the device-side
-        // source). The metadata master worker fans it in to the service-core staging
-        // region, and the sender ships it to the host alongside the payload.
         const auto expected_metadata = make_metadata_pattern(iter, metadata_size_bytes);
         if (metadata_size_bytes > 0) {
             write_worker_metadata(mesh_device, service, worker_cores, expected_metadata);
@@ -266,12 +254,6 @@ void run_d2h_worker_sync_case(
     }
 }
 
-// Worker-sync helper that verifies per-shard via the Tensor read path. Works
-// uniformly for replicated and sharded placements: every device's workers
-// fill that device's backing tensor with `make_worker_fill_pattern(seed,
-// page_size, per_device_num_pages)` (the kernel only knows per-device-local
-// page indices), so the expected payload at every coord is the same per-device
-// pattern regardless of how the global tensor is split across the mesh.
 void run_d2h_worker_sync_case_per_shard(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const D2HServiceCase& cs,
@@ -368,9 +350,7 @@ void run_d2h_stream_service_case(
     ASSERT_NE(service.get_backing_tensor().buffer(), nullptr);
     ASSERT_EQ(service.get_sockets().size(), mesh_device->num_devices());
 
-    // Drain the kernel's initial auto-iteration (zeros in backing tensor at startup).
-    // Use the Tensor read path so partial-shard placements (where the auto-derived
-    // composer is suppressed) don't FATAL on the unused bytes path.
+    // Drain the kernel's initial auto-iteration; use Tensor read for sharded cases.
     {
         auto drain_mapper = create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = cs.placements});
         auto drain_host = distribute_tensor(
@@ -490,9 +470,6 @@ TEST_F(D2HStreamServiceTest, Replicated_WorkerSync_Metadata) {
         this->mesh_device_, cs, worker_cores, metadata_master, /*num_iterations=*/5, /*metadata_size_bytes=*/64);
 }
 
-// Single-worker metadata: the lone worker is itself the metadata master, writing
-// both its backing slice and the metadata. Exercises the >= 1 worker path (no
-// peers), so there is no inter-worker dependency at all.
 TEST_F(D2HStreamServiceTest, Replicated_WorkerSync_Metadata_SingleWorker) {
     const tt::tt_metal::CoreRange worker_cores({0, 0}, {0, 0});
     const tt::tt_metal::CoreCoord metadata_master{0, 0};
@@ -507,12 +484,6 @@ TEST_F(D2HStreamServiceTest, Replicated_WorkerSync_Metadata_SingleWorker) {
         this->mesh_device_, cs, worker_cores, metadata_master, /*num_iterations=*/5, /*metadata_size_bytes=*/64);
 }
 
-// Sharded sweep — mirrors the H2D Sharded_Sweep but on the read path.
-//
-// Three placement patterns × four (page_size, N, chunking) rows × two output
-// paths (Tensor and Bytes). The bytes path exercises the composer's recombine
-// step (Replicated alone hits the per-shard fast path because all shards are
-// identical); the Tensor path exercises the per-shard read accounting.
 TEST_F(D2HStreamServiceTest, Sharded_Sweep) {
     const auto mesh_shape = this->mesh_device_->shape();
     if (mesh_shape.dims() != 2) {
@@ -528,29 +499,16 @@ TEST_F(D2HStreamServiceTest, Sharded_Sweep) {
         uint32_t fifo_pages;
     };
     const Row rows[] = {
-        // Single chunk: baseline.
         Row{640, 1, 1, 1},
-        // Multi-chunk even split.
         Row{640, 16, 4, 16},
-        // Page-at-a-time.
         Row{640, 32, 1, 8},
-        // Divisor fallback: 7 (prime) pages -> pages_per_chunk falls back to 1.
         Row{640, 7, 4, 8},
-        // Tiny 512 B page x many.
         Row{128, 64, 1, 8},
-        // Medium 4 KB page x medium count.
         Row{1024, 8, 2, 8},
-        // Large 16 KB page; few of them, biggest fan-out per PCIe read.
         Row{4096, 4, 2, 4},
     };
 
-    // Sharded placements exercise the Tensor read path only: the bytes path
-    // (`read_from_tensor(span<byte>)`) goes through the auto-derived composer
-    // when per_shard != global, which (a) FATALs for partial-shard mappers on
-    // multi-dim meshes (composer dims < mesh dims) and (b) the post-compose
-    // `to_vector<uint8_t>` rejects non-UINT8 tensors. Both are pre-existing
-    // limitations of the bytes path under sharded placements; the Tensor path
-    // is composer-free and works uniformly.
+    // Sharded placements: Tensor read path only (bytes path needs a composer).
     auto run_pattern = [&](const char* label,
                            const ttsl::SmallVector<MeshMapperConfig::Placement>& placements,
                            const std::function<ttnn::Shape(uint32_t, uint32_t)>& make_global_shape) {
@@ -592,9 +550,6 @@ TEST_F(D2HStreamServiceTest, Sharded_Sweep) {
     }
 }
 
-// Worker-sync sweep at fully-replicated placements across worker grid sizes,
-// chunking budgets, and inline metadata sizes. A metadata master worker is used only
-// when metadata_size_bytes > 0. Page count per device must divide num_workers.
 TEST_F(D2HStreamServiceTest, Replicated_WorkerSync_Sweep) {
     struct Row {
         uint32_t per_row_size;
@@ -610,24 +565,10 @@ TEST_F(D2HStreamServiceTest, Replicated_WorkerSync_Sweep) {
         uint32_t fifo_pages;
         const char* label;
     };
-    // Like the host-only Replicated_Sweep, sweep multiple page sizes (per_row)
-    // and page counts (N) — not just the 640/16 baseline — but across worker
-    // grids too. Every row must satisfy N % num_workers == 0. Page sizes:
-    //   * 512 B  (per_row=128)   tiny page x many pages, per-iter overhead
-    //   * 2560 B (per_row=640)   baseline
-    //   * 4 KB   (per_row=1024)  typical real-world value
-    //   * 16 KB  (per_row=4096)  max NoC fan-out per worker write
-    // num_iterations matches H2D's Replicated_WorkerSync_Sweep: 20 per row, 100
-    // for the full-grid row (heaviest fan-out gets the most repetitions).
     const Row rows[] = {
-        // --- 2560 B baseline across worker grids (incl. the num_workers==1 path) ---
-        // Single worker covering all 16 pages — degenerate multicast (1 dest).
         {640, 16, tt::tt_metal::CoreRange{{0, 0}, {0, 0}}, tt::tt_metal::CoreCoord{0, 0}, 20, 0, "1_worker_p640_N16"},
-        // 2-worker row. 16 / 2 = 8 pages per worker.
         {640, 16, tt::tt_metal::CoreRange{{0, 0}, {1, 0}}, tt::tt_metal::CoreCoord{0, 0}, 20, 0, "2_workers_p640_N16"},
-        // 4-worker row. 16 / 4 = 4 pages per worker.
         {640, 16, tt::tt_metal::CoreRange{{0, 0}, {3, 0}}, tt::tt_metal::CoreCoord{0, 0}, 20, 0, "4_workers_p640_N16"},
-        // 2x2 worker block. 16 / 4 = 4 pages per worker.
         {640,
          16,
          tt::tt_metal::CoreRange{{0, 0}, {1, 1}},
@@ -635,13 +576,8 @@ TEST_F(D2HStreamServiceTest, Replicated_WorkerSync_Sweep) {
          20,
          0,
          "4_workers_2x2_p640_N16"},
-        // More pages per worker: 32 / 4 = 8.
         {640, 32, tt::tt_metal::CoreRange{{0, 0}, {3, 0}}, tt::tt_metal::CoreCoord{0, 0}, 20, 0, "4_workers_p640_N32"},
-
-        // --- page-size variety (non-metadata) ---
-        // Tiny 512 B page x many: 64 / 4 = 16 pages per worker.
         {128, 64, tt::tt_metal::CoreRange{{0, 0}, {3, 0}}, tt::tt_metal::CoreCoord{0, 0}, 20, 0, "4_workers_p128_N64"},
-        // Medium 4 KB page: 16 / 4 = 4 pages per worker.
         {1024,
          16,
          tt::tt_metal::CoreRange{{0, 0}, {3, 0}},
@@ -649,10 +585,7 @@ TEST_F(D2HStreamServiceTest, Replicated_WorkerSync_Sweep) {
          20,
          0,
          "4_workers_p1024_N16"},
-        // Large 16 KB page, 2 workers: 8 / 2 = 4 pages per worker.
         {4096, 8, tt::tt_metal::CoreRange{{0, 0}, {1, 0}}, tt::tt_metal::CoreCoord{0, 0}, 20, 0, "2_workers_p4096_N8"},
-        // Full 12x10 = 120-worker grid, one page per worker. Stresses the
-        // transfer_done multicast / write_ack fan-out at maximum worker count.
         {640,
          120,
          tt::tt_metal::CoreRange{{0, 0}, {11, 9}},
@@ -660,8 +593,6 @@ TEST_F(D2HStreamServiceTest, Replicated_WorkerSync_Sweep) {
          100,
          0,
          "120_workers_full_grid"},
-
-        // --- Metadata variants on the 4-worker baseline ---
         {640, 16, tt::tt_metal::CoreRange{{0, 0}, {3, 0}}, tt::tt_metal::CoreCoord{0, 0}, 20, 16, "4_workers_meta_16B"},
         {640,
          16,
@@ -670,7 +601,6 @@ TEST_F(D2HStreamServiceTest, Replicated_WorkerSync_Sweep) {
          20,
          256,
          "4_workers_meta_256B"},
-        // Just under the cb1 socket_page_size (2560 B) for the chunking row below.
         {640,
          16,
          tt::tt_metal::CoreRange{{0, 0}, {3, 0}},
@@ -680,15 +610,9 @@ TEST_F(D2HStreamServiceTest, Replicated_WorkerSync_Sweep) {
          "4_workers_meta_near_page"},
     };
     const Chunking chunkings[] = {
-        // Smallest: one tensor page per socket page, FIFO holds one page.
         {1, 1, "cb1_fifo1"},
-        // Page-at-a-time but deeper FIFO so host fills ahead.
         {1, 8, "cb1_fifo8"},
-        // 4-page chunks fanned out from a deeper FIFO.
         {4, 16, "cb4_fifo16"},
-        // Deep FIFO, single-page CB: stresses many socket-page wraps with the
-        // host filling far ahead of the sender. Safe for every page size above
-        // (16 KB page x 32 = 512 KB FIFO fits service-core L1).
         {1, 32, "cb1_fifo32"},
     };
 
@@ -715,9 +639,6 @@ TEST_F(D2HStreamServiceTest, Replicated_WorkerSync_Sweep) {
     }
 }
 
-// Worker-sync sweep across sharded placement patterns × worker grid sizes ×
-// chunking. Uses the per-shard verification helper so any sharded recompose
-// path doesn't muddy expected payload arithmetic. D2H requires num_workers >= 2.
 TEST_F(D2HStreamServiceTest, Sharded_WorkerSync_Sweep) {
     const auto mesh_shape = this->mesh_device_->shape();
     if (mesh_shape.dims() != 2) {
@@ -742,11 +663,9 @@ TEST_F(D2HStreamServiceTest, Sharded_WorkerSync_Sweep) {
     const Row rows[] = {
         {640, 16, tt::tt_metal::CoreRange{{0, 0}, {1, 0}}, tt::tt_metal::CoreCoord{0, 0}, 0, "2_workers_row"},
         {640, 16, tt::tt_metal::CoreRange{{0, 0}, {3, 0}}, tt::tt_metal::CoreCoord{0, 0}, 0, "4_workers_row"},
-        // Page-size variety under sharding (per-device N % num_workers == 0).
         {128, 64, tt::tt_metal::CoreRange{{0, 0}, {3, 0}}, tt::tt_metal::CoreCoord{0, 0}, 0, "4_workers_p128_N64"},
         {1024, 16, tt::tt_metal::CoreRange{{0, 0}, {3, 0}}, tt::tt_metal::CoreCoord{0, 0}, 0, "4_workers_p1024_N16"},
         {4096, 8, tt::tt_metal::CoreRange{{0, 0}, {1, 0}}, tt::tt_metal::CoreCoord{0, 0}, 0, "2_workers_p4096_N8"},
-        // Metadata cross-product with sharded placement.
         {640, 16, tt::tt_metal::CoreRange{{0, 0}, {3, 0}}, tt::tt_metal::CoreCoord{0, 0}, 128, "4_workers_meta_128B"},
     };
     const Chunking chunkings[] = {

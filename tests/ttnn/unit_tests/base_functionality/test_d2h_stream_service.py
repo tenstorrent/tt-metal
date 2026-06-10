@@ -33,9 +33,6 @@ def _run_io_loop(
     mesh_device,
     num_iters: int = _IO_LOOPS,
 ) -> None:
-    # Drain the kernel's initial auto-iteration via the same path the test body uses.
-    # The bytes path goes through the auto-derived composer, which has limitations
-    # under sharded placements, so the (sharded) Tensor cases drain via the Tensor path.
     if input_path == "tensor":
         drain_host = ttnn.from_torch(
             torch.zeros(shape_list, dtype=_DTYPE_TORCH), spec=global_spec, mesh_mapper=iter_mapper
@@ -153,7 +150,7 @@ def _sharded_sweep_patterns(mesh_shape, N, per_row):
     [
         (1, 1, 1),
         (16, 4, 16),
-        (7, 4, 8),  # prime page count -> pages_per_chunk fallback
+        (7, 4, 8),
     ],
 )
 def test_d2h_stream_service_sharded_sweep(mesh_device, pattern, N, scratch_cb_pages, fifo_pages):
@@ -170,8 +167,6 @@ def test_d2h_stream_service_sharded_sweep(mesh_device, pattern, N, scratch_cb_pa
         pytest.skip(f"no shardable mesh axis on {mesh_shape}")
 
     per_row = 640
-    # Per-device row width is `per_row` elements in every pattern (the sharded dim is
-    # split across the mesh axis), so socket/FIFO sizing is per-device.
     per_row_bytes = per_row * _DTYPE_SIZE
 
     patterns = _sharded_sweep_patterns(mesh_shape, N, per_row)
@@ -182,7 +177,6 @@ def test_d2h_stream_service_sharded_sweep(mesh_device, pattern, N, scratch_cb_pa
     placements, shape_list = pattern_map[pattern]
     global_spec = _make_global_spec(ttnn.Shape(shape_list))
     mapper_config = ttnn.MeshMapperConfig(placements=placements)
-    # Two mappers: service_mapper is consumed by the ctor; iter_mapper drives the loop.
     iter_mapper = ttnn.create_mesh_mapper(mesh_device, mapper_config)
     service_mapper = ttnn.create_mesh_mapper(mesh_device, mapper_config)
 

@@ -2,21 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Cross-process D2HStreamService integration tests.
-// Used to validate that one process can own the tenstorrent device and stream D2H data,
-// while a second process attaches without a mesh device and reads the same payload over PCIe with shared-memory
-// descriptors.
-
-//
-// Runs under MPI as 2 ranks. Rank 0 is the owner: opens the MeshDevice, builds
-// a D2HStreamService (no worker_cores — uses notify_backing_ready), copies a
-// deterministic iota source into the backing tensor each iteration, and
-// exports the descriptor. Rank 1 is the connector: holds no MeshDevice,
-// attaches via the exported descriptor, reads payload (and metadata, if
-// enabled) per iteration, and verifies against the same deterministic iota.
-//
-// Both ranks compute the per-iter source data identically via
-// `make_iter_data(iter, volume)`; no IPC for seeds.
+// Cross-process D2HStreamService integration tests (MPI, 2 ranks: owner + connector).
 //
 // Launch:
 //   mpirun -np 2 ./build_Release/test/tt_metal/distributed/cross_process_d2h_stream_service_test
@@ -65,25 +51,12 @@ int g_world_rank = -1;
 int g_world_size = -1;
 std::shared_ptr<::tt::tt_metal::distributed::multihost::DistributedContext> g_cross_rank_world;
 
-// Deterministic per-iter source data; identical formula on both ranks so no
-// IPC is needed for seeds.
 std::vector<uint32_t> make_iter_data(uint32_t iter, size_t volume) {
     std::vector<uint32_t> v(volume);
     std::iota(v.begin(), v.end(), iter * 0x12345678u);
     return v;
 }
 
-// --- Worker-sync + metadata helpers (mirrors the in-process gtest harness in
-// tests/ttnn/unit_tests/gtests/tensor/test_d2h_stream_service.cpp). Used only by
-// the metadata cross-process test: D2H metadata forwarding requires the
-// worker-sync path (worker_cores + metadata_master_core), so the owner has to
-// dispatch the worker workload that fills the backing tensor and (via the
-// metadata master worker) forwards the shared metadata. Both the device-side fill pattern and the
-// metadata pattern are deterministic, so the connector reconstructs the
-// expected values without any IPC. -----------------------------------------
-
-// Device-side fill: every worker writes `fill_seed + page + element` into each
-// page they own. Replicated placement => global payload == per-device payload.
 std::vector<uint32_t> make_worker_fill_pattern(uint32_t fill_seed, uint32_t page_size, uint32_t num_pages) {
     std::vector<uint32_t> out(num_pages * (page_size / sizeof(uint32_t)));
     size_t idx = 0;
@@ -108,10 +81,6 @@ uint32_t worker_idx_from_xy(const tt::tt_metal::CoreRange& worker_cores, uint32_
            (x - worker_cores.start_coord.x);
 }
 
-// Stage the per-iter metadata as the device-produced source: the same blob is
-// written (replicated) to every worker core's metadata L1 on every device. The
-// metadata master worker reads its own local copy and writes it to the service-core
-// staging region, and the sender ships it to the host alongside the payload.
 void write_worker_metadata(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const tt::tt_metal::D2HStreamService& service,
@@ -129,10 +98,6 @@ void write_worker_metadata(
     }
 }
 
-// Build the metadata-enabled worker workload: every worker core runs the single
-// persistent_d2h_worker.cpp kernel. The master (is_master runtime arg) fans the
-// replicated metadata in to the service core before acking; all other workers
-// just write their backing slice and ack.
 tt::tt_metal::distributed::MeshWorkload build_d2h_metadata_worker_workload(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const tt::tt_metal::D2HStreamService& service,
@@ -175,9 +140,6 @@ tt::tt_metal::distributed::MeshWorkload build_d2h_metadata_worker_workload(
         const uint32_t worker_metadata_l1_addr = static_cast<uint32_t>(service.get_worker_metadata_addr());
         const uint32_t metadata_input_addr = static_cast<uint32_t>(service.get_metadata_input_addr(coord));
 
-        // Single worker kernel on every core; the master (is_master runtime arg)
-        // fans the replicated metadata in to the service core before acking. No
-        // inter-worker cross-talk — the sender waits for all acks before streaming.
         auto worker_kernel = tt::tt_metal::CreateKernel(
             program,
             "tests/ttnn/unit_tests/gtests/tensor/kernels/persistent_d2h_worker.cpp",
@@ -223,7 +185,6 @@ tt::tt_metal::distributed::MeshWorkload build_d2h_metadata_worker_workload(
     return workloads;
 }
 
-// One sweep case. Pinned to UINT32 ROW_MAJOR DRAM-interleaved.
 struct CrossProcessCase {
     ttnn::Shape global_shape;
     ttsl::SmallVector<MeshMapperConfig::Placement> placements;
@@ -233,7 +194,6 @@ struct CrossProcessCase {
     uint32_t num_iterations;
 };
 
-// Rank-0 (owner) body.
 void run_owner(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const CrossProcessCase& cs,
@@ -254,9 +214,6 @@ void run_owner(
     tt::tt_metal::D2HStreamService service(mesh_device, std::move(cfg));
     service.export_descriptor(service_id);
 
-    // Initial discard: kernel auto-runs one iteration of zero-init backing data.
-    // Synchronize via cross-rank barrier so the connector reads it cleanly
-    // before owner enters the data loop.
     g_cross_rank_world->barrier();
     std::vector<std::byte> discard(service.payload_size_bytes());
     service.read_from_tensor(discard);
@@ -312,9 +269,7 @@ void verify_sharded_readback(
     }
 }
 
-// Rank-0 (owner) body for sharded placements. Uses the Tensor read path for the
-// initial discard: the bytes path goes through the auto-derived composer, which
-// is unavailable on the connector and malformed for partial-shard mappers.
+// Sharded cases use the Tensor read path; the bytes path needs a composer the connector lacks.
 void run_owner_sharded(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const CrossProcessCase& cs,
@@ -356,8 +311,6 @@ void run_owner_sharded(
     g_cross_rank_world->barrier();
 }
 
-// Rank-1 (connector) body for sharded placements. Reads into a distributed host
-// tensor and verifies each local shard independently.
 void run_connector_sharded(
     const CrossProcessCase& cs,
     const ::tt::tt_metal::distributed::MeshShape& mesh_shape,
@@ -388,8 +341,6 @@ void run_connector_sharded(
     g_cross_rank_world->barrier();
 }
 
-// Rank-1 (connector) body. Holds no MeshDevice — only PCIe reads through
-// each connected D2HSocket.
 void run_connector(const CrossProcessCase& cs, const std::string& service_id) {
     auto service = tt::tt_metal::D2HStreamService::connect(service_id, /*timeout_ms=*/30000);
     const size_t volume = cs.global_shape.volume();
@@ -415,11 +366,6 @@ void run_connector(const CrossProcessCase& cs, const std::string& service_id) {
     g_cross_rank_world->barrier();
 }
 
-// Rank-0 (owner) body for the metadata path. Unlike `run_owner`, this drives the
-// worker-sync path: each iteration stages the metadata into the service-core L1,
-// then dispatches the worker workload (which fills the backing tensor and, via
-// the metadata master worker, forwards the shared metadata). The workload completing triggers the
-// persistent sender to stream payload + metadata to the connector.
 void run_owner_metadata(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const CrossProcessCase& cs,
@@ -448,22 +394,18 @@ void run_owner_metadata(
     constexpr uint32_t kFillSeed = 0;
     auto worker_workload = build_d2h_metadata_worker_workload(mesh_device, service, worker_cores, kFillSeed);
 
-    // Sync once the connector has attached, then drive one workload per iter.
     g_cross_rank_world->barrier();
     for (uint32_t iter = 0; iter < cs.num_iterations; ++iter) {
         const auto metadata = make_metadata_pattern(iter, cs.metadata_size_bytes);
         write_worker_metadata(mesh_device, service, worker_cores, metadata);
         EnqueueMeshWorkload(mesh_device->mesh_command_queue(), worker_workload, /*blocking=*/false);
-        g_cross_rank_world->barrier();  // connector reads payload + metadata here
-        g_cross_rank_world->barrier();  // connector finished this iter's read
+        g_cross_rank_world->barrier();
+        g_cross_rank_world->barrier();
         Finish(mesh_device->mesh_command_queue());
     }
     g_cross_rank_world->barrier();
 }
 
-// Rank-1 (connector) body for the metadata path. Reads payload + metadata each
-// iteration and verifies both against the deterministic fill / metadata
-// patterns. Replicated placement => global payload == per-device fill pattern.
 void run_connector_metadata(const CrossProcessCase& cs, const std::string& service_id) {
     auto service = tt::tt_metal::D2HStreamService::connect(service_id, /*timeout_ms=*/30000);
     const size_t payload = service->payload_size_bytes();
@@ -496,10 +438,6 @@ void run_connector_metadata(const CrossProcessCase& cs, const std::string& servi
     g_cross_rank_world->barrier();
 }
 
-// MPI fixture. Rank 0 opens the MeshDevice via the base fixture (auto-detected
-// shape — the largest the cluster supports); rank 1 stays lightweight (no
-// MeshDevice). The shape is broadcast from rank 0 → rank 1 after device open
-// so both ranks enumerate the same sweep cases.
 class CrossProcessD2HStreamServiceFixture : public ::tt::tt_metal::MeshDeviceFixtureBase {
 protected:
     CrossProcessD2HStreamServiceFixture() :
@@ -512,11 +450,7 @@ protected:
             ::tt::tt_metal::MeshDeviceFixtureBase::SetUp();
         }
 
-        // Broadcast mesh shape from rank 0 to rank 1 so both ranks enumerate
-        // the same sweep cases. Encoded as [dims, dim_0, dim_1, ...] in a
-        // fixed-size buffer; the cross-rank world is used (not the per-rank
-        // split installed by `main`), since broadcasts on the size-1 split
-        // are no-ops.
+        // Broadcast over g_cross_rank_world; the per-rank split in main is size-1.
         const auto& world = g_cross_rank_world;
         ASSERT_NE(world, nullptr) << "g_cross_rank_world not initialized in main";
         constexpr size_t kMaxDims = 4;
@@ -550,8 +484,6 @@ protected:
     ::tt::tt_metal::distributed::MeshShape mesh_shape_{1, 1};
 };
 
-// Keep the minimal smoke test that the original file shipped with so that a
-// quick run still validates the baseline path even if the sweep is filtered.
 TEST_F(CrossProcessD2HStreamServiceFixture, ReplicatedMinimal) {
     constexpr uint32_t kNumIterations = 10;
     const std::string service_id = "cross_process_d2h_minimal";
@@ -573,11 +505,6 @@ TEST_F(CrossProcessD2HStreamServiceFixture, ReplicatedMinimal) {
     }
 }
 
-// Cross-process metadata forwarding: the owner drives the worker-sync path (a
-// 4-worker grid with a fixed metadata master) so per-transfer inline metadata
-// is produced; the connector reads payload + metadata over PCIe and verifies
-// both. Replicated placement keeps the metadata identical across every socket,
-// exercising the cross-socket consistency check in read_from_tensor.
 TEST_F(CrossProcessD2HStreamServiceFixture, ReplicatedMetadata) {
     constexpr uint32_t kNumIterations = 10;
     const std::string service_id = "cross_process_d2h_metadata";
@@ -602,9 +529,6 @@ TEST_F(CrossProcessD2HStreamServiceFixture, ReplicatedMetadata) {
     }
 }
 
-// Cross-process sweep at fully-replicated placements: sizes × chunking. The
-// bytes read path on the connector goes through `read_from_tensor(span)`, which
-// is exercised here because per-shard size == global size under replication.
 TEST_F(CrossProcessD2HStreamServiceFixture, Sweep) {
     constexpr uint32_t kNumIterations = 10;  // per case
 
@@ -634,13 +558,10 @@ TEST_F(CrossProcessD2HStreamServiceFixture, Sweep) {
     int case_counter = 0;
     for (const auto& sz : sizes) {
         const uint32_t per_row_bytes = sz.per_row * sizeof(uint32_t);
-        // Replicated: global shape == per-device shape.
         const ttnn::Shape global_shape({1, 1, sz.per_device_pages, sz.per_row});
         for (const auto& ch : chunkings) {
             SCOPED_TRACE(::testing::Message() << "rank=" << rank_ << " size=" << sz.label << " chunk=" << ch.label);
 
-            // Service IDs must agree across ranks; use a deterministic
-            // counter so both ranks construct the same id.
             const std::string service_id = "xproc_d2h_stream_" + std::to_string(case_counter++);
 
             std::cout << "[xproc-d2h] rank=" << rank_ << " case=" << service_id << " size=" << sz.label
@@ -664,10 +585,6 @@ TEST_F(CrossProcessD2HStreamServiceFixture, Sweep) {
     }
 }
 
-// Cross-process sharded sweep: mirrors the in-process Sharded_Sweep and the
-// Python sharded sweep. Uses the Tensor read path on both ranks because the
-// bytes path goes through the auto-derived composer, which is unavailable on
-// the connector and malformed for partial-shard mappers on multi-dim meshes.
 TEST_F(CrossProcessD2HStreamServiceFixture, Sharded_Sweep) {
     if (mesh_shape_.dims() != 2) {
         GTEST_SKIP() << "Sharded_Sweep requires a 2D mesh; got " << mesh_shape_;
@@ -754,9 +671,6 @@ int main(int argc, char** argv) {
     tt::tt_metal::distributed::g_world_rank = *world->rank();
     tt::tt_metal::distributed::g_world_size = *world->size();
 
-    // Stash the cross-rank world before the per-rank split below — the
-    // fixture's SetUp broadcasts the mesh shape from rank 0 to rank 1 over
-    // this 2-rank communicator.
     tt::tt_metal::distributed::g_cross_rank_world = world;
 
     auto local_ctx = world->split(Color(tt::tt_metal::distributed::g_world_rank), Key(0));

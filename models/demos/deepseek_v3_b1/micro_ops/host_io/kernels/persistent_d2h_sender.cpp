@@ -3,19 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Persistent fixed-shape D2H sender for D2HStreamService.
-//
-// Worker-sync protocol (mirror of H2D consumed-counter handshake):
-//   1. Service core multicasts transfer_done_sem → workers may write backing DRAM.
-//   2. Each worker writes its slice; when metadata is enabled the designated
-//      metadata master worker fans the replicated metadata IN to this service
-//      core's metadata L1 region before acking. Every worker (incl. master)
-//      atomic-incs the service-core write_ack counter.
-//   3. Service core waits for exactly num_workers acks, then streams the backing
-//      tensor to the host FIFO and, if metadata is enabled, reads this core's
-//      metadata L1 region and ships it as the trailing socket page.
-//
-// Host-only path (worker_sync_enabled == 0): host bumps write_ack via
-// notify_backing_ready() before read_from_tensor().
 
 #include <cstdint>
 
@@ -55,8 +42,6 @@ void kernel_main() {
     const uint32_t write_addr_hi = sender_socket.d2h.data_addr_hi;
     const uint32_t pcie_xy_enc = sender_socket.d2h.pcie_xy_enc;
 
-    // Single-slot scratch CB; use the write pointer consistently across PCIe-in and
-    // NoC-out since no producer/consumer split exists in this kernel.
     const uint32_t cb_l1_addr = get_write_ptr(scratch_buffer_cb_index);
 
     volatile tt_l1_ptr uint32_t* termination_semaphore =
@@ -80,17 +65,10 @@ void kernel_main() {
     bool terminated = false;
     while (!terminated) {
         if constexpr (worker_sync_enabled) {
-            // Phase 1: unlock backing DRAM for worker writes this iteration. The
-            // workers' transfer_done global semaphore starts at 0 (= locked) so they
-            // block until the service core releases the backing tensor memory region;
-            // the very first thing this loop does each iteration is unlock it.
             noc_semaphore_inc_multicast(worker_mcast_addr, /*incr=*/1, /*num_dests=*/num_workers);
             noc_async_atomic_barrier();
         }
 
-        // Phase 2: wait for all producers to ack before sending.
-        // In tests (host-only path), notify_backing_ready() is called so the host plays the producer,
-        // writing the backing tensor and bumping write_ack just as a worker would.
         while (true) {
             invalidate_l1_cache();
             const uint32_t cur = *write_ack_ptr;
@@ -107,10 +85,7 @@ void kernel_main() {
             break;
         }
 
-        // Phase 3: read backing tensor and stream to host FIFO. This loop reads num_socket_pages chunks of
-        // pages_per_chunk pages each from the input tensor and writes them to the scratch CB
         for (uint32_t chunk = 0; chunk < num_socket_pages; ++chunk) {
-            // DRAM -> L1 scratch CB
             const uint32_t base_page = chunk * pages_per_chunk;
             uint32_t dst = cb_l1_addr;
             for (uint32_t i = 0; i < pages_per_chunk; ++i) {
@@ -120,13 +95,11 @@ void kernel_main() {
             }
             noc_async_read_barrier();
 
-            // Wait for FIFO Space
             if (!deepseek_b1_ops::socket_reserve_pages_with_termination(sender_socket, 1, termination_semaphore)) {
                 terminated = true;
                 break;
             }
 
-            // L1 scratch CB -> Host FIFO over PCIe
             noc_async_wide_write_any_len_with_state(
                 NOC_INDEX,
                 cb_l1_addr,
@@ -136,7 +109,6 @@ void kernel_main() {
                 socket_page_size);
             noc_async_writes_flushed();
 
-            // Push to Host FIFO
             socket_push_pages(sender_socket, 1);
             socket_notify_receiver(sender_socket);
         }
@@ -146,11 +118,6 @@ void kernel_main() {
         }
 
         if constexpr (metadata_enabled) {
-            // Ship the metadata as the trailing socket page. metadata_l1_addr is the
-            // service-core staging region the metadata master worker fanned the
-            // metadata in to: it is a full, zero-padded socket page on this same service core
-            // and is NOC-accessible, so write it straight to the host FIFO — no
-            // intermediate scratch-CB copy needed.
             if (!deepseek_b1_ops::socket_reserve_pages_with_termination(sender_socket, 1, termination_semaphore)) {
                 terminated = true;
                 break;

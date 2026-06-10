@@ -852,14 +852,10 @@ struct D2HWorkerSyncArgs {
     uint32_t num_workers = 0;
 };
 
-// Metadata args for the persistent D2H sender. When enabled, after the payload
-// the sender reads `metadata_size_bytes` from `metadata_l1_addr` (this service
-// core's staging region, which the metadata master worker fanned in to), pads it to a
-// full socket page, and ships it as the trailing page.
 struct D2HMetadataArgs {
     bool enabled = false;
     uint32_t metadata_size_bytes = 0;
-    uint32_t metadata_l1_addr = 0;  // service-core staging region (== metadata_input_addrs_[coord])
+    uint32_t metadata_l1_addr = 0;
 };
 
 Program build_persistent_d2h_program(
@@ -981,13 +977,7 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
         composer_ = ttnn::distributed::create_mesh_composer(*mesh_device_, cfg_.composer_config.value());
     } else {
         const auto comp_cfg = derive_composer_config(mapper_->config());
-        // The auto-derived composer only emits the Shard placements (one entry per
-        // sharded mesh dim). When the mapper mixes Shard with Replicate across a
-        // multi-dim mesh, the derived dims count is smaller than the mesh dims
-        // count and create_mesh_composer FATALs. Skip auto-creation in that case
-        // — callers who need the bytes read path with partial-shard placements
-        // must supply `Config::composer_config` explicitly (typically with a
-        // `mesh_shape_override` that collapses the replicated mesh dims).
+        // Skip auto-composer when partial-shard mapper dims != mesh dims.
         const auto effective_mesh = mapper_->config().mesh_shape_override.value_or(mesh_device_->shape());
         if (!comp_cfg.dims.empty() && comp_cfg.dims.size() == effective_mesh.dims()) {
             composer_ = ttnn::distributed::create_mesh_composer(*mesh_device_, comp_cfg);
@@ -1005,13 +995,7 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
         service_cores_.emplace(coord, chosen);
     }
 
-    // The claims above are keyed by physical device id (get_device(coord)), as
-    // allocate_l1()/wait_done() require. But CB validation checks
-    // claimed_cores(mesh_device->id()) — the MeshDevice's scoped id, which
-    // increments per mesh open and only matches a physical id for the first mesh
-    // in a process. Also register the service cores under the MeshDevice id so
-    // validation holds across repeated mesh opens; skip cores already claimed
-    // under that id to avoid a double-claim.
+    // Also claim service cores under MeshDevice id for CB validation across mesh reopens.
     {
         const auto mesh_claimed = svc.claimed_cores(mesh_device_->id());
         std::unordered_set<CoreCoord> registered;
@@ -1055,9 +1039,6 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
         tt::tt_metal::detail::WriteToDeviceL1(d, chosen, static_cast<uint32_t>(sem_addr), zero_word);
     }
 
-    // Write-ack counter on each service core. Host bumps when worker_cores is
-    // unset; each worker (and master when metadata is enabled) incs once per
-    // iteration when worker sync is on.
     for (const auto& coord : coords) {
         auto* d = mesh_device_->get_device(coord);
         const CoreCoord chosen = service_cores_.at(coord);
@@ -1075,11 +1056,6 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
         if (cfg_.metadata_size_bytes > 0) {
             const uint32_t l1_align = hal::get_l1_alignment();
 
-            // Per-worker metadata source: one L1 shard per worker core, all at the
-            // same L1 address (sharded buffer). The replicated metadata lives here;
-            // the metadata master worker reads its own shard and fans it in to the
-            // service core. Same address on every worker, so get_worker_metadata_addr()
-            // returns a single value.
             const DeviceAddr aligned_shard_size =
                 tt::align(static_cast<DeviceAddr>(cfg_.metadata_size_bytes), static_cast<DeviceAddr>(l1_align));
             const CoreRangeSet shard_grid(worker_range);
@@ -1104,15 +1080,7 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
     }
 
     if (cfg_.metadata_size_bytes > 0) {
-        // Per-coord service-core metadata staging region (one per mesh coord). The
-        // metadata master worker fans the replicated metadata IN to this region, and the
-        // persistent sender reads it from here and ships it as the trailing socket
-        // page. Zero-initialized so a stale read can't masquerade as valid metadata.
         const uint32_t l1_align = hal::get_l1_alignment();
-        // The sender ships the metadata as one full trailing socket page straight
-        // from this region (NOC write, no intermediate CB copy), so size it to a
-        // full page. The master writes only the leading metadata_size_bytes each
-        // iteration; the trailing pad stays zero from this init.
         const DeviceAddr aligned_staging_size =
             tt::align(static_cast<DeviceAddr>(socket_page_size_), static_cast<DeviceAddr>(l1_align));
         for (const auto& coord : coords) {
@@ -1135,11 +1103,7 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
 
         D2HWorkerSyncArgs worker_sync;
         worker_sync.write_ack_counter_addr = static_cast<uint32_t>(write_ack_addrs_.at(core.device_coord));
-        // Sender gates each transfer on write_ack advancing by num_workers.
-        // Host-only (worker_cores unset) has num_workers_ == 1 and bumps the
-        // counter once per read via notify_backing_ready(); the D2HWorkerSyncArgs
-        // default of 0 would pass the gate every iteration, free-running the
-        // sender and hanging D2HSocket::barrier().
+        // Host-only path: default num_workers=0 would free-run the sender.
         worker_sync.num_workers = num_workers_;
         if (cfg_.worker_cores.has_value()) {
             const auto& worker_range = cfg_.worker_cores.value();
@@ -1255,7 +1219,6 @@ D2HStreamService::~D2HStreamService() {
                 svc.release(d, {core});
             }
 
-            // Release the MeshDevice-id validation claims registered in the ctor.
             if (!mesh_id_claimed_cores_.empty()) {
                 svc.release(mesh_device_.get(), mesh_id_claimed_cores_);
                 mesh_id_claimed_cores_.clear();
@@ -1406,11 +1369,7 @@ std::string D2HStreamService::export_descriptor(const std::string& service_id) {
     if (cfg_.composer_config.has_value()) {
         desc.composer_config = cfg_.composer_config.value();
     } else {
-        // Mirror constructor guard: emit an empty composer_config when the
-        // auto-derived dims would be malformed (partial-shard mapper on a
-        // multi-dim mesh). The connector sees `dims.empty()` and stays in
-        // composer-less mode; the bytes read path will FATAL, but the Tensor
-        // read path keeps working across processes.
+        // Mirror ctor: omit composer_config when auto-derived dims are malformed.
         auto comp_cfg = derive_composer_config(mapper_->config());
         const auto effective_mesh = mapper_->config().mesh_shape_override.value_or(mesh_device_->shape());
         if (comp_cfg.dims.size() == effective_mesh.dims()) {
@@ -1450,9 +1409,6 @@ std::unique_ptr<D2HStreamService> D2HStreamService::connect(
     std::vector<std::unique_ptr<distributed::D2HSocket>> sockets;
     sockets.reserve(desc.per_coord_entries.size());
     for (const auto& [coord, socket_desc] : desc.per_coord_entries) {
-        // The socket descriptor carries its owner-side mesh coord; the outer
-        // per-coord-entry `coord` is kept as a map key but isn't needed for
-        // wire-up.
         (void)coord;
         sockets.push_back(distributed::D2HSocket::connect_from_descriptor(socket_desc));
     }
@@ -1468,11 +1424,6 @@ std::unique_ptr<D2HStreamService> D2HStreamService::connect(
         .metadata_size_bytes = desc.metadata_size_bytes,
     };
 
-    // The connector reads with the per-shard fast path (replicated cross-process,
-    // where per-shard size == global). It does not build a MeshToTensor composer:
-    // that requires a device-free composer, and sharded cross-process recompose is
-    // out of scope for v1. A sharded connector reading bytes therefore fatals with
-    // "composer unavailable" rather than silently mis-composing.
     auto service = std::unique_ptr<D2HStreamService>(
         new D2HStreamService(std::move(cfg), std::move(sockets), desc.socket_page_size, desc.num_socket_pages));
     return service;
@@ -1509,9 +1460,7 @@ void D2HStreamService::read_from_tensor(ttsl::Span<std::byte> bytes, ttsl::Span<
     TT_FATAL(composer_ != nullptr, "D2HStreamService::read_from_tensor: composer unavailable");
     Tensor composed = composer_->compose(host_tensor);
 
-    // The span contract is raw packed bytes regardless of dtype, so view the
-    // composed buffer's bytes directly; `to_vector<uint8_t>()` would copy and
-    // fatal on any non-UINT8 dtype.
+    // View composed bytes directly; to_vector<uint8_t>() rejects non-UINT8 dtypes.
     const auto& composed_host = composed.host_storage().host_tensor();
     const auto& composed_dhb = composed_host.buffer();
     const auto& composed_coords = composed_dhb.shard_coords();
@@ -1578,9 +1527,6 @@ void D2HStreamService::read_from_tensor(Tensor& host_tensor, ttsl::Span<std::byt
     for (size_t s = 0; s < sockets_.size(); ++s) {
         read_threads.emplace_back([&, s] {
             try {
-                // One page per read: D2HSocket::read fatals when
-                // num_pages*page_size exceeds the FIFO, which is intentionally
-                // smaller than the payload. Mirrors the H2D page-major loop.
                 for (uint32_t i = 0; i < num_socket_pages_; ++i) {
                     const size_t offset = static_cast<size_t>(i) * socket_page_size_;
                     sockets_[s]->read(bases[s] + offset, /*num_pages=*/1);
@@ -1599,10 +1545,6 @@ void D2HStreamService::read_from_tensor(Tensor& host_tensor, ttsl::Span<std::byt
         }
     }
 
-    // Drain the trailing metadata page each socket ships after its payload. The
-    // metadata is replicated identically across devices, so socket 0's page is
-    // returned to the caller and every other socket's page must match it byte for
-    // byte — a mismatch means a device/worker shipped a stale or divergent blob.
     if (cfg_.metadata_size_bytes > 0) {
         TT_FATAL(!sockets_.empty(), "D2HStreamService::read_from_tensor: expected at least one socket for metadata");
         sockets_.front()->read(metadata_scratch_.data(), /*num_pages=*/1);
