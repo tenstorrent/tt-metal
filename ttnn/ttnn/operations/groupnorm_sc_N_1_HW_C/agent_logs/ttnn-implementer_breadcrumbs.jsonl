@@ -56,3 +56,10 @@
 {"event":"test_run","status":"pass","details":"golden test_regression.py 35/35","ts":"2026-06-10T16:56:34+00:00"}
 {"event":"test_run","status":"fail","classification":"timeout_sigterm","details":"Full golden sweep exceeded 600s bash cap (exit 143). Not a test failure. Sharding by shape ids as verifier did at R2.","ts":"2026-06-10T17:06:59+00:00"}
 {"event":"test_run","status":"fail","classification":"unknown_pending","details":"golden shard0: 55 failed / 550 passed / 583 skipped. Inspecting failed cell ids.","ts":"2026-06-10T17:13:16+00:00"}
+{"event":"test_run","status":"fail","classification":"single_shape","details":"shard0: all 55 failures are 1x1x16384x320 (HW=16384, Ht=512), all dtype/affine combos; other shapes pass. Inspecting one cell.","ts":"2026-06-10T17:16:24+00:00"}
+{"event":"test_run","status":"fail","classification":"numerical_error","details":"1x1x16384x320 bf16: pcc=0.9915 (target 0.995), rms=0.149 (target 0.02). 512 bf16 reload-accumulate steps in pass1/2 quantize the running mean/var. Other 54 fails same shape, dtype variants.","ts":"2026-06-10T17:17:37+00:00"}
+{"event":"hypothesis","details":"Lever: cluster path defaults fp32_dest_acc_en=True (stat CBs become Float32 via existing R1 logic), matching the R1 fp32-input default. Aligned path defaults unchanged.","ts":"2026-06-10T17:17:37+00:00"}
+{"event":"test_run","status":"fail","details":"fp32 default flipped 11 SDXL cells (55->44 fail). Inspecting remaining metrics.","ts":"2026-06-10T17:19:14+00:00"}
+{"event":"dprint_observation","details":"SDXL probe: per-group bias ~1e-4 (means OK), error std 0.046 uniform. Either rstd off ~4.6% per group uniformly or per-element noise. Probing slope per group.","ts":"2026-06-10T17:20:48+00:00"}
+{"event":"dprint_observation","details":"slope=1.0458 ALL groups, resid 0.0017 -> rstd uniformly +4.6% (var -8.7%). 512 per-row partial reloads truncate toward zero (TF32 srcA). Lever: chunk pass1/2 reduce blocks to R=16 rows -> 32 reloads.","ts":"2026-06-10T17:22:14+00:00"}
+{"event":"test_run","status":"fail","details":"chunked accumulation: SDXL 55->10 failed (45 pass). Checking remaining 10 cells.","ts":"2026-06-10T17:25:14+00:00"}

@@ -99,6 +99,11 @@ def create_program_descriptor(
     # Widest per-group tile span: a group covers ceil(Cg/32) tiles + 1 for
     # straddling a tile boundary, never wider than the cluster itself.
     Ws_max = min(Cg // TILE_DIM + 2, Wc_max)
+    # Accumulation chunk (rows per reduce block) for cluster passes 1/2. Each
+    # block reloads the running partial through TF32 srcA (truncation toward
+    # zero): 512 single-row reloads at HW=16384 cost ~9% of the variance —
+    # 16-row chunks cut that to ~0.3%. Bounded by L1 (R*Ws_max stat pages).
+    chunk_rows = min(Ht, 16)
 
     has_gamma = gamma_tensor is not None
     has_beta = beta_tensor is not None
@@ -116,7 +121,11 @@ def create_program_descriptor(
         dst_full_sync_en = compute_kernel_config.dst_full_sync_en
     else:
         math_fidelity = ttnn.MathFidelity.HiFi4
-        fp32_dest_acc_en = input_tensor.dtype == ttnn.float32
+        # Cluster path (groups_non_aligned) also defaults fp32 accumulation:
+        # per-(n,g) stats reload-accumulate Ht times (512 for SDXL HW=16384) —
+        # bf16 running sums quantize to rms 0.15 on (1,1,16384,320) G=32;
+        # fp32 dest + Float32 stat CBs restore the budget.
+        fp32_dest_acc_en = input_tensor.dtype == ttnn.float32 or groups_non_aligned
         math_approx_mode = False
         dst_full_sync_en = False
 
@@ -179,9 +188,10 @@ def create_program_descriptor(
         )
 
     # Streaming row-chunk width: Wg tiles on the aligned path; on the cluster
-    # path passes 1/2 stream group spans (Ws_max) and pass 3 streams full
+    # path passes 1/2 stream chunk_rows-row group-span blocks (chunk_rows *
+    # Ws_max tiles live between mul/sub and reduce) and pass 3 streams full
     # cluster rows (Wc_max).
-    chunk_w = max(Ws_max, Wc_max) if groups_non_aligned else Wg
+    chunk_w = max(chunk_rows * Ws_max, Wc_max) if groups_non_aligned else Wg
     stream_pages = 2 * chunk_w
 
     # Scaler precision follows the stat format. For non-tile-aligned shapes the
@@ -293,9 +303,10 @@ def create_program_descriptor(
         stat_is_f32,
         int(mask_out_cluster),
         Ws_max,
+        chunk_rows,
     ]
-    READER_NUM_SCALAR_CT_ARGS = len(reader_ct_args)  # accessor args start here (kernel hard-codes 18)
-    assert READER_NUM_SCALAR_CT_ARGS == 18
+    READER_NUM_SCALAR_CT_ARGS = len(reader_ct_args)  # accessor args start here (kernel hard-codes 19)
+    assert READER_NUM_SCALAR_CT_ARGS == 19
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct_args.extend(
         ttnn.TensorAccessorArgs(gamma_tensor).get_compile_time_args()
@@ -354,6 +365,7 @@ def create_program_descriptor(
         Cg,
         C,
         Ws_max,
+        chunk_rows,
     ]
     compute_config = ttnn.ComputeConfigDescriptor(
         math_fidelity=math_fidelity,

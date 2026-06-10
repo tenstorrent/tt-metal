@@ -108,7 +108,8 @@ void kernel_main() {
     constexpr uint32_t NUM_CLUSTERS = get_compile_time_arg_val(13);
     constexpr uint32_t Cg = get_compile_time_arg_val(14);
     constexpr uint32_t C = get_compile_time_arg_val(15);
-    constexpr uint32_t WS_MAX = get_compile_time_arg_val(16);  // mask frame width (tiles)
+    constexpr uint32_t WS_MAX = get_compile_time_arg_val(16);      // mask frame width (tiles)
+    constexpr uint32_t CHUNK_ROWS = get_compile_time_arg_val(17);  // rows per pass-1/2 reduce block
 
     const uint32_t start_group = get_arg_val<uint32_t>(0);
     const uint32_t num_groups_here = get_arg_val<uint32_t>(1);
@@ -262,10 +263,17 @@ void kernel_main() {
                 const auto span_row = ckl::EltwiseShape::grid(1, Wsg);
                 const auto span_reduce = ckl::ReduceInputBlockShape::of(1, Wsg);
 
+                // Pass-1/2 blocks are CHUNK_ROWS tall: every accumulate call
+                // reloads the running partial through TF32 srcA (truncates
+                // toward zero), so fewer/taller blocks keep the deficit
+                // negligible (512 1-row reloads cost ~9% of var at HW=16384).
+                const uint32_t nb1 = (Ht + CHUNK_ROWS - 1) / CHUNK_ROWS;
+
                 // ---- Pass 1: masked mean — neighbor groups share tiles, so
                 // mask BEFORE the reduce (scaler is logical 1/sqrt(HW*Cg)).
                 // Padding rows are zero from host tilize; interior mask is fine.
-                for (uint32_t b = 0; b < Ht; ++b) {
+                for (uint32_t b = 0; b < nb1; ++b) {
+                    const uint32_t rc = (b + 1 == nb1) ? Ht - b * CHUNK_ROWS : CHUNK_ROWS;
                     ckl::mul<
                         cb_input_tiles,
                         cb_mask_interior,
@@ -277,15 +285,34 @@ void kernel_main() {
                         ckl::BinaryDataFormatReconfig::Input,
                         ckl::PackTileReconfig::Output,
                         ckl::OperandKind::Scalar,
-                        ckl::OperandKind::Row>(span_row);
+                        ckl::OperandKind::Row>(ckl::EltwiseShape::grid(rc, Wsg));
                     ckl::accumulate_reduce_block<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_SCALAR>(
-                        cb_centered, cb_scaler, cb_mean, span_reduce, b, Ht);
+                        cb_centered, cb_scaler, cb_mean, ckl::ReduceInputBlockShape::of(rc, Wsg), b, nb1);
                 }
                 // Export mean to the reader (row-vector scatter); keep holding it.
                 ckl::copy<cb_mean, cb_mean_export, ckl::InputLifecycle::HeldBulk>(1);
 
-                // ---- Pass 2: variance over the masked span ----
-                for (uint32_t b = 0; b < Ht; ++b) {
+                // ---- Pass 2: variance over the masked span. Interior rows in
+                // CHUNK_ROWS blocks; the HW-tail row (different mask) last. ----
+                const uint32_t rows_int = HW_TAIL > 0 ? Ht - 1 : Ht;
+                const uint32_t nb2_int = (rows_int + CHUNK_ROWS - 1) / CHUNK_ROWS;
+                const uint32_t nb2 = nb2_int + (HW_TAIL > 0 ? 1 : 0);
+                for (uint32_t b = 0; b < nb2_int; ++b) {
+                    const uint32_t rc = (b + 1 == nb2_int) ? rows_int - b * CHUNK_ROWS : CHUNK_ROWS;
+                    const auto chunk_shape = ckl::EltwiseShape::grid(rc, Wsg);
+                    ckl::sub<
+                        cb_input_tiles,
+                        cb_mean,
+                        cb_centered,
+                        ckl::BroadcastDim::Scalar,
+                        ckl::InputLifecycle::Streaming,
+                        ckl::InputLifecycle::HeldBulk>(chunk_shape);
+                    mask_centered_row<cb_centered, cb_mask_interior>(chunk_shape);
+                    ckl::square<cb_centered, cb_centered>(chunk_shape);
+                    ckl::accumulate_reduce_block<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_SCALAR>(
+                        cb_centered, cb_scaler, cb_var, ckl::ReduceInputBlockShape::of(rc, Wsg), b, nb2);
+                }
+                if constexpr (HW_TAIL > 0) {
                     ckl::sub<
                         cb_input_tiles,
                         cb_mean,
@@ -293,14 +320,10 @@ void kernel_main() {
                         ckl::BroadcastDim::Scalar,
                         ckl::InputLifecycle::Streaming,
                         ckl::InputLifecycle::HeldBulk>(span_row);
-                    if (HW_TAIL > 0 && b + 1 == Ht) {
-                        mask_centered_row<cb_centered, cb_mask_tail>(span_row);
-                    } else {
-                        mask_centered_row<cb_centered, cb_mask_interior>(span_row);
-                    }
+                    mask_centered_row<cb_centered, cb_mask_tail>(span_row);
                     ckl::square<cb_centered, cb_centered>(span_row);
                     ckl::accumulate_reduce_block<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_SCALAR>(
-                        cb_centered, cb_scaler, cb_var, span_reduce, b, Ht);
+                        cb_centered, cb_scaler, cb_var, span_reduce, nb2 - 1, nb2);
                 }
                 ckl::transform_in_place(cb_var, [](uint32_t dst) {
                     binop_with_scalar_tile_init();

@@ -119,9 +119,10 @@ void kernel_main() {
     constexpr bool STAT_F32 = get_compile_time_arg_val(15) != 0;
     constexpr bool MASK_OUT = get_compile_time_arg_val(16) != 0;  // bf8b out + HW tail (cluster path)
     constexpr uint32_t WS_MAX = get_compile_time_arg_val(17);     // mask frame width (tiles)
+    [[maybe_unused]] constexpr uint32_t CHUNK_ROWS = get_compile_time_arg_val(18);  // compute-side reduce block rows
 
     // Accessors declared unconditionally, chained offsets (placeholders when absent).
-    constexpr auto input_args = TensorAccessorArgs<18>();
+    constexpr auto input_args = TensorAccessorArgs<19>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
