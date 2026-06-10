@@ -46,9 +46,10 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 TT_METAL_HOME = SCRIPT_DIR.parents[4]
 RUNS_BASE = TT_METAL_HOME / "generated/profiler/op_to_op_runs"
-OUT_DIR = RUNS_BASE / "batch8"
+BATCH_PREFIX = os.environ.get("BATCH_PREFIX", "batch8")
+OUT_DIR = RUNS_BASE / os.environ.get("OUT_DIR_NAME", BATCH_PREFIX)
 OUT_CSV = OUT_DIR / "gap_decomposition.csv"
-MIN_PROG_ID = 3
+MIN_PROG_ID = int(os.environ.get("MIN_PROG_ID", "3"))
 
 CORE_COUNTS = [1, 2, 4, 10, 20, 40, 80, 110]
 MODES = [(0, "barrier"), (1, "flushed")]
@@ -84,7 +85,7 @@ def decompose_row(row: dict) -> dict:
 
 
 def load_runs(cores: int, mode: int) -> list[dict]:
-    pattern = str(RUNS_BASE / f"batch8_c{cores}_m{mode}" / "run_*" / "profile_log_device_op_to_op_complete.csv")
+    pattern = str(RUNS_BASE / f"{BATCH_PREFIX}_c{cores}_m{mode}" / "run_*" / "profile_log_device_op_to_op_complete.csv")
     paths = sorted(glob.glob(pattern))
     out: list[dict] = []
     for p in paths:
