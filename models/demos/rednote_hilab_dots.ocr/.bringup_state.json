@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T05:46:32Z",
+  "updated_at": "2026-06-10T05:54:11Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -429,8 +429,16 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/embedding.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_embedding.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_embedding.py",
+          "generated/profiler/reports/2026_06_10_05_51_18/ops_perf_results_2026_06_10_05_51_18.csv"
+        ],
+        "notes": "Tracy-driven at-ceiling verdict, no change applied: traced tracy (metal-trace captured+replayed, 2 replay sessions) at the production operating point (uint32 ids [1,1,1,128] replicated, bf16 table [1,1,151936,1536] hidden-dim-sharded 1x4 mesh) shows per-device block kernel time ~33us: AllGatherDeviceOperation 88.1% (~29us/device, 9-10 cores), EmbeddingsDeviceOperation ~4us@4c. The gather is fabric-latency-bound at this payload (128x384 bf16 ~98KB/device/hop): wall-clock A/B over 200 traced replays measured FLAT across every available lever - baseline DRAM 57.7, L1-pinned embedding-out+gather-out 57.0, num_links=2 58.0, L1+links2 58.0 us/iter - so no change was applied (V1 -1.2% is replay noise and would break the DRAM block-output contract without evidence). KB ttnn_embedding placement observations already matched by the ttnn-phase code (prefill >32 flattened tokens -> DRAM interleaved + TILE output, uint32 ROW_MAJOR indices, table DRAM ROW_MAJOR); ttnn_embedding_1 sibling-lookup, cos_1, rope and embedding_bw entries n/a to this block. Async all_gather deferred to generation/perf phases per tp-guidance (sync CCL acceptable; in single-op-chain isolation async overlap cannot help). PCC 1.000000 (unchanged) re-verified on 1x4 mesh; traced_ops sidecar regenerated (all_gather/embedding/unsqueeze_to_4D). Guard ok (lint 0, traced tracy artifact verified). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 1.0
       },
       "real_weights": {
         "status": "pending",
@@ -865,6 +873,12 @@
       "tick": 25,
       "ts": "2026-06-10T05:46:32Z",
       "action": "device[vision_transformer]",
+      "result": "ok"
+    },
+    {
+      "tick": 26,
+      "ts": "2026-06-10T05:54:11Z",
+      "action": "device[embedding]",
       "result": "ok"
     }
   ],
