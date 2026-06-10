@@ -12,7 +12,6 @@
 #include "tt-metalium/hal_types.hpp"
 #include "tt-metalium/experimental/global_circular_buffer.hpp"
 #include "tt-metalium/work_split.hpp"
-#include "tt_stl/reflection.hpp"
 #include "tt_stl/unreachable.hpp"
 
 namespace ttnn::prim {
@@ -118,12 +117,9 @@ void validate_matmul_tile_constraints(
 }
 
 void validate_matmul_block_and_subblock_configuration(
-    const MatmulParams& attributes,
-    const ttnn::Shape& a_shape_padded,
-    const tt::tt_metal::Tile& in0_tile,
-    const operations::matmul::MatmulProgramConfig& chosen_program_config) {
+    const MatmulParams& attributes, const operations::matmul::MatmulProgramConfig& chosen_program_config) {
     std::visit(
-        [&attributes, &a_shape_padded, &in0_tile](const auto& program_config) {
+        [&attributes](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (
                 std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreProgramConfig> ||
@@ -139,13 +135,6 @@ void validate_matmul_block_and_subblock_configuration(
                 std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig> ||
                 std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig> ||
                 std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                TT_FATAL(program_config.in0_block_w != 0, "in0_block_w is 0, which is not valid");
-                const uint32_t Kt = a_shape_padded[-1] / in0_tile.get_width();
-                TT_FATAL(
-                    Kt % program_config.in0_block_w == 0,
-                    "Kt ({}) must be divisible by in0_block_w ({})",
-                    Kt,
-                    program_config.in0_block_w);
                 TT_FATAL(program_config.out_subblock_h != 0, "out_subblock_h is 0, which is not valid");
                 TT_FATAL(program_config.out_subblock_w != 0, "out_subblock_w is 0, which is not valid");
                 if constexpr (
@@ -417,35 +406,6 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
             }
         },
         chosen_program_config);
-}
-
-void validate_matmul_fused_operations(
-    const std::optional<const Tensor>& optional_bias,
-    const std::optional<ttnn::operations::unary::UnaryWithParam>& fused_activation,
-    const operations::matmul::MatmulProgramConfig& chosen_program_config) {
-    // Determine which fused operations the chosen program config supports.
-    bool config_supports_fused_ops = false;
-    std::visit(
-        [&config_supports_fused_ops](const auto& program_config) {
-            using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            // MatmulMultiCoreProgramConfig and MatmulMultiCoreReuseProgramConfig have no
-            // bias / fused_activation kernel paths. Other configs support both; gather_in0
-            // on 1D multicast rejects bias separately in its dedicated check below.
-            config_supports_fused_ops =
-                !std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreProgramConfig> &&
-                !std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig>;
-        },
-        chosen_program_config);
-
-    // Reject bias or activation if the selected config does not support them.
-    TT_FATAL(
-        !optional_bias.has_value() || config_supports_fused_ops,
-        "Bias is not supported for this matmul program config: {}",
-        ttsl::get_active_type_name_in_variant(chosen_program_config));
-    TT_FATAL(
-        !fused_activation.has_value() || config_supports_fused_ops,
-        "Fused activation is not supported for this matmul program config: {}",
-        ttsl::get_active_type_name_in_variant(chosen_program_config));
 }
 
 bool get_broadcast_batch(
@@ -797,9 +757,9 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         chosen_program_config, input_tensor_a.device()->compute_with_storage_grid_size());
 
     validate_matmul_tile_constraints(input_tensor_a, input_tensor_b, in0_tile, in1_tile, chosen_program_config);
+    validate_matmul_block_and_subblock_configuration(attributes, chosen_program_config);
+
     validate_matmul_compute_grid_and_per_core_dims(input_tensor_a, chosen_program_config);
-    validate_matmul_block_and_subblock_configuration(attributes, a_shape_padded, in0_tile, chosen_program_config);
-    validate_matmul_fused_operations(optional_bias, attributes.user_fused_activation, chosen_program_config);
     validate_matmul_sharded_operand_grids_within_program_compute_grid(
         input_tensor_a, input_tensor_b, chosen_program_config);
     validate_matmul_work_distribution_and_gather_ring_topology(
@@ -974,7 +934,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
                 chosen_program_config),
             "Untilize out is not supported for this program config: {}",
-            ttsl::get_active_type_name_in_variant(chosen_program_config));
+            typeid(chosen_program_config).name());
     }
 
     using namespace tt;
@@ -1674,6 +1634,14 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
                     "Output memory layout must be INTERLEAVED, got: {}",
                     attributes.output_mem_config.memory_layout());
+            }
+            if constexpr (
+                std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig> ||
+                std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig> ||
+                std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                TT_FATAL(
+                    (a_shape_padded[-1] / in0_tile.get_width()) % program_config.in0_block_w == 0,
+                    "Kt must be divisible by in0_block_w");
             }
         },
         chosen_program_config);
