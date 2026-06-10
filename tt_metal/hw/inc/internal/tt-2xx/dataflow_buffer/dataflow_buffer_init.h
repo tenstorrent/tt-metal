@@ -98,6 +98,30 @@ FORCE_INLINE void copy_txn_descriptor_32(
     d[7] = s[7];
 }
 
+// tc_init_done is published/consumed via the uncached TL1 alias so DM L2 flush is not
+// required for Neo TRISC waiters (TRISC has no Quasar L2 invalidate API).
+static constexpr uint32_t dfb_per_risc_tc_init_done_byte_off =
+    offsetof(dfb_initializer_per_risc_t, num_tcs_and_init);
+static constexpr uint8_t dfb_per_risc_tc_init_done_bit = 4;
+
+FORCE_INLINE volatile uint8_t* dfb_per_risc_tc_init_done_byte_uncached(
+    volatile dfb_initializer_per_risc_t* per_risc_ptr) {
+    return reinterpret_cast<volatile uint8_t*>(
+        reinterpret_cast<uintptr_t>(per_risc_ptr) + MEM_L1_UNCACHED_BASE + dfb_per_risc_tc_init_done_byte_off);
+}
+
+FORCE_INLINE void dfb_publish_per_risc_tc_init_done(volatile dfb_initializer_per_risc_t* per_risc_ptr) {
+    per_risc_ptr->num_tcs_and_init.tc_init_done = 1;
+    volatile uint8_t* tc_init_byte = dfb_per_risc_tc_init_done_byte_uncached(per_risc_ptr);
+    *tc_init_byte = static_cast<uint8_t>(*tc_init_byte | (1u << dfb_per_risc_tc_init_done_bit));
+    asm volatile("fence w, w" ::: "memory");
+}
+
+FORCE_INLINE bool dfb_load_per_risc_tc_init_done(volatile dfb_initializer_per_risc_t* per_risc_ptr) {
+    const volatile uint8_t* tc_init_byte = dfb_per_risc_tc_init_done_byte_uncached(per_risc_ptr);
+    return ((*tc_init_byte) & static_cast<uint8_t>(1u << dfb_per_risc_tc_init_done_bit)) != 0;
+}
+
 // Returns true when every local producer RISC on this DFB has tc_init_done set.
 // Only producer entries are checked; consumers never set tc_init_done. Cores with no
 // local producers (e.g. Tensix consumer binding) vacuously pass.
@@ -121,7 +145,7 @@ FORCE_INLINE bool dfb_producers_tc_init_done(
         if (!per_risc_ptr->flags.is_producer) {
             continue;
         }
-        if (!per_risc_ptr->num_tcs_and_init.tc_init_done) {
+        if (!dfb_load_per_risc_tc_init_done(per_risc_ptr)) {
             return false;
         }
     }
@@ -626,7 +650,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 #endif
                     }
                     total_tc_hw += rdcycle() - tc_hw_start;
-                    per_risc_ptr->num_tcs_and_init.tc_init_done = 1;
+                    dfb_publish_per_risc_tc_init_done(per_risc_ptr);
                 }
             }
             WAYPOINT("L8");
@@ -668,3 +692,10 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
         start_time,
         end_time);
 }
+
+
+
+// 1k cycles to program isrs in the worst case
+// programming remapper is 37 cycles / remapper pair (how many in worst case??)
+// enabling remapper is 4-100 cycles (why the range?)
+// tc reset + set cap is 45 cycles / tc (worst case how many???)
