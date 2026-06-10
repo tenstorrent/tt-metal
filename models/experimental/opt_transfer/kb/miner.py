@@ -138,22 +138,31 @@ def build_kb(client, cache_root=None, kb_root=None, config=CONFIG, limit_ops=Non
     if limit_ops:
         ops = ops[:limit_ops]
     entries: dict[str, KBEntry] = {}
-    skipped = 0
-    for op in ops:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from models.experimental.opt_transfer.matcher import EXTRACT_SYSTEM
+
+    def _extract(op):
         available = inv.get(op, {"tests": [], "examples": []})
         used = usage.get(op, [])
         golden_src = _golden_source(op)
         # Prompt text participates in the cache key so prompt fixes invalidate stale outputs.
-        from models.experimental.opt_transfer.matcher import EXTRACT_SYSTEM
-
         content = (
             repr(EXTRACT_SYSTEM) + repr(golden_src) + repr(available["examples"]) + repr([u["snippet"] for u in used])
         )
         raw = cache.get_or_compute(
             key=f"op::{op}",
             content=content,
-            compute=lambda op=op, a=available, u=used, g=golden_src: client.extract_entries(op, a, u, g),
+            compute=lambda: client.extract_entries(op, available, used, golden_src),
         )
+        return op, available, used, golden_src, raw
+
+    # Extractions are independent LLM calls — fan out; cache writes are per-file.
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(_extract, ops))
+
+    skipped = 0
+    for op, available, used, golden_src, raw in results:
         for i, d in enumerate(raw):
             try:
                 e = KBEntry.from_dict(_normalize(dict(d), op, i))
