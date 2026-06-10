@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T08:44:49Z",
+  "updated_at": "2026-06-10T09:08:28Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -855,8 +855,17 @@
         "wer": 0.0
       },
       "perf": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/ocr_model.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_ocr.py",
+          "models/demos/rednote_hilab_dots.ocr/perf/traced/cpp_device_perf_report_traced.csv",
+          "models/demos/rednote_hilab_dots.ocr/PERF_NOTES.md"
+        ],
+        "notes": "Sub-pass 1: single-call metal trace of full decode body (full-seq recompute is fixed-shape; persistent embeds buffer + fixed lm_head window) \u2014 trace alone was SLOWER (89.8->113.7 ms/step): 39MB fp32 logits readback dominated. Sub-pass 2 (tracy on traced path, 10 replays, kernel 33.85 ms/replay, top: Matmul 41.4%, ArgMax 17.5%, AllGather 13.0%): ONE optimization = device argmax in-trace (all_gather logits + untilize + multicore argmax, readback 39MB->4KB/step). Steady 89.8 -> 18.4 ms (4.9x); e2e WER 0.0000 == HF, byte-identical. KV-cache token step deferred (PERF_NOTES recommendations).",
+        "steady_step_ms": 18.4,
+        "speedup": 4.88
       }
     }
   ],
@@ -1141,6 +1150,12 @@
       "tick": 46,
       "ts": "2026-06-10T08:44:49Z",
       "action": "generation[ocr]",
+      "result": "ok"
+    },
+    {
+      "tick": 47,
+      "ts": "2026-06-10T09:08:28Z",
+      "action": "perf[ocr]",
       "result": "ok"
     }
   ],

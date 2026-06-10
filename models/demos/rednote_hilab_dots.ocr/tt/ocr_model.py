@@ -25,9 +25,18 @@ AR loop: fixed-shape full-sequence recompute. The sequence buffer is
 padded once to ``L = roundup(prompt + max_new_tokens, 32)`` and every
 decode step re-runs the decoder stack over the same [1, 1, L, H] tensor
 (constant shapes -> every step after the first hits the device program
-cache; the plain causal mask makes pad rows unread and unattended). A
-paged-KV-cache decode path is deliberately deferred to the perf phase —
-parity first, then the traced single-token step (see skills/perf).
+cache; the plain causal mask makes pad rows unread and unattended).
+
+Perf phase (skills/perf sub-pass 1): ``ocr(use_trace=True)`` captures the
+whole decode body (28 layers -> final norm -> fixed lm_head window slice
+-> lm_head) as ONE metal trace and replays it per step — the only
+per-step host work is one ``copy_host_to_device_tensor`` into the
+persistent embeds buffer and a host argmax. Trace lifetime is
+single-call (L is call-dependent); the trace is released at the end of
+``ocr()``. Requires the mesh be opened with ``trace_region_size`` > 0.
+A paged-KV-cache decode (token-step instead of full-seq recompute)
+remains the documented follow-up; at gate sizes the step is dispatch-
+bound and the trace removes that bound without touching attention.
 """
 
 import importlib.util
@@ -209,6 +218,43 @@ class TtOCRModel(LightweightModule):
         ttnn.deallocate(e_tt)
         return e
 
+    def _decode_body(
+        self, h_tt: ttnn.Tensor, rot_mats, causal_mask, win_start: int, win_len: int, device_argmax: bool = False
+    ) -> ttnn.Tensor:
+        """Decoder stack + final norm + fixed window slice + lm_head, fully on device.
+
+        Trace-safe: shapes and the slice window are constants for the call,
+        every input is a long-lived device tensor. Returns per-chip logits
+        ``[1, 1, win_len, vocab/N]`` (vocab-sharded), or — with
+        ``device_argmax`` — greedy token ids ``[1, 1, win_len, 1]`` uint32
+        (all_gather to full vocab, untilize, multicore argmax; ~4 KB
+        readback instead of ~39 MB fp32 logits — the perf-phase hot fix).
+        """
+        h = self.layers[0].forward(h_tt, rot_mats, causal_mask)
+        for layer in self.layers[1:]:
+            h = layer.forward(h, rot_mats, causal_mask)
+        normed = self.final_norm(h)
+        ttnn.deallocate(h)
+        # lm_head only needs the window holding the live rows; keep it fp32 —
+        # a bf16 typecast here rounds the hidden state and flips near-tie
+        # argmax tokens (the "Tenstorrent"/"Tenstorment" e2e drift).
+        window = ttnn.slice(normed, [0, 0, win_start, 0], [1, 1, win_start + win_len, normed.shape[-1]])
+        ttnn.deallocate(normed)
+        logits_tt = self.lm_head.forward(window)
+        ttnn.deallocate(window)
+        if not device_argmax:
+            return logits_tt
+        if self.mesh_device.get_num_devices() > 1:
+            full = ttnn.all_gather(logits_tt, dim=3, num_links=2, topology=ttnn.Topology.Linear)
+            ttnn.deallocate(logits_tt)
+        else:
+            full = logits_tt
+        rm = ttnn.untilize(full)  # multicore argmax needs ROW_MAJOR
+        ttnn.deallocate(full)
+        tok = ttnn.argmax(rm, dim=-1, use_multicore=True, keepdim=True)
+        ttnn.deallocate(rm)
+        return tok
+
     def _decode_logits_row(self, embeds: torch.Tensor, rot_mats, causal_mask, row: int) -> torch.Tensor:
         """Run the decoder stack over [L, H] host embeds; return logits [vocab] at ``row``."""
         L, H = embeds.shape
@@ -220,29 +266,47 @@ class TtOCRModel(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        for layer in self.layers:
-            h = layer.forward(h, rot_mats, causal_mask)
-        normed = self.final_norm(h)
-        ttnn.deallocate(h)
-        # lm_head only needs the tile window holding ``row``; keep it fp32 —
-        # a bf16 typecast here rounds the hidden state and flips near-tie
-        # argmax tokens (the "Tenstorrent"/"Tenstorment" e2e drift).
         start = (row // 32) * 32
-        window = ttnn.slice(normed, [0, 0, start, 0], [1, 1, start + 32, H])
-        ttnn.deallocate(normed)
-        logits_tt = self.lm_head.forward(window)
-        ttnn.deallocate(window)
+        logits_tt = self._decode_body(h, rot_mats, causal_mask, start, 32)
+        ttnn.deallocate(h)
         logits = ttnn.to_torch(logits_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)).float()[
             0, 0, row - start
         ]
         ttnn.deallocate(logits_tt)
         return logits
 
+    def _host_embeds(self, embeds: torch.Tensor) -> ttnn.Tensor:
+        """[L, H] host fp32 -> host-resident TILE tensor (replicated) for H2D copy."""
+        L, H = embeds.shape
+        return ttnn.from_torch(
+            embeds.reshape(1, 1, L, H),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
     # ------------------------------------------------------------------
     # The use-case verb
     # ------------------------------------------------------------------
-    def ocr(self, image, prompt=DEFAULT_PROMPT, max_new_tokens=32, eos_ids=DEFAULT_EOS_IDS):
-        """Greedy OCR decode. Returns the generated text (special tokens stripped)."""
+    def ocr(
+        self,
+        image,
+        prompt=DEFAULT_PROMPT,
+        max_new_tokens=32,
+        eos_ids=DEFAULT_EOS_IDS,
+        use_trace=False,
+        step_callback=None,
+    ):
+        """Greedy OCR decode. Returns the generated text (special tokens stripped).
+
+        use_trace: capture the decode body as a metal trace on step 0 and
+            replay it for steps 1..N (mesh must be opened with
+            ``trace_region_size`` > 0). Trace lifetime is single-call.
+        step_callback: optional ``f(position, ms, kind)`` hook,
+            kind in {"warmup", "capture", "replay"}; "replay" is steady state.
+        """
+        import time as _time
+
         input_ids, pixel_values, grid_thw = self.preprocess(image, prompt)
         tokens = input_ids[0].tolist()
         prompt_len = len(tokens)
@@ -265,16 +329,99 @@ class TtOCRModel(LightweightModule):
 
         # Stage 2: greedy AR loop, fixed-shape full-sequence recompute.
         generated = []
-        for _ in range(max_new_tokens):
-            row = len(tokens) - 1
-            logits = self._decode_logits_row(embeds, rot_mats, causal_mask, row)
-            next_token = int(torch.argmax(logits).item())
-            tokens.append(next_token)
-            generated.append(next_token)
-            if next_token in eos_ids:
-                break
-            embeds[len(tokens) - 1] = self._embed_tokens([next_token])[0]
+        if not use_trace:
+            for _ in range(max_new_tokens):
+                row = len(tokens) - 1
+                t0 = _time.perf_counter()
+                logits = self._decode_logits_row(embeds, rot_mats, causal_mask, row)
+                next_token = int(torch.argmax(logits).item())
+                if step_callback:
+                    step_callback(row, (_time.perf_counter() - t0) * 1000.0, "untraced")
+                tokens.append(next_token)
+                generated.append(next_token)
+                if next_token in eos_ids:
+                    break
+                embeds[len(tokens) - 1] = self._embed_tokens([next_token])[0]
+        else:
+            generated = self._generate_traced(
+                embeds, rot_mats, causal_mask, tokens, prompt_len, L, max_new_tokens, eos_ids, step_callback
+            )
 
         for t in (*rot_mats, causal_mask):
             ttnn.deallocate(t)
         return self.tokenizer.decode(generated, skip_special_tokens=True).strip()
+
+    def _generate_traced(
+        self, embeds, rot_mats, causal_mask, tokens, prompt_len, L, max_new_tokens, eos_ids, step_callback
+    ):
+        """Single-call metal-trace AR loop (skills/perf sub-pass 1).
+
+        The decode body (28 layers -> norm -> fixed window slice -> lm_head)
+        is captured ONCE after an untraced compile step; every later step is
+        one H2D embed copy + ``execute_trace`` + host argmax. The fixed
+        lm_head window covers the last ``win_len`` rows, which always contain
+        all live decode rows (L - prompt_len <= max_new_tokens + 31 < win_len
+        unless L < win_len, then the window is the whole sequence).
+        """
+        import time as _time
+
+        win_len = min(L, ((max_new_tokens + 32 + 31) // 32) * 32)
+        win_start = L - win_len
+        assert prompt_len - 1 >= win_start, f"window misses first decode row ({prompt_len=}, {win_start=})"
+
+        # Persistent input buffer; H2D-overwritten each step at a stable address.
+        h_persist = ttnn.from_torch(
+            torch.zeros(1, 1, L, embeds.shape[-1]),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        trace_id, tok_out = None, None
+        generated = []
+        try:
+            for step in range(max_new_tokens):
+                row = len(tokens) - 1
+                t0 = _time.perf_counter()
+                ttnn.copy_host_to_device_tensor(self._host_embeds(embeds), h_persist)
+                if step == 0:
+                    # Compile the per-step embed path BEFORE trace capture —
+                    # first-call kernel compiles allocate device buffers, which
+                    # is unsafe while a trace is alive (corrupts trace buffers).
+                    self._embed_tokens([tokens[-1]])
+                    # Untraced compile pass (program cache), token ids used.
+                    tt = self._decode_body(h_persist, rot_mats, causal_mask, win_start, win_len, device_argmax=True)
+                    ttnn.synchronize_device(self.mesh_device)
+                    tok_host = ttnn.to_torch(ttnn.get_device_tensors(tt)[0])
+                    ttnn.deallocate(tt)
+                    # Capture exactly once; output handle stays valid for replays.
+                    tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+                    try:
+                        tok_out = self._decode_body(
+                            h_persist, rot_mats, causal_mask, win_start, win_len, device_argmax=True
+                        )
+                    finally:
+                        ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
+                    ttnn.synchronize_device(self.mesh_device)
+                    trace_id = tid
+                    kind = "capture"
+                else:
+                    ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=True)
+                    tok_host = ttnn.to_torch(ttnn.get_device_tensors(tok_out)[0])
+                    kind = "replay"
+                next_token = int(tok_host[0, 0, row - win_start, 0].item())
+                if step_callback:
+                    step_callback(row, (_time.perf_counter() - t0) * 1000.0, kind)
+                tokens.append(next_token)
+                generated.append(next_token)
+                if next_token in eos_ids:
+                    break
+                embeds[len(tokens) - 1] = self._embed_tokens([next_token])[0]
+        finally:
+            if trace_id is not None:
+                ttnn.release_trace(self.mesh_device, trace_id)
+            if tok_out is not None:
+                ttnn.deallocate(tok_out)
+            ttnn.deallocate(h_persist)
+        return generated
