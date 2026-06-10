@@ -85,6 +85,17 @@ python -m models.common.readiness_check.generate \
 
 Raw Tale-of-Two-Cities/book references can still be useful as extra stress coverage, but they should not be the main quality gate for an instruct model unless the model lacks a usable chat template.
 
+Free-running comparison must be strong enough to catch feedback bugs; teacher forcing cannot see them by construction (it overrides the token-feedback path every step). Use several prompts and the longest feasible generation - at least 64-128 tokens when runtime allows - not a single short continuation. Then run:
+
+```bash
+python models/common/readiness_check/check_degenerate_output.py \
+  --hf-model <hf-model-id> --missing-artifacts critical --scope autoregressive
+```
+
+and include its verdict in the stage evidence. Mechanical degeneracy - doubled tokens, single-token collapse - is a decode-loop bug, never a model property. The runner-side stage gate runs the same check.
+
+Build the fast probe before any repeated debugging loop: a reduced variant (one layer of each kind, short generation, real shapes) with a documented runtime of a couple of minutes or less. Repeating a multi-minute full-model pass to answer single-bit questions wastes the budget the debugging loop needs; the probe pays for itself within a few iterations.
+
 When full-model accuracy is poor, debug the new wrapper first: embeddings, final norm, LM head/tied weights, positions, masks, cache indexing, prompt lengths, page tables, and sampling all commonly fail outside the decoder itself. If the failure spans several of these boundaries and the causal chain is unclear, use `$autofix`; it will run `$autodebug` if needed, then verify or refute each proposed bug before keeping any fix. Escalate back into decoder precision or fidelity only when evidence points there.
 
 ## Performance
@@ -97,6 +108,8 @@ The figures you must report are:
 - decode tokens/sec/user over a representative generation window;
 - traced decode latency;
 - any material host/device gap or setup overhead discovered while measuring.
+
+Measure the reported batch-1 TTFT and decode t/s/u with the same workload shape the serving benchmark uses (prompt 128 / generate 128 unless the project specifies otherwise), separate from the accuracy workload, and record the workload shape next to every number. This keeps full-model and vLLM serving numbers directly comparable in later stages.
 
 If performance regresses badly from block-level evidence, inspect data movement between embeddings, blocks, final norm, LM head, and sampling before changing precision.
 

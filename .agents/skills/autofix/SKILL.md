@@ -58,6 +58,7 @@ Stop only when the bug is fixed with evidence, the remaining blocker is outside 
 
 ## TTNN Experiment Examples
 
+- For traced-decode or serving output symptoms - token doubling, greedy nondeterminism, wrong output at the capture position, per-replica divergence, serving-only repetition - check the symptom table in `$tt-enable-tracing` first; each row names the likely mechanism and a focused experiment.
 - Compare one decoder subcomponent against HF or the single-chip TTNN baseline with identical inputs and weights.
 - For top-k accuracy drift, probe the earliest layer/step where logits or hidden states diverge enough to change rank order, then substitute CPU/reference tail components to isolate whether the bug is in the hidden-state producer or the output head/postprocessing.
 - Print or assert the lowered TTNN op inputs: logical shape, physical/padded shape, dtype, layout, memory config, program config, compute config, mesh mapper, and runtime args.

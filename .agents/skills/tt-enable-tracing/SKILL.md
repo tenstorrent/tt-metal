@@ -148,6 +148,18 @@ Before accepting any reduced input-refresh scheme, add a focused replay test tha
 
 If you are still stuck after isolating the failing block, use `$autofix`. It should run diagnosis, then verify or refute each proposed root cause with focused experiments before keeping a fix.
 
+## Symptom Table
+
+These are mechanism signatures, not model properties. When generated or served output matches one, run the focused experiment before forming any precision, accuracy, or model-quality theory.
+
+| Symptom | Likely mechanism | Focused experiment |
+|---|---|---|
+| Every output token emitted twice (or k times) while the text still advances | Decode loop consumes a stale token/position input - feedback lags replay by one step | Two-step replay with different tokens/positions; assert the exact tensors the trace reads were refreshed and the outputs differ |
+| Greedy output nondeterministic across runs, or wrong after a sampled request | Trace cache keyed too coarsely - sampling mode/params are not part of the trace key, so replay reuses another mode's captured graph | Alternate greedy and sampled requests back-to-back; log which trace id each replay uses |
+| Wrong output at exactly the capture position, correct afterwards | Capture recorded the cache update but never executed it | Execute the trace once immediately after capture, then validate the capture-position cache entry |
+| One device/replica diverges after layer N while single-chip is clean | Collective-variant divergence on that axis (numerics or ordering of the reduce path) | Compare per-device outputs at layer boundaries; swap the collective variant for the failing axis |
+| Serving output repetitive or garbled while the standalone generator is clean | Stale async-decode state across requests: outputs read before refresh, or per-request state not reset | Serve the same prompt twice with a different prompt between; diff against the batch-1 generator output |
+
 ## Evidence To Leave
 
 Leave compact evidence that the traced path is real:

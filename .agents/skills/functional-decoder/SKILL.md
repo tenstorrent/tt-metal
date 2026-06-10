@@ -17,6 +17,8 @@ Implement:
 models/autoports/<model>/tt/functional_decoder.py
 ```
 
+Derive `<model>` from the HF model id: lowercase it and replace every non-alphanumeric character with an underscore, for example `org/Model-1.2B-Instruct` becomes `org_model_1_2b_instruct`. Downstream verification gates and tooling resolve the autoport directory from the HF model id, so do not add extra qualifiers such as hardware or experiment names.
+
 with a model-appropriate `FunctionalDecoder` that subclasses `models.common.lightweightmodule.LightweightModule` and exposes a real weight-loading boundary:
 
 ```python
