@@ -1,7 +1,7 @@
 --index-url https://pypi.org/simple/
 --extra-index-url https://download.pytorch.org/whl/cpu
 
-## TT packages
+## TT packages available on PyPI
 tt-exalens==0.3.22
 tt-smi==3.1.1
 tt-umd==0.9.6
