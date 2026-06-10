@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T07:36:26Z",
+  "updated_at": "2026-06-10T07:44:32Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -550,8 +550,15 @@
         "pcc": 0.999985
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/weight_loader.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_real_hf_weights.py"
+        ],
+        "notes": "text_rmsnorm_weights loader added to consolidated tt/weight_loader.py (pure-PyTorch, memoized key-filtered safetensors load; covers model.layers.{i}.input_layernorm/post_attention_layernorm per-layer keys and the stack-level model.norm key; TEXT_NUM_LAYERS=28 constant added; __main__ self-test extended: weight [1536] at all sites, 1536 params each). Stage-1 parametric tests/test_real_hf_weights.py row runs TtTextRMSNorm at the production operating point (fp32 [1,1,128,1536] replicated 1x4 mesh, replicated fused path - the decoder hot path; distributed pre/post path off hot path), golden real residual-stream input, vs the pure-PyTorch reference with the same real weights at THREE sites: input_layernorm@0 PCC 0.999990, post_attention_layernorm@27 0.999988, final_norm 0.999991 (min 0.999988 > 0.99 reported). Block forward untouched; full harness re-run, all 9 rows passing (8 prior rows unchanged). Guard ok (lint 0, params_loaded 4608>0). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999988,
+        "params_loaded": 4608
       }
     },
     {
@@ -1054,6 +1061,12 @@
       "tick": 39,
       "ts": "2026-06-10T07:36:26Z",
       "action": "device[embedding]",
+      "result": "ok"
+    },
+    {
+      "tick": 40,
+      "ts": "2026-06-10T07:44:32Z",
+      "action": "device[text_rmsnorm]",
       "result": "ok"
     }
   ],

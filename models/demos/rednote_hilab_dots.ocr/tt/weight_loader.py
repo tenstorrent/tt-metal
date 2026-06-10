@@ -21,6 +21,7 @@ VISION_PATCH_EMBED_PREFIX = "vision_tower.patch_embed.patchifier"
 VISION_TOWER_PREFIX = "vision_tower"
 VISION_NUM_BLOCKS = 42
 TEXT_EMBED_KEY = "model.embed_tokens.weight"
+TEXT_NUM_LAYERS = 28
 
 _CHECKPOINT_CACHE: Dict[str, torch.Tensor] = {}
 
@@ -183,6 +184,27 @@ def embedding_weights(hf_sd: Optional[Dict[str, torch.Tensor]] = None) -> Dict[s
     return {"weight": hf_sd[TEXT_EMBED_KEY]}
 
 
+def text_rmsnorm_weights(
+    layer_idx: int = 0, which: str = "input_layernorm", hf_sd: Optional[Dict[str, torch.Tensor]] = None
+) -> Dict[str, torch.Tensor]:
+    """State dict for TtTextRMSNorm: {"weight": [hidden]}.
+
+    ``which`` selects the norm site: ``"input_layernorm"`` /
+    ``"post_attention_layernorm"`` inside ``model.layers.{layer_idx}``, or
+    ``"final_norm"`` (the decoder-stack-level ``model.norm``; ``layer_idx``
+    is ignored).
+    """
+    if which == "final_norm":
+        key = "model.norm.weight"
+    elif which in ("input_layernorm", "post_attention_layernorm"):
+        key = f"model.layers.{layer_idx}.{which}.weight"
+    else:
+        raise ValueError(f"unknown text rmsnorm site {which!r}")
+    if hf_sd is None:
+        hf_sd = load_hf_state_dict(keys=[key])
+    return {"weight": hf_sd[key]}
+
+
 def count_params(sd) -> int:
     """Tensor-leaf element count of a (possibly nested) state dict."""
     if isinstance(sd, torch.Tensor):
@@ -249,3 +271,13 @@ if __name__ == "__main__":
     esd = embedding_weights()
     assert esd["weight"].shape == (151936, 1536), esd["weight"].shape
     print(f"embedding: {len(esd)} tensors, {count_params(esd)} params OK")
+
+    for which, idx in [
+        ("input_layernorm", 0),
+        ("post_attention_layernorm", 0),
+        ("input_layernorm", TEXT_NUM_LAYERS - 1),
+        ("final_norm", 0),
+    ]:
+        tsd = text_rmsnorm_weights(layer_idx=idx, which=which)
+        assert tsd["weight"].shape == (1536,), (which, idx, tsd["weight"].shape)
+    print(f"text_rmsnorm: input/post_attention/final_norm OK, {count_params(tsd)} params each")

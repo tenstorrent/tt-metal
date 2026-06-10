@@ -41,6 +41,7 @@ _vision_block_mod = _load_module("dots_ocr_tt_vision_block", MODEL_DIR / "tt" / 
 _patch_merger_mod = _load_module("dots_ocr_tt_patch_merger", MODEL_DIR / "tt" / "patch_merger.py")
 _vision_transformer_mod = _load_module("dots_ocr_tt_vision_transformer", MODEL_DIR / "tt" / "vision_transformer.py")
 _embedding_mod = _load_module("dots_ocr_tt_embedding", MODEL_DIR / "tt" / "embedding.py")
+_text_rmsnorm_mod = _load_module("dots_ocr_tt_text_rmsnorm", MODEL_DIR / "tt" / "text_rmsnorm.py")
 
 
 def _pcc(a, b):
@@ -312,6 +313,41 @@ def _t_embedding(mesh_device) -> tuple[float, int]:
     return _pcc(ref_out, out), wl.count_params(sd)
 
 
+def _t_text_rmsnorm(mesh_device) -> tuple[float, int]:
+    # Real weights from three sites (layers.0.input_layernorm,
+    # layers.27.post_attention_layernorm, model.norm) exercise the loader
+    # across the per-layer index and the stack-level key; PCC gated on each,
+    # min reported. Production-distribution input: the golden's real
+    # residual-stream activation (RMSNorm is its own first op, so a real
+    # activation suffices). Production operating point: fp32 [1,1,128,1536]
+    # replicated 1x4 mesh on the replicated fused path — the decoder layer
+    # keeps a replicated residual stream, so this is the hot path (the
+    # distributed pre/post path is off the decoder_layer hot path).
+    golden = torch.load(MODEL_DIR / "reference" / "golden" / "text_rmsnorm.pt")
+    x, eps = golden["input"].unsqueeze(1), golden["eps"]  # [1, 1, 128, 1536]
+    sites = [(0, "input_layernorm"), (wl.TEXT_NUM_LAYERS - 1, "post_attention_layernorm"), (0, "final_norm")]
+    pccs, n_params = [], 0
+    for layer_idx, which in sites:
+        sd = wl.text_rmsnorm_weights(layer_idx=layer_idx, which=which)
+        n_params += wl.count_params(sd)
+        ref_out = ref.text_rmsnorm_forward(x, sd["weight"], eps=eps)
+        block = _text_rmsnorm_mod.TtTextRMSNorm(mesh_device, sd, dtype=ttnn.float32, eps=eps)
+        x_tt = ttnn.from_torch(
+            x,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        out = ttnn.to_torch(ttnn.get_device_tensors(block.forward(x_tt))[0]).float()
+        assert out.shape == ref_out.shape, f"{which}: {out.shape} != {ref_out.shape}"
+        pcc = _pcc(ref_out, out)
+        print(f"  text_rmsnorm[{which}@{layer_idx}] PCC = {pcc:.6f}")
+        pccs.append(pcc)
+    return min(pccs), n_params
+
+
 BLOCKS = [
     ("vision_patch_embed", _t_vision_patch_embed),
     ("vision_rmsnorm", _t_vision_rmsnorm),
@@ -321,6 +357,7 @@ BLOCKS = [
     ("patch_merger", _t_patch_merger),
     ("vision_transformer", _t_vision_transformer),
     ("embedding", _t_embedding),
+    ("text_rmsnorm", _t_text_rmsnorm),
 ]
 
 

@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T07:36:26Z
+**Updated:** 2026-06-10T07:44:32Z
 
 ## Block Status
 
@@ -54,7 +54,7 @@
 | text_rmsnorm | ttnn | done | 0.999986 | 0 | Qwen2RMSNorm eps=1e-6 via fused ttnn.rms_norm ([1,1,dim//32,32] ROW_MAJOR gamma, HiFi2+fp32-acc per reference_impl models/common/rmsnorm.py) PLUS the parallelism-plan distributed path: rms_norm_pre_all_gather -> sync ttnn.all_gather(dim=3, Topology.Linear; async deferred to optimization per tp-guidance) -> rms_norm_post_all_gather with dim-2-sharded gamma (KB ttnn_rms_norm_post_all_gather cited; KB ttnn_pow chain fused into ttnn.rms_norm). Real layers.0 input_layernorm weight; 1x4 mesh; replicated path compared single-device vs golden (PCC 0.999986), distributed path concat-on-hidden vs golden (PCC 0.999986). Guard ok (lint 0, kernels ok, no new host ops). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | text_rmsnorm | debug | n/a | — | 0 |  |
 | text_rmsnorm | optimization | done | 0.999985 | 0 | Tracy-driven single change: replicated-path ttnn.rms_norm switched from default DRAM-interleaved (4-core row-tile-capped LayerNorm kernel at seq 128) to WIDTH-SHARDED 4x3 grid (12 cores, block_w=4, LayerNormShardedMultiCoreProgramConfig) with an i2s/s2i bounce that keeps the DRAM-interleaved block-output contract (both decoder_layer consumers are matmuls; tick-23 L1-interleaved-into-matmul stall counter-example forbids an L1 pin). Shape-gated (tile-aligned seq, dim tiles %12==0, per-core shard <=256KB) with deterministic shape-keyed config cache; non-qualifying shapes (decode seq=1) fall back to the fused interleaved path. Traced tracy at the production operating point (fp32 [1,1,128,1536] replicated 1x4 mesh, metal-trace captured+replayed, 2 replay sessions): per-device block kernel time 21.1us -> 16.5us (-22%); LayerNormDeviceOperation 21.1us@4c -> 8.2us@12c, +i2s 3.8us +s2i 4.5us@12c. Wall-clock A/B over 200 traced replays, 2 reps each: 24.4/24.3 -> 21.1/21.1 us/iter (-13.4%); grids 8x6 (24.4), 8x3 (22.6), 6x2 (21.7), 2x3 (26.0) all measured worse than 4x3. Top hotspot post-change LayerNormDeviceOperation ~50% of block kernel time at 12c. KB entries for kind norm reviewed: ttnn_pow chain already fused into ttnn.rms_norm (cited in ttnn phase); ttnn_rms_norm_post_all_gather targets the distributed pre/post path which is NOT on the decoder_layer hot path (residual stream is replicated) - async all_gather swap deferred to generation/perf phases; none newly applied. PCC re-verified: text_rmsnorm replicated 0.999985, distributed 0.999986 (>0.99); composition insurance: test_decoder_layer PCC 0.999943 (was 0.999936) - no stall introduced. traced_ops sidecar regenerated (+interleaved_to_sharded/sharded_to_interleaved). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
-| text_rmsnorm | real_weights | pending | — | 0 |  |
+| text_rmsnorm | real_weights | done | 0.999988 | 0 | text_rmsnorm_weights loader added to consolidated tt/weight_loader.py (pure-PyTorch, memoized key-filtered safetensors load; covers model.layers.{i}.input_layernorm/post_attention_layernorm per-layer keys and the stack-level model.norm key; TEXT_NUM_LAYERS=28 constant added; __main__ self-test extended: weight [1536] at all sites, 1536 params each). Stage-1 parametric tests/test_real_hf_weights.py row runs TtTextRMSNorm at the production operating point (fp32 [1,1,128,1536] replicated 1x4 mesh, replicated fused path - the decoder hot path; distributed pre/post path off hot path), golden real residual-stream input, vs the pure-PyTorch reference with the same real weights at THREE sites: input_layernorm@0 PCC 0.999990, post_attention_layernorm@27 0.999988, final_norm 0.999991 (min 0.999988 > 0.99 reported). Block forward untouched; full harness re-run, all 9 rows passing (8 prior rows unchanged). Guard ok (lint 0, params_loaded 4608>0). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | text_attention | reference | done | 1.000000 | 0 | eager causal GQA 12Q/2KV hd128 qkv-bias o_proj-no-bias, rope theta=1e6, real layers.0 weights |
 | text_attention | ttnn | done | 0.999047 | 0 | Fused per-chip QKV ttnn.linear(+bias) -> nlp_create_qkv_heads (3 Q + KV replicated to 3, MHA core) -> explicit fp32 HF-convention rope (slice/neg/concat/mul/add, vision-tower recipe) -> explicit fp32 causal core matmul QK^T * scale + additive triu mask -> ttnn.softmax(numeric_stable) -> matmul PV -> nlp_concat_heads -> row-parallel o_proj + sync all_gather all-reduce. bf16 SDPA rejected by measurement: layer-0 logits reach +-3122 (std 664, Qwen2 attention sink); per-stage isolation showed q/k/v+rope 0.9999+ but bf16 SDPA core 0.9265 (0.92-0.97 across program configs), so the whole path runs fp32 (HiFi4 + fp32 acc; SDPA kernel is bf16-only) -- guard satisfied via softmax alternative. kv_replication=2 per parallelism plan via per-chip KV row repeat; 1x4 mesh; replicated all-reduced output vs golden. Guard ok (lint 0, kernels ok, no new host ops). KB entries reviewed (nlp_create_qkv_heads idiom applied); decode/KV-cache deferred to generation phase. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | text_attention | debug | n/a | — | 0 |  |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 30 (2026-06-10T06:33:07Z): device[decoder_layer] — ok
 - tick 31 (2026-06-10T06:40:18Z): device[lm_head] — ok
 - tick 32 (2026-06-10T06:46:52Z): device[vision_patch_embed] — ok
 - tick 33 (2026-06-10T06:53:44Z): device[vision_rmsnorm] — ok
@@ -94,6 +93,7 @@
 - tick 37 (2026-06-10T07:19:34Z): device[patch_merger] — ok
 - tick 38 (2026-06-10T07:28:34Z): device[vision_transformer] — ok
 - tick 39 (2026-06-10T07:36:26Z): device[embedding] — ok
+- tick 40 (2026-06-10T07:44:32Z): device[text_rmsnorm] — ok
 
 ## Host-Resident Exceptions
 
