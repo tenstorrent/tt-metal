@@ -819,8 +819,8 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         // Required nodes from MGD adjacency graph (this represents the topology pattern to match)
         size_t required_nodes = mgd_grouping_info.adjacency_graph.get_nodes().size();
 
-        // RING dims from MGD device topology. Matching uses LINE-only graphs; committed groupings are rebuilt with
-        // RING.
+        // RING dims from MGD device topology. Matching uses LINE-only MGD graphs; PGD provides topology
+        // variants and committed groupings are rebuilt with RING via finalize_mesh_grouping_with_device_topology.
         const auto device_topo = get_mgd_instance_device_topology(mesh_graph_descriptor, instance_name);
 
         // Group valid candidates by node difference (map is ordered by key ascending)
@@ -850,7 +850,6 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
 
             for (const auto& [name, idx] : name_idx_pairs) {
                 const auto& grouping_info = mesh_flat_groupings.at(name)[idx];
-                // NOTE: If we ever want to support mixed type topologies, we need to add constraints to match the types
                 MappingConstraints<uint32_t, uint32_t> constraints;
                 constraints.add_required_constraint(0, 0);
                 auto mapping_result = solve_topology_mapping<uint32_t, uint32_t>(

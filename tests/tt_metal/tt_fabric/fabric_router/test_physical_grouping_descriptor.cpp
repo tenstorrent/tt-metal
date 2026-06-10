@@ -1616,15 +1616,15 @@ TEST(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyMesh
             << "Expected validation to pass: 4x4_Mesh grouping should map to mock cluster PSD";
     }
 
-    // Test 2x8_Mesh_adjacent - validation against mock cluster
+    // Test 2x8_Mesh - validation against mock cluster
     {
-        const auto* mesh_grouping = find_mesh_by_name("2x8_Mesh_adjacent");
-        ASSERT_NE(mesh_grouping, nullptr) << "2x8_Mesh_adjacent grouping not found";
+        const auto* mesh_grouping = find_mesh_by_name("2x8_Mesh");
+        ASSERT_NE(mesh_grouping, nullptr) << "2x8_Mesh grouping not found";
 
         auto asic_ids = pgd.find_any_in_psd(*mesh_grouping, psd);
 
         EXPECT_FALSE(asic_ids.empty())
-            << "Expected validation to pass: 2x8_Mesh_adjacent grouping should map to mock cluster PSD";
+            << "Expected validation to pass: 2x8_Mesh grouping should map to mock cluster PSD";
     }
 
     // Test 4x8_Mesh - validation against mock cluster
@@ -1696,18 +1696,17 @@ TEST(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyQuad
     }
 
     {
-        // Test 4x4_Mesh_diagonal grouping with find_all_in_psd
-        auto mesh_groupings = pgd.get_groupings_by_name("4x4_Mesh_diagonal");
-        ASSERT_EQ(mesh_groupings.size(), 1u) << "4x4_Mesh_diagonal grouping not found";
+        // Test 4x4_Mesh grouping with find_all_in_psd
+        auto mesh_groupings = pgd.get_groupings_by_name("4x4_Mesh");
+        ASSERT_EQ(mesh_groupings.size(), 1u) << "4x4_Mesh grouping not found";
 
         std::vector<std::string> errors;
 
         auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd, errors);
 
-        // SP4 GLX mock + bh_galaxy_sp4 rank bindings: 4 meshes × 4 hosts = 16 hosts in the merged PSD.
-        // One 4x4_Mesh_diagonal variant yields two valid tray-orientation placements per host → 32 total.
+        // SP4 GLX mock: 16 hosts × 32 ASICs = 512 ASICs; a 4x4_Mesh (16 ASICs) tiles disjointly → 32 placements.
         EXPECT_EQ(asic_ids.size(), 32u)
-            << "Expected validation to pass: 4x4_Mesh_diagonal grouping should map to mock cluster PSD (32 placements)";
+            << "Expected validation to pass: 4x4_Mesh grouping should map to mock cluster PSD (32 placements)";
     }
 }
 
