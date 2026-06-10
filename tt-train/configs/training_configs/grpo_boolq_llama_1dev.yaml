@@ -16,10 +16,10 @@ training_config:
 
   grpo_config:
     epsilon: 0.2
-    batch_size: 2
-    micro_batch_size: 16
+    batch_size: 1
+    micro_batch_size: 8
     num_iterations: 1
-    gradient_accumulation_steps: 8
+    gradient_accumulation_steps: 16
     logging_steps: 1
     checkpointing: true
     checkpoint_interval: 5

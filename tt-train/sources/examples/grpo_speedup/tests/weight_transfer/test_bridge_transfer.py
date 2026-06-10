@@ -7,20 +7,29 @@ Launched under tt-run with world_size == 2 (see ``runner.sh``):
 
 * Rank 0 (TTML_RANK)
     - Owns one full N300 board (``TT_VISIBLE_DEVICES="0"``). The MGD
-      declares a ``[1, 2]`` mesh covering both chips on the board so UMD's
-      eth discovery has a mapping for every ASIC, but the application
-      opens only a ``[1, 1]`` sub-mesh pinned to chip 0 -- the second chip
-      sits idle.
+      declares a ``[1, 2]`` mesh covering both chips on the board and the
+      application opens the full ``[1, 2]`` sub-mesh -- both chips
+      participate.
     - Builds a ttml ``LlamaCompositeKV`` for ``Llama-3.2-1B`` from real
-      HuggingFace weights, DDP disabled (degenerate on one chip).
+      HuggingFace weights with DDP enabled across the two chips
+      (parameters are still fully replicated; data is split for the
+      sanity-completion generate).
     - Generates a short completion as a "model is healthy" sanity check.
-    - Calls ``model.export_to_hf_dict()`` and ships the resulting on-device
-      tensor dict over a :class:`WeightBridge` to rank 1.
+    - Calls ``model.export_to_hf_dict()`` and ships the resulting
+      on-device tensor dict over a :class:`WeightBridge` to rank 1.
+      :class:`WeightBridge` exchanges mesh shapes during ``connect()``
+      and resolves the asymmetric ``[1, 2] -> [1, 1]`` pair to a single
+      ``(0, 0) -> (0, 0)`` ``SocketConnection``, so only chip ``(0, 0)``
+      of the ttml mesh participates in the transfer; the other ttml chip
+      sits idle for its duration.
 
 * Rank 1 (TTT_RANK)
-    - Owns the second N300 board (``TT_VISIBLE_DEVICES="1"``), same
-      declared ``[1, 2]`` / used ``[1, 1]`` split as the TTML rank. No
-      AutoContext, no ttml device init -- the ttt rank stays ttml-free.
+    - Owns the second N300 board (``TT_VISIBLE_DEVICES="1"``). The MGD
+      declares a ``[1, 2]`` mesh per rank to match the board's two
+      chips, but the application opens only a ``[1, 1]`` sub-mesh
+      pinned to chip 0 so every ``Transformer.update_weights`` dispatch
+      hits the single-device fast path. No AutoContext, no ttml device
+      init -- the ttt rank stays ttml-free.
     - Builds a tt-transformers :class:`Transformer` for ``Llama-3.2-1B``
       from real HuggingFace weights, with ``disable_disk_cache=True`` to
       skip the cold-cache ``dump_tensor_flatbuffer`` collective (which
@@ -71,7 +80,15 @@ INSTRUCT_MODEL_ID = "meta-llama/Llama-3.2-1B-instruct"
 PROMPT = "The capital of France is"
 MAX_NEW_TOKENS = 256
 TEMPERATURE = 0.0
-MESH_SHAPE = (1, 1)
+
+# Asymmetric mesh shapes:
+# - TTML side opens both chips of board 0 ([1, 2], DDP across the pair).
+# - TTT  side opens only chip 0 of board 1 ([1, 1]) so every
+#   ``Transformer.update_weights`` dispatch hits the single-device fast
+#   path. ``WeightBridge`` resolves the pair to a single ``(0,0) ->
+#   (0,0)`` ``SocketConnection`` during ``connect()``.
+TTML_MESH_SHAPE = (1, 2)
+TTT_MESH_SHAPE = (1, 1)
 
 
 def _ttml_rank_send_state() -> None:
@@ -86,13 +103,15 @@ def _ttml_rank_send_state() -> None:
     autograd_ctx.initialize_distributed_context(*sys.argv)
 
     device_config, raw = load_device_config()
-    device_config.mesh_shape = list(MESH_SHAPE)
-    device_config.enable_ddp = False
+    device_config.mesh_shape = list(TTML_MESH_SHAPE)
+    device_config.enable_ddp = True
     device_config.enable_tp = False
-    # MGD declares a [1, 2] mesh per rank to match the N300 board's two
-    # chips; we deterministically pick chip 0 so the used sub-mesh is the
-    # one the test's metadata assertions expect.
-    device_config.device_ids = [0]
+    # MGD declares a [1, 2] mesh per rank covering both chips of the
+    # board; the application opens the full mesh so the sanity-completion
+    # generate can split its batch across both chips under DDP. Weight
+    # parameters loaded via ``load_from_safetensors`` are still fully
+    # replicated, which is what ``WeightBridge`` requires.
+    device_config.device_ids = [0, 1]
 
     mesh_device = open_device(device_config)
     completer: Any = None
@@ -100,14 +119,16 @@ def _ttml_rank_send_state() -> None:
         ctx = LlamaCompletionCtx(
             max_tokens_to_complete=MAX_NEW_TOKENS,
             temperature=TEMPERATURE,
-            completions_per_prompt=MESH_SHAPE[0] * MESH_SHAPE[1],
+            # ``LlamaCompleterTtml`` asserts ``B % num_devices == 0`` so
+            # with 2 ttml chips we need at least 2 completions per prompt.
+            completions_per_prompt=TTML_MESH_SHAPE[0] * TTML_MESH_SHAPE[1],
         )
         completer = LlamaCompleterTtml(
             ctx=ctx,
             transformer_config=get_model_config(raw["training_config"]["model_config"]),
             mesh_device=mesh_device,
             model_source=INSTRUCT_MODEL_ID,
-            enable_ddp=False,
+            enable_ddp=True,
         )
 
         prompt_ids = completer.tokenizer.encode(PROMPT, add_special_tokens=True)
@@ -152,8 +173,10 @@ def _ttt_rank_recv_update_and_generate() -> None:
     # MGD declares a [1, 2] mesh per rank (the full N300); we pin the
     # sub-mesh origin to chip 0 so the second chip stays idle and
     # num_devices_per_group == 1 across every leaf .update() dispatch.
+    # ``WeightBridge`` handles the asymmetric ttml [1, 2] -> ttt [1, 1]
+    # pairing by negotiating a single (0, 0) -> (0, 0) ``SocketConnection``.
     mesh_device = ttnn.open_mesh_device(
-        mesh_shape=ttnn.MeshShape(*MESH_SHAPE),
+        mesh_shape=ttnn.MeshShape(*TTT_MESH_SHAPE),
         offset=ttnn.MeshCoordinate(0, 0),
     )
     completer: Any = None
@@ -203,7 +226,9 @@ def _ttt_rank_recv_update_and_generate() -> None:
             flush=True,
         )
 
-        expected_dist_shape = list(MESH_SHAPE)
+        # Received tensors are allocated on the local ttt mesh
+        # (``TTT_MESH_SHAPE``) regardless of the sender's mesh shape.
+        expected_dist_shape = list(TTT_MESH_SHAPE)
         for key, tensor in hf_dict.items():
             assert tensor.dtype == ttnn.bfloat16, f"key={key!r} dtype={tensor.dtype}, expected bfloat16"
             assert tensor.layout == ttnn.TILE_LAYOUT, f"key={key!r} layout={tensor.layout}, expected TILE_LAYOUT"
@@ -218,8 +243,8 @@ def _ttt_rank_recv_update_and_generate() -> None:
 
             placements = tensor.tensor_topology().placements()
             assert len(placements) == len(
-                MESH_SHAPE
-            ), f"key={key!r} placement axes ({len(placements)}) != mesh axes ({len(MESH_SHAPE)})"
+                TTT_MESH_SHAPE
+            ), f"key={key!r} placement axes ({len(placements)}) != mesh axes ({len(TTT_MESH_SHAPE)})"
             assert all(isinstance(p, ttnn.PlacementReplicate) for p in placements), (
                 f"key={key!r} not fully replicated: placements={placements}. WeightBridge "
                 "should have allocated a fully replicated template on every mesh axis."

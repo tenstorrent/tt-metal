@@ -25,21 +25,33 @@ Protocol
    receiver knows what to allocate and in what order.
 2. Each tensor is then streamed in manifest key order over a single
    cached fabric socket (``ttnn.MeshSocket`` +
-   ``ttnn.experimental.send_async`` / ``recv_async``). One
-   ``SocketConnection`` is created per ``(row, col)`` of the local mesh
-   so all chips on each side participate in the transfer (matches the
-   fan-out logic in ``ttml/core/distributed/socket_manager.cpp``).
+   ``ttnn.experimental.send_async`` / ``recv_async``). The
+   ``SocketConnection`` list is built from both meshes' shapes
+   exchanged at ``connect()`` time -- see the *Mesh-shape contract*
+   section below.
 3. A single ``ttnn.synchronize_device`` at the end of each direction
    waits for all per-tensor transfers to drain.
 
 Mesh-shape contract
 ===================
 
-Both submeshes must have the same shape because the per-``(row, col)``
-fan-out pairs ``coord -> coord`` on each side. The manifest carries the
-sender's mesh shape and the receiver asserts on match. ``[1, 4]`` on
-both sides (DDP-only line topology) is the configuration this code is
-written for; ``[2, 2]`` on both sides also works.
+Both ranks exchange their local mesh shapes during ``connect()`` and
+build the same ``SocketConfig`` from that pair. Two regimes are
+supported:
+
+- Symmetric (``ttml.shape == ttt.shape``): cartesian per-``(row, col)``
+  fan-out so every chip on each side participates. ``[1, 4]`` on both
+  sides (DDP-only line topology) is the canonical configuration;
+  ``[2, 2]`` on both sides also works.
+- Asymmetric (any pair of non-empty 2D meshes, e.g. ``[1, 2] -> [1, 1]``):
+  a single ``(0, 0) -> (0, 0)`` connection. With every source tensor
+  fully replicated on the ttml side (enforced in
+  ``_validate_source_tensor``), the ttml chip at ``(0, 0)`` carries the
+  same payload the cartesian fan-out would have, and the other ttml
+  chips sit idle for the duration of the transfer. Throughput is
+  bounded by one fabric link -- use this when the ttt rank holds the
+  model on a single chip (small models, debugging, staging) and you
+  don't care about the bandwidth gap.
 
 Replicated-only contract
 ========================
@@ -78,8 +90,13 @@ _MANIFEST_BODY_TAG: int = 2
 # Per-direction tags so a send cannot self-match the same rank's recv.
 _HANDSHAKE_TAG_FROM_TTML: int = 3
 _HANDSHAKE_TAG_FROM_TTT: int = 4
+_SHAPE_TAG_FROM_TTML: int = 5
+_SHAPE_TAG_FROM_TTT: int = 6
 
 _HANDSHAKE_PAYLOAD: bytes = b"ready"
+
+# Fixed-size 2D mesh shape exchange: two little-endian uint32s.
+_SHAPE_PAYLOAD_BYTES: int = 8
 
 _ROLE_TTML: str = "ttml"
 _ROLE_TTT: str = "ttt"
@@ -115,29 +132,45 @@ def _make_socket_mem_config() -> "ttnn.SocketMemoryConfig":
     return ttnn.SocketMemoryConfig(ttnn.BufferType.DRAM, _SOCKET_FIFO_BYTES)
 
 
-def _make_socket_connection_config(mesh_shape: list[int]) -> list["ttnn.SocketConnection"]:
-    """One ``coord -> coord`` SocketConnection per mesh chip (CoreCoord(0,0)).
+def _make_socket_connection_config(
+    sender_shape: list[int],
+    receiver_shape: list[int],
+) -> list["ttnn.SocketConnection"]:
+    """Build the ``SocketConnection`` list shared by both ranks.
 
-    Mirrors ``_make_socket_connection_config`` in
-    ``tt-train/sources/ttml/core/distributed/socket_manager.cpp``: every
-    sender chip pairs with the same-coord receiver chip so all devices
-    on each side participate in the transfer.
+    Two regimes:
+
+    1. ``sender_shape == receiver_shape``: cartesian per-``(row, col)``
+       fan-out -- every chip on each side participates. Mirrors
+       ``_make_socket_connection_config`` in
+       ``tt-train/sources/ttml/core/distributed/socket_manager.cpp``.
+    2. ``sender_shape != receiver_shape``: a single
+       ``(0, 0) -> (0, 0)`` connection. Because every source tensor is
+       fully replicated (enforced in ``_validate_source_tensor``), the
+       chip at ``(0, 0)`` of the sender mesh carries the same payload
+       the cartesian fan-out would have. The receiver mesh just needs a
+       ``(0, 0)`` device, which every non-empty mesh has. Throughput is
+       capped by one fabric link.
     """
-    if len(mesh_shape) != 2:
+    if len(sender_shape) != 2 or len(receiver_shape) != 2:
         raise ValueError(
-            f"WeightBridge: only 2D meshes are supported (got mesh_shape={mesh_shape}); "
-            f"line topologies should be expressed as [1, N] or [N, 1]."
+            f"WeightBridge: only 2D meshes are supported (got sender_shape={sender_shape}, "
+            f"receiver_shape={receiver_shape}); line topologies should be expressed as [1, N] or [N, 1]."
         )
-    rows, cols = int(mesh_shape[0]), int(mesh_shape[1])
-    connections: list[ttnn.SocketConnection] = []
-    for row in range(rows):
-        for col in range(cols):
-            mesh_core_coord = ttnn.MeshCoreCoord(
-                ttnn.MeshCoordinate(row, col),
-                ttnn.CoreCoord(0, 0),
-            )
-            connections.append(ttnn.SocketConnection(mesh_core_coord, mesh_core_coord))
-    return connections
+    if sender_shape == receiver_shape:
+        rows, cols = int(sender_shape[0]), int(sender_shape[1])
+        connections: list[ttnn.SocketConnection] = []
+        for row in range(rows):
+            for col in range(cols):
+                mesh_core_coord = ttnn.MeshCoreCoord(
+                    ttnn.MeshCoordinate(row, col),
+                    ttnn.CoreCoord(0, 0),
+                )
+                connections.append(ttnn.SocketConnection(mesh_core_coord, mesh_core_coord))
+        return connections
+
+    coord_zero = ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 0))
+    return [ttnn.SocketConnection(coord_zero, coord_zero)]
 
 
 def _is_fully_replicated(tensor: "ttnn.Tensor") -> bool:
@@ -235,6 +268,35 @@ class WeightBridge:
             _mpi_send_bytes(_HANDSHAKE_PAYLOAD, self.peer_rank, _HANDSHAKE_TAG_FROM_TTT)
             _mpi_recv_bytes(len(_HANDSHAKE_PAYLOAD), self.peer_rank, _HANDSHAKE_TAG_FROM_TTML)
 
+    def _exchange_mesh_shapes(self) -> tuple[list[int], list[int]]:
+        """Exchange 2D mesh shapes; return ``(sender_shape, receiver_shape)``.
+
+        Both ranks need the same ``SocketConfig`` (the descriptor-exchange
+        in ``MeshSocket::connect_with_peer`` validates the peer's config
+        against the local config), so each side must know both shapes
+        before constructing the socket. The asymmetric case --
+        e.g. ttml on ``[1, 2]`` and ttt on ``[1, 1]`` -- depends on this
+        exchange to land on the same single-connection config on both
+        sides.
+        """
+        local_shape = _shape_to_list(self.device.shape)
+        if len(local_shape) != 2:
+            raise ValueError(
+                f"WeightBridge: only 2D meshes are supported (got local mesh_shape={local_shape}); "
+                f"line topologies should be expressed as [1, N] or [N, 1]."
+            )
+        payload = struct.pack("<II", int(local_shape[0]), int(local_shape[1]))
+        if self.role == _ROLE_TTML:
+            _mpi_send_bytes(payload, self.peer_rank, _SHAPE_TAG_FROM_TTML)
+            peer_bytes = _mpi_recv_bytes(_SHAPE_PAYLOAD_BYTES, self.peer_rank, _SHAPE_TAG_FROM_TTT)
+        else:
+            _mpi_send_bytes(payload, self.peer_rank, _SHAPE_TAG_FROM_TTT)
+            peer_bytes = _mpi_recv_bytes(_SHAPE_PAYLOAD_BYTES, self.peer_rank, _SHAPE_TAG_FROM_TTML)
+        peer_shape = list(struct.unpack("<II", peer_bytes))
+        if self.role == _ROLE_TTML:
+            return local_shape, peer_shape
+        return peer_shape, local_shape
+
     def _require_connected(self, op: str) -> "ttnn.MeshSocket":
         if self._socket is None:
             raise RuntimeError(
@@ -254,14 +316,16 @@ class WeightBridge:
         Both ranks must call this exactly once before any transfer.
         The handshake pins both ranks to the same point so the
         ``MeshSocket`` constructor's MPI descriptor exchange does not
-        trip its 10s timeout when pre-work is asymmetric.
+        trip its 10s timeout when pre-work is asymmetric. A subsequent
+        shape exchange lets each side build the same ``SocketConfig``
+        when the two submeshes have different shapes.
         """
         if self._socket is not None:
             return
         self._handshake()
-        mesh_shape = _shape_to_list(self.device.shape)
+        sender_shape, receiver_shape = self._exchange_mesh_shapes()
         socket_config = ttnn.SocketConfig(
-            _make_socket_connection_config(mesh_shape),
+            _make_socket_connection_config(sender_shape, receiver_shape),
             _make_socket_mem_config(),
             sender_rank=TTML_RANK,
             receiver_rank=TTT_RANK,
@@ -358,14 +422,10 @@ class WeightBridge:
         body = _mpi_recv_bytes(int(n), self.peer_rank, _MANIFEST_BODY_TAG)
         manifest = json.loads(body.decode("utf-8"))
 
-        sender_shape = manifest["sender_mesh_shape"]
-        receiver_shape = _shape_to_list(self.device.shape)
-        if sender_shape != receiver_shape:
-            raise RuntimeError(
-                "WeightBridge: ttml and ttt submeshes must have the same shape "
-                "(per-(row, col) socket fan-out pairs coord->coord on each side). "
-                f"ttml mesh {sender_shape} != ttt mesh {receiver_shape}."
-            )
+        # Mesh shapes were already exchanged and the SocketConfig
+        # negotiated in connect(); the manifest still carries
+        # ``sender_mesh_shape`` for forward compatibility / debugging
+        # but the receiver does not need to consume it.
 
         hf_dict: dict[str, ttnn.Tensor] = {}
         for entry in manifest["entries"]:

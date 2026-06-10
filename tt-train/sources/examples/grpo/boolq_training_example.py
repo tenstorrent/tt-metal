@@ -13,7 +13,7 @@ from ttml.common.config import DeviceConfig, TrainingConfig, get_model_config, l
 from ttml.common.utils import get_tt_metal_runtime_root
 from ttml.trainers import GRPOTrainer, TrainerCallback, get_grpo_config
 from utils.llama_completer import LlamaCompletionCtx
-from utils.llama_completer import LlamaGRPOCompleter
+from utils.llama_completer_stub import LlamaGRPOCompleter
 
 
 class GRPOMonitor(TrainerCallback):
