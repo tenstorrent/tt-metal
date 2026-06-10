@@ -4,7 +4,7 @@
 
 // Compute for indexer_score. Per work unit (q_tiles_per_unit q-tile-rows x
 // k_tiles_in_unit k-tiles):
-//   acc[r,c](fp32) = sum_h relu(q[h,row,:] @ k[col,:]^T) * w[h,row]
+//   acc[r,c] = sum_h relu(q[h,row,:] @ k[col,:]^T) * w[h,row]
 //   tile on the causal diagonal: += -inf strict upper triangle; past it: full -inf
 //   pack_untilize acc -> bf16 row-major out, (r, c) row-major order
 // Heads stream in heads_per_group groups, heads_per_dest_pass rows per DEST
@@ -162,7 +162,7 @@ void add_mask(uint32_t idx) {
 }
 
 /**
- * out_cb = untilize(acc front), fp32 tile -> bf16 row-major
+ * out_cb = untilize(acc front) -> bf16 row-major
  */
 template <uint32_t acc_cb, uint32_t out_cb>
 void untilize_to_out() {

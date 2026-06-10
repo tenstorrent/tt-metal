@@ -121,7 +121,9 @@ resident: 512K q + 128K w + 256K k + 64K acc + 64K out ≈ 1.0 MB.
 ## Formats / fidelity
 
 - inputs bf16; `k` as bfp8_b is the biggest lever (halves k BW, Kt→32, LoFi).
-- DEST fp32 (`fp32_dest_acc_en`): 64-head sum, feeds discrete top-k cut.
+- DEST bf16 (default): 8-head subblocks in half-sync, PCC ≥ 0.999 holds for
+  the 64-head sum; fp32 DEST (`fp32_dest_acc_en`, 4-head subblocks) kept as a
+  compile-time fallback if top-k cuts ever need it.
 - HiFi2 (reference scores fp8; selection-only). HiFi4 first PCC bring-up only.
 - Output bf16; w stays bf16 (scales fp32-side in DEST).
 
@@ -153,11 +155,12 @@ with the same loop, so there are no segment tables. Compile args common to all
 kernels: `Hi, Sqt, Tt, Dt, chunk_t, QC, KC, HB`; TensorAccessor args appended
 for reader (q/k/w) and writer (out, page = T·2 bytes).
 
-ComputeConfig: HiFi4, `fp32_dest_acc_en`, half-sync. The qk subblock height
-HP comes from SDPA's `determine_largest_subblock_size(HB, 1, dst_size)`
-(`sdpa_subblock_utils.hpp`) with SDPA's `dst_size = fp32 ? 4 : 8` → `{4, 1}`
+ComputeConfig: HiFi4, bf16 DEST, half-sync. The qk subblock height HP comes
+from SDPA's `determine_largest_subblock_size(HB, 1, dst_size)`
+(`sdpa_subblock_utils.hpp`) with SDPA's `dst_size = fp32 ? 4 : 8` → `{8, 1}`
 at 64 heads, passed to compute as CT arg 8. Half-sync lets pack drain one
-DEST half while math fills the other; bf16 DEST would auto-yield HP=8.
+DEST half while math fills the other; flipping `fp32_dest_acc_en` back on
+(factory constant) drops HP to 4 and the qk/mul/acc CBs go fp32.
 
 ### CBs
 
@@ -167,9 +170,9 @@ DEST half while math fills the other; bf16 DEST would auto-yield HP=8.
 | c_1 k | k chunk, double buffered | `2·KC·Dt` bf16 |
 | c_2 w | resident w group `[QC][Hi]` | `Hi·QC` bf16 |
 | c_3 mask | [diag strict-upper, full] −inf tiles, persistent | 2 bf16 |
-| c_24 qk | per-subblock relu(q·kᵀ) | `2·HP` fp32 |
-| c_25 mul | relu·w contributions | `2·HP` fp32 |
-| c_26 acc | accumulator ping-pong | `2·QC·KC` fp32 |
+| c_24 qk | per-subblock relu(q·kᵀ) | `2·HP` DEST fmt |
+| c_25 mul | relu·w contributions | `2·HP` DEST fmt |
+| c_26 acc | accumulator ping-pong | `2·QC·KC` DEST fmt |
 | c_16 out | untilized output | `2·KC` bf16 |
 | c_17 scratch | writer-only −inf source | 1 bf16 |
 

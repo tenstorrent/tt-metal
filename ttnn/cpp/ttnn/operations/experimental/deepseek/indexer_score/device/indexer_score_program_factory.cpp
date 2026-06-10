@@ -59,7 +59,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     TT_FATAL(HB > 0 && Hi % HB == 0, "head_group_size {} must divide Hi {}", HB, Hi);
 
     // qk matmul subblock: heads are output rows, k column is 1 tile wide (SDPA-style)
-    constexpr bool fp32_dest_acc_en = true;
+    constexpr bool fp32_dest_acc_en = false;  // bf16 DEST: 8-head subblocks in half-sync
     constexpr uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;  // half-sync, as in sdpa_program_factory
     const auto [qk_subblock_h, qk_subblock_w] = ttnn::prim::detail::determine_largest_subblock_size(HB, 1, dst_size);
     TT_FATAL(HB % qk_subblock_h == 0, "head group {} must be divisible by qk_subblock_h={}", HB, qk_subblock_h);
@@ -96,9 +96,9 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     constexpr uint32_t cb_k = CBIndex::c_1;       // k chunk, double buffered
     constexpr uint32_t cb_w = CBIndex::c_2;       // resident w group: Hi*QC tiles
     constexpr uint32_t cb_mask = CBIndex::c_3;    // [diag -inf, full -inf], persistent
-    constexpr uint32_t cb_qk = CBIndex::c_24;     // relu(q.kT) per subblock, fp32
-    constexpr uint32_t cb_mul = CBIndex::c_25;    // relu*w per subblock, fp32
-    constexpr uint32_t cb_acc = CBIndex::c_26;    // unit accumulator ring, fp32
+    constexpr uint32_t cb_qk = CBIndex::c_24;     // relu(q.kT) per subblock
+    constexpr uint32_t cb_mul = CBIndex::c_25;    // relu*w per subblock
+    constexpr uint32_t cb_acc = CBIndex::c_26;    // unit accumulator ring
     constexpr uint32_t cb_out = CBIndex::c_16;    // untilized bf16 tiles
     constexpr uint32_t cb_scratch = CBIndex::c_17;  // writer-only -inf scratch
 
@@ -106,9 +106,11 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     make_cb(cb_k, 2 * KC * Dt, DataFormat::Float16_b, bf16_tile);
     make_cb(cb_w, Hi * QC, DataFormat::Float16_b, bf16_tile);
     make_cb(cb_mask, 2, DataFormat::Float16_b, bf16_tile);
-    make_cb(cb_qk, 2 * qk_subblock_h, DataFormat::Float32, fp32_tile);
-    make_cb(cb_mul, 2 * qk_subblock_h, DataFormat::Float32, fp32_tile);
-    make_cb(cb_acc, 2 * QC * KC, DataFormat::Float32, fp32_tile);
+    const DataFormat acc_fmt = fp32_dest_acc_en ? DataFormat::Float32 : DataFormat::Float16_b;
+    const uint32_t acc_tile = fp32_dest_acc_en ? fp32_tile : bf16_tile;
+    make_cb(cb_qk, 2 * qk_subblock_h, acc_fmt, acc_tile);
+    make_cb(cb_mul, 2 * qk_subblock_h, acc_fmt, acc_tile);
+    make_cb(cb_acc, 2 * QC * KC, acc_fmt, acc_tile);
     make_cb(cb_out, 2 * KC, DataFormat::Float16_b, bf16_tile);
     make_cb(cb_scratch, 1, DataFormat::Float16_b, bf16_tile);
 
