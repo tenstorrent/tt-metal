@@ -68,7 +68,7 @@ logger.critical("Critical message: unrecoverable error condition")  # logger.cri
 ## logging in CPP
 
 ### verbosity setup cpp
-Setup console environment with `TT_LOGGER_LEVEL`:
+Set the C++ log verbosity with `TT_LOGGER_LEVEL` (case-insensitive; common values: trace, debug, info, warn/warning, error, critical/fatal, off):
 
 | level | command | filtering |
 | --- | --- | --- |
