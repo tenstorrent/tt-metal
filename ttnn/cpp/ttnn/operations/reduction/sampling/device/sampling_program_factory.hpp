@@ -40,6 +40,9 @@ struct SamplingProgramFactory {
         tt::tt_metal::TensorSpec output_spec;
         CoreCoord grid;
         std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
+        // Architecture is structural: it selects the index intermediate width (Int32 on Quasar,
+        // UInt16 on WH/BH) and the compute kernel's fp32_dest_acc_en, so it belongs in the key.
+        tt::ARCH arch = tt::ARCH::Invalid;
 
         static constexpr auto attribute_names = std::forward_as_tuple(
             "input_values_spec",
@@ -49,10 +52,19 @@ struct SamplingProgramFactory {
             "temp_spec",
             "output_spec",
             "grid",
-            "sub_core_grids");
+            "sub_core_grids",
+            "arch");
         auto attribute_values() const {
             return std::forward_as_tuple(
-                input_values_spec, input_indices_spec, k_spec, p_spec, temp_spec, output_spec, grid, sub_core_grids);
+                input_values_spec,
+                input_indices_spec,
+                k_spec,
+                p_spec,
+                temp_spec,
+                output_spec,
+                grid,
+                sub_core_grids,
+                arch);
         }
     };
 

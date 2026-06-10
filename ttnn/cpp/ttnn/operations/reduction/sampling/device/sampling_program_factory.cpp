@@ -78,6 +78,7 @@ struct SamplingDerived {
     uint32_t k_chunk_size = 0;
     uint32_t p_chunk_size = 0;
     uint32_t temp_chunk_size = 0;
+    bool use_32bit_index = false;
 
     CoreRangeSet core_grid;
     std::vector<CoreCoord> cores;
@@ -87,9 +88,15 @@ struct SamplingDerived {
 // grid + the optional sub-core grid. No live Tensor, no addresses, no seed.
 SamplingDerived derive_from_info(const immutable_info_t& info) {
     SamplingDerived derived;
+    // The bitonic top-k LLK carries sort indices through the dest register, and the index load/store
+    // width is tied to fp32_dest_acc_en (INT32 when enabled, LO16 otherwise). WH/BH use the cheaper
+    // 16-bit (UInt16) path with fp32 dest accumulation disabled; every other architecture (e.g. Quasar,
+    // which also lacks UInt16/UInt32 DFB metadata support) uses 32-bit (Int32) index intermediates with
+    // fp32 dest accumulation enabled. Gated on !(WH || BH) so new architectures default to 32-bit.
+    derived.use_32bit_index = !(info.arch == tt::ARCH::WORMHOLE_B0 || info.arch == tt::ARCH::BLACKHOLE);
     derived.input_values_df = datatype_to_dataformat_converter(info.input_values_spec.data_type());
     derived.input_indices_df = datatype_to_dataformat_converter(info.input_indices_spec.data_type());
-    derived.index_df = tt::DataFormat::UInt16;
+    derived.index_df = derived.use_32bit_index ? tt::DataFormat::Int32 : tt::DataFormat::UInt16;
     derived.k_df = datatype_to_dataformat_converter(info.k_spec.data_type());
     derived.p_df = datatype_to_dataformat_converter(info.p_spec.data_type());
     derived.temp_df = datatype_to_dataformat_converter(info.temp_spec.data_type());
@@ -149,6 +156,7 @@ SamplingProgramFactory::immutable_info_t SamplingProgramFactory::extract_immutab
         .output_spec = std::move(output_spec),
         .grid = tensor_args.input_values.device()->compute_with_storage_grid_size(),
         .sub_core_grids = attrs.sub_core_grids,
+        .arch = tensor_args.input_values.device()->arch(),
     };
 }
 
@@ -204,7 +212,8 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
             {{"Ht", derived.Ht},
              {"Wt", derived.Wt},
              {"final_indices_stick_size", derived.aligned_final_indices_rm_unit_size},
-             {"tile_height", derived.tile_height}},
+             {"tile_height", derived.tile_height},
+             {"use_32bit_index", static_cast<uint32_t>(derived.use_32bit_index)}},
         // Reader on NCRISC (RISCV_1 / NOC1), writer on BRISC — mirrors the legacy Reader/Writer configs
         // so the two data-movement kernels don't collide on the same DM processor.
         .hw_config =
@@ -241,7 +250,9 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
         .compile_time_args =
             {{"Ht", derived.Ht}, {"Wt", derived.Wt}, {"logWt", derived.logWt}, {"tile_width", derived.tile_width}},
         .runtime_arg_schema = {.runtime_arg_names = {"seed"}},
-        .hw_config = m2::ComputeHardwareConfig{},
+        // 32-bit (Int32) sort indices require fp32 dest accumulation so the top-k LLK loads/stores indices
+        // in INT32 mode; the 16-bit (UInt16) path uses LO16 mode with fp32 dest acc off.
+        .hw_config = m2::ComputeHardwareConfig{.fp32_dest_acc_en = derived.use_32bit_index},
     };
 
     m2::KernelSpec writer{
@@ -266,7 +277,8 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
         .compile_time_args =
             {{"final_indices_stick_size", derived.aligned_final_indices_rm_unit_size},
              {"ids_per_batch", derived.tile_width},
-             {"num_cores", derived.num_cores}},
+             {"num_cores", derived.num_cores},
+             {"use_32bit_index", static_cast<uint32_t>(derived.use_32bit_index)}},
         // core_id is a per-core RUNTIME arg, declared enqueue-invariant (it's a function of the grid,
         // identical for every dispatch that shares this cache entry).
         .runtime_arg_schema = {.runtime_arg_names = {"core_id"}},

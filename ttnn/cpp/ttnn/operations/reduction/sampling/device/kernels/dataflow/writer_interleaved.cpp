@@ -4,6 +4,7 @@
 
 #include "api/numeric/bfloat16.h"
 #include <stdint.h>
+#include <type_traits>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -54,6 +55,9 @@ void kernel_main() {
     const uint32_t core_id = get_arg(args::core_id);
     constexpr uint32_t ids_per_batch = get_arg(args::ids_per_batch);
     constexpr uint32_t num_cores = get_arg(args::num_cores);
+    // Local sort-index width must match the index DFB format / fp32_dest_acc_en chosen by the host:
+    // 32-bit (Int32) on Quasar, 16-bit (UInt16) on WH/BH.
+    constexpr bool use_32bit_index = get_arg(args::use_32bit_index) == 1;
     constexpr uint32_t k_chunk_size = num_cores * sizeof(uint32_t);     // 4 bytes per uint32_t
     constexpr uint32_t p_chunk_size = num_cores * sizeof(uint16_t);     // 2 bytes per uint16_t
     constexpr uint32_t temp_chunk_size = num_cores * sizeof(uint16_t);  // 2 bytes per uint16_t
@@ -123,7 +127,8 @@ void kernel_main() {
     // Read producer-written compute outputs from these CBs in L1.
     CoreLocalMem<volatile uint16_t> local_values(cb_local_values.get_read_ptr());
 
-    CoreLocalMem<volatile uint16_t> local_indices(cb_local_indices.get_read_ptr());
+    using local_index_t = std::conditional_t<use_32bit_index, uint32_t, uint16_t>;
+    CoreLocalMem<volatile local_index_t> local_indices(cb_local_indices.get_read_ptr());
 
     CoreLocalMem<volatile uint32_t> final_indices(cb_final_indices.get_read_ptr() + core_id * final_indices_stick_size);
 
