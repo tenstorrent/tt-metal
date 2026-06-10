@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import torch
 import ttnn
 from models.experimental.tt_symbiote.core.module import (
@@ -787,3 +789,528 @@ class TTNNDotsOCRAttention(TTNNModule):
             )
         else:
             return self._forward_prefill(hidden_states, attention_mask, past_key_values, cache_position)
+
+
+# ---------------------------------------------------------------------------
+# TP4 prefill (replicated-hidden Megatron) — self-contained, mirrors the
+# ``vision_tp4_bh`` pattern for the text decoder. These helpers + the
+# ``TTNNDotsOCRAttentionTP4Prefill`` class are the in-module TP4 attention body
+# used by the ``DOTS_OCR_TEXT_BODY=tp4_prefill`` pipeline path (no external
+# package dependency). They are shared with the TP4 prefill MLP in
+# ``dots_ocr_mlp.py`` (imported from here to avoid duplication).
+# ---------------------------------------------------------------------------
+
+
+def tp4_lossy_matmul_dtype() -> ttnn.DataType:
+    """Weight dtype for the TP4 matmuls that use BFP4 in the production recipe.
+
+    Default ``bfloat4_b`` (fastest). ``DOTS_OCR_TP4_HI_PRECISION`` opts into a
+    higher-precision weight to recover accuracy on low-confidence tokens at a
+    bandwidth/speed cost. Affects gate/up (early layers), down, and o_proj; qkv
+    is already BFP8. Values: unset/"0" -> bfloat4_b; "1"/"bf8" -> bfloat8_b;
+    "bf16" -> bfloat16 (max-accuracy diagnostic).
+    """
+    v = os.environ.get("DOTS_OCR_TP4_HI_PRECISION", "0").strip().lower()
+    if v in {"bf16", "bfloat16"}:
+        return ttnn.bfloat16
+    if v in {"1", "true", "yes", "on", "bf8", "bfloat8", "bfloat8_b"}:
+        return ttnn.bfloat8_b
+    return ttnn.bfloat4_b
+
+
+def _tp4_mesh_num_devices(mesh_device) -> int:
+    if mesh_device is None or not hasattr(mesh_device, "get_num_devices"):
+        return 1
+    return int(mesh_device.get_num_devices())
+
+
+def _tp4_cluster_axis(mesh_device) -> int:
+    """Cluster axis the TP shards live on (the >1 dim of a 1xN / Nx1 mesh)."""
+    shape = [int(x) for x in mesh_device.shape]
+    return 0 if (len(shape) == 2 and shape[0] > 1 and shape[1] == 1) else 1
+
+
+def _tp4_matmul_m_dim(x) -> int:
+    """Folded M dimension (product of all dims but the last) of a tensor."""
+    s = x.shape
+    m = 1
+    for i in range(len(s) - 1):
+        m *= int(s[i])
+    return m
+
+
+def _tp4_all_reduce(t: ttnn.Tensor, mesh_device, num_links: int = 1, output_memory_config=None) -> ttnn.Tensor:
+    """All-reduce a ``[.., N]`` full-width partial-sum tensor across the TP axis.
+
+    Implemented as reduce_scatter + all_gather (the proven 1x4-ring pattern on
+    this host). ``output_memory_config`` selects where the gathered result lands
+    (default DRAM; pass L1 for decode so the replicated hidden stays resident).
+    Returns a replicated full-N tensor.
+    """
+    nd = _tp4_mesh_num_devices(mesh_device)
+    if nd <= 1:
+        return t
+    out_mc = output_memory_config or ttnn.DRAM_MEMORY_CONFIG
+    orig_shape = list(t.shape)
+    work = t
+    if len(work.shape) < 4:
+        work = ttnn.reshape(work, [1] * (4 - len(work.shape)) + orig_shape)
+    axis = _tp4_cluster_axis(mesh_device)
+    scattered = ttnn.reduce_scatter(
+        work,
+        dim=3,
+        num_links=num_links,
+        cluster_axis=axis,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        topology=ttnn.Topology.Linear,
+    )
+    gathered = ttnn.all_gather(
+        scattered,
+        dim=3,
+        num_links=num_links,
+        cluster_axis=axis,
+        memory_config=out_mc,
+        topology=ttnn.Topology.Linear,
+    )
+    ttnn.deallocate(scattered)
+    if len(orig_shape) < 4:
+        gathered = ttnn.reshape(gathered, orig_shape[:-1] + [int(gathered.shape[-1])])
+    return gathered
+
+
+def _tp4_to_replicated(torch_tensor: torch.Tensor, mesh_device, dtype, layout=ttnn.TILE_LAYOUT):
+    """Send a torch tensor to device replicated on every chip."""
+    mapper = ttnn.ReplicateTensorToMesh(mesh_device) if _tp4_mesh_num_devices(mesh_device) > 1 else None
+    return ttnn.from_torch(
+        torch_tensor,
+        dtype=dtype,
+        layout=layout,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mapper,
+    )
+
+
+def _tp4_shard_to_mesh(torch_tensor: torch.Tensor, mesh_device, dim: int, dtype, layout=ttnn.TILE_LAYOUT):
+    """Send a torch tensor to device sharded along ``dim`` across the chips."""
+    if _tp4_mesh_num_devices(mesh_device) <= 1:
+        return ttnn.from_torch(
+            torch_tensor, dtype=dtype, layout=layout, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+    return ttnn.from_torch(
+        torch_tensor,
+        dtype=dtype,
+        layout=layout,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=dim),
+    )
+
+
+def _tp4_largest_divisor_leq(n: int, cap: int) -> int:
+    for d in range(min(n, cap), 0, -1):
+        if n % d == 0:
+            return d
+    return 1
+
+
+def tp4_prefill_matmul_2d_config(mesh_device, m: int, k: int, n: int, fp32_dest: bool = False):
+    """Adaptive 2D-mcast matmul program config for a per-chip prefill matmul
+    ``[M,K] x [K,N]``. Returns ``None`` for shapes that aren't tile-aligned or
+    for decode (M<=tile) so the caller falls back to the auto heuristic.
+
+    With an interleaved (mcast) in0 the 2D kernel only needs ``gy | M_tiles``,
+    ``gx | N_tiles`` and ``in0_block_w | K_tiles`` — so it works for the awkward
+    TP-sharded N/K that the auto heuristic degrades to ``in0_block_w=1`` on.
+    """
+    if m % 32 or k % 32 or n % 32:
+        return None
+    mt, kt, nt = m // 32, k // 32, n // 32
+    if mt <= 1:
+        return None
+    grid = mesh_device.compute_with_storage_grid_size()
+    gy = _tp4_largest_divisor_leq(mt, grid.y)
+    gx = _tp4_largest_divisor_leq(nt, grid.x)
+    per_core_m = mt // gy
+    per_core_n = nt // gx
+    in0_block_w = 1
+    for d in (8, 7, 6, 5, 4, 3, 2):
+        if kt % d == 0:
+            in0_block_w = d
+            break
+    if in0_block_w == 1:
+        in0_block_w = kt  # K-tiles prime; do the whole K in one block
+    # L1 budget guard: a prime M-tile count (e.g. 89 -> gy=1, per_core_M=89)
+    # blows past L1; estimate the CB footprint and fall back to auto rather than
+    # crash.
+    TILE_BYTES = 32 * 32 * 2  # bf16 tile; conservative upper bound
+    in0_cb = per_core_m * in0_block_w * TILE_BYTES * 2  # double-buffered
+    in1_cb = in0_block_w * per_core_n * TILE_BYTES * 2
+    out_cb = per_core_m * per_core_n * TILE_BYTES
+    if in0_cb + in1_cb + out_cb > 1_300_000:  # headroom under the 1.5MB L1
+        return None
+
+    dst = 4 if fp32_dest else 8
+    out_subblock_w = _tp4_largest_divisor_leq(per_core_n, min(4, dst))
+    out_subblock_h = 1
+    while out_subblock_h * 2 * out_subblock_w <= dst and per_core_m % (out_subblock_h * 2) == 0:
+        out_subblock_h *= 2
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        out_block_h=per_core_m,
+        out_block_w=per_core_n,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )
+
+
+class TTNNDotsOCRAttentionTP4Prefill(TTNNModule):
+    """TP4 GQA attention for dots.ocr prefill (replicated-hidden Megatron design).
+
+    Head sharding with GQA (heads=12, kv_heads=2, head_dim=128) across nd=4 chips:
+      - ``q_heads_per_chip`` Q-heads per chip (12/4 = 3).
+      - Each chip holds the single KV head its Q-heads attend to, so per-chip the
+        layout is pure MHA with ``num_heads=3``, ``num_kv_heads=1``.
+      - qkv_proj column-parallel: per-chip fused weight ``[Q3 | K1 | V1]`` sharded
+        along the output dim across chips.
+      - o_proj row-parallel: weight sharded along the contraction dim, partial
+        sums all-reduced to the full replicated hidden.
+
+    Input  x   : replicated ``[B, S, H]``
+    Output out : replicated ``[B, S, H]``
+
+    Self-contained, symbiote-native TP4 prefill attention body (no external
+    package dependency).
+    """
+
+    def __init__(self, mesh_device, config, layer_idx=0, weight_dtype=ttnn.bfloat16):
+        super().__init__()
+        self.mesh_device = mesh_device
+        self.config = config
+        self.layer_idx = layer_idx
+        self.weight_dtype = weight_dtype
+        self.num_devices = max(1, _tp4_mesh_num_devices(mesh_device))
+
+        self.num_heads = config.num_attention_heads
+        self.num_kv_heads = config.num_key_value_heads
+        self.head_dim = config.head_dim
+        self.hidden_size = config.hidden_size
+        self.scaling = self.head_dim**-0.5
+
+        nd = self.num_devices
+        assert self.num_heads % nd == 0, f"heads {self.num_heads} not divisible by {nd}"
+        self.q_heads_per_chip = self.num_heads // nd
+        self.kv_groups = self.num_heads // self.num_kv_heads
+        assert (
+            self.kv_groups % self.q_heads_per_chip == 0
+        ), "a chip's Q-heads must stay within one KV group for single-KV-head sharding"
+        self.kv_heads_per_chip = 1
+
+        self.qkv_w = None
+        self.qkv_bias = None
+        self.o_w = None
+        self.o_bias = None
+        self._rotary_setup = None
+
+        # Precision recipe matched to the production dots.ocr prefill profile:
+        #   qkv : BF16 x BFP8 -> BF16 @ HiFi2
+        #   o   : BF16 x BFP4 -> BFP8 @ LoFi
+        #   sdpa: BF16 @ HiFi2
+        # QKV is the most precision-sensitive matmul: it produces the K/V cached
+        # for the whole prompt, which the (low-confidence) first generated token
+        # attends to. Default BFP8 (matches the symbiote QKV precision); a
+        # full-bf16 high-precision request (DOTS_OCR_TP4_HI_PRECISION=bf16)
+        # promotes it to bf16 so the cached K/V approach the FP reference.
+        self.qkv_weight_dtype = ttnn.bfloat16 if tp4_lossy_matmul_dtype() == ttnn.bfloat16 else ttnn.bfloat8_b
+        self.o_weight_dtype = tp4_lossy_matmul_dtype()
+        self.qkv_compute = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        self.o_compute = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        self.sdpa_program_config = None
+        # Decode SDPA program config (q/k chunk 0 -> kernel picks per cur_pos).
+        self._sdpa_decode_program_config = None
+        self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+    @classmethod
+    def from_torch(cls, mesh_device, config, torch_attn, layer_idx=0, weight_dtype=ttnn.bfloat16):
+        m = cls(mesh_device, config, layer_idx=layer_idx, weight_dtype=weight_dtype)
+        m.load_weights(torch_attn)
+        m.to_device(mesh_device)
+        # Weights are sharded to device in load_weights (construction-time), so the
+        # TTNNModule weight lifecycle is already satisfied -- mark it ready.
+        m._preprocessed_weight = True
+        m._weights_on_device = True
+        return m
+
+    def _chip_kv_index(self, chip: int) -> int:
+        """Which KV head this chip's Q-heads attend to."""
+        first_q_head = chip * self.q_heads_per_chip
+        return first_q_head // self.kv_groups
+
+    def load_weights(self, torch_attn):
+        nd = self.num_devices
+        hd = self.head_dim
+        qhpc = self.q_heads_per_chip
+
+        q_w = torch_attn.q_proj.weight.data  # [q_size, H]
+        k_w = torch_attn.k_proj.weight.data  # [kv_size, H]
+        v_w = torch_attn.v_proj.weight.data  # [kv_size, H]
+        has_bias = getattr(torch_attn.q_proj, "bias", None) is not None
+        q_b = torch_attn.q_proj.bias.data if has_bias else None
+        k_b = torch_attn.k_proj.bias.data if has_bias else None
+        v_b = torch_attn.v_proj.bias.data if has_bias else None
+
+        # Build the stacked per-chip fused QKV weight: rows ordered
+        # [chip0(Q3|K1|V1) ; chip1(...) ; ...], shape [nd*(qhpc+2)*hd, H].
+        w_blocks = []
+        b_blocks = []
+        for c in range(nd):
+            kv = self._chip_kv_index(c)
+            q_rows = q_w[c * qhpc * hd : (c + 1) * qhpc * hd]  # [qhpc*hd, H]
+            k_rows = k_w[kv * hd : (kv + 1) * hd]  # [hd, H]
+            v_rows = v_w[kv * hd : (kv + 1) * hd]  # [hd, H]
+            w_blocks.append(torch.cat([q_rows, k_rows, v_rows], dim=0))
+            if has_bias:
+                qb = q_b[c * qhpc * hd : (c + 1) * qhpc * hd]
+                kb = k_b[kv * hd : (kv + 1) * hd]
+                vb = v_b[kv * hd : (kv + 1) * hd]
+                b_blocks.append(torch.cat([qb, kb, vb], dim=0))
+
+        fused_w = torch.cat(w_blocks, dim=0)  # [nd*(qhpc+2)*hd, H]
+        # ttnn.linear wants [K=H, N]; transpose then shard the N dim across chips.
+        self.qkv_w = _tp4_shard_to_mesh(fused_w.t().contiguous(), self.mesh_device, dim=-1, dtype=self.qkv_weight_dtype)
+        if has_bias:
+            fused_b = torch.cat(b_blocks, dim=0).reshape(1, -1)  # [1, nd*(qhpc+2)*hd]
+            self.qkv_bias = _tp4_shard_to_mesh(fused_b, self.mesh_device, dim=-1, dtype=ttnn.bfloat16)
+
+        # o_proj row-parallel: weight [H, q_size]; shard the contraction dim
+        # (q_size) which lines up 1:1 with the per-chip Q-head columns.
+        o_w = torch_attn.o_proj.weight.data  # [H, q_size]
+        self.o_w = _tp4_shard_to_mesh(o_w.t().contiguous(), self.mesh_device, dim=0, dtype=self.o_weight_dtype)
+        o_has_bias = getattr(torch_attn.o_proj, "bias", None) is not None
+        if o_has_bias:
+            # o_proj bias is added once to the full (reduced) output -> replicate.
+            self.o_bias = _tp4_to_replicated(
+                torch_attn.o_proj.bias.data.reshape(1, -1), self.mesh_device, dtype=ttnn.bfloat16
+            )
+
+        self._rotary_setup = BailingRotarySetup(
+            device=self.mesh_device,
+            head_dim=self.head_dim,
+            max_seq_len=self.config.max_position_embeddings,
+            rope_theta=self.config.rope_theta,
+            partial_rotary_factor=1.0,
+            rope_convention="half_half",
+        )
+
+        # Decode SDPA program config (q/k chunk 0 -> kernel picks per cur_pos).
+        # Prefill SDPA config: hardware-swept on BH P150x4 for the per-chip
+        # q[1,3,S,128]/kv[1,1,S,128] causal shape -> grid 8x10, q_chunk=128,
+        # k_chunk=256. exp_approx off to preserve PCC. Needs a >=8x10 grid;
+        # otherwise leave the auto-config (None).
+        try:
+            grid = self.mesh_device.compute_with_storage_grid_size()
+            self._sdpa_decode_program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(grid.x, grid.y),
+                q_chunk_size=0,
+                k_chunk_size=0,
+                exp_approx_mode=False,
+            )
+            if int(grid.x) >= 8 and int(grid.y) >= 10:
+                self.sdpa_program_config = ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(8, 10),
+                    q_chunk_size=128,
+                    k_chunk_size=256,
+                    exp_approx_mode=False,
+                )
+        except Exception:
+            self._sdpa_decode_program_config = None
+
+    def _project_qkv_heads(self, x, batch_size, seq_len, heads_mem_config):
+        """qkv linear (+bias) -> per-chip [Q3 | K1 | V1] -> create heads."""
+        qkv_pc = tp4_prefill_matmul_2d_config(
+            self.mesh_device, _tp4_matmul_m_dim(x), int(x.shape[-1]), int(self.qkv_w.shape[-1]), fp32_dest=False
+        )
+        qkv = ttnn.linear(
+            x,
+            self.qkv_w,
+            bias=self.qkv_bias,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.qkv_compute,
+            program_config=qkv_pc,
+        )
+        qkv = ttnn.reshape(qkv, (batch_size, 1, seq_len, -1))
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv,
+            num_heads=self.q_heads_per_chip,
+            num_kv_heads=self.kv_heads_per_chip,
+            transpose_k_heads=False,
+            memory_config=heads_mem_config,
+        )
+        ttnn.deallocate(qkv)
+        return q, k, v
+
+    def _o_proj_all_reduce(self, attn):
+        # Decode (seq==1) keeps the o_proj matmul + all-reduce L1-resident.
+        is_decode = int(attn.shape[-2]) == 1
+        out_mc = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
+        o_pc = tp4_prefill_matmul_2d_config(
+            self.mesh_device, _tp4_matmul_m_dim(attn), int(attn.shape[-1]), int(self.o_w.shape[-1]), fp32_dest=False
+        )
+        out = ttnn.linear(
+            attn,
+            self.o_w,
+            dtype=ttnn.bfloat8_b,
+            memory_config=out_mc,
+            compute_kernel_config=self.o_compute,
+            program_config=o_pc,
+        )
+        ttnn.deallocate(attn)
+        out = _tp4_all_reduce(out, self.mesh_device, output_memory_config=out_mc)
+        if self.o_bias is not None:
+            out = ttnn.add(out, self.o_bias, memory_config=out_mc)
+        return out
+
+    def forward(self, x: ttnn.Tensor, past_key_value=None, cache_position=None) -> ttnn.Tensor:
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        seq_len = int(x.shape[-2])
+        if past_key_value is not None and seq_len == 1:
+            return self._forward_decode(x, past_key_value, cache_position)
+        return self._forward_prefill(x, past_key_value)
+
+    def _forward_prefill(self, x: ttnn.Tensor, past_key_value=None) -> ttnn.Tensor:
+        batch_size = int(x.shape[0])
+        seq_len = int(x.shape[-2])
+
+        q, k, v = self._project_qkv_heads(x, batch_size, seq_len, ttnn.DRAM_MEMORY_CONFIG)
+
+        cos, sin = self._rotary_setup.get_cos_sin_for_prefill(seq_len)
+        q = ttnn.experimental.rotary_embedding(q, cos, sin)
+        k = ttnn.experimental.rotary_embedding(k, cos, sin)
+
+        # ``rotary_embedding`` materializes the tile-padded seq dim, so for a
+        # non-tile-multiple ``seq_len`` Q/K come back padded while V (no rotary)
+        # stays at ``seq_len`` -- SDPA then rejects the K/V length mismatch. Slice
+        # Q/K back to the real ``seq_len`` (no-op when already tile-aligned).
+        if int(q.shape[2]) != seq_len:
+            q = q[:, :, :seq_len, :]
+        if int(k.shape[2]) != seq_len:
+            k = k[:, :, :seq_len, :]
+
+        # Populate the paged KV cache (per chip: this chip's 1 KV head, rotated K
+        # + raw V) so decode can read it. The cache adapter mirrors the per-chip
+        # KV head into the symbiote two-KV-head decode cache.
+        if past_key_value is not None:
+            past_key_value.paged_fill_on_device(k, v, layer_idx=self.layer_idx, batch_idx=0)
+
+        attn = ttnn.transformer.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            is_causal=True,
+            scale=self.scaling,
+            program_config=self.sdpa_program_config,
+            compute_kernel_config=self.sdpa_compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
+
+        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn = ttnn.squeeze(attn, 1)  # [B, S, q_heads_per_chip*head_dim]
+        return self._o_proj_all_reduce(attn)
+
+    def _forward_decode(self, x: ttnn.Tensor, past_key_value, cache_position) -> ttnn.Tensor:
+        """Single-token decode reading/writing the paged KV cache (per chip).
+
+        Only used when the full TP4 body drives decode (``DOTS_OCR_TEXT_BODY=tp4``);
+        in ``tp4_prefill`` mode decode runs on the symbiote stack instead.
+        """
+        batch_size = int(x.shape[0])
+        cur_pos = cache_position  # ttnn int32 [batch] = position of the new token
+
+        q, k, v = self._project_qkv_heads(x, batch_size, 1, ttnn.DRAM_MEMORY_CONFIG)
+
+        cos, sin = self._rotary_setup.get_cos_sin_for_decode(cur_pos)
+        q = ttnn.experimental.rotary_embedding(q, cos, sin)
+        k = ttnn.experimental.rotary_embedding(k, cos, sin)
+
+        # rotary_embedding materializes the tile-padded seq dim (S=1 -> 32); slice
+        # it back to the single decode token before the paged kernels, otherwise
+        # the permute leaves a 32-tall seq that over-shards K/V.
+        if int(q.shape[2]) != 1:
+            q = q[:, :, :1, :]
+        if int(k.shape[2]) != 1:
+            k = k[:, :, :1, :]
+
+        # [B, H, S=1, D] -> [S=1, B, H, D] for the paged kernels.
+        q = ttnn.permute(q, (2, 0, 1, 3))
+        kv_key = ttnn.permute(k, (2, 0, 1, 3))
+        kv_value = ttnn.permute(v, (2, 0, 1, 3))
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
+
+        # Height-shard K/V for paged_update (it requires sharded input). One batch
+        # per core; the per-core shard is [TILE, head_dim] holding this chip's
+        # single KV head (padded to a tile). Use the explicit shard-shape form so
+        # 1 KV head -> exactly 1 shard.
+        shard_cfg = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, self.head_dim),
+            core_grid=ttnn.CoreGrid(y=1, x=batch_size),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        kv_key = ttnn.to_memory_config(kv_key, shard_cfg)
+        kv_value = ttnn.to_memory_config(kv_value, shard_cfg)
+        past_key_value.paged_update_on_device(kv_key, kv_value, layer_idx=self.layer_idx, current_pos=cur_pos)
+        ttnn.deallocate(kv_key)
+        ttnn.deallocate(kv_value)
+
+        attn = past_key_value.paged_sdpa_decode(
+            q,
+            self.layer_idx,
+            current_pos=cur_pos,
+            scale=self.scaling,
+            program_config=self._sdpa_decode_program_config,
+            compute_kernel_config=self.sdpa_compute_kernel_config,
+        )
+        ttnn.deallocate(q)
+
+        # [S=1, B, H, D] -> concat heads -> [1, 1, B, H*D]
+        sdpa_out_memcfg = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, self.head_dim),
+            core_grid=ttnn.CoreGrid(y=1, x=batch_size),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        attn = ttnn.to_memory_config(attn, sdpa_out_memcfg)
+        attn = ttnn.experimental.nlp_concat_heads_decode(attn, num_heads=self.q_heads_per_chip)
+        attn = ttnn.to_memory_config(attn, ttnn.L1_MEMORY_CONFIG)
+        attn = ttnn.slice(attn, [0, 0, 0, 0], [1, 1, batch_size, int(attn.shape[-1])])
+        attn = ttnn.squeeze(attn, 1)  # [1, B, H*D]
+        return self._o_proj_all_reduce(attn)

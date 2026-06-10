@@ -33,9 +33,12 @@ from models.experimental.tt_symbiote.modules.attention import (
     dp_batch_shard_tensor_mapper,
 )
 from models.experimental.tt_symbiote.modules.dots_ocr_decoder_layer import (
+    DotsOCRTextConfig,
     TTNNDotsOCRDecoderLayer,
     TTNNDotsOCRLayerStack,
     TTNNDotsOCRLocalShardRMSNorm,
+    TTNNDotsOCRPrefillStackTP4,
+    TTNNDotsOCRRMSNormTP4,
 )
 from models.experimental.tt_symbiote.modules.dots_ocr_vision import TTNNDotsOCRVisionTower
 from models.experimental.tt_symbiote.modules.embedding import TTNNEmbedding
@@ -114,7 +117,7 @@ def _text_body_from_env() -> str:
 
     ``symbiote`` is the existing hidden-sharded ``TTNNDotsOCRLayerStack``
     (``row`` / ``col_parallel`` schemes). ``tp4`` swaps in the head-local
-    replicated-hidden Megatron body from ``models.experimental.dots_ocr_tp4`` --
+    replicated-hidden Megatron body (``TTNNDotsOCRPrefillStackTP4``) --
     its prefill is ~4x lighter on SDPA (3 Q-heads / 1 KV-head per chip, no
     QKV gather) so the prefill is much faster. Both prefill and decode run on
     that body (they must share one KV-cache layout: ``num_kv_heads=1`` per chip),
@@ -153,8 +156,8 @@ def _all_gather_hidden_to_full(t: ttnn.Tensor, device, hidden_size: int) -> ttnn
     Bridges the symbiote column-sharded hidden stream (embedding / vision scatter
     emit ``H/num_devices`` per chip) to the replicated full-H stream the TP4 body
     consumes. No-op when the tensor is already full-width or the mesh is single
-    device. Mirrors ``dots_ocr_tp4.tt.common.all_gather_last_dim`` (plain
-    ``ttnn.all_gather``, no worker kwargs -- proven trace-capturable in the TP4
+    device. Uses a plain
+    ``ttnn.all_gather`` (no worker kwargs -- proven trace-capturable in the TP4
     graphs).
     """
     if int(t.shape[-1]) >= int(hidden_size):
@@ -647,6 +650,30 @@ def _create_paged_kv_cache(model_config, device, batch_size: int = 1):
     ).to_device(device)
 
 
+def _create_tp4_paged_kv_cache(
+    config, mesh_device, batch_size: int = 1, block_size: int = 64, max_num_blocks: int = 2048
+):
+    """Paged KV cache sized for the TP4 per-chip layout (in-house port).
+
+    Reuses the proven ``TTNNPagedAttentionKVCache``. The TP4 twist: each chip
+    stores exactly its ONE assigned KV head, so the cache is created with
+    ``num_kv_heads=1`` and allocated per-chip on the mesh. Chips that share a KV
+    head compute identical K/V from the replicated hidden, so their caches agree.
+    Self-contained (in-house; no external package dependency).
+    """
+    paged_cfg = PagedAttentionConfig(block_size=block_size, max_num_blocks=max_num_blocks, batch_size=batch_size)
+    cache = TTNNPagedAttentionKVCache(
+        num_layers=config.num_hidden_layers,
+        num_kv_heads=1,  # per chip: this chip's single assigned KV head
+        head_dim=config.head_dim,
+        config=paged_cfg,
+        device=mesh_device,
+        dtype=torch.bfloat16,
+    )
+    cache.to_device(mesh_device)
+    return cache
+
+
 class _TP4PrefillDecodeCacheAdapter(TTNNPagedAttentionKVCache):
     """Fill TP4 prefill cache and symbiote decode cache from TP4 K/V states.
 
@@ -878,13 +905,15 @@ class TTNNDotsOCRPipeline(TTNNModule):
         use_tp4_decode = text_body == "tp4"
 
         if use_tp4_prefill:
-            # Head-local replicated-hidden Megatron body from dots_ocr_tp4: fast
-            # prefill (3 Q-heads / 1 KV-head per chip, no QKV gather). In
+            # Head-local replicated-hidden Megatron body: fast prefill (3 Q-heads
+            # / 1 KV-head per chip, no QKV gather). The body is now self-contained
+            # inside the tt_symbiote modules (``TTNNDotsOCR*TP4Prefill`` /
+            # ``TTNNDotsOCRPrefillStackTP4`` / ``TTNNDotsOCRRMSNormTP4``), mirroring
+            # the vision ``*TP4BH`` pattern -- no external package dependency. In
             # ``tp4_prefill`` mode only prefill uses this stack; decode stays on
             # the existing symbiote stack and consumes the adapter-filled cache.
-            from models.experimental.dots_ocr_tp4.tt.common import DotsOCRConfig, tp4_lossy_matmul_dtype
-            from models.experimental.dots_ocr_tp4.tt.model import DotsOCRPrefillModelTP4
-            from models.experimental.dots_ocr_tp4.tt.rmsnorm import DotsOCRRMSNormTP4
+            # The config dataclass + TP4 paged-cache factory are in-house too.
+            from models.experimental.tt_symbiote.modules.dots_ocr_attention import tp4_lossy_matmul_dtype
 
             print(
                 f"[dots_ocr] tp4 body lossy-matmul weight dtype (gate/up early + down + o_proj): "
@@ -903,15 +932,15 @@ class TTNNDotsOCRPipeline(TTNNModule):
                     f"({hf_model.config.num_attention_heads}) divisible by num_devices ({num_devices})"
                 )
             print(f"[dots_ocr] text body: {text_body} (tp4 prefill, num_devices={num_devices})")
-            dots_cfg = DotsOCRConfig.from_hf(hf_model.config)
-            prefill_stack = DotsOCRPrefillModelTP4.from_torch(
+            dots_cfg = DotsOCRTextConfig.from_hf(hf_model.config)
+            prefill_stack = TTNNDotsOCRPrefillStackTP4.from_torch(
                 device,
                 dots_cfg,
                 hf_model.model.layers,
                 weight_dtype=ttnn.bfloat16,
             )
             prefill_stack._unique_name = "model.layer_stack_tp4_prefill"
-            prefill_norm = DotsOCRRMSNormTP4.from_torch(device, hf_model.model.norm, eps=dots_cfg.rms_norm_eps)
+            prefill_norm = TTNNDotsOCRRMSNormTP4.from_torch(device, hf_model.model.norm, eps=dots_cfg.rms_norm_eps)
             prefill_norm._unique_name = "model.norm_tp4_prefill"
 
         if use_tp4_decode:
@@ -952,12 +981,8 @@ class TTNNDotsOCRPipeline(TTNNModule):
         # chip (head-sharded across the mesh). Hybrid prefill fills both that
         # cache and the symbiote two-KV-head decode cache.
         if use_tp4_decode:
-            from models.experimental.dots_ocr_tp4.tt.kv_cache import create_paged_kv_cache as _create_tp4_paged_kv_cache
-
             paged_cache = _create_tp4_paged_kv_cache(dots_cfg, device, batch_size=batch_size)
         elif use_tp4_prefill:
-            from models.experimental.dots_ocr_tp4.tt.kv_cache import create_paged_kv_cache as _create_tp4_paged_kv_cache
-
             tp4_paged_cache = _create_tp4_paged_kv_cache(dots_cfg, device, batch_size=batch_size)
             decode_paged_cache = _create_paged_kv_cache(hf_model.config, device, batch_size)
             paged_cache = _TP4PrefillDecodeCacheAdapter(tp4_paged_cache, decode_paged_cache, device)
@@ -1154,6 +1179,23 @@ class TTNNDotsOCRPipeline(TTNNModule):
                 f"DP batch-parallel prefill expects input_ids batch {self.config.batch_size}, "
                 f"got {input_ids.shape[0]}"
             )
+
+        # TP4 prefill first-token boundary fix. The TP4 (replicated-hidden +
+        # all-reduce) body computes a slightly different last-position hidden
+        # than the symbiote body; on a low-confidence leading token (e.g. a page
+        # running-header) that flips the greedy argmax and drops the token from
+        # the output. So in tp4_prefill mode the TP4 body only FILLS the cache
+        # for prompt[0:L-1]; the FIRST generated token is produced by the
+        # SYMBIOTE decode body via ``decode_step(last_prompt_token)`` -- the same
+        # path that already generates every subsequent (correct) token. Requires
+        # a real multi-token prefill remainder (L-1 >= 2) so the peeled prompt
+        # still routes through the prefill (not decode) attention path.
+        tp4_boundary_first_token = _tp4_prefill_body_enabled() and int(input_ids.shape[-1]) > 2
+        boundary_last_token_ids = None
+        if tp4_boundary_first_token:
+            boundary_last_token_ids = input_ids[:, -1:].clone()  # [B, 1]
+            input_ids = input_ids[:, :-1].contiguous()
+
         seq_len = input_ids.shape[-1]
 
         # --- Embedding ---
@@ -1281,6 +1323,26 @@ class TTNNDotsOCRPipeline(TTNNModule):
                 )
             else:
                 token_id_tt = self.graph_prefill(hidden_states, tt_cache_position, past_key_value=self.paged_cache)
+
+        # TP4 prefill first-token boundary fix: the TP4 body has now filled the
+        # cache for prompt[0:L-1]. Produce the FIRST generated token from the
+        # SYMBIOTE decode body at position L-1. ``decode_step`` (first call)
+        # initialises its position from the current cache length (= L-1), reads
+        # the TP4-filled 0..L-2 cache, fills L-1, and emits the first token via
+        # the symbiote head -- recovering low-confidence leading tokens that the
+        # TP4 body's structural numerics would otherwise flip out of the decode.
+        if tp4_boundary_first_token:
+            ttnn.deallocate(tt_cache_position)
+            last_ids = [int(x) for x in boundary_last_token_ids.reshape(-1).tolist()]
+            prev = last_ids if dual else last_ids[0]
+            print(
+                f"[tp4_prefill] boundary fix ACTIVE: TP4 body filled cache for prompt[0:{seq_len}] "
+                f"(cache_seq={self.paged_cache.get_seq_length(layer_idx=0)}); first token via symbiote "
+                f"decode at pos {seq_len} (peeled last prompt token={last_ids})",
+                flush=True,
+            )
+            _dots_ocr_signpost("dots_ocr.prefill_end")
+            return self.decode_step(prev)
 
         # TP4 prefill body: the graph returned the post-body hidden; run the head eager.
         if self._external_prefill_head:

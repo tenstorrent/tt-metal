@@ -2,13 +2,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+from dataclasses import dataclass
 
 import torch
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNLayerStack, TTNNModule
 from models.experimental.tt_symbiote.core.run_config import trace_enabled
-from models.experimental.tt_symbiote.modules.dots_ocr_attention import TTNNDotsOCRAttention
-from models.experimental.tt_symbiote.modules.dots_ocr_mlp import TTNNDotsOCRMLP, TTNNDotsOCRMLPColParallelFusedGateUp
+from models.experimental.tt_symbiote.modules.dots_ocr_attention import (
+    TTNNDotsOCRAttention,
+    TTNNDotsOCRAttentionTP4Prefill,
+    _tp4_to_replicated,
+    tp4_lossy_matmul_dtype,
+)
+from models.experimental.tt_symbiote.modules.dots_ocr_mlp import (
+    TTNNDotsOCRMLP,
+    TTNNDotsOCRMLPColParallelFusedGateUp,
+    TTNNDotsOCRMLPTP4Prefill,
+)
 from models.experimental.tt_symbiote.modules.linear import (
     _decode_rmsnorm_program_config,
     _decode_width_sharded_input_memory_config,
@@ -613,3 +623,250 @@ class TTNNDotsOCRLayerStack(TTNNLayerStack):
             if hasattr(layer, "self_attn") and hasattr(layer.self_attn, "layer_idx"):
                 layer_idx = layer.self_attn.layer_idx
                 past_key_value.update_seq_length(layer_idx=layer_idx, seq_len=seq_len)
+
+
+# ---------------------------------------------------------------------------
+# TP4 prefill (replicated-hidden Megatron) text body — self-contained, mirrors
+# the ``vision_tp4_bh`` pattern. ``TTNNDotsOCRRMSNormTP4`` /
+# ``TTNNDotsOCRDecoderBlockTP4Prefill`` / ``TTNNDotsOCRPrefillStackTP4`` are the
+# in-module TP4 rmsnorm / decoder_block / stack bodies used by the
+# ``DOTS_OCR_TEXT_BODY=tp4_prefill`` pipeline path (no external package
+# dependency). Replicated-hidden in -> replicated-hidden out; the only
+# collectives are the two all-reduces in the attention (o_proj) and MLP (down).
+# ---------------------------------------------------------------------------
+
+
+def _tp4_gate_up_dtype_for_layer(layer_idx):
+    """gate/up weight dtype per layer: BFP4 on early layers (0-6), promoted to
+    BFP8 on the later, accuracy-sensitive layers (>=7). Pure BFP4 everywhere
+    over-degrades the 28-layer real-weight PCC. A full-bf16 high-precision
+    request (DOTS_OCR_TP4_HI_PRECISION=bf16) promotes every layer to bf16."""
+    hp = tp4_lossy_matmul_dtype()
+    if layer_idx is not None and int(layer_idx) >= 7:
+        return ttnn.bfloat16 if hp == ttnn.bfloat16 else ttnn.bfloat8_b
+    return hp
+
+
+@dataclass
+class DotsOCRTextConfig:
+    """Subset of the dots.ocr text-decoder config the TP4 prefill body needs.
+
+    Self-contained config dataclass for the TP4 prefill body (in-house; no
+    external package dependency). Build from an HF config via :meth:`from_hf`.
+    """
+
+    hidden_size: int = 1536
+    intermediate_size: int = 8960
+    num_hidden_layers: int = 28
+    num_attention_heads: int = 12
+    num_key_value_heads: int = 2
+    head_dim: int = 128
+    rms_norm_eps: float = 1e-6
+    rope_theta: float = 1000000.0
+    attention_bias: bool = True
+    max_position_embeddings: int = 131072
+
+    @classmethod
+    def from_hf(cls, hf_config):
+        head_dim = getattr(hf_config, "head_dim", None) or (hf_config.hidden_size // hf_config.num_attention_heads)
+        rope_theta = getattr(hf_config, "rope_theta", None)
+        if rope_theta is None:
+            rp = getattr(hf_config, "rope_parameters", {}) or {}
+            rope_theta = rp.get("rope_theta", 1000000.0)
+        return cls(
+            hidden_size=hf_config.hidden_size,
+            intermediate_size=hf_config.intermediate_size,
+            num_hidden_layers=hf_config.num_hidden_layers,
+            num_attention_heads=hf_config.num_attention_heads,
+            num_key_value_heads=hf_config.num_key_value_heads,
+            head_dim=head_dim,
+            rms_norm_eps=getattr(hf_config, "rms_norm_eps", 1e-6),
+            rope_theta=float(rope_theta),
+            attention_bias=getattr(hf_config, "attention_bias", True),
+            max_position_embeddings=getattr(hf_config, "max_position_embeddings", 131072),
+        )
+
+    @property
+    def q_size(self) -> int:
+        return self.num_attention_heads * self.head_dim
+
+    @property
+    def kv_size(self) -> int:
+        return self.num_key_value_heads * self.head_dim
+
+
+class TTNNDotsOCRRMSNormTP4(TTNNModule):
+    """Local (replicated) RMSNorm for the TP4 replicated-hidden design.
+
+    Because the hidden stream is replicated full-width on every chip, RMSNorm is
+    a plain per-chip op over the full hidden dim -- numerically exact (matches
+    torch up to bf16 rounding). Self-contained replacement for the external
+    ``DotsOCRRMSNormTP4``.
+    """
+
+    def __init__(self, mesh_device, eps=1e-6):
+        super().__init__()
+        self.mesh_device = mesh_device
+        self.eps = eps
+        self.tt_weight = None
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+    @classmethod
+    def from_torch(cls, mesh_device, torch_norm, eps=None):
+        e = eps
+        if e is None:
+            e = getattr(torch_norm, "variance_epsilon", getattr(torch_norm, "eps", 1e-6))
+        m = cls(mesh_device, eps=e)
+        # Replicate gamma on every chip; [32, H] tile layout (broadcast over rows).
+        weight = torch_norm.weight.data
+        m.tt_weight = _tp4_to_replicated(weight.unsqueeze(0).expand(32, -1), mesh_device, dtype=ttnn.bfloat16)
+        m.to_device(mesh_device)
+        m._preprocessed_weight = True
+        m._weights_on_device = True
+        return m
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        original_shape = x.shape
+        # Decode (seq==1): keep the norm L1-resident so the surrounding decode
+        # ops avoid a DRAM round-trip. Prefill stays DRAM-interleaved.
+        is_decode = int(original_shape[-2]) == 1
+        mc = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
+        if len(original_shape) == 3:
+            x = ttnn.unsqueeze(x, 1)
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=mc)
+        out = ttnn.rms_norm(
+            x,
+            epsilon=self.eps,
+            weight=self.tt_weight,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=mc,
+        )
+        if len(original_shape) == 3 and len(out.shape) == 4:
+            out = ttnn.reshape(out, [out.shape[0], out.shape[2], out.shape[3]])
+        return out
+
+
+class TTNNDotsOCRDecoderBlockTP4Prefill(TTNNModule):
+    """A single dots.ocr decoder block in TP4 (replicated-hidden Megatron).
+
+        residual = x
+        h = input_layernorm(x)
+        h = self_attn(h)            # all-reduced -> replicated
+        x = residual + h
+        residual = x
+        h = post_attention_layernorm(x)
+        h = mlp(h)                  # all-reduced -> replicated
+        x = residual + h
+
+    Everything stays replicated full-width on every chip.
+    """
+
+    def __init__(self, mesh_device, config, layer_idx=0, weight_dtype=ttnn.bfloat16):
+        super().__init__()
+        self.mesh_device = mesh_device
+        self.config = config
+        self.layer_idx = layer_idx
+        self.weight_dtype = weight_dtype
+        self.input_layernorm = None
+        self.self_attn = None
+        self.post_attention_layernorm = None
+        self.mlp = None
+
+    @classmethod
+    def from_torch(cls, mesh_device, config, torch_layer, layer_idx=0, weight_dtype=ttnn.bfloat16):
+        b = cls(mesh_device, config, layer_idx=layer_idx, weight_dtype=weight_dtype)
+        b.input_layernorm = TTNNDotsOCRRMSNormTP4.from_torch(
+            mesh_device, torch_layer.input_layernorm, eps=config.rms_norm_eps
+        )
+        b.self_attn = TTNNDotsOCRAttentionTP4Prefill.from_torch(
+            mesh_device, config, torch_layer.self_attn, layer_idx=layer_idx, weight_dtype=weight_dtype
+        )
+        b.post_attention_layernorm = TTNNDotsOCRRMSNormTP4.from_torch(
+            mesh_device, torch_layer.post_attention_layernorm, eps=config.rms_norm_eps
+        )
+        b.mlp = TTNNDotsOCRMLPTP4Prefill.from_torch(
+            mesh_device,
+            config,
+            torch_layer.mlp,
+            weight_dtype=weight_dtype,
+            gate_up_weight_dtype=_tp4_gate_up_dtype_for_layer(layer_idx),
+        )
+        b.to_device(mesh_device)
+        b._preprocessed_weight = True
+        b._weights_on_device = True
+        return b
+
+    def to_device(self, device):
+        super().to_device(device)
+        for child in (self.input_layernorm, self.self_attn, self.post_attention_layernorm, self.mlp):
+            if child is not None:
+                child.to_device(device)
+        return self
+
+    def forward(self, x: ttnn.Tensor, past_key_value=None, cache_position=None) -> ttnn.Tensor:
+        # Decode (seq==1) keeps the residual stream L1-resident; prefill stays DRAM.
+        is_decode = int(x.shape[-2]) == 1
+        add_mc = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
+
+        residual = x
+        h = self.input_layernorm.forward(x)
+        h = self.self_attn.forward(h, past_key_value=past_key_value, cache_position=cache_position)
+        x = ttnn.add(residual, h, memory_config=add_mc)
+        ttnn.deallocate(h)
+
+        residual = x
+        h = self.post_attention_layernorm.forward(x)
+        h = self.mlp.forward(h)
+        x = ttnn.add(residual, h, memory_config=add_mc)
+        ttnn.deallocate(h)
+        return x
+
+
+class TTNNDotsOCRPrefillStackTP4(TTNNModule):
+    """Full dots.ocr text-decoder prefill body in TP4 — a stack of decoder blocks.
+
+    Replicated hidden in -> replicated hidden out. Exposes ``.layers`` (each with
+    ``self_attn.layer_idx``) and ``forward(x, past_key_value=..., cache_position=...)``
+    so it is a drop-in for the prefill graph / cache-update bookkeeping that the
+    external ``DotsOCRPrefillModelTP4`` previously satisfied.
+    """
+
+    def __init__(self, mesh_device, config, weight_dtype=ttnn.bfloat16):
+        super().__init__()
+        self.mesh_device = mesh_device
+        self.config = config
+        self.weight_dtype = weight_dtype
+        self.layers = []
+
+    def to_device(self, device):
+        super().to_device(device)
+        for layer in self.layers:
+            layer.to_device(device)
+        return self
+
+    @classmethod
+    def from_torch(cls, mesh_device, config, torch_layers, weight_dtype=ttnn.bfloat16):
+        """``torch_layers`` is an iterable of torch decoder blocks (e.g. HF
+        ``model.model.layers``)."""
+        m = cls(mesh_device, config, weight_dtype=weight_dtype)
+        for idx, torch_layer in enumerate(torch_layers):
+            m.layers.append(
+                TTNNDotsOCRDecoderBlockTP4Prefill.from_torch(
+                    mesh_device, config, torch_layer, layer_idx=idx, weight_dtype=weight_dtype
+                )
+            )
+        m.to_device(mesh_device)
+        m._preprocessed_weight = True
+        m._weights_on_device = True
+        return m
+
+    def forward(self, x: ttnn.Tensor, past_key_value=None, cache_position=None) -> ttnn.Tensor:
+        for layer in self.layers:
+            x = layer.forward(x, past_key_value=past_key_value, cache_position=cache_position)
+        return x
