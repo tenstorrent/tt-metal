@@ -27,7 +27,39 @@ VOXTRAL_STANDARD_CHAR_TEXT = (
 )
 
 
+def ensure_voxtral_device_available() -> None:
+    """Skip the test when the host exposes no Tenstorrent devices."""
+    if ttnn.get_num_devices() < 1:
+        pytest.skip("No Tenstorrent device available on this host")
+
+
+def voxtral_single_device_mesh_shape() -> ttnn.MeshShape:
+    """1×1 mesh — one effective device for single-card Voxtral workloads (tokenizer, acoustic step)."""
+    ensure_voxtral_device_available()
+    return ttnn.MeshShape(1, 1)
+
+
+def prepare_voxtral_open_mesh_kwargs(device_params: dict | None) -> tuple[dict, dict]:
+    """Host-aware ``open_mesh_device`` kwargs plus fabric settings for teardown.
+
+    Applies ``get_updated_device_params`` (Blackhole/QB dispatch axis, etc.) and strips
+    fabric keys that must be passed to ``set_fabric`` before opening the mesh.
+    """
+    from tests.scripts.common import get_updated_device_params
+
+    updated = get_updated_device_params(dict(device_params or {}))
+    fabric = {
+        "fabric_config": updated.pop("fabric_config", None),
+        "fabric_tensix_config": updated.pop("fabric_tensix_config", None),
+        "reliability_mode": updated.pop("reliability_mode", None),
+        "fabric_manager": updated.pop("fabric_manager", None),
+        "fabric_router_config": updated.pop("fabric_router_config", None),
+    }
+    return updated, fabric
+
+
 def resolve_voxtral_model_name_or_skip() -> str:
+    """Return Voxtral checkpoint id from env or skip."""
     model_name_or_path = os.getenv("VOXTRAL_TTS_MODEL") or os.getenv("HF_MODEL") or DEFAULT_VOXTRAL_MODEL
     if "voxtral" not in model_name_or_path.lower():
         pytest.skip(
