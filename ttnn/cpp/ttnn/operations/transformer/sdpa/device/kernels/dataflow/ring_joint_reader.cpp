@@ -542,7 +542,7 @@ void kernel_main() {
                     // local and gathered tensors may use different accessor types.
                     const auto fetch_k = [&](const auto& k_gen) {
                         fetch_block(
-                            k_gen, k_slice, end_seq_tile, cb_k_start_address, k_tile_bytes, true /*transpose*/);
+                            k_gen, k_slice, end_seq_tile, cb_k_in, cb_k_start_address, k_tile_bytes, true /*transpose*/);
                     };
                     fetch_k_from_source<has_joint_k, joint_tensor_args_offset>(
                         kv_chunk_is_joint,
@@ -654,7 +654,7 @@ void kernel_main() {
                     } else {
                         const auto fetch_v = [&](const auto& v_gen) {
                             fetch_block(
-                                v_gen, v_slice, end_seq_tile, cb_v_start_address, v_tile_bytes, false /*transpose*/);
+                                v_gen, v_slice, end_seq_tile, cb_v_in, cb_v_start_address, v_tile_bytes, false /*transpose*/);
                         };
                         fetch_v_from_source<has_joint_k, joint_tensor_args_offset>(
                             kv_chunk_is_joint,

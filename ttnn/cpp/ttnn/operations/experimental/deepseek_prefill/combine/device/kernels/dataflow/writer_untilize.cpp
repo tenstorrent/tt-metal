@@ -68,9 +68,7 @@ void kernel_main() {
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
 #if INIT_ZEROS
-    fill_zero_buffer(cb_zero_buffer_id);
-    uint32_t zero_buffer_addr = get_write_ptr(cb_zero_buffer_id);
-    zero_pages(zero_buffer_addr, page_start, page_end, aligned_output_page_size, output_addr_gen);
+    zero_pages(cb_zero_buffer_id, page_start, page_end, aligned_output_page_size, output_addr_gen);
 
     // Signal all sender/reader cores that output-zeroing is complete
     for (uint32_t c = 0; c < num_sender_cores; c++) {

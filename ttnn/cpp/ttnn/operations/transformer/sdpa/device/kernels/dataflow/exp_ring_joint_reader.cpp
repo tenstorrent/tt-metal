@@ -288,6 +288,7 @@ void kernel_main() {
                                           : (ring_iter == 0 ? local_k_generator : gathered_k_generator),
                         kv_slice,
                         end_seq_tile,
+                        cb_k_in,
                         cb_k_start_address,
                         k_tile_bytes,
                         true /*transpose*/
@@ -370,6 +371,7 @@ void kernel_main() {
                                           : (ring_iter == 0 ? local_v_generator : gathered_v_generator),
                         kv_slice,
                         end_seq_tile,
+                        cb_v_in,
                         cb_v_start_address,
                         v_tile_bytes,
                         false /*transpose*/

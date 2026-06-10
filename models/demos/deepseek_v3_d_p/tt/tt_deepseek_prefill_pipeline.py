@@ -9,14 +9,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-import torch
 from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
-from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reorder_tensor_chunks
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
@@ -51,6 +50,10 @@ class TtPrefillPipelineConfig:
     shared_expert_activations_dtype: ttnn.DataType = ttnn.bfloat16
     shared_expert_weights_dtype: ttnn.DataType = ttnn.bfloat8_b
     weight_cache_path: Optional[Path] = None
+    # Static model-dimension constants for the variant being built
+    # (DeepSeekV3Config | KimiK26Config). Drives expert counts, dense-layer
+    # count, route groups, etc. in the TT layer code.
+    model_cfg: type = DeepSeekV3Config
 
     @property
     def sp_factor(self) -> int:
@@ -88,11 +91,15 @@ class TtDeepSeekPrefillPipeline:
             f"num_layers={self.config.num_layers}, max_seq_len={self.config.max_seq_len}, "
             f"mesh_shape={self.config.mesh_shape}, is_balanced={self.config.is_balanced}"
         )
+        model_cfg = self.config.model_cfg
         if self.config.weight_cache_path:
             num_devices = self.config.mesh_shape[0] * self.config.mesh_shape[1]
-            experts_per_chip = 256 // num_devices
+            experts_per_chip = model_cfg.NUM_ROUTED_EXPERTS // num_devices
             if TtPrefillTransformer.check_cache_complete(
-                self.config.weight_cache_path, self.config.num_layers, experts_per_chip
+                self.config.weight_cache_path,
+                self.config.num_layers,
+                experts_per_chip,
+                first_k_dense=model_cfg.NUM_DENSE_LAYERS,
             ):
                 logger.info(f"TTNN weight cache complete at {self.config.weight_cache_path}; loading from disk")
             else:
@@ -104,7 +111,7 @@ class TtDeepSeekPrefillPipeline:
         self.model = TtPrefillTransformer(
             mesh_device=self.mesh_device,
             config=self.hf_config,
-            model_cfg=DeepSeekV3Config,
+            model_cfg=model_cfg,
             state_dict=state_dict,
             num_layers=self.config.num_layers,
             seq_len=self.config.max_seq_len,
@@ -145,7 +152,14 @@ class TtDeepSeekPrefillPipeline:
         )
         logger.info(f"TtDeepSeekPrefillPipeline.compile() — warming up with {max_seq_len} tokens")
         t0 = time.perf_counter()
-        tt_token_ids = self._prepare_input_tensor([0] * max_seq_len)
+        tt_token_ids = prepare_prefill_input_tensor(
+            [0] * max_seq_len,
+            self.mesh_device,
+            self.config.sp_factor,
+            self.config.is_balanced,
+            self.config.mesh_shape,
+            self.config.sp_axis,
+        )
         self.model.forward(
             tt_token_ids,
             self.kvpe_cache,
@@ -158,22 +172,25 @@ class TtDeepSeekPrefillPipeline:
 
     def prefill(
         self,
-        token_ids: list[int],
-        slot_id: int,
-        actual_isl: Optional[int] = None,
+        input_tensor: ttnn.Tensor,
+        actual_isl: int,
+        slot_id: int = 0,
         dst_slot: Optional[int] = None,
     ) -> int:
+        """Run one prefill pass and return the first generated token.
+
+        `input_tensor` must be an SP-sharded uint32 ROW_MAJOR DRAM tensor as
+        produced by `prepare_prefill_input_tensor`. `actual_isl` is the number
+        of real (non-pad) tokens in the chunk.
+        """
         assert self.compiled, "Call compile() before prefill()"
-        if actual_isl is None:
-            actual_isl = len(token_ids)
         if dst_slot is None:
             dst_slot = slot_id
 
-        tt_token_ids = self._prepare_input_tensor(token_ids)
         on_layer_complete = self._build_migration_callback(slot_id, actual_isl, dst_slot)
 
         first_token_id, _first_token_prob, _ = self.model.forward(
-            tt_token_ids,
+            input_tensor,
             self.kvpe_cache,
             number_of_non_padded_tokens=actual_isl,
             on_layer_complete=on_layer_complete,
@@ -181,37 +198,12 @@ class TtDeepSeekPrefillPipeline:
         )
         return int(first_token_id)
 
-    def _prepare_input_tensor(self, token_ids: list[int]) -> ttnn.Tensor:
-        sp_factor = self.config.sp_factor
-        isl_per_chip = len(token_ids) // sp_factor
-
-        if self.config.is_balanced:
-            chunk_order = create_balanced_chunk_order(sp_factor)
-            t = torch.tensor(token_ids, dtype=torch.int64).unsqueeze(0).unsqueeze(0).unsqueeze(-1)
-            t = reorder_tensor_chunks(t, chunk_order, seq_dim=2)
-            token_ids_sharded = t.squeeze(0).squeeze(-1).reshape(sp_factor, 1, isl_per_chip)
-        else:
-            token_ids_sharded = torch.tensor(token_ids, dtype=torch.int64).reshape(sp_factor, 1, isl_per_chip)
-
-        return ttnn.from_torch(
-            token_ids_sharded,
-            device=self.mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.mesh_device,
-                mesh_shape=self.config.mesh_shape,
-                dims=(self.config.sp_axis, None),
-            ),
-        )
-
     def setup_migration(self, endpoint, remote_endpoint_id: int) -> None:
         assert self.compiled, "Call compile() before setup_migration()"
         self.migration_layer = BoundMigrationEndpoint(endpoint, remote_endpoint_id)
 
     def _build_migration_callback(self, slot_id: int, actual_isl: int, dst_slot: int):
-        from models.demos.deepseek_v3_d_p.tt.runners.migration_setup import INVALID_SLOT_ID
+        from models.demos.deepseek_v3_d_p.tt.runners.integration_setup import INVALID_SLOT_ID
 
         if self.migration_layer is None or dst_slot == INVALID_SLOT_ID:
             return None

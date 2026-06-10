@@ -4,6 +4,7 @@
 
 from typing import List
 
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIMENSIONS
 from helpers.llk_params import (
@@ -20,33 +21,55 @@ def get_valid_dest_accumulation_modes(formats):
     """
     Base constraints for Dest Accumulation modes.
 
+    Constraints (all architectures):
+    - Dest accumulation must be ENABLED for the following format combination:
+        - Input format is 32bit integer format
+        Reason: HW limitation, Unpacker cannot unpack 32bit integer formats into SrcA and SrcB registers
+
+    Constraints (Wormhole/Blackhole only):
     - Dest accumulation must be ENABLED for the following format combinations:
         - Input format has B type exponent (bfp8_b, float16_b)
         - Output format is A type exponent (float16)
         Reason: HW limitation, Packer cannot convert expB to expA, so we convert it to Float32 first as intermediate. (Source???)
-    - Dest accumulation must be ENABLED for the following format combination:
-        - Input format is 32bit integer format (int32, uint32)
-        Reason: HW limitation, Unpacker cannot unpack 32bit integer formats into SrcA and SrcB registers
     - Otherwise it can be ENABLED or DISABLED
 
     NOTE: There are more combos that fit this rule, but aren't handled in the codebase
         So I'm not sure if they should also be handled here.
+
+    Constraints (Quasar only):
+        - 32-bit output (Float32, Int32) requires dest_acc=Yes, packer cannot perform upcasting to 32-bit formats
+        - UInt8 <-> Int8 conversions require dest_acc=Yes, because packer cannot convert UInt8 <-> Int8
+        - Int16 input requires dest_acc=No, packer cannot convert Int16 to and from other formats and thus
+          32-bit dest register mode is not supported when working with Int16
     """
+    chip_arch = get_chip_architecture()
+    in_fmt, out_fmt = formats.input, formats.output
 
-    if (
-        formats.input
-        in [
-            DataFormat.Bfp8_b,
-            DataFormat.Bfp4_b,
-            DataFormat.Bfp2_b,
-            DataFormat.Float16_b,
-        ]
-        and formats.output == DataFormat.Float16
-    ):
+    if in_fmt in [DataFormat.Int32, DataFormat.UInt32]:
         return [DestAccumulation.Yes]
 
-    if formats.input in [DataFormat.Int32, DataFormat.UInt32]:
-        return [DestAccumulation.Yes]
+    if chip_arch == ChipArchitecture.QUASAR:
+        if out_fmt.is_32_bit():
+            return [DestAccumulation.Yes]
+        if (in_fmt, out_fmt) in (
+            (DataFormat.UInt8, DataFormat.Int8),
+            (DataFormat.Int8, DataFormat.UInt8),
+        ):
+            return [DestAccumulation.Yes]
+        if in_fmt == DataFormat.Int16:
+            return [DestAccumulation.No]
+    else:
+        if (
+            in_fmt
+            in [
+                DataFormat.Bfp8_b,
+                DataFormat.Bfp4_b,
+                DataFormat.Bfp2_b,
+                DataFormat.Float16_b,
+            ]
+            and out_fmt == DataFormat.Float16
+        ):
+            return [DestAccumulation.Yes]
 
     return [DestAccumulation.No, DestAccumulation.Yes]
 
@@ -118,3 +141,39 @@ def get_valid_dest_indices(
         return list(range(start_index, end_index + 1))
 
     return [start_index] if start_index == end_index else [start_index, end_index]
+
+
+def is_valid_data_format_conversion(fmt: InputOutputFormat) -> bool:
+    """
+    Base constraints for valid data format conversions. Specific operations might have additional constraints.
+
+    Check whether a single InputOutputFormat represents a valid data format conversion.
+
+    Constraints (all architectures):
+        - Cannot convert between integer and float formats
+
+    Constraints (Quasar only):
+        - Int16 input can only output to Int16
+    """
+    chip_arch = get_chip_architecture()
+    in_fmt, out_fmt = fmt.input_format, fmt.output_format
+
+    if in_fmt.is_integer() ^ out_fmt.is_integer():
+        return False
+
+    if chip_arch == ChipArchitecture.QUASAR:
+        if in_fmt == DataFormat.Int16 and out_fmt != DataFormat.Int16:
+            return False
+
+    return True
+
+
+def get_valid_data_format_conversions(
+    formats_list: List[InputOutputFormat],
+) -> List[InputOutputFormat]:
+    """
+    Filter a list of InputOutputFormat to only valid data format conversions.
+
+    These are basic constraints. Specific operations might have additional constraints.
+    """
+    return [fmt for fmt in formats_list if is_valid_data_format_conversion(fmt)]

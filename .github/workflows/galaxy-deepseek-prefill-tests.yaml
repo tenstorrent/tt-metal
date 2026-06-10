@@ -12,6 +12,7 @@ on:
           - module
           - moe_gate
           - mla
+          - mla_chunked
           - kv_cache_table
           - prefill_block
           - prefill_transformer
@@ -45,6 +46,8 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+  schedule:
+    - cron: "0 5 * * *" # Run at 5:00 AM UTC every day
 
 jobs:
   check-harbor:

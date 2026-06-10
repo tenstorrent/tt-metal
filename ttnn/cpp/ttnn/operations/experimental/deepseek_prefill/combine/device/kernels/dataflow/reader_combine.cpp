@@ -143,12 +143,10 @@ void kernel_main() {
         uint32_t page_end = get_arg_val<uint32_t>(rt_args++);
         uint32_t output_init_done_semaphore_id = get_arg_val<uint32_t>(rt_args++);
         uint32_t output_init_done_sem_address = get_semaphore(output_init_done_semaphore_id);
-        uint32_t zero_buf = get_write_ptr(cb_zero_buffer_id);
 
         {
             // DeviceZoneScopedN("combine-output-zeroing-SENDER-writing");
-            fill_zero_buffer(cb_zero_buffer_id);
-            zero_pages(zero_buf, page_start, page_end, aligned_output_page_size, output_addr_gen);
+            zero_pages(cb_zero_buffer_id, page_start, page_end, aligned_output_page_size, output_addr_gen);
         }
 
         volatile tt_l1_ptr uint32_t* output_init_done_sem_ptr =
