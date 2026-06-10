@@ -112,10 +112,20 @@ $ctx"
   fi
   set -e
 
+  # Agent failure: 🟡 block (not ⚠️ — that triggers the walk-back) plus
+  # the last cached summary so the digest still shows real test state.
+  # 🟡 first line tells the caller to skip persisting, so next tick retries.
   if [[ $rc -ne 0 || -z "$summary" ]]; then
     log "  agent failed on #$rnum (rc=$rc); using fallback block"
-    summary="▸ *$display*  ❌ $rconcl  _run #${rnum}_
-(agent error — see $rurl)"
+    local cached
+    cached=$(jq -r --arg w "$workflow" '.[$w].summary // ""' "$STATE")
+    if [[ -n "$cached" ]]; then
+      cached=$(printf '%s' "$cached" | sed -E '1 s/^▸ \*[^*]+\*  ?//')
+    else
+      cached="(none)"
+    fi
+    summary="▸ *$display*  🟡 agent error (rc=$rc) — run #${rnum} ($rconcl) not analyzed — $rurl
+↳ last cached: $cached"
   fi
   printf '%s' "$summary"
 }
@@ -271,6 +281,13 @@ for entry in "${PIPELINES[@]}"; do
   fi
 
   blocks+=("$summary")
+
+  # 🟡 = agent error fallback; keep the old cache entry so the next tick
+  # sees a cache miss and retries the analysis.
+  if [[ "$(printf '%s' "$summary" | head -n1)" == *🟡* ]]; then
+    log "  not persisting state for #$run_number (agent error)"
+    continue
+  fi
 
   # Persist new state, keyed on the primary (latest) run id.
   jq --arg w "$workflow" --arg id "$run_id" --arg sha "$sha" --arg sm "$summary" \
