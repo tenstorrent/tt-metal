@@ -209,16 +209,16 @@ jobs:
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
-        if: always() && hashFiles('generated/tt-train-metrics/**') != ''
+        if: always() && hashFiles('docker-job/generated/tt-train-metrics/**') != ''
         with:
-          path: generated/tt-train-metrics
+          path: /work/generated/tt-train-metrics
           prefix: "metrics_"
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
-        if: always() && hashFiles('generated/test_reports/**') != ''
+        if: always() && hashFiles('docker-job/generated/test_reports/**') != ''
         with:
-          path: generated/test_reports
+          path: /work/generated/test_reports
           prefix: "test_reports_"
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
