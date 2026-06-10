@@ -482,9 +482,9 @@ class Attention(Module):
         if prompt is not None:
             assert len(prompt.shape) == 3
         for t in spatial_rope or ():
-            assert len(t.shape) == 2
+            assert len(t.shape) == 4, f"rope tensors must be pre-shaped to (1, 1, seq, head_dim), got {t.shape}"
         for t in prompt_rope or ():
-            assert len(t.shape) == 2
+            assert len(t.shape) == 4, f"rope tensors must be pre-shaped to (1, 1, seq, head_dim), got {t.shape}"
 
         tp_axis = self.parallel_config.tensor_parallel.mesh_axis
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
@@ -503,8 +503,9 @@ class Attention(Module):
             )
             return out
 
-        spatial_cos = spatial_rope[0].reshape([1, 1, *spatial_rope[0].shape]) if spatial_rope is not None else None
-        spatial_sin = spatial_rope[1].reshape([1, 1, *spatial_rope[1].shape]) if spatial_rope is not None else None
+        # Rope tensors arrive pre-shaped as (1, 1, seq, head_dim); no per-call reshape needed.
+        spatial_cos = spatial_rope[0] if spatial_rope is not None else None
+        spatial_sin = spatial_rope[1] if spatial_rope is not None else None
         trans_mat = self.trans_mat if spatial_rope is not None else None
 
         q_flat, k_flat, v_flat = self.to_qkv(
@@ -532,8 +533,9 @@ class Attention(Module):
         v = _split_heads(v_flat)
 
         if self.add_qkv_proj is not None and prompt is not None:
-            prompt_cos = prompt_rope[0].reshape([1, 1, *prompt_rope[0].shape]) if prompt_rope is not None else None
-            prompt_sin = prompt_rope[1].reshape([1, 1, *prompt_rope[1].shape]) if prompt_rope is not None else None
+            # Rope tensors arrive pre-shaped as (1, 1, seq, head_dim); no per-call reshape needed.
+            prompt_cos = prompt_rope[0] if prompt_rope is not None else None
+            prompt_sin = prompt_rope[1] if prompt_rope is not None else None
             prompt_trans_mat = self.trans_mat if prompt_rope is not None else None
 
             add_q_flat, add_k_flat, add_v_flat = self.add_qkv_proj(
