@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T09:08:28Z",
+  "updated_at": "2026-06-10T09:39:56Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -841,32 +841,16 @@
       "validation_threshold": "HF + 0.05",
       "hybrid_notes": "Image preprocessing (resize, patchify, grid_thw) and tokenizer/chat-template stay on HF host; rot_pos_emb tables and cu_seqlens computed on host.",
       "generation": {
-        "status": "done",
-        "attempts": 1,
-        "artifacts": [
-          "models/demos/rednote_hilab_dots.ocr/tt/ocr_model.py",
-          "models/demos/rednote_hilab_dots.ocr/demo/demo_ocr.py",
-          "models/demos/rednote_hilab_dots.ocr/demo/validate.py",
-          "models/demos/rednote_hilab_dots.ocr/demo/inputs/make_samples.py",
-          "models/demos/rednote_hilab_dots.ocr/demo/inputs/ocr_samples.json",
-          "models/demos/rednote_hilab_dots.ocr/tests/test_e2e_ocr.py"
-        ],
-        "notes": "e2e gate PASSED: TTNN wer=0.0000 == HF wer=0.0000 (gate HF+0.05), 5/5 samples byte-identical. Run synchronously this tick; prior-tick orphan pytest (pid 284663) killed under tick-46 device lock. Root-caused prior 0.0714 fail: OOV brand-word near-tie \u2014 fp32-HF probe picks storm(16.70) over stor(16.51) i.e. Tenstorment, matching TTNN (16.77/16.61) within ~0.1 logits; bf16-HF rounding flips it (17.0/16.5). TTNN tracks the fp32-ideal model better than bf16 HF. lm_head path lifted to fp32 (weights + no bf16 typecast of the hidden window); sample set uses in-vocabulary words, 5 samples/31 words.",
-        "wer": 0.0
+        "status": "pending",
+        "attempts": 0,
+        "notes": "REDO: replace full-seq recompute with KV-cached token step (paged_update_cache + SDPA-decode); prefill once; parity gate unchanged"
       },
       "perf": {
-        "status": "done",
+        "status": "pending",
         "attempts": 0,
-        "artifacts": [
-          "models/demos/rednote_hilab_dots.ocr/tt/ocr_model.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/profile_ocr.py",
-          "models/demos/rednote_hilab_dots.ocr/perf/traced/cpp_device_perf_report_traced.csv",
-          "models/demos/rednote_hilab_dots.ocr/PERF_NOTES.md"
-        ],
-        "notes": "Sub-pass 1: single-call metal trace of full decode body (full-seq recompute is fixed-shape; persistent embeds buffer + fixed lm_head window) \u2014 trace alone was SLOWER (89.8->113.7 ms/step): 39MB fp32 logits readback dominated. Sub-pass 2 (tracy on traced path, 10 replays, kernel 33.85 ms/replay, top: Matmul 41.4%, ArgMax 17.5%, AllGather 13.0%): ONE optimization = device argmax in-trace (all_gather logits + untilize + multicore argmax, readback 39MB->4KB/step). Steady 89.8 -> 18.4 ms (4.9x); e2e WER 0.0000 == HF, byte-identical. KV-cache token step deferred (PERF_NOTES recommendations).",
-        "steady_step_ms": 18.4,
-        "speedup": 4.88
-      }
+        "notes": "REDO after kv-cache decode: trace token step; steady ms/tok must be O(1) in context; target <= 20 ms/tok at 3k context"
+      },
+      "decode_strategy": "kv_cache"
     }
   ],
   "locks": {

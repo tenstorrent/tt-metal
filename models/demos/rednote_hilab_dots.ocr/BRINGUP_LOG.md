@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T09:08:28Z
+**Updated:** 2026-06-10T09:39:56Z
 
 ## Block Status
 
@@ -80,7 +80,7 @@
 
 | Name | Input | Output | needs_ar | Generation | Perf |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| ocr | image | text | yes | done | done |
+| ocr | image | text | yes | pending | pending |
 
 ## Recent Ticks
 
