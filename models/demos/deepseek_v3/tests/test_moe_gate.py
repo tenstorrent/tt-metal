@@ -11,10 +11,11 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.modules.moe.tt_moe_gate import TTMoEGate
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.moe_gate import MoEGate
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_dequantized_tensor, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     get_model_config,
@@ -204,6 +205,115 @@ def test_forward_pass(
     ), f"TopK experts weights output does not meet PCC requirement {topk_weights_pcc_required}: {pcc_message}"
 
     assert accuracy >= topk_indices_accuracy_required, f"TopK experts indices output does not match: {accuracy}"
+
+
+def test_tt_moe_gate_real_weights(
+    hf_config,
+    request,
+    mesh_device,
+    set_deterministic_env,
+):
+    """Real-weights test for the COMMON ``TTMoEGate`` (the n_group=8 grouped path), modeled on
+    ``test_forward_pass`` above but routing through ``models.common.modules.moe.tt_moe_gate.TTMoEGate``
+    instead of the deepseek-specific ``MoEGate`` module.
+
+    Why it lives here (not in the standalone ``test_tt_moe_gate.py``): the grouped 8→4 group selection
+    needs REAL router weights to be meaningful. With random weights the 256 logits are ~iid, the 16
+    groups are near-tied, and bf16 rounding flips which groups win → device vs golden diverge (PCC ~0.87,
+    overlap ~0.71). Real DeepSeek router weights separate the groups, so the device selection matches the
+    HF reference — letting us hold the same strict bar as ``test_forward_pass`` (weights PCC 0.99, index
+    accuracy 0.91). ``test_tt_moe_gate.py`` skips deepseek_v3 and points here.
+
+    Loads the real gate weight + score-correction bias from the checkpoint and compares against the HF
+    ``ReferenceMoEGate`` (bf16), reusing ``generate_reference_io``.
+    """
+    mode = "decode"
+    module_path = "model.layers.3.mlp"
+    num_tokens = USERS_PER_ROW  # TTMoEGate replicates (no batch sharding), so one row's worth is enough.
+
+    reference_model = ReferenceMoEGate(hf_config)
+    checkpoint_state_dict = request.getfixturevalue("state_dict")
+    gate_state_dict, torch_input, reference_topk_indices, reference_topk_weights = generate_reference_io(
+        mode=mode,
+        num_tokens=num_tokens,
+        reference_model=reference_model,
+        checkpoint_state_dict=checkpoint_state_dict,
+        module_path=module_path,
+    )
+
+    # Real router weights → the common TTMoEGate. HF stores the gate as [n_experts, hidden]; TTMoEGate
+    # wants [hidden, n_experts]. The score-correction bias is mean-centered (as in moe_gate.py's
+    # convert_weights) so `sigmoid + bias` stays small enough for the op's bf16 selection precision —
+    # a constant shift changes neither the group ranking nor the (unbiased) output weights.
+    gate_weight = get_dequantized_tensor(gate_state_dict, "weight")  # [n_experts, hidden]
+    bias = get_dequantized_tensor(gate_state_dict, "e_score_correction_bias", dtype=torch.float32)  # [n_experts]
+    bias = bias - bias.mean()
+
+    gate = TTMoEGate(
+        mesh_device,
+        num_experts=hf_config.n_routed_experts,
+        select_experts_k=hf_config.num_experts_per_tok,
+        hidden_size=hf_config.hidden_size,
+        torch_gate_weight=gate_weight.t().contiguous(),
+        torch_gate_bias=bias,
+        n_group=hf_config.n_group,
+        score_func="sigmoid",
+        scaling_factor=hf_config.routed_scaling_factor,
+        eps=1e-20,
+        # deepseek's deep (7168) + tie-sensitive gate needs HiFi2 + fp32 accumulation, else the default
+        # matmul flips near-tied experts → index accuracy drops (~0.83 vs ~0.90). Matches the
+        # `gate_matmul_compute` block in models/common/modules/moe/configs/deepseek_v3.yaml.
+        matmul_compute_config={
+            "math_fidelity": "HiFi2",
+            "math_approx_mode": True,
+            "fp32_dest_acc_en": True,
+            "packer_l1_acc": True,
+        },
+    )
+
+    tt_x = ttnn.from_torch(
+        torch_input.reshape(1, 1, num_tokens, hf_config.hidden_size),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_topk_weights, tt_topk_indices = gate.forward(tt_x)
+
+    # TTMoEGate replicates across the mesh (bare from_torch, no shard mapper), so every device holds the
+    # full [1,1,num_tokens,k] result — read back one replica.
+    dev_weights = ttnn.to_torch(tt_topk_weights, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0].reshape(
+        num_tokens, -1
+    )
+    dev_indices = ttnn.to_torch(tt_topk_indices, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0].reshape(
+        num_tokens, -1
+    )
+
+    ttnn.deallocate(tt_x)
+    ttnn.deallocate(tt_topk_weights)
+    ttnn.deallocate(tt_topk_indices)
+
+    # Same comparison as test_forward_pass: sort weights desc, gather indices to that order, PCC the
+    # sorted weights + position-wise index accuracy.
+    ref_sorted_weights, ref_sort_idx = torch.sort(
+        reference_topk_weights.to(torch.bfloat16), dim=-1, descending=True, stable=True
+    )
+    ref_sorted_indices = torch.gather(reference_topk_indices.to(torch.int32), -1, ref_sort_idx)
+
+    tt_sorted_weights, tt_sort_idx = torch.sort(dev_weights.to(torch.bfloat16), dim=-1, descending=True, stable=True)
+    tt_sorted_indices = torch.gather(dev_indices.to(torch.int32), -1, tt_sort_idx)
+
+    topk_weights_pcc_required = 0.99
+    passing, pcc_message = comp_pcc(ref_sorted_weights, tt_sorted_weights, topk_weights_pcc_required)
+    topk_indices_accuracy_required = 0.90
+    accuracy = tt_sorted_indices.eq(ref_sorted_indices).float().mean()
+
+    logger.info(f"TTMoEGate real-weights — TopK experts weights PCC: {pcc_message}")
+    logger.info(f"TTMoEGate real-weights — TopK experts indices accuracy: {accuracy}")
+    assert passing, f"TTMoEGate TopK weights PCC < {topk_weights_pcc_required}: {pcc_message}"
+    assert (
+        accuracy >= topk_indices_accuracy_required
+    ), f"TTMoEGate TopK indices accuracy {accuracy} < {topk_indices_accuracy_required}"
 
 
 def test_linear_fallback_op_uses_hf_oriented_gate_weights(monkeypatch: pytest.MonkeyPatch):
