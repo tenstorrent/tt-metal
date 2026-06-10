@@ -31,7 +31,7 @@ done
 #   50000; pre-existing env wins). On hang the watchdog _Exit(1)'s the child;
 #   we classify that as HANG and dump the watchdog message.
 #
-# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--sim-workers N] <test_path> [extra_pytest_args...]
+# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--tracy] [--sim-workers N] <test_path> [extra_pytest_args...]
 #
 # Options:
 #   --dev            Enables polling watcher (NoC sanitizer, waypoints, CB
@@ -119,6 +119,7 @@ PYTEST_STDOUT_LOG="/tmp/safe-pytest-stdout-$$.log"
 # --- Parse flags ---
 DEV_MODE=false
 FAIL_FAST=true
+TRACY_MODE=false
 SIM_WORKERS=""
 SIM_WORKERS_GIVEN=false
 while [[ $# -gt 0 ]]; do
@@ -129,6 +130,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --run-all)
             FAIL_FAST=false
+            shift
+            ;;
+        --tracy)
+            TRACY_MODE=true
             shift
             ;;
         --sim-workers)
@@ -166,7 +171,7 @@ fi
 # --- Argument validation ---
 if [[ $# -eq 0 ]]; then
     echo "SAFE_PYTEST_ERROR: No test path provided"
-    echo "Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] <test_path> [extra_pytest_args...]"
+    echo "Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--tracy] <test_path> [extra_pytest_args...]"
     exit 3
 fi
 
@@ -356,6 +361,25 @@ if [[ "$SIM_MODE" == true && "$SIM_WORKERS" -gt 1 ]]; then
     PYTEST_CMD+=(-n "$SIM_WORKERS")
 fi
 PYTEST_CMD+=("$@")
+
+# --- Tracy / device profiler mode ---
+# --tracy re-wraps the run through the tracy profiler, which sets the device
+# profiler env, runs the workload, reads device results, and post-processes into
+# the per-op CSV (ops_perf_results_<ts>.csv) under the output dir. That CSV is
+# where the bottleneck-finding columns live — DEVICE KERNEL DURATION, DEVICE
+# COMPUTE CB WAIT FRONT / CB RESERVE BACK, PER CORE MIN/MAX/AVG. See
+# tt_metal/tools/profiler/PROFILING_GUIDE.md. Hardware only (sim has no Tracy).
+if [[ "$TRACY_MODE" == true ]]; then
+    if [[ "$SIM_MODE" == true ]]; then
+        echo "SAFE_PYTEST_ERROR: --tracy is hardware only (no Tracy on the simulator)" >&2
+        exit 3
+    fi
+    TRACY_OUT="${TT_METAL_PROFILER_DIR:-${REPO_ROOT:-.}/generated/profiler}/run_safe_pytest_$(date +%s)"
+    mkdir -p "$TRACY_OUT" 2>/dev/null || true
+    # -r generate ops report, -p only profile enabled zones, -m the command.
+    PYTEST_CMD=(python3 -m tracy -v -r -p -o "$TRACY_OUT" -m "${PYTEST_CMD[*]}")
+    echo "SAFE_PYTEST: [tracy] device profiling ON → per-op CSV under ${TRACY_OUT}/" >&2
+fi
 
 # Signal handling: if this script is killed (e.g. parent process gets SIGTERM
 # and we get reparented to init, or a watchdog kills us), forward SIGKILL to
