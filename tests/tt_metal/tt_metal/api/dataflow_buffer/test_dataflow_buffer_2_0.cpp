@@ -1616,6 +1616,17 @@ DFB_BLOCKED_TEST_2_0(DMTest1xDFB3Bx3B_blk4, DM, DM, 3, 3, 4, 24, false)
 // Non-power-of-2 block: blk3, 12-entry ring → 4 blocks of 3 (guards against pow2 assumptions).
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk3, DM, DM, 1, 1, 3, 12, false)
 
+// --- ASYMMETRIC BLOCKED→BLOCKED (DM-DM, explicit) — num_producers != num_consumers ---
+// Supported at integer thread-count ratios via the tile-counter round-robin (stride_in_entries stays 1,
+// so blocks stay contiguous and the burst is valid). DM→DM still verifies as identity (the producer's
+// block page-read composes with the consumer's page-write). P+C <= 6 (Gen2 DM cap); 16 % (4*max(P,C))==0.
+DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx2B_blk4, DM, DM, 1, 2, 4, 16, false)
+DFB_BLOCKED_TEST_2_0(DMTest1xDFB2Bx1B_blk4, DM, DM, 2, 1, 4, 16, false)
+DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx4B_blk4, DM, DM, 1, 4, 4, 16, false)
+DFB_BLOCKED_TEST_2_0(DMTest1xDFB4Bx1B_blk4, DM, DM, 4, 1, 4, 16, false)
+DFB_BLOCKED_TEST_2_0(DMTest1xDFB2Bx4B_blk4, DM, DM, 2, 4, 4, 16, false)
+DFB_BLOCKED_TEST_2_0(DMTest1xDFB4Bx2B_blk4, DM, DM, 4, 2, 4, 16, false)
+
 // --- BLOCKED→BLOCKED (DM-DM, IMPLICIT sync: one TXN_ID transfer per tile, ISR-batched credits) ---
 // Same layout/page-mapping as the explicit variants; only the sync mode differs.
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk4_impl, DM, DM, 1, 1, 4, 16, true)

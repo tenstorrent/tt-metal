@@ -1394,15 +1394,22 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     prod.binding->block_size,
                     cons.kernel->unique_id,
                     cons.binding->block_size);
+                // BLOCKED supports asymmetric thread counts (fan-in/out via the tile-counter
+                // round-robin), but only at an INTEGER ratio — the larger side's thread count must be a
+                // whole multiple of the smaller's (matches calculate_num_tile_counters' divisibility).
+                const uint32_t pt = prod.kernel->num_threads;
+                const uint32_t ct = cons.kernel->num_threads;
+                const uint32_t hi = std::max(pt, ct);
+                const uint32_t lo = std::min(pt, ct);
                 TT_FATAL(
-                    prod.kernel->num_threads == cons.kernel->num_threads,
-                    "DFB '{}': BLOCKED requires equal producer and consumer thread counts "
-                    "(producer '{}' = {}, consumer '{}' = {}); each thread owns one contiguous sub-ring.",
+                    lo > 0 && hi % lo == 0,
+                    "DFB '{}': BLOCKED producer/consumer thread counts must form an integer ratio "
+                    "(producer '{}' = {}, consumer '{}' = {}); non-integer ratios are not supported.",
                     dfb.unique_id,
                     prod.kernel->unique_id,
-                    prod.kernel->num_threads,
+                    pt,
                     cons.kernel->unique_id,
-                    cons.kernel->num_threads);
+                    ct);
             }
         }
 

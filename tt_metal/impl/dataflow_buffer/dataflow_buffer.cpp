@@ -597,23 +597,26 @@ static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowB
             stride_in_entries = 1;
             break;
         case ::dfb::AccessPattern::BLOCKED: {
-            // BLOCKED gives each thread its own CONTIGUOUS sub-ring of `capacity` entries.
-            // Setting stride_in_entries = 1 makes the host base_step = capacity*entry_size, so
-            // thread t owns L1 entries [t*capacity, (t+1)*capacity). The block-ness lives in the
-            // kernel: it moves block_size contiguous entries in a single NoC burst and posts/waits
-            // block_size credits at a time. The burst is valid precisely because each thread's
-            // entries are contiguous (stride 1) within its sub-ring.
+            // BLOCKED uses stride_in_entries = 1, so the host base_step = capacity*entry_size and the
+            // ring is partitioned into max(P,C) CONTIGUOUS sub-rings of `capacity` entries each. The
+            // block-ness lives in the kernel: it moves block_size contiguous entries in a single NoC
+            // burst and posts/waits block_size credits at a time — valid precisely because each block
+            // is contiguous (stride 1) within a sub-ring.
             //
-            // This 1:1 sub-ring model requires num_producers == num_consumers (producer t pairs
-            // with consumer t over sub-ring t). Asymmetric fan-in/out would need the interleaved
-            // STRIDED layout (stride > 1), where a thread's entries are NOT contiguous, so the
-            // single-burst kernels don't support it yet.
+            // Asymmetric P != C IS supported (explicit sync): the per-thread tile-counter round-robin
+            // (num_tcs_to_rr, see calculate_num_tile_counters) fans blocks across the unequal side
+            // exactly as STRIDED does, while stride_in_entries stays 1 so the contiguous-burst invariant
+            // holds. The thread-count ratio must be an integer (enforced downstream by
+            // calculate_num_tile_counters). Implicit-sync asymmetric BLOCKED is NOT yet supported
+            // (commit_implicit_read/write round-robin the TC once per entry, not per block), so require
+            // explicit sync when the counts differ.
             const uint32_t threads = std::max(config.num_producers, config.num_consumers);
             const uint32_t block = std::max<uint32_t>(config.consumer_block_size, 1u);
             TT_FATAL(
-                config.num_producers == config.num_consumers,
-                "BLOCKED DFB {} requires num_producers == num_consumers (got {} and {}); asymmetric "
-                "BLOCKED is not yet supported",
+                config.num_producers == config.num_consumers ||
+                    (!config.enable_producer_implicit_sync && !config.enable_consumer_implicit_sync),
+                "BLOCKED DFB {}: asymmetric thread counts ({} producers vs {} consumers) require explicit "
+                "sync; implicit-sync asymmetric BLOCKED is not yet supported",
                 dfb.id,
                 config.num_producers,
                 config.num_consumers);
