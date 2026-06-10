@@ -31,6 +31,9 @@ constexpr std::uint32_t replay_buf_offset = 16; // split replay buffer usage bet
                                                 // fist 16 for sfpu, next 16 for fpu
 
 // Pack config
+// Word-2 layout matches THCON_SEC[01]_REG1. The REG8 banks differ: bits 17-23 are not
+// implemented as below (no All_pack_disable_zero_compress/_ovrd; Add_tile_header_size is
+// at bit 17 per cfg_defines.h), so REG8 readback can't be interpreted with this struct.
 typedef struct
 {
     // word 0

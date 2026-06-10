@@ -590,6 +590,8 @@ inline void dprint_tensix_pack_counters(uint reg_id = 0) {
 }
 
 // Choose what register you want by id (1-4). 0 for all.
+// On Wormhole, REG_IDs 2 and 4 are the REG8 banks, whose word-2 layout differs from REG1
+// (bits 17-23, see cfg_defines.h); fields above src_if_sel are mislabeled for those banks.
 inline void dprint_tensix_pack_config(uint reg_id = 0) {
     std::array<ckernel::packer::pack_config_t, ckernel::packer::NUM_PACKERS> config_vec;
     MATH(

@@ -232,8 +232,10 @@ const std::vector<std::string> field_names_pack_config_wormhole = {
     "pack_l1_acc_disable_pack_zero_flag",
     "reserved_2",
     "exp_threshold"};
-const std::vector<uint32_t> field_values_pack_config_wormhole = {12, 24, 16, 0, 1, 0,  5, 5, 0, 0, 0, 0, 1,
-                                                                 0,  0,  0,  0, 8, 12, 4, 0, 1, 2, 0, 12};
+// REG8 banks (REG_ID 2/4) differ above src_if_sel, so keep all_pack_disable_zero_compress <= 1
+// and ovrd/add_tile_header_size at 0 for readback to match across all 4 banks.
+const std::vector<uint32_t> field_values_pack_config_wormhole = {12, 24, 16, 0, 1, 2,  5, 5, 1, 1, 1, 1, 1,
+                                                                 1,  0,  0,  0, 8, 12, 4, 0, 1, 2, 0, 12};
 
 // Configuration for Data Flow Test involving Reader, Datacopy, and Writer
 struct ConfigRegPrintTestConfig {
