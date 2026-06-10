@@ -27,6 +27,13 @@ constexpr int NUM_STAGES                  = 2;
 constexpr int NUM_TILES_PER_STAGE         = 2;
 constexpr std::uint32_t TOPK_INDEX_FORMAT = ckernel::to_underlying(DataFormat::Int16);
 
+// PACK -> UNPACK L1 write-back semaphore (free t6 semaphore; MATH_PACK uses index 1).
+// In iterations >= 1 the unpacker re-reads tiles from buffer_A that the packer wrote
+// back during the previous iteration. The math<->pack dest semaphore does not order
+// pack's L1 writes against unpack's L1 reads, so without this semaphore the unpack
+// thread runs ahead and reads stale tiles (the same race as tt-llk issue #1344 on BH).
+constexpr std::uint8_t TOPK_L1_WB_SEM = 2;
+
 // ============================================================================
 // UNPACK TRISC
 // ============================================================================
@@ -64,6 +71,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             for (int current_tile_pair_idx = 0; current_tile_pair_idx < num_pairs; ++current_tile_pair_idx)
             {
+                if (!first_iteration)
+                {
+                    // Each source tile of this pair was packed back to buffer_A by one
+                    // pair of the previous iteration; pack posts TOPK_L1_WB_SEM once per
+                    // pair. Consume two posts before issuing any UNPACR for this pair.
+                    // STALL_SYNC holds the SEMGET, STALL_UNPACK/TDMA hold the unpackers.
+                    for (int t = 0; t < NUM_TILES_PER_STAGE; ++t)
+                    {
+                        TTI_SEMWAIT(
+                            ckernel::p_stall::STALL_SYNC | ckernel::p_stall::STALL_UNPACK | ckernel::p_stall::STALL_TDMA,
+                            ckernel::p_stall::STALL_ON_ZERO,
+                            0,
+                            ckernel::trisc::semaphore::t6_sem(TOPK_L1_WB_SEM));
+                        TTI_SEMGET(0, ckernel::trisc::semaphore::t6_sem(TOPK_L1_WB_SEM));
+                    }
+                }
+
                 for (Stage stage : {Stage::Values, Stage::Indices})
                 {
                     const int stage_index                 = static_cast<int>(stage);
@@ -125,8 +149,8 @@ const bool is_int_fpu_en = false;
 #include "ckernel_sfpu.h"
 #include "cmath_common.h"
 #include "llk_math_common.h"
+#include "llk_math_eltwise_sfpu_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
-#include "llk_math_eltwise_unary_sfpu_common.h"
 #include "llk_math_eltwise_unary_sfpu_topk.h"
 #include "params.h"
 
@@ -256,6 +280,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // shared simulator session.
     _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
 
+    // Init the PACK -> UNPACK L1 write-back semaphore (see TOPK_L1_WB_SEM).
+    // Max pending posts = pairs in one iteration (<= 8 for [32,1024]); 15 is the HW max.
+    TTI_SEMINIT(15, 0, 0, ckernel::trisc::semaphore::t6_sem(TOPK_L1_WB_SEM));
+
     const std::uint32_t pack_src_data_types[NUM_STAGES] = {formats.pack_src, TOPK_INDEX_FORMAT};
     const std::uint32_t pack_dst_data_types[NUM_STAGES] = {formats.pack_dst, TOPK_INDEX_FORMAT};
 
@@ -316,6 +344,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                 // Pure semaphore sync: zeros bank, decrements semaphore, flips bank, updates packer dest
                 _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
+
+                if (!last_iter)
+                {
+                    // Both tiles of this pair (value + index) are now committed to L1
+                    // (section_done stalls on PACK). Release the unpack thread to re-read them.
+                    ckernel::trisc::t6_semaphore_post<p_stall::PACK>(TOPK_L1_WB_SEM);
+                }
             } // Pipeline loop.
         } // Iteration loop.
     } // current_tile_row loop.
