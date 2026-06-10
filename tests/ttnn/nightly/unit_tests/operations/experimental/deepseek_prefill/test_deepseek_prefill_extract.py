@@ -110,7 +110,9 @@ def test_valid_inputs_2d_index_first_dim_one(device):
 
 
 def test_global_tensor_wrong_dtype(device):
-    g = _make_global(device, dtype=ttnn.bfloat16)
+    # The op accepts BFLOAT8_B and BFLOAT16 (bf16 is used by the PCC test path);
+    # float32 is a genuinely-invalid global_tensor dtype that must be rejected.
+    g = _make_global(device, dtype=ttnn.float32)
     s = _make_index(device)
     c = _make_index(device)
     with pytest.raises(RuntimeError):

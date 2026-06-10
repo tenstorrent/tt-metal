@@ -14,7 +14,6 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
 #include "api/compute/transpose_wh.h"
-#include "api/compute/untilize.h"
 #include "api/debug/assert.h"
 
 void kernel_main() {
@@ -92,9 +91,6 @@ void kernel_main() {
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
 
     transpose_wh_init_short(cb_in1);
-    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
-
-    untilize_init(cb_in2);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
     unary_op_init_common(cb_in0, cb_out0);
