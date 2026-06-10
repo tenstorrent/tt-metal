@@ -33,7 +33,7 @@
 - **Compute config**: hard-coded HiFi2 + fp32_dest_acc_en
 - **Golden baseline**: 134 / 140 supported cells passing (6 long-context precision misses → Refinement 3); 604 xfail_expected; loud categories all 0 (per verifier_report.json)
 
-### [ ] Refinement 1 — Numerical configurability expansion
+### [~] Refinement 1 — Numerical configurability expansion
 
 **Goal**: add `ttnn.float32` and `ttnn.bfloat8_b` to `SUPPORTED["dtype"]` (496 xfail cells across all shapes × mask_mode × scale_mode), expose `compute_kernel_config: ttnn.ComputeKernelConfig` on the entry point, and derive input/probs/output CB formats from the input dtype (intermediate stat/accumulator CBs are already Float32). Cells that fail out of the box land in `EXCLUSIONS`, not their own refinement. Pass condition: zero kernel changes when helpers are wired correctly.
 
@@ -42,6 +42,15 @@
 **Verifier notes**: lands first — Refinement 3 reuses the dtype-driven CB-format derivation and the exposed fidelity/fp32-dest knobs. Mind the documented HiFi4+fp32-DEST-with-bf16 known-bad (matmul_block_helpers.hpp:415). fp32 dtype ≈ doubles Q/K/V/probs CB footprint: re-run the L1 budget; the D=1024 (Dt=32, c=1) corner is at the 1.5 MB boundary and is an acceptable `EXCLUSIONS` candidate.
 
 **Done when**: all dtype-axis xfail cells pass (minus declared EXCLUSIONS); golden run clean.
+
+**Outcome (2026-06-10, partial)**: all three dtypes in SUPPORTED; zero kernel changes;
+compute_kernel_config exposed (defaults: HiFi2+fp32dest for bf16/bf8b, HiFi4+fp32dest for
+fp32); CB formats dtype-derived, intermediates follow fp32_dest_acc_en. 494/496 new dtype
+cells pass (412/420 supported incl. Phase 0). Deferred to Refinement 3 (no EXCLUSIONS,
+left failing): 2 bf8b Q1x1x8192x64 mask=none cells, RMS 0.165 vs 0.12 — same
+near-uniform-attention root cause as Phase 0's 6 bf16 misses. Guards (config-level, not
+axes): HiFi4+fp32dest+bf16/bf8b (known-bad #38306, ValueError); fp32/bf8b inputs with
+fp32_dest_acc_en=False (16-bit DEST pairing corrupts — probe_008, NotImplementedError).
 
 ### [ ] Refinement 2 — GQA / MQA head mapping
 
@@ -56,6 +65,8 @@
 **Goal**: move the 6 `supported_fail` `numerical-precision` cells (Q1x1x4096x64, Q1x1x8192x64, Q1x4x4096x64 × mask_mode=none × both scale_modes; RMS 0.067–0.158 vs 0.05) and the failing distribution regressions (`uniform_input`, `negative_input` rms 0.09–0.50 incl. one severity=bug at S=512, `long_context_smoke`) into passing. Root cause: near-uniform attention output has tiny stddev while bf16 `cb_probs` quantization noise stays constant — relative RMS blows up with S. Lever: fp32 probs path for rowsum + P@V (fp32 matmul inputs at reduced throughput, gated on compute_kernel_config from Refinement 1) or bf16 probs error compensation in `l`. No SUPPORTED axis changes — these cells are inside SUPPORTED and must not be gated out via EXCLUSIONS or a shape-size tagger.
 
 **Verifier notes**: depends on Refinement 1 (compute_kernel_config + CB-format plumbing). Tolerances live in `eval/golden_tests/.../helpers.py:TOLERANCES` — fix the kernel, don't loosen them.
+
+**Inherited from Refinement 1**: also fix the 2 bf8b Q1x1x8192x64 mask=none cells (RMS 0.165 vs 0.12, ulp_p99 9.5e8 — same near-uniform-attention root cause; cb_probs is bf8b for bf8b inputs, so the probs-quantization noise term is larger). Lever: keep cb_probs at Float16_b (or Float32 with the fp32-probs path) regardless of input dtype — Refinement 1 already left `in_fmt` vs `acc_fmt` derivation in the descriptor, so this is one line for the probs CB. fp32 inputs already pass long-context (probs CB Float32 there).
 
 **Done when**: zero `supported_fail` cells; uniform/negative/long_context regression tests pass at default tolerances.
 
