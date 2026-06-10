@@ -53,23 +53,14 @@ spec_return_value_t TopkXLDeviceOperation::compute_output_specs(
     output_shape_vec.back() = attrs.k;
 
     const auto memory_config = tensor_args.input_tensor.memory_config();
-    auto values_spec = TensorSpec(
-        ttnn::Shape(output_shape_vec),
-        tt::tt_metal::TensorLayout(DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), memory_config));
-    auto indices_spec = TensorSpec(
+    return TensorSpec(
         ttnn::Shape(std::move(output_shape_vec)),
         tt::tt_metal::TensorLayout(DataType::UINT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), memory_config));
-
-    return {values_spec, indices_spec};
 }
 
 tensor_return_value_t TopkXLDeviceOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    auto specs = compute_output_specs(attrs, tensor_args);
-    auto* device = tensor_args.input_tensor.device();
-    auto values = create_device_tensor(std::get<0>(specs), device);
-    auto indices = create_device_tensor(std::get<1>(specs), device);
-    return {values, indices};
+    return create_device_tensor(compute_output_specs(attrs, tensor_args), tensor_args.input_tensor.device());
 }
 
 std::tuple<TopkXLDeviceOperation::operation_attributes_t, TopkXLDeviceOperation::tensor_args_t>
@@ -83,7 +74,7 @@ TopkXLDeviceOperation::invoke(const Tensor& input_tensor, uint32_t k, bool large
 
 namespace ttnn::experimental {
 
-std::tuple<Tensor, Tensor> topk_xl(const Tensor& input_tensor, uint32_t k, bool largest, bool sorted) {
+Tensor topk_xl(const Tensor& input_tensor, uint32_t k, bool largest, bool sorted) {
     auto [operation_attributes, tensor_args] =
         operations::experimental::topk_xl::TopkXLDeviceOperation::invoke(input_tensor, k, largest, sorted);
     return ttnn::device_operation::launch<operations::experimental::topk_xl::TopkXLDeviceOperation>(

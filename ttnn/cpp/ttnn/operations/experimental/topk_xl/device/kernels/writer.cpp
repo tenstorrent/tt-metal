@@ -2,62 +2,101 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "api/core_local_mem.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
 
+namespace {
+
+template <uint32_t output_slices_per_row, uint32_t slice_bytes>
+FORCE_INLINE void copy_row_to_scratch(CircularBuffer& src_cb, CircularBuffer& scratch_cb, const Noc& noc) {
+    static_assert(output_slices_per_row == 32 || output_slices_per_row == 64 || output_slices_per_row == 128);
+    constexpr uint32_t transfer_bytes = output_slices_per_row == 32 ? output_slices_per_row * slice_bytes : slice_bytes;
+    static_assert(transfer_bytes <= NOC_MAX_BURST_SIZE);
+
+    const uint32_t src_base = src_cb.get_read_ptr();
+    const uint32_t dst_base = scratch_cb.get_write_ptr();
+    const uint32_t noc_id = noc.get_noc_id();
+    const auto local_src = [noc_id](uint32_t addr) {
+        return noc_traits_t<UnicastEndpoint>::src_args_type{
+            .noc_x = static_cast<uint32_t>(my_x[noc_id]), .noc_y = static_cast<uint32_t>(my_y[noc_id]), .addr = addr};
+    };
+
+    noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+        UnicastEndpoint{}, transfer_bytes, local_src(src_base));
+
+    if constexpr (output_slices_per_row == 32) {
+        noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+            UnicastEndpoint{},
+            CoreLocalMem<uint32_t>(dst_base),
+            transfer_bytes,
+            local_src(src_base),
+            {.offset_bytes = 0});
+    } else {
+        for (uint32_t dst_slice = 0; dst_slice < output_slices_per_row; ++dst_slice) {
+            const uint32_t src_slice =
+                2 * (dst_slice >> 2) + (dst_slice & 0x1) + ((dst_slice & 0x2) ? output_slices_per_row / 2 : 0);
+            const uint32_t src_addr = src_base + src_slice * slice_bytes;
+            const uint32_t dst_addr = dst_base + dst_slice * slice_bytes;
+            noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                UnicastEndpoint{},
+                CoreLocalMem<uint32_t>(dst_addr),
+                transfer_bytes,
+                local_src(src_addr),
+                {.offset_bytes = 0});
+        }
+    }
+    noc.async_read_barrier();
+}
+
+template <uint32_t output_slices_per_row, uint32_t slice_bytes, typename TensorAccessorT>
+FORCE_INLINE void issue_reordered_row_write(
+    CircularBuffer& src_cb,
+    CircularBuffer& scratch_cb,
+    const Noc& noc,
+    const TensorAccessorT& tensor,
+    uint32_t row,
+    uint32_t row_bytes) {
+    src_cb.wait_front(1);
+    scratch_cb.reserve_back(1);
+    copy_row_to_scratch<output_slices_per_row, slice_bytes>(src_cb, scratch_cb, noc);
+    src_cb.pop_front(1);
+
+    scratch_cb.push_back(1);
+    scratch_cb.wait_front(1);
+    noc.async_write(scratch_cb, tensor, row_bytes, {.offset_bytes = 0}, {.page_id = row, .offset_bytes = 0});
+}
+
+}  // namespace
+
 void kernel_main() {
-    const uint32_t values_addr = get_arg_val<uint32_t>(0);
-    const uint32_t indices_addr = get_arg_val<uint32_t>(1);
+    const uint32_t indices_addr = get_arg_val<uint32_t>(0);
+    const uint32_t start_row = get_arg_val<uint32_t>(1);
+    const uint32_t num_rows = get_arg_val<uint32_t>(2);
 
-    constexpr uint32_t cb_values = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_indices = get_compile_time_arg_val(1);
-    constexpr uint32_t num_rows = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_indices = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_indices_scratch = get_compile_time_arg_val(1);
+    constexpr uint32_t indices_page_bytes = get_compile_time_arg_val(2);
     constexpr uint32_t output_slices_per_row = get_compile_time_arg_val(3);
-    constexpr uint32_t values_slice_bytes = get_compile_time_arg_val(4);
-    constexpr uint32_t indices_slice_bytes = get_compile_time_arg_val(5);
-    constexpr uint32_t values_page_bytes = get_compile_time_arg_val(6);
-    constexpr uint32_t indices_page_bytes = get_compile_time_arg_val(7);
-    constexpr uint32_t output_tiles_per_row = get_compile_time_arg_val(8);
-    constexpr uint32_t rank_page_groups = output_slices_per_row / 16;
-    constexpr auto values_args = TensorAccessorArgs<9>();
+    constexpr uint32_t indices_slice_bytes = get_compile_time_arg_val(4);
+    constexpr auto indices_args = TensorAccessorArgs<5>();
 
-    const auto values = TensorAccessor(values_args, values_addr, values_page_bytes);
-    const auto indices = TensorAccessor(values_args, indices_addr, indices_page_bytes);
-    CircularBuffer values_cb(cb_values);
+    const auto indices = TensorAccessor(indices_args, indices_addr, indices_page_bytes);
     CircularBuffer indices_cb(cb_indices);
+    CircularBuffer indices_scratch_cb(cb_indices_scratch);
     Noc noc;
 
-    for (uint32_t row = 0; row < num_rows; ++row) {
-        values_cb.wait_front(output_tiles_per_row);
-        for (uint32_t page = 0; page < output_slices_per_row; ++page) {
-            const uint32_t rank_page = ((page & 0xF) * rank_page_groups) | (page >> 4);
-            const uint32_t src_offset = page * values_slice_bytes;
-            const uint32_t dst_offset = rank_page * values_slice_bytes;
-            noc.async_write(
-                values_cb,
-                values,
-                values_slice_bytes,
-                {.offset_bytes = src_offset},
-                {.page_id = row, .offset_bytes = dst_offset});
-        }
-        noc.async_write_barrier();
-        values_cb.pop_front(output_tiles_per_row);
+    for (uint32_t local_row = 0; local_row < num_rows; ++local_row) {
+        const uint32_t row = start_row + local_row;
+        issue_reordered_row_write<output_slices_per_row, indices_slice_bytes>(
+            indices_cb, indices_scratch_cb, noc, indices, row, indices_page_bytes);
 
-        indices_cb.wait_front(output_tiles_per_row);
-        for (uint32_t page = 0; page < output_slices_per_row; ++page) {
-            const uint32_t rank_page = ((page & 0xF) * rank_page_groups) | (page >> 4);
-            const uint32_t src_offset = page * indices_slice_bytes;
-            const uint32_t dst_offset = rank_page * indices_slice_bytes;
-            noc.async_write(
-                indices_cb,
-                indices,
-                indices_slice_bytes,
-                {.offset_bytes = src_offset},
-                {.page_id = row, .offset_bytes = dst_offset});
-        }
-        noc.async_write_barrier();
-        indices_cb.pop_front(output_tiles_per_row);
+        noc.async_writes_flushed();
+        indices_scratch_cb.pop_front(1);
     }
+
+    noc.async_write_barrier();
 }

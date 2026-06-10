@@ -6,6 +6,63 @@ topk op. tt-blaze issue #558.
 
 ## Log
 
+### 2026-06-10 — multicore row sharding, no padded-K workaround
+- Parallelization now shards independent rows across the active Tensix cores with
+  `split_work_to_cores(..., row_wise=true)`. Each scheduled core receives a contiguous
+  `[start_row, start_row + num_rows)` range; the unit of work is one full input row.
+- Reader and writer runtime args are now `{buffer_addr, start_row, num_rows}`. Compute receives
+  `{num_rows}`. CBs are allocated over the active core range so reader, compute, and writer can
+  overlap row-by-row on each core with the existing double-buffered input/output CBs.
+- For 640 rows on a 120-core device, the split is expected to be 40 cores with 6 rows and 80 cores
+  with 5 rows, so no core processes more than 6 rows.
+- Important cleanup after review: do **not** route public K=512 through an internal K=1024 padded
+  path. That would add extra compute/L1 traffic and is not the right fix. The writer scratch reorder
+  also keeps the K=512 case as a single contiguous local-L1 NOC transfer.
+- Validation: `./build_metal.sh --release` PASS; `scripts/run_safe_pytest.sh
+  tests/ttnn/unit_tests/operations/experimental/test_topk_xl.py::test_topk_xl_row_major_parallelizes_640_rows -q`
+  PASS with K=1024; full `scripts/run_safe_pytest.sh
+  tests/ttnn/unit_tests/operations/experimental/test_topk_xl.py -q` PASS (19/19).
+- Caveat: a 640-row stress run with K=512 exposed a separate half-tile/multicore corner. Existing
+  K=512 coverage still passes, but no slow padded workaround is retained; K=512 large-row stress
+  needs a direct fix.
+
+### 2026-06-10 — requirement change: indices-only public output
+- Requirement changed: `topk_xl` now returns only sorted row-major UINT32 indices. It no longer
+  returns sorted BFLOAT16 values.
+- Cleanup/simplification applied:
+  - Public C++/Python API returns a single `Tensor`.
+  - Output spec/allocation creates only the UINT32 indices tensor.
+  - Program factory removed values output CB and values scratch CB; only `cb_indices` and
+    `cb_indices_scratch` remain for output.
+  - Compute still carries values internally in DST because Top-K needs them for comparison and
+    value/index swaps, but it now materializes/transposes only the index tiles and packs only the
+    indices row page.
+  - Writer now has one stream only: local-L1 NOC reorder into index scratch, then one contiguous
+    DRAM write per row.
+- Validation: `./build_metal.sh --release` PASS; `scripts/run_safe_pytest.sh
+  tests/ttnn/unit_tests/operations/experimental/test_topk_xl.py -q` PASS (18/18).
+
+### 2026-06-10 — continuous row-output experiment
+- Started replacing writer-side 16-element scatter with compute-side `pack_untilize_dest` into
+  double-buffered row pages. Output CB contract is now one page per logical output row:
+  `cb_values` page size = `K * sizeof(bfloat16)`, `cb_indices` page size = `K * sizeof(uint32_t)`.
+- Writer path is now intended to issue exactly two contiguous DRAM writes per row: one values row and
+  one indices row. Compute reserves/pushes one row page per output tensor so writer and compute can
+  overlap across rows via the existing 2-page CB depth.
+- K=512 output CBs use 2-face metadata so `pack_untilize_dest` emits 16 row-major sticks = 512
+  elements. K=1024/2048 use normal 4-face geometry, producing 32 sticks of 32/64 elements.
+- First validation: K=512 is directly correct. K=1024/2048 emit 16-element groups in face-row order
+  (`0,1,4,5,...,2,3,6,7,...`), so writer now uses a one-page local scratch CB per output stream:
+  copy/reorder compute's row page into scratch, pop compute's CB immediately for overlap, then issue one
+  contiguous DRAM write from scratch.
+- Scratch reorder is implemented with local-L1 NOC reads, not RISC-V copy loops. Since transaction
+  sizes are compile-time constants, `copy_row_to_scratch` sets read state once per row/output stream
+  with `set_async_read_state`, then issues `async_read_with_state` transfers into the scratch CB.
+  The writer uses `async_writes_flushed()` per row so scratch pages can be reused after writes have
+  left L1, with one final `async_write_barrier()` after all rows for DRAM completion.
+- Validation: `./build_metal.sh --release` PASS; `scripts/run_safe_pytest.sh
+  tests/ttnn/unit_tests/operations/experimental/test_topk_xl.py -q` PASS (18/18).
+
 ### 2026-06-08
 - **Plan + recon.** Wrote `PLAN_topk_xl_op.md` (op design, LLK 4-layer integration analysis,
   Approach A vs B, two-level testing plan). Chose **Approach A** (headers in canonical tt-llk
@@ -1124,3 +1181,53 @@ Closed the requested gaps. Final LLK test suite (all GREEN on Blackhole silicon)
   - `./build_metal.sh --release`: PASS.
   - `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/experimental/test_topk_xl.py -q`:
     PASS (18 passed).
+
+### 2026-06-10 — indices-only output and row-parallel K=512 fix
+- Updated the public/device op path to return indices only:
+  - removed the values output from the device operation result, program factory, runtime args,
+    compute kernel CBs, writer kernel CBs, and nanobind wrapper;
+  - retained the required input/output contract: row-major BFLOAT16 input and row-major UINT32
+    indices output.
+- Changed work distribution so all available Tensix worker cores receive row work:
+  - the unit of work is one input row;
+  - runtime args pass each core's `start_row` and `num_rows`;
+  - for 640 rows on a 120-core grid, rows are split across all cores with at most six rows per
+    core.
+- Reworked the indices output path:
+  - compute materializes only the index half of DEST with `transpose_wh_dest<true, false>`;
+  - compute packs the index tiles through `pack_untilize_dest` into one row-major CB page per row;
+  - writer uses a local scratch CB to reorder packed stick slices and issues one contiguous DRAM
+    write per output row.
+- Debugged the K=512 / 640-row failure:
+  - reader-side zero filling, writer direct writes, writer slice reorder variants, remap reset, and
+    an LLK RWC reset experiment did not fix the bad-row pattern and were not kept;
+  - the real trigger was the single-chunk path (`n == k == 512`), which did not execute the merge
+    loop and therefore skipped the unfused `topk_xl_rebuild<K, false>` finalization that multi-chunk
+    rows already receive;
+  - fixed this by running `topk_xl_init<K, false>()` and `topk_xl_rebuild<K, false>(slot0, false)`
+    once after the first chunk when `num_chunks == 1`.
+- Validation:
+  - `./build_metal.sh --release`: PASS.
+  - `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/experimental/test_topk_xl.py::test_topk_xl_row_major_parallelizes_640_rows -q`:
+    PASS (3 passed for K=512, K=1024, K=2048).
+  - `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/experimental/test_topk_xl.py -q`:
+    PASS (21 passed).
+- ttsim note:
+  - not needed for the current fix because the LLK implementation files are unchanged and the bug
+    was in op-level row/chunk finalization;
+  - use ttsim if a future change modifies the Blaze-derived LLKs or if silicon/pytest exposes an
+    instruction-level hang or register-state issue.
+
+### 2026-06-10 — hoist Blackhole DEST remap for pack-untilize
+- Hoisted the Blackhole DEST remap enable out of the per-row pack-untilize init:
+  - `kernel_main()` now calls `MATH((llk_math_reconfig_remap(true)))` once after
+    `compute_kernel_hw_startup`;
+  - the row loop calls
+    `pack_untilize_dest_init<tiles_per_sequence, tiles_per_sequence, false, TILE_C_DIM, false, false>`
+    so `pack_untilize_dest_init` does not repeat the remap reconfiguration for every output row.
+- Kept pack-untilize init/uninit scoped per row because the row loop still switches between topk,
+  transpose/materialize, and pack-untilize packer state.
+- Validation:
+  - `./build_metal.sh --release`: PASS.
+  - `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/experimental/test_topk_xl.py -q`:
+    PASS (21 passed).

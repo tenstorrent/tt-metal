@@ -7,13 +7,15 @@
 #include "topk_xl_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
+#include <vector>
+
 namespace ttnn::operations::experimental::topk_xl::program {
 
 struct TopkXLSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id{};
     tt::tt_metal::KernelHandle compute_kernel_id{};
     tt::tt_metal::KernelHandle writer_kernel_id{};
-    CoreCoord core{};
+    std::vector<CoreCoord> cores{};
 };
 
 struct TopkXLProgramFactory {

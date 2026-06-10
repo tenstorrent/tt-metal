@@ -11,8 +11,7 @@
 
 namespace ttnn::operations::experimental::topk_xl {
 
-std::tuple<ttnn::Tensor, ttnn::Tensor> topk_xl_func(
-    const ttnn::Tensor& input_tensor, uint32_t k, bool largest, bool sorted) {
+ttnn::Tensor topk_xl_func(const ttnn::Tensor& input_tensor, uint32_t k, bool largest, bool sorted) {
     auto [operation_attributes, tensor_args] = TopkXLDeviceOperation::invoke(input_tensor, k, largest, sorted);
     return ttnn::device_operation::launch<TopkXLDeviceOperation>(operation_attributes, tensor_args);
 }
@@ -25,11 +24,11 @@ void bind_topk_xl(nb::module_& mod) {
     ttnn::bind_function<"topk_xl", "ttnn.experimental.">(
         mod,
         R"doc(
-        Experimental row-major Top-K XL for BFLOAT16 values and UINT32 row-major indices.
+        Experimental row-major Top-K XL for UINT32 row-major indices.
 
         Args:
             input_tensor: row-major BFLOAT16 tensor. Reduction is over the last dimension.
-            k: number of top elements. Initial implementation supports k=1024.
+            k: number of top elements. Initial implementation supports k=512, 1024, or 2048.
             largest: must be true.
             sorted: must be true.
         )doc",

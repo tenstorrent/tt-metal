@@ -9,21 +9,23 @@
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
+    const uint32_t start_row = get_arg_val<uint32_t>(1);
+    const uint32_t num_rows = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
-    constexpr uint32_t num_rows = get_compile_time_arg_val(1);
-    constexpr uint32_t num_chunks = get_compile_time_arg_val(2);
-    constexpr uint32_t chunk_bytes = get_compile_time_arg_val(3);
-    constexpr uint32_t input_page_bytes = get_compile_time_arg_val(4);
-    constexpr uint32_t tile_bytes = get_compile_time_arg_val(5);
-    constexpr uint32_t tiles_per_chunk = get_compile_time_arg_val(6);
-    constexpr auto input_args = TensorAccessorArgs<7>();
+    constexpr uint32_t num_chunks = get_compile_time_arg_val(1);
+    constexpr uint32_t chunk_bytes = get_compile_time_arg_val(2);
+    constexpr uint32_t input_page_bytes = get_compile_time_arg_val(3);
+    constexpr uint32_t tile_bytes = get_compile_time_arg_val(4);
+    constexpr uint32_t tiles_per_chunk = get_compile_time_arg_val(5);
+    constexpr auto input_args = TensorAccessorArgs<6>();
 
     const auto input = TensorAccessor(input_args, src_addr, input_page_bytes);
     CircularBuffer input_cb(cb_in);
     Noc noc;
 
-    for (uint32_t row = 0; row < num_rows; ++row) {
+    for (uint32_t local_row = 0; local_row < num_rows; ++local_row) {
+        const uint32_t row = start_row + local_row;
         for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
             for (uint32_t tile = 0; tile < tiles_per_chunk; ++tile) {
                 input_cb.reserve_back(1);

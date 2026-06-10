@@ -51,22 +51,35 @@ def test_topk_xl_row_major_bfloat16_uint32_indices(device, k, num_rows, n):
 
     tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-    tt_values, tt_indices = ttnn.experimental.topk_xl(tt_input, k=k)
+    tt_indices = ttnn.experimental.topk_xl(tt_input, k=k)
 
-    ref_values, ref_indices = torch.topk(torch_input.float(), k, dim=-1, largest=True, sorted=True)
-    ref_values = ref_values.to(torch.bfloat16)
+    _, ref_indices = torch.topk(torch_input.float(), k, dim=-1, largest=True, sorted=True)
 
-    values = ttnn.to_torch(tt_values)
     indices = ttnn.to_torch(tt_indices, dtype=torch.uint32)
 
-    assert list(tt_values.shape) == [num_rows, k]
     assert list(tt_indices.shape) == [num_rows, k]
-    assert tt_values.dtype == ttnn.bfloat16
     assert tt_indices.dtype == ttnn.uint32
-    assert tt_values.layout == ttnn.ROW_MAJOR_LAYOUT
     assert tt_indices.layout == ttnn.ROW_MAJOR_LAYOUT
 
-    assert_equal(values, ref_values)
+    assert_equal(indices.to(torch.int64), ref_indices)
+
+
+@pytest.mark.parametrize("k", [512, 1024, 2048])
+def test_topk_xl_row_major_parallelizes_640_rows(device, k):
+    num_rows = 640
+    n = k
+    torch_input = _make_large_index_input(num_rows=num_rows, n=n, k=k)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    tt_indices = ttnn.experimental.topk_xl(tt_input, k=k)
+
+    _, ref_indices = torch.topk(torch_input.float(), k, dim=-1, largest=True, sorted=True)
+    indices = ttnn.to_torch(tt_indices, dtype=torch.uint32)
+
+    assert list(tt_indices.shape) == [num_rows, k]
+    assert tt_indices.dtype == ttnn.uint32
+    assert tt_indices.layout == ttnn.ROW_MAJOR_LAYOUT
     assert_equal(indices.to(torch.int64), ref_indices)
 
 
@@ -80,14 +93,11 @@ def test_topk_xl_row_major_uint32_indices_above_uint16(device, k, num_chunks):
 
     tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-    tt_values, tt_indices = ttnn.experimental.topk_xl(tt_input, k=k)
+    tt_indices = ttnn.experimental.topk_xl(tt_input, k=k)
 
-    values = ttnn.to_torch(tt_values)
     indices = ttnn.to_torch(tt_indices, dtype=torch.uint32)
 
-    ref_values, ref_indices = torch.topk(torch_input.float(), k, dim=-1, largest=True, sorted=True)
-    ref_values = ref_values.to(torch.bfloat16)
+    _, ref_indices = torch.topk(torch_input.float(), k, dim=-1, largest=True, sorted=True)
 
     assert int(ref_indices.min()) >= 65536
-    assert_equal(values, ref_values)
     assert_equal(indices.to(torch.int64), ref_indices)

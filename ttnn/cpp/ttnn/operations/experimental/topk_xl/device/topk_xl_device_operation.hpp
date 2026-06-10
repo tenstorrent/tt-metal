@@ -38,6 +38,6 @@ struct TopkXLDeviceOperation {
 
 namespace ttnn::experimental {
 
-std::tuple<Tensor, Tensor> topk_xl(const Tensor& input_tensor, uint32_t k, bool largest = true, bool sorted = true);
+Tensor topk_xl(const Tensor& input_tensor, uint32_t k, bool largest = true, bool sorted = true);
 
 }  // namespace ttnn::experimental
