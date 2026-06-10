@@ -7,6 +7,5 @@
   "ttnn.linear",
   "ttnn.multiply",
   "ttnn.rms_norm",
-  "ttnn.silu",
   "ttnn.transformer.windowed_scaled_dot_product_attention"
 ]

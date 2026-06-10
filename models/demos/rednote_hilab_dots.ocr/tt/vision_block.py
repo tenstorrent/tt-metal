@@ -103,13 +103,17 @@ class TtVisionBlock(LightweightModule):
         attn_in = self.norm1(x_11SH)
         attn_out = self.attn(attn_in, rot_mats, cu_seqlens)
         ttnn.deallocate(attn_in)
-        h = ttnn.add(x_11SH, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=res_dtype)
+        # Residual adds live in L1: their only consumers are RMSNorm reads and
+        # the next residual add — never a matmul — so the L1 pin avoids the
+        # L1-interleaved-into-matmul stall (tower tracy: DRAM add 44.2us vs
+        # 13.8us for the same-sized L1 BinaryNg) while norm reads get faster.
+        h = ttnn.add(x_11SH, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=res_dtype)
         ttnn.deallocate(attn_out)
 
         ff_in = self.norm2(h)
         ff_out = self.mlp(ff_in)
         ttnn.deallocate(ff_in)
-        out = ttnn.add(h, ff_out, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=res_dtype)
+        out = ttnn.add(h, ff_out, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=res_dtype)
         ttnn.deallocate(h)
         ttnn.deallocate(ff_out)
         return out

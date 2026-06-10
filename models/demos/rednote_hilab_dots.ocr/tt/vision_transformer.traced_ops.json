@@ -11,9 +11,9 @@
   "ttnn.neg",
   "ttnn.reshape",
   "ttnn.rms_norm",
-  "ttnn.silu",
   "ttnn.slice",
   "ttnn.to_layout",
+  "ttnn.to_memory_config",
   "ttnn.to_string",
   "ttnn.transformer.windowed_scaled_dot_product_attention",
   "ttnn.typecast"
