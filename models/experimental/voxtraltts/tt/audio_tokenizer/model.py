@@ -567,8 +567,13 @@ class VoxtralTTAudioTokenizer:
 
         b, _, input_t, input_c = (int(latent_b1tc.shape[i]) for i in range(4))
 
+        # Cache attention masks only for short sequences (PCC tests up to T≈160). Longer
+        # decodes upsample to ~8× before the last transformer; keeping all four stage masks
+        # live at once exceeds DRAM (see chunked-path comment below). Single chunks up to
+        # _DECODE_CHUNK_T use the same use_cache=False inner path as long utterances.
         if input_t <= _DECODE_CHUNK_T:
-            return self._decode_full_forward_inner(latent_b1tc, use_cache=True)
+            use_cache = input_t <= 160
+            return self._decode_full_forward_inner(latent_b1tc, use_cache=use_cache)
 
         # Long sequence: chunk into _DECODE_CHUNK_T-token pieces.
         # Each chunk includes _DECODE_OVERLAP left-context tokens from the previous chunk

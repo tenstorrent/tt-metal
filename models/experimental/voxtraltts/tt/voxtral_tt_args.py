@@ -197,6 +197,7 @@ def _load_safetensors_state_dict(model_name_or_path: str) -> dict[str, torch.Ten
         snapshot_dir = Path(
             snapshot_download(
                 repo_id=model_name_or_path,
+                allow_patterns=["*.safetensors"],
                 local_files_only=os.getenv("CI") == "true",
             )
         )
