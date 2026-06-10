@@ -75,13 +75,14 @@ def test_topk_indices_match(mesh_device, skv, k):
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
-def test_sparse_mla_numerics(mesh_device):
+@pytest.mark.parametrize("start_pos", [0, 256], ids=["single_shot", "chunked"])
+def test_sparse_mla_numerics(mesh_device, start_pos):
     torch.manual_seed(1)
     h, sq, skv, k = 8, 128, 512, 64
     q = torch.randn(1, h, sq, 576, dtype=torch.bfloat16)
     kvpe = torch.randn(1, 1, skv, 576, dtype=torch.bfloat16)
-    # Causal-valid indices: sparse_mla masks index > row_pos (op contract).
-    idx = (torch.rand(1, 1, sq, k) * (torch.arange(sq).view(sq, 1) + 1)).to(torch.int32)
+    # Causal-valid indices: sparse_mla masks index > start_pos + row (op contract).
+    idx = (torch.rand(1, 1, sq, k) * (start_pos + torch.arange(sq).view(sq, 1) + 1)).to(torch.int32)
     scale = 576**-0.5
 
     sel = kvpe[0, 0][idx.long()[0, 0]]
@@ -102,6 +103,7 @@ def test_sparse_mla_numerics(mesh_device):
         _dev(kvpe, mesh_device),
         _dev(idx, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32),
         scale,
+        start_pos=start_pos,
     )
     out_t = ttnn.to_torch(
         out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=mesh_device.shape)

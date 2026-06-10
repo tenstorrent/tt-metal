@@ -71,7 +71,9 @@ def topk_indices(logits: ttnn.Tensor, k: int) -> ttnn.Tensor:
         )
 
 
-def sparse_mla(q: ttnn.Tensor, kvpe: ttnn.Tensor, indices: ttnn.Tensor, scale: float) -> ttnn.Tensor:
+def sparse_mla(
+    q: ttnn.Tensor, kvpe: ttnn.Tensor, indices: ttnn.Tensor, scale: float, start_pos: int = 0
+) -> ttnn.Tensor:
     """
     Absorbed MQA over the top-k selected latents only (FlashMLA sparse contract:
     no causal mask — indices already encode it).
@@ -79,8 +81,10 @@ def sparse_mla(q: ttnn.Tensor, kvpe: ttnn.Tensor, indices: ttnn.Tensor, scale: f
     Args:
         q: [1, H, Sq, 576] absorbed queries (nope·wkv_b ++ rope)
         kvpe: [1, 1, Skv, 576] latent cache (kv 512 ++ pe 64)
-        indices: [1, 1, Sq, k] uint32 from topk_indices
+        indices: [1, 1, Sq, k] uint32 from topk_indices (global key positions)
         scale: softmax scale (with YaRN mscale)
+        start_pos: global position of q row 0 (chunked prefill); row s may attend
+            keys <= start_pos + s
     Returns:
         out [1, H, Sq, 512] bf16 latent attention output
     CPU FALLBACK (gather+SDPA on host): no ttnn gather over Skv; fused op is follow-up.
@@ -94,7 +98,7 @@ def sparse_mla(q: ttnn.Tensor, kvpe: ttnn.Tensor, indices: ttnn.Tensor, scale: f
     # from latents so the -inf does not carry over. FlashMLA handles this with
     # per-row topk_length; the fused op must too.
     sq = idx.shape[2]
-    future = (idx[0, 0] > torch.arange(sq).view(sq, 1)).unsqueeze(0)  # [1, Sq, k]
+    future = (idx[0, 0] > start_pos + torch.arange(sq).view(sq, 1)).unsqueeze(0)  # [1, Sq, k]
     outs = []
     for q_shard in ttnn.get_device_tensors(q):
         q_t = ttnn.to_torch(q_shard)
