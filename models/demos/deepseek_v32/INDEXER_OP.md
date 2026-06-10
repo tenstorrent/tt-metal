@@ -124,9 +124,15 @@ Branch: `skrstic/dsa_indexer_score_op`.
 
 - [x] Test + torch reference: `tests/nightly/blackhole/sdpa/test_indexer_score.py`
   (with ring-joint SDPA tests). One test, GLX dims, `sp_rank ∈ {0, 7}`;
-  `indexer_score()` runs the reference for now, swap point for the ttnn op
-  marked. Reference verified vs einsum and brute force per element.
-- [ ] ttnn `indexer_score` op (reader / compute / writer per pipeline above).
+  test drives the ttnn op. Reference verified vs einsum and brute force
+  per element.
+- [x] Skeleton op `ttnn.experimental.deepseek.indexer_score` at
+  `ttnn/cpp/ttnn/operations/experimental/deepseek/indexer_score/`: host API,
+  device op (`is_causal` + `chunk_start_idx` attrs, input validation, RM bf16
+  output spec), empty program factory (no kernels), nanobind + CMake
+  registration. Compiles, dispatches at GLX dims, output is garbage — test
+  fails PCC as expected and is the bring-up gate.
+- [ ] real program factory (reader / compute / writer per pipeline above).
 - [ ] new row-major top-k (separate effort).
 - [ ] negative-weights topk-safety test once both exist (padding must not win).
 

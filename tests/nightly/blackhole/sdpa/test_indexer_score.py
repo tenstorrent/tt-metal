@@ -19,6 +19,8 @@ runs the torch reference; swap in the ttnn op where marked.
 import pytest
 import torch
 
+import ttnn
+
 GLX_HEADS, GLX_DIM = 64, 128
 GLX_SQ = 640  # queries per device (5120 chunk / SP=8)
 GLX_T = 55296  # all-gathered keys, tile-aligned
@@ -37,13 +39,18 @@ def indexer_score_ref(q, k, w, chunk_start):
     return score.masked_fill(future, float("-inf")).unsqueeze(1)
 
 
-def indexer_score(q, k, w, chunk_start):
-    """Op under test. TODO: replace with ttnn.experimental.indexer_score."""
-    return indexer_score_ref(q, k, w, chunk_start)
+def indexer_score(q, k, w, chunk_start, device):
+    """Op under test (skeleton: compiles/dispatches, output garbage -> bad PCC)."""
+
+    def dev(t):
+        return ttnn.from_torch(t, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+    out = ttnn.experimental.deepseek.indexer_score(dev(q), dev(k), dev(w), chunk_start_idx=chunk_start)
+    return ttnn.to_torch(out)
 
 
 @pytest.mark.parametrize("sp_rank", [0, 7])
-def test_indexer_score_glx_chunked(sp_rank):
+def test_indexer_score_glx_chunked(device, sp_rank):
     chunk_start = GLX_HISTORY + sp_rank * GLX_SQ
     g = torch.Generator().manual_seed(42)
     q = torch.randn(1, GLX_HEADS, GLX_SQ, GLX_DIM, generator=g, dtype=torch.bfloat16)
@@ -51,7 +58,7 @@ def test_indexer_score_glx_chunked(sp_rank):
     # negative gates make real scores negative — zero-filled columns would win topk
     w = torch.randn(1, GLX_HEADS, GLX_SQ, 1, generator=g, dtype=torch.bfloat16)
 
-    out = indexer_score(q, k, w, chunk_start)
+    out = indexer_score(q, k, w, chunk_start, device)
     ref = indexer_score_ref(q, k, w, chunk_start)
 
     assert out.shape == (1, 1, GLX_SQ, GLX_T)
