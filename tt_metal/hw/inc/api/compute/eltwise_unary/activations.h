@@ -30,23 +30,21 @@ namespace ckernel {
 */
 // clang-format on
 ALWI void hardsigmoid_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL_CAST(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_activation,
         (APPROX, ckernel::ActivationType::Hardsigmoid, 8 /* ITERATIONS */),
-        (void (*)()),
         idst,
         VectorMode::RC));
 }
 
 ALWI void hardsigmoid_tile_pack(uint32_t idst) {
-    PACK(SFPU_UNARY_CALL_CAST(
+    PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_activation,
         (APPROX, ckernel::ActivationType::Hardsigmoid, 8 /* ITERATIONS */),
-        (void (*)()),
         idst,
         VectorMode::RC));
 }

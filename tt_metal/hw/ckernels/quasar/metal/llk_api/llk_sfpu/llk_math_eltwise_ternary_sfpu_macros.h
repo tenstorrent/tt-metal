@@ -70,7 +70,7 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_and_call_(
 #define _SFPU_TERN_EXPAND(...) __VA_ARGS__
 
 /*
- * Ternary SFPU invocation macros (3 total)
+ * Ternary SFPU invocation macros (2 total)
  *
  * All paths funnel through ckernel::_sfpu_ternary_check_and_call_<DST_SYNC,
  * DST_ACCUM>(...), which (on Quasar) asserts RC vector mode and dispatches
@@ -110,25 +110,6 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_and_call_(
     DST_SYNC, DST_ACCUM, FN, DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE, ...) \
     ::ckernel::_sfpu_ternary_check_and_call_<DST_SYNC, DST_ACCUM>(                 \
         ::ckernel::sfpu::FN, DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE, ##__VA_ARGS__)
-
-/*
- * Templated functor wrapped in a static_cast for overload disambiguation.
- *   SFPU_TERNARY_CALL_CAST(DST_SYNC_MODE, DST_ACCUM_MODE,
- *                          _ternary_fn_,
- *                          (APPROXIMATE, ITER),
- *                          (void(*)(uint32_t, uint32_t, uint32_t, uint32_t)),
- *                          in0, in1, in2, out, vmode);
- */
-#define SFPU_TERNARY_CALL_CAST(                                                                          \
-    DST_SYNC, DST_ACCUM, FN, TEMPLATES, SIGNATURE, DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE, ...) \
-    ::ckernel::_sfpu_ternary_check_and_call_<DST_SYNC, DST_ACCUM>(                                       \
-        static_cast<_SFPU_TERN_EXPAND SIGNATURE>(::ckernel::sfpu::FN<_SFPU_TERN_EXPAND TEMPLATES>),      \
-        DST_IN0,                                                                                         \
-        DST_IN1,                                                                                         \
-        DST_IN2,                                                                                         \
-        DST_OUT,                                                                                         \
-        VECTOR_MODE,                                                                                     \
-        ##__VA_ARGS__)
 
 /*
  * Ternary SFPU init macros (4 total)

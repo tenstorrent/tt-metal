@@ -129,7 +129,7 @@ void call_unary_sfpu_operation_init()
 /**
  * Calls only the calculate portion of a unary SFPU operation.
  * Must be preceded by a call to call_unary_sfpu_operation_init() for the same operation.
- * Delegates to SFPU_UNARY_CALL / SFPU_UNARY_CALL_CAST from llk_math_eltwise_unary_sfpu_macros.h,
+ * Delegates to SFPU_UNARY_CALL from llk_math_eltwise_unary_sfpu_macros.h,
  * which funnel through ckernel::_sfpu_check_and_call_<DST_SYNC_MODE, DST_ACCUM_MODE>
  * (dst-bound LLK_ASSERT, then _llk_math_eltwise_unary_sfpu_params_). Face-looping
  * versus single-call behavior is selected by the explicit vector_mode parameter;
@@ -280,15 +280,8 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::hardsigmoid)
     {
-        // Zero-arg _calculate_activation_ vs param overload — cast so Callable deduces.
-        SFPU_UNARY_CALL_CAST(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_activation,
-            (APPROX_MODE, ckernel::ActivationType::Hardsigmoid, ITERATIONS),
-            (void (*)()),
-            dst_index,
-            vector_mode);
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_activation, (APPROX_MODE, ckernel::ActivationType::Hardsigmoid, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::log)
     {

@@ -56,7 +56,7 @@ inline __attribute__((always_inline)) void _sfpu_check_and_call_(
 #define _SFPU_EXPAND(...) __VA_ARGS__
 
 /*
- * SFPU invocation macros (3 total)
+ * SFPU invocation macros (2 total)
  *
  * All paths funnel through ckernel::_sfpu_check_and_call_<DST_SYNC, DST_ACCUM>(...),
  * which performs the dst-bound LLK_ASSERT and then dispatches to
@@ -103,28 +103,6 @@ inline __attribute__((always_inline)) void _sfpu_check_and_call_(
  */
 #define SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, DST_ACCUM, FN, DST_IDX, VECTOR_MODE, ...) \
     ::ckernel::_sfpu_check_and_call_<DST_SYNC, DST_ACCUM>(::ckernel::sfpu::FN, DST_IDX, VECTOR_MODE, ##__VA_ARGS__)
-
-/*
- * Templated functor wrapped in a static_cast for overload disambiguation.
- * SIGNATURE follows TEMPLATES because both relate to FN (template arity then
- * the desired pointer signature).
- *   SFPU_UNARY_CALL_CAST(DST_SYNC_MODE, DST_ACCUM_MODE,
- *                  _calculate_threshold_,
- *                  (APPROXIMATE, ITER),
- *                  (void(*)(uint32_t, uint32_t)),
- *                  dst, vmode, p0, p1);
- *   SFPU_UNARY_CALL_CAST(DST_SYNC_MODE, DST_ACCUM_MODE,
- *                  _calculate_activation_,
- *                  (APPROXIMATE, ACTIVATION, ITER),
- *                  (void(*)()),
- *                  dst, vmode);
- */
-#define SFPU_UNARY_CALL_CAST(DST_SYNC, DST_ACCUM, FN, TEMPLATES, SIGNATURE, DST_IDX, VECTOR_MODE, ...) \
-    ::ckernel::_sfpu_check_and_call_<DST_SYNC, DST_ACCUM>(                                             \
-        static_cast<_SFPU_EXPAND SIGNATURE>(::ckernel::sfpu::FN<_SFPU_EXPAND TEMPLATES>),              \
-        DST_IDX,                                                                                       \
-        VECTOR_MODE,                                                                                   \
-        ##__VA_ARGS__)
 
 /*
  * SFPU init macros (3 total)
