@@ -811,7 +811,9 @@ class ttMLA:
             # streams clean zeros (not residual data from a prior request) for the
             # decode side. Slice the cache to batch=cache_layer_idx so the page math
             # in zero_cache_range hits this layer's slot, not layer 0.
-            if on_layer_complete is not None:
+            # TEMP(layerack-test): disabled — kvpe_cache[cache_layer_idx] squeeze hits a
+            # latest-main ND-sharded view TT_FATAL. Re-enable with the zero_out rework.
+            if False and on_layer_complete is not None:
                 assert actual_isl is not None, "actual_isl required when on_layer_complete is set"
                 seq_len_local = kvpe_cache.shape[2]
                 seq_len_total = seq_len_local * self.sp_factor
