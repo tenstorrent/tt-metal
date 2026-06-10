@@ -32,6 +32,15 @@ MLA layer.
    - tt/mla/mla.py — ttMLA subclass of v3 ttMLA, passthrough for now; all DSA changes go here.
    - tt/tt_prefill_block.py, tt/tt_prefill_transformer.py — copies of v3, only the MLA/block import changed. Future work: add mla_class/block_class injection params to v3 so the copies can be deleted (see tt/README.md).
    - tests/test_mla.py — e2e MLA test reusing the v3 harness (monkeypatched MLA class); collects. Currently compares against the v3 reference — to be replaced, see Next.
+4. **In progress:** Next step 1 (test rewire to CPU reference) implemented, first hardware run pending. Decisions taken:
+   - Weight mapping MLACPU→v3 dict is a pure rename (wq_a→q_a_proj, q_norm→q_a_layernorm, wq_b→q_b_proj, wkv_a→kv_a_proj_with_mqa, kv_norm→kv_a_layernorm, wkv_b→kv_b_proj, wo→o_proj); same [out,in] layout, bf16.
+   - Bring-up seq_len = 2048 = index_topk: there the DSA index mask is 0 over the causal region, so MLACPU is dense-equivalent and the passthrough must match (output PCC 0.98, KVPE 0.99 — v3 thresholds). seq>2048 diverges by design until indexer+sparse SDPA land.
+   - MLACPU run with simulate_fp8=False (device KVPE stores bf16; same as single-chip port).
+   - CPU outputs cached at $DEEPSEEK_V32_MLA_REF_CACHE (default /tmp/deepseek_v32_mla_ref_cache), keyed by tag+seq+seed.
+   - Device side keeps the HF config (shape-asserted vs ModelArgs); RoPE equivalence interleaved↔reference proven in single-chip spec D5.
+   - First hardware runs (1x4, passthrough): pipeline runs e2e clean on QuietBox; seq2k output PCC 0.785, seq256 0.889 — diagnosed, not an MLA bug: ModelArgs.max_seq_len was set to seq_len, which disables YaRN (max_seq_len ≤ original 4096) in the CPU reference while v3's device tables (HF DeepseekV3YarnRotaryEmbedding) always apply YaRN; freqs and softmax mscale² (1.87x) diverge. Host check confirmed. Fix: keep max_seq_len=16384, refs re-cached (cache tag includes max_seq_len).
+   - **After fix, seq256 PASSES: output PCC 0.9991, KVPE kv 0.99989 / pe 0.99990** — weight mapping, RoPE convention, sp=1 harness all confirmed working. seq2k rerun in flight.
+   - Gotcha: don't pipe pytest through tail — swallows exit code; log to file, check $?.
 4. **Next (proposed, to agree on — no implementation until agreed):**
    1. Rewire tests/test_mla.py to use reference_cpu (MLACPU) as the PCC truth instead of the v3 reference — v3.2 and v3 outputs are not assumed to match, even for the passthrough. Reuse v3's run_mla_inference for the device side only; one set of random torch weights mapped into both the v3 ttMLA dict format and MLACPU; cache CPU reference outputs on disk (pattern exists in reference_tt_single_chip/test_model.py). Mesh shape parametrized; bring-up config = QuietBox 4x Blackhole.
    2. Define APIs (inputs/outputs, shapes, sharding) for the missing ops from the context/ reports + existing ttnn ops; record them here for review. For each missing op the first deliverable is a shape test: the agreed API runs e2e and produces the right shapes (stub/composed/CPU-fallback per "Approach to missing ops"); numerics vs CPU reference follow.
@@ -51,11 +60,32 @@ MLA layer.
 5. v3 composition files hardcode ttMLA/TtPrefillBlock — forced copies in v32; fix by upstreaming injection params (tt/README.md)
 6. V3.2 checkpoints (indexer weights) not wired into test conftest — tests run with v3 weights
 
+### Missing op APIs (proposed 2026-06-10, step 2 — review async)
+ttnn-shaped equivalents of the fused references (DeepGEMM fp8_mqa_logits, FlashMLA sparse fwd). All activations [1, B, S_local, ·] TILE bf16 like v3; indexer replicated across TP, S sharded on SP (spec-multichip §3.6). B=1 prefill.
+
+1. `indexer_logits(q, k, w) -> logits` — q [1,B,Sq,H_idx*D_idx] (H=64, D=128), k [1,B,Skv,D_idx], w [1,B,Sq,H_idx] (fp32 weights_proj out). Out [1,B,Sq,Skv] bf16 (fp8 inputs later). Causal window per row (DeepGEMM ks/ke), no materialized mask. Workaround: per-head matmul + ReLU + weighted head-sum + causal mask add. CPU fallback for non-interleaved rope (F1).
+2. `topk_indices(logits, k=2048) -> indices` — row-major in, out [1,B,Sq,k] uint32, padded with last valid where Skv<k. Workaround: ttnn.topk (untested at k=2048); else host. K cache format untouched (agreement 3).
+3. `sparse_mla(q, kvpe_cache, indices, scale) -> out` — q [1,H,Sq,576] absorbed; kvpe [1,1,Skv,576]; indices [1,B,Sq,2048]; out [1,H,Sq,512]; indices replace causal mask (FlashMLA contract). Workaround: gather (embedding-style) + chunked dense SDPA; stub: dense ring MLA (valid Sq≤2048).
+
+Shape tests are the first deliverable per op; numerics vs reference_cpu after.
+
 ### Approach to missing ops
 When no op exist try to **0. define an API (inputs/outputs)** and
 1. create a workaround by composing existing ops
 2. fallback to CPU implementation
-3. implement stub op that emits a warning and returns random/zeroes/ones tensor in the expected format
+3. implement stub op that emits a warning and returns random/zeroes/ones tensor in the expected format.
+4. Proper implementation of c++ ops is out of scope. That's follow-up that should be documented.
+
+## Long-running tasks
+Track every step that takes minutes — each is either a bug risk (silent hangs, stale state) or a caching/optimization opportunity. Add measured times as we collect them.
+
+| Task | When | Time | Mitigation / caching |
+|---|---|---|---|
+| First e2e MLA test run (mesh init + fabric + weight upload, no output until end) | every fresh pytest | measured: 472s seq2k (cold CPU ref incl.), ~40s seq256 | pytest -s for live progress; track time per stage; weight cache reuses v3 build_ttnn_cache |
+| CPU reference forward (uncached) | per (tag, seq, seed); seq 2048, 128 heads | ~1-2 min, grows quadratically; 50k cache + 5k chunk infeasible cold | disk cache /tmp/deepseek_v32_mla_ref_cache (env DEEPSEEK_V32_MLA_REF_CACHE) — keep tag/seed stable; 50k+5k truth must be cached once on a big box |
+| ttnn incremental rebuild after .so staleness | after rebase/pull | ~3 min observed | rebuild ninja -C build ttnn (target is "ttnn", not "_ttnn"); fresh lib lands in build/ttnn/_ttnn.so |
+| HF config-only download | first run / new variant | seconds-min, network | already cached by v3 conftest |
+| Pre-commit hooks (isort/black, EOF fixer) | every commit | tens of sec | don't partial-stage — keep index clean or hooks loop on fix-rollback |
 
 ## Testing
 - Primary goal: prefilled 50k cache, 5k chunk
