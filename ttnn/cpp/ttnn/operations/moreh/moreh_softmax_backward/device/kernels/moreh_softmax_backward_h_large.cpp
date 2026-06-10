@@ -50,8 +50,8 @@ void kernel_main() {
             }
         }
 
-        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_COL>(
-            cb_add, cb_bcast_scaler, cb_sum, compute_kernel_lib::ReduceInputBlockShape::single());
+        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_COL, cb_add, cb_bcast_scaler, cb_sum>(
+            compute_kernel_lib::ReduceInputBlockShape::single());
 
         for (uint32_t h = 0; h < Ht; ++h) {
             // exp(y)
@@ -85,8 +85,8 @@ void kernel_main() {
         }
 
         // step 2, compute sum(y * dy)
-        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_COL>(
-            cb_add, cb_bcast_scaler, cb_sum, compute_kernel_lib::ReduceInputBlockShape::single());
+        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_COL, cb_add, cb_bcast_scaler, cb_sum>(
+            compute_kernel_lib::ReduceInputBlockShape::single());
 
         // step 3, compute final result
         for (uint32_t h = 0; h < Ht; ++h) {
