@@ -70,7 +70,7 @@ logger.critical("Critical message: unrecoverable error condition")  # logger.cri
 ### verbosity setup cpp
 Setup console environment with `TT_LOGGER_LEVEL`:
 
-| level | command | screening |
+| level | command | filtering |
 | --- | --- | --- |
 | TRACE | `export TT_LOGGER_LEVEL=TRACE` | shows all messages |
 | DEBUG | `export TT_LOGGER_LEVEL=DEBUG` | shows DEBUG, INFO, WARNING, ERROR, CRITICAL |
