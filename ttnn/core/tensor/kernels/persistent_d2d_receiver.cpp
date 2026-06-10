@@ -65,6 +65,17 @@ constexpr uint32_t share_fabric_links = get_compile_time_arg_val(19);
 constexpr uint32_t link_grant_addr = get_compile_time_arg_val(20);
 constexpr auto output_tensor_accessor_args = TensorAccessorArgs<21>();
 
+FORCE_INLINE bool socket_wait_for_pages_with_termination(
+    const SocketReceiverInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* termination_semaphore) {
+    while (!socket_wait_for_pages(socket, num_pages, 1000)) {
+        invalidate_l1_cache();
+        if (termination_semaphore[0] == 1) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void kernel_main() {
     size_t rt_args_idx = 0;
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
@@ -153,15 +164,7 @@ void kernel_main() {
             // Termination-aware socket wait: poll for one page with a bounded
             // early-exit count, re-checking the termination word between polls
             // so shutdown stays responsive when no sender is online.
-            bool got_page = true;
-            while (!socket_wait_for_pages(receiver_socket, 1, /*early_exit_iter_count=*/1000)) {
-                invalidate_l1_cache();
-                if (termination_semaphore[0] == 1) {
-                    got_page = false;
-                    break;
-                }
-            }
-            if (!got_page) {
+            while (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
                 terminated = true;
                 break;
             }
@@ -186,7 +189,6 @@ void kernel_main() {
         // termination poll, no transfer completed — skip the worker handshake
         // (workers aren't running during teardown).
         if (terminated) {
-            DEVICE_PRINT("D2DStreamService receiver terminated\n");
             break;
         }
 
@@ -205,9 +207,8 @@ void kernel_main() {
                     break;
                 }
             }
-            if (!got_md) {
-                terminated = true;
-            } else {
+            terminated = !got_md;
+            if (got_md) {
                 // The metadata page sits in this core's L1 FIFO at read_ptr (an
                 // allocated buffer address — a valid NoC multicast source, unlike a
                 // stack-local). Multicast it straight to the worker grid.
@@ -223,7 +224,6 @@ void kernel_main() {
         }
 
         if (terminated) {
-            DEVICE_PRINT("D2DStreamService receiver terminated in metadata wait\n");
             break;
         }
 
@@ -253,7 +253,6 @@ void kernel_main() {
                 }
             }
             if (terminated) {
-                DEVICE_PRINT("D2DStreamService receiver terminated in worker handshake\n");
                 break;
             }
         }

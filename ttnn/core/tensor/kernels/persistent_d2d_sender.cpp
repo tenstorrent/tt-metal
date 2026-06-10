@@ -99,6 +99,7 @@ void kernel_main() {
     // Two fabric headers in the packet-header CB: one for the data writes, one for
     // the socket control-flow notify. Set up before any open — all L1 writes, no
     // connection needed.
+
     volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr =
         reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_index));
     volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr =
@@ -179,7 +180,6 @@ void kernel_main() {
         }
 
         if (terminated) {
-            DEVICE_PRINT("D2DStreamService sender terminated\n");
             break;
         }
 
@@ -215,19 +215,15 @@ void kernel_main() {
         // 2b. Optional trailing metadata page. The designated worker wrote the
         //     blob into this service core's L1 at sender_metadata_l1_addr before
         //     acking (and the kernel only got here after num_workers acks), so the
-        //     blob is present. Stage it into the scratch CB (the rest of the page
-        //     is padding the receiver ignores) and ship it as one more socket page.
+        //     blob is present.
+        //     Data from sender_metadata_l1_addr is sent directly to the receiver over fabric with
+        //     intermediate storage in the scratch CB.
         if constexpr (metadata_enabled) {
             socket_reserve_pages(sender_socket, 1);
-            volatile tt_l1_ptr uint32_t* md_src =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_metadata_l1_addr);
-            volatile tt_l1_ptr uint32_t* md_dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_l1_addr);
-            for (uint32_t i = 0; i < metadata_size_bytes / sizeof(uint32_t); ++i) {
-                md_dst[i] = md_src[i];
-            }
             const uint64_t md_fifo_dst_addr = get_noc_addr(
                 receiver_noc_x, receiver_noc_y, sender_socket.write_ptr + sender_socket.downstream_fifo_addr);
-            fabric_write_socket_page(fabric_connection, md_fifo_dst_addr, cb_l1_addr, data_packet_header_addr);
+            fabric_write_socket_page(
+                fabric_connection, md_fifo_dst_addr, sender_metadata_l1_addr, data_packet_header_addr);
             socket_push_pages(sender_socket, 1);
             fabric_socket_notify_receiver(sender_socket, fabric_connection, socket_packet_header_addr);
         }
