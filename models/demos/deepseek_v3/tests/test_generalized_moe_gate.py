@@ -47,8 +47,9 @@ def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed, topk, ou
     eps = 1e-20
     scaling_factor = 2.5
 
-    # Reference output.
-    top8_scores, top8_indices = GeneralizedMoeGateOp.golden(
+    # Reference output. (Only the golden indices are used — scores are validated tie-robustly below
+    # against the device's OWN selection, not the golden's scores, so the golden scores are unused here.)
+    _, top8_indices = GeneralizedMoeGateOp.golden(
         torch_input, torch_bias, eps, scaling_factor, enable_sigmoid, topk, output_softmax
     )
 
@@ -150,8 +151,7 @@ def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed, topk, ou
     sorted_output_indices_torch, i = torch.sort(output_indices_torch, dim=-1)
     sorted_output_torch = torch.gather(output_torch, dim=-1, index=i)
 
-    top8_indices, i = torch.sort(top8_indices, dim=-1)
-    top8_scores = torch.gather(top8_scores, dim=-1, index=i)
+    top8_indices = torch.sort(top8_indices, dim=-1).values
 
     # bf16 produces many equal bias-corrected values, so the exact top-8 *indices* are ambiguous at
     # the rank-8 cutoff (genuine ties — e.g. two experts with identical bf16 bias fight for the last

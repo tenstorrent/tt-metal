@@ -51,13 +51,13 @@ def test_softmax_perf(device, dtype, num_experts, warmup_iters, num_iters, devic
         return ttnn.softmax(tt_input, dim=-1, memory_config=SOFTMAX_MEMORY_CONFIG)
 
     # Compile the op
-    tt_out = run_softmax()
+    run_softmax()
     ttnn.synchronize_device(device)
 
     # Capture warmup trace
     trace_id_warmup = ttnn.begin_trace_capture(device, cq_id=0)
     for _ in range(warmup_iters):
-        tt_out = run_softmax()
+        run_softmax()
     ttnn.end_trace_capture(device, trace_id_warmup, cq_id=0)
     ttnn.synchronize_device(device)
 
@@ -65,7 +65,7 @@ def test_softmax_perf(device, dtype, num_experts, warmup_iters, num_iters, devic
     logger.info(f"Capturing main trace ({num_experts} experts, {num_iters} iters)")
     trace_id = ttnn.begin_trace_capture(device, cq_id=0)
     for _ in range(num_iters):
-        tt_out = run_softmax()
+        run_softmax()
     ttnn.end_trace_capture(device, trace_id, cq_id=0)
     ttnn.synchronize_device(device)
 
