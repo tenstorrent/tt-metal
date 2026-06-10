@@ -52,7 +52,7 @@ near-uniform-attention root cause as Phase 0's 6 bf16 misses. Guards (config-lev
 axes): HiFi4+fp32dest+bf16/bf8b (known-bad #38306, ValueError); fp32/bf8b inputs with
 fp32_dest_acc_en=False (16-bit DEST pairing corrupts — probe_008, NotImplementedError).
 
-### [ ] Refinement 2 — GQA / MQA head mapping
+### [~] Refinement 2 — GQA / MQA head mapping
 
 **Goal**: add `"gqa"` and `"mqa"` to `SUPPORTED["kv_heads_mode"]` (68 xfail cells incl. GQA/MQA cross-attention and long-context). Compute is head-agnostic; the only structural change is the reader mapping Q head `h` → KV head `h / (H_q / H_kv)` (design line: "GQA/MQA ready"). Pass `H_kv` (or the ratio) as a CT arg; `_validate_shapes` already enforces `H_q % H_kv == 0`.
 
@@ -60,11 +60,22 @@ fp32_dest_acc_en=False (16-bit DEST pairing corrupts — probe_008, NotImplement
 
 **Done when**: every kv_heads_mode=gqa/mqa golden cell passes; gqa_mqa_forward regression tests pass.
 
+**Outcome (2026-06-10, partial)**: gqa + mqa in SUPPORTED; reader-only change as
+designed (H_kv CT arg, kv_bh = b*H_kv + h/(H/H_kv)); head mapping verified exactly
+via deterministic constant-V test. 64/68 GQA/MQA cells pass; all 4 gqa_mqa_forward
+regressions pass. 4 deferred cells (no EXCLUSIONS, left failing) are long-context
+mask=none precision misses (Q1x4x4096x64 KV1x1 mqa, Q1x8x4096x128 KV1x2 gqa ×
+scale_modes; RMS 0.064–0.067 vs 0.05) — identical near-uniform-attention root cause
+and magnitude as their MHA siblings already filed under Refinement 3; the head
+mapping contributes no extra error. Moved to Refinement 3 inherited list.
+
 ### [ ] Refinement 3 — Long-context / near-uniform-attention precision
 
 **Goal**: move the 6 `supported_fail` `numerical-precision` cells (Q1x1x4096x64, Q1x1x8192x64, Q1x4x4096x64 × mask_mode=none × both scale_modes; RMS 0.067–0.158 vs 0.05) and the failing distribution regressions (`uniform_input`, `negative_input` rms 0.09–0.50 incl. one severity=bug at S=512, `long_context_smoke`) into passing. Root cause: near-uniform attention output has tiny stddev while bf16 `cb_probs` quantization noise stays constant — relative RMS blows up with S. Lever: fp32 probs path for rowsum + P@V (fp32 matmul inputs at reduced throughput, gated on compute_kernel_config from Refinement 1) or bf16 probs error compensation in `l`. No SUPPORTED axis changes — these cells are inside SUPPORTED and must not be gated out via EXCLUSIONS or a shape-size tagger.
 
 **Verifier notes**: depends on Refinement 1 (compute_kernel_config + CB-format plumbing). Tolerances live in `eval/golden_tests/.../helpers.py:TOLERANCES` — fix the kernel, don't loosen them.
+
+**Inherited from Refinement 2**: also fix the 4 GQA/MQA long-context mask=none cells (Q1x4x4096x64 KV1x1x4096x64 mqa, Q1x8x4096x128 KV1x2x4096x128 gqa × both scale_modes; bf16, RMS 0.064–0.067 vs 0.05) — same root cause and same lever as the 6 MHA bf16 cells above; head mapping verified exact, no GQA-specific error term.
 
 **Inherited from Refinement 1**: also fix the 2 bf8b Q1x1x8192x64 mask=none cells (RMS 0.165 vs 0.12, ulp_p99 9.5e8 — same near-uniform-attention root cause; cb_probs is bf8b for bf8b inputs, so the probs-quantization noise term is larger). Lever: keep cb_probs at Float16_b (or Float32 with the fp32-probs path) regardless of input dtype — Refinement 1 already left `in_fmt` vs `acc_fmt` derivation in the descriptor, so this is one line for the probs CB. fp32 inputs already pass long-context (probs CB Float32 there).
 
