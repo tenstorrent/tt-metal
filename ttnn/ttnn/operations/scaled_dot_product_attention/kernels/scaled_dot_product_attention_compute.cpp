@@ -291,7 +291,9 @@ void kernel_main() {
 
 #ifdef SDPA_DEBUG_DPRINT
             cb_wait_front(cb_pv, 1);
-            DPRINT_PACK(DPRINT << "PV kb: " << TSLICE(cb_pv, 0, SliceRange::hw0_32_16()) << ENDL());
+            DPRINT_PACK(
+                DPRINT << "PV kb r0: " << SETPRECISION(6) << FIXED()
+                       << TSLICE(cb_pv, 0, SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1}) << ENDL());
 #endif
             // ---- Phase 10: O = alpha*O + PV on SFPU (fp32-exact); pops alpha.
             //      Same-CB read/write needs 2-block cb_o_acc. ----
@@ -312,10 +314,38 @@ void kernel_main() {
         }
 
 #ifdef SDPA_DEBUG_DPRINT
-        cb_wait_front(cb_running_sum, 1);
-        DPRINT_PACK(DPRINT << "l(sum): " << TSLICE(cb_running_sum, 0, SliceRange::hw0_32_16()) << ENDL());
-        cb_wait_front(cb_o_acc, 1);
-        DPRINT_PACK(DPRINT << "O(acc): " << TSLICE(cb_o_acc, 0, SliceRange::hw0_32_16()) << ENDL());
+        // Clean copy of O col0 (row0) into a single-buffered fp32 scratch (cb 29,
+        // free here) so the print is from the fresh write pointer, not the stale
+        // ping-pong front. Same for l into cb 30.
+        ckl::eltwise_chain(
+            cur_cq,
+            ckl::CopyTile<
+                cb_o_acc,
+                Dst::D0,
+                InputLifecycle::HeldBulk,
+                ckl::CopyTileReconfig::Input,
+                OperandKind::Block>{},
+            ckl::PackTile<cb_cur_max_full>{});
+        cb_wait_front(cb_cur_max_full, 1);
+        DPRINT_PACK(
+            DPRINT << "O0: " << SETPRECISION(6) << FIXED()
+                   << TSLICE(cb_cur_max_full, 0, SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1})
+                   << ENDL());
+        cb_pop_front(cb_cur_max_full, cur_cq);
+        ckl::eltwise_chain(
+            cur_cq,
+            ckl::CopyTile<
+                cb_running_sum,
+                Dst::D0,
+                InputLifecycle::HeldBulk,
+                ckl::CopyTileReconfig::Input,
+                OperandKind::Block>{},
+            ckl::PackTile<cb_m_full>{});
+        cb_wait_front(cb_m_full, 1);
+        DPRINT_PACK(
+            DPRINT << "L0: " << SETPRECISION(6) << FIXED()
+                   << TSLICE(cb_m_full, 0, SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1}) << ENDL());
+        cb_pop_front(cb_m_full, cur_cq);
 #endif
 
         // ---- Phase 11: inv = recip(bcast-Col(l)) as a FULL fp32 tile ----
@@ -330,13 +360,9 @@ void kernel_main() {
 
 #ifdef SDPA_DEBUG_DPRINT
         cb_wait_front(cb_inv_sum, 1);
-        {
-            volatile tt_l1_ptr uint32_t* inv_p =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_inv_sum));
-            DPRINT_PACK(
-                DPRINT << "INV bits[0]=" << HEX() << inv_p[0] << " [1]=" << inv_p[1] << DEC()
-                       << " f=" << SETPRECISION(9) << F32(*reinterpret_cast<volatile float*>(&inv_p[0])) << ENDL());
-        }
+        DPRINT_PACK(
+            DPRINT << "INV: " << SETPRECISION(9) << FIXED() << TSLICE(cb_inv_sum, 0, SliceRange::hw0_32_16())
+                   << ENDL());
 #endif
 
         // ---- Phase 12: out = O * inv on SFPU (fp32-exact), pack -> output dtype ----
