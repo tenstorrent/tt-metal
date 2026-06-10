@@ -16,6 +16,7 @@ from models.experimental.voxtraltts.tt.mlp import VoxtralTTMLP
 from models.experimental.voxtraltts.tt.rmsnorm import VoxtralAcousticRMSNorm
 from models.experimental.voxtraltts.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_VOXTRAL_ACOUSTIC,
+    COMPUTE_KERNEL_CONFIG_VOXTRAL_ACOUSTIC_BFP8,
     COMPUTE_KERNEL_CONFIG_VOXTRAL_SEMANTIC,
 )
 from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_MODEL, load_voxtral_config
@@ -87,7 +88,6 @@ def _build_acoustic_1d_mcast_configs(dim: int, hidden_dim: int, n_heads: int, n_
             mcast_in0=True,
         )
 
-    # Sweep winner grid for single-device acoustic decode (matches Voxtral text model).
     gx, gy = 8, 6
     nc = gx * gy  # 48
 
@@ -228,6 +228,7 @@ class VoxtralTTAcousticModel:
         )
 
         self._compute_kernel_config = COMPUTE_KERNEL_CONFIG_VOXTRAL_ACOUSTIC
+        self._bfp8_compute_config = COMPUTE_KERNEL_CONFIG_VOXTRAL_ACOUSTIC_BFP8
         self._semantic_compute_kernel_config = COMPUTE_KERNEL_CONFIG_VOXTRAL_SEMANTIC
 
         # Infer hidden_dim from the w1 weight shape (dim→hidden_dim after transpose).
@@ -279,6 +280,55 @@ class VoxtralTTAcousticModel:
             tt_ccl=None,
         )
 
+        # Velocity head (acoustic_codebook_output): K=dim → N=n_acoustic_out.
+        # n_acoustic_out (e.g. 36) may not be tile-aligned; use ceiling to get the
+        # tile-padded NT that TTNN actually allocates, so nc × per_core_N == NT.
+        _vel_n = int(sd["acoustic_codebook_output.weight"].shape[0])
+        _vel_nt = max(1, math.ceil(_vel_n / ttnn.TILE_SIZE))
+        _vel_nc = max(1, _vel_nt)
+        self._vel_prg_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(min(_vel_nc, 10), max(1, (_vel_nc + 9) // 10)),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=2,
+            per_core_N=1,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
+        # Sharded RMSNorm for the transformer layer norms.
+        # h is tile-padded to (bsz, 1, 32, dim) → 2D view (bsz*32, dim).
+        # WIDTH SHARDED on 32 cores (8×4 grid): shard_h = full tensor height (TTNN requirement
+        # for WIDTH_SHARDED), shard_w = dim/32 = 96. Two configs: one per bsz value.
+        # Baseline on 2 cores (L1-interleaved, NoC-bound reads): 47 μs/call.
+        _rms_n_cores, _rms_gx, _rms_gy = 32, 8, 4
+        _rms_block_w = (dim // ttnn.TILE_SIZE) // _rms_n_cores  # K-tiles per core = 3
+        _rms_subblock_w = 3
+        _rms_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_rms_gx - 1, _rms_gy - 1))})
+
+        def _make_rms_cfg(n_m_tiles):
+            prg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=(_rms_gx, _rms_gy),
+                subblock_w=_rms_subblock_w,
+                block_h=n_m_tiles,
+                block_w=_rms_block_w,
+                inplace=False,
+            )
+            mem = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    _rms_grid, [n_m_tiles * ttnn.TILE_SIZE, dim // _rms_n_cores], ttnn.ShardOrientation.ROW_MAJOR
+                ),
+            )
+            return prg, mem
+
+        self._rms_prg_cfg_by_m, self._rms_shard_cfg_by_m = {}, {}
+        for n_m in (1, 2):  # bsz=1 → 1 M-tile, bsz=2 → 2 M-tiles
+            self._rms_prg_cfg_by_m[n_m], self._rms_shard_cfg_by_m[n_m] = _make_rms_cfg(n_m)
+
         # BFP8_B weights: 2× bandwidth reduction vs BF16 with same 1D-mcast program configs.
         # DS sharding requires fuse_batch semantics that 1D-mcast provides but DS does not;
         # the acoustic FM input (2,1,3,dim) needs per_core_M=2 via fuse_batch, which DS cannot match.
@@ -295,7 +345,7 @@ class VoxtralTTAcousticModel:
                 weight_prefix=f"layers.{i}.attention",
                 weight_dtype=_fm_wdtype,
                 output_dtype=dtype,
-                compute_kernel_config=self._compute_kernel_config,
+                compute_kernel_config=self._bfp8_compute_config,
                 activation_memory_config=self._matmul_act_mem_config,
                 wqkv_program_config=self._wqkv_prg_config,
                 wo_program_config=self._wo_prg_config,
@@ -312,7 +362,7 @@ class VoxtralTTAcousticModel:
                 weight_dtype=_fm_wdtype,
                 output_dtype=dtype,
                 exact_silu=True,
-                compute_kernel_config=self._compute_kernel_config,
+                compute_kernel_config=self._bfp8_compute_config,
                 activation_memory_config=self._matmul_act_mem_config,
                 ff1_3_program_config=self._ff1_3_prg_config,
                 ff2_program_config=self._ff2_prg_config,
@@ -441,9 +491,18 @@ class VoxtralTTAcousticModel:
             return ttnn.add(h4, r4, memory_config=self._matmul_act_mem_config, dtype=self.dtype)
 
         residual_mc = self._matmul_act_mem_config
+        _n_m_tiles = bsz  # h tile-pads seq to 32 → 2D view is (bsz*32, dim) = bsz M-tiles
+        _rms_prg_cfg = self._rms_prg_cfg_by_m[_n_m_tiles]
+        _rms_shard_input_cfg = self._rms_shard_cfg_by_m[_n_m_tiles]
+        _rms_norm_config = {
+            "sharded_program_config": _rms_prg_cfg,
+            "output_mem_config": residual_mc,
+        }
         for i in range(self.n_layers):
             residual_attn = ttnn.clone(h, dtype=self.dtype, memory_config=residual_mc)
-            normed = self.attn_norms[i](h, mode=Mode.DECODE, norm_config={"output_mem_config": residual_mc})
+            h_s = ttnn.to_memory_config(h, _rms_shard_input_cfg)
+            normed = self.attn_norms[i](h_s, mode=Mode.DECODE, in_sharded=True, norm_config=_rms_norm_config)
+            ttnn.deallocate(h_s)
             attn_out = self.attentions[i](normed, None, None, attention_mask=None, activation_memory_config=residual_mc)
             ttnn.deallocate(normed)
             attn_out = _slice_like(attn_out, h)
@@ -454,7 +513,9 @@ class VoxtralTTAcousticModel:
             ttnn.deallocate(attn_out)
 
             residual_ffn = ttnn.clone(h, dtype=self.dtype, memory_config=residual_mc)
-            normed_ff = self.ffn_norms[i](h, mode=Mode.DECODE, norm_config={"output_mem_config": residual_mc})
+            h_s = ttnn.to_memory_config(h, _rms_shard_input_cfg)
+            normed_ff = self.ffn_norms[i](h_s, mode=Mode.DECODE, in_sharded=True, norm_config=_rms_norm_config)
+            ttnn.deallocate(h_s)
             ff_out = self.mlps[i](normed_ff, activation_memory_config=residual_mc)
             ttnn.deallocate(normed_ff)
             ff_out = _slice_like(ff_out, h)
@@ -464,7 +525,9 @@ class VoxtralTTAcousticModel:
             ttnn.deallocate(residual_ffn)
             ttnn.deallocate(ff_out)
 
-        h = self.final_norm(h, mode=Mode.DECODE)
+        h_s = ttnn.to_memory_config(h, _rms_shard_input_cfg)
+        h = self.final_norm(h_s, mode=Mode.DECODE, in_sharded=True, norm_config=_rms_norm_config)
+        ttnn.deallocate(h_s)
         h_shape = tuple(h.shape)
         h0 = ttnn.slice(h, [0, 0, 0, 0], [h_shape[0], 1, 1, h_shape[-1]])
         ttnn.deallocate(h)
@@ -474,6 +537,7 @@ class VoxtralTTAcousticModel:
             dtype=self.dtype,
             memory_config=self._matmul_act_mem_config,
             compute_kernel_config=self._compute_kernel_config,
+            program_config=self._vel_prg_config,
         )
         ttnn.deallocate(h0)
         return vel
