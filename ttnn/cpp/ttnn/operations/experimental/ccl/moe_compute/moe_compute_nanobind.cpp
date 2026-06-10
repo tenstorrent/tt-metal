@@ -242,9 +242,15 @@ void bind_moe_compute_utils(nb::module_& mod) {
         pre-arranged ``shared_w*`` tensors.
 
         The shared experts are tensor-parallel split on the intermediate dim across
-        ``1 - cluster_axis`` (via ``mesh_partition``). All three weight sets keep
-        real rows front-packed ( but only the W2 part of the kernel reads fewer row
-        blocks for shared experts).
+        ``1 - cluster_axis`` (via ``mesh_partition``). Each ring core's real TpNt
+        slice is front-packed into the front of that core's full-Nt shard (zeros
+        after), using the same per-core shard maps the kernel derives, and the
+        identical mapping is applied to W0/W1 (intermediate dim) and W2 (contraction
+        dim) so real columns stay paired with their real W2 rows. This keeps the
+        downstream prep + DRAM layout uniform (full-Nt per-expert stride) while
+        letting the kernel walk only the per-core prefixes as a balanced TpNt ring.
+        ``bh_ring_size`` selects the ring size for the shard-map generator (must
+        match the value used for ``prepare_*`` / ``get_weight_mem_configs``).
 
         Returns ``(output_w0, output_w1, output_w2)``, each the result of
         concatenating routed + shared along dim 1.
@@ -256,7 +262,8 @@ void bind_moe_compute_utils(nb::module_& mod) {
         nb::arg("shared_w0").noconvert(),
         nb::arg("shared_w1").noconvert(),
         nb::arg("shared_w2").noconvert(),
-        nb::arg("cluster_axis"));
+        nb::arg("cluster_axis"),
+        nb::arg("bh_ring_size") = 12);
 
     ttnn::bind_function<"prepare_w0_w1_tensor_for_moe_compute", "ttnn.experimental.">(
         mod,
