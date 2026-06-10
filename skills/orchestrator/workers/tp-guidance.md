@@ -17,7 +17,9 @@ never `ttnn.open_device(device_id=...)`.
 - **architecture worker**: COMPUTE the parallelism plan — do not eyeball it.
   Extract per-component facts from the HF config (param bytes, cadence:
   `per_token` for anything in the decode loop, `per_input` for run-once
-  encoders, q/kv head counts), then:
+  encoders, q/kv head counts, and `production_tokens` — the encoder
+  sequence length at REAL input sizes, e.g. a full document page, not the
+  unit-test shape), then:
 
   ```python
   from skills.orchestrator.lib.parallelism import plan_parallelism

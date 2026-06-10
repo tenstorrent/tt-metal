@@ -19,7 +19,7 @@ def test_single_device_replicates_everything():
 def test_per_token_shards_per_input_replicates_when_fitting():
     comps = [
         {"name": "lm", "cadence": "per_token", "param_bytes": 3 * GB, "q_heads": 16, "kv_heads": 8},
-        {"name": "vision", "cadence": "per_input", "param_bytes": GB},
+        {"name": "vision", "cadence": "per_input", "param_bytes": GB, "production_tokens": 900},
     ]
     out = plan_parallelism(comps, 4, 32 * GB)
     rows = _rows(out)
@@ -56,3 +56,24 @@ def test_unknown_cadence_is_a_judgment_not_a_plan_row():
     out = plan_parallelism([{"name": "mystery", "param_bytes": GB}], 4, 32 * GB)
     assert "mystery" not in _rows(out)
     assert any("mystery" in j for j in out["judgments"])
+
+
+def test_large_per_input_encoder_shards():
+    out = plan_parallelism(
+        [{"name": "vision", "cadence": "per_input", "param_bytes": GB, "production_tokens": 11000}], 4, 32 * GB
+    )
+    assert _rows(out)["vision"]["placement"] == "shard"
+
+
+def test_small_per_input_encoder_replicates_without_judgment():
+    out = plan_parallelism(
+        [{"name": "vision", "cadence": "per_input", "param_bytes": GB, "production_tokens": 900}], 4, 32 * GB
+    )
+    assert _rows(out)["vision"]["placement"] == "replicate"
+    assert out["judgments"] == []
+
+
+def test_unknown_production_tokens_replicates_with_judgment():
+    out = plan_parallelism([{"name": "vision", "cadence": "per_input", "param_bytes": GB}], 4, 32 * GB)
+    assert _rows(out)["vision"]["placement"] == "replicate"
+    assert any("production_tokens unknown" in j for j in out["judgments"])
