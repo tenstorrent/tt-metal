@@ -14,7 +14,9 @@ CB layout (per op_design.md, refined dtype handling):
   cb_input_tiles  (0):  2*Wg pages, in_dtype — pass 1/2/3 stream
   cb_gamma_tiles  (1):  Wt pages, affine dtype — read once, HeldBulk
   cb_beta_tiles   (2):  Wt pages, affine dtype — read once, HeldBulk
-  cb_scaler       (8):  1 page, bf16 — 1/sqrt(HW*Cg), pushed once
+  cb_scaler       (8):  1 page, bf16 — 1/sqrt(HW*Cg) on LOGICAL sizes, pushed once
+  cb_mask_interior(9):  Wg pages, bf16 — C-tail col mask row (c_tail > 0 only)
+  cb_mask_tail    (10): Wg pages, bf16 — HW-tail row mask row (hw_tail > 0 only)
   cb_output_tiles (16): 2*Wg pages, out_dtype — compute -> writer stream
   cb_mean         (24): 1 page, stat fmt — per-group mean, HeldBulk passes 2/3
   cb_var          (25): 1 page, stat fmt — variance accumulator -> rstd
@@ -56,9 +58,16 @@ def create_program_descriptor(
     N, _, HW, C = list(input_tensor.shape)
     G = num_groups
     Cg = C // G
-    Ht = HW // TILE_DIM
-    Wt = C // TILE_DIM
-    Wg = Cg // TILE_DIM
+    # Padded tile counts (HW / C tails round up). Groups are tile-aligned
+    # whenever G > 1 (validate gates groups_alignment), so the ceil on Wg
+    # only fires for G == 1 where Wg == Wt.
+    Ht = (HW + TILE_DIM - 1) // TILE_DIM
+    Wt = (C + TILE_DIM - 1) // TILE_DIM
+    Wg = (Cg + TILE_DIM - 1) // TILE_DIM
+    # Tail sizes (0 = aligned). c_tail > 0 implies G == 1, so the C tail tile
+    # is always the last tile of the (single) group slab.
+    hw_tail = HW % TILE_DIM
+    c_tail = C % TILE_DIM
 
     has_gamma = gamma_tensor is not None
     has_beta = beta_tensor is not None
@@ -115,6 +124,8 @@ def create_program_descriptor(
     CB_GAMMA_TILES = 1
     CB_BETA_TILES = 2
     CB_SCALER = 8
+    CB_MASK_INTERIOR = 9
+    CB_MASK_TAIL = 10
     CB_OUTPUT_TILES = 16
     CB_MEAN = 24
     CB_VAR = 25
@@ -147,6 +158,14 @@ def create_program_descriptor(
         beta_page = beta_tensor.buffer_page_size()
         cbs.append(cb(CB_BETA_TILES, Wt, beta_page, beta_tensor.dtype))
         cbs.append(cb(CB_SCALED, stream_pages, stat_page, stat_dtype))
+    # Mask rows for non-tile-aligned shapes (Refinement 2): generated once by
+    # the reader, held for the whole kernel. Interior row mask (zeros in the
+    # C tail columns of the last tile) and tail row mask (zeros below the HW
+    # tail rows, corner combined in the last tile). bf16 — masks are 0/1.
+    if c_tail > 0:
+        cbs.append(cb(CB_MASK_INTERIOR, Wg, bf16_page, ttnn.bfloat16))
+    if hw_tail > 0:
+        cbs.append(cb(CB_MASK_TAIL, Wg, bf16_page, ttnn.bfloat16))
 
     # --- per-core runtime args: [start_group, num_groups_here] + addresses ---
     reader_rt_args = ttnn.RuntimeArgs()
@@ -177,7 +196,7 @@ def create_program_descriptor(
     assert start_group == num_units, f"work split mismatch: {start_group} != {num_units}"
 
     # --- Reader: scalars first, TensorAccessorArgs at the end (input, gamma, beta) ---
-    reader_ct_args = [Ht, Wt, Wg, G, int(has_gamma), int(has_beta), inv_sqrt_n_bits]
+    reader_ct_args = [Ht, Wt, Wg, G, int(has_gamma), int(has_beta), inv_sqrt_n_bits, hw_tail, c_tail]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct_args.extend(
         ttnn.TensorAccessorArgs(gamma_tensor).get_compile_time_args()
@@ -211,7 +230,7 @@ def create_program_descriptor(
     )
 
     # --- Compute ---
-    compute_ct_args = [Ht, Wt, Wg, G, int(has_gamma), int(has_beta), eps_bits]
+    compute_ct_args = [Ht, Wt, Wg, G, int(has_gamma), int(has_beta), eps_bits, hw_tail, c_tail]
     compute_config = ttnn.ComputeConfigDescriptor(
         math_fidelity=math_fidelity,
         fp32_dest_acc_en=fp32_dest_acc_en,

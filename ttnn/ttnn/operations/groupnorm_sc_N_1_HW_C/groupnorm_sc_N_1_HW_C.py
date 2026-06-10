@@ -36,16 +36,22 @@ def tag_alignment(inputs, axes):
 
 
 def tag_groups_alignment(inputs, axes):
-    """aligned iff per-group channel count (C / num_groups) is a tile multiple.
+    """aligned iff no group straddles a tile boundary mid-tile.
 
-    Reads the sibling axis `num_groups` (per-shape extra). For G that does
-    not divide C the cell is rejected with ValueError before the registry
-    gate fires; report non_aligned defensively here.
+    True when the per-group channel count (C / num_groups) is a tile
+    multiple, and trivially true for num_groups == 1 (a single group spans
+    the whole C axis — only the C tail tile needs masking, which is the
+    `alignment` axis's job, not this one). Reads the sibling axis
+    `num_groups` (per-shape extra). For G that does not divide C the cell
+    is rejected with ValueError before the registry gate fires; report
+    non_aligned defensively here.
     """
     C = inputs[0][-1]
     G = axes["num_groups"]
     if G < 1 or C % G != 0:
         return "non_aligned"
+    if G == 1:
+        return "aligned"
     return "aligned" if (C // G) % TILE_DIM == 0 else "non_aligned"
 
 
@@ -56,13 +62,13 @@ INPUT_TAGGERS = {
 
 
 # ---------------------------------------------------------------------------
-# 2. SUPPORTED — Phase 0 + Refinement 1 (dtype / affine_dtype expansion)
+# 2. SUPPORTED — Phase 0 + Refinement 1 (dtype) + Refinement 2 (alignment)
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
     "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-    "alignment": ["tile_aligned"],
+    "alignment": ["tile_aligned", "hw_non_aligned", "c_non_aligned"],
     "groups_alignment": ["aligned"],
     "affine": ["gamma_beta", "gamma_only", "no_affine"],
     "affine_dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
