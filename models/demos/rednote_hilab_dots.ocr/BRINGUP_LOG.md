@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T06:33:07Z
+**Updated:** 2026-06-10T06:40:18Z
 
 ## Block Status
 
@@ -73,7 +73,7 @@
 | lm_head | reference | done | 1.000000 | 0 | untied Linear 1536->151936 no bias, real lm_head.weight, matches torch.nn.Linear |
 | lm_head | ttnn | done | 1.000000 | 0 | Untied vocab projection Linear 1536->151936 no bias as a single column-parallel ttnn.linear: weight [vocab,hidden] transposed to [hidden,vocab] and vocab-sharded ShardTensorToMesh(dim=-1) on the 1x4 mesh per parallelism plan (placement=shard vocab dim; 151936/4=37984 logits per chip, tile-divisible, no padding); replicated activation in, per-chip logit slices out, recombined on host via ConcatMeshToTensor(dim=-1) per tp-guidance (all_gather left to the generation-phase consumer). reference_impl tt_transformers/tt/lm_head.py DRAM-sharded program configs / column splits deferred to optimization. HiFi4+fp32-acc, bf16; real lm_head.weight re-loaded from checkpoint in the test; PCC 1.000000 vs golden. Guard ok (lint 0, kernels ok, no new host ops). KB entries for kind linear were attention/tensor-manipulation records (nlp_concat_heads_decode, concatenate_heads, flash_mla_prefill, narrow/split/bcast/concat, create_qkv_heads) - none applicable, none used. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | lm_head | debug | n/a | — | 0 |  |
-| lm_head | optimization | pending | — | 0 |  |
+| lm_head | optimization | done | 0.999945 | 0 | Tracy-driven single change: lm_head weight dtype bf16 -> bfloat8_b (tt_transformers lm_head idiom; KB entries for kind linear were attention/tensor-manipulation records - nlp_concat_heads_decode, concatenate_heads, flash_mla_prefill, narrow/split/bcast/concat - none applicable, none used). Baseline traced tracy (metal-trace captured+replayed, bf16 [1,1,128,1536] replicated 1x4 mesh, real lm_head.weight vocab-sharded 37984/chip) showed the single 108-core MatmulMultiCoreReuseMultiCast1D matmul at 348-368us/device, ~111MB bf16 weight stream = DRAM-bandwidth-bound; share=1.0 by construction (single-op block). Halving weight bytes moved it to 245-253us/device (-29%); HiFi4+fp32-acc accumulation unchanged. PCC 0.999945 (>0.99, was 1.0 bf16 - bfp8 weight quantization noise) re-verified on 1x4 mesh; traced_ops sidecar regenerated (ttnn.linear only). Guard ok (lint 0, traced tracy artifact verified). DRAM-sharded program config (K=1536 < 2048 threshold) left as a possible second pass; one-change budget. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | lm_head | real_weights | pending | — | 0 |  |
 
 ## Use cases
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 21 (2026-06-10T05:09:51Z): device[vision_attention] — ok
 - tick 22 (2026-06-10T05:17:43Z): device[vision_mlp] — ok
 - tick 23 (2026-06-10T05:25:23Z): device[vision_block] — ok
 - tick 24 (2026-06-10T05:35:01Z): device[patch_merger] — ok
@@ -94,6 +93,7 @@
 - tick 28 (2026-06-10T06:14:27Z): device[text_attention] — ok
 - tick 29 (2026-06-10T06:22:15Z): device[text_mlp] — ok
 - tick 30 (2026-06-10T06:33:07Z): device[decoder_layer] — ok
+- tick 31 (2026-06-10T06:40:18Z): device[lm_head] — ok
 
 ## Host-Resident Exceptions
 

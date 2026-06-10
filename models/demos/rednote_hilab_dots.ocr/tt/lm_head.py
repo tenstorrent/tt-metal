@@ -33,10 +33,14 @@ class TtLMHead(LightweightModule):
         mesh_device: ttnn mesh device handle (1xN line; weight vocab-sharded).
         state_dict: {"weight": [vocab=151936, hidden=1536]} torch tensor
             (HF key lm_head.weight, untied).
-        dtype: on-device weight/activation dtype.
+        dtype: on-device weight dtype. Default bfloat8_b: the 1536->37984
+            per-chip matmul is DRAM weight-streaming-bound (~111MB bf16 at
+            ~350us/device, tracy tick-31), so halving weight bytes halves the
+            block; HiFi4+fp32-acc accumulation keeps logits PCC > 0.99
+            (tt_transformers lm_head idiom).
     """
 
-    def __init__(self, mesh_device, state_dict, dtype=ttnn.bfloat16):
+    def __init__(self, mesh_device, state_dict, dtype=ttnn.bfloat8_b):
         super().__init__()
         self.mesh_device = mesh_device
         num_devices = mesh_device.get_num_devices()

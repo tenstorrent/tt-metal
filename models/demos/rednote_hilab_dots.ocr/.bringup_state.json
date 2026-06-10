@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T06:33:07Z",
+  "updated_at": "2026-06-10T06:40:18Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -705,8 +705,16 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/lm_head.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_lm_head.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_lm_head.py",
+          "generated/profiler/reports/2026_06_10_06_39_23/ops_perf_results_2026_06_10_06_39_23.csv"
+        ],
+        "notes": "Tracy-driven single change: lm_head weight dtype bf16 -> bfloat8_b (tt_transformers lm_head idiom; KB entries for kind linear were attention/tensor-manipulation records - nlp_concat_heads_decode, concatenate_heads, flash_mla_prefill, narrow/split/bcast/concat - none applicable, none used). Baseline traced tracy (metal-trace captured+replayed, bf16 [1,1,128,1536] replicated 1x4 mesh, real lm_head.weight vocab-sharded 37984/chip) showed the single 108-core MatmulMultiCoreReuseMultiCast1D matmul at 348-368us/device, ~111MB bf16 weight stream = DRAM-bandwidth-bound; share=1.0 by construction (single-op block). Halving weight bytes moved it to 245-253us/device (-29%); HiFi4+fp32-acc accumulation unchanged. PCC 0.999945 (>0.99, was 1.0 bf16 - bfp8 weight quantization noise) re-verified on 1x4 mesh; traced_ops sidecar regenerated (ttnn.linear only). Guard ok (lint 0, traced tracy artifact verified). DRAM-sharded program config (K=1536 < 2048 threshold) left as a possible second pass; one-change budget. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999945
       },
       "real_weights": {
         "status": "pending",
@@ -936,6 +944,12 @@
       "tick": 30,
       "ts": "2026-06-10T06:33:07Z",
       "action": "device[decoder_layer]",
+      "result": "ok"
+    },
+    {
+      "tick": 31,
+      "ts": "2026-06-10T06:40:18Z",
+      "action": "device[lm_head]",
       "result": "ok"
     }
   ],
