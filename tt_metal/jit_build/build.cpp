@@ -66,7 +66,7 @@ void report_result(const string& target_name, string_view op, const string& cmd,
         if (!result) {
             TT_THROW("{} build failed. Log: {}", target_name, log_contents);
         }
-        if (false && !log_contents.empty()) {
+        if (!log_contents.empty()) {
             // Don't mix warnings from parallel compilations.
             static std::mutex mutex;
             std::lock_guard lock(mutex);
