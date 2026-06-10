@@ -9,20 +9,38 @@
 struct DevicePrintMemoryLayout {
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
     // TODO: This needs to be properly defined
+#if !defined(DEVICE_PRINT_BUFFER_SIZE)
     DevicePrintBuffer<408, 2> buffer;
+#else
+    DevicePrintBuffer<DEVICE_PRINT_BUFFER_SIZE, 2> buffer;
+#endif
 #elif defined(COMPILE_FOR_DRISC)
     // TODO: This needs to be properly defined
+#if !defined(DEVICE_PRINT_BUFFER_SIZE)
     DevicePrintBuffer<204, 1> buffer;
 #else
-#if defined(COMPILE_FOR_DM)
-    DevicePrintBuffer<3264, 16, 8> buffer_triscs;  // Quasar TRISC 16 processors
-    DevicePrintBuffer<1632, 8, 0> buffer;          // Quasar DM 8 processors
-#elif defined(COMPILE_FOR_TRISC)
-    DevicePrintBuffer<3264, 16, 8> buffer;     // Quasar TRISC 16 processors
-    DevicePrintBuffer<1632, 8, 0> buffer_dms;  // Quasar DM 8 processors
+    DevicePrintBuffer<DEVICE_PRINT_BUFFER_SIZE, 1> buffer;
+#endif
 #else
-    DevicePrintBuffer<3264, 16, 8> buffer_triscs;  // Quasar TRISC 16 processors
-    DevicePrintBuffer<1632, 8, 0> buffer_dms;      // Quasar DM 8 processors
+#if !defined(DEVICE_PRINT_BUFFER_SIZE)
+    static constexpr size_t buffer_size_triscs = 3264;
+#else
+    static constexpr size_t buffer_size_triscs = DEVICE_PRINT_BUFFER_SIZE;
+#endif
+#if !defined(DEVICE_PRINT_BUFFER_SIZE2)
+    static constexpr size_t buffer_size_dms = 3264;
+#else
+    static constexpr size_t buffer_size_dms = DEVICE_PRINT_BUFFER_SIZE2;
+#endif
+#if defined(COMPILE_FOR_DM)
+    DevicePrintBuffer<buffer_size_triscs, 16, 8> buffer_triscs;  // Quasar TRISC 16 processors
+    DevicePrintBuffer<buffer_size_dms, 8, 0> buffer;             // Quasar DM 8 processors
+#elif defined(COMPILE_FOR_TRISC)
+    DevicePrintBuffer<buffer_size_triscs, 16, 8> buffer;  // Quasar TRISC 16 processors
+    DevicePrintBuffer<buffer_size_dms, 8, 0> buffer_dms;  // Quasar DM 8 processors
+#else
+    DevicePrintBuffer<buffer_size_triscs, 16, 8> buffer_triscs;  // Quasar TRISC 16 processors
+    DevicePrintBuffer<buffer_size_dms, 8, 0> buffer_dms;         // Quasar DM 8 processors
 #endif
 #endif
 };
