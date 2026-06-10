@@ -39,7 +39,8 @@ ALL = "all"
 
 def error(message):
     """Emit a GitHub Actions error annotation and exit non-zero."""
-    print(f"::error::{message}")
+    safe = str(message).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    print(f"::error::{safe}", file=sys.stderr)
     sys.exit(1)
 
 
