@@ -84,21 +84,21 @@ concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } |
 //      ALL its run-args bundled. Migrate here first; it is the least to write.
 //
 //   2. AdvancedProgramSpecFactoryConcept — if the cache-HIT cost hurts. Keep the same cache key, but
-//      split the run-args into STATIC (create_static_args — fixed for a cache entry, set once on miss
-//      and retained) and DYNAMIC (create_dynamic_args — the per-dispatch values, e.g. an RNG seed or
+//      split the run-args into STATIC (create_enqueue_invariant_args — fixed for a cache entry, set once on miss
+//      and retained) and DYNAMIC (create_per_enqueue_args — the per-dispatch values, e.g. an RNG seed or
 //      tensor addresses). The framework re-applies ONLY the dynamic set on a hit (UpdateProgramRunArgs),
 //      not the whole arg set.
 //
 //   3. ImmutableProgramSpecFactoryConcept / AdvancedImmutableProgramSpecFactoryConcept — if it STILL
 //      hurts. Add extract_immutable_info: a small, hashable projection of (attributes, tensor_args)
-//      that becomes the cache key AND the sole input to create_program_spec / create_static_args. This
+//      that becomes the cache key AND the sole input to create_program_spec / create_enqueue_invariant_args. This
 //      lets the framework skip the spec rebuild on a hit, and structurally prevents a mutable value
 //      (the seed) from leaking into the spec — it isn't even visible to create_program_spec. Available
 //      both bare (combined run-args) and with the static/dynamic split.
 //
 // The concepts are detected by method surface and are mutually exclusive by construction:
 //   - extract_immutable_info present        => Immutable-keyed (3/4)
-//   - create_static_args + create_dynamic_args present => Advanced / split (2/4)
+//   - create_enqueue_invariant_args + create_per_enqueue_args present => Advanced / split (2/4)
 //
 // Run-args contract for the split (2 and 4): static run-args are declared enqueue-invariant in the spec
 // (KernelAdvancedOptions::enqueue_invariant_runtime_args / _common_runtime_args,
@@ -117,9 +117,9 @@ concept HasCreateProgramSpec = requires { &T::create_program_spec; };
 template <typename T>
 concept HasImmutableInfoExtraction = requires { &T::extract_immutable_info; };
 template <typename T>
-concept HasStaticDynamicArgSplit = requires {
-    &T::create_static_args;
-    &T::create_dynamic_args;
+concept HasEnqueueInvariantArgSplit = requires {
+    &T::create_enqueue_invariant_args;
+    &T::create_per_enqueue_args;
 };
 // Shared exclusion: a Metal 2.0 spec factory is none of the legacy factory shapes.
 template <typename T>
@@ -128,27 +128,27 @@ concept NotALegacyFactory =
 
 // 1. Basic, spec-keyed (the default). create_program_spec -> ProgramArtifacts{spec, run_args}.
 template <typename T>
-concept ProgramSpecFactoryConcept =
-    HasCreateProgramSpec<T> && !HasImmutableInfoExtraction<T> && !HasStaticDynamicArgSplit<T> && NotALegacyFactory<T>;
+concept ProgramSpecFactoryConcept = HasCreateProgramSpec<T> && !HasImmutableInfoExtraction<T> &&
+                                    !HasEnqueueInvariantArgSplit<T> && NotALegacyFactory<T>;
 
 // 2. Advanced (static/dynamic split), spec-keyed. create_program_spec -> ProgramSpec;
-//    create_static_args -> ProgramRunArgs; create_dynamic_args -> ProgramRunArgs.
+//    create_enqueue_invariant_args -> ProgramRunArgs; create_per_enqueue_args -> ProgramRunArgs.
 template <typename T>
 concept AdvancedProgramSpecFactoryConcept =
-    HasCreateProgramSpec<T> && HasStaticDynamicArgSplit<T> && !HasImmutableInfoExtraction<T> && NotALegacyFactory<T>;
+    HasCreateProgramSpec<T> && HasEnqueueInvariantArgSplit<T> && !HasImmutableInfoExtraction<T> && NotALegacyFactory<T>;
 
 // 3. Basic, immutable-info-keyed. extract_immutable_info -> ImmutableInfo (cache key);
 //    create_program_spec(ImmutableInfo) -> ProgramArtifacts{spec, run_args}.
 template <typename T>
 concept ImmutableProgramSpecFactoryConcept =
-    HasCreateProgramSpec<T> && HasImmutableInfoExtraction<T> && !HasStaticDynamicArgSplit<T> && NotALegacyFactory<T>;
+    HasCreateProgramSpec<T> && HasImmutableInfoExtraction<T> && !HasEnqueueInvariantArgSplit<T> && NotALegacyFactory<T>;
 
 // 4. Advanced (static/dynamic split), immutable-info-keyed.
 //    extract_immutable_info -> ImmutableInfo; create_program_spec(ImmutableInfo) -> ProgramSpec;
-//    create_static_args(ImmutableInfo) -> ProgramRunArgs; create_dynamic_args(...) -> ProgramRunArgs.
+//    create_enqueue_invariant_args(ImmutableInfo) -> ProgramRunArgs; create_per_enqueue_args(...) -> ProgramRunArgs.
 template <typename T>
 concept AdvancedImmutableProgramSpecFactoryConcept =
-    HasCreateProgramSpec<T> && HasImmutableInfoExtraction<T> && HasStaticDynamicArgSplit<T> && NotALegacyFactory<T>;
+    HasCreateProgramSpec<T> && HasImmutableInfoExtraction<T> && HasEnqueueInvariantArgSplit<T> && NotALegacyFactory<T>;
 
 // Umbrella: any of the four Metal 2.0 spec factory shapes (exactly one is satisfied by construction).
 template <typename T>

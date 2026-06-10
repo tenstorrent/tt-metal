@@ -37,14 +37,14 @@ struct RandDeviceOperation {
     //
     // The four-method surface IS the documentation of what's what:
     //   - extract_immutable_info → the cache key AND the sole input to create_program_spec /
-    //     create_static_args. It is the structural projection of the request (output layout + grid).
+    //     create_enqueue_invariant_args. It is the structural projection of the request (output layout + grid).
     //     It deliberately EXCLUDES seed/from/to, so two calls that differ only in those values map to
     //     the same cache entry — and a mutable value cannot leak into the spec, because the spec
     //     builders never see anything but the ImmutableInfo.
     //   - create_program_spec → the immutable blueprint (DFBs, kernels, work-units, schemas).
-    //   - create_static_args → the ENQUEUE-INVARIANT run-args: the per-core work split (start_id /
+    //   - create_enqueue_invariant_args → the ENQUEUE-INVARIANT run-args: the per-core work split (start_id /
     //     num_tiles), declared invariant in the spec, set once on cache miss and retained.
-    //   - create_dynamic_args → the PER-ENQUEUE run-args: the per-core RNG seed + from/to range and
+    //   - create_per_enqueue_args → the PER-ENQUEUE run-args: the per-core RNG seed + from/to range and
     //     the output tensor. Re-applied on every dispatch via UpdateProgramRunArgs, so a new seed
     //     produces new output while the cached program is reused.
     //
@@ -61,8 +61,8 @@ struct RandDeviceOperation {
         static immutable_info_t extract_immutable_info(
             const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
         static tt::tt_metal::experimental::ProgramSpec create_program_spec(const immutable_info_t& info);
-        static tt::tt_metal::experimental::ProgramRunArgs create_static_args(const immutable_info_t& info);
-        static tt::tt_metal::experimental::ProgramRunArgs create_dynamic_args(
+        static tt::tt_metal::experimental::ProgramRunArgs create_enqueue_invariant_args(const immutable_info_t& info);
+        static tt::tt_metal::experimental::ProgramRunArgs create_per_enqueue_args(
             const operation_attributes_t& attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output,

@@ -727,10 +727,10 @@ public:
 
             // Method-surface traits select one of the four factory shapes (see operation_concepts.hpp):
             //   kImmutable → cache key & spec input come from extract_immutable_info (option 3);
-            //   kSplit     → run-args are split into static (create_static_args) + dynamic
-            //                (create_dynamic_args), re-applied partially on a hit (the "Advanced" tier).
+            //   kSplit     → run-args are split into static (create_enqueue_invariant_args) + dynamic
+            //                (create_per_enqueue_args), re-applied partially on a hit (the "Advanced" tier).
             constexpr bool kImmutable = HasImmutableInfoExtraction<ProgramSpecFactory>;
-            constexpr bool kSplit = HasStaticDynamicArgSplit<ProgramSpecFactory>;
+            constexpr bool kSplit = HasEnqueueInvariantArgSplit<ProgramSpecFactory>;
 
             auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
             tt::tt_metal::distributed::MeshWorkload mesh_workload;
@@ -746,15 +746,16 @@ public:
                 if constexpr (kImmutable) {
                     const auto info = ProgramSpecFactory::extract_immutable_info(attrs, tensor_args);
                     spec = ProgramSpecFactory::create_program_spec(info);
-                    static_args = ProgramSpecFactory::create_static_args(info);
+                    static_args = ProgramSpecFactory::create_enqueue_invariant_args(info);
                 } else {
                     spec = ProgramSpecFactory::create_program_spec(attrs, tensor_args, tensor_return_value);
-                    static_args = ProgramSpecFactory::create_static_args(attrs, tensor_args, tensor_return_value);
+                    static_args =
+                        ProgramSpecFactory::create_enqueue_invariant_args(attrs, tensor_args, tensor_return_value);
                 }
                 for (const auto& range : tensor_coords.ranges()) {
                     const std::optional<ttnn::MeshCoordinate> coord(*range.begin());
                     auto dynamic_args =
-                        ProgramSpecFactory::create_dynamic_args(attrs, tensor_args, tensor_return_value, coord);
+                        ProgramSpecFactory::create_per_enqueue_args(attrs, tensor_args, tensor_return_value, coord);
                     std::array<tt::tt_metal::experimental::ProgramRunArgs, 1> appended{std::move(dynamic_args)};
                     auto run_params = tt::tt_metal::experimental::MergeProgramRunArgs(static_args, appended);
                     auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
@@ -795,7 +796,7 @@ public:
             [[maybe_unused]] const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
-            if constexpr (HasStaticDynamicArgSplit<ProgramSpecFactory>) {
+            if constexpr (HasEnqueueInvariantArgSplit<ProgramSpecFactory>) {
                 // Advanced tier: rebuild ONLY the dynamic run-args per coordinate (the per-dispatch
                 // scalars AND the tensor addresses) and re-apply them via UpdateProgramRunArgs. The
                 // static (enqueue-invariant) set stays baked from the cache-miss SetProgramRunArgs; the
@@ -803,7 +804,7 @@ public:
                 for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                     const std::optional<ttnn::MeshCoordinate> coord(*coordinate_range.begin());
                     auto dynamic_args =
-                        ProgramSpecFactory::create_dynamic_args(attrs, tensor_args, tensor_return_value, coord);
+                        ProgramSpecFactory::create_per_enqueue_args(attrs, tensor_args, tensor_return_value, coord);
                     tt::tt_metal::experimental::UpdateProgramRunArgs(program, dynamic_args);
                 }
             } else {

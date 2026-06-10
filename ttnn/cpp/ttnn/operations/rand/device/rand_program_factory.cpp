@@ -35,7 +35,7 @@ constexpr const char* WRITER_KERNEL_PATH = "ttnn/cpp/ttnn/operations/rand/device
 constexpr const char* COMPUTE_KERNEL_PATH = "ttnn/cpp/ttnn/operations/rand/device/kernels/compute_uniform.cpp";
 
 // Work split over the output tiles — a pure function of (grid, tile count). create_program_spec and
-// create_static_args derive it from the ImmutableInfo; create_dynamic_args re-derives the identical
+// create_enqueue_invariant_args derive it from the ImmutableInfo; create_per_enqueue_args re-derives the identical
 // split from the output tensor, so the per-core seed assignment lines up with the static start_id /
 // num_tiles for the same cores.
 struct RandWorkSplit {
@@ -146,9 +146,10 @@ m2::ProgramSpec RandDeviceOperation::RandProgramFactory::create_program_spec(con
     return spec;
 }
 
-// create_static_args — the enqueue-invariant per-core work split (start_id / num_tiles). Derived only
+// create_enqueue_invariant_args — the enqueue-invariant per-core work split (start_id / num_tiles). Derived only
 // from the ImmutableInfo and declared invariant in the spec, so the hit path may omit it.
-m2::ProgramRunArgs RandDeviceOperation::RandProgramFactory::create_static_args(const immutable_info_t& info) {
+m2::ProgramRunArgs RandDeviceOperation::RandProgramFactory::create_enqueue_invariant_args(
+    const immutable_info_t& info) {
     const uint32_t units = info.output_spec.padded_shape().volume() / constants::TILE_HW;
     const auto ws = compute_work_split(info.grid, units);
 
@@ -167,10 +168,10 @@ m2::ProgramRunArgs RandDeviceOperation::RandProgramFactory::create_static_args(c
     return args;
 }
 
-// create_dynamic_args — the per-enqueue values: per-core seed + from/to range, and the output tensor.
+// create_per_enqueue_args — the per-enqueue values: per-core seed + from/to range, and the output tensor.
 // Re-applied on every dispatch via UpdateProgramRunArgs. The per-coordinate seed offset gives distinct
 // streams across a sharded mesh.
-m2::ProgramRunArgs RandDeviceOperation::RandProgramFactory::create_dynamic_args(
+m2::ProgramRunArgs RandDeviceOperation::RandProgramFactory::create_per_enqueue_args(
     const operation_attributes_t& attrs,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output,
