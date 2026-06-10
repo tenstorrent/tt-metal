@@ -73,12 +73,31 @@ std::map<distributed::MeshCoordinate, CoreCoord> claim_service_cores(
     std::map<distributed::MeshCoordinate, CoreCoord> service_cores;
     for (const auto& coord : coords) {
         auto* d = mesh->get_device(coord);
-        auto claimable = svc.get_claimable_cores(d);
+        const auto claimable = svc.get_claimable_cores(d);
+        // get_claimable_cores() returns the full dispatch-available set and does NOT
+        // exclude cores already claimed via ServiceCoreManager, so pick the first
+        // claimable core that isn't already taken. This is what lets multiple
+        // services share one device: an H2D service + this D2D sender on a pipeline's
+        // first stage, or an inbound D2D receiver + an outbound D2D sender on a middle
+        // stage. Picking claimable.front() unconditionally would re-pick the H2D /
+        // other-direction core and TT_FATAL in claim().
+        const auto already_claimed = svc.claimed_cores(d->id());
+        std::optional<CoreCoord> chosen;
+        for (const auto& c : claimable) {
+            if (!already_claimed.contains(c)) {
+                chosen = c;
+                break;
+            }
+        }
         TT_FATAL(
-            !claimable.empty(), "D2DStreamService: no claimable {} service core on device at coord {}", side, coord);
-        const CoreCoord chosen = claimable.front();
-        svc.claim(d, {chosen});
-        service_cores.emplace(coord, chosen);
+            chosen.has_value(),
+            "D2DStreamService: no unclaimed {} service core on device at coord {} ({} claimable, {} already claimed)",
+            side,
+            coord,
+            claimable.size(),
+            already_claimed.size());
+        svc.claim(d, {*chosen});
+        service_cores.emplace(coord, *chosen);
     }
     return service_cores;
 }
