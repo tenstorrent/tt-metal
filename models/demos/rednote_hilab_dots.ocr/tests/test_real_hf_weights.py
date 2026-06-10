@@ -43,6 +43,7 @@ _vision_transformer_mod = _load_module("dots_ocr_tt_vision_transformer", MODEL_D
 _embedding_mod = _load_module("dots_ocr_tt_embedding", MODEL_DIR / "tt" / "embedding.py")
 _text_rmsnorm_mod = _load_module("dots_ocr_tt_text_rmsnorm", MODEL_DIR / "tt" / "text_rmsnorm.py")
 _text_attention_mod = _load_module("dots_ocr_tt_text_attention", MODEL_DIR / "tt" / "text_attention.py")
+_text_mlp_mod = _load_module("dots_ocr_tt_text_mlp", MODEL_DIR / "tt" / "text_mlp.py")
 
 
 def _pcc(a, b):
@@ -389,6 +390,41 @@ def _t_text_attention(mesh_device) -> tuple[float, int]:
     return min(pccs), n_params
 
 
+def _t_text_mlp(mesh_device) -> tuple[float, int]:
+    # Real gate/up/down_proj weights from two sites (layers.0, layers.27)
+    # exercise the per-layer loader index; PCC gated on each, min reported.
+    # Production-distribution input: the golden's real
+    # post-attention_layernorm activation — the MLP consumes the RMSNorm
+    # output directly, so this is exactly what the block sees in production.
+    # Production operating point: fp32 [1,1,128,1536] replicated 1x4 mesh,
+    # gate/up column-parallel + row-parallel down with reduce_scatter/
+    # all_gather all-reduce (ttnn/optimization phases); replicated output,
+    # one device's copy compared.
+    golden = torch.load(MODEL_DIR / "reference" / "golden" / "text_mlp.pt")
+    x = golden["input"]  # [1, 128, 1536]
+    _, seq, dim = x.shape
+    pccs, n_params = [], 0
+    for layer_idx in (0, wl.TEXT_NUM_LAYERS - 1):
+        sd = wl.text_mlp_weights(layer_idx=layer_idx)
+        n_params += wl.count_params(sd)
+        ref_out = ref.text_mlp_forward(x, sd)
+        block = _text_mlp_mod.TtTextMLP(mesh_device, sd, dtype=ttnn.float32)
+        x_tt = ttnn.from_torch(
+            x.reshape(1, 1, seq, dim).float(),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        out = ttnn.to_torch(ttnn.get_device_tensors(block.forward(x_tt))[0]).float().reshape(seq, dim)
+        assert out.shape == ref_out.reshape(seq, dim).shape, f"layers.{layer_idx}: {out.shape} != {ref_out.shape}"
+        pcc = _pcc(ref_out.reshape(seq, dim), out)
+        print(f"  text_mlp[layers.{layer_idx}] PCC = {pcc:.6f}")
+        pccs.append(pcc)
+    return min(pccs), n_params
+
+
 BLOCKS = [
     ("vision_patch_embed", _t_vision_patch_embed),
     ("vision_rmsnorm", _t_vision_rmsnorm),
@@ -400,6 +436,7 @@ BLOCKS = [
     ("embedding", _t_embedding),
     ("text_rmsnorm", _t_text_rmsnorm),
     ("text_attention", _t_text_attention),
+    ("text_mlp", _t_text_mlp),
 ]
 
 

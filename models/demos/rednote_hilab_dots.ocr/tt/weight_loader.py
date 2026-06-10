@@ -232,6 +232,22 @@ def text_attention_weights(
     return {n: hf_sd[f"{prefix}.{n}"] for n in names}
 
 
+def text_mlp_weights(layer_idx: int = 0, hf_sd: Optional[Dict[str, torch.Tensor]] = None) -> Dict[str, torch.Tensor]:
+    """State dict for TtTextMLP: gate/up/down_proj.weight (Qwen2 SwiGLU, no biases).
+
+    HF keys live under ``model.layers.{layer_idx}.mlp`` (gate_proj
+    [8960, 1536], up_proj [8960, 1536], down_proj [1536, 8960]). The TTNN
+    module transposes and TP-shards at construction; the loader hands over
+    the raw HF tensors exactly as ``TtTextMLP.__init__`` expects.
+    """
+    prefix = f"model.layers.{layer_idx}.mlp"
+    names = ["gate_proj.weight", "up_proj.weight", "down_proj.weight"]
+    keys = [f"{prefix}.{n}" for n in names]
+    if hf_sd is None:
+        hf_sd = load_hf_state_dict(keys=keys)
+    return {n: hf_sd[f"{prefix}.{n}"] for n in names}
+
+
 def count_params(sd) -> int:
     """Tensor-leaf element count of a (possibly nested) state dict."""
     if isinstance(sd, torch.Tensor):
@@ -320,3 +336,11 @@ if __name__ == "__main__":
         assert tasd["o_proj.weight"].shape == (1536, 1536), (idx, tasd["o_proj.weight"].shape)
         assert len(tasd) == 7, (idx, sorted(tasd))
     print(f"text_attention: layers.0/layers.{TEXT_NUM_LAYERS - 1} OK, {count_params(tasd)} params each")
+
+    for idx in (0, TEXT_NUM_LAYERS - 1):
+        tmsd = text_mlp_weights(layer_idx=idx)
+        assert tmsd["gate_proj.weight"].shape == (8960, 1536), (idx, tmsd["gate_proj.weight"].shape)
+        assert tmsd["up_proj.weight"].shape == (8960, 1536), (idx, tmsd["up_proj.weight"].shape)
+        assert tmsd["down_proj.weight"].shape == (1536, 8960), (idx, tmsd["down_proj.weight"].shape)
+        assert len(tmsd) == 3, (idx, sorted(tmsd))
+    print(f"text_mlp: layers.0/layers.{TEXT_NUM_LAYERS - 1} OK, {count_params(tmsd)} params each")

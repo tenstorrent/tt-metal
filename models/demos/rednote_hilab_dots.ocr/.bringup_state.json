@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T07:52:31Z",
+  "updated_at": "2026-06-10T07:58:25Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -674,8 +674,15 @@
         "pcc": 0.999989
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/weight_loader.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_real_hf_weights.py"
+        ],
+        "notes": "Added text_mlp_weights(layer_idx) loader (model.layers.N.mlp gate/up/down_proj.weight, raw HF tensors as TtTextMLP.__init__ expects) + _t_text_mlp harness row. Real weights from two sites (layers.0, layers.27) exercise the per-layer index; PCC gated on each, min reported (layers.0=1.000000, layers.27=0.999999). Production-distribution input: golden real post-attention_layernorm activation [1,128,1536]. Production operating point: fp32 [1,1,128,1536] replicated 1x4 mesh, gate/up column-parallel + row-parallel down with reduce_scatter/all_gather all-reduce. 82,575,360 params loaded; tt/text_mlp.py untouched. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999999,
+        "params_loaded": 82575360
       }
     },
     {
@@ -1080,6 +1087,12 @@
       "tick": 41,
       "ts": "2026-06-10T07:52:31Z",
       "action": "device[text_attention]",
+      "result": "ok"
+    },
+    {
+      "tick": 42,
+      "ts": "2026-06-10T07:58:25Z",
+      "action": "device[text_mlp]",
       "result": "ok"
     }
   ],
