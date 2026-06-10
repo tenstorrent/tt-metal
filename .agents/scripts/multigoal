@@ -21,6 +21,19 @@ from typing import Any, Callable
 MAX_GOAL_OBJECTIVE_CHARS = 4_000
 TERMINAL_GOAL_STATUSES = {"complete", "blocked", "usageLimited", "budgetLimited"}
 SKILL_RE = re.compile(r"\$([A-Za-z0-9][A-Za-z0-9_-]*)")
+ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+# Stage check scripts exit with: 0 = pass, 1 = advisory failure (recorded,
+# pipeline continues), 2 = critical failure (after remediation attempts are
+# exhausted, no further stages are launched). Any other exit (including the
+# checker-internal-error convention of 3) is a broken check or misconfigured
+# environment: it is retried once for transients and then, by default, stops
+# the pipeline as a runner/infra failure - a silently disabled guardrail
+# would restore exactly the self-graded completion the gates exist to
+# prevent. Use --check-error-policy continue to override in an emergency.
+CHECK_PASS = 0
+CHECK_ADVISORY = 1
+CHECK_CRITICAL = 2
 
 
 JsonObject = dict[str, Any]
@@ -240,6 +253,30 @@ def parse_args() -> argparse.Namespace:
         default=[],
         metavar="KEY=VALUE",
         help="Codex config override passed to app-server. May be repeated.",
+    )
+    parser.add_argument(
+        "--check-retries",
+        type=int,
+        default=1,
+        help=(
+            "Remediation goals to run when a stage's <prompt>.check.sh fails "
+            "before recording the failure (default: 1)."
+        ),
+    )
+    parser.add_argument(
+        "--no-checks",
+        action="store_true",
+        help="Skip <prompt>.check.sh verification scripts entirely.",
+    )
+    parser.add_argument(
+        "--check-error-policy",
+        choices=("stop", "continue"),
+        default="stop",
+        help=(
+            "What to do when a check script itself is broken (exit outside "
+            "0/1/2 after one retry). Default: stop the pipeline as an infra "
+            "failure so a disabled guardrail cannot pass silently."
+        ),
     )
     parser.add_argument("--approval-policy", default="never")
     parser.add_argument("--sandbox", default="danger-full-access")
@@ -504,48 +541,27 @@ def append_manifest(path: pathlib.Path, lines: list[str]) -> None:
             f.write(line + "\n")
 
 
-def run_stage(
+def execute_goal(
     client: AppServerClient,
     args: argparse.Namespace,
     repo: pathlib.Path,
-    log_dir: pathlib.Path,
-    manifest: pathlib.Path,
-    index: int,
-    prompt_path: pathlib.Path,
-    replacements: list[tuple[str, str]],
-) -> int:
-    prompt = load_prompt(prompt_path, replacements)
-    objective = objective_from_prompt(prompt)
-    name = stage_name(index, prompt_path)
-    prompt_copy = log_dir / f"{name}.prompt.txt"
-    prompt_copy.write_text(prompt)
-    output_log = log_dir / f"{name}.jsonl"
-    input_items, missing_skills = input_items_for_objective(repo, objective)
+    objective: str,
+    output_log: pathlib.Path,
+    on_thread_started: Callable[[str], None] | None = None,
+) -> tuple[str, str, str | None]:
+    """Run one objective to a terminal goal status.
 
-    print(f"\n== Stage {index}: {prompt_path} ==", file=sys.stderr)
-    print(f"+ log: {output_log}", file=sys.stderr)
-    print(f"+ objective_chars: {len(objective)}", file=sys.stderr)
-    if missing_skills:
-        print(f"+ missing skill paths: {', '.join(missing_skills)}", file=sys.stderr)
-
-    if args.dry_run:
-        output_log.write_text(objective)
-        append_manifest(
-            manifest,
-            [
-                f"stage_{index}_dry_run=true",
-                f"stage_{index}_objective_chars={len(objective)}",
-                f"stage_{index}_skills={','.join(parse_skill_names(objective))}",
-            ],
-        )
-        return 0
-
+    Returns (terminal_status, thread_id, last_turn_error).
+    """
+    input_items, _missing = input_items_for_objective(repo, objective)
     with output_log.open("w", encoding="utf-8") as log:
         started = client.request("thread/start", thread_start_params(args, repo), log)
         thread = started.get("thread")
         if not isinstance(thread, dict) or not isinstance(thread.get("id"), str):
             raise RuntimeError(f"thread/start did not return a thread id: {started!r}")
         thread_id = thread["id"]
+        if on_thread_started is not None:
+            on_thread_started(thread_id)
         state = StageState(thread_id=thread_id, objective=objective)
 
         set_paused = client.request(
@@ -584,26 +600,259 @@ def run_stage(
         if goal.get("objective") != objective or goal.get("status") != "active":
             raise RuntimeError(f"active goal was not set exactly: {goal!r}")
 
+        terminal = wait_for_stage_terminal(client, log, state)
+        return terminal, thread_id, state.last_turn_error
+
+
+def find_check_script(prompt_path: pathlib.Path) -> pathlib.Path | None:
+    candidate = prompt_path.with_name(prompt_path.stem + ".check.sh")
+    return candidate if candidate.exists() else None
+
+
+def replacement_env(replacements: list[tuple[str, str]]) -> dict[str, str]:
+    return {old: new for old, new in replacements if ENV_NAME_RE.match(old)}
+
+
+def run_check_script(
+    script: pathlib.Path,
+    repo: pathlib.Path,
+    extra_env: dict[str, str],
+    check_log: pathlib.Path,
+) -> int:
+    env = os.environ.copy()
+    env.update(extra_env)
+    result = subprocess.run(
+        ["bash", str(script)],
+        cwd=repo,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    check_log.write_text(result.stdout or "", encoding="utf-8")
+    tail = "\n".join((result.stdout or "").splitlines()[-15:])
+    print(f"check {script.name} exited {result.returncode}; log: {check_log}", file=sys.stderr)
+    if tail:
+        print(tail, file=sys.stderr)
+    return result.returncode
+
+
+def remediation_objective(
+    prompt: str,
+    *,
+    script: pathlib.Path,
+    check_log: pathlib.Path,
+    prompt_copy: pathlib.Path,
+    exit_code: int,
+) -> str:
+    first_line = objective_from_prompt(prompt).splitlines()[0].strip()
+    severity = "CRITICAL" if exit_code >= CHECK_CRITICAL else "ADVISORY"
+    objective = "\n".join(
+        [
+            first_line,
+            "",
+            "Runner-side verification: an independent check script ran after this goal "
+            f"was previously reported complete and FAILED (exit {exit_code}, {severity}).",
+            f"Check script: {script}",
+            f"Full check output: {check_log}",
+            f"Original goal requirements: {prompt_copy}",
+            "Read the check output and treat it as a bug report against the previous "
+            "completion claim. Reproduce the problem, fix the underlying cause, and "
+            "re-verify by running the check script yourself until it exits 0 - or refute "
+            "it with concrete evidence recorded in the stage work_log. All original "
+            "completion requirements still apply.",
+        ]
+    )
+    if len(objective) > MAX_GOAL_OBJECTIVE_CHARS:
+        raise RuntimeError(f"remediation objective is {len(objective)} characters")
+    return objective
+
+
+def append_status(log_dir: pathlib.Path, name: str, goal_status: str, check_status: str) -> None:
+    status = log_dir / "STATUS.md"
+    if not status.exists():
+        status.write_text("| stage | goal | check |\n|---|---|---|\n", encoding="utf-8")
+    with status.open("a", encoding="utf-8") as f:
+        f.write(f"| {name} | {goal_status} | {check_status} |\n")
+
+
+def run_stage_checks(
+    client: AppServerClient,
+    args: argparse.Namespace,
+    repo: pathlib.Path,
+    log_dir: pathlib.Path,
+    manifest: pathlib.Path,
+    index: int,
+    name: str,
+    prompt: str,
+    prompt_path: pathlib.Path,
+    prompt_copy: pathlib.Path,
+    replacements: list[tuple[str, str]],
+) -> str:
+    """Run the stage's check script with remediation. Returns the check status string."""
+    script = find_check_script(prompt_path)
+    if script is None or args.no_checks:
+        status = "skipped" if args.no_checks and script is not None else "none"
+        append_manifest(manifest, [f"stage_{index}_check={status}"])
+        return status
+
+    extra_env = replacement_env(replacements)
+    extra_env["MULTIGOAL_LOG_DIR"] = str(log_dir)
+    extra_env["MULTIGOAL_STAGE"] = name
+
+    code = -1
+    for attempt in range(args.check_retries + 1):
+        check_log = log_dir / f"{name}.check-{attempt + 1}.log"
+        code = run_check_script(script, repo, extra_env, check_log)
+        append_manifest(manifest, [f"stage_{index}_check_attempt_{attempt + 1}=exit{code}"])
+        if code not in (CHECK_PASS, CHECK_ADVISORY, CHECK_CRITICAL):
+            # Broken check or environment: retry once for transients.
+            check_log = log_dir / f"{name}.check-{attempt + 1}-retry.log"
+            code = run_check_script(script, repo, extra_env, check_log)
+            append_manifest(manifest, [f"stage_{index}_check_attempt_{attempt + 1}_retry=exit{code}"])
+        if code == CHECK_PASS:
+            append_manifest(manifest, [f"stage_{index}_check=pass"])
+            return "pass"
+        if code not in (CHECK_ADVISORY, CHECK_CRITICAL):
+            append_manifest(manifest, [f"stage_{index}_check=check-error(exit{code})"])
+            return f"check-error(exit{code})"
+        if attempt >= args.check_retries:
+            break
+        objective = remediation_objective(
+            prompt,
+            script=script,
+            check_log=check_log,
+            prompt_copy=prompt_copy,
+            exit_code=code,
+        )
+        remediation_log = log_dir / f"{name}.remediation-{attempt + 1}.jsonl"
+        print(f"\n== Stage {index} remediation {attempt + 1}: check failed (exit {code}) ==", file=sys.stderr)
+        print(f"+ log: {remediation_log}", file=sys.stderr)
+        terminal, _thread_id, turn_error = execute_goal(
+            client,
+            args,
+            repo,
+            objective,
+            remediation_log,
+            on_thread_started=lambda tid: append_manifest(
+                manifest, [f"stage_{index}_remediation_{attempt + 1}_thread_id={tid}"]
+            ),
+        )
+        append_manifest(
+            manifest,
+            [f"stage_{index}_remediation_{attempt + 1}_terminal_status={terminal}"],
+        )
+        if terminal != "complete":
+            detail = f": {turn_error}" if turn_error else ""
+            print(f"remediation goal ended {terminal}{detail}", file=sys.stderr)
+            break
+
+    status = "critical-fail" if code >= CHECK_CRITICAL else "advisory-fail"
+    append_manifest(manifest, [f"stage_{index}_check={status}"])
+    return status
+
+
+def run_stage(
+    client: AppServerClient,
+    args: argparse.Namespace,
+    repo: pathlib.Path,
+    log_dir: pathlib.Path,
+    manifest: pathlib.Path,
+    index: int,
+    prompt_path: pathlib.Path,
+    replacements: list[tuple[str, str]],
+) -> int:
+    prompt = load_prompt(prompt_path, replacements)
+    objective = objective_from_prompt(prompt)
+    name = stage_name(index, prompt_path)
+    prompt_copy = log_dir / f"{name}.prompt.txt"
+    prompt_copy.write_text(prompt)
+    output_log = log_dir / f"{name}.jsonl"
+    _input_items, missing_skills = input_items_for_objective(repo, objective)
+
+    print(f"\n== Stage {index}: {prompt_path} ==", file=sys.stderr)
+    print(f"+ log: {output_log}", file=sys.stderr)
+    print(f"+ objective_chars: {len(objective)}", file=sys.stderr)
+    if missing_skills:
+        print(f"+ missing skill paths: {', '.join(missing_skills)}", file=sys.stderr)
+
+    if args.dry_run:
+        output_log.write_text(objective)
+        check_script = find_check_script(prompt_path)
         append_manifest(
             manifest,
             [
-                f"stage_{index}_thread_id={thread_id}",
+                f"stage_{index}_dry_run=true",
                 f"stage_{index}_objective_chars={len(objective)}",
                 f"stage_{index}_skills={','.join(parse_skill_names(objective))}",
-                f"stage_{index}_missing_skills={','.join(missing_skills)}",
+                f"stage_{index}_check_script={check_script if check_script else 'none'}",
             ],
         )
+        return 0
 
-        terminal = wait_for_stage_terminal(client, log, state)
-        append_manifest(manifest, [f"stage_{index}_terminal_status={terminal}"])
-        print(f"stage_terminal_status={terminal}", file=sys.stderr)
-        if terminal == "complete":
-            return 0
-        if terminal == "turnFailed":
-            print(f"Stopping after stage {index}: turn failed: {state.last_turn_error}", file=sys.stderr)
-            return 5
+    append_manifest(
+        manifest,
+        [
+            f"stage_{index}_objective_chars={len(objective)}",
+            f"stage_{index}_skills={','.join(parse_skill_names(objective))}",
+            f"stage_{index}_missing_skills={','.join(missing_skills)}",
+        ],
+    )
+
+    terminal, _thread_id, turn_error = execute_goal(
+        client,
+        args,
+        repo,
+        objective,
+        output_log,
+        on_thread_started=lambda tid: append_manifest(manifest, [f"stage_{index}_thread_id={tid}"]),
+    )
+    append_manifest(manifest, [f"stage_{index}_terminal_status={terminal}"])
+    print(f"stage_terminal_status={terminal}", file=sys.stderr)
+    if terminal == "turnFailed":
+        append_status(log_dir, name, terminal, "not-run")
+        print(f"Stopping after stage {index}: turn failed: {turn_error}", file=sys.stderr)
+        return 5
+    if terminal != "complete":
+        append_status(log_dir, name, terminal, "not-run")
         print(f"Stopping after stage {index}: goal is {terminal}", file=sys.stderr)
         return 3
+
+    check_status = run_stage_checks(
+        client,
+        args,
+        repo,
+        log_dir,
+        manifest,
+        index,
+        name,
+        prompt,
+        prompt_path,
+        prompt_copy,
+        replacements,
+    )
+    append_status(log_dir, name, terminal, check_status)
+    if check_status == "critical-fail":
+        print(
+            f"Stopping after stage {index}: verification failed critically after "
+            f"{args.check_retries} remediation attempt(s). Artifacts are preserved; "
+            "later stages would build on a broken base.",
+            file=sys.stderr,
+        )
+        return 6
+    if check_status.startswith("check-error") and args.check_error_policy == "stop":
+        print(
+            f"Stopping after stage {index}: the verification check itself failed "
+            f"({check_status}). This is a runner/environment fault, not a model "
+            "verdict. Fix the check or environment, then resume with "
+            f"--start-index {index} (the stage goal already completed, so rerun "
+            "from this stage only if its work needs re-verification).",
+            file=sys.stderr,
+        )
+        return 7
+    return 0
 
 
 def main() -> int:
@@ -623,6 +872,11 @@ def main() -> int:
     replacements = parse_replacements(args.replace)
     manifest = log_dir / "manifest.txt"
     write_manifest_header(manifest, repo, home, codex_bin, args)
+
+    # Validate every prompt up front so an over-long or malformed late-stage
+    # prompt cannot kill a run hours in.
+    for prompt_path in args.prompt_files:
+        objective_from_prompt(load_prompt(prompt_path, replacements))
 
     if args.dry_run:
         client: AppServerClient | None = None
