@@ -323,7 +323,6 @@ void SDMeshCommandQueue::enqueue_write_dram_core_counter(
     // writes) is complete before the counter is bumped.
     wait_for_cores_idle();
 
-    uint32_t v = value;
     for (const auto& target : targets) {
         if (!mesh_device_->impl().is_local(target.device_coord)) {
             continue;
@@ -333,7 +332,7 @@ void SDMeshCommandQueue::enqueue_write_dram_core_counter(
         // DRAM L1 NOC offset). write_core is synchronous, so `blocking` is moot.
         tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
             .get_cluster()
-            .write_core(&v, sizeof(v), tt_cxy_pair(device->id(), target.virtual_core_coord), target.address);
+            .write_core(&value, sizeof(value), tt_cxy_pair(device->id(), target.virtual_core_coord), target.address);
     }
 }
 

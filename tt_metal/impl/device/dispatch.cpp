@@ -102,7 +102,11 @@ void issue_core_write_command_sequence(const CoreWriteDispatchParams& dispatch_p
     sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
 }
 
-void write_to_core(
+namespace {
+// Shared body of write_to_core / write_to_core_unchecked: chunk the write across the max
+// prefetch payload size and issue a command sequence per chunk. `address` is used verbatim
+// as the full device destination (no bank/channel translation).
+void write_to_core_impl(
     IDevice* device,
     const CoreCoord& virtual_core,
     const void* src,
@@ -111,8 +115,6 @@ void write_to_core(
     uint32_t cq_id,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    validate_core_read_write_bounds(device, virtual_core, address, size_bytes);
-
     while (size_bytes > 0) {
         const CoreType dispatch_core_type =
             MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
@@ -136,6 +138,21 @@ void write_to_core(
         src = (uint8_t*)src + size_bytes_to_write;
     }
 }
+}  // namespace
+
+void write_to_core(
+    IDevice* device,
+    const CoreCoord& virtual_core,
+    const void* src,
+    DeviceAddr address,
+    uint32_t size_bytes,
+    uint32_t cq_id,
+    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    validate_core_read_write_bounds(device, virtual_core, address, size_bytes);
+    write_to_core_impl(
+        device, virtual_core, src, address, size_bytes, cq_id, expected_num_workers_completed, sub_device_ids);
+}
 
 void write_to_core_unchecked(
     IDevice* device,
@@ -146,31 +163,10 @@ void write_to_core_unchecked(
     uint32_t cq_id,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    // Same command sequence as write_to_core, minus the bounds validation: `address` is
-    // taken as the full device destination verbatim (write_to_core applies no bank offset
-    // either, so there is nothing extra to skip here).
-    while (size_bytes > 0) {
-        const CoreType dispatch_core_type =
-            MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-        const uint32_t size_bytes_to_write =
-            std::min(size_bytes, calculate_max_prefetch_data_size_bytes(dispatch_core_type, sub_device_ids.size()));
-
-        CoreWriteDispatchParams dispatch_params{
-            {virtual_core,
-             address,
-             size_bytes_to_write,
-             device,
-             cq_id,
-             dispatch_core_type,
-             expected_num_workers_completed,
-             sub_device_ids},
-            src};
-        issue_core_write_command_sequence(dispatch_params);
-
-        size_bytes -= size_bytes_to_write;
-        address += size_bytes_to_write;
-        src = (uint8_t*)src + size_bytes_to_write;
-    }
+    // Same as write_to_core, minus validate_core_read_write_bounds: the DRAM-banked bounds
+    // check would reject programmable DRAM-core (DRISC) L1.
+    write_to_core_impl(
+        device, virtual_core, src, address, size_bytes, cq_id, expected_num_workers_completed, sub_device_ids);
 }
 
 void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_params) {

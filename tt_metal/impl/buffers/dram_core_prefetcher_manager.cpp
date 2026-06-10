@@ -517,7 +517,7 @@ void DramCorePrefetcherManager::enqueue_cq_signal_and_wait(
 
     // Resolve target device coords (subset if given, else full mesh).
     std::vector<MeshCoordinate> target_devices;
-    MeshCoordinateRangeSet effective_subset = device_subset.has_value() ? *device_subset : full_mesh_subset();
+    const MeshCoordinateRangeSet effective_subset = device_subset.has_value() ? *device_subset : full_mesh_subset();
     for (const auto& range : effective_subset.ranges()) {
         for (const auto& coord : range) {
             TT_FATAL(

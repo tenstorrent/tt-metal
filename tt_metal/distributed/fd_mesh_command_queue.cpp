@@ -526,9 +526,6 @@ void FDMeshCommandQueue::enqueue_write_dram_core_counter(
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
 
-    // Copied inline into the command region by write_to_core before it returns, so
-    // a local is sufficient.
-    uint32_t v = value;
     for (const auto& target : targets) {
         if (!mesh_device_->impl().is_local(target.device_coord)) {
             continue;
@@ -536,13 +533,14 @@ void FDMeshCommandQueue::enqueue_write_dram_core_counter(
         IDevice* device = mesh_device_->impl().get_device(target.device_coord);
         // target.address is the full device destination (the caller pre-applies the
         // DRAM L1 NOC offset). Use the unchecked write: the DRAM-banked bounds check
-        // in write_to_core rejects programmable DRAM-core (DRISC) L1.
+        // in write_to_core rejects programmable DRAM-core (DRISC) L1. `value` is copied
+        // inline into the command region by write_to_core_unchecked before it returns.
         device_dispatch::write_to_core_unchecked(
             device,
             target.virtual_core_coord,
-            &v,
+            &value,
             target.address,
-            sizeof(v),
+            sizeof(value),
             id_,
             expected_num_workers_completed_,
             sub_device_ids);
