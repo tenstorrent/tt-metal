@@ -26,6 +26,8 @@
   skus:
     bh_quietbox:
       timeout: 15
+    bh_loudbox:
+      timeout: 15
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -34,6 +36,8 @@
   cmd: ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter='*HDSocketFixture*'
   skus:
     bh_quietbox:
+      timeout: 10
+    bh_loudbox:
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
