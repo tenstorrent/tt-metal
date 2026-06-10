@@ -3452,11 +3452,11 @@ def _main(activations, weights):
     ttnn.deallocate(ttnn_reshape_43, False)
     # E_attn iter4: collapse reshape_44 -> permute([1,2,0,3]) -> reshape_49 into one
     # 3D permute on the 3D bmm output. matmul_6 [16,32,512] -> [32,16,512] directly.
-    ttnn_permute_30 = ttnn.permute(
+    ttnn_permute_30 = ttnn.transpose(
         ttnn_matmul_6,
-        [1, 0, 2],
+        0,
+        1,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        pad_value=0.0,
     )
     ttnn.deallocate(ttnn_matmul_6, False)
     ttnn_reshape_45 = ttnn.reshape(
@@ -3707,11 +3707,11 @@ def _main(activations, weights):
     ttnn.deallocate(_sdpa0_q, False)
     ttnn.deallocate(_sdpa0_k, False)
     # E46: fold permute([1,0,2,3]) → permute([2,0,1,3]) into single permute([2,1,0,3])
-    ttnn_permute_33 = ttnn.permute(
+    ttnn_permute_33 = ttnn.transpose(
         _sdpa0_out,
-        [2, 1, 0, 3],
+        1,
+        2,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1, None),
-        pad_value=0.0,
     )
     ttnn.deallocate(_sdpa0_out, False)
     # === END E_sdpa_layer0 ===
@@ -4493,11 +4493,11 @@ def _main(activations, weights):
     ttnn.deallocate(ttnn_reshape_94, False)
     # E_attn iter4: collapse reshape_95 -> permute([1,2,0,3]) -> reshape_100 into one
     # 3D permute on the 3D bmm output. matmul_21 [16,32,512] -> [32,16,512] directly.
-    ttnn_permute_39 = ttnn.permute(
+    ttnn_permute_39 = ttnn.transpose(
         ttnn_matmul_21,
-        [1, 0, 2],
+        0,
+        1,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        pad_value=0.0,
     )
     ttnn.deallocate(ttnn_matmul_21, False)
     ttnn_reshape_96 = ttnn.reshape(
@@ -4746,11 +4746,11 @@ def _main(activations, weights):
     ttnn.deallocate(_sdpa1_k, False)
     ttnn.deallocate(ttnn_to_layout_108, False)
     # E46: fold permute([1,0,2,3]) → permute([2,0,1,3]) into single permute([2,1,0,3])
-    ttnn_permute_42 = ttnn.permute(
+    ttnn_permute_42 = ttnn.transpose(
         _sdpa1_out,
-        [2, 1, 0, 3],
+        1,
+        2,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1, None),
-        pad_value=0.0,
     )
     ttnn.deallocate(_sdpa1_out, False)
     # === END E_sdpa_layer1 ===
