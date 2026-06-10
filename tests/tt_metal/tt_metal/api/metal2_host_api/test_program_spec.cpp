@@ -826,7 +826,8 @@ inline ProgramSpec MakeBorrowedDFBProgramSpec(
     const std::string& tensor_param_name = "borrowed_tensor",
     tt::tt_metal::BufferType tensor_buffer_type = tt::tt_metal::BufferType::L1,
     uint32_t dfb_entry_size = 16,
-    uint32_t dfb_num_entries = 2) {
+    uint32_t dfb_num_entries = 2,
+    bool bind_backing_to_kernel = true) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -841,8 +842,12 @@ inline ProgramSpec MakeBorrowedDFBProgramSpec(
     consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     auto tensor_param = MakeMinimalTensorParameter(tensor_param_name, tensor_buffer_type);
-    // The TensorParameter must be bound to at least one kernel (referential-integrity check).
-    BindTensorParameterToKernel(producer, tensor_param_name, "borrowed_t");
+    // The borrowed_from reference is itself counted as a use of the TensorParameter, so binding it
+    // to a kernel is not required for referential integrity. Callers exercising the borrowed-only
+    // path pass bind_backing_to_kernel=false.
+    if (bind_backing_to_kernel) {
+        BindTensorParameterToKernel(producer, tensor_param_name, "borrowed_t");
+    }
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -854,6 +859,21 @@ inline ProgramSpec MakeBorrowedDFBProgramSpec(
 TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBSucceeds) {
     // Positive baseline: borrowed-memory DFB whose TensorParameter is L1-resident and large enough.
     ProgramSpec spec = MakeBorrowedDFBProgramSpec();
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBBackingParameterNeedNotBeKernelBoundSucceeds) {
+    // Regression: a TensorParameter used ONLY as a borrowed-memory DFB's backing (referenced via
+    // borrowed_from, never bound by a kernel) is a legitimate use. The validator must count
+    // borrowed_from toward referential integrity rather than rejecting the parameter as "defined
+    // but not bound by any kernel". This is the common borrowed-memory-DFB case (e.g. a borrowed
+    // LUT / scratch tensor consumed only through the DFB).
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec(
+        "borrowed_tensor",
+        tt::tt_metal::BufferType::L1,
+        /*dfb_entry_size=*/16,
+        /*dfb_num_entries=*/2,
+        /*bind_backing_to_kernel=*/false);
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 

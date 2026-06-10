@@ -453,8 +453,20 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
         }
     }
 
-    // Referential integrity: every declared TensorParameter must be referenced by some kernel.
-    // (Same usage requirement as DFBs; an unused tensor parameter is a user error.)
+    // A borrowed-memory DFB uses its backing TensorParameter via DataflowBufferSpec::borrowed_from
+    // (the DFB resolves its L1 address from that parameter's TensorArgument at runtime) even when no
+    // kernel binds the parameter directly. Count that as a use so the completeness check below doesn't
+    // reject a borrowed-only parameter. Existence of the referent is validated separately in the
+    // borrowed-DFB checks; remote DFBs don't carry borrowed_from.
+    for (const auto& dfb : spec.dataflow_buffers) {
+        if (dfb.borrowed_from.has_value()) {
+            collected.tensor_parameter_users[*dfb.borrowed_from];  // register as used (no kernel user)
+        }
+    }
+
+    // Referential integrity: every declared TensorParameter must be referenced by some kernel
+    // binding or a DFB borrowed_from. (Same usage requirement as DFBs; an unused tensor parameter
+    // is a user error.)
     for (const auto& tensor_parameter : spec.tensor_parameters) {
         TT_FATAL(
             collected.tensor_parameter_users.contains(tensor_parameter.unique_id),
