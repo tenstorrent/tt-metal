@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T05:09:51Z
+**Updated:** 2026-06-10T05:17:43Z
 
 ## Block Status
 
@@ -28,7 +28,7 @@
 | vision_mlp | reference | done | 1.000000 | 0 | SwiGLU fc1/fc3->fc2 no bias |
 | vision_mlp | ttnn | done | 0.999999 | 0 | SwiGLU fc2(silu(fc1(x))*fc3(x)) 1536->4224->1536 no bias: two sibling ttnn.linear branches + explicit ttnn.silu + ttnn.mul + down ttnn.linear (KB ttnn_silu_2 cited; KB ttnn_mul_1 fused input_tensor_a_activations=[SILU] variant deferred to optimization phase since the mlp guard requires a traced silu/gelu kernel). HiFi4+fp32-acc; real blocks.0.mlp weights, replicated on 1x4 mesh per parallelism plan (placement=replicate), single-device copy vs golden. Guard ok (lint 0, kernels ok, no new host ops). |
 | vision_mlp | debug | n/a | — | 0 |  |
-| vision_mlp | optimization | pending | — | 0 |  |
+| vision_mlp | optimization | done | 0.999999 | 0 | Tracy-driven single change: standalone ttnn.silu fused into the elementwise mul via input_tensor_a_activations=[ttnn.UnaryOpType.SILU] (KB ttnn_mul_1 cited; qwen25_vl reference idiom deferred from ttnn phase). Traced tracy at the production operating point (fp32 [1,1,896,1536] replicated 1x4 mesh, metal-trace captured+replayed): per-device block kernel time 684.5 -> 592.3 us (-13.5%); silu(98.8us)+mul(98.3us) two 110-core passes collapsed into one fused BinaryNg 105.7us; matmuls unchanged (gate 178.2, up 174.7, down 133.7us). Top hotspot post-change MatmulDeviceOperation 82.2% of block kernel time at 100-110 cores DRAM-interleaved fp32 (HiFi4+fp32-acc mandated precision floor; no per-block lever left without precision/PCC risk). KB ttnn_gelu n/a (SwiGLU has no gelu); ttnn_silu_2 superseded by fused mul_1. PCC 0.999999 (>0.99, unchanged) re-verified on 1x4 mesh; traced_ops sidecar already accurate (deallocate/linear/multiply). Guard ok (lint 0, traced tracy artifact verified). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | vision_mlp | real_weights | pending | — | 0 |  |
 | vision_block | reference | done | 1.000000 | 0 | pre-norm residual block x+attn(norm1(x)); x+mlp(norm2(x)), real blocks.0 weights |
 | vision_block | ttnn | done | 0.999958 | 0 | Pre-norm residual composition of done sub-blocks: TtVisionRMSNorm(norm1) -> TtVisionAttention (fused-QKV MHA 12h hd128, rotary_embedding_llama, windowed SDPA over cu_seqlens) -> ttnn.add residual -> TtVisionRMSNorm(norm2) -> TtVisionMLP (SwiGLU) -> ttnn.add residual, mirroring reference_impl qwen25_vl/tt/vision_block.py. Real blocks.0 weights, replicated on 1x4 mesh per parallelism plan (placement=replicate); seq padded 784->896, cu_seqlens keeps unpadded boundaries. Guard ok (lint 0, kernels ok, no new host ops). No KB entries returned for decoder_layer. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 12 (2026-06-10T03:50:19Z): device[vision_transformer] — ok
 - tick 13 (2026-06-10T03:57:57Z): device[embedding] — ok
 - tick 14 (2026-06-10T04:05:51Z): device[text_rmsnorm] — ok
 - tick 15 (2026-06-10T04:25:05Z): device[text_attention] — ok
@@ -94,6 +93,7 @@
 - tick 19 (2026-06-10T04:53:46Z): device[vision_patch_embed] — ok
 - tick 20 (2026-06-10T05:01:30Z): device[vision_rmsnorm] — ok
 - tick 21 (2026-06-10T05:09:51Z): device[vision_attention] — ok
+- tick 22 (2026-06-10T05:17:43Z): device[vision_mlp] — ok
 
 ## Host-Resident Exceptions
 

@@ -6,13 +6,13 @@ DotsSwiGLUFFN (modeling_dots_vision): ``fc2(silu(fc1(x)) * fc3(x))``,
 1536 -> 4224 -> 1536, no biases. Identical SwiGLU pattern to reference_impl
 models/demos/qwen25_vl/tt/vision_mlp.py (w1=gate/fc1, w3=up/fc3, w2=down/fc2).
 
-TTNN mapping: two sibling ``ttnn.linear`` branches sharing the input, explicit
-``ttnn.silu`` on the gate branch, elementwise ``ttnn.mul`` with the up branch,
-then the down ``ttnn.linear`` — the KB ttnn_silu_2 SwiGLU replacement
-(``out = ttnn.mul(ttnn.silu(gate), up)``). KB ttnn_mul_1's fused variant
-(``input_tensor_a_activations=[ttnn.UnaryOpType.SILU]``, as the qwen25_vl
-reference uses) computes the same thing in one op; deferred to the
-optimization phase.
+TTNN mapping: two sibling ``ttnn.linear`` branches sharing the input, then a
+single fused elementwise ``ttnn.mul(gate, up,
+input_tensor_a_activations=[ttnn.UnaryOpType.SILU])`` (KB ttnn_mul_1, the
+qwen25_vl reference idiom — silu computed inside the BinaryNg kernel), then
+the down ``ttnn.linear``. Applied in the optimization phase: it removes the
+standalone 110-core silu kernel pass measured at ~99 us (~14% of block kernel
+time) at the production fp32 [1,1,896,1536] operating point.
 
 Parallelism plan (ARCHITECTURE.md): vision tower placement=replicate — all
 three weights are ``ReplicateTensorToMesh`` on the 1x4 mesh, activations stay
@@ -76,8 +76,13 @@ class TtVisionMLP(LightweightModule):
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        gate = ttnn.silu(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        h = ttnn.mul(gate, up, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Fused silu(gate) * up in one BinaryNg kernel (KB ttnn_mul_1).
+        h = ttnn.mul(
+            gate,
+            up,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
         out = ttnn.linear(

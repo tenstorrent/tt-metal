@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T05:09:51Z",
+  "updated_at": "2026-06-10T05:17:43Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -207,8 +207,16 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_mlp.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_vision_mlp.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_vision_mlp.py",
+          "generated/profiler/reports/2026_06_10_05_16_17/ops_perf_results_2026_06_10_05_16_17.csv"
+        ],
+        "notes": "Tracy-driven single change: standalone ttnn.silu fused into the elementwise mul via input_tensor_a_activations=[ttnn.UnaryOpType.SILU] (KB ttnn_mul_1 cited; qwen25_vl reference idiom deferred from ttnn phase). Traced tracy at the production operating point (fp32 [1,1,896,1536] replicated 1x4 mesh, metal-trace captured+replayed): per-device block kernel time 684.5 -> 592.3 us (-13.5%); silu(98.8us)+mul(98.3us) two 110-core passes collapsed into one fused BinaryNg 105.7us; matmuls unchanged (gate 178.2, up 174.7, down 133.7us). Top hotspot post-change MatmulDeviceOperation 82.2% of block kernel time at 100-110 cores DRAM-interleaved fp32 (HiFi4+fp32-acc mandated precision floor; no per-block lever left without precision/PCC risk). KB ttnn_gelu n/a (SwiGLU has no gelu); ttnn_silu_2 superseded by fused mul_1. PCC 0.999999 (>0.99, unchanged) re-verified on 1x4 mesh; traced_ops sidecar already accurate (deallocate/linear/multiply). Guard ok (lint 0, traced tracy artifact verified). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999999
       },
       "real_weights": {
         "status": "pending",
@@ -809,6 +817,12 @@
       "tick": 21,
       "ts": "2026-06-10T05:09:51Z",
       "action": "device[vision_attention]",
+      "result": "ok"
+    },
+    {
+      "tick": 22,
+      "ts": "2026-06-10T05:17:43Z",
+      "action": "device[vision_mlp]",
       "result": "ok"
     }
   ],
