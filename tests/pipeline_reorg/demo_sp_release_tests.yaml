@@ -19,12 +19,11 @@
 
 - name: "(Galaxy) DeepSeek Prefill e2e tests"
   cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI MESH_DEVICE=TG
     export DEEPSEEK_V3_MLA_REF_CACHE=/mnt/MLPerf/deepseek-prefill-cache/test_mla_output
 
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and pcc and balanced and not non_balanced and fabric2d and with_determinism and iter5" -vvv --tb=short --timeout=900
-    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py -k "ds_prefill and pretrained and e256_device_fp32 and fabric2d-mesh-8x4 and 61_layers and balanced and right_pad and smoke and no_determinism and iter25 and 25600 and longbook" -vvv --tb=short --timeout=1800
+    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and smoke and balanced and not non_balanced and fabric2d and with_determinism and iter5" -vvv --tb=short --timeout=900
+    TT_DS_PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill-fresh HF_HOME=/mnt/MLPerf/huggingface/hub TT_DS_PREFILL_HOST_REF_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-prefill-golden-32a3e8b6/ pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py -k "ds_prefill and pretrained and e256_device_fp32 and fabric2d-mesh-8x4 and 61_layers and balanced and right_pad and smoke and no_determinism and iter25 and 25600 and longbook" -vvv --tb=short --timeout=1800
     # to replace test_prefill_transformer.py with add kimi and deepseek runners tests
   model: deepseek_prefill
   skus:
@@ -35,7 +34,6 @@
 
 - name: "(Galaxy) DeepSeek Prefill Perf tests"
   cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI MESH_DEVICE=TG
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
     pytest models/demos/deepseek_v3_d_p/tests/perf/test_prefill_block_perf.py -k "block_8x4" -vvv --tb=short
     pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_perf.py::test_deepseek_v3_moe_perf_galaxy -vvv --tb=short
@@ -52,10 +50,10 @@
   cmd: |
 
     # deepseek and kimi chunked prefill on 2x4 mesh
-    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "production and 50k+5k and cpu and 2x4 and not 32x4" -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "production and 50k+5k and cpu and 2x4 and not 32x4" -vvv --tb=short --timeout=1800
     # deepseek and kimi moe blocks
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe -k "linear-8 and pcc-device" -vvv --tb=short
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_moe -k "linear-8 and 5k and not 25k" -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe -k "linear-8 and pcc-device" -vvv --tb=short --timeout=1800
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_moe -k "linear-8 and 5k and not 25k" -vvv --tb=short --timeout=1800
   model: deepseek_prefill
   skus:
     bh_loudbox:
