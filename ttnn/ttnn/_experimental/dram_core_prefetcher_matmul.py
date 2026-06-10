@@ -37,7 +37,6 @@ def prefetch_and_linear(
     *,
     global_cb,
     program_config,
-    device_subset=None,
     cq_id=None,
     **linear_kwargs,
 ):
@@ -50,8 +49,6 @@ def prefetch_and_linear(
         global_cb: DRAM-sender GlobalCircularBuffer shared by the prefetch and
             the matmul. Its receiver count fixes the prefetch ``block_count``.
         program_config: gather_in0 1D mcast matmul program config driving the matmul.
-        device_subset: Mesh subset that processes the prefetch request. Defaults
-            to the full mesh.
         cq_id: Command queue for the prefetch request. When that CQ is mid
             trace-capture the request is captured into the trace. Defaults to the
             current command queue.
@@ -70,7 +67,6 @@ def prefetch_and_linear(
         device,
         [(weight, block_count)],
         global_cb=global_cb,
-        device_subset=device_subset,
         cq_id=cq_id,
     )
     return ttnn.linear(
