@@ -8,55 +8,67 @@
 // the row tail [valid(s)*32, T) with -inf so skipped tiles never read junk.
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include <tt-metalium/constants.hpp>
+#include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/dataflow_common.hpp"
 
 #include "indexer_score_common.hpp"
 
 constexpr uint32_t page_bytes = get_compile_time_arg_val(5);  // T*2
 
 constexpr uint32_t cb_out = tt::CBIndex::c_16;
-constexpr uint32_t cb_scratch = tt::CBIndex::c_17;  // writer-only -inf scratch
-constexpr uint32_t frag_bytes = 64;  // 32 bf16 = one tile row
+constexpr uint32_t cb_scratch = tt::CBIndex::c_17;  // writer-only -inf scratch tile
 
-constexpr uint32_t scratch_elems = 32 * 32;
-constexpr uint32_t scratch_bytes = scratch_elems * 2;
+constexpr uint32_t frag_bytes = tt::constants::TILE_WIDTH * sizeof(uint16_t);  // one bf16 tile row
+constexpr uint32_t scratch_bytes = tt::constants::TILE_HW * sizeof(uint16_t);
 
+/** Stamp the -inf scratch tile (plain L1 stores) and return its address. */
 inline uint32_t fill_inf_scratch() {
-    const uint32_t scratch = get_write_ptr(cb_scratch);
-    volatile tt_l1_ptr uint16_t* p = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch);
-    for (uint32_t e = 0; e < scratch_elems; ++e) {
-        p[e] = 0xFF80;  // bf16 -inf
-    }
-    return scratch;
+    fill_neginf_tile<scratch_bytes>(cb_scratch, /*tile_id=*/0);
+    return CircularBuffer(cb_scratch).get_write_ptr();
 }
 
-// scatter one untilized tile's 32 rows into output rows of q-tile-row s
+/** Scatter one untilized tile's rows into output rows of q-tile-row s, column tile t. */
 template <typename OutAcc>
-inline void write_tile(const OutAcc& out_acc, uint32_t s, uint32_t t) {
-    cb_wait_front(cb_out, 1);
-    uint32_t l1 = get_read_ptr(cb_out);
-    for (uint32_t r = 0; r < 32; ++r) {
-        uint64_t dst = out_acc.get_noc_addr(s * 32 + r, t * frag_bytes);
-        noc_async_write(l1 + r * frag_bytes, dst, frag_bytes);
+inline void write_tile(Noc noc, const OutAcc& out_acc, uint32_t s, uint32_t t) {
+    CircularBuffer cb(cb_out);
+    cb.wait_front(1);
+    uint32_t src = cb.get_read_ptr();
+    for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
+        noc.async_write(
+            CoreLocalMem<uint32_t>(src),
+            out_acc,
+            frag_bytes,
+            {},
+            {.page_id = s * tt::constants::TILE_HEIGHT + r, .offset_bytes = t * frag_bytes});
+        src += frag_bytes;
     }
-    noc_async_write_barrier();
-    cb_pop_front(cb_out, 1);
+    noc.async_write_barrier();
+    cb.pop_front(1);
 }
 
-// fill row tail [valid(s)*32, T) with -inf from the L1 scratch tile
+/** Fill row tail [valid(s)*32, T) of q-tile-row s with -inf from the L1 scratch tile. */
 template <typename OutAcc>
-inline void fill_row_tail(const OutAcc& out_acc, uint32_t scratch, uint32_t s) {
+inline void fill_row_tail(Noc noc, const OutAcc& out_acc, uint32_t scratch, uint32_t s) {
     const uint32_t tail_bytes_total = (Tt - valid(s)) * frag_bytes;
-    for (uint32_t r = 0; r < 32; ++r) {
+    for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
         uint32_t off = valid(s) * frag_bytes;
         uint32_t left = tail_bytes_total;
         while (left > 0) {
-            uint32_t n = left < scratch_bytes ? left : scratch_bytes;
-            noc_async_write(scratch, out_acc.get_noc_addr(s * 32 + r, off), n);
+            const uint32_t n = left < scratch_bytes ? left : scratch_bytes;
+            noc.async_write(
+                CoreLocalMem<uint32_t>(scratch),
+                out_acc,
+                n,
+                {},
+                {.page_id = s * tt::constants::TILE_HEIGHT + r, .offset_bytes = off});
             off += n;
             left -= n;
         }
     }
-    noc_async_write_barrier();
+    noc.async_write_barrier();
 }
 
 void kernel_main() {
@@ -67,15 +79,17 @@ void kernel_main() {
     constexpr auto out_args = TensorAccessorArgs<6>();
     const auto out_acc = TensorAccessor(out_args, out_addr, page_bytes);
 
+    Noc noc;
+
     const uint32_t scratch = fill_inf_scratch();
 
     ValidTileSpan span;
     span.start(flat_start);
 
     for (uint32_t i = 0; i < flat_count; ++i) {
-        write_tile(out_acc, span.s, span.t);
+        write_tile(noc, out_acc, span.s, span.t);
         if (span.last_in_row() && valid(span.s) < Tt) {
-            fill_row_tail(out_acc, scratch, span.s);
+            fill_row_tail(noc, out_acc, scratch, span.s);
         }
         span.advance();
     }

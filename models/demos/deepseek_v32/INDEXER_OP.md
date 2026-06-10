@@ -138,7 +138,7 @@ factory `indexer_score_program_factory.cpp`, kernels
 ### Program factory
 
 Validates tile alignment (`Sq, T, D, chunk_start % 32 == 0`,
-`chunk_start + Sq ≤ T`, `Hi % 8 == 0`, B=1, causal only), computes
+`chunk_start + Sq ≤ T`, `Hi % HP == 0`, B=1, causal only), computes
 `valid(s) = min(Tt, chunk_t + s + 1)` and `V = Σ valid(s)` on host, and deals V
 flat across the full grid (`min(V, cores)` workers, base = V/N, remainder one
 extra). Per-core runtime args are just `flat_start, count` + buffer addresses
@@ -147,8 +147,11 @@ index locally with the same loop, so there are no segment tables. Compile args
 common to all kernels: `Hi, Sqt, Tt, Dt, chunk_t`; TensorAccessor args
 appended for reader (q/k/w) and writer (out, page = T·2 bytes).
 
-ComputeConfig: HiFi4, `fp32_dest_acc_en`, `dst_full_sync_en` (8 fp32 DEST
-tiles → 8-head passes).
+ComputeConfig: HiFi4, `fp32_dest_acc_en`, half-sync. The qk subblock height
+HP comes from SDPA's `determine_largest_subblock_size(Hi, 1, dst_size)`
+(`sdpa_subblock_utils.hpp`) with SDPA's `dst_size = fp32 ? 4 : 8` → `{4, 1}`
+at 64 heads, passed to compute as CT arg 5. Half-sync lets pack drain one
+DEST half while math fills the other; bf16 DEST would auto-yield HP=8.
 
 ### CBs
 
@@ -166,16 +169,25 @@ tiles → 8-head passes).
 
 ### Kernels (all walk the same flat span)
 
+Kernels share `kernels/indexer_score_common.hpp` (dims at CT args 0–4,
+`valid(s)`, `ValidTileSpan` flat-span cursor) and are split into named phase
+functions in SDPA style: dataflow uses `Noc`/`CircularBuffer` wrappers; the
+diagonal mask and the writer scratch reuse SDPA's
+`fill_causal_diagonal_tile_bf16` / `fill_neginf_tile`.
+
 **Reader** — on a new q-tile-row pushes the resident q row (`Hi·Dt` tiles,
 id `h·Sqt·Dt + s·Dt + d`) and w row (`h·Sqt + s`); per output tile pushes the
-k column (`t·Dt + d`). Builds the mask tile once in L1 (strict upper = 0xFF80,
-else 0, face-ordered).
+k column (`t·Dt + d`). Builds the mask tile once at start.
 
-**Compute** — per output tile: phase 1, 8 heads per DEST acquire: `Dt`
-`matmul_tiles` accumulate q·kᵀ (transpose set at `mm_init`), `relu_tile`,
-pack 8 → cb_qk. Phase 2 per 8: `mul_tiles_bcast_cols(qk, w)` (per-row gate in
-col 0), then ping-pong `add_tiles` into cb_acc (first contribution primes via
-`copy_tile`). Diagonal (`t == chunk_t + s`): `add_tiles(acc, mask)`. Then
+**Compute** — per output tile: phase 1 is a subblock matmul mirroring SDPA's
+`matmul_blocks` with heads as output rows (M=Hi, N=1, K=Dt): per subblock one
+`matmul_block(rt=HP, ct=1)` per inner-dim step accumulates HP head rows in
+DEST, relu fused before pack → cb_qk. Packs must stay subblock-relative
+(reserve HP / pack / push HP): absolute offsets past a granular push walk off
+the Hi-tile CB and corrupt neighbor CBs. Phase 2 per HP:
+`mul_tiles_bcast_cols(qk, w)`, then ping-pong `add_tiles` into cb_acc (first
+contribution primes via `copy_tile`) — the L1 round-trip per head is the
+known perf TODO. Diagonal (`t == chunk_t + s`): `add_tiles(acc, mask)`. Then
 `pack_untilize<1,1>` → cb_out bf16. Pops q/w on row change. Heads are fully
 core-local; sum order is the same on every device, so SP ranks agree exactly.
 
@@ -209,7 +221,11 @@ Branch: `skrstic/dsa_indexer_score_op`.
 - [x] kernels: reader / compute (8-head DEST passes, fp32 ping-pong acc, diag
       mask) / writer (RM 64 B fragments, −inf tails); mini + GLX rank 0/7 pass
       (PCC ≥ 0.999, exact −inf map)
+- [x] kernel refactor: shared `indexer_score_common.hpp` + phase functions,
+      SDPA dataflow/compute idioms, mask/scratch from SDPA helpers
+- [x] subblock qk matmul: HP from `determine_largest_subblock_size`, half-sync
+      pack overlap, relu fused in DEST
 - [ ] row-major top-k (separate); negative-weights topk-safety test
-- [ ] perf: bfp8 k + LoFi, fused relu·w, pack overlap
+- [ ] perf: bfp8 k + LoFi, DEST-resident acc, fused relu·w
 
 Out of scope: decode/paged variant, fused score+topk.

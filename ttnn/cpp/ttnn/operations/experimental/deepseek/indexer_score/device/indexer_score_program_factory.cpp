@@ -9,6 +9,8 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
+#include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
+
 namespace ttnn::operations::experimental::deepseek::indexer::program {
 
 using namespace tt;
@@ -36,7 +38,11 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     TT_FATAL(Sq % TILE_HEIGHT == 0 && T % TILE_WIDTH == 0 && D % TILE_WIDTH == 0, "Sq, T, D must be tile-aligned");
     TT_FATAL(args.chunk_start_idx % TILE_WIDTH == 0, "chunk_start_idx must be tile-aligned");
     TT_FATAL(args.chunk_start_idx + Sq <= T, "chunk window [{}+{}) exceeds T={}", args.chunk_start_idx, Sq, T);
-    TT_FATAL(Hi % 8 == 0, "Hi={} must be a multiple of 8 (fp32 DEST passes)", Hi);
+    // qk matmul subblock: heads are output rows, k column is 1 tile wide (SDPA-style)
+    constexpr bool fp32_dest_acc_en = true;
+    constexpr uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;  // half-sync, as in sdpa_program_factory
+    const auto [qk_subblock_h, qk_subblock_w] = ttnn::prim::detail::determine_largest_subblock_size(Hi, 1, dst_size);
+    TT_FATAL(Hi % qk_subblock_h == 0, "Hi={} must be divisible by qk_subblock_h={}", Hi, qk_subblock_h);
     TT_FATAL(q.logical_shape()[0] == 1, "batch 1 only");
     TT_FATAL(args.is_causal, "non-causal not implemented");
 
@@ -105,15 +111,17 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
         program, kdir + "reader_indexer_score.cpp", core_ranges, ReaderDataMovementConfig(reader_ct));
     auto writer_id = CreateKernel(
         program, kdir + "writer_indexer_score.cpp", core_ranges, WriterDataMovementConfig(writer_ct));
+    std::vector<uint32_t> compute_ct = common_ct;
+    compute_ct.push_back(qk_subblock_h);
     auto compute_id = CreateKernel(
         program,
         kdir + "compute_indexer_score.cpp",
         core_ranges,
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = true,
-            .dst_full_sync_en = true,
-            .compile_args = common_ct});
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = false,
+            .compile_args = compute_ct});
 
     uint32_t flat = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {

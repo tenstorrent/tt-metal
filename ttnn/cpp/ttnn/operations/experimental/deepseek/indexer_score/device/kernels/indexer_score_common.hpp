@@ -11,19 +11,19 @@
 
 #include <cstdint>
 
-constexpr uint32_t Hi = get_compile_time_arg_val(0);
-constexpr uint32_t Sqt = get_compile_time_arg_val(1);
-constexpr uint32_t Tt = get_compile_time_arg_val(2);
-constexpr uint32_t Dt = get_compile_time_arg_val(3);
-constexpr uint32_t chunk_t = get_compile_time_arg_val(4);
+constexpr uint32_t Hi = get_compile_time_arg_val(0);       // indexer heads
+constexpr uint32_t Sqt = get_compile_time_arg_val(1);      // q chunk rows, in tiles
+constexpr uint32_t Tt = get_compile_time_arg_val(2);       // total k positions, in tiles
+constexpr uint32_t Dt = get_compile_time_arg_val(3);       // head dim, in tiles
+constexpr uint32_t chunk_t = get_compile_time_arg_val(4);  // q chunk start offset, in tiles
 
-// causal-valid output tiles in q-tile-row s
+/** Number of causal-valid output tiles in q-tile-row s. */
 inline uint32_t valid(uint32_t s) {
     uint32_t v = chunk_t + s + 1;
     return v < Tt ? v : Tt;
 }
 
-// (s, t) cursor over valid output tiles, starting at a flat index
+/** (s, t) cursor over causal-valid output tiles, starting at a flat index. */
 struct ValidTileSpan {
     uint32_t s = 0;
     uint32_t t = 0;
@@ -37,7 +37,7 @@ struct ValidTileSpan {
         t = flat - rowsum;
     }
 
-    // advance one tile; true when a new q-tile-row begins
+    /** Advance one tile; true when a new q-tile-row begins. */
     bool advance() {
         if (++t == valid(s)) {
             ++s;

@@ -6,7 +6,8 @@
 //   acc(fp32) = sum_h relu(q[h,s,:] @ k[t,:]^T) * w[h,s]   (bcast col)
 //   diagonal tile (t == chunk_t + s): acc += -inf strict upper triangle
 //   pack_untilize acc -> bf16 row-major out
-// Heads run in passes of 8 (fp32 DEST, full sync). q/w rows stay resident.
+// Heads run in HP-row matmul subblocks (fp32 DEST, half sync; HP from the
+// host via determine_largest_subblock_size). q/w rows stay resident.
 
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
@@ -30,115 +31,150 @@ constexpr uint32_t cb_mul = tt::CBIndex::c_25;
 constexpr uint32_t cb_acc = tt::CBIndex::c_26;
 constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
-constexpr uint32_t HP = 8;  // heads per DEST pass
+// qk matmul subblock: heads are output rows, k column is 1 tile wide.
+// Host picks HP via determine_largest_subblock_size(Hi, 1, dst_size), SDPA-style.
+constexpr uint32_t HP = get_compile_time_arg_val(5);
+constexpr uint32_t num_subblocks = Hi / HP;
 
-// phase 1: per head, relu(q_row . k_col^T) -> cb_qk (fp32), HP heads per pass
-inline void relu_qk_all_heads() {
-    cb_wait_front(cb_k, Dt);
-    reconfig_data_format(cb_q, cb_k);
-    pack_reconfig_data_format(cb_qk);
-    mm_init_short(cb_q, cb_k, 1);
-    for (uint32_t hp = 0; hp < Hi; hp += HP) {
+/**
+ * qk_cb = relu(q_cb @ k_cb^T): M=Hi (head rows), N=1, K=Dt.
+ * Subblock loop mirrors SDPA's matmul_blocks; one matmul_block per inner-dim
+ * step accumulates HP head rows in DEST, relu fused before pack.
+ */
+template <uint32_t q_cb, uint32_t k_cb, uint32_t qk_cb>
+void relu_qk_all_heads() {
+    // Precondition: q_cb has Hi*Dt produced (resident), k_cb has Dt produced
+    // Postcondition: qk_cb has Hi produced, k_cb has Dt consumed
+    cb_wait_front(k_cb, Dt);
+    reconfig_data_format(q_cb, k_cb);
+    pack_reconfig_data_format(qk_cb);
+    mm_block_init_short(q_cb, k_cb, 1 /*transpose k*/, 1 /*ct_dim*/, HP /*rt_dim*/, Dt /*kt_dim*/);
+    uint32_t in0_offset = 0;
+    for (uint32_t sb = 0; sb < num_subblocks; ++sb) {
         tile_regs_acquire();
-        for (uint32_t h8 = 0; h8 < HP; ++h8) {
-            const uint32_t qbase = (hp + h8) * Dt;
-            for (uint32_t d = 0; d < Dt; ++d) {
-                matmul_tiles(cb_q, cb_k, qbase + d, d, h8);
-            }
-            relu_tile(h8);
+        for (uint32_t d = 0; d < Dt; ++d) {
+            matmul_block(q_cb, k_cb, in0_offset + d, d, 0, 1 /*transpose k*/, 1, HP, Dt);
+        }
+        for (uint32_t h = 0; h < HP; ++h) {
+            relu_tile(h);
         }
         tile_regs_commit();
-        cb_reserve_back(cb_qk, HP);
+        cb_reserve_back(qk_cb, HP);
         tile_regs_wait();
-        for (uint32_t h8 = 0; h8 < HP; ++h8) {
-            pack_tile(h8, cb_qk);
+        for (uint32_t h = 0; h < HP; ++h) {
+            pack_tile(h, qk_cb);
         }
         tile_regs_release();
-        cb_push_back(cb_qk, HP);
+        cb_push_back(qk_cb, HP);
+        in0_offset += HP * Dt;
     }
-    cb_pop_front(cb_k, Dt);
-    cb_wait_front(cb_qk, Hi);
+    cb_pop_front(k_cb, Dt);
+    cb_wait_front(qk_cb, Hi);
 }
 
-// phase 2a: one HP pass of qk[h] * bcast_col(w[h]) -> cb_mul
-inline void mul_gates_pass(uint32_t hp) {
-    reconfig_data_format(cb_qk, cb_w);
-    mul_bcast_cols_init_short(cb_qk, cb_w);
-    pack_reconfig_data_format(cb_mul);
-    cb_reserve_back(cb_mul, HP);
+/**
+ * mul_cb[h] = qk_cb[hp + h] * bcast_cols(w_cb[hp + h]) for one HP pass
+ */
+template <uint32_t qk_cb, uint32_t w_cb, uint32_t mul_cb>
+void mul_gates_pass(uint32_t hp) {
+    // Precondition: qk_cb has Hi produced (resident), w_cb has Hi produced (resident)
+    // Postcondition: mul_cb has HP produced
+    reconfig_data_format(qk_cb, w_cb);
+    pack_reconfig_data_format(mul_cb);
+    mul_bcast_cols_init_short(qk_cb, w_cb);
+    cb_reserve_back(mul_cb, HP);
     tile_regs_acquire();
-    for (uint32_t h8 = 0; h8 < HP; ++h8) {
-        mul_tiles_bcast_cols(cb_qk, cb_w, hp + h8, hp + h8, h8);
+    for (uint32_t h = 0; h < HP; ++h) {
+        mul_tiles_bcast_cols(qk_cb, w_cb, hp + h, hp + h, h);
     }
     tile_regs_commit();
     tile_regs_wait();
-    for (uint32_t h8 = 0; h8 < HP; ++h8) {
-        pack_tile(h8, cb_mul);
+    for (uint32_t h = 0; h < HP; ++h) {
+        pack_tile(h, mul_cb);
     }
     tile_regs_release();
-    cb_push_back(cb_mul, HP);
+    cb_push_back(mul_cb, HP);
 }
 
-// phase 2b: fold one HP pass of cb_mul into the ping-pong fp32 accumulator
-inline void accumulate_pass(uint32_t hp) {
-    reconfig_data_format(cb_acc, cb_mul);
-    add_tiles_init(cb_acc, cb_mul);
-    pack_reconfig_data_format(cb_acc);
-    cb_wait_front(cb_mul, HP);
-    for (uint32_t h8 = 0; h8 < HP; ++h8) {
-        if (hp == 0 && h8 == 0) {
-            // prime acc with the first contribution
-            reconfig_data_format_srca(cb_mul);
-            copy_tile_to_dst_init_short(cb_mul);
-            tile_regs_acquire();
-            copy_tile(cb_mul, 0, 0);
-            tile_regs_commit();
-            reconfig_data_format(cb_acc, cb_mul);
-            add_tiles_init(cb_acc, cb_mul);
-        } else {
-            cb_wait_front(cb_acc, 1);
-            tile_regs_acquire();
-            add_tiles(cb_acc, cb_mul, 0, h8, 0);
-            tile_regs_commit();
-            cb_pop_front(cb_acc, 1);
-        }
-        cb_reserve_back(cb_acc, 1);
+/**
+ * acc_cb += mul_cb[0..HP), one tile at a time through the 2-slot ping-pong;
+ * when first, acc_cb is primed from mul_cb[0] instead of added.
+ */
+template <uint32_t mul_cb, uint32_t acc_cb>
+void accumulate_pass(bool first) {
+    // Precondition: mul_cb has HP produced, acc_cb has 1 produced (unless first)
+    // Postcondition: mul_cb has HP consumed, acc_cb has 1 produced
+    cb_wait_front(mul_cb, HP);
+    pack_reconfig_data_format(acc_cb);
+    uint32_t h = 0;
+    if (first) {
+        reconfig_data_format_srca(mul_cb);
+        copy_tile_to_dst_init_short(mul_cb);
+        tile_regs_acquire();
+        copy_tile(mul_cb, 0, 0);
+        tile_regs_commit();
+        cb_reserve_back(acc_cb, 1);
         tile_regs_wait();
-        pack_tile(0, cb_acc);
+        pack_tile(0, acc_cb);
         tile_regs_release();
-        cb_push_back(cb_acc, 1);
+        cb_push_back(acc_cb, 1);
+        h = 1;
     }
-    cb_pop_front(cb_mul, HP);
+    reconfig_data_format(acc_cb, mul_cb);
+    add_tiles_init(acc_cb, mul_cb);
+    for (; h < HP; ++h) {
+        cb_wait_front(acc_cb, 1);
+        tile_regs_acquire();
+        add_tiles(acc_cb, mul_cb, 0, h, 0);
+        tile_regs_commit();
+        cb_pop_front(acc_cb, 1);
+        cb_reserve_back(acc_cb, 1);
+        tile_regs_wait();
+        pack_tile(0, acc_cb);
+        tile_regs_release();
+        cb_push_back(acc_cb, 1);
+    }
+    cb_pop_front(mul_cb, HP);
 }
 
-// diagonal tile: mask strictly-future columns with -inf
-inline void add_diag_mask() {
-    reconfig_data_format(cb_acc, cb_mask);
-    add_tiles_init(cb_acc, cb_mask);
-    pack_reconfig_data_format(cb_acc);
-    cb_wait_front(cb_acc, 1);
+/**
+ * acc_cb += mask_cb[0]  (-inf on the strict upper triangle of the diagonal tile)
+ */
+template <uint32_t acc_cb, uint32_t mask_cb>
+void add_diag_mask() {
+    // Precondition: acc_cb has 1 produced, mask_cb has 1 produced (resident)
+    // Postcondition: acc_cb has 1 produced
+    reconfig_data_format(acc_cb, mask_cb);
+    pack_reconfig_data_format(acc_cb);
+    add_tiles_init(acc_cb, mask_cb);
+    cb_wait_front(acc_cb, 1);
     tile_regs_acquire();
-    add_tiles(cb_acc, cb_mask, 0, 0, 0);
+    add_tiles(acc_cb, mask_cb, 0, 0, 0);
     tile_regs_commit();
-    cb_pop_front(cb_acc, 1);
-    cb_reserve_back(cb_acc, 1);
+    cb_pop_front(acc_cb, 1);
+    cb_reserve_back(acc_cb, 1);
     tile_regs_wait();
-    pack_tile(0, cb_acc);
+    pack_tile(0, acc_cb);
     tile_regs_release();
-    cb_push_back(cb_acc, 1);
+    cb_push_back(acc_cb, 1);
 }
 
-// untilize acc -> bf16 row-major out
-inline void untilize_to_out() {
-    reconfig_data_format_srca(cb_acc);
-    pack_reconfig_data_format(cb_out);
-    pack_untilize_init<1, 1>(cb_acc, cb_out);
-    cb_wait_front(cb_acc, 1);
-    cb_reserve_back(cb_out, 1);
-    pack_untilize_block<1, 1>(cb_acc, 1, cb_out);
-    cb_push_back(cb_out, 1);
-    cb_pop_front(cb_acc, 1);
-    pack_untilize_uninit(cb_out);
+/**
+ * out_cb = untilize(acc_cb), fp32 tile -> bf16 row-major
+ */
+template <uint32_t acc_cb, uint32_t out_cb>
+void untilize_to_out() {
+    // Precondition: acc_cb has 1 produced
+    // Postcondition: acc_cb has 1 consumed, out_cb has 1 produced
+    reconfig_data_format_srca(acc_cb);
+    pack_reconfig_data_format(out_cb);
+    pack_untilize_init<1, 1>(acc_cb, out_cb);
+    cb_wait_front(acc_cb, 1);
+    cb_reserve_back(out_cb, 1);
+    pack_untilize_block<1, 1>(acc_cb, 1, out_cb);
+    cb_push_back(out_cb, 1);
+    cb_pop_front(acc_cb, 1);
+    pack_untilize_uninit(out_cb);
 }
 
 void kernel_main() {
@@ -148,7 +184,7 @@ void kernel_main() {
         return;
     }
 
-    mm_init(cb_q, cb_k, cb_qk, 1 /*transpose k*/);
+    mm_block_init(cb_q, cb_k, cb_qk, 1 /*transpose k*/, 1 /*ct_dim*/, HP /*rt_dim*/, Dt /*kt_dim*/);
     relu_tile_init();
     cb_wait_front(cb_mask, 1);
 
@@ -163,17 +199,17 @@ void kernel_main() {
             have_row = true;
         }
 
-        relu_qk_all_heads();
+        relu_qk_all_heads<cb_q, cb_k, cb_qk>();
         for (uint32_t hp = 0; hp < Hi; hp += HP) {
-            mul_gates_pass(hp);
-            accumulate_pass(hp);
+            mul_gates_pass<cb_qk, cb_w, cb_mul>(hp);
+            accumulate_pass<cb_mul, cb_acc>(hp == 0);
         }
         cb_pop_front(cb_qk, Hi);
 
         if (span.on_diagonal()) {
-            add_diag_mask();
+            add_diag_mask<cb_acc, cb_mask>();
         }
-        untilize_to_out();
+        untilize_to_out<cb_acc, cb_out>();
 
         if (span.advance()) {
             cb_pop_front(cb_q, Hi * Dt);
