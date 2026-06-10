@@ -114,7 +114,8 @@ def _model_key_candidates():
         elif is_moe:
             candidates.append("gemma-4-26B-A4B-it")
     except Exception:
-        pass
+        # Config inference is best-effort; fall back to the HF_MODEL basename.
+        return tuple(dict.fromkeys(candidates))
     return tuple(dict.fromkeys(candidates))
 
 
