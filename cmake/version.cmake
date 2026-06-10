@@ -15,7 +15,7 @@ function(ParseGitDescribe)
     if(Git_FOUND)
         execute_process(
             COMMAND
-                ${GIT_EXECUTABLE} describe --abbrev=10 --first-parent --dirty=-dirty
+                ${GIT_EXECUTABLE} describe --abbrev=10 --first-parent --dirty=-dirty --match "v[0-9]*"
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
             OUTPUT_VARIABLE version
             OUTPUT_STRIP_TRAILING_WHITESPACE
