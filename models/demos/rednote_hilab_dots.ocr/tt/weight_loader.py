@@ -18,6 +18,8 @@ import torch
 
 MODEL_ID = "rednote-hilab/dots.ocr"
 VISION_PATCH_EMBED_PREFIX = "vision_tower.patch_embed.patchifier"
+VISION_TOWER_PREFIX = "vision_tower"
+VISION_NUM_BLOCKS = 42
 
 _CHECKPOINT_CACHE: Dict[str, torch.Tensor] = {}
 
@@ -68,6 +70,26 @@ def vision_patch_embed_weights(hf_sd: Optional[Dict[str, torch.Tensor]] = None) 
     return {"proj.weight": sd["proj.weight"], "proj.bias": sd["proj.bias"], "norm.weight": sd["norm.weight"]}
 
 
+def vision_rmsnorm_weights(
+    layer_idx: int = 0, which: str = "norm1", hf_sd: Optional[Dict[str, torch.Tensor]] = None
+) -> Dict[str, torch.Tensor]:
+    """State dict for TtVisionRMSNorm: {"weight": [dim]}.
+
+    ``which`` selects the norm site: ``"norm1"`` / ``"norm2"`` inside
+    ``vision_tower.blocks.{layer_idx}``, or ``"post_trunk_norm"`` (the
+    tower-level final norm; ``layer_idx`` is ignored).
+    """
+    if which == "post_trunk_norm":
+        key = f"{VISION_TOWER_PREFIX}.post_trunk_norm.weight"
+    elif which in ("norm1", "norm2"):
+        key = f"{VISION_TOWER_PREFIX}.blocks.{layer_idx}.{which}.weight"
+    else:
+        raise ValueError(f"unknown vision rmsnorm site {which!r}")
+    if hf_sd is None:
+        hf_sd = load_hf_state_dict(keys=[key])
+    return {"weight": hf_sd[key]}
+
+
 def count_params(sd) -> int:
     """Tensor-leaf element count of a (possibly nested) state dict."""
     if isinstance(sd, torch.Tensor):
@@ -86,3 +108,8 @@ if __name__ == "__main__":
     assert sd["proj.bias"].shape == (1536,), sd["proj.bias"].shape
     assert sd["norm.weight"].shape == (1536,), sd["norm.weight"].shape
     print(f"vision_patch_embed: {len(sd)} tensors, {n} params OK")
+
+    for which, idx in [("norm1", 0), ("norm2", 0), ("norm1", VISION_NUM_BLOCKS - 1), ("post_trunk_norm", 0)]:
+        nsd = vision_rmsnorm_weights(layer_idx=idx, which=which)
+        assert nsd["weight"].shape == (1536,), (which, idx, nsd["weight"].shape)
+    print(f"vision_rmsnorm: norm1/norm2/post_trunk_norm OK, {count_params(nsd)} params each")

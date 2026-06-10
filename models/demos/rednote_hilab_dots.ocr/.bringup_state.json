@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T06:46:52Z",
+  "updated_at": "2026-06-10T06:53:44Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -116,8 +116,15 @@
         "pcc": 0.999982
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/weight_loader.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_real_hf_weights.py"
+        ],
+        "notes": "vision_rmsnorm_weights loader added to consolidated tt/weight_loader.py (pure-PyTorch, memoized key-filtered safetensors load; covers blocks.{i}.norm1/norm2 per-layer keys and the tower-level post_trunk_norm key; __main__ self-test extended: weight [1536] at all sites, 1536 params each). Stage-1 parametric tests/test_real_hf_weights.py row runs TtVisionRMSNorm at the production operating point (fp32 residual stream, fp32 TILE gamma, 1x4 mesh replicated, golden real-activation input [784,1536]) vs the pure-PyTorch reference with the same real weights at THREE sites: norm1@0 PCC 0.999981, norm2@41 0.999985, post_trunk_norm 0.999993 (min 0.999981 > 0.99 reported). Block forward untouched; full harness re-run, vision_patch_embed row still passing. Guard ok (lint 0, params_loaded 4608>0). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999981,
+        "params_loaded": 4608
       }
     },
     {
@@ -963,6 +970,12 @@
       "tick": 32,
       "ts": "2026-06-10T06:46:52Z",
       "action": "device[vision_patch_embed]",
+      "result": "ok"
+    },
+    {
+      "tick": 33,
+      "ts": "2026-06-10T06:53:44Z",
+      "action": "device[vision_rmsnorm]",
       "result": "ok"
     }
   ],

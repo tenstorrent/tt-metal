@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T06:46:52Z
+**Updated:** 2026-06-10T06:53:44Z
 
 ## Block Status
 
@@ -19,7 +19,7 @@
 | vision_rmsnorm | ttnn | done | 0.999982 | 0 | Fused ttnn.rms_norm eps=1e-5 with [1,1,dim//32,32] ROW_MAJOR gamma per reference_impl qwen25_vl/tt/vision_rmsnorm.py; KB entry ttnn_pow cited (pow/mean/rsqrt/mul chain fused into ttnn.rms_norm). Weight replicated on 1x4 mesh per parallelism plan (placement=replicate); replicated output compared single-device vs golden (real blocks.0.norm1 weight). Guard ok (lint 0, kernels ok, no new host ops). |
 | vision_rmsnorm | debug | n/a | — | 0 |  |
 | vision_rmsnorm | optimization | done | 0.999982 | 0 | Tracy-driven single change: ttnn.rms_norm output pinned to L1 interleaved (memory_config=L1_MEMORY_CONFIG), cutting the kernel's DRAM write. Traced tracy at the production operating point (fp32 [1,1,896,1536] replicated 1x4 mesh, metal-trace captured+replayed, 2 replay sessions): per-device LayerNormDeviceOperation kernel time 44.3-46.2us@28c -> 29.9-32.9us@28c (-~29%); wall-clock A/B over 200 traced replays 51.2 -> 38.4 us/iter (-25%). Width-sharded LayerNormShardedMultiCoreProgramConfig alternative (48c, 8x6 grid) measured WORSE (69.4 us/iter): i2s/s2i bounce around a single op costs more than it saves; rejected. Block is a single op, so top_hotspot share=1.0 by construction; 28-core count is the row-tile cap (896/32). KB entries for kind norm reviewed: ttnn_pow chain already fused into ttnn.rms_norm (cited in ttnn phase); ttnn_rms_norm_post_all_gather distributed-stats entries target sharded-TP norms - vision tower is placement=replicate, not applicable, none used. PCC 0.999982 (>0.99, unchanged) re-verified on 1x4 mesh; traced_ops sidecar regenerated (ttnn.rms_norm only). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
-| vision_rmsnorm | real_weights | pending | — | 0 |  |
+| vision_rmsnorm | real_weights | done | 0.999981 | 0 | vision_rmsnorm_weights loader added to consolidated tt/weight_loader.py (pure-PyTorch, memoized key-filtered safetensors load; covers blocks.{i}.norm1/norm2 per-layer keys and the tower-level post_trunk_norm key; __main__ self-test extended: weight [1536] at all sites, 1536 params each). Stage-1 parametric tests/test_real_hf_weights.py row runs TtVisionRMSNorm at the production operating point (fp32 residual stream, fp32 TILE gamma, 1x4 mesh replicated, golden real-activation input [784,1536]) vs the pure-PyTorch reference with the same real weights at THREE sites: norm1@0 PCC 0.999981, norm2@41 0.999985, post_trunk_norm 0.999993 (min 0.999981 > 0.99 reported). Block forward untouched; full harness re-run, vision_patch_embed row still passing. Guard ok (lint 0, params_loaded 4608>0). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | vision_attention | reference | done | 1.000000 | 0 | eager MHA 12h hd128 fused QKV no-bias, 2D rope, cu_seqlens mask |
 | vision_attention | ttnn | done | 0.999855 | 0 | Fused-QKV linear -> nlp_create_qkv_heads (12 MHA heads, hd128) -> rotary_embedding_llama (q/k weights reverse_permute'd HF->meta + convert_rope_style_hf_to_meta cos/sin, qwen25_vl vision recipe) -> windowed_scaled_dot_product_attention over cu_seqlens (in-kernel block-diagonal mask) -> nlp_concat_heads -> o_proj. Seq padded 784->896, cu_seqlens keeps unpadded boundaries; real blocks.0.attn weights, replicated on 1x4 mesh per parallelism plan; HiFi4+fp32-acc. Guard ok (lint 0, kernels ok, no new host ops). KB ttnn_experimental_create_qkv_heads pattern applied via the nlp_* fused-head idiom. Framework fix: added ttnn.transformer.windowed_scaled_dot_product_attention to guard KIND_REQUIRED_KERNELS[attention] (mandated vision idiom was unrecognized; guard self-tests still pass). |
 | vision_attention | debug | n/a | — | 0 |  |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 23 (2026-06-10T05:25:23Z): device[vision_block] — ok
 - tick 24 (2026-06-10T05:35:01Z): device[patch_merger] — ok
 - tick 25 (2026-06-10T05:46:32Z): device[vision_transformer] — ok
 - tick 26 (2026-06-10T05:54:11Z): device[embedding] — ok
@@ -94,6 +93,7 @@
 - tick 30 (2026-06-10T06:33:07Z): device[decoder_layer] — ok
 - tick 31 (2026-06-10T06:40:18Z): device[lm_head] — ok
 - tick 32 (2026-06-10T06:46:52Z): device[vision_patch_embed] — ok
+- tick 33 (2026-06-10T06:53:44Z): device[vision_rmsnorm] — ok
 
 ## Host-Resident Exceptions
 
