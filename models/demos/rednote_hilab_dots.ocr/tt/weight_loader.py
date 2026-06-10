@@ -21,6 +21,7 @@ VISION_PATCH_EMBED_PREFIX = "vision_tower.patch_embed.patchifier"
 VISION_TOWER_PREFIX = "vision_tower"
 VISION_NUM_BLOCKS = 42
 TEXT_EMBED_KEY = "model.embed_tokens.weight"
+LM_HEAD_KEY = "lm_head.weight"
 TEXT_NUM_LAYERS = 28
 
 _CHECKPOINT_CACHE: Dict[str, torch.Tensor] = {}
@@ -274,6 +275,20 @@ def decoder_layer_weights(
     return out
 
 
+def lm_head_weights(hf_sd: Optional[Dict[str, torch.Tensor]] = None) -> Dict[str, torch.Tensor]:
+    """State dict for TtLMHead: {"weight": [vocab, hidden]}.
+
+    HF key ``lm_head.weight`` [151936, 1536], no bias, untied from
+    ``model.embed_tokens.weight`` (``tie_word_embeddings`` is false for
+    dots.ocr). The TTNN module transposes and vocab-shards at construction;
+    the loader hands over the raw HF tensor exactly as ``TtLMHead.__init__``
+    expects.
+    """
+    if hf_sd is None:
+        hf_sd = load_hf_state_dict(keys=[LM_HEAD_KEY])
+    return {"weight": hf_sd[LM_HEAD_KEY]}
+
+
 def count_params(sd) -> int:
     """Tensor-leaf element count of a (possibly nested) state dict."""
     if isinstance(sd, torch.Tensor):
@@ -383,3 +398,7 @@ if __name__ == "__main__":
         assert dlsd["mlp.down_proj.weight"].shape == (1536, 8960), (idx, dlsd["mlp.down_proj.weight"].shape)
         assert len(dlsd) == 12, (idx, sorted(dlsd))
     print(f"decoder_layer: layers.0/layers.{TEXT_NUM_LAYERS - 1} OK, {count_params(dlsd)} params each")
+
+    lsd = lm_head_weights()
+    assert lsd["weight"].shape == (151936, 1536), lsd["weight"].shape
+    print(f"lm_head: {len(lsd)} tensors, {count_params(lsd)} params OK")

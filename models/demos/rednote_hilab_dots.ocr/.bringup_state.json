@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T08:06:18Z",
+  "updated_at": "2026-06-10T08:13:43Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -801,8 +801,15 @@
         "pcc": 0.999945
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/weight_loader.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_real_hf_weights.py"
+        ],
+        "notes": "lm_head_weights loader added to consolidated tt/weight_loader.py (pure-PyTorch, memoized key-filtered safetensors load of lm_head.weight [151936,1536], no bias, untied from embed_tokens - tie_word_embeddings false; __main__ self-test extended: 233373696 params, shape asserted). Stage-1 parametric tests/test_real_hf_weights.py row runs TtLMHead at the production operating point (bfloat8_b vocab-sharded weight per optimization-phase idiom, bf16 golden real final-hidden-state activation [1,128,1536] replicated 1x4 mesh, HiFi4+fp32-acc, per-chip 37984-logit slices recombined host-side ConcatMeshToTensor(dim=-1)) vs the pure-PyTorch lm_head_forward with the same real weights: PCC 0.999945 (>0.99, matches optimization-phase bfp8 PCC exactly - quantization noise, not loader defect). Block forward untouched; full harness re-run, all 13 rows passing. Guard ok (lint 0, params_loaded 233373696>0). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999945,
+        "params_loaded": 233373696
       }
     }
   ],
@@ -1106,6 +1113,12 @@
       "tick": 43,
       "ts": "2026-06-10T08:06:18Z",
       "action": "device[decoder_layer]",
+      "result": "ok"
+    },
+    {
+      "tick": 44,
+      "ts": "2026-06-10T08:13:43Z",
+      "action": "device[lm_head]",
       "result": "ok"
     }
   ],

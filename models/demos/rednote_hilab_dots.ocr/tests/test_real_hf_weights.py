@@ -45,6 +45,7 @@ _text_rmsnorm_mod = _load_module("dots_ocr_tt_text_rmsnorm", MODEL_DIR / "tt" / 
 _text_attention_mod = _load_module("dots_ocr_tt_text_attention", MODEL_DIR / "tt" / "text_attention.py")
 _text_mlp_mod = _load_module("dots_ocr_tt_text_mlp", MODEL_DIR / "tt" / "text_mlp.py")
 _decoder_layer_mod = _load_module("dots_ocr_tt_decoder_layer", MODEL_DIR / "tt" / "decoder_layer.py")
+_lm_head_mod = _load_module("dots_ocr_tt_lm_head", MODEL_DIR / "tt" / "lm_head.py")
 
 
 def _pcc(a, b):
@@ -466,6 +467,37 @@ def _t_decoder_layer(mesh_device) -> tuple[float, int]:
     return min(pccs), n_params
 
 
+def _t_lm_head(mesh_device) -> tuple[float, int]:
+    # Real lm_head.weight (151936x1536, no bias, untied from embed_tokens)
+    # through the consolidated loader. Production-distribution input: the
+    # golden's real final-hidden-state activation [1, 128, 1536] (the head
+    # consumes the post-final-norm residual stream directly). Production
+    # operating point: bfloat8_b vocab-sharded weight (optimization-phase
+    # idiom), bf16 activation replicated on the 1x4 mesh, HiFi4+fp32-acc;
+    # per-chip 37984-logit slices recombined on host with
+    # ConcatMeshToTensor(dim=-1) per tp-guidance.
+    golden = torch.load(MODEL_DIR / "reference" / "golden" / "lm_head.pt")
+    x = golden["input"]  # [1, 128, 1536]
+    _, seq, dim = x.shape
+    sd = wl.lm_head_weights()
+    ref_out = ref.lm_head_forward(x, sd["weight"])
+    vocab = ref_out.shape[-1]
+
+    block = _lm_head_mod.TtLMHead(mesh_device, sd)
+    x_tt = ttnn.from_torch(
+        x.reshape(1, 1, seq, dim),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    out_tt = block.forward(x_tt)
+    out = ttnn.to_torch(out_tt, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)).float().reshape(seq, vocab)
+    assert out.shape == ref_out.reshape(seq, vocab).shape, f"{out.shape} != {ref_out.shape}"
+    return _pcc(ref_out.reshape(seq, vocab), out), wl.count_params(sd)
+
+
 BLOCKS = [
     ("vision_patch_embed", _t_vision_patch_embed),
     ("vision_rmsnorm", _t_vision_rmsnorm),
@@ -479,6 +511,7 @@ BLOCKS = [
     ("text_attention", _t_text_attention),
     ("text_mlp", _t_text_mlp),
     ("decoder_layer", _t_decoder_layer),
+    ("lm_head", _t_lm_head),
 ]
 
 

@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T08:06:18Z
+**Updated:** 2026-06-10T08:13:43Z
 
 ## Block Status
 
@@ -74,7 +74,7 @@
 | lm_head | ttnn | done | 1.000000 | 0 | Untied vocab projection Linear 1536->151936 no bias as a single column-parallel ttnn.linear: weight [vocab,hidden] transposed to [hidden,vocab] and vocab-sharded ShardTensorToMesh(dim=-1) on the 1x4 mesh per parallelism plan (placement=shard vocab dim; 151936/4=37984 logits per chip, tile-divisible, no padding); replicated activation in, per-chip logit slices out, recombined on host via ConcatMeshToTensor(dim=-1) per tp-guidance (all_gather left to the generation-phase consumer). reference_impl tt_transformers/tt/lm_head.py DRAM-sharded program configs / column splits deferred to optimization. HiFi4+fp32-acc, bf16; real lm_head.weight re-loaded from checkpoint in the test; PCC 1.000000 vs golden. Guard ok (lint 0, kernels ok, no new host ops). KB entries for kind linear were attention/tensor-manipulation records (nlp_concat_heads_decode, concatenate_heads, flash_mla_prefill, narrow/split/bcast/concat, create_qkv_heads) - none applicable, none used. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | lm_head | debug | n/a | — | 0 |  |
 | lm_head | optimization | done | 0.999945 | 0 | Tracy-driven single change: lm_head weight dtype bf16 -> bfloat8_b (tt_transformers lm_head idiom; KB entries for kind linear were attention/tensor-manipulation records - nlp_concat_heads_decode, concatenate_heads, flash_mla_prefill, narrow/split/bcast/concat - none applicable, none used). Baseline traced tracy (metal-trace captured+replayed, bf16 [1,1,128,1536] replicated 1x4 mesh, real lm_head.weight vocab-sharded 37984/chip) showed the single 108-core MatmulMultiCoreReuseMultiCast1D matmul at 348-368us/device, ~111MB bf16 weight stream = DRAM-bandwidth-bound; share=1.0 by construction (single-op block). Halving weight bytes moved it to 245-253us/device (-29%); HiFi4+fp32-acc accumulation unchanged. PCC 0.999945 (>0.99, was 1.0 bf16 - bfp8 weight quantization noise) re-verified on 1x4 mesh; traced_ops sidecar regenerated (ttnn.linear only). Guard ok (lint 0, traced tracy artifact verified). DRAM-sharded program config (K=1536 < 2048 threshold) left as a possible second pass; one-change budget. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
-| lm_head | real_weights | pending | — | 0 |  |
+| lm_head | real_weights | done | 0.999945 | 0 | lm_head_weights loader added to consolidated tt/weight_loader.py (pure-PyTorch, memoized key-filtered safetensors load of lm_head.weight [151936,1536], no bias, untied from embed_tokens - tie_word_embeddings false; __main__ self-test extended: 233373696 params, shape asserted). Stage-1 parametric tests/test_real_hf_weights.py row runs TtLMHead at the production operating point (bfloat8_b vocab-sharded weight per optimization-phase idiom, bf16 golden real final-hidden-state activation [1,128,1536] replicated 1x4 mesh, HiFi4+fp32-acc, per-chip 37984-logit slices recombined host-side ConcatMeshToTensor(dim=-1)) vs the pure-PyTorch lm_head_forward with the same real weights: PCC 0.999945 (>0.99, matches optimization-phase bfp8 PCC exactly - quantization noise, not loader defect). Block forward untouched; full harness re-run, all 13 rows passing. Guard ok (lint 0, params_loaded 233373696>0). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 
 ## Use cases
 
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 34 (2026-06-10T06:59:50Z): device[vision_attention] — ok
 - tick 35 (2026-06-10T07:05:44Z): device[vision_mlp] — ok
 - tick 36 (2026-06-10T07:12:02Z): device[vision_block] — ok
 - tick 37 (2026-06-10T07:19:34Z): device[patch_merger] — ok
@@ -94,6 +93,7 @@
 - tick 41 (2026-06-10T07:52:31Z): device[text_attention] — ok
 - tick 42 (2026-06-10T07:58:25Z): device[text_mlp] — ok
 - tick 43 (2026-06-10T08:06:18Z): device[decoder_layer] — ok
+- tick 44 (2026-06-10T08:13:43Z): device[lm_head] — ok
 
 ## Host-Resident Exceptions
 
