@@ -183,6 +183,7 @@ class TT_CCL:
                 mesh_mapper=mapper,
             )
 
+        assert num_heads_local * self.mesh_device.shape[tp_axis] == num_heads
         buffers = {
             "persistent_k_output_buffer": _alloc(
                 torch.zeros(1, 1, seq_len, kv_lora_rank + qk_rope_head_dim), shard_dims=k_shard_dims
@@ -190,9 +191,9 @@ class TT_CCL:
             "persistent_v_output_buffer": _alloc(
                 torch.zeros(1, num_heads, seq_len, v_head_dim), shard_dims=v_shard_dims
             ),
-            "joint_q": _alloc(torch.zeros(1, num_heads_local, 0, qk_head_dim), shard_dims=joint_shard_dims),
+            "joint_q": _alloc(torch.zeros(1, num_heads, 0, qk_head_dim), shard_dims=joint_shard_dims),
             "joint_kv": _alloc(torch.zeros(1, 1, 0, kv_lora_rank + qk_rope_head_dim), replicate=True),
-            "joint_v": _alloc(torch.zeros(1, num_heads_local, 0, v_head_dim), shard_dims=joint_shard_dims),
+            "joint_v": _alloc(torch.zeros(1, num_heads, 0, v_head_dim), shard_dims=joint_shard_dims),
         }
         self.mla_ring_attention_buffers[key] = buffers
         return buffers
