@@ -23,8 +23,9 @@ Optional:
                                             (if provided, cabling and deployment descriptors are ignored)
     --output <directory>                    Output directory for log files (default: validation_output)
     --volume <host-path>                    Additional volume mount for Docker containers (can be repeated)
-                                            /data/scaleout_configs is mounted by default; each host path
-                                            is mounted at the same path inside the container
+                                            /data/scaleout_configs is mounted by default when it exists on
+                                            the host; each host path is mounted at the same path inside
+                                            the container
     --mpi-if <interface>                    Network interface for MPI TCP transport (default: ens5f0np0)
     --mpi-args <args>                       Extra arguments passed directly to mpirun (quoted string)
                                             e.g. --mpi-args "--tag-output"
@@ -57,7 +58,13 @@ ITERATIONS=50
 
 FACTORY_DESCRIPTOR_PATH=""
 OUTPUT_DIR="validation_output"
-EXTRA_VOLUMES=(/data/scaleout_configs)
+# /data/scaleout_configs is a Markham-cluster convention. Only mount it when it
+# actually exists locally; otherwise Docker fails trying to auto-create the
+# missing bind-mount source path (mkdir: permission denied) and every rank dies
+# before run_cluster_validation starts. Sites that keep configs elsewhere just
+# pass them via --volume / the descriptor path flags.
+EXTRA_VOLUMES=()
+[[ -d /data/scaleout_configs ]] && EXTRA_VOLUMES+=(/data/scaleout_configs)
 MPI_IF="ens5f0np0"
 MPI_EXTRA_ARGS=()
 VALIDATION_EXTRA_ARGS=()
@@ -365,6 +372,14 @@ for ((i=1; i<=ITERATIONS; i++)); do
             echo ""
             echo "Running cluster validation..."
             run_cluster_validation "$OUTPUT_DIR/iteration_${i}"
+            VALIDATION_EXIT_CODE=$?
+            # Surface validation failures explicitly. Without this, a container
+            # that dies before run_cluster_validation starts (e.g. a bad bind
+            # mount -> docker exit 126) produces no output yet the loop still
+            # prints "completed", masking the failure.
+            if [[ $VALIDATION_EXIT_CODE -ne 0 ]]; then
+                echo "ERROR: cluster validation FAILED (exit code $VALIDATION_EXIT_CODE)"
+            fi
         else
             echo "Skipping validation due to mpirun failure"
         fi
