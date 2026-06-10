@@ -61,9 +61,15 @@ def _vision_tower_signpost(header: str) -> None:
     signpost(header)
 
 
-def _tp4_prefill_vision_enabled() -> bool:
-    """True when experimental TP4-prefill-only vision optimizations are enabled."""
-    return os.environ.get("DOTS_OCR_TEXT_BODY", "").strip().lower() == "tp4_prefill"
+def _tp4_prefill_vision_enabled(device=None) -> bool:
+    """True when Wormhole TP4 prefill vision optimizations should be used."""
+    body_env = os.environ.get("DOTS_OCR_TEXT_BODY")
+    if body_env is not None:
+        return body_env.strip().lower() in {"tp4", "tp4_prefill"}
+    if device is None or not is_wormhole_b0() or not hasattr(device, "shape"):
+        return False
+    shape = tuple(int(x) for x in device.shape)
+    return len(shape) == 2 and int(shape[-1]) == 4
 
 
 def _vision_tensor_mem_tag(t: ttnn.Tensor) -> str:
@@ -1129,7 +1135,7 @@ class TTNNDotsVisionMLP(TTNNModule):
 
         self._tp_down_pc = None
         self._tp_down_k = None
-        if _tp4_prefill_vision_enabled():
+        if _tp4_prefill_vision_enabled(self.device):
             from models.experimental.tt_symbiote.modules.vision_tp4_bh import bh_tp4_mlp_down_pc
 
             num_tp = self._mlp_tp_num_devices()
@@ -1145,7 +1151,7 @@ class TTNNDotsVisionMLP(TTNNModule):
         auto-config path at ~3.6 ms / 6% TFLOPs.  Prefer the hardware-swept
         BH TP4 config (``bh_tp4_mlp_down_pc``) with BFP8 output.
         """
-        if not _tp4_prefill_vision_enabled():
+        if not _tp4_prefill_vision_enabled(self.device):
             return _vision_matmul_program_config(self.device, m_dim, k_dim, n_dim)
         cached = getattr(self, "_tp_down_pc", None)
         if cached is not None and m_dim == 11264 and k_dim == int(getattr(self, "_tp_down_k", k_dim)):
@@ -1326,7 +1332,7 @@ class TTNNDotsVisionMLP(TTNNModule):
         # Row-parallel down-projection: each device contracts its intermediate shard
         # into a full-width partial sum. The tp4_prefill experiment uses BFP8 L1
         # out + explicit 2D-mcast PC; default keeps the prior DRAM/BF16 path.
-        use_tp4_prefill_vision = _tp4_prefill_vision_enabled()
+        use_tp4_prefill_vision = _tp4_prefill_vision_enabled(self.device)
         out_mem = ttnn.L1_MEMORY_CONFIG if use_tp4_prefill_vision else mem
         out_dtype = ttnn.bfloat8_b if use_tp4_prefill_vision else ttnn.bfloat16
         down_m = int(gate_up_mul.shape[0]) * int(gate_up_mul.shape[1]) * int(gate_up_mul.shape[2])
@@ -1494,7 +1500,7 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
         grid_thw: torch.Tensor = None,
         activation_memory_config: ttnn.MemoryConfig | None = None,
     ) -> ttnn.Tensor:
-        if _tp4_prefill_vision_enabled():
+        if _tp4_prefill_vision_enabled(self.device):
             _vision_tower_signpost("vision_tower.start")
         mem = activation_memory_config or ttnn.DRAM_MEMORY_CONFIG
         mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
@@ -1827,7 +1833,7 @@ class TTNNDotsVisionAttention(TTNNModule):
             )
             self._tp_o_ctx_dim = None
             self._tp_o_proj_pc = None
-            if _tp4_prefill_vision_enabled():
+            if _tp4_prefill_vision_enabled(self.device):
                 from models.experimental.tt_symbiote.modules.vision_tp4_bh import bh_tp4_o_proj_pc
 
                 heads_per_tp = self.num_heads // self._tp_ndev
@@ -1849,7 +1855,7 @@ class TTNNDotsVisionAttention(TTNNModule):
         ``_vision_matmul_program_config`` returns ``None`` on BH 11×10 for
         M=11264; without an explicit PC the auto-config path lands at ~1.3 ms.
         """
-        if not _tp4_prefill_vision_enabled():
+        if not _tp4_prefill_vision_enabled(self.device):
             return _vision_matmul_program_config(self.device, m_dim, k_dim, n_dim)
         cached = getattr(self, "_tp_o_proj_pc", None)
         cached_k = getattr(self, "_tp_o_ctx_dim", None)
@@ -2084,7 +2090,7 @@ class TTNNDotsVisionAttention(TTNNModule):
         # matmul_device_operation.cpp:841 constrains out_subblock_w/h when output is sharded.
         o_k = int(self.tt_o_proj_weight.shape[-2])
         o_n = int(self.tt_o_proj_weight.shape[-1])
-        use_tp4_prefill_vision = ndev > 1 and _tp4_prefill_vision_enabled()
+        use_tp4_prefill_vision = ndev > 1 and _tp4_prefill_vision_enabled(self.device)
         o_pc = (
             self._tp_o_proj_program_config(qkv_m, o_k, o_n)
             if use_tp4_prefill_vision
@@ -3103,7 +3109,7 @@ class TTNNDotsOCRVisionTower(TTNNModule):
         attention_mask: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Vision blocks + post-trunk norm + patch merger (``patch_embed`` already applied)."""
-        if _tp4_prefill_vision_enabled() and isinstance(x, torch.Tensor):
+        if _tp4_prefill_vision_enabled(self.device) and isinstance(x, torch.Tensor):
             _vision_tower_signpost("vision_tower.start")
         if grid_thw is None:
             raise ValueError("grid_thw is required for Dots vision")

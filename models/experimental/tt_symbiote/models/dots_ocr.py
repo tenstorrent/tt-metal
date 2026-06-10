@@ -98,18 +98,23 @@ def _deep_sync_profile_enabled() -> bool:
 def _decode_tp_scheme_from_env() -> str:
     """Tensor-parallel decode scheme for full dots.ocr pipeline construction.
 
-    ``col_parallel`` is the default fast TP4 decode path. Wormhole B0 defaults
-    to ``row`` because the TP4 column-parallel decode path can drift on greedy
-    OCR text. Set ``DOTS_OCR_TP_DECODE_SCHEME`` explicitly to override.
+    ``col_parallel`` is the default fast TP4 decode path. Set
+    ``DOTS_OCR_TP_DECODE_SCHEME=row`` explicitly to compare the older
+    row-parallel path.
     """
-    default_scheme = "row" if is_wormhole_b0() else "col_parallel"
-    scheme = os.environ.get("DOTS_OCR_TP_DECODE_SCHEME", default_scheme).strip()
+    scheme = os.environ.get("DOTS_OCR_TP_DECODE_SCHEME", "col_parallel").strip()
     if scheme not in {"row", "col_parallel"}:
         raise ValueError("DOTS_OCR_TP_DECODE_SCHEME must be one of {'row', 'col_parallel'}, " f"got {scheme!r}")
     return scheme
 
 
-def _text_body_from_env() -> str:
+def _default_text_body(device) -> str:
+    if is_wormhole_b0() and _tp_degree(device) == 4:
+        return "tp4_prefill"
+    return "symbiote"
+
+
+def _text_body_from_env(device=None) -> str:
     """Which text-decoder body the pipeline builds.
 
     ``symbiote`` is the existing hidden-sharded ``TTNNDotsOCRLayerStack``
@@ -126,19 +131,19 @@ def _text_body_from_env() -> str:
     the graphs all-gather to full-H at the body boundary (one CCL, see
     ``_all_gather_hidden_to_full``).
     ``tp4_prefill`` uses the TP4 body only for prefill, fills a decode-compatible
-    two-KV-head cache, and keeps the existing symbiote decode stack. It remains
-    explicit because it is faster but currently drops heading tokens on the
-    vision sample.
+    two-KV-head cache, and keeps the existing symbiote decode stack. On
+    Wormhole TP4 meshes this is the default optimized prefill path; set
+    ``DOTS_OCR_TEXT_BODY=symbiote`` to force the legacy prefill body.
     """
     body_env = os.environ.get("DOTS_OCR_TEXT_BODY")
-    body = body_env.strip().lower() if body_env is not None else "symbiote"
+    body = body_env.strip().lower() if body_env is not None else _default_text_body(device)
     if body not in {"symbiote", "tp4", "tp4_prefill"}:
         raise ValueError(f"DOTS_OCR_TEXT_BODY must be one of {{'symbiote', 'tp4', 'tp4_prefill'}}, got {body!r}")
     return body
 
 
-def _tp4_prefill_body_enabled() -> bool:
-    return os.environ.get("DOTS_OCR_TEXT_BODY", "").strip().lower() == "tp4_prefill"
+def _tp4_prefill_body_enabled(device=None) -> bool:
+    return _text_body_from_env(device) == "tp4_prefill"
 
 
 def _tp_cluster_axis(device) -> int:
@@ -915,7 +920,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
         vision_tower._unique_name = "vision_tower"
         vision_tower.override_children_module_names()
 
-        text_body = _text_body_from_env()
+        text_body = _text_body_from_env(device)
         tp_decode_scheme = _decode_tp_scheme_from_env()
 
         def _build_symbiote_stack(norm_name: str = "model.norm"):
@@ -1214,7 +1219,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
             First predicted token ID (int), or a list of ``B`` IDs when
             ``_mesh_dp_dual_stream()`` is active.
         """
-        if _tp4_prefill_body_enabled():
+        if _tp4_prefill_body_enabled(self.device):
             _dots_ocr_signpost("dots_ocr.prefill_start")
         dual = self._mesh_dp_dual_stream()
         if dual and int(input_ids.shape[0]) != int(self.config.batch_size):
@@ -1650,7 +1655,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
                 raise RuntimeError("prefill must return a single int in non-DP mode")
             return [first_out]
 
-        if _tp4_prefill_body_enabled():
+        if _tp4_prefill_body_enabled(self.device):
             _dots_ocr_signpost("dots_ocr.decode_start")
         try:
             return self._decode_after_prefill(first_out, max_new_tokens, stop_on_eos)

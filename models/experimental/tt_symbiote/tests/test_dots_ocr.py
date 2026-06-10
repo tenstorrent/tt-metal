@@ -27,7 +27,8 @@ MESH_DEVICE_MAP = {
     "N150": (1, 1),
     "N300": (1, 2),
     "N150x4": (1, 4),
-    "T3K": (1, 8),
+    "T3K": (2, 4),
+    "T3K_DP8": (8, 1),
     "TG": (8, 4),
     "P100": (1, 1),
     "P150": (1, 1),
@@ -93,6 +94,8 @@ def _dots_ocr_mesh_dp_degree():
         return int(sh[0])
     if parallelism == "DP":
         return int(sh[0]) if int(sh[0]) > 1 else int(sh[1])
+    if int(sh[0]) > 1 and int(sh[1]) > 1:
+        return int(sh[0])
     return 1
 
 
@@ -139,18 +142,18 @@ def _dots_ocr_decode_full_decoder_tp_schemes():
     """Decoder-stack TP scheme(s) for the full 28-layer L1-boundary test.
 
     Mirrors :func:`_dots_ocr_decode_one_layer_tp_schemes` but for the full
-    decoder stack. ``row`` (default) is the production TP contract (hidden dim
-    sharded across TP, 1536/4 = 384 on a 1x4 mesh). ``col_parallel`` keeps the
+    decoder stack. ``col_parallel`` (default) is the production TP contract
+    (hidden dim sharded across TP, 1536/4 = 384 on a 1x4 mesh). ``row`` keeps the
     same hidden-sharded input/output (distributed TP4 RMSNorm) but routes
-    QKV/gate-up as N-dim column-parallel matmuls. Set
+    QKV/gate-up as K-dim row-parallel matmuls. Set
     ``DOTS_OCR_DECODE_FULL_DECODER_TP_SCHEMES=both`` or a comma-separated list
     to compare schemes.
     """
-    env = os.environ.get("DOTS_OCR_DECODE_FULL_DECODER_TP_SCHEMES", "row").strip()
+    env = os.environ.get("DOTS_OCR_DECODE_FULL_DECODER_TP_SCHEMES", "col_parallel").strip()
     if env.lower() == "both":
         return ["row", "col_parallel"]
     schemes = [s.strip() for s in env.split(",") if s.strip()]
-    return schemes or ["row"]
+    return schemes or ["col_parallel"]
 
 
 DOTS_OCR_MODEL_ID = "rednote-hilab/dots.ocr"
@@ -223,12 +226,10 @@ def _dots_ocr_vision_one_layer_block_counts() -> list[int]:
 def _dots_ocr_pipeline_batch_size():
     """Match ``TTNNDotsOCRPipeline`` batch to mesh size when DP is requested.
 
-    DP sharding in the pipeline requires ``batch_size == num_devices`` on the
-    mesh. ``DOTS_OCR_PARALLELISM=DP`` alone only changes the *fixture* mesh
-    shape (e.g. N300 ``(2, 1)``); without this, tests still run batch 1.
+    DP sharding in the pipeline requires ``batch_size == dp_degree``. Plain
+    ``T3K`` defaults to the hybrid ``(2, 4)`` mesh; ``T3K_DP8`` keeps the
+    working ``(8, 1)`` DP8/TP1 mesh available explicitly.
     """
-    if _dots_ocr_parallelism_mode() not in {"DP", "DP2_TP4"}:
-        return 1
     n = _dots_ocr_mesh_dp_degree()
     return n if n > 1 else 1
 
@@ -331,12 +332,10 @@ def test_dots_ocr_text(mesh_device):
 def test_dots_ocr_vision(mesh_device, image_link):
     """Test standalone TTNN pipeline for dots.ocr with vision (image + text).
 
-    Default mesh comes from ``MESH_DEVICE`` (e.g. N300 ``(1, 2)``). With
-    ``DOTS_OCR_PARALLELISM=DP``, the fixture uses ``DOTS_OCR_DP_MESH_DEVICE_MAP``
-    (N300 ``(2, 1)``). In DP mode the test sets ``batch_size == num_devices`` and
-    repeats the same prompt on each stream so dual-stream sharding is exercised.
-    For TP decode scheme comparisons on a 1x4 mesh, set
-    ``DOTS_OCR_TP_DECODE_SCHEME=row`` (default) or ``col_parallel``.
+    Default mesh comes from ``MESH_DEVICE``. Plain T3K is the hybrid ``(2, 4)``
+    shape and ``T3K_DP8`` is the working ``(8, 1)`` DP8/TP1 shape.
+    ``DOTS_OCR_PARALLELISM=DP`` remains available for DP-only shapes. For TP decode scheme comparisons, set
+    ``DOTS_OCR_TP_DECODE_SCHEME=row``; otherwise ``col_parallel`` is used.
     """
     pytest.importorskip("qwen_vl_utils")
     from qwen_vl_utils import process_vision_info
@@ -1361,10 +1360,10 @@ def test_dots_ocr_decode_full_decoder_l1_boundaries(mesh_device, tp_decode_schem
 def test_dots_ocr_vision(mesh_device, image_link):
     """Test standalone TTNN pipeline for dots.ocr with vision (image + text).
 
-    Default mesh comes from ``MESH_DEVICE`` (e.g. N300 ``(1, 2)``). With
-    ``DOTS_OCR_PARALLELISM=DP``, the fixture uses ``DOTS_OCR_DP_MESH_DEVICE_MAP``
-    (N300 ``(2, 1)``). In DP mode the test sets ``batch_size == num_devices`` and
-    repeats the same prompt on each stream so dual-stream sharding is exercised.
+    Default mesh comes from ``MESH_DEVICE``. Plain T3K is the hybrid ``(2, 4)``
+    shape and ``T3K_DP8`` is the working ``(8, 1)`` DP8/TP1 shape.
+    ``DOTS_OCR_PARALLELISM=DP`` remains available for DP-only shapes. In DP mode
+    the test sets one prompt row per DP stream.
     """
     pytest.importorskip("qwen_vl_utils")
     from qwen_vl_utils import process_vision_info
