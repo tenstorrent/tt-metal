@@ -225,3 +225,9 @@ dtype change in the decode loop must ALSO pass a long-generation check:
 — exact match, or first divergence only at an HF-near-tie (verify the
 fp32-ideal model decides the same way). Report `drift_first_divergence`
 in notes; revert changes whose divergence stems from accumulated error.
+
+**Occupancy + convergence (same contract as optimization-worker):**
+query the grid (13x10 on full Blackhole), report per-hotspot core
+counts, drive each <70%-occupancy op to a max-core config or measured
+rejection, L1-shard batch-1 decode activations, iterate until at-ceiling
+with evidence. Post-trace "dispatch-bound" is not a valid wave-off.

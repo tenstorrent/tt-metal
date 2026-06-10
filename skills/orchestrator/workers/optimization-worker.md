@@ -162,3 +162,21 @@ Use the standard JSON last-line contract above. Pre-pend any human-readable
 prose to explain what you did — the orchestrator will parse only the last
 JSON line. Always report the post-optimisation PCC, even when status is
 `"ok"` with no improvement.
+
+## Occupancy and convergence contract
+
+- QUERY the compute grid (`mesh_device.compute_with_storage_grid_size()`)
+  — never hardcode 8x8/10x10; full Blackhole is 13x10 (130 cores),
+  harvested parts report fewer. Use the queried grid for core_grid and
+  program configs.
+- For each top-5 traced hotspot, report cores used vs grid cores. Any op
+  below ~70% occupancy needs either a max-core program config or an A/B
+  showing the lever loses. Decode/batch-1: shard activations in L1
+  across the grid (tt_transformers decode posture).
+- ITERATE until the top hotspot is at-ceiling-with-evidence — one change
+  per measurement, multiple changes per tick. A single applied lever is
+  not completion.
+- Post-trace, "dispatch-bound" is an INVALID wave-off: traced replay has
+  no host dispatch; trace-timeline gaps and tiny grids are real op-level
+  problems. The only valid wave-off is occupancy ~full AND each top op
+  at measured ceiling.
