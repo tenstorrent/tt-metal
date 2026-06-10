@@ -74,6 +74,8 @@
 #include "ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/post_combine_reduce_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/per_token_cast_to_fp8_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_back/per_token_cast_back_nanobind.hpp"
 #include "ttnn/operations/experimental/fusion/fusion_dispatch_op_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/extract/extract_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/insert/insert_nanobind.hpp"
@@ -143,6 +145,8 @@ void py_module(nb::module_& mod) {
     deepseek_prefill::offset_cumsum::detail::bind_experimental_offset_cumsum_operation(mod);
     deepseek_prefill::detail::bind_post_combine_reduce(mod);
     deepseek_prefill::moe_grouped_topk::detail::bind_moe_grouped_topk(mod);
+    deepseek_prefill::per_token_cast_to_fp8::detail::bind_experimental_per_token_cast_to_fp8_operation(mod);
+    deepseek_prefill::per_token_cast_back::detail::bind_experimental_per_token_cast_back_operation(mod);
 
     plusone::detail::bind_experimental_plusone_operation(mod);
     dropout::detail::bind_experimental_dropout_operation(mod);
