@@ -1,37 +1,16 @@
 # Maps MPI ranks to mesh ids declared in mgd.textproto, and pins each rank
-# to a disjoint physical N300 board via TT_VISIBLE_DEVICES.
+# to a disjoint N300 board via TT_VISIBLE_DEVICES (UMD enumerates PCIe
+# boards 0..3; each board has 2 chips both reachable to UMD via the
+# on-board eth link).
 #
-# Rank 0 = TTML rank (WeightBridge sender, hosts the ttml LlamaCompositeKV).
-# Rank 1 = TTT  rank (WeightBridge receiver, hosts the tt-transformers Transformer).
+# Rank 0 = TTML rank (WeightBridge sender), owns board 0.
+# Rank 1 = TTT  rank (WeightBridge receiver), owns board 1.
 #
-# Hardware: T3K = 4x N300 boards = 8 wormhole chips. UMD's TT_VISIBLE_DEVICES
-# enumerates *PCIe boards* (valid IDs 0..3), not chips -- each board has 2
-# chips connected by an internal eth link, both visible to UMD.
-#
-# Declared layout (in mgd.textproto): each rank owns a [1, 2] mesh covering
-# both chips of one board. This must match what UMD discovers physically;
-# declaring fewer chips trips
-# `TopologyMapper: Fabric node ID not yet assigned for ASIC id ...`.
-#
-# Used layout (asymmetric):
-#   - Rank 0 (TTML) opens the full [1, 2] sub-mesh -- both chips of board 0
-#     participate in the ttml model's forward / generate, DDP across the
-#     pair.
-#   - Rank 1 (TTT)  opens only a [1, 1] sub-mesh at offset (0, 0) so every
-#     ``Transformer.update_weights`` dispatch hits the
-#     num_devices_per_group == 1 fast path. The multi-device update paths
-#     (Attention/MLP/Embedding/LMHead for num_devices_per_group > 1) are
-#     still TODO; once they land, this side can move back to [1, 2] or
-#     larger.
-#
-# ``WeightBridge`` handles the asymmetric pair by exchanging mesh shapes
-# during ``connect()`` and resolving to a single (0, 0) -> (0, 0)
-# ``SocketConnection`` (see ``utils/weight_bridge.py``).
-#
-#   board0-chip0   (rank 0, TTML, sends from this chip)
-#   board0-chip1   (rank 0, TTML, idle during weight transfer)
-#   board1-chip0   (rank 1, TTT,  receives here)
-#   board1-chip1   (rank 1, TTT,  declared but never opened)
+# Both ranks declare a [1, 2] mesh in mgd.textproto so UMD's eth walk has
+# a fabric-node mapping for every ASIC. The applications open
+# asymmetric sub-meshes: TTML opens the full [1, 2], TTT opens only
+# [1, 1] at offset (0, 0). See test_bridge_transfer.py and
+# utils/weight_bridge.py for the bridge's negotiation logic.
 
 rank_bindings:
   - rank: 0
