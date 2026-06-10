@@ -46,6 +46,8 @@ DOTS_OCR_DP2_TP4_MESH_DEVICE_MAP = {
     "T3K": (2, 4),
 }
 
+DOTS_OCR_LAYOUT_PROMPT = "Please output all the text present in the image heading, pagenumber, table data "
+
 
 def _dots_ocr_parallelism_mode() -> str:
     return os.environ.get("DOTS_OCR_PARALLELISM", "").upper()
@@ -1407,7 +1409,7 @@ def test_dots_ocr_vision(mesh_device, image_link):
             "role": "user",
             "content": [
                 {"type": "image", "image": image},
-                {"type": "text", "text": "Describe this image."},
+                {"type": "text", "text": DOTS_OCR_LAYOUT_PROMPT},
             ],
         }
     ]

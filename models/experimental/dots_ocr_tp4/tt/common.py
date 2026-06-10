@@ -93,6 +93,16 @@ def tp_cluster_axis(mesh_device) -> int:
     return 0 if (len(shape) == 2 and shape[0] > 1 and shape[1] == 1) else 1
 
 
+def tp_degree(mesh_device) -> int:
+    """Devices along the TP axis (1 for DP-only meshes like ``(2, 1)``)."""
+    if not hasattr(mesh_device, "shape"):
+        return 1
+    shape = [int(x) for x in mesh_device.shape]
+    if len(shape) != 2:
+        return 1
+    return int(shape[1]) if int(shape[1]) > 1 else 1
+
+
 def all_reduce(t: ttnn.Tensor, mesh_device, num_links: int = 1, output_memory_config=None) -> ttnn.Tensor:
     """All-reduce a [.., N] full-width partial-sum tensor across the TP axis.
 
@@ -105,8 +115,7 @@ def all_reduce(t: ttnn.Tensor, mesh_device, num_links: int = 1, output_memory_co
     and was speed-neutral (decode is not CCL-bandwidth-bound at M=1), so the
     bandwidth-efficient RS+AG is kept for both prefill and decode.
     """
-    nd = mesh_num_devices(mesh_device)
-    if nd <= 1:
+    if tp_degree(mesh_device) <= 1:
         return t
     out_mc = output_memory_config or ttnn.DRAM_MEMORY_CONFIG
     orig_shape = list(t.shape)
@@ -220,8 +229,7 @@ def to_l1(t: ttnn.Tensor) -> ttnn.Tensor:
 def all_gather_last_dim(t: ttnn.Tensor, mesh_device, num_links: int = 1) -> ttnn.Tensor:
     """All-gather a [.., N/ndev] column-sharded tensor along its last dim across
     the TP axis -> full replicated [.., N]. Used by the column-parallel LM head."""
-    nd = mesh_num_devices(mesh_device)
-    if nd <= 1:
+    if tp_degree(mesh_device) <= 1:
         return t
     orig_shape = list(t.shape)
     work = t
@@ -254,8 +262,18 @@ def to_replicated(torch_tensor: torch.Tensor, mesh_device, dtype, layout=ttnn.TI
     )
 
 
+def tp_mesh_mapper(mesh_device, dim: int):
+    """Shard along ``dim`` on the TP axis; replicate across DP when mesh is 2D."""
+    if tp_degree(mesh_device) <= 1:
+        return ttnn.ReplicateTensorToMesh(mesh_device) if mesh_num_devices(mesh_device) > 1 else None
+    shape = list(mesh_device.shape) if hasattr(mesh_device, "shape") else []
+    if len(shape) == 2 and (shape[0] > 1 or shape[-1] == 1):
+        return ttnn.ShardTensor2dMesh(mesh_device, dims=(None, dim), mesh_shape=shape)
+    return ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=dim)
+
+
 def shard_to_mesh(torch_tensor: torch.Tensor, mesh_device, dim: int, dtype, layout=ttnn.TILE_LAYOUT):
-    """Send a torch tensor to device sharded along ``dim`` across the chips."""
+    """Send a torch tensor to device sharded along ``dim`` across the TP axis."""
     if mesh_num_devices(mesh_device) <= 1:
         return ttnn.from_torch(
             torch_tensor, dtype=dtype, layout=layout, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -266,7 +284,7 @@ def shard_to_mesh(torch_tensor: torch.Tensor, mesh_device, dim: int, dtype, layo
         layout=layout,
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=dim),
+        mesh_mapper=tp_mesh_mapper(mesh_device, dim),
     )
 
 

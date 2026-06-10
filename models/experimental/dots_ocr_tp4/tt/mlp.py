@@ -19,7 +19,7 @@ import ttnn
 from models.experimental.dots_ocr_tp4.tt.common import (
     all_reduce,
     matmul_m_dim,
-    mesh_num_devices,
+    tp_degree,
     prefill_matmul_2d_config,
     shard_to_mesh,
     tp4_lossy_matmul_dtype,
@@ -74,7 +74,7 @@ class DotsOCRMLPTP4(TTNNModule):
         self.mesh_device = mesh_device
         self.config = config
         self.weight_dtype = weight_dtype
-        self.num_devices = mesh_num_devices(mesh_device)
+        self.tp_degree = max(1, tp_degree(mesh_device))
         self.gate_up_w = None  # fused [H, 2*I/nd] per chip: [gate_shard | up_shard]
         self.down_w = None
         # Precision recipe matched to the production dots.ocr prefill profile:
@@ -122,7 +122,7 @@ class DotsOCRMLPTP4(TTNNModule):
         return self
 
     def load_weights(self, torch_mlp):
-        nd = max(1, self.num_devices)
+        nd = self.tp_degree
         I = self.config.intermediate_size
         assert I % nd == 0, f"intermediate_size {I} not divisible by {nd}"
         i_shard = I // nd

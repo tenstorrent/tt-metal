@@ -221,8 +221,7 @@ def _all_gather_hidden_to_full(t: ttnn.Tensor, device, hidden_size: int) -> ttnn
     """
     if int(t.shape[-1]) >= int(hidden_size):
         return t
-    nd = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
-    if nd <= 1:
+    if _tp_degree(device) <= 1:
         return t
     orig_shape = list(t.shape)
     work = t if len(orig_shape) == 4 else ttnn.reshape(t, [1] * (4 - len(orig_shape)) + orig_shape)
@@ -735,9 +734,8 @@ class _TP4PrefillDecodeCacheAdapter(TTNNPagedAttentionKVCache):
         return getattr(self.decode_cache, name)
 
     def _tp4_kv_to_decode_kv(self, kv: ttnn.Tensor) -> ttnn.Tensor:
-        nd = self.device.get_num_devices() if hasattr(self.device, "get_num_devices") else 1
         target_heads = int(self.decode_cache.num_kv_heads)
-        if nd <= 1 or int(kv.shape[1]) == target_heads:
+        if _tp_degree(self.device) <= 1 or int(kv.shape[1]) == target_heads:
             return kv
         gathered = ttnn.all_gather(
             kv,
@@ -957,17 +955,22 @@ class TTNNDotsOCRPipeline(TTNNModule):
                 f"(DOTS_OCR_TP4_HI_PRECISION={os.environ.get('DOTS_OCR_TP4_HI_PRECISION', '<unset>')!r})"
             )
 
-            num_devices = int(device.get_num_devices()) if hasattr(device, "get_num_devices") else 1
-            if int(batch_size) != 1:
+            tp_deg = _tp_degree(device)
+            if int(batch_size) > 1 and dp_batch_shard_tensor_mapper(device, batch_size) is None:
                 raise ValueError(
-                    f"DOTS_OCR_TEXT_BODY={text_body} requires batch_size=1 (TP, no DP batch sharding); got {batch_size}"
+                    f"DOTS_OCR_TEXT_BODY={text_body} batch_size={batch_size} requires a DP batch-sharded "
+                    f"mesh (batch along mesh axis 0 or 1); mesh shape is {getattr(device, 'shape', None)}"
                 )
-            if num_devices > 1 and (hf_model.config.num_attention_heads % num_devices) != 0:
+            if tp_deg > 1 and (hf_model.config.num_attention_heads % tp_deg) != 0:
                 raise ValueError(
                     f"DOTS_OCR_TEXT_BODY={text_body} needs num_attention_heads "
-                    f"({hf_model.config.num_attention_heads}) divisible by num_devices ({num_devices})"
+                    f"({hf_model.config.num_attention_heads}) divisible by TP degree ({tp_deg})"
                 )
-            print(f"[dots_ocr] text body: {text_body} (tp4 prefill, num_devices={num_devices})")
+            num_devices = int(device.get_num_devices()) if hasattr(device, "get_num_devices") else 1
+            print(
+                f"[dots_ocr] text body: {text_body} "
+                f"(tp4 prefill, num_devices={num_devices}, tp={tp_deg}, batch={batch_size})"
+            )
             dots_cfg = DotsOCRConfig.from_hf(hf_model.config)
             prefill_stack = DotsOCRPrefillModelTP4.from_torch(
                 device,

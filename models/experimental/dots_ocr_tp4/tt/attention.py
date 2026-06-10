@@ -24,9 +24,9 @@ import ttnn
 from models.experimental.dots_ocr_tp4.tt.common import (
     all_reduce,
     matmul_m_dim,
-    mesh_num_devices,
     prefill_matmul_2d_config,
     shard_to_mesh,
+    tp_degree,
 )
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.modules.rope import BailingRotarySetup
@@ -39,7 +39,7 @@ class DotsOCRAttentionTP4(TTNNModule):
         self.config = config
         self.layer_idx = layer_idx
         self.weight_dtype = weight_dtype
-        self.num_devices = max(1, mesh_num_devices(mesh_device))
+        self.tp_degree = max(1, tp_degree(mesh_device))
 
         self.num_heads = config.num_attention_heads
         self.num_kv_heads = config.num_key_value_heads
@@ -47,7 +47,7 @@ class DotsOCRAttentionTP4(TTNNModule):
         self.hidden_size = config.hidden_size
         self.scaling = self.head_dim**-0.5
 
-        nd = self.num_devices
+        nd = self.tp_degree
         assert self.num_heads % nd == 0, f"heads {self.num_heads} not divisible by {nd}"
         self.q_heads_per_chip = self.num_heads // nd
         self.kv_groups = self.num_heads // self.num_kv_heads
@@ -109,7 +109,7 @@ class DotsOCRAttentionTP4(TTNNModule):
         return first_q_head // self.kv_groups
 
     def load_weights(self, torch_attn):
-        nd = self.num_devices
+        nd = self.tp_degree
         hd = self.head_dim
         qhpc = self.q_heads_per_chip
 

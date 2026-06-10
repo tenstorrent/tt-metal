@@ -18,7 +18,7 @@ import ttnn
 from models.experimental.dots_ocr_tp4.tt.common import (
     all_gather_last_dim,
     from_replicated_to_torch,
-    mesh_num_devices,
+    tp_degree,
     shard_to_mesh,
 )
 from models.experimental.dots_ocr_tp4.tt.rmsnorm import DotsOCRRMSNormTP4
@@ -31,7 +31,7 @@ class DotsOCRLMHeadTP4(TTNNModule):
         self.mesh_device = mesh_device
         self.config = config
         self.weight_dtype = weight_dtype
-        self.num_devices = max(1, mesh_num_devices(mesh_device))
+        self.tp_degree = max(1, tp_degree(mesh_device))
         self.norm = None
         self.lm_head_w = None
         self.vocab_size = None
@@ -49,7 +49,7 @@ class DotsOCRLMHeadTP4(TTNNModule):
 
         w = torch_lm_head.weight.data  # [vocab, H]
         m.vocab_size = int(w.shape[0])
-        nd = m.num_devices
+        nd = m.tp_degree
         assert m.vocab_size % nd == 0, f"vocab {m.vocab_size} not divisible by {nd}"
         m.v_shard = m.vocab_size // nd  # per-chip vocab width (for distributed argmax)
         # Column-parallel: ttnn.linear wants [K=H, N=vocab]; shard N across chips.
