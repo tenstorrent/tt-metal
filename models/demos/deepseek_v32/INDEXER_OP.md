@@ -1,4 +1,4 @@
-# DeepSeek-V3.2 Indexer Score Op — Proposal
+# DeepSeek-V3.2 Indexer Score Op — Design
 
 ## Background (brief)
 
@@ -15,128 +15,138 @@ score[s, t] = Σ_h  relu(q[h, s, :] · k[t, :]) * w[h, s]
 ```
 
 `q` comes from MLA's query latent, `k` is a single shared 128-dim key per
-token, `w` are per-head gates (scalars `Hi^-0.5 · d^-0.5` pre-folded). After
-the score, top-k(2048) indices feed the sparse MLA.
+token, `w` are per-head gates (scalars `Hi^-0.5 · d^-0.5` pre-folded, can be
+negative). After the score, top-k(2048) indices feed the sparse MLA.
 
-## The op we want
-
-The projections, norm, RoPE are covered by existing ttnn ops. The new op is
-the scorer:
+## The op
 
 ```
-ttnn.experimental.indexer_score(q, k, weights, is_causal, chunk_start_idx) -> score
+ttnn.experimental.deepseek.indexer_score(q, k, weights, is_causal, chunk_start_idx) -> score
 ```
 
 Weighted-ReLU MQA scoring with head-sum accumulation (analogue of DeepGEMM's
-`fp8_mqa_logits` on the CUDA side). SDPA-like kernel skeleton, minus
-softmax / V / output path.
-
-A **new top-k op is being written alongside** (k=2048, row-major input, uint32
-indices) — top-k is not part of this op, but this op's output layout is
-designed for it.
+`fp8_mqa_logits`). Causality from the scalar `chunk_start_idx` — key `t` is
+visible to query `s` iff `t ≤ chunk_start + s`; no mask tensor. Output is
+ROW_MAJOR bf16, designed for a row-major top-k written alongside.
 
 ## Main case: chunked prefill on Galaxy
 
-5K query chunk attending to 55K context. SP=8 shards queries (640/device),
-TP=4 within an SP group, K all-gathered to all devices. Indexer heads are
-**replicated** across TP ranks (cheap; avoids ~70 MB score all-reduce; all
-ranks deterministically agree on indices, which MLA's head shards require).
+5K query chunk attending to 50K history + itself: T = 51200 + 5120 = **56320**
+(55K, exactly 1760 tiles — no pad). SP=8 shards queries (640/device), K
+all-gathered; indexer heads replicated across TP (all ranks agree on indices).
 
-Per-device dims (T padded 55K → 55296):
+Per-device dims:
 
-| Tensor | Shape | Layout / dtype |
-|---|---|---|
-| in `q` | `[1, 64, 640, 128]` | TILE, bf16 |
-| in `k` | `[1, 1, 55296, 128]` | TILE, bf16 |
-| in `weights` | `[1, 64, 640, 1]` | TILE, bf16 |
-| out `score` | `[1, 1, 640, 55296]` | **ROW_MAJOR**, bf16 (~71 MB) |
+| Tensor | Shape | Tiles | Layout / dtype |
+|---|---|---|---|
+| in `q` | `[1, 64, 640, 128]` | 64 heads × 20×4 | TILE, bf16 |
+| in `k` | `[1, 1, 56320, 128]` | 1760×4 | TILE, bf16 (later bfp8_b) |
+| in `weights` | `[1, 64, 640, 1]` | 64 heads × 20×1 | TILE, bf16 |
+| out `score` | `[1, 1, 640, 56320]` | 20×1760 | **ROW_MAJOR**, bf16 (~72 MB) |
 
-In tiles: q = 64 heads × 20×4, k = 1728×4, score = 20×1728 before untilize.
+`chunk_start_idx = 51200 + sp_rank·640`.
 
-## Compute pipeline
+## Parallelization: flat deal of causal-valid output tiles
 
-Per output tile `[s_tile, t_tile]`, loop over the 64 heads:
+The op is **output-stationary**. Reasons:
 
-1. **`matmul_tiles`** — `q_h[s_tile, 0:4] × kᵀ[0:4, t_tile]`, the 4 inner
-   tiles (D=128) accumulate in DEST.
-2. **`relu_tile`** — SFPU, in place on DEST.
-3. **`mul_tiles_bcast_col`** — per-row scale by `w[h, s]` (column-vector
-   broadcast along T; the reason weights are laid out `[1, 64, 640, 1]`).
-4. **Accumulate** into an L1 CB across heads (packer L1-accumulate or
-   `add_tiles`).
+- the output (~72 MB) is the only large tensor — write each tile once, never
+  spill partials; q (10 MB) and k (14 MB) are cheap to re-read per core;
+- **heads are a reduction**, not a parallel dim: any input-side head split
+  needs a ~72 MB cross-core score reduction; an output split needs none;
+- work per valid output tile is uniform (H·Dt matmuls + relu + ×w), so dealing
+  equal tile counts is balanced compute, with no causal pathologies.
 
-After the last head: `copy_tile` accumulator → DEST, **`pack_untilize`** to
-emit row-major. No standalone untilize over 71 MB; downstream top-k consumes
-640 independent contiguous rows (~108 KB each — parallelizes trivially,
-streams without holding a row in L1).
+The host computes the valid tiles per row in closed form,
 
-Loop order: k-chunk outer, heads inner — `k` is the dominant read traffic
-(~0.9 GB/device, 64 head passes) and should be reused in L1; q is only ~10 MB.
+```
+valid(s)  = min(Tt, chunk_start/32 + s + 1)        # per q-tile-row
+V         = Σ_s valid(s)
+```
 
-**Note: pack-ReLU does not fit.** ReLU sits *between* matmul and the weight
-multiply, and `relu(x)·w ≠ relu(x·w)` since `weights_proj` outputs can be
-negative; the packer can't apply a per-row scalar after its ReLU. Packing
-after matmul would add a 64×-per-tile L1 round trip. ReLU stays on SFPU in
-DEST.
+and deals V evenly across cores **in row-major order** — the same flat split
+SDPA's program factory uses for global Q chunks. Per-core runtime args reduce
+to buffer addresses + `flat_unit_start/count` + `chunk_start`; kernels invert
+`valid(s)` locally. Fully-future and pad tiles are never assigned.
+
+Each core's flat span lands as 1–2 **segments**: contiguous (row, t-range)
+runs. GLX rank 0: V = 32,210 of 35,200 (91.5%), ~248 tiles per core /130;
+rank 7: V = 35,010 (99.5%), ~269. Cores compute their segments left→right;
+imbalance ≤ ±1 tile by construction (early-prefill triangles included).
+
+## Per-core loop (one Tensix)
+
+```
+for seg {row s, t_first..t_last}:
+    READER  q[h-block, s] + w[h-block, s] resident; k chunk (Kt×Dt) double-buffered
+    for kc in chunks of Kt:
+        zero acc (q_chunk×Kt fp32 CB)
+        for hb in head blocks:
+            for h: matmul q 1×Dt ⊗ k Dt×Kt → DEST (dest blocks of 8 fp32)
+                   SFPU fused relu·w[h]
+                   pack l1-acc → acc CB
+        if diagonal chunk: add −inf mask tile
+        pack_untilize acc → out CB → WRITER streams RM fragments
+    WRITER memsets row tail [chunk_start+s+1, T) to −inf if last valid owner
+```
+
+DRAM is read once per core (q ~0.5 MB/segment, k ~2 MB, out written once).
+Head re-reads are L1/unpack only: k unpacked once per chunk into srcB and
+reused across heads; per head q is 4 tiles. Roofline at HiFi2: math ~1472
+cyc/head/chunk vs unpack ~704 — **matmul-bound** (~60–76% FPU). Total ~2–2.6
+ms on BH 130 cores; tweaks: keep pack off the math path (half-sync 4-tile
+blocks or DEST-resident accumulation), fuse relu+scale into one SFPU pass.
+
+Heads may also be stacked into one matmul: 8 heads as tile rows ⊗ same k →
+8 DEST tiles, separate per head (sum still at pack-acc). Same matmul count;
+just `rt/ct` subblock shape.
+
+## Knobs
+
+| knob | meaning | default | range / notes |
+|---|---|---|---|
+| `q_chunk` | tile rows per work-unit row | 1 | DEST loops dest blocks, so any size; acc/out CBs scale ×Kt fp32; big values reduce parallel rows (Sqt/q_chunk × colgroups ≥ cores) |
+| `k_chunk` (Kt) | k tiles per streamed chunk | 16 bf16 / 32 bfp8 | only acc width + L1; bigger = fewer chunks, less q re-read |
+| `head_block` | heads resident at once | H if fits | floor 1 always fits; <H streams q per chunk (traffic = blocks×chunks×slice; grow Kt to amortize) |
+| grid / fidelity | cores; HiFi2→LoFi with bfp8 k | full, HiFi2 | |
+
+L1 (1464 KB): `2·Dt·Kt (k) + HB·QC·(Dt+1) (q+w) + QC·Kt fp32 acc + 2·QC·Kt out`.
+Defaults: 64h×4 q resident 512K + 128K w + 256K k + 64K acc + 64K out ≈ 1.0 MB.
+512-head model: head_block=64 streamed, Kt=64 — same kernel, no scheme change.
 
 ## Formats / fidelity
 
-- CBs / inputs: bf16 (later: `k` as bfp8_b — biggest bandwidth lever).
-- DEST: fp32 (`fp32_dest_acc_en`) — accumulating 64 heads in bf16 loses
-  bits, and the scores feed a discrete top-k cut.
-- Matmul fidelity: HiFi2 (reference scores in fp8; selection-only output).
-  HiFi4 only for first PCC bring-up.
-- Output: bf16 (fp32 packed to bf16 at the end; bf16 ±inf survives packing).
+- inputs bf16; `k` as bfp8_b is the biggest lever (halves k BW, Kt→32, LoFi).
+- DEST fp32 (`fp32_dest_acc_en`): 64-head sum, feeds discrete top-k cut.
+- HiFi2 (reference scores fp8; selection-only). HiFi4 first PCC bring-up only.
+- Output bf16; w stays bf16 (scales fp32-side in DEST).
 
-## Causality and masking — the `-inf` invariant
+## −inf invariant
 
-Causality from `chunk_start_idx = 50176 + sp_rank·640` — no mask tensor.
-Three regions along T per device:
+Skipped tiles never pass through the packer — the writer **memsets row tails
+to −inf** (rank0: 2,990 tiles ≈ 6 MB, <3% runtime; pattern:
+`moe_ungroup_rmw_writer.cpp`). Zeros are NOT safe: gates negative. RM partial-
+page writes from multiple cores are aligned (32-elem fragment = 64 B ≥ NoC
+align). Later: `valid_len` contract with top-k to skip the fill entirely.
 
-- keys `[0, 50176)`: fully visible, no masking, full compute (~97% of T);
-- trailing `[640, 5120]` band: ~20 diagonal tiles get an additive `{0,-inf}`
-  mask tile (`add_tiles`); fully-future tiles skip compute entirely;
-- pad columns `[55040, 55296)`: skip compute.
+## Validation
 
-**Hazard:** skipped tiles never pass through DEST or the packer, so nothing
-writes them — they must be explicitly `-inf`-filled (writer memset of RM row
-tails / fill pass), or the RM top-k will select garbage. Zeros are NOT safe:
-real scores can be negative (negative gates). Test this with negative
-weights so unmasked padding would win top-k.
-
-## Validation plan
-
-Single-chip tests, parametrized by `sp_rank` (SP enters the op only through
-`chunk_start_idx`, so each ring position is just a different scalar; no
-multi-device needed to validate the op — Galaxy only matters for what
-surrounds it: all-gather before, MLA after).
-
-- torch reference + comparison contract: -inf maps must match exactly
-  (anything ≤ bf16 lowest counts as masked), visible values by PCC ≥ 0.999
-  (element-exact is wrong: head-sum reduction order alone moves values ~1e-5).
-- ranks 0 and 7 are the boundary cases: rank 0 maximizes skipped future
-  tiles, rank 7 puts the causal diagonal flush against T.
-- ttnn bring-up on tile-aligned mini case first (Sq=64, T=256), then GLX.
+Single-chip, `sp_rank ∈ {0,7}` boundary cases via `chunk_start`; −inf maps
+exact, visible PCC ≥ 0.999 (0.99 with bfp8 k); negative weights so padding
+can't hide. Mini case Sq=64/T=256 first. Note: test constants need fixing,
+`GLX_T 55296 → 56320`, history `50176 → 51200`.
 
 ## Status
 
 Branch: `skrstic/dsa_indexer_score_op`.
 
-- [x] Test + torch reference: `tests/nightly/blackhole/sdpa/test_indexer_score.py`
-  (with ring-joint SDPA tests). One test, GLX dims, `sp_rank ∈ {0, 7}`;
-  test drives the ttnn op. Reference verified vs einsum and brute force
-  per element.
-- [x] Skeleton op `ttnn.experimental.deepseek.indexer_score` at
-  `ttnn/cpp/ttnn/operations/experimental/deepseek/indexer_score/`: host API,
-  device op (`is_causal` + `chunk_start_idx` attrs, input validation, RM bf16
-  output spec), empty program factory (no kernels), nanobind + CMake
-  registration. Compiles, dispatches at GLX dims, output is garbage — test
-  fails PCC as expected and is the bring-up gate.
-- [ ] real program factory (reader / compute / writer per pipeline above).
-- [ ] new row-major top-k (separate effort).
-- [ ] negative-weights topk-safety test once both exist (padding must not win).
+- [x] torch reference + test (`tests/nightly/blackhole/sdpa/test_indexer_score.py`)
+- [x] skeleton op, validation, RM out spec, nanobind, CMake; empty factory
+- [x] design (this doc); visualizations `indexer_score_viz.html`, `indexer_core0_viz.html`
+- [ ] fix test dims 55296 → 56320
+- [ ] program factory: flat valid-tile deal + runtime args
+- [ ] kernels: reader / compute (head-blocked, l1-acc, mask) / writer (−inf tails)
+- [ ] row-major top-k (separate); negative-weights topk-safety test
+- [ ] perf: bfp8 k + LoFi, fused relu·w, pack overlap
 
-## Out of scope (for now)
-
-Decode / paged k-cache variant, fp8/bfp8 inputs, fused score+topk — perf
-follow-ups, not needed for functionality.
+Out of scope: decode/paged variant, fused score+topk.
