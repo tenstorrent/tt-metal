@@ -167,6 +167,13 @@ def run(
         w_mem = ttnn.DRAM_MEMORY_CONFIG
         w_placement = None
 
+    # gamma must share the input's element type: an untraced weight leaves w_dtype
+    # None, so ttnn.from_torch would build a float32 gamma. ttnn.rms_norm with a
+    # float32 gamma on a bf16 input produces garbage (≈0 PCC), so default the gamma
+    # dtype to the input dtype.
+    if w_dtype is None:
+        w_dtype = input_a_dtype
+
     torch_input = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
         input_shape
     )
