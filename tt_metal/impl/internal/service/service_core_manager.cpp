@@ -122,7 +122,25 @@ std::vector<CoreCoord> ServiceCoreManager::get_claimable_cores(IDevice* device) 
         MetalContext::instance().rtoptions().get_fast_dispatch(),
         "get_claimable_cores() requires Fast Dispatch to be active. "
         "Call initialize_fast_dispatch() first.");
-    return MetalContext::instance().get_dispatch_core_manager().get_available_dispatch_cores(device->id());
+    // The dispatch-core manager only knows about FD's own allocations, not the
+    // service cores this manager has already handed out. Subtract our own claims
+    // so two services on the same device (e.g. chaining H2D in front of D2D) each
+    // get a distinct core instead of both picking the same front() and colliding
+    // at claim() time. Matches the documented contract ("not yet allocated to FD
+    // infra or claimed as service cores").
+    auto available = MetalContext::instance().get_dispatch_core_manager().get_available_dispatch_cores(device->id());
+    const auto claimed = claimed_cores(device->id());
+    if (claimed.empty()) {
+        return available;
+    }
+    std::vector<CoreCoord> out;
+    out.reserve(available.size());
+    for (const auto& core : available) {
+        if (!claimed.contains(core)) {
+            out.push_back(core);
+        }
+    }
+    return out;
 }
 
 void ServiceCoreManager::on_device_close(ChipId device_id) { impl_->devices.erase(device_id); }

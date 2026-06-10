@@ -21,6 +21,7 @@
 //   * >= 2x2 mesh: a sender/receiver pair needs two distinct submeshes
 //     (1x1<->1x1 for single-chip cases; 1x2<->1x2 for multi-socket cases).
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -51,8 +52,10 @@
 
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/tensor/d2d_stream_service.hpp"
+#include "ttnn/tensor/socket_services.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::distributed::test {
@@ -74,6 +77,7 @@ using ::tt::tt_metal::DataMovementConfig;
 using ::tt::tt_metal::DataMovementProcessor;
 using ::tt::tt_metal::DataType;
 using ::tt::tt_metal::DeviceAddr;
+using ::tt::tt_metal::H2DStreamService;
 using ::tt::tt_metal::Layout;
 using ::tt::tt_metal::MemoryConfig;
 using ::tt::tt_metal::NOC;
@@ -675,6 +679,412 @@ void verify_metadata_reuse(
     }
 }
 
+// ===========================================================================
+// Part A: real receiver consumer (D2D -> Host). A consumer worker reads its page
+// slice of the receiver backing tensor into a SEPARATE output tensor; the host
+// validates the output tensor (not the backing tensor). See
+// notes/d2d_test_flow_vs_realistic_workload.md.
+// ===========================================================================
+
+// Row-major worker index within a CoreRange (robust to iterator order).
+uint32_t worker_index(const CoreCoord& wc, const CoreRange& worker_cores) {
+    const uint32_t width = worker_cores.end_coord.x - worker_cores.start_coord.x + 1;
+    return (wc.y - worker_cores.start_coord.y) * width + (wc.x - worker_cores.start_coord.x);
+}
+
+// Per-worker [start_page, end_page) over num_pages, distributing the remainder to
+// the first `rem` workers. Empty ranges (num_pages < num_workers) are valid: that
+// worker copies nothing but still handshakes, so the service's num_workers ack
+// count is always satisfied.
+std::pair<uint32_t, uint32_t> worker_page_range(uint32_t worker_idx, uint32_t num_workers, uint32_t num_pages) {
+    const uint32_t base = num_pages / num_workers;
+    const uint32_t rem = num_pages % num_workers;
+    const uint32_t start = worker_idx * base + std::min(worker_idx, rem);
+    const uint32_t end = start + base + (worker_idx < rem ? 1u : 0u);
+    return {start, end};
+}
+
+// Build a receiver-side CONSUMER worker workload: one program per coord. Each
+// worker copies its page slice of the receiver backing tensor into `output_tensor`
+// (same spec) and runs the receiver handshake num_iters times. Grid-agnostic.
+MeshWorkload make_receiver_consumer_workload(
+    D2DStreamServiceReceiver* receiver,
+    const std::shared_ptr<MeshDevice>& mesh,
+    const tt::tt_metal::Tensor& output_tensor,
+    uint32_t num_iters) {
+    const auto& coords = receiver->get_backing_tensor().tensor_topology().mesh_coords();
+    const auto* backing_buffer = receiver->get_backing_tensor().buffer();
+    const uint32_t page_size = backing_buffer->aligned_page_size();
+    const uint32_t num_pages = backing_buffer->num_pages();
+    const CoreRange worker_cores = receiver->get_worker_cores();
+    const uint32_t num_workers = core_range_volume(worker_cores);
+    constexpr auto kScratchCb = CBIndex::c_0;
+
+    const uint32_t input_addr = static_cast<uint32_t>(backing_buffer->address());
+    const uint32_t output_addr = static_cast<uint32_t>(output_tensor.buffer()->address());
+
+    MeshWorkload workload;
+    for (const auto& coord : coords) {
+        auto program = CreateProgram();
+
+        auto cb_cfg = CircularBufferConfig(page_size, {{kScratchCb, tt::DataFormat::UInt32}})
+                          .set_page_size(kScratchCb, page_size);
+        CreateCircularBuffer(program, worker_cores, cb_cfg);
+
+        const auto* dbuf = receiver->get_backing_tensor().mesh_buffer().get_device_buffer(coord);
+        auto accessor_ct = TensorAccessorArgs(*dbuf).get_compile_time_args();
+        std::vector<uint32_t> ct_args = {
+            static_cast<uint32_t>(receiver->get_data_ready_sem_addr()),
+            input_addr,
+            output_addr,
+            page_size,
+            num_iters,
+            static_cast<uint32_t>(kScratchCb),
+        };
+        ct_args.insert(ct_args.end(), accessor_ct.begin(), accessor_ct.end());
+
+        auto kernel = CreateKernel(
+            program,
+            "tests/ttnn/unit_tests/gtests/tensor/kernels/d2d_receiver_consumer_worker.cpp",
+            worker_cores,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = ct_args});
+
+        auto* device = mesh->get_device(coord);
+        const auto service_phys = device->worker_core_from_logical_core(receiver->get_service_core(coord));
+        for (const auto& wc : worker_cores) {
+            const auto [start_page, end_page] =
+                worker_page_range(worker_index(wc, worker_cores), num_workers, num_pages);
+            const std::vector<uint32_t> rt_args = {
+                start_page,
+                end_page,
+                static_cast<uint32_t>(receiver->get_consumed_counter_addr(coord)),
+                static_cast<uint32_t>(service_phys.x),
+                static_cast<uint32_t>(service_phys.y),
+            };
+            SetRuntimeArgs(program, kernel, wc, rt_args);
+        }
+        workload.add_program(MeshCoordinateRange(coord), std::move(program));
+    }
+    return workload;
+}
+
+// Assert `output_tensor` holds `value` uniformly on every coord.
+void expect_output_tensor_equals(
+    const tt::tt_metal::Tensor& output_tensor, const std::shared_ptr<MeshDevice>& mesh, uint32_t value) {
+    auto mesh_buffer = output_tensor.device_storage().get_mesh_buffer_leak_ownership();
+    const size_t num_u32 = output_tensor.buffer()->size() / sizeof(uint32_t);
+    const std::vector<uint32_t> expected(num_u32, value);
+    std::vector<uint32_t> readback;
+    for (const auto& coord : output_tensor.tensor_topology().mesh_coords()) {
+        readback.clear();
+        ReadShard(mesh->mesh_command_queue(), readback, mesh_buffer, coord);
+        EXPECT_EQ(readback, expected) << "output tensor mismatch at " << coord << " (expected " << value << ")";
+    }
+}
+
+// Part A driver: real consumer end-to-end (no H2D). The existing placeholder
+// sender worker produces value (fill_base + iter) into the sender backing tensor;
+// the receiver consumer copies the landed data into a separate output tensor. The
+// final value (fill_base + num_iters - 1) must appear in the output tensor on
+// every coord. With metadata enabled, the {-1,0,final} blob must also land on the
+// sender service core and every receiver worker core.
+void verify_receiver_consume(
+    const std::shared_ptr<MeshDevice>& sender_mesh,
+    const std::shared_ptr<MeshDevice>& receiver_mesh,
+    const ttnn::Shape& global_shape,
+    const CoreRange& worker_cores,
+    uint32_t num_iters,
+    uint32_t metadata_size_bytes = 0) {
+    constexpr uint32_t kFillBase = 1u;
+    auto cfg = make_config(sender_mesh, global_shape);
+    cfg.sender_worker_cores = worker_cores;
+    cfg.receiver_worker_cores = worker_cores;
+    cfg.metadata_size_bytes = metadata_size_bytes;
+    auto [sender, receiver] = D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg));
+
+    auto output_tensor = tt::tt_metal::create_device_tensor(
+        receiver->get_backing_tensor().tensor_spec(),
+        receiver_mesh.get(),
+        receiver->get_backing_tensor().tensor_topology());
+
+    auto consumer_workload = make_receiver_consumer_workload(receiver.get(), receiver_mesh, output_tensor, num_iters);
+    auto sender_workload =
+        make_sender_worker_workload(sender.get(), sender_mesh, num_iters, kFillBase, metadata_size_bytes);
+
+    EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), consumer_workload, /*blocking=*/false);
+    EnqueueMeshWorkload(sender_mesh->mesh_command_queue(), sender_workload, /*blocking=*/false);
+    Finish(sender_mesh->mesh_command_queue());
+    Finish(receiver_mesh->mesh_command_queue());
+
+    const uint32_t final_value = kFillBase + num_iters - 1;
+    expect_output_tensor_equals(output_tensor, receiver_mesh, final_value);
+    if (metadata_size_bytes > 0) {
+        expect_metadata_everywhere(
+            sender.get(), receiver.get(), sender_mesh, receiver_mesh, {static_cast<uint32_t>(-1), 0u, final_value});
+    }
+}
+
+// Part A reuse: build the pair once, drive num_rounds single-transfer rounds with
+// distinct seeds against the same persistent service + a reused output tensor,
+// verifying each round. Catches early kernel exit / stale-buffer reuse.
+void verify_receiver_consume_reuse(
+    const std::shared_ptr<MeshDevice>& sender_mesh,
+    const std::shared_ptr<MeshDevice>& receiver_mesh,
+    const ttnn::Shape& global_shape,
+    const CoreRange& worker_cores,
+    uint32_t num_rounds,
+    uint32_t metadata_size_bytes = 0) {
+    auto cfg = make_config(sender_mesh, global_shape);
+    cfg.sender_worker_cores = worker_cores;
+    cfg.receiver_worker_cores = worker_cores;
+    cfg.metadata_size_bytes = metadata_size_bytes;
+    auto [sender, receiver] = D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg));
+
+    auto output_tensor = tt::tt_metal::create_device_tensor(
+        receiver->get_backing_tensor().tensor_spec(),
+        receiver_mesh.get(),
+        receiver->get_backing_tensor().tensor_topology());
+
+    for (uint32_t round = 0; round < num_rounds; ++round) {
+        const uint32_t seed = 0x1000u + round * 0x111u;
+        auto consumer_workload =
+            make_receiver_consumer_workload(receiver.get(), receiver_mesh, output_tensor, /*num_iters=*/1);
+        auto sender_workload = make_sender_worker_workload(
+            sender.get(), sender_mesh, /*num_iters=*/1, /*fill_base=*/seed, metadata_size_bytes);
+        EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), consumer_workload, /*blocking=*/false);
+        EnqueueMeshWorkload(sender_mesh->mesh_command_queue(), sender_workload, /*blocking=*/false);
+        Finish(sender_mesh->mesh_command_queue());
+        Finish(receiver_mesh->mesh_command_queue());
+
+        expect_output_tensor_equals(output_tensor, receiver_mesh, seed);
+        if (metadata_size_bytes > 0) {
+            expect_metadata_everywhere(
+                sender.get(), receiver.get(), sender_mesh, receiver_mesh, {static_cast<uint32_t>(-1), 0u, seed});
+        }
+    }
+}
+
+// ===========================================================================
+// Part B: H2D front-end (Host -> H2D -> bridge -> D2D -> Host). A bridge worker on
+// the sender mesh drains the H2D backing tensor into the D2D sender backing tensor
+// and drives both handshakes; the receiver consumer (Part A) lands the result in
+// an output tensor the host validates.
+// ===========================================================================
+
+// Build the bridge worker workload on the sender mesh: one program per coord. Each
+// worker copies its page slice of the H2D backing tensor into the D2D sender
+// backing tensor and runs both handshakes num_iters times. The designated
+// (highest-id) worker forwards the metadata from its L1 to the D2D sender service.
+MeshWorkload make_bridge_workload(
+    H2DStreamService& h2d_service,
+    D2DStreamServiceSender* d2d_sender,
+    const std::shared_ptr<MeshDevice>& mesh,
+    const CoreRange& worker_cores,
+    uint32_t num_iters,
+    uint32_t metadata_size_bytes) {
+    const auto& coords = d2d_sender->get_backing_tensor().tensor_topology().mesh_coords();
+    const auto* backing_buffer = d2d_sender->get_backing_tensor().buffer();
+    const uint32_t page_size = backing_buffer->aligned_page_size();
+    const uint32_t num_pages = backing_buffer->num_pages();
+    const uint32_t num_workers = core_range_volume(worker_cores);
+    const bool metadata_enabled = metadata_size_bytes > 0;
+    constexpr auto kScratchCb = CBIndex::c_0;
+
+    const uint32_t h2d_input_addr = static_cast<uint32_t>(h2d_service.get_backing_tensor().buffer()->address());
+    const uint32_t d2d_backing_addr = static_cast<uint32_t>(backing_buffer->address());
+    const uint32_t h2d_metadata_l1_addr =
+        metadata_enabled ? static_cast<uint32_t>(h2d_service.get_metadata_addr()) : 0u;
+
+    MeshWorkload workload;
+    for (const auto& coord : coords) {
+        auto program = CreateProgram();
+
+        auto cb_cfg = CircularBufferConfig(page_size, {{kScratchCb, tt::DataFormat::UInt32}})
+                          .set_page_size(kScratchCb, page_size);
+        CreateCircularBuffer(program, worker_cores, cb_cfg);
+
+        const auto* dbuf = d2d_sender->get_backing_tensor().mesh_buffer().get_device_buffer(coord);
+        auto accessor_ct = TensorAccessorArgs(*dbuf).get_compile_time_args();
+        std::vector<uint32_t> ct_args = {
+            static_cast<uint32_t>(h2d_service.get_data_ready_sem_addr()),
+            h2d_input_addr,
+            d2d_backing_addr,
+            page_size,
+            num_iters,
+            static_cast<uint32_t>(kScratchCb),
+            static_cast<uint32_t>(d2d_sender->get_consumed_sem_addr()),
+            metadata_enabled ? 1u : 0u,
+            metadata_size_bytes,
+            h2d_metadata_l1_addr,
+        };
+        ct_args.insert(ct_args.end(), accessor_ct.begin(), accessor_ct.end());
+
+        auto kernel = CreateKernel(
+            program,
+            "tests/ttnn/unit_tests/gtests/tensor/kernels/h2d_d2d_bridge_worker.cpp",
+            worker_cores,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = ct_args});
+
+        auto* device = mesh->get_device(coord);
+        const auto h2d_service_phys = device->worker_core_from_logical_core(h2d_service.get_service_core(coord));
+        const auto d2d_service_phys = device->worker_core_from_logical_core(d2d_sender->get_service_core(coord));
+        const uint32_t d2d_md_addr =
+            metadata_enabled ? static_cast<uint32_t>(d2d_sender->get_metadata_addr(coord)) : 0u;
+        for (const auto& wc : worker_cores) {
+            const auto [start_page, end_page] =
+                worker_page_range(worker_index(wc, worker_cores), num_workers, num_pages);
+            const uint32_t is_metadata_writer = (metadata_enabled && wc == worker_cores.end_coord) ? 1u : 0u;
+            const std::vector<uint32_t> rt_args = {
+                start_page,
+                end_page,
+                static_cast<uint32_t>(h2d_service.get_consumed_counter_addr(coord)),
+                static_cast<uint32_t>(h2d_service_phys.x),
+                static_cast<uint32_t>(h2d_service_phys.y),
+                static_cast<uint32_t>(d2d_sender->get_data_ready_counter_addr(coord)),
+                static_cast<uint32_t>(d2d_service_phys.x),
+                static_cast<uint32_t>(d2d_service_phys.y),
+                is_metadata_writer,
+                d2d_md_addr,
+            };
+            SetRuntimeArgs(program, kernel, wc, rt_args);
+        }
+        workload.add_program(MeshCoordinateRange(coord), std::move(program));
+    }
+    return workload;
+}
+
+// Build an H2D service on the sender mesh sized to one full global tensor per push.
+std::unique_ptr<H2DStreamService> make_h2d_service(
+    const std::shared_ptr<MeshDevice>& sender_mesh,
+    const TensorSpec& global_spec,
+    const CoreRange& worker_cores,
+    uint32_t metadata_size_bytes) {
+    const uint32_t total_bytes = static_cast<uint32_t>(global_spec.logical_shape().volume() * sizeof(uint32_t));
+    H2DStreamService::Config h2d_cfg{
+        .global_spec = global_spec,
+        .mapper = create_mesh_mapper(*sender_mesh, MeshMapperConfig{.placements = replicate_all(*sender_mesh)}),
+        .socket_buffer_type = BufferType::L1,
+        .fifo_size_bytes = total_bytes,
+        .scratch_cb_size_bytes = total_bytes,
+        .worker_cores = worker_cores,
+        .metadata_size_bytes = metadata_size_bytes,
+    };
+    return std::make_unique<H2DStreamService>(sender_mesh, std::move(h2d_cfg));
+}
+
+// Push one token (uniform `value`) + its {-1,0,value} metadata through the H2D
+// service. A zero-length metadata span when disabled.
+void h2d_push_token(H2DStreamService& h2d_service, uint32_t num_u32, uint32_t value, uint32_t metadata_size_bytes) {
+    std::vector<uint32_t> token(num_u32, value);
+    const std::vector<uint32_t> meta_words = {static_cast<uint32_t>(-1), 0u, value};
+    const auto bytes =
+        ttsl::Span<const std::byte>(reinterpret_cast<const std::byte*>(token.data()), token.size() * sizeof(uint32_t));
+    const auto meta =
+        ttsl::Span<const std::byte>(reinterpret_cast<const std::byte*>(meta_words.data()), metadata_size_bytes);
+    h2d_service.forward_to_tensor(bytes, meta);
+}
+
+// Part B driver: full Host -> H2D -> bridge -> D2D -> consumer -> Host chain. The
+// host streams num_iters tokens (value fill_base+i); the final value must appear
+// in the receiver output tensor, with metadata {-1,0,final} on the sender service
+// core and every receiver worker core when enabled.
+void verify_h2d_d2d_bridge(
+    const std::shared_ptr<MeshDevice>& sender_mesh,
+    const std::shared_ptr<MeshDevice>& receiver_mesh,
+    const ttnn::Shape& global_shape,
+    const CoreRange& worker_cores,
+    uint32_t num_iters,
+    uint32_t metadata_size_bytes = 0) {
+    constexpr uint32_t kFillBase = 1u;
+    const bool metadata_enabled = metadata_size_bytes > 0;
+
+    const auto global_spec = make_config(sender_mesh, global_shape).global_spec;
+    auto h2d_service = make_h2d_service(sender_mesh, global_spec, worker_cores, metadata_size_bytes);
+
+    auto cfg = make_config(sender_mesh, global_shape);
+    cfg.sender_worker_cores = worker_cores;
+    cfg.receiver_worker_cores = worker_cores;
+    cfg.metadata_size_bytes = metadata_size_bytes;
+    auto [sender, receiver] = D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg));
+
+    auto output_tensor = tt::tt_metal::create_device_tensor(
+        receiver->get_backing_tensor().tensor_spec(),
+        receiver_mesh.get(),
+        receiver->get_backing_tensor().tensor_topology());
+
+    auto consumer_workload = make_receiver_consumer_workload(receiver.get(), receiver_mesh, output_tensor, num_iters);
+    auto bridge_workload =
+        make_bridge_workload(*h2d_service, sender.get(), sender_mesh, worker_cores, num_iters, metadata_size_bytes);
+
+    EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), consumer_workload, /*blocking=*/false);
+    EnqueueMeshWorkload(sender_mesh->mesh_command_queue(), bridge_workload, /*blocking=*/false);
+
+    const uint32_t num_u32 = static_cast<uint32_t>(global_shape.volume());
+    for (uint32_t i = 0; i < num_iters; ++i) {
+        h2d_push_token(*h2d_service, num_u32, kFillBase + i, metadata_size_bytes);
+    }
+    h2d_service->barrier();
+    Finish(sender_mesh->mesh_command_queue());
+    Finish(receiver_mesh->mesh_command_queue());
+
+    const uint32_t final_value = kFillBase + num_iters - 1;
+    expect_output_tensor_equals(output_tensor, receiver_mesh, final_value);
+    if (metadata_enabled) {
+        expect_metadata_everywhere(
+            sender.get(), receiver.get(), sender_mesh, receiver_mesh, {static_cast<uint32_t>(-1), 0u, final_value});
+    }
+}
+
+// Part B reuse: build the H2D service + D2D pair once, drive num_rounds rounds with
+// distinct seeds (re-enqueue the bridge + consumer per round), verifying each.
+void verify_h2d_d2d_bridge_reuse(
+    const std::shared_ptr<MeshDevice>& sender_mesh,
+    const std::shared_ptr<MeshDevice>& receiver_mesh,
+    const ttnn::Shape& global_shape,
+    const CoreRange& worker_cores,
+    uint32_t num_rounds,
+    uint32_t metadata_size_bytes = 0) {
+    const bool metadata_enabled = metadata_size_bytes > 0;
+
+    const auto global_spec = make_config(sender_mesh, global_shape).global_spec;
+    auto h2d_service = make_h2d_service(sender_mesh, global_spec, worker_cores, metadata_size_bytes);
+
+    auto cfg = make_config(sender_mesh, global_shape);
+    cfg.sender_worker_cores = worker_cores;
+    cfg.receiver_worker_cores = worker_cores;
+    cfg.metadata_size_bytes = metadata_size_bytes;
+    auto [sender, receiver] = D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg));
+
+    auto output_tensor = tt::tt_metal::create_device_tensor(
+        receiver->get_backing_tensor().tensor_spec(),
+        receiver_mesh.get(),
+        receiver->get_backing_tensor().tensor_topology());
+
+    const uint32_t num_u32 = static_cast<uint32_t>(global_shape.volume());
+    for (uint32_t round = 0; round < num_rounds; ++round) {
+        const uint32_t seed = 0x1000u + round * 0x111u;
+        auto consumer_workload =
+            make_receiver_consumer_workload(receiver.get(), receiver_mesh, output_tensor, /*num_iters=*/1);
+        auto bridge_workload = make_bridge_workload(
+            *h2d_service, sender.get(), sender_mesh, worker_cores, /*num_iters=*/1, metadata_size_bytes);
+        EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), consumer_workload, /*blocking=*/false);
+        EnqueueMeshWorkload(sender_mesh->mesh_command_queue(), bridge_workload, /*blocking=*/false);
+
+        h2d_push_token(*h2d_service, num_u32, seed, metadata_size_bytes);
+        h2d_service->barrier();
+        Finish(sender_mesh->mesh_command_queue());
+        Finish(receiver_mesh->mesh_command_queue());
+
+        expect_output_tensor_equals(output_tensor, receiver_mesh, seed);
+        if (metadata_enabled) {
+            expect_metadata_everywhere(
+                sender.get(), receiver.get(), sender_mesh, receiver_mesh, {static_cast<uint32_t>(-1), 0u, seed});
+        }
+    }
+}
+
 // 1x1 <-> 1x1 (single chip each).
 TEST_F(D2DStreamServiceTest, CreatableSingleChipPair) {
     if (!service_cores_supported()) {
@@ -1029,6 +1439,230 @@ TEST_F(D2DStreamServiceTest, MetadataReuse4Cores) {
     auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
     verify_metadata_reuse(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), kWorkerCores4, /*num_rounds=*/4);
+}
+
+// ===========================================================================
+// Part A tests: real receiver consumer (D2D -> Host).
+// ===========================================================================
+
+// Single worker core: the consumer copies the whole landed tensor into the output
+// tensor over several iterations.
+TEST_F(D2DStreamServiceTest, ReceiverConsume1Core) {
+    if (!service_cores_supported()) {
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
+    }
+    const auto shape = this->mesh_device_->shape();
+    if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {
+        GTEST_SKIP() << "Need a 2D mesh with >= 2 devices to carve distinct submeshes; got " << shape;
+    }
+    const auto coord0 = MeshCoordinate(0, 0);
+    const auto coord1 = (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0);
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
+    verify_receiver_consume(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), kWorkerCores, /*num_iters=*/4);
+}
+
+// 4 cores with a page count NOT divisible by 4 (30 pages) to exercise the
+// partition remainder branch (first 2 workers carry one extra page).
+TEST_F(D2DStreamServiceTest, ReceiverConsume4Cores) {
+    if (!service_cores_supported()) {
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
+    }
+    const auto shape = this->mesh_device_->shape();
+    if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {
+        GTEST_SKIP() << "Need a 2D mesh with >= 2 devices to carve distinct submeshes; got " << shape;
+    }
+    const auto coord0 = MeshCoordinate(0, 0);
+    const auto coord1 = (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0);
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
+    verify_receiver_consume(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 30, 64}), kWorkerCores4, /*num_iters=*/3);
+}
+
+// Full worker grid (the realistic case). num_pages < num_workers exercises the
+// empty-range workers (they still handshake).
+TEST_F(D2DStreamServiceTest, ReceiverConsumeAllCores) {
+    if (!service_cores_supported()) {
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
+    }
+    const auto shape = this->mesh_device_->shape();
+    if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {
+        GTEST_SKIP() << "Need a 2D mesh with >= 2 devices to carve distinct submeshes; got " << shape;
+    }
+    const auto coord0 = MeshCoordinate(0, 0);
+    const auto coord1 = (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0);
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
+    const auto grid = receiver_mesh->compute_with_storage_grid_size();
+    const CoreRange all_cores{CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}};
+    verify_receiver_consume(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), all_cores, /*num_iters=*/4);
+}
+
+// Full grid + metadata: the {-1,0,final} blob must land on the sender service core
+// and every receiver worker core, alongside the consumed output tensor.
+TEST_F(D2DStreamServiceTest, ReceiverConsumeMetadataAllCores) {
+    if (!service_cores_supported()) {
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
+    }
+    const auto shape = this->mesh_device_->shape();
+    if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {
+        GTEST_SKIP() << "Need a 2D mesh with >= 2 devices to carve distinct submeshes; got " << shape;
+    }
+    const auto coord0 = MeshCoordinate(0, 0);
+    const auto coord1 = (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0);
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
+    const auto grid = receiver_mesh->compute_with_storage_grid_size();
+    const CoreRange all_cores{CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}};
+    verify_receiver_consume(
+        sender_mesh,
+        receiver_mesh,
+        ttnn::Shape({1, 1, 32, 64}),
+        all_cores,
+        /*num_iters=*/4,
+        /*metadata_size_bytes=*/3u * sizeof(uint32_t));
+}
+
+// Full grid + reuse: build once, drive several rounds with distinct seeds.
+TEST_F(D2DStreamServiceTest, ReceiverConsumeReuseAllCores) {
+    if (!service_cores_supported()) {
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
+    }
+    const auto shape = this->mesh_device_->shape();
+    if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {
+        GTEST_SKIP() << "Need a 2D mesh with >= 2 devices to carve distinct submeshes; got " << shape;
+    }
+    const auto coord0 = MeshCoordinate(0, 0);
+    const auto coord1 = (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0);
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
+    const auto grid = receiver_mesh->compute_with_storage_grid_size();
+    const CoreRange all_cores{CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}};
+    verify_receiver_consume_reuse(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), all_cores, /*num_rounds=*/4);
+}
+
+// Multi-device variant: mirrors the existing RowPair setup (1x2 <-> 1x2).
+TEST_F(D2DStreamServiceTest, ReceiverConsumeRowPair) {
+    if (!service_cores_supported()) {
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
+    }
+    const auto shape = this->mesh_device_->shape();
+    if (shape.dims() != 2 || shape[0] < 2 || shape[1] < 2) {
+        GTEST_SKIP() << "Need a >= 2x2 mesh to carve 1x2 <-> 1x2 submeshes; got " << shape;
+    }
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(0, 0));
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(1, 0));
+    verify_receiver_consume(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), kWorkerCores, /*num_iters=*/4);
+}
+
+// ===========================================================================
+// Part B tests: full Host -> H2D -> bridge -> D2D -> consumer -> Host chain.
+// ===========================================================================
+
+// Single worker core: one bridge core drains the whole tensor H2D -> D2D.
+TEST_F(D2DStreamServiceTest, H2DtoD2DBridge1Core) {
+    if (!service_cores_supported()) {
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
+    }
+    const auto shape = this->mesh_device_->shape();
+    if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {
+        GTEST_SKIP() << "Need a 2D mesh with >= 2 devices to carve distinct submeshes; got " << shape;
+    }
+    const auto coord0 = MeshCoordinate(0, 0);
+    const auto coord1 = (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0);
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
+    verify_h2d_d2d_bridge(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), kWorkerCores, /*num_iters=*/4);
+}
+
+// 4 cores with a page count NOT divisible by 4 (30 pages) — partition remainder.
+TEST_F(D2DStreamServiceTest, H2DtoD2DBridge4Cores) {
+    if (!service_cores_supported()) {
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
+    }
+    const auto shape = this->mesh_device_->shape();
+    if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {
+        GTEST_SKIP() << "Need a 2D mesh with >= 2 devices to carve distinct submeshes; got " << shape;
+    }
+    const auto coord0 = MeshCoordinate(0, 0);
+    const auto coord1 = (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0);
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
+    verify_h2d_d2d_bridge(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 30, 64}), kWorkerCores4, /*num_iters=*/3);
+}
+
+// Full worker grid (the realistic case).
+TEST_F(D2DStreamServiceTest, H2DtoD2DBridgeAllCores) {
+    if (!service_cores_supported()) {
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
+    }
+    const auto shape = this->mesh_device_->shape();
+    if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {
+        GTEST_SKIP() << "Need a 2D mesh with >= 2 devices to carve distinct submeshes; got " << shape;
+    }
+    const auto coord0 = MeshCoordinate(0, 0);
+    const auto coord1 = (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0);
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
+    const auto grid = receiver_mesh->compute_with_storage_grid_size();
+    const CoreRange all_cores{CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}};
+    verify_h2d_d2d_bridge(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), all_cores, /*num_iters=*/4);
+}
+
+// Full grid + metadata end-to-end through both services.
+TEST_F(D2DStreamServiceTest, H2DtoD2DBridgeMetadataAllCores) {
+    if (!service_cores_supported()) {
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
+    }
+    const auto shape = this->mesh_device_->shape();
+    if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {
+        GTEST_SKIP() << "Need a 2D mesh with >= 2 devices to carve distinct submeshes; got " << shape;
+    }
+    const auto coord0 = MeshCoordinate(0, 0);
+    const auto coord1 = (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0);
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
+    const auto grid = receiver_mesh->compute_with_storage_grid_size();
+    const CoreRange all_cores{CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}};
+    verify_h2d_d2d_bridge(
+        sender_mesh,
+        receiver_mesh,
+        ttnn::Shape({1, 1, 32, 64}),
+        all_cores,
+        /*num_iters=*/4,
+        /*metadata_size_bytes=*/3u * sizeof(uint32_t));
+}
+
+// Full grid + reuse: build the chain once, drive several rounds.
+TEST_F(D2DStreamServiceTest, H2DtoD2DBridgeReuseAllCores) {
+    if (!service_cores_supported()) {
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
+    }
+    const auto shape = this->mesh_device_->shape();
+    if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {
+        GTEST_SKIP() << "Need a 2D mesh with >= 2 devices to carve distinct submeshes; got " << shape;
+    }
+    const auto coord0 = MeshCoordinate(0, 0);
+    const auto coord1 = (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0);
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
+    const auto grid = receiver_mesh->compute_with_storage_grid_size();
+    const CoreRange all_cores{CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}};
+    verify_h2d_d2d_bridge_reuse(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), all_cores, /*num_rounds=*/4);
+}
+
+// Multi-device variant: mirrors the existing RowPair setup (1x2 <-> 1x2).
+TEST_F(D2DStreamServiceTest, H2DtoD2DBridgeRowPair) {
+    if (!service_cores_supported()) {
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
+    }
+    const auto shape = this->mesh_device_->shape();
+    if (shape.dims() != 2 || shape[0] < 2 || shape[1] < 2) {
+        GTEST_SKIP() << "Need a >= 2x2 mesh to carve 1x2 <-> 1x2 submeshes; got " << shape;
+    }
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(0, 0));
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 2), MeshCoordinate(1, 0));
+    verify_h2d_d2d_bridge(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), kWorkerCores, /*num_iters=*/4);
 }
 
 }  // namespace
