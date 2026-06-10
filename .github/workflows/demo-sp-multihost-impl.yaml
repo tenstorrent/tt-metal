@@ -175,7 +175,7 @@ jobs:
         with:
           directory: /ci/ttrun
           allocationConfigPath: /etc/ttop
-          mgd: ${{ needs.load-test-matrix.outputs.mgd_content || '' }}
+          mgd: ${{ inputs.sp-config != 'sp1-mgd' && needs.load-test-matrix.outputs.mgd_content || '' }}
           copyToWorkers: false
 
       - name: 📦 Download Build Artifact
