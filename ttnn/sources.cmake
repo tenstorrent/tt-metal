@@ -41,7 +41,8 @@ set(TTNN_CORE_SRCS
     core/tensor/tensor_attributes.cpp
     core/tensor/tensor_impl.cpp
     core/tensor/tensor_ops.cpp
-    core/tensor/socket_services.cpp
+    core/services/h2d_socket_service.cpp
+    core/services/d2h_socket_service.cpp
     cpp/ttnn/operations/experimental/core_subset_write/copy_to_device_filtered.cpp
     core/tensor/tensor_utils.cpp
     core/tensor/unit_mesh/unit_mesh_utils.cpp
