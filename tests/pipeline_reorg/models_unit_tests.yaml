@@ -566,7 +566,7 @@
     bh_p150:
       timeout: 45
       tier: 1
-    bh_p300:
+    bh_quietbox_2:
       timeout: 55
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee

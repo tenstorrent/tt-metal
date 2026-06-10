@@ -1148,6 +1148,10 @@ wh_glx_unit_test_params = pytest.mark.parametrize(
     ],
 )
 @pytest.mark.parametrize("mesh_device, num_links", [mesh_device_map["wh_glx"]], ids=["8x4"], indirect=["mesh_device"])
+@pytest.mark.skipif(
+    ttnn.cluster.get_cluster_type() not in (ttnn.cluster.ClusterType.GALAXY, ttnn.cluster.ClusterType.TG),
+    reason="test_ring_joint_sdpa_dit_wh_glx requires a Wormhole Galaxy (6U/TG) cluster",
+)
 def test_ring_joint_sdpa_dit_wh_glx(
     mesh_device,
     input_shape,
