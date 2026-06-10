@@ -33,6 +33,33 @@ def _make_fp32_to_int32_input(shape):
 
 
 @pytest.mark.parametrize(
+    "tt_input_dtype, tt_output_dtype, expected",
+    [
+        (ttnn.int32, ttnn.uint16, (-1000, 80000)),
+        (ttnn.uint32, ttnn.uint16, (0, 80000)),
+        (ttnn.int32, ttnn.uint32, (-1000, 80000)),
+        (ttnn.int32, ttnn.uint8, (-512, 512)),
+        (ttnn.uint16, ttnn.uint8, (0, 512)),
+        (ttnn.uint32, ttnn.uint8, (0, 512)),
+        (ttnn.uint16, ttnn.uint32, (0, 65535)),
+        (ttnn.uint16, ttnn.int32, (0, 65535)),
+        (ttnn.bfloat16, ttnn.uint8, (-512, 512)),
+        (ttnn.bfloat16, ttnn.uint16, (-1000, 80000)),
+        (ttnn.bfloat16, ttnn.bfloat16, (0, 100)),
+    ],
+)
+def test_typecast_test_input_bounds(tt_input_dtype, tt_output_dtype, expected):
+    assert typecast_test_input_bounds(tt_input_dtype, tt_output_dtype) == expected
+
+
+def test_typecast_test_input_bounds_unsigned_high_never_exceeds_input_max():
+    for tt_output_dtype in (ttnn.uint32, ttnn.int32, ttnn.uint16, ttnn.uint8):
+        low, high = typecast_test_input_bounds(ttnn.uint16, tt_output_dtype)
+        assert low == 0
+        assert high <= 65535
+
+
+@pytest.mark.parametrize(
     "pt_input_dtype, tt_input_dtype, tt_output_dtype",
     (
         (torch.bfloat16, ttnn.bfloat16, ttnn.float32),
