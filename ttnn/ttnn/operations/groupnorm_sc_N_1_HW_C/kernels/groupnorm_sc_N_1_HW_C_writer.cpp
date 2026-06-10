@@ -60,13 +60,24 @@ void kernel_main() {
             }
         }
     } else {
+        // Cluster path: cluster width varies (capped last cluster), so drain
+        // per tile — uniform 1-page frames can never straddle the buffer end.
         uint32_t n = start_group / NUM_CLUSTERS;
         uint32_t cl = start_group % NUM_CLUSTERS;
         for (uint32_t i = 0; i < num_groups_here; ++i) {
             const uint32_t cluster_c0 = cl * CLUSTER_CH;
             const uint32_t Ccl = (C - cluster_c0 < CLUSTER_CH) ? (C - cluster_c0) : CLUSTER_CH;
             const uint32_t Wcu = (Ccl + 31) / 32;
-            write_rows(n, cl * WC_FULL, Wcu);
+            const uint32_t base = n * Ht * Wt + cl * WC_FULL;
+            for (uint32_t r = 0; r < Ht; ++r) {
+                const uint32_t row_base = base + r * Wt;
+                for (uint32_t c = 0; c < Wcu; ++c) {
+                    cb_wait_front(cb_output_tiles, 1);
+                    noc_async_write_tile(row_base + c, output, get_read_ptr(cb_output_tiles));
+                    noc_async_write_barrier();
+                    cb_pop_front(cb_output_tiles, 1);
+                }
+            }
             if (++cl == NUM_CLUSTERS) {
                 cl = 0;
                 ++n;

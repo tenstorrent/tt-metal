@@ -63,3 +63,5 @@
 {"source":"eval_test_runner","pid":1997293,"started_at_ms":1781107804865,"wait_ms":195,"run_ms":677906,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/","exit_code":0}
 {"source":"tt-probe","pid":2021849,"started_at_ms":1781109423931,"wait_ms":256,"run_ms":39793,"test_path":"groupnorm_sc_N_1_HW_C","exit_code":2}
 {"source":"tt-probe","pid":2022802,"started_at_ms":1781109563553,"wait_ms":256,"run_ms":16308,"test_path":"groupnorm_sc_N_1_HW_C","exit_code":0}
+{"source":"tt-probe","pid":2024433,"started_at_ms":1781109697326,"wait_ms":253,"run_ms":41168,"test_path":"groupnorm_sc_N_1_HW_C","exit_code":2}
+{"source":"tt-probe","pid":2026272,"started_at_ms":1781110063271,"wait_ms":259,"run_ms":17704,"test_path":"groupnorm_sc_N_1_HW_C","exit_code":0}

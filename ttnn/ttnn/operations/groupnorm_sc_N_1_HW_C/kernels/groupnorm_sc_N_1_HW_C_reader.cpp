@@ -118,9 +118,10 @@ void kernel_main() {
     constexpr uint32_t C = get_compile_time_arg_val(14);
     constexpr bool STAT_F32 = get_compile_time_arg_val(15) != 0;
     constexpr bool MASK_OUT = get_compile_time_arg_val(16) != 0;  // bf8b out + HW tail (cluster path)
+    constexpr uint32_t WS_MAX = get_compile_time_arg_val(17);     // mask frame width (tiles)
 
     // Accessors declared unconditionally, chained offsets (placeholders when absent).
-    constexpr auto input_args = TensorAccessorArgs<17>();
+    constexpr auto input_args = TensorAccessorArgs<18>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
@@ -134,6 +135,8 @@ void kernel_main() {
     constexpr uint32_t cb_rstd_export = 12;
     constexpr uint32_t cb_mean_row = 13;
     constexpr uint32_t cb_rstd_row = 14;
+    constexpr uint32_t cb_mask_ones = 15;
+    constexpr uint32_t cb_mask_rows = 17;
 
     // Scaler: non-standard value (1/sqrt(HW*Cg) combines the SCALAR double-apply
     // with the 1/N mean factor) -> prepare_reduce_scaler, pool-type-aware overload.
@@ -235,8 +238,27 @@ void kernel_main() {
         // scalars from compute and scatter them into per-column row-vector
         // tiles. After all groups: push the row vectors (+ optional bf8b
         // output masks) and stream pass 3 over the whole cluster.
+        //
+        // CB-wrap rule: multi-tile reserve/push frames must all be the same
+        // width per CB, or a frame straddles the buffer end and writes run off
+        // it. Input is therefore streamed per tile; masks push WS_MAX frames;
+        // row vectors push WC_FULL frames (zero-padded for capped clusters).
         const uint32_t stat_tile_bytes = get_tile_size(cb_mean_row);
         const uint32_t mask_tile_bytes = get_tile_size(cb_mask_interior);
+
+        auto stream_rows_per_tile = [&](uint32_t n, uint32_t col0, uint32_t width) {
+            const uint32_t base = n * Ht * Wt + col0;
+            for (uint32_t r = 0; r < Ht; ++r) {
+                const uint32_t row_base = base + r * Wt;
+                for (uint32_t c = 0; c < width; ++c) {
+                    cb_reserve_back(cb_input_tiles, 1);
+                    noc_async_read_tile(row_base + c, input, get_write_ptr(cb_input_tiles));
+                    noc_async_read_barrier();
+                    cb_push_back(cb_input_tiles, 1);
+                }
+            }
+        };
+
         uint32_t n = start_group / NUM_CLUSTERS;
         uint32_t cl = start_group % NUM_CLUSTERS;
         for (uint32_t i = 0; i < num_groups_here; ++i) {
@@ -246,12 +268,12 @@ void kernel_main() {
             const uint32_t Wcu = (Ccl + 31) / 32;
             const uint32_t cluster_t0 = cl * WC_FULL;
 
-            cb_reserve_back(cb_mean_row, Wcu);
-            cb_reserve_back(cb_rstd_row, Wcu);
+            cb_reserve_back(cb_mean_row, WC_FULL);
+            cb_reserve_back(cb_rstd_row, WC_FULL);
             const uint32_t mean_row_addr = get_write_ptr(cb_mean_row);
             const uint32_t rstd_row_addr = get_write_ptr(cb_rstd_row);
-            zero_l1(mean_row_addr, Wcu * stat_tile_bytes);
-            zero_l1(rstd_row_addr, Wcu * stat_tile_bytes);
+            zero_l1(mean_row_addr, WC_FULL * stat_tile_bytes);
+            zero_l1(rstd_row_addr, WC_FULL * stat_tile_bytes);
 
             for (uint32_t g = 0; g < Gc; ++g) {
                 const uint32_t c0 = g * Cg;  // cluster-relative channel range
@@ -260,7 +282,8 @@ void kernel_main() {
                 const uint32_t Wsg = (c1 - 1) / 32 - t0 + 1;
 
                 // Group masks: interior (all rows) and HW-tail variant.
-                cb_reserve_back(cb_mask_interior, Wsg);
+                // WS_MAX-wide frames; tiles beyond Wsg are left unfilled.
+                cb_reserve_back(cb_mask_interior, WS_MAX);
                 uint32_t m_addr = get_write_ptr(cb_mask_interior);
                 for (uint32_t t = 0; t < Wsg; ++t) {
                     const uint32_t lo = c0 > (t0 + t) * 32 ? c0 - (t0 + t) * 32 : 0;
@@ -268,9 +291,9 @@ void kernel_main() {
                     fill_mask_tile_range(m_addr, 32, lo, hi);
                     m_addr += mask_tile_bytes;
                 }
-                cb_push_back(cb_mask_interior, Wsg);
+                cb_push_back(cb_mask_interior, WS_MAX);
                 if constexpr (hw_tail > 0) {
-                    cb_reserve_back(cb_mask_tail, Wsg);
+                    cb_reserve_back(cb_mask_tail, WS_MAX);
                     m_addr = get_write_ptr(cb_mask_tail);
                     for (uint32_t t = 0; t < Wsg; ++t) {
                         const uint32_t lo = c0 > (t0 + t) * 32 ? c0 - (t0 + t) * 32 : 0;
@@ -278,11 +301,11 @@ void kernel_main() {
                         fill_mask_tile_range(m_addr, hw_tail, lo, hi);
                         m_addr += mask_tile_bytes;
                     }
-                    cb_push_back(cb_mask_tail, Wsg);
+                    cb_push_back(cb_mask_tail, WS_MAX);
                 }
 
-                stream_rows(n, cluster_t0 + t0, Wsg);  // pass 1
-                stream_rows(n, cluster_t0 + t0, Wsg);  // pass 2
+                stream_rows_per_tile(n, cluster_t0 + t0, Wsg);  // pass 1
+                stream_rows_per_tile(n, cluster_t0 + t0, Wsg);  // pass 2
 
                 // Collect this group's mean/rstd, scatter into row vectors.
                 cb_wait_front(cb_mean_export, 1);
@@ -313,29 +336,22 @@ void kernel_main() {
                     set_row0_range<STAT_F32>(rstd_row_addr + t * stat_tile_bytes, lo, hi, bits);
                 }
             }
-            cb_push_back(cb_mean_row, Wcu);
-            cb_push_back(cb_rstd_row, Wcu);
+            cb_push_back(cb_mean_row, WC_FULL);
+            cb_push_back(cb_rstd_row, WC_FULL);
 
             if constexpr (MASK_OUT) {
-                // Cluster-wide output masks: all-ones interior rows + HW-tail
-                // rows. Padding columns are already zeroed via rstd_row = 0.
-                cb_reserve_back(cb_mask_interior, Wcu);
-                uint32_t m_addr = get_write_ptr(cb_mask_interior);
-                for (uint32_t t = 0; t < Wcu; ++t) {
-                    fill_mask_tile_range(m_addr, 32, 0, 32);
-                    m_addr += mask_tile_bytes;
-                }
-                cb_push_back(cb_mask_interior, Wcu);
-                cb_reserve_back(cb_mask_tail, Wcu);
-                m_addr = get_write_ptr(cb_mask_tail);
-                for (uint32_t t = 0; t < Wcu; ++t) {
-                    fill_mask_tile_range(m_addr, hw_tail, 0, 32);
-                    m_addr += mask_tile_bytes;
-                }
-                cb_push_back(cb_mask_tail, Wcu);
+                // Cluster-wide output row masks are column-independent — one
+                // scalar tile per variant (all-ones interior; HW-tail rows).
+                // Padding columns are already zeroed via rstd_row = 0.
+                cb_reserve_back(cb_mask_ones, 1);
+                fill_mask_tile_range(get_write_ptr(cb_mask_ones), 32, 0, 32);
+                cb_push_back(cb_mask_ones, 1);
+                cb_reserve_back(cb_mask_rows, 1);
+                fill_mask_tile_range(get_write_ptr(cb_mask_rows), hw_tail, 0, 32);
+                cb_push_back(cb_mask_rows, 1);
             }
 
-            stream_rows(n, cluster_t0, Wcu);  // pass 3
+            stream_rows_per_tile(n, cluster_t0, Wcu);  // pass 3
             if (++cl == NUM_CLUSTERS) {
                 cl = 0;
                 ++n;

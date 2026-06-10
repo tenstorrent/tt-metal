@@ -58,6 +58,8 @@ constexpr uint32_t cb_mean_export = 11;   // per-group mean scalar -> reader (cl
 constexpr uint32_t cb_rstd_export = 12;   // per-group rstd scalar -> reader (cluster path)
 constexpr uint32_t cb_mean_row = 13;      // per-column mean row vector (cluster path, HeldBulk)
 constexpr uint32_t cb_rstd_row = 14;      // per-column rstd row vector (cluster path, HeldBulk)
+constexpr uint32_t cb_mask_ones = 15;     // all-ones scalar mask tile (cluster bf8b output mask)
+constexpr uint32_t cb_mask_rows = 17;     // HW-tail rows scalar mask tile (cluster bf8b output mask)
 constexpr uint32_t cb_output_tiles = 16;
 constexpr uint32_t cb_mean = 24;
 constexpr uint32_t cb_var = 25;
@@ -106,6 +108,7 @@ void kernel_main() {
     constexpr uint32_t NUM_CLUSTERS = get_compile_time_arg_val(13);
     constexpr uint32_t Cg = get_compile_time_arg_val(14);
     constexpr uint32_t C = get_compile_time_arg_val(15);
+    constexpr uint32_t WS_MAX = get_compile_time_arg_val(16);  // mask frame width (tiles)
 
     const uint32_t start_group = get_arg_val<uint32_t>(0);
     const uint32_t num_groups_here = get_arg_val<uint32_t>(1);
@@ -307,12 +310,13 @@ void kernel_main() {
                 });
                 ckl::copy<cb_var, cb_rstd_export, ckl::InputLifecycle::HeldBulk>(1);
 
-                // ---- group end: release stats + this group's masks ----
+                // ---- group end: release stats + this group's masks (WS_MAX
+                // frames — reader pads every mask frame to WS_MAX tiles) ----
                 cb_pop_front(cb_mean, 1);
                 cb_pop_front(cb_var, 1);
-                cb_pop_front(cb_mask_interior, Wsg);
+                cb_pop_front(cb_mask_interior, WS_MAX);
                 if constexpr (HW_TAIL > 0) {
-                    cb_pop_front(cb_mask_tail, Wsg);
+                    cb_pop_front(cb_mask_tail, WS_MAX);
                 }
             }
 
@@ -381,10 +385,12 @@ void kernel_main() {
                 }
                 if constexpr (MASK_FINAL) {
                     // bf8b + HW tail: zero the padding rows (cols already 0).
+                    // The row mask is column-independent — one scalar tile per
+                    // variant, broadcast over the cluster row.
                     if (HW_TAIL > 0 && b + 1 == Ht) {
                         ckl::mul<
                             cb_final,
-                            cb_mask_tail,
+                            cb_mask_rows,
                             cb_output_tiles,
                             ckl::BroadcastDim::None,
                             ckl::InputLifecycle::Streaming,
@@ -393,11 +399,11 @@ void kernel_main() {
                             ckl::BinaryDataFormatReconfig::Input,
                             ckl::PackTileReconfig::Output,
                             ckl::OperandKind::Scalar,
-                            ckl::OperandKind::Row>(cluster_row);
+                            ckl::OperandKind::Scalar>(cluster_row);
                     } else {
                         ckl::mul<
                             cb_final,
-                            cb_mask_interior,
+                            cb_mask_ones,
                             cb_output_tiles,
                             ckl::BroadcastDim::None,
                             ckl::InputLifecycle::Streaming,
@@ -406,17 +412,18 @@ void kernel_main() {
                             ckl::BinaryDataFormatReconfig::Input,
                             ckl::PackTileReconfig::Output,
                             ckl::OperandKind::Scalar,
-                            ckl::OperandKind::Row>(cluster_row);
+                            ckl::OperandKind::Scalar>(cluster_row);
                     }
                 }
             }
 
-            // ---- cluster end: release row vectors (+ output masks) ----
-            cb_pop_front(cb_mean_row, Wcu);
-            cb_pop_front(cb_rstd_row, Wcu);
+            // ---- cluster end: release row vectors (+ output masks). Row
+            // vectors are pushed as full WC_FULL frames (zero-padded). ----
+            cb_pop_front(cb_mean_row, WC_FULL);
+            cb_pop_front(cb_rstd_row, WC_FULL);
             if constexpr (MASK_FINAL) {
-                cb_pop_front(cb_mask_interior, Wcu);
-                cb_pop_front(cb_mask_tail, Wcu);
+                cb_pop_front(cb_mask_ones, 1);
+                cb_pop_front(cb_mask_rows, 1);
             }
 
             if (++cl == NUM_CLUSTERS) {

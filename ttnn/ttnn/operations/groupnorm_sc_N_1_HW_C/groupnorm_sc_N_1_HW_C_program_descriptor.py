@@ -162,6 +162,8 @@ def create_program_descriptor(
     CB_RSTD_EXPORT = 12
     CB_MEAN_ROW = 13
     CB_RSTD_ROW = 14
+    CB_MASK_ONES = 15
+    CB_MASK_ROWS = 17
     CB_OUTPUT_TILES = 16
     CB_MEAN = 24
     CB_VAR = 25
@@ -210,19 +212,25 @@ def create_program_descriptor(
     mask_output = int(output_tensor.dtype == ttnn.bfloat8_b)
     if groups_non_aligned:
         # Per-group 0/1 column masks (interior + HW-tail variants), regenerated
-        # per group (Ws span tiles); plus per-cluster output masks (Wc tiles)
-        # when bf8b + HW tail. bf16 — masks are 0/1.
+        # per group. CB-wrap rule: every push frame must be the same width, so
+        # frames are padded to Ws_max tiles (compute waits Wsg, pops Ws_max).
         mask_out_cluster = bool(mask_output) and hw_tail > 0
-        mask_pages = max(Ws_max, Wc_max) if mask_out_cluster else Ws_max
-        cbs.append(cb(CB_MASK_INTERIOR, mask_pages, bf16_page, ttnn.bfloat16))
+        cbs.append(cb(CB_MASK_INTERIOR, 2 * Ws_max, bf16_page, ttnn.bfloat16))
         if hw_tail > 0:
-            cbs.append(cb(CB_MASK_TAIL, mask_pages, bf16_page, ttnn.bfloat16))
+            cbs.append(cb(CB_MASK_TAIL, 2 * Ws_max, bf16_page, ttnn.bfloat16))
         # mean/rstd scalar export (compute -> reader) and reader-built per-column
-        # row vectors (reader -> compute, pass 3).
+        # row vectors (reader -> compute, pass 3). Row vectors always push
+        # Wc_full-tile frames (zero-padded for the capped last cluster) so the
+        # FIFO wraps exactly at the buffer end.
         cbs.append(cb(CB_MEAN_EXPORT, 2, stat_page, stat_dtype))
         cbs.append(cb(CB_RSTD_EXPORT, 2, stat_page, stat_dtype))
-        cbs.append(cb(CB_MEAN_ROW, Wc_max, stat_page, stat_dtype))
-        cbs.append(cb(CB_RSTD_ROW, Wc_max, stat_page, stat_dtype))
+        cbs.append(cb(CB_MEAN_ROW, Wc_full, stat_page, stat_dtype))
+        cbs.append(cb(CB_RSTD_ROW, Wc_full, stat_page, stat_dtype))
+        if mask_out_cluster:
+            # bf8b + HW tail: the output row mask is column-independent — one
+            # scalar tile per variant (all-ones interior; rows < hw_tail tail).
+            cbs.append(cb(CB_MASK_ONES, 1, bf16_page, ttnn.bfloat16))
+            cbs.append(cb(CB_MASK_ROWS, 1, bf16_page, ttnn.bfloat16))
     else:
         # Mask rows for non-tile-aligned shapes (Refinement 2): generated once by
         # the reader, held for the whole kernel. Interior row mask (zeros in the
@@ -284,9 +292,10 @@ def create_program_descriptor(
         C,
         stat_is_f32,
         int(mask_out_cluster),
+        Ws_max,
     ]
-    READER_NUM_SCALAR_CT_ARGS = len(reader_ct_args)  # accessor args start here (kernel hard-codes 17)
-    assert READER_NUM_SCALAR_CT_ARGS == 17
+    READER_NUM_SCALAR_CT_ARGS = len(reader_ct_args)  # accessor args start here (kernel hard-codes 18)
+    assert READER_NUM_SCALAR_CT_ARGS == 18
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct_args.extend(
         ttnn.TensorAccessorArgs(gamma_tensor).get_compile_time_args()
@@ -344,6 +353,7 @@ def create_program_descriptor(
         num_clusters,
         Cg,
         C,
+        Ws_max,
     ]
     compute_config = ttnn.ComputeConfigDescriptor(
         math_fidelity=math_fidelity,
