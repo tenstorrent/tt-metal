@@ -410,7 +410,7 @@ inline void set_packer_config(
     //           THCON_SEC0_REG1_L1_Dest_addr = cfg_reg_array[1][32 +: 32];
     // THCON_SEC0_REG1_Disable_zero_compress = cfg_reg_array[1][64 +: 1];
     // THCON_SEC0_REG1_Add_l1_dest_addr_offset = cfg_reg_array[1][65 +: 1];
-    // THCON_SEC0_REG1_Unused0 = cfg_reg_array[1][66 +: 2];
+    // THCON_SEC0_REG1_Addr_cnt_context = cfg_reg_array[1][66 +: 2];
     // THCON_SEC0_REG1_Out_data_format = cfg_reg_array[1][68 +: 4];
     // THCON_SEC0_REG1_In_data_format = cfg_reg_array[1][72 +: 4];
     // THCON_SEC0_REG1_Dis_shared_exp_assembler = cfg_reg_array[1][76 +: 1];

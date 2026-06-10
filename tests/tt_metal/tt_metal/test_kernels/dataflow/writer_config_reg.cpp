@@ -94,21 +94,38 @@ void generate_pack_config(ckernel::packer::pack_config_t& config) {
     config.l1_dest_addr = 16;
     config.uncompress = 0;
     config.add_l1_dest_addr_offset = 1;
+#ifdef ARCH_WORMHOLE
+    config.addr_cnt_context = 0;
+#else
     config.reserved_0 = 0;
+#endif
     config.out_data_format = 5;
     config.in_data_format = 5;
     config.src_if_sel = 1;
     config.l1_src_addr = 8;
-#if defined(ARCH_WORMHOLE) or defined(ARCH_GRAYSKULL)
+#ifdef ARCH_WORMHOLE
+    config.dis_shared_exp_assembler = 0;
+    config.force_pack_per_max_xy_plane = 0;
+    config.enable_out_fifo = 0;
+    config.sub_l1_tile_header_size = 0;
+    config.all_pack_disable_zero_compress = 0;
+    config.all_pack_disable_zero_compress_ovrd = 0;
+    config.add_tile_header_size = 0;
+    config.reserved_1 = 0;
+    config.downsample_mask = 12;
+    config.downsample_shift_count = 4;
+    config.read_mode = 0;
+    config.exp_threshold_en = 1;
+    config.pack_l1_acc_disable_pack_zero_flag = 2;
+    config.reserved_2 = 0;
+    config.exp_threshold = 12;
+#elif defined(ARCH_GRAYSKULL)
     config.reserved_1 = 0;
     config.pack_per_xy_plane = 0;
     config.downsample_mask = 12;
     config.downsample_shift_count = 4;
     config.read_mode = 0;
     config.exp_threshold_en = 1;
-#ifdef ARCH_WORMHOLE
-    config.pack_l1_acc_disable_pack_zero_flag = 2;
-#endif
     config.reserved_2 = 0;
     config.exp_threshold = 12;
 #endif
