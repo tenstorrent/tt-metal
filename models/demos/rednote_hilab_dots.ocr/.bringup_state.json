@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T21:05:20Z",
+  "updated_at": "2026-06-10T21:16:43Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -44,16 +44,9 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "done",
+        "status": "pending",
         "attempts": 0,
-        "artifacts": [
-          "models/demos/rednote_hilab_dots.ocr/tt/vision_patch_embed.py",
-          "models/demos/rednote_hilab_dots.ocr/tests/test_vision_patch_embed.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/profile_vision_patch_embed.py",
-          "generated/profiler/reports/2026_06_10_04_52_37/ops_perf_results_2026_06_10_04_52_37.csv"
-        ],
-        "notes": "Tracy-driven single change: linear output pinned to L1 WITH core_grid 10x10 so the fused-bias L1 matmul variant engages (L1 alone regressed: 24-core matmul + un-fused 149us BinaryNg bias add, the optimization-skill counter-example), rms_norm reads L1, block output back to DRAM. Traced tracy at production operating point (fp32, [1,1,896,588] replicated 1x4 mesh, metal-trace captured+replayed): per-device block kernel time 103.3us -> 90.5us (-12.4%); matmul 59.5us@100c -> 53.7us@100c (bias fused), rms_norm(LayerNormDeviceOperation) 44.4us@28c -> 36.8us@28c. Top hotspot post-change MatmulDeviceOperation ~59% of block kernel time. KB entries for kind conv (ttnn_fold/ttnn_conv2d/eltwise records) target real conv kernels - block is already a collapsed conv==linear, none applicable, none used. PCC 0.999858 (>0.99) re-verified on 1x4 mesh; guard ok (lint 0, traced tracy artifact verified). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
-        "pcc": 0.999858
+        "notes": "OCCUPANCY REDO: per the new occupancy+convergence contract \u2014 query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid"
       },
       "real_weights": {
         "status": "done",
@@ -104,16 +97,9 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "done",
+        "status": "pending",
         "attempts": 0,
-        "artifacts": [
-          "models/demos/rednote_hilab_dots.ocr/tt/vision_rmsnorm.py",
-          "models/demos/rednote_hilab_dots.ocr/tests/test_vision_rmsnorm.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/profile_vision_rmsnorm.py",
-          "generated/profiler/reports/2026_06_10_05_00_04/ops_perf_results_2026_06_10_05_00_04.csv"
-        ],
-        "notes": "Tracy-driven single change: ttnn.rms_norm output pinned to L1 interleaved (memory_config=L1_MEMORY_CONFIG), cutting the kernel's DRAM write. Traced tracy at the production operating point (fp32 [1,1,896,1536] replicated 1x4 mesh, metal-trace captured+replayed, 2 replay sessions): per-device LayerNormDeviceOperation kernel time 44.3-46.2us@28c -> 29.9-32.9us@28c (-~29%); wall-clock A/B over 200 traced replays 51.2 -> 38.4 us/iter (-25%). Width-sharded LayerNormShardedMultiCoreProgramConfig alternative (48c, 8x6 grid) measured WORSE (69.4 us/iter): i2s/s2i bounce around a single op costs more than it saves; rejected. Block is a single op, so top_hotspot share=1.0 by construction; 28-core count is the row-tile cap (896/32). KB entries for kind norm reviewed: ttnn_pow chain already fused into ttnn.rms_norm (cited in ttnn phase); ttnn_rms_norm_post_all_gather distributed-stats entries target sharded-TP norms - vision tower is placement=replicate, not applicable, none used. PCC 0.999982 (>0.99, unchanged) re-verified on 1x4 mesh; traced_ops sidecar regenerated (ttnn.rms_norm only). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
-        "pcc": 0.999982
+        "notes": "OCCUPANCY REDO: per the new occupancy+convergence contract \u2014 query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid"
       },
       "real_weights": {
         "status": "done",
@@ -166,16 +152,9 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "done",
+        "status": "pending",
         "attempts": 0,
-        "artifacts": [
-          "models/demos/rednote_hilab_dots.ocr/tt/vision_attention.py",
-          "models/demos/rednote_hilab_dots.ocr/tests/test_vision_attention.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/profile_vision_attention.py",
-          "generated/profiler/reports/2026_06_10_05_08_04/ops_perf_results_2026_06_10_05_08_04.csv"
-        ],
-        "notes": "Tracy-driven single change: fp32 explicit HF rope chain (slice/neg/concat/mul/add) pinned to L1 interleaved ([1,12,896,128] fp32 ~5.5MB), boundary typecasts kept DRAM (windowed SDPA TT_FATALs on non-DRAM operands - first attempt with L1 typecasts crashed, fixed). Traced tracy at the production operating point (fp32 high-precision path, [1,1,896,1536] replicated 1x4 mesh, metal-trace captured+replayed): per-device block kernel time 1360.2 -> 1172.1 us (-13.8%); BinaryNg 255.7->140.0us, Concat 57.3->21.3us, Unary 29.5->10.3us, Slice 78.6->61.4us, Typecast 89.9->73.1us; SDPA/Matmul unchanged. Top hotspot post-change WindowedScaledDotProductAttention 444.0us 37.9% - bf16-only fused kernel at 110 cores, no per-block lever beyond it. KB entries for kind attention reviewed (ttnn_bcast_2 scale-bcast and ttnn_eq mask-building n/a: scale+mask are in-kernel in windowed SDPA; create_qkv_heads idiom already applied in ttnn phase) - none applicable, none used. PCC re-verified both paths: bf16 0.999855 (pytest), fp32 production path 0.999853 (>0.99). Guard ok (lint 0, traced tracy artifact verified). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
-        "pcc": 0.999855
+        "notes": "OCCUPANCY REDO: per the new occupancy+convergence contract \u2014 query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid"
       },
       "real_weights": {
         "status": "done",
@@ -228,16 +207,9 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "done",
+        "status": "pending",
         "attempts": 0,
-        "artifacts": [
-          "models/demos/rednote_hilab_dots.ocr/tt/vision_mlp.py",
-          "models/demos/rednote_hilab_dots.ocr/tests/test_vision_mlp.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/profile_vision_mlp.py",
-          "generated/profiler/reports/2026_06_10_05_16_17/ops_perf_results_2026_06_10_05_16_17.csv"
-        ],
-        "notes": "Tracy-driven single change: standalone ttnn.silu fused into the elementwise mul via input_tensor_a_activations=[ttnn.UnaryOpType.SILU] (KB ttnn_mul_1 cited; qwen25_vl reference idiom deferred from ttnn phase). Traced tracy at the production operating point (fp32 [1,1,896,1536] replicated 1x4 mesh, metal-trace captured+replayed): per-device block kernel time 684.5 -> 592.3 us (-13.5%); silu(98.8us)+mul(98.3us) two 110-core passes collapsed into one fused BinaryNg 105.7us; matmuls unchanged (gate 178.2, up 174.7, down 133.7us). Top hotspot post-change MatmulDeviceOperation 82.2% of block kernel time at 100-110 cores DRAM-interleaved fp32 (HiFi4+fp32-acc mandated precision floor; no per-block lever left without precision/PCC risk). KB ttnn_gelu n/a (SwiGLU has no gelu); ttnn_silu_2 superseded by fused mul_1. PCC 0.999999 (>0.99, unchanged) re-verified on 1x4 mesh; traced_ops sidecar already accurate (deallocate/linear/multiply). Guard ok (lint 0, traced tracy artifact verified). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
-        "pcc": 0.999999
+        "notes": "OCCUPANCY REDO: per the new occupancy+convergence contract \u2014 query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid"
       },
       "real_weights": {
         "status": "done",
@@ -292,16 +264,9 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "done",
+        "status": "pending",
         "attempts": 0,
-        "artifacts": [
-          "models/demos/rednote_hilab_dots.ocr/tt/vision_block.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/vision_rmsnorm.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/profile_vision_block.py",
-          "generated/profiler/reports/2026_06_10_05_24_03/ops_perf_results_2026_06_10_05_24_03.csv"
-        ],
-        "notes": "Tracy-driven single change: reverted vision_rmsnorm output L1 pin to DRAM interleaved. Composed-block traced tracy (metal-trace captured+replayed, fp32 [1,1,896,1536] replicated 1x4 mesh, production operating point) exposed a layout-interaction stall invisible in sub-block isolation: 5.5MB fp32 L1-interleaved norm output stalls every consuming ttnn.linear (QKV 2963us, fc1 2650us, fc3 2637us vs 97-134us for DRAM-fed o_proj/fc2) - the skill's 'never pin a LARGE activation to L1 before a matmul' counter-example; rmsnorm's earlier isolated -25% win reverses ~25x in composition. Per-device block kernel time 9632.5 -> 1943.7us (-79.8%); QKV 199, fc1 172, fc3 174, norms 66->90us (+24 expected DRAM write). Top hotspot post-change MatmulDeviceOperation 775.8us 39.9%, SDPA 439.4us 22.6%, BinaryNg 347us 17.9%. No KB entries for decoder_layer. PCC re-verified: vision_block 0.999958, vision_rmsnorm 0.999982 (both unchanged). Guard ok. Dispatched inline (no Agent tool in tick context).",
-        "pcc": 0.999958
+        "notes": "OCCUPANCY REDO: per the new occupancy+convergence contract \u2014 query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid"
       },
       "real_weights": {
         "status": "done",
@@ -354,16 +319,9 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "done",
+        "status": "pending",
         "attempts": 0,
-        "artifacts": [
-          "models/demos/rednote_hilab_dots.ocr/tt/patch_merger.py",
-          "models/demos/rednote_hilab_dots.ocr/tests/test_patch_merger.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/profile_patch_merger.py",
-          "generated/profiler/reports/2026_06_10_05_33_34/ops_perf_results_2026_06_10_05_33_34.csv"
-        ],
-        "notes": "Tracy-driven single change: down-projection ttnn.linear given core_grid 10x10 + L1 output so the fused-bias L1 matmul variant engages on a fuller grid (vision_patch_embed recipe; default heuristic ran it at only 48 cores), with a 5.3us to_memory_config copy back to DRAM preserving the block-output contract. Traced tracy at the production operating point (fp32 [1,1,896,1536] replicated 1x4 mesh, metal-trace captured+replayed): per-device block kernel time 921.1 -> 815.4us (-11.5%); down-proj matmul 249.6us@48c -> 141.7us@70c (-43%). Up-projection kept default DRAM heuristic: forcing core_grid+L1 there measured WORSE (431.9 -> 448.8us, fp32 compute-bound) and was reverted. gelu stays DRAM-out so the down matmul is DRAM-fed (vision_block L1-interleaved-into-matmul stall). Top hotspot post-change MatmulDeviceOperation (up-proj 6144x6144) 425.9us 52.2% of block kernel time at 96c, fp32 HiFi4 compute-bound - no per-block lever left without precision risk. KB entries for kind mlp reviewed: ttnn_gelu already applied in ttnn phase (exact erf standalone; fuse-into-matmul variant rejected for PCC per entry note); ttnn_silu_2/ttnn_mul_1 (SwiGLU) and ttnn_concat/ttnn_fold n/a to LayerNorm->Linear->GELU->Linear - none newly applied. PCC 0.999992 (>0.99, unchanged) re-verified on 1x4 mesh; traced_ops sidecar regenerated (+ttnn.to_memory_config). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
-        "pcc": 0.999992
+        "notes": "OCCUPANCY REDO: per the new occupancy+convergence contract \u2014 query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid"
       },
       "real_weights": {
         "status": "done",
@@ -418,20 +376,9 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "done",
+        "status": "pending",
         "attempts": 0,
-        "artifacts": [
-          "models/demos/rednote_hilab_dots.ocr/tt/vision_transformer.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/vision_attention.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/vision_mlp.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/vision_block.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/ocr_model.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/profile_vision_transformer.py",
-          "models/demos/rednote_hilab_dots.ocr/perf/traced/vision_tower_bf16_11k_traced.csv",
-          "models/demos/rednote_hilab_dots.ocr/perf/traced/vision_tower_bf16_tp4_11k_traced.csv"
-        ],
-        "notes": "REDO done, both steps. Step1 dtype: tower fp32->bf16 acts+weights (HiFi4+fp32acc matmuls); 11k-token shape (/tmp/demo_image1_cropped.jpg seq 11224) 3073ms, tracy traced==untraced (compute-bound), WindowedSDPA 86.9% (62.6ms/call, kernel default 32x32 chunks). Fix: SDPA HiFi2+fp32acc q256k256 on 11x10 grid (bf16 dest acc rejected: bf16 softmax*V accumulation over 11k tokens) -> 889ms untraced, kernel 779ms, target<=900 met; fp32 high-precision path keeps kernel defaults (0.9901 margin untouched). Step2 TP A/B: head-parallel TP4 (QKV col-shard chip-blocked 3 heads/chip, o_proj row-shard, MLP col/row, RS+AG all-reduce; CCL 1.3ms/op) 485.9ms vs replicate 889ms -> TP4 kept in ocr_model (degenerates tp=1 single device). E2E parity gate (5-sample WER vs HF) PASSED after EACH step: 0.0000==HF, 5/5 exact; block PCC informational 0.9821 bf16 / 0.9852 TP4 (gate redefined to E2E per redo). Sub-block bf16 PCC unchanged (attn 0.999824 mlp 0.999999 block 0.999955); lint 0 all touched. Final tracy 470.6ms kernel: AllGather 23.4%, SDPA 23.0%, RS 21.6%, Matmul 19.7% \u2014 next lever async CCL. Dispatched inline (no Agent tool in tick context); worker contract followed.",
-        "pcc": 0.985151
+        "notes": "OCCUPANCY REDO: per the new occupancy+convergence contract \u2014 query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid"
       },
       "real_weights": {
         "status": "done",
@@ -482,16 +429,9 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "done",
+        "status": "pending",
         "attempts": 0,
-        "artifacts": [
-          "models/demos/rednote_hilab_dots.ocr/tt/embedding.py",
-          "models/demos/rednote_hilab_dots.ocr/tests/test_embedding.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/profile_embedding.py",
-          "generated/profiler/reports/2026_06_10_05_51_18/ops_perf_results_2026_06_10_05_51_18.csv"
-        ],
-        "notes": "Tracy-driven at-ceiling verdict, no change applied: traced tracy (metal-trace captured+replayed, 2 replay sessions) at the production operating point (uint32 ids [1,1,1,128] replicated, bf16 table [1,1,151936,1536] hidden-dim-sharded 1x4 mesh) shows per-device block kernel time ~33us: AllGatherDeviceOperation 88.1% (~29us/device, 9-10 cores), EmbeddingsDeviceOperation ~4us@4c. The gather is fabric-latency-bound at this payload (128x384 bf16 ~98KB/device/hop): wall-clock A/B over 200 traced replays measured FLAT across every available lever - baseline DRAM 57.7, L1-pinned embedding-out+gather-out 57.0, num_links=2 58.0, L1+links2 58.0 us/iter - so no change was applied (V1 -1.2% is replay noise and would break the DRAM block-output contract without evidence). KB ttnn_embedding placement observations already matched by the ttnn-phase code (prefill >32 flattened tokens -> DRAM interleaved + TILE output, uint32 ROW_MAJOR indices, table DRAM ROW_MAJOR); ttnn_embedding_1 sibling-lookup, cos_1, rope and embedding_bw entries n/a to this block. Async all_gather deferred to generation/perf phases per tp-guidance (sync CCL acceptable; in single-op-chain isolation async overlap cannot help). PCC 1.000000 (unchanged) re-verified on 1x4 mesh; traced_ops sidecar regenerated (all_gather/embedding/unsqueeze_to_4D). Guard ok (lint 0, traced tracy artifact verified). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
-        "pcc": 1.0
+        "notes": "OCCUPANCY REDO: per the new occupancy+convergence contract \u2014 query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid"
       },
       "real_weights": {
         "status": "done",
@@ -542,16 +482,9 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "done",
+        "status": "pending",
         "attempts": 0,
-        "artifacts": [
-          "models/demos/rednote_hilab_dots.ocr/tt/text_rmsnorm.py",
-          "models/demos/rednote_hilab_dots.ocr/tests/test_text_rmsnorm.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/profile_text_rmsnorm.py",
-          "generated/profiler/reports/2026_06_10_06_03_51/ops_perf_results_2026_06_10_06_03_51.csv"
-        ],
-        "notes": "Tracy-driven single change: replicated-path ttnn.rms_norm switched from default DRAM-interleaved (4-core row-tile-capped LayerNorm kernel at seq 128) to WIDTH-SHARDED 4x3 grid (12 cores, block_w=4, LayerNormShardedMultiCoreProgramConfig) with an i2s/s2i bounce that keeps the DRAM-interleaved block-output contract (both decoder_layer consumers are matmuls; tick-23 L1-interleaved-into-matmul stall counter-example forbids an L1 pin). Shape-gated (tile-aligned seq, dim tiles %12==0, per-core shard <=256KB) with deterministic shape-keyed config cache; non-qualifying shapes (decode seq=1) fall back to the fused interleaved path. Traced tracy at the production operating point (fp32 [1,1,128,1536] replicated 1x4 mesh, metal-trace captured+replayed, 2 replay sessions): per-device block kernel time 21.1us -> 16.5us (-22%); LayerNormDeviceOperation 21.1us@4c -> 8.2us@12c, +i2s 3.8us +s2i 4.5us@12c. Wall-clock A/B over 200 traced replays, 2 reps each: 24.4/24.3 -> 21.1/21.1 us/iter (-13.4%); grids 8x6 (24.4), 8x3 (22.6), 6x2 (21.7), 2x3 (26.0) all measured worse than 4x3. Top hotspot post-change LayerNormDeviceOperation ~50% of block kernel time at 12c. KB entries for kind norm reviewed: ttnn_pow chain already fused into ttnn.rms_norm (cited in ttnn phase); ttnn_rms_norm_post_all_gather targets the distributed pre/post path which is NOT on the decoder_layer hot path (residual stream is replicated) - async all_gather swap deferred to generation/perf phases; none newly applied. PCC re-verified: text_rmsnorm replicated 0.999985, distributed 0.999986 (>0.99); composition insurance: test_decoder_layer PCC 0.999943 (was 0.999936) - no stall introduced. traced_ops sidecar regenerated (+interleaved_to_sharded/sharded_to_interleaved). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
-        "pcc": 0.999985
+        "notes": "OCCUPANCY REDO: per the new occupancy+convergence contract \u2014 query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid"
       },
       "real_weights": {
         "status": "done",
@@ -604,16 +537,9 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "done",
+        "status": "pending",
         "attempts": 0,
-        "artifacts": [
-          "models/demos/rednote_hilab_dots.ocr/tt/text_attention.py",
-          "models/demos/rednote_hilab_dots.ocr/tests/test_text_attention.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/profile_text_attention.py",
-          "generated/profiler/reports/2026_06_10_06_12_44/ops_perf_results_2026_06_10_06_12_44.csv"
-        ],
-        "notes": "Tracy-driven single change: o_proj partial-sum all-reduce swapped from sync all_gather(4*hidden) + 3 slices + 3 local adds to ttnn.reduce_scatter(dim=3) + ttnn.all_gather(dim=3) (Topology.Linear, fp32 fabric accumulation) \u2014 the tp-guidance optimization-phase CCL swap. Traced tracy at the production operating point (fp32 [1,1,128,1536] replicated 1x4 mesh, real layers.0 weights, golden rope/causal mask, metal-trace captured+replayed): per-device block kernel time 327.8 -> 247.8 us (-24.4%); CCL 127.3 (all_gather) -> 91.8 us (48.9 reduce_scatter + 42.9 all_gather), BinaryNg 49.7 -> 24.3 us (local adds gone), Slice 25.6 -> 6.9 us. Wall-clock A/B over 200 traced replays 364.8 -> 281.3 us/iter (-22.9%). Top hotspot post-change MatmulDeviceOperation 85.5us 34.5% (QKV/QK^T/PV/o_proj fp32 HiFi4 tiny per-chip shapes 16-48c). KB entries for kind attention reviewed (ttnn_bcast_2 scale-bcast n/a: scale+mask cost 9.8us total; ttnn_eq mask-building n/a host mask; create_qkv_heads idiom already applied) - none applicable, none used. PCC 0.999049 (>0.99, +2e-6 vs sync baseline); composition insurance test_decoder_layer 0.999944 (was 0.999943). traced_ops sidecar regenerated (+reduce_scatter, -local slices/adds). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
-        "pcc": 0.999049
+        "notes": "OCCUPANCY REDO: per the new occupancy+convergence contract \u2014 query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid"
       },
       "real_weights": {
         "status": "done",
@@ -666,16 +592,9 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "done",
+        "status": "pending",
         "attempts": 0,
-        "artifacts": [
-          "models/demos/rednote_hilab_dots.ocr/tt/text_mlp.py",
-          "models/demos/rednote_hilab_dots.ocr/tests/test_text_mlp.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/profile_text_mlp.py",
-          "generated/profiler/reports/2026_06_10_06_20_49/ops_perf_results_2026_06_10_06_20_49.csv"
-        ],
-        "notes": "Tracy-driven single change: down_proj partial-sum all-reduce swapped from sync all_gather(4*hidden) + 4 slices + 3 local adds to ttnn.reduce_scatter(dim=3) + ttnn.all_gather(dim=3) (Topology.Linear, fp32 fabric accumulation) - the tp-guidance optimization-phase CCL swap, same idiom as text_attention o_proj (tick-28). Traced tracy at the production operating point (fp32 [1,1,128,1536] replicated 1x4 mesh, real layers.0.mlp weights, metal-trace captured+replayed, 2 replay sessions): per-device block kernel time 368.5 -> 287.5 us (-22.0%); CCL cluster 171.9 (all_gather 127.4 + slices 19.0 + adds 25.5) -> 90.6 us (reduce_scatter 50.6 + all_gather 40.0), slices/adds eliminated. Top hotspot post-change MatmulDeviceOperation 180.0us 62.2% of block kernel time (gate 55.1/up 55.4 @70c, down 69.5 @48c, fp32 HiFi4 per-chip shapes; down K=2240 DRAM-sharded variant is the remaining candidate but exceeds the one-change budget this tick). KB entries for kind mlp reviewed: ttnn_mul_1 fused-SILU mul considered - silu+mul cost only 18.5us (5%) vs 172us CCL cluster, not the top hotspot this tick (the standalone ttnn.silu also keeps the mlp guard kernel traceable); ttnn_gelu/ttnn_std/ttnn_sub n/a to SwiGLU - none applied. PCC 0.999989 (>0.99, was 0.999991 - delta is bf16-test noise, math unchanged) re-verified on 1x4 mesh; traced_ops sidecar regenerated (+reduce_scatter, -slice/add). Guard ok (lint 0, traced tracy artifact verified). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
-        "pcc": 0.999989
+        "notes": "OCCUPANCY REDO: per the new occupancy+convergence contract \u2014 query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid"
       },
       "real_weights": {
         "status": "done",
@@ -730,17 +649,9 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "done",
+        "status": "pending",
         "attempts": 0,
-        "artifacts": [
-          "models/demos/rednote_hilab_dots.ocr/tt/decoder_layer.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/text_mlp.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/text_attention.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/profile_decoder_layer.py",
-          "generated/profiler/reports/2026_06_10_06_30_09/ops_perf_results_2026_06_10_06_30_09.csv"
-        ],
-        "notes": "Tracy-driven CCL link change: num_links=2 on all four sync CCL calls (reduce_scatter+all_gather in text_attention o_proj and text_mlp down_proj all-reduce; qb smoke tests validate 2 links), plus the attention-residual ttnn.add pinned to L1 (consumers are RMSNorm + add, never a matmul - vision tick-25 recipe; block output stays DRAM). Traced tracy at the production operating point (fp32 [1,1,128,1536] replicated 1x4 mesh, real layers.0 weights, metal-trace captured+replayed): per-device layer kernel time 584.9 -> 518.1 us (-11.4%); ReduceScatter 91.4->57.4us, AllGather 86.2->59.1us, BinaryNg 51.9->47.2us, Matmul 265.9us unchanged (no stall introduced). Wall-clock A/B over 200 traced replays x2 reps: 622.5 -> 555.2/557.6 us/iter (-10.8%). Rejected by measurement: down_proj core_grid 10x10 (69.5 -> 98.4us, still 48c - N_t=48 structurally caps the grid; reverted). Matmul cluster (51.3% post-change) at fp32 HiFi4 per-chip structural ceiling per tick-28/29; async TT_CCL semaphore machinery deferred to generation/perf phases. No KB entries for decoder_layer. PCC re-verified: decoder_layer 0.999945 (was 0.999936), text_mlp 0.999989, text_attention 0.999049 (all >0.99); traced_ops sidecar regenerated. Guard ok (lint 0 on all three touched files, traced tracy artifact verified). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
-        "pcc": 0.999945
+        "notes": "OCCUPANCY REDO: per the new occupancy+convergence contract \u2014 query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid"
       },
       "real_weights": {
         "status": "done",
@@ -793,16 +704,9 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "done",
+        "status": "pending",
         "attempts": 0,
-        "artifacts": [
-          "models/demos/rednote_hilab_dots.ocr/tt/lm_head.py",
-          "models/demos/rednote_hilab_dots.ocr/tests/test_lm_head.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/profile_lm_head.py",
-          "generated/profiler/reports/2026_06_10_06_39_23/ops_perf_results_2026_06_10_06_39_23.csv"
-        ],
-        "notes": "Tracy-driven single change: lm_head weight dtype bf16 -> bfloat8_b (tt_transformers lm_head idiom; KB entries for kind linear were attention/tensor-manipulation records - nlp_concat_heads_decode, concatenate_heads, flash_mla_prefill, narrow/split/bcast/concat - none applicable, none used). Baseline traced tracy (metal-trace captured+replayed, bf16 [1,1,128,1536] replicated 1x4 mesh, real lm_head.weight vocab-sharded 37984/chip) showed the single 108-core MatmulMultiCoreReuseMultiCast1D matmul at 348-368us/device, ~111MB bf16 weight stream = DRAM-bandwidth-bound; share=1.0 by construction (single-op block). Halving weight bytes moved it to 245-253us/device (-29%); HiFi4+fp32-acc accumulation unchanged. PCC 0.999945 (>0.99, was 1.0 bf16 - bfp8 weight quantization noise) re-verified on 1x4 mesh; traced_ops sidecar regenerated (ttnn.linear only). Guard ok (lint 0, traced tracy artifact verified). DRAM-sharded program config (K=1536 < 2048 threshold) left as a possible second pass; one-change budget. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
-        "pcc": 0.999945
+        "notes": "OCCUPANCY REDO: per the new occupancy+convergence contract \u2014 query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid"
       },
       "real_weights": {
         "status": "done",
@@ -858,18 +762,9 @@
         "wer": 0.0
       },
       "perf": {
-        "status": "done",
+        "status": "pending",
         "attempts": 0,
-        "artifacts": [
-          "models/demos/rednote_hilab_dots.ocr/tt/ocr_model.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/text_attention.py",
-          "models/demos/rednote_hilab_dots.ocr/tt/lm_head.py",
-          "models/demos/rednote_hilab_dots.ocr/PERF_NOTES.md",
-          "models/demos/rednote_hilab_dots.ocr/perf/traced/cpp_device_perf_report_kv_redo4_traced.csv"
-        ],
-        "notes": "REDO 4 complete (precision budget, baseline 10.68 ms/step re-measured): spent PCC headroom in descending bytes-touched order, ONE change at a time, e2e WER gate (5/5 exact vs HF) re-run after EACH step. Kept: (1) bf16 decode residual stream (norms/adds/MLP acts; embedding row is bf16 already); (2a) lm_head weights fp32->bf8b (233->58 MB/chip/step; logits PINNED fp32 out, HiFi4+fp32 acc \u2014 the generation-phase near-tie flip did not reproduce under KV-cache decode, gate 5/5 exact); (2b) lm_head acts bf16; (3) decode rope/QK chain bf16 (pre-scaled Q tames sinks; typecast op deleted, rope add lands in L1 to keep the Blackhole DRAM-align workaround); (4a/4b) down + QKV/o_proj bf16->bf8b \u2014 wall-flat (1-row matmuls dispatch-bound, tick-50 verdict) but parity-neutral, frees ~330 MB/chip. Reverted: bf16 norm gammas (wall 9.41->9.78). Kept fp32 (measured hazards): prefill attention/softmax (Qwen2 +-3122 sink, bf16 core PCC 0.92), lm_head logits + accumulation. Result: 10.68->9.40 ms/step bench, ocr() steady 9.39, traced kernel sum 9.03->8.35 ms (matmul 54.4%, 169 calls/step dispatch floor; CCL 20.6% latency-bound; host ~1 ms). Target <=8 ms/tok NOT met \u2014 dtype lever exhausted; next levers are structural (fuse gate/up, QKV+rope-rot, async CCL, on-device rope). Block PCCs 0.99905/0.99997/0.99994; e2e gate re-passed on final config. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
-        "steady_step_ms": 9.4,
-        "speedup": 1.14
+        "notes": "OCCUPANCY REDO: per the new occupancy+convergence contract \u2014 query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid; target <=8 ms/tok; long-AR drift gate at 180 tok"
       },
       "decode_strategy": "kv_cache"
     }
