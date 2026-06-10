@@ -13,7 +13,7 @@ Division of labor (user decision, 2026-06-10):
 
 Schema (architecture-neutral; fixed keys = harness roles, open `components`):
   perf_test  {path, case, note} | null     -> what tracy profiles
-  pcc        {end_to_end: {path, note}, ...} -> correctness gates
+  pcc        {end_to_end: {path, threshold, note}, ...} -> correctness gates
   components {name: {path, note}}          -> isolated tests (open map)
   model_files [...]                        -> where levers get applied
   summary    str                           -> one-paragraph narrative for the lead
@@ -45,8 +45,11 @@ PROMPT_TEMPLATE = (
     "perf/time-measuring test exists; if the end-to-end PCC test is runnable, "
     "prefer returning IT as perf_test with its FIRST parametrize id as case, "
     "plus a warning flag;\n"
-    '  "pcc": object mapping role name to {{"path": <path or node id>, "note": '
-    "<one sentence: what it compares, against what reference, what threshold>}}; "
+    '  "pcc": object mapping role name to {{"path": <path or node id>, '
+    '"threshold": <the numeric PCC threshold the test ENFORCES — read the '
+    "assert (assert pcc > X / comp_pcc(..., X) / assert_with_pcc(..., X)) — "
+    'null if you cannot find one>, "note": <one sentence: what it compares, '
+    "against what reference, citing the threshold line/snippet>}}; "
     'use role "end_to_end" for the full-model correctness check if one exists;\n'
     '  "components": object mapping component name (whatever this model actually '
     "has: attention, backbone, unet_block, ...) to {{path, note}}; empty if none;\n"
@@ -57,7 +60,9 @@ PROMPT_TEMPLATE = (
     '  "flags": array of {{"level": "fatal"|"warning", "code": <short id>, '
     '"detail": <one sentence>}}. If there is NO end-to-end correctness check, '
     'emit {{"level": "fatal", "code": "no_end_to_end_pcc", ...}}. If there is no '
-    'dedicated perf test, emit {{"level": "warning", "code": "no_perf_test", ...}}.\n'
+    'dedicated perf test, emit {{"level": "warning", "code": "no_perf_test", ...}}. '
+    "If the end-to-end check exists but you cannot find the numeric threshold it "
+    'enforces, emit {{"level": "fatal", "code": "no_pcc_threshold", ...}}.\n'
     "All paths relative to {root}. No commentary, no code fences."
 )
 
@@ -80,6 +85,8 @@ def _norm_entry(value: Any, root: Path, what: str) -> dict[str, str]:
         entry = {"path": value, "note": ""}
     elif isinstance(value, dict) and "path" in value:
         entry = {"path": value["path"], "note": str(value.get("note", ""))}
+        if "threshold" in value:
+            entry["threshold"] = value["threshold"]
     else:
         raise ModelFilesError(f"{what} must be a path string or {{path, note}}")
     _require_file(root, entry["path"], what)
@@ -106,6 +113,29 @@ def _validate(pathmap: dict[str, Any], model_root: Path) -> dict[str, Any]:
         )
         raise ModelFilesError(f"CANNOT CONTINUE — fatal discovery flag(s): {details}")
     pcc = {name: _norm_entry(v, model_root, f"pcc entry {name!r}") for name, v in pcc_raw.items()}
+    for name, entry in pcc.items():
+        thr = entry.setdefault("threshold", None)
+        if thr is not None:
+            if isinstance(thr, bool) or not isinstance(thr, (int, float)) or not (0.0 < float(thr) < 1.0):
+                raise ModelFilesError(f"pcc entry {name!r} threshold must be a number in (0, 1), got {thr!r}")
+            entry["threshold"] = float(thr)
+    # FLOOR (code): an e2e check with no enforced threshold gives the loop nothing to gate on.
+    if pcc["end_to_end"]["threshold"] is None:
+        raise ModelFilesError(
+            "CANNOT CONTINUE — fatal discovery flag(s): no_pcc_threshold: "
+            "end_to_end PCC test found but no numeric threshold extracted from it"
+        )
+    missing_thr = sorted(n for n, e in pcc.items() if n != "end_to_end" and e["threshold"] is None)
+    if missing_thr and not any(f.get("code") == "no_component_pcc_threshold" for f in warnings):
+        warnings.append(
+            {
+                "level": "warning",
+                "code": "no_component_pcc_threshold",
+                "detail": "no threshold for component pcc "
+                + ", ".join(missing_thr)
+                + "; loop gates on end_to_end only",
+            }
+        )
 
     perf_raw = pathmap.get("perf_test")
     if perf_raw is None:

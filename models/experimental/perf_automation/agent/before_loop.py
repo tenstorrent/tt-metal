@@ -113,7 +113,7 @@ def make_mock_model_runner(model_root: str | Path) -> Callable[[str], str]:
         return json.dumps(
             {
                 "perf_test": {"path": rel[0], "case": "mock"},
-                "pcc": {"end_to_end": rel[0]},
+                "pcc": {"end_to_end": {"path": rel[0], "threshold": 0.99}},
                 "components": {},
                 "model_files": rel,
             }

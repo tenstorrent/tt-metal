@@ -17,7 +17,7 @@ def _mock_tree(root):
 
 GOOD = {
     "perf_test": {"path": "tests/test_e2e.py", "case": "S128"},
-    "pcc": {"end_to_end": "tests/test_e2e.py", "attention": "tests/test_attention.py"},
+    "pcc": {"end_to_end": {"path": "tests/test_e2e.py", "threshold": 0.99}, "attention": "tests/test_attention.py"},
     "components": {"attention": "tests/test_attention.py"},
     "model_files": ["model.py", "attention.py"],
 }
@@ -35,6 +35,7 @@ def test_read_model_files_returns_expanded_pathmap(tmp_path):
     assert result["perf_test"]["path"] == "tests/test_e2e.py"
     assert result["perf_test"]["case"] == "S128"
     assert result["pcc"]["end_to_end"]["path"] == "tests/test_e2e.py"
+    assert result["pcc"]["end_to_end"]["threshold"] == 0.99
     assert result["components"]["attention"]["path"] == "tests/test_attention.py"
     assert "model.py" in result["model_files"]
     assert str(tmp_path) in captured["prompt"]
@@ -102,7 +103,7 @@ def test_accepts_pytest_node_ids(tmp_path):
     _mock_tree(tmp_path)
     nid = dict(GOOD)
     nid["perf_test"] = {"path": "tests/test_e2e.py::test_full", "case": "S128"}
-    nid["pcc"] = {"end_to_end": "tests/test_e2e.py::test_full"}
+    nid["pcc"] = {"end_to_end": {"path": "tests/test_e2e.py::test_full", "threshold": 0.99}}
     result = read_model_files(tmp_path, runner=lambda p: json.dumps(nid))
     assert result["perf_test"]["path"].endswith("::test_full")
 
@@ -111,8 +112,34 @@ def test_notes_are_preserved(tmp_path):
     """Evidence notes ride through normalization for the lead review."""
     _mock_tree(tmp_path)
     rich = dict(GOOD)
-    rich["pcc"] = {"end_to_end": {"path": "tests/test_e2e.py", "note": "full model vs HF ref, PCC>0.99"}}
+    rich["pcc"] = {
+        "end_to_end": {"path": "tests/test_e2e.py", "threshold": 0.99, "note": "full model vs HF ref, PCC>0.99"}
+    }
     rich["summary"] = "standard encoder layout"
     result = read_model_files(tmp_path, runner=lambda p: json.dumps(rich))
     assert "PCC>0.99" in result["pcc"]["end_to_end"]["note"]
     assert result["summary"] == "standard encoder layout"
+
+
+def test_e2e_without_threshold_is_fatal(tmp_path):
+    """User decision 2026-06-10: e2e file found but no extractable threshold -> stop."""
+    _mock_tree(tmp_path)
+    bad = dict(GOOD)
+    bad["pcc"] = {"end_to_end": "tests/test_e2e.py"}
+    with pytest.raises(ModelFilesError, match="no_pcc_threshold"):
+        read_model_files(tmp_path, runner=lambda p: json.dumps(bad))
+
+
+def test_component_without_threshold_is_warning(tmp_path):
+    _mock_tree(tmp_path)
+    result = read_model_files(tmp_path, runner=lambda p: json.dumps(GOOD))
+    assert result["pcc"]["attention"]["threshold"] is None
+    assert any(w["code"] == "no_component_pcc_threshold" for w in result["warnings"])
+
+
+def test_threshold_out_of_range_rejected(tmp_path):
+    _mock_tree(tmp_path)
+    bad = dict(GOOD)
+    bad["pcc"] = {"end_to_end": {"path": "tests/test_e2e.py", "threshold": 1.5}}
+    with pytest.raises(ModelFilesError, match="threshold"):
+        read_model_files(tmp_path, runner=lambda p: json.dumps(bad))

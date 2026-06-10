@@ -93,7 +93,7 @@ def test_before_loop_perf_warning_falls_back_to_pcc(tmp_path, model_root):
         return json.dumps(
             {
                 "perf_test": None,
-                "pcc": {"end_to_end": "test_e2e.py"},
+                "pcc": {"end_to_end": {"path": "test_e2e.py", "threshold": 0.99}},
                 "components": {},
                 "model_files": ["attention.py"],
                 "flags": [{"level": "warning", "code": "no_perf_test", "detail": "no perf.py; using e2e pcc"}],
@@ -121,7 +121,7 @@ def test_default_case_is_first_collected(tmp_path, model_root):
         return json.dumps(
             {
                 "perf_test": None,
-                "pcc": {"end_to_end": "test_e2e.py"},
+                "pcc": {"end_to_end": {"path": "test_e2e.py", "threshold": 0.99}},
                 "components": {},
                 "model_files": ["attention.py"],
                 "flags": [{"level": "warning", "code": "no_perf_test", "detail": "x"}],

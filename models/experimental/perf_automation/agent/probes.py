@@ -350,7 +350,9 @@ REVIEW_PROMPT = (
     "Findings:\n{findings}\n\n"
     "Consider: does the end-to-end entry truly look like a full-model "
     "correctness check (not a unit test)? Is the perf test appropriate to "
-    "profile? Do the warnings change anything?\n"
+    "profile? Is the extracted end-to-end PCC threshold plausible as a "
+    "correctness gate (not a loose debug value)? Do the warnings change "
+    "anything?\n"
     'Respond with ONLY a JSON object: {{"decision": "continue"|"stop", '
     '"reasoning": <2-3 sentences>}}. Stop only for genuine blockers — '
     "warnings with a sensible fallback are acceptable."
