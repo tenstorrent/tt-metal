@@ -1,0 +1,14 @@
+[
+  {
+    "image": "invoice_total.png",
+    "ref": "Invoice total: 1,250 dollars"
+  },
+  {
+    "image": "hello_doc.png",
+    "ref": "Hello world from Tenstorrent"
+  },
+  {
+    "image": "serial_no.png",
+    "ref": "Serial number 7 4 2 9"
+  }
+]

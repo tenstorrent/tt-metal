@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T08:13:43Z",
+  "updated_at": "2026-06-10T08:30:56Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -841,8 +841,11 @@
       "validation_threshold": "HF + 0.05",
       "hybrid_notes": "Image preprocessing (resize, patchify, grid_thw) and tokenizer/chat-template stay on HF host; rot_pos_emb tables and cu_seqlens computed on host.",
       "generation": {
-        "status": "pending",
-        "attempts": 0
+        "status": "failing",
+        "attempts": 1,
+        "last_error": "worker did not complete synchronously (backgrounded weight-load watcher; tick contract violation)",
+        "artifacts": [],
+        "notes": "ocr_model/demo/test artifacts written; retry can reuse weight cache"
       },
       "perf": {
         "status": "pending",
@@ -1120,6 +1123,12 @@
       "ts": "2026-06-10T08:13:43Z",
       "action": "device[lm_head]",
       "result": "ok"
+    },
+    {
+      "tick": 45,
+      "ts": "2026-06-10T08:30:56Z",
+      "action": "generation[ocr]",
+      "result": "fail"
     }
   ],
   "config": {
