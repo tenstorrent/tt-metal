@@ -13,6 +13,7 @@ This guide helps developers migrate from legacy data movement APIs to the new De
    - [Circular Buffer Operations](#circular-buffer-operations)
    - [Semaphore Operations](#semaphore-operations)
    - [Memory Access](#memory-access)
+   - [Zeroing Memory](#zeroing-memory)
 5. [Complete Migration Examples](#complete-migration-examples)
 6. [Troubleshooting](#troubleshooting)
 
@@ -507,6 +508,84 @@ for (auto ptr = mem; ptr < end; ++ptr) {
     *ptr = value;
 }
 ```
+
+---
+
+### Zeroing Memory
+
+#### Zero a local-L1 buffer
+
+**Legacy API** (manual loopback from the hardware zeros region):
+```cpp
+constexpr uint32_t n = bytes_to_zero / MEM_ZEROS_SIZE;
+uint64_t zeros = get_noc_addr(my_x[noc_index], my_y[noc_index], MEM_ZEROS_BASE);
+for (uint32_t i = 0; i < n; ++i) {
+    noc_async_read(zeros, write_addr + i * MEM_ZEROS_SIZE, MEM_ZEROS_SIZE);
+}
+noc_async_read_barrier();
+```
+
+**New API:**
+```cpp
+Noc noc;
+DataflowBuffer dfb(dfb_id);                // or CircularBuffer
+dfb.reserve_back(1);
+noc.async_write_zeros(
+    dfb,                                   // Destination (DataflowBuffer or CircularBuffer)
+    size_bytes,                            // Number of bytes to zero
+    {.offset_bytes = 0}                    // Offset within the destination entry (optional; default {})
+);
+noc.write_zeros_l1_barrier();              // wait for completion before consuming
+dfb.push_back(1);
+```
+
+`async_write_zeros(dst, size_bytes, {.offset_bytes = off})` zeroes `size_bytes` starting at `dst.get_write_ptr() + off` (`off` defaults to `0`). `dst` must be a `CircularBuffer` or `DataflowBuffer`.
+
+Zeroing a CB/DFB entry is the common case: legacy kernels obtained the zero target's address from a CB (e.g. `get_write_ptr(cb_id)`), so the migrated form zeroes that same CB/DFB entry directly.
+
+#### Zero pages of a DRAM tensor
+
+The DRAM overload streams zeros from a pre-zeroed L1 source, read from its **front (read) pointer**. A CB/DFB is required to source the zeros (the reserved L1 zeros region is reclaimed on Quasar). **Reuse a `DataflowBuffer` (or `CircularBuffer`) the kernel already has** — do not allocate one solely for this if possible, since CB/DFB consumes Quasar tile counter resources. Zero one entry, `push_back`/`wait_front` it to the front before streaming, then `pop_front` to release:
+```cpp
+Noc noc;
+DataflowBuffer dfb(dfb_id);              // a DFB the kernel already owns
+
+// 1. Pre-zero the DFB entry once
+dfb.reserve_back(1);
+noc.async_write_zeros(dfb, zero_bytes);
+noc.write_zeros_l1_barrier();
+dfb.push_back(1);
+
+// 2. Stream zeros to DRAM pages from the (front of the) DFB
+dfb.wait_front(1);                       // the zeroed entry is now the front
+for (uint32_t p = page_start; p < page_end; ++p) {
+    noc.async_write_zeros(
+        dram_accessor,                   // Destination DRAM tensor accessor
+        page_size,                       // Number of bytes to zero (per page)
+        {.page_id = p},                  // Destination page args (page_id, optional offset_bytes)
+        dfb                              // Pre-zeroed L1 source of zeros
+    );
+}
+noc.write_zeros_dram_barrier();
+dfb.pop_front(1);                        // release; the buffer is left as it was
+```
+
+**Each call zeroes within a single page:** `offset_bytes + size_bytes` must not exceed the tensor's aligned page size. Zero a multi-page region by looping over `page_id`.
+
+Any buffer the kernel already owns can be reused (i.e. it needn't be one dedicated to zeroing). The pre-zeroed prefix must cover at least `min(page_size, NOC_MAX_BURST_SIZE)` bytes. This overload pairs with `write_zeros_dram_barrier()`.
+
+#### Barriers and the Quasar command-buffer contract
+
+`async_write_zeros` is asynchronous; pair each overload with its barrier:
+
+| Overload | Barrier |
+|---|---|
+| L1 | `noc.write_zeros_l1_barrier()` |
+| DRAM | `noc.write_zeros_dram_barrier()` |
+
+**Quasar contract:** the L1 zero borrows the overlay write command buffer (cmd buffer 0) and switches it to iDMA "zero mode"; it is restored to normal write mode only by `write_zeros_l1_barrier()`. **Do not issue any other NoC write (`noc.async_write` / `noc_async_write`, which also use cmd buffer 0) on the same RISC between `async_write_zeros` and `write_zeros_l1_barrier()`**: such a write would execute in zero mode and silently write zeros instead of its data. The rule is **zero → barrier → reuse**. NoC *reads* use a separate command buffer and are unaffected, so reads may be interleaved. On Wormhole/Blackhole there is no command-buffer borrow (the zero is a read loopback and the barrier is a plain read barrier).
+
+For performance, issue one barrier after a batch of zeros rather than per-call, subject to the no-intervening-write rule above on Quasar.
 
 ---
 

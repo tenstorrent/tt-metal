@@ -2375,29 +2375,19 @@ class EltwiseBinaryGolden(FidelityMasking):
             MathOperation.Elwmul: self._mul,
         }
 
-    def _quantize_input(
-        self, operand, fmt, data_format, preserve_input_precision=False
-    ):
-        """Quantize a single operand to match what hardware sees after unpack.
-
-        Args:
-            preserve_input_precision: When True, plain FP inputs are cast to
-                their own format's dtype rather than the output's. Set this for
-                MX-output paths on Quasar with implied math format — the dest
-                register holds values in the input's precision (fp16 for
-                Float16, bf16 for Float16_b).
-        """
-        if fmt is None:
-            return to_tensor(operand, data_format)
-        if fmt == DataFormat.Bfp2_b:
+    def _quantize_input(self, operand, input_fmt, output_fmt):
+        """Quantize a single operand to match what hardware sees after unpack."""
+        if input_fmt is None:
+            return to_tensor(operand, output_fmt)
+        if input_fmt == DataFormat.Bfp2_b:
             return _bfp2b_to_float16b(operand)
-        if fmt == DataFormat.Bfp4_b:
+        if input_fmt == DataFormat.Bfp4_b:
             return _bfp4b_to_float16b(operand)
-        if fmt == DataFormat.Bfp8_b:
+        if input_fmt == DataFormat.Bfp8_b:
             return _bfp8b_to_float16b(operand)
-        if fmt.is_mx_format():
-            return quantize_mx_tensor_chunked(operand, fmt)
-        return to_tensor(operand, fmt if preserve_input_precision else data_format)
+        if input_fmt.is_mx_format():
+            return quantize_mx_tensor_chunked(operand, input_fmt)
+        return to_tensor(operand, input_fmt)
 
     _UNSET = object()
 
@@ -2474,12 +2464,8 @@ class EltwiseBinaryGolden(FidelityMasking):
         )
         # Step 1: Quantize each input independently to match what hardware sees
         # after unpacking from L1. Each operand uses its own format.
-        operand1 = self._quantize_input(
-            operand1, input_format, data_format, preserve_input_precision=out_is_mx
-        )
-        operand2 = self._quantize_input(
-            operand2, input_format_B, data_format, preserve_input_precision=out_is_mx
-        )
+        operand1 = self._quantize_input(operand1, input_format, data_format)
+        operand2 = self._quantize_input(operand2, input_format_B, data_format)
 
         # Fidelity masking models the source register decomposition, so use
         # the *input* format, not the output format.  Block-float / MX formats
@@ -2566,7 +2552,11 @@ class EltwiseBinaryGolden(FidelityMasking):
             # closely.
             result = quantize_mx_tensor_chunked(result, data_format)
         else:
-            result = to_tensor(result, data_format)
+            if data_format.is_integer():
+                torch_format = format_dict[data_format]
+                result = saturate_integer(result, data_format, torch_format)
+            else:
+                result = to_tensor(result, data_format)
 
         # Final FTZ pass: hardware always flushes subnormals to zero. Do this
         # after all quantization so it covers every output format (including

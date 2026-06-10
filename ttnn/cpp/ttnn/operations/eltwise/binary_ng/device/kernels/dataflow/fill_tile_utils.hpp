@@ -8,8 +8,8 @@
 
 // Fills one full tile of bfloat16 with a scalar value
 // Scalar is assumed to be a 16-bit value double packed into a u32
-FORCE_INLINE void fill_with_val_bfloat16(uint32_t cb_id, uint32_t packed_scalar) {
-    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
+FORCE_INLINE void fill_with_val_bfloat16(uint32_t l1_write_ptr, uint32_t packed_scalar) {
+    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_ptr);
     // 1024 is the number of elements in a full tile, but since the scalar is packed into a u32,
     // each iteration writes 2 elements, hence the division by 2
     for (uint32_t i = 0; i < 512; ++i) {
@@ -18,8 +18,8 @@ FORCE_INLINE void fill_with_val_bfloat16(uint32_t cb_id, uint32_t packed_scalar)
 }
 
 template <uint32_t ElementsV, class ScalarT>
-FORCE_INLINE void fill_with_val(uint32_t cb_id, ScalarT scalar) {
-    auto* ptr = reinterpret_cast<volatile tt_l1_ptr ScalarT*>(get_write_ptr(cb_id));
+FORCE_INLINE void fill_with_val(uint32_t l1_write_ptr, ScalarT scalar) {
+    auto* ptr = reinterpret_cast<volatile tt_l1_ptr ScalarT*>(l1_write_ptr);
     for (uint32_t i = 0; i < ElementsV; ++i) {
         ptr[i] = scalar;
     }
@@ -27,14 +27,14 @@ FORCE_INLINE void fill_with_val(uint32_t cb_id, ScalarT scalar) {
 
 // Reads the very first element of the CB and fills the entire tile with that value.
 // Tile is assumed to have 16-bit elements
-FORCE_INLINE void fill_tile_with_first_element_bfloat16(uint32_t cb_id) {
-    auto* read_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id));
+FORCE_INLINE void fill_tile_with_first_element_bfloat16(uint32_t l1_write_ptr) {
+    auto* read_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_ptr);
     const uint16_t first_elem = read_ptr[0];
-    const uint32_t packed_first_elem = first_elem << 16 | first_elem;
+    const uint32_t packed_first_elem = (static_cast<uint32_t>(first_elem) << 16) | static_cast<uint32_t>(first_elem);
 
     // Since all elements in the tile are the same, we can ignore the faces and assume the entire
     // tile is contiguous in memory.
-    auto* write_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
+    auto* write_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_ptr);
     // TODO: should I fill one face like this and then use noc to fill the rest?
     for (uint32_t i = 0; i < 512; ++i) {
         write_ptr[i] = packed_first_elem;
@@ -44,11 +44,11 @@ FORCE_INLINE void fill_tile_with_first_element_bfloat16(uint32_t cb_id) {
 // Reads the very first element of the CB and fills the entire tile with that value.
 // Tile is assumed to have 32-bit elements (float32 or int32).
 template <typename T>
-FORCE_INLINE void fill_tile_with_first_element(uint32_t cb_id) {
-    auto* read_ptr = reinterpret_cast<volatile tt_l1_ptr T*>(get_write_ptr(cb_id));
+FORCE_INLINE void fill_tile_with_first_element(uint32_t l1_write_ptr) {
+    auto* read_ptr = reinterpret_cast<volatile tt_l1_ptr T*>(l1_write_ptr);
     const T first_elem = read_ptr[0];
 
-    auto* write_ptr = reinterpret_cast<volatile tt_l1_ptr T*>(get_write_ptr(cb_id));
+    auto* write_ptr = reinterpret_cast<volatile tt_l1_ptr T*>(l1_write_ptr);
     for (uint32_t i = 0; i < 1024; ++i) {
         write_ptr[i] = first_elem;
     }
@@ -61,8 +61,8 @@ FORCE_INLINE void fill_tile_with_first_element(uint32_t cb_id) {
 //                  4 faces x 16 rows/face, one exponent byte per row of 16 elements
 //   Bytes 64-1087: Data section (256 uint32_t words = 1024 bytes)
 //                  4 faces x 256 bytes/face, one byte per element
-FORCE_INLINE void fill_tile_with_first_element_bfp8(uint32_t cb_id) {
-    auto* word_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
+FORCE_INLINE void fill_tile_with_first_element_bfp8(uint32_t l1_write_ptr) {
+    auto* word_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_ptr);
     uint32_t packed_exp = (word_ptr[0] & 0xFF) * 0x01010101u;
     uint32_t packed_data = (word_ptr[16] & 0xFF) * 0x01010101u;
 
@@ -90,8 +90,8 @@ FORCE_INLINE void fill_tile_with_first_element_bfp8(uint32_t cb_id) {
 //   Bytes 64-575: Data section (128 uint32_t words = 512 bytes)
 //                 4 faces x 128 bytes/face, 4 bits per element (2 elements per byte)
 // BFP4 nibble packing: element[even] in low nibble (bits 0-3), element[odd] in high nibble (bits 4-7).
-FORCE_INLINE void fill_tile_with_first_element_bfp4(uint32_t cb_id) {
-    auto* byte_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(get_write_ptr(cb_id));
+FORCE_INLINE void fill_tile_with_first_element_bfp4(uint32_t l1_write_ptr) {
+    auto* byte_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(l1_write_ptr);
     uint8_t exp_val = byte_ptr[0];  // First exponent byte
 
     // Element 0 (the scalar) is in the LOW nibble of the first data byte.
@@ -105,7 +105,7 @@ FORCE_INLINE void fill_tile_with_first_element_bfp4(uint32_t cb_id) {
     uint32_t packed_data =
         (uint32_t)data_val | ((uint32_t)data_val << 8) | ((uint32_t)data_val << 16) | ((uint32_t)data_val << 24);
 
-    auto* write_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
+    auto* write_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_ptr);
     // Fill 64 exponent bytes = 16 uint32_t words
     for (uint32_t i = 0; i < 16; ++i) {
         write_ptr[i] = packed_exp;
@@ -125,9 +125,9 @@ FORCE_INLINE void fill_tile_with_first_element_bfp4(uint32_t cb_id) {
 // Face arrangement: 0=top-left, 1=top-right, 2=bottom-left, 3=bottom-right
 // Column broadcast: left faces (0,2) have column 0 data; right faces (1,3) are zero.
 //   -> Extract column 0 nibble, pack into both nibbles, fill row, then copy left to right face.
-FORCE_INLINE void fill_tile_with_first_column_bfp4(uint32_t cb_id) {
-    auto* byte_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(get_write_ptr(cb_id));
-    auto* word_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
+FORCE_INLINE void fill_tile_with_first_column_bfp4(uint32_t l1_write_ptr) {
+    auto* byte_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(l1_write_ptr);
+    auto* word_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_ptr);
 
     // Process left->right face pairs: (face0->face1) and (face2->face3)
     for (uint32_t pair = 0; pair < 2; ++pair) {
@@ -164,9 +164,9 @@ FORCE_INLINE void fill_tile_with_first_column_bfp4(uint32_t cb_id) {
 // Tile is assumed to be in BFP4 format (Bfp4 or Bfp4_b).
 // Row broadcast: top faces (0,1) have row 0 data; bottom faces (2,3) are zero.
 //   -> Replicate row 0 within top faces, then copy top faces to bottom faces.
-FORCE_INLINE void fill_tile_with_first_row_bfp4(uint32_t cb_id) {
-    auto* byte_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(get_write_ptr(cb_id));
-    auto* word_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
+FORCE_INLINE void fill_tile_with_first_row_bfp4(uint32_t l1_write_ptr) {
+    auto* byte_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(l1_write_ptr);
+    auto* word_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_ptr);
 
     // Pack row-0 exponents into words and write all 4 faces at once
     uint32_t packed_exp0 = static_cast<uint32_t>(byte_ptr[0]) * 0x01010101u;
@@ -226,8 +226,8 @@ FORCE_INLINE void fill_tile_with_first_row_bfp4(uint32_t cb_id) {
 // Face arrangement: 0=top-left, 1=top-right, 2=bottom-left, 3=bottom-right
 // Column broadcast: left faces (0,2) have column 0 data; right faces (1,3) are zero.
 //   -> Replicate column 0 within left faces, then copy left faces to right faces.
-FORCE_INLINE void fill_tile_with_first_column_bfp8(uint32_t cb_id) {
-    auto* word_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
+FORCE_INLINE void fill_tile_with_first_column_bfp8(uint32_t l1_write_ptr) {
+    auto* word_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_ptr);
 
     // --- Face pair 0: face0 (left) -> face1 (right) ---
     // Replicate column 0 across all 16 columns in left face data (4 words per row)
@@ -278,9 +278,9 @@ FORCE_INLINE void fill_tile_with_first_column_bfp8(uint32_t cb_id) {
 // Tile is assumed to be in BFP8 format (Bfp8 or Bfp8_b).
 // Row broadcast: top faces (0,1) have row 0 data; bottom faces (2,3) are zero.
 //   -> Replicate row 0 within top faces, then copy top faces to bottom faces.
-FORCE_INLINE void fill_tile_with_first_row_bfp8(uint32_t cb_id) {
-    auto* byte_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(get_write_ptr(cb_id));
-    auto* word_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
+FORCE_INLINE void fill_tile_with_first_row_bfp8(uint32_t l1_write_ptr) {
+    auto* byte_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(l1_write_ptr);
+    auto* word_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_ptr);
 
     // Pack row-0 exponents into words and write all 4 faces at once
     uint32_t packed_exp0 = static_cast<uint32_t>(byte_ptr[0]) * 0x01010101u;
@@ -343,11 +343,11 @@ FORCE_INLINE void fill_tile_with_first_row_bfp8(uint32_t cb_id) {
 
 // Reads the very first row of the CB and fills the entire tile with the same row.
 // Tile is assumed to have 16-bit elements.
-FORCE_INLINE void fill_tile_with_first_row_bfloat16(uint32_t cb_id) {
+FORCE_INLINE void fill_tile_with_first_row_bfloat16(uint32_t l1_write_ptr) {
     // Here we have to account for the fact that a tile consists of 4 16x16 faces.
     // So we have to fill faces 0 and 2 with the first row of face 0, and faces 1 and 3
     // with the first row of face 1.
-    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
+    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_ptr);
     uint32_t row_offset = 8;  // start at second row since first row is source
     uint32_t num_rows = 15;
 
@@ -368,9 +368,9 @@ FORCE_INLINE void fill_tile_with_first_row_bfloat16(uint32_t cb_id) {
 
 // Reads the very first row of the CB and fills the entire tile with the same row.
 // Tile is assumed to have 32-bit elements (float32/int32).
-FORCE_INLINE void fill_tile_with_first_row(uint32_t cb_id) {
+FORCE_INLINE void fill_tile_with_first_row(uint32_t l1_write_ptr) {
     // Tile with 4 faces (16x16) and 32-bit elements
-    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
+    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_ptr);
 
     uint32_t row_offset = 16;  // Start at the second row (offset by 16 elements)
     uint32_t num_rows = 15;    // 15 rows to fill per face
@@ -392,11 +392,11 @@ FORCE_INLINE void fill_tile_with_first_row(uint32_t cb_id) {
 
 // Reads the very first column of the CB and fills the entire tile with the same column.
 // Tile is assumed to have 16-bit elements.
-FORCE_INLINE void fill_tile_with_first_column_bfloat16(uint32_t cb_id) {
+FORCE_INLINE void fill_tile_with_first_column_bfloat16(uint32_t l1_write_ptr) {
     // Here we have to account for the fact that a tile consists of 4 16x16 faces.
     // So we have to fill faces 0 and 1 with the first column of face 0, and faces 2 and 3
     // with the first column of face 2.
-    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id));
+    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_ptr);
 
     constexpr uint32_t num_rows = 16;
 
@@ -417,9 +417,9 @@ FORCE_INLINE void fill_tile_with_first_column_bfloat16(uint32_t cb_id) {
 
 // Reads the very first column of the CB and fills the entire tile with the same column.
 // Tile is assumed to have 32-bit elements (float32/int32).
-FORCE_INLINE void fill_tile_with_first_column(uint32_t cb_id) {
+FORCE_INLINE void fill_tile_with_first_column(uint32_t l1_write_ptr) {
     // Tile with 4 faces (16x16) and 32-bit elements
-    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
+    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_ptr);
 
     constexpr uint32_t num_rows = 16;             // Number of rows per face
     constexpr uint32_t face_row_stride = 16;      // Elements per row

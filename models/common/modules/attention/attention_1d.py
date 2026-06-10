@@ -956,7 +956,6 @@ class Attention1D(LightweightModule):
         else:
             self.wqkv_bias_prefill = None
 
-        # Resolve kv_cache from config (may be LazyWeight or ttnn.Tensor)
         if cfg.kv_cache is not None:
             keys, values = cfg.kv_cache
             if isinstance(keys, LazyWeight):
@@ -965,6 +964,10 @@ class Attention1D(LightweightModule):
                 values = values.get_device_weight()
             self.kv_cache = (keys, values)
         else:
+            assert not hasattr(self, "kv_cache") or self.kv_cache is None, (
+                "kv_cache was set directly on Attention1D instead of via config.kv_cache. "
+                "Use model.set_kv_cache() to bind kv_cache through the config."
+            )
             self.kv_cache = None
 
         self._device_weights_loaded = True
