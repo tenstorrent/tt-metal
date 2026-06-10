@@ -14,8 +14,11 @@ Required Options:
 Optional:
     --config <4x8|4x32|8x16|4x8z|2x4x4z|4x32z|<N>x32x4|8x4x4z>  Mesh configuration (default: 4x32)
                                         <N>x32x4 (N in 2..9) is a multi-mesh config of N fully-connected
-                                        32x4 torus meshes, one galaxy per host (N hosts, rank i pinned to
-                                        host i); launched like 4x32z. e.g. 4x32x4.
+                                        32x4 torus meshes. Each 32x4 mesh is built from 4 BH galaxies
+                                        (host_topology 4x1), one galaxy per host, so it needs 4*N hosts
+                                        and launches 4*N ranks (4 per mesh, each with its own
+                                        TT_MESH_HOST_RANK). Provide --hosts grouped 4 per mesh, in
+                                        physical ring order within each group. e.g. 4x32x4 -> 16 hosts.
                                         The *z configs are multi-mesh layouts that exercise Z links
                                         (inter-mesh) in addition to the intra-mesh N/S/E/W links.
                                         They launch one MPI rank per mesh, each with its own TT_MESH_ID.
@@ -36,7 +39,7 @@ Optional:
                                         4x32z default:  tt_metal/fabric/mesh_graph_descriptors/quad_bh_galaxy_4x4x8_z_torus_graph_descriptor.textproto
                                                        (4 galaxies as 4 Z-connected 8x4 torus meshes)
                                         <N>x32x4 default: tt_metal/fabric/mesh_graph_descriptors/<N>_quad_bh_galaxy_<N>x32x4_torus_graph_descriptor.textproto
-                                                       (N fully-connected 32x4 torus meshes, one per host; N in 2..9)
+                                                       (N fully-connected 32x4 torus meshes; each mesh = 4 galaxies/hosts; N in 2..9)
                                         8x4x4z default: tt_metal/fabric/mesh_graph_descriptors/quad_bh_galaxy_8x4x4_z_graph_descriptor.textproto
                                                        (8 Z-connected 4x4 meshes across 4 galaxies; even single-host, odd split 2x1)
     --test-binary <path>                Path to test binary
@@ -68,8 +71,10 @@ MESH_GRAPH_DESC_PATH_4x8z="tt_metal/fabric/mesh_graph_descriptors/single_bh_gala
 # 2x4x4z: single galaxy split into 2 Z-connected 4x4 meshes (dual_4x4 layout).
 MESH_GRAPH_DESC_PATH_2x4x4z="tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_2x4x4_z_graph_descriptor.textproto"
 MESH_GRAPH_DESC_PATH_4x32z="tt_metal/fabric/mesh_graph_descriptors/quad_bh_galaxy_4x4x8_z_torus_graph_descriptor.textproto"
-# Nx32x4 family (2x32x4 .. 9x32x4): N fully-connected 32x4 torus meshes, one galaxy per host
-# (rank i -> host i). The descriptor path is derived from N below:
+# Nx32x4 family (2x32x4 .. 9x32x4): N fully-connected 32x4 torus meshes. Each
+# 32x4 mesh is built from 4 BH galaxies (host_topology 4x1), so the run uses
+# 4*N hosts (4 ranks per mesh, one galaxy per host). The descriptor path is
+# derived from N below:
 #   tt_metal/fabric/mesh_graph_descriptors/<N>_quad_bh_galaxy_<N>x32x4_torus_graph_descriptor.textproto
 MESH_GRAPH_DESC_PATH_8x4x4z="tt_metal/fabric/mesh_graph_descriptors/quad_bh_galaxy_8x4x4_z_graph_descriptor.textproto"
 CONFIG="4x32"
@@ -652,9 +657,11 @@ print_fabric_final_summary() {
 }
 
 if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || -n "$NX32X4_NUM_MESHES" || "$CONFIG" == "8x4x4z" ]]; then
-    # Multi-mesh Z configs: launch one MPI rank per mesh, each with its own
-    # TT_MESH_ID, so the descriptor's inter-mesh (Z) connections are exercised
-    # alongside the intra-mesh N/S/E/W links during neighbor exchange.
+    # Multi-mesh configs: launch one MPI rank per mesh host (single-host meshes
+    # use one rank per mesh; multi-host meshes like <N>x32x4 use 4 ranks per mesh,
+    # one per galaxy/host, each with its own TT_MESH_HOST_RANK). Every rank also
+    # carries its TT_MESH_ID, so the descriptor's inter-mesh (Z / fully-connected)
+    # links are exercised alongside the intra-mesh N/S/E/W links during exchange.
     Z_VISIBLE_DEVICES=()
     Z_RANK_HOSTS=()
     Z_GLOBAL_HOST=()
@@ -691,19 +698,45 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || -n
         resolve_quad_split_rank_table "$HOSTS" "$NUM_RANKS"
         write_quad_split_rankfile
         echo "Running multi-mesh 8x4x4z (8 Z-connected 4x4 meshes across 4 hosts, slice-based split; 12 ranks, even=single-host {1,2}, odd=split {3}+next-host {0}); ranks pinned via rankfile."
-    else
-        # 4x32z / <N>x32x4: one full galaxy per host, N inter-connected meshes
-        # (4x32z uses Z links and has 4 meshes; <N>x32x4 uses non-Z fully-connected
-        # links and has N meshes). Those inter-mesh connections only exist between
-        # specific physically-adjacent galaxies, so rank i (== mesh i) MUST land on
-        # a deterministic host. We therefore pin rank i to the i-th --hosts entry
-        # (do NOT rely on MPI round-robin). Provide hosts in the same order as
-        # scaleout_configs/full_rankfile.
-        if [[ -n "$NX32X4_NUM_MESHES" ]]; then
-            NUM_MESHES="$NX32X4_NUM_MESHES"
-        else
-            NUM_MESHES=4
+    elif [[ -n "$NX32X4_NUM_MESHES" ]]; then
+        # <N>x32x4: N fully-connected 32x4 torus meshes. Each 32x4 mesh is built
+        # from 4 BH galaxies (descriptor host_topology 4x1), i.e. ONE galaxy per
+        # host and 4 hosts per mesh -> 4*N hosts / 4*N ranks total. Ranks are
+        # assigned mesh-major, host-rank-minor: rank r -> mesh_id (r / 4),
+        # host_rank (r % 4). host_rank h owns rows [8h, 8h+7] of the 32-dim RING
+        # torus, so each consecutive group of 4 --hosts entries must be the 4
+        # galaxies of one physical 32x4 torus, listed in ring order (host_rank
+        # 0,1,2,3). The groups themselves can be in any order relative to each
+        # other because the mesh-level graph is fully connected (symmetric).
+        # Each (mesh_id, host_rank) is pinned to its --hosts entry via a rankfile;
+        # TT_MESH_HOST_RANK is required so the control plane knows each host's
+        # slice of the multi-host mesh.
+        NUM_MESHES="$NX32X4_NUM_MESHES"
+        HOSTS_PER_MESH=4
+        NUM_RANKS=$(( NUM_MESHES * HOSTS_PER_MESH ))
+        IFS=',' read -ra Z_RANK_HOSTS <<< "$HOSTS"
+        if [[ "${#Z_RANK_HOSTS[@]}" -ne "$NUM_RANKS" ]]; then
+            echo "Error: --config $CONFIG requires exactly $NUM_RANKS hosts (4 galaxies per 32x4 mesh x $NUM_MESHES meshes) in --hosts (got ${#Z_RANK_HOSTS[@]})"
+            exit 1
         fi
+        for ((r = 0; r < NUM_RANKS; r++)); do
+            Z_RANK_MESH_ID[$r]=$(( r / HOSTS_PER_MESH ))
+            Z_RANK_HOST_RANK[$r]=$(( r % HOSTS_PER_MESH ))
+            Z_RANK_PIN_HOSTS[$r]="${Z_RANK_HOSTS[$r]}"
+        done
+        write_quad_split_rankfile
+        echo "Running multi-mesh $CONFIG ($NUM_MESHES fully-connected 32x4 torus meshes; 4 galaxies/hosts per mesh, $NUM_RANKS ranks):"
+        for ((r = 0; r < NUM_RANKS; r++)); do
+            echo "  rank $r -> mesh_id ${Z_RANK_MESH_ID[$r]} host_rank ${Z_RANK_HOST_RANK[$r]} -> ${Z_RANK_PIN_HOSTS[$r]}"
+        done
+    else
+        # 4x32z: 4 Z-connected 8x4 torus meshes, one full galaxy per host (4 hosts).
+        # The Z ring (mesh 0->1->2->3->0) only exists between specific physically-
+        # adjacent galaxies, so rank i (== mesh i) MUST land on a deterministic
+        # host. We therefore pin rank i to the i-th --hosts entry (do NOT rely on
+        # MPI round-robin). Provide hosts in the same order as
+        # scaleout_configs/full_rankfile.
+        NUM_MESHES=4
         IFS=',' read -ra Z_RANK_HOSTS <<< "$HOSTS"
         if [[ "${#Z_RANK_HOSTS[@]}" -ne "$NUM_MESHES" ]]; then
             echo "Error: --config $CONFIG requires exactly $NUM_MESHES hosts in --hosts (got ${#Z_RANK_HOSTS[@]})"
@@ -721,9 +754,10 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || -n
     fi
     echo ""
 
-    # Configs other than 8x4x4z launch one rank per mesh (mesh_id == rank, no
+    # Configs that didn't already populate the per-rank arrays (i.e. everything
+    # except 8x4x4z and <N>x32x4) launch one rank per mesh (mesh_id == rank, no
     # explicit host rank). Fill the per-rank arrays so the segment builder below
-    # is shared by all Z configs.
+    # is shared by all multi-mesh configs.
     if [[ -z "$NUM_RANKS" ]]; then
         NUM_RANKS="$NUM_MESHES"
         for ((i = 0; i < NUM_RANKS; i++)); do
@@ -734,10 +768,11 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || -n
 
     # Assemble the per-rank ":"-separated MPMD segments shared by the docker
     # and no-docker launch paths. Each segment carries its own TT_MESH_ID (and,
-    # where resolved, TT_VISIBLE_DEVICES). 8x4x4z additionally sets
-    # TT_MESH_HOST_RANK (required on multi-host systems, and distinguishes the
-    # two ranks of a split mesh). Host placement for 4x32z/8x4x4z is handled by
-    # the OpenMPI rankfile in Z_GLOBAL_HOST, not per-segment --host.
+    # where resolved, TT_VISIBLE_DEVICES). Multi-host-mesh configs (8x4x4z and
+    # <N>x32x4) additionally set TT_MESH_HOST_RANK (required on multi-host
+    # systems, and distinguishes the per-host slices of a mesh). Host placement
+    # for 4x32z/8x4x4z/<N>x32x4 is handled by the OpenMPI rankfile in
+    # Z_GLOBAL_HOST, not per-segment --host.
     # TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS matches full_rank_binding.yaml so the
     # slowest ethernet handshakes don't trip the Fabric Router Sync timeout.
     Z_SEGMENTS=()
