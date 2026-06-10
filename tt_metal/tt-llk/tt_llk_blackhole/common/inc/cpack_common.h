@@ -570,6 +570,11 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
 
     // Set packer strides
     set_packer_strides<PackMode::Default>(pack_output_src_format, tile_c_dim);
+
+    // Program the packer X (datum) counter. This is the packer state that used to be owned by
+    // _llk_pack_init_; ownership now lives solely in configure_pack and this reconfig path (mirroring
+    // the Wormhole change). On Blackhole x_start/x_end must stay within a single row (0..FACE_C_DIM-1).
+    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
 }
 
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>

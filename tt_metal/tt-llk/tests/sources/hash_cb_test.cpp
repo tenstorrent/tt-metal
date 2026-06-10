@@ -104,7 +104,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint32_t int32_fmt = static_cast<std::uint32_t>(DataFormat::Int32);
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(
         int32_fmt, int32_fmt, 32 * 32 * 4 /* INT32 tile size in bytes */, FACE_R_DIM, 4 /* num_faces */);
+#ifdef ARCH_BLACKHOLE
+    // Blackhole init takes pack_src_format first; strides + X counter come from the hw-configure above.
+    _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
+        int32_fmt, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
+#else
     _llk_pack_init_<PackMode::Default>(int32_fmt, FACE_R_DIM, 4 /* num_faces */);
+#endif
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
     _llk_packer_wait_for_math_done_();
