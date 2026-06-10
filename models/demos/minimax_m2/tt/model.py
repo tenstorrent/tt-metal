@@ -347,9 +347,15 @@ class Model:
         batch_size=1,
         skip_lm_head=False,
         page_tables_per_layer=None,
+        on_layer_complete=None,
     ):
         """
         Shared forward pass through decoder layers and final projection.
+
+        on_layer_complete: optional callback ``fn(layer_idx)`` invoked after each
+            decoder layer finishes. This is the SEAM for per-layer KV migration in
+            the prefill/decode-disaggregation pipeline (see PREFILL_PROPOSAL.md §7).
+            Default None = no-op (the validated single-process path is unchanged).
 
         Args:
             hidden_states: Input tensor
@@ -392,6 +398,9 @@ class Model:
                 user_id=user_id,
                 batch_size=batch_size,
             )
+            # Per-layer migration seam (no-op unless a pipeline supplies a callback).
+            if on_layer_complete is not None:
+                on_layer_complete(i)
         logits = hidden_states
 
         if get_last_token != -1:
@@ -574,6 +583,7 @@ class Model:
         batch_size=1,
         skip_lm_head=False,
         page_tables_per_layer=None,
+        on_layer_complete=None,
     ):
         if page_tables_per_layer is None:
             # See ttnn_decode_forward: the bridge stashes per-layer page tables
@@ -606,6 +616,7 @@ class Model:
             batch_size=batch_size,
             skip_lm_head=skip_lm_head,
             page_tables_per_layer=page_tables_per_layer,
+            on_layer_complete=on_layer_complete,
         )
 
         return logits

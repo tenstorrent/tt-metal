@@ -3,6 +3,30 @@
 > **Goal of this document:** Define the architecture and work breakdown for a
 > *functional* (correctness-first, not optimized) MiniMax-M2 prefill pipeline
 > on a single Blackhole Galaxy. This is a starting point for team discussion.
+>
+> **This is a LIVING doc** — it is kept in sync with the code as the source of
+> truth for the team (and for handing context to an agent). Rule: it never claims
+> something works that isn't validated; status is either *validated (with PCC +
+> conditions)* or *scaffold (owner + blocker)*.
+
+---
+
+## 0. Status (living) — last updated 2026-06-10
+
+**Model (validated, single Wormhole, TP=1/EP=1/SP=1, random weights, seq=128):**
+attention block 0.9991 · router (decomposed) · experts 0.9990 · **full decoder layer
+0.99993** vs HF. The M2 architecture deltas (partial RoPE, distributed QK-norm,
+sigmoid+bias router, SiLU-SwiGLU experts, no biases/sinks/sliding-window) are done.
+
+**In progress — serving skeleton (scaffold, see §4/§8):** prefill runner + pipeline +
+per-layer KV migration seam + chunked prefill. Tiering:
+- *Tier 1 (build + validate here):* chunked prefill (op confirmed, see §11.2), standalone runner.
+- *Tier 2 (seam/stub, cross-team / multi-card):* per-layer migration, P/D disaggregation.
+- *Tier 3 (defer, undefined):* EP=8 (`experts_throughput/` is the future home, untouched).
+
+**Not validated anywhere yet:** TP>1 / EP / SP collectives, paged KV read-back, full
+model logits, real weights, bfp4 accuracy, decode path, long context. All need the
+multi-card Blackhole box.
 
 ---
 
@@ -426,9 +450,15 @@ Option B: migrate after all chunks of a layer complete (per-layer only)
   → recommended for functional bring-up
 ```
 
-**2. Does chunked_scaled_dot_product_attention support MiniMax-M2's shapes?**
-- MiniMax-M2 uses partial RoPE (dim 64), QK-norm, full causal (no sliding window).
-- Verify `chunk_start_idx` parameter works with the kernel as-is, or if adaptation needed.
+**2. Does chunked_scaled_dot_product_attention support MiniMax-M2's shapes? — RESOLVED ✅**
+- `ttnn.transformer.chunked_scaled_dot_product_attention(q, k, v, page_table, chunk_start_idx[/_tensor], ...)`
+  exists (ttnn/cpp/ttnn/operations/transformer/sdpa/sdpa.hpp:29). Scalar or device-tensor chunk_start_idx.
+- GQA / head_dim agnostic (NQH/NKH are runtime args); llama3_70b_galaxy uses it with GQA + head_dim 128.
+- Partial RoPE + QK-norm happen BEFORE SDPA, so the kernel sees plain Q/K — no kernel change needed.
+- **Constraint:** chunked SDPA **requires paged KV** (reads K/V from the cache via page_table; no non-paged
+  chunked variant). So chunked prefill ⇒ paged mode. Bonus: this exercises the KV-cache READ path
+  (currently unvalidated). `chunk_start_idx` is the ABSOLUTE token position and must be a multiple of
+  q_chunk_size (scalar variant). Integration is "call the op + slice page_table per chunk", not new kernel work.
 
 **3. SP=4 + chunked prefill — does each row see seq/4 per chunk, or the full chunk?**
 - With SP=4 and chunk_size=5120: each row sees 1280 tokens per chunk.
