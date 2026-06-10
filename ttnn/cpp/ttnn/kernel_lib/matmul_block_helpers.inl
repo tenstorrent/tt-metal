@@ -91,7 +91,8 @@ ALWI void matmul_block(
     PostKBlockFn post_k_block,
     KBlockInnerDimFn k_block_inner_dim,
     In0SourceFn in0_source_fn,
-    In1BaseOffsetFn in1_base_offset_fn) {
+    In1BaseOffsetFn in1_base_offset_fn,
+    uint32_t pin_base_tile_offset) {
 
     // OutWithUntilize requires the SubblockMajor pack path: pack_untilize_dest is
     // initialized for a fixed block_ct_dim and packs from DST starting at offset 0,
@@ -368,12 +369,16 @@ ALWI void matmul_block(
                 for (uint32_t in1_subblock = 0; in1_subblock < shape.in1_num_subblocks; in1_subblock++) {
                     tile_regs_acquire();
 
-                    // Subblock tile offset within the one-shot interm reservation
-                    // (SubblockMajor layout). Used by the pin path to read/write each
-                    // K-block's partial at a fixed position instead of advancing the CB
-                    // ptrs. Computed unconditionally — the compiler DCEs it when pin=false.
+                    // Subblock tile offset within the pinned interm region (SubblockMajor
+                    // layout). Used by the pin path to read/write each K-block's partial
+                    // at a fixed position instead of advancing the CB ptrs.
+                    // pin_base_tile_offset relocates the whole pinned region for callers
+                    // whose interm aliases a FIFO that advances per helper call (conv2d
+                    // Out target, partials_cb_uses_output) — the CB ptrs never move in pin
+                    // mode, so the per-output-block advance must come from this software
+                    // base. Computed unconditionally — the compiler DCEs it when pin=false.
                     const uint32_t subblock_pin_offset =
-                        (in0_subblock * shape.in1_num_subblocks + in1_subblock) * out_num_tiles;
+                        pin_base_tile_offset + (in0_subblock * shape.in1_num_subblocks + in1_subblock) * out_num_tiles;
 
                     // shape.last_in1_subblock_w_valid narrowing: on the last in1 subblock, if the
                     // caller set the override, narrow the matmul FMA's ct_dim so the unpacker

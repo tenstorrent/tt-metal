@@ -627,6 +627,20 @@ struct NoIn1BaseOffset {
  *                      the exception: it reads in1 at per_core_N_in1_sender (unpadded shard
  *                      width) but packs output at per_core_N_compute (padded after subblock-
  *                      growth); those factories must pass the larger pack stride here.
+ *   pin_base_tile_offset
+ *                      Pin-mode only (pin_interm_to_captured_base=true); default 0.
+ *                      Tile offset added to every pinned interm access (spill packs and
+ *                      reloads). The pin path never push_backs interm during the K-loop,
+ *                      so its CB pointers stay at the kernel-entry base across helper
+ *                      calls. When interm aliases a FIFO whose data position advances
+ *                      per call (conv2d's partials_cb_uses_output: interm aliases out_cb,
+ *                      and the Out-target sequential pack advances out_cb one out-block
+ *                      per call), the caller must advance the pinned region in software
+ *                      or spills for output block b>0 land on — and corrupt — output
+ *                      block 0. Pass (output_block_index * out_block_num_tiles) on the
+ *                      Out target with aliased interm; pass 0 (default) when interm has
+ *                      its own L1 region or when the Interm target's exit push already
+ *                      advances the FIFO (FUSE_BIAS / untilize_out paths).
  *
  * @example
  *   // Single-core matmul with defaults — no transpose, no L1 accumulation,
@@ -821,7 +835,8 @@ ALWI void matmul_block(
     PostKBlockFn post_k_block = {},
     KBlockInnerDimFn k_block_inner_dim = {},
     In0SourceFn in0_source_fn = {},
-    In1BaseOffsetFn in1_base_offset_fn = {});
+    In1BaseOffsetFn in1_base_offset_fn = {},
+    uint32_t pin_base_tile_offset = 0);
 
 }  // namespace compute_kernel_lib
 

@@ -483,6 +483,21 @@ void kernel_main() {
             // Pick the buffer the last K-block packs to. Mirrors last_block_target above.
             auto& matmul_out_buf = fuse_bias ? cb_matmul_partials : cb_untilize_mode_out;
 
+            // Pin-region base for this output block. On the Out target with
+            // partials_cb_uses_output, matmul_partials_cb aliases out_cb's L1 but its CB
+            // ptrs never advance under pin (no interm push on the Out path), while the
+            // sequential last-block pack advances out_cb one out-block per iter. Advance
+            // the pinned spill/reload region in software to track it, or block b>0
+            // spills land on — and corrupt — block 0's finished output. The Interm
+            // target needs no offset: its exit push advances partials' own ptrs, and the
+            // top-of-iter re-capture re-pins to the advanced base.
+            constexpr uint32_t out_block_num_tiles = out_subblock_num_tiles * in0_num_subblocks * in1_num_subblocks;
+            constexpr bool out_target_aliased_partials =
+                partials_cb_uses_output && last_block_target != compute_kernel_lib::LastBlockTarget::Interm;
+            const uint32_t pin_base_tile_offset =
+                out_target_aliased_partials ? (in1_block_w_i * in0_num_blocks_h + in0_block_h_i) * out_block_num_tiles
+                                            : 0;
+
             const auto shape = compute_kernel_lib::MatmulBlockShape::of(
                 in0_num_subblocks,
                 in1_num_subblocks,
@@ -519,7 +534,20 @@ void kernel_main() {
                 MatmulPostFn,
                 PreKBlockFn,
                 /*pin_interm_to_captured_base=*/true>(
-                cb_mm_in0, cb_in1, matmul_out_buf, cb_matmul_partials, shape, MatmulPostFn{}, pre_k_block);
+                cb_mm_in0,
+                cb_in1,
+                matmul_out_buf,
+                cb_matmul_partials,
+                shape,
+                MatmulPostFn{},
+                pre_k_block,
+                /*in1_per_core_w=*/0,
+                /*out_row_width=*/0,
+                /*post_k_block=*/{},
+                /*k_block_inner_dim=*/{},
+                /*in0_source_fn=*/{},
+                /*in1_base_offset_fn=*/{},
+                pin_base_tile_offset);
 
             if constexpr (!partials_cb_uses_output) {
                 // Helper's pin path now keeps matmul_partials_cb's CB pointers
