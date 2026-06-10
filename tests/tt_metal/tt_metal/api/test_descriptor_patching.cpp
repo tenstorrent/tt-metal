@@ -170,6 +170,24 @@ TEST(DescriptorPatching, ResolvedBindings_EmptyAfterAddingCb_IsFalse) {
     EXPECT_FALSE(b.empty());
 }
 
+TEST(DescriptorPatching, TensorBufferIndexMap_DuplicateInputReturnsNullopt) {
+    Buffer* buf_a = reinterpret_cast<Buffer*>(0x1000);
+
+    auto index_map = detail::build_tensor_buffer_index_map(std::vector<Buffer*>{buf_a, buf_a}, 2u);
+
+    EXPECT_FALSE(index_map.has_value());
+}
+
+TEST(DescriptorPatching, TensorBufferIndexMap_OutputAliasingInputKeepsInputSlot) {
+    Buffer* buf_a = reinterpret_cast<Buffer*>(0x1000);
+
+    auto index_map = detail::build_tensor_buffer_index_map(std::vector<Buffer*>{buf_a, buf_a}, 1u);
+
+    ASSERT_TRUE(index_map.has_value());
+    ASSERT_EQ(index_map->size(), 1u);
+    EXPECT_EQ(index_map->at(buf_a), 0u);
+}
+
 // ============================================================================
 // SECTION 2: Device integration tests
 // ============================================================================
@@ -608,6 +626,27 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_DuplicateBuffer_Retu
 
     EXPECT_TRUE(resolved.empty());
     EXPECT_TRUE(resolved.rt_args.empty());
+    EXPECT_TRUE(resolved.cbs.empty());
+}
+
+// Regression: an output tensor aliasing an input tensor is the safe in-place
+// case, not the ambiguous "same input passed twice" case. The resolver should
+// preserve the input-slot mapping and keep the cache-hit fast path alive.
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_OutputAliasingInput_KeepsFastPath) {
+    auto buf_a = MakeDramBuffer(device());
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    kd.emplace_runtime_args({0, 0}, {buf_a.get()});
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+
+    Program program{desc};
+    ResolvedBindings resolved = resolve_bindings(program, desc, std::vector<Buffer*>{buf_a.get(), buf_a.get()}, 1u);
+
+    ASSERT_FALSE(resolved.empty());
+    ASSERT_EQ(resolved.rt_args.size(), 1u);
+    EXPECT_EQ(resolved.rt_args[0].tensor_buffer_idx, 0u);
     EXPECT_TRUE(resolved.cbs.empty());
 }
 

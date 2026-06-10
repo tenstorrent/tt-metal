@@ -31,7 +31,6 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
-#include <unordered_set>
 #include <vector>
 
 namespace tt::tt_metal {
@@ -57,37 +56,21 @@ ResolvedBindings resolve_bindings(
     //     mapping them to the one shared address is always correct.  Keep the fast path.
     //
     // tensor_buffers is ordered inputs-first; the first num_input_buffers entries are inputs.
-    {
-        std::unordered_set<Buffer*> input_buffers;   // buffers seen in the input region
-        std::unordered_set<Buffer*> output_buffers;  // buffers seen in the output/workload region
-        for (size_t i = 0; i < tensor_buffers.size(); ++i) {
-            Buffer* buf = tensor_buffers[i];
-            if (!buf) {
-                continue;
-            }
-            const bool is_input = i < num_input_buffers;
-            // An output/workload buffer that aliases an input is the safe in-place case — skip it.
-            if (!is_input && input_buffers.contains(buf)) {
-                continue;
-            }
-            // Otherwise a repeat is ambiguous (matmul(X, X), or a repeated output) — bail to slow path.
-            auto& seen = is_input ? input_buffers : output_buffers;
-            if (!seen.insert(buf).second) {
-                return ResolvedBindings{};
-            }
-        }
+    auto tensor_buffer_to_idx = detail::build_tensor_buffer_index_map(tensor_buffers, num_input_buffers);
+    if (!tensor_buffer_to_idx.has_value()) {
+        return ResolvedBindings{};
     }
 
     // Map each Buffer* to its index in tensor_buffers.  Every binding Buffer* must be
     // present; TT_FATAL fires if a factory used a non-tensor buffer in emplace_runtime_args.
     auto find_idx = [&](Buffer* buf, std::string_view context) -> uint32_t {
-        auto it = std::find(tensor_buffers.begin(), tensor_buffers.end(), buf);
+        auto it = tensor_buffer_to_idx->find(buf);
         TT_FATAL(
-            it != tensor_buffers.end(),
+            it != tensor_buffer_to_idx->end(),
             "Buffer* in {} not found in tensor_args/tensor_return_value enumeration. "
             "All buffer bindings must come directly from input/output tensors.",
             context);
-        return static_cast<uint32_t>(it - tensor_buffers.begin());
+        return it->second;
     };
 
     for (uint32_t k = 0; k < static_cast<uint32_t>(desc.kernels.size()); ++k) {
@@ -166,10 +149,9 @@ ResolvedBindings resolve_bindings(
                 cb_buffer = cb_desc.tensor->mesh_buffer().get_reference_buffer();
             }
             if (cb_buffer) {
-                auto it = std::find(tensor_buffers.begin(), tensor_buffers.end(), cb_buffer);
-                if (it != tensor_buffers.end()) {
-                    result.cbs.push_back(
-                        {program_cbs[ci]->id(), static_cast<uint32_t>(it - tensor_buffers.begin()), cb_desc.address_offset});
+                auto it = tensor_buffer_to_idx->find(cb_buffer);
+                if (it != tensor_buffer_to_idx->end()) {
+                    result.cbs.push_back({program_cbs[ci]->id(), it->second, cb_desc.address_offset});
                 }
                 // else: stable, non-tensor buffer; pegged at create time, no patching needed.
             }

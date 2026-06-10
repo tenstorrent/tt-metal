@@ -39,7 +39,10 @@
 
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <span>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace tt::tt_metal {
@@ -80,6 +83,41 @@ struct ResolvedBindings {
     std::vector<ResolvedCbBinding> cbs;
     bool empty() const noexcept { return rt_args.empty() && cbs.empty(); }
 };
+
+namespace detail {
+
+inline std::optional<std::unordered_map<Buffer*, uint32_t>> build_tensor_buffer_index_map(
+    std::span<Buffer* const> tensor_buffers,
+    size_t num_input_buffers) {
+    std::unordered_map<Buffer*, uint32_t> tensor_buffer_to_idx;
+    tensor_buffer_to_idx.reserve(tensor_buffers.size());
+
+    std::unordered_set<Buffer*> input_buffers;   // buffers seen in the input region
+    std::unordered_set<Buffer*> output_buffers;  // buffers seen in the output/workload region
+    input_buffers.reserve(num_input_buffers);
+    output_buffers.reserve(tensor_buffers.size() >= num_input_buffers ? tensor_buffers.size() - num_input_buffers : 0);
+    for (uint32_t i = 0; i < tensor_buffers.size(); ++i) {
+        Buffer* buf = tensor_buffers[i];
+        if (!buf) {
+            continue;
+        }
+        const bool is_input = i < num_input_buffers;
+        // An output/workload buffer that aliases an input is the safe in-place case — keep
+        // the first input slot mapping so all bindings patch the shared address consistently.
+        if (!is_input && input_buffers.contains(buf)) {
+            continue;
+        }
+        // Otherwise a repeat is ambiguous (matmul(X, X), or a repeated output) — bail to slow path.
+        auto& seen = is_input ? input_buffers : output_buffers;
+        if (!seen.insert(buf).second) {
+            return std::nullopt;
+        }
+        tensor_buffer_to_idx.emplace(buf, i);
+    }
+    return tensor_buffer_to_idx;
+}
+
+}  // namespace detail
 
 // ---------------------------------------------------------------------------
 // resolve / apply
