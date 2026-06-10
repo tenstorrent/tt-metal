@@ -987,7 +987,9 @@ all_gather_minimal_matmul_async_factory_helper(
             in0_noc,
             /*axis_is_x_when_not_transposed=*/true,
             /*initial_endpoint=*/(transpose_core_grid ? top_core : left_core),
-            /*force_increasing=*/true);
+            /*force_increasing=*/false);  // chain direction follows in0_noc: increasing on NOC_0 (transposed),
+                                          // decreasing on NOC_1 (non-transposed). Role indices below use the same
+                                          // predicate.
 
         auto [in1_core_order, in1_core_order_index] = build_core_order_for_axis(
             core,
@@ -1006,6 +1008,14 @@ all_gather_minimal_matmul_async_factory_helper(
         auto in0_next_core_physical = device->worker_core_from_logical_core(in0_next_core);
         auto in1_prev_core_physical = device->worker_core_from_logical_core(in1_prev_core);
         auto in1_next_core_physical = device->worker_core_from_logical_core(in1_next_core);
+
+        // Fabric senders sit beside the mux (high-coordinate end). With an increasing chain (NOC_0)
+        // that is the chain tail; with a decreasing chain (NOC_1) it is chain indices 1 and 2. Derive
+        // the indices from the same predicate as the chain direction so roles land on the fixed geometry.
+        const bool in0_increasing = (in0_noc == tt::tt_metal::NOC::NOC_0);
+        const uint32_t in0_fwd_idx = in0_increasing ? (uint32_t)(in0_core_order.size() - 1) : 1u;
+        const uint32_t in0_bwd_idx = in0_increasing ? (uint32_t)(in0_core_order.size() - 2) : 2u;
+        const bool in0_is_fabric_core = (in0_core_order_index == in0_fwd_idx) || (in0_core_order_index == in0_bwd_idx);
 
         /**
          * NOTE: Some cores are doing unnecessary work, on blocks which are processed just to make
@@ -1047,13 +1057,16 @@ all_gather_minimal_matmul_async_factory_helper(
             in0_injector_virtual_core.x,
             in0_injector_virtual_core.y,
             in0_core_order_index,
-            in0_core_order.size()};
-        if (in0_core_order_index > (in0_core_order.size() - 3)) {
+            in0_core_order.size(),
+            in0_fwd_idx,
+            in0_bwd_idx};
+        if (in0_is_fabric_core) {
             uint32_t worker_idx = in0_idx % num_workers_per_link;
-            auto last_in0_core = in0_core_order.back();
+            const auto in0_bwd_core = in0_core_order.at(in0_bwd_idx);
+            const auto in0_fwd_core = in0_core_order.at(in0_fwd_idx);
             auto termination_master_logical_core_backward = transpose_core_grid
-                                                                ? CoreCoord(in0_idx - worker_idx, last_in0_core.y - 1)
-                                                                : CoreCoord(last_in0_core.x - 1, in0_idx - worker_idx);
+                                                                ? CoreCoord(in0_idx - worker_idx, in0_bwd_core.y)
+                                                                : CoreCoord(in0_bwd_core.x, in0_idx - worker_idx);
             CoreCoord termination_master_virtual_core_backward =
                 device->worker_core_from_logical_core(termination_master_logical_core_backward);
 
@@ -1064,7 +1077,7 @@ all_gather_minimal_matmul_async_factory_helper(
             CoreCoord mux_virtual_core_backward = device->worker_core_from_logical_core(mux_logical_core_backward);
             fabric_mux_connection_rt_args(
                 mux_connection_valid(0),
-                (in0_core_order_index == (in0_core_order.size() - 2)) && !(in0_idx % num_workers_per_link),
+                (in0_core_order_index == in0_bwd_idx) && !(in0_idx % num_workers_per_link),
                 tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
                 mux_virtual_core_backward,
                 worker_idx,
@@ -1075,8 +1088,8 @@ all_gather_minimal_matmul_async_factory_helper(
                 in0_args);
 
             auto termination_master_logical_core_forward = transpose_core_grid
-                                                               ? CoreCoord(in0_idx - worker_idx, last_in0_core.y)
-                                                               : CoreCoord(last_in0_core.x, in0_idx - worker_idx);
+                                                               ? CoreCoord(in0_idx - worker_idx, in0_fwd_core.y)
+                                                               : CoreCoord(in0_fwd_core.x, in0_idx - worker_idx);
             CoreCoord termination_master_virtual_core_forward =
                 device->worker_core_from_logical_core(termination_master_logical_core_forward);
 
@@ -1087,7 +1100,7 @@ all_gather_minimal_matmul_async_factory_helper(
             CoreCoord mux_virtual_core_forward = device->worker_core_from_logical_core(mux_logical_core_forward);
             fabric_mux_connection_rt_args(
                 mux_connection_valid(1),
-                (in0_core_order_index == (in0_core_order.size() - 1)) && !(in0_idx % num_workers_per_link),
+                (in0_core_order_index == in0_fwd_idx) && !(in0_idx % num_workers_per_link),
                 tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
                 mux_virtual_core_forward,
                 worker_idx,
@@ -1100,7 +1113,7 @@ all_gather_minimal_matmul_async_factory_helper(
         if (in0_core_order_index == 0) {
             // in0 sender
             SetRuntimeArgs(program, in0_sender_kernels_id, core, in0_args);
-        } else if (in0_core_order_index > (in0_core_order.size() - 3)) {
+        } else if (in0_is_fabric_core) {
             // in0 receiver fabric
             SetRuntimeArgs(program, in0_receiver_fabric_kernels_id, core, in0_args);
         } else {

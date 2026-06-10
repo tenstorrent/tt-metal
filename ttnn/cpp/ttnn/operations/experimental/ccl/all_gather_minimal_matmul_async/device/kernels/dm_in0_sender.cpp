@@ -135,6 +135,11 @@ void kernel_main() {
     const uint8_t out_ready_sem_injector_noc0_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_core_order_index = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_core_order_size = get_arg_val<uint32_t>(argidx++);
+    // Fabric-sender chain indices (host order: forward then backward). Read unconditionally so argidx
+    // stays aligned across all kernel variants. The chain may run decreasing (NOC_1, non-transposed),
+    // so these are not necessarily the chain tail.
+    const uint32_t forward_in0_core_order_index = get_arg_val<uint32_t>(argidx++);
+    const uint32_t backward_in0_core_order_index = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
     constexpr auto in0_args = TensorAccessorArgs<ct_arg_count>();
@@ -148,9 +153,6 @@ void kernel_main() {
 
 #if MATMUL_ISOLATION_MODE == 0
 #ifdef USE_MUX
-    uint32_t backward_in0_core_order_index = in0_core_order_size - 2;
-    uint32_t forward_in0_core_order_index = in0_core_order_size - 1;
-
     auto mux_backward =
         parse_mux_connection_args<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes>(
             argidx, in0_core_order_index, backward_in0_core_order_index);
@@ -414,7 +416,7 @@ void kernel_main() {
                         forward_slice = true;
                     }
                     if (forward_slice) {
-                        if (in0_core_order_index >= forward_in0_core_order_index) {
+                        if (in0_core_order_index == forward_in0_core_order_index) {
                             // If forward, send backward
                             forward_half_block_to_fabric_neighbor(
                                 m_tile,
@@ -433,7 +435,7 @@ void kernel_main() {
                                 true,
                                 M_tiles,
                                 true);
-                        } else if (in0_core_order_index >= backward_in0_core_order_index) {
+                        } else if (in0_core_order_index == backward_in0_core_order_index) {
                             // If backward, send forward
                             forward_half_block_to_fabric_neighbor(
                                 m_tile,
