@@ -52,7 +52,7 @@ from ...utils.patchifiers import (
     video_get_patch_grid_bounds,
 )
 from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
-from ...utils.tracing import Tracer
+from ...utils.tracing import StateTensor
 from ...utils.video import Audio
 
 LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
@@ -93,6 +93,43 @@ class TransformerState:
     cache_name: str
     lora_specs: list[LoraSpec] = field(default_factory=list)
     state_dict_provider: Callable[[], dict[str, torch.Tensor]] | None = None
+
+
+class LTXTransformerState:
+    """Per-stage (s1/s2) persistent trace I/O.
+
+    Static per-shape inputs (rope/cross-PE/masks/trans_mat) are bound once; the latent buffers and
+    timestep are refreshed each step — in place when traced (a ttnn trace bakes their addresses),
+    rebound otherwise. ``__getattr__`` returns the underlying tensor: update via
+    ``state._tt_x.update(...)``, read via ``state.tt_x``.
+    """
+
+    def __init__(self) -> None:
+        self._tt_video_lat = StateTensor()
+        self._tt_audio_lat = StateTensor()
+        self._tt_timestep = StateTensor()
+        self._tt_video_pad_mask = StateTensor()
+        self._tt_audio_pad_mask = StateTensor()
+        self._tt_video_rope_cos = StateTensor()
+        self._tt_video_rope_sin = StateTensor()
+        self._tt_audio_rope_cos = StateTensor()
+        self._tt_audio_rope_sin = StateTensor()
+        self._tt_trans_mat = StateTensor()
+        self._tt_video_cross_pe_cos = StateTensor()
+        self._tt_video_cross_pe_sin = StateTensor()
+        self._tt_audio_cross_pe_cos = StateTensor()
+        self._tt_audio_cross_pe_sin = StateTensor()
+        self._tt_video_cross_pe_cos_full = StateTensor()
+        self._tt_video_cross_pe_sin_full = StateTensor()
+        self._tt_audio_cross_pe_cos_full = StateTensor()
+        self._tt_audio_cross_pe_sin_full = StateTensor()
+        self._tt_audio_attn_mask = StateTensor()
+        self._tt_audio_padding_mask = StateTensor()
+        self._tt_audio_padding_mask_full = StateTensor()
+        self._tt_video_padding_mask = StateTensor()
+
+    def __getattr__(self, name: str) -> ttnn.Tensor | None:
+        return object.__getattribute__(self, f"_{name}")._value
 
 
 # =============================================================================
@@ -221,19 +258,18 @@ class LTXPipeline:
         self.encoder_parallel_config = EncoderParallelConfig(
             tensor_parallel=ParallelFactor(factor=self.mesh_device.shape[1], mesh_axis=1),
         )
-        # Capture the DiT forward as a ttnn trace on the first step, replay after.
+        # Capture the DiT forward as a ttnn trace on the first step, replay after. The Tracers
+        # (one per fixed shape "s1"/"s2") live in the @traced_function cache on
+        # LTXTransformerModel.inner_step, keyed per (transformer, trace_key); release_traces frees them.
         self._traced = traced
-        # One Tracer per fixed shape ("s1"/"s2"); resident across generate(), freed by release_traces().
-        self._tracers: dict[str, Tracer] = {}
-        # Per-trace device constants (rope/masks/cross-PE). A ttnn trace bakes absolute tensor
-        # addresses, so every held input is allocated up front and never rebuilt.
-        self._trace_consts: dict[str, tuple] = {}
-        # Per-trace SP-sharded latent buffers + padding masks, held for the traced loop's
-        # on-device Euler (nothing freed/reallocated per step).
-        self._trace_latents: dict[str, tuple] = {}
-        # Shared prompt buffer, built on the first traced step rather than pre-allocated:
-        # a low-address pre-alloc would overlap a video activation.
-        self._trace_prompt: dict[str, tuple] = {}
+        # Per-stage (s1/s2) persistent trace I/O. A ttnn trace bakes absolute tensor addresses,
+        # so static inputs are bound once and the latent/timestep buffers refreshed in place.
+        self._trace_state: dict[str, LTXTransformerState] = {}
+        # Prompt buffers shared by both stages (the embedding is identical), built on the first
+        # traced step — before s1's capture — so they sit below both traces' activations and
+        # neither replay overwrites them.
+        self._prompt_v = StateTensor()
+        self._prompt_a = StateTensor()
         if ccl_manager.topology == ttnn.Topology.Linear:
             self.vae_ccl_manager = ccl_manager
         else:
@@ -312,31 +348,16 @@ class LTXPipeline:
                     "skipping forced warmup — trace capture will likely fail"
                 )
 
-    def _traced_step(self, trace_key: str, fn: Callable, *, capture_inputs: dict, replay_inputs: dict):
-        """Capture ``fn`` as a ttnn trace on the first call for ``trace_key``; replay after.
-
-        Capture passes the full input set; replay passes only the inputs that change
-        (per step or per generate). Omitted kwargs reuse the captured device buffers —
-        passing a value-identical constant would re-copy it into the buffer every step.
-        Every value in both dicts must be trace-valid: ttnn.Tensor | int | float | str | bool | None.
-        """
-        tracer = self._tracers.get(trace_key)
-        if tracer is None:
-            tracer = Tracer(fn, device=self.mesh_device, prep_run=False, clone_prep_inputs=False)
-            self._tracers[trace_key] = tracer
-            return tracer(**capture_inputs)
-        return tracer(**replay_inputs)
-
     def release_traces(self) -> None:
         """Release captured denoise traces and free their device trace memory."""
-        for tracer in self._tracers.values():
-            tracer.release_trace()
-        self._tracers.clear()
+        if self.transformer is not None:
+            for tracer in LTXTransformerModel.inner_step._tracers_keyed.get(self.transformer, {}).values():
+                tracer.release_trace()
         if self.tt_vocoder_with_bwe is not None:
             self.tt_vocoder_with_bwe.release_trace()
-        self._trace_consts.clear()
-        self._trace_latents.clear()
-        self._trace_prompt.clear()
+        self._trace_state.clear()
+        self._prompt_v = StateTensor()
+        self._prompt_a = StateTensor()
 
     @staticmethod
     def _resolve_checkpoint_file(checkpoint: str, default_filename: str = "ltx-2.3-22b-dev.safetensors") -> str:
