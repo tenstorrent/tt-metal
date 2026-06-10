@@ -39,7 +39,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
 )
-from helpers.tile_constants import SUPPORTED_TILE_SIZES
+from helpers.tile_constants import SUPPORTED_TILE_SIZES, is_mx_unsupported_tile_dims
 from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
@@ -152,7 +152,7 @@ def test_eltwise_unary_datacopy_quasar(
     ):
         pytest.skip("MX formats require implied_math_format=Yes on Quasar")
 
-    if is_mx_supported_tile_dims(
+    if is_mx_unsupported_tile_dims(
         formats.input_format, formats.output_format, tile_dimensions
     ):
         pytest.skip("MX formats only support square tile dimensions (num_faces = 1, 4)")

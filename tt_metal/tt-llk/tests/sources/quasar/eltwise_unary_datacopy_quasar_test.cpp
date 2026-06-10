@@ -9,7 +9,6 @@
 #include "ckernel.h"
 #include "llk_defs.h"
 #include "sfpu_stub.h"
-#include "tensor_shape.h"
 
 #ifdef LLK_TRISC_UNPACK
 
