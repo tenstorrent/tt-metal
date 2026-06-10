@@ -60,3 +60,6 @@
 {"source":"run_safe_pytest","pid":1974444,"started_at_ms":1781107236005,"wait_ms":1,"run_ms":19120,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_regression.py","exit_code":0}
 {"source":"run_safe_pytest","pid":1975496,"started_at_ms":1781107286746,"wait_ms":1,"run_ms":139033,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":1}
 {"source":"run_safe_pytest","pid":1982180,"started_at_ms":1781107443831,"wait_ms":1,"run_ms":272773,"test_path":"tests/ttnn/unit_tests/operations/groupnorm_sc_N_1_HW_C/","exit_code":0}
+{"source":"eval_test_runner","pid":1997293,"started_at_ms":1781107804865,"wait_ms":195,"run_ms":677906,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/","exit_code":0}
+{"source":"tt-probe","pid":2021849,"started_at_ms":1781109423931,"wait_ms":256,"run_ms":39793,"test_path":"groupnorm_sc_N_1_HW_C","exit_code":2}
+{"source":"tt-probe","pid":2022802,"started_at_ms":1781109563553,"wait_ms":256,"run_ms":16308,"test_path":"groupnorm_sc_N_1_HW_C","exit_code":0}

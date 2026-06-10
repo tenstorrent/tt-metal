@@ -45,3 +45,6 @@
 {"event":"test_run","test":"golden test_regression.py","status":"pass","detail":"35 pass","ts":"2026-06-10T16:01:26+00:00"}
 {"event":"test_run","test":"golden shard A post-fix","status":"pass-known","detail":"438 pass, 2 fail (irreducible 1x1x64x17 bf8b-gamma floor), 0 xpass","ts":"2026-06-10T16:04:03+00:00"}
 {"event":"test_run","test":"tests/.../groupnorm_sc_N_1_HW_C full","status":"pass","detail":"477/477 post scaler change; refinement 2 complete, [x] ticked","ts":"2026-06-10T16:09:45+00:00"}
+{"event":"test_run","status":"fail","classification":"hang","details":"probe_007 exit 2 (hang). Cluster path first run; writer CT args show C=320 case compiled. Checking triage JSON for stuck waypoints.","ts":"2026-06-10T16:37:55+00:00"}
+{"event":"hypothesis","details":"Compute stuck UPAD/MWDD all cores; writer CWFW, reader CRBD secondary. Suspect compute consumes/produces fewer tiles than reader pushes (CB count mismatch on cluster path), or copy/transform init issue. Isolating minimal geometry first.","ts":"2026-06-10T16:39:11+00:00"}
+{"event":"test_run","status":"pass","details":"probe_008: (1,1,32,64) G=4 cluster path PCC=0.999996 max_diff=0.014. Hang isolated to larger geometry: (1,1,32,320) G=32 Cg=10, group spans straddle tiles.","ts":"2026-06-10T16:39:56+00:00"}

@@ -63,13 +63,14 @@ INPUT_TAGGERS = {
 
 # ---------------------------------------------------------------------------
 # 2. SUPPORTED — Phase 0 + Refinement 1 (dtype) + Refinement 2 (alignment)
+#    + Refinement 3 (non-tile-aligned group widths, SD/SDXL regime)
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
     "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "alignment": ["tile_aligned", "hw_non_aligned", "c_non_aligned"],
-    "groups_alignment": ["aligned"],
+    "groups_alignment": ["aligned", "non_aligned"],
     "affine": ["gamma_beta", "gamma_only", "no_affine"],
     "affine_dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     # TILE-given gamma/beta flow through the same host-side to_layout path

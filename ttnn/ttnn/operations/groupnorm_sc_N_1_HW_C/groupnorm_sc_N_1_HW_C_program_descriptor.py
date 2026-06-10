@@ -17,12 +17,33 @@ CB layout (per op_design.md, refined dtype handling):
   cb_scaler       (8):  1 page, bf16 — 1/sqrt(HW*Cg) on LOGICAL sizes, pushed once
   cb_mask_interior(9):  Wg pages, bf16 — C-tail col mask row (c_tail > 0 only)
   cb_mask_tail    (10): Wg pages, bf16 — HW-tail row mask row (hw_tail > 0 only)
+  cb_mean_export  (11): 2 pages, stat fmt — compute -> reader per-group mean scalar
+  cb_rstd_export  (12): 2 pages, stat fmt — compute -> reader per-group rstd scalar
+  cb_mean_row     (13): Wc pages, stat fmt — reader-built per-column mean row vector
+  cb_rstd_row     (14): Wc pages, stat fmt — reader-built per-column rstd row vector
   cb_output_tiles (16): 2*Wg pages, out_dtype — compute -> writer stream
   cb_mean         (24): 1 page, stat fmt — per-group mean, HeldBulk passes 2/3
   cb_var          (25): 1 page, stat fmt — variance accumulator -> rstd
   cb_centered     (26): 2*Wg pages, stat fmt — (x - mean) per row chunk
   cb_xhat         (27): 2*Wg pages, stat fmt — (x - mean)*rstd (HAS_GAMMA only)
   cb_scaled       (28): 2*Wg pages, stat fmt — xhat*gamma (HAS_GAMMA && HAS_BETA)
+
+Non-tile-aligned group widths (Refinement 3, Cg % 32 != 0, G > 1 — the SD /
+SDXL regime): groups straddle tile boundaries, so the work unit changes from
+one (n, g) group to one (n, cluster), where a cluster is lcm(Cg, 32) channels
+(capped at C) — the smallest channel run on which group and tile boundaries
+re-align. Group output tiles within a cluster stay shared, but cluster output
+tiles are disjoint, keeping multi-core writes race-free. Per cluster:
+  - Passes 1/2 run per group over its tile span (Wsmax <= ceil(Cg/32)+1 tiles)
+    with per-group 0/1 column masks (cb_mask_interior / cb_mask_tail).
+  - Compute exports each group's mean/rstd scalars (cb_mean_export /
+    cb_rstd_export); the reader scatters them into per-column row vectors
+    (cb_mean_row / cb_rstd_row), zeros in the padding columns.
+  - Pass 3 is one Row-broadcast sweep over the whole cluster:
+    (x - mean_row) * rstd_row * gamma + beta — no partial tile writes;
+    padding columns get rstd=0 -> 0 output.
+Streaming CB sizing uses max(Wsmax, Wc) per row chunk; the mask CBs hold
+max(Wsmax, Wc) pages so the bf8b+HW-tail output masks fit too.
 
 Intermediate (stat) format: Float32 when fp32_dest_acc_en is set (accumulation
 crosses these CBs between passes — packing to bf16 would erase the fp32 dest
@@ -58,16 +79,26 @@ def create_program_descriptor(
     N, _, HW, C = list(input_tensor.shape)
     G = num_groups
     Cg = C // G
-    # Padded tile counts (HW / C tails round up). Groups are tile-aligned
-    # whenever G > 1 (validate gates groups_alignment), so the ceil on Wg
-    # only fires for G == 1 where Wg == Wt.
+    # Padded tile counts (HW / C tails round up).
     Ht = (HW + TILE_DIM - 1) // TILE_DIM
     Wt = (C + TILE_DIM - 1) // TILE_DIM
     Wg = (Cg + TILE_DIM - 1) // TILE_DIM
-    # Tail sizes (0 = aligned). c_tail > 0 implies G == 1, so the C tail tile
-    # is always the last tile of the (single) group slab.
+    # Tail sizes (0 = aligned).
     hw_tail = HW % TILE_DIM
     c_tail = C % TILE_DIM
+
+    # Non-tile-aligned group widths (Refinement 3): groups straddle tile
+    # boundaries. Work unit becomes one (n, cluster); cluster = lcm(Cg, 32)
+    # channels (capped at C) so group and tile boundaries re-align at cluster
+    # edges and cluster output tiles are disjoint across cores.
+    groups_non_aligned = G > 1 and Cg % TILE_DIM != 0
+    cluster_ch = (Cg * TILE_DIM) // math.gcd(Cg, TILE_DIM)
+    num_clusters = (C + cluster_ch - 1) // cluster_ch
+    Wc_full = cluster_ch // TILE_DIM  # cluster_t0 stride (full clusters)
+    Wc_max = min(Wc_full, Wt)  # widest cluster in tiles (last may be capped)
+    # Widest per-group tile span: a group covers ceil(Cg/32) tiles + 1 for
+    # straddling a tile boundary, never wider than the cluster itself.
+    Ws_max = min(Cg // TILE_DIM + 2, Wc_max)
 
     has_gamma = gamma_tensor is not None
     has_beta = beta_tensor is not None
@@ -107,10 +138,11 @@ def create_program_descriptor(
         stat_dtype = ttnn.bfloat16
     stat_page = ttnn.tile_size(stat_dtype)
 
-    # --- multi-core split: one work unit = one (n, g) group ---
+    # --- multi-core split: one work unit = one (n, g) group, or one
+    # (n, cluster) on the non-aligned-groups path ---
     grid = input_tensor.device().compute_with_storage_grid_size()
     full_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
-    num_units = N * G
+    num_units = N * num_clusters if groups_non_aligned else N * G
     (
         num_cores,
         all_cores,
@@ -126,6 +158,10 @@ def create_program_descriptor(
     CB_SCALER = 8
     CB_MASK_INTERIOR = 9
     CB_MASK_TAIL = 10
+    CB_MEAN_EXPORT = 11
+    CB_RSTD_EXPORT = 12
+    CB_MEAN_ROW = 13
+    CB_RSTD_ROW = 14
     CB_OUTPUT_TILES = 16
     CB_MEAN = 24
     CB_VAR = 25
@@ -140,7 +176,11 @@ def create_program_descriptor(
             format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page_size)],
         )
 
-    stream_pages = 2 * Wg
+    # Streaming row-chunk width: Wg tiles on the aligned path; on the cluster
+    # path passes 1/2 stream group spans (Ws_max) and pass 3 streams full
+    # cluster rows (Wc_max).
+    chunk_w = max(Ws_max, Wc_max) if groups_non_aligned else Wg
+    stream_pages = 2 * chunk_w
 
     # Scaler precision follows the stat format. For non-tile-aligned shapes the
     # group element count is not a power of two, so a bf16 scaler quantizes
@@ -166,14 +206,32 @@ def create_program_descriptor(
         beta_page = beta_tensor.buffer_page_size()
         cbs.append(cb(CB_BETA_TILES, Wt, beta_page, beta_tensor.dtype))
         cbs.append(cb(CB_SCALED, stream_pages, stat_page, stat_dtype))
-    # Mask rows for non-tile-aligned shapes (Refinement 2): generated once by
-    # the reader, held for the whole kernel. Interior row mask (zeros in the
-    # C tail columns of the last tile) and tail row mask (zeros below the HW
-    # tail rows, corner combined in the last tile). bf16 — masks are 0/1.
-    if c_tail > 0:
-        cbs.append(cb(CB_MASK_INTERIOR, Wg, bf16_page, ttnn.bfloat16))
-    if hw_tail > 0:
-        cbs.append(cb(CB_MASK_TAIL, Wg, bf16_page, ttnn.bfloat16))
+    # pass-3 output padding zeroing (bf8b only — see compute kernel docs)
+    mask_output = int(output_tensor.dtype == ttnn.bfloat8_b)
+    if groups_non_aligned:
+        # Per-group 0/1 column masks (interior + HW-tail variants), regenerated
+        # per group (Ws span tiles); plus per-cluster output masks (Wc tiles)
+        # when bf8b + HW tail. bf16 — masks are 0/1.
+        mask_out_cluster = bool(mask_output) and hw_tail > 0
+        mask_pages = max(Ws_max, Wc_max) if mask_out_cluster else Ws_max
+        cbs.append(cb(CB_MASK_INTERIOR, mask_pages, bf16_page, ttnn.bfloat16))
+        if hw_tail > 0:
+            cbs.append(cb(CB_MASK_TAIL, mask_pages, bf16_page, ttnn.bfloat16))
+        # mean/rstd scalar export (compute -> reader) and reader-built per-column
+        # row vectors (reader -> compute, pass 3).
+        cbs.append(cb(CB_MEAN_EXPORT, 2, stat_page, stat_dtype))
+        cbs.append(cb(CB_RSTD_EXPORT, 2, stat_page, stat_dtype))
+        cbs.append(cb(CB_MEAN_ROW, Wc_max, stat_page, stat_dtype))
+        cbs.append(cb(CB_RSTD_ROW, Wc_max, stat_page, stat_dtype))
+    else:
+        # Mask rows for non-tile-aligned shapes (Refinement 2): generated once by
+        # the reader, held for the whole kernel. Interior row mask (zeros in the
+        # C tail columns of the last tile) and tail row mask (zeros below the HW
+        # tail rows, corner combined in the last tile). bf16 — masks are 0/1.
+        if c_tail > 0:
+            cbs.append(cb(CB_MASK_INTERIOR, Wg, bf16_page, ttnn.bfloat16))
+        if hw_tail > 0:
+            cbs.append(cb(CB_MASK_TAIL, Wg, bf16_page, ttnn.bfloat16))
 
     # --- per-core runtime args: [start_group, num_groups_here] + addresses ---
     reader_rt_args = ttnn.RuntimeArgs()
@@ -203,8 +261,32 @@ def create_program_descriptor(
                     start_group += units_per_core
     assert start_group == num_units, f"work split mismatch: {start_group} != {num_units}"
 
+    if not groups_non_aligned:
+        mask_out_cluster = False
+    stat_is_f32 = int(stat_dtype == ttnn.float32)
+
     # --- Reader: scalars first, TensorAccessorArgs at the end (input, gamma, beta) ---
-    reader_ct_args = [Ht, Wt, Wg, G, int(has_gamma), int(has_beta), inv_sqrt_n_bits, hw_tail, c_tail]
+    reader_ct_args = [
+        Ht,
+        Wt,
+        Wg,
+        G,
+        int(has_gamma),
+        int(has_beta),
+        inv_sqrt_n_bits,
+        hw_tail,
+        c_tail,
+        int(groups_non_aligned),
+        cluster_ch,
+        Wc_full,
+        num_clusters,
+        Cg,
+        C,
+        stat_is_f32,
+        int(mask_out_cluster),
+    ]
+    READER_NUM_SCALAR_CT_ARGS = len(reader_ct_args)  # accessor args start here (kernel hard-codes 17)
+    assert READER_NUM_SCALAR_CT_ARGS == 17
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct_args.extend(
         ttnn.TensorAccessorArgs(gamma_tensor).get_compile_time_args()
@@ -226,7 +308,7 @@ def create_program_descriptor(
     )
 
     # --- Writer ---
-    writer_ct_args = [Ht, Wt, Wg, G]
+    writer_ct_args = [Ht, Wt, Wg, G, int(groups_non_aligned), Wc_full, num_clusters, C, cluster_ch]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
     writer_kernel = ttnn.KernelDescriptor(
@@ -243,8 +325,26 @@ def create_program_descriptor(
     # positions). For fp32/bf16 the padding is unread garbage, and the mask mul
     # costs an extra dest rounding of every valid value — measured to push the
     # fp32 + bf8b-gamma golden cells from rms 0.0075 over the 0.01 target.
-    mask_output = int(output_tensor.dtype == ttnn.bfloat8_b)
-    compute_ct_args = [Ht, Wt, Wg, G, int(has_gamma), int(has_beta), eps_bits, hw_tail, c_tail, mask_output]
+    # Cluster path: padding columns are zeroed for free via rstd_row = 0, so
+    # only the HW-tail rows need masking (mask_out_cluster).
+    compute_ct_args = [
+        Ht,
+        Wt,
+        Wg,
+        G,
+        int(has_gamma),
+        int(has_beta),
+        eps_bits,
+        hw_tail,
+        c_tail,
+        int(mask_out_cluster) if groups_non_aligned else mask_output,
+        int(groups_non_aligned),
+        cluster_ch,
+        Wc_full,
+        num_clusters,
+        Cg,
+        C,
+    ]
     compute_config = ttnn.ComputeConfigDescriptor(
         math_fidelity=math_fidelity,
         fp32_dest_acc_en=fp32_dest_acc_en,

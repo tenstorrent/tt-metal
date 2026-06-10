@@ -26,6 +26,17 @@
 // Passes 2/3 re-zero the padding after `x - mean` with persistent 0/1 mask
 // rows (cb_mask_interior for the C tail, cb_mask_tail for the HW tail row)
 // — REDUCE_SCALAR has no partial-scaler support, so masking is the lever.
+//
+// Non-tile-aligned group widths (Refinement 3, GROUPS_NA): groups straddle
+// tile boundaries, so the work unit becomes one (n, cluster) of lcm(Cg, 32)
+// channels (group/tile boundaries re-align at cluster edges). Per cluster:
+//   Passes 1/2 run per group over its tile span with per-group 0/1 column
+//   masks (pass 1 must mask BEFORE the reduce — neighbor groups share tiles).
+//   Per-group mean/rstd are exported to the reader (cb_mean_export /
+//   cb_rstd_export), which scatters them into per-column row vectors.
+//   Pass 3 is one Row-broadcast sweep over the cluster:
+//     out = (x - mean_row) * rstd_row [* gamma] [+ beta]
+//   so no partial tile writes; padding columns get rstd_row = 0 -> 0.
 
 #include <cstdint>
 
@@ -41,8 +52,12 @@ constexpr uint32_t cb_input_tiles = 0;
 constexpr uint32_t cb_gamma_tiles = 1;
 constexpr uint32_t cb_beta_tiles = 2;
 constexpr uint32_t cb_scaler = 8;
-constexpr uint32_t cb_mask_interior = 9;  // C-tail col mask row (Wg tiles, HeldBulk)
-constexpr uint32_t cb_mask_tail = 10;     // HW-tail row mask row (Wg tiles, HeldBulk)
+constexpr uint32_t cb_mask_interior = 9;  // col mask row (HeldBulk; per-group span on cluster path)
+constexpr uint32_t cb_mask_tail = 10;     // HW-tail row mask row (HeldBulk)
+constexpr uint32_t cb_mean_export = 11;   // per-group mean scalar -> reader (cluster path)
+constexpr uint32_t cb_rstd_export = 12;   // per-group rstd scalar -> reader (cluster path)
+constexpr uint32_t cb_mean_row = 13;      // per-column mean row vector (cluster path, HeldBulk)
+constexpr uint32_t cb_rstd_row = 14;      // per-column rstd row vector (cluster path, HeldBulk)
 constexpr uint32_t cb_output_tiles = 16;
 constexpr uint32_t cb_mean = 24;
 constexpr uint32_t cb_var = 25;
@@ -82,15 +97,27 @@ void kernel_main() {
     constexpr bool HAS_BETA = get_compile_time_arg_val(5) != 0;
     constexpr uint32_t EPS_BITS = get_compile_time_arg_val(6);
     constexpr uint32_t HW_TAIL = get_compile_time_arg_val(7);  // HW % 32 (0 = aligned)
-    constexpr uint32_t C_TAIL = get_compile_time_arg_val(8);   // C % 32 (0 = aligned; > 0 implies G == 1)
+    constexpr uint32_t C_TAIL = get_compile_time_arg_val(8);   // C % 32 (0 = aligned)
     constexpr bool MASK_OUTPUT = get_compile_time_arg_val(9) != 0;  // pass-3 padding zeroing (bf8b out only)
+    // Cluster path (Refinement 3): Cg % 32 != 0 && G > 1.
+    constexpr bool GROUPS_NA = get_compile_time_arg_val(10) != 0;
+    constexpr uint32_t CLUSTER_CH = get_compile_time_arg_val(11);  // lcm(Cg, 32)
+    constexpr uint32_t WC_FULL = get_compile_time_arg_val(12);     // cluster_t0 stride
+    constexpr uint32_t NUM_CLUSTERS = get_compile_time_arg_val(13);
+    constexpr uint32_t Cg = get_compile_time_arg_val(14);
+    constexpr uint32_t C = get_compile_time_arg_val(15);
 
     const uint32_t start_group = get_arg_val<uint32_t>(0);
     const uint32_t num_groups_here = get_arg_val<uint32_t>(1);
 
-    // Stage outputs when affine stages are absent / present.
-    constexpr uint32_t cb_norm_out = HAS_GAMMA ? cb_xhat : cb_output_tiles;    // 3b output
-    constexpr uint32_t cb_gamma_out = HAS_BETA ? cb_scaled : cb_output_tiles;  // 3c output
+    // Stage outputs when affine stages are absent / present. On the cluster
+    // path with MASK_OUTPUT, the affine result detours through cb_centered so
+    // a final mask-mul can zero the HW-tail rows (padding cols are already 0
+    // via rstd_row).
+    constexpr bool MASK_FINAL = GROUPS_NA && MASK_OUTPUT;
+    constexpr uint32_t cb_final = MASK_FINAL ? cb_centered : cb_output_tiles;
+    constexpr uint32_t cb_norm_out = HAS_GAMMA ? cb_xhat : cb_final;    // 3b output
+    constexpr uint32_t cb_gamma_out = HAS_BETA ? cb_scaled : cb_final;  // 3c output
 
     compute_kernel_hw_startup(cb_input_tiles, cb_scaler, cb_output_tiles);
 
@@ -98,7 +125,7 @@ void kernel_main() {
     constexpr auto row_reduce_shape = ckl::ReduceInputBlockShape::of(1, Wg);
     constexpr auto row_shape = ckl::EltwiseShape::grid(1, Wg);
 
-    {
+    if constexpr (!GROUPS_NA) {
         // (g tracked incrementally from start_group; one mod at startup.)
         uint32_t g = start_group % G;
         for (uint32_t i = 0; i < num_groups_here; ++i) {
@@ -214,14 +241,196 @@ void kernel_main() {
                 g = 0;
             }
         }
+    } else {
+        // ==== Cluster path (Refinement 3): work unit = (n, cluster) ====
+        uint32_t cl = start_group % NUM_CLUSTERS;  // n is irrelevant to compute
+        for (uint32_t i = 0; i < num_groups_here; ++i) {
+            const uint32_t cluster_c0 = cl * CLUSTER_CH;
+            const uint32_t Ccl = (C - cluster_c0 < CLUSTER_CH) ? (C - cluster_c0) : CLUSTER_CH;
+            const uint32_t Gc = Ccl / Cg;
+            const uint32_t Wcu = (Ccl + 31) / 32;
+            const uint32_t cluster_t0 = cl * WC_FULL;
+            const auto cluster_row = ckl::EltwiseShape::grid(1, Wcu);
+
+            for (uint32_t g = 0; g < Gc; ++g) {
+                const uint32_t c0 = g * Cg;  // cluster-relative channel range
+                const uint32_t c1 = c0 + Cg;
+                const uint32_t Wsg = (c1 - 1) / 32 - c0 / 32 + 1;  // group tile span
+                const auto span_row = ckl::EltwiseShape::grid(1, Wsg);
+                const auto span_reduce = ckl::ReduceInputBlockShape::of(1, Wsg);
+
+                // ---- Pass 1: masked mean — neighbor groups share tiles, so
+                // mask BEFORE the reduce (scaler is logical 1/sqrt(HW*Cg)).
+                // Padding rows are zero from host tilize; interior mask is fine.
+                for (uint32_t b = 0; b < Ht; ++b) {
+                    ckl::mul<
+                        cb_input_tiles,
+                        cb_mask_interior,
+                        cb_centered,
+                        ckl::BroadcastDim::None,
+                        ckl::InputLifecycle::Streaming,
+                        ckl::InputLifecycle::HeldBulk,
+                        ckl::OutputLifecycle::Streaming,
+                        ckl::BinaryDataFormatReconfig::Input,
+                        ckl::PackTileReconfig::Output,
+                        ckl::OperandKind::Scalar,
+                        ckl::OperandKind::Row>(span_row);
+                    ckl::accumulate_reduce_block<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_SCALAR>(
+                        cb_centered, cb_scaler, cb_mean, span_reduce, b, Ht);
+                }
+                // Export mean to the reader (row-vector scatter); keep holding it.
+                ckl::copy<cb_mean, cb_mean_export, ckl::InputLifecycle::HeldBulk>(1);
+
+                // ---- Pass 2: variance over the masked span ----
+                for (uint32_t b = 0; b < Ht; ++b) {
+                    ckl::sub<
+                        cb_input_tiles,
+                        cb_mean,
+                        cb_centered,
+                        ckl::BroadcastDim::Scalar,
+                        ckl::InputLifecycle::Streaming,
+                        ckl::InputLifecycle::HeldBulk>(span_row);
+                    if (HW_TAIL > 0 && b + 1 == Ht) {
+                        mask_centered_row<cb_centered, cb_mask_tail>(span_row);
+                    } else {
+                        mask_centered_row<cb_centered, cb_mask_interior>(span_row);
+                    }
+                    ckl::square<cb_centered, cb_centered>(span_row);
+                    ckl::accumulate_reduce_block<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_SCALAR>(
+                        cb_centered, cb_scaler, cb_var, span_reduce, b, Ht);
+                }
+                ckl::transform_in_place(cb_var, [](uint32_t dst) {
+                    binop_with_scalar_tile_init();
+                    add_unary_tile(dst, EPS_BITS);
+                    rsqrt_tile_init();
+                    rsqrt_tile(dst);
+                });
+                ckl::copy<cb_var, cb_rstd_export, ckl::InputLifecycle::HeldBulk>(1);
+
+                // ---- group end: release stats + this group's masks ----
+                cb_pop_front(cb_mean, 1);
+                cb_pop_front(cb_var, 1);
+                cb_pop_front(cb_mask_interior, Wsg);
+                if constexpr (HW_TAIL > 0) {
+                    cb_pop_front(cb_mask_tail, Wsg);
+                }
+            }
+
+            // ---- Pass 3: Row-broadcast sweep over the whole cluster ----
+            // out = (x - mean_row) * rstd_row [* gamma] [+ beta] [* row mask]
+            for (uint32_t b = 0; b < Ht; ++b) {
+                ckl::sub<
+                    cb_input_tiles,
+                    cb_mean_row,
+                    cb_centered,
+                    ckl::BroadcastDim::Row,
+                    ckl::InputLifecycle::Streaming,
+                    ckl::InputLifecycle::HeldBulk,
+                    ckl::OutputLifecycle::Streaming,
+                    ckl::BinaryDataFormatReconfig::Input,
+                    ckl::PackTileReconfig::Output,
+                    ckl::OperandKind::Scalar,
+                    ckl::OperandKind::Row>(cluster_row);
+                ckl::mul<
+                    cb_centered,
+                    cb_rstd_row,
+                    cb_norm_out,
+                    ckl::BroadcastDim::Row,
+                    ckl::InputLifecycle::Streaming,
+                    ckl::InputLifecycle::HeldBulk,
+                    ckl::OutputLifecycle::Streaming,
+                    ckl::BinaryDataFormatReconfig::Input,
+                    ckl::PackTileReconfig::Output,
+                    ckl::OperandKind::Scalar,
+                    ckl::OperandKind::Row>(cluster_row);
+                if constexpr (HAS_GAMMA) {
+                    ckl::eltwise_chain(
+                        cluster_row,
+                        ckl::BinaryFpu<
+                            cb_xhat,
+                            cb_gamma_tiles,
+                            ckl::BinaryFpuOp::Mul,
+                            ckl::BroadcastDim::Row,
+                            ckl::InputLifecycle::Streaming,
+                            ckl::InputLifecycle::HeldBulk,
+                            ckl::BinaryDataFormatReconfig::Input,
+                            ckl::Dst::D0,
+                            ckl::OperandKind::Scalar,
+                            ckl::OperandKind::Row,
+                            ckl::TileOffset::Unset,
+                            ckl::TileOffset::Set>{0, cluster_t0},
+                        ckl::PackTile<cb_gamma_out>{});
+                }
+                if constexpr (HAS_BETA) {
+                    ckl::eltwise_chain(
+                        cluster_row,
+                        ckl::BinaryFpu<
+                            cb_scaled,
+                            cb_beta_tiles,
+                            ckl::BinaryFpuOp::Add,
+                            ckl::BroadcastDim::Row,
+                            ckl::InputLifecycle::Streaming,
+                            ckl::InputLifecycle::HeldBulk,
+                            ckl::BinaryDataFormatReconfig::Input,
+                            ckl::Dst::D0,
+                            ckl::OperandKind::Scalar,
+                            ckl::OperandKind::Row,
+                            ckl::TileOffset::Unset,
+                            ckl::TileOffset::Set>{0, cluster_t0},
+                        ckl::PackTile<cb_final>{});
+                }
+                if constexpr (MASK_FINAL) {
+                    // bf8b + HW tail: zero the padding rows (cols already 0).
+                    if (HW_TAIL > 0 && b + 1 == Ht) {
+                        ckl::mul<
+                            cb_final,
+                            cb_mask_tail,
+                            cb_output_tiles,
+                            ckl::BroadcastDim::None,
+                            ckl::InputLifecycle::Streaming,
+                            ckl::InputLifecycle::HeldBulk,
+                            ckl::OutputLifecycle::Streaming,
+                            ckl::BinaryDataFormatReconfig::Input,
+                            ckl::PackTileReconfig::Output,
+                            ckl::OperandKind::Scalar,
+                            ckl::OperandKind::Row>(cluster_row);
+                    } else {
+                        ckl::mul<
+                            cb_final,
+                            cb_mask_interior,
+                            cb_output_tiles,
+                            ckl::BroadcastDim::None,
+                            ckl::InputLifecycle::Streaming,
+                            ckl::InputLifecycle::HeldBulk,
+                            ckl::OutputLifecycle::Streaming,
+                            ckl::BinaryDataFormatReconfig::Input,
+                            ckl::PackTileReconfig::Output,
+                            ckl::OperandKind::Scalar,
+                            ckl::OperandKind::Row>(cluster_row);
+                    }
+                }
+            }
+
+            // ---- cluster end: release row vectors (+ output masks) ----
+            cb_pop_front(cb_mean_row, Wcu);
+            cb_pop_front(cb_rstd_row, Wcu);
+            if constexpr (MASK_FINAL) {
+                cb_pop_front(cb_mask_interior, Wcu);
+                cb_pop_front(cb_mask_tail, Wcu);
+            }
+
+            if (++cl == NUM_CLUSTERS) {
+                cl = 0;
+            }
+        }
     }
 
     // ---- kernel end: drain persistent operands ----
     cb_pop_front(cb_scaler, 1);
-    if constexpr (C_TAIL > 0) {
+    if constexpr (!GROUPS_NA && C_TAIL > 0) {
         cb_pop_front(cb_mask_interior, Wg);
     }
-    if constexpr (HW_TAIL > 0) {
+    if constexpr (!GROUPS_NA && HW_TAIL > 0) {
         cb_pop_front(cb_mask_tail, Wg);
     }
     if constexpr (HAS_GAMMA) {
