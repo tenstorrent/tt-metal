@@ -25,7 +25,6 @@ jobs:
     outputs:
       matrix: ${{ steps.filter-tests.outputs.matrix }}
       allocation_spec: ${{ steps.extract-allocation.outputs.allocation_spec }}
-      mgd_content: ${{ steps.extract-mgd.outputs.mgd_content }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/demo_sp_multihost_tests.yaml
     steps:
@@ -50,20 +49,6 @@ jobs:
           {
             echo "allocation_spec<<EOF"
             python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_${{ inputs.sp-config }}"
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
-
-          # Extract allocation type for conditional MGD extraction
-          ALLOC_TYPE=$(python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_${{ inputs.sp-config }}" --type-only)
-          echo "allocation_type=$ALLOC_TYPE" >> $GITHUB_OUTPUT
-
-      - name: Extract MGD content from SKU
-        id: extract-mgd
-        if: steps.extract-allocation.outputs.allocation_type == 'MGD'
-        run: |
-          {
-            echo "mgd_content<<EOF"
-            python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_${{ inputs.sp-config }}" --mgd-only
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
@@ -108,7 +93,7 @@ jobs:
       PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
       PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
       PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
-      PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
+      PRTE_MCA_prte_default_hostfile: /etc/ttop/hostfile
       PRTE_MCA_prte_fwd_environment: "true"
       PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       VIRTUAL_ENV: /opt/venv
@@ -156,6 +141,7 @@ jobs:
         with:
           allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
           allocationNamespace: ttop-ci
+          path: /etc/ttop
 
       - name: Create test environment
         uses: ./.github/actions/ttop-create-environment
@@ -168,15 +154,6 @@ jobs:
           workerTag: ${{ steps.parse-image.outputs.tag }}
           useDevHostMount: 'true'
           sharedVolumeEnabled: 'true'
-
-      - name: Setup tt-run for test
-        uses: ./.github/actions/ttop-configure-tt-run
-        timeout-minutes: 5
-        with:
-          directory: /ci/ttrun
-          allocationConfigPath: /etc/ttop
-          mgd: ${{ inputs.sp-config != 'sp1-mgd' && needs.load-test-matrix.outputs.mgd_content || '' }}
-          copyToWorkers: false
 
       - name: 📦 Download Build Artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
