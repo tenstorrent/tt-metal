@@ -106,10 +106,10 @@ ttnn:
 
 train:
   l2:
-    wh_n150_civ2: 600
-    wh_n300_civ2: 600
-    bh_p100a_civ2_viommu: 600
-    bh_p150b_civ2: 600
+    wh_n150_civ2: 340
+    wh_n300_civ2: 340
+    bh_p100a_civ2_viommu: 340
+    bh_p150b_civ2: 340
 
 ttsim:
   l2:
