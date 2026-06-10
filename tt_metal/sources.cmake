@@ -220,13 +220,5 @@ set(JITAPI_FILES
     impl/dispatch/kernels/device_print_dispatch.h
     fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
     fabric/impl/kernels/tt_fabric_mux.cpp
-    kernels/compute/blank.cpp
-    kernels/compute/eltwise_binary.cpp
-    kernels/compute/eltwise_sfpu.cpp
-    kernels/dataflow/blank.cpp
-    kernels/dataflow/reader_binary_diff_lengths.cpp
-    kernels/dataflow/reader_unary.cpp
-    kernels/dataflow/writer_unary.cpp
-    kernels/dataflow/writer_unary_1.cpp
     sfpi-version
 )
