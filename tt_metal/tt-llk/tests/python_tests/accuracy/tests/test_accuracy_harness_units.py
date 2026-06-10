@@ -60,7 +60,6 @@ def test_csv_columns_have_expected_schema_order():
         "chip_arch",
         "distribution",
         "intervals",
-        "variant_name",
         "seed",
         "sample_index",
         "x",
@@ -69,11 +68,9 @@ def test_csv_columns_have_expected_schema_order():
         "approx_mode",
         "fast_mode",
         "dest_acc",
-        "abs_error",
         "signed_error",
         "rel_error",
         "signed_ulp_error",
-        "abs_ulp_error",
         "is_finite_hw",
         "is_finite_golden",
     ]
@@ -87,7 +84,6 @@ def _toy_df(op="exp", in_fmt="Float16_b", x=(0.0, 1.0)):
         chip_arch="wormhole",
         distribution="ramp",
         intervals="[(0.0, 1.0)]",
-        variant=f"{op}__toy",
         seed="",
         approx="0",
         fast="0",
@@ -105,6 +101,15 @@ def test_rows_dataframe_has_all_columns_and_sample_index(tmp_path):
     assert df["sample_index"].tolist() == [0, 1]
 
 
+def test_rows_dataframe_abbreviates_labels_and_flags():
+    # in/out format and chip_arch are abbreviated; finite flags are T/F.
+    df = _toy_df(in_fmt="Float16_b")
+    assert df["input_format"].iloc[0] == "bf16"
+    assert df["output_format"].iloc[0] == "bf16"
+    assert df["chip_arch"].iloc[0] == "wh"
+    assert set(df["is_finite_hw"]) <= {"T", "F"}
+
+
 def test_write_and_merge_overwrites_from_current_run_only(tmp_path, monkeypatch):
     # Redirect output dirs into tmp_path so the test never touches the repo.
     monkeypatch.setattr("accuracy.accuracy_harness.OUTPUT_DIR", tmp_path / "out")
@@ -119,8 +124,8 @@ def test_write_and_merge_overwrites_from_current_run_only(tmp_path, monkeypatch)
         tmp_path / "out" / "exp.csv", index=False
     )
 
-    write_shard(_toy_df(op="exp"))
-    write_shard(_toy_df(op="log"))
+    write_shard(_toy_df(op="exp"), "exp__toy")
+    write_shard(_toy_df(op="log"), "log__toy")
     merge_shards()
 
     exp = pd.read_csv(tmp_path / "out" / "exp.csv")
@@ -136,7 +141,7 @@ def test_merge_sorts_deterministically(tmp_path, monkeypatch):
     )
     (tmp_path / "out" / "_shards").mkdir(parents=True)
 
-    write_shard(_toy_df(op="exp", x=(1.0, 0.0)))  # unsorted x on purpose
+    write_shard(_toy_df(op="exp", x=(1.0, 0.0)), "exp__toy")  # unsorted x on purpose
     merge_shards()
     exp = pd.read_csv(tmp_path / "out" / "exp.csv")
     assert exp["x"].tolist() == [0.0, 1.0]  # sorted ascending by x

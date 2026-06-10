@@ -57,6 +57,13 @@ OUTPUT_DIR = _THIS_DIR / "_csv_output"
 SHARD_DIR = OUTPUT_DIR / "_shards"
 
 # ── CSV schema (column order is the on-disk order) ──────────────────────────
+# Compact schema: redundant columns are omitted to keep files small.
+#   - variant_name : reconstructable from op + formats + approx/fast/dest
+#   - abs_error / abs_ulp_error : = abs() of their signed counterparts
+# seed and distribution are kept (constant for the deterministic ramp sweep,
+# but they disambiguate rows once random / multi-distribution sweeps are added).
+# Categorical labels are abbreviated (see _ARCH_ABBR/_FMT_ABBR) and floats are
+# written rounded (FLOAT_FORMAT) since the values are bf16/fp16-precision.
 CSV_COLUMNS: List[str] = [
     "op",
     "input_format",
@@ -64,7 +71,6 @@ CSV_COLUMNS: List[str] = [
     "chip_arch",
     "distribution",
     "intervals",
-    "variant_name",
     "seed",
     "sample_index",
     "x",
@@ -73,14 +79,29 @@ CSV_COLUMNS: List[str] = [
     "approx_mode",
     "fast_mode",
     "dest_acc",
-    "abs_error",
     "signed_error",
     "rel_error",
     "signed_ulp_error",
-    "abs_ulp_error",
     "is_finite_hw",
     "is_finite_golden",
 ]
+
+# Float precision on disk: bf16/fp16 outputs carry <=11 mantissa bits, so 7
+# significant digits is lossless-enough and far shorter than full float64 repr.
+FLOAT_FORMAT = "%.7g"
+
+# Short labels to shrink repeated categorical columns (.get falls back to the
+# full name for anything not listed, so new formats still serialize sanely).
+_ARCH_ABBR = {"wormhole": "wh", "blackhole": "bh", "quasar": "qsr"}
+_FMT_ABBR = {
+    "Float32": "fp32",
+    "Float16": "fp16",
+    "Float16_b": "bf16",
+    "Bfp8_b": "bfp8",
+    "Bfp4_b": "bfp4",
+    "Bfp2_b": "bfp2",
+    "Tf32": "tf32",
+}
 
 # Deterministic merge sort key -> byte-stable per-op CSVs across reruns.
 MERGE_SORT_COLS = [
@@ -142,7 +163,6 @@ def rows_dataframe(
     chip_arch: str,
     distribution: str,
     intervals: str,
-    variant: str,
     seed: str,
     approx: str,
     fast: str,
@@ -155,7 +175,13 @@ def rows_dataframe(
     """Assemble one variant's rows (sorted ascending by x) into a DataFrame.
 
     Computes per-element metrics via the shared accuracy_metrics module and
-    assigns a stable 0-based sample_index along the sorted sweep.
+    assigns a stable 0-based sample_index along the sorted sweep. Emits the
+    compact CSV_COLUMNS schema: categorical labels are abbreviated, boolean
+    finite flags are written as T/F, and the redundant abs_*/variant_name/
+    seed/distribution columns are omitted.
+
+    *out_fmt_enum_name* must be the FULL DataFormat name (e.g. "Float16_b") —
+    it drives the ULP metric lookup — even though *out_fmt* may be abbreviated.
     """
     x = np.asarray(x, dtype=np.float64)
     golden = np.asarray(golden, dtype=np.float64)
@@ -171,12 +197,11 @@ def rows_dataframe(
     df = pd.DataFrame(
         {
             "op": op_name,
-            "input_format": in_fmt,
-            "output_format": out_fmt,
-            "chip_arch": chip_arch,
+            "input_format": _FMT_ABBR.get(in_fmt, in_fmt),
+            "output_format": _FMT_ABBR.get(out_fmt, out_fmt),
+            "chip_arch": _ARCH_ABBR.get(chip_arch, chip_arch),
             "distribution": distribution,
             "intervals": intervals,
-            "variant_name": variant,
             "seed": seed,
             "sample_index": np.arange(n, dtype=np.int64),
             "x": x,
@@ -185,24 +210,25 @@ def rows_dataframe(
             "approx_mode": approx,
             "fast_mode": fast,
             "dest_acc": dest,
-            "abs_error": m["abs_error"],
             "signed_error": m["signed_error"],
             "rel_error": m["rel_error"],
             "signed_ulp_error": m["signed_ulp_error"],
-            "abs_ulp_error": m["abs_ulp_error"],
-            "is_finite_hw": m["is_finite_hw"],
-            "is_finite_golden": m["is_finite_golden"],
+            "is_finite_hw": np.where(m["is_finite_hw"], "T", "F"),
+            "is_finite_golden": np.where(m["is_finite_golden"], "T", "F"),
         }
     )
     return df[CSV_COLUMNS]
 
 
-def write_shard(df: "pd.DataFrame") -> Path:
-    """Write one variant's DataFrame to SHARD_DIR/{variant_name}.csv."""
+def write_shard(df: "pd.DataFrame", variant: str) -> Path:
+    """Write one variant's DataFrame to SHARD_DIR/{variant}.csv.
+
+    *variant* is the unique shard stem (it is no longer a CSV column, so it is
+    passed explicitly).
+    """
     SHARD_DIR.mkdir(parents=True, exist_ok=True)
-    variant = df["variant_name"].iloc[0]
     shard_path = SHARD_DIR / f"{variant}.csv"
-    df.to_csv(shard_path, index=False)
+    df.to_csv(shard_path, index=False, float_format=FLOAT_FORMAT)
     return shard_path
 
 
@@ -225,7 +251,7 @@ def merge_shards() -> List[Path]:
     for op_name, group in combined.groupby("op", sort=True):
         ordered = group.sort_values(MERGE_SORT_COLS, kind="stable")
         out_path = OUTPUT_DIR / f"{op_name}.csv"
-        ordered.to_csv(out_path, index=False)
+        ordered.to_csv(out_path, index=False, float_format=FLOAT_FORMAT)
         written.append(out_path)
     return written
 
@@ -336,6 +362,14 @@ def run_case(
 
     domain = spec.intervals if spec.intervals is not None else [(spec.low, spec.high)]
     intervals_str = str(domain)
+    vname = variant_name(
+        op,
+        formats.input_format,
+        formats.output_format,
+        approx_mode,
+        fast_mode,
+        dest_acc,
+    )
     df = rows_dataframe(
         op_name=op.name.lower(),
         in_fmt=formats.input_format.name,
@@ -343,14 +377,6 @@ def run_case(
         chip_arch=str(TestConfig.CHIP_ARCH.name).lower(),
         distribution="ramp",
         intervals=intervals_str,
-        variant=variant_name(
-            op,
-            formats.input_format,
-            formats.output_format,
-            approx_mode,
-            fast_mode,
-            dest_acc,
-        ),
         seed="",
         approx=str(int(approx_mode == ApproximationMode.Yes)),
         fast=str(int(fast_mode == FastMode.Yes)),
@@ -360,4 +386,4 @@ def run_case(
         hw=hw_np,
         out_fmt_enum_name=formats.output_format.name,
     )
-    return write_shard(df)
+    return write_shard(df, vname)
