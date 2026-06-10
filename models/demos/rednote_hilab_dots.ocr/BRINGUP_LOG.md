@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T02:31:43Z
+**Updated:** 2026-06-10T02:38:20Z
 
 ## Block Status
 
@@ -50,22 +50,22 @@
 | embedding | debug | n/a | — | 0 |  |
 | embedding | optimization | pending | — | 0 |  |
 | embedding | real_weights | pending | — | 0 |  |
-| text_rmsnorm | reference | pending | — | 0 |  |
+| text_rmsnorm | reference | done | 1.000000 | 0 | Qwen2RMSNorm eps=1e-6, fp32 variance then weight*x, real layers.0 input_layernorm weight |
 | text_rmsnorm | ttnn | pending | — | 0 |  |
 | text_rmsnorm | debug | n/a | — | 0 |  |
 | text_rmsnorm | optimization | pending | — | 0 |  |
 | text_rmsnorm | real_weights | pending | — | 0 |  |
-| text_attention | reference | pending | — | 0 |  |
+| text_attention | reference | done | 1.000000 | 0 | eager causal GQA 12Q/2KV hd128 qkv-bias o_proj-no-bias, rope theta=1e6, real layers.0 weights |
 | text_attention | ttnn | pending | — | 0 |  |
 | text_attention | debug | n/a | — | 0 |  |
 | text_attention | optimization | pending | — | 0 |  |
 | text_attention | real_weights | pending | — | 0 |  |
-| text_mlp | reference | pending | — | 0 |  |
+| text_mlp | reference | done | 1.000000 | 0 | Qwen2 SwiGLU 1536->8960->1536 no bias, real layers.0 weights |
 | text_mlp | ttnn | pending | — | 0 |  |
 | text_mlp | debug | n/a | — | 0 |  |
 | text_mlp | optimization | pending | — | 0 |  |
 | text_mlp | real_weights | pending | — | 0 |  |
-| decoder_layer | reference | pending | — | 0 |  |
+| decoder_layer | reference | done | 1.000000 | 0 | Qwen2DecoderLayer pre-norm residual x+attn(ln1(x)); h+mlp(ln2(h)), real layers.0 weights |
 | decoder_layer | ttnn | pending | — | 0 |  |
 | decoder_layer | debug | n/a | — | 0 |  |
 | decoder_layer | optimization | pending | — | 0 |  |
@@ -87,6 +87,7 @@
 - tick 1 (2026-06-10T02:15:14Z): architecture[all] — ok
 - tick 2 (2026-06-10T02:23:55Z): reference[vision_patch_embed,vision_rmsnorm,vision_attention,vision_mlp] — ok
 - tick 3 (2026-06-10T02:31:43Z): reference[vision_block,patch_merger,vision_transformer,embedding] — ok
+- tick 4 (2026-06-10T02:38:20Z): reference[text_rmsnorm,text_attention,text_mlp,decoder_layer] — ok
 
 ## Host-Resident Exceptions
 

@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T02:31:43Z",
+  "updated_at": "2026-06-10T02:38:20Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -336,8 +336,15 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/reference/functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/test_functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/golden/text_rmsnorm.pt"
+        ],
+        "notes": "Qwen2RMSNorm eps=1e-6, fp32 variance then weight*x, real layers.0 input_layernorm weight",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -369,8 +376,15 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/reference/functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/test_functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/golden/text_attention.pt"
+        ],
+        "notes": "eager causal GQA 12Q/2KV hd128 qkv-bias o_proj-no-bias, rope theta=1e6, real layers.0 weights",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -402,8 +416,15 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/reference/functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/test_functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/golden/text_mlp.pt"
+        ],
+        "notes": "Qwen2 SwiGLU 1536->8960->1536 no bias, real layers.0 weights",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -437,8 +458,15 @@
         "reference_link": null
       },
       "reference": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/reference/functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/test_functional.py",
+          "models/demos/rednote_hilab_dots.ocr/reference/golden/decoder_layer.pt"
+        ],
+        "notes": "Qwen2DecoderLayer pre-norm residual x+attn(ln1(x)); h+mlp(ln2(h)), real layers.0 weights",
+        "pcc": 1.0
       },
       "ttnn": {
         "status": "pending",
@@ -551,6 +579,12 @@
       "tick": 3,
       "ts": "2026-06-10T02:31:43Z",
       "action": "reference[vision_block,patch_merger,vision_transformer,embedding]",
+      "result": "ok"
+    },
+    {
+      "tick": 4,
+      "ts": "2026-06-10T02:38:20Z",
+      "action": "reference[text_rmsnorm,text_attention,text_mlp,decoder_layer]",
       "result": "ok"
     }
   ],

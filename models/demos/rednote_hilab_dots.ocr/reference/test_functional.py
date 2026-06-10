@@ -220,3 +220,120 @@ def test_embedding():
     p = pcc(ref, hf(ids))
     _save_golden("embedding", {"input": ids, "output": ref, "pcc_vs_hf": p})
     assert p > 0.99, p
+
+
+# ---------------------------------------------------------------------------
+# text side: plain Qwen2 (DotsOCRForCausalLM subclasses Qwen2ForCausalLM)
+# ---------------------------------------------------------------------------
+TEXT_SEQ = 128
+
+
+def text_config():
+    from transformers.models.qwen2 import Qwen2Config
+
+    raw = json.load(open(SNAP / "config.json"))
+    drop = {"vision_config", "architectures", "auto_map", "model_type"}
+    cfg = Qwen2Config(**{k: v for k, v in raw.items() if k not in drop})
+    cfg._attn_implementation = "eager"
+    return cfg
+
+
+def _text_pos_embeds(cfg, x):
+    from transformers.models.qwen2.modeling_qwen2 import Qwen2RotaryEmbedding
+
+    pos_ids = torch.arange(TEXT_SEQ).unsqueeze(0)
+    hf_cos, hf_sin = Qwen2RotaryEmbedding(cfg)(x, pos_ids)
+    ref_cos, ref_sin = fn.text_rope_cos_sin(pos_ids, head_dim=cfg.hidden_size // cfg.num_attention_heads)
+    assert torch.allclose(ref_cos, hf_cos, atol=1e-5) and torch.allclose(ref_sin, hf_sin, atol=1e-5)
+    return ref_cos, ref_sin
+
+
+def _causal_mask_4d(dtype):
+    mask = torch.triu(torch.full((TEXT_SEQ, TEXT_SEQ), torch.finfo(dtype).min, dtype=dtype), diagonal=1)
+    return mask[None, None, :, :]
+
+
+def test_text_rmsnorm():
+    torch.manual_seed(0)
+    from transformers.models.qwen2.modeling_qwen2 import Qwen2RMSNorm
+
+    w = load_weights("model.layers.0", ["input_layernorm.weight"])["input_layernorm.weight"]
+    x = torch.randn(1, TEXT_SEQ, 1536)
+    hf = Qwen2RMSNorm(1536, eps=1e-6)
+    hf.weight.data.copy_(w)
+    ref = fn.text_rmsnorm_forward(x, w, eps=1e-6)
+    p = pcc(ref, hf(x))
+    _save_golden("text_rmsnorm", {"input": x, "output": ref, "weight": w, "pcc_vs_hf": p, "eps": 1e-6})
+    assert p > 0.99, p
+
+
+ATTN_KEYS = [
+    "q_proj.weight",
+    "q_proj.bias",
+    "k_proj.weight",
+    "k_proj.bias",
+    "v_proj.weight",
+    "v_proj.bias",
+    "o_proj.weight",
+]
+
+
+def test_text_attention():
+    torch.manual_seed(0)
+    from transformers.models.qwen2.modeling_qwen2 import Qwen2Attention
+
+    cfg = text_config()
+    sd = load_weights("model.layers.0.self_attn", ATTN_KEYS)
+    x = torch.randn(1, TEXT_SEQ, cfg.hidden_size)
+    cos, sin = _text_pos_embeds(cfg, x)
+    hf = Qwen2Attention(cfg, layer_idx=0)
+    hf.load_state_dict({k: v for k, v in sd.items()})
+    with torch.no_grad():
+        hf_out = hf(x, position_embeddings=(cos, sin), attention_mask=_causal_mask_4d(x.dtype))[0]
+        ref = fn.text_attention_forward(x, sd, cos, sin, num_heads=12, num_kv_heads=2)
+    p = pcc(ref, hf_out)
+    _save_golden("text_attention", {"input": x, "output": ref, "cos": cos, "sin": sin, "pcc_vs_hf": p})
+    assert p > 0.99, p
+
+
+def test_text_mlp():
+    torch.manual_seed(0)
+    from transformers.models.qwen2.modeling_qwen2 import Qwen2MLP
+
+    cfg = text_config()
+    sd = load_weights("model.layers.0.mlp", ["gate_proj.weight", "up_proj.weight", "down_proj.weight"])
+    x = torch.randn(1, TEXT_SEQ, cfg.hidden_size)
+    hf = Qwen2MLP(cfg)
+    hf.load_state_dict(sd)
+    with torch.no_grad():
+        hf_out = hf(x)
+        ref = fn.text_mlp_forward(x, sd)
+    p = pcc(ref, hf_out)
+    _save_golden("text_mlp", {"input": x, "output": ref, "pcc_vs_hf": p})
+    assert p > 0.99, p
+
+
+LAYER_KEYS = (
+    ["input_layernorm.weight", "post_attention_layernorm.weight"]
+    + [f"self_attn.{k}" for k in ATTN_KEYS]
+    + ["mlp.gate_proj.weight", "mlp.up_proj.weight", "mlp.down_proj.weight"]
+)
+
+
+def test_decoder_layer():
+    torch.manual_seed(0)
+    from transformers.models.qwen2.modeling_qwen2 import Qwen2DecoderLayer
+
+    cfg = text_config()
+    sd = load_weights("model.layers.0", LAYER_KEYS)
+    x = torch.randn(1, TEXT_SEQ, cfg.hidden_size)
+    cos, sin = _text_pos_embeds(cfg, x)
+    hf = Qwen2DecoderLayer(cfg, layer_idx=0)
+    hf.load_state_dict(sd)
+    with torch.no_grad():
+        hf_out = hf(x, attention_mask=_causal_mask_4d(x.dtype), position_embeddings=(cos, sin))
+        hf_out = hf_out[0] if isinstance(hf_out, tuple) else hf_out
+        ref = fn.decoder_layer_forward(x, sd, cos, sin, num_heads=12, num_kv_heads=2, eps=1e-6)
+    p = pcc(ref, hf_out)
+    _save_golden("decoder_layer", {"input": x, "output": ref, "cos": cos, "sin": sin, "pcc_vs_hf": p})
+    assert p > 0.99, p

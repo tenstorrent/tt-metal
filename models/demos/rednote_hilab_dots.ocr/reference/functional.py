@@ -235,3 +235,112 @@ def vision_transformer_forward(
 def embedding_forward(input_ids: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
     """Token embedding lookup: weight [vocab, hidden], untied from lm_head."""
     return F.embedding(input_ids, weight)
+
+
+# ---------------------------------------------------------------------------
+# text_rmsnorm (Qwen2RMSNorm, eps=1e-6)
+# ---------------------------------------------------------------------------
+def text_rmsnorm_forward(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """Qwen2RMSNorm: fp32 variance + rsqrt, cast back, THEN scale by weight."""
+    out = (x.float() * torch.rsqrt(x.float().pow(2).mean(-1, keepdim=True) + eps)).type_as(x)
+    return weight * out
+
+
+# ---------------------------------------------------------------------------
+# text rotary helpers (host-side tables, Qwen2 default rope theta=1e6)
+# ---------------------------------------------------------------------------
+def text_rope_cos_sin(position_ids: torch.Tensor, head_dim: int = 128, theta: float = 1e6):
+    """cos/sin tables matching Qwen2RotaryEmbedding (default rope, scaling=1).
+
+    position_ids: [batch, seq] int. Returns cos, sin each [batch, seq, head_dim].
+    """
+    inv_freq = 1.0 / (theta ** (torch.arange(0, head_dim, 2, dtype=torch.float) / head_dim))
+    freqs = position_ids[..., None].float() * inv_freq[None, None, :]
+    emb = torch.cat((freqs, freqs), dim=-1)
+    return emb.cos(), emb.sin()
+
+
+def _apply_rotary_text(q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor):
+    """q/k: [batch, heads, seq, head_dim]; cos/sin: [batch, seq, head_dim]."""
+    cos, sin = cos.unsqueeze(1), sin.unsqueeze(1)
+    return (q * cos) + (_rotate_half(q) * sin), (k * cos) + (_rotate_half(k) * sin)
+
+
+# ---------------------------------------------------------------------------
+# text_attention (Qwen2 GQA: 12 Q heads, 2 KV heads, QKV bias, causal)
+# ---------------------------------------------------------------------------
+def text_attention_forward(
+    x: torch.Tensor,
+    state_dict: Dict[str, torch.Tensor],
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    num_heads: int = 12,
+    num_kv_heads: int = 2,
+) -> torch.Tensor:
+    """Eager causal GQA exactly as Qwen2Attention.
+
+    x: [batch, seq, hidden]. state_dict keys: q_proj.weight/.bias,
+    k_proj.weight/.bias, v_proj.weight/.bias, o_proj.weight (no bias).
+    cos/sin from text_rope_cos_sin.
+    """
+    bsz, seq, hidden = x.shape
+    head_dim = hidden // num_heads
+    q = F.linear(x, state_dict["q_proj.weight"], state_dict["q_proj.bias"])
+    k = F.linear(x, state_dict["k_proj.weight"], state_dict["k_proj.bias"])
+    v = F.linear(x, state_dict["v_proj.weight"], state_dict["v_proj.bias"])
+    q = q.view(bsz, seq, num_heads, head_dim).transpose(1, 2)
+    k = k.view(bsz, seq, num_kv_heads, head_dim).transpose(1, 2)
+    v = v.view(bsz, seq, num_kv_heads, head_dim).transpose(1, 2)
+    q, k = _apply_rotary_text(q, k, cos, sin)
+
+    rep = num_heads // num_kv_heads
+    k = k.repeat_interleave(rep, dim=1)
+    v = v.repeat_interleave(rep, dim=1)
+
+    mask = torch.triu(torch.full((seq, seq), torch.finfo(q.dtype).min, dtype=q.dtype), diagonal=1)
+    attn = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(head_dim) + mask
+    attn = F.softmax(attn, dim=-1, dtype=torch.float32).to(q.dtype)
+    out = torch.matmul(attn, v).transpose(1, 2).reshape(bsz, seq, hidden)
+    return F.linear(out, state_dict["o_proj.weight"])
+
+
+# ---------------------------------------------------------------------------
+# text_mlp (Qwen2 SwiGLU 1536 -> 8960 -> 1536, no bias)
+# ---------------------------------------------------------------------------
+def text_mlp_forward(x: torch.Tensor, state_dict: Dict[str, torch.Tensor]) -> torch.Tensor:
+    """down(silu(gate(x)) * up(x)), no biases."""
+    return F.linear(
+        F.silu(F.linear(x, state_dict["gate_proj.weight"])) * F.linear(x, state_dict["up_proj.weight"]),
+        state_dict["down_proj.weight"],
+    )
+
+
+# ---------------------------------------------------------------------------
+# decoder_layer (Qwen2DecoderLayer: pre-norm residual)
+# ---------------------------------------------------------------------------
+def decoder_layer_forward(
+    x: torch.Tensor,
+    state_dict: Dict[str, torch.Tensor],
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    num_heads: int = 12,
+    num_kv_heads: int = 2,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """x + attn(input_layernorm(x)); h + mlp(post_attention_layernorm(h)).
+
+    state_dict keys: input_layernorm.weight, self_attn.{q,k,v}_proj.weight/.bias,
+    self_attn.o_proj.weight, post_attention_layernorm.weight,
+    mlp.{gate,up,down}_proj.weight.
+    """
+    attn_sd = {k[len("self_attn.") :]: v for k, v in state_dict.items() if k.startswith("self_attn.")}
+    mlp_sd = {k[len("mlp.") :]: v for k, v in state_dict.items() if k.startswith("mlp.")}
+    h = x + text_attention_forward(
+        text_rmsnorm_forward(x, state_dict["input_layernorm.weight"], eps),
+        attn_sd,
+        cos,
+        sin,
+        num_heads=num_heads,
+        num_kv_heads=num_kv_heads,
+    )
+    return h + text_mlp_forward(text_rmsnorm_forward(h, state_dict["post_attention_layernorm.weight"], eps), mlp_sd)
