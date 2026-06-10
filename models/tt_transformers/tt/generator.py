@@ -112,6 +112,74 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         "supports_prefix_caching": True,
     }
 
+    def update_weights(self, hf_state_dict: dict[str, ttnn.Tensor], *, hf_rope: bool = False) -> None:
+        """In-place replace the weights of every data-parallel replica.
+
+        ``hf_state_dict`` is an HF-keyed dict of on-device tensors meeting the
+        ``Transformer.update_weights`` contract (replicated, DRAM-interleaved,
+        TILE, bfloat16). This is the vLLM-side entry point an external trainer
+        reaches via the worker's ``collective_rpc("update_weights", ...)``.
+
+        Data parallelism replicates the whole model, so the same weights apply
+        to every replica -- there is no per-replica weight transform, only the
+        input batch differs at inference. Each replica's ``Transformer`` lives
+        on its own submesh, though, and ttnn ops require their operands on the
+        same mesh handle, so for DP>1 the dict is re-homed onto each submesh
+        before dispatch (see ``_rehome_hf_dict``).
+
+        The underlying ``Transformer.update_weights`` overwrites each weight in
+        place with ``ttnn.copy``, preserving every device buffer address; any
+        captured trace (and the DRAM prefetcher's recorded addresses) stays
+        valid. Callers must NOT recapture traces after an update. The caller is
+        also responsible for quiescing inference (no concurrent forward); on the
+        vLLM path ``collective_rpc`` is serialized with engine steps.
+        """
+        if self.data_parallel == 1:
+            # create_submeshes(mesh, 1) returns the parent mesh itself, so the
+            # received dict already shares the single replica's mesh handle --
+            # dispatch directly, no re-homing needed.
+            self.model[0].update_weights(hf_state_dict, hf_rope=hf_rope)
+            return
+
+        for replica in self.model:
+            submesh_dict = self._rehome_hf_dict(hf_state_dict, replica.mesh_device)
+            try:
+                replica.update_weights(submesh_dict, hf_rope=hf_rope)
+            finally:
+                # The in-place copy is enqueued; free the temporaries so peak
+                # device memory stays bounded to one replica's worth of weights
+                # rather than holding a full re-homed copy per replica at once.
+                for tensor in submesh_dict.values():
+                    ttnn.deallocate(tensor)
+
+    def _rehome_hf_dict(
+        self, hf_state_dict: dict[str, ttnn.Tensor], target_mesh
+    ) -> dict[str, ttnn.Tensor]:
+        """Re-materialize ``hf_state_dict`` as replicated tensors on ``target_mesh``.
+
+        A ``ttnn.Tensor`` is bound to a single mesh-device handle, but DP
+        replicas live on disjoint submeshes, so a dict received on one mesh
+        cannot be ``ttnn.copy``'d into a replica on another even though the
+        intended bytes are identical. We pull one replica of each weight to
+        host (every mesh shard of a replicated tensor holds the same data) and
+        push it back onto the target submesh, preserving dtype and layout.
+
+        This host round-trip only runs on the DP>1 path; DP=1 dispatches the
+        received dict directly.
+        """
+        rehomed: dict[str, ttnn.Tensor] = {}
+        for key, src in hf_state_dict.items():
+            host_tensor = ttnn.to_torch(ttnn.get_device_tensors(src)[0])
+            rehomed[key] = ttnn.from_torch(
+                host_tensor,
+                dtype=src.dtype,
+                layout=src.layout,
+                device=target_mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(target_mesh),
+            )
+        return rehomed
+
     def _set_sampling_trace_mode(self, enabled: bool):
         for model_instance in self.model:
             sampling_module = getattr(model_instance, "sampling", None)
