@@ -49,9 +49,8 @@ std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed
     bool nw_corner_only) {
     std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
 
-    // Multi-process: anchor only the NW corner (fabric node 0) to tray 1 / asic 1. The auto-generated rank
-    // bindings orient each host's slice, so the other three corners would over-constrain the mapping; the
-    // single NW anchor still fixes orientation and keeps a torus mesh from folding (bottom half on top).
+    // Sub-galaxy slices: pin only the NW corner (node 0) to tray 1 / asic 1. This is a single-position pin
+    // (the only kind the rank-binding solver supports) that fixes orientation without over-constraining a slice.
     if (nw_corner_only) {
         fixed_asic_position_pinnings.emplace_back(
             FabricNodeId{mesh_id, 0}, std::vector<AsicPosition>{AsicPosition{1, 1}});

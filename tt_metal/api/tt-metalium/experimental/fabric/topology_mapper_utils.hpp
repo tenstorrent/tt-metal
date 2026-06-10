@@ -46,10 +46,10 @@ using AsicPositionMap = std::map<tt::tt_metal::AsicID, AsicPosition>;
 using PinningConstraint = std::pair<AsicPosition, FabricNodeId>;
 
 // Galaxy corner pinnings for a single mesh, ensuring QSFP links align with the fabric mesh corner nodes
-// and the mesh is not folded. Single-host bring-up pins all four logical corners to the four tray corners
-// (with hard_pin_node_0 fixing the NW corner to tray 1 / asic 1). nw_corner_only pins ONLY the NW corner
-// (fabric node 0) to tray 1 / asic 1 -- the single orientation anchor used for multi-process runs.
-// Shared by generate_rank_bindings (Phase 1) and ControlPlane (Phase 2) so both apply identical placement.
+// and the mesh is not folded. Pins all four logical corners to the four tray corners (with hard_pin_node_0
+// fixing the NW corner to tray 1 / asic 1); nw_corner_only pins ONLY the NW corner (a single-position pin
+// for sub-galaxy slices, which the solver can satisfy without over-constraining a small slice). Shared by
+// generate_rank_bindings (Phase 1) and ControlPlane (Phase 2) so both apply identical placement.
 std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed_asic_position_pinnings_for_mesh(
     MeshId mesh_id,
     const tt::tt_metal::distributed::MeshShape& mesh_shape,
