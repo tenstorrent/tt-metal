@@ -69,7 +69,7 @@ scale_modes; RMS 0.064–0.067 vs 0.05) — identical near-uniform-attention roo
 and magnitude as their MHA siblings already filed under Refinement 3; the head
 mapping contributes no extra error. Moved to Refinement 3 inherited list.
 
-### [ ] Refinement 3 — Long-context / near-uniform-attention precision
+### [~] Refinement 3 — Long-context / near-uniform-attention precision
 
 **Goal**: move the 6 `supported_fail` `numerical-precision` cells (Q1x1x4096x64, Q1x1x8192x64, Q1x4x4096x64 × mask_mode=none × both scale_modes; RMS 0.067–0.158 vs 0.05) and the failing distribution regressions (`uniform_input`, `negative_input` rms 0.09–0.50 incl. one severity=bug at S=512, `long_context_smoke`) into passing. Root cause: near-uniform attention output has tiny stddev while bf16 `cb_probs` quantization noise stays constant — relative RMS blows up with S. Lever: fp32 probs path for rowsum + P@V (fp32 matmul inputs at reduced throughput, gated on compute_kernel_config from Refinement 1) or bf16 probs error compensation in `l`. No SUPPORTED axis changes — these cells are inside SUPPORTED and must not be gated out via EXCLUSIONS or a shape-size tagger.
 
@@ -80,6 +80,32 @@ mapping contributes no extra error. Moved to Refinement 3 inherited list.
 **Inherited from Refinement 1**: also fix the 2 bf8b Q1x1x8192x64 mask=none cells (RMS 0.165 vs 0.12, ulp_p99 9.5e8 — same near-uniform-attention root cause; cb_probs is bf8b for bf8b inputs, so the probs-quantization noise term is larger). Lever: keep cb_probs at Float16_b (or Float32 with the fp32-probs path) regardless of input dtype — Refinement 1 already left `in_fmt` vs `acc_fmt` derivation in the descriptor, so this is one line for the probs CB. fp32 inputs already pass long-context (probs CB Float32 there).
 
 **Done when**: zero `supported_fail` cells; uniform/negative/long_context regression tests pass at default tolerances.
+
+**Outcome (2026-06-10, partial)**: zero `supported_fail` cells — all 12 golden cells
+(6 MHA bf16 + 4 GQA/MQA + 2 bf8b) pass at rms 0.008–0.020; `long_context_smoke` and
+all GQA/MQA regressions pass. Actual root cause (probes 009–013) was NOT probs
+quantization alone: HiFi2 skips the SrcB low-mantissa fidelity phase, so rowsum `l`
+and P@V consumed packed probs at different precision (V=ones invariant O==1 off by
+11%). Fix: bf16/bf8b default HiFi3 + cb_probs follows acc_fmt (Float32) — zero kernel
+changes. Deferred: 9 uniform/negative regression cells (rms 0.04–0.21, all
+`ulp_p99=1, median_abs=0`) — output std ≈ 1 bf16 ulp puts default rel-RMS at the
+output-quantization floor; static analyzer confirms no structural term remains. See
+Refinement 5.
+
+### [ ] Refinement 5 — Uniform/negative-input bf16-floor flip-rate reduction
+
+**Goal**: move the 9 deferred `test_uniform_input` / `test_negative_input` regression
+cells (S=32–512 bf16; rms 0.04–0.21 vs 0.04, pcc up to 0.9947 vs 0.995) into passing.
+All disagreement is single-ulp flips at the bf16 output grid (`ulp_p99=1,
+median_abs=0`); rms tolerance requires flip-rate < ~0.2% vs current ~1–2%. Known
+residual terms (probes 009–013, static-analyzer report): (a) Phase 12 `O · (1/l)`
+runs on FPU — fp32 operands truncate to ~10 mantissa bits (≈0.25 ulp of bf16), and
+(b) `recip_tile` SFPU ≈1 ulp fp32. Levers, in order: (1) materialize `inv` to a full
+fp32 tile (eltwise Col-bcast copy) and do the final multiply on SFPU (`SfpuMul`,
+fp32-exact); (2) verify packer fp32→bf16 rounding mode is RNE (torch's mode);
+(3) extra NR iteration on recip (or compute `out = O · (1/l)` with bcast on the
+already-HiFi3 FPU using `l` pre-inverted in fp32). No SUPPORTED/EXCLUSIONS changes —
+cells stay inside SUPPORTED and failing until fixed.
 
 ### [ ] Refinement 4 — Non-tile-aligned shapes
 
