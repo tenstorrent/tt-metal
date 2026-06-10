@@ -85,6 +85,28 @@ EXTRACT_SYSTEM = (
 )
 
 
+def _relevant_entries(kb, graph_summary, max_entries):
+    """Cap the KB serialized into the prompt: rank by op-token overlap between each
+    entry's torch_pattern/fused_op and the traced graph's node kinds. Falls back to
+    the full KB (capped) when nothing overlaps, so small hand-built KBs and graphs
+    with unknown kinds keep the old behavior."""
+    from models.experimental.opt_transfer.kb.store import _entry_ops, op_token
+
+    if len(kb) <= max_entries:
+        return kb
+    kinds = {op_token(n.get("kind", "")) for n in graph_summary if isinstance(n, dict)}
+    kinds.discard("")
+    scored = []
+    for e in kb:
+        overlap = kinds & set(_entry_ops(e))
+        if overlap:
+            scored.append((-len(overlap), 0 if e.confidence == "high" else 1, e.id, e))
+    if not scored:
+        return kb[:max_entries]
+    scored.sort(key=lambda t: t[:3])
+    return [e for _, _, _, e in scored[:max_entries]]
+
+
 class LLMClient:
     """Production client for BOTH the KB miner (extract_entries) and the matcher (propose),
     sharing prompt-cached context. Transport is injectable for offline tests."""
@@ -113,7 +135,10 @@ class LLMClient:
         )
         return _extract_json(self._complete(sys, user))
 
+    MAX_KB_IN_PROMPT = 40
+
     def propose(self, graph_summary, kb, diagnosis=None):
+        kb = _relevant_entries(kb, graph_summary, self.MAX_KB_IN_PROMPT)
         kb_text = json.dumps([e.to_dict() for e in kb], indent=2)
         sys = [
             {"type": "text", "text": SYSTEM},
