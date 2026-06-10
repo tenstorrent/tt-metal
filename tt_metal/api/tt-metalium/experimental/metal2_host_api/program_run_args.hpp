@@ -112,11 +112,17 @@ using KernelRunArgs = ProgramRunArgs::KernelRunArgs;
 using DFBRunOverrides = ProgramRunArgs::DFBRunOverrides;
 using TensorArgument = ProgramRunArgs::TensorArgument;
 
-// Resolve a TensorArgument to its MeshTensor. (One alternative today; switch to
-// std::visit once MeshTensorView is added as a second variant alternative.)
+// Resolve a TensorArgument to its MeshTensor.
+// (Switch to std::visit once MeshTensorView is added as a second variant alternative.)
 inline const MeshTensor& mesh_tensor_of(const TensorArgument& arg) {
     return std::get<std::reference_wrapper<const MeshTensor>>(arg).get();
 }
+
+// Helper function to merge two or more ProgramRunArgs objects into one.
+// Validates that the provided ProgramRunArgs objects specify mutually disjoint arguments.
+ProgramRunArgs MergeProgramRunArgs(
+    ProgramRunArgs base, std::span<const ProgramRunArgs> rest, bool skip_validation = false);
+// Invocation: auto full = MergeProgramRunArgs(std::move(base_run_args), {appended_run_args});
 
 //------------------------------------------------
 // ProgramRunArgsView (for advanced users)

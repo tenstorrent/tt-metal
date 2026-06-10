@@ -1553,7 +1553,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_InterleavedAcceptsDifferentSha
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     auto binding = MakeMinimalTensorParameter("input_tensor");  // shape {1, 32}
-    binding.relaxations = TensorParameterRelaxations{.dynamic_tensor_shape = true};
+    binding.advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true};
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
@@ -1576,7 +1576,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_DTypeMismatchStillFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     auto binding = MakeMinimalTensorParameter("input_tensor");  // BFLOAT16
-    binding.relaxations = TensorParameterRelaxations{.dynamic_tensor_shape = true};
+    binding.advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true};
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
@@ -1605,7 +1605,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_RankMismatchFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     auto binding = MakeMinimalTensorParameter("input_tensor");  // rank-2 shape {1, 32}
-    binding.relaxations = TensorParameterRelaxations{.dynamic_tensor_shape = true};
+    binding.advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true};
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
@@ -1671,7 +1671,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_ShardedSetWritesShapeIntoCRTAs
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     auto binding =
         MakeShardedTensorParameter("input_tensor", tt::tt_metal::Shape{1, 1, 64, 32}, {32, 32}, /*num_cores=*/2);
-    binding.relaxations = TensorParameterRelaxations{.dynamic_tensor_shape = true};
+    binding.advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true};
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
@@ -1697,7 +1697,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_ShardedUpdateRefreshesShape) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     auto binding =
         MakeShardedTensorParameter("input_tensor", tt::tt_metal::Shape{1, 1, 64, 32}, {32, 32}, /*num_cores=*/2);
-    binding.relaxations = TensorParameterRelaxations{.dynamic_tensor_shape = true};
+    binding.advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true};
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
@@ -1750,7 +1750,7 @@ TEST_F(ProgramRunArgsTestGen1, MatchPaddedShapeOnly_AcceptsDifferentLogicalShape
     TensorParameter binding{
         .unique_id = TensorParamName{"input_tensor"},
         .spec = declared_spec,
-        .relaxations = TensorParameterRelaxations{.match_padded_shape_only = true},
+        .advanced_options = TensorParameterAdvancedOptions{.match_padded_shape_only = true},
     };
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
@@ -1782,7 +1782,7 @@ TEST_F(ProgramRunArgsTestGen1, MatchPaddedShapeOnly_PaddedShapeMismatchFails) {
     TensorParameter binding{
         .unique_id = TensorParamName{"input_tensor"},
         .spec = declared_spec,
-        .relaxations = TensorParameterRelaxations{.match_padded_shape_only = true},
+        .advanced_options = TensorParameterAdvancedOptions{.match_padded_shape_only = true},
     };
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
@@ -1811,7 +1811,7 @@ TEST_F(ProgramRunArgsTestGen1, MatchPaddedShapeOnly_DTypeMismatchStillFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     auto binding = MakeMinimalTensorParameter("input_tensor");  // BFLOAT16
-    binding.relaxations = TensorParameterRelaxations{.match_padded_shape_only = true};
+    binding.advanced_options = TensorParameterAdvancedOptions{.match_padded_shape_only = true};
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
@@ -1874,8 +1874,8 @@ TEST_F(ProgramRunArgsTestGen1, MatchPaddedShapeOnly_DynamicWinsWhenBothSet) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     auto binding = MakeMinimalTensorParameter("input_tensor");  // shape {1, 32}
-    binding.relaxations =
-        TensorParameterRelaxations{.match_padded_shape_only = true, .dynamic_tensor_shape = true};
+    binding.advanced_options =
+        TensorParameterAdvancedOptions{.match_padded_shape_only = true, .dynamic_tensor_shape = true};
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
