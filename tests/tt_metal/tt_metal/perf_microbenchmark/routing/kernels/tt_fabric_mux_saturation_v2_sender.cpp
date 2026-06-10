@@ -6,7 +6,9 @@
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+#if defined(FABRIC_2D)
 #include "tt_metal/fabric/hw/inc/mesh/api.h"
+#endif
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_v2_sender.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 
@@ -98,6 +100,7 @@ void kernel_main() {
         seed = prng_next(seed);
         fill_packet_data(payload_start_ptr, packet_payload_size_bytes / 16, seed);
 
+#if defined(FABRIC_2D)
         if constexpr (is_2d_fabric) {
             tt::tt_fabric::mesh::experimental::fabric_unicast_noc_unicast_write(
                 &sender,
@@ -107,7 +110,9 @@ void kernel_main() {
                 payload_buffer_address,
                 packet_payload_size_bytes,
                 dest_command_header);
-        } else {
+        } else
+#endif
+        {
             tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_write(
                 &sender,
                 packet_header,

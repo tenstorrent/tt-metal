@@ -6,7 +6,9 @@
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+#if defined(FABRIC_2D)
 #include "tt_metal/fabric/hw/inc/mesh/api.h"
+#endif
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_v2_sender.hpp"
 
@@ -80,10 +82,13 @@ void kernel_main() {
         if (pending_credits == return_credits_per_packet) {
             const auto credit_header =
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sender_credit_noc_addr, pending_credits};
+#if defined(FABRIC_2D)
             if constexpr (is_2d_fabric) {
                 tt::tt_fabric::mesh::experimental::fabric_unicast_noc_unicast_atomic_inc(
                     &sender, packet_header, dst_device_id, dst_mesh_id, credit_header);
-            } else {
+            } else
+#endif
+            {
                 tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_atomic_inc(
                     &sender, packet_header, credit_header, num_hops);
             }
@@ -94,10 +99,13 @@ void kernel_main() {
     if (pending_credits > 0) {
         const auto credit_header =
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sender_credit_noc_addr, pending_credits};
+#if defined(FABRIC_2D)
         if constexpr (is_2d_fabric) {
             tt::tt_fabric::mesh::experimental::fabric_unicast_noc_unicast_atomic_inc(
                 &sender, packet_header, dst_device_id, dst_mesh_id, credit_header);
-        } else {
+        } else
+#endif
+        {
             tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_atomic_inc(
                 &sender, packet_header, credit_header, num_hops);
         }
