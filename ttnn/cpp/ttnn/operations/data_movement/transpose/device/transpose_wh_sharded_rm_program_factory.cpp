@@ -243,6 +243,15 @@ tt::tt_metal::ProgramDescriptor TransposeWHShardedRMProgramFactory::create_descr
         .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
     };
 
+    // Register the IO buffers as common buffer bindings so the program-cache-hit
+    // fast path (apply_resolved_bindings) re-patches the sharded CB addresses,
+    // instead of falling to the slow path that rebuilds the whole ProgramDescriptor
+    // on every dispatch. These kernels address their data via the sharded CBs and
+    // ignore these trailing args; the bindings exist only to flag the fast path as
+    // safe (this factory emits no other raw-address runtime args).
+    reader_desc.emplace_common_runtime_args({input_tensor.buffer()});
+    writer_desc.emplace_common_runtime_args({output_tensor.buffer()});
+
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(writer_desc));
     desc.kernels.push_back(std::move(compute_desc));

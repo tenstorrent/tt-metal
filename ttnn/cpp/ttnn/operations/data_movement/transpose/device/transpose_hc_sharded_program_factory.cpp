@@ -399,6 +399,15 @@ tt::tt_metal::ProgramDescriptor TransposeHCShardedProgramFactory::create_descrip
         reader_desc.runtime_args.emplace_back(core, all_runtime_args[i].first);
     }
 
+    // Register the input buffer as a common buffer binding so the program-cache-hit
+    // fast path (apply_resolved_bindings) re-patches the sharded CB addresses instead
+    // of falling to the slow path that rebuilds the whole ProgramDescriptor on every
+    // dispatch. The kernels address their data via the sharded CBs and the per-core
+    // geometry args (stable across same-shape cache hits); this trailing common arg is
+    // ignored and exists only to flag the fast path as safe. The fast path re-patches
+    // both the input and output CB addresses.
+    reader_desc.emplace_common_runtime_args({input_tensor.buffer()});
+
     desc.kernels.push_back(std::move(reader_desc));
 
     if (is_special_case) {
