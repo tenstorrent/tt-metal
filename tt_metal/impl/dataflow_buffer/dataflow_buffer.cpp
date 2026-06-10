@@ -7,6 +7,7 @@
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <tuple>
 #include <utility>
 
@@ -562,13 +563,14 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
 // producer/consumer divisibility constraints.
 static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowBufferImpl& dfb) {
     const DataflowBufferConfig& config = dfb.config;
-    uint16_t capacity = 0;
+    uint32_t capacity = 0;
     uint32_t stride_in_entries = 0;
     switch (config.cap) {
         case ::dfb::AccessPattern::STRIDED:
             TT_FATAL(
                 config.num_entries % std::max(config.num_producers, config.num_consumers) == 0,
-                "Num entries in DFB {} must be divisible by max of num producers and consumers {}",
+                "DFB {}: num_entries ({}) must be divisible by max(num_producers, num_consumers) = {}",
+                dfb.id,
                 config.num_entries,
                 std::max(config.num_producers, config.num_consumers));
             capacity = config.num_entries / std::max(config.num_producers, config.num_consumers);
@@ -577,7 +579,8 @@ static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowB
         case ::dfb::AccessPattern::ALL:
             TT_FATAL(
                 config.num_entries % config.num_producers == 0,
-                "Num entries in DFB {} must be divisible by num producers {}",
+                "DFB {}: num_entries ({}) must be divisible by num_producers = {}",
+                dfb.id,
                 config.num_entries,
                 config.num_producers);
             capacity = config.num_entries / config.num_producers;
@@ -585,8 +588,16 @@ static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowB
             break;
         default: TT_FATAL(false, "Invalid access pattern {}", (uint32_t)config.cap);
     }
+
+    constexpr uint32_t max_capacity = std::numeric_limits<decltype(DataflowBufferImpl::capacity)>::max();
+    TT_FATAL(
+        capacity <= max_capacity,
+        "DFB {}: capacity {} exceeds the maximum {}, reduce num_entries.",
+        dfb.id,
+        capacity,
+        max_capacity);
     log_debug(tt::LogMetal, "DFB {} capacity={} stride_in_entries={}", dfb.id, capacity, stride_in_entries);
-    return {capacity, stride_in_entries};
+    return {static_cast<uint16_t>(capacity), stride_in_entries};
 }
 
 static void validate_ring_extent(const DataflowBufferImpl& dfb) {
@@ -728,7 +739,7 @@ void DataflowBufferImpl::update_size(std::optional<uint32_t> new_entry_size, std
     }
 
     if (serialized_size_before.has_value()) {
-        TT_ASSERT(
+        TT_FATAL(
             serialized_size() == *serialized_size_before,
             "DFB {}: size override unexpectedly changed serialized size from {} to {}",
             id,
@@ -1594,13 +1605,13 @@ void ProgramImpl::apply_dfb_size_overrides(const std::vector<DfbSizeOverride>& o
 
     // (a) Resolve each override to its new total_size (entry_size * num_entries), filling unset fields
     //     from the current config. Indexed by dfb_id for the alias-group agreement check below.
-    std::unordered_map<uint32_t, uint32_t> new_total_by_id;
+    std::unordered_map<uint32_t, uint64_t> new_total_by_id;
     new_total_by_id.reserve(overrides.size());
     for (const auto& o : overrides) {
         auto dfb = get_dataflow_buffer(o.dfb_id);
         uint32_t es = o.entry_size.value_or(dfb->config.entry_size);
         uint32_t ne = o.num_entries.value_or(dfb->config.num_entries);
-        new_total_by_id[o.dfb_id] = es * ne;
+        new_total_by_id[o.dfb_id] = static_cast<uint64_t>(es) * ne;
     }
 
     // (b) Alias-group coherence gate. Aliased DFBs total-size change is only safe if the whole group
@@ -1624,7 +1635,7 @@ void ProgramImpl::apply_dfb_size_overrides(const std::vector<DfbSizeOverride>& o
         group.push_back(primary_id);
         group.insert(group.end(), primary->alias_secondary_ids.begin(), primary->alias_secondary_ids.end());
 
-        std::optional<uint32_t> agreed_total;
+        std::optional<uint64_t> agreed_total;
         for (uint32_t member_id : group) {
             auto it = new_total_by_id.find(member_id);
             TT_FATAL(

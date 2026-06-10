@@ -499,6 +499,20 @@ TEST_F(ProgramRunArgsTestQuasar, DFBReentryEntrySizeRingExtentFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("exceeds uint16_t")));
 }
 
+// capacity (num_entries / max(producers, consumers)) is stored as uint16_t; an override that pushes it
+// past the uint16_t max is rejected rather than silently truncated.
+TEST_F(ProgramRunArgsTestQuasar, DFBOverrideCapacityExceedsUint16Fails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .num_entries = 70000});  // capacity 70000 > 65535
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("capacity 70000 exceeds the maximum 65535")));
+}
+
 // Isolated change on the primary: entry_size and num_entries traded so total_size is unchanged.
 TEST_F(ProgramRunArgsTestQuasar, AliasIsolatedResizeSucceeds) {
     NodeCoord node{0, 0};
