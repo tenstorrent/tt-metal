@@ -1692,15 +1692,17 @@ class TTNNDotsVisionAttention(TTNNModule):
 
         Decided purely from the *physical* mesh so it stays independent of the
         decoder's forced-replicate flag (``DOTS_OCR_REST_TP1`` /
-        ``linear._REST_REPLICATE``): a ``(1, N)`` TP-layout mesh with ``N > 1``
-        head-shards across the ranks when ``num_heads`` divides evenly; the
-        ``(N, 1)`` DP mesh and single-device (P100) keep the replicated path.
-        This module builds its own shard mappers (``shard_tensor_to_mesh_mapper``)
-        and CCLs, so it never routes through the flag-aware ``_tp_*`` helpers.
+        ``linear._REST_REPLICATE``): a ``(1, N)`` or ``(DP, N)`` TP-layout mesh
+        with ``N > 1`` head-shards across the TP axis when ``num_heads`` divides
+        evenly; the ``(N, 1)`` DP mesh and single-device (P100) keep the
+        replicated path.
         """
         dev = getattr(self, "device", None)
-        n = _linear_mesh_num_devices(dev)
-        is_tp_mesh = hasattr(dev, "shape") and len(list(dev.shape)) >= 1 and int(list(dev.shape)[-1]) > 1
+        if dev is None or not hasattr(dev, "shape"):
+            return 1
+        shape = [int(x) for x in dev.shape]
+        n = int(shape[-1]) if shape and int(shape[-1]) > 1 else 1
+        is_tp_mesh = n > 1
         if n > 1 and is_tp_mesh and self.num_heads % n == 0:
             return n
         return 1
@@ -1788,7 +1790,7 @@ class TTNNDotsVisionAttention(TTNNModule):
                 device=self.device,
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=-1),
+                mesh_mapper=_tp_mesh_mapper(self.device, -1),
                 memory_config=mem,
             )
             self.tt_qkv_bias = (
@@ -1797,7 +1799,7 @@ class TTNNDotsVisionAttention(TTNNModule):
                     device=self.device,
                     dtype=ttnn.bfloat8_b,
                     layout=ttnn.TILE_LAYOUT,
-                    mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=-1),
+                    mesh_mapper=_tp_mesh_mapper(self.device, -1),
                     memory_config=mem,
                 )
                 if self._qkv_bias_tp is not None
@@ -1808,7 +1810,7 @@ class TTNNDotsVisionAttention(TTNNModule):
                 device=self.device,
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=-2),
+                mesh_mapper=_tp_mesh_mapper(self.device, -2),
                 memory_config=mem,
             )
             self.tt_o_proj_bias = (

@@ -22,12 +22,13 @@ from models.experimental.tt_symbiote.modules.normalization import TTNNDistribute
 def _mesh_dp_batch_sharded(device, batch_size: int) -> bool:
     if not hasattr(device, "get_num_devices") or int(device.get_num_devices()) <= 1:
         return False
-    num_devices = int(device.get_num_devices())
-    if int(batch_size) != num_devices or not hasattr(device, "shape"):
+    if not hasattr(device, "shape"):
         return False
     mesh_shape = [int(x) for x in device.shape]
-    return len(mesh_shape) == 2 and (
-        (mesh_shape[0] == num_devices and mesh_shape[1] == 1) or (mesh_shape[1] == num_devices and mesh_shape[0] == 1)
+    if len(mesh_shape) != 2:
+        return False
+    return (mesh_shape[0] == int(batch_size) and mesh_shape[0] > 1) or (
+        mesh_shape[1] == int(batch_size) and mesh_shape[0] == 1
     )
 
 

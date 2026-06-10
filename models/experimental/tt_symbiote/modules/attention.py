@@ -43,12 +43,12 @@ except ImportError:
 def dp_batch_shard_tensor_mapper(device, batch_size: int):
     if not hasattr(device, "get_num_devices") or device.get_num_devices() <= 1:
         return None
-    if batch_size != device.get_num_devices():
+    if int(batch_size) <= 1:
         return None
     shp = list(device.shape)
-    if shp[0] == batch_size and shp[1] == 1:
+    if len(shp) == 2 and shp[0] == batch_size:
         return ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(shp), dims=(0, None))
-    if shp[1] == batch_size and shp[0] == 1:
+    if len(shp) == 2 and shp[1] == batch_size and shp[0] == 1:
         return ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(shp), dims=(None, 0))
     return None
 

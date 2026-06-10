@@ -25,6 +25,7 @@ from models.experimental.tt_symbiote.modules.linear import (
     _dram_sharded_mem_config_2d,
     _tp_requires_ccl,
     _tp_mesh_mapper,
+    _tp_num_shards,
     _linear_mesh_num_devices,
     _ccl_num_links,
     _ccl_worker_kwargs,
@@ -42,7 +43,7 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
         if not _tp_requires_ccl(self.device):
             return super().move_weights_to_device_impl()
 
-        num_devices = self.device.get_num_devices() if hasattr(self.device, "get_num_devices") else 1
+        num_devices = _tp_num_shards(self.device)
         intermediate = self._gate_weight_torch.shape[0]
         shard = intermediate // num_devices
         weight_chunks = []

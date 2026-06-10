@@ -45,7 +45,8 @@ def _tp_mesh_mapper(device, dim):
         hasattr(device, "get_num_devices")
         and device.get_num_devices() > 1
         and hasattr(device, "shape")
-        and list(device.shape)[-1] == 1
+        and len(list(device.shape)) == 2
+        and (list(device.shape)[0] > 1 or list(device.shape)[-1] == 1)
     ):
         return ttnn.ShardTensor2dMesh(device, dims=(None, dim), mesh_shape=list(device.shape))
     return ttnn.shard_tensor_to_mesh_mapper(device, dim=dim)
@@ -993,8 +994,8 @@ class TTNNLinearLLamaIColShardedWAllReduced(TTNNLinearIColShardedWAllReduced):
     matches the working pattern in qwen_attention.py / linear_intelligent.py.
 
     Bias-fusion (multi-device): we replicate the bias on every device but
-    pre-divide by ``num_devices`` so it can be fused directly into the matmul
-    kernel. After ``reduce_scatter`` sums the per-device partials, the
+    pre-divide by the TP degree so it can be fused directly into the matmul
+    kernel. After ``reduce_scatter`` sums the TP-axis partials, the
     contribution from each device's ``bias/k`` adds up to the full bias on
     the relevant N-shard, exactly matching the original behaviour. This
     eliminates one ``ttnn.add`` per layer in TP decode (~28 ops/token).
@@ -1039,10 +1040,10 @@ class TTNNLinearLLamaIColShardedWAllReduced(TTNNLinearIColShardedWAllReduced):
                 weights_mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
             )
         if isinstance(self.tt_bias_host, torch.Tensor):
-            num_devices = _linear_mesh_num_devices(self.device)
-            multi_device_ccl = num_devices > 1 and _tp_requires_ccl(self.device)
+            num_tp = _tp_num_shards(self.device)
+            multi_device_ccl = _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device)
             if multi_device_ccl:
-                bias_torch = self.tt_bias_host / float(num_devices)
+                bias_torch = self.tt_bias_host / float(num_tp)
                 bias_mapper = ttnn.replicate_tensor_to_mesh_mapper(self.device)
                 self._bias_fused_into_matmul = True
             else:

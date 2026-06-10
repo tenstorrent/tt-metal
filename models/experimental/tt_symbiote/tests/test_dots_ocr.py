@@ -42,6 +42,23 @@ DOTS_OCR_DP_MESH_DEVICE_MAP = {
     "T3K": (8, 1),
 }
 
+DOTS_OCR_DP2_TP4_MESH_DEVICE_MAP = {
+    "T3K": (2, 4),
+}
+
+
+def _dots_ocr_parallelism_mode() -> str:
+    return os.environ.get("DOTS_OCR_PARALLELISM", "").upper()
+
+
+def _mesh_device_map_get(mapping, mesh_device, default=None):
+    if mesh_device is None:
+        return default
+    for key, value in mapping.items():
+        if key.upper() == mesh_device.upper():
+            return value
+    return default
+
 
 def _assert_l1_resident(tensor, name: str):
     assert isinstance(tensor, ttnn.Tensor), f"{name} should be a TTNN tensor"
@@ -50,11 +67,31 @@ def _assert_l1_resident(tensor, name: str):
 
 def _resolve_mesh_device_shape():
     mesh_device = os.environ.get("MESH_DEVICE")
-    if os.environ.get("DOTS_OCR_PARALLELISM", "").upper() == "DP":
-        return DOTS_OCR_DP_MESH_DEVICE_MAP.get(
-            mesh_device, MESH_DEVICE_MAP.get(mesh_device, len(ttnn.get_device_ids()))
+    parallelism = _dots_ocr_parallelism_mode()
+    if parallelism == "DP2_TP4":
+        shape = _mesh_device_map_get(DOTS_OCR_DP2_TP4_MESH_DEVICE_MAP, mesh_device)
+        if shape is None:
+            raise ValueError("DOTS_OCR_PARALLELISM=DP2_TP4 is only supported for MESH_DEVICE=T3K")
+        return shape
+    if parallelism == "DP":
+        return _mesh_device_map_get(
+            DOTS_OCR_DP_MESH_DEVICE_MAP,
+            mesh_device,
+            _mesh_device_map_get(MESH_DEVICE_MAP, mesh_device, len(ttnn.get_device_ids())),
         )
-    return MESH_DEVICE_MAP.get(mesh_device, len(ttnn.get_device_ids()))
+    return _mesh_device_map_get(MESH_DEVICE_MAP, mesh_device, len(ttnn.get_device_ids()))
+
+
+def _dots_ocr_mesh_dp_degree():
+    sh = _resolve_mesh_device_shape()
+    if not isinstance(sh, (tuple, list)) or len(sh) < 2:
+        return 1
+    parallelism = _dots_ocr_parallelism_mode()
+    if parallelism == "DP2_TP4":
+        return int(sh[0])
+    if parallelism == "DP":
+        return int(sh[0]) if int(sh[0]) > 1 else int(sh[1])
+    return 1
 
 
 def _dots_ocr_mesh_num_devices():
@@ -188,9 +225,9 @@ def _dots_ocr_pipeline_batch_size():
     mesh. ``DOTS_OCR_PARALLELISM=DP`` alone only changes the *fixture* mesh
     shape (e.g. N300 ``(2, 1)``); without this, tests still run batch 1.
     """
-    if os.environ.get("DOTS_OCR_PARALLELISM", "").upper() != "DP":
+    if _dots_ocr_parallelism_mode() not in {"DP", "DP2_TP4"}:
         return 1
-    n = _dots_ocr_mesh_num_devices()
+    n = _dots_ocr_mesh_dp_degree()
     return n if n > 1 else 1
 
 

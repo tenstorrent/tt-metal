@@ -147,6 +147,68 @@ def _tp_cluster_axis(device) -> int:
     return 0 if (len(shape) == 2 and shape[0] > 1 and shape[1] == 1) else 1
 
 
+def _mesh_shape_2d(device) -> tuple[int, int] | None:
+    if not hasattr(device, "shape"):
+        return None
+    shape = tuple(int(x) for x in device.shape)
+    return shape if len(shape) == 2 else None
+
+
+def _tp_degree(device) -> int:
+    shape = _mesh_shape_2d(device)
+    return int(shape[1]) if shape is not None else 1
+
+
+def _dp_degree(device) -> int:
+    shape = _mesh_shape_2d(device)
+    if shape is None:
+        return 1
+    return int(shape[0]) if int(shape[0]) > 1 else 1
+
+
+def _dp_batch_mesh_composer(device, batch_size: int):
+    """Compose small DP-sharded tensors; callers drop replicated TP copies."""
+    shape = _mesh_shape_2d(device)
+    if shape is None or int(batch_size) <= 1:
+        return None
+    if int(shape[0]) == int(batch_size):
+        return ttnn.ConcatMesh2dToTensor(device, shape, (0, 1))
+    if int(shape[1]) == int(batch_size) and int(shape[0]) == 1:
+        return ttnn.ConcatMesh2dToTensor(device, shape, (1, 0))
+    return None
+
+
+def _token_mesh_composer(device, batch_size: int, dual: bool):
+    shape = _mesh_shape_2d(device)
+    if shape is not None:
+        if dual:
+            return _dp_batch_mesh_composer(device, batch_size)
+        if int(shape[0]) == 1 and int(shape[1]) > 1:
+            return ttnn.ConcatMesh2dToTensor(device, shape, (1, 0))
+        if int(shape[1]) == 1 and int(shape[0]) > 1:
+            return ttnn.ConcatMeshToTensor(device, dim=0)
+        return ttnn.ConcatMesh2dToTensor(device, shape, (0, 1))
+    return ttnn.ConcatMeshToTensor(device, dim=0)
+
+
+def _select_dp_token_replicas(token_torch: torch.Tensor, device, batch_size: int) -> torch.Tensor:
+    """Keep one TP replica per DP stream after 2D token readback."""
+    shape = _mesh_shape_2d(device)
+    if shape is None or int(batch_size) <= 1 or int(shape[0]) != int(batch_size) or int(shape[1]) <= 1:
+        return token_torch
+    elems_per_stream = int(token_torch.numel()) // (int(batch_size) * int(shape[1]))
+    if elems_per_stream <= 0 or int(token_torch.numel()) % (int(batch_size) * int(shape[1])) != 0:
+        return token_torch
+    return token_torch.reshape(int(batch_size), int(shape[1]), elems_per_stream)[:, 0, :]
+
+
+def _first_device_token_to_torch(token_tt: ttnn.Tensor) -> torch.Tensor:
+    shards = ttnn.get_device_tensors(token_tt)
+    if not shards:
+        return ttnn.to_torch(token_tt)
+    return ttnn.to_torch(shards[0])
+
+
 def _all_gather_hidden_to_full(t: ttnn.Tensor, device, hidden_size: int) -> ttnn.Tensor:
     """All-gather an ``[.., H/ndev]`` column-sharded hidden -> replicated ``[.., H]``.
 
@@ -235,12 +297,15 @@ def _dp_repack_batch_sharded_hidden_for_device(device, batch_input_mapper, tt_hi
         mesh_composer=ttnn.ConcatMesh2dToTensor(device, mesh_shape, (0, -1)),
     )
     ttnn.deallocate(owned)
+    hidden_mapper = batch_input_mapper
+    if len(mesh_shape) == 2 and int(mesh_shape[0]) == int(full.shape[0]):
+        hidden_mapper = ttnn.ShardTensor2dMesh(device, mesh_shape=mesh_shape, dims=(0, -1))
     return ttnn.from_torch(
         full,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        mesh_mapper=batch_input_mapper,
+        mesh_mapper=hidden_mapper,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -332,12 +397,12 @@ class TTNNDotsOCRPrefillGraph(TTNNModule):
         input_ids: torch.Tensor,
         n_vision: int,
         idx_mapper,
-        num_devices: int,
+        tp_degree: int,
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         device = self.device
         S = int(input_ids.shape[-1])
         H = self._hidden_size
-        H_per_device = H // num_devices if num_devices > 1 else H
+        H_per_device = H // tp_degree if tp_degree > 1 else H
         cache_key = (
             int(input_ids.shape[0]),
             S,
@@ -389,9 +454,9 @@ class TTNNDotsOCRPrefillGraph(TTNNModule):
         self._scatter_cache_mask = tt_mask
         return tt_idx, tt_mask
 
-    def _ensure_scatter_zero_row(self, num_devices: int, H: int, H_per_device: int) -> None:
+    def _ensure_scatter_zero_row(self, tp_degree: int, H: int, H_per_device: int) -> None:
         device = self.device
-        if num_devices > 1:
+        if tp_degree > 1:
             zero_row_mapper = ttnn.ShardTensor2dMesh(
                 device,
                 dims=(None, -1),
@@ -400,7 +465,7 @@ class TTNNDotsOCRPrefillGraph(TTNNModule):
         else:
             zero_row_mapper = ttnn.ReplicateTensorToMesh(device)
 
-        zero_row_key = (int(H), int(num_devices), self._scatter_uses_dp_batch_mapper)
+        zero_row_key = (int(H), int(tp_degree), self._scatter_uses_dp_batch_mapper)
         if self._scatter_zero_row is None or self._scatter_zero_row_key != zero_row_key:
             if self._scatter_zero_row is not None:
                 ttnn.deallocate(self._scatter_zero_row)
@@ -421,14 +486,14 @@ class TTNNDotsOCRPrefillGraph(TTNNModule):
         tt_mask: ttnn.Tensor,
     ) -> ttnn.Tensor:
         device = self.device
-        num_devices = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
+        tp_degree = _tp_degree(device)
         N_vision = int(vision_tt.shape[2])
         H_per_device = int(vision_tt.shape[3])
         scatter_memory_config = ttnn.L1_MEMORY_CONFIG
 
         vision_2d = ttnn.reshape(vision_tt, (N_vision, H_per_device))
 
-        self._ensure_scatter_zero_row(num_devices, self._hidden_size, H_per_device)
+        self._ensure_scatter_zero_row(tp_degree, self._hidden_size, H_per_device)
         vision_table = ttnn.concat([self._scatter_zero_row, vision_2d], dim=0, memory_config=scatter_memory_config)
         ttnn.deallocate(vision_tt)
         ttnn.deallocate(vision_2d)
@@ -1216,7 +1281,9 @@ class TTNNDotsOCRPipeline(TTNNModule):
                     else None
                 )
             n_vis = self.vision_tower.merged_vision_sequence_length(image_grid_thw, pixel_values)
-            tt_idx, tt_mask = self.graph_prefill.get_or_build_scatter_tensors(input_ids, n_vis, id_mapper, num_devices)
+            tt_idx, tt_mask = self.graph_prefill.get_or_build_scatter_tensors(
+                input_ids, n_vis, id_mapper, _tp_degree(self.device)
+            )
             grid_cpu = image_grid_thw.detach().cpu()
             if grid_cpu.dim() == 1:
                 grid_cpu = grid_cpu.unsqueeze(0)
@@ -1288,10 +1355,15 @@ class TTNNDotsOCRPipeline(TTNNModule):
 
         # --- Read to host ---
         with _profile_stage(self.device, "prefill.first_token_readback"):
-            token_id_torch = ttnn.to_torch(
-                token_id_tt,
-                mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
-            )
+            if dual:
+                token_composer = _token_mesh_composer(self.device, self.config.batch_size, dual)
+                token_id_torch = ttnn.to_torch(
+                    token_id_tt,
+                    mesh_composer=token_composer,
+                )
+                token_id_torch = _select_dp_token_replicas(token_id_torch, self.device, self.config.batch_size)
+            else:
+                token_id_torch = _first_device_token_to_torch(token_id_tt)
         flat_ids = [int(x) for x in token_id_torch.reshape(-1).tolist()]
         if dual:
             if len(flat_ids) != int(self.config.batch_size):
@@ -1497,10 +1569,15 @@ class TTNNDotsOCRPipeline(TTNNModule):
 
         # --- Read to host ---
         with _profile_stage(self.device, "decode.token_readback"):
-            token_id_torch = ttnn.to_torch(
-                token_id_tt,
-                mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
-            )
+            if self._mesh_dp_dual_stream():
+                token_composer = _token_mesh_composer(self.device, self.config.batch_size, True)
+                token_id_torch = ttnn.to_torch(
+                    token_id_tt,
+                    mesh_composer=token_composer,
+                )
+                token_id_torch = _select_dp_token_replicas(token_id_torch, self.device, self.config.batch_size)
+            else:
+                token_id_torch = _first_device_token_to_torch(token_id_tt)
         flat_ids = [int(x) for x in token_id_torch.reshape(-1).tolist()]
         if self._mesh_dp_dual_stream():
             return flat_ids
