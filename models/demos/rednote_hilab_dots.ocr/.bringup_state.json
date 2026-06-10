@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T22:43:29Z",
+  "updated_at": "2026-06-10T23:08:15Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -419,9 +419,15 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
+        "status": "done",
         "attempts": 0,
-        "notes": "OCCUPANCY REDO: per the new occupancy+convergence contract \u2014 query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid"
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_patch_embed.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_vision_transformer.py",
+          "generated/profiler/reports/2026_06_10_23_02_33/ops_perf_results_2026_06_10_23_02_33.csv"
+        ],
+        "notes": "OCCUPANCY REDO complete at the PRODUCTION posture (bf16 tower, tp=4, 11224-token document padded 11264, 1x4 BH mesh, queried grid 11x10=110; tracy under --traced, metal trace replay). REMINDER VERIFIED \u2014 the tick-54 patch_embed sharded config does NOT hold at document scale: at M=352 tiles the largest dividing grid is 8x8 with per_core_M=44, and the full-K (in0_block_w=19) mcast matmul CBs grow to 3150336 B > 1572864 B L1 (TT_FATAL program.cpp:1326) \u2014 the production 11k shape CRASHED the tower. SIZE-GATED: analytic CB-fit estimate (in0 per_m*K + in1 K*per_n + 2x out per_m*per_n tile bytes <= 1.3 MB) calibrated against the measured overflow (~3.0 MB at doc shape, ~0.98 MB at the measured-good fp32 gate shape) keeps the tick-54 sharded recipe at gate shapes and routes the doc shape to the interleaved full-grid fallback \u2014 which is also the RIGHT path there: with m_tiles 352 >= 110 grid cores the interleaved rms_norm occupies the full grid (the 28-row under-occupancy that motivated sharding is a small-shape artifact). Doc-shape boundary ops measured: proj matmul 372.7us @100/110 (91%), rms_norm 145-148us @110/110 \u2014 at the occupancy bar. TOWER AT 11K (first working numbers): traced wall 316.3 ms, 303.89 ms/device kernel after the minimal fix (= pre-tick-54-equivalent 'before'); FINAL after levers 315.4 ms traced wall, 304.06 ms/device kernel (tower delta noise-level; the substantive win is crash -> 315 ms). Levers, one per measurement: (A) bf8b+HiFi2+fp32-dest-acc with explicit compute config on the fallback projection LOSES \u2014 fp32-acc interm CBs clash with the 33 MB L1-interleaved output (program.cpp:1335), and the forced DRAM-out variant measured matmul 372.7->468.1us, LN 145.3->177.8us, tower 304.27 ms \u2014 rejected with A/B; (B) bfloat8_b projection weight alone (default compute config, L1 out) is a perf tie (matmul 372.7us identical \u2014 DM-bound on the activation; tower 304.06 vs 303.89 ms) and is KEPT per the bf8b-first single-pass directive (last non-bf8b matmul weight in the tower, ~0.9 MB/chip DRAM saved, zero cost; sharded gate path picks HiFi2 with bf8b, fp32 high-precision path untouched). Final top-5 traced occupancy vs 110-core grid: WindowedSDPA 107.9 ms 35.5% @110/110 (recorded chunk-A/B ceiling, k512 CB-OOM), matmuls 63.2 ms 20.8% @88-110/110 (80-91%, recorded M/N-divisibility ceilings), reduce_scatter 47.3 ms 15.5% @34c + all_gather 31.1 ms 10.2% @18c (link-bound at the 2/2-eth-link HW ceiling with bf8b partials; async rejected by recorded A/B), BinaryNg 23.9 ms 7.9% @110/110, LayerNorm 15.0 ms 4.9% @110/110 (DRAM stream re-affirmed per recorded L1-into-matmul stall hazard) \u2014 every top-5 hotspot at measured ceiling with evidence. Gates: block PCC 0.999853 (sharded gate path bf8b+HiFi2), doc-shape patch_embed PCC 0.999236 vs fp32 torch reference (interleaved path, real 11224-token image), tower fp32 PCC 0.990769 (>0.99, fp32 path untouched), e2e WER parity PASS (TTNN wer=0.0 == HF wer=0.0, drift 0.0, tolerance 0.05), real-weights patch_embed row PASS, lint 0 on both touched files, traced_ops sideguard unchanged. KB entries for kind other reviewed (generic eltwise/scatter) \u2014 not applicable. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.990769
       },
       "real_weights": {
         "status": "done",
@@ -1171,6 +1177,12 @@
       "tick": 59,
       "ts": "2026-06-10T22:43:29Z",
       "action": "device[patch_merger]",
+      "result": "ok"
+    },
+    {
+      "tick": 60,
+      "ts": "2026-06-10T23:08:15Z",
+      "action": "device[vision_transformer]",
       "result": "ok"
     }
   ],
