@@ -5,6 +5,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 
 enum class DevicePrintRiscCoreState : uint8_t {
     KernelNotPrinted = 0,
