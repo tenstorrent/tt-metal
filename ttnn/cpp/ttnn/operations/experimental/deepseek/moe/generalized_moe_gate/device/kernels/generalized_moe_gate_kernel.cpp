@@ -14,20 +14,7 @@
 //     4-group merge runs twice (topA=top8(groups 0-3) at cols {0,2}, topB=top8(groups 4-7) at {4,6},
 //     with FPU copy4rows stashing the idle half in rows 8-15), then finalize fully bitonic-sorts the
 //     16 candidates -> global top-8. (none enabled -> original grouped DeepSeek gate.)
-//
-// DEBUG/DIAGNOSTIC macros (all OFF by default; kept for re-debugging during generalization):
-//   GMG_DUMP_AFTER_SUM_TOP2 / GMG_DUMP_AFTER_STEP0 / GMG_DUMP_AFTER_STEP1 : stop after that stage and
-//     pack the bias/indices DEST regions as a 16x16 face (read via test_dump_sum_top2_layout).
-//   GMG_DIAG_TOPA / GMG_DIAG_TOPB : in the ungrouped path, output topA (or topB) ALONE — pair with a
-//     top8(groups 0-3) (or groups 4-7) golden in op.py to isolate a half from the finalize merge.
 #define GMG_UNGROUPED_TOP8 1
-// #define GMG_DUMP_AFTER_SUM_TOP2 1
-// #define GMG_DUMP_AFTER_STEP0 1
-// #define GMG_DIAG_TOPA 1
-// #define GMG_DIAG_TOPB 1
-// MULTI-BLOCK A1 diagnostic: with num_blocks>1, output ONLY this block's top-8 (run the full per-256
-// pipeline per block) so each block can be validated against its own 256-golden. Unset for A2 (combine).
-// #define GMG_DIAG_BLOCK 1
 
 #include "../unified_kernels/kernel_op_api.hpp"
 #include "../unified_kernels/kernel_utils.hpp"

@@ -108,15 +108,4 @@ inline void llk_math_sfpu_generalized_moe_gate_finalize_ungrouped(
         scale);
 }
 
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
-inline void llk_math_sfpu_generalized_moe_gate_normalize_run(
-    uint dst_index, uint32_t eps, uint32_t scale, VectorMode vector_mode = VectorMode::RC_custom) {
-    _llk_math_eltwise_unary_sfpu_params_(
-        ckernel::sfpu::generalized_moe_gate_normalize_run<APPROXIMATE, is_fp32_dest_acc_en>,
-        dst_index,
-        vector_mode,
-        eps,
-        scale);
-}
-
 }  // namespace ckernel

@@ -26,21 +26,6 @@ constexpr uint32_t indices_offset = scores_offset + dst_tile_offset;
 constexpr uint32_t bias_offset = indices_offset + dst_tile_offset;
 constexpr uint32_t interm_offset = bias_offset + dst_tile_offset;
 
-template <bool is_fp32_dest_acc_en>
-inline void bitonic_topk_load16_single_face() {
-    // Load 16 consecutive numbers
-    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + 0);
-    TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, bias_offset + 4);
-    TTI_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_3, bias_offset + 8);
-    TTI_SFPLOAD(p_sfpu::LREG3, 0, ADDR_MOD_3, bias_offset + 12);
-
-    constexpr uint8_t instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
-    TTI_SFPLOAD(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_3, indices_offset + 0);
-    TTI_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_3, indices_offset + 4);
-    TTI_SFPLOAD(p_sfpu::LREG6, instr_mod_index, ADDR_MOD_3, indices_offset + 8);
-    TTI_SFPLOAD(p_sfpu::LREG7, instr_mod_index, ADDR_MOD_3, indices_offset + 12);
-}
-
 template <bool is_fp32_dest_acc_en, uint32_t offset = 0>
 inline void bitonic_topk_load16_concat_indices_single_face() {
     // Load 16 consecutive numbers
@@ -61,61 +46,6 @@ inline void bitonic_topk_load16_concat_indices_single_face() {
 }
 
 template <bool is_fp32_dest_acc_en>
-inline void bitonic_topk_load16_concatted_indices_single_face() {
-    // Load 16 consecutive numbers
-    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + 0);
-    TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, bias_offset + 4);
-    TTI_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_3, bias_offset + 8);
-    TTI_SFPLOAD(p_sfpu::LREG3, 0, ADDR_MOD_3, bias_offset + 12);
-
-    static_assert(!is_fp32_dest_acc_en, "is_fp32_dest_acc_en must be false");
-    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_3, interm_offset + 0);
-    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_3, interm_offset + 4);
-    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_3, interm_offset + 8);
-    TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_3, interm_offset + 12);
-}
-
-template <bool is_fp32_dest_acc_en>
-inline void bitonic_topk_store16_concatted_indices_single_face() {
-    // Store 16 consecutive numbers
-    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + 0);
-    TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, bias_offset + 4);
-    TTI_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_3, bias_offset + 8);
-    TTI_SFPSTORE(p_sfpu::LREG3, 0, ADDR_MOD_3, bias_offset + 12);
-
-    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_3, interm_offset + 0);
-    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_3, interm_offset + 4);
-    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_3, interm_offset + 8);
-    TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_3, interm_offset + 12);
-}
-
-template <bool is_fp32_dest_acc_en>
-inline void bitonic_topk_store16_single_face() {
-    // Store 16 consecutive numbers
-    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + 0);
-    TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, bias_offset + 4);
-    TTI_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_3, bias_offset + 8);
-    TTI_SFPSTORE(p_sfpu::LREG3, 0, ADDR_MOD_3, bias_offset + 12);
-
-    constexpr uint8_t instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
-    TTI_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_3, indices_offset + 0);
-    TTI_SFPSTORE(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_3, indices_offset + 4);
-    TTI_SFPSTORE(p_sfpu::LREG6, instr_mod_index, ADDR_MOD_3, indices_offset + 8);
-    TTI_SFPSTORE(p_sfpu::LREG7, instr_mod_index, ADDR_MOD_3, indices_offset + 12);
-}
-
-template <bool is_fp32_dest_acc_en>
-inline void bitonic_topk_load8_even_cols_single_face() {
-    // Load 8 consecutive numbers
-    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + 0);
-    TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, bias_offset + 4);
-
-    constexpr uint8_t instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
-    TTI_SFPLOAD(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_3, indices_offset + 0);
-    TTI_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_3, indices_offset + 4);
-}
-
-template <bool is_fp32_dest_acc_en>
 inline void bitonic_topk_load8_even_cols_concatted_indices_single_face() {
     // Load 8 consecutive numbers
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + 0);
@@ -123,17 +53,6 @@ inline void bitonic_topk_load8_even_cols_concatted_indices_single_face() {
 
     TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_3, interm_offset + 0);
     TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_3, interm_offset + 4);
-}
-
-template <bool is_fp32_dest_acc_en>
-inline void bitonic_topk_store8_even_cols_single_face() {
-    // Store 8 consecutive numbers
-    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + 0);
-    TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, bias_offset + 4);
-
-    constexpr uint8_t instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
-    TTI_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_3, indices_offset + 0);
-    TTI_SFPSTORE(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_3, indices_offset + 4);
 }
 
 template <bool is_fp32_dest_acc_en>
@@ -157,26 +76,6 @@ inline void bitonic_topk_store8_even_cols_concatted_indices_single_face() {
 
     TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_3, interm_offset + 0);
     TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_3, interm_offset + 4);
-}
-
-template <bool is_fp32_dest_acc_en>
-inline void bitonic_topk_load8_odd_cols_concatted_indices_single_face() {
-    // Load 8 consecutive numbers
-    TTI_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_3, bias_offset + 2);
-    TTI_SFPLOAD(p_sfpu::LREG3, 0, ADDR_MOD_3, bias_offset + 6);
-
-    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_3, interm_offset + 2);
-    TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_3, interm_offset + 6);
-}
-
-template <bool is_fp32_dest_acc_en>
-inline void bitonic_topk_store8_odd_cols_concatted_indices_single_face() {
-    // Store 8 consecutive numbers
-    TTI_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_3, bias_offset + 2);
-    TTI_SFPSTORE(p_sfpu::LREG3, 0, ADDR_MOD_3, bias_offset + 6);
-
-    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_3, interm_offset + 2);
-    TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_3, interm_offset + 6);
 }
 
 template <bool start_transpose, bool end_transpose>
@@ -600,44 +499,6 @@ inline void _gmg_place_field_from_interm() {
     TTI_SFPNOP;
     TTI_SFPSTORE(p_sfpu::LREG0, mode, ADDR_MOD_3, region + dst_lo);
     TTI_SFPSTORE(p_sfpu::LREG1, mode, ADDR_MOD_3, region + dst_hi);
-}
-
-// DIAGNOSTIC: normalize a top-8 run already sitting at scores/indices {0,4} (the normalize tail of
-// _generalized_moe_gate_top8, factored out). Used by GMG_DIAG_TOPA to output a single half's run.
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-inline void _gmg_normalize_run(uint32_t eps, uint32_t scale) {
-    // Reset Dst RWC (see _gmg_copy_topk_run): a preceding FPU MOP leaves it advanced, biasing SFPLOAD.
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, scores_offset + 0);
-    TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, scores_offset + 4);
-    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
-    TTI_SFPNOP;
-    TTI_SFPTRANSP(0, 0, 0, 0);
-    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
-    TTI_SFPNOP;
-    TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG2, 0);
-    TTI_SFPNOP;
-    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-    TTI_SFPNOP;
-    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
-    sfpu_reciprocal_init<APPROXIMATION_MODE>();
-    TTI_SFPCONFIG(0, 0xF, 1);
-    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
-    sfpi::vFloat l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
-    sfpi::vFloat eps_value = Converter::as_float(eps);
-    l0 = l0 + eps_value;
-    l0 = sfpu_reciprocal<APPROXIMATION_MODE>(l0);
-    sfpi::vFloat scale_value = Converter::as_float(scale);
-    l0 = l0 * scale_value;
-    sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
-    TTI_SFPNOP;
-    TTI_SFPCONFIG(0, p_sfpu::LREG14, 0);
-    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, scores_offset + 0);
-    TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, scores_offset + 4);
-    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-    TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
-    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, scores_offset + 0);
-    TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, scores_offset + 4);
 }
 
 // Ungrouped finalize: combine topA at {0,2} (rows 0-3) and topB at {4,6} (rows 4-7) into the global

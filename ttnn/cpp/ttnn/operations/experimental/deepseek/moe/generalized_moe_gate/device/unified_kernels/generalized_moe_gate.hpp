@@ -222,11 +222,7 @@ struct GeneralizedMoeGate {
                 cb_reserve_back(CTArgs::output_cb, 1);
                 cb_reserve_back(CTArgs::output_indices_cb, 1);
                 tile_regs_wait();
-#if defined(GMG_DUMP_AFTER_SUM_TOP2) || defined(GMG_DUMP_AFTER_STEP1) || defined(GMG_DUMP_AFTER_STEP0)
-                pack_tile(2, CTArgs::output_cb);  // DEBUG probe: dump an intermediate region, not the result
-#else
                 pack_tile(0, CTArgs::output_cb);
-#endif
                 cb_push_back(CTArgs::output_cb, 1);
                 pack_reconfig_data_format(CTArgs::output_indices_cb);
                 pack_tile(1, CTArgs::output_indices_cb);
@@ -234,7 +230,6 @@ struct GeneralizedMoeGate {
                 tile_regs_release();
             } else {
                 // ============ multi-block path ============
-#ifndef GMG_DIAG_BLOCK
                 // A2 combine (L1 stash, v3 — MERGE-ONLY acquire). Both blocks are stashed to L1 via the
                 // proven round-trip (process_block_to_run). Then ALL fields are tilize'd into scratch, and a
                 // SINGLE merge-only acquire (NO produce_run inside it — produce_run's SFPU/srcb state poisons a
@@ -323,51 +318,6 @@ struct GeneralizedMoeGate {
                 pack_tile(1, CTArgs::output_indices_cb);
                 cb_push_back(CTArgs::output_indices_cb, 1);
                 tile_regs_release();
-#else
-                // A1 diagnostic: run the full per-256 pipeline on each block and OUTPUT only block
-                // GMG_DIAG_BLOCK, to validate each block's top-8 in isolation.
-                for (uint32_t b = 0; b < CTArgs::num_blocks; ++b) {
-                    cb_wait_front(CTArgs::bias_cb, 1);   // block b's bias tile (front)
-                    cb_wait_front(CTArgs::input_cb, 1);  // block b's logit tile (front)
-
-                    // Reset SrcA to the input_indices (uint16) format before copying indices: the
-                    // previous block's pipeline left SrcA configured for input_cb (bf16), which would
-                    // otherwise mis-read the uint16 indices as garbage (e.g. bf16 score bits).
-                    reconfig_data_format_srca(CTArgs::input_indices_cb);
-                    copy_tile_to_dst_init_short(CTArgs::input_indices_cb);
-                    tile_regs_acquire();
-                    copy_tile(CTArgs::input_indices_cb, 0, 1);
-                    reconfig_data_format_srca(CTArgs::input_cb);
-                    generalized_moe_gate_init<CTArgs::enable_sigmoid>(CTArgs::input_cb, CTArgs::bias_cb);
-                    generalized_moe_gate<CTArgs::enable_sigmoid>(
-                        CTArgs::input_cb, CTArgs::bias_cb, CTArgs::eps, CTArgs::scaling_factor);
-                    tile_regs_commit();
-
-                    // Complete the full math/pack handshake EVERY iteration (commit -> wait -> release),
-                    // even for non-output blocks; skipping wait/release misaligns the semaphore and
-                    // corrupts the next iteration. Pack only the GMG_DIAG_BLOCK block's result.
-#ifdef GMG_DIAG_BLOCK
-                    const bool do_output = (b == (uint32_t)GMG_DIAG_BLOCK);
-#else
-                    const bool do_output = false;
-#endif
-                    if (do_output) {
-                        cb_reserve_back(CTArgs::output_cb, 1);
-                        cb_reserve_back(CTArgs::output_indices_cb, 1);
-                    }
-                    tile_regs_wait();
-                    if (do_output) {
-                        pack_tile(0, CTArgs::output_cb);
-                        cb_push_back(CTArgs::output_cb, 1);
-                        pack_reconfig_data_format(CTArgs::output_indices_cb);
-                        pack_tile(1, CTArgs::output_indices_cb);
-                        cb_push_back(CTArgs::output_indices_cb, 1);
-                    }
-                    tile_regs_release();
-                    cb_pop_front(CTArgs::input_cb, 1);
-                    cb_pop_front(CTArgs::bias_cb, 1);
-                }
-#endif  // GMG_DIAG_BLOCK (combine vs A1 diagnostic)
             }
 #endif
         }

@@ -67,11 +67,6 @@ inline void generalized_moe_gate_finalize_ungrouped(uint32_t eps, uint32_t scale
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-inline void generalized_moe_gate_normalize_run(uint32_t eps, uint32_t scale) {
-    _gmg_normalize_run<APPROXIMATION_MODE, is_fp32_dest_acc_en>(eps, scale);
-}
-
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void generalized_moe_gate_topk_init() {
     _init_generalized_moe_gate_topk<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
 }
