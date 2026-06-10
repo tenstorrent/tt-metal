@@ -42,9 +42,7 @@ namespace ckernel {
 template <DataFormat data_format>
 ALWI void mul_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #if defined(ARCH_QUASAR)
-    static_assert(
-        data_format == DataFormat::Int32 || data_format == DataFormat::UInt16,
-        "Unsupported data format for mul_int. Supported data formats are: Int32, UInt16");
+    static_assert(data_format == DataFormat::Int32, "Unsupported data format for mul_int on Quasar. Supported: Int32");
     // Int8 copy_tile + fp32_dest_acc FPU writes sign-magnitude Int32 into dest.
     // Native Int32 tiles use 2's-comp dest and keep SIGN_MAGNITUDE_FORMAT=false.
     MATH((llk_math_eltwise_binary_sfpu_mul_int<APPROX, data_format, 8 /*ITERATIONS*/, true /*SIGN_MAGNITUDE_FORMAT*/>(
@@ -68,9 +66,7 @@ ALWI void mul_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 template <DataFormat data_format>
 ALWI void mul_int_tile_init() {
 #if defined(ARCH_QUASAR)
-    static_assert(
-        data_format == DataFormat::Int32 || data_format == DataFormat::UInt16,
-        "Unsupported data format for mul_int. Supported data formats are: Int32, UInt16");
+    static_assert(data_format == DataFormat::Int32, "Unsupported data format for mul_int on Quasar. Supported: Int32");
     MATH((llk_math_eltwise_binary_sfpu_mul_int_init<APPROX, data_format>()));
 #else
     static_assert(
