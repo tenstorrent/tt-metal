@@ -41,7 +41,7 @@ inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
     // For UNP_DEST: Dst Tile Idx Inc = 1 to place faces at consecutive dest positions (no math involved).
     std::uint32_t unpack_tile_instrn;
     std::uint32_t unpack_tile_w_dvalid_instrn;
-    std::uint32_t reset_dest_tile_cnt_instrn = TT_OP_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, 0);
+    std::uint32_t reset_dest_tile_cnt_instrn = TT_OP_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, 0 /*Value*/);
 
     std::uint32_t dest_tile_idx_inc = (static_cast<std::uint32_t>(tensor_shape.face_r_dim) < (FACE_R_DIM >> 1))
                                           ? (FACE_R_DIM >> (rows_log2(static_cast<std::uint32_t>(tensor_shape.face_r_dim)) + 1))
@@ -49,13 +49,13 @@ inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
 
     if constexpr (UNP_SEL == p_unpacr::UNP_A)
     {
-        unpack_tile_instrn          = TT_OP_UNPACR0_TILE_INC(dest_tile_idx_inc /*Dst Tile Idx*/, 1 /*Src Tile Idx*/, buf_desc_id, 0 /*Set Dvalid*/);
-        unpack_tile_w_dvalid_instrn = TT_OP_UNPACR0_TILE_INC(dest_tile_idx_inc /*Dst Tile Idx*/, 1 /*Src Tile Idx*/, buf_desc_id, 1 /*Set Dvalid*/);
+        unpack_tile_instrn          = TT_OP_UNPACR0_TILE_INC(dest_tile_idx_inc, 1 /*Src_Tile_Idx_Inc*/, buf_desc_id, 0 /*SetDatValid*/);
+        unpack_tile_w_dvalid_instrn = TT_OP_UNPACR0_TILE_INC(dest_tile_idx_inc, 1 /*Src_Tile_Idx_Inc*/, buf_desc_id, 1 /*SetDatValid*/);
     }
     else if constexpr (UNP_SEL == p_unpacr::UNP_B)
     {
-        unpack_tile_instrn          = TT_OP_UNPACR1_TILE_INC(dest_tile_idx_inc /*Dst Tile Idx*/, 1 /*Src Tile Idx*/, buf_desc_id, 0 /*Set Dvalid*/);
-        unpack_tile_w_dvalid_instrn = TT_OP_UNPACR1_TILE_INC(dest_tile_idx_inc /*Dst Tile Idx*/, 1 /*Src Tile Idx*/, buf_desc_id, 1 /*Set Dvalid*/);
+        unpack_tile_instrn          = TT_OP_UNPACR1_TILE_INC(dest_tile_idx_inc, 1 /*Src_Tile_Idx_Inc*/, buf_desc_id, 0 /*SetDatValid*/);
+        unpack_tile_w_dvalid_instrn = TT_OP_UNPACR1_TILE_INC(dest_tile_idx_inc, 1 /*Src_Tile_Idx_Inc*/, buf_desc_id, 1 /*SetDatValid*/);
     }
 
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_tile_instrn);
@@ -68,11 +68,11 @@ inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
     // The only test in which there is a unary upk to SRCA with 32b DF is the datacopy kernel, which uses ELWADD
     if constexpr (UNP_SEL == p_unpacr::UNP_A && IS_32b_DEST_EN)
     {
-        temp.set_start_op(TT_OP_UNPACR_NOP(p_unpacr::UNP_B, 1 /*Dvalid*/, 0, 0, 0 /*clear to 0*/, 0 /*clear to 0*/));
+        temp.set_start_op(TT_OP_UNPACR_NOP(p_unpacr::UNP_B, 1 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, 0 /*Src_ClrVal_Ctrl*/, 0 /*Nop_type*/));
     }
     else if constexpr (UNP_SEL == p_unpacr::UNP_B && IS_32b_DEST_EN)
     {
-        temp.set_start_op(TT_OP_UNPACR_NOP(p_unpacr::UNP_A, 1 /*Dvalid*/, 0, 0, 0 /*clear to 0*/, 0 /*clear to 0*/));
+        temp.set_start_op(TT_OP_UNPACR_NOP(p_unpacr::UNP_A, 1 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, 0 /*Src_ClrVal_Ctrl*/, 0 /*Nop_type*/));
     }
 
     temp.program_bank0_sw_cntl(instrn_buffer);
@@ -103,15 +103,15 @@ inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_i
     std::uint32_t unpack_tile_instrn;
     if constexpr (UNP_SEL == p_unpacr::UNP_A)
     {
-        unpack_tile_instrn = TT_OP_UNPACR0_TILE_INC(0, 1 /*Src Tile Idx*/, buf_desc_id, 1 /*Set Dvalid*/);
+        unpack_tile_instrn = TT_OP_UNPACR0_TILE_INC(0 /*Dst_Tile_Idx_Inc*/, 1 /*Src_Tile_Idx_Inc*/, buf_desc_id, 1 /*SetDatValid*/);
     }
     else if constexpr (UNP_SEL == p_unpacr::UNP_B)
     {
-        unpack_tile_instrn = TT_OP_UNPACR1_TILE_INC(0, 1 /*Src Tile Idx*/, buf_desc_id, 1 /*Set Dvalid*/);
+        unpack_tile_instrn = TT_OP_UNPACR1_TILE_INC(0 /*Dst_Tile_Idx_Inc*/, 1 /*Src_Tile_Idx_Inc*/, buf_desc_id, 1 /*SetDatValid*/);
     }
     else if constexpr (UNP_SEL == p_unpacr::UNP_DEST)
     {
-        unpack_tile_instrn = TT_OP_UNPACR_DEST_TILE_INC(1, 1 /*Src Tile Idx*/, buf_desc_id, 0 /*Set Dvalid*/);
+        unpack_tile_instrn = TT_OP_UNPACR_DEST_TILE_INC(1 /*Dst_Tile_Idx_Inc*/, 1 /*Src_Tile_Idx_Inc*/, buf_desc_id, 0 /*SetDatValid*/);
     }
 
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_tile_instrn);
@@ -120,11 +120,11 @@ inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_i
     // The only test in which there is a unary upk to SRCA with 32b DF is the datacopy kernel, which uses ELWADD
     if constexpr (UNP_SEL == p_unpacr::UNP_A && IS_32b_DEST_EN)
     {
-        temp.set_end_op(TT_OP_UNPACR_NOP(p_unpacr::UNP_B, 1 /*Dvalid*/, 0, 0, 0 /*clear to 0*/, 0 /*clear to 0*/));
+        temp.set_end_op(TT_OP_UNPACR_NOP(p_unpacr::UNP_B, 1 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, 0 /*Src_ClrVal_Ctrl*/, 0 /*Nop_type*/));
     }
     else if constexpr (UNP_SEL == p_unpacr::UNP_B && IS_32b_DEST_EN)
     {
-        temp.set_end_op(TT_OP_UNPACR_NOP(p_unpacr::UNP_A, 1 /*Dvalid*/, 0, 0, 0 /*clear to 0*/, 0 /*clear to 0*/));
+        temp.set_end_op(TT_OP_UNPACR_NOP(p_unpacr::UNP_A, 1 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, 0 /*Src_ClrVal_Ctrl*/, 0 /*Nop_type*/));
     }
 
     temp.program_bank0_sw_cntl(instrn_buffer);
@@ -158,35 +158,63 @@ inline void _llk_unpack_unary_operand_transpose_mop_config_(const std::uint32_t 
         {
             if constexpr (UNP_SEL == p_unpacr::UNP_A)
             {
-                TT_UNPACR0_FACE(0 /*Dst Face Idx*/, 0 /*Src Face Idx*/, 0, 0, buf_desc_id, 0);                   // Unpacks face 0 into dest offset 0
-                TT_UNPACR0_FACE(1 /*Dst Face Idx*/, 2 /*Src Face Idx*/, 0, 0, buf_desc_id, 0);                   // Unpacks face 2 into dest offset 1
-                TT_UNPACR0_FACE(2 /*Dst Face Idx*/, 1 /*Src Face Idx*/, 0, 0, buf_desc_id, 0);                   // Unpacks face 1 into dest offset 2
-                TT_UNPACR0_FACE(3 /*Dst Face Idx*/, 3 /*Src Face Idx*/, 0, 0, buf_desc_id, 1 /*Set DataValid*/); // Unpacks face 3 into dest offset 3
+                TT_UNPACR0_FACE(
+                    0 /*Dst_Face_Idx*/,
+                    0 /*Src_Face_Idx*/,
+                    0 /*Dst_Tile_Offset_Idx_Inc*/,
+                    0 /*Src_Tile_Offset_Idx_Inc*/,
+                    buf_desc_id,
+                    0 /*SetDatValid*/); // Unpacks face 0 into dest offset 0
+                TT_UNPACR0_FACE(
+                    1 /*Dst_Face_Idx*/,
+                    2 /*Src_Face_Idx*/,
+                    0 /*Dst_Tile_Offset_Idx_Inc*/,
+                    0 /*Src_Tile_Offset_Idx_Inc*/,
+                    buf_desc_id,
+                    0 /*SetDatValid*/); // Unpacks face 2 into dest offset 1
+                TT_UNPACR0_FACE(
+                    2 /*Dst_Face_Idx*/,
+                    1 /*Src_Face_Idx*/,
+                    0 /*Dst_Tile_Offset_Idx_Inc*/,
+                    0 /*Src_Tile_Offset_Idx_Inc*/,
+                    buf_desc_id,
+                    0 /*SetDatValid*/); // Unpacks face 1 into dest offset 2
+                TT_UNPACR0_FACE(
+                    3 /*Dst_Face_Idx*/,
+                    3 /*Src_Face_Idx*/,
+                    0 /*Dst_Tile_Offset_Idx_Inc*/,
+                    0 /*Src_Tile_Offset_Idx_Inc*/,
+                    buf_desc_id,
+                    1 /*SetDatValid*/); // Unpacks face 3 into dest offset 3
             }
             else if constexpr (UNP_SEL == p_unpacr::UNP_B)
             {
-                TT_UNPACR1_FACE(0 /*Dst Face Idx*/, 0 /*Src Face Idx*/, 0, 0, buf_desc_id, 0);
-                TT_UNPACR1_FACE(1 /*Dst Face Idx*/, 2 /*Src Face Idx*/, 0, 0, buf_desc_id, 0);
-                TT_UNPACR1_FACE(2 /*Dst Face Idx*/, 1 /*Src Face Idx*/, 0, 0, buf_desc_id, 0);
-                TT_UNPACR1_FACE(3 /*Dst Face Idx*/, 3 /*Src Face Idx*/, 0, 0, buf_desc_id, 1 /*Set DataValid*/);
+                TT_UNPACR1_FACE(
+                    0 /*Dst_Face_Idx*/, 0 /*Src_Face_Idx*/, 0 /*Dst_Tile_Offset_Idx_Inc*/, 0 /*Src_Tile_Offset_Idx_Inc*/, buf_desc_id, 0 /*SetDatValid*/);
+                TT_UNPACR1_FACE(
+                    1 /*Dst_Face_Idx*/, 2 /*Src_Face_Idx*/, 0 /*Dst_Tile_Offset_Idx_Inc*/, 0 /*Src_Tile_Offset_Idx_Inc*/, buf_desc_id, 0 /*SetDatValid*/);
+                TT_UNPACR1_FACE(
+                    2 /*Dst_Face_Idx*/, 1 /*Src_Face_Idx*/, 0 /*Dst_Tile_Offset_Idx_Inc*/, 0 /*Src_Tile_Offset_Idx_Inc*/, buf_desc_id, 0 /*SetDatValid*/);
+                TT_UNPACR1_FACE(
+                    3 /*Dst_Face_Idx*/, 3 /*Src_Face_Idx*/, 0 /*Dst_Tile_Offset_Idx_Inc*/, 0 /*Src_Tile_Offset_Idx_Inc*/, buf_desc_id, 1 /*SetDatValid*/);
             }
         });
     ckernel_template temp(
         MOP_OUTER_LOOP,
         MOP_INNER_LOOP,
-        TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0),
-        TT_OP_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, 1)); // Inc Src by 1 tile, because above UNPACR0/1_FACE do not inc counters
+        TT_OP_REPLAY(0 /*start_idx*/, replay_buf_len, 0 /*last*/, 0 /*set_mutex*/, 0 /*execute_while_loading*/, 0 /*load_mode*/),
+        TT_OP_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, 1 /*Value*/)); // Inc Src by 1 tile, because above UNPACR0/1_FACE do not inc counters
 
     // 32-bit datacopy uses ELWADD, which requires datavalid from both SrcA and SrcB
     if constexpr (IS_32b_DEST_EN)
     {
         if constexpr (UNP_SEL == p_unpacr::UNP_A)
         {
-            temp.set_end_op(TT_OP_UNPACR_NOP(p_unpacr::UNP_B, 1 /*Dvalid*/, 0, 0, 0 /*clear to 0*/, 0 /*clear to 0*/));
+            temp.set_end_op(TT_OP_UNPACR_NOP(p_unpacr::UNP_B, 1 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, 0 /*Src_ClrVal_Ctrl*/, 0 /*Nop_type*/));
         }
         else if constexpr (UNP_SEL == p_unpacr::UNP_B)
         {
-            temp.set_end_op(TT_OP_UNPACR_NOP(p_unpacr::UNP_A, 1 /*Dvalid*/, 0, 0, 0 /*clear to 0*/, 0 /*clear to 0*/));
+            temp.set_end_op(TT_OP_UNPACR_NOP(p_unpacr::UNP_A, 1 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, 0 /*Src_ClrVal_Ctrl*/, 0 /*Nop_type*/));
         }
     }
 
@@ -216,21 +244,33 @@ inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t
     constexpr std::uint32_t DUMMY_UNP = (reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA) ? p_unpacr::UNP_A : p_unpacr::UNP_B;
 
     // Dummy dvalid NOP for the source register filled by MOVD2A/B
-    const std::uint32_t nop_op = TT_OP_UNPACR_NOP(DUMMY_UNP, 0, 0, 0, 0, p_unpacr::UNP_NOP);
+    const std::uint32_t nop_op =
+        TT_OP_UNPACR_NOP(DUMMY_UNP, 0 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, 0 /*Src_ClrVal_Ctrl*/, p_unpacr::UNP_NOP);
 
     // Unpack one face from CB with auto-increment of src face index.
     // Dst_Face_Idx_Inc=0: always write to face 0 position (FPU reads from 0 after CLR_AB).
     // Src_Face_Idx_Inc=1: advance through L1 tile faces 0→1→2→3 (wraps back to 0).
     if (tensor_shape.total_num_faces() == NUM_FACES) // Using regular tile dimensions
     {
-        const std::uint32_t face_inc_op = (CB_UNP == p_unpacr::UNP_A)
-                                              ? TT_OP_UNPACR0_FACE_INC(0 /*Dst_Face_Inc*/, 1 /*Src_Face_Inc*/, 0, 0, buf_desc_id, 1 /*SetDatValid*/)
-                                              : TT_OP_UNPACR1_FACE_INC(0 /*Dst_Face_Inc*/, 1 /*Src_Face_Inc*/, 0, 0, buf_desc_id, 1 /*SetDatValid*/);
+        const std::uint32_t face_inc_op = (CB_UNP == p_unpacr::UNP_A) ? TT_OP_UNPACR0_FACE_INC(
+                                                                            0 /*Dst_Face_Idx_Inc*/,
+                                                                            1 /*Src_Face_Idx_Inc*/,
+                                                                            0 /*Dst_Tile_Offset_Idx_Inc*/,
+                                                                            0 /*Src_Tile_Offset_Idx_Inc*/,
+                                                                            buf_desc_id,
+                                                                            1 /*SetDatValid*/)
+                                                                      : TT_OP_UNPACR1_FACE_INC(
+                                                                            0 /*Dst_Face_Idx_Inc*/,
+                                                                            1 /*Src_Face_Idx_Inc*/,
+                                                                            0 /*Dst_Tile_Offset_Idx_Inc*/,
+                                                                            0 /*Src_Tile_Offset_Idx_Inc*/,
+                                                                            buf_desc_id,
+                                                                            1 /*SetDatValid*/);
         // MOP: outer=num_tiles, inner=num_faces
         // Each inner iteration: NOP (dvalid for dummy src) + FACE_INC (unpack face + inc src face)
         // END_OP: increment CB tile counter after all faces of a tile are processed
         ckernel_template temp(num_tiles, tensor_shape.total_num_faces(), nop_op, face_inc_op);
-        temp.set_end_op(TT_OP_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, CB_UNP, 1));
+        temp.set_end_op(TT_OP_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, CB_UNP, 1 /*Value*/));
         temp.program_bank0_sw_cntl(instrn_buffer);
     }
     else // Using tiny-tiles
@@ -323,7 +363,7 @@ inline void _llk_unpack_unary_operand_(const std::uint32_t l1_tile_idx, const Te
         constexpr std::uint32_t CB_UNP = (reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA) ? p_unpacr::UNP_B : p_unpacr::UNP_A;
         TT_SET_SRC_TILE_FACE_ROW_IDX(
             p_set_inc_sel::TILE_SEL, CB_UNP, (tensor_shape.total_num_faces() == NUM_FACES) ? l1_tile_idx : l1_tile_idx * tensor_shape.total_num_faces());
-        TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, CB_UNP, 0);
+        TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, CB_UNP, 0 /*Value*/);
     }
     else
     {
@@ -335,7 +375,7 @@ inline void _llk_unpack_unary_operand_(const std::uint32_t l1_tile_idx, const Te
             p_set_inc_sel::TILE_SEL,
             UNP_SEL == p_unpacr::UNP_DEST ? p_unpacr::UNP_A : UNP_SEL,
             (tensor_shape.total_num_faces() == NUM_FACES) ? l1_tile_idx : l1_tile_idx * tensor_shape.total_num_faces());
-        TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL == p_unpacr::UNP_DEST ? p_unpacr::UNP_A : UNP_SEL, 0);
+        TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL == p_unpacr::UNP_DEST ? p_unpacr::UNP_A : UNP_SEL, 0 /*Value*/);
     }
 
     // Runs MOP
