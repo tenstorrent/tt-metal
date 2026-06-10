@@ -125,9 +125,6 @@ ALL_MESH_CONFIGS = [
         "fabric2d-mesh-4x2",
         reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
     ),
-    # 2-link variant of the 4x2 multi-hop column — LoudBox-runnable PCC guard for the FABRIC_2D
-    # RoutingPlaneConnectionManager path at num_links>1 (the {core_link} per-core link spreading),
-    # which the 8x4-2link config only exercises on Galaxy.
     _mesh_param(
         (4, 2),
         ttnn.FabricConfig.FABRIC_2D,
