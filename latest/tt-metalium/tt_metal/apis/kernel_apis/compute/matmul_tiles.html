@@ -121,6 +121,19 @@
 <span class="target" id="namespaceckernel_1a98ec3548059036d6ad4ae29c9ac08a2b"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">mm_init</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">in0_cb_id</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">in1_cb_id</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">out_cb_id</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">transpose</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">call_line</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">__builtin_LINE</span></span><span class="p"><span class="pre">(</span></span><span class="p"><span class="pre">)</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel7mm_initE8uint32_t8uint32_t8uint32_tK8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
+<p>Which matmul init to call, and when:</p>
+<p>Pick the init that matches the matmul you run, and call it once before the first matmul:</p>
+<ul class="simple">
+<li><p>matmul_tiles (single tile) -&gt; mm_init</p></li>
+<li><p>matmul_block (block of tiles) -&gt; mm_block_init</p></li>
+</ul>
+
+<p>The _with_dt / _with_both_dt variants also reconfigure input data formats before init:</p>
+<ul class="simple">
+<li><p>Use _with_dt when the input data format changed since the last init (it reconfigures srcA first).</p></li>
+<li><p>Use _with_both_dt when both input data formats changed (it reconfigures srcA and srcB).</p></li>
+</ul>
+
 <p>Initialization for matmul_tiles operation. Must be called before matmul_tiles.</p>
 <p>Return value: None</p>
 <p></p>

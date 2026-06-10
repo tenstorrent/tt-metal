@@ -323,6 +323,7 @@
 </dt>
 <dd>
 <p>Performs block-sized matrix multiplication <em>C=A*B</em> between the blocks in two different input CBs and accumulates the result to DST (DST += C). The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>
+<p>A block is a rectangle of tiles: A is rt_dim x kt_dim tiles, B is kt_dim x ct_dim tiles, and the output C is rt_dim x ct_dim tiles. So a block is just ct_dim * rt_dim output tiles produced in one call (with kt_dim tiles along the shared inner dimension). The output must fit in DST, so the block size is limited by DST size and sync mode (see mm_block_init for the valid ct_dim/rt_dim ranges).</p>
 <p>Return value: None</p>
 <p></p>
 <table class="docutils align-default">
