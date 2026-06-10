@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T06:14:27Z",
+  "updated_at": "2026-06-10T06:22:15Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -592,8 +592,16 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/text_mlp.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_text_mlp.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_text_mlp.py",
+          "generated/profiler/reports/2026_06_10_06_20_49/ops_perf_results_2026_06_10_06_20_49.csv"
+        ],
+        "notes": "Tracy-driven single change: down_proj partial-sum all-reduce swapped from sync all_gather(4*hidden) + 4 slices + 3 local adds to ttnn.reduce_scatter(dim=3) + ttnn.all_gather(dim=3) (Topology.Linear, fp32 fabric accumulation) - the tp-guidance optimization-phase CCL swap, same idiom as text_attention o_proj (tick-28). Traced tracy at the production operating point (fp32 [1,1,128,1536] replicated 1x4 mesh, real layers.0.mlp weights, metal-trace captured+replayed, 2 replay sessions): per-device block kernel time 368.5 -> 287.5 us (-22.0%); CCL cluster 171.9 (all_gather 127.4 + slices 19.0 + adds 25.5) -> 90.6 us (reduce_scatter 50.6 + all_gather 40.0), slices/adds eliminated. Top hotspot post-change MatmulDeviceOperation 180.0us 62.2% of block kernel time (gate 55.1/up 55.4 @70c, down 69.5 @48c, fp32 HiFi4 per-chip shapes; down K=2240 DRAM-sharded variant is the remaining candidate but exceeds the one-change budget this tick). KB entries for kind mlp reviewed: ttnn_mul_1 fused-SILU mul considered - silu+mul cost only 18.5us (5%) vs 172us CCL cluster, not the top hotspot this tick (the standalone ttnn.silu also keeps the mlp guard kernel traceable); ttnn_gelu/ttnn_std/ttnn_sub n/a to SwiGLU - none applied. PCC 0.999989 (>0.99, was 0.999991 - delta is bf16-test noise, math unchanged) re-verified on 1x4 mesh; traced_ops sidecar regenerated (+reduce_scatter, -slice/add). Guard ok (lint 0, traced tracy artifact verified). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999989
       },
       "real_weights": {
         "status": "pending",
@@ -907,6 +915,12 @@
       "tick": 28,
       "ts": "2026-06-10T06:14:27Z",
       "action": "device[text_attention]",
+      "result": "ok"
+    },
+    {
+      "tick": 29,
+      "ts": "2026-06-10T06:22:15Z",
+      "action": "device[text_mlp]",
       "result": "ok"
     }
   ],

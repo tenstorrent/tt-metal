@@ -1,9 +1,8 @@
 [
-  "ttnn.add",
   "ttnn.all_gather",
   "ttnn.deallocate",
   "ttnn.linear",
   "ttnn.multiply",
-  "ttnn.silu",
-  "ttnn.slice"
+  "ttnn.reduce_scatter",
+  "ttnn.silu"
 ]

@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T06:14:27Z
+**Updated:** 2026-06-10T06:22:15Z
 
 ## Block Status
 
@@ -63,7 +63,7 @@
 | text_mlp | reference | done | 1.000000 | 0 | Qwen2 SwiGLU 1536->8960->1536 no bias, real layers.0 weights |
 | text_mlp | ttnn | done | 0.999991 | 0 | Qwen2 SwiGLU down(silu(gate(x))*up(x)) 1536->8960->1536 no bias: two sibling ttnn.linear branches + explicit ttnn.silu + ttnn.mul + row-parallel down ttnn.linear, mirroring reference_impl models/tt_transformers/tt/mlp.py (KB ttnn_silu_2 cited; KB ttnn_mul_1 fused input_tensor_a_activations=[SILU] variant deferred to optimization since the mlp guard requires a traced silu/gelu kernel). Parallelism plan placement=shard implemented: gate/up column-parallel ShardTensorToMesh(dim=-1) (per-chip intermediate 8960/4=2240), down row-parallel (dim=-2) with per-chip PARTIAL sums combined by sync all_gather(dim=3, Topology.Linear) + local adds (same all-reduce idiom as text_attention o_proj; async CCL deferred to optimization per tp-guidance). HiFi4+fp32-acc, bf16; real model.layers.0.mlp weights re-loaded from checkpoint in the test; all-reduced replicated output compared single-device vs golden. Guard ok (lint 0, kernels ok, no new host ops). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | text_mlp | debug | n/a | — | 0 |  |
-| text_mlp | optimization | pending | — | 0 |  |
+| text_mlp | optimization | done | 0.999989 | 0 | Tracy-driven single change: down_proj partial-sum all-reduce swapped from sync all_gather(4*hidden) + 4 slices + 3 local adds to ttnn.reduce_scatter(dim=3) + ttnn.all_gather(dim=3) (Topology.Linear, fp32 fabric accumulation) - the tp-guidance optimization-phase CCL swap, same idiom as text_attention o_proj (tick-28). Traced tracy at the production operating point (fp32 [1,1,128,1536] replicated 1x4 mesh, real layers.0.mlp weights, metal-trace captured+replayed, 2 replay sessions): per-device block kernel time 368.5 -> 287.5 us (-22.0%); CCL cluster 171.9 (all_gather 127.4 + slices 19.0 + adds 25.5) -> 90.6 us (reduce_scatter 50.6 + all_gather 40.0), slices/adds eliminated. Top hotspot post-change MatmulDeviceOperation 180.0us 62.2% of block kernel time (gate 55.1/up 55.4 @70c, down 69.5 @48c, fp32 HiFi4 per-chip shapes; down K=2240 DRAM-sharded variant is the remaining candidate but exceeds the one-change budget this tick). KB entries for kind mlp reviewed: ttnn_mul_1 fused-SILU mul considered - silu+mul cost only 18.5us (5%) vs 172us CCL cluster, not the top hotspot this tick (the standalone ttnn.silu also keeps the mlp guard kernel traceable); ttnn_gelu/ttnn_std/ttnn_sub n/a to SwiGLU - none applied. PCC 0.999989 (>0.99, was 0.999991 - delta is bf16-test noise, math unchanged) re-verified on 1x4 mesh; traced_ops sidecar regenerated (+reduce_scatter, -slice/add). Guard ok (lint 0, traced tracy artifact verified). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | text_mlp | real_weights | pending | — | 0 |  |
 | decoder_layer | reference | done | 1.000000 | 0 | Qwen2DecoderLayer pre-norm residual x+attn(ln1(x)); h+mlp(ln2(h)), real layers.0 weights |
 | decoder_layer | ttnn | done | 0.999936 | 0 | Pre-norm residual composition of done sub-blocks: TtTextRMSNorm(input_layernorm, eps=1e-6) -> TtTextAttention (fused per-chip QKV+bias, 12Q/2KV hd128, kv_replication=2, fp32 HF rope + fp32 explicit causal core, row-parallel o_proj + sync all-reduce) -> ttnn.add residual -> TtTextRMSNorm(post_attention_layernorm) -> TtTextMLP (SwiGLU 1536->8960->1536, column/row-parallel + sync all-reduce) -> ttnn.add residual, mirroring reference_impl models/tt_transformers/tt/decoder.py TransformerBlock. Whole layer fp32 (attention path fp32-mandatory: layer-0 logits +-3122, bf16 core PCC ~0.92; fp32 gammas TILE [1,1,1,dim]); residual stream keeps input dtype for chained-caller precision control. Real model.layers.0 weights re-loaded from checkpoint; replicated all-reduced output compared single-device vs golden. Guard ok (lint 0, kernels ok, no new host ops). No KB entries returned for decoder_layer. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 19 (2026-06-10T04:53:46Z): device[vision_patch_embed] — ok
 - tick 20 (2026-06-10T05:01:30Z): device[vision_rmsnorm] — ok
 - tick 21 (2026-06-10T05:09:51Z): device[vision_attention] — ok
 - tick 22 (2026-06-10T05:17:43Z): device[vision_mlp] — ok
@@ -94,6 +93,7 @@
 - tick 26 (2026-06-10T05:54:11Z): device[embedding] — ok
 - tick 27 (2026-06-10T06:05:07Z): device[text_rmsnorm] — ok
 - tick 28 (2026-06-10T06:14:27Z): device[text_attention] — ok
+- tick 29 (2026-06-10T06:22:15Z): device[text_mlp] — ok
 
 ## Host-Resident Exceptions
 

@@ -20,11 +20,12 @@ gate/up are COLUMN-parallel (output-feature dim sharded 4-way,
 ``ShardTensorToMesh(dim=-1)``; per-chip intermediate slice 8960/4 = 2240),
 the elementwise silu/mul stay chip-local on the matching slices, and down is
 ROW-parallel (input-feature dim sharded, ``dim=-2``), producing per-chip
-PARTIAL [.., hidden] sums combined with a sync all-reduce (``ttnn.all_gather``
-along width + local adds — async reduce_scatter/all_gather is the
-optimization-phase swap per tp-guidance), the same idiom as this model's
-text_attention o_proj. On a single device the sharding degenerates to the
-replicated full computation and the CCL is skipped.
+PARTIAL [.., hidden] sums combined with an all-reduce
+(``ttnn.reduce_scatter`` + ``ttnn.all_gather``, fp32 fabric accumulation;
+swapped from all_gather + local adds in the optimization phase per
+tp-guidance), the same idiom as this model's text_attention o_proj. On a
+single device the sharding degenerates to the replicated full computation
+and the CCL is skipped.
 """
 
 import ttnn
@@ -110,17 +111,16 @@ class TtTextMLP(LightweightModule):
         ttnn.deallocate(h)
 
         if self.num_devices > 1:
-            # Sync all-reduce: gather the N partials along width, then add
-            # them locally (async reduce_scatter/all_gather is the
-            # optimization-phase swap per tp-guidance).
-            hidden = out.shape[-1]
-            gathered = ttnn.all_gather(out, dim=3, topology=ttnn.Topology.Linear)
+            # All-reduce of the per-chip partials: reduce_scatter (each chip
+            # sums its hidden/N shard, fp32 fabric accumulation) + all_gather
+            # to re-replicate. Replaces the original all_gather + N slices +
+            # N-1 local adds (full 4*hidden payload gathered then summed on
+            # 110-core BinaryNg) — same swap as text_attention o_proj
+            # (tick-28); tracy tick-29 A/B on this block: per-device kernel
+            # 368.5 -> 287.5 us (-22%), CCL cluster 171.9 -> 90.6 us, PCC
+            # unchanged.
+            reduced = ttnn.reduce_scatter(out, dim=3, topology=ttnn.Topology.Linear)
             ttnn.deallocate(out)
-            shape = gathered.shape
-            out = ttnn.slice(gathered, [0, 0, 0, 0], [shape[0], shape[1], shape[2], hidden])
-            for d in range(1, self.num_devices):
-                part = ttnn.slice(gathered, [0, 0, 0, d * hidden], [shape[0], shape[1], shape[2], (d + 1) * hidden])
-                out = ttnn.add(out, part)
-                ttnn.deallocate(part)
-            ttnn.deallocate(gathered)
+            out = ttnn.all_gather(reduced, dim=3, topology=ttnn.Topology.Linear)
+            ttnn.deallocate(reduced)
         return out
