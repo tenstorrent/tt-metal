@@ -298,6 +298,10 @@ class BgeM3Model(LightweightModule):
             keep = ttnn.reshape(ttnn.to_layout(keep, ttnn.TILE_LAYOUT), [B, 1, 1, S])
             summed = ttnn.matmul(keep, hidden_states)  # [B, 1, 1, D]
             counts = ttnn.sum(keep, dim=-1, keepdim=True)  # [B, 1, 1, 1]
+            # Guard fully-padded rows (counts==0): clamp to >=1 so the divide
+            # yields 0 (summed is also 0 there) instead of inf/NaN. Matches the
+            # vLLM generator's counts.clamp(min=1).
+            counts = ttnn.clip(counts, 1.0, float(S))
             return ttnn.divide(summed, counts)
 
         if self.pooling == "colbert":

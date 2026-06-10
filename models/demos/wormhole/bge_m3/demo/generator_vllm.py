@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Iterator, Optional
 
 import torch
@@ -226,7 +227,10 @@ class BgeM3ForEmbedding:
         """
         batch_size = attention_mask.shape[0]
         cropped_mask = attention_mask[:, :cropped_seq_len]
-        mask_signature = int(cropped_mask.sum().item())
+        # Content hash of the actual mask bytes (not just the unmasked-token
+        # count): different padding patterns with the same number of unmasked
+        # tokens must NOT reuse the same cached (mask_tt, counts_tt).
+        mask_signature = hashlib.sha1(cropped_mask.to(torch.int32).contiguous().cpu().numpy().tobytes()).hexdigest()
         cache_key = (batch_size, cropped_seq_len)
         cached = self._mean_pool_cache.get(cache_key)
         if cached is not None and cached[2] == mask_signature:

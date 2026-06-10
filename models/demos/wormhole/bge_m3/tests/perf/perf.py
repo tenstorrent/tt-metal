@@ -245,7 +245,7 @@ def test_embedding_perf(mesh_device, batch_size):
 
     # ── Trace capture ────────────────────────────────────────────────
     logger.info("Capturing trace...")
-    trace_output = model.capture_trace(**device_tensors, mesh_device=mesh_device, cq_id=0)
+    model.capture_trace(**device_tensors, mesh_device=mesh_device, cq_id=0)
 
     # Trace warmup
     for _ in range(3):
@@ -919,7 +919,6 @@ def test_embedding_perf_pooling(mesh_device, batch_size, pooling):
     """
     dtype = ttnn.bfloat8_b
     device_name = determine_device_name(mesh_device)[0]
-    hidden = 1024  # BGE-M3 hidden dim
 
     # ── Build model with the requested pooling head ──────────────────────
     logger.info(f"Building model (pooling={pooling!r}): B{batch_size} S{SEQ_LEN} {device_name}")

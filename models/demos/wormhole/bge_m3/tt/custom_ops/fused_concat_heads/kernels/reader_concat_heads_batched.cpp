@@ -31,6 +31,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // ---- runtime args ----
@@ -52,17 +55,21 @@ void kernel_main() {
     const uint32_t tile_size_bytes = get_tile_size(cb_id);
     const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
 
+    // Device 2.0 data-movement API (see device_api_migration_guide.md).
+    Noc noc;
+    CircularBuffer cb(cb_id);
+
     for (uint32_t block = 0; block < num_blocks; block++) {
         // Read the whole concat block (num_heads * head_dim_tiles) in one go.
-        cb_reserve_back(cb_id, block_tiles);
-        uint32_t l1_write_addr = get_write_ptr(cb_id);
+        cb.reserve_back(block_tiles);
+        uint32_t l1_write_offset = 0;
 
         uint32_t tile_id_along_c = in0_tensor_tile_id;
         for (uint32_t c_dim = 0; c_dim < in0_c; c_dim++) {
             uint32_t tid = tile_id_along_c;
             for (uint32_t w_dim = 0; w_dim < in0_w_tiles; w_dim++) {
-                noc_async_read_tile(tid, s0, l1_write_addr);
-                l1_write_addr += tile_size_bytes;
+                noc.async_read(s0, cb, tile_size_bytes, {.page_id = tid}, {.offset_bytes = l1_write_offset});
+                l1_write_offset += tile_size_bytes;
                 tid++;
             }
             tile_id_along_c += in0_HtWt;
@@ -73,8 +80,8 @@ void kernel_main() {
         uint32_t in0_tensor_current_tile_id_after = tile_id_along_c;
 
         // ONE barrier for the whole block instead of one-per-tile.
-        noc_async_read_barrier();
-        cb_push_back(cb_id, block_tiles);
+        noc.async_read_barrier();
+        cb.push_back(block_tiles);
 
         // Mirror stock tile-id advance.
         in0_h_dim++;

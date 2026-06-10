@@ -40,9 +40,8 @@ MAX_MODEL_LEN = 512
 # Same example queries/documents and fixed reference tensors as test_generator_vllm.py.
 sentences_1 = ["What is BGE M3?", "Definition of BM25"]
 sentences_2 = [
-    "BGE M3 is an embedding model supporting dense retrieval, " "lexical matching and multi-vector interaction.",
-    "BM25 is a bag-of-words retrieval function that ranks a set "
-    "of documents based on the query terms appearing in each document",
+    "BGE M3 is an embedding model supporting dense retrieval, lexical matching and multi-vector interaction.",
+    "BM25 is a bag-of-words retrieval function that ranks a set of documents based on the query terms appearing in each document",
 ]
 
 similarity_reference = torch.tensor([[0.6259, 0.3474], [0.3309, 0.6734]], dtype=torch.float32)

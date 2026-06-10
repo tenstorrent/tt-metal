@@ -33,6 +33,9 @@ def test_ci_dispatch(model_weights):
             "models/demos/wormhole/bge_m3/tests/pcc/test_attention.py",
             "models/demos/wormhole/bge_m3/tests/pcc/test_transformer_block.py",
             "models/demos/wormhole/bge_m3/tests/pcc/test_model.py",
+            # Pooling/head validation (cls / mean / colbert / sparse) -- replaces
+            # the removed test_generator_vllm.py for nightly head coverage.
+            "models/demos/wormhole/bge_m3/tests/pcc/test_model_pooling.py",
         ]
         + ["-x"]  # Fail if one of the tests fails
     )
