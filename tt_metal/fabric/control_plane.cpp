@@ -3038,8 +3038,16 @@ PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
             });
         std::unordered_set<FabricNodeId> requested_exit_nodes = this->get_requested_exit_nodes(
             my_mesh_id, neighbor_mesh_id, requested_intermesh_ports, src_exit_node_chips);
-        port_descriptors[my_mesh_id][neighbor_mesh_id] = this->propose_port_descriptors_for_exit_nodes(
+        auto neighbor_ports = this->propose_port_descriptors_for_exit_nodes(
             my_host, neighbor_host, strict_binding, requested_exit_nodes, assigned_port_ids);
+        // A host may connect to multiple neighbor hosts on the same logical mesh (e.g. pod
+        // boundary spanning several machines). Append per-neighbor discoveries instead of
+        // overwriting the previous neighbor's ports.
+        auto& aggregated_ports = port_descriptors[my_mesh_id][neighbor_mesh_id];
+        aggregated_ports.insert(
+            aggregated_ports.end(),
+            std::make_move_iterator(neighbor_ports.begin()),
+            std::make_move_iterator(neighbor_ports.end()));
     }
     return port_descriptors;
 }
