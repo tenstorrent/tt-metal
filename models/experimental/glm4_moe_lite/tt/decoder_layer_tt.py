@@ -30,6 +30,84 @@ def _profile_add(profile: dict[str, float] | None, key: str, elapsed_s: float) -
     profile[key] = float(profile.get(key, 0.0)) + float(elapsed_s)
 
 
+# Sharded RMSNorm config cache keyed by (dim, padded_rows, cores, device id).
+_SHARDED_NORM_CFG_CACHE: dict = {}
+# Width-shard the norm only when it pays off. Measured (BH, decode): hidden=2048
+# drops ~32µs→5.6µs single→multi-core device time, while dim≤768 regresses (reshard
+# cost > the tiny norm). 32 tiles = 1024 elems is the break-even floor.
+_SHARDED_NORM_MIN_TILES = 32
+
+
+def _build_sharded_norm_cfg(device: Any, dim: int, padded_rows: int, cores: int):
+    """Width-sharded input MC + LayerNormShardedMultiCoreProgramConfig, or None if it won't fit.
+
+    ``padded_rows`` is the batch dim rounded up to a tile (decode batch ≤ 32 → 32).
+    """
+    nt = dim // ttnn.TILE_SIZE
+    if nt % cores != 0 or dim % cores != 0:
+        return None
+    block_w = nt // cores
+    subblock_w = 4
+    while subblock_w > 0 and block_w % subblock_w != 0:
+        subblock_w -= 1
+    grid = device.compute_with_storage_grid_size()
+    max_x, max_y = int(grid.x), int(grid.y)
+    core_x, core_y = 0, 0
+    for gx in range(min(max_x, cores), 0, -1):
+        if cores % gx == 0 and cores // gx <= max_y:
+            core_x, core_y = gx, cores // gx
+            break
+    if core_x == 0:
+        return None
+    in_mc = ttnn.create_sharded_memory_config(
+        shape=(padded_rows, dim // cores),
+        core_grid=ttnn.CoreGrid(y=core_y, x=core_x),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    prog_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[core_x, core_y],
+        subblock_w=subblock_w,
+        block_h=padded_rows // ttnn.TILE_SIZE,
+        block_w=block_w,
+        inplace=False,
+    )
+    return in_mc, prog_cfg
+
+
+def _decode_rmsnorm(norm: Any, x: ttnn.Tensor, *, device: Any, cfg: Glm4RuntimeConfig) -> ttnn.Tensor:
+    """RMSNorm for a decode step, multi-core-sharded for large norms when enabled.
+
+    Falls back to the plain (single-core) ``norm(x, mode="decode")`` whenever
+    sharding is disabled, the norm is small (< _SHARDED_NORM_MIN_TILES wide, where
+    the reshard costs more than it saves), or the shape doesn't fit the grid.
+    """
+    if not cfg.sharded_norm:
+        return norm(x, mode="decode")
+    dim = int(x.shape[-1])
+    nt = dim // ttnn.TILE_SIZE
+    if nt < _SHARDED_NORM_MIN_TILES:
+        return norm(x, mode="decode")
+    # Decode batch (≤ TILE_SIZE) sits on the seq axis; round it up to one tile row.
+    batch_rows = int(x.shape[-2])
+    padded_rows = ((batch_rows + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    cores = 8 if nt % 8 == 0 else (4 if nt % 4 == 0 else 0)
+    if cores == 0:
+        return norm(x, mode="decode")
+    key = (dim, padded_rows, cores, id(device))
+    if key not in _SHARDED_NORM_CFG_CACHE:
+        _SHARDED_NORM_CFG_CACHE[key] = _build_sharded_norm_cfg(device, dim, padded_rows, cores)
+    built = _SHARDED_NORM_CFG_CACHE[key]
+    if built is None:
+        return norm(x, mode="decode")
+    in_mc, prog_cfg = built
+    x_sharded = ttnn.to_memory_config(x, in_mc)
+    out = norm(x_sharded, mode="decode", in_sharded=True, norm_config={"sharded_program_config": prog_cfg})
+    ttnn.deallocate(x_sharded, force=False)
+    return out
+
+
 def prepare_decode_rope_inputs_for_rotary_llama_decode_mode_tt(
     *,
     device: Any,
@@ -437,7 +515,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         signpost(f"L{layer_idx}_attn-start")
     residual = x_embed_tok
     t0 = time.perf_counter() if profile is not None else 0.0
-    x = w.input_layernorm(x_embed_tok, mode="decode")
+    x = _decode_rmsnorm(w.input_layernorm, x_embed_tok, device=device, cfg=cfg)
     _profile_add(profile, "norm_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     # ---- KV Cache Update ----
@@ -528,7 +606,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         signpost(f"L{layer_idx}_moe-start")
     residual = x_attn_out
     t0 = time.perf_counter() if profile is not None else 0.0
-    x = w.post_attention_layernorm(x_attn_out, mode="decode")
+    x = _decode_rmsnorm(w.post_attention_layernorm, x_attn_out, device=device, cfg=cfg)
     _profile_add(profile, "mlp_norm_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     use_moe = moe_runtime is not None and getattr(w, "moe", None) is not None
