@@ -62,9 +62,9 @@ Run from repo root on Blackhole QuietBox or P150.
 | Demo | System | Mesh | New tokens | Steady-state throughput| End-to-end throughput| TTFT (ms) |
 |:-----|:-------|:-----|----------:|------:|----------:|----------:|
 | Image + text | BH-QB | 1x4 | 100 | 29.4 | 20.8 | 1250 |
-| Image + text | P150 | 1x1 | 100 | 5.3 | 4.5 | 3121 |
+| Image + text | P150 | 1x1 | 100 | 5 | 4.2 | 3121 |
 | Text LM | BH-QB | 1x4 | 200 | 30.3 | 28.4 | 279 |
-| Text LM | P150 | 1x1 | 200 | 5.4 | 5.3 | 528 |
+| Text LM | P150 | 1x1 | 200 | 5.1 | 5 | 528 |
 
 ## Resources
 
