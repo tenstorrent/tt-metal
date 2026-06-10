@@ -15,6 +15,6 @@ Goal completion requirements:
 - Runtime fallback audit covers model/generator paths, including cache ownership, host-logit boundaries, sampling, and reset behavior.
 - models/autoports/<model>/doc/full_model/README.md and work_log.md summarize commands, top-k accuracy, autoregressive qualitative verdict, perf, limitations, and exact artifacts.
 - The full model runs end to end on real weights with acceptable accuracy and usable generation evidence. If the full model exposes a decoder, cache, mesh, or optimization gap, keep working.
-- Prefill TTFT and decode t/s/u reported for batch 1 inference reported at the top of README.md
+- Prefill TTFT and trace-verified decode t/s/u reported for batch 1 inference reported at the top of README.md
 
 Do not mark this goal blocked just because PCC, trace replay, watcher, profiler, CCL, cache, MoE or other validation currently fails. Those failures are expected bringup work. Before marking blocked, isolate the failure to the smallest reproducible component, compare against the optimized single-chip baseline, try a concrete fix/refutation loop, and for subtle PCC, mesh/CCL, cache, or routed-expert bugs use $autofix or document why those skills could not be used. A blocked result requires evidence that continued debugging by the agent is no longer meaningful, not merely that a requirement is still failing.
