@@ -53,6 +53,24 @@ class ttMLA(_ttMLAv3):
         )
         super().__init__(config, weights, mesh_device, **kwargs)
 
+    def _indexer_update_kcache(self, hidden_states: ttnn.Tensor, seq_len: int, start_pos: int):
+        """Write this chunk's index keys into the host K-cache. Must run on EVERY
+        chunk — including dense-passthrough ones — or later DSA chunks score
+        against zero keys for the early prefix. Returns (x, freqs) for reuse."""
+        a = self.index_args
+        w = self.indexer_weights
+        end_pos = start_pos + seq_len
+        # hidden is TP-sharded on dim, sp=1: concat TP shards -> [1, S, dim]
+        x = torch.cat([ttnn.to_torch(s) for s in ttnn.get_device_tensors(hidden_states)], dim=-1)[0].to(torch.bfloat16)
+        freqs = precompute_freqs_cis(a)[start_pos:end_pos]
+        k = torch.nn.functional.layer_norm(
+            x @ w["indexer.wk"].T, (a.index_head_dim,), w["indexer.k_norm"], w["indexer.k_norm_bias"]
+        )
+        k_pe, k_nope = torch.split(k, [64, a.index_head_dim - 64], dim=-1)
+        k = torch.cat([apply_rotary_emb(k_pe.unsqueeze(2), freqs, interleaved=False).squeeze(2), k_nope], dim=-1)
+        self._index_k_cache[start_pos:end_pos] = k[0]
+        return x, freqs
+
     def _indexer_topk(self, hidden_states: ttnn.Tensor, seq_len: int, start_pos: int = 0) -> ttnn.Tensor:
         """Top-k indices [1, 1, S, k] over the cached prefix + this chunk.
 
@@ -62,9 +80,7 @@ class ttMLA(_ttMLAv3):
         a = self.index_args
         w = self.indexer_weights
         end_pos = start_pos + seq_len
-        # hidden is TP-sharded on dim, sp=1: concat TP shards -> [1, S, dim]
-        x = torch.cat([ttnn.to_torch(s) for s in ttnn.get_device_tensors(hidden_states)], dim=-1)[0].to(torch.bfloat16)
-        freqs = precompute_freqs_cis(a)[start_pos:end_pos]
+        x, freqs = self._indexer_update_kcache(hidden_states, seq_len, start_pos)
 
         # qr = MLA q-latent (shared with the MLA stem in the reference)
         qr = torch.nn.functional.rms_norm(
@@ -77,13 +93,6 @@ class ttMLA(_ttMLAv3):
         q_pe, q_nope = torch.split(q, [64, a.index_head_dim - 64], dim=-1)
         q = torch.cat([apply_rotary_emb(q_pe, freqs, interleaved=False), q_nope], dim=-1)
 
-        k = torch.nn.functional.layer_norm(
-            x @ w["indexer.wk"].T, (a.index_head_dim,), w["indexer.k_norm"], w["indexer.k_norm_bias"]
-        )
-        k_pe, k_nope = torch.split(k, [64, a.index_head_dim - 64], dim=-1)
-        k = torch.cat([apply_rotary_emb(k_pe.unsqueeze(2), freqs, interleaved=False).squeeze(2), k_nope], dim=-1)
-        # Persist this chunk's keys; score against the whole populated prefix.
-        self._index_k_cache[start_pos:end_pos] = k[0]
         k = self._index_k_cache[:end_pos].unsqueeze(0)
 
         wts = (x.float() @ w["indexer.weights_proj"].T.float()) * a.index_n_heads**-0.5 * self.scale
@@ -104,6 +113,8 @@ class ttMLA(_ttMLAv3):
         kv_isl = kwargs.get("kv_actual_isl")
         end_pos = (kv_isl or 0) + seq_len_local * self.sp_factor
         if end_pos <= self.index_args.index_topk or not self.indexer_weights:
+            if self.indexer_weights and kv_isl is not None:
+                self._indexer_update_kcache(hidden_states, seq_len_local, kv_isl)
             return super().forward(hidden_states, rope_tensors, kvpe_cache, **kwargs)
         if self.sp_factor != 1:
             raise NotImplementedError("DSA bring-up: sp=1 only (status.md step 4)")
