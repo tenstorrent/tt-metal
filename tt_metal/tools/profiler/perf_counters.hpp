@@ -425,6 +425,9 @@ __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group)
         PerfCounter counter(counter_val, ref_cnt_val, counters[i].first);
         timeStampedData<PERF_COUNTER_PROFILER_ID>(counter.raw_data);
     }
+    // Toggle start bit to clear the counters for this group
+    cntl_reg[2] = 0;
+    cntl_reg[2] = PERF_CNT_START_VALUE;
 }
 
 void read_perf_counters() {
