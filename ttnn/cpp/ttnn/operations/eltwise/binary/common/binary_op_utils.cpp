@@ -42,7 +42,7 @@ bool is_input_dtype_supported(BinaryOpType op, tt::tt_metal::DataType dtype) {
 
 bool is_dtype_combination_supported(BinaryOpType op, DataType dtype_a, DataType dtype_b) {
     if (dtype_a == dtype_b) {
-        return true;
+        return is_input_dtype_supported(op, dtype_a);
     }
 
     if (dtype_policy::is_mixed_bfloat_tile_pair(dtype_a, dtype_b) &&
@@ -50,12 +50,15 @@ bool is_dtype_combination_supported(BinaryOpType op, DataType dtype_a, DataType 
         return is_input_dtype_supported(op, dtype_a) && is_input_dtype_supported(op, dtype_b);
     }
 
-    if (op == BinaryOpType::ISCLOSE) {
-        return (dtype_a == DataType::FLOAT32 && dtype_b == DataType::BFLOAT16) ||
-               (dtype_a == DataType::BFLOAT16 && dtype_b == DataType::FLOAT32);
+    // special cases:
+    switch (op) {
+        case BinaryOpType::ISCLOSE:
+            return (dtype_a == DataType::FLOAT32 && dtype_b == DataType::BFLOAT16) ||
+                   (dtype_a == DataType::BFLOAT16 && dtype_b == DataType::FLOAT32);
+        case BinaryOpType::DEQUANT:
+        case BinaryOpType::REQUANT: return dtype_a == DataType::INT32 && dtype_b == DataType::FLOAT32;
+        default: return false;
     }
-
-    return false;
 }
 
 std::map<std::string, std::string> get_defines(
