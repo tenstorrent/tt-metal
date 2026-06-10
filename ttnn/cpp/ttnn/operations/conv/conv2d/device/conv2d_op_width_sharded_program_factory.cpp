@@ -522,6 +522,15 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         0,                              // activation reuse related arguments
         static_cast<uint32_t>(false)};  // split_reader_cb_shared (not used in width sharded)
 
+    // No-l1_acc convs run main's VERBATIM hand-written kernel (same rationale as the sharded
+    // factory dispatch): the helper pin scheme requires packer_l1_acc for sound spill/reload
+    // ordering and the migration win is l1_acc-only. Verbatim layout = helper layout + TEMP_SUM
+    // CB index at arg 25 (unused on non-depthwise; pass 0). Depthwise never reaches here.
+    if (!packer_l1_acc) {
+        compute_kernel_path = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize_main.cpp";
+        compute_kernel_args.insert(compute_kernel_args.begin() + 25, 0u);
+    }
+
     std::vector<uint32_t> activation_kernel_compile_args = {
         (uint32_t)stride_w,
         (uint32_t)dilation_h,

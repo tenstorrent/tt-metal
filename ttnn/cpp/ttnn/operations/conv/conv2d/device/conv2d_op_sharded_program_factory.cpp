@@ -1305,6 +1305,21 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             static_cast<uint32_t>(get_cb_info_by_name(cb_info, Conv2dCb::TEMP_SUM).index));
     }
 
+    // PRODUCTION dispatch (bench mode off only): no-l1_acc convs run main's VERBATIM hand-written
+    // kernel. The matmul-helper pin scheme requires packer_l1_acc for sound PACK→UNPACK ordering
+    // on its spill/reload (no FIFO counts to wait on otherwise) and the migration's measured win
+    // is l1_acc-only (GH#45995 bench: l1_acc OFF = neutral). Verbatim kernel takes one extra arg
+    // vs the helper layout — a TEMP_SUM CB index at position 25 it never reads on non-depthwise —
+    // pass 0. Depthwise has its own kernel (path set above) and never goes through the matmul
+    // helper. Gate on bench mode None: bench Main already swapped the kernel and inserted the real
+    // TEMP_SUM index above (must not double-apply); bench helper_sbm/helper_trm deliberately keep
+    // the helper kernel even when !l1_acc so the harness measures the helper path.
+    if (conv_bench_mode == ttnn::operations::conv::Conv2dBenchMode::None && !packer_l1_acc_en &&
+        !is_conv_1d_depthwise_conv) {
+        compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize_main.cpp";
+        compute_kernel_args.insert(compute_kernel_args.begin() + 25, 0u);
+    }
+
     const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     const tt::tt_metal::NOC reader_noc =
         writer_mcast_noc == tt::tt_metal::NOC::NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
