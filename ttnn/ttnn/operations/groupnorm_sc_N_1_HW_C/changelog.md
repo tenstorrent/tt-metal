@@ -95,3 +95,41 @@
 - **Tests added**: test_groupnorm_sc_N_1_HW_C_refinement2.py (28 cases),
   test_groupnorm_sc_N_1_HW_C_refinement2_debug.py (6 deterministic cases), probes/probe_005.py
   (DPRINT mean/rstd), probes/probe_006.py (bf8b gamma quantization floor).
+
+## Refinement 3 — Non-tile-aligned group widths (SD / SDXL regime)
+- **Date**: 2026-06-10
+- **What was done**:
+  - `SUPPORTED["groups_alignment"]` extended with `non_aligned` (Cg % 32 != 0, G > 1 — the
+    SD/SDXL regime, Cg ∈ {10..80}; also unblocks the 8 coupled C-tail + straddle cells).
+  - New cluster kernel path (all three kernels, CT-gated `GROUPS_NA`; aligned path untouched):
+    work unit = (n, cluster), cluster = lcm(Cg, 32) channels capped at C — group/tile
+    boundaries re-align at cluster edges, so output tiles stay disjoint across cores.
+    Passes 1/2 run per group over its tile span (≤ ceil(Cg/32)+1 tiles) with reader-generated
+    0/1 column masks; pass 1 masks BEFORE the reduce (neighbor groups share tiles). Compute
+    exports per-group mean/rstd scalars; the reader scatters them into per-column row vectors
+    (zeros in padding cols). Pass 3 is one Row-broadcast sweep over the cluster:
+    (x − mean_row)·rstd_row·γ+β — no partial-tile writes; padding cols zero via rstd_row=0;
+    bf8b + HW-tail rows masked with two scalar tiles (row masks are column-independent).
+  - CB-wrap rule learned the hard way (deadlock at first Wsg=2 group): multi-tile frames must
+    have uniform width per CB. Input/output stream per tile; mask frames pad to Ws_max;
+    row vectors push full Wc_full frames.
+  - Precision at Ht=512 (SDXL 16384x320): per-row reload-accumulate truncates through TF32
+    srcA toward zero — variance deficit 8.7% (slope 1.046 on all groups). Fixed by 16-row
+    chunked reduce blocks (512→32 reloads) + `fp32_dest_acc_en` default ON for the cluster
+    path (Float32 stat CBs). L1 OOM from chunking fixed by sizing only cb_centered for full
+    chunks (in/out/xhat/scaled stay 2·max(Ws,Wc)).
+- **Accuracy achieved**: PCC ≥ 0.9994, rel_rms 0.002–0.009 bf16 on 33 refinement cases
+  (SD widths 10–80, C-tail+straddle, HW-tail+straddle, all dtypes, multibatch); SDXL
+  16384x320 bf16 PCC 0.99975.
+- **Golden test progress**: full sweep (7 shape shards): 3683 supported_pass / 3551
+  invalid_skipped / 0 xfail remaining / 0 xpass_drift / 0 xfail_wrong_mode / 2 supported_fail
+  — both the pre-existing R2 irreducible `1x1x64x17 gamma_only bf8b` cells (op below the
+  bf8b gamma quantization floor; test-side tolerance issue, NOT in EXCLUSIONS). Up from
+  2361 at Refinement 2. EXCLUSIONS remains empty.
+- **Issues encountered**: (1) CB wrap deadlock with variable-width frames (DPRINT-isolated to
+  first 2-tile group span); (2) TF32 reload truncation at Ht=512; (3) L1 OOM 1.57MB after
+  16-row chunking; one transient infra failure (host disk full → MPI segfault, pruned stale
+  JIT caches). Two prior gate tests asserting NotImplementedError for straddle flipped to
+  assert support.
+- **Tests added**: test_groupnorm_sc_N_1_HW_C_refinement3.py (33 cases); probes/probe_007–012
+  (hang isolation, per-group bias and slope decomposition).

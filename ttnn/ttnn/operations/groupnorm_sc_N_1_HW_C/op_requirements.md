@@ -70,7 +70,7 @@ after Refinement 3 lands; until then they remain xfail on groups_alignment).
 **Done when**: golden cells with alignment ∈ {hw_non_aligned, c_non_aligned} and
 groups_alignment=aligned (~700 marginal cells) pass.
 
-### [ ] Refinement 3 — Non-tile-aligned group widths (SD / SDXL regime)
+### [x] Refinement 3 — Non-tile-aligned group widths (SD / SDXL regime)
 
 **Goal**: add `"non_aligned"` to `SUPPORTED["groups_alignment"]` — groups straddle tile
 boundaries (C/G ∈ {10, 20, 24, 30, 40, ...} with num_groups=32), the dominant Stable Diffusion

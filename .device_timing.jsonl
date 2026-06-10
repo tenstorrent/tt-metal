@@ -88,3 +88,16 @@
 {"source":"run_safe_pytest","pid":2126318,"started_at_ms":1781112412282,"wait_ms":1,"run_ms":5455,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py::test_op[1x1x16384x320-affine=gamma_beta-affine_dtype=FLOAT32-affine_layout=ROW_MAJOR-alignment=tile_aligned-dtype=FLOAT32-groups_alignment=non_aligned-layout=TILE-num_groups=32]","exit_code":1}
 {"source":"run_safe_pytest","pid":2126521,"started_at_ms":1781112425665,"wait_ms":2,"run_ms":5438,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py::test_op[1x1x16384x320-affine=gamma_beta-affine_dtype=FLOAT32-affine_layout=ROW_MAJOR-alignment=tile_aligned-dtype=FLOAT32-groups_alignment=non_aligned-layout=TILE-num_groups=32]","exit_code":1}
 {"source":"run_safe_pytest","pid":2126908,"started_at_ms":1781112486689,"wait_ms":1,"run_ms":38874,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":2128410,"started_at_ms":1781112558619,"wait_ms":2,"run_ms":48139,"test_path":"tests/ttnn/unit_tests/operations/groupnorm_sc_N_1_HW_C/test_groupnorm_sc_N_1_HW_C_refinement3.py","exit_code":0}
+{"source":"run_safe_pytest","pid":2131569,"started_at_ms":1781112615962,"wait_ms":1,"run_ms":366545,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":2152658,"started_at_ms":1781112992519,"wait_ms":1,"run_ms":311237,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":2173141,"started_at_ms":1781113312919,"wait_ms":2,"run_ms":341316,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":2196064,"started_at_ms":1781113664724,"wait_ms":2,"run_ms":103832,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":2199420,"started_at_ms":1781113781918,"wait_ms":1,"run_ms":165275,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":2209755,"started_at_ms":1781113955956,"wait_ms":1,"run_ms":3444,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":2209959,"started_at_ms":1781113970775,"wait_ms":2,"run_ms":3127,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":2210226,"started_at_ms":1781113996110,"wait_ms":2,"run_ms":3145,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":2210912,"started_at_ms":1781114093805,"wait_ms":1,"run_ms":235340,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":2231136,"started_at_ms":1781114340377,"wait_ms":2,"run_ms":268912,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":2249127,"started_at_ms":1781114619331,"wait_ms":1,"run_ms":292918,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":2269756,"started_at_ms":1781114921547,"wait_ms":2,"run_ms":331956,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":0}

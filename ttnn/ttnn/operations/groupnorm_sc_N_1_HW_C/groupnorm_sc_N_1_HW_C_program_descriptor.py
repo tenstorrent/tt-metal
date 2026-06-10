@@ -42,8 +42,13 @@ tiles are disjoint, keeping multi-core writes race-free. Per cluster:
   - Pass 3 is one Row-broadcast sweep over the whole cluster:
     (x - mean_row) * rstd_row * gamma + beta — no partial tile writes;
     padding columns get rstd=0 -> 0 output.
-Streaming CB sizing uses max(Wsmax, Wc) per row chunk; the mask CBs hold
-max(Wsmax, Wc) pages so the bf8b+HW-tail output masks fit too.
+CB-wrap rule (deadlock otherwise): multi-tile reserve/push frames must have
+uniform width per CB. Input/output stream per tile; mask frames pad to Ws_max
+(2*Ws_max pages); row vectors push Wc_full frames (Wc_full pages); the bf8b
+output row masks are single scalar tiles (cb_mask_ones 15 / cb_mask_rows 17).
+Passes 1/2 accumulate in chunk_rows(=16)-row blocks: per-block partial reload
+quantizes through TF32 srcA, so fewer/taller blocks keep stats accurate at
+large Ht; only cb_centered is sized for the full chunk.
 
 Intermediate (stat) format: Float32 when fp32_dest_acc_en is set (accumulation
 crosses these CBs between passes — packing to bf16 would erase the fp32 dest

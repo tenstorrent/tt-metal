@@ -64,3 +64,12 @@
 {"event":"dprint_observation","details":"slope=1.0458 ALL groups, resid 0.0017 -> rstd uniformly +4.6% (var -8.7%). 512 per-row partial reloads truncate toward zero (TF32 srcA). Lever: chunk pass1/2 reduce blocks to R=16 rows -> 32 reloads.","ts":"2026-06-10T17:22:14+00:00"}
 {"event":"test_run","status":"fail","details":"chunked accumulation: SDXL 55->10 failed (45 pass). Checking remaining 10 cells.","ts":"2026-06-10T17:25:14+00:00"}
 {"event":"test_run","status":"pass","details":"SDXL shape 1x1x16384x320 now 55/55. CB slimming: only cb_centered holds full chunk; in/out/xhat/scaled at 2*max(Ws,Wc).","ts":"2026-06-10T17:28:58+00:00"}
+{"event":"test_run","status":"pass","details":"refinement3 unit suite 33/33 after chunked accumulation + CB slimming","ts":"2026-06-10T17:30:15+00:00"}
+{"event":"test_run","status":"pass","details":"golden shard0 605 passed / 0 failed / 583 skipped","ts":"2026-06-10T17:36:32+00:00"}
+{"event":"test_run","status":"pass","details":"golden shard1 495 passed / 0 failed","ts":"2026-06-10T17:41:52+00:00"}
+{"event":"test_run","status":"fail","details":"golden shard2: 2 failed / 548 passed. Identifying cells.","ts":"2026-06-10T17:47:44+00:00"}
+{"event":"test_run","status":"pass","details":"shard2 2 fails = known R2 irreducible cells (1x1x64x17 gamma_only bf8b, below quantization floor, see changelog R2). 548 passed, no regression.","ts":"2026-06-10T17:49:41+00:00"}
+{"event":"test_run","status":"pass","details":"golden shard3 495 passed / 0 failed (after freeing 220G of stale JIT caches; shard3 segfaults were host disk-full, not op)","ts":"2026-06-10T17:59:00+00:00"}
+{"event":"test_run","status":"pass","details":"golden shard4 495 passed / 0 failed","ts":"2026-06-10T18:03:39+00:00"}
+{"event":"test_run","status":"pass","details":"golden shard5 495 passed / 0 failed","ts":"2026-06-10T18:08:41+00:00"}
+{"event":"test_run","status":"pass","details":"golden full sweep complete via 7 shape shards: 3683 supported_pass, 2 supported_fail (pre-existing R2 bf8b near-miss cells 1x1x64x17, not groups-related), 3551 invalid_skipped, 0 xfail remaining, 0 xpass_drift, 0 xfail_wrong_mode. R2 baseline was 2361 supported_pass.","ts":"2026-06-10T18:14:37+00:00"}
