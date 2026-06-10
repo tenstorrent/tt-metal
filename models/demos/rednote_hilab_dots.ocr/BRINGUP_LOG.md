@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T06:53:44Z
+**Updated:** 2026-06-10T06:59:50Z
 
 ## Block Status
 
@@ -24,7 +24,7 @@
 | vision_attention | ttnn | done | 0.999855 | 0 | Fused-QKV linear -> nlp_create_qkv_heads (12 MHA heads, hd128) -> rotary_embedding_llama (q/k weights reverse_permute'd HF->meta + convert_rope_style_hf_to_meta cos/sin, qwen25_vl vision recipe) -> windowed_scaled_dot_product_attention over cu_seqlens (in-kernel block-diagonal mask) -> nlp_concat_heads -> o_proj. Seq padded 784->896, cu_seqlens keeps unpadded boundaries; real blocks.0.attn weights, replicated on 1x4 mesh per parallelism plan; HiFi4+fp32-acc. Guard ok (lint 0, kernels ok, no new host ops). KB ttnn_experimental_create_qkv_heads pattern applied via the nlp_* fused-head idiom. Framework fix: added ttnn.transformer.windowed_scaled_dot_product_attention to guard KIND_REQUIRED_KERNELS[attention] (mandated vision idiom was unrecognized; guard self-tests still pass). |
 | vision_attention | debug | n/a | — | 0 |  |
 | vision_attention | optimization | done | 0.999855 | 0 | Tracy-driven single change: fp32 explicit HF rope chain (slice/neg/concat/mul/add) pinned to L1 interleaved ([1,12,896,128] fp32 ~5.5MB), boundary typecasts kept DRAM (windowed SDPA TT_FATALs on non-DRAM operands - first attempt with L1 typecasts crashed, fixed). Traced tracy at the production operating point (fp32 high-precision path, [1,1,896,1536] replicated 1x4 mesh, metal-trace captured+replayed): per-device block kernel time 1360.2 -> 1172.1 us (-13.8%); BinaryNg 255.7->140.0us, Concat 57.3->21.3us, Unary 29.5->10.3us, Slice 78.6->61.4us, Typecast 89.9->73.1us; SDPA/Matmul unchanged. Top hotspot post-change WindowedScaledDotProductAttention 444.0us 37.9% - bf16-only fused kernel at 110 cores, no per-block lever beyond it. KB entries for kind attention reviewed (ttnn_bcast_2 scale-bcast and ttnn_eq mask-building n/a: scale+mask are in-kernel in windowed SDPA; create_qkv_heads idiom already applied in ttnn phase) - none applicable, none used. PCC re-verified both paths: bf16 0.999855 (pytest), fp32 production path 0.999853 (>0.99). Guard ok (lint 0, traced tracy artifact verified). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
-| vision_attention | real_weights | pending | — | 0 |  |
+| vision_attention | real_weights | done | 0.999813 | 0 | vision_attention_weights loader added to consolidated tt/weight_loader.py (pure-PyTorch, memoized key-filtered safetensors load; fused qkv.weight [4608,1536] + proj.weight [1536,1536], no bias, 9437184 params/layer). Stage-1 parametric tests/test_real_hf_weights.py row runs TtVisionAttention at the production operating point (fp32 high-precision path with explicit fp32 HF rope, bf16 only at the bf16-only windowed-SDPA kernel, 1x4 mesh replicated, golden real post-norm1 activation [784,1536] padded to 896, golden rope tables + cu_seqlens) vs the pure-PyTorch reference with the same real weights at TWO sites: blocks.0 PCC 0.999853, blocks.41 0.999813 (min 0.999813 > 0.99 reported). Block forward untouched; full harness re-run, vision_patch_embed and vision_rmsnorm rows still passing. Guard ok (lint 0, params_loaded 18874368>0). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | vision_mlp | reference | done | 1.000000 | 0 | SwiGLU fc1/fc3->fc2 no bias |
 | vision_mlp | ttnn | done | 0.999999 | 0 | SwiGLU fc2(silu(fc1(x))*fc3(x)) 1536->4224->1536 no bias: two sibling ttnn.linear branches + explicit ttnn.silu + ttnn.mul + down ttnn.linear (KB ttnn_silu_2 cited; KB ttnn_mul_1 fused input_tensor_a_activations=[SILU] variant deferred to optimization phase since the mlp guard requires a traced silu/gelu kernel). HiFi4+fp32-acc; real blocks.0.mlp weights, replicated on 1x4 mesh per parallelism plan (placement=replicate), single-device copy vs golden. Guard ok (lint 0, kernels ok, no new host ops). |
 | vision_mlp | debug | n/a | — | 0 |  |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 24 (2026-06-10T05:35:01Z): device[patch_merger] — ok
 - tick 25 (2026-06-10T05:46:32Z): device[vision_transformer] — ok
 - tick 26 (2026-06-10T05:54:11Z): device[embedding] — ok
 - tick 27 (2026-06-10T06:05:07Z): device[text_rmsnorm] — ok
@@ -94,6 +93,7 @@
 - tick 31 (2026-06-10T06:40:18Z): device[lm_head] — ok
 - tick 32 (2026-06-10T06:46:52Z): device[vision_patch_embed] — ok
 - tick 33 (2026-06-10T06:53:44Z): device[vision_rmsnorm] — ok
+- tick 34 (2026-06-10T06:59:50Z): device[vision_attention] — ok
 
 ## Host-Resident Exceptions
 

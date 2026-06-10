@@ -90,6 +90,17 @@ def vision_rmsnorm_weights(
     return {"weight": hf_sd[key]}
 
 
+def vision_attention_weights(
+    layer_idx: int = 0, hf_sd: Optional[Dict[str, torch.Tensor]] = None
+) -> Dict[str, torch.Tensor]:
+    """State dict for TtVisionAttention: qkv.weight [3*dim, dim] (fused, no bias), proj.weight [dim, dim]."""
+    prefix = f"{VISION_TOWER_PREFIX}.blocks.{layer_idx}.attn"
+    keys = [f"{prefix}.qkv.weight", f"{prefix}.proj.weight"]
+    if hf_sd is None:
+        hf_sd = load_hf_state_dict(keys=keys)
+    return {"qkv.weight": hf_sd[keys[0]], "proj.weight": hf_sd[keys[1]]}
+
+
 def count_params(sd) -> int:
     """Tensor-leaf element count of a (possibly nested) state dict."""
     if isinstance(sd, torch.Tensor):
@@ -113,3 +124,9 @@ if __name__ == "__main__":
         nsd = vision_rmsnorm_weights(layer_idx=idx, which=which)
         assert nsd["weight"].shape == (1536,), (which, idx, nsd["weight"].shape)
     print(f"vision_rmsnorm: norm1/norm2/post_trunk_norm OK, {count_params(nsd)} params each")
+
+    for idx in (0, VISION_NUM_BLOCKS - 1):
+        asd = vision_attention_weights(layer_idx=idx)
+        assert asd["qkv.weight"].shape == (3 * 1536, 1536), (idx, asd["qkv.weight"].shape)
+        assert asd["proj.weight"].shape == (1536, 1536), (idx, asd["proj.weight"].shape)
+    print(f"vision_attention: blocks.0/blocks.{VISION_NUM_BLOCKS - 1} OK, {count_params(asd)} params each")

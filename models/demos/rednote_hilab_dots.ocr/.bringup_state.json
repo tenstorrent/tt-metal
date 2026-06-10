@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T06:53:44Z",
+  "updated_at": "2026-06-10T06:59:50Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -178,8 +178,15 @@
         "pcc": 0.999855
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/weight_loader.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_real_hf_weights.py"
+        ],
+        "notes": "vision_attention_weights loader added to consolidated tt/weight_loader.py (pure-PyTorch, memoized key-filtered safetensors load; fused qkv.weight [4608,1536] + proj.weight [1536,1536], no bias, 9437184 params/layer). Stage-1 parametric tests/test_real_hf_weights.py row runs TtVisionAttention at the production operating point (fp32 high-precision path with explicit fp32 HF rope, bf16 only at the bf16-only windowed-SDPA kernel, 1x4 mesh replicated, golden real post-norm1 activation [784,1536] padded to 896, golden rope tables + cu_seqlens) vs the pure-PyTorch reference with the same real weights at TWO sites: blocks.0 PCC 0.999853, blocks.41 0.999813 (min 0.999813 > 0.99 reported). Block forward untouched; full harness re-run, vision_patch_embed and vision_rmsnorm rows still passing. Guard ok (lint 0, params_loaded 18874368>0). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999813,
+        "params_loaded": 18874368
       }
     },
     {
@@ -976,6 +983,12 @@
       "tick": 33,
       "ts": "2026-06-10T06:53:44Z",
       "action": "device[vision_rmsnorm]",
+      "result": "ok"
+    },
+    {
+      "tick": 34,
+      "ts": "2026-06-10T06:59:50Z",
+      "action": "device[vision_attention]",
       "result": "ok"
     }
   ],

@@ -34,6 +34,7 @@ wl = _load_module("dots_ocr_weight_loader", MODEL_DIR / "tt" / "weight_loader.py
 ref = _load_module("dots_ocr_reference_functional", MODEL_DIR / "reference" / "functional.py")
 _patch_embed_mod = _load_module("dots_ocr_tt_vision_patch_embed", MODEL_DIR / "tt" / "vision_patch_embed.py")
 _vision_rmsnorm_mod = _load_module("dots_ocr_tt_vision_rmsnorm", MODEL_DIR / "tt" / "vision_rmsnorm.py")
+_vision_attention_mod = _load_module("dots_ocr_tt_vision_attention", MODEL_DIR / "tt" / "vision_attention.py")
 
 
 def _pcc(a, b):
@@ -96,9 +97,48 @@ def _t_vision_rmsnorm(mesh_device) -> tuple[float, int]:
     return min(pccs), n_params
 
 
+def _t_vision_attention(mesh_device) -> tuple[float, int]:
+    # Real fused-QKV / proj weights from two sites (blocks.0, blocks.41)
+    # exercise the per-layer loader index; PCC gated on each, min reported.
+    # Production-distribution input: the golden's real post-norm1 activation,
+    # with the golden's real rope tables and cu_seqlens (block-diagonal mask).
+    golden = torch.load(MODEL_DIR / "reference" / "golden" / "vision_attention.pt")
+    x, rope, cu_seqlens = golden["input"], golden["rotary_pos_emb"], golden["cu_seqlens"]
+    seq, dim = x.shape
+    padded_seq = ((seq + 127) // 128) * 128
+    x_pad = torch.cat([x, torch.zeros(padded_seq - seq, dim)], dim=0)
+    pccs, n_params = [], 0
+    for layer_idx in (0, wl.VISION_NUM_BLOCKS - 1):
+        sd = wl.vision_attention_weights(layer_idx=layer_idx)
+        n_params += wl.count_params(sd)
+        ref_out = ref.vision_attention_forward(x, sd, cu_seqlens, rope)
+        # Production operating point: fp32 high-precision path (explicit fp32
+        # HF rope; bf16 only at the bf16-only windowed-SDPA kernel boundary),
+        # as the 42-layer tower runs it.
+        block = _vision_attention_mod.TtVisionAttention(mesh_device, sd, num_heads=12, dtype=ttnn.float32)
+        x_tt = ttnn.from_torch(
+            x_pad.reshape(1, 1, padded_seq, dim),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        rot_mats = block.prepare_rope(rope, padded_seq)
+        cu_tt = block.prepare_cu_seqlens(cu_seqlens)
+        out_tt = block.forward(x_tt, rot_mats, cu_tt)
+        out = ttnn.to_torch(ttnn.get_device_tensors(out_tt)[0]).float().reshape(padded_seq, dim)[:seq]
+        assert out.shape == ref_out.shape, f"blocks.{layer_idx}: {out.shape} != {ref_out.shape}"
+        pcc = _pcc(ref_out, out)
+        print(f"  vision_attention[blocks.{layer_idx}] PCC = {pcc:.6f}")
+        pccs.append(pcc)
+    return min(pccs), n_params
+
+
 BLOCKS = [
     ("vision_patch_embed", _t_vision_patch_embed),
     ("vision_rmsnorm", _t_vision_rmsnorm),
+    ("vision_attention", _t_vision_attention),
 ]
 
 
