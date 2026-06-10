@@ -15,6 +15,30 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
+// Optional chain element: conditionally include Exp based on NUMERIC_STABLE
+template <bool IncludeExp>
+struct OptionalChainElement {
+    // When IncludeExp=false, this is a pass-through (identity) that does nothing
+    // When IncludeExp=true, specialized below to be Exp
+};
+
+#ifndef NUMERIC_STABLE
+template <>
+struct OptionalChainElement<true> : compute_kernel_lib::Exp<
+                                        static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
+                                        compute_kernel_lib::Approx::Exact,
+                                        compute_kernel_lib::Dst::D0> {
+    // Inherit from Exp when we want to include it
+};
+#endif
+
+// Alias for cleaner usage: OptionalChainElement<true> when !NUMERIC_STABLE, no-op when NUMERIC_STABLE
+#ifdef NUMERIC_STABLE
+using OptionalExp = OptionalChainElement<false>;
+#else
+using OptionalExp = OptionalChainElement<true>;
+#endif
+
 // for scale+mask+softmax:
 // bcast HW (mul by 1 tile)  example: (  [2,1,1024,64] * [1,1,32,32]  )
 // bcast add H               example: ( [2,1,1024,64] + [2,1,32,64] ) (bcast W -> H)
@@ -169,12 +193,7 @@ void kernel_main() {
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::OperandKind::Block>{},
-#ifndef NUMERIC_STABLE
-            compute_kernel_lib::Exp<
-                static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
-                compute_kernel_lib::Approx::Exact,
-                compute_kernel_lib::Dst::D0>{},
-#endif
+            OptionalExp{},
             compute_kernel_lib::PackTile<
                 cb_x,
                 compute_kernel_lib::OutputLifecycle::Streaming,
