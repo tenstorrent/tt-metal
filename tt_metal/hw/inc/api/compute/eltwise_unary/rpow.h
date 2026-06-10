@@ -33,7 +33,7 @@ ALWI void rpow_tile_init() { MATH(SFPU_UNARY_INIT_FN(rpow, sfpu::sfpu_binary_pow
  */
 // clang-format on
 ALWI void rpow_tile(uint32_t idst, uint32_t base_val, VectorMode vector_mode = VectorMode::RC) {
-    MATH(SFPU_CALL(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_rpow,

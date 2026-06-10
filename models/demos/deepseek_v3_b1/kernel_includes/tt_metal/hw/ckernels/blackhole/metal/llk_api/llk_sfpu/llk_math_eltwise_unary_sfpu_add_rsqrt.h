@@ -21,7 +21,7 @@ inline void llk_math_eltwise_unary_sfpu_add_rsqrt_init() {
 template <bool APPROXIMATE, bool fp32_dest_acc_en, bool FAST_APPROX, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_add_rsqrt(
     uint dst_index, uint32_t param0, VectorMode vector_mode = VectorMode::RC) {
-    SFPU_CALL(
+    SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_add_rsqrt,

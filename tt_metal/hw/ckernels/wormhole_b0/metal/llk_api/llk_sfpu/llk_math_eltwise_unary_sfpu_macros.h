@@ -49,7 +49,7 @@ inline __attribute__((always_inline)) void _sfpu_check_and_call_(
  * template-argument list in `(...)` at the call site, then stripping the
  * outer parentheses with _SFPU_EXPAND inside the macro definition:
  *
- *   SFPU_CALL((APPROX, ITER), calculate_clamp, dst, vmode, lo, hi);
+ *   SFPU_UNARY_CALL((APPROX, ITER), calculate_clamp, dst, vmode, lo, hi);
  *                  ^^^^^^^^   <- single macro argument
  */
 
@@ -79,29 +79,29 @@ inline __attribute__((always_inline)) void _sfpu_check_and_call_(
 
 /*
  * Templated functor in `ckernel::sfpu`, runtime vector_mode expression.
- *   SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE,
+ *   SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE,
  *             calculate_abs,   (APPROXIMATE),                  dst, vmode);
- *   SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE,
+ *   SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE,
  *             calculate_clamp, (APPROXIMATE, ITER),            dst, vmode, lo, hi);
- *   SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE,
+ *   SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE,
  *             calculate_celu,  (APPROX, fp32, ITER),           dst, vmode, alpha, alpha_recip);
- *   SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE,
+ *   SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE,
  *             calculate_rsqrt, (APPROX, 8, fp32, FAST, lgcy),  dst, vmode);
  */
-#define SFPU_CALL(DST_SYNC, DST_ACCUM, FN, TEMPLATES, DST_IDX, VECTOR_MODE, ...) \
-    ::ckernel::_sfpu_check_and_call_<DST_SYNC, DST_ACCUM>(                       \
+#define SFPU_UNARY_CALL(DST_SYNC, DST_ACCUM, FN, TEMPLATES, DST_IDX, VECTOR_MODE, ...) \
+    ::ckernel::_sfpu_check_and_call_<DST_SYNC, DST_ACCUM>(                             \
         ::ckernel::sfpu::FN<_SFPU_EXPAND TEMPLATES>, DST_IDX, VECTOR_MODE, ##__VA_ARGS__)
 
 /*
- * Same as SFPU_CALL but vector_mode is given as a `VectorMode` enumerator name
+ * Same as SFPU_UNARY_CALL but vector_mode is given as a `VectorMode` enumerator name
  * (RC, C, RC_custom, ...).
- *   SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE,
+ *   SFPU_UNARY_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE,
  *                  calculate_erfc,   (8),     RC,        idst);
- *   SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE,
+ *   SFPU_UNARY_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE,
  *                  calculate_cumsum, (false), RC_custom, dst, first);
  */
-#define SFPU_CALL_MODE(DST_SYNC, DST_ACCUM, FN, TEMPLATES, MODE, DST_IDX, ...) \
-    ::ckernel::_sfpu_check_and_call_<DST_SYNC, DST_ACCUM>(                     \
+#define SFPU_UNARY_CALL_MODE(DST_SYNC, DST_ACCUM, FN, TEMPLATES, MODE, DST_IDX, ...) \
+    ::ckernel::_sfpu_check_and_call_<DST_SYNC, DST_ACCUM>(                           \
         ::ckernel::sfpu::FN<_SFPU_EXPAND TEMPLATES>, DST_IDX, ::ckernel::VectorMode::MODE, ##__VA_ARGS__)
 
 /*
@@ -120,22 +120,22 @@ inline __attribute__((always_inline)) void _sfpu_check_and_call_(
  * Templated functor wrapped in a static_cast for overload disambiguation.
  * SIGNATURE follows TEMPLATES because both relate to FN (template arity then
  * the desired pointer signature).
- *   SFPU_CALL_CAST(DST_SYNC_MODE, DST_ACCUM_MODE,
+ *   SFPU_UNARY_CALL_CAST(DST_SYNC_MODE, DST_ACCUM_MODE,
  *                  _calculate_threshold_,
  *                  (APPROXIMATE, ITER),
  *                  (void(*)(uint32_t, uint32_t)),
  *                  dst, vmode, p0, p1);
- *   SFPU_CALL_CAST(DST_SYNC_MODE, DST_ACCUM_MODE,
+ *   SFPU_UNARY_CALL_CAST(DST_SYNC_MODE, DST_ACCUM_MODE,
  *                  _calculate_activation_,
  *                  (APPROXIMATE, ACTIVATION, ITER),
  *                  (void(*)()),
  *                  dst, vmode);
  */
-#define SFPU_CALL_CAST(DST_SYNC, DST_ACCUM, FN, TEMPLATES, SIGNATURE, DST_IDX, VECTOR_MODE, ...) \
-    ::ckernel::_sfpu_check_and_call_<DST_SYNC, DST_ACCUM>(                                       \
-        static_cast<_SFPU_EXPAND SIGNATURE>(::ckernel::sfpu::FN<_SFPU_EXPAND TEMPLATES>),        \
-        DST_IDX,                                                                                 \
-        VECTOR_MODE,                                                                             \
+#define SFPU_UNARY_CALL_CAST(DST_SYNC, DST_ACCUM, FN, TEMPLATES, SIGNATURE, DST_IDX, VECTOR_MODE, ...) \
+    ::ckernel::_sfpu_check_and_call_<DST_SYNC, DST_ACCUM>(                                             \
+        static_cast<_SFPU_EXPAND SIGNATURE>(::ckernel::sfpu::FN<_SFPU_EXPAND TEMPLATES>),              \
+        DST_IDX,                                                                                       \
+        VECTOR_MODE,                                                                                   \
         ##__VA_ARGS__)
 
 /*
@@ -149,9 +149,9 @@ inline __attribute__((always_inline)) void _sfpu_check_and_call_(
 
 /*
  * Bare init: no callback.
- *   SFPU_INIT(abs);
+ *   SFPU_UNARY_INIT(abs);
  */
-#define SFPU_INIT(OP) ::ckernel::llk_math_eltwise_unary_sfpu_init<::SfpuType::OP>()
+#define SFPU_UNARY_INIT(OP) ::ckernel::llk_math_eltwise_unary_sfpu_init<::SfpuType::OP>()
 
 /*
  * Init with a templated callback.

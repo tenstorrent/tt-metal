@@ -186,7 +186,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // formats use the DEFAULT path (sfpmem::DEFAULT, HW derives the mode from ACC_CTRL).
     if (math_format == DataFormat::Int32)
     {
-        SFPU_CALL_MODE(
+        SFPU_UNARY_CALL_MODE(
             dest_sync,
             is_fp32_dest_acc_en,
             calculate_binary_max_min,
@@ -199,7 +199,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     else
     {
-        SFPU_CALL_MODE(
+        SFPU_UNARY_CALL_MODE(
             dest_sync,
             is_fp32_dest_acc_en,
             calculate_binary_max_min,

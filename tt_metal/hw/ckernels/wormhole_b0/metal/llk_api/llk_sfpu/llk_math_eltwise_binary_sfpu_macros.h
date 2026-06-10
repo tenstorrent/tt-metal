@@ -138,7 +138,7 @@ inline __attribute__((always_inline)) void _sfpu_binary_check_and_call_(
 /*
  * Binary SFPU init macros (4 total)
  *
- * These mirror the unary SFPU_INIT* macros and delegate to the existing
+ * These mirror the unary SFPU_UNARY_INIT* macros and delegate to the existing
  * `ckernel::llk_math_eltwise_binary_sfpu_init<SfpuType::OP>` wrapper, which
  * configures the address-modifier registers for binary SFPU ops and then
  * invokes the optional per-op init callback.

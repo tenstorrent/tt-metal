@@ -152,7 +152,7 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_and_call_(
 /*
  * Ternary SFPU init macros (4 total)
  *
- * These mirror the unary/binary SFPU_INIT* macros and delegate to the
+ * These mirror the unary/binary SFPU_UNARY_INIT* macros and delegate to the
  * `ckernel::llk_math_eltwise_ternary_sfpu_init<SfpuType::OP>` wrapper, which
  * configures the address-modifier registers for ternary SFPU ops and then
  * invokes the optional per-op init callback.

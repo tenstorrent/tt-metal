@@ -146,7 +146,7 @@ inline __attribute__((always_inline)) void _sfpu_binary_check_and_call_(
 /*
  * Binary SFPU init macros (4 total)
  *
- * These mirror the unary/ternary SFPU_INIT* macros and delegate to
+ * These mirror the unary/ternary SFPU_UNARY_INIT* macros and delegate to
  * `ckernel::llk_math_eltwise_binary_sfpu_init<SfpuType::OP>` (defined in
  * `llk_math_eltwise_binary_sfpu_init.h`). On Quasar that wrapper is itself
  * a thin shim around `_llk_math_eltwise_sfpu_init_()`, matching what the

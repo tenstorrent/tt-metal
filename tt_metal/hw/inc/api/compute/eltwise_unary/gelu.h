@@ -44,13 +44,13 @@ ALWI void gelu_tile_init_pack() {
 // clang-format on
 template <bool fast_and_approx = true>
 ALWI void gelu_tile(uint32_t idst) {
-    MATH(SFPU_CALL(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu, (fast_and_approx, DST_ACCUM_MODE), idst, VectorMode::RC));
 }
 
 template <bool fast_and_approx = true>
 ALWI void gelu_tile_pack(uint32_t idst) {
-    PACK(SFPU_CALL(
+    PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu, (fast_and_approx, DST_ACCUM_MODE), idst, VectorMode::RC));
 }
 
@@ -84,7 +84,7 @@ ALWI void gelu_derivative_tile_init() {
 // clang-format on
 template <bool fast_and_approx = false>
 ALWI void gelu_derivative_tile(uint32_t idst) {
-    MATH(SFPU_CALL_MODE(
+    MATH(SFPU_UNARY_CALL_MODE(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu_derivative_polynomial, (fast_and_approx), RC, idst));
 }
 

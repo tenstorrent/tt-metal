@@ -171,7 +171,7 @@ struct Matmul {
 
                     // Use 2 iterations for 1x32 tiny tiles
                     if constexpr (CTArgs::fuse_sigmoid) {
-                        PACK(SFPU_CALL_MODE(
+                        PACK(SFPU_UNARY_CALL_MODE(
                             DST_SYNC_MODE,
                             DST_ACCUM_MODE,
                             calculate_sigmoid,
@@ -179,7 +179,7 @@ struct Matmul {
                             R,
                             0 /*dst_index*/));
                     } else {
-                        PACK(SFPU_CALL_MODE(
+                        PACK(SFPU_UNARY_CALL_MODE(
                             DST_SYNC_MODE,
                             DST_ACCUM_MODE,
                             calculate_silu,

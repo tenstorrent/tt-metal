@@ -983,7 +983,7 @@ struct MatmulExpertCompressedDRAM {
                         cb_reserve_back(CTArgs::cb_out_silu, 1);
                         tile_regs_acquire();
                         copy_tile(CTArgs::cb_out_silu, 0, 0);
-                        MATH(SFPU_CALL_MODE(
+                        MATH(SFPU_UNARY_CALL_MODE(
                             DST_SYNC_MODE,
                             DST_ACCUM_MODE,
                             calculate_silu,
@@ -1085,7 +1085,7 @@ struct MatmulExpertCompressedDRAM {
                             PACK(TT_SETC16(
                                 DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
                             for (uint32_t sn = 0; sn < CTArgs::subblock_n; sn++) {
-                                PACK(SFPU_CALL_MODE(
+                                PACK(SFPU_UNARY_CALL_MODE(
                                     DST_SYNC_MODE,
                                     DST_ACCUM_MODE,
                                     calculate_silu,

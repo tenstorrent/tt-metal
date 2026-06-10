@@ -30,7 +30,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void softplus_tile(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
-    MATH(SFPU_CALL_MODE(
+    MATH(SFPU_UNARY_CALL_MODE(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_softplus,
@@ -43,7 +43,7 @@ ALWI void softplus_tile(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, 
 }
 
 ALWI void softplus_tile_pack(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
-    PACK(SFPU_CALL_MODE(
+    PACK(SFPU_UNARY_CALL_MODE(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_softplus,
@@ -58,8 +58,8 @@ ALWI void softplus_tile_pack(uint32_t idst, uint32_t beta, uint32_t beta_recipro
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void softplus_tile_init() { MATH(SFPU_INIT(softplus)); }
+ALWI void softplus_tile_init() { MATH(SFPU_UNARY_INIT(softplus)); }
 
-ALWI void softplus_tile_init_pack() { PACK(SFPU_INIT(softplus)); }
+ALWI void softplus_tile_init_pack() { PACK(SFPU_UNARY_INIT(softplus)); }
 
 }  // namespace ckernel

@@ -24,14 +24,14 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void identity_tile(uint32_t idst) {
-    MATH(
-        SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_identity, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_identity, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void identity_tile_init() { MATH(SFPU_INIT(unused)); }
+ALWI void identity_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
 
 // clang-format off
 /**
@@ -46,7 +46,7 @@ ALWI void identity_tile_init() { MATH(SFPU_INIT(unused)); }
  */
 // clang-format on
 ALWI void identity_tile_uint32(uint32_t idst) {
-    MATH(SFPU_CALL(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_identity_uint, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
 }
 

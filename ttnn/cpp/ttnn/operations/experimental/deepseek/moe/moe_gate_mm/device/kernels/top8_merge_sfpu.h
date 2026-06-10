@@ -438,7 +438,7 @@ inline void _llk_math_top8_merge_init_() {
 
 template <uint32_t column_idx>
 inline void _llk_math_top8_merge_() {
-    SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, _top8_merge_, (column_idx), RC_custom, 0 /*DST_IDX*/);
+    SFPU_UNARY_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, _top8_merge_, (column_idx), RC_custom, 0 /*DST_IDX*/);
 }
 
 #endif

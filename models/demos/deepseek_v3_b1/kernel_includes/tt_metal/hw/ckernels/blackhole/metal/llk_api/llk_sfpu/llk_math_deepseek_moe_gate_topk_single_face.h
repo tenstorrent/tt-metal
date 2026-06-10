@@ -19,7 +19,7 @@ inline void llk_math_sfpu_deepseek_moe_gate_topk_init() {
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
 inline void llk_math_sfpu_deepseek_moe_gate_sum_top2(uint dst_index, VectorMode vector_mode = VectorMode::RC_custom) {
-    SFPU_CALL(
+    SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         deepseek_moe_gate_sum_top2,
@@ -31,7 +31,7 @@ inline void llk_math_sfpu_deepseek_moe_gate_sum_top2(uint dst_index, VectorMode 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
 inline void llk_math_sfpu_deepseek_moe_gate_sort_top4_groups(
     uint dst_index, VectorMode vector_mode = VectorMode::RC_custom) {
-    SFPU_CALL(
+    SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         deepseek_moe_gate_sort_top4_groups,
@@ -43,7 +43,7 @@ inline void llk_math_sfpu_deepseek_moe_gate_sort_top4_groups(
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
 inline void llk_math_sfpu_deepseek_moe_gate_top8(
     uint dst_index, uint32_t eps, uint32_t scale, VectorMode vector_mode = VectorMode::RC_custom) {
-    SFPU_CALL(
+    SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         deepseek_moe_gate_top8,

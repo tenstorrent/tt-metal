@@ -150,7 +150,7 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_and_call_(
 /*
  * Ternary SFPU init macros (4 total)
  *
- * These mirror the unary/binary SFPU_INIT* macros and delegate to
+ * These mirror the unary/binary SFPU_UNARY_INIT* macros and delegate to
  * `ckernel::llk_math_eltwise_ternary_sfpu_init<SfpuType::OP>` (defined in
  * `llk_math_eltwise_ternary_sfpu_init.h`), which on Quasar is a thin
  * inline wrapper around `::_llk_math_eltwise_ternary_sfpu_init_<sfpu_op>()`.

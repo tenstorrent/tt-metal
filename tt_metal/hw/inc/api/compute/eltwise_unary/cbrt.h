@@ -27,7 +27,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void cbrt_tile(uint32_t idst) {
-    MATH(SFPU_CALL_MODE(
+    MATH(SFPU_UNARY_CALL_MODE(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_cube_root, (APPROX, DST_ACCUM_MODE, 8 /* ITERATIONS */), RC, idst));
 }
 

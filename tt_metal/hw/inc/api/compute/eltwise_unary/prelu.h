@@ -26,12 +26,12 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void prelu_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_prelu, (APPROX), RC, idst, param0));
+    MATH(SFPU_UNARY_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_prelu, (APPROX), RC, idst, param0));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void prelu_tile_init() { MATH(SFPU_INIT(prelu)); }
+ALWI void prelu_tile_init() { MATH(SFPU_UNARY_INIT(prelu)); }
 
 }  // namespace ckernel

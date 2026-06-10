@@ -20,7 +20,7 @@ inline void llk_math_deepseek_top32_rm_init() {
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
 inline void llk_math_deepseek_top32_rm_local_sort(
     uint dst_index, int idir, VectorMode vector_mode = VectorMode::RC_custom) {
-    SFPU_CALL(
+    SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _bitonic_top32_phases_steps_,
@@ -33,7 +33,7 @@ inline void llk_math_deepseek_top32_rm_local_sort(
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en, bool idir = false>
 inline void llk_math_deepseek_top32_rm_merge(
     uint dst_index, bool across_tiles, VectorMode vector_mode = VectorMode::RC_custom) {
-    SFPU_CALL(
+    SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _bitonic_top32_merge_,
@@ -46,7 +46,7 @@ inline void llk_math_deepseek_top32_rm_merge(
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
 inline void llk_math_deepseek_top32_rm_rebuild(
     uint dst_index, bool idir, bool skip_second, VectorMode vector_mode = VectorMode::RC_custom) {
-    SFPU_CALL(
+    SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _bitonic_top32_rebuild_,
@@ -60,7 +60,7 @@ inline void llk_math_deepseek_top32_rm_rebuild(
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en, bool top_min>
 inline void llk_math_deepseek_top32_of_1024_rm_pre_sorted_prep(
     uint dst_index, VectorMode vector_mode = VectorMode::RC_custom) {
-    SFPU_CALL(
+    SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _bitonic_top32_of_1024_rm_pre_sorted_prep_,
@@ -73,7 +73,7 @@ inline void llk_math_deepseek_top32_of_1024_rm_pre_sorted_prep(
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
 inline void llk_math_deepseek_top32_of_1024_rm_pre_sorted_combine(
     uint dst_index, VectorMode vector_mode = VectorMode::RC_custom) {
-    SFPU_CALL(
+    SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _bitonic_top32_of_1024_rm_pre_sorted_combine_,
@@ -86,7 +86,7 @@ inline void llk_math_deepseek_top32_of_1024_rm_pre_sorted_combine(
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
 inline void llk_math_deepseek_top32_of_1024_rm_pre_sorted_final(
     uint dst_index, VectorMode vector_mode = VectorMode::RC_custom) {
-    SFPU_CALL(
+    SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _bitonic_top32_of_1024_rm_pre_sorted_final_,

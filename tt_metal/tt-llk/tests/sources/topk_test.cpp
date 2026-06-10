@@ -322,7 +322,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 if (first_iteration)
                 {
                     // same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_local_sort from metal.
-                    SFPU_CALL(
+                    SFPU_UNARY_CALL(
                         dest_sync,
                         is_fp32_dest_acc_en,
                         calculate_bitonic_topk_phases_steps,
@@ -338,7 +338,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 else
                 {
                     // Same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_rebuild from metal.
-                    SFPU_CALL(
+                    SFPU_UNARY_CALL(
                         dest_sync,
                         is_fp32_dest_acc_en,
                         calculate_bitonic_topk_rebuild,
@@ -353,7 +353,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
 
                 // Always a second operation.
-                SFPU_CALL(
+                SFPU_UNARY_CALL(
                     dest_sync,
                     is_fp32_dest_acc_en,
                     calculate_bitonic_topk_merge,
@@ -367,7 +367,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 if (last_iteration)
                 {
                     // Same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_rebuild from metal.
-                    SFPU_CALL(
+                    SFPU_UNARY_CALL(
                         dest_sync,
                         is_fp32_dest_acc_en,
                         calculate_bitonic_topk_rebuild,

@@ -27,7 +27,8 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void fill_tile(uint32_t idst, float param0) {
-    MATH(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_fill_, (APPROX, 8 /*ITERATIONS*/), RC, idst, param0));
+    MATH(SFPU_UNARY_CALL_MODE(
+        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_fill_, (APPROX, 8 /*ITERATIONS*/), RC, idst, param0));
 }
 
 // clang-format off
@@ -53,7 +54,7 @@ ALWI void fill_tile_int(uint32_t idst, uint32_t param0) {
         "Unsupported data format for fill_tile_int. Supported: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
-    MATH(SFPU_CALL_MODE(
+    MATH(SFPU_UNARY_CALL_MODE(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_fill_int_,
@@ -78,12 +79,12 @@ ALWI void fill_tile_int(uint32_t idst, uint32_t param0) {
  */
 // clang-format on
 ALWI void fill_tile_bitcast(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_CALL_MODE(
+    MATH(SFPU_UNARY_CALL_MODE(
         DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_fill_bitcast_, (APPROX, 8 /*ITERATIONS*/), RC, idst, param0));
 }
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void fill_tile_init() { MATH(SFPU_INIT(fill)); }
+ALWI void fill_tile_init() { MATH(SFPU_UNARY_INIT(fill)); }
 
 }  // namespace ckernel

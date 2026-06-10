@@ -36,7 +36,7 @@ ALWI void recip_tile_init() {
 // clang-format on
 template <bool legacy_compat = true>
 ALWI void recip_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
-    MATH(SFPU_CALL(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_reciprocal,

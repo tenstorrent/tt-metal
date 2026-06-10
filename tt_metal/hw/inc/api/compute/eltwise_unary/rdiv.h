@@ -34,7 +34,7 @@ ALWI void rdiv_tile_init() { MATH(SFPU_UNARY_INIT_FN(rdiv, sfpu::rdiv_init, (APP
 // clang-format on
 template <RoundingMode rounding_mode = RoundingMode::None>
 ALWI void rdiv_tile(uint32_t dst_index, uint32_t value, VectorMode vector_mode = VectorMode::RC) {
-    MATH(SFPU_CALL(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_rdiv,

@@ -325,7 +325,7 @@ struct DRAMStreamingMatmul {
                             DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 
                         if constexpr (CTArgs::tile_r_dim <= 4) {
-                            PACK(SFPU_CALL_MODE(
+                            PACK(SFPU_UNARY_CALL_MODE(
                                 DST_SYNC_MODE,
                                 DST_ACCUM_MODE,
                                 calculate_silu,
@@ -333,7 +333,7 @@ struct DRAMStreamingMatmul {
                                 R,
                                 0 /*dst_index*/));
                         } else if constexpr (CTArgs::tile_r_dim == 8) {
-                            PACK(SFPU_CALL_MODE(
+                            PACK(SFPU_UNARY_CALL_MODE(
                                 DST_SYNC_MODE,
                                 DST_ACCUM_MODE,
                                 calculate_silu,
@@ -341,7 +341,7 @@ struct DRAMStreamingMatmul {
                                 R,
                                 0 /*dst_index*/));
                         } else {
-                            PACK(SFPU_CALL_MODE(
+                            PACK(SFPU_UNARY_CALL_MODE(
                                 DST_SYNC_MODE,
                                 DST_ACCUM_MODE,
                                 calculate_silu,
