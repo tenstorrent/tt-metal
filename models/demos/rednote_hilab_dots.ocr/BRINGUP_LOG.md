@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T22:08:54Z
+**Updated:** 2026-06-10T22:25:08Z
 
 ## Block Status
 
@@ -33,7 +33,7 @@
 | vision_block | reference | done | 1.000000 | 0 | pre-norm residual block x+attn(norm1(x)); x+mlp(norm2(x)), real blocks.0 weights |
 | vision_block | ttnn | done | 0.999958 | 0 | Pre-norm residual composition of done sub-blocks: TtVisionRMSNorm(norm1) -> TtVisionAttention (fused-QKV MHA 12h hd128, rotary_embedding_llama, windowed SDPA over cu_seqlens) -> ttnn.add residual -> TtVisionRMSNorm(norm2) -> TtVisionMLP (SwiGLU) -> ttnn.add residual, mirroring reference_impl qwen25_vl/tt/vision_block.py. Real blocks.0 weights, replicated on 1x4 mesh per parallelism plan (placement=replicate); seq padded 784->896, cu_seqlens keeps unpadded boundaries. Guard ok (lint 0, kernels ok, no new host ops). No KB entries returned for decoder_layer. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | vision_block | debug | n/a | — | 0 |  |
-| vision_block | optimization | pending | — | 0 | OCCUPANCY REDO: per the new occupancy+convergence contract — query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid |
+| vision_block | optimization | done | 0.999917 | 0 | OCCUPANCY REDO complete at the PRODUCTION posture (bf16 tower, tp=4, 11264-row document, 1x4 BH mesh, queried grid 11x10=110; tracy under --traced, metal trace replay). Per-block harness re-pointed from the stale fp32/896/tp1 posture to the document image (profile_vision_block.py now mirrors the attention/mlp redo harnesses: --dtype/--tp/--image). Baseline composed-block traced kernel time 8.03 ms/device: SDPA 2567us @110/110 (32%, at the attention tick's chunk-A/B ceiling), matmuls 1602us @88-100/110 (19.9%, at the sub-block A/B ceilings), all_gather 1334us @18c (16.6%), reduce_scatter 1222us @34c (15.2%), BinaryNg 628us + LayerNorm 335us @110/110. The only non-waved hotspot was the CCL pair (31.8%, link-bound at the recorded 2/2-link HW ceiling), so the lever axis is wire BYTES per the bf8b-first single-pass directive. Levers, one per measurement: (1) attention o_proj emits bfloat8_b partials into reduce_scatter+all_gather (8033->7657us/device; attention AG ~halved); (2) MLP down emits bfloat8_b partials (7657->7137us; all_gather total 1334->742us, reduce_scatter 1222->1080us — RS is local-reduction-bound, not wire-bound, so it does not scale with bytes); residual adds consume the bf8b BRANCH outputs mixed-dtype (BinaryNg unpacker converts; 628->575us) while the bf16 residual STREAM is untouched — the recorded 42-block compounding hazard governs stream precision. (3) reduce_scatter_minimal_async+all_gather_async A/B at the production CCL shape ([1,1,11264,1536] bf8b, num_links=2, traced replay): 1.259 vs 1.050 ms median — async LOSES, sync composite kept (contract-valid wave-off with A/B evidence). Final: 7.14 ms/device (-11.2%; 42 calls/image => ~37 ms off the tower); untraced wall 7.99->7.41 ms median. Final occupancy vs 110-core grid: SDPA 110/110 (36% share, at ceiling with evidence), matmuls 88-100/110 (80-91%, recorded ceilings), residual adds/norms/rope/heads 110/110, CCL 18-34c link-bound at 2/2 links with bytes halved and async rejected. Norm/add DRAM placement re-affirmed per the recorded L1-into-matmul stall hazard (QKV 97->2963us). Gates: block PCC 0.999917 at the tp=4 production parallelism (>0.99), gate tests unchanged (block 0.999951 / attention 0.999693 / mlp 0.999991, traced_ops sideguards regenerated), e2e WER parity re-run PASS (ttnn_wer <= hf_wer + 0.05, tests/test_e2e_ocr.py). No KB entries returned for decoder_layer. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | vision_block | real_weights | done | 0.999909 | 0 | vision_block_weights composed loader added to consolidated tt/weight_loader.py (pure-PyTorch; composes vision_rmsnorm/vision_attention/vision_mlp per-kind loaders so layer indexing never leaks past them; 7 keys norm1/attn.qkv/attn.proj/norm2/mlp.fc1/fc2/fc3, 28904448 params/layer; __main__ self-test extended blocks.0/blocks.41). Stage-1 parametric tests/test_real_hf_weights.py row runs TtVisionBlock at the production operating point (fp32 residual stream + fp32 weights with the high-precision attention path, 1x4 mesh replicated, golden real residual-stream input [784,1536] padded to 896 + golden rope tables + cu_seqlens) vs the pure-PyTorch reference with the same real weights at TWO sites: blocks.0 PCC 0.999958, blocks.41 0.999909 (min 0.999909 > 0.99 reported). Block forward untouched; full harness re-run, vision_patch_embed/vision_rmsnorm/vision_attention/vision_mlp rows still passing. Guard ok (lint 0, params_loaded 57808896>0). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | patch_merger | reference | done | 1.000000 | 0 | LayerNorm(eps=1e-6) -> view(-1,6144) -> Linear -> GELU -> Linear 6144->1536, real merger weights |
 | patch_merger | ttnn | done | 0.999992 | 0 | LayerNorm(eps=1e-6, gamma+beta TILE [1,32,dim] per llama_layernorm.py) -> ROW_MAJOR reshape workaround (tilized ttnn.reshape hang, issue #29932, qwen25_vl recipe) [784,1536]->[196,6144] -> ttnn.linear+bias -> ttnn.gelu(fast_and_approximate_mode=False) -> ttnn.linear+bias 6144->1536, mirroring reference_impl qwen25_vl/tt/patch_merger.py with dots.ocr deltas (LayerNorm-with-bias instead of RMSNorm; biased Linears). KB ttnn_gelu cited (exact erf GELU standalone after linear; entry notes fused-into-matmul activation cost PCC). HiFi4+fp32-acc; real vision_tower.merger weights, replicated on 1x4 mesh per parallelism plan (placement=replicate); replicated output compared single-device vs golden. Guard ok (lint 0, kernels ok, no new host ops). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 48 (2026-06-10T09:58:25Z): generation[ocr] — ok
 - tick 49 (2026-06-10T10:24:17Z): device[ocr] — ok
 - tick 50 (2026-06-10T10:50:09Z): perf[ocr] — ok
 - tick 51 (2026-06-10T11:16:02Z): device[vision_transformer] — ok
@@ -94,6 +93,7 @@
 - tick 55 (2026-06-10T21:37:18Z): device[vision_rmsnorm] — ok
 - tick 56 (2026-06-10T21:53:05Z): device[vision_attention] — ok
 - tick 57 (2026-06-10T22:08:54Z): device[vision_mlp] — ok
+- tick 58 (2026-06-10T22:25:08Z): device[vision_block] — ok
 
 ## Host-Resident Exceptions
 

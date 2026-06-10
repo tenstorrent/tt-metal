@@ -342,10 +342,18 @@ class TtVisionAttention(LightweightModule):
         # o_proj output follows the residual-stream dtype (fp32 callers keep
         # an fp32 skip connection; bf16 callers are unchanged). The SDPA core
         # itself stays bf16: the windowed SDPA kernel is bf16-only.
+        # bf8b all-reduce (occupancy REDO, vision_block tick): the tp>1 CCL
+        # pair is LINK-bound (18-34 cores, 2/2 links — the recorded HW
+        # ceiling), so the remaining lever is wire BYTES: emit the o_proj
+        # partials as bfloat8_b and run reduce_scatter+all_gather at half the
+        # volume. The replicated bf8b output feeds the caller's mixed-dtype
+        # residual add (BinaryNg converts in the unpacker; vision_block adds
+        # back into the bf16 stream). fp32/tp=1 paths untouched.
+        ccl_bf8b = self.tp_degree > 1 and not self.high_precision
         out = ttnn.linear(
             attn,
             self.wo,
-            dtype=x_11SH.dtype,
+            dtype=ttnn.bfloat8_b if ccl_bf8b else x_11SH.dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=proj_cfg,
         )

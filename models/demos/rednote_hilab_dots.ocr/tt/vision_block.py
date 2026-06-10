@@ -13,7 +13,28 @@ residual -> norm -> mlp -> ttnn.add residual, DRAM interleaved throughout.
 Parallelism plan (ARCHITECTURE.md): vision tower placement=replicate — all
 sub-block weights are ``ReplicateTensorToMesh`` on the 1x4 mesh, activations
 stay replicated, no CCL. On a single device the mesh_mapper degenerates
-gracefully.
+gracefully. Production (tt/ocr_model.py) overrides to tp_degree=4.
+
+Occupancy REDO (production posture: bf16 tower, tp=4, 11264-row document,
+1x4 BH mesh, queried grid 11x10=110, tracy under --traced): block traced
+kernel time 8.03 -> 7.14 ms/device (-11.2%; 42 calls/image => ~37 ms off
+the tower). The composed-block hotspots are the sub-blocks' recorded
+ceilings (SDPA 2.57 ms @ 110/110 — chunk A/B ceiling; matmuls 1.47 ms @
+88-100/110 — per-matmul A/B ceilings), so this tick's lever is the CCL
+pair, 31.8%% of block time at 18-34 cores: it is LINK-bound at the 2/2-link
+HW ceiling, so the remaining axis is wire BYTES — the tp>1 all-reduces in
+attention (o_proj) and MLP (down) now emit bfloat8_b partials
+(all_gather 1334 -> 742 us, reduce_scatter 1222 -> 1080 us/device; the
+residual adds consume the bf8b branch output mixed-dtype, the bf16 residual
+STREAM is untouched — the recorded 42-block compounding hazard governs).
+reduce_scatter does not scale with bytes (local-reduction-bound, not
+wire-bound). reduce_scatter_minimal_async + all_gather_async A/B at the
+production shape LOSES (1.259 vs 1.050 ms median traced) — sync composite
+kept. Residual adds/norms: 110/110 cores, DRAM placement per the recorded
+L1-into-matmul stall hazard (QKV 97 -> 2963 us). Gates: block PCC 0.999917
+at the tp=4 production parallelism (>0.99), gate tests unchanged
+(block 0.999951 / attention 0.999693 / mlp 0.999991), e2e WER parity
+re-run PASS (ttnn_wer <= hf_wer + 0.05).
 """
 
 import importlib.util

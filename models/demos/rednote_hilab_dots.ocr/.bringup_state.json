@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T22:08:54Z",
+  "updated_at": "2026-06-10T22:25:08Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -292,9 +292,17 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
+        "status": "done",
         "attempts": 0,
-        "notes": "OCCUPANCY REDO: per the new occupancy+convergence contract \u2014 query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid"
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_block.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_attention.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_mlp.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_vision_block.py",
+          "generated/profiler/reports/2026_06_10_22_19_50/ops_perf_results_2026_06_10_22_19_50.csv"
+        ],
+        "notes": "OCCUPANCY REDO complete at the PRODUCTION posture (bf16 tower, tp=4, 11264-row document, 1x4 BH mesh, queried grid 11x10=110; tracy under --traced, metal trace replay). Per-block harness re-pointed from the stale fp32/896/tp1 posture to the document image (profile_vision_block.py now mirrors the attention/mlp redo harnesses: --dtype/--tp/--image). Baseline composed-block traced kernel time 8.03 ms/device: SDPA 2567us @110/110 (32%, at the attention tick's chunk-A/B ceiling), matmuls 1602us @88-100/110 (19.9%, at the sub-block A/B ceilings), all_gather 1334us @18c (16.6%), reduce_scatter 1222us @34c (15.2%), BinaryNg 628us + LayerNorm 335us @110/110. The only non-waved hotspot was the CCL pair (31.8%, link-bound at the recorded 2/2-link HW ceiling), so the lever axis is wire BYTES per the bf8b-first single-pass directive. Levers, one per measurement: (1) attention o_proj emits bfloat8_b partials into reduce_scatter+all_gather (8033->7657us/device; attention AG ~halved); (2) MLP down emits bfloat8_b partials (7657->7137us; all_gather total 1334->742us, reduce_scatter 1222->1080us \u2014 RS is local-reduction-bound, not wire-bound, so it does not scale with bytes); residual adds consume the bf8b BRANCH outputs mixed-dtype (BinaryNg unpacker converts; 628->575us) while the bf16 residual STREAM is untouched \u2014 the recorded 42-block compounding hazard governs stream precision. (3) reduce_scatter_minimal_async+all_gather_async A/B at the production CCL shape ([1,1,11264,1536] bf8b, num_links=2, traced replay): 1.259 vs 1.050 ms median \u2014 async LOSES, sync composite kept (contract-valid wave-off with A/B evidence). Final: 7.14 ms/device (-11.2%; 42 calls/image => ~37 ms off the tower); untraced wall 7.99->7.41 ms median. Final occupancy vs 110-core grid: SDPA 110/110 (36% share, at ceiling with evidence), matmuls 88-100/110 (80-91%, recorded ceilings), residual adds/norms/rope/heads 110/110, CCL 18-34c link-bound at 2/2 links with bytes halved and async rejected. Norm/add DRAM placement re-affirmed per the recorded L1-into-matmul stall hazard (QKV 97->2963us). Gates: block PCC 0.999917 at the tp=4 production parallelism (>0.99), gate tests unchanged (block 0.999951 / attention 0.999693 / mlp 0.999991, traced_ops sideguards regenerated), e2e WER parity re-run PASS (ttnn_wer <= hf_wer + 0.05, tests/test_e2e_ocr.py). No KB entries returned for decoder_layer. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999917
       },
       "real_weights": {
         "status": "done",
@@ -1144,6 +1152,12 @@
       "tick": 57,
       "ts": "2026-06-10T22:08:54Z",
       "action": "device[vision_mlp]",
+      "result": "ok"
+    },
+    {
+      "tick": 58,
+      "ts": "2026-06-10T22:25:08Z",
+      "action": "device[vision_block]",
       "result": "ok"
     }
   ],

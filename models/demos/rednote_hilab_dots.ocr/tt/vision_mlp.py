@@ -164,9 +164,17 @@ class TtVisionMLP(LightweightModule):
         )
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
+        # bf8b all-reduce (occupancy REDO, vision_block tick): the tp>1 CCL
+        # pair is LINK-bound (18-34 cores, 2/2 links — the recorded HW
+        # ceiling), so the remaining lever is wire BYTES: emit the down
+        # partials as bfloat8_b and run reduce_scatter+all_gather at half
+        # the volume. The replicated bf8b output feeds the caller's
+        # mixed-dtype residual add. fp32/tp=1 paths untouched.
+        ccl_bf8b = self.tp_degree > 1 and not self.high_precision
         out = ttnn.linear(
             h,
             self.w2,
+            dtype=ttnn.bfloat8_b if ccl_bf8b else None,
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
