@@ -211,7 +211,7 @@ KernelSpec reader{
         // RoleHint is the primary intent knob — READER/WRITER auto-infers the
         // Gen1 processor/NOC pair (and the Gen2 default config). UNSPECIFIED
         // requires you to provide gen1_config explicitly (power-user override).
-        .role = DataMovementHardwareConfig::RoleHint::READER,
+        .role = DataMovementRoleHint::READER,
     },
 };
 
@@ -1046,7 +1046,7 @@ KernelSpec reader{
         .accessor_name = "input",   // kernel accesses as `ta::input`
     }},
     .hw_config = DataMovementHardwareConfig{
-        .role = DataMovementHardwareConfig::RoleHint::READER,
+        .role = DataMovementRoleHint::READER,
     },
 };
 
@@ -1065,7 +1065,7 @@ KernelSpec writer{
         .accessor_name = "output",  // kernel accesses as `ta::output`
     }},
     .hw_config = DataMovementHardwareConfig{
-        .role = DataMovementHardwareConfig::RoleHint::WRITER,
+        .role = DataMovementRoleHint::WRITER,
     },
 };
 
