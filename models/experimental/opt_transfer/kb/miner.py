@@ -100,18 +100,31 @@ def build_kb(client, cache_root=None, kb_root=None, config=CONFIG, limit_ops=Non
     if limit_ops:
         ops = ops[:limit_ops]
     entries: dict[str, KBEntry] = {}
+    skipped = 0
     for op in ops:
         available = inv.get(op, {"tests": [], "examples": []})
         used = usage.get(op, [])
         golden_src = _golden_source(op)
-        content = repr(golden_src) + repr(available["examples"]) + repr([u["snippet"] for u in used])
+        # Prompt text participates in the cache key so prompt fixes invalidate stale outputs.
+        from models.experimental.opt_transfer.matcher import EXTRACT_SYSTEM
+
+        content = (
+            repr(EXTRACT_SYSTEM) + repr(golden_src) + repr(available["examples"]) + repr([u["snippet"] for u in used])
+        )
         raw = cache.get_or_compute(
             key=f"op::{op}",
             content=content,
             compute=lambda op=op, a=available, u=used, g=golden_src: client.extract_entries(op, a, u, g),
         )
         for d in raw:
-            e = KBEntry.from_dict(d)
+            try:
+                e = KBEntry.from_dict(d)
+            except (ValueError, KeyError, TypeError) as err:
+                # LLM output that doesn't fit the schema (e.g. pattern_kind outside the
+                # enum for non-fusable symbols) is noise, not a reason to abort the mine.
+                skipped += 1
+                print(f"KB_MINE_SKIP op={op} err={err}", flush=True)
+                continue
             if not e.unit_test_refs:
                 e.unit_test_refs = list(available["tests"])
             e.status = "in_use" if used else "supported_unused"
@@ -119,6 +132,8 @@ def build_kb(client, cache_root=None, kb_root=None, config=CONFIG, limit_ops=Non
                 e.pattern_source = "golden" if golden_src else ("unit_test" if available["examples"] else "llm")
                 e.confidence = "low" if e.pattern_source == "llm" else "high"
             entries[e.id] = e
+    if skipped:
+        print(f"KB_MINE_SKIPPED_TOTAL {skipped}", flush=True)
     out = list(entries.values())
     store.save(out)
     return out

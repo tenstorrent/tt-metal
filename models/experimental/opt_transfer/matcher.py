@@ -69,8 +69,13 @@ class _ClaudeCodeAgentTransport:
 
 EXTRACT_SYSTEM = (
     "Given a ttnn op, its registered golden source (if any), unit-test examples, and model "
-    "call sites, emit KBEntry JSON dicts. The torch_pattern MUST be taken from the golden/test "
-    "source (the unoptimized subsequence the op replaces) — do not invent it. Fill pattern_kind, "
+    "call sites, emit KBEntry JSON dicts. If the symbol is NOT a fusable compute op (a class "
+    "constructor, descriptor, config object, device/mesh management call, or anything without "
+    "a torch-level equivalent), return [] — an empty JSON list, nothing else. "
+    "The torch_pattern MUST be taken from the golden/test "
+    "source (the unoptimized subsequence the op replaces) — do not invent it. pattern_kind "
+    "MUST be exactly 'chain' (contiguous op-subsequence) or 'horizontal_merge' (N sibling "
+    "branches sharing one input); there is no other valid value. Fill "
     "config_template (use {DIM} placeholders), weight_transform, category. "
     "ALSO emit placement_observations: for each tensor whose "
     "memory_config/program_config and size regime you can read from the call site or test, add "

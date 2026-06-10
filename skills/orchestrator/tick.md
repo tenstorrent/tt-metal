@@ -90,6 +90,22 @@ worker prompt dispatched this tick (after the worker.md contents, before the
 `## Spec:` line). tp-guidance.md scopes itself per phase — do not tailor it
 per worker. If `num_devices == 1`, change nothing.
 
+### Knowledge-base injection (ttnn / optimization workers)
+
+When dispatching a `ttnn` or `optimization` worker, select mined
+optimization-transfer entries for the block:
+
+```python
+from skills.orchestrator.lib.kb import kb_entries_for_block
+kb = kb_entries_for_block(result["block"], component["kind"])
+if kb:
+    spec["kb_entries"] = kb
+```
+
+The helper returns `[]` when the KB store is missing, empty, or has no
+relevant entries — omit the field then. Worker prompts explain how to use
+`kb_entries`; do not summarize or filter the entries yourself.
+
 ### phase == "architecture"
 
 ONE Agent call with `workers/architecture-worker.md`. Spec:

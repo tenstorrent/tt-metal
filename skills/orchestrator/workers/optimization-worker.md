@@ -43,6 +43,15 @@ The orchestrator only dispatches `optimization` after `ttnn` reached
 `"done"` for the same block, so you can assume `tt/<block>.py` exists
 and currently passes its PCC test.
 
+The spec may also carry `kb_entries`: mined optimization-transfer records
+with `placement_observations` (per-tensor L1/DRAM placement + size
+conditions measured on donor models) and fusion patterns (`fused_op`,
+`torch_pattern`, `config_template`). Try applicable observations FIRST —
+they are measured wins on similar shapes, cheaper than rediscovering via
+profiling — then profile to confirm. Cite applied entry `id`s in your
+result `notes`. Entries are advisory; the tracy evidence and PCC gates
+still decide.
+
 ## Output result format
 
 Your LAST LINE must be a valid JSON object on a single line:

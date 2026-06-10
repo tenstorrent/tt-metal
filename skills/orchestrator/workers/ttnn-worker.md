@@ -43,6 +43,14 @@ dispatching prompt. Fields:
 when present, the dispatching prompt also includes a "Multi-Device
 (Tensor-Parallel) Guidance" section that governs device and sharding code.
 
+The spec may also carry `kb_entries`: mined optimization-transfer records
+(fused op, the torch op-subsequence it replaces, config template with
+`{DIM}` placeholders, weight transform, placement observations, unit-test
+refs). When a `kb_entries` pattern matches part of this block's reference
+computation, PREFER its fused op + config template over composing the
+ops one-by-one, and cite the entry `id` in your result `notes`. Entries
+are advisory — correctness (PCC vs the golden) always wins.
+
 ## Output result format
 
 Your LAST LINE must be a valid JSON object on a single line:
