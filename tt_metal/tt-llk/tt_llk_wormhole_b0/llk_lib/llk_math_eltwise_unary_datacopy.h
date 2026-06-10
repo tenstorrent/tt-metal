@@ -40,6 +40,11 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
 template <DataCopyType type, DstSync Dst, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
 inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, const std::uint32_t src_format, const std::uint32_t dst_format)
 {
+    // Datacopy preserves bf16 -0.0 (tt-metal #18346) and 16-bit-integer datums through the MOVA2D/MOVB2D
+    // below, so keep the Src zero-substitution flag disabled. Asserted here (not in the init) so it
+    // survives any llk_math_hw_configure that runs after the init; skip-if-set keeps it cheap (tt-llk #960/#966).
+    math::_configure_unary_preserve_zero_flag_state_();
+
     if (unpack_to_dest && is_32bit_input(src_format, dst_format))
     {
         math_unpack_to_dest_math_ready();
@@ -52,8 +57,8 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
         // Switch from the default SrcA format bank to the override bank so manual SrcA_val writes control MOVB2D behavior.
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
 
-        // Disable zero flag to prevent mantissa flushing when exponent bits are 0.
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+        // The Src zero-substitution flag is already disabled by the datacopy init's UNARY_PRESERVE
+        // state (tt-llk #960/#966), so the 32b hi16/lo16 MOVB2D below is not subject to mantissa flushing.
 
         if constexpr (src_b_bcast_type == BroadcastType::ROW)
         {
@@ -178,7 +183,7 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
             TTI_CLEARDVALID(0b10, 0);
         }
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
+        // Src zero-substitution flag is left in the datacopy init's UNARY_PRESERVE state (tt-llk #960/#966).
     }
     else
     {

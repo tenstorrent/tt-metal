@@ -248,11 +248,9 @@ inline void _llk_unpack_A_init_(
     // Set transpose register to prevent state pollution
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
 
-    // TODO NC (#966): make the Src zero-substitution flag operand-restorable by establishing it
-    // here from the operand dst format instead of in configure_unpack_AB. UInt16 dst needs the flag
-    // disabled so 16-bit integer values with a zero low byte are not flushed to 0; see
-    // ckernel::unpacker::requires_disabled_src_zero_flag (tt-llk #960).
-    // cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(requires_disabled_src_zero_flag(unpack_dst_format, unpack_dst_format) ? 1 : 0);
+    // NOTE: the Src zero-substitution flag (ALU_ACC_CTRL_Zero_Flag_disabled_src) is owned by the
+    // math-side data-format state tracker (ckernel::math::_configure_*_zero_flag_state_), not the
+    // unpacker - it is only read by MOVA2D/MOVB2D/ELW/MVMUL (tt-llk #960/#966).
 
     // x-start/x-end is per-unpacker state, so program it on exactly the unpacker(s) the MOP issues a
     // real (non-ZEROSRC) UNPACR against; a zeroed source does not read L1, so its X counter is unused.

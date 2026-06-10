@@ -33,19 +33,15 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __b
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
 
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
-    const std::uint32_t src_format = get_operand_src_format(icb);
     const std::uint32_t dst_format = get_operand_dst_format(icb);
 
 #ifndef ARCH_QUASAR
-    const bool is_int32 = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;
     const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
                                        (dst_format == (std::uint32_t)DataFormat::UInt32) ||
                                        (dst_format == (std::uint32_t)DataFormat::Int32);
-    if (is_int32) {
-        UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE, true>(icb)));
-    } else {
-        UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb)));
-    }
+    // The Src zero-substitution flag for the int32 / 32b transpose path is owned by the math-side
+    // transpose_dest MOV_OPS state (tt-llk #960/#966), so a single plain hw_configure suffices.
+    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb)));
 
     if (enable_unpack_to_dest) {
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
