@@ -265,6 +265,7 @@ def main() -> None:
     )
     pipeline.compile()
 
+    ack_channel = None
     if enable_migration:
         # Standalone-worker model: build the KV chunk address table from the device
         # KV layout and serialize it to a .pb file. The inference server / orchestrator
@@ -287,6 +288,16 @@ def main() -> None:
             path=table_path,
         )
         send_kv_chunk_table(table_path)
+
+        # Per-layer LayerAck: the runner bumps a counter once per layer; the scheduler
+        # reads the delta (the ack carries no payload) and drives the migration worker.
+        # ttnn.InterProcessCounterChannel owns a named POSIX shm segment the scheduler
+        # connects to via shm_layer_ack_name(service_id).
+        service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
+        ack_shm_name = f"/tt_prefill_layer_acks_{service_id}"
+        ack_channel = ttnn.InterProcessCounterChannel(ack_shm_name)
+        pipeline.set_layer_ack_channel(ack_channel)
+        logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
 
     if os.environ.get("PREFILL_STANDALONE", "0") == "1":
         # Truly standalone: file input, no H2D socket service at all.
@@ -329,6 +340,11 @@ def main() -> None:
 
         del h2d_service
         gc.collect()
+
+    if ack_channel is not None:
+        # munmap + shm_unlink; doesn't need the mesh, but tear down here for symmetry.
+        ack_channel.shutdown()
+        del ack_channel
 
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
     ttnn.close_mesh_device(mesh_device)
