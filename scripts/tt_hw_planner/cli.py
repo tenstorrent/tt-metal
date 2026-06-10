@@ -8936,8 +8936,46 @@ def _cmd_up_core(args) -> int:
             print()
             print("  The generic cold-start demo runs the whole model and has no")
             print("  per-op CPU fallback, so it would fail on the block(s) above.")
-            print("  Use per-component bring-up instead — unsupported ops run on")
-            print("  CPU while the rest graduates on device:")
+            print("  Routing to per-component bring-up — unsupported ops run on")
+            print("  CPU while the rest graduates on device.")
+            print(sep)
+            if not getattr(args, "_escalated_already", False):
+                print()
+                print(f"  AUTO-ROUTE: auto-onboard {MODEL} -> re-enter per-component loop")
+                ao_args = argparse.Namespace(
+                    model_id=MODEL,
+                    agent_bin=getattr(args, "auto_agent_bin", None) or "claude",
+                    auto_model=getattr(args, "auto_model", None) or "sonnet",
+                    timeout_s=getattr(args, "auto_agent_timeout", 1500) or 1500,
+                    skip_llm=False,
+                    accept=True,
+                )
+                try:
+                    _ao_rc = cmd_auto_onboard(ao_args)
+                except SystemExit as _ao_exc:
+                    _ao_rc = int(_ao_exc.code) if _ao_exc.code is not None else 2
+                except Exception as _ao_exc:
+                    print(f"  auto-onboard raised: {type(_ao_exc).__name__}: {_ao_exc}")
+                    _ao_rc = 2
+                if _ao_rc == 0:
+                    try:
+                        import importlib
+                        from scripts.tt_hw_planner import compatibility as _compat_mod
+                        from scripts.tt_hw_planner import family_backends as _fb_mod
+
+                        importlib.reload(_fb_mod)
+                        importlib.reload(_compat_mod)
+                    except Exception as _rl_exc:
+                        print(
+                            f"  WARNING: registry reload after auto-onboard failed: "
+                            f"{type(_rl_exc).__name__}: {_rl_exc}"
+                        )
+                    setattr(args, "_escalated_already", True)
+                    return _cmd_up_core(args)
+                print(f"  auto-onboard exit={_ao_rc}; cannot auto-route. Run manually:")
+            else:
+                print()
+                print("  Already escalated once; not re-routing. Run manually:")
             print(f"      python -m scripts.tt_hw_planner auto-onboard {MODEL}")
             print(f"      python -m scripts.tt_hw_planner auto-up {MODEL}")
             print(sep)
