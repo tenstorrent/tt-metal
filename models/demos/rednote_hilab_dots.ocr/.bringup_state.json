@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T07:05:44Z",
+  "updated_at": "2026-06-10T07:12:02Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -304,8 +304,15 @@
         "pcc": 0.999958
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/weight_loader.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_real_hf_weights.py"
+        ],
+        "notes": "vision_block_weights composed loader added to consolidated tt/weight_loader.py (pure-PyTorch; composes vision_rmsnorm/vision_attention/vision_mlp per-kind loaders so layer indexing never leaks past them; 7 keys norm1/attn.qkv/attn.proj/norm2/mlp.fc1/fc2/fc3, 28904448 params/layer; __main__ self-test extended blocks.0/blocks.41). Stage-1 parametric tests/test_real_hf_weights.py row runs TtVisionBlock at the production operating point (fp32 residual stream + fp32 weights with the high-precision attention path, 1x4 mesh replicated, golden real residual-stream input [784,1536] padded to 896 + golden rope tables + cu_seqlens) vs the pure-PyTorch reference with the same real weights at TWO sites: blocks.0 PCC 0.999958, blocks.41 0.999909 (min 0.999909 > 0.99 reported). Block forward untouched; full harness re-run, vision_patch_embed/vision_rmsnorm/vision_attention/vision_mlp rows still passing. Guard ok (lint 0, params_loaded 57808896>0). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999909,
+        "params_loaded": 57808896
       }
     },
     {
@@ -1002,6 +1009,12 @@
       "tick": 35,
       "ts": "2026-06-10T07:05:44Z",
       "action": "device[vision_mlp]",
+      "result": "ok"
+    },
+    {
+      "tick": 36,
+      "ts": "2026-06-10T07:12:02Z",
+      "action": "device[vision_block]",
       "result": "ok"
     }
   ],

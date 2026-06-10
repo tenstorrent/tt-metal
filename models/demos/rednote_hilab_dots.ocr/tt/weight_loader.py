@@ -110,6 +110,28 @@ def vision_mlp_weights(layer_idx: int = 0, hf_sd: Optional[Dict[str, torch.Tenso
     return {"fc1.weight": hf_sd[keys[0]], "fc2.weight": hf_sd[keys[1]], "fc3.weight": hf_sd[keys[2]]}
 
 
+def vision_block_weights(
+    layer_idx: int = 0, hf_sd: Optional[Dict[str, torch.Tensor]] = None
+) -> Dict[str, torch.Tensor]:
+    """State dict for TtVisionBlock: norm1/norm2.weight [dim], attn.qkv/proj.weight, mlp.fc1/fc2/fc3.weight.
+
+    Composes the per-kind loaders so layer indexing never leaks past them;
+    keys match the HF ``vision_tower.blocks.{i}.*`` layout with the block
+    prefix stripped (the shape TtVisionBlock.__init__ expects).
+    """
+    attn = vision_attention_weights(layer_idx=layer_idx, hf_sd=hf_sd)
+    mlp = vision_mlp_weights(layer_idx=layer_idx, hf_sd=hf_sd)
+    return {
+        "norm1.weight": vision_rmsnorm_weights(layer_idx=layer_idx, which="norm1", hf_sd=hf_sd)["weight"],
+        "attn.qkv.weight": attn["qkv.weight"],
+        "attn.proj.weight": attn["proj.weight"],
+        "norm2.weight": vision_rmsnorm_weights(layer_idx=layer_idx, which="norm2", hf_sd=hf_sd)["weight"],
+        "mlp.fc1.weight": mlp["fc1.weight"],
+        "mlp.fc2.weight": mlp["fc2.weight"],
+        "mlp.fc3.weight": mlp["fc3.weight"],
+    }
+
+
 def count_params(sd) -> int:
     """Tensor-leaf element count of a (possibly nested) state dict."""
     if isinstance(sd, torch.Tensor):
@@ -146,3 +168,12 @@ if __name__ == "__main__":
         assert msd["fc2.weight"].shape == (1536, 4224), (idx, msd["fc2.weight"].shape)
         assert msd["fc3.weight"].shape == (4224, 1536), (idx, msd["fc3.weight"].shape)
     print(f"vision_mlp: blocks.0/blocks.{VISION_NUM_BLOCKS - 1} OK, {count_params(msd)} params each")
+
+    for idx in (0, VISION_NUM_BLOCKS - 1):
+        bsd = vision_block_weights(layer_idx=idx)
+        assert bsd["norm1.weight"].shape == (1536,), (idx, bsd["norm1.weight"].shape)
+        assert bsd["norm2.weight"].shape == (1536,), (idx, bsd["norm2.weight"].shape)
+        assert bsd["attn.qkv.weight"].shape == (3 * 1536, 1536), (idx, bsd["attn.qkv.weight"].shape)
+        assert bsd["mlp.fc2.weight"].shape == (1536, 4224), (idx, bsd["mlp.fc2.weight"].shape)
+        assert len(bsd) == 7, (idx, sorted(bsd))
+    print(f"vision_block: blocks.0/blocks.{VISION_NUM_BLOCKS - 1} OK, {count_params(bsd)} params each")

@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T07:05:44Z
+**Updated:** 2026-06-10T07:12:02Z
 
 ## Block Status
 
@@ -34,7 +34,7 @@
 | vision_block | ttnn | done | 0.999958 | 0 | Pre-norm residual composition of done sub-blocks: TtVisionRMSNorm(norm1) -> TtVisionAttention (fused-QKV MHA 12h hd128, rotary_embedding_llama, windowed SDPA over cu_seqlens) -> ttnn.add residual -> TtVisionRMSNorm(norm2) -> TtVisionMLP (SwiGLU) -> ttnn.add residual, mirroring reference_impl qwen25_vl/tt/vision_block.py. Real blocks.0 weights, replicated on 1x4 mesh per parallelism plan (placement=replicate); seq padded 784->896, cu_seqlens keeps unpadded boundaries. Guard ok (lint 0, kernels ok, no new host ops). No KB entries returned for decoder_layer. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | vision_block | debug | n/a | — | 0 |  |
 | vision_block | optimization | done | 0.999958 | 0 | Tracy-driven single change: reverted vision_rmsnorm output L1 pin to DRAM interleaved. Composed-block traced tracy (metal-trace captured+replayed, fp32 [1,1,896,1536] replicated 1x4 mesh, production operating point) exposed a layout-interaction stall invisible in sub-block isolation: 5.5MB fp32 L1-interleaved norm output stalls every consuming ttnn.linear (QKV 2963us, fc1 2650us, fc3 2637us vs 97-134us for DRAM-fed o_proj/fc2) - the skill's 'never pin a LARGE activation to L1 before a matmul' counter-example; rmsnorm's earlier isolated -25% win reverses ~25x in composition. Per-device block kernel time 9632.5 -> 1943.7us (-79.8%); QKV 199, fc1 172, fc3 174, norms 66->90us (+24 expected DRAM write). Top hotspot post-change MatmulDeviceOperation 775.8us 39.9%, SDPA 439.4us 22.6%, BinaryNg 347us 17.9%. No KB entries for decoder_layer. PCC re-verified: vision_block 0.999958, vision_rmsnorm 0.999982 (both unchanged). Guard ok. Dispatched inline (no Agent tool in tick context). |
-| vision_block | real_weights | pending | — | 0 |  |
+| vision_block | real_weights | done | 0.999909 | 0 | vision_block_weights composed loader added to consolidated tt/weight_loader.py (pure-PyTorch; composes vision_rmsnorm/vision_attention/vision_mlp per-kind loaders so layer indexing never leaks past them; 7 keys norm1/attn.qkv/attn.proj/norm2/mlp.fc1/fc2/fc3, 28904448 params/layer; __main__ self-test extended blocks.0/blocks.41). Stage-1 parametric tests/test_real_hf_weights.py row runs TtVisionBlock at the production operating point (fp32 residual stream + fp32 weights with the high-precision attention path, 1x4 mesh replicated, golden real residual-stream input [784,1536] padded to 896 + golden rope tables + cu_seqlens) vs the pure-PyTorch reference with the same real weights at TWO sites: blocks.0 PCC 0.999958, blocks.41 0.999909 (min 0.999909 > 0.99 reported). Block forward untouched; full harness re-run, vision_patch_embed/vision_rmsnorm/vision_attention/vision_mlp rows still passing. Guard ok (lint 0, params_loaded 57808896>0). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | patch_merger | reference | done | 1.000000 | 0 | LayerNorm(eps=1e-6) -> view(-1,6144) -> Linear -> GELU -> Linear 6144->1536, real merger weights |
 | patch_merger | ttnn | done | 0.999992 | 0 | LayerNorm(eps=1e-6, gamma+beta TILE [1,32,dim] per llama_layernorm.py) -> ROW_MAJOR reshape workaround (tilized ttnn.reshape hang, issue #29932, qwen25_vl recipe) [784,1536]->[196,6144] -> ttnn.linear+bias -> ttnn.gelu(fast_and_approximate_mode=False) -> ttnn.linear+bias 6144->1536, mirroring reference_impl qwen25_vl/tt/patch_merger.py with dots.ocr deltas (LayerNorm-with-bias instead of RMSNorm; biased Linears). KB ttnn_gelu cited (exact erf GELU standalone after linear; entry notes fused-into-matmul activation cost PCC). HiFi4+fp32-acc; real vision_tower.merger weights, replicated on 1x4 mesh per parallelism plan (placement=replicate); replicated output compared single-device vs golden. Guard ok (lint 0, kernels ok, no new host ops). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | patch_merger | debug | n/a | — | 0 |  |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 26 (2026-06-10T05:54:11Z): device[embedding] — ok
 - tick 27 (2026-06-10T06:05:07Z): device[text_rmsnorm] — ok
 - tick 28 (2026-06-10T06:14:27Z): device[text_attention] — ok
 - tick 29 (2026-06-10T06:22:15Z): device[text_mlp] — ok
@@ -94,6 +93,7 @@
 - tick 33 (2026-06-10T06:53:44Z): device[vision_rmsnorm] — ok
 - tick 34 (2026-06-10T06:59:50Z): device[vision_attention] — ok
 - tick 35 (2026-06-10T07:05:44Z): device[vision_mlp] — ok
+- tick 36 (2026-06-10T07:12:02Z): device[vision_block] — ok
 
 ## Host-Resident Exceptions
 
