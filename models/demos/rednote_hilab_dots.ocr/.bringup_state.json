@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T03:50:19Z",
+  "updated_at": "2026-06-10T03:57:57Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -358,8 +358,15 @@
         "pcc": 1.0
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/embedding.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_embedding.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/embedding.traced_ops.json"
+        ],
+        "notes": "Single ttnn.embedding lookup (KB ttnn_embedding cited: uint32 ROW_MAJOR indices [1,1,1,128], table [1,1,151936,1536] ROW_MAJOR DRAM, TILE_LAYOUT output) + ttnn.unsqueeze_to_4D + ttnn.all_gather(dim=3, Topology.Linear). Parallelism plan placement=shard implemented via the reference_impl tt_transformers/tt/embedding.py pattern: table sharded on the HIDDEN dim across the 1x4 mesh (ShardTensorToMesh dim=-1), per-device hidden slices recombined by all_gather into a replicated activation \u2014 the plan's 'shard vocab dim' wording deviates from the named tt_transformers pattern (vocab shard would need index offset/masking ttnn.embedding lacks); hidden-dim shard delta documented in the block docstring. Real model.embed_tokens.weight (untied) loaded from checkpoint in the test; replicated output compared single-device vs golden ids/output. Guard ok (lint 0, kernels ok, no new host ops). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 1.0
       },
       "debug": {
         "status": "n/a",
@@ -689,6 +696,12 @@
       "tick": 12,
       "ts": "2026-06-10T03:50:19Z",
       "action": "device[vision_transformer]",
+      "result": "ok"
+    },
+    {
+      "tick": 13,
+      "ts": "2026-06-10T03:57:57Z",
+      "action": "device[embedding]",
       "result": "ok"
     }
   ],

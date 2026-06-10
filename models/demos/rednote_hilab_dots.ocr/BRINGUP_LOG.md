@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T03:50:19Z
+**Updated:** 2026-06-10T03:57:57Z
 
 ## Block Status
 
@@ -46,7 +46,7 @@
 | vision_transformer | optimization | pending | — | 0 |  |
 | vision_transformer | real_weights | pending | — | 0 |  |
 | embedding | reference | done | 1.000000 | 0 | F.embedding lookup on model.embed_tokens.weight 151936x1536, untied |
-| embedding | ttnn | pending | — | 0 |  |
+| embedding | ttnn | done | 1.000000 | 0 | Single ttnn.embedding lookup (KB ttnn_embedding cited: uint32 ROW_MAJOR indices [1,1,1,128], table [1,1,151936,1536] ROW_MAJOR DRAM, TILE_LAYOUT output) + ttnn.unsqueeze_to_4D + ttnn.all_gather(dim=3, Topology.Linear). Parallelism plan placement=shard implemented via the reference_impl tt_transformers/tt/embedding.py pattern: table sharded on the HIDDEN dim across the 1x4 mesh (ShardTensorToMesh dim=-1), per-device hidden slices recombined by all_gather into a replicated activation — the plan's 'shard vocab dim' wording deviates from the named tt_transformers pattern (vocab shard would need index offset/masking ttnn.embedding lacks); hidden-dim shard delta documented in the block docstring. Real model.embed_tokens.weight (untied) loaded from checkpoint in the test; replicated output compared single-device vs golden ids/output. Guard ok (lint 0, kernels ok, no new host ops). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | embedding | debug | n/a | — | 0 |  |
 | embedding | optimization | pending | — | 0 |  |
 | embedding | real_weights | pending | — | 0 |  |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 3 (2026-06-10T02:31:43Z): reference[vision_block,patch_merger,vision_transformer,embedding] — ok
 - tick 4 (2026-06-10T02:38:20Z): reference[text_rmsnorm,text_attention,text_mlp,decoder_layer] — ok
 - tick 5 (2026-06-10T02:43:31Z): reference[lm_head] — ok
 - tick 6 (2026-06-10T02:52:24Z): device[vision_patch_embed] — ok
@@ -94,6 +93,7 @@
 - tick 10 (2026-06-10T03:26:43Z): device[vision_block] — ok
 - tick 11 (2026-06-10T03:32:56Z): device[patch_merger] — ok
 - tick 12 (2026-06-10T03:50:19Z): device[vision_transformer] — ok
+- tick 13 (2026-06-10T03:57:57Z): device[embedding] — ok
 
 ## Host-Resident Exceptions
 
