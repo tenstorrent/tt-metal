@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T07:58:25Z",
+  "updated_at": "2026-06-10T08:06:18Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -739,8 +739,15 @@
         "pcc": 0.999945
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/weight_loader.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_real_hf_weights.py"
+        ],
+        "notes": "decoder_layer_weights(layer_idx) composed loader added to consolidated tt/weight_loader.py (pure-PyTorch; composes text_rmsnorm/text_attention/text_mlp per-kind loaders so layer indexing never leaks past them; 12 keys input_layernorm/self_attn.q,k,v_proj(+bias)/o_proj/post_attention_layernorm/mlp.gate,up,down_proj, 46797824 params/layer; __main__ self-test extended layers.0/layers.27). Stage-1 parametric tests/test_real_hf_weights.py row runs TtDecoderLayer at the production operating point (whole layer fp32 - attention path fp32-mandatory: layer-0 logits +-3122, bf16 core ~0.92 - TP-sharded sub-blocks on the 1x4 mesh with kv_replication=2 and reduce_scatter/all_gather all-reduce, replicated residual stream; golden real residual-stream input [1,128,1536] + golden rope tables theta=1e6) vs the pure-PyTorch decoder_layer_forward reference with the same real weights at TWO sites: layers.0 PCC 0.999945, layers.27 0.999533 (min 0.999533 > 0.99 reported). Block forward untouched; full harness re-run, all 12 rows passing (11 prior rows unchanged). Guard ok (lint 0, params_loaded 93595648>0). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999533,
+        "params_loaded": 93595648
       }
     },
     {
@@ -1093,6 +1100,12 @@
       "tick": 42,
       "ts": "2026-06-10T07:58:25Z",
       "action": "device[text_mlp]",
+      "result": "ok"
+    },
+    {
+      "tick": 43,
+      "ts": "2026-06-10T08:06:18Z",
+      "action": "device[decoder_layer]",
       "result": "ok"
     }
   ],

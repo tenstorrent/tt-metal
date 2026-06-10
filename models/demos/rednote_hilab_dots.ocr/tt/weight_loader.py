@@ -248,6 +248,32 @@ def text_mlp_weights(layer_idx: int = 0, hf_sd: Optional[Dict[str, torch.Tensor]
     return {n: hf_sd[f"{prefix}.{n}"] for n in names}
 
 
+def decoder_layer_weights(
+    layer_idx: int = 0, hf_sd: Optional[Dict[str, torch.Tensor]] = None
+) -> Dict[str, torch.Tensor]:
+    """State dict for TtDecoderLayer: input_layernorm.weight, self_attn.{q,k,v}_proj.weight/.bias,
+    self_attn.o_proj.weight, post_attention_layernorm.weight, mlp.{gate,up,down}_proj.weight.
+
+    Composes the per-kind loaders (text_rmsnorm/text_attention/text_mlp) so
+    layer indexing never leaks past them; keys match the HF
+    ``model.layers.{i}.*`` layout with the layer prefix stripped (the shape
+    ``TtDecoderLayer.__init__`` expects).
+    """
+    out = {
+        "input_layernorm.weight": text_rmsnorm_weights(layer_idx=layer_idx, which="input_layernorm", hf_sd=hf_sd)[
+            "weight"
+        ],
+        "post_attention_layernorm.weight": text_rmsnorm_weights(
+            layer_idx=layer_idx, which="post_attention_layernorm", hf_sd=hf_sd
+        )["weight"],
+    }
+    for k, v in text_attention_weights(layer_idx=layer_idx, hf_sd=hf_sd).items():
+        out[f"self_attn.{k}"] = v
+    for k, v in text_mlp_weights(layer_idx=layer_idx, hf_sd=hf_sd).items():
+        out[f"mlp.{k}"] = v
+    return out
+
+
 def count_params(sd) -> int:
     """Tensor-leaf element count of a (possibly nested) state dict."""
     if isinstance(sd, torch.Tensor):
@@ -344,3 +370,16 @@ if __name__ == "__main__":
         assert tmsd["down_proj.weight"].shape == (1536, 8960), (idx, tmsd["down_proj.weight"].shape)
         assert len(tmsd) == 3, (idx, sorted(tmsd))
     print(f"text_mlp: layers.0/layers.{TEXT_NUM_LAYERS - 1} OK, {count_params(tmsd)} params each")
+
+    for idx in (0, TEXT_NUM_LAYERS - 1):
+        dlsd = decoder_layer_weights(layer_idx=idx)
+        assert dlsd["input_layernorm.weight"].shape == (1536,), (idx, dlsd["input_layernorm.weight"].shape)
+        assert dlsd["post_attention_layernorm.weight"].shape == (1536,), (
+            idx,
+            dlsd["post_attention_layernorm.weight"].shape,
+        )
+        assert dlsd["self_attn.q_proj.weight"].shape == (1536, 1536), (idx, dlsd["self_attn.q_proj.weight"].shape)
+        assert dlsd["self_attn.k_proj.bias"].shape == (256,), (idx, dlsd["self_attn.k_proj.bias"].shape)
+        assert dlsd["mlp.down_proj.weight"].shape == (1536, 8960), (idx, dlsd["mlp.down_proj.weight"].shape)
+        assert len(dlsd) == 12, (idx, sorted(dlsd))
+    print(f"decoder_layer: layers.0/layers.{TEXT_NUM_LAYERS - 1} OK, {count_params(dlsd)} params each")
