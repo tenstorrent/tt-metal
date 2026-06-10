@@ -493,11 +493,18 @@ all_gather_minimal_matmul_async_factory_helper(
 
     // Scheme 4 single-row interleave: when the fsdp ring is fused and BOTH axes are uni-rings
     // (Linear), every device creates exactly one mux per (ring, link) — so all 8 muxes fit on the
-    // single row R = full_grid_size.y - 1, interleaved by parity: in0 link g -> even col (nwpl*g),
-    // fsdp link g -> odd col (nwpl*g + 1). This frees the fsdp column AND the second mux row the old
+    // single row R = full_grid_size.y - 1, interleaved by parity: in0 link g -> ODD col (nwpl*g + 1),
+    // fsdp link g -> EVEN col (nwpl*g). This frees the fsdp column AND the second mux row the old
     // fallback consumed, letting the matmul reclaim the full 8x8. Collision-free for nwpl==2 (4 links
     // exactly fill cols 0..7). The create / RT-args / sender-wiring sites all route mux placement
     // through these helpers so they stay in lockstep.
+    //
+    // in0 on the ODD column (not even) is deliberate: in0's worker->mux write runs on NOC_0 (prefers
+    // +x), and a group's chain-tail sender sits at the group's columns {2g, 2g+1}. Placing the mux at
+    // 2g+1 keeps that write on the +x (with-grain) side; placing it at 2g (the group's left edge)
+    // forced the odd-column sender to write -x against NOC_0, which measured ~11% slower on the fused
+    // op. fsdp takes the even column; its relay write is column-matched (vertical) and m==0-gated, so
+    // the +x/-x grain doesn't apply to it.
     const bool single_row_muxes = persistent_weight_buffer.has_value() && topology == ttnn::ccl::Topology::Linear &&
                                   fsdp_topology == ttnn::ccl::Topology::Linear;
     TT_FATAL(
@@ -507,7 +514,7 @@ all_gather_minimal_matmul_async_factory_helper(
     const uint32_t single_mux_row = full_grid_size.y - 1;
     const auto in0_mux_logical = [&](uint32_t link, uint32_t dir) -> CoreCoord {
         if (single_row_muxes) {
-            return CoreCoord(num_workers_per_link * link, single_mux_row);  // even col 2g
+            return CoreCoord(num_workers_per_link * link + 1, single_mux_row);  // odd col 2g+1 (NOC_0 +x-aligned)
         }
         uint32_t x = (num_workers_per_link * (link + 1)) - (1 - dir);
         if (x >= full_grid_size.x) {
@@ -517,7 +524,7 @@ all_gather_minimal_matmul_async_factory_helper(
     };
     const auto fsdp_mux_logical = [&](uint32_t link, uint32_t dir) -> CoreCoord {
         if (single_row_muxes) {
-            return CoreCoord(num_workers_per_link * link + 1, single_mux_row);  // odd col 2g+1
+            return CoreCoord(num_workers_per_link * link, single_mux_row);  // even col 2g
         }
         if (fsdp_mux_in_column) {
             return CoreCoord(full_grid_size.x - 1, fsdp_mux_col_row(link, dir));
@@ -1342,7 +1349,7 @@ all_gather_minimal_matmul_async_factory_helper(
         // fsdp_uni_dir==0 -> backward sender relays (Dev 0 chain head); ==1 -> forward sender relays.
         constexpr uint32_t NO_FSDP_SENDER = 0xFFFFFFFFu;
         if (single_row_muxes) {
-            const uint32_t fsdp_mux_col = num_workers_per_link * (in1_idx / num_workers_per_link) + 1;
+            const uint32_t fsdp_mux_col = num_workers_per_link * (in1_idx / num_workers_per_link);
             uint32_t col_matched_index = fsdp_forward_sender_index;  // fallback (tail) if not found
             for (uint32_t i = 0; i < in1_core_order.size(); ++i) {
                 if (in1_core_order[i].x == fsdp_mux_col) {
@@ -1411,7 +1418,7 @@ all_gather_minimal_matmul_async_factory_helper(
                 // worker-0 term master is the column-matched core at the group-base row.
                 CoreCoord fsdp_term_master_logical_backward =
                     single_row_muxes
-                        ? CoreCoord(num_workers_per_link * (in1_idx / num_workers_per_link) + 1, in1_idx - worker_idx)
+                        ? CoreCoord(num_workers_per_link * (in1_idx / num_workers_per_link), in1_idx - worker_idx)
                     : transpose_core_grid ? CoreCoord(second_last_in1_core.x, in1_idx - worker_idx)
                                           : CoreCoord(in1_idx - worker_idx, second_last_in1_core.y);
                 CoreCoord fsdp_mux_virtual_backward = device->worker_core_from_logical_core(fsdp_mux_logical_backward);
@@ -1438,7 +1445,7 @@ all_gather_minimal_matmul_async_factory_helper(
                 CoreCoord fsdp_mux_logical_forward = fsdp_mux_logical(in1_idx / num_workers_per_link, /*dir=*/1);
                 CoreCoord fsdp_term_master_logical_forward =
                     single_row_muxes
-                        ? CoreCoord(num_workers_per_link * (in1_idx / num_workers_per_link) + 1, in1_idx - worker_idx)
+                        ? CoreCoord(num_workers_per_link * (in1_idx / num_workers_per_link), in1_idx - worker_idx)
                     : transpose_core_grid ? CoreCoord(last_in1_core.x, in1_idx - worker_idx)
                                           : CoreCoord(in1_idx - worker_idx, last_in1_core.y);
                 CoreCoord fsdp_mux_virtual_forward = device->worker_core_from_logical_core(fsdp_mux_logical_forward);
