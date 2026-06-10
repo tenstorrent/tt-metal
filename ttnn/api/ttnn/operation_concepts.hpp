@@ -90,6 +90,42 @@ template <typename T>
 concept ProgramSpecFactoryConcept = requires { &T::create_program_spec; } && !ProgramFactoryConcept<T> &&
                                     !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
 
+// Opt-in refinement of ProgramSpecFactoryConcept that turns on the Metal 2.0 enqueue-invariant
+// fast path (UpdateProgramRunArgs). A factory satisfying this splits its run-args into two sets:
+//
+//   - ENQUEUE-INVARIANT run-args — work-split scalars, shape constants: every run-arg whose value is
+//     identical for every dispatch that shares a program-cache entry. The factory returns these as the
+//     `run_params` of create_program_spec's ProgramArtifacts AND declares each one invariant in the
+//     ProgramSpec (KernelAdvancedOptions::enqueue_invariant_runtime_args / _common_runtime_args,
+//     TensorParameterAdvancedOptions::enqueue_invariant). They are applied ONCE, on cache miss, and
+//     statefully retained on every subsequent enqueue.
+//
+//   - PER-ENQUEUE run-args — tensor addresses, an RNG seed, a fill value: anything that may differ
+//     between two dispatches that hit the same cache entry. The factory returns these from
+//     create_per_enqueue_run_args, which the framework re-applies on EVERY dispatch.
+//
+// The framework adapter then:
+//   - on cache miss, merges the two sets (experimental::MergeProgramRunArgs) and applies the union via
+//     SetProgramRunArgs — a complete initial specification;
+//   - on cache hit, re-applies ONLY the per-enqueue set via experimental::UpdateProgramRunArgs, leaving
+//     the invariant set baked from the miss.
+//
+// This is safe-by-construction: the metal runtime validates that every run-arg omitted on the hit path
+// was declared enqueue-invariant in the spec. A per-enqueue value the factory forgets to refresh is a
+// hard validation error, not a silently-stale wrong answer — the failure mode the plain hit path
+// (UpdateTensorArgs, which can only refresh tensors) hides for ops with dynamic non-tensor args.
+//
+// A plain ProgramSpecFactoryConcept factory (no create_per_enqueue_run_args) is unaffected: it returns
+// the full run-args from create_program_spec and the adapter refreshes only tensors on hit.
+//
+// NOTE: This is a deliberately minimal consumer of the partial-update primitive — a single opt-in
+// method on top of the one existing factory concept. It is NOT the richer split-method factory shape
+// (immutable-info extraction, a caching-strategy axis, op-owned resources) that is being reworked
+// upstream; none of that is introduced here.
+template <typename T>
+concept ProgramSpecFactoryWithPerEnqueueArgsConcept =
+    ProgramSpecFactoryConcept<T> && requires { &T::create_per_enqueue_run_args; };
+
 // Detect operations that put create_descriptor directly on the operation struct
 // (no program_factory_t wrapper needed for single-descriptor operations).
 template <typename T>
