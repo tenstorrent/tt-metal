@@ -131,9 +131,11 @@ class TtLanguageModel(LightweightModule):
         dtype=ttnn.bfloat16,
         weight_memory_config=ttnn.DRAM_MEMORY_CONFIG,
         max_seq_len=None,
+        sharded_decode=False,
     ):
         super().__init__()
         self.device = device
+        self.sharded_decode = sharded_decode
         hidden = num_heads * head_dim
         self.num_layers = num_layers
         self.num_kv_heads = num_kv_heads
@@ -186,6 +188,7 @@ class TtLanguageModel(LightweightModule):
                 weight_memory_config=weight_memory_config,
                 decode_cos=decode_cos,
                 decode_sin=decode_sin,
+                sharded_decode=sharded_decode,
             )
             self.layers.append(layer)
 

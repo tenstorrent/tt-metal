@@ -15,11 +15,26 @@ float-then-cast path, then scaled by the (replicated) weight vector.
 This is the Qwen2RMSNorm used by the decoder layers / final norm. It mirrors
 ``tt/vision_rmsnorm.py`` (TtVisionRMSNorm) exactly except for the epsilon.
 """
+import importlib.util
+import os
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
 TILE = 32
 SHARD_HEIGHT = TILE  # ttnn.rms_norm wants the weight laid out one tile high
+
+_TT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _load_sibling(name, filename):
+    spec = importlib.util.spec_from_file_location(name, os.path.join(_TT_DIR, filename))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_sc = _load_sibling("dots_rmsnorm_sharded_config", "sharded_config.py")
 
 
 class TtRMSNorm(LightweightModule):
@@ -73,3 +88,26 @@ class TtRMSNorm(LightweightModule):
             weight=self.weight,
             compute_kernel_config=self.compute_kernel_config,
         )
+
+    def forward_sharded(self, x: ttnn.Tensor, out_num_cores: int):
+        """Width-sharded decode RMSNorm: input + output both L1 width-sharded over
+        ``out_num_cores``. The output shard grid matches the downstream matmul so no
+        separate reshard is needed. x: [32, dim] (any layout) -> [32, dim] sharded.
+
+        dim must be divisible by out_num_cores (e.g. 1536 / 16 = 96).
+        """
+        dim = x.shape[-1]
+        in_cfg = _sc.width_sharded_l1_config(32, dim, out_num_cores)
+        x_ws = ttnn.to_memory_config(x, in_cfg)
+        grid = _sc.core_grid_for_num_cores(out_num_cores)
+        prog = _sc.create_sharded_norm_config(grid, dim, block_h_tiles=1)
+        out = ttnn.rms_norm(
+            x_ws,
+            epsilon=self.eps,
+            weight=self.weight,
+            program_config=prog,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=in_cfg,
+        )
+        ttnn.deallocate(x_ws)
+        return out

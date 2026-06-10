@@ -31,12 +31,26 @@ ttnn ops (no host matmul / softmax / numpy / torch.nn.functional).
 
 Reference TTNN technique: models/demos/rednote_hilab_dots.ocr/tt/vision_attention.py
 """
+import importlib.util
 import math
+import os
 
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+
+_TT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _load_sibling(name, filename):
+    spec = importlib.util.spec_from_file_location(name, os.path.join(_TT_DIR, filename))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_sc = _load_sibling("dots_attn_sharded_config", "sharded_config.py")
 
 
 class TtAttention(LightweightModule):
@@ -77,9 +91,11 @@ class TtAttention(LightweightModule):
         weight_memory_config=ttnn.DRAM_MEMORY_CONFIG,
         decode_cos=None,
         decode_sin=None,
+        sharded_decode=False,
     ):
         super().__init__()
         self.device = device
+        self.sharded_decode = sharded_decode
         self.num_heads = num_heads
         self.num_kv_heads = num_kv_heads
         self.head_dim = head_dim
@@ -215,6 +231,47 @@ class TtAttention(LightweightModule):
             q_chunk_size=0,
             k_chunk_size=0,
         )
+
+        # ---- DRAM-sharded decode weight DUPS (bf8) for qkv + o, built alongside
+        # the untouched bf16 interleaved prefill weights. Only when sharded_decode.
+        self._dec_qkv = None
+        self._dec_o = None
+        self._dec_qkv_cores = None
+        self._dec_o_cores = None
+        self._dec_qkv_bias = None
+        if sharded_decode:
+            self.decode_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+            qkv_k = self.hidden  # 1536
+            qkv_n = (num_heads + 2 * num_kv_heads) * head_dim  # 2048
+            self._dec_qkv_cores, _ = _sc.sharded_matmul_plan(device, 32, qkv_k, qkv_n)
+            if self._dec_qkv_cores is not None:
+                self._dec_qkv = ttnn.as_tensor(
+                    qkv_w.transpose(0, 1).contiguous(),
+                    device=device,
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=_sc.create_dram_sharded_mem_config(device, qkv_k, qkv_n),
+                    mesh_mapper=mesh_mapper,
+                )
+                # Bias kept interleaved (added post-matmul; dram-sharded mm has no bias).
+                self._dec_qkv_bias = self.qkv_bias
+            o_k = self.hidden
+            o_n = self.hidden
+            self._dec_o_cores, _ = _sc.sharded_matmul_plan(device, 32, o_k, o_n)
+            if self._dec_o_cores is not None:
+                self._dec_o = ttnn.as_tensor(
+                    o_weight.transpose(0, 1).contiguous(),
+                    device=device,
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=_sc.create_dram_sharded_mem_config(device, o_k, o_n),
+                    mesh_mapper=mesh_mapper,
+                )
 
     def write_decode_rope(self, pos: int) -> None:
         """Stream the cos/sin row for ``pos`` into the persistent decode buffers."""
@@ -538,3 +595,106 @@ class TtAttention(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,  # keep decode intermediate in L1
         )
+
+    # ------------------------------------------------------------------ #
+    # Sharded decode (DRAM-sharded qkv/o, width-sharded activation).     #
+    # ------------------------------------------------------------------ #
+    def _qkv_proj_heads_sharded(self, x: ttnn.Tensor):
+        """DRAM-sharded QKV projection for ONE token -> q/k/v head tensors.
+
+        x: [1, hidden] interleaved L1. Returns q [1,nh,1,hd], k/v [1,nkv,1,hd]
+        (same layout the rest of the decode path expects). The qkv matmul runs
+        DRAM-sharded; its output is resharded to interleaved bf16 because
+        nlp_create_qkv_heads requires an interleaved input. The QKV bias is added
+        post-matmul (DRAM-sharded matmul does not take a bias).
+        """
+        nh, nkv, hd = self.num_heads, self.num_kv_heads, self.head_dim
+        qkv_n = (nh + 2 * nkv) * hd
+        x_ws = ttnn.to_memory_config(x, _sc.width_sharded_l1_config(32, self.hidden, self._dec_qkv_cores))
+        qkv = ttnn.linear(
+            x_ws,
+            self._dec_qkv,
+            program_config=_sc.dram_matmul_config(32, self.hidden, qkv_n, self._dec_qkv_cores),
+            compute_kernel_config=self.decode_compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(x_ws)
+        qkv = ttnn.sharded_to_interleaved(qkv, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
+        qkv = ttnn.add(qkv, self._dec_qkv_bias)
+        qkv = ttnn.reshape(qkv, (1, 1, 1, qkv_n))
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv,
+            num_heads=nh,
+            num_kv_heads=nkv,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return q, k, v
+
+    def _o_proj_sharded(self, attn: ttnn.Tensor) -> ttnn.Tensor:
+        """DRAM-sharded output projection. attn: [1, hidden] -> [1, hidden]."""
+        attn_ws = ttnn.to_memory_config(attn, _sc.width_sharded_l1_config(32, self.hidden, self._dec_o_cores))
+        out = ttnn.linear(
+            attn_ws,
+            self._dec_o,
+            program_config=_sc.dram_matmul_config(32, self.hidden, self.hidden, self._dec_o_cores),
+            compute_kernel_config=self.decode_compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(attn_ws)
+        return ttnn.sharded_to_interleaved(out, ttnn.L1_MEMORY_CONFIG)
+
+    def _attn_core_decode(self, q, k, v, kv_cache, layer_idx, pos_arg, cos_tt, sin_tt):
+        """Shared RoPE -> cache update -> SDPA-decode -> [1, hidden] reshape."""
+        nh, hd = self.num_heads, self.head_dim
+        q = self._rope_with(q, cos_tt, sin_tt)
+        k = self._rope_with(k, cos_tt, sin_tt)
+        kv_cache.update(layer_idx, k, v, pos_arg)
+        k_cache, v_cache = kv_cache.read(layer_idx)
+        q_sdpa = ttnn.permute(q, (0, 2, 1, 3))
+        sdpa_kwargs = dict(
+            scale=self.scale,
+            program_config=self._sdpa_decode_program_config,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        if isinstance(pos_arg, ttnn.Tensor):
+            sdpa_kwargs["cur_pos_tensor"] = pos_arg
+        else:
+            sdpa_kwargs["cur_pos"] = [pos_arg]
+        attn = ttnn.transformer.scaled_dot_product_attention_decode(q_sdpa, k_cache, v_cache, **sdpa_kwargs)
+        return ttnn.reshape(attn, (1, nh * hd), memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    def _o_decode(self, attn):
+        if self._dec_o is not None:
+            return self._o_proj_sharded(attn)
+        return ttnn.linear(
+            attn,
+            self.o_weight,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+    def forward_decode_traced_sharded(self, x: ttnn.Tensor, kv_cache, layer_idx: int) -> ttnn.Tensor:
+        """Trace-capturable sharded decode (DRAM-sharded qkv/o). x: [1, hidden]."""
+        if self._dec_qkv is not None:
+            q, k, v = self._qkv_proj_heads_sharded(x)
+        else:
+            q, k, v = self._qkv_proj_heads(x, 1)
+        pos_tt = kv_cache.get_persistent_pos_buffer()
+        attn = self._attn_core_decode(
+            q, k, v, kv_cache, layer_idx, pos_tt, self._persistent_decode_cos, self._persistent_decode_sin
+        )
+        return self._o_decode(attn)
+
+    def forward_decode_sharded(self, x: ttnn.Tensor, pos: int, kv_cache, layer_idx: int) -> ttnn.Tensor:
+        """Untraced sharded decode (for the PCC guardrail). x: [1, hidden]."""
+        if self._dec_qkv is not None:
+            q, k, v = self._qkv_proj_heads_sharded(x)
+        else:
+            q, k, v = self._qkv_proj_heads(x, 1)
+        cos_tt, sin_tt = self._decode_rope_tiles(pos)
+        attn = self._attn_core_decode(q, k, v, kv_cache, layer_idx, pos, cos_tt, sin_tt)
+        return self._o_decode(attn)

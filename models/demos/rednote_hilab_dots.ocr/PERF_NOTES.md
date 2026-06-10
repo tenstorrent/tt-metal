@@ -227,3 +227,42 @@ unchanged; both matmuls converted.
 hypothesis (the matmuls aren't purely DRAM-read-bound at this config), but it is
 a consistent, correctness-neutral −10% of the decode step. Both MLP matmuls were
 converted (PCC headroom ample at 0.99979, so no need to fall back to one).
+
+## Sub-pass 4: width-sharded DRAM-sharded-matmul decode path (Phases 1–4 coupled)
+
+Per the plan (`docs/superpowers/plans/2026-05-30-dots-ocr-sharded-decode.md`),
+built a fully width-sharded decode block behind a `sharded_decode=True` flag
+(default OFF; prefill + the existing bf8/interleaved decode path untouched). The
+residual-stream activation is laid out L1 **WIDTH_SHARDED**, the four layer
+matmuls (qkv 16c, o 48c, gate_up 16c, down 8c) run **DRAM-sharded** (HiFi2,
+`create_dram_sharded_mem_config` bf8 weight dups) on dedicated DRAM banks
+(removes the 130-core interleaved bank contention), and the two RMSNorms run as
+**sharded `LayerNormShardedMultiCoreProgramConfig`** whose output grid matches the
+downstream matmul so the matmul needs no separate input reshard.
+
+| metric | baseline (bf8 interleaved) | sharded decode | delta |
+| --- | --- | --- | --- |
+| decode-step guardrail PCC (flag ON) | — | **0.999430** | > 0.99 held |
+| pure device replay (decompose, p50) | 14.67 ms | **12.97 ms** | **−1.70 ms (−11.6%)** |
+| decode traced ms/tok (32 tok, median of 3) | 17.47 | **15.96** | **−1.51 ms (−8.6%)** |
+| OCR text (32 tok vs HF) | exact | **exact** | `**TABLE II** – ODDS RATIO OF HODGKIN LYMPHOMA…` |
+
+Sharded successfully: qkv (16c), o (48c), gate_up (16c), down (8c) DRAM-sharded
+matmuls; both RMSNorms width-sharded; all PCC-neutral. Fell back to interleaved:
+nothing (all four matmul shapes validated as DRAM-sharded-expressible).
+
+**Honest read vs the ~9 ms target:** realized only **~1.5 ms/tok (−8.6%)**, far
+short of ~9 ms. Two reasons, both confirmed on device:
+1. **Reshard tax, exactly as the plan's CRITICAL FINDING warned.** With sharded
+   matmuls alone the device floor barely moved (14.67 → 14.07 ms, −0.6 ms): the
+   per-boundary reshards (`to_memory_config` / `sharded_to_interleaved` around
+   `nlp_create_qkv_heads` which needs interleaved bf16, the SwiGLU, and the 16c→8c
+   gate_up→down regrid) nearly cancelled the matmul saving. The real win only
+   appeared once the **sharded RMSNorm fed the matmul directly** (removed the
+   norm→matmul reshard + killed the single-core LN), taking the floor to 12.97 ms.
+2. **The decode step is no longer matmul-dominated.** ~4 ms/step is host tail
+   OUTSIDE the trace — the `[1, 151936]` logits D2H (~2.3 ms) + per-layer RoPE
+   cos/sin H2D (~0.96 ms) — plus the bf8 lm_head (~1.5 ms, out of scope). Sharding
+   the layer matmuls cannot touch any of that. Hitting ~9 ms needs attacking the
+   host tail (e.g. on-device argmax to shrink the D2H, device-resident RoPE) and
+   the lm_head, not more layer-matmul sharding.

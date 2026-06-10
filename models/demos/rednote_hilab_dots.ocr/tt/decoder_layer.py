@@ -110,9 +110,11 @@ class TtDecoderLayer(LightweightModule):
         weight_memory_config=ttnn.DRAM_MEMORY_CONFIG,
         decode_cos=None,
         decode_sin=None,
+        sharded_decode=False,
     ):
         super().__init__()
         self.device = device
+        self.sharded_decode = sharded_decode
         hidden = num_heads * head_dim
 
         self.input_layernorm = TtRMSNorm(
@@ -143,6 +145,7 @@ class TtDecoderLayer(LightweightModule):
             weight_memory_config=weight_memory_config,
             decode_cos=decode_cos,
             decode_sin=decode_sin,
+            sharded_decode=sharded_decode,
         )
         self.post_attention_layernorm = TtRMSNorm(
             device=device,
@@ -159,6 +162,7 @@ class TtDecoderLayer(LightweightModule):
             down_weight=down_weight,
             dtype=dtype,
             weight_memory_config=weight_memory_config,
+            sharded_decode=sharded_decode,
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -192,11 +196,30 @@ class TtDecoderLayer(LightweightModule):
         x = ttnn.add(x, mlp_out, memory_config=mem)
         return x
 
+    def _sharded_norm(self, norm, x, out_cores):
+        """Width-sharded RMSNorm whose output grid matches the downstream matmul
+        (so the matmul needs no separate input reshard). Falls back to the
+        interleaved norm if the matmul shape wasn't DRAM-sharded (out_cores None)
+        or dim isn't divisible by out_cores.
+        """
+        dim = x.shape[-1]
+        if out_cores is None or dim % out_cores != 0:
+            return norm(x)
+        return norm.forward_sharded(x, out_cores)
+
     def forward_decode(self, x: ttnn.Tensor, pos: int, kv_cache, layer_idx: int) -> ttnn.Tensor:
         """Single-token cached decode (reads/writes ``kv_cache`` at ``pos``).
 
         x: [1, hidden] TILE -> [1, hidden]. Uses the attention's flash-decode path.
         """
+        if self.sharded_decode:
+            norm_in = self._sharded_norm(self.input_layernorm, x, self.self_attn._dec_qkv_cores)
+            attn_out = self.self_attn.forward_decode_sharded(norm_in, pos, kv_cache, layer_idx)
+            x = ttnn.add(x, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+            norm_in2 = self._sharded_norm(self.post_attention_layernorm, x, self.mlp._dec_gu_cores)
+            mlp_out = self.mlp.forward_decode(norm_in2)
+            x = ttnn.add(x, mlp_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+            return x
         attn_out = self.self_attn.forward_decode(self.input_layernorm(x), pos, kv_cache, layer_idx)
         x = ttnn.add(x, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         mlp_out = self.mlp(self.post_attention_layernorm(x))
@@ -209,6 +232,14 @@ class TtDecoderLayer(LightweightModule):
         Identical maths to :meth:`forward_decode` but uses the attention's
         ``forward_decode_traced`` path so no Python int is baked into kernel args.
         """
+        if self.sharded_decode:
+            norm_in = self._sharded_norm(self.input_layernorm, x, self.self_attn._dec_qkv_cores)
+            attn_out = self.self_attn.forward_decode_traced_sharded(norm_in, kv_cache, layer_idx)
+            x = ttnn.add(x, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+            norm_in2 = self._sharded_norm(self.post_attention_layernorm, x, self.mlp._dec_gu_cores)
+            mlp_out = self.mlp.forward_decode(norm_in2)
+            x = ttnn.add(x, mlp_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+            return x
         attn_out = self.self_attn.forward_decode_traced(self.input_layernorm(x), kv_cache, layer_idx)
         x = ttnn.add(x, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         mlp_out = self.mlp(self.post_attention_layernorm(x))

@@ -113,9 +113,15 @@ class TtOcrModel(LightweightModule):
         bias: bool = True,
         vocab_size: int = 151936,
         dtype=ttnn.bfloat16,
+        sharded_decode=None,
     ):
         super().__init__()
         self.device = device
+        # sharded_decode: width-sharded DRAM-sharded-matmul decode path. Default
+        # follows the DOTS_SHARDED_DECODE env var (off unless set to "1").
+        if sharded_decode is None:
+            sharded_decode = os.environ.get("DOTS_SHARDED_DECODE", "0") == "1"
+        self.sharded_decode = sharded_decode
         self.lm_state_dict = {k: v.to(torch.float32) for k, v in lm_state_dict.items()}
         self.vision_state_dict = vision_state_dict
         self.grid_thw = torch.as_tensor(grid_thw)
@@ -191,6 +197,7 @@ class TtOcrModel(LightweightModule):
                 bias=self.bias,
                 dtype=self.dtype,
                 max_seq_len=max_seq_len if max_seq_len is not None else seq_len,
+                sharded_decode=self.sharded_decode,
             )
             self._lm_cache[key] = lm
         return lm

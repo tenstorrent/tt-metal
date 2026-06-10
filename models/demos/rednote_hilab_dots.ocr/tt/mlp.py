@@ -20,10 +20,25 @@ device — one matmul instead of two — before applying SiLU to the gate half.
 
 Reference TTNN impl this follows: models/demos/rednote_hilab_dots.ocr/tt/vision_mlp.py
 """
+import importlib.util
+import os
+
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+
+_TT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _load_sibling(name, filename):
+    spec = importlib.util.spec_from_file_location(name, os.path.join(_TT_DIR, filename))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_sc = _load_sibling("dots_mlp_sharded_config", "sharded_config.py")
 
 
 class TtMLP(LightweightModule):
@@ -52,9 +67,11 @@ class TtMLP(LightweightModule):
         dtype=ttnn.bfloat16,
         weight_dtype=ttnn.bfloat8_b,
         weight_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        sharded_decode=False,
     ):
         super().__init__()
         self.device = device
+        self.sharded_decode = sharded_decode
 
         is_mesh_device = device.__class__.__name__ == "MeshDevice"
         mesh_mapper = ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None
@@ -93,6 +110,113 @@ class TtMLP(LightweightModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+
+        # ---- DRAM-sharded decode weight DUPS (bf8), built alongside the bf16/bf8
+        # interleaved prefill weights above which are LEFT UNTOUCHED. Only built
+        # when sharded_decode=True. gate_up: k=dim, n=2*intermediate; down:
+        # k=intermediate, n=dim. ~+20 MB DRAM total at bf8.
+        self.dim = down_weight.shape[0]
+        self._dec_gate_up = None
+        self._dec_down = None
+        self._dec_gu_cores = None
+        self._dec_down_cores = None
+        if sharded_decode:
+            # HiFi2 for the DRAM-sharded decode matmuls (flop-bound otherwise).
+            self.decode_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+            gu_k, gu_n = self.dim, 2 * intermediate
+            self._dec_gu_cores, _ = _sc.sharded_matmul_plan(device, 32, gu_k, gu_n)
+            if self._dec_gu_cores is not None:
+                self._dec_gate_up = ttnn.as_tensor(
+                    gate_up,
+                    device=device,
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=_sc.create_dram_sharded_mem_config(device, gu_k, gu_n),
+                    mesh_mapper=mesh_mapper,
+                )
+            d_k, d_n = intermediate, self.dim
+            self._dec_down_cores, _ = _sc.sharded_matmul_plan(device, 32, d_k, d_n)
+            if self._dec_down_cores is not None:
+                self._dec_down = ttnn.as_tensor(
+                    down_weight.transpose(0, 1).contiguous(),
+                    device=device,
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=_sc.create_dram_sharded_mem_config(device, d_k, d_n),
+                    mesh_mapper=mesh_mapper,
+                )
+
+    def forward_decode(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """Width-sharded DRAM-sharded-matmul decode MLP. x: [32, dim] -> [32, dim].
+
+        Falls back to interleaved per-matmul if that shape was not expressible as a
+        DRAM-sharded matmul (recorded at construction). The SwiGLU elementwise chain
+        runs on the width-sharded intermediate to avoid an extra reshard.
+        """
+        intermediate = self.intermediate
+        # ---- gate_up (DRAM-sharded if available) ----
+        if self._dec_gate_up is not None:
+            x_ws = ttnn.to_memory_config(x, _sc.width_sharded_l1_config(32, self.dim, self._dec_gu_cores))
+            gate_up = ttnn.linear(
+                x_ws,
+                self._dec_gate_up,
+                program_config=_sc.dram_matmul_config(32, self.dim, 2 * intermediate, self._dec_gu_cores),
+                compute_kernel_config=self.decode_compute_kernel_config,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(x_ws)
+        else:
+            gate_up = ttnn.linear(
+                x,
+                self.gate_up_weight,
+                compute_kernel_config=self.compute_kernel_config,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+
+        # SwiGLU on the (sharded or interleaved) gate_up intermediate. slice/silu/mul
+        # keep whatever layout gate_up has; interleave back for the down matmul input.
+        mem = gate_up.memory_config()
+        gate = ttnn.slice(gate_up, [0, 0], [gate_up.shape[0], intermediate], memory_config=mem)
+        up = ttnn.slice(gate_up, [0, intermediate], [gate_up.shape[0], 2 * intermediate], memory_config=mem)
+        ttnn.deallocate(gate_up)
+        h = ttnn.mul(ttnn.silu(gate, memory_config=mem), up, memory_config=mem)
+        ttnn.deallocate(gate)
+        ttnn.deallocate(up)
+
+        # ---- down (DRAM-sharded if available) ----
+        if self._dec_down is not None:
+            # down needs the input width-sharded on its own core count (8); reshard.
+            h_ws = ttnn.to_memory_config(h, _sc.width_sharded_l1_config(32, intermediate, self._dec_down_cores))
+            ttnn.deallocate(h)
+            out = ttnn.linear(
+                h_ws,
+                self._dec_down,
+                program_config=_sc.dram_matmul_config(32, intermediate, self.dim, self._dec_down_cores),
+                compute_kernel_config=self.decode_compute_kernel_config,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(h_ws)
+            # Hand a normal interleaved L1 tensor back to the residual add.
+            out = ttnn.sharded_to_interleaved(out, ttnn.L1_MEMORY_CONFIG)
+            return out
+        else:
+            h_il = ttnn.sharded_to_interleaved(h, ttnn.L1_MEMORY_CONFIG) if h.is_sharded() else h
+            out = ttnn.linear(
+                h_il,
+                self.down_weight,
+                compute_kernel_config=self.compute_kernel_config,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            return out
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """x: [seq, dim] (TILE layout) -> [seq, dim]."""

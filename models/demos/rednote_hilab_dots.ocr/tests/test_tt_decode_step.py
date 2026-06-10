@@ -109,6 +109,9 @@ def _torch_decode_golden(state_dict):
     return logits[:, -1, :].to(torch.float32).reshape(1, -1)
 
 
+SHARDED_DECODE = os.environ.get("DOTS_SHARDED_DECODE", "0") == "1"
+
+
 def _build_lm_and_cache(device, state_dict, prompt_len, max_seq_len):
     lm = TtLanguageModel(
         device=device,
@@ -122,6 +125,7 @@ def _build_lm_and_cache(device, state_dict, prompt_len, max_seq_len):
         eps=EPS,
         bias=BIAS,
         max_seq_len=max_seq_len,
+        sharded_decode=SHARDED_DECODE,
     )
     cache = SelfAttentionKVCache(
         device=device,
