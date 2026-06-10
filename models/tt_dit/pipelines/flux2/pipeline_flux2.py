@@ -183,21 +183,29 @@ class Flux2Pipeline:
         image_ids = _prepare_ids(height=self._height // 16, width=self._width // 16)
         prompt_rope_cos, prompt_rope_sin = self._pos_embed.forward(text_ids)
         spatial_rope_cos, spatial_rope_sin = self._pos_embed.forward(image_ids)
+        # Store rope tensors pre-shaped as (1, 1, seq, head_dim) so attention blocks never
+        # need to reshape per-call (2800 ops per inference). SP sharding is on dim 2 (seq).
         self.ts._tt_spatial_rope_cos.update(
-            spatial_rope_cos, False, mesh_axes=[sp_axis, None], device=self._mesh_device
+            spatial_rope_cos.unsqueeze(0).unsqueeze(0),
+            False,
+            mesh_axes=[None, None, sp_axis, None],
+            device=self._mesh_device,
         )
         self.ts._tt_spatial_rope_sin.update(
-            spatial_rope_sin, False, mesh_axes=[sp_axis, None], device=self._mesh_device
+            spatial_rope_sin.unsqueeze(0).unsqueeze(0),
+            False,
+            mesh_axes=[None, None, sp_axis, None],
+            device=self._mesh_device,
         )
         # When sharding the prompt across SP, the prompt rope must be sharded the same way (on the
         # sequence dim) so per-rank tokens get their matching rope positions before the attention
         # gathers q/k/v back to full length.
-        prompt_rope_mesh_axes = [sp_axis, None] if self._shard_prompt else None
+        prompt_rope_mesh_axes = [None, None, sp_axis, None] if self._shard_prompt else None
         self.ts._tt_prompt_rope_cos.update(
-            prompt_rope_cos, False, mesh_axes=prompt_rope_mesh_axes, device=self._mesh_device
+            prompt_rope_cos.unsqueeze(0).unsqueeze(0), False, mesh_axes=prompt_rope_mesh_axes, device=self._mesh_device
         )
         self.ts._tt_prompt_rope_sin.update(
-            prompt_rope_sin, False, mesh_axes=prompt_rope_mesh_axes, device=self._mesh_device
+            prompt_rope_sin.unsqueeze(0).unsqueeze(0), False, mesh_axes=prompt_rope_mesh_axes, device=self._mesh_device
         )
 
         self.warmup(warmup_info="e2e warmup")  # E2E warmup. Preallocate buffers
