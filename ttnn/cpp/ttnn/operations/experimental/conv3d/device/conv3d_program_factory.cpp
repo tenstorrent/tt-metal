@@ -266,6 +266,25 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         });
     }
 
+    // Experimental: fold bias into matmul DST via the helper's PostComputeFn
+    // (acc_to_dest ELWADD of a zero tile + 32-row-replicated bias). Needs bias
+    // replicated to 32 rows by the caller and a single C_in block. Env-gated
+    // off by default while validating.
+    const bool fuse_bias_dst = use_bias && C_in_num_blocks == 1 && std::getenv("TT_CONV3D_FUSE_BIAS") != nullptr;
+    uint32_t cb_zero_id = 32;
+    if (fuse_bias_dst) {
+        cb_zero_id = next_cb_index++;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = tile_size,
+            .core_ranges = CoreRangeSet(core_grid),
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_zero_id),
+                .data_format = data_format,
+                .page_size = tile_size,
+            }}},
+        });
+    }
+
     uint32_t cb_bias_tiled_id =
         32;  // Invalid value for cb index since there is only 32 of them and the indices go from 0 to 31
     if (use_bias) {
@@ -795,7 +814,9 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         semaphore_id,
         (uint32_t)use_fp32_partials,
         // Stream final output rows only for many small output writes when there is a writer tail to overlap.
-        (uint32_t)(enable_streaming_output ? 1 : 0)};
+        (uint32_t)(enable_streaming_output ? 1 : 0),
+        (uint32_t)(fuse_bias_dst ? 1 : 0),
+        cb_zero_id};
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/compute.cpp";
@@ -835,7 +856,9 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         static_cast<uint32_t>(weight_share_mode),
         weights_mcast_sender_sem_id,
         weights_mcast_receiver_sem_id,
-        static_cast<uint32_t>(enable_streaming_output)};
+        static_cast<uint32_t>(enable_streaming_output),
+        (uint32_t)(fuse_bias_dst ? 1 : 0),
+        cb_zero_id};
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr)

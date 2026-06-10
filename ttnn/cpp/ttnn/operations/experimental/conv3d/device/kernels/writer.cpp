@@ -63,6 +63,8 @@ void kernel_main() {
     constexpr uint32_t weights_mcast_sender_sem_id = get_compile_time_arg_val(23);
     constexpr uint32_t weights_mcast_receiver_sem_id = get_compile_time_arg_val(24);
     constexpr bool enable_streaming_output = get_compile_time_arg_val(25) == 1;
+    constexpr bool fuse_bias_dst = get_compile_time_arg_val(26) == 1;
+    constexpr uint32_t cb_zero = get_compile_time_arg_val(27);
 
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
@@ -119,12 +121,29 @@ void kernel_main() {
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_weight_tiled);
     constexpr uint32_t partials_tile_bytes = get_tile_size(cb_matmul_interm_tiled);
-    constexpr auto out_args = TensorAccessorArgs<26>();
+    constexpr auto out_args = TensorAccessorArgs<28>();
     constexpr auto weight_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     const auto out_writer = TensorAccessor(out_args, out_addr);
     const auto weight_reader = TensorAccessor(weight_args, weight_addr);
     const auto bias_reader = TensorAccessor(bias_args, bias_addr);
+
+    if constexpr (fuse_bias_dst) {
+        // One zero tile for the compute kernel's acc_to_dest bias add (DST += zero + bias).
+        experimental::CB cb_z(cb_zero);
+        cb_z.reserve_back(1);
+        uint32_t zero_write_addr = get_write_ptr(cb_zero);
+        const uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+        uint32_t bytes_left = tile_bytes;
+        while (bytes_left > 0) {
+            const uint32_t read_size = bytes_left > MEM_ZEROS_SIZE ? MEM_ZEROS_SIZE : bytes_left;
+            noc_async_read(zeros_noc_addr, zero_write_addr, read_size);
+            zero_write_addr += read_size;
+            bytes_left -= read_size;
+        }
+        noc_async_read_barrier();
+        cb_z.push_back(1);
+    }
 
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;

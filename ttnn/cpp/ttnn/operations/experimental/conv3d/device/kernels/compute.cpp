@@ -114,6 +114,43 @@ void add_bias_inplace_l1_acc_if_needed() {
     }
 }
 
+// Fused bias post-compute for compute_kernel_lib::matmul_block (SDPA-mask pattern):
+// adds row-replicated bias tiles into the still-resident matmul DST via the
+// acc_to_dest=true ELWADD (DST += zero + bias), eliminating the M*N bias
+// round trip (unpack+add/copy+pack) the CB-based bias paths pay. Requires
+// bias replicated to all 32 tile rows (host prepares (32, C_out)) and a
+// zero tile in zero_cb. SubblockMajor walks subblocks left to right, so a
+// per-call column cursor (mod N_t) gives each subblock's bias column.
+template <
+    uint32_t bias_cb,
+    uint32_t zero_cb,
+    uint32_t in0_cb,
+    uint32_t in1_cb,
+    uint32_t N_t,
+    uint32_t sh,
+    uint32_t sw,
+    uint32_t Kt,
+    bool fp32>
+struct BiasAccPostCompute {
+    mutable uint32_t col = 0;
+    void operator()(uint32_t) const {
+        cb_wait_front(bias_cb, N_t);
+        cb_wait_front(zero_cb, 1);
+        if constexpr (fp32) {
+            reconfig_data_format(zero_cb, bias_cb);
+        }
+        add_tiles_init(zero_cb, bias_cb, true);
+        for (uint32_t r = 0; r < sh; ++r) {
+            for (uint32_t c = 0; c < sw; ++c) {
+                add_tiles(zero_cb, bias_cb, 0, col + c, r * sw + c);
+            }
+        }
+        col = (col + sw) % N_t;
+        reconfig_data_format(in1_cb, in0_cb);
+        mm_block_init_short(in0_cb, in1_cb, false, sw, sh, Kt);
+    }
+};
+
 template <uint32_t rows, uint32_t cols, bool use_fp32_partials, uint32_t in_cb, uint32_t out_cb>
 void untilize_block() {
     constexpr auto untilize_reconfig_mode =
@@ -219,6 +256,9 @@ void kernel_main() {
     constexpr bool use_fp32_partials = get_compile_time_arg_val(27) == 1;
     // Stream final single-tile C_out rows through bias/untilize when the writer can overlap the compute tail.
     constexpr bool enable_streaming_output = get_compile_time_arg_val(28) == 1;
+    // Host enables only when use_bias && C_in_num_blocks==1 (single C_in block, bias replicated to 32 rows).
+    constexpr bool fuse_bias_dst = get_compile_time_arg_val(29) == 1;
+    constexpr uint32_t cb_zero = get_compile_time_arg_val(30);
 
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
@@ -312,25 +352,53 @@ void kernel_main() {
                                     //     what tilize itself needs; the helper handles the
                                     //     post-tilize → matmul restore automatically).
                                     // interm_buf = out_buf because num_k_blocks==1: interm is unused.
-                                    compute_kernel_lib::matmul_block<
-                                        /*transpose=*/false,
-                                        /*packer_l1_acc=*/false,
-                                        compute_kernel_lib::LastBlockTarget::Out,
-                                        compute_kernel_lib::OutputCBLayout::SubblockMajor,
-                                        compute_kernel_lib::matmul_config::InitMode::Short,
-                                        compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,
-                                        compute_kernel_lib::InputPolicy::WaitAndRetainOnLastBlock>(
-                                        cb_vol2col_tiled_buf,
-                                        cb_weight_tiled_buf,
-                                        cb_matmul_interm_tiled_buf,
-                                        cb_matmul_interm_tiled_buf,
-                                        compute_kernel_lib::MatmulBlockShape::of(
-                                            in0_num_subblocks,
-                                            in1_num_subblocks,
-                                            subblock_h,
-                                            subblock_w,
-                                            in0_block_w,
-                                            /*num_k_blocks=*/1));
+                                    const auto mm_shape = compute_kernel_lib::MatmulBlockShape::of(
+                                        in0_num_subblocks,
+                                        in1_num_subblocks,
+                                        subblock_h,
+                                        subblock_w,
+                                        in0_block_w,
+                                        /*num_k_blocks=*/1);
+                                    if constexpr (fuse_bias_dst) {
+                                        compute_kernel_lib::matmul_block<
+                                            /*transpose=*/false,
+                                            /*packer_l1_acc=*/false,
+                                            compute_kernel_lib::LastBlockTarget::Out,
+                                            compute_kernel_lib::OutputCBLayout::SubblockMajor,
+                                            compute_kernel_lib::matmul_config::InitMode::Short,
+                                            compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,
+                                            compute_kernel_lib::InputPolicy::WaitAndRetainOnLastBlock,
+                                            BiasAccPostCompute<
+                                                cb_bias_tiled,
+                                                cb_zero,
+                                                cb_vol2col_tiled,
+                                                cb_weight_tiled,
+                                                matmul_N_t,
+                                                subblock_h,
+                                                subblock_w,
+                                                in0_block_w,
+                                                use_fp32_partials>>(
+                                            cb_vol2col_tiled_buf,
+                                            cb_weight_tiled_buf,
+                                            cb_matmul_interm_tiled_buf,
+                                            cb_matmul_interm_tiled_buf,
+                                            mm_shape,
+                                            {});
+                                    } else {
+                                        compute_kernel_lib::matmul_block<
+                                            /*transpose=*/false,
+                                            /*packer_l1_acc=*/false,
+                                            compute_kernel_lib::LastBlockTarget::Out,
+                                            compute_kernel_lib::OutputCBLayout::SubblockMajor,
+                                            compute_kernel_lib::matmul_config::InitMode::Short,
+                                            compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,
+                                            compute_kernel_lib::InputPolicy::WaitAndRetainOnLastBlock>(
+                                            cb_vol2col_tiled_buf,
+                                            cb_weight_tiled_buf,
+                                            cb_matmul_interm_tiled_buf,
+                                            cb_matmul_interm_tiled_buf,
+                                            mm_shape);
+                                    }
 
                                     if constexpr (enable_streaming_output) {
                                         // Streaming emits subblocks before cb_matmul_interm_tiled is physically full,
@@ -338,7 +406,7 @@ void kernel_main() {
                                         // waits for the whole block and can use L1 pack accumulation instead.
                                         cb_wait_front(cb_matmul_interm_tiled, subblock_tiles);
 
-                                        if constexpr (use_bias) {
+                                        if constexpr (use_bias && !fuse_bias_dst) {
                                             if constexpr (use_fp32_partials) {
                                                 reconfig_data_format(cb_matmul_interm_tiled, cb_bias_tiled);
                                             }
@@ -383,12 +451,13 @@ void kernel_main() {
                                     // Clear our partial results and continue
                                     cb_pop_front(cb_matmul_interm_tiled, output_tiles);
                                 } else {
-                                    // We are a reducer core.
+                                    // We are a reducer core. fuse_bias_dst implies single C_in
+                                    // block (bias already applied in DST), so drop the CB add.
                                     reduce_bias_untilize_fullblock<
                                         matmul_M_t,
                                         matmul_N_t,
                                         use_fp32_partials,
-                                        use_bias,
+                                        use_bias && !fuse_bias_dst,
                                         cb_matmul_interm_tiled,
                                         cb_reduction_tiled,
                                         cb_bias_tiled,
