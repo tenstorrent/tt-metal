@@ -70,7 +70,7 @@ TrayID get_tray_id_for_chip(
             mobo_name,
             chip_id,
             bus_id);
-        return TrayID{static_cast<unsigned int>(bus_id)};
+        return TrayID{static_cast<uint32_t>(bus_id)};
     }
 
     std::vector<uint16_t> ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
