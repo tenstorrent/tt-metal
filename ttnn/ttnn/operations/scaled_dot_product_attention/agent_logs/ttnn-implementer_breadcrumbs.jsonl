@@ -12,3 +12,5 @@
 {"event":"test_run","status":"pass","summary":"production mode (no --dev): 20/20 pass (18 acceptance + 2 debug) — no race conditions","ts":"2026-06-10T07:14:33+00:00"}
 {"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"scaled_dot_product_attention — add float32 and bfloat8_b to SUPPORTED dtype, expose compute_kernel_config, derive CB formats from input dtype","ts":"2026-06-10T07:33:17+00:00"}
 {"event":"test_run","test":"probes/probe_006.py","status":"pass","details":"bf16 pcc .99997, fp32 pcc .999999, bf8b pcc .9998; fp32 D=1024 fits L1; known-bad guard OK; LoFi+bf16_dest catastrophic pcc 0.016 — investigating","ts":"2026-06-10T07:38:43+00:00"}
+{"event":"test_run","test":"probes/probe_007.py","status":"pass","details":"fidelity sweep: all fp32_acc=True pass (LoFi .9995); all fp32_acc=False ~0.41 pcc, HiFi4+False=NaN -> Float32 intermediates + 16-bit dest format mismatch","ts":"2026-06-10T07:39:55+00:00"}
+{"event":"hypothesis","hypothesis":"fp32_dest_acc_en=False packs 16-bit dest into Float32 stat/acc CBs -> garbage; fix: derive intermediate CB format from fp32_dest_acc_en (skill §4)","ts":"2026-06-10T07:39:55+00:00"}
