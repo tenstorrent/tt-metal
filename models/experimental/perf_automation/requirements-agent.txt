@@ -1,0 +1,10 @@
+# Python dependencies for the agentic perf-optimization workflow (perf_automation).
+# Install into the tt-metal python_env venv:
+#   source /localdev/gtobar/local_env.sh
+#   uv pip install -r models/experimental/perf_automation/requirements-agent.txt
+
+# --- Claude Agent SDK (lead agent + sub-agents, in-process MCP tools) ---
+claude-agent-sdk==0.2.95
+
+# --- Credentials: load .env.agent as the sole credential source (PLAN section 3.1) ---
+python-dotenv>=1.0.0
