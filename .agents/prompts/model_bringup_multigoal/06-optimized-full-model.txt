@@ -6,19 +6,19 @@ This goal creates the optimized-full-model state for the repo-local TTNN autopor
 
 Goal completion requirements:
 - The full model is parallelized appropriately across the target mesh, not merely built from a multichip decoder while embeddings, norms, LM head, logits, sampling, cache management, or generator boundaries remain accidental bottlenecks.
-- Full-model prefill, teacher-forcing decode, and autoregressive readiness still pass after optimization, with top-1/top-5/top-100 and qualitative generation evidence refreshed. For instruction/chat models, refresh the main readiness result against the DeepSeek AIME24 prompt rendered through the HF tokenizer chat template; raw Tale-of-Two-Cities book references are only supplemental or fallback evidence.
+- Full-model prefill, teacher-forcing decode, and autoregressive readiness still pass after optimization, with top-1/top-5/top-100 and qualitative generation evidence refreshed. For instruction/chat models, use AIME24 with the HF tokenizer chat template; raw book references are only supplemental.
 - The main AIME24 chat-template readiness reference uses 100 generated tokens unless a concrete model-specific limit prevents it.
 - Warmed full-model prefill and decode performance are measured before and after this optimization pass.
-- tt-perf-report human-readable tables and CSV/provenance logs exist for the full-model path (with a minimal number of internal layers) where the profiler can capture it; any profiler limitation is documented with exact failure evidence and a fallback timing method.
-- The report audits and optimizes embeddings, all decoder layers, final norm, LM head/tied embeddings, logits movement, sampling, paged KV-cache allocation/update, trace capture/replay, collectives, residual layouts, and host boundaries.
+- tt-perf-report tables and CSV/provenance logs exist for the full-model path, using a minimal internal-layer set where needed; profiler limits have exact failure evidence and fallback timing.
+- The report audits and optimizes embeddings, decoders, final norm, LM head/tied embeddings, logits movement, sampling, paged KV-cache, trace replay, collectives, residual layouts, and host boundaries.
 - It is not valid to leave potential optimizations untried to "functional risk". Optimization opportunities MUST be tried and debugged using $autofix if they cause functional regressions.
-- Multichip and optimize guidance is applied to full-model-only pieces, including sharding/replication decisions, async CCLs, fused matmul-CCL opportunities, DRAM-sharded matmuls, program configs, and compute-kernel configs.
-- Do not run the full-model BFP4 datatype frontier search in this goal; the following $datatype-sweep stage owns BFP4 weight, BFP8 activation, BFP8 CCL, and KV-cache datatype selection against top-1/top-5 accuracy.
+- Multichip and optimize guidance is applied to full-model-only pieces: sharding/replication, async CCLs, fused matmul-CCLs, DRAM-sharded matmuls, program configs, and compute-kernel configs.
+- Do not run the full-model BFP4 datatype frontier search here; $datatype-sweep owns BFP4 weights, BFP8 activation/CCL, and KV-cache dtype selection against top-1/top-5.
 - Runtime fallback audit is clean for the measured full-model/generator path, or every remaining host boundary is named as an explicit production compromise with evidence.
 - models/autoports/<model>/doc/optimized_full_model/README.md and work_log.md summarize commands, before/after accuracy and perf, mesh/optimization decisions, tt-perf-report conclusions, limitations, and exact artifacts.
-- The relevant checklist items in the $optimize skill have been completed with evidence, excluding final full-model datatype frontier selection that belongs to $datatype-sweep.
-- Fully-traced decode path from token in to token out including on-device sampling (via models.common.sampling) that supports top-k/top-p as well as greedy sampling
+- Relevant $optimize checklist items are completed with evidence, excluding final full-model datatype frontier selection.
+- Fully-traced decode path from token in to token out including on-device sampling (via models.common.sampling) that supports top-k/top-p as well as greedy sampling. Teacher-forcing decode must use this traced path; eager teacher-forcing accuracy or performance is not a completed optimized-full-model result.
 - run_prefill_check and run_teacher_forcing meet top-5 >= 98% and top-100 = 100% on the AIME24 chat-template reference unless model-specific evidence justifies otherwise.
-- Prefill TTFT and decode t/s/u for batch-1 inference reported at the top of README.md
+- Prefill TTFT and trace-verified decode t/s/u for batch-1 inference reported at the top of README.md
 
 Do not mark this goal blocked because PCC, trace replay, watcher, profiler, CCL, cache, MoE, or validation currently fails; those are expected bringup work. Before blocking, isolate the smallest repro, compare against optimized single-chip, try a concrete fix/refutation loop, and use $autofix for subtle PCC, mesh/CCL, cache, or routed-expert bugs unless unavailable. Blocking requires evidence that continued agent debugging is no longer meaningful.

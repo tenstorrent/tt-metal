@@ -84,7 +84,6 @@ def _run_one_entry(
     generator: Generator,
     acc: TokenAccuracy,
     entry_idx: int,
-    enable_trace: bool = True,
 ) -> Dict[str, Any]:
     prompt_ids = acc.get_prompt_token_ids(entry_idx)
     n_steps = acc.num_gt_tokens(entry_idx)
@@ -214,7 +213,6 @@ def run_teacher_forcing(
     reference_path: Path,
     mesh_device,
     build_kwargs: Dict[str, Any] | None = None,
-    enable_trace: bool = True,
 ) -> List[Dict[str, Any]]:
     """
     Programmatic entry point. Builds the generator, runs teacher forcing
@@ -277,11 +275,6 @@ def _main() -> None:
     parser = argparse.ArgumentParser(description="Run the teacher-forcing readiness check against a reference file.")
     parser.add_argument("--model-dir", type=Path, required=True, help="Path to the model directory.")
     parser.add_argument("--reference", type=Path, required=True, help="Path to the .refpt reference file.")
-    parser.add_argument(
-        "--disable-trace",
-        action="store_true",
-        help="Request untraced decode from generator.generate() for trace-debug fallback runs.",
-    )
     add_mesh_device_args(parser)
     args = parser.parse_args()
 
@@ -291,7 +284,6 @@ def _main() -> None:
             model_dir=args.model_dir.resolve(),
             reference_path=args.reference.resolve(),
             mesh_device=mesh_device,
-            enable_trace=not args.disable_trace,
         )
     finally:
         close_readiness_mesh_device(mesh_device, args.fabric_config)
