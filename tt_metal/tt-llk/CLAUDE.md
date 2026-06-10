@@ -91,7 +91,7 @@ CHIP_ARCH=quasar pytest -x --compile-producer -n 15 test_{op}_quasar.py
 TT_UMD_SIMULATOR_PATH=/proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-quasar-1x3 CHIP_ARCH=quasar pytest -x --run-simulator --compile-consumer --port=5556 test_{op}_quasar.py
 ```
 
-When running inside codegen agents, wrap the simulator step with the `flock /tmp/tt-llk-test-simulator.lock` pattern to serialize simulator access — see any `codegen/agents/quasar/llk-*.md` for the full wrapper.
+When running inside codegen agents, never call pytest or flock directly — use `.claude/scripts/run_test.sh` (`count` / `compile` / `simulate` / `run`), which serialises simulator access via a per-arch lock (`/tmp/tt-llk-test-{arch}.lock`), cleans up stale port processes, sets `TT_UMD_SIMULATOR_PATH`, and detects hangs (exit 5). See `.claude/skills/run-test/SKILL.md`.
 
 ## Key Files
 

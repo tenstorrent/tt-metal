@@ -21,7 +21,7 @@ The issue-solver orchestrators use this table to resolve arch-specific values fr
 | `DASHBOARD_PROJECT_ID` | `blackhole_issue_solver` | `quasar_issue_solver` | `wormhole_issue_solver` |
 | `MULTI_DASHBOARD_PROJECT_ID` | `issue_solver` | `issue_solver` | `issue_solver` |
 
-`SIM_PORT` is only populated for Quasar (the lone sim carve-out). Blackhole and Wormhole run on the locally-attached card via `run_hw` in `tester.md` — no simulator, no `--run-simulator`, no `flock`. Hosts without a matching BH/WH card finalize the run as `failed` with `ENV_ERROR`. Quasar has no silicon, so it always runs on `emu-quasar-1x3` with port 5556, flock-serialized on `/tmp/tt-llk-test-simulator.lock` — same sim path the Quasar kernel-gen playbooks have used since day one.
+`SIM_PORT` is only populated for Quasar (the lone sim carve-out). Blackhole and Wormhole run on the locally-attached card — no simulator, no `--run-simulator`. Hosts without a matching BH/WH card finalize the run as `failed` with `ENV_ERROR`. Quasar has no silicon, so it always runs on `emu-quasar-1x3` with port 5556. On every arch, `.claude/scripts/run_test.sh` serialises the consumer step internally via the per-arch lock `/tmp/tt-llk-test-<arch>.lock` — agents never flock manually.
 
 ## How the orchestrators consume this
 

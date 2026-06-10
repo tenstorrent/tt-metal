@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-PostToolUse hook — captures Bash tool outcomes for compiler.py and run_llk_tests.sh.
+PostToolUse hook — captures Bash tool outcomes for compiler.py and run_test.sh
+(also matches its predecessor run_llk_tests.sh).
 
 Receives a JSON payload on stdin (Claude Code PostToolUse format):
   tool_name       "Bash"
@@ -13,11 +14,11 @@ Behaviour:
                            → write compile_success_{N}.txt artifact
   compiler.py failure      → increment compile_failures in run.json
                            → write compile_failure_{N}.txt artifact
-  run_llk_tests.sh compile success   → compile_successes++, compile_success_{N}.txt
-  run_llk_tests.sh simulate success  → run_successes++, run_success_{N}/test_run.txt
-  run_llk_tests.sh run success       → both compile_successes++ and run_successes++
-  run_llk_tests.sh exit 2  → compile_failures++, compile_failure_{N}.txt
-  run_llk_tests.sh exit 1/3→ run_failures++, failed_attempt_{N}/test_run.txt
+  run_test.sh compile success   → compile_successes++, compile_success_{N}.txt
+  run_test.sh simulate success  → run_successes++, run_success_{N}/test_run.txt
+  run_test.sh run success       → both compile_successes++ and run_successes++
+  run_test.sh exit 2     → compile_failures++, compile_failure_{N}.txt
+  run_test.sh exit 1/3/5 → run_failures++, failed_attempt_{N}/test_run.txt
 
 LOG_DIR is read from /tmp/codegen_run_state.sh (written by the orchestrator Step 0).
 If the state file is absent or LOG_DIR does not exist, the hook exits silently.
@@ -175,11 +176,12 @@ def _compiler_py_failed(output: str, exit_code: int | None) -> bool:
 
 def _test_runner_outcome(output: str, exit_code: int | None) -> str | None:
     """Return 'compile_error', 'test_failure', 'timeout', or None (pass)."""
-    # Explicit exit codes from run_llk_tests.sh:
-    #   0 = pass, 1 = test failure, 2 = compile error, 3 = env/timeout error
+    # Explicit exit codes from run_test.sh:
+    #   0 = pass, 1 = test failure, 2 = compile error, 3 = env/timeout error,
+    #   5 = hang (watchdog killed a stalled consumer)
     if exit_code == 2:
         return "compile_error"
-    if exit_code == 3:
+    if exit_code in (3, 5):
         return "timeout"
     if exit_code == 1:
         # Distinguish timeout from test failure by output content
@@ -235,12 +237,12 @@ def main() -> None:
             artifact = _write_compile_success(log_dir, command, output)
             print(f"[hook] compiler.py success #{n} → {artifact.name}")
 
-    # ── run_llk_tests.sh ─────────────────────────────────────────────────────
-    elif re.search(r"run_llk_tests\.sh", command):
+    # ── run_test.sh (and its predecessor run_llk_tests.sh) ──────────────────
+    elif re.search(r"run(?:_llk)?_tests?\.sh", command):
         outcome = _test_runner_outcome(output, exit_code)
 
         # Detect the subcommand (compile | simulate | run | count | …)
-        m = re.search(r"run_llk_tests\.sh\s+(\w+)", command)
+        m = re.search(r"run(?:_llk)?_tests?\.sh\s+(\w+)", command)
         subcommand = m.group(1) if m else "run"
 
         if outcome == "compile_error":

@@ -189,13 +189,16 @@ table in `codegen/agents/quasar/llk-kernel-writer.md` Step 4 for the full mappin
 fields only. If the C++ test uses a symbol as a template argument or compile-time constant,
 it **must** be `-t`.
 
-2. **Run functional tests** — use `run_llk_tests.sh run` (compile + simulate, flock-serialised).
+2. **Run functional tests** — use `run_test.sh run` (compile + simulate, flock-serialised).
    Invoke via the Bash tool with `timeout: 1800000`; never `run_in_background: true`.
+   `--maxfail 0` is required: this is a full-matrix verification run, and omitting the flag defaults to 10.
 ```bash
-bash {WORKTREE_DIR}/codegen/scripts/run_llk_tests.sh run \
-    --worktree {WORKTREE_DIR} --arch quasar --test test_{op}_quasar.py
+bash {WORKTREE_DIR}/tt_metal/tt-llk/.claude/scripts/run_test.sh run \
+    --worktree {WORKTREE_DIR}/tt_metal/tt-llk --arch quasar --test test_{op}_quasar.py \
+    --maxfail 0 --log-dir {LOG_DIR}/test_logs_optimizer
 echo "RUN_EXIT=$?"
 ```
+Exit codes: 0=pass, 2=compile fail, 1=test fail, 3=env error, 5=hang (watchdog killed a stalled simulator). On 1, 2, or 5 the optimization broke something — go to Step 9.
 
 ### Step 9: Handle Failures
 
