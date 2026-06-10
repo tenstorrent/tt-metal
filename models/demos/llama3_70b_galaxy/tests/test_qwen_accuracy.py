@@ -523,12 +523,22 @@ def test_qwen_model_acc(
         profiler.end("run")
         benchmark_data = BenchmarkData()
         benchmark_data.add_measurement(
-            profiler, 0, "inference_decode", "top1_token_accuracy", total_top1_acc,
-            step_warm_up_num_iterations=None, target=None
+            profiler,
+            0,
+            "inference_decode",
+            "top1_token_accuracy",
+            total_top1_acc,
+            step_warm_up_num_iterations=None,
+            target=None,
         )
         benchmark_data.add_measurement(
-            profiler, 0, "inference_decode", "top5_token_accuracy", total_top5_acc,
-            step_warm_up_num_iterations=None, target=None
+            profiler,
+            0,
+            "inference_decode",
+            "top5_token_accuracy",
+            total_top5_acc,
+            step_warm_up_num_iterations=None,
+            target=None,
         )
         benchmark_data.save_partial_run_json(
             profiler,

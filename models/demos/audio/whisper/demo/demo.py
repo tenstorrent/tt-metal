@@ -889,7 +889,9 @@ def test_demo_for_conditional_generation(
     if is_ci_env:
         # When run_both_batch_sizes is active, the returned metrics correspond to
         # the last batch size iterated (WHISPER_BATCH_SIZE).
-        effective_bs_per_device = WHISPER_BATCH_SIZE if (run_both_batch_sizes and not should_check_perf) else batch_size_per_device
+        effective_bs_per_device = (
+            WHISPER_BATCH_SIZE if (run_both_batch_sizes and not should_check_perf) else batch_size_per_device
+        )
         total_batch = mesh_device.get_num_devices() * effective_bs_per_device
         benchmark_data = BenchmarkData()
         benchmark_data.add_measurement(profiler, 0, "inference_prefill", "time_to_token", ttft)
