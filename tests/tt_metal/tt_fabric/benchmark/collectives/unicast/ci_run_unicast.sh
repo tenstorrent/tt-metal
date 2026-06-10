@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# Clear L1 to a known state before each run so the benchmark measures from a
-# deterministic device state (matches the other fabric BW microbenchmarks).
-export TT_METAL_CLEAR_L1=1
-
 OUT="${TT_METAL_HOME}/generated/test_reports/unicast"
 mkdir -p "$OUT"
 
