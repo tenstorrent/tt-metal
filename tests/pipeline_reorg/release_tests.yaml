@@ -148,6 +148,7 @@
   cmd: |
     export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub HF_DATASETS_CACHE=/tmp/huggingface/datasets
     pytest --timeout 600 models/demos/audio/whisper/tests/test_whisper_modules.py
+    pytest --timeout 600 models/demos/audio/whisper/tests/test_whisper_streaming_detok.py
   model-name: whisper
   skus:
     wh_n150:

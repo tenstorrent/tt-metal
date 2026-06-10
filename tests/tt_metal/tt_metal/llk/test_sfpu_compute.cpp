@@ -97,10 +97,17 @@ const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_
     {"gt_int",
      {{"SFPU_OP_INIT_0", "gt_int_tile_init<DataFormat::Int32>();"},
       {"SFPU_OP_CHAIN_0", "gt_int_tile<DataFormat::Int32>(0, 1, 0);"}}},
+    {"binary_max", {{"SFPU_OP_INIT_0", "binary_max_tile_init();"}, {"SFPU_OP_CHAIN_0", "binary_max_tile(0, 1, 0);"}}},
+    {"binary_min", {{"SFPU_OP_INIT_0", "binary_min_tile_init();"}, {"SFPU_OP_CHAIN_0", "binary_min_tile(0, 1, 0);"}}},
+    {"binary_max_int32",
+     {{"SFPU_OP_INIT_0", "binary_max_int32_tile_init();"}, {"SFPU_OP_CHAIN_0", "binary_max_int32_tile(0, 1, 0);"}}},
+    {"binary_min_int32",
+     {{"SFPU_OP_INIT_0", "binary_min_int32_tile_init();"}, {"SFPU_OP_CHAIN_0", "binary_min_int32_tile(0, 1, 0);"}}},
 };
 
 bool is_int8_binary_sfpu_op(const std::string& op_name) {
-    return (op_name == "add_int") or (op_name == "mul_int") or (op_name == "gt_int");
+    return (op_name == "add_int") or (op_name == "mul_int") or (op_name == "gt_int") or
+           (op_name == "binary_max_int32") or (op_name == "binary_min_int32");
 }
 
 bfloat16 sfpu_function(const std::string& op_name, const bfloat16& input) {
@@ -158,6 +165,12 @@ bfloat16 sfpu_binary_function(const std::string& op_name, const bfloat16& lhs, c
     if (op_name == "mul_float") {
         return bfloat16(static_cast<float>(lhs) * static_cast<float>(rhs));
     }
+    if (op_name == "binary_max") {
+        return bfloat16(std::max(static_cast<float>(lhs), static_cast<float>(rhs)));
+    }
+    if (op_name == "binary_min") {
+        return bfloat16(std::min(static_cast<float>(lhs), static_cast<float>(rhs)));
+    }
     TT_THROW("Unsupported binary op_name in test");
 }
 
@@ -191,6 +204,12 @@ int32_t get_binary_int_operation_result(const std::string& op_name, int lhs, int
     }
     if (op_name == "gt_int") {
         return (lhs > rhs) ? 1 : 0;
+    }
+    if (op_name == "binary_max_int32") {
+        return std::max(lhs, rhs);
+    }
+    if (op_name == "binary_min_int32") {
+        return std::min(lhs, rhs);
     }
     TT_THROW("Unsupported int8 binary op_name in test");
 }
@@ -251,6 +270,11 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs
         auto rhs = generate_div_operand(numel, seed + 1);
         return {lhs, rhs};
     }
+    if (op_name == "binary_max" || op_name == "binary_min") {
+        auto lhs = generate_packed_uniform_random_vector<uint32_t, bfloat16>(-4.0f, 4.0f, numel, seed);
+        auto rhs = generate_packed_uniform_random_vector<uint32_t, bfloat16>(-4.0f, 4.0f, numel, seed + 1);
+        return {lhs, rhs};
+    }
     if (is_int8_binary_sfpu_op(op_name)) {
         auto lhs = create_random_vector_of_int8(numel, seed);
         auto rhs = create_random_vector_of_int8(numel, seed + 1);
@@ -274,7 +298,7 @@ std::tuple<vector<uint32_t>, vector<uint32_t>, vector<uint32_t>> generate_packed
 
 bool is_close_packed_sfpu_output(
     const std::vector<uint32_t>& vec_a, const std::vector<uint32_t>& vec_b, const std::string& op_name) {
-    if (is_int8_binary_sfpu_op(op_name)) {
+    if (is_int8_binary_sfpu_op(op_name) || op_name == "binary_max" || op_name == "binary_min") {
         return vec_a == vec_b;
     }
     if (op_name == "where") {
@@ -666,7 +690,11 @@ bool run_sfpu_binary_two_input_buffer(
             sfpu_defines["SFPU_OP_BINARY_MUL_INT_INCLUDE"] = "1";
         } else if (test_config.sfpu_op == "gt_int") {
             sfpu_defines["SFPU_OP_BINARY_GT_INT_INCLUDE"] = "1";
+        } else {
+            sfpu_defines["SFPU_OP_BINARY_MAX_MIN_INCLUDE"] = "1";
         }
+    } else if (test_config.sfpu_op == "binary_max" || test_config.sfpu_op == "binary_min") {
+        sfpu_defines["SFPU_OP_BINARY_MAX_MIN_INCLUDE"] = "1";
     } else {
         sfpu_defines["SFPU_OP_BINARY_DIV_INCLUDE"] = "1";
     }
@@ -1034,12 +1062,25 @@ bool run_sfpu_ternary_three_input_buffer(
 }
 
 }  // namespace unit_tests::compute::sfpu
+
+// Unary SFPU ops with no Quasar compute-API implementation yet: their
+// compute_kernel_api.h / eltwise_unary headers are wrapped in #ifndef ARCH_QUASAR,
+// so building the kernel would fail with "not declared in this scope". Skip them on
+// Quasar so the suite reflects actual coverage instead of a hard kernel-build failure.
+inline bool is_unary_sfpu_op_unsupported_on_quasar(const std::string& sfpu_op) {
+    return sfpu_op == "gelu" || sfpu_op == "log" || sfpu_op == "tanh" || sfpu_op == "sign";
+}
+
 class SingleCoreSingleMeshDeviceSfpuParameterizedFixture
     : public LLKMeshDeviceFixture,
       public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
 TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedFixture, TensixSfpuCompute) {
     size_t num_tiles = std::get<0>(GetParam());
     std::string sfpu_op = std::get<1>(GetParam());
+
+    if (arch_ == tt::ARCH::QUASAR && is_unary_sfpu_op_unsupported_on_quasar(sfpu_op)) {
+        GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' has no Quasar compute-API implementation";
+    }
 
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
@@ -1095,6 +1136,9 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture, TensixSfpuCompu
     size_t num_tiles = std::get<0>(GetParam());
     std::string sfpu_op = std::get<1>(GetParam());
 
+    if (arch_ == tt::ARCH::QUASAR && is_unary_sfpu_op_unsupported_on_quasar(sfpu_op)) {
+        GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' has no Quasar compute-API implementation";
+    }
     if (((arch_ == tt::ARCH::WORMHOLE_B0) and (sfpu_op == "relu")) or
         ((arch_ == tt::ARCH::WORMHOLE_B0) and (sfpu_op == "exponential")) or
         ((arch_ == tt::ARCH::WORMHOLE_B0) and (sfpu_op == "log"))) {
@@ -1152,6 +1196,10 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterized32BitDestFixture, TensixSfpuCo
     size_t num_tiles = std::get<0>(GetParam());
     std::string sfpu_op = std::get<1>(GetParam());
 
+    if (arch_ == tt::ARCH::QUASAR && is_unary_sfpu_op_unsupported_on_quasar(sfpu_op)) {
+        GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' has no Quasar compute-API implementation";
+    }
+
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
     unit_tests::compute::sfpu::SfpuConfig test_config = {
@@ -1207,6 +1255,9 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterized32BitDestApproxFixture, Tensix
     size_t num_tiles = std::get<0>(GetParam());
     std::string sfpu_op = std::get<1>(GetParam());
 
+    if (arch_ == tt::ARCH::QUASAR && is_unary_sfpu_op_unsupported_on_quasar(sfpu_op)) {
+        GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' has no Quasar compute-API implementation";
+    }
     if (((arch_ == tt::ARCH::WORMHOLE_B0) and (sfpu_op == "relu")) or
         ((arch_ == tt::ARCH::WORMHOLE_B0) and (sfpu_op == "exponential")) or
         ((arch_ == tt::ARCH::WORMHOLE_B0) and (sfpu_op == "log"))) {
@@ -1310,7 +1361,11 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "mul_float"),
         std::make_tuple(1, "add_int"),
         std::make_tuple(1, "mul_int"),
-        std::make_tuple(1, "gt_int")),
+        std::make_tuple(1, "gt_int"),
+        std::make_tuple(1, "binary_max"),
+        std::make_tuple(1, "binary_min"),
+        std::make_tuple(1, "binary_max_int32"),
+        std::make_tuple(1, "binary_min_int32")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });

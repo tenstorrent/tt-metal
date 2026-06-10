@@ -115,10 +115,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "cfg_defines.h"
 #include "cmath_common.h"
-#include "experimental/ckernel_sfpu_binary_max_min.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
-#include "llk_math_eltwise_unary_sfpu_common.h"
+#include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_sfpu/ckernel_sfpu_binary_max_min.h"
 #include "params.h"
 
 using namespace ckernel;
@@ -189,6 +189,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_eltwise_unary_sfpu_params_(
             ckernel::sfpu::calculate_binary_max_min<DataFormat::Int32, IS_MAX_OP, 8 /*ITERATIONS*/>,
             params.DST_INDEX,
+            VectorMode::RC,
             /* dst_index_in0 */ 0U,
             /* dst_index_in1 */ 1U,
             /* dst_index_out */ 2U);
@@ -198,6 +199,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_eltwise_unary_sfpu_params_(
             ckernel::sfpu::calculate_binary_max_min<DataFormat::Float32, IS_MAX_OP, 8 /*ITERATIONS*/>,
             params.DST_INDEX,
+            VectorMode::RC,
             /* dst_index_in0 */ 0U,
             /* dst_index_in1 */ 1U,
             /* dst_index_out */ 2U);
