@@ -17,9 +17,11 @@ namespace tt::tt_metal::experimental {
 // Metal 2.0 offline (AOT) compile + load APIs
 // (experimental namespace free functions)
 //
-// Live-device only: both APIs require a live MeshDevice so the producer and loader share
-// identical kernel hashing by construction (the producer reuses the real detail::CompileProgram
-// path, and the loader recomputes the same hash at dispatch time).
+// Requires an initialized MeshDevice: both APIs go through the real on-device CompileProgram
+// path, so the producer and loader compute identical kernel hashes by construction
+// (the loader recomputes the same hash at dispatch time). The device's build env (arch +
+// build flags, folded into build_key) must match the device the AOT binaries will run on;
+// a mock MeshDevice configured for the target arch is sufficient to produce them.
 //------------------------------------------------
 
 // Produce: compile every kernel in `spec` against `mesh_device` and emit AOT artifacts under

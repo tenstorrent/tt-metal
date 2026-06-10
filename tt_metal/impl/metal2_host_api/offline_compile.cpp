@@ -43,7 +43,7 @@ void for_each_kernel(detail::ProgramImpl& program_impl, const Fn& fn) {
     }
 }
 
-// Copy every generated ELF for `kernel` from the live device's JIT kernel root into `output_dir`.
+// Copy every generated ELF for `kernel` from the device's JIT kernel root into `output_dir`.
 // Both source and destination paths are computed by BuildEnvManager::get_kernel_binary_path so the
 // emitted layout matches exactly what the runtime precompiled-loader path searches for.
 void copy_kernel_elfs_to_output_dir(
@@ -104,8 +104,9 @@ void CompileProgramSpecOffline(
     }
     IDevice* device = devices[0];
 
-    // Compile via the real live-device path: this writes ELFs to the JIT cache and sets each
-    // kernel's full_name to "<name>/<hash>/" (the suffix the loader recomputes at dispatch time).
+    // Compile via the real on-device CompileProgram path: this writes ELFs to the JIT cache and
+    // sets each kernel's full_name to "<name>/<hash>/" (the suffix the loader recomputes at
+    // dispatch time).
     Program program = MakeProgramFromSpec(mesh_device, spec);
     detail::CompileProgram(device, program);
 
@@ -115,16 +116,6 @@ void CompileProgramSpecOffline(
     const Hal& hal = MetalContext::instance().hal();
 
     for_each_kernel(program.impl(), [&](const std::shared_ptr<Kernel>& kernel) {
-        // Log build_key + full_name per kernel so produce-time/load-time build-key mismatches
-        // (watcher, dprint, opt level, etc. fold into build_key) are diagnosable.
-        log_debug(
-            tt::LogBuildKernels,
-            "CompileProgramSpecOffline: emitting AOT binaries. kernel_name={}, full_name={}, build_key={}, "
-            "output_dir={}",
-            kernel->name(),
-            kernel->get_full_kernel_name(),
-            device_build_env.build_key(),
-            output_dir);
         copy_kernel_elfs_to_output_dir(
             kernel, build_env_manager, device->build_id(), hal, source_kernel_root, output_dir);
     });
