@@ -1,0 +1,109 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+"""TTNN vision transformer block for dots.ocr.
+
+DotsVisionBlock (modeling_dots_vision): pre-norm residual block —
+``x + attn(norm1(x))`` then ``h + mlp(norm2(h))`` — composing the already
+brought-up sub-blocks TtVisionRMSNorm (eps=1e-5), TtVisionAttention (fused
+QKV MHA, 12 heads x head_dim 128, 2D rope, windowed SDPA over cu_seqlens) and
+TtVisionMLP (SwiGLU 1536 -> 4224 -> 1536). Mirrors reference_impl
+models/demos/qwen25_vl/tt/vision_block.py: norm -> attention -> ttnn.add
+residual -> norm -> mlp -> ttnn.add residual, DRAM interleaved throughout.
+
+Parallelism plan (ARCHITECTURE.md): vision tower placement=replicate — all
+sub-block weights are ``ReplicateTensorToMesh`` on the 1x4 mesh, activations
+stay replicated, no CCL. On a single device the mesh_mapper degenerates
+gracefully.
+"""
+
+import importlib.util
+import sys
+from pathlib import Path
+
+import ttnn
+from models.common.lightweightmodule import LightweightModule
+
+# Dir name contains a dot -> not importable as a package; load siblings by path.
+_TT_DIR = Path(__file__).resolve().parent
+
+
+def _load_sibling(stem):
+    name = f"dots_ocr_tt_{stem}"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, _TT_DIR / f"{stem}.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)
+    return sys.modules[name]
+
+
+TtVisionRMSNorm = _load_sibling("vision_rmsnorm").TtVisionRMSNorm
+TtVisionAttention = _load_sibling("vision_attention").TtVisionAttention
+TtVisionMLP = _load_sibling("vision_mlp").TtVisionMLP
+
+
+class TtVisionBlock(LightweightModule):
+    """dots.ocr vision block: x + attn(norm1(x)); h + mlp(norm2(h)).
+
+    Args:
+        mesh_device: ttnn mesh device handle (weights replicated).
+        state_dict: torch tensors keyed norm1.weight, attn.qkv.weight,
+            attn.proj.weight, norm2.weight, mlp.fc1.weight, mlp.fc2.weight,
+            mlp.fc3.weight (HF keys vision_tower.blocks.N.* with the block
+            prefix stripped).
+        num_heads: attention heads (dots.ocr vision: 12, head_dim 128).
+        dtype: on-device weight/activation dtype.
+        eps: RMSNorm epsilon (dots.ocr vision uses 1e-5).
+    """
+
+    def __init__(self, mesh_device, state_dict, num_heads=12, dtype=ttnn.bfloat16, eps=1e-5):
+        super().__init__()
+        self.mesh_device = mesh_device
+
+        self.norm1 = TtVisionRMSNorm(mesh_device, {"weight": state_dict["norm1.weight"]}, dtype=dtype, eps=eps)
+        self.attn = TtVisionAttention(
+            mesh_device,
+            {"qkv.weight": state_dict["attn.qkv.weight"], "proj.weight": state_dict["attn.proj.weight"]},
+            num_heads=num_heads,
+            dtype=dtype,
+        )
+        self.norm2 = TtVisionRMSNorm(mesh_device, {"weight": state_dict["norm2.weight"]}, dtype=dtype, eps=eps)
+        self.mlp = TtVisionMLP(
+            mesh_device,
+            {
+                "fc1.weight": state_dict["mlp.fc1.weight"],
+                "fc2.weight": state_dict["mlp.fc2.weight"],
+                "fc3.weight": state_dict["mlp.fc3.weight"],
+            },
+            dtype=dtype,
+        )
+
+    # Host-side input prep delegates to the attention sub-block (rope tables
+    # and cu_seqlens stay on host per ARCHITECTURE.md hybrid_notes).
+    def prepare_rope(self, rotary_pos_emb, padded_seq):
+        return self.attn.prepare_rope(rotary_pos_emb, padded_seq)
+
+    def prepare_cu_seqlens(self, cu_seqlens):
+        return self.attn.prepare_cu_seqlens(cu_seqlens)
+
+    def forward(self, x_11SH: ttnn.Tensor, rot_mats, cu_seqlens: ttnn.Tensor) -> ttnn.Tensor:
+        """x_11SH: [1, 1, padded_seq, dim] TILE_LAYOUT, replicated.
+
+        rot_mats: (cos, sin) each [1, 1, padded_seq, head_dim] from prepare_rope.
+        cu_seqlens: uint32 device tensor of unpadded window boundaries.
+        Returns: [1, 1, padded_seq, dim], replicated (rows past the last
+        cu_seqlens boundary are padding garbage — caller slices them off).
+        """
+        attn_in = self.norm1(x_11SH)
+        attn_out = self.attn(attn_in, rot_mats, cu_seqlens)
+        ttnn.deallocate(attn_in)
+        h = ttnn.add(x_11SH, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(attn_out)
+
+        ff_in = self.norm2(h)
+        ff_out = self.mlp(ff_in)
+        ttnn.deallocate(ff_in)
+        out = ttnn.add(h, ff_out, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+        ttnn.deallocate(h)
+        ttnn.deallocate(ff_out)
+        return out

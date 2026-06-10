@@ -1,0 +1,12 @@
+[
+  "ttnn.add",
+  "ttnn.deallocate",
+  "ttnn.experimental.nlp_concat_heads",
+  "ttnn.experimental.nlp_create_qkv_heads",
+  "ttnn.experimental.rotary_embedding_llama",
+  "ttnn.linear",
+  "ttnn.multiply",
+  "ttnn.rms_norm",
+  "ttnn.silu",
+  "ttnn.transformer.windowed_scaled_dot_product_attention"
+]

@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T03:20:47Z",
+  "updated_at": "2026-06-10T03:26:43Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -217,8 +217,15 @@
         "pcc": 0.9999998807907104
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_block.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_vision_block.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_block.traced_ops.json"
+        ],
+        "notes": "Pre-norm residual composition of done sub-blocks: TtVisionRMSNorm(norm1) -> TtVisionAttention (fused-QKV MHA 12h hd128, rotary_embedding_llama, windowed SDPA over cu_seqlens) -> ttnn.add residual -> TtVisionRMSNorm(norm2) -> TtVisionMLP (SwiGLU) -> ttnn.add residual, mirroring reference_impl qwen25_vl/tt/vision_block.py. Real blocks.0 weights, replicated on 1x4 mesh per parallelism plan (placement=replicate); seq padded 784->896, cu_seqlens keeps unpadded boundaries. Guard ok (lint 0, kernels ok, no new host ops). No KB entries returned for decoder_layer. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999958
       },
       "debug": {
         "status": "n/a",
@@ -650,6 +657,12 @@
       "tick": 9,
       "ts": "2026-06-10T03:20:47Z",
       "action": "device[vision_mlp]",
+      "result": "ok"
+    },
+    {
+      "tick": 10,
+      "ts": "2026-06-10T03:26:43Z",
+      "action": "device[vision_block]",
       "result": "ok"
     }
   ],

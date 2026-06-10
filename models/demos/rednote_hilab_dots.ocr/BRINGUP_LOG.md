@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T03:20:47Z
+**Updated:** 2026-06-10T03:26:43Z
 
 ## Block Status
 
@@ -31,7 +31,7 @@
 | vision_mlp | optimization | pending | — | 0 |  |
 | vision_mlp | real_weights | pending | — | 0 |  |
 | vision_block | reference | done | 1.000000 | 0 | pre-norm residual block x+attn(norm1(x)); x+mlp(norm2(x)), real blocks.0 weights |
-| vision_block | ttnn | pending | — | 0 |  |
+| vision_block | ttnn | done | 0.999958 | 0 | Pre-norm residual composition of done sub-blocks: TtVisionRMSNorm(norm1) -> TtVisionAttention (fused-QKV MHA 12h hd128, rotary_embedding_llama, windowed SDPA over cu_seqlens) -> ttnn.add residual -> TtVisionRMSNorm(norm2) -> TtVisionMLP (SwiGLU) -> ttnn.add residual, mirroring reference_impl qwen25_vl/tt/vision_block.py. Real blocks.0 weights, replicated on 1x4 mesh per parallelism plan (placement=replicate); seq padded 784->896, cu_seqlens keeps unpadded boundaries. Guard ok (lint 0, kernels ok, no new host ops). No KB entries returned for decoder_layer. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | vision_block | debug | n/a | — | 0 |  |
 | vision_block | optimization | pending | — | 0 |  |
 | vision_block | real_weights | pending | — | 0 |  |
@@ -93,6 +93,7 @@
 - tick 7 (2026-06-10T02:59:42Z): device[vision_rmsnorm] — ok
 - tick 8 (2026-06-10T03:13:53Z): device[vision_attention] — ok
 - tick 9 (2026-06-10T03:20:47Z): device[vision_mlp] — ok
+- tick 10 (2026-06-10T03:26:43Z): device[vision_block] — ok
 
 ## Host-Resident Exceptions
 
