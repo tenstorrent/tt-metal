@@ -16,7 +16,9 @@ def op_token(name: str) -> str:
 
 def _entry_ops(e: KBEntry) -> list[str]:
     toks = {op_token(p) for p in (e.torch_pattern or [])}
-    toks.add(op_token(e.fused_op.rsplit(".", 1)[-1]))
+    # Mined fused_op may be a list of op names rather than one string.
+    fused = e.fused_op if isinstance(e.fused_op, (list, tuple)) else [e.fused_op]
+    toks.update(op_token(str(f).rsplit(".", 1)[-1]) for f in fused if f)
     return sorted(t for t in toks if t)
 
 

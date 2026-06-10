@@ -19,10 +19,13 @@ DEFAULT_KB_DIR = Path(__file__).resolve().parents[3] / "models/experimental/opt_
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 
-def _tokens(*texts: str) -> set[str]:
+def _tokens(*texts) -> set[str]:
     out: set[str] = set()
     for t in texts:
-        out.update(_TOKEN_RE.findall(t.lower()))
+        # Mined records aren't schema-perfect: fused_op/category may be lists or None.
+        if isinstance(t, (list, tuple)):
+            t = " ".join(str(x) for x in t)
+        out.update(_TOKEN_RE.findall(str(t or "").lower()))
     return out
 
 
