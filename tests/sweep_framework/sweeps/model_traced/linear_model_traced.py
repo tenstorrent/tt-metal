@@ -616,6 +616,99 @@ def _run_batched_dram_sharded_matmul(
             pass
 
 
+def _apply_linear_activation(t, activation, fused_act_optype, fused_act_param):
+    """Apply the matmul's fused/explicit activation to a torch golden tensor."""
+    if activation is not None:
+        act = str(activation).lower()
+        if "silu" in act or "swish" in act:
+            return torch.nn.functional.silu(t)
+        if "gelu" in act:
+            return torch.nn.functional.gelu(t, approximate=("tanh" if "approx" in act else "none"))
+        if "relu" in act:
+            return torch.nn.functional.relu(t)
+    if fused_act_optype is not None:
+        try:
+            ot = int(fused_act_optype)
+        except (TypeError, ValueError):
+            ot = None
+        if ot == 2:
+            approx = (
+                "tanh"
+                if (isinstance(fused_act_param, (list, tuple)) and fused_act_param and fused_act_param[0])
+                else "none"
+            )
+            return torch.nn.functional.gelu(t, approximate=approx)
+        if ot == 3:
+            return torch.nn.functional.relu(t)
+        if ot == 5:
+            return torch.sigmoid(t)
+        if ot == 57:
+            return torch.nn.functional.silu(t)
+    return t
+
+
+def _run_kshard_replicated_matmul(
+    input_a_shape,
+    input_b_shape,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    compute_kernel_config_raw,
+    activation,
+    fused_act_optype,
+    fused_act_param,
+):
+    """K-sharded tensor-parallel matmul (BOTH operands sharded on the contracting
+    K dim). On the model's Galaxy mesh each device computes a partial over its
+    K-slice and a downstream all-reduce sums them — which equals the full-K matmul
+    a@b over the traced K. N300 (2 chips) can't reproduce the Galaxy 32-way
+    distribution, and the traced program_config encodes that mesh's per-device
+    tiling (invalid for the reconstructed shapes -> garbage/TT_FATAL). But the
+    all-reduced RESULT is just a@b, so validate THAT: replicate the operands, run a
+    plain matmul (device auto-selects a valid config for the actual shapes), and
+    compare to torch.matmul. (Equivalent to taking chip-0 of a replicated result.)
+    """
+    from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+    a_dtype = _as_dtype(input_a_dtype, ttnn.bfloat16)
+    b_dtype = _as_dtype(input_b_dtype, ttnn.bfloat16)
+    out_dtype = _as_dtype(output_dtype, None)
+    ckc = compute_kernel_config_raw
+    if isinstance(ckc, dict):
+        try:
+            ckc = parse_dict_value("compute_kernel_config", ckc)
+        except Exception:
+            ckc = None
+
+    dev = _ensure_vector_device(None)  # full 8x8 ETH grid on N150/N300
+    is_mesh = hasattr(dev, "get_num_devices")
+    torch.manual_seed(0)
+    a = torch.randn(*tuple(input_a_shape), dtype=torch.float32)
+    b = torch.randn(*tuple(input_b_shape), dtype=torch.float32)
+    golden = torch.matmul(a, b)
+    golden = _apply_linear_activation(golden, activation, fused_act_optype, fused_act_param)
+
+    mm = ttnn.ReplicateTensorToMesh(dev) if is_mesh else None
+    ta = ttnn.from_torch(
+        a, dtype=a_dtype, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=mm
+    )
+    tb = ttnn.from_torch(
+        b, dtype=b_dtype, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=mm
+    )
+    linear_kwargs = {}
+    if isinstance(ckc, ttnn.WormholeComputeKernelConfig):
+        linear_kwargs["compute_kernel_config"] = ckc
+    if out_dtype is not None:
+        linear_kwargs["dtype"] = out_dtype
+    if activation is not None:
+        linear_kwargs["activation"] = activation
+    start_time = start_measuring_time()
+    out = ttnn.linear(ta, tb, **linear_kwargs)
+    res = mesh_tensor_to_torch(out, dev if is_mesh else None)
+    e2e_perf = stop_measuring_time(start_time)
+    return [check_with_pcc(golden, res, 0.99), e2e_perf]
+
+
 # Override the default timeout in seconds for hang detection.
 # Linear operations with large shapes can take longer, increase timeout
 TIMEOUT = 300
@@ -707,6 +800,26 @@ def _mesh_factor_for_axis(plac_dict, axis, ndim):
             if ad == axis:
                 factor *= n
     return factor
+
+
+def _placement_shards_axis(plac_dict, axis, ndim):
+    """True if the traced placement shards the given tensor axis — regardless of
+    the per-mesh distribution size. (_mesh_factor_for_axis returns 1 when the
+    distribution on that axis is 1, e.g. a tensor-parallel config re-grouped onto
+    a 1x1 mesh; but the traced program_config is still the distributed mesh's, so
+    we must still treat it as a distributed fragment.)"""
+    if not isinstance(plac_dict, dict):
+        return False
+    for kind, d in _parse_placement_list(plac_dict.get("placement")) or []:
+        if kind == "S" and d is not None and (d if d >= 0 else d + ndim) == axis:
+            return True
+    return False
+
+
+def _placement_has_any_shard(plac_dict):
+    if not isinstance(plac_dict, dict):
+        return False
+    return any(kind == "S" for kind, _ in (_parse_placement_list(plac_dict.get("placement")) or []))
 
 
 def _align_linear_for_torch(torch_a, placement_a, torch_w, placement_w):
@@ -897,6 +1010,48 @@ def run(
             compute_kernel_config_raw=compute_kernel_config,
         )
 
+    # K-sharded tensor-parallel matmul: BOTH operands sharded on the contracting
+    # K dim (input_a's last dim, input_b's second-to-last). This is a distributed
+    # Galaxy fragment whose traced program_config encodes that mesh's per-device
+    # tiling — invalid for the N300 reconstruction (kernel reads wrong data -> ~0
+    # PCC / TT_FATAL). The all-reduced result is just a@b, so validate the math via
+    # a replicated plain matmul. (Separate path so the standard path is untouched.)
+    _a_plac = kwargs.get("input_a_tensor_placement")
+    _b_plac = kwargs.get("input_b_tensor_placement") or kwargs.get("input_tensor_b_tensor_placement")
+    _sa = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else ()
+    _sb = tuple(_ib_shape) if isinstance(_ib_shape, (list, tuple)) else ()
+    # Route any tensor-parallel matmul where the activation is sharded on its
+    # contracting dim (a's last dim = K) AND the weight is sharded on some dim
+    # (K via dim-2, or N via dim-1). These are Galaxy distributed fragments whose
+    # traced program_config encodes that mesh's per-device tiling (invalid on
+    # N300); the distributed result is still a@b, so validate the math via the
+    # replicated path.
+    # Use placement (not per-mesh factor): a tensor-parallel config re-grouped to
+    # 1x1 has factor 1 on every axis yet still carries the distributed mesh's
+    # program_config. Trigger when a is sharded on K (its last dim) AND b is
+    # sharded anywhere — but only when a traced program_config is present (that's
+    # what's invalid on N300; un-config'd matmuls already validate fine).
+    _kshard = (
+        program_config is not None
+        and _ib_shape is not None
+        and len(_sa) >= 2
+        and len(_sb) >= 2
+        and _placement_shards_axis(_a_plac, len(_sa) - 1, len(_sa))
+        and _placement_has_any_shard(_b_plac)
+    )
+    if _kshard:
+        return _run_kshard_replicated_matmul(
+            input_a_shape=input_a_shape,
+            input_b_shape=_ib_shape,
+            input_a_dtype=input_a_dtype,
+            input_b_dtype=(input_b_dtype if input_b_dtype is not None else kwargs.get("input_tensor_b_dtype")),
+            output_dtype=dtype,
+            compute_kernel_config_raw=compute_kernel_config,
+            activation=activation,
+            fused_act_optype=_fused_act_optype,
+            fused_act_param=_fused_act_param,
+        )
+
     # Open (or reuse) a mesh device whose dispatch axis matches this vector's
     # matmul program_config grid + the real shard-grid placement (read raw,
     # before parsing below). The fixture yielded None; we own the device here.
@@ -1069,15 +1224,20 @@ def run(
     torch_a_for_golden, torch_weight_for_golden = _align_linear_for_torch(
         torch_a, input_a_tensor_placement, torch_weight, input_b_tensor_placement
     )
-    if len(torch_a_for_golden.shape) > 2:
-        torch_output_tensor = torch.matmul(torch_a_for_golden, torch_weight_for_golden)
-        if torch_bias is not None:
-            torch_output_tensor = torch_output_tensor + torch_bias
-    else:
-        torch_weight_for_linear = torch_weight_for_golden
-        if len(torch_weight_for_golden.shape) >= 2:
-            torch_weight_for_linear = torch_weight_for_golden.transpose(-1, -2)
-        torch_output_tensor = torch.nn.functional.linear(torch_a_for_golden, torch_weight_for_linear, torch_bias)
+    # Honor transpose_a / transpose_b (the model traces e.g. transpose_b=True, so
+    # the device computes a @ wᵀ — the golden must match or it computes a @ w and
+    # diverges, ~0 PCC). torch.matmul over the (optionally transposed) operands
+    # gives the same result the old F.linear dance did for transpose_b=False, so
+    # the common case is unchanged.
+    _ag = torch_a_for_golden.transpose(-1, -2) if (transpose_a and torch_a_for_golden.ndim >= 2) else torch_a_for_golden
+    _wg = (
+        torch_weight_for_golden.transpose(-1, -2)
+        if (transpose_b and torch_weight_for_golden.ndim >= 2)
+        else torch_weight_for_golden
+    )
+    torch_output_tensor = torch.matmul(_ag, _wg)
+    if torch_bias is not None:
+        torch_output_tensor = torch_output_tensor + torch_bias
 
     # Apply activation to golden reference to match ttnn.linear behavior
     # Skip for batched weights (ttnn.matmul path doesn't apply activation)
