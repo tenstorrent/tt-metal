@@ -14,24 +14,26 @@
 # ║   TT_CONV_BENCH_MODE=helper_trm bash scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/conv/test_conv_bench.py   ║
 # ║                                                                                            ║
 # ║   main       = main's verbatim no-helper conv kernel (SubblockMajor, hand-written matmul).  ║
-# ║   helper_sbm = matmul-helper kernel, SubblockMajor (subblock_w == per_core_N enforced).     ║
-# ║   helper_trm = matmul-helper kernel, TileRowMajor (subblock_w == per_core_N relaxed).       ║
+# ║   helper_sbm = this branch's kernel, TileRowMajor auto-select forced OFF (pure SBM + pin).  ║
+# ║   helper_trm = this branch's kernel with TRM+pin engaged on the conv's REAL output layout   ║
+# ║                (ROW_MAJOR and TILE both); pin stays ON; relaxed subblock is tuner-derived.  ║
+# ║                Add TT_CONV_BENCH_FORCE_TRM=1 to skip the production ROI gate so any         ║
+# ║                hard-eligible conv runs TRM. Hard constraints stay: HEIGHT_SHARDED, no bias, ║
+# ║                packer_l1_acc, bf16/fp32 weights, TILE-out partials alias. Ineligible convs  ║
+# ║                fall back to helper_sbm with a CONV_BENCH fallback log (no FATAL).           ║
 # ║                                                                                            ║
-# ║ Optional manual subblock (overrides the auto-tuner; validated with TT_FATAL):               ║
-# ║   TT_CONV_BENCH_SUBBLOCK_H=2 TT_CONV_BENCH_SUBBLOCK_W=2 TT_CONV_BENCH_MODE=helper_trm ...    ║
+# ║ Optional manual subblock (overrides the host SBM tuner pick; validated with TT_FATAL —      ║
+# ║ the TRM relaxed subblock stays tuner-derived in the factory and cannot be set manually):    ║
+# ║   TT_CONV_BENCH_SUBBLOCK_H=1 TT_CONV_BENCH_SUBBLOCK_W=2 TT_CONV_BENCH_MODE=helper_sbm ...    ║
 # ║                                                                                            ║
-# ║ IDIOT-PROOFING (the harness TT_FATALs loudly rather than let you misread a result):         ║
+# ║ IDIOT-PROOFING (the harness fails loudly rather than let you misread a result):             ║
 # ║   • output_layout / packer_l1_acc / weights_dtype are REAL per-conv via CB_* env (defaults:  ║
-# ║     tile out, l1_acc on) so main/helper_sbm baselines match how models run the conv. The     ║
-# ║     ROW_MAJOR subblock-relaxation study (helper_trm) = CB_OUT_LAYOUT=row_major CB_L1_ACC=false║
-# ║   • helper_trm on a shape where out_subblock_w == per_core_N (weight_num_subblocks==1)       ║
-# ║     fatals: TileRowMajor would be identical to SubblockMajor (no-op). To make helper_trm     ║
-# ║     actually differ, the tuner must pick out_subblock_w < per_core_N — that needs            ║
-# ║     per_core_N > DST capacity (DST = 4 with fp32_accum=True, 8 with fp32_accum=False), i.e.  ║
-# ║     enough output channels (per_core_N = out_channels/32 tiles on height-sharded).           ║
+# ║     tile out, l1_acc on) so all three modes match how models run the conv.                  ║
+# ║   • helper_trm ineligible convs run SBM and the dispatch log shows trm_fallback_sbm=true —   ║
+# ║     a helper_trm row equal to helper_sbm means FALLBACK, not a null result.                 ║
 # ║   • width-sharded / 1D-depthwise convs fatal (bench supports HEIGHT/BLOCK sharded only).     ║
-# ║   • every run prints a CONV_BENCH[...] line: the mode, per_core_M/N, what the tuner WOULD     ║
-# ║     pick for SubblockMajor vs TileRowMajor, the out_subblock actually used, and l1_acc state.║
+# ║   • every run prints CONV_BENCH[...] lines: tuner SubblockMajor vs TileRowMajor picks (host) ║
+# ║     and USING + trm_pin/trm_forced/trm_fallback_sbm (factory dispatch).                     ║
 # ║   • run_conv checks PCC vs torch every run, so a mis-wired mode fails loudly (never a         ║
 # ║     silently-wrong perf number).                                                            ║
 # ╚══════════════════════════════════════════════════════════════════════════════════════════╝

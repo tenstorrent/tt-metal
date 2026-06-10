@@ -1,7 +1,19 @@
 # conv_bench profiling tools (GH #45995)
 
 Reusable drivers for the conv2d 3-mode (main / helper_sbm / helper_trm) real-config baseline sweep.
-Branch `wransom/conv_bench`. Assumes repo at /localdev/wransom/tt-metal and uses /tmp/cb_last.log scratch.
+Branch `wransom/conv_bench` (v2: re-ported onto the TRM+pin substrate as `wransom/conv_bench_v2`).
+Assumes repo at /localdev/wransom/tt-metal and uses /tmp/cb_last.log scratch.
+
+## v2 mode mapping (TRM+pin substrate — differs from the original conv_bench)
+- `main`       — main's verbatim no-helper kernel (unchanged).
+- `helper_sbm` — this branch's kernel with the TileRowMajor auto-select forced OFF (pure SBM + pin).
+- `helper_trm` — this branch's kernel with TRM+pin on the conv's REAL output layout (ROW_MAJOR and
+  TILE both), pin ON, relaxed subblock tuner-derived in the factory. Export `TT_CONV_BENCH_FORCE_TRM=1`
+  to skip the production ROI gate; hard-ineligible convs (bias, no l1_acc, bf8 weights/output,
+  BLOCK_SHARDED) fall back to SBM with `trm_fallback_sbm=true` in the CONV_BENCH dispatch log.
+  The old forced-ROW_MAJOR / forced-l1_acc-off helper_trm regime is gone; old helper_trm rows in the
+  CSVs are NOT comparable to v2 helper_trm rows.
+- Profiler build required for cb_bench.sh (Tracy device-kernel durations): `./build_metal.sh --enable-profiler`.
 
 ## Files
 - `cb_warm_conv.py` — reads newest `generated/profiler/reports/*/ops_perf_results_*.csv`, prints the warm

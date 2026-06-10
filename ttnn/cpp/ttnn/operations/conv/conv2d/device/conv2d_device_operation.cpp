@@ -110,10 +110,12 @@ void Conv2dDeviceOperation::validate_on_program_cache_miss(
         uint32_t out_width_ntiles =
             compute_output_specs(args, tensor_args).padded_shape()[-1] / tt::constants::TILE_WIDTH;
         // The "out_subblock_w == out_width || out_subblock_h == 1" gate exists for SubblockMajor output:
-        // reblock_and_untilize (the SubblockMajor untilize gather) is only correct under it. The conv_bench
-        // helper_trm (HelperRowMajor) path packs the output interm in TileRowMajor (tile-row) order and
-        // untilizes via the plain, non-reblock path, which is correct for any out_subblock_h — so the gate
-        // does not apply there. Relax it only for that path; every other conv keeps the constraint.
+        // reblock_and_untilize (the SubblockMajor untilize gather) is only correct under it. The production
+        // TRM+pin auto-select never trips it — the host block config stays SBM-shaped and the relaxed
+        // subblock is folded into the compute compile args inside the factory, so this relax is DORMANT
+        // today (the bench manual override TT_FATALs on SBM-illegal shapes in every mode). Kept keyed to
+        // helper_trm as defense for future bench tweaks that let a relaxed shape reach the host block
+        // config; every other conv keeps the constraint.
         const bool relax_subblock =
             ttnn::operations::conv::conv2d_bench_mode() == ttnn::operations::conv::Conv2dBenchMode::HelperRowMajor;
         if (args.memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {

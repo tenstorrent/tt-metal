@@ -38,13 +38,18 @@ uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num1, uint32_t n
 // Conv kernel profiling harness (conv_bench branch — pure test scaffolding). Selected by env
 // TT_CONV_BENCH_MODE:
 //   main         → main's verbatim no-helper conv kernel (SubblockMajor, hand-written matmul).
-//   helper_sbm   → matmul-helper kernel, SubblockMajor (subblock_w == per_core_N enforced).
-//   helper_trm   → matmul-helper kernel, TileRowMajor (subblock_w == per_core_N relaxed).
-//   (unset)      → normal conv, completely untouched.
-// ALL bench modes force ROW_MAJOR output and packer_l1_acc=OFF so the three are a fair, bug-free
-// 3-way comparison (l1_acc-late-disable was the source of the prior CB-format/spill bugs; off-from-
-// the-start avoids them). Optional TT_CONV_BENCH_SUBBLOCK_H / _W force a specific out_subblock,
-// overriding the tuner (validated with TT_FATAL). The factory adds the remaining TT_FATAL guards.
+//   helper_sbm   → matmul-helper kernel, SubblockMajor (TileRowMajor auto-select forced OFF).
+//   helper_trm   → matmul-helper kernel with the TRM+pin path engaged (TileRowMajor + pinned
+//                  partials, relaxed subblock). ROW_MAJOR and TILE outputs both supported.
+//                  Set TT_CONV_BENCH_FORCE_TRM=1 to skip the production ROI gate (relaxed h > 1
+//                  and larger volume) so convs the production heuristic would leave on SBM still
+//                  run TRM. Hard constraints — HEIGHT_SHARDED, no bias, packer_l1_acc, bf16/fp32
+//                  weights, TILE-out partials alias, divisible subblocks — are still required;
+//                  ineligible convs fall back to helper_sbm with a CONV_BENCH fallback log.
+//   (unset)      → normal conv, completely untouched (production TileRowMajor auto-select).
+// All bench modes run each conv's REAL output_layout / packer_l1_acc / weights_dtype (passed via
+// the harness CONFIG). Optional TT_CONV_BENCH_SUBBLOCK_H / _W force a specific SBM out_subblock,
+// overriding the tuner (validated with TT_FATAL); the TRM relaxed subblock stays tuner-driven.
 enum class Conv2dBenchMode : uint8_t { None, Main, HelperSubblock, HelperRowMajor };
 
 // Reads TT_CONV_BENCH_MODE once per process; TT_FATALs on an unrecognized value.
@@ -54,6 +59,11 @@ const char* conv2d_bench_mode_name(Conv2dBenchMode mode);
 
 // Manual out_subblock {h, w} from TT_CONV_BENCH_SUBBLOCK_H / _W (both or neither); nullopt if unset.
 std::optional<std::pair<uint32_t, uint32_t>> conv2d_bench_subblock_override();
+
+// TT_CONV_BENCH_FORCE_TRM=1 (helper_trm mode only; TT_FATALs in any other mode): skip the TRM+pin
+// auto-select ROI gate so every hard-eligible benched conv engages TileRowMajor+pin even where
+// production would stay SubblockMajor (e.g. relaxed shape == SBM shape, or no volume gain).
+bool conv2d_bench_force_trm();
 
 uint32_t get_input_channels_alignment(
     TensorMemoryLayout input_tensor_memory_layout,
