@@ -38,6 +38,8 @@ CB_SCORES_SCALED = 25
 CB_PROBS = 26
 CB_PV = 27
 CB_O_ACC = 28
+CB_CUR_MAX_FULL = 29  # block rowmax bcast to full tile (fp32, Refinement 5)
+CB_M_FULL = 30  # running max as full tile (fp32, Refinement 5)
 
 
 def _float_bits(value: float) -> int:
@@ -126,7 +128,8 @@ def create_program_descriptor(
         cb(CB_SCALER_MAX, 1, t_bf, ttnn.bfloat16),
         cb(CB_SCALER_SUM, 1, t_bf, ttnn.bfloat16),
         cb(CB_CUR_SUM, c_q, t_acc, acc_fmt),
-        cb(CB_PREV_MAX, c_q, t_acc, acc_fmt),
+        # 2x: Phase 5b pushes the new m_prev before popping the old block.
+        cb(CB_PREV_MAX, 2 * c_q, t_acc, acc_fmt),
         cb(CB_RUNNING_MAX, 2 * c_q, t_acc, acc_fmt),
         cb(CB_ALPHA, c_q, t_acc, acc_fmt),
         cb(CB_RUNNING_SUM, 2 * c_q, t_acc, acc_fmt),
@@ -137,6 +140,8 @@ def create_program_descriptor(
         cb(CB_PROBS, c_q * c_kv, t_acc, acc_fmt),
         cb(CB_PV, c_q * Dt, t_acc, acc_fmt),
         cb(CB_O_ACC, 2 * c_q * Dt, t_acc, acc_fmt),
+        cb(CB_CUR_MAX_FULL, c_q, t_acc, acc_fmt),
+        cb(CB_M_FULL, c_q, t_acc, acc_fmt),
     ]
     if has_mask:
         cbs.append(cb(CB_MASK_TILES, 2 * c_q * c_kv, t_in, in_fmt))
