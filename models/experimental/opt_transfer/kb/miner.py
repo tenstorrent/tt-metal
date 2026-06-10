@@ -91,6 +91,44 @@ def _golden_source(op_name: str):
         return None
 
 
+# KBEntry field names the extractor must produce; anything else is an alias or noise.
+_KB_FIELDS = {f.name for f in __import__("dataclasses").fields(KBEntry)}
+# Common aliases the LLM emits for KBEntry fields.
+_ALIASES = {"op": "fused_op", "notes": "applicability_notes"}
+# Off-schema keys whose content is still useful — folded into applicability_notes.
+_FOLD_INTO_NOTES = ("constraints", "fusion_notes", "ttnn_replacement", "torch_pattern_notes", "torch_pattern_source")
+
+
+def _normalize(d: dict, op: str, idx: int) -> dict:
+    """Map the LLM's near-miss output shape onto KBEntry fields.
+
+    The extractor reliably emits {op, torch_pattern, pattern_kind, category,
+    config_template, weight_transform, placement_observations, notes?, ...}.
+    Rename aliases, synthesize required fields (id/signature/source), fold
+    informative extras into applicability_notes, drop the rest. Validation
+    (e.g. pattern_kind enum) still happens in KBEntry.from_dict.
+    """
+    out = {}
+    notes_extra = []
+    for k, v in d.items():
+        k = _ALIASES.get(k, k)
+        if k in _KB_FIELDS:
+            out[k] = v
+        elif k in _FOLD_INTO_NOTES and v:
+            notes_extra.append(f"{k}: {v}")
+    base = re.sub(r"\W+", "_", str(out.get("fused_op") or op)).strip("_").lower()
+    out.setdefault("id", base if idx == 0 else f"{base}_{idx}")
+    out.setdefault("fused_op", op)
+    out.setdefault("signature", {})
+    out.setdefault("source", "mined")
+    out.setdefault("category", "uncategorized")
+    if out.get("torch_pattern") is None:
+        out["torch_pattern"] = []
+    if notes_extra:
+        out["applicability_notes"] = "; ".join(filter(None, [out.get("applicability_notes", ""), *notes_extra]))
+    return out
+
+
 def build_kb(client, cache_root=None, kb_root=None, config=CONFIG, limit_ops=None) -> list[KBEntry]:
     cache = ContentCache(cache_root or config.cache_dir)
     store = KBStore(kb_root or config.kb_dir)
@@ -116,9 +154,9 @@ def build_kb(client, cache_root=None, kb_root=None, config=CONFIG, limit_ops=Non
             content=content,
             compute=lambda op=op, a=available, u=used, g=golden_src: client.extract_entries(op, a, u, g),
         )
-        for d in raw:
+        for i, d in enumerate(raw):
             try:
-                e = KBEntry.from_dict(d)
+                e = KBEntry.from_dict(_normalize(dict(d), op, i))
             except (ValueError, KeyError, TypeError) as err:
                 # LLM output that doesn't fit the schema (e.g. pattern_kind outside the
                 # enum for non-fusable symbols) is noise, not a reason to abort the mine.
