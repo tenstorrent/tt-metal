@@ -110,6 +110,7 @@ def make_mock_model_runner(model_root: str | Path) -> Callable[[str], str]:
         if not files:
             files = sorted(p for p in root.rglob("*") if p.is_file())[:6]
         rel = [str(p.relative_to(root)) for p in files]
+        runner.last_usage = {"tokens_in": 1200, "tokens_out": 300, "cost_usd": 0.012, "latency_s": 0.0}
         return json.dumps(
             {
                 "perf_test": {"path": rel[0], "case": "mock"},
@@ -119,6 +120,7 @@ def make_mock_model_runner(model_root: str | Path) -> Callable[[str], str]:
             }
         )
 
+    runner.last_usage = None
     return runner
 
 
@@ -133,7 +135,12 @@ def mock_preflight(tt_metal_root, perf_test, case, env=None):
 
 
 def mock_review(pathmap):
-    return {"decision": "continue", "reasoning": "mock review", "model": "mock"}
+    return {
+        "decision": "continue",
+        "reasoning": "mock review",
+        "model": "mock",
+        "usage": {"tokens_in": 800, "tokens_out": 60, "cost_usd": 0.008, "latency_s": 0.0},
+    }
 
 
 def mock_collect_cases(tt_root, perf_test, env=None):
@@ -197,7 +204,29 @@ def before_loop(
     stages.done(f"{len(index)} sections indexed")
 
     stages.start("discover", f"sub-agent mapping {model_root}")
+    agent_calls_path = run.dir / "agent_calls.jsonl"
+    agent_totals = {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0}
+
+    def record_agent_call(stage: str, role: str, model: str, usage: dict | None) -> str:
+        """Append one row per query(); accumulate totals; return event suffix."""
+        usage = usage or {}
+        row = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "stage": stage, "role": role, "model": model, **usage}
+        with open(agent_calls_path, "a") as fh:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
+        for k in ("tokens_in", "tokens_out"):
+            agent_totals[k] += usage.get(k) or 0
+        agent_totals["cost_usd"] += usage.get("cost_usd") or 0.0
+        if not usage:
+            return " · usage n/a"
+        return f" · tok {usage.get('tokens_in')}/{usage.get('tokens_out')} · ${usage.get('cost_usd') or 0:.4f}"
+
     pathmap = read_model_files(model_root, model_runner)
+    usage_suffix = record_agent_call(
+        "discover",
+        "discovery_sub_agent",
+        getattr(model_runner, "model", "mock"),
+        getattr(model_runner, "last_usage", None),
+    )
     # perf test path: discovery returns model-root-relative; pytest runs from tt-metal root
     perf_rel = config.get("perf_test") or os.path.relpath(model_root / pathmap["perf_test"]["path"], tt_root)
     case = config.get("case") or pathmap["perf_test"]["case"]
@@ -205,7 +234,7 @@ def before_loop(
         print(f"      ⚠ {w.get('code')}: {w.get('detail')}", file=sys.stderr, flush=True)
     stages.done(
         f"perf_test={perf_rel} -k {case} · pcc={list(pathmap['pcc'])} · "
-        f"components={list(pathmap['components'])} · {len(pathmap['model_files'])} files"
+        f"components={list(pathmap['components'])} · {len(pathmap['model_files'])} files" + usage_suffix
     )
 
     user_input = config.get("input")
@@ -237,7 +266,8 @@ def before_loop(
 
     stages.start("lead_review", "lead agent reviewing discovery evidence")
     verdict = review(pathmap)
-    stages.done(f"{verdict['decision']}: {verdict['reasoning'][:90]}")
+    usage_suffix = record_agent_call("lead_review", "lead", verdict.get("model", "?"), verdict.get("usage"))
+    stages.done(f"{verdict['decision']}: {verdict['reasoning'][:90]}" + usage_suffix)
 
     stages.start("preflight", f"pytest --collect-only -k {case}")
     n_selected = preflight(tt_root, perf_rel, case, env=sub_env)
@@ -295,7 +325,9 @@ def before_loop(
             },
             "max_iter": config.get("max_iter", 25),
             "budget_usd": config.get("budget_usd", 5.0),
-            "cost_usd": 0.0,
+            "cost_usd": round(agent_totals["cost_usd"], 6),
+            "tokens_in": agent_totals["tokens_in"],
+            "tokens_out": agent_totals["tokens_out"],
             "git_sha_clean": None,
             "candidates": [],
             "tried": [],

@@ -93,6 +93,17 @@ def _extract_json_object(text: str) -> str:
     return text  # let model_files raise its own ModelFilesError
 
 
+def _usage_summary(result_msg) -> dict:
+    """Flatten a ResultMessage into {tokens_in, tokens_out, cost_usd, latency_s}."""
+    u = getattr(result_msg, "usage", None) or {}
+    return {
+        "tokens_in": u.get("input_tokens"),
+        "tokens_out": u.get("output_tokens"),
+        "cost_usd": getattr(result_msg, "total_cost_usd", None),
+        "latency_s": round(getattr(result_msg, "duration_ms", 0) / 1000.0, 2),
+    }
+
+
 def sdk_model_files_runner(
     env_agent_path: str | os.PathLike[str] = Path(__file__).parent.parent / ".env.agent",
     max_turns: int = 24,
@@ -112,6 +123,7 @@ def sdk_model_files_runner(
         from claude_agent_sdk import (
             AssistantMessage,
             ClaudeAgentOptions,
+            ResultMessage,
             TextBlock,
             query,
         )
@@ -136,9 +148,14 @@ def sdk_model_files_runner(
                     for block in msg.content:
                         if isinstance(block, TextBlock):
                             chunks.append(block.text)
+                elif isinstance(msg, ResultMessage):
+                    runner.last_usage = _usage_summary(msg)
 
         asyncio.run(_go())
         return _extract_json_object("\n".join(chunks))
+
+    runner.last_usage = None
+    runner.model = model
 
     return runner
 
@@ -372,7 +389,7 @@ def lead_review_gate(
     No tools — pure judgment over the structured findings."""
     import asyncio
 
-    from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, TextBlock, query
+    from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock, query
 
     from .config import apply_agent_env, get_model
 
@@ -388,6 +405,7 @@ def lead_review_gate(
         max_turns=max_turns,
     )
     chunks: list[str] = []
+    usage: dict[str, Any] = {}
 
     async def _go() -> None:
         async for msg in query(prompt=REVIEW_PROMPT.format(findings=findings), options=options):
@@ -395,6 +413,8 @@ def lead_review_gate(
                 for block in msg.content:
                     if isinstance(block, TextBlock):
                         chunks.append(block.text)
+            elif isinstance(msg, ResultMessage):
+                usage["summary"] = _usage_summary(msg)
 
     asyncio.run(_go())
     try:
@@ -407,7 +427,7 @@ def lead_review_gate(
         raise DiscoveryRejected(f"lead review returned invalid decision: {decision!r}")
     if decision == "stop":
         raise DiscoveryRejected(f"lead agent stopped the run: {reasoning}")
-    return {"decision": decision, "reasoning": reasoning, "model": model}
+    return {"decision": decision, "reasoning": reasoning, "model": model, "usage": usage.get("summary")}
 
 
 # ---------------------------------------------------------------------------

@@ -206,3 +206,15 @@ def test_baseline_profile_json_persisted(tmp_path, model_root):
     result = _run(tmp_path, model_root)
     prof = json.loads((Path(result["run_dir"]) / "profiles" / "baseline_profile.json").read_text())
     assert prof["buckets"] and "device_ms" in prof
+
+
+def test_agent_call_telemetry_persisted(tmp_path, model_root):
+    """One row per query() in agent_calls.jsonl; cumulative tokens+cost in state."""
+    result = _run(tmp_path, model_root)
+    rows = [json.loads(l) for l in (Path(result["run_dir"]) / "agent_calls.jsonl").read_text().splitlines()]
+    assert [r["stage"] for r in rows] == ["discover", "lead_review"]
+    assert all(r["tokens_in"] > 0 and r["cost_usd"] > 0 for r in rows)
+    state = json.loads((Path(result["run_dir"]) / "state.json").read_text())
+    assert state["tokens_in"] == sum(r["tokens_in"] for r in rows)
+    assert state["tokens_out"] == sum(r["tokens_out"] for r in rows)
+    assert state["cost_usd"] == round(sum(r["cost_usd"] for r in rows), 6)
