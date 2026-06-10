@@ -39,11 +39,10 @@ void calc_numeric_stable(uint32_t Wt) {
         cb_in, cb_max_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
 
     // x - max(x) then exp, fused into one chain. cb_in waited upfront by the reduce above
-    // (popped below) -> CallerManaged + Block; cb_max held (wait/pop kept outside) ->
-    // CallerManaged + Scalar; cb_out per-tile reserve+push -> Streaming.
+    // (popped below) -> CallerManaged + Block; cb_max (chain manages wait/pop) ->
+    // Bulk + Scalar; cb_out per-tile reserve+push -> Streaming.
     // sub_bcast_cols_init_short -> BinaryDataFormatReconfig::Input; plain pack_tile
     // (pack format already cb_out) -> PackTileReconfig::None.
-    cb_max_obj.wait_front(1);
     compute_kernel_lib::eltwise_chain(
         compute_kernel_lib::EltwiseShape::tiles(Wt),
         compute_kernel_lib::BinaryFpu<
@@ -52,7 +51,7 @@ void calc_numeric_stable(uint32_t Wt) {
             compute_kernel_lib::BinaryFpuOp::Sub,
             compute_kernel_lib::BroadcastDim::Col,
             compute_kernel_lib::InputLifecycle::CallerManaged,
-            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::InputLifecycle::Bulk,
             compute_kernel_lib::BinaryDataFormatReconfig::Input,
             compute_kernel_lib::Dst::D0,
             compute_kernel_lib::OperandKind::Block,
@@ -66,7 +65,6 @@ void calc_numeric_stable(uint32_t Wt) {
             compute_kernel_lib::OutputLifecycle::Streaming,
             compute_kernel_lib::PackTileReconfig::None>{});
     cb_in_obj.pop_front(Wt);
-    cb_max_obj.pop_front(1);
     cb_out_obj.wait_front(Wt);
 }
 
