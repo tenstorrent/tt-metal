@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T02:52:24Z
+**Updated:** 2026-06-10T02:59:42Z
 
 ## Block Status
 
@@ -16,7 +16,7 @@
 | vision_patch_embed | optimization | pending | — | 0 |  |
 | vision_patch_embed | real_weights | pending | — | 0 |  |
 | vision_rmsnorm | reference | done | 1.000000 | 0 | matches HF RMSNorm eps=1e-5, fp32 norm then scale |
-| vision_rmsnorm | ttnn | pending | — | 0 |  |
+| vision_rmsnorm | ttnn | done | 0.999982 | 0 | Fused ttnn.rms_norm eps=1e-5 with [1,1,dim//32,32] ROW_MAJOR gamma per reference_impl qwen25_vl/tt/vision_rmsnorm.py; KB entry ttnn_pow cited (pow/mean/rsqrt/mul chain fused into ttnn.rms_norm). Weight replicated on 1x4 mesh per parallelism plan (placement=replicate); replicated output compared single-device vs golden (real blocks.0.norm1 weight). Guard ok (lint 0, kernels ok, no new host ops). |
 | vision_rmsnorm | debug | n/a | — | 0 |  |
 | vision_rmsnorm | optimization | pending | — | 0 |  |
 | vision_rmsnorm | real_weights | pending | — | 0 |  |
@@ -90,6 +90,7 @@
 - tick 4 (2026-06-10T02:38:20Z): reference[text_rmsnorm,text_attention,text_mlp,decoder_layer] — ok
 - tick 5 (2026-06-10T02:43:31Z): reference[lm_head] — ok
 - tick 6 (2026-06-10T02:52:24Z): device[vision_patch_embed] — ok
+- tick 7 (2026-06-10T02:59:42Z): device[vision_rmsnorm] — ok
 
 ## Host-Resident Exceptions
 
