@@ -53,16 +53,6 @@ inline void TT_SFPLOAD_EXT(const std::uint32_t lreg_ind, const std::uint32_t ins
     }
 }
 
-template <bool clear_high_bits>
-inline void TTI_SFPLOAD_EXT(const std::uint32_t lreg_ind, const std::uint32_t instr_mod0, const std::uint32_t sfpu_addr_mode, const std::uint32_t dest_reg_addr)
-{
-    TTI_SFPLOAD(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr);
-    if constexpr (clear_high_bits)
-    {
-        TTI_SFPAND(0, CLEAR_REG, lreg_ind, 0);
-    }
-}
-
 // ============================================================================
 // Helper Functions
 // ============================================================================
@@ -77,13 +67,14 @@ inline void TTI_SFPLOAD_EXT(const std::uint32_t lreg_ind, const std::uint32_t in
 // direction-neutral (the same cast mode converts both ways) and, crucially, uses no condition codes, so it is
 // robust regardless of SFPABS/cc interaction. It requires one free GPR (LREG0-7) as scratch; LREG8-15 are
 // constant/config registers that SFPCAST cannot write.
-constexpr InstrModCast REDUCE_INT_REPR_SWAP_CAST = InstrModCast::INT_SIGN_MAGN_TO_INT32_2S_COMP;
+// "Representation swap": converts an integer between its sign-magnitude and two's-complement representations.
+constexpr InstrModCast REDUCE_INT_REPRESENTATION_SWAP_CAST = InstrModCast::INT_SIGN_MAGN_TO_INT32_2S_COMP;
 
 // Convert one int operand between sign-magnitude and two's-complement, in place. `scratch_gpr` must be a free
 // GPR (LREG0-7) distinct from `reg`; it is clobbered. The result is left in `reg`.
-inline void convert_int_repr_inplace(std::uint32_t reg, std::uint32_t scratch_gpr)
+inline void convert_int_representation_inplace(std::uint32_t reg, std::uint32_t scratch_gpr)
 {
-    apply_sign_magnitude_conversion(reg, scratch_gpr, REDUCE_INT_REPR_SWAP_CAST);
+    apply_sign_magnitude_conversion(reg, scratch_gpr, REDUCE_INT_REPRESENTATION_SWAP_CAST);
 }
 
 /**
@@ -230,10 +221,10 @@ inline void perform_reduce_col_sum_avg()
             TT_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, upper_base + ROWS_PER_LOAD);
             TT_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, upper_base + 2 * ROWS_PER_LOAD);
             TT_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, upper_base + 3 * ROWS_PER_LOAD);
-            convert_int_repr_inplace(p_sfpu::LREG0, p_sfpu::LREG4);
-            convert_int_repr_inplace(p_sfpu::LREG1, p_sfpu::LREG5);
-            convert_int_repr_inplace(p_sfpu::LREG2, p_sfpu::LREG6);
-            convert_int_repr_inplace(p_sfpu::LREG3, p_sfpu::LREG7);
+            convert_int_representation_inplace(p_sfpu::LREG0, p_sfpu::LREG4);
+            convert_int_representation_inplace(p_sfpu::LREG1, p_sfpu::LREG5);
+            convert_int_representation_inplace(p_sfpu::LREG2, p_sfpu::LREG6);
+            convert_int_representation_inplace(p_sfpu::LREG3, p_sfpu::LREG7);
             TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG2, 4); // LREG2 += LREG3
             TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG1, 4); // LREG1 += LREG2
             TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 4); // LREG0 = sum of upper face; LREG1-3 now free
@@ -243,10 +234,10 @@ inline void perform_reduce_col_sum_avg()
             TT_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, lower_base + ROWS_PER_LOAD);
             TT_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, lower_base + 2 * ROWS_PER_LOAD);
             TT_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_7, lower_base + 3 * ROWS_PER_LOAD);
-            convert_int_repr_inplace(p_sfpu::LREG4, p_sfpu::LREG1);
-            convert_int_repr_inplace(p_sfpu::LREG5, p_sfpu::LREG2);
-            convert_int_repr_inplace(p_sfpu::LREG6, p_sfpu::LREG3);
-            convert_int_repr_inplace(p_sfpu::LREG7, p_sfpu::LREG1);
+            convert_int_representation_inplace(p_sfpu::LREG4, p_sfpu::LREG1);
+            convert_int_representation_inplace(p_sfpu::LREG5, p_sfpu::LREG2);
+            convert_int_representation_inplace(p_sfpu::LREG6, p_sfpu::LREG3);
+            convert_int_representation_inplace(p_sfpu::LREG7, p_sfpu::LREG1);
             TTI_SFPIADD(0, p_sfpu::LREG7, p_sfpu::LREG6, 4); // LREG6 += LREG7
             TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG5, 4); // LREG5 += LREG6
             TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG4, 4); // LREG4 = sum of lower face
@@ -297,7 +288,7 @@ inline void perform_reduce_col_sum_avg()
         // LREG1-7 are free here (only LREG0 holds the result), so LREG1 is a safe GPR scratch.
         if constexpr (INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP)
         {
-            convert_int_repr_inplace(p_sfpu::LREG0, p_sfpu::LREG1);
+            convert_int_representation_inplace(p_sfpu::LREG0, p_sfpu::LREG1);
         }
         constexpr std::uint32_t STORE_MODE = pack_low16 ? 9 /* SFPSTORE_MOD0_FMT_LO16 */ : INSTRUCTION_MODE;
         // Use the runtime-address store (TT_ not TTI_): the Int32 two's-complement path makes this loop body
@@ -706,10 +697,10 @@ inline void perform_reduce_row_sum_tile(std::uint32_t tile_row_offset, std::uint
                 TT_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, group_a_base + 2);
                 TT_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, group_a_base + ROWS_PER_FACE);
                 TT_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, group_a_base + ROWS_PER_FACE + 2);
-                convert_int_repr_inplace(p_sfpu::LREG0, p_sfpu::LREG4);
-                convert_int_repr_inplace(p_sfpu::LREG1, p_sfpu::LREG5);
-                convert_int_repr_inplace(p_sfpu::LREG2, p_sfpu::LREG6);
-                convert_int_repr_inplace(p_sfpu::LREG3, p_sfpu::LREG7);
+                convert_int_representation_inplace(p_sfpu::LREG0, p_sfpu::LREG4);
+                convert_int_representation_inplace(p_sfpu::LREG1, p_sfpu::LREG5);
+                convert_int_representation_inplace(p_sfpu::LREG2, p_sfpu::LREG6);
+                convert_int_representation_inplace(p_sfpu::LREG3, p_sfpu::LREG7);
                 TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG2, 4); // LREG2 += LREG3
                 TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG1, 4); // LREG1 += LREG2
                 TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 4); // LREG0 = sum of group A; LREG1-3 now free
@@ -719,10 +710,10 @@ inline void perform_reduce_row_sum_tile(std::uint32_t tile_row_offset, std::uint
                 TT_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, group_b_base + 2);
                 TT_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, group_b_base + ROWS_PER_FACE);
                 TT_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_7, group_b_base + ROWS_PER_FACE + 2);
-                convert_int_repr_inplace(p_sfpu::LREG4, p_sfpu::LREG1);
-                convert_int_repr_inplace(p_sfpu::LREG5, p_sfpu::LREG2);
-                convert_int_repr_inplace(p_sfpu::LREG6, p_sfpu::LREG3);
-                convert_int_repr_inplace(p_sfpu::LREG7, p_sfpu::LREG1);
+                convert_int_representation_inplace(p_sfpu::LREG4, p_sfpu::LREG1);
+                convert_int_representation_inplace(p_sfpu::LREG5, p_sfpu::LREG2);
+                convert_int_representation_inplace(p_sfpu::LREG6, p_sfpu::LREG3);
+                convert_int_representation_inplace(p_sfpu::LREG7, p_sfpu::LREG1);
                 TTI_SFPIADD(0, p_sfpu::LREG7, p_sfpu::LREG6, 4); // LREG6 += LREG7
                 TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG5, 4); // LREG5 += LREG6
                 TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG4, 4); // LREG4 = sum of group B
@@ -753,8 +744,8 @@ inline void perform_reduce_row_sum_tile(std::uint32_t tile_row_offset, std::uint
             // Only LREG0 and LREG4 hold results, so LREG1/LREG5 are free GPR scratch.
             if constexpr (INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP)
             {
-                convert_int_repr_inplace(p_sfpu::LREG0, p_sfpu::LREG1);
-                convert_int_repr_inplace(p_sfpu::LREG4, p_sfpu::LREG5);
+                convert_int_representation_inplace(p_sfpu::LREG0, p_sfpu::LREG1);
+                convert_int_representation_inplace(p_sfpu::LREG4, p_sfpu::LREG5);
             }
 
             // result_store_mode is mode 9 (SFPSTORE_MOD0_FMT_LO16) only when this per-tile store is the
@@ -809,10 +800,10 @@ inline void sum_first_columns_across_tiles(std::uint32_t tile_row_base, std::uin
         // LREG4-7 are free here, so they serve as GPR scratch for the four casts.
         if constexpr (INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP)
         {
-            convert_int_repr_inplace(p_sfpu::LREG0, p_sfpu::LREG4);
-            convert_int_repr_inplace(p_sfpu::LREG1, p_sfpu::LREG5);
-            convert_int_repr_inplace(p_sfpu::LREG2, p_sfpu::LREG6);
-            convert_int_repr_inplace(p_sfpu::LREG3, p_sfpu::LREG7);
+            convert_int_representation_inplace(p_sfpu::LREG0, p_sfpu::LREG4);
+            convert_int_representation_inplace(p_sfpu::LREG1, p_sfpu::LREG5);
+            convert_int_representation_inplace(p_sfpu::LREG2, p_sfpu::LREG6);
+            convert_int_representation_inplace(p_sfpu::LREG3, p_sfpu::LREG7);
         }
 
         // Accumulate from remaining tiles
@@ -829,7 +820,7 @@ inline void sum_first_columns_across_tiles(std::uint32_t tile_row_base, std::uin
                 for (std::uint32_t j = 0; j < 4; j++)
                 {
                     TT_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + RESULT_ROWS[base_idx + j]);
-                    convert_int_repr_inplace(p_sfpu::LREG4, p_sfpu::LREG5);
+                    convert_int_representation_inplace(p_sfpu::LREG4, p_sfpu::LREG5);
                     TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG0 + j, 4); // LREG(j) += LREG4
                 }
             }
@@ -863,10 +854,10 @@ inline void sum_first_columns_across_tiles(std::uint32_t tile_row_base, std::uin
         // LREG4-7 are free after the accumulation loop, so they serve as GPR scratch for the four casts.
         if constexpr (INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP)
         {
-            convert_int_repr_inplace(p_sfpu::LREG0, p_sfpu::LREG4);
-            convert_int_repr_inplace(p_sfpu::LREG1, p_sfpu::LREG5);
-            convert_int_repr_inplace(p_sfpu::LREG2, p_sfpu::LREG6);
-            convert_int_repr_inplace(p_sfpu::LREG3, p_sfpu::LREG7);
+            convert_int_representation_inplace(p_sfpu::LREG0, p_sfpu::LREG4);
+            convert_int_representation_inplace(p_sfpu::LREG1, p_sfpu::LREG5);
+            convert_int_representation_inplace(p_sfpu::LREG2, p_sfpu::LREG6);
+            convert_int_representation_inplace(p_sfpu::LREG3, p_sfpu::LREG7);
         }
 
         // Store LREG0-3 back to tile 0. This is the final, packer-visible result, so it uses mode 9
@@ -1126,7 +1117,7 @@ inline void init_reduce_sum_avg()
  * @tparam clear_high_bits Whether to mask the garbage high bits on load (true for UInt16 in 32-bit dest)
  * @tparam pack_low16 Whether the final packer-visible store uses mode 9 (true for UInt16 OUTPUT in 32-bit dest)
  */
-template <InstrModLoadStore INSTRUCTION_MODE, PoolType pool_type, ReduceDim reduce_dim, bool clear_high_bits, bool pack_low16>
+template <PoolType pool_type, ReduceDim reduce_dim, InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool pack_low16>
 inline void calculate_reduce_max_min_uint16()
 {
     static_assert(reduce_dim == ReduceDim::REDUCE_COL, "Only column reduction (REDUCE_COL) is currently supported");
@@ -1231,10 +1222,10 @@ inline void calculate_reduce_max_min(const std::uint32_t block_height)
     constexpr std::uint32_t replay_buffer_next_face = 10;
 
     // Initial loads: LREG4-7 will hold maximum values across F0 and F1
-    TTI_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, 0);
-    TTI_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, 2);
-    TTI_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, 16);
-    TTI_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_7, 18);
+    TTI_SFPLOAD(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, 0);
+    TTI_SFPLOAD(p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, 2);
+    TTI_SFPLOAD(p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, 16);
+    TTI_SFPLOAD(p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_7, 18);
 
     // First tile processing (F0, F1, F2, F3)
     lltt::replay(0, replay_buffer_offset);
@@ -1439,7 +1430,7 @@ inline void _calculate_reduce_(std::uint32_t block_ct_dim = 1, std::uint32_t blo
         else if constexpr (clear_high_bits)
         {
             // UInt16 in 32-bit dest: manual load/mask/swap path (LOADMACRO cannot mask between load and swap).
-            calculate_reduce_max_min_uint16<INSTRUCTION_MODE, pool_type, reduce_dim, clear_high_bits, pack_low16>();
+            calculate_reduce_max_min_uint16<pool_type, reduce_dim, INSTRUCTION_MODE, clear_high_bits, pack_low16>();
         }
         else
         {

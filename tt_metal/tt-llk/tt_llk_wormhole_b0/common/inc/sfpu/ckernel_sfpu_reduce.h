@@ -47,7 +47,7 @@ constexpr std::uint32_t ROWS_PER_FACE = 16;
 // from a 32-bit (fp32 dest accumulation) dest word. Maps to sfpi::vConstIntPrgm0 on Wormhole B0.
 constexpr std::uint32_t CLEAR_REG = p_sfpu::LREG12;
 
-// SFPLOAD wrappers that optionally clear the high 16 bits of the loaded value. Needed for UInt16
+// SFPLOAD wrapper that optionally clears the high 16 bits of the loaded value. Needed for UInt16
 // reduce with fp32 dest accumulation: the datum lives in the low 16 bits of a 32-bit dest word and
 // the high 16 bits are garbage, which would otherwise corrupt integer compare/add operations.
 template <bool clear_high_bits>
@@ -57,16 +57,6 @@ inline void TT_SFPLOAD_EXT(const std::uint32_t lreg_ind, const std::uint32_t ins
     if constexpr (clear_high_bits)
     {
         TT_SFPAND(0, CLEAR_REG, lreg_ind, 0);
-    }
-}
-
-template <bool clear_high_bits>
-inline void TTI_SFPLOAD_EXT(const std::uint32_t lreg_ind, const std::uint32_t instr_mod0, const std::uint32_t sfpu_addr_mode, const std::uint32_t dest_reg_addr)
-{
-    TTI_SFPLOAD(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr);
-    if constexpr (clear_high_bits)
-    {
-        TTI_SFPAND(0, CLEAR_REG, lreg_ind, 0);
     }
 }
 
@@ -939,7 +929,7 @@ inline void init_reduce_sum_avg()
  * @tparam clear_high_bits Whether to mask the garbage high bits on load (true for UInt16 in 32-bit dest)
  * @tparam pack_low16 Whether the final packer-visible store uses mode 9 (true for UInt16 OUTPUT in 32-bit dest)
  */
-template <InstrModLoadStore INSTRUCTION_MODE, PoolType pool_type, ReduceDim reduce_dim, bool clear_high_bits, bool pack_low16>
+template <PoolType pool_type, ReduceDim reduce_dim, InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool pack_low16>
 inline void calculate_reduce_max_min_uint16()
 {
     static_assert(reduce_dim == ReduceDim::REDUCE_COL, "Only column reduction (REDUCE_COL) is currently supported");
@@ -1054,10 +1044,10 @@ inline void calculate_reduce_max_min(const std::uint32_t block_ct_dim = 1, const
         constexpr std::uint32_t replay_buffer_next_face = clear_high_bits ? 10 : 8;
 
         // Initial loads: LREG4-7 will hold maximum values across F0 and F1
-        TTI_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_3, 0);
-        TTI_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_3, 2);
-        TTI_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_3, 16);
-        TTI_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_3, 18);
+        TTI_SFPLOAD(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_3, 0);
+        TTI_SFPLOAD(p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_3, 2);
+        TTI_SFPLOAD(p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_3, 16);
+        TTI_SFPLOAD(p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_3, 18);
 
         // First tile processing (F0, F1, F2, F3)
         lltt::replay(0, replay_buffer_offset);
@@ -1258,7 +1248,7 @@ inline void _calculate_reduce_(std::uint32_t block_ct_dim = 1, std::uint32_t blo
         if constexpr (clear_high_bits)
         {
             // UInt16 in 32-bit dest: manual load/mask/swap path (LOADMACRO cannot mask between load and swap).
-            calculate_reduce_max_min_uint16<INSTRUCTION_MODE, pool_type, reduce_dim, clear_high_bits, pack_low16>();
+            calculate_reduce_max_min_uint16<pool_type, reduce_dim, INSTRUCTION_MODE, clear_high_bits, pack_low16>();
         }
         else
         {
