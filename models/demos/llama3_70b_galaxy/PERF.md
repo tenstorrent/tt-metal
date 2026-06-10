@@ -52,7 +52,7 @@ re-baselined for that path.
 
 vLLM offline run command:
 ```
-VLLM_RPC_TIMEOUT=100000 TT_LLAMA_TEXT_VER=llama3_70b_galaxy python plugins/vllm-tt-plugin/examples/offline_inference_tt.py  --model meta-llama/Llama-3.3-70B-Instruct --additional-config '{"tt": {"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 95693824}}' --greedy_sampling --num_repeat_prompts 2 --async_engine
+MESH_DEVICE=TG TT_LLAMA_TEXT_VER=llama3_70b_galaxy VLLM_RPC_TIMEOUT=100000 python plugins/vllm-tt-plugin/examples/offline_inference_tt.py --model meta-llama/Llama-3.3-70B-Instruct --additional-config '{"tt": {"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 95693824}}' --greedy_sampling --num_repeat_prompts 2 --async_engine
 ```
 
 vLLM server run command:
