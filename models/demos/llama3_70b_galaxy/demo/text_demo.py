@@ -1656,9 +1656,23 @@ def test_demo_text(
             profiler,
             1,  # grab the second repeat batch of prefill
             "inference_prefill",
-            f"ttft_e2e_{galaxy_type}",
-            round(avg_time_to_first_token * 1000, 2),
-        )  # average TTFT in ms
+            "time_to_token",
+            avg_time_to_first_token,
+        )
+        benchmark_data.add_measurement(
+            profiler,
+            0,
+            "inference_decode",
+            "tokens/s",
+            decode_tok_s,
+        )
+        benchmark_data.add_measurement(
+            profiler,
+            0,
+            "inference_decode",
+            "tokens/s/user",
+            decode_tok_s_user,
+        )
 
         benchmark_data.save_partial_run_json(
             profiler,
