@@ -431,10 +431,12 @@ jobs:
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       enabled-skus: ${{ github.event_name == 'merge_group' && 'wh_n150_civ2,bh_p150b_civ2_viommu_prio' || 'wh_n150_civ2,bh_p150b_civ2_viommu' }}
 
-  # Merge-gate runs the LLK gtest binary in fast dispatch. SKU selection
-  # (full set vs. arch-scoped) is decided inside the impl based on the
-  # find-changes outputs passed through here. Nightly runs the slow-dispatch
-  # superset via the L2 pipeline.
+  # Merge-gate runs the LLK gtest binary across every entry in
+  # tests/pipeline_reorg/llk_unit_tests.yaml that is NOT tagged nightly_only
+  # (FD shards + SD Quasar slice). Dispatch mode per entry is driven by the
+  # entry's own dispatch_mode field. SKU coverage is narrowed below based on
+  # find-changes outputs. Nightly runs the nightly_only superset via the L2
+  # pipeline.
   llk-unit-tests:
     needs: [build, resolve-docker-pull-refs, find-changes]
     if: ${{
@@ -462,8 +464,7 @@ jobs:
         }}
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
-      dispatch-mode: fd
-      include-nightly-only: false
+      l2-only: false
       enabled-skus: ${{
           (github.ref_name == 'main'
            || needs.find-changes.outputs.llk-common-changed == 'true'

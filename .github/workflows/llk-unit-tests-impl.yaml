@@ -12,16 +12,12 @@ on:
       enabled-skus:
         required: true
         type: string
-        description: "Comma-separated SKU list, or the literal ALL_SKUS_IN_TESTS."
-      dispatch-mode:
-        required: true
-        type: string
-        description: "'fd' for fast dispatch, 'sd' for slow dispatch."
-      include-nightly-only:
+        description: "Comma-separated SKU list."
+      l2-only:
         required: false
         type: boolean
         default: false
-        description: "When true, include entries flagged nightly_only"
+        description: "false: run entries whose nightly_only is unset/false (merge-gate). true: run only entries flagged nightly_only: true (l2 nightly set)."
       enable-llk-asserts:
         required: false
         type: boolean
@@ -61,17 +57,17 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
-      - name: Filter matrix by dispatch-mode and nightly inclusion
+      - name: Filter matrix by nightly_only flag
         id: filter-matrix
         env:
           MATRIX: ${{ steps.build-matrix.outputs.matrix }}
-          DISPATCH_MODE: ${{ inputs.dispatch-mode }}
-          INCLUDE_NIGHTLY: ${{ inputs.include-nightly-only }}
+          NIGHTLY_ONLY: ${{ inputs.l2-only }}
         run: |
+          # Exclusive split: l2-only=false picks entries without nightly_only;
+          # l2-only=true picks entries flagged nightly_only.
           filtered=$(echo "$MATRIX" | jq -c \
-            --arg dm "$DISPATCH_MODE" \
-            --argjson inc_nightly "$INCLUDE_NIGHTLY" \
-            '[.[] | select(.dispatch_mode == $dm) | select($inc_nightly or ((.nightly_only // false) | not))]')
+            --argjson nightly_only "$NIGHTLY_ONLY" \
+            '[.[] | select((.nightly_only // false) == $nightly_only)]')
           echo "matrix<<EOF" >> "$GITHUB_OUTPUT"
           echo "$filtered" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
@@ -127,7 +123,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           mkdir -p generated/test_reports
-          ${{ inputs.dispatch-mode == 'sd' && 'TT_METAL_SLOW_DISPATCH_MODE=1 ' || '' }}${{ matrix.test-group.cmd }}
+          ${{ matrix.test-group.dispatch_mode == 'sd' && 'TT_METAL_SLOW_DISPATCH_MODE=1 ' || '' }}${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
