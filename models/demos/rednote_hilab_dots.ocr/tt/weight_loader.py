@@ -132,6 +132,21 @@ def vision_block_weights(
     }
 
 
+def patch_merger_weights(hf_sd: Optional[Dict[str, torch.Tensor]] = None) -> Dict[str, torch.Tensor]:
+    """State dict for TtPatchMerger: ln_q.weight/bias [dim], mlp.0.weight [dim*m^2, dim*m^2],
+    mlp.0.bias [dim*m^2], mlp.2.weight [out, dim*m^2], mlp.2.bias [out].
+
+    HF keys live under ``vision_tower.merger`` (LayerNorm-with-bias + two
+    biased Linears; the nn.Sequential indices 0/2 are HF's, kept verbatim).
+    """
+    prefix = f"{VISION_TOWER_PREFIX}.merger"
+    if hf_sd is None:
+        hf_sd = load_hf_state_dict(prefix=prefix)
+    sd = _strip(hf_sd, prefix)
+    names = ["ln_q.weight", "ln_q.bias", "mlp.0.weight", "mlp.0.bias", "mlp.2.weight", "mlp.2.bias"]
+    return {k: sd[k] for k in names}
+
+
 def count_params(sd) -> int:
     """Tensor-leaf element count of a (possibly nested) state dict."""
     if isinstance(sd, torch.Tensor):
@@ -177,3 +192,12 @@ if __name__ == "__main__":
         assert bsd["mlp.fc2.weight"].shape == (1536, 4224), (idx, bsd["mlp.fc2.weight"].shape)
         assert len(bsd) == 7, (idx, sorted(bsd))
     print(f"vision_block: blocks.0/blocks.{VISION_NUM_BLOCKS - 1} OK, {count_params(bsd)} params each")
+
+    psd = patch_merger_weights()
+    assert psd["ln_q.weight"].shape == (1536,), psd["ln_q.weight"].shape
+    assert psd["ln_q.bias"].shape == (1536,), psd["ln_q.bias"].shape
+    assert psd["mlp.0.weight"].shape == (6144, 6144), psd["mlp.0.weight"].shape
+    assert psd["mlp.0.bias"].shape == (6144,), psd["mlp.0.bias"].shape
+    assert psd["mlp.2.weight"].shape == (1536, 6144), psd["mlp.2.weight"].shape
+    assert psd["mlp.2.bias"].shape == (1536,), psd["mlp.2.bias"].shape
+    print(f"patch_merger: {len(psd)} tensors, {count_params(psd)} params OK")

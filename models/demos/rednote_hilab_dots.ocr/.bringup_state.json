@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T07:12:02Z",
+  "updated_at": "2026-06-10T07:19:34Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -366,8 +366,15 @@
         "pcc": 0.999992
       },
       "real_weights": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/weight_loader.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_real_hf_weights.py"
+        ],
+        "notes": "patch_merger_weights loader added to consolidated tt/weight_loader.py (pure-PyTorch, memoized prefix-filtered safetensors load of vision_tower.merger.*: ln_q.weight/bias [1536], mlp.0.weight [6144,6144]+bias, mlp.2.weight [1536,6144]+bias, 47196672 params; __main__ self-test extended, all 6 shapes asserted). Stage-1 parametric tests/test_real_hf_weights.py row runs TtPatchMerger at the production operating point (fp32, exactly as TtVisionTransformer instantiates it, 1x4 mesh replicated, golden real post-trunk-norm activation [784,1536]) vs the pure-PyTorch reference with the same real weights: PCC 1.000000 (>0.99). Block forward untouched; full harness re-run, all prior rows (vision_patch_embed/vision_rmsnorm/vision_attention/vision_mlp/vision_block) still passing (6/6). Guard ok (lint 0, params_loaded 47196672>0). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 1.0,
+        "params_loaded": 47196672
       }
     },
     {
@@ -1015,6 +1022,12 @@
       "tick": 36,
       "ts": "2026-06-10T07:12:02Z",
       "action": "device[vision_block]",
+      "result": "ok"
+    },
+    {
+      "tick": 37,
+      "ts": "2026-06-10T07:19:34Z",
+      "action": "device[patch_merger]",
       "result": "ok"
     }
   ],

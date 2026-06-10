@@ -37,6 +37,7 @@ _vision_rmsnorm_mod = _load_module("dots_ocr_tt_vision_rmsnorm", MODEL_DIR / "tt
 _vision_attention_mod = _load_module("dots_ocr_tt_vision_attention", MODEL_DIR / "tt" / "vision_attention.py")
 _vision_mlp_mod = _load_module("dots_ocr_tt_vision_mlp", MODEL_DIR / "tt" / "vision_mlp.py")
 _vision_block_mod = _load_module("dots_ocr_tt_vision_block", MODEL_DIR / "tt" / "vision_block.py")
+_patch_merger_mod = _load_module("dots_ocr_tt_patch_merger", MODEL_DIR / "tt" / "patch_merger.py")
 
 
 def _pcc(a, b):
@@ -208,12 +209,38 @@ def _t_vision_block(mesh_device) -> tuple[float, int]:
     return min(pccs), n_params
 
 
+def _t_patch_merger(mesh_device) -> tuple[float, int]:
+    # Real vision_tower.merger weights (LayerNorm-with-bias + two biased
+    # Linears) through the consolidated loader. Production-distribution input:
+    # the golden's real post-trunk-norm activation [784, 1536] (the merger
+    # consumes the tower-level RMSNorm output directly). Production operating
+    # point: fp32, exactly as TtVisionTransformer instantiates the merger.
+    golden = torch.load(MODEL_DIR / "reference" / "golden" / "patch_merger.pt")
+    x = golden["input"]  # [784, 1536]
+    sd = wl.patch_merger_weights()
+    ref_out = ref.patch_merger_forward(x, sd)
+
+    block = _patch_merger_mod.TtPatchMerger(mesh_device, sd, dtype=ttnn.float32)
+    x_tt = ttnn.from_torch(
+        x,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    out = ttnn.to_torch(ttnn.get_device_tensors(block.forward(x_tt))[0]).float()
+    assert out.shape == ref_out.shape, f"{out.shape} != {ref_out.shape}"
+    return _pcc(ref_out, out), wl.count_params(sd)
+
+
 BLOCKS = [
     ("vision_patch_embed", _t_vision_patch_embed),
     ("vision_rmsnorm", _t_vision_rmsnorm),
     ("vision_attention", _t_vision_attention),
     ("vision_mlp", _t_vision_mlp),
     ("vision_block", _t_vision_block),
+    ("patch_merger", _t_patch_merger),
 ]
 
 
