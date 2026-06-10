@@ -565,6 +565,11 @@ def _aggregate_pages_to_chunks(op_id, pages):
     ``_parse_page``: ``(device_id, address, core_y, core_x, bank_id,
     page_index, page_address, page_size, buffer_type)``.
     """
+    # Mutable accumulator per group is a 4-slot list; these constants name the
+    # slots so the in-place update block below stays self-describing without
+    # paying the per-page allocation cost of a dataclass/namedtuple.
+    ACC_START, ACC_END, ACC_PAGE_SIZE, ACC_COUNT = 0, 1, 2, 3
+
     groups = {}
     for device_id, address, core_y, core_x, bank_id, _page_index, page_address, page_size, buffer_type in pages:
         key = (device_id, address, bank_id, core_x, core_y, buffer_type)
@@ -573,13 +578,13 @@ def _aggregate_pages_to_chunks(op_id, pages):
         if existing is None:
             groups[key] = [page_address, end, page_size, 1]
         else:
-            if page_address < existing[0]:
-                existing[0] = page_address
-            if end > existing[1]:
-                existing[1] = end
-            if page_size > existing[2]:
-                existing[2] = page_size
-            existing[3] += 1
+            if page_address < existing[ACC_START]:
+                existing[ACC_START] = page_address
+            if end > existing[ACC_END]:
+                existing[ACC_END] = end
+            if page_size > existing[ACC_PAGE_SIZE]:
+                existing[ACC_PAGE_SIZE] = page_size
+            existing[ACC_COUNT] += 1
 
     rows = []
     for (device_id, address, bank_id, core_x, core_y, buffer_type), (
