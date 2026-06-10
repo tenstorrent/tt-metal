@@ -1,0 +1,3 @@
+{"event":"start","details":"read-only structural analysis of two-pass SDPA kernels for precision floor diagnosis","ts":"2026-06-09T18:56:42+00:00"}
+{"event":"read_kernels","details":"compute and reader kernels read; verifying two-pass faithful + sync","ts":"2026-06-09T18:56:56+00:00"}
+{"event":"analysis_complete","details":"two-pass faithful; cb_value=2*Dt double-buffered; cb_attention_weights=2*bf16; cb_cur_mm_out=2*Dt sized. Found one important precision concern: cb_attention_weights stays bf16 even when fp32_dest_acc_en=True","ts":"2026-06-09T18:57:13+00:00"}
