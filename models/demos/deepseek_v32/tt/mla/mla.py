@@ -40,15 +40,25 @@ class ttMLA(_ttMLAv3):
             n: weights[f"{n}.weight"].clone() for n in ("q_a_proj", "q_a_layernorm") if f"{n}.weight" in weights
         }
         self.index_args = ModelArgs(max_batch_size=1)
+        # Host indexer K-cache (chunked prefill): chunks only carry their own
+        # hidden, but logits need every prior key. [max_seq, D_idx] per layer.
+        self._index_k_cache = torch.zeros(
+            self.index_args.max_seq_len, self.index_args.index_head_dim, dtype=torch.bfloat16
+        )
         super().__init__(config, weights, mesh_device, **kwargs)
 
-    def _indexer_topk(self, hidden_states: ttnn.Tensor, seq_len: int) -> ttnn.Tensor:
-        """Top-k indices [1, 1, S, k] from host stems + device logits/topk."""
+    def _indexer_topk(self, hidden_states: ttnn.Tensor, seq_len: int, start_pos: int = 0) -> ttnn.Tensor:
+        """Top-k indices [1, 1, S, k] over the cached prefix + this chunk.
+
+        Chunked: writes this chunk's index keys into the host K-cache and scores
+        q against keys [0, start_pos + seq_len). Causal mask offset by start_pos.
+        """
         a = self.index_args
         w = self.indexer_weights
+        end_pos = start_pos + seq_len
         # hidden is TP-sharded on dim, sp=1: concat TP shards -> [1, S, dim]
         x = torch.cat([ttnn.to_torch(s) for s in ttnn.get_device_tensors(hidden_states)], dim=-1)[0].to(torch.bfloat16)
-        freqs = precompute_freqs_cis(a)[:seq_len]
+        freqs = precompute_freqs_cis(a)[start_pos:end_pos]
 
         # qr = MLA q-latent (shared with the MLA stem in the reference)
         qr = torch.nn.functional.rms_norm(
@@ -66,6 +76,9 @@ class ttMLA(_ttMLAv3):
         )
         k_pe, k_nope = torch.split(k, [64, a.index_head_dim - 64], dim=-1)
         k = torch.cat([apply_rotary_emb(k_pe.unsqueeze(2), freqs, interleaved=False).squeeze(2), k_nope], dim=-1)
+        # Persist this chunk's keys; score against the whole populated prefix.
+        self._index_k_cache[start_pos:end_pos] = k[0]
+        k = self._index_k_cache[:end_pos].unsqueeze(0)
 
         wts = (x.float() @ w["indexer.weights_proj"].T.float()) * a.index_n_heads**-0.5 * self.scale
 
@@ -77,8 +90,8 @@ class ttMLA(_ttMLAv3):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         logits = ops.indexer_logits(dev(q.permute(0, 2, 1, 3)), dev(k.unsqueeze(1)), dev(wts.unsqueeze(1)))
-        mask = dev(torch.full((1, 1, seq_len, seq_len), float("-inf")).triu_(1))
-        return ops.topk_indices(ttnn.add(logits, mask), self.index_args.index_topk)
+        mask = dev(torch.full((1, 1, seq_len, end_pos), float("-inf")).triu_(start_pos + 1))
+        return ops.topk_indices(ttnn.add(logits, mask), min(self.index_args.index_topk, end_pos))
 
     def forward(self, hidden_states, rope_tensors, kvpe_cache, **kwargs):
         seq_len_local = hidden_states.shape[2]
