@@ -184,8 +184,11 @@ class TtVisionAttention(LightweightModule):
         showed the DRAM-default chain at ~512 us/block, L1 pinning is the
         single biggest lever after the bf16-only SDPA kernel.
         """
-        L1 = ttnn.L1_MEMORY_CONFIG
+        # Size-conditional placement: the L1 win was measured at seq<=896; at
+        # document scale (10k+ vision tokens, ~69 MB fp32 intermediates) the
+        # chain exceeds per-bank L1 capacity, so fall back to DRAM.
         shape = t.shape
+        L1 = ttnn.L1_MEMORY_CONFIG if shape[-2] <= 4096 else ttnn.DRAM_MEMORY_CONFIG
         half = self.head_dim // 2
         t1 = ttnn.slice(t, [0, 0, 0, 0], [shape[0], shape[1], shape[2], half], memory_config=L1)
         t2 = ttnn.slice(t, [0, 0, 0, half], [shape[0], shape[1], shape[2], self.head_dim], memory_config=L1)

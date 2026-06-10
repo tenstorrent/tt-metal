@@ -107,13 +107,16 @@ class TtVisionBlock(LightweightModule):
         # the next residual add — never a matmul — so the L1 pin avoids the
         # L1-interleaved-into-matmul stall (tower tracy: DRAM add 44.2us vs
         # 13.8us for the same-sized L1 BinaryNg) while norm reads get faster.
-        h = ttnn.add(x_11SH, attn_out, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=res_dtype)
+        # Size-conditional: L1 win measured at seq<=896; document-scale
+        # sequences (10k+ tokens, ~67 MB fp32 residual) exceed L1 — use DRAM.
+        res_mem = ttnn.L1_MEMORY_CONFIG if x_11SH.shape[-2] <= 4096 else ttnn.DRAM_MEMORY_CONFIG
+        h = ttnn.add(x_11SH, attn_out, memory_config=res_mem, dtype=res_dtype)
         ttnn.deallocate(attn_out)
 
         ff_in = self.norm2(h)
         ff_out = self.mlp(ff_in)
         ttnn.deallocate(ff_in)
-        out = ttnn.add(h, ff_out, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=res_dtype)
+        out = ttnn.add(h, ff_out, memory_config=res_mem, dtype=res_dtype)
         ttnn.deallocate(h)
         ttnn.deallocate(ff_out)
         return out
