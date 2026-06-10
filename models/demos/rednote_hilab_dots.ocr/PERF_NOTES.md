@@ -371,3 +371,24 @@ Sub-pass 2), so the multicore spread is confirmed by the op's C++ output-shard g
 (>1 core by construction) + the reproducible end-to-end DecodeGraph delta rather than
 a per-op-by-name table. On by default under `DOTS_SHARDED_DECODE=1`; set
 `DOTS_HEADSPLIT_DECODE=0` to fall back to the single-core split.
+
+## Consolidated decode result (honest cumulative, same harness/args)
+
+Measured `profile_ocr_traced.py --max-new-tokens 32 --iters 1`, median of 3, all
+decode optimizations ON (`DOTS_SHARDED_DECODE=1`); OCR byte-identical to HF every run.
+
+| | decode/tok (median) |
+|---|---|
+| Phase-0 baseline (pre-opt) | 17.52 ms |
+| Fully optimized (sharded matmuls+RMSNorm, on-device argmax, device-resident RoPE, multicore head-split) | **15.80 ms** |
+| **Cumulative** | **~1.7 ms / ~10% / 1.11×** |
+
+Honest caveat: the per-pass in-isolation A/B deltas (sharding device-floor −1.7,
+argmax −2.98, RoPE −0.96, head-split −0.25) summed to ~4.5 ms but do NOT fully
+compound in the integrated, repeated measurement — run-to-run variance (±0.5 ms)
+plus the argmax/RoPE host-tail wins landing OUTSIDE the `decode_traced_ms` graph
+zone the profiler reports. The reproducible same-harness cumulative is ~10%.
+Consistent with the ceiling finding: dots.ocr was already well-tuned; four
+correctness-neutral optimizations net a modest integrated decode gain. The
+remaining gap to ~9 ms/tok would need lm_head/vocab-projection work (out of scope,
+low ROI) or a more fundamental change.
