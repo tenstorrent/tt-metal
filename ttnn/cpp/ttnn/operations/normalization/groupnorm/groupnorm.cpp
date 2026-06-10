@@ -4,14 +4,16 @@
 
 #include "groupnorm.hpp"
 #include "device/groupnorm_device_operation.hpp"
+#include "device/groupnorm_program_utils.hpp"
 #include "groupnorm_grid_utils.hpp"
 #include "groupnorm_input_mask.hpp"
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 
-#include <stdexcept>
-#include <string_view>
+#include <tt-metalium/allocator.hpp>
+
+#include <optional>
 
 namespace {
 
@@ -229,14 +231,9 @@ Tensor group_norm(
         input_tensor.storage_type() == StorageType::DEVICE,
         "Invalid input tensor storage type: Input tensor must be on device. (storage type={})",
         input_tensor.storage_type());
-    if (input_mask.has_value()) {
-        TT_FATAL(
-            input_mask->storage_type() == StorageType::DEVICE,
-            "Input mask must be on device, got storage type: {}",
-            input_mask->storage_type());
-        TT_FATAL(input_mask->buffer() != nullptr, "Input mask must be allocated in buffers on device!");
-        TT_FATAL(input_tensor.device() == input_mask->device(), "Input and input mask tensors must be on same device");
-    }
+    // Note: input_mask is no longer a public parameter; the mask is created internally (always
+    // on-device, always allocated) and validated in the device op's validate(). The user-mask
+    // validation that #46162 added here is therefore obsolete on this interface.
     const auto arch = input_tensor.device()->arch();
     const auto math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     const auto approx_mode = true;
@@ -371,8 +368,55 @@ Tensor group_norm(
         const bool negative_mask_applicable =
             input_tensor.layout() == Layout::ROW_MAJOR && effective_output_layout == Layout::ROW_MAJOR;
 
-        // First attempt: run without negative mask (better performance)
-        try {
+        // Allocate the output up front (reusing the op's own create_output_tensors, so the spec
+        // can't drift) so that lowest_occupied_compute_l1_address() reflects it exactly. We then
+        // decide whether the cheaper no-negative-mask CBs fit with NO prediction about where the
+        // allocator placed the output. The pre-allocated output is handed to the prim op via
+        // optional_output, so it is not allocated a second time.
+        const ttnn::prim::GroupNormParams output_alloc_params{
+            .eps = epsilon,
+            .num_groups = static_cast<uint32_t>(num_groups),
+            .output_mem_config = output_mem_config,
+            .program_config = program_config,
+            .compute_kernel_config = kernel_config_val,
+            .use_welford = use_welford};
+        const ttnn::Tensor output = ttnn::prim::GroupNormDeviceOperation::create_output_tensors(
+            output_alloc_params, ttnn::prim::GroupNormInputs{.input = input_tensor});
+
+        // Exact L1-fit check: the CBs grow up from l1_base; the output (now allocated) is already
+        // counted in lowest_occupied. So the no-negative-mask CBs fit iff
+        //   l1_base + static_cb_total <= lowest_occupied.
+        // CB sizes come from the same helper the program factory uses, so they match what the
+        // factory will allocate. NOTE: this is exact under the default LOCKSTEP allocator; under
+        // the experimental HYBRID per-core allocator (or if another stream allocates L1 between
+        // here and dispatch) per-core occupancy can diverge from this single value, and the
+        // framework's dispatch-time check in program.cpp remains the ground truth.
+        const bool needs_negative_mask = negative_mask_applicable && [&] {
+            const uint32_t l1_base =
+                input_tensor.device()->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+            const auto lowest_occupied = input_tensor.device()->lowest_occupied_compute_l1_address();
+            const uint32_t lowest_l1 = lowest_occupied.value_or(input_tensor.buffer()->address());
+
+            const auto cb_sizes = ttnn::prim::compute_sharded_gn_static_cb_sizes(
+                input_tensor,
+                gamma.has_value() ? std::make_optional(gamma->dtype()) : std::nullopt,
+                beta.has_value() ? std::make_optional(beta->dtype()) : std::nullopt,
+                use_welford,
+                static_cast<uint32_t>(num_groups));
+            const uint32_t tile_w = input_tensor.tensor_spec().tile().get_width();
+            const bool reader_repack_output = (input_tensor.shard_spec().value().shape[1] % tile_w) != 0;
+            const uint32_t cb_total = cb_sizes.total(
+                /*with_negative_mask=*/false,
+                /*untilize_out=*/effective_output_layout == Layout::ROW_MAJOR,
+                /*has_gamma=*/gamma.has_value(),
+                /*has_beta=*/beta.has_value(),
+                /*has_input_mask=*/true,
+                reader_repack_output,
+                use_welford);
+            return l1_base + cb_total > lowest_l1;
+        }();
+
+        if (!needs_negative_mask) {
             return ttnn::prim::group_norm(
                 input_tensor,
                 epsilon,
@@ -385,15 +429,10 @@ Tensor group_norm(
                 beta,
                 mask,
                 std::nullopt,
-                reciprocals);
-        } catch (const std::runtime_error& e) {
-            const bool is_l1_clash = std::string_view(e.what()).find("clash") != std::string_view::npos;
-            if (!negative_mask_applicable || !is_l1_clash) {
-                throw;
-            }
+                reciprocals,
+                output);
         }
 
-        // Fallback: retry with negative mask to relax L1 CB constraints
         ttnn::Tensor neg_mask =
             operations::normalization::get_negative_mask_tensor(input_tensor, core_grid.value(), num_groups);
         return ttnn::prim::group_norm(
@@ -408,7 +447,8 @@ Tensor group_norm(
             beta,
             mask,
             neg_mask,
-            reciprocals);
+            reciprocals,
+            output);
     }
     // When the user did not pin a core grid, defer num_out_blocks to the program
     // factory's heuristic via the -1 sentinel (see GroupNormMultiCoreProgramConfig).

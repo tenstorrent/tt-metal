@@ -55,6 +55,11 @@ struct GroupNormInputs {
     std::optional<Tensor> input_mask;
     std::optional<Tensor> negative_mask;
     std::optional<Tensor> reciprocals;
+    // Pre-allocated output. When set, the op writes into this buffer instead of allocating a new
+    // one (see create_output_tensors / compute_output_specs). The ttnn::group_norm wrapper uses
+    // this to allocate the output up front so it can make an exact L1-fit decision before
+    // dispatch. Hashed by spec only (no buffer address), so it is program-cache safe.
+    std::optional<Tensor> optional_output;
 };
 
 }  // namespace ttnn::prim
