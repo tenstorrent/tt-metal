@@ -1,6 +1,10 @@
 name: "CI Digest"
 
 on:
+  pull_request:  # HACK (throwaway branch only): run the digest on this PR to preview it pre-merge — do not merge
+    paths:
+      - .github/workflows/ci-digest.yaml
+      - .github/scripts/ci_digest.py
   schedule:
     - cron: "0 * * * *"  # top of every hour; each digest's slot is gated by its schedule
   workflow_dispatch:
@@ -56,7 +60,7 @@ jobs:
           python3 .github/scripts/ci_digest.py --out-dir out \
             --name "${{ matrix.name }}" \
             --schedule "${{ matrix.schedule }}" \
-            --workflows ${{ join(matrix.workflows, ' ') }} ${{ github.event_name == 'workflow_dispatch' && '--force' || '' }}
+            --workflows ${{ join(matrix.workflows, ' ') }} ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request') && '--force' || '' }}
           shopt -s nullglob
           files=(out/ci-digest-*.md)
           if [ ${#files[@]} -gt 0 ]; then
@@ -79,7 +83,7 @@ jobs:
       # key off this step's `go` output (empty when this step is skipped).
       - name: Gate Slack notification
         id: notify
-        if: steps.digest.outputs.produced == 'true' && matrix.slack_channel != '' && github.event_name != 'workflow_dispatch'
+        if: steps.digest.outputs.produced == 'true' && matrix.slack_channel != '' && github.event_name == 'schedule'
         run: echo "go=true" >> "$GITHUB_OUTPUT"
 
       - name: Resolve this job's id
