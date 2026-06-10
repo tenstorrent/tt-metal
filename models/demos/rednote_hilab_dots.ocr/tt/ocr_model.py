@@ -131,8 +131,12 @@ class TtOCRModel(LightweightModule):
         self.final_norm = TtTextRMSNorm(
             mesh_device, wl.text_rmsnorm_weights(which="final_norm"), dtype=ttnn.float32, eps=1e-6
         )
-        # Untied vocab projection (lm_head component), vocab-sharded.
-        self.lm_head = TtLMHead(mesh_device, wl.lm_head_weights())
+        # Untied vocab projection (lm_head component), vocab-sharded. fp32
+        # weights instead of the block's bf8b default: greedy decode rides on
+        # exact argmax and reduced-precision logits flip near-tie tokens (e2e
+        # showed one subword flip vs HF at bf8b AND one at bf16 — fp32 logits
+        # remove the quantization tie-break entirely); the perf phase owns speed.
+        self.lm_head = TtLMHead(mesh_device, wl.lm_head_weights(), dtype=ttnn.float32)
 
     # ------------------------------------------------------------------
     # Host-side preprocessing (hybrid_notes: stays on the HF host path)
@@ -220,14 +224,14 @@ class TtOCRModel(LightweightModule):
             h = layer.forward(h, rot_mats, causal_mask)
         normed = self.final_norm(h)
         ttnn.deallocate(h)
-        # lm_head only needs the tile window holding ``row``.
+        # lm_head only needs the tile window holding ``row``; keep it fp32 —
+        # a bf16 typecast here rounds the hidden state and flips near-tie
+        # argmax tokens (the "Tenstorrent"/"Tenstorment" e2e drift).
         start = (row // 32) * 32
         window = ttnn.slice(normed, [0, 0, start, 0], [1, 1, start + 32, H])
         ttnn.deallocate(normed)
-        window_bf16 = ttnn.typecast(window, ttnn.bfloat16)
+        logits_tt = self.lm_head.forward(window)
         ttnn.deallocate(window)
-        logits_tt = self.lm_head.forward(window_bf16)
-        ttnn.deallocate(window_bf16)
         logits = ttnn.to_torch(logits_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)).float()[
             0, 0, row - start
         ]

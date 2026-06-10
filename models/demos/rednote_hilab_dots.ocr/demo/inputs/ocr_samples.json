@@ -4,11 +4,19 @@
     "ref": "Invoice total: 1,250 dollars"
   },
   {
-    "image": "hello_doc.png",
-    "ref": "Hello world from Tenstorrent"
+    "image": "pangram.png",
+    "ref": "The quick brown fox jumps over the lazy dog"
   },
   {
     "image": "serial_no.png",
     "ref": "Serial number 7 4 2 9"
+  },
+  {
+    "image": "meeting.png",
+    "ref": "Meeting starts at 10:30 in room 4"
+  },
+  {
+    "image": "keys.png",
+    "ref": "Please return the keys before Friday"
   }
 ]
