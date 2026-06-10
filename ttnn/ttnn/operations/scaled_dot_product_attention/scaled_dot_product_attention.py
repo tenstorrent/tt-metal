@@ -68,7 +68,7 @@ INPUT_TAGGERS = {
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT],
     "alignment": ["tile_aligned"],
     "attention_kind": ["self", "cross"],
@@ -156,6 +156,20 @@ def validate(q, k, v, *, attention_mask=None, scale=None):
 # ---------------------------------------------------------------------------
 
 
+def _default_compute_kernel_config(dtype):
+    """Defaults preserve Phase 0 behavior exactly for bfloat16 (HiFi2 +
+    fp32 DEST acc, no approx, half-sync). float32 inputs default to HiFi4 +
+    fp32 DEST — per matmul_block_helpers.hpp, the only correct pairing for
+    fp32 matmul inputs (no prior behavior existed for fp32, so no drift).
+    """
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4 if dtype == ttnn.float32 else ttnn.MathFidelity.HiFi2,
+        fp32_dest_acc_en=True,
+        math_approx_mode=False,
+        dst_full_sync_en=False,
+    )
+
+
 def scaled_dot_product_attention(
     query: ttnn.Tensor,
     key: ttnn.Tensor,
@@ -164,9 +178,25 @@ def scaled_dot_product_attention(
     attention_mask: ttnn.Tensor = None,
     scale: float = None,
     memory_config: ttnn.MemoryConfig = None,
+    compute_kernel_config=None,
 ) -> ttnn.Tensor:
     """Flash-Attention SDPA. Output shape = query shape."""
     validate(query, key, value, attention_mask=attention_mask, scale=scale)
+
+    if compute_kernel_config is None:
+        compute_kernel_config = _default_compute_kernel_config(query.dtype)
+
+    # Documented known-bad on Wormhole B0 (issue #38306, matmul_block_helpers.hpp):
+    # HiFi4 + fp32 DEST with bf16-family inputs silently corrupts the K-accumulator.
+    if (
+        compute_kernel_config.math_fidelity == ttnn.MathFidelity.HiFi4
+        and compute_kernel_config.fp32_dest_acc_en
+        and query.dtype != ttnn.float32
+    ):
+        raise ValueError(
+            "sdpa: HiFi4 + fp32_dest_acc_en with bf16/bf8b inputs is known-bad on "
+            "Wormhole B0 (issue #38306) — use HiFi2/HiFi3, or float32 inputs"
+        )
 
     if scale is None:
         scale = 1.0 / math.sqrt(query.shape[-1])
@@ -182,7 +212,15 @@ def scaled_dot_product_attention(
         output_memory_config,
     )
 
-    program_descriptor = create_program_descriptor(query, key, value, attention_mask, output_tensor, scale=float(scale))
+    program_descriptor = create_program_descriptor(
+        query,
+        key,
+        value,
+        attention_mask,
+        output_tensor,
+        scale=float(scale),
+        compute_kernel_config=compute_kernel_config,
+    )
 
     io_tensors = [query, key, value]
     if attention_mask is not None:

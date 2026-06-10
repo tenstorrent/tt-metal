@@ -56,6 +56,7 @@ def create_program_descriptor(
     output: ttnn.Tensor,
     *,
     scale: float,
+    compute_kernel_config,
 ) -> ttnn.ProgramDescriptor:
     B, H, S_q, D = list(q.shape)
     _, H_kv, S_kv, _ = list(k.shape)
@@ -84,6 +85,12 @@ def create_program_descriptor(
     has_mask = mask is not None
     mask_is_per_head = has_mask and list(mask.shape)[1] == H
 
+    # Input/probs/output CB formats follow the input dtype (validate() enforces
+    # Q/K/V/mask dtype equality, and output dtype == query dtype). Stat /
+    # accumulator intermediates stay Float32 (fp32 DEST accumulation crosses
+    # those CBs); reduce-scaler tiles stay bfloat16 (helper fill format).
+    in_fmt = q.dtype
+    t_in = ttnn.tile_size(in_fmt)
     t_bf = ttnn.tile_size(ttnn.bfloat16)
     t_f32 = ttnn.tile_size(ttnn.float32)
 
@@ -108,9 +115,9 @@ def create_program_descriptor(
         )
 
     cbs = [
-        cb(CB_Q_TILES, c_q * Dt, t_bf, ttnn.bfloat16),
-        cb(CB_KT_TILES, 2 * c_kv * Dt, t_bf, ttnn.bfloat16),
-        cb(CB_V_TILES, 2 * c_kv * Dt, t_bf, ttnn.bfloat16),
+        cb(CB_Q_TILES, c_q * Dt, t_in, in_fmt),
+        cb(CB_KT_TILES, 2 * c_kv * Dt, t_in, in_fmt),
+        cb(CB_V_TILES, 2 * c_kv * Dt, t_in, in_fmt),
         cb(CB_SCALER_MAX, 1, t_bf, ttnn.bfloat16),
         cb(CB_SCALER_SUM, 1, t_bf, ttnn.bfloat16),
         cb(CB_CUR_SUM, c_q, t_f32, ttnn.float32),
@@ -119,15 +126,15 @@ def create_program_descriptor(
         cb(CB_ALPHA, c_q, t_f32, ttnn.float32),
         cb(CB_RUNNING_SUM, 2 * c_q, t_f32, ttnn.float32),
         cb(CB_INV_SUM, c_q, t_f32, ttnn.float32),
-        cb(CB_OUT_TILES, 2 * c_q * Dt, t_bf, ttnn.bfloat16),
+        cb(CB_OUT_TILES, 2 * c_q * Dt, t_in, in_fmt),
         cb(CB_SCORES, c_q * c_kv, t_f32, ttnn.float32),
         cb(CB_SCORES_SCALED, c_q * c_kv, t_f32, ttnn.float32),
-        cb(CB_PROBS, c_q * c_kv, t_bf, ttnn.bfloat16),
+        cb(CB_PROBS, c_q * c_kv, t_in, in_fmt),
         cb(CB_PV, c_q * Dt, t_f32, ttnn.float32),
         cb(CB_O_ACC, 2 * c_q * Dt, t_f32, ttnn.float32),
     ]
     if has_mask:
-        cbs.append(cb(CB_MASK_TILES, 2 * c_q * c_kv, t_bf, ttnn.bfloat16))
+        cbs.append(cb(CB_MASK_TILES, 2 * c_q * c_kv, t_in, in_fmt))
 
     # --- Reader ---
     reader_ct_args = [
@@ -218,8 +225,10 @@ def create_program_descriptor(
         compile_time_args=compute_ct_args,
         runtime_args=compute_rt,
         config=ttnn.ComputeConfigDescriptor(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            fp32_dest_acc_en=True,
+            math_fidelity=compute_kernel_config.math_fidelity,
+            fp32_dest_acc_en=compute_kernel_config.fp32_dest_acc_en,
+            math_approx_mode=compute_kernel_config.math_approx_mode,
+            dst_full_sync_en=compute_kernel_config.dst_full_sync_en,
         ),
     )
 
