@@ -77,6 +77,15 @@ void kernel_main() {
             ckernel::ReduceDim::REDUCE_ROW,
             dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
             /*compute_uses_reduce_tile=*/true>();
+        constexpr uint32_t partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
+        if constexpr (partial_last_tile_cols > 0) {
+            dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                cb_in_2,
+                ckernel::PoolType::SUM,
+                ckernel::ReduceDim::REDUCE_ROW,
+                dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
+                /*compute_uses_reduce_tile=*/true>(partial_last_tile_cols);
+        }
     }
     constexpr uint32_t eps_cb_id = get_named_compile_time_arg_val("cb_eps");
     const uint32_t eps = get_arg_val<uint32_t>(5);
