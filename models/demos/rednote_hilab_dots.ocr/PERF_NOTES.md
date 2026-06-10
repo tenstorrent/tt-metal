@@ -266,3 +266,37 @@ short of ~9 ms. Two reasons, both confirmed on device:
    the layer matmuls cannot touch any of that. Hitting ~9 ms needs attacking the
    host tail (e.g. on-device argmax to shrink the D2H, device-resident RoPE) and
    the lm_head, not more layer-matmul sharding.
+
+## Sub-pass 5: on-device greedy argmax in the decode trace (kill the logits D2H)
+
+The sharded-decode write-up above identified the `[1, 151936]` logits D2H (~2.3 ms)
+as the largest remaining host-tail item: the full logits vector was read back every
+step only so a host `torch.argmax` could pick the next token. This sub-pass folds the
+greedy argmax INTO the captured decode trace, so each step reads back one int (the
+chosen token id) instead of 151,936 floats.
+
+`TtLanguageModel.decode_step` / `decode_step_traced` gained a `return_logits` flag
+(default **True**, preserving the logits output the PCC guardrail compares). With
+`return_logits=False` the trace output is the next-token id `[1, 1]` uint32 produced by
+`_greedy_token_id`: `ttnn.untilize(use_multicore) -> ttnn.argmax(dim=-1, use_multicore)`.
+Both ops are device-resident and trace-safe (no D2H / host work inside capture); the
+argmax output is a transient that belongs to the trace and is reused on replay.
+
+**Implementation note (load-bearing):** single-core `ttnn.argmax` on a TILE `[1, 151936]`
+tensor is **~5.15 ms** — slower than the host tail it replaces. `use_multicore=True`
+requires ROW_MAJOR input, so untilize-multicore first, then multicore argmax: **~0.09 ms**
+standalone, and **+0.01 ms** to the in-trace device replay (measured A/B in one process:
+pure replay 14.427 → 14.438 ms).
+
+| metric | logits D2H + host argmax | on-device argmax (int readback) | delta |
+| --- | --- | --- | --- |
+| full decode step (one harness, p50 over ~140 warm steps) | 18.61 ms | **15.63 ms** | **−2.98 ms (−16%)** |
+| in-trace device replay (A/B, p50) | 14.427 ms | 14.438 ms | +0.011 ms (argmax is free) |
+| decode-step guardrail PCC (logits path, default) | 0.999448 | 0.999448 | unchanged |
+| OCR text (32 tok vs HF) | exact | **exact (token-identical)** | `**TABLE II** – ODDS RATIO OF HODGKIN LYMPHOMA…` |
+
+The full ~2.62 ms D2H+cast+host-argmax tail is recovered; the int readback is cheaper
+than even the host cast, so the realized win (−2.98 ms) slightly exceeds the D2H alone.
+The graph-zone `decode_traced_ms` reported by `profile_ocr_traced.py` does NOT reflect
+this win (the saving is in the host tail, outside that zone) — the new
+`decode_full_step_ms` field added to the SUMMARY line is the honest per-token metric.

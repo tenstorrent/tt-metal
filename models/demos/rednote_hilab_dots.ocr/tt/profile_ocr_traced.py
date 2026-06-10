@@ -229,7 +229,7 @@ def main():
         warm_pos = prompt_len
         write_embed(first_id)
         lm.write_decode_pos(warm_pos, cache)
-        _ = lm.decode_step_traced(decode_embed, cache)
+        _ = lm.decode_step_traced(decode_embed, cache, return_logits=False)
         ttnn.synchronize_device(device)
 
         # Also warm the UNTRACED vision/prefill/decode for the comparison numbers.
@@ -258,11 +258,14 @@ def main():
         ttnn.end_trace_capture(device, prefill_tid, cq_id=0)
         ttnn.synchronize_device(device)
 
-        # decode trace
+        # decode trace -- the on-device greedy argmax is INSIDE the captured
+        # region (return_logits=False), so the trace output is the next-token id
+        # [1, 1] uint32 instead of the [1, vocab] logits. Per step we read back
+        # one int, not 151,936 floats (removes most of the ~2.3 ms logits D2H).
         write_embed(first_id)
         lm.write_decode_pos(warm_pos, cache)
         decode_tid = ttnn.begin_trace_capture(device, cq_id=0)
-        decode_logits = lm.decode_step_traced(decode_embed, cache)
+        decode_tok = lm.decode_step_traced(decode_embed, cache, return_logits=False)
         ttnn.end_trace_capture(device, decode_tid, cq_id=0)
         ttnn.synchronize_device(device)
 
@@ -320,10 +323,12 @@ def main():
 
         gen_tokens = [next_id]
         decode_ms = []
+        decode_full_ms = []  # whole per-step body incl. token-id readback (true per-tok wall)
         cur_id = next_id
         with zone("TTNNDotsOCRPipelineDecode"):
             for step in range(1, args.max_new_tokens):
                 pos = prompt_len + step - 1
+                t_full = time.perf_counter()
                 write_embed(cur_id)
                 lm.write_decode_pos(pos, cache)
                 t0 = time.perf_counter()
@@ -331,12 +336,16 @@ def main():
                     ttnn.execute_trace(device, decode_tid, cq_id=0, blocking=False)
                     ttnn.synchronize_device(device)
                 decode_ms.append((time.perf_counter() - t0) * 1000.0)
-                cur_id = int(torch.argmax(ttnn.to_torch(decode_logits).to(torch.float32).reshape(-1)).item())
+                # Read back ONLY the on-device-argmax token id (one int), not the
+                # [1, vocab] logits vector.
+                cur_id = int(ttnn.to_torch(decode_tok).reshape(-1)[0].item())
+                decode_full_ms.append((time.perf_counter() - t_full) * 1000.0)
                 gen_tokens.append(cur_id)
                 if cur_id in EOS:
                     break
 
         decode_p50 = statistics.median(decode_ms) if decode_ms else float("nan")
+        decode_full_p50 = statistics.median(decode_full_ms) if decode_full_ms else float("nan")
         text = tok.decode(gen_tokens, skip_special_tokens=True)
 
         # all-untraced-except-decode baseline e2e (vision+prefill untraced, decode traced).
@@ -366,7 +375,7 @@ def main():
             f"vision_speedup={vis_untraced/vis_traced:.2f} "
             f"prefill_untraced_ms={pf_untraced:.2f} prefill_traced_ms={pf_traced:.2f} "
             f"prefill_speedup={pf_untraced/pf_traced:.2f} "
-            f"decode_traced_ms={decode_p50:.2f} "
+            f"decode_traced_ms={decode_p50:.2f} decode_full_step_ms={decode_full_p50:.2f} "
             f"e2e_baseline_ms={baseline_e2e:.2f} e2e_traced_ms={traced_e2e:.2f} "
             f"e2e_speedup={baseline_e2e/traced_e2e:.2f} ntok={len(gen_tokens)} text={text!r}"
         )

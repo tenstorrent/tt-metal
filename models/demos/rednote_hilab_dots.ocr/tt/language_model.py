@@ -253,16 +253,33 @@ class TtLanguageModel(LightweightModule):
         hidden = self.norm(hidden)
         return self.lm_head(hidden)
 
-    def decode_step(self, hidden: ttnn.Tensor, pos: int, kv_cache):
+    def decode_step(self, hidden: ttnn.Tensor, pos: int, kv_cache, return_logits: bool = True):
         """One cached decode step from a single token's embed [1, hidden].
 
         Reads/writes ``kv_cache`` at ``pos`` per layer (O(1) layer-runs), then
-        norm + lm_head. Returns logits [1, vocab].
+        norm + lm_head. Returns logits [1, vocab] (``return_logits=True``) or the
+        greedy next-token id [1, 1] uint32 (``return_logits=False``), the latter
+        computed by an on-device argmax over the full vocab so only a scalar is
+        read back per step instead of the [1, vocab] logits vector.
         """
         for layer_idx, layer in enumerate(self.layers):
             hidden = layer.forward_decode(hidden, pos, kv_cache, layer_idx)
         hidden = self.norm(hidden)
-        return self.lm_head(hidden)
+        logits = self.lm_head(hidden)
+        if return_logits:
+            return logits
+        return self._greedy_token_id(logits)
+
+    def _greedy_token_id(self, logits: ttnn.Tensor) -> ttnn.Tensor:
+        """On-device greedy argmax over the full vocab -> next-token id [1, 1] uint32.
+
+        Single-core ``ttnn.argmax`` on a TILE-layout [1, 151936] logits tensor is
+        ~5 ms (slower than the host tail it replaces). Untilizing multicore first
+        and running the multicore argmax is ~0.09 ms -- so we untilize then reduce.
+        Both ops are device-resident and trace-safe (no D2H / host work).
+        """
+        logits_rm = ttnn.untilize(logits, use_multicore=True)
+        return ttnn.argmax(logits_rm, dim=-1, keepdim=True, use_multicore=True)
 
     def write_decode_pos(self, pos: int, kv_cache):
         """Stream ``pos`` into all per-step persistent buffers (RoPE + kv_cache).
@@ -276,16 +293,27 @@ class TtLanguageModel(LightweightModule):
         for layer in self.layers:
             layer.self_attn.write_decode_rope(int(pos))
 
-    def decode_step_traced(self, hidden: ttnn.Tensor, kv_cache):
+    def decode_step_traced(self, hidden: ttnn.Tensor, kv_cache, return_logits: bool = True):
         """Trace-capturable cached decode step (position read from device memory).
 
         Identical maths to :meth:`decode_step` but every per-step input flows
         through a persistent device buffer (the token embed ``hidden`` written in
         place by the caller, the position via :meth:`write_decode_pos`), so this
         whole call can be captured into a single metal trace and replayed at every
-        position. Returns logits [1, vocab].
+        position.
+
+        When ``return_logits=True`` (default; used by the PCC guardrail) the trace
+        output is the logits [1, vocab]. When ``return_logits=False`` the greedy
+        ``ttnn.argmax`` over the full vocab is run INSIDE the captured region and
+        the trace output is the next-token id [1, 1] uint32 -- so the per-step
+        readback shrinks from 151,936 floats to one int, removing most of the
+        ~2.3 ms logits D2H that previously ran in the host tail (the host argmax is
+        deterministic greedy, so it picks the same token as on-device argmax).
         """
         for layer_idx, layer in enumerate(self.layers):
             hidden = layer.forward_decode_traced(hidden, kv_cache, layer_idx)
         hidden = self.norm(hidden)
-        return self.lm_head(hidden)
+        logits = self.lm_head(hidden)
+        if return_logits:
+            return logits
+        return self._greedy_token_id(logits)
