@@ -36,3 +36,12 @@
 {"event":"hypothesis","detail":"rms unchanged after pass-3 gate -> mask not the source. Tail N=1088 non-pow2 -> bf16 scaler rounds at 2^-9 rel (DPRINT mean 0.996). Aligned N is pow2 -> exact scaler. Lever: scaler CB Float32 when stats fp32.","ts":"2026-06-10T15:28:27+00:00"}
 {"event":"test_run","test":"golden fp32+bf8b c-tail","status":"fail","detail":"fp32 scaler CB: 6 -> 2 failures","ts":"2026-06-10T15:29:49+00:00"}
 {"event":"dprint_observation","probe":"probes/probe_006.py","detail":"floor_rms=0.01064 (bf8b gamma quantization alone, perfect math) > target 0.01; op_rms=0.01056 (below floor); op_vs_floor=0.00092. Cell irreducible with seed gamma on 17 channels; leave failing per precision-near-miss protocol.","ts":"2026-06-10T15:31:29+00:00"}
+{"event":"test_run","test":"golden shard FLOAT32","status":"timeout","detail":"shard too large for 600s bash limit; resharding by shape prefix","ts":"2026-06-10T15:42:24+00:00"}
+{"event":"test_run","test":"golden -k 1x1x32x","status":"pass","detail":"330 pass, 165 xfail, 477 skip","ts":"2026-06-10T15:45:09+00:00"}
+{"event":"test_run","test":"golden -k 1x1x64x","status":"fail-known","detail":"438 pass, 2 fail = known 1x1x64x17 bf8b-gamma floor cells, 495 xfail","ts":"2026-06-10T15:49:41+00:00"}
+{"event":"test_run","test":"golden -k 1x1x{128,256,512}x","status":"pass","detail":"495 pass, 330 xfail","ts":"2026-06-10T15:54:05+00:00"}
+{"event":"test_run","test":"golden -k large 1x1 shapes","status":"pass","detail":"165 pass, 385 xfail","ts":"2026-06-10T15:56:34+00:00"}
+{"event":"test_run","test":"golden -k multi-batch","status":"pass","detail":"495 pass, 220 xfail. All shards: 2357 supported_pass, 2 known floor fails, 0 xpass","ts":"2026-06-10T16:00:35+00:00"}
+{"event":"test_run","test":"golden test_regression.py","status":"pass","detail":"35 pass","ts":"2026-06-10T16:01:26+00:00"}
+{"event":"test_run","test":"golden shard A post-fix","status":"pass-known","detail":"438 pass, 2 fail (irreducible 1x1x64x17 bf8b-gamma floor), 0 xpass","ts":"2026-06-10T16:04:03+00:00"}
+{"event":"test_run","test":"tests/.../groupnorm_sc_N_1_HW_C full","status":"pass","detail":"477/477 post scaler change; refinement 2 complete, [x] ticked","ts":"2026-06-10T16:09:45+00:00"}

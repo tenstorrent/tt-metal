@@ -54,3 +54,44 @@
   affine, compute config sweep, multicore split regimes incl. uneven 100-group + distinct-group
   routing), test_groupnorm_sc_N_1_HW_C_precision_matrix.py (384 cases) +
   precision_matrix_results.md, probes/probe_004.py.
+
+## Refinement 2 — Non-tile-aligned shapes (HW and C tails)
+- **Date**: 2026-06-10
+- **What was done**:
+  - `SUPPORTED["alignment"]` extended with `hw_non_aligned`, `c_non_aligned`.
+  - `tag_groups_alignment` now reports `aligned` for `num_groups == 1` (a single group cannot
+    straddle a tile boundary — only the C-tail tile needs masking, which is the alignment
+    axis's job). All `c_non_aligned` golden cells have G == 1; G > 1 C tails stay gated on
+    `groups_alignment=non_aligned` until Refinement 3.
+  - Host: padded tile counts via ceil (Ht/Wt/Wg); CT args `hw_tail`, `c_tail` (+ `mask_output`)
+    to reader/compute; scaler stays `1/sqrt(HW·Cg)` on logical sizes.
+  - Masking (REDUCE_SCALAR has no partial-scaler support — `prepare_partial_reduce_scalers`
+    static-rejects it): reader fills persistent bf16 0/1 mask rows (`cb_mask_interior` Wg tiles
+    for C tail; `cb_mask_tail` Wg tiles for HW tail, corner combined); compute multiplies
+    `cb_centered` by the held mask after `x − mean` in pass 2 (variance correctness) and —
+    only when output dtype is bf8b — in pass 3 (block-exponent hygiene; for fp32/bf16 the
+    padding is unread garbage and the extra mul cost rms). Pass 1 needs no masking — host
+    tilize zero-pads, so the SUM over the padded slab is already logical.
+  - Scaler CB format now follows the stat format (Float32 when fp32 stats): tail element
+    counts are non-power-of-two, so a bf16 1/sqrt(N) quantizes at 2^-9 relative and shifts
+    the mean by ~0.4% (DPRINT-confirmed: mean 0.996 on all-ones); fp32 scaler flipped 4 of
+    6 failing fp32 + bf8b-gamma golden cells.
+- **Accuracy achieved**: rel_rms 0.002–0.006 bf16, ≤ 0.005 fp32, ≤ 0.015 bf8b; PCC ≥ 0.995
+  on all 28 refinement-2 unit cases (shapes incl. 17x64, 50x128, 47x256, 2x1x100x128, 64x17,
+  64x50, 128x100, 2x1x64x47, 17x17, 50x100, 2x1x47x50, hw tails with G ∈ {4,8}).
+- **Golden test progress**: shape-sharded full sweep: 2,361 supported_pass across shards
+  (1,923 in disjoint shape shards + 438 in the tail-shape shard), 0 xpass_drift,
+  0 xfail_wrong_mode, 2 supported_fail (see Issues). Regression suite 35/35. Up from 1,650
+  supported_pass at Refinement 1.
+- **Issues encountered**:
+  - All-ones probing initially looked like a masking bug (constant 0.7773 output). DPRINT
+    showed correct masking; root cause was bf16 scaler quantization amplified by rstd at
+    var = 0 — degenerate input, documented in the debug test.
+  - 2 irreducible golden fails: `1x1x64x17 gamma_only bf8b TILE/RM` rms 0.01056 vs target
+    0.01 — the bf8b quantization floor of gamma alone (perfect torch math) is 0.01064
+    (probe_006), i.e. the op is BELOW the floor (op_vs_floor rms 0.0009). NOT in EXCLUSIONS
+    (precision near-miss). Follow-up belongs test-side: golden tolerance is keyed on input
+    dtype only and doesn't budget bf8b affine quantization on tiny C.
+- **Tests added**: test_groupnorm_sc_N_1_HW_C_refinement2.py (28 cases),
+  test_groupnorm_sc_N_1_HW_C_refinement2_debug.py (6 deterministic cases), probes/probe_005.py
+  (DPRINT mean/rstd), probes/probe_006.py (bf8b gamma quantization floor).

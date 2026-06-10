@@ -50,3 +50,13 @@
 {"source":"run_safe_pytest","pid":1889102,"started_at_ms":1781105360153,"wait_ms":1,"run_ms":19986,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":1}
 {"source":"run_safe_pytest","pid":1890294,"started_at_ms":1781105389754,"wait_ms":2,"run_ms":11229,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":1}
 {"source":"tt-probe","pid":1890829,"started_at_ms":1781105439222,"wait_ms":203,"run_ms":16155,"test_path":"groupnorm_sc_N_1_HW_C","exit_code":0}
+{"source":"run_safe_pytest","pid":1892237,"started_at_ms":1781105512758,"wait_ms":1,"run_ms":4746,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":3}
+{"source":"run_safe_pytest","pid":1892424,"started_at_ms":1781105528927,"wait_ms":1,"run_ms":600016,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":143}
+{"source":"run_safe_pytest","pid":1928395,"started_at_ms":1781106144095,"wait_ms":1,"run_ms":157093,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":1935012,"started_at_ms":1781106309726,"wait_ms":1,"run_ms":259970,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":1946639,"started_at_ms":1781106581310,"wait_ms":1,"run_ms":251679,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":1957878,"started_at_ms":1781106845314,"wait_ms":1,"run_ms":140390,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":1963416,"started_at_ms":1781106994371,"wait_ms":2,"run_ms":226094,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":1974444,"started_at_ms":1781107236005,"wait_ms":1,"run_ms":19120,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_regression.py","exit_code":0}
+{"source":"run_safe_pytest","pid":1975496,"started_at_ms":1781107286746,"wait_ms":1,"run_ms":139033,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":1982180,"started_at_ms":1781107443831,"wait_ms":1,"run_ms":272773,"test_path":"tests/ttnn/unit_tests/operations/groupnorm_sc_N_1_HW_C/","exit_code":0}

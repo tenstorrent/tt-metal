@@ -51,7 +51,7 @@ verification_report.md L1 note.
 **Done when**: golden xfail cells whose only missing axes are dtype / affine_dtype
 (~2 600 marginal cells) pass; verifier CLI loud categories all 0.
 
-### [ ] Refinement 2 — Non-tile-aligned shapes (HW and C tails)
+### [x] Refinement 2 — Non-tile-aligned shapes (HW and C tails)
 
 **Goal**: add `"hw_non_aligned"` and `"c_non_aligned"` to `SUPPORTED["alignment"]`. Tail tiles
 in HW need row masking in the statistics passes; tail tiles in C need column masking — the
