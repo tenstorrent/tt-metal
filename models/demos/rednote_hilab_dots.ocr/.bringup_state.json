@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T02:59:42Z",
+  "updated_at": "2026-06-10T03:13:53Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -121,8 +121,15 @@
         "pcc": 1.0
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_attention.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_vision_attention.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_attention.traced_ops.json"
+        ],
+        "notes": "Fused-QKV linear -> nlp_create_qkv_heads (12 MHA heads, hd128) -> rotary_embedding_llama (q/k weights reverse_permute'd HF->meta + convert_rope_style_hf_to_meta cos/sin, qwen25_vl vision recipe) -> windowed_scaled_dot_product_attention over cu_seqlens (in-kernel block-diagonal mask) -> nlp_concat_heads -> o_proj. Seq padded 784->896, cu_seqlens keeps unpadded boundaries; real blocks.0.attn weights, replicated on 1x4 mesh per parallelism plan; HiFi4+fp32-acc. Guard ok (lint 0, kernels ok, no new host ops). KB ttnn_experimental_create_qkv_heads pattern applied via the nlp_* fused-head idiom. Framework fix: added ttnn.transformer.windowed_scaled_dot_product_attention to guard KIND_REQUIRED_KERNELS[attention] (mandated vision idiom was unrecognized; guard self-tests still pass).",
+        "pcc": 0.999855
       },
       "debug": {
         "status": "n/a",
@@ -624,6 +631,12 @@
       "tick": 7,
       "ts": "2026-06-10T02:59:42Z",
       "action": "device[vision_rmsnorm]",
+      "result": "ok"
+    },
+    {
+      "tick": 8,
+      "ts": "2026-06-10T03:13:53Z",
+      "action": "device[vision_attention]",
       "result": "ok"
     }
   ],

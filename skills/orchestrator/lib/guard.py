@@ -72,7 +72,11 @@ KIND_REQUIRED_KERNELS: dict[str, list[set[str]]] = {
     ],
     "attention": [
         {"ttnn.linear", "ttnn.matmul"},
-        {"ttnn.softmax", "ttnn.transformer.scaled_dot_product_attention"},
+        {
+            "ttnn.softmax",
+            "ttnn.transformer.scaled_dot_product_attention",
+            "ttnn.transformer.windowed_scaled_dot_product_attention",
+        },
     ],
     "mlp": [
         {"ttnn.linear", "ttnn.matmul"},
