@@ -11,6 +11,7 @@ REFERENCE_DIR = VIBEVOICE_ROOT / "reference"
 RESOURCES_DIR = VIBEVOICE_ROOT / "resources"
 VOICES_DIR = RESOURCES_DIR / "voices"
 TEXT_EXAMPLES_DIR = RESOURCES_DIR / "text"
+GOLDEN_DIR = RESOURCES_DIR / "golden"
 
 # Upstream demo assets: https://github.com/vibevoice-community/VibeVoice/tree/main/demo
 GITHUB_DEMO_REPO = "vibevoice-community/VibeVoice"
