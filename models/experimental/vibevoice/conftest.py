@@ -24,6 +24,21 @@ for path in (_REFERENCE_DIR, _TT_METAL_ROOT):
 
 
 @pytest.fixture(scope="session", autouse=True)
+def vibevoice_demo_resources():
+    """Download demo text/voice assets once per session from upstream GitHub."""
+    from models.experimental.vibevoice.common.resource_utils import ensure_demo_resources
+
+    try:
+        ensure_demo_resources()
+    except Exception as exc:
+        pytest.skip(
+            f"VibeVoice demo resources unavailable: {exc}. "
+            "Ensure network access to github.com or pre-populate "
+            "models/experimental/vibevoice/resources/."
+        )
+
+
+@pytest.fixture(scope="session", autouse=True)
 def vibevoice_model_weights(model_location_generator):
     """Download weights once per session and expose them via config.MODEL_PATH."""
     from models.experimental.vibevoice.common import config

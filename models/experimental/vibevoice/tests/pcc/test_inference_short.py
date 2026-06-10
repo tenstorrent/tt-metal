@@ -4,17 +4,14 @@
 """
 Short reference inference smoke test (PyTorch gold before TTNN PCC).
 
-Runs 1p_short.txt on CPU with SDPA; checks non-empty speech output.
+Runs 1p_vibevoice.txt on CPU with SDPA; checks non-empty speech output.
 """
 
 import pytest
 import torch
 
-from models.experimental.vibevoice.common.config import (
-    DEFAULT_TXT_PATH,
-    MODEL_PATH,
-    VOICES_DIR,
-)
+from models.experimental.vibevoice.common.config import DEFAULT_TXT_PATH, MODEL_PATH, VOICES_DIR
+from models.experimental.vibevoice.common.resource_utils import load_script
 from vibevoice.modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
 from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
 
@@ -24,8 +21,7 @@ def test_inference_short_cpu(tmp_path):
     assert DEFAULT_TXT_PATH.is_file()
     assert VOICES_DIR.is_dir()
 
-    with open(DEFAULT_TXT_PATH, encoding="utf-8") as f:
-        script = f.read().strip().replace("\u2019", "'")
+    script = load_script()
 
     voice_path = VOICES_DIR / "en-Alice_woman.wav"
     if not voice_path.is_file():
@@ -68,6 +64,6 @@ def test_inference_short_cpu(tmp_path):
     num_samples = speech.shape[-1] if hasattr(speech, "shape") else len(speech)
     assert num_samples > 1000
 
-    out_wav = tmp_path / "1p_short_generated.wav"
+    out_wav = tmp_path / "1p_vibevoice_generated.wav"
     processor.save_audio(speech, output_path=str(out_wav))
     assert out_wav.stat().st_size > 1000
