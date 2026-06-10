@@ -57,8 +57,12 @@ _sp = int(os.environ.get("PREFILL_SP", 8))
 _tp = int(os.environ.get("PREFILL_TP", 4))
 GLOBAL_MESH_SHAPE = (_sp, _tp)
 NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
-MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 3200 * _sp))
-IS_BALANCED = os.environ.get("PREFILL_IS_BALANCED", "1" if VARIANT.default_is_balanced else "0") == "1"
+# Chunked prefill: per-user KV-cache length (60*1024), streamed in CHUNK_SIZE chunks, NUM_USERS slots.
+MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 60 * 1024))
+CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
+NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
+# Chunked / indexed-RoPE path is non-balanced (block-cyclic), regardless of variant default.
+IS_BALANCED = os.environ.get("PREFILL_IS_BALANCED", "0") == "1"
 CAPACITY_FACTOR = int(os.environ.get("PREFILL_CAPACITY_FACTOR", 8))
 _gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", VARIANT.default_gate_mode)
 
@@ -71,6 +75,13 @@ def _handle_sigterm(signum, frame):
 
 
 DEFAULT_HOST_REF_CACHE = "/tmp/prefill_ref_cache"
+
+# Golden DeepSeek-R1 chunked-prefill trace for the longbook_qa prompt (56320 = 11 * 5120 tokens).
+# Same default as tests/test_prefill_transformer_chunked.py; holds metadata.json (token_ids) plus
+# kv_cache/layer_*.safetensors (kv_post_transform_layer_*). Override with DEEPSEEK_PREFILL_TRACE_DIR.
+DEFAULT_PREFILL_TRACE_DIR = (
+    "/mnt/models/deepseek-prefill-cache/golden/kimi-26/debug_trace/longbook_qa_eng_prefill_56320_nopad"
+)
 
 # Default the variant's TTNN-cache env so resolve_weight_cache_path works
 # without the caller exporting anything. TtPrefillTransformer additionally
@@ -108,36 +119,220 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
             f"Bump PREFILL_MAX_SEQ_LEN."
         )
     actual_isl = len(token_ids)
-    if len(token_ids) < MAX_SEQ_LEN:
-        token_ids = token_ids + [1] * (MAX_SEQ_LEN - len(token_ids))
+    # Chunked prefill needs a whole number of chunks; pad the tail up to the next chunk boundary.
+    pad_to = ((len(token_ids) + CHUNK_SIZE - 1) // CHUNK_SIZE) * CHUNK_SIZE
+    if len(token_ids) < pad_to:
+        token_ids = token_ids + [1] * (pad_to - len(token_ids))
 
+    slot_id = int(data.get("slot_id", 0)) % NUM_USERS
+
+    n_chunks = len(token_ids) // CHUNK_SIZE
     num_iterations = int(os.environ.get("PREFILL_STANDALONE_ITERS", "1"))
     logger.info(f"[standalone] task_id={task_id} actual_isl={actual_isl} iters={num_iterations}")
     iter_times_ms = []
-    first_token = None
-    for i in range(num_iterations):
+    for it in range(num_iterations):
         _t0 = _time.perf_counter()
-        first_token = pipeline.prefill(
+        # prefill() is single-chunk; drive the chunk loop here, advancing kv_actual per chunk. For
+        # chunk-aligned offsets the block-cyclic layout degenerates to a plain per-chip reshape, so
+        # prepare_prefill_input_tensor (is_balanced=False) produces the correct chip-major chunk.
+        for c in range(n_chunks):
+            kv_actual = c * CHUNK_SIZE
+            pipeline.prefill(
+                prepare_prefill_input_tensor(
+                    token_ids[kv_actual : kv_actual + CHUNK_SIZE],
+                    pipeline.mesh_device,
+                    cfg.sp_factor,
+                    cfg.is_balanced,
+                    cfg.mesh_shape,
+                    cfg.sp_axis,
+                ),
+                slot_id=slot_id,
+                kv_actual_isl=kv_actual,
+            )
+        _dt_ms = (_time.perf_counter() - _t0) * 1000.0
+        iter_times_ms.append(_dt_ms)
+        logger.info(
+            f"[prefill timing] task_id={task_id} iter={it} num_tokens={len(token_ids)} "
+            f"chunks={n_chunks} slot={slot_id} pipeline.prefill() = {_dt_ms:.2f} ms"
+        )
+    logger.info(f"[iter timing summary] per-iter ms = {[round(t,2) for t in iter_times_ms]}")
+
+    # stdout, not a log line: callers (tests / orchestrators) parse this. Chunked prefill fills the
+    # KV cache and does not sample, so there is no first token to report.
+    print(f"[standalone] prefill_complete task_id={task_id} slot={slot_id} isl={actual_isl}")
+    logger.info(f"Prefill complete for task {task_id} (slot={slot_id}, isl={actual_isl})")
+
+
+def _kv_cache_pcc_check(pipeline: TtDeepSeekPrefillPipeline, slot_id: int, n_chunks: int) -> float:
+    """Gather the device KV cache for `slot_id`, un-rotate the block-cyclic layout to natural order,
+    and PCC-compare each layer against the golden DeepSeek-R1 `kv_post_transform` trace.
+
+    Shared by `run_standalone_chunked_prefill_loop` (single-process) and the request-loop PCC mode
+    (driven by the external producer over the H2D socket). Returns the min per-layer PCC and asserts
+    (unless PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1) when any layer is below threshold.
+
+    Env:
+      DEEPSEEK_PREFILL_TRACE_DIR              golden trace dir (default: the longbook_qa 56320 trace)
+      PREFILL_STANDALONE_CHUNKED_PCC          min per-layer KV-cache PCC threshold (default 0.88)
+      PREFILL_STANDALONE_CHUNKED_RECORD_ONLY  "1" -> log PCC only, do not assert
+    """
+
+    import torch
+    from safetensors import safe_open
+
+    from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
+    from tests.ttnn.utils_for_testing import comp_pcc
+
+    cfg = pipeline.config
+    mesh_device = pipeline.mesh_device
+    sp = cfg.sp_factor
+    chunk_size = cfg.chunk_size
+    num_layers = cfg.num_layers
+    seq_len_cache = cfg.max_seq_len
+    total_len = n_chunks * chunk_size
+
+    trace_dir = Path(os.environ.get("DEEPSEEK_PREFILL_TRACE_DIR", DEFAULT_PREFILL_TRACE_DIR))
+    if not trace_dir.exists():
+        raise FileNotFoundError(f"golden trace dir not found: {trace_dir} (set DEEPSEEK_PREFILL_TRACE_DIR)")
+
+    threshold = float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.88"))
+    record_only = os.environ.get("PREFILL_STANDALONE_CHUNKED_RECORD_ONLY", "0") == "1"
+    kv_lora = pipeline.hf_config.kv_lora_rank
+    kvpe_dim = pipeline.hf_config.qk_rope_head_dim + kv_lora
+
+    # One gather: [num_users*num_layers, tp_replicas, seq_len_cache, kvpe] -> collapse TP via [:, :1].
+    cache_full = ttnn.to_torch(
+        pipeline.kvpe_cache,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+    ).to(torch.float32)[
+        :, :1
+    ]  # [num_users*num_layers, 1, seq_len_cache, kvpe]
+
+    p = blockcyclic_positions(sp, chunk_size, seq_len_cache)
+    logger.info(f"[kv-pcc] device KV cache vs golden kv_post_transform (slot={slot_id}, per layer):")
+    min_pcc = 1.0
+    failures = []
+    for i in range(num_layers):
+        # user-major slot layout: cache batch index = slot_id * num_layers + layer_idx
+        batch_idx = slot_id * num_layers + i
+        nat = torch.empty(seq_len_cache, kvpe_dim, dtype=torch.float32)
+        nat[p] = cache_full[batch_idx, 0]  # un-rotate block-cyclic -> natural order
+        dev_cache = nat[:total_len]
+
+        with safe_open(trace_dir / "kv_cache" / f"layer_{i}.safetensors", framework="pt") as fsafe:
+            g_post = fsafe.get_slice(f"kv_post_transform_layer_{i}")[:total_len].to(torch.float32)
+        # nope (kv_lora) compares directly; the RoPE (pe) slice uses the Meta-interleaved basis while
+        # the golden stores the HF half-split, so re-interleave the golden before comparing.
+        _, pcc_nope = comp_pcc(g_post[:, :kv_lora], dev_cache[:, :kv_lora])
+        ref_pe = g_post[:, kv_lora:]
+        d = ref_pe.shape[-1]
+        ref_pe_int = torch.stack([ref_pe[:, : d // 2], ref_pe[:, d // 2 :]], dim=-1).reshape(-1, d)  # HF -> Meta
+        _, pcc_pe = comp_pcc(ref_pe_int, dev_cache[:, kv_lora:])
+        layer_pcc = min(pcc_nope, pcc_pe)
+        min_pcc = min(min_pcc, layer_pcc)
+        logger.info(f"  cache layer {i} PCC: nope={pcc_nope:.6f} pe(interleaved)={pcc_pe:.6f} -> {layer_pcc:.6f}")
+        if layer_pcc < threshold:
+            failures.append((i, layer_pcc))
+
+    logger.info(f"[kv-pcc] KV cache min PCC across {num_layers} layers: {min_pcc:.6f} (threshold {threshold})")
+    # stdout, not a log line: callers (tests / orchestrators) parse this.
+    print(
+        f"[standalone-chunked] kv_cache_pcc_complete slot={slot_id} n_chunks={n_chunks} "
+        f"total_len={total_len} min_pcc={min_pcc:.6f}"
+    )
+    if failures:
+        msg = "; ".join(f"layer {layer} PCC {pcc:.6f} < {threshold}" for layer, pcc in failures)
+        if record_only:
+            logger.warning(f"[kv-pcc] sub-threshold PCC (record-only, not asserted): {msg}")
+        else:
+            raise AssertionError(f"[kv-pcc] KV cache PCC below {threshold}: {msg}")
+    else:
+        logger.success(f"[kv-pcc] KV cache PCC PASSED (min {min_pcc:.6f} >= {threshold})")
+    return min_pcc
+
+
+def run_standalone_chunked_prefill_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
+    """Standalone chunked-prefill *validation* loop: drive the golden longbook_qa prompt through the
+    pipeline in CHUNK_SIZE chunks (exactly as `run_standalone_loop` drives the chunk loop), then PCC
+    the resulting device KV cache against the golden DeepSeek-R1 `kv_post_transform` trace.
+
+    This exercises the FULL runner machinery — main() opens the mesh, builds the pipeline, and
+    compiles before calling us; we then push N chunks through `pipeline.prefill` (forward_chunk +
+    the shared KV cache) — but instead of file/socket input it reads the golden prompt and asserts
+    correctness, mirroring `tests/test_prefill_transformer_chunked.py::run_chunked_transformer`.
+
+    Token input is sharded with `prepare_prefill_input_tensor` (is_balanced=False), same as
+    `run_standalone_loop`. For chunk-aligned offsets the block-cyclic gather degenerates to a plain
+    per-chip reshape, so this matches the test's `rotated_chip_positions` gather exactly.
+
+    The KV cache is gathered and un-rotated (block-cyclic -> natural) and PCC-compared per layer
+    against the trace. The cache is allocated user-major (slot index = user_id * num_layers +
+    layer_idx), so layer i of slot `slot_id` lives at batch index `slot_id * num_layers + i`.
+
+    Env (in addition to the standard runner env — see _print_config):
+      DEEPSEEK_PREFILL_TRACE_DIR              golden trace dir (default: the longbook_qa 56320 trace)
+      PREFILL_STANDALONE_CHUNKED_NCHUNKS      chunks to run (default 11 -> 56320 tokens)
+      PREFILL_STANDALONE_CHUNKED_SLOT         KV-cache user slot to fill (default 0)
+      PREFILL_STANDALONE_CHUNKED_PCC          min per-layer KV-cache PCC threshold (default 0.88)
+      PREFILL_STANDALONE_CHUNKED_RECORD_ONLY  "1" -> log PCC only, do not assert
+    """
+    import json
+    import time as _time
+
+    cfg = pipeline.config
+    mesh_device = pipeline.mesh_device
+    sp = cfg.sp_factor
+    chunk_size = cfg.chunk_size
+    num_layers = cfg.num_layers
+    seq_len_cache = cfg.max_seq_len  # allocated cache seq dim — drives the block-cyclic inversion below
+
+    n_chunks = int(os.environ.get("PREFILL_STANDALONE_CHUNKED_NCHUNKS", "11"))
+    slot_id = int(os.environ.get("PREFILL_STANDALONE_CHUNKED_SLOT", "0")) % NUM_USERS
+    total_len = n_chunks * chunk_size
+    assert total_len <= seq_len_cache, (
+        f"{n_chunks} chunks x {chunk_size} = {total_len} exceeds per-user cache max_seq_len={seq_len_cache}; "
+        f"bump PREFILL_MAX_SEQ_LEN or lower PREFILL_STANDALONE_CHUNKED_NCHUNKS"
+    )
+
+    trace_dir = Path(os.environ.get("DEEPSEEK_PREFILL_TRACE_DIR", DEFAULT_PREFILL_TRACE_DIR))
+    if not trace_dir.exists():
+        raise FileNotFoundError(f"golden trace dir not found: {trace_dir} (set DEEPSEEK_PREFILL_TRACE_DIR)")
+
+    logger.info(
+        f"[standalone-chunked] trace={trace_dir} n_chunks={n_chunks} chunk_size={chunk_size} "
+        f"total_len={total_len} slot={slot_id} cache={seq_len_cache} sp={sp} layers={num_layers}"
+    )
+
+    with open(trace_dir / "metadata.json") as f:
+        md = json.load(f)
+    token_ids_full = list(md["token_ids"])[:total_len]
+    assert (
+        len(token_ids_full) == total_len
+    ), f"trace metadata has {len(token_ids_full)} tokens but need {total_len}; lower PREFILL_STANDALONE_CHUNKED_NCHUNKS"
+
+    # --- Drive chunked prefill: one CHUNK_SIZE chunk per pipeline.prefill, advancing kv_actual. ---
+    _t0 = _time.perf_counter()
+    for c in range(n_chunks):
+        kv_actual = c * chunk_size
+        pipeline.prefill(
             prepare_prefill_input_tensor(
-                token_ids,
-                pipeline.mesh_device,
+                token_ids_full[kv_actual : kv_actual + chunk_size],
+                mesh_device,
                 cfg.sp_factor,
                 cfg.is_balanced,
                 cfg.mesh_shape,
                 cfg.sp_axis,
             ),
-            actual_isl=actual_isl,
-            slot_id=0,
+            slot_id=slot_id,
+            kv_actual_isl=kv_actual,
         )
-        _dt_ms = (_time.perf_counter() - _t0) * 1000.0
-        iter_times_ms.append(_dt_ms)
-        logger.info(
-            f"[prefill timing] task_id={task_id} iter={i} num_tokens={MAX_SEQ_LEN} "
-            f"pipeline.prefill() = {_dt_ms:.2f} ms first_token={first_token}"
-        )
-    logger.info(f"[iter timing summary] per-iter ms = {[round(t,2) for t in iter_times_ms]}")
-    # stdout, not a log line: callers (tests / orchestrators) parse this.
-    print(f"[standalone] task_id={task_id} first_token={first_token}")
+        logger.info(f"[standalone-chunked] prefilled chunk {c + 1}/{n_chunks} (kv_actual={kv_actual})")
+    ttnn.synchronize_device(mesh_device)
+    dt_ms = (_time.perf_counter() - _t0) * 1000.0
+    logger.info(f"[standalone-chunked] {n_chunks} chunks prefilled in {dt_ms:.2f} ms")
+
+    # --- PCC the device KV cache against the golden kv_post_transform trace (per layer). ---
+    _kv_cache_pcc_check(pipeline, slot_id, n_chunks)
 
 
 def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DStreamService) -> None:
@@ -155,13 +350,28 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
     """
     import time as _time
 
+    # Bounded PCC mode: when PREFILL_REQUEST_LOOP_PCC=1 the runner expects a finite stream of
+    # PREFILL_STANDALONE_CHUNKED_NCHUNKS chunks (the producer reads the golden longbook_qa trace and
+    # pushes exactly that many), then exits the loop so main() can PCC the resulting KV cache against
+    # the golden trace — the socket-driven analogue of run_standalone_chunked_prefill_loop.
+    pcc_mode = os.environ.get("PREFILL_REQUEST_LOOP_PCC", "0") == "1"
+    expected_chunks = int(os.environ.get("PREFILL_STANDALONE_CHUNKED_NCHUNKS", "11")) if pcc_mode else None
+
     logger.info(
         "[request] entering request loop — blocks on h2d_socket_sync for each push, "
-        "runs until SIGTERM/SIGINT (Ctrl-C). Drive it with prefill_h2d_producer.py / the scheduler."
+        + (
+            f"runs for {expected_chunks} chunks then PCC-checks the KV cache (PREFILL_REQUEST_LOOP_PCC=1)."
+            if pcc_mode
+            else "runs until SIGTERM/SIGINT (Ctrl-C). Drive it with prefill_h2d_producer.py / the scheduler."
+        )
     )
 
+    last_slot_id = int(os.environ.get("PREFILL_STANDALONE_CHUNKED_SLOT", "0")) % NUM_USERS
     i = 0
     while not _shutdown:
+        if expected_chunks is not None and i >= expected_chunks:
+            logger.info(f"[request] received all {expected_chunks} expected chunks; exiting loop for PCC check")
+            break
         # Device-side sync: workers block on data_ready_sem (set by the service
         # core after a producer push lands), copy backing -> fresh output, ack
         # consumed_counter. Returns tensors independent of the backing. This call
@@ -173,28 +383,42 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
         )
         # Decode per-iter PrefillMetadata (replicated across the mesh — first device view).
         meta_host = ttnn.to_torch(ttnn.get_device_tensors(tt_metadata)[0]).view(torch.int32).flatten()
-        slot_id = int(meta_host[0])
+        slot_id = int(meta_host[0]) % NUM_USERS
+        last_slot_id = slot_id
         actual_start = int(meta_host[1])
         actual_end = int(meta_host[2])
         actual_isl = actual_end - actual_start
+        # Chunked prefill: each push is one CHUNK_SIZE-wide chunk; actual_start is the absolute KV
+        # position where this chunk begins (cumulative valid tokens before it) -> kv_actual_isl. The
+        # real-token count (actual_isl) is informational — padding is handled by causality + the
+        # caller advancing actual_start by the real count for the next chunk.
         logger.info(
-            f"[request] iter={i} metadata: slot_id={slot_id} "
-            f"actual_start={actual_start} actual_end={actual_end} actual_isl={actual_isl}"
+            f"[request] iter={i} metadata: slot_id={slot_id} actual_start={actual_start} "
+            f"actual_end={actual_end} actual_isl={actual_isl}"
         )
-        # Time ONLY the prefill compute, not the idle h2d_socket_sync wait above.
+        # Time ONLY the prefill compute, not the idle h2d_socket_sync wait above. prefill() consumes
+        # (deallocates) tt_tokens; free the metadata tensor here. No token is returned — chunked
+        # prefill fills the KV cache and the decode stage reads it directly.
         _t0 = _time.perf_counter()
-        first_token = pipeline.prefill(
+        pipeline.prefill(
             tt_tokens,
-            actual_isl=actual_isl,
             slot_id=slot_id,
+            kv_actual_isl=actual_start,
         )
+        ttnn.deallocate(tt_metadata)
         _dt_ms = (_time.perf_counter() - _t0) * 1000.0
         logger.info(
-            f"[request] iter={i} num_tokens={MAX_SEQ_LEN} "
-            f"pipeline.prefill() = {_dt_ms:.2f} ms first_token={first_token}"
+            f"[request] iter={i} chunk_tokens={CHUNK_SIZE} kv_actual_isl={actual_start} "
+            f"actual_isl={actual_isl} slot={slot_id} pipeline.prefill() = {_dt_ms:.2f} ms"
         )
         i += 1
     logger.info(f"[request] loop exited after {i} requests")
+
+    if pcc_mode:
+        # Drain the device, then PCC the KV cache filled over the socket against the golden trace.
+        ttnn.synchronize_device(pipeline.mesh_device)
+        logger.info(f"[request] running KV-cache PCC check (slot={last_slot_id}, n_chunks={i})")
+        _kv_cache_pcc_check(pipeline, last_slot_id, i)
 
 
 def _print_config() -> None:
@@ -215,6 +439,12 @@ def _print_config() -> None:
         ("PREFILL_STANDALONE", os.environ.get("PREFILL_STANDALONE", "0")),
         ("PREFILL_STANDALONE_INPUT", os.environ.get("PREFILL_STANDALONE_INPUT", "<default>")),
         ("PREFILL_STANDALONE_ITERS", os.environ.get("PREFILL_STANDALONE_ITERS", "1")),
+        ("PREFILL_STANDALONE_CHUNKED", os.environ.get("PREFILL_STANDALONE_CHUNKED", "0")),
+        ("DEEPSEEK_PREFILL_TRACE_DIR", os.environ.get("DEEPSEEK_PREFILL_TRACE_DIR", DEFAULT_PREFILL_TRACE_DIR)),
+        ("PREFILL_STANDALONE_CHUNKED_NCHUNKS", os.environ.get("PREFILL_STANDALONE_CHUNKED_NCHUNKS", "11")),
+        ("PREFILL_STANDALONE_CHUNKED_SLOT", os.environ.get("PREFILL_STANDALONE_CHUNKED_SLOT", "0")),
+        ("PREFILL_STANDALONE_CHUNKED_PCC", os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.88")),
+        ("PREFILL_REQUEST_LOOP_PCC", os.environ.get("PREFILL_REQUEST_LOOP_PCC", "0")),
         ("PREFILL_ENABLE_MIGRATION", os.environ.get("PREFILL_ENABLE_MIGRATION", "0")),
         ("PREFILL_H2D_SERVICE_ID", os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")),
     ]
@@ -250,6 +480,8 @@ def main() -> None:
         max_seq_len=MAX_SEQ_LEN,
         mesh_shape=GLOBAL_MESH_SHAPE,
         is_balanced=IS_BALANCED,
+        chunk_size=CHUNK_SIZE,
+        num_users=NUM_USERS,
         num_links=2,
         capacity_factor=CAPACITY_FACTOR,
         gate_fallback_mode=GateComputeMode[_gate_mode_name],
@@ -285,11 +517,16 @@ def main() -> None:
             num_layers=NUM_LAYERS,
             mesh_shape=GLOBAL_MESH_SHAPE,
             sp_axis=0,  # GLOBAL_MESH_SHAPE = (sp, tp) — SP is axis 0
+            num_users=NUM_USERS,
             path=table_path,
         )
         send_kv_chunk_table(table_path)
 
-    if os.environ.get("PREFILL_STANDALONE", "0") == "1":
+    if os.environ.get("PREFILL_STANDALONE_CHUNKED", "0") == "1":
+        # Standalone validation: golden longbook_qa input, chunked prefill, KV-cache PCC vs trace.
+        logger.info("Setup complete, running standalone chunked-prefill loop (golden KV-cache PCC check)")
+        run_standalone_chunked_prefill_loop(pipeline)
+    elif os.environ.get("PREFILL_STANDALONE", "0") == "1":
         # Truly standalone: file input, no H2D socket service at all.
         logger.info("Setup complete, running standalone loop (file input, no socket)")
         run_standalone_loop(pipeline)
@@ -304,10 +541,12 @@ def main() -> None:
         # service cores don't fit a single custom sub-device. Revert to the
         # default whole-chip sub-device so the service program validates.
         mesh_device.clear_loaded_sub_device_manager()
+        # Chunked prefill streams ONE CHUNK_SIZE-wide chunk per push, so the
+        # service's global tensor is sized to a chunk, not the full sequence.
         h2d_service = build_h2d_service(
             mesh_device,
             mesh_shape=GLOBAL_MESH_SHAPE,
-            max_seq_len=MAX_SEQ_LEN,
+            max_seq_len=CHUNK_SIZE,
             mapper_config=H2D_MAPPER_CONFIG,
             worker_cores=H2D_SYNC_WORKER_CORES,
             metadata_size_bytes=H2D_METADATA_SIZE_BYTES,

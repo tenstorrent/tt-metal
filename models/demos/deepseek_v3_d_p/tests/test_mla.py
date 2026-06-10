@@ -480,19 +480,18 @@ def test_kimi_mla(
 # real GPU run); multi-user pulls one trace per user, cycling if there are fewer traces than users.
 DEEPSEEK_MLA_TRACE_DIR = os.environ.get("DEEPSEEK_MLA_TRACE_DIR")
 
-# Per-iteration VALID token counts for the rotation/padding edge cases, tuned for the TARGET 8x4 mesh
-# (sp=8, chunk_local=640, chunk=5120). Each cumulative kv_actual lands on a distinct rotation edge:
-# which chip the boundary falls on (0..7), chip-aligned vs mid-chip straddle (offset != 0), single vs
-# multi-slab, and how much of the chunk is pad. All values are tile-aligned (multiple of 32).
+# Per-iteration valid-ISL patterns for the rotation/padding edge cases (chunk=5120). Partial values
+# (< chunk) exercise mid-slab rotation + causal pad masking; CPU-reference only (a dense GPU trace
+# has no partial chunks).
 ROTATED_VALID_LISTS = [
-    [640, 5120],  # aligned_min: iter0 = 1 chip valid (7 chips pad), then chip-1 rotated full
-    [672, 5120],  # midchip_straddle: frontier 1 tile into chip 1, then rotated with offset=32 straddle
-    [4480, 5120],  # lastchip: iter0 = 7 chips, rotation at the LAST chip (chip 7)
-    [1280, 1920, 5120],  # rot_partial: iter1 is rotated AND partial (3-chip valid, 5-chip pad)
-    [5120, 1280, 5120],  # multislab: rotation in slab 1 (multi-slab), partial then full
-    [5120, 5120],  # allfull: sanity, two full chunks at slab boundaries (aligned, no rotation)
+    [2560, 5120],  # iter0partial — only iter 0 padded
+    [5120, 5120],  # allfull — rotation degenerates (sanity)
+    [2560, 2560, 5120],  # iter1rotpartial — iter 1 BOTH rotated AND partial
+    [1280, 3840, 5120],  # iter1multichippad — iter 1 pad-fill spans both chips
+    [2560, 2560],  # lastpartial — final iter partial, fills the OLD slab
+    [2592, 5120, 5120],  # padded_partial — 1-tile offset so the boundary chip straddles a slab
 ]
-ROTATED_VALID_IDS = ["aligned_min", "midchip_straddle", "lastchip", "rot_partial", "multislab", "allfull"]
+ROTATED_VALID_IDS = ["iter0partial", "allfull", "iter1rotpartial", "iter1multichippad", "lastpartial", "padded_partial"]
 
 
 def _run_chunked_prefill(
@@ -512,7 +511,7 @@ def _run_chunked_prefill(
       * "cpu"   -> synthetic inputs + torch MLA reference (k_pe in Meta basis). Partial-chunk iters
                    (rotation) allowed; any prefix is preloaded from the CPU reference KV.
       * "trace" -> GPU-trace inputs + reference (k_pe in HF basis, re-interleaved to compare). TRACE
-                   ONLY: requires DEEPSEEK_MLA_TRACE_DIR (skips if unset); supports partial iters.
+                   ONLY: requires DEEPSEEK_MLA_TRACE_DIR (skips if unset) and full-chunk iters.
       * None    -> no reference (functional/perf): random inputs + random prefix, finite-output check.
     Multi-user partitions iters_isl across users (last gets the remainder); each user is independent in
     its own cache slot, so cross-user contamination surfaces as a per-user output PCC drop.
@@ -759,58 +758,45 @@ def _run_chunked_prefill(
     logger.success(f"✓ Chunked prefill passed ({'trace' if use_trace else 'cpu'} ref, {num_users} user(s))")
 
 
-# Functionality scenarios (id, kwargs) -- PURE FUNCTIONALITY: no mesh, no reference. Mesh and
-# reference are SEPARATE pytest axes below (chunk=5120 is valid for sp in {2,4,8}), so the same
-# scenario runs on any mesh and is validated against either ground truth (or run functional) without
-# duplicating the case.
+# Representative scenarios: (id, mesh, kwargs). Rotation edge cases (CPU), production depth (CPU),
+# multi-user isolation (CPU), GPU-trace ground truth + functional perf (prefill>0).
 _CHUNKED_SCENARIOS = (
-    [(f"rot-{rid}", dict(iters_isl=lst)) for rid, lst in zip(ROTATED_VALID_IDS, ROTATED_VALID_LISTS)]
-    # One representative case packing the most sp=8 edges: iter0 aligned partial, iter1 rotated
-    # chip-aligned (offset=0) partial, iter2 rotated mid-chip straddle (offset=32) + multi-slab + full.
-    + [("maxedge", dict(iters_isl=[2560, 2592, 5120]))]
+    [(f"rot-{rid}", (2, 2), dict(iters_isl=lst)) for rid, lst in zip(ROTATED_VALID_IDS, ROTATED_VALID_LISTS)]
+    # One sp=8 case covering all rotation edges at once: iter1 is rotated + PARTIAL + mid-chip
+    # straddle (boff=32); iter2 is rotated + multi-slab (slab 1) + mid-chip.
+    + [("rot8x4-maxedge", (8, 4), dict(iters_isl=[2592, 2560, 5120]))]
     + [
-        ("production-50k+5k", dict(iters_isl=[5120] * 11)),
-        ("multiuser-U2", dict(iters_isl=[5120] * 4, num_users=2)),
-        # Multi-user WITH padding/rotation: each user runs the full maxedge pattern in its own slot
-        # (partition splits [..]*2 into one maxedge per user), exercising rotation + cross-user isolation.
-        ("maxedge-multiuser-U2", dict(iters_isl=[2560, 2592, 5120] * 2, num_users=2)),
-        ("deep-50k+5k", dict(iters_isl=[5120], prefill_len=50 * 1024)),
-        ("deep-multiuser-U2", dict(iters_isl=[5120, 5120], prefill_len=50 * 1024, num_users=2)),
+        ("production-50k+5k", (8, 4), dict(iters_isl=[5120] * 11)),
+        ("multiuser-U2", (2, 2), dict(iters_isl=[5120] * 4, num_users=2)),
+        # Same full-chunk functionality as the two CPU cases above, but validated against the GPU
+        # trace instead (whole sequence built from scratch and PCC'd vs the trace output). Trace-only:
+        # skip without DEEPSEEK_MLA_TRACE_DIR. Rotation/partial cases have no dense-trace equivalent.
+        ("production-trace", (8, 4), dict(iters_isl=[5120] * 11, reference="trace")),
+        ("multiuser-U2-trace", (8, 4), dict(iters_isl=[5120] * 4, num_users=2, reference="trace")),
+        # Variable-width / rotation chunking of a dense trace prefix: same pattern as rot8x4-maxedge
+        # (interior partials + mid-chip straddle + multi-slab) but validated vs the GPU trace.
+        ("rot8x4-maxedge-trace", (8, 4), dict(iters_isl=[2592, 2560, 5120], reference="trace")),
+        ("trace-50k+5k", (8, 4), dict(iters_isl=[5120], prefill_len=50 * 1024, reference="trace")),
+        (
+            "trace-multiuser-U2",
+            (8, 4),
+            dict(iters_isl=[5120, 5120], prefill_len=50 * 1024, num_users=2, reference="trace"),
+        ),
+        ("functional-50k+5k", (8, 4), dict(iters_isl=[5120], prefill_len=50 * 1024, reference=None)),
     ]
 )
 
 
-# TODO(FABRIC_2D): the BH Galaxy 8x4 prefill target moved to FABRIC_2D (#45595, which fixed the MLA
-# ring all-gather writer this path uses). Add a fabric2d device_params variant (router config +
-# RELAXED_INIT + per-mesh num_links, via conftest's FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS) in a
-# follow-up, validated on BH Galaxy. This test currently covers FABRIC_1D only.
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4), (8, 4)], ids=["2x2", "2x4", "8x4"], indirect=True)
-@pytest.mark.parametrize("reference", ["cpu", "trace", None], ids=["cpu", "trace", "func"])
-@pytest.mark.parametrize("kwargs", [kw for _, kw in _CHUNKED_SCENARIOS], ids=[sid for sid, _ in _CHUNKED_SCENARIOS])
-@pytest.mark.parametrize("variant", ["deepseek_v3_d_p", "kimi_k2_6"], indirect=True, ids=["deepseek_v3", "kimi"])
+@pytest.mark.parametrize(
+    "mesh_device, kwargs",
+    [(m, kw) for _, m, kw in _CHUNKED_SCENARIOS],
+    ids=[sid for sid, _, _ in _CHUNKED_SCENARIOS],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
 @pytest.mark.timeout(0)
-def test_mla_chunked_prefill(request, mesh_device, kwargs, reference, device_params, variant):
-    """Unified chunked-prefill driver crossed with independent mesh and reference axes. Each
-    functionality scenario (rotation edges, production depth, multi-user, deep prefix) runs on any mesh
-    and is validated against the CPU torch reference ('cpu'), the GPU trace ('trace', skips without
-    DEEPSEEK_MLA_TRACE_DIR), or run with no reference ('func'). Select with e.g.
-    -k 'maxedge and trace and 8x4'. See _run_chunked_prefill.
-
-    Real weights on the CPU-reference path: point the variant's HF env var (DEEPSEEK_V3_HF_MODEL /
-    KIMI_K2_6_HF_MODEL) at a checkpoint to validate the chunked path against the CPU torch reference
-    with pretrained weights instead of random. create_mla_reference is config-driven and
-    architecture-agnostic (Kimi's YaRN/theta flow through, absorbed-MLA math matches the variant's own
-    reference), so this works for both variants. It complements the deepseek GPU-trace path, which only
-    replays full-chunk iters and so never exercises real weights across the rotation/partial-chunk edge
-    scenarios that the cpu path covers. Without the env var, fall back to random (mirroring
-    test_kimi_mla). kimi_k2_6 has no trace path (traces are deepseek-only) but otherwise runs the same
-    config-driven driver on any arch/mesh."""
-    if variant.name == "kimi_k2_6" and reference == "trace":
-        pytest.skip("kimi_k2_6: GPU traces are deepseek-only (no Kimi traces)")
-    # Opt into real weights on the cpu path when the variant's checkpoint env var is set. The "trace"
-    # path already forces pretrained; "func" is ref-less so weights don't matter. The pretrained
-    # fixture skips the test if the env var is set but the checkpoint is incomplete.
-    if reference == "cpu" and os.environ.get(variant.env_var) and not kwargs.get("use_pretrained"):
-        kwargs = {**kwargs, "use_pretrained": True}
-    _run_chunked_prefill(request, mesh_device, reference=reference, **kwargs)
+def test_mla_chunked_prefill(request, mesh_device, kwargs, device_params, variant):
+    """Unified chunked-prefill: rotation edges + production depth + multi-user (CPU ref), plus GPU
+    trace ground truth and functional perf when DEEPSEEK_MLA_TRACE_DIR is set. See _run_chunked_prefill."""
+    _run_chunked_prefill(request, mesh_device, **kwargs)

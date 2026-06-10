@@ -15,6 +15,7 @@ import ttnn
 # This is a predefined constant for the number of contiguous tokens in a DRAM bank
 NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
 BH_NUM_DRAM_BANKS = 8
+PREFILL_CHUNK_OUTPUT_TOKENS = 5 * 1024
 
 
 def create_kv_chunk_address_table(config, mesh_device, mesh_shape, seq_len, sp_axis, tt_kvpe_cache, chunk_size_bytes):
@@ -143,6 +144,81 @@ def create_kv_chunk_address_table(config, mesh_device, mesh_shape, seq_len, sp_a
                         layer_current_position == layer_max_position + 1
                     ), f"Missmatch in position calculation. Expected layer current_position to be {layer_max_position + 1}, but it is: {layer_current_position}."
                     (layer_current_position, layer_max_position) = device_position_indices_high_strip[row]
+
+    return lookup_table
+
+
+def create_kv_chunk_address_table_kimi(
+    config, mesh_device, mesh_shape, seq_len, sp_axis, tt_kvpe_cache, chunk_size_bytes, num_users
+):
+    """
+    Create and populate a KV chunk address table for disaggregation (Kimi K2.6 model - non-balanced).
+
+    Args:
+        config: KvChunkAddressTableConfig
+        mesh_device: Mesh device for TT
+        mesh_shape: Shape of mesh device
+        seq_len: Sequence length
+        sp_axis: Sequence parallel axis
+        tt_kvpe_cache: Initialized KVPE cache on device
+        chunk_size_bytes: Size of each chunk in bytes
+
+    Returns:
+        lookup_table: Populated KvChunkAddressTable
+    """
+    assert seq_len % (mesh_shape[sp_axis] * NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK) == 0, (
+        f"seq_len {seq_len} must be divisible by sp_factor({mesh_shape[sp_axis]}) * "
+        f"{NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK} for the sequential layout"
+    )
+
+    lookup_table = ttnn.experimental.disaggregation.KvChunkAddressTable(config)
+    host_name = socket.gethostname()
+
+    rank = ttnn.distributed_context_get_rank()
+    size = ttnn.distributed_context_get_size()
+    total_rows = mesh_shape[0]
+    rank_row_start = int(rank) * total_rows // int(size)
+    rank_row_end = rank_row_start + total_rows // int(size)
+
+    num_layers = config.num_layers
+
+    # Data is replicated across each column of the mesh, so one device group per row.
+    device_group_idx_per_row = []
+    all_fabric_node_ids = []
+    for row in range(rank_row_start, rank_row_end):
+        fabric_node_ids = []
+        for col in range(mesh_shape[1]):
+            fabric_node_ids.append(mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(row, col)))
+        all_fabric_node_ids.extend(fabric_node_ids)
+        device_group_idx_per_row.append(lookup_table.add_device_group(fabric_node_ids))
+
+    for fid in all_fabric_node_ids:
+        lookup_table.set_fabric_node_host(fid, host_name=host_name)
+        logger.debug(
+            f"Set host name for fabric node id: mesh_id={int(fid.mesh_id)}, chip_id={int(fid.chip_id)} to {host_name}"
+        )
+
+    seq_len_local = seq_len // mesh_shape[sp_axis]
+
+    dram_bank_base_addr = tt_kvpe_cache.buffer_address()
+    for local_idx, global_row in enumerate(range(rank_row_start, rank_row_end)):
+        group_idx = device_group_idx_per_row[local_idx]
+        curr_bank_id = 0
+        curr_bank_offset = 0
+        device_token_start = global_row * seq_len_local
+        device_token_end = device_token_start + seq_len_local
+        for slot in range(num_users):
+            for layer in range(num_layers):
+                for position in range(device_token_start, device_token_end, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+                    location = ttnn.experimental.disaggregation.KvCacheLocation()
+                    location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
+                    location.size_bytes = chunk_size_bytes
+                    location.device_group_index = group_idx
+                    lookup_table.set(layer, position, slot, location)
+
+                    curr_bank_id = (curr_bank_id + 1) % BH_NUM_DRAM_BANKS
+                    if curr_bank_id == 0:
+                        curr_bank_offset += chunk_size_bytes
 
     return lookup_table
 

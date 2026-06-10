@@ -47,6 +47,8 @@ class TestVariant:
         ref_cache_env: Optional[str] = None,
         mla_ref_cache_env: Optional[str] = None,
         ttnn_cache_env: Optional[str] = None,
+        prefill_trace_env: Optional[str] = None,
+        prefill_trace_default: Optional[str] = None,
         moe_pcc_threshold: float = 0.999,
         mla_pcc_threshold: float = 0.999,
         supports_pretrained: bool = True,
@@ -64,6 +66,10 @@ class TestVariant:
         self.ref_cache_env = ref_cache_env
         self.mla_ref_cache_env = mla_ref_cache_env
         self.ttnn_cache_env = ttnn_cache_env
+        # Golden chunked-prefill trace (kv_cache/ + hidden_states/ + metadata.json) used by the
+        # chunked block/transformer PCC tests. `prefill_trace_env` overrides `prefill_trace_default`.
+        self.prefill_trace_env = prefill_trace_env
+        self.prefill_trace_default = prefill_trace_default
         self.moe_pcc_threshold = moe_pcc_threshold
         self.mla_pcc_threshold = mla_pcc_threshold
         self.supports_pretrained = supports_pretrained
@@ -83,6 +89,8 @@ DSV3 = TestVariant(
     ref_cache_env="TT_DS_PREFILL_HOST_REF_CACHE",
     mla_ref_cache_env="DEEPSEEK_V3_MLA_REF_CACHE",
     ttnn_cache_env="TT_DS_PREFILL_TTNN_CACHE",
+    prefill_trace_env="DEEPSEEK_PREFILL_TRACE_DIR",
+    prefill_trace_default="/mnt/models/deepseek-prefill-cache/golden/kimi-26/debug_trace/longbook_qa_eng_prefill_56320_nopad",
     mla_pcc_threshold=0.996,
     moe_pcc_threshold=0.985,
 )
@@ -101,6 +109,10 @@ KIMI_V2_6 = TestVariant(
     ref_cache_env="TT_KIMI_PREFILL_HOST_REF_CACHE",
     mla_ref_cache_env="KIMI_MLA_REF_CACHE",
     ttnn_cache_env="TT_KIMI_PREFILL_TTNN_CACHE",
+    # Golden chunked-prefill trace for Kimi K2.6. The trace is not yet published; until it lands the
+    # chunked tests skip (the path won't exist). Point KIMI_PREFILL_TRACE_DIR at it once available.
+    prefill_trace_env="KIMI_PREFILL_TRACE_DIR",
+    prefill_trace_default="/mnt/models/kimi-prefill-cache/golden/kimi_k2_6_chunked_trace",
     mla_pcc_threshold=0.995,
     moe_pcc_threshold=0.987,
 )

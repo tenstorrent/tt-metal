@@ -211,6 +211,30 @@ class ttMLA:
             state_dict, mesh_device, config, layer_idx, sp_axis, tp_axis, cache_path, device=None
         )
 
+    @staticmethod
+    def make_chunked_kv_buf(mesh_device, cache_batch: int, seq_len: int, kvpe_dim: int) -> ttnn.Tensor:
+        """Allocate the ring_mla gathered-KV scratch buffer [1, 1, seq_len, kvpe_dim].
+
+        Replicated across the mesh (the op gathers the full window per chip). ring_mla's fused
+        all-gather gathers only the single active cache slot (kv_cache_batch_idx) into batch slot 0 of
+        this buffer, so it is ALWAYS batch-1 regardless of how many users/layers the KV cache holds —
+        one layer's worth of scratch (~32MB for 56320x576 bf8), not slot_num*layer_num (~2GB for L61).
+        `cache_batch` is accepted for call-site compatibility but no longer sizes the buffer. The buffer
+        holds no per-layer state, so a multi-layer caller still allocates ONE and shares it across all
+        layers' ttMLA via the chunked_kv_buf constructor arg.
+        """
+        # Allocate UNINITIALIZED on device (replicated across the mesh). This is pure scratch: ring_mla
+        # all-gathers the cache's [0, logical_n) prefix into slot 0 before the SDPA reads it (reads
+        # bounded by logical_n, tile-aligned), so the contents need not be zeroed. ttnn.empty just
+        # reserves DRAM (instant) vs ttnn.zeros which would memset across the mesh.
+        return ttnn.empty(
+            shape=[1, 1, seq_len, kvpe_dim],
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     def __init__(
         self,
         config: PretrainedConfig,
@@ -226,6 +250,7 @@ class ttMLA:
         is_chunked: bool = False,
         slot_num: int = 1,
         layer_num: int = 61,
+        chunked_kv_buf: Optional[ttnn.Tensor] = None,
     ):
         self.config = config
         self.mesh_device = mesh_device
@@ -312,25 +337,24 @@ class ttMLA:
         # Hoist them to a shared owner (or pass them in) when ttMLA instances are created per layer.
         if self.is_chunked:
             # Single combined gathered-KV buffer for ring_mla: K and V both come from the latent
-            # kvpe cache, so one (cache_batch, 1, seq_len, kvpe_dim) buffer replaces the separate
-            # per-K/per-V ring-SDPA buffers (and the dummy joint tensors) used in the other mode.
+            # kvpe cache, so one (1, 1, seq_len, kvpe_dim) buffer replaces the separate per-K/per-V
+            # ring-SDPA buffers (and the dummy joint tensors) used in the other mode.
             #
-            # TODO: reduce DRAM pressure -- ring_mla only ever gathers into the single
-            # kv_cache_batch_idx slot, but the op's TT_FATAL forces gathered-KV batch == cache
-            # batch (slot_num * layer_num). Allocating the full batch wastes DRAM for all but one
-            # slot; relaxing the op to index the gathered buffer independently (always slot 0)
-            # would let this be a batch-1 buffer.
-            cache_batch = self.slot_num * self.layer_num
+            # ring_mla's fused all-gather gathers only the single active kv_cache_batch_idx slot into
+            # batch slot 0 of this buffer, so it is batch-1 regardless of cache batch (slot_num *
+            # layer_num) -- one layer's worth of scratch, not depth*slot. (Previously the op forced
+            # gathered-KV batch == cache batch; the all-gather + ring reader now index the gathered
+            # buffer independently at slot 0.)
+            #
+            # This is a scratch buffer with no per-layer state, so a multi-layer caller (the chunked
+            # transformer) passes ONE shared buffer for all layers via chunked_kv_buf. When None we
+            # self-allocate (single-layer use, e.g. the block / MLA-unit tests).
+            cache_batch = self.slot_num * self.layer_num  # retained for call compatibility (buffer is batch-1)
             kvpe_dim = self.kv_lora_rank + self.qk_rope_head_dim
-            self._chunked_kv_buf = ttnn.from_torch(
-                torch.zeros(cache_batch, 1, seq_len, kvpe_dim),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=[None, None]
-                ),
+            self._chunked_kv_buf = (
+                chunked_kv_buf
+                if chunked_kv_buf is not None
+                else ttMLA.make_chunked_kv_buf(self.mesh_device, cache_batch, seq_len, kvpe_dim)
             )
         else:
             # ring attention setup
@@ -586,7 +610,6 @@ class ttMLA:
         compact (kv_lora_rank-wide) attention output afterwards. Returns attn_out in v_head_dim space.
         """
         assert not self.is_balanced, "chunked prefill currently requires is_balanced=False"
-        assert on_layer_complete is None, "on_layer_complete not yet supported in chunked prefill"
 
         tile_size = ttnn.TILE_SIZE
         chunk_size_global = seq_len_local * self.sp_factor
@@ -607,6 +630,12 @@ class ttMLA:
             kv_actual_global=kv_actual_isl,
             cluster_axis=self.sp_axis,
         )
+
+        # Per-layer ack: this layer's chunk KV is now written to the cache. Fire here (before the
+        # read-only ring_mla) so the scheduler / migration worker can consume the layer's KV as early
+        # as possible. Mirrors the non-chunked path's post-fill_cache_for_user_ callback.
+        if on_layer_complete is not None:
+            on_layer_complete(self.layer_idx)
 
         # K and V are the single latent kvpe cache (V = first kv_lora_rank columns, materialized
         # in-op). logical_n = prior valid length + this chunk; cache_batch_idx selects this
@@ -655,6 +684,7 @@ class ttMLA:
         actual_isl: Optional[int] = None,
         kv_actual_isl: Optional[int] = None,
         cache_user_id: int = 0,
+        return_kv_intermediates: bool = False,
     ) -> ttnn.Tensor:
         signpost(header="MLA_START")
         num_heads_local = self.num_heads // self.tp_factor
@@ -781,6 +811,10 @@ class ttMLA:
                 tt_kv, dims=[1], output=None, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
             )
 
+        # Optionally surface the raw compressed-KV (pre-norm/pre-rope, [.., 576]) for debug/PCC
+        # comparison against golden traces before it is split + deallocated below.
+        kv_intermediates = {"tt_kv": ttnn.clone(tt_kv)} if return_kv_intermediates else None
+
         # TODO: split rope and nope, workaround remove with ttnn.narrow or fusion
         tt_kv_nope = ttnn.slice(tt_kv, [0, 0, 0, 0], [1, 1, seq_len_local, self.kv_lora_rank])
         tt_kv_rope = ttnn.slice(
@@ -798,10 +832,19 @@ class ttMLA:
 
         tt_kv_rope = self._apply_rope(tt_kv_rope, rope_tensors, kv_actual_isl)
 
+        if return_kv_intermediates:
+            # post-RMSNorm latent ([.., 512]) and post-RoPE k_pe ([.., 64]); clone before concat.
+            kv_intermediates["tt_kv_nope"] = ttnn.clone(tt_kv_nope)
+            kv_intermediates["tt_kv_rope"] = ttnn.clone(tt_kv_rope)
+
         # TODO: concat rope and nope, workaround remove with ttnn.narrow or fusion
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
         ttnn.deallocate(tt_kv_rope)
         tt_kvpe = ttnn.typecast(tt_kvpe, dtype=ttnn.bfloat8_b)
+
+        if return_kv_intermediates:
+            # post-transform concat ([.., 576], bf8) — what actually gets written to the cache.
+            kv_intermediates["tt_kvpe"] = ttnn.clone(tt_kvpe)
 
         if not is_chunked:
             # === single-shot prefill: fill the whole local slot, run on-device ring SDPA with a
@@ -901,4 +944,6 @@ class ttMLA:
         else:
             out = v_out
         signpost(header="MLA_END")
+        if return_kv_intermediates:
+            return out, kv_intermediates
         return out

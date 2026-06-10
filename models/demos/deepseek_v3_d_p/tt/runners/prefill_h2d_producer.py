@@ -29,6 +29,14 @@ Env vars:
   PREFILL_SP / PREFILL_TP / PREFILL_MAX_SEQ_LEN / PREFILL_IS_BALANCED
     — must match the runner so token packing produces the same byte layout.
 
+  PREFILL_REQUEST_LOOP_PCC     — "1": source tokens from the golden longbook_qa trace instead of
+                                 standalone_input.json and push exactly
+                                 PREFILL_STANDALONE_CHUNKED_NCHUNKS chunks (default 11 -> 56320
+                                 tokens) into slot PREFILL_STANDALONE_CHUNKED_SLOT. Pairs with the
+                                 runner's PREFILL_REQUEST_LOOP_PCC=1 KV-cache PCC check.
+  DEEPSEEK_PREFILL_TRACE_DIR   — golden trace dir read in PCC mode (default: the longbook_qa 56320
+                                 trace; must match the runner).
+
 Usage (two terminals):
     # terminal A — runner (creates service + exports descriptor + waits):
     PREFILL_STANDALONE=1 PREFILL_H2D_EXTERNAL_PRODUCER=1 \
@@ -70,31 +78,73 @@ def _pack_metadata(slot_id: int, actual_start: int, actual_end: int) -> bytes:
 _sp = int(os.environ.get("PREFILL_SP", 8))
 _tp = int(os.environ.get("PREFILL_TP", 4))
 GLOBAL_MESH_SHAPE = (_sp, _tp)
-MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 3200 * _sp))
-IS_BALANCED = os.environ.get("PREFILL_IS_BALANCED", "1") == "1"
+MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 60 * 1024))
+CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
+NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
+# Chunked / indexed-RoPE prefill is non-balanced (block-cyclic).
+IS_BALANCED = os.environ.get("PREFILL_IS_BALANCED", "0") == "1"
+
+# Default golden trace (must match prefill_runner.DEFAULT_PREFILL_TRACE_DIR): longbook_qa 56320 = 11*5120.
+DEFAULT_PREFILL_TRACE_DIR = (
+    "/mnt/models/deepseek-prefill-cache/golden/kimi-26/debug_trace/longbook_qa_eng_prefill_56320_nopad"
+)
 
 
-def _tokens_to_host_array(token_ids: list[int]):
-    """Build the un-sharded global token buffer for `service.forward_to_tensor_bytes`.
+def _load_tokens():
+    """Return (task_id, slot_id, actual_isl, token_ids) for the run.
 
-    Returns a contiguous CPU uint32 ndarray of shape [sp_factor, 1, isl_per_chip]
-    in the runner's global ROW_MAJOR layout. The connected service splits it
-    across SP coords via its own mapper (rebuilt device-lessly from the
-    descriptor on `connect()`), so this process needs neither a mapper nor a
-    MeshDevice. Identical reorder logic to the runner — replicated inline so
-    this producer doesn't import the runner module (which pulls in `_migration`).
+    Two sources, selected by PREFILL_REQUEST_LOOP_PCC:
+      * PCC mode ("1"): the golden longbook_qa trace — read token_ids from
+        DEEPSEEK_PREFILL_TRACE_DIR/metadata.json, take the first NCHUNKS*CHUNK_SIZE (chunk-aligned,
+        all real tokens), slot from PREFILL_STANDALONE_CHUNKED_SLOT. Pairs with the runner's
+        request-loop PCC check, mirroring run_standalone_chunked_prefill_loop's input.
+      * otherwise: PREFILL_STANDALONE_INPUT JSON {"task_id", "token_ids", optional "slot_id"}.
+    """
+    if os.environ.get("PREFILL_REQUEST_LOOP_PCC", "0") == "1":
+        n_chunks = int(os.environ.get("PREFILL_STANDALONE_CHUNKED_NCHUNKS", "11"))
+        slot_id = int(os.environ.get("PREFILL_STANDALONE_CHUNKED_SLOT", "0")) % NUM_USERS
+        total_len = n_chunks * CHUNK_SIZE
+        trace_dir = Path(os.environ.get("DEEPSEEK_PREFILL_TRACE_DIR", DEFAULT_PREFILL_TRACE_DIR))
+        logger.info(f"[producer] PCC mode: reading {total_len} tokens ({n_chunks} chunks) from trace {trace_dir}")
+        with open(trace_dir / "metadata.json") as f:
+            md = json.load(f)
+        token_ids = list(md["token_ids"])[:total_len]
+        assert (
+            len(token_ids) == total_len
+        ), f"trace has {len(token_ids)} tokens but need {total_len}; lower PREFILL_STANDALONE_CHUNKED_NCHUNKS"
+        return 0, slot_id, total_len, token_ids
+
+    default_input = Path(__file__).parent / "standalone_input.json"
+    input_path = Path(os.environ.get("PREFILL_STANDALONE_INPUT", default_input))
+    logger.info(f"[producer] reading input from {input_path}")
+    with open(input_path) as f:
+        data = json.load(f)
+    token_ids = list(data["token_ids"])
+    slot_id = int(data.get("slot_id", 0)) % NUM_USERS
+    return data["task_id"], slot_id, len(token_ids), token_ids
+
+
+def _chunk_to_host_array(chunk_token_ids: list[int]):
+    """Build the un-sharded per-chunk token buffer for `service.forward_to_tensor_bytes`.
+
+    Returns a contiguous CPU uint32 ndarray of shape [sp_factor, 1, chunk_local]
+    (chunk_local = CHUNK_SIZE // sp_factor) in the runner's global ROW_MAJOR layout. The
+    connected service splits it across SP coords via its own mapper (rebuilt device-lessly
+    from the descriptor on `connect()`), so this process needs neither a mapper nor a
+    MeshDevice. Identical reorder logic to the runner's prepare_prefill_input_tensor —
+    replicated inline so this producer doesn't import the runner module.
     """
     sp_factor = GLOBAL_MESH_SHAPE[0]
-    assert len(token_ids) == MAX_SEQ_LEN, f"token_ids must be padded to MAX_SEQ_LEN={MAX_SEQ_LEN}, got {len(token_ids)}"
-    isl_per_chip = MAX_SEQ_LEN // sp_factor
+    assert len(chunk_token_ids) == CHUNK_SIZE, f"chunk must be CHUNK_SIZE={CHUNK_SIZE}, got {len(chunk_token_ids)}"
+    chunk_local = CHUNK_SIZE // sp_factor
 
     if IS_BALANCED:
         chunk_order = create_balanced_chunk_order(sp_factor)
-        t = torch.tensor(token_ids, dtype=torch.int64).unsqueeze(0).unsqueeze(0).unsqueeze(-1)
+        t = torch.tensor(chunk_token_ids, dtype=torch.int64).unsqueeze(0).unsqueeze(0).unsqueeze(-1)
         t = reorder_tensor_chunks(t, chunk_order, seq_dim=2)
-        token_ids_sharded = t.squeeze(0).squeeze(-1).reshape(sp_factor, 1, isl_per_chip)
+        token_ids_sharded = t.squeeze(0).squeeze(-1).reshape(sp_factor, 1, chunk_local)
     else:
-        token_ids_sharded = torch.tensor(token_ids, dtype=torch.int64).reshape(sp_factor, 1, isl_per_chip)
+        token_ids_sharded = torch.tensor(chunk_token_ids, dtype=torch.int64).reshape(sp_factor, 1, chunk_local)
 
     return token_ids_sharded.to(torch.uint32).contiguous().numpy()
 
@@ -103,9 +153,6 @@ def main() -> None:
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
     timeout_s = int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60"))
     num_iterations = int(os.environ.get("PREFILL_STANDALONE_ITERS", "1"))
-
-    default_input = Path(__file__).parent / "standalone_input.json"
-    input_path = Path(os.environ.get("PREFILL_STANDALONE_INPUT", default_input))
 
     logger.info(
         f"[producer] service_id={service_id!r} timeout={timeout_s}s "
@@ -117,55 +164,58 @@ def main() -> None:
     service = ttnn.H2DStreamService.connect(service_id, timeout_ms=timeout_s * 1000)
     logger.info(f"[producer] attached in {(time.perf_counter() - t0):.2f}s")
 
-    logger.info(f"[producer] reading input from {input_path}")
-    with open(input_path) as f:
-        data = json.load(f)
-    task_id = data["task_id"]
-    token_ids = list(data["token_ids"])
+    task_id, slot_id, actual_isl, token_ids = _load_tokens()  # actual_isl captured BEFORE padding
 
     if len(token_ids) > MAX_SEQ_LEN:
         raise ValueError(
             f"task_id={task_id} prompt has {len(token_ids)} tokens but MAX_SEQ_LEN={MAX_SEQ_LEN}. "
             f"Set PREFILL_MAX_SEQ_LEN to match the runner."
         )
-    actual_isl = len(token_ids)  # captured BEFORE padding — runner uses this for MLA
-    if len(token_ids) < MAX_SEQ_LEN:
-        token_ids = token_ids + [1] * (MAX_SEQ_LEN - len(token_ids))
-    # Pack per-iter control bytes. Single-chunk demo: whole prompt on slot 0
-    # starting at KV pos 0, so [actual_start, actual_end) = [0, actual_isl).
-    # When wired into the inference server these come from the request envelope.
-    metadata = _pack_metadata(slot_id=0, actual_start=0, actual_end=actual_isl)
-    assert len(metadata) == _METADATA_SIZE_BYTES, f"metadata pack expected {_METADATA_SIZE_BYTES}B, got {len(metadata)}"
-    logger.info(f"[producer] metadata: slot_id=0 actual_start=0 actual_end={actual_isl} ({len(metadata)}B)")
-
-    # Bytes path: this process has no MeshDevice. We hand the un-sharded global
-    # buffer to the service, which distributes it across SP coords via its own
-    # mapper (rebuilt from the descriptor's mapper_config on connect()). No
-    # host-side mapper / ttnn.from_torch needed.
-    host_tokens = _tokens_to_host_array(token_ids)
+    # Chunked prefill streams ONE chunk per push. Pad the prompt up to a chunk boundary, then
+    # push each CHUNK_SIZE-wide chunk with per-chunk PrefillMetadata: actual_start is the chunk's
+    # absolute KV start (= c * CHUNK_SIZE for chunk-aligned demo), actual_end clamps to actual_isl
+    # so trailing pad positions in the last chunk are reported as such. When wired into the
+    # inference server these come from the request envelope / scheduler.
+    pad_to = ((actual_isl + CHUNK_SIZE - 1) // CHUNK_SIZE) * CHUNK_SIZE
+    if len(token_ids) < pad_to:
+        token_ids = token_ids + [1] * (pad_to - len(token_ids))
+    n_chunks = pad_to // CHUNK_SIZE
     expected = service.payload_size_bytes()
-    assert host_tokens.nbytes == expected, f"payload {host_tokens.nbytes}B != service-expected {expected}B"
     logger.info(
-        f"[producer] host buffer ready: shape={host_tokens.shape} dtype={host_tokens.dtype} ({host_tokens.nbytes}B)"
+        f"[producer] task_id={task_id} slot_id={slot_id} actual_isl={actual_isl} "
+        f"n_chunks={n_chunks} chunk_size={CHUNK_SIZE} iters={num_iterations}"
     )
 
     push_times_ms: list[float] = []
     for i in range(num_iterations):
-        # Log BEFORE the push so a blocked call (backpressure when the FIFO
-        # is full) is visible from the log alone — pre-line lands, post-line
-        # delays until forward_to_tensor returns.
-        logger.info(f"[producer] starting push iter={i}/{num_iterations} task_id={task_id}")
-        t = time.perf_counter()
-        service.forward_to_tensor_bytes(host_tokens, metadata=metadata)
-        dt_ms = (time.perf_counter() - t) * 1000.0
-        push_times_ms.append(dt_ms)
-        logger.info(f"[producer]   push iter={i} returned in {dt_ms:.2f} ms")
+        for c in range(n_chunks):
+            chunk_start = c * CHUNK_SIZE
+            actual_start = chunk_start
+            actual_end = min(chunk_start + CHUNK_SIZE, actual_isl)
+            metadata = _pack_metadata(slot_id=slot_id, actual_start=actual_start, actual_end=actual_end)
+            assert len(metadata) == _METADATA_SIZE_BYTES, f"metadata {len(metadata)}B != {_METADATA_SIZE_BYTES}B"
+
+            # Bytes path: no MeshDevice here. The service distributes the un-sharded per-chunk
+            # buffer across SP coords via its descriptor-rebuilt mapper.
+            host_tokens = _chunk_to_host_array(token_ids[chunk_start : chunk_start + CHUNK_SIZE])
+            assert host_tokens.nbytes == expected, f"payload {host_tokens.nbytes}B != service-expected {expected}B"
+
+            # Log BEFORE the push so backpressure (full FIFO) is visible from the log alone.
+            logger.info(
+                f"[producer] push iter={i} chunk={c}/{n_chunks} task_id={task_id} slot={slot_id} "
+                f"actual_start={actual_start} actual_end={actual_end}"
+            )
+            t = time.perf_counter()
+            service.forward_to_tensor_bytes(host_tokens, metadata=metadata)
+            dt_ms = (time.perf_counter() - t) * 1000.0
+            push_times_ms.append(dt_ms)
+            logger.info(f"[producer]   push iter={i} chunk={c} returned in {dt_ms:.2f} ms")
 
     # Final barrier so the descriptor isn't released before the last push has
     # been drained by the service core. (`connect`-side `barrier` is supported.)
     service.barrier()
     logger.info(
-        f"[producer] done. per-push ms = {[round(t, 2) for t in push_times_ms]}; "
+        f"[producer] done. {len(push_times_ms)} pushes, per-push ms = {[round(t, 2) for t in push_times_ms]}; "
         "exiting (the runner keeps its sync-op loop running)."
     )
 
