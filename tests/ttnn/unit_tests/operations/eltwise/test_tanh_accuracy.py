@@ -321,7 +321,17 @@ def test_tanh_fp32_special_values(device):
     tt_result = ttnn.tanh(tt_in)
     result = ttnn.to_torch(tt_result)
 
+    # tanh(NaN) == NaN
     assert torch.equal(torch.isnan(result), torch.isnan(golden))
+    # tanh(+Inf) == 1.0
     assert torch.equal(torch.isposinf(result), torch.isposinf(golden))
+    # tanh(-Inf) == -1.0
     assert torch.equal(torch.isneginf(result), torch.isneginf(golden))
+
+    # tanh(-0.0) == -0.0
+    finite_mask = ~torch.isnan(golden)
+    assert torch.equal(
+        torch.signbit(result)[finite_mask], torch.signbit(golden)[finite_mask]
+    ), f"Sign bit mismatch: result={result.tolist()} golden={golden.tolist()}"
+
     assert_with_ulp(golden, result, 5, allow_nonfinite=True)
