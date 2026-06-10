@@ -196,3 +196,105 @@ def test_v32_mla_vs_cpu_reference(mesh_device, seq_len, device_params, variant, 
     logger.info(f"KVPE cache PCC: kv={kv_pcc} pe={pe_pcc}")
 
     ttnn.synchronize_device(mesh_device)
+
+
+def run_cpu_reference_chunked(args, mla_cpu, hidden_states, seq_len, chunk, seed):
+    """Chunk-loop truth on MLACPU decode branch; mask [chunk, end_pos] keeps causality."""
+    cache_dir = Path(os.environ.get("DEEPSEEK_V32_MLA_REF_CACHE", "/tmp/deepseek_v32_mla_ref_cache"))
+    cache_path = cache_dir / f"chunked_funcidx_seq{seq_len}_c{chunk}_seed{seed}.pt"
+    if cache_path.exists():
+        logger.info(f"Loading cached chunked CPU reference from {cache_path}")
+        return torch.load(cache_path, weights_only=True)["ref_output"]
+
+    freqs_all = precompute_freqs_cis(args)
+    outs = []
+    with torch.no_grad():
+        for s in range(0, seq_len, chunk):
+            mask = torch.full((chunk, s + chunk), float("-inf")).triu_(s + 1)
+            outs.append(
+                mla_cpu.forward(hidden_states[:, s : s + chunk].to(torch.bfloat16), s, freqs_all[s : s + chunk], mask)
+            )
+    ref_output = torch.cat(outs, dim=1)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    torch.save({"ref_output": ref_output}, cache_path)
+    logger.info(f"Saved chunked CPU reference to {cache_path}")
+    return ref_output
+
+
+# Chunked prefill e2e (step 4): chunk size is a parameter — 1k dev default (agreement 15).
+@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
+        }
+    ],
+    ids=["line"],
+    indirect=True,
+)
+@pytest.mark.parametrize("seq_len,chunk", [(4096, 1024)], ids=["4k_c1k"])
+@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
+@pytest.mark.timeout(0)
+def test_v32_mla_chunked_vs_cpu_reference(mesh_device, seq_len, chunk, device_params, variant, config_only):
+    from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+
+    config = config_only
+    seed = 42
+    args, mla_cpu, weights = build_cpu_reference(seq_len, seed)
+    assert_config_matches(config, args)
+    config.max_seq_len = seq_len
+
+    mesh_shape = list(mesh_device.shape)
+    sp_axis, tp_axis = 0, 1
+    tt_kvpe_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=1,
+    )
+
+    mla_tt = ttMLAv32(
+        config,
+        weights,
+        mesh_device,
+        layer_idx=0,
+        seq_len=chunk,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        is_chunked=True,
+        layer_num=1,
+    )
+    rope = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
+    rope_tensors = rope.get_rope_tensors_indexed(seq_len, chunk)
+
+    torch.manual_seed(seed)
+    hidden = torch.randn(1, seq_len, config.hidden_size).to(torch.bfloat16)
+    shard_dims = [None, None]
+    shard_dims[tp_axis], shard_dims[sp_axis] = -1, -2
+
+    outs = []
+    for s in range(0, seq_len, chunk):
+        tt_x = ttnn.from_torch(
+            hidden[:, s : s + chunk].unsqueeze(0),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+        )
+        out = mla_tt.forward(tt_x, rope_tensors, tt_kvpe_cache, kv_actual_isl=s)
+        outs.append(
+            ttnn.to_torch(
+                out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
+            ).to(torch.bfloat16)
+        )
+    tt_output = torch.cat(outs, dim=2)
+
+    ref_output = run_cpu_reference_chunked(args, mla_cpu, hidden, seq_len, chunk, seed)
+    _, pcc_message = assert_with_pcc(ref_output.unsqueeze(0), tt_output, OUTPUT_PCC)
+    logger.info(f"Chunked output PCC: {pcc_message}")
+    ttnn.synchronize_device(mesh_device)

@@ -456,6 +456,11 @@ class MLACPU(nn.Module):
             index_mask = torch.full((bsz, seqlen, end_pos), float("-inf"), device=x.device).scatter_(
                 -1, topk_indices, 0
             )
+            # Chunked prefill ([S>1, end_pos] mask): rows with fewer causal keys than
+            # topk still get future indices scattered to 0 — re-impose causality like
+            # the prefill branch above (mask shape [S, end_pos], rows offset start_pos).
+            if mask is not None:
+                index_mask = index_mask + mask
             scores = scores + index_mask.unsqueeze(2)
 
             scores = scores.softmax(dim=-1, dtype=torch.float32).type_as(x)
