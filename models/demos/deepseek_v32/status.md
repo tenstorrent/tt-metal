@@ -32,7 +32,7 @@ MLA layer.
    - tt/mla/mla.py — ttMLA subclass of v3 ttMLA, passthrough for now; all DSA changes go here.
    - tt/tt_prefill_block.py, tt/tt_prefill_transformer.py — copies of v3, only the MLA/block import changed. Future work: add mla_class/block_class injection params to v3 so the copies can be deleted (see tt/README.md).
    - tests/test_mla.py — e2e MLA test reusing the v3 harness (monkeypatched MLA class); collects. Currently compares against the v3 reference — to be replaced, see Next.
-4. **In progress:** Next step 1 (test rewire to CPU reference) implemented, first hardware run pending. Decisions taken:
+4. **Done (step 1, test rewire to CPU reference):** Decisions taken:
    - Weight mapping MLACPU→v3 dict is a pure rename (wq_a→q_a_proj, q_norm→q_a_layernorm, wq_b→q_b_proj, wkv_a→kv_a_proj_with_mqa, kv_norm→kv_a_layernorm, wkv_b→kv_b_proj, wo→o_proj); same [out,in] layout, bf16.
    - Bring-up seq_len = 2048 = index_topk: there the DSA index mask is 0 over the causal region, so MLACPU is dense-equivalent and the passthrough must match (output PCC 0.98, KVPE 0.99 — v3 thresholds). seq>2048 diverges by design until indexer+sparse SDPA land.
    - MLACPU run with simulate_fp8=False (device KVPE stores bf16; same as single-chip port).
@@ -47,11 +47,8 @@ MLA layer.
    **Remaining for production (next):** chunked prefill (sparse_mla needs start_pos offset for causality; goal = 50k cache + 5k chunk with cached truth); 2x2 SP×TP (indexer needs seq AG or distributed topk); device-side indexer stems + non-interleaved rope (F1 still host); fused fp8 ops out of scope (C++ follow-ups per Approach §4).
    **Chunked plan (step 4, proposed):** (1) sparse_mla gains start_pos: causality drops index > start_pos + row; (2) v32 ttMLA keeps a host indexer K-cache (k_norm(wk(x)) per chunk, [max_seq, 128] per layer) since chunks only carry their own hidden; logits matmul against full cached prefix, mask [chunk, end_pos]; (3) attention reuses v3 _chunked_attn cache write but swaps ring_mla for sparse_mla over the populated prefix. Tests staged like step 3: shape/numerics for sparse_mla(start_pos>0) first; e2e at 4k cache + 1k chunk (~5k truth, cold ~1.5h, cache once) before 50k+5k (truth on big box overnight). CPU truth: chunk loop on MLACPU decode branch (kv from cache). Bring-up bugs found+fixed so far: (a) hidden is TP-sharded — indexer host stems concat shards; (b) epilogue is RS-only (RS+AG gave replicated 28672 output); (c) sparse_mla must re-impose causality for rows with <k causal keys (0.20→0.38; future indices from topk's -inf band) — now part of the op contract; (d) CPU truth ran the fp8/Hadamard indexer path — selection-divergent vs functional stems — set indexer.use_fp8_path=False per spec.md §104 parity; truth re-cached (46 min at 4096); (e) band diagnostics (dense rows also ~0.40) exposed the real bug: q is head-sharded across TP, but sparse_mla read shard 0 and replicated its 32 heads to all chips → 3/4 chips fed o_proj wrong heads. sparse_mla is now per-shard: each chip's heads computed separately, out re-sharded on heads — this is the op's distribution contract (q/out TP-sharded, kvpe+indices replicated); unit tests updated accordingly.
    - Gotcha: don't pipe pytest through tail — swallows exit code; log to file, check $?.
-4. **Next (proposed, to agree on — no implementation until agreed):**
-   1. Rewire tests/test_mla.py to use reference_cpu (MLACPU) as the PCC truth instead of the v3 reference — v3.2 and v3 outputs are not assumed to match, even for the passthrough. Reuse v3's run_mla_inference for the device side only; one set of random torch weights mapped into both the v3 ttMLA dict format and MLACPU; cache CPU reference outputs on disk (pattern exists in reference_tt_single_chip/test_model.py). Mesh shape parametrized; bring-up config = QuietBox 4x Blackhole.
-   2. Define APIs (inputs/outputs, shapes, sharding) for the missing ops from the context/ reports + existing ttnn ops; record them here for review. For each missing op the first deliverable is a shape test: the agreed API runs e2e and produces the right shapes (stub/composed/CPU-fallback per "Approach to missing ops"); numerics vs CPU reference follow.
-   3. Wire indexer into v32 ttMLA — sharding follows v3 exactly (TP plan: indexer replicated, only collective = RS+AG after wo; deviations documented here) — PCC vs the same CPU reference, random weights.
-   4. Pretrained: add V3.2 checkpoint (indexer weights) to conftest; reuse reference_cpu loading + v3 ttnn conversion/sharding.
+9. **In progress (step 4, chunked prefill):** slice 1 done — sparse_mla(start_pos) green (10/10 ops tests, single_shot + chunked cases). Remaining slices per Chunked plan: host indexer K-cache in ttMLA, chunked DSA forward (v3 _chunked_attn cache write + sparse_mla), chunked e2e harness (v3 run_mla_inference is single-shot; needs chunk loop + get_rope_tensors_indexed); truth at 4k+1k cold ~1.5h then 50k+5k overnight.
+10. **Backlog:** pretrained weights (V3.2 checkpoint with indexer weights into conftest; reuse reference_cpu loading + v3 conversion); 2x2 SP×TP; device indexer stems.
 
 ## References
 1. models/demos/deepseek_v32/reference_cpu - deepseek's reference implementation running on CPU w/o fused ops and sparse attention
@@ -59,10 +56,10 @@ MLA layer.
 3. models/demos/deepseek_v3_d_p - tt multichip implementation for deepseek v3
 
 ## Issues
-1. No fused indexing op in ttnn (fp8_index + causal mask)
+1. No fused indexing op in ttnn (fp8_index + causal mask) — composed-op workaround in tt/ops.py::indexer_logits (device, bf16, no fp8/Hadamard); fused C++ op is follow-up
 2. ~~ttnn.topk k=2048 untested~~ RESOLVED 2026-06-10: works on Blackhole at k=2048 (TILE input, shape test green)
-3. No sparse attention in ttnn
-4. Missing non-interleaved RoPE op
+3. No sparse attention in ttnn — CPU fallback in tt/ops.py::sparse_mla carrying the agreed contract (TP-shard distribution, causality, start_pos); fused C++ op is follow-up
+4. Missing non-interleaved RoPE op — host fallback (F1, single-chip spec), used in indexer host stems
 5. v3 composition files hardcode ttMLA/TtPrefillBlock — forced copies in v32; fix by upstreaming injection params (tt/README.md)
 6. V3.2 checkpoints (indexer weights) not wired into test conftest — tests run with v3 weights
 
