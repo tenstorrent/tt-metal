@@ -153,3 +153,50 @@ def test_conv1d_depthwise_mesh(mesh_device, C, T_pad, K, stride):
     for i in range(n):
         assert_with_pcc(golden[0], out[i], pcc=PCC)
     logger.info(f"mesh {tuple(mesh_device.shape)} C={C} T_pad={T_pad} K={K} stride={stride}: {n} chips OK")
+
+
+# Repro for #46395: why a dedicated depthwise op exists instead of stock ttnn.conv1d.
+# The vocoder anti-alias resample filters are depthwise (one shared tap set per channel) and run
+# at long sequence lengths after the upsample stages (T_pad up to ~115k at t_frames=120). A stock
+# ttnn.conv1d(groups=C) with HEIGHT_SHARDED buffers the whole sequence in L1, so its static
+# circular buffers exceed the 1.5 MB L1 and it throws (single device) / hung on a T-sharded mesh —
+# hence ttnn.experimental.conv1d_depthwise, which streams the taps and handles the shape.
+# Topology: single Blackhole device, l1_small_size=32768 (the vocoder's setting); shape is a real
+# STAGE_C upsample tail.
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+def test_stock_conv1d_l1_oom_vs_depthwise(device, device_params):
+    C, T_pad, K, stride = 64, 28841, 12, 1
+    torch.manual_seed(0)
+    x = torch.randn(1, T_pad, C, dtype=torch.float32)
+    taps = _make_taps(K)
+    x_tt = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    # Stock ttnn.conv1d depthwise (the pre-op path) overflows L1 at this length.
+    wt = torch.tensor(taps, dtype=torch.float32).reshape(1, 1, K).expand(C, 1, K).contiguous()
+    weight = ttnn.from_torch(wt, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.float32)
+    cc = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
+    )
+    conv_config = ttnn.Conv1dConfig(weights_dtype=ttnn.float32, shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
+    with pytest.raises(RuntimeError):  # TT_THROW: static circular buffers beyond max L1 size
+        ttnn.conv1d(
+            input_tensor=ttnn.reshape(x_tt, (1, T_pad, 1, C)),
+            weight_tensor=weight,
+            device=device,
+            in_channels=C,
+            out_channels=C,
+            batch_size=1,
+            input_length=T_pad,
+            kernel_size=K,
+            stride=stride,
+            padding=0,
+            dilation=1,
+            groups=C,
+            dtype=ttnn.float32,
+            conv_config=conv_config,
+            compute_config=cc,
+        )
+
+    # The dedicated op handles the same shape and matches the depthwise golden.
+    out = ttnn.to_torch(ttnn.experimental.conv1d_depthwise(x_tt, taps=taps, stride=stride))
+    assert_with_pcc(_golden(x, taps, stride), out, pcc=PCC)
