@@ -1,5 +1,14 @@
 # GH #45995 — Conv2d matmul-helper: cross-arch baselines + helper_trm analysis
 
+> **v2 PORT NOTE (`wransom/conv_bench_v2`, 2026-06-10).** This document is the ORIGINAL conv_bench
+> findings, kept verbatim for history. Everything below describes the v1 mode mapping, where
+> `helper_trm` = TileRowMajor WITHOUT pin, forced ROW_MAJOR output, l1_acc forced off (and the §6/§9
+> "TRM-compatible pin doesn't exist yet" gap). On `wransom/conv_bench_v2` that gap is closed:
+> `helper_trm` benches the TRM+pin substrate (mm_help2_trm_pin_v2) on each conv's REAL output layout —
+> ROW_MAJOR and TILE both, pin always ON, relaxed subblock factory-derived, `TT_CONV_BENCH_FORCE_TRM=1`
+> skips the production ROI gate, hard-ineligible convs fall back to SBM with `trm_fallback_sbm=true`.
+> v1 helper_trm rows in the CSVs are NOT comparable to v2 helper_trm rows; `main`/`helper_sbm` rows are.
+
 **Branch:** `wransom/conv_bench` @ `839878b0d58`
 **Devices:** Wormhole n150 L and Blackhole p100a (single chip each)
 **Measurement:** Tracy `DEVICE KERNEL DURATION [ns]`, warm (2nd of `run_twice`) `Conv2dDeviceOperation` row, ≥2 reps / median (device timing spread 0.0–0.4%).
