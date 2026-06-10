@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DeepSeek-V3.2 Lightning Indexer — Dataflow (MLA_LAYER.md §A.3)</title>
+
+<!-- KaTeX -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"
+  onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'\\(',right:'\\)',display:false}]});"></script>
+
+<style>
+  :root {
+    --q: #1565c0; --qbg: #e3f2fd;
+    --w: #b06f00; --wbg: #fff3e0;
+    --k: #2e7d32; --kbg: #e6ffe6;
+    --s: #6a1b9a; --sbg: #f3e5f5;
+    --ink: #1c1c1c; --muted: #666;
+  }
+  body { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         color: var(--ink); margin: 0; background: #fafafa; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 32px 80px; }
+  h1 { font-size: 1.5em; margin-bottom: 0; }
+  h2 { font-size: 1.15em; margin-top: 2em; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
+  .sub { color: var(--muted); margin-top: 4px; font-size: .95em; }
+  .lanechip { display: inline-block; padding: 1px 10px; border-radius: 10px; font-size: .85em; margin-right: 6px; }
+  .cq { background: var(--qbg); color: var(--q); border: 1px solid var(--q); }
+  .cw { background: var(--wbg); color: var(--w); border: 1px solid var(--w); }
+  .ck { background: var(--kbg); color: var(--k); border: 1px solid var(--k); }
+  .cs { background: var(--sbg); color: var(--s); border: 1px solid var(--s); }
+  table { border-collapse: collapse; width: 100%; font-size: .92em; }
+  th, td { border: 1px solid #ddd; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #f0f0f0; }
+  .diagram { background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 12px; overflow-x: auto; }
+  .controls { margin: 8px 0 4px; }
+  button { font: inherit; padding: 4px 14px; border-radius: 6px; border: 1px solid #bbb; background: #fff; cursor: pointer; }
+  button:hover { background: #f0f0f0; }
+  .note { background: var(--sbg); border-left: 4px solid var(--s); padding: 8px 14px; border-radius: 0 6px 6px 0; font-size: .93em; }
+  .fr { background:#fff;border:1px solid #e0e0e0;border-radius:8px;padding:6px 18px;margin:10px 0; }
+
+  /* dataflow animation: marching dashes along every mermaid edge */
+  .animate .edgePaths path { stroke-dasharray: 7 5; animation: flow 0.9s linear infinite; }
+  @keyframes flow { to { stroke-dashoffset: -12; } }
+  @media (prefers-reduced-motion: reduce) { .animate .edgePaths path { animation: none; } }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Lightning Indexer — dataflow</h1>
+<p class="sub">DeepSeek-V3.2 sparse-attention selector (DSA). Source: <code>inference/model.py::Indexer</code> (line 435) and
+<code>inference/kernel.py::fp8_index</code> (line 254). Corresponds to <code>MLA_LAYER.md</code> §A.3/A.4. The only output is
+<b>topk_indices</b> — the keys each query may attend to.</p>
+
+<h2>Legend</h2>
+<table>
+<tr><th>Symbol</th><th>Meaning</th><th>Value (671B)</th></tr>
+<tr><td>\(B\)</td><td>batch size</td><td>runtime</td></tr>
+<tr><td>\(S\)</td><td>query positions in current call (prefill: chunk; decode: 1)</td><td>runtime</td></tr>
+<tr><td>\(T\)</td><td>total cached keys = start_pos + S</td><td>runtime</td></tr>
+<tr><td>\(H_i\)</td><td>indexer query heads (key is single-head)</td><td>64</td></tr>
+<tr><td>\(d_i\)</td><td>indexer head dim</td><td>128</td></tr>
+<tr><td>\(r\)</td><td>rope sub-dim of \(d_i\) (first, rope-FIRST order)</td><td>64</td></tr>
+<tr><td>\(\kappa\)</td><td>keys kept per query, \(\kappa = \min(2048,\,T)\)</td><td>≤ 2048</td></tr>
+<tr><td>\(qr\)</td><td>MLA query latent (post q_norm) — shared input</td><td>1536</td></tr>
+<tr><td>\(s_q,\ s_k\)</td><td>fp8 dequant scales of q / k</td><td>per (b,s,h) / per (b,t)</td></tr>
+</table>
+<p>Lanes: <span class="lanechip cq">Q — queries from qr</span> <span class="lanechip cw">W — per-head gate from x</span>
+<span class="lanechip ck">K — single-head key from x</span> <span class="lanechip cs">score → top-k</span></p>
+
+<h2>Diagram</h2>
+<div class="controls"><button id="anim">⏸ pause flow</button></div>
+<div class="diagram animate" id="dwrap">
+<pre class="mermaid">
+flowchart TD
+    QR["qr : (B,S,1536)"] -->|"(B,S,1536)"| WQB["wq_b : Linear 1536→8192"]
+    WQB -->|"(B,S,8192)"| QVIEW["view → (B,S,64,128)"]
+    QVIEW -->|"(B,S,64,128)"| QSPLIT["split [64,64]"]
+    QSPLIT -->|"q_pe (B,S,64,64)"| QROPE["RoPE (non-interleaved)"]
+    QSPLIT -->|"q_nope (B,S,64,64)"| QCAT["cat([q_pe, q_nope]) — rope first"]
+    QROPE -->|"(B,S,64,64)"| QCAT
+    QCAT -->|"q (B,S,64,128)"| QHAD["Hadamard (orthogonal)"]
+    QHAD -->|"(B,S,64,128)"| QQ["act_quant → q_fp8 + s_q (B,S,64,1)"]
+
+    X["x : (B,S,7168)"] -->|"x.float()"| WP["weights_proj : Linear 7168→64 (fp32)"]
+    WP -->|"(B,S,64)"| WC["w = gate · 64^-1/2 · s_q · 128^-1/2 → (B,S,64,1)"]
+    QQ -->|"s_q (B,S,64,1)"| WC
+
+    X -->|"(B,S,7168)"| WK["wk : Linear 7168→128"]
+    WK -->|"(B,S,128)"| KN["k_norm : LayerNorm(128)"]
+    KN -->|"(B,S,128)"| KS["split [64,64]"]
+    KS -->|"k_pe (B,S,64)"| KR["RoPE (non-interleaved)"]
+    KS -->|"k_nope (B,S,64)"| KC["cat([k_pe, k_nope])"]
+    KR -->|"(B,S,64)"| KC
+    KC -->|"k (B,S,128) single-head"| KH["Hadamard"]
+    KH -->|"(B,S,128)"| KQ["act_quant → k_fp8 + s_k (B,S,1)"]
+    KQ -->|"write [:,start:end]"| KCACHE[("k_cache (B,T,128)<br/>s_k cache (B,T,1)")]
+
+    QQ -->|"q_fp8 (B,S,64,128)"| FI
+    WC -->|"w (B,S,64,1)"| FI
+    KCACHE -->|"k_fp8, s_k (read [:, :T])"| FI
+    FI["fp8_index: Σ_h relu(q·k)·w · s_k"] -->|"I (B,S,T)"| MS["+ causal mask (S,T), prefill only"]
+    MS -->|"(B,S,T)"| TK["top-κ over keys"]
+    TK -->|"(B,S,κ)"| OUT["topk_indices"]
+
+    classDef q fill:#e3f2fd,stroke:#1565c0,color:#000;
+    classDef w fill:#fff3e0,stroke:#b06f00,color:#000;
+    classDef k fill:#e6ffe6,stroke:#2e7d32,color:#000;
+    classDef s fill:#f3e5f5,stroke:#6a1b9a,color:#000;
+    class QR,WQB,QVIEW,QSPLIT,QROPE,QCAT,QHAD,QQ q;
+    class X,WP,WC w;
+    class WK,KN,KS,KR,KC,KH,KQ,KCACHE k;
+    class FI,MS,TK,OUT s;
+</pre>
+</div>
+
+<h2>Math</h2>
+<p><b>Queries</b> (64 heads, from the MLA latent):</p>
+<div class="fr">$$ q = \mathrm{view}_{B,S,H_i,d_i}\!\big(W_{qb}\, qr\big),\qquad
+q \leftarrow \big[\mathrm{RoPE}(q_{pe})\ \|\ q_{nope}\big] \in \mathbb{R}^{B\times S\times 64\times 128} $$</div>
+<p><b>Key</b> (single head, shared by all 64 query heads):</p>
+<div class="fr">$$ k = \big[\mathrm{RoPE}(k_{pe})\ \|\ k_{nope}\big],\quad k_{pe},k_{nope}=\mathrm{split}\,\mathrm{LN}(W_k x) \in \mathbb{R}^{B\times S\times 128} $$</div>
+<p><b>Per-head gate</b> — four factors folded into one multiplier before the kernel:</p>
+<div class="fr">$$ w_{b,s,h} = \underbrace{\big(W_p\, x\big)_{h}}_{\text{learned gate}} \cdot \underbrace{H_i^{-1/2}}_{=64^{-1/2}} \cdot \underbrace{s_q[b,s,h]}_{\text{q dequant}} \cdot \underbrace{d_i^{-1/2}}_{=128^{-1/2}} $$</div>
+<p><b>Score</b> — heads are summed out; one scalar per (query, key):</p>
+<div class="fr">$$ I[b,s,t] = \Big(\sum_{h=1}^{64} \mathrm{relu}\big(\langle q_{b,s,h},\, k_{b,t}\rangle\big)\, w_{b,s,h}\Big)\, s_k[b,t] \in \mathbb{R}^{B\times S\times T} $$</div>
+<p><b>Selection</b>:</p>
+<div class="fr">$$ \mathrm{topk\_indices} = \mathrm{arg\,top}_{\kappa}\big(I + M_{\text{causal}}\big),\qquad \kappa=\min(2048, T) $$</div>
+
+<div class="note">Hadamard is orthogonal — \(\langle Hq, Hk\rangle = \langle q,k\rangle\) — and exists only so fp8 quantization
+stays accurate; with fp8 dropped (CPU/TT functional port) Hadamard, act_quant, \(s_q\), \(s_k\) all reduce to identity.
+MLA then converts the indices to an additive \(\{0,-\infty\}\) mask over the key axis (shared by all 128 MLA heads).</div>
+
+</main>
+<script type="module">
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+mermaid.initialize({ startOnLoad: true, theme: "neutral", flowchart: { curve: "basis" } });
+document.getElementById("anim").onclick = (e) => {
+  const w = document.getElementById("dwrap");
+  w.classList.toggle("animate");
+  e.target.textContent = w.classList.contains("animate") ? "⏸ pause flow" : "▶ animate flow";
+};
+</script>
+</body>
+</html>
