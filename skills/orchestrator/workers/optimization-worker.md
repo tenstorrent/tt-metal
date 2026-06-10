@@ -180,3 +180,9 @@ JSON line. Always report the post-optimisation PCC, even when status is
   no host dispatch; trace-timeline gaps and tiny grids are real op-level
   problems. The only valid wave-off is occupancy ~full AND each top op
   at measured ceiling.
+
+**Production operating point = REAL inputs**: for VLM vision blocks the
+operating point is a real-document shape (10k+ patches), not the
+small-sample PCC shape — grid divisibility and L1 feasibility flip with
+M, and gate-shape gains can regress 12x larger. Profile at the largest
+production shape; size-gate placements where small/large diverge.
