@@ -31,6 +31,23 @@ def _tensor_debug(tensor: ttnn.Tensor) -> str:
     return f"shape={tuple(tensor.shape)} dtype={tensor.dtype} layout={layout} memory_config={mem}"
 
 
+def _sharded_to_interleaved_dram(tensor: ttnn.Tensor) -> ttnn.Tensor:
+    if tensor.memory_config().is_sharded():
+        out = ttnn.sharded_to_interleaved(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(tensor)
+        return out
+    return tensor
+
+
+def _deshard_split_result(tensor: ttnn.Tensor, *, keep_sharded: bool) -> ttnn.Tensor:
+    """Leave height-sharded L1 activations intact until an interleaved op is required."""
+    if keep_sharded and tensor.memory_config().is_sharded():
+        return tensor
+    if tensor.memory_config().is_sharded():
+        return ttnn.sharded_to_interleaved(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return tensor
+
+
 def _causal_conv1d_pad_amounts(seq_len: int, kernel_size: int, stride: int, dilation: int = 1) -> tuple[int, int]:
     effective_kernel_size = (kernel_size - 1) * dilation + 1
     padding_total = effective_kernel_size - stride
@@ -465,6 +482,7 @@ class VoxtralTTAudioTokenizerDecoderCausalConv1d:
         out_channels: int | None = None,
         output_channel_splits: int = 4,
         input_channel_splits: int = 1,
+        keep_sharded_splits: bool = False,
         weight_dtype=ttnn.bfloat16,
         activations_dtype=ttnn.bfloat16,
         output_dtype=ttnn.bfloat16,
@@ -477,6 +495,7 @@ class VoxtralTTAudioTokenizerDecoderCausalConv1d:
         self.pad_mode = pad_mode
         self.output_channel_splits = output_channel_splits
         self.input_channel_splits = input_channel_splits
+        self.keep_sharded_splits = keep_sharded_splits
         self.activations_dtype = activations_dtype
         self.output_dtype = output_dtype
         self.debug_name = (
@@ -531,20 +550,22 @@ class VoxtralTTAudioTokenizerDecoderCausalConv1d:
         self.conv_config, self.compute_config = get_audio_tokenizer_conv_configs(device)
 
     def _conv_summed_over_inputs(self, inp: ttnn.Tensor, input_length: int, b: int, weight_group: list) -> ttnn.Tensor:
-        """One output-channel split: conv each input-channel split and sum (interleaved DRAM out)."""
+        """One output-channel split: conv each input-channel split and sum partials."""
+        keep_sharded = self.keep_sharded_splits
         accum = None
         for in_idx, weight_tensor in enumerate(weight_group):
             if self.input_channel_splits == 1:
                 x_in = inp
             else:
                 ic0 = in_idx * self.in_channels_per_split
+                slice_mem = None if keep_sharded else ttnn.DRAM_MEMORY_CONFIG
                 x_in = ttnn.slice(
                     inp,
                     [0, 0, ic0],
                     [b, input_length, ic0 + self.in_channels_per_split],
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    memory_config=slice_mem,
                 )
-            out_chunk = ttnn.conv1d(
+            conv_kwargs = dict(
                 input_tensor=x_in,
                 weight_tensor=weight_tensor,
                 in_channels=self.in_channels_per_split,
@@ -558,26 +579,42 @@ class VoxtralTTAudioTokenizerDecoderCausalConv1d:
                 input_length=input_length,
                 conv_config=self.conv_config,
                 compute_config=self.compute_config,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 groups=1,
                 dtype=self.output_dtype,
                 return_weights_and_bias=False,
             )
+            if keep_sharded:
+                out_i = ttnn.conv1d(**conv_kwargs)
+            else:
+                out_i = ttnn.conv1d(**conv_kwargs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             if x_in is not inp and x_in.is_allocated():
                 ttnn.deallocate(x_in)
-            if out_chunk.memory_config().is_sharded():
-                out_i = ttnn.sharded_to_interleaved(out_chunk, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                ttnn.deallocate(out_chunk)
-            else:
-                out_i = out_chunk
+            if not keep_sharded and out_i.memory_config().is_sharded():
+                out_i = ttnn.sharded_to_interleaved(out_i, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             if accum is None:
                 accum = out_i
             else:
-                summed = ttnn.add(accum, out_i, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                add_mem = accum.memory_config() if keep_sharded else ttnn.DRAM_MEMORY_CONFIG
+                summed = ttnn.add(accum, out_i, memory_config=add_mem)
                 ttnn.deallocate(accum)
                 ttnn.deallocate(out_i)
                 accum = summed
-        return accum
+        return _deshard_split_result(accum, keep_sharded=keep_sharded)
+
+    def _concat_output_channel_splits(self, out_splits: list[ttnn.Tensor]) -> ttnn.Tensor:
+        channel_dim = len(out_splits[0].shape) - 1
+        if self.keep_sharded_splits:
+            ready = [_sharded_to_interleaved_dram(split) for split in out_splits]
+            return ttnn.concat(ready, dim=channel_dim)
+        return ttnn.concat(out_splits, dim=channel_dim)
+
+    def _concat_time_chunks(self, split_chunks: list[ttnn.Tensor]) -> ttnn.Tensor:
+        if len(split_chunks) == 1:
+            return split_chunks[0]
+        time_dim = 2 if len(split_chunks[0].shape) == 4 else 1
+        if self.keep_sharded_splits:
+            split_chunks = [_sharded_to_interleaved_dram(chunk) for chunk in split_chunks]
+        return ttnn.concat(split_chunks, dim=time_dim, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def padded_sequence_length(self, time_len: int) -> tuple[int, int, int]:
         """``(pad_left, pad_right, padded_len)`` for this conv's causal padding."""
@@ -654,11 +691,12 @@ class VoxtralTTAudioTokenizerDecoderCausalConv1d:
                     out_end = min(out_start + self.max_conv_output_chunk, t_out)
                     in_start = out_start * self.stride
                     in_end = (out_end - 1) * self.stride + effective_kernel
+                    chunk_slice_mem = None if self.keep_sharded_splits else ttnn.DRAM_MEMORY_CONFIG
                     conv_chunk = ttnn.slice(
                         x_rm,
                         [0, in_start, 0],
                         [b, in_end, c],
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        memory_config=chunk_slice_mem,
                     )
                     if _conv_debug_enabled():
                         logger.info(
@@ -681,28 +719,29 @@ class VoxtralTTAudioTokenizerDecoderCausalConv1d:
                     ttnn.deallocate(conv_chunk)
                     split_chunks.append(out_chunk)
 
-                if len(split_chunks) == 1:
-                    out_splits.append(split_chunks[0])
-                else:
-                    time_dim = 2 if len(split_chunks[0].shape) == 4 else 1
-                    out_splits.append(ttnn.concat(split_chunks, dim=time_dim, memory_config=ttnn.DRAM_MEMORY_CONFIG))
-                    for split_chunk in split_chunks:
+                out_splits.append(self._concat_time_chunks(split_chunks))
+                for split_chunk in split_chunks:
+                    if split_chunk.is_allocated():
                         ttnn.deallocate(split_chunk)
 
-        conv_out = ttnn.concat(out_splits, dim=len(out_splits[0].shape) - 1)
-        for out_split in out_splits:
-            ttnn.deallocate(out_split)
+        conv_out = self._concat_output_channel_splits(out_splits)
+        if not self.keep_sharded_splits:
+            for out_split in out_splits:
+                ttnn.deallocate(out_split)
+        if self.keep_sharded_splits and conv_out.memory_config().is_sharded():
+            conv_out = _sharded_to_interleaved_dram(conv_out)
+        trim_mem = None if self.keep_sharded_splits else ttnn.DRAM_MEMORY_CONFIG
         if len(conv_out.shape) == 4:
             out_len = int(conv_out.shape[2])
             if out_len > t_out:
-                conv_out = ttnn.slice(conv_out, [0, 0, 0, 0], [b, 1, t_out, self.out_channels])
+                conv_out = ttnn.slice(conv_out, [0, 0, 0, 0], [b, 1, t_out, self.out_channels], memory_config=trim_mem)
             elif out_len < t_out:
                 raise RuntimeError(f"conv1d length {out_len} < expected {t_out}")
             out4 = conv_out
         else:
             out_len = int(conv_out.shape[1])
             if out_len > t_out:
-                conv_out = ttnn.slice(conv_out, [0, 0, 0], [b, t_out, self.out_channels])
+                conv_out = ttnn.slice(conv_out, [0, 0, 0], [b, t_out, self.out_channels], memory_config=trim_mem)
             elif out_len < t_out:
                 raise RuntimeError(f"conv1d length {out_len} < expected {t_out}")
             out4 = ttnn.reshape(conv_out, (b, 1, t_out, self.out_channels))
