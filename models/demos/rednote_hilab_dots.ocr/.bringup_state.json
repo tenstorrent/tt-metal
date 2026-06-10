@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T22:25:08Z",
+  "updated_at": "2026-06-10T22:43:29Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -355,9 +355,16 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
+        "status": "done",
         "attempts": 0,
-        "notes": "OCCUPANCY REDO: per the new occupancy+convergence contract \u2014 query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid"
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/patch_merger.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_patch_merger.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/patch_merger.traced_ops.json",
+          "generated/profiler/reports/2026_06_10_22_39_47/ops_perf_results_2026_06_10_22_39_47.csv"
+        ],
+        "notes": "OCCUPANCY REDO complete at the PRODUCTION posture (bf16 tower, document image => padded_seq 11264, 1x4 BH mesh, queried grid 11x10=110; tracy under --traced, metal trace replay; merger runs ONCE per image, weights replicated per plan). Per-block harness re-pointed from the stale fp32/896 posture (--dtype/--weight-dtype/--seq flags mirror sibling redo harnesses). Block kernel time 3541 -> 2362 us/device (-33%); traced wall 3.44 -> 2.77 ms/call, untraced median 3.41 -> 2.64 ms. Levers, one per measurement: (1) bf8b-first single-pass directive \u2014 bfloat8_b weights + HiFi2 (fp32 dest acc kept) on both projections, biases kept bf16, matmuls 2416 -> 1825 us/device; fp32 high-precision path untouched (weight_dtype param mirrors vision_mlp). (2) up-projection explicit 2D-mcast config from scratch sweep (preallocated DRAM operands): heuristic ibw=1 @46% FPU 1513us -> ibw=16 sb1x3 out_block 9x9 952us @73% FPU, 110/110 cores (ibw 4/6/12 = 1.26/1.14/1.13 ms/iter wall; ibw>=6 full out_block and ibw>=24 CB-overflow program.cpp:1326 -> out_block_w halved). (3) down-projection: hardcoded 10x10 core_grid (contract violation) + L1 + 34us DRAM copy replaced by queried-grid 11x10 ibw=16 sb3x1 per_core 9x5 DRAM-direct, 509+34 -> 274us @100/110 (N_t=48 / 5-per-core covers 10 columns \u2014 N-divisibility ceiling); legacy gate-shape fallback keeps the measured 896-row recipe with the grid clamped to the queried size. Size-gated via _mm_program_config (per_core_M < 2 or K%16 -> heuristic). Final occupancy vs 110-core grid: up matmul 110/110 (40.3% share, FPU 73.4%, sweep ceiling), down 100/110 (91%), GELU/LN/reshape chain 104-110/110. Waved with evidence/recorded hazards: exact-erf GELU 337us (fuse-into-matmul costs PCC per KB ttnn_gelu), LayerNorm 240us @110/110 full grid (sharded-LN i2s/s2i bounce loses, vision_rmsnorm A/B), untilize/reshape/tilize 558us @104-110 (tilized ttnn.reshape hang issue #29932; ROW_MAJOR round-trip is the qwen25_vl recipe). Gates: gate-shape PCC 0.999915 (>0.99, traced_ops sideguard regenerated), document-shape PCC 0.999889 vs fp32 torch reference (explicit-config path), e2e WER parity re-run PASS (TTNN wer=0.0 == HF wer=0.0, drift 0.0, tolerance 0.05). KB entries: ttnn_concat reviewed \u2014 no sibling-merge site in this block (single chain); not applicable. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999915
       },
       "real_weights": {
         "status": "done",
@@ -1158,6 +1165,12 @@
       "tick": 58,
       "ts": "2026-06-10T22:25:08Z",
       "action": "device[vision_block]",
+      "result": "ok"
+    },
+    {
+      "tick": 59,
+      "ts": "2026-06-10T22:43:29Z",
+      "action": "device[patch_merger]",
       "result": "ok"
     }
   ],
