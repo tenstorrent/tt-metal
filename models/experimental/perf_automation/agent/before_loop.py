@@ -27,7 +27,7 @@ from .environment import environment_check
 from .model_files import read_model_files
 from .router import build_index, cache_playbook
 from .run import Run
-from .tracy import stack_report, tracy_tool
+from .tracy_tool import stack_report, tracy_tool
 
 PKG_ROOT = Path(__file__).parent.parent
 DEFAULT_PLAYBOOK = PKG_ROOT / "GUIDELINES"

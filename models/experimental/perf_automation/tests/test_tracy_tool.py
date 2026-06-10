@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from agent.tracy import (
+from agent.tracy_tool import (
     build_buckets,
     median,
     normalize_dispatch,
