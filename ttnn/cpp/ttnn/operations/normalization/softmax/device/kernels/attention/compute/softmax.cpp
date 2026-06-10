@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <type_traits>
 
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
@@ -15,29 +16,23 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
-// Optional chain element: conditionally include Exp based on NUMERIC_STABLE
-template <bool IncludeExp>
-struct OptionalChainElement {
-    // When IncludeExp=false, this is a pass-through (identity) that does nothing
-    // When IncludeExp=true, specialized below to be Exp
-};
-
-#ifndef NUMERIC_STABLE
-template <>
-struct OptionalChainElement<true> : compute_kernel_lib::Exp<
-                                        static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
-                                        compute_kernel_lib::Approx::Exact,
-                                        compute_kernel_lib::Dst::D0> {
-    // Inherit from Exp when we want to include it
-};
-#endif
-
-// Alias for cleaner usage: OptionalChainElement<true> when !NUMERIC_STABLE, no-op when NUMERIC_STABLE
+constexpr bool kNumericStable =
 #ifdef NUMERIC_STABLE
-using OptionalExp = OptionalChainElement<false>;
+    true;
 #else
-using OptionalExp = OptionalChainElement<true>;
+    false;
 #endif
+
+// Exp stage is fused into the chains only when !NUMERIC_STABLE (otherwise exp happens in
+// calc_numeric_stable). The empty struct carries no chain tag, so the chain skips it entirely.
+struct NoOpChainElement {};
+using OptionalExp = std::conditional_t<
+    kNumericStable,
+    NoOpChainElement,
+    compute_kernel_lib::Exp<
+        static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
+        compute_kernel_lib::Approx::Exact,
+        compute_kernel_lib::Dst::D0>>;
 
 // for scale+mask+softmax:
 // bcast HW (mul by 1 tile)  example: (  [2,1,1024,64] * [1,1,32,32]  )
@@ -142,7 +137,6 @@ void kernel_main() {
     cb_fused_scale_obj.wait_front(1);
 #endif
 
-    constexpr int dst0 = 0;
     uint32_t ht = start_ht;
     bool wait_mask = true;
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
@@ -150,7 +144,7 @@ void kernel_main() {
         // apply fused scale [*= 1/sqrt(...)] — cb_in0 * cb_fused_scale (scalar
         // bcast) -> cb_scale_mask. Per-ndst DEST batching collapsed to per-tile
         // streaming via chain: cb_in0 InputLifecycle::Streaming + Scalar (wait+pop 1 per iter),
-        // cb_fused_scale InputLifecycle::CallerManaged (held outside via line 112 wait_front(1)),
+        // cb_fused_scale InputLifecycle::CallerManaged (held outside via the pre-loop wait_front(1)),
         // cb_scale_mask OutputLifecycle::Streaming (per-tile reserve+push).
         //
         // Reconfig: reconfig_data_format(cb_in0, cb_fused_scale) +
@@ -242,12 +236,7 @@ void kernel_main() {
             compute_kernel_lib::eltwise_chain(
                 Wt - 1,
                 compute_kernel_lib::CopyTile<cb_in0>{},
-#ifndef NUMERIC_STABLE
-                compute_kernel_lib::Exp<
-                    static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
-                    compute_kernel_lib::Approx::Exact,
-                    compute_kernel_lib::Dst::D0>{},
-#endif
+                OptionalExp{},
                 compute_kernel_lib::PackTile<
                     cb_x,
                     compute_kernel_lib::OutputLifecycle::Streaming,
@@ -262,12 +251,7 @@ void kernel_main() {
                     compute_kernel_lib::BroadcastDim::Row,
                     compute_kernel_lib::InputLifecycle::Streaming,
                     compute_kernel_lib::InputLifecycle::CallerManaged>{},
-#ifndef NUMERIC_STABLE
-                compute_kernel_lib::Exp<
-                    static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
-                    compute_kernel_lib::Approx::Exact,
-                    compute_kernel_lib::Dst::D0>{},
-#endif
+                OptionalExp{},
                 compute_kernel_lib::PackTile<
                     cb_x,
                     compute_kernel_lib::OutputLifecycle::Streaming,
@@ -293,7 +277,7 @@ void kernel_main() {
             // Reconfig: copy_tile + exp_tile are SFPU/copy ops; no explicit
             // reconfig_data_format outside this block, so CopyTileReconfig::Input matches
             // copy_tile_init's reconfig. PackTileReconfig::None — pack format set by
-            // binary_op_init_common at line 70 to cb_exps already.
+            // binary_op_init_common to cb_exps already.
             compute_kernel_lib::unary<
                 compute_kernel_lib::Exp<
                     static_cast<compute_kernel_lib::Approx>(EXP_APPROX),

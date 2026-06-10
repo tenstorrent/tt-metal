@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <type_traits>
 
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
@@ -15,15 +16,38 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
+constexpr bool kCausalMask =
+#ifdef CAUSAL_MASK
+    true;
+#else
+    false;
+#endif
+constexpr bool kShardedCausalMask =
+#ifdef SHARDED_CAUSAL_MASK
+    true;
+#else
+    false;
+#endif
+constexpr bool kNumericStable =
+#ifdef NUMERIC_STABLE
+    true;
+#else
+    false;
+#endif
+
+// Exp stage is fused into the mask-add chain only when !NUMERIC_STABLE (otherwise exp happens in
+// calc_numeric_stable). The empty struct carries no chain tag, so the chain skips it entirely.
+struct NoOpChainElement {};
+using OptionalExp = std::conditional_t<
+    kNumericStable,
+    NoOpChainElement,
+    compute_kernel_lib::Exp<
+        static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
+        compute_kernel_lib::Approx::Exact,
+        compute_kernel_lib::Dst::D0>>;
+
 // Templated on the CBs so the eltwise_chain below can take them as compile-time NTTPs.
-template <
-    uint32_t block_w,
-    uint32_t num_subblocks_w,
-    uint32_t subblock_w,
-    uint32_t cb_in,
-    uint32_t cb_max_scaler,
-    uint32_t cb_max,
-    uint32_t cb_out>
+template <uint32_t block_w, uint32_t cb_in, uint32_t cb_max_scaler, uint32_t cb_max, uint32_t cb_out>
 ALWI void calc_numeric_stable() {
     auto cb_max_obj = CircularBuffer(cb_max);
     auto cb_out_obj = CircularBuffer(cb_out);
@@ -63,8 +87,8 @@ ALWI void calc_numeric_stable() {
 void kernel_main() {
     constexpr uint32_t block_h = get_compile_time_arg_val(0);
     constexpr uint32_t block_w = get_compile_time_arg_val(1);
-    constexpr uint32_t subblock_w = get_compile_time_arg_val(2);
-    constexpr uint32_t num_subblocks_w = get_compile_time_arg_val(3);
+    [[maybe_unused]] constexpr uint32_t subblock_w = get_compile_time_arg_val(2);
+    [[maybe_unused]] constexpr uint32_t num_subblocks_w = get_compile_time_arg_val(3);
 
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_6);
 
@@ -97,8 +121,6 @@ void kernel_main() {
     auto cb_max_obj = CircularBuffer(cb_max);
 #endif
 
-    constexpr int dst0 = 0;
-
     for (uint32_t i = 0; i < block_h; i++) {
 #if FUSED_SCALE_MASK
         // fused scale: cb_in0 (resident sharded, popped at chain end) * cb_fused_scale (held
@@ -120,41 +142,31 @@ void kernel_main() {
             compute_kernel_lib::OperandKind::Scalar>(block_w);
 
         // fused mask add (+exp): cb_scale_mask (Bulk: wait+pop block_w) + cb_fused_attn
-        // (lifecycle per the CAUSAL_MASK / SHARDED_CAUSAL_MASK matrix — chain owns wait+pop,
+        // (lifecycle per the kCausalMask / kShardedCausalMask matrix — chain owns wait+pop,
         // exactly reproducing the original's #ifndef SHARDED_CAUSAL_MASK wait + #ifdef CAUSAL_MASK
         // pop) -> cb_x (reserve+push block_w -> Bulk). add init -> Input; plain pack_tile -> None.
         // Exp dropped when NUMERIC_STABLE (done in calc_numeric_stable below).
+        constexpr auto fused_broadcast =
+            kCausalMask ? compute_kernel_lib::BroadcastDim::None : compute_kernel_lib::BroadcastDim::Row;
+        constexpr auto fused_attn_lifecycle =
+            (kCausalMask && kShardedCausalMask) ? compute_kernel_lib::InputLifecycle::DeferredPop  // no wait, pop
+            : kCausalMask                       ? compute_kernel_lib::InputLifecycle::Bulk         // wait + pop
+            : !kShardedCausalMask               ? compute_kernel_lib::InputLifecycle::HeldBulk  // wait, no pop (held)
+                                                : compute_kernel_lib::InputLifecycle::CallerManaged;          // no wait, no pop
         compute_kernel_lib::eltwise_chain(
             compute_kernel_lib::EltwiseShape::tiles(block_w),
             compute_kernel_lib::BinaryFpu<
                 cb_scale_mask,
                 cb_fused_attn,
                 compute_kernel_lib::BinaryFpuOp::Add,
-#ifdef CAUSAL_MASK
-                compute_kernel_lib::BroadcastDim::None,
-#else
-                compute_kernel_lib::BroadcastDim::Row,
-#endif
+                fused_broadcast,
                 compute_kernel_lib::InputLifecycle::Bulk,
-#if defined(CAUSAL_MASK) && defined(SHARDED_CAUSAL_MASK)
-                compute_kernel_lib::InputLifecycle::DeferredPop,  // no wait (SHARDED), pop (CAUSAL)
-#elif defined(CAUSAL_MASK)
-                compute_kernel_lib::InputLifecycle::Bulk,  // wait + pop
-#elif !defined(SHARDED_CAUSAL_MASK)
-                compute_kernel_lib::InputLifecycle::HeldBulk,  // wait, no pop (held across block_h)
-#else
-                compute_kernel_lib::InputLifecycle::CallerManaged,  // no wait, no pop
-#endif
+                fused_attn_lifecycle,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::OperandKind::Block>{},
-#ifndef NUMERIC_STABLE
-            compute_kernel_lib::Exp<
-                static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
-                compute_kernel_lib::Approx::Exact,
-                compute_kernel_lib::Dst::D0>{},
-#endif
+            OptionalExp{},
             compute_kernel_lib::PackTile<
                 cb_x,
                 compute_kernel_lib::OutputLifecycle::Bulk,
@@ -164,7 +176,7 @@ void kernel_main() {
 // fuse exp with sub tiles
 #ifdef NUMERIC_STABLE
         cb_x_obj.wait_front(block_w);
-        calc_numeric_stable<block_w, num_subblocks_w, subblock_w, cb_x, cb_max_scaler, cb_max, cb_exps>();
+        calc_numeric_stable<block_w, cb_x, cb_max_scaler, cb_max, cb_exps>();
 #endif
 
         // cb_fused_attn pop is now owned by the fused-attn chain above (DeferredPop/Bulk under
@@ -174,7 +186,7 @@ void kernel_main() {
 #else
 
 #ifdef NUMERIC_STABLE
-        calc_numeric_stable<block_w, num_subblocks_w, subblock_w, cb_in0, cb_max_scaler, cb_max, cb_exps>();
+        calc_numeric_stable<block_w, cb_in0, cb_max_scaler, cb_max, cb_exps>();
 #else
         // exp(x): CopyTile + Exp + PackTile chain over all block_w tiles (eliminates subblock loop).
         // cb_in0 wait+pop all block_w via Bulk lifecycle; cb_exps reserve+push -> Bulk.
@@ -231,7 +243,7 @@ void kernel_main() {
                 compute_kernel_lib::InputLifecycle::Bulk,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
                 compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::OperandKind::Scalar>{},
             compute_kernel_lib::PackTile<
                 cb_out0,
