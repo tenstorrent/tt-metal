@@ -71,6 +71,8 @@ def build_cpu_reference(seq_len: int, seed: int = 42):
     torch.manual_seed(seed)
     # simulate_fp8=False: device KVPE cache stores bf16 (spec.md), keep truth identical.
     mla_cpu = MLACPU(args, simulate_fp8=False).eval()
+    # Functional-parity indexer (spec.md §104): Hadamard+fp8 dropped on both sides.
+    mla_cpu.indexer.use_fp8_path = False
     initialize_weights(mla_cpu)
     sd = mla_cpu.state_dict()
     weights = {v3_name: sd[cpu_name].clone() for cpu_name, v3_name in WEIGHT_NAME_MAP.items()}
@@ -167,13 +169,19 @@ def test_v32_mla_vs_cpu_reference(mesh_device, seq_len, device_params, variant, 
     )
 
     ref_output, ref_kvpe = run_cpu_reference(
-        args, mla_cpu, hidden_states, seq_len, seed, cache_tag=f"random_max{args.max_seq_len}"
+        args, mla_cpu, hidden_states, seq_len, seed, cache_tag=f"random_funcidx_max{args.max_seq_len}"
     )
 
     tt_output_cpu = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape),
     ).to(torch.bfloat16)
+    if seq_len > 2048:  # DSA diagnostics: dense rows (<topk) vs sparse rows
+        from models.common.utility_functions import comp_pcc
+
+        for name, sl in [("rows<2048", slice(0, 2048)), ("rows>=2048", slice(2048, seq_len))]:
+            _, m = comp_pcc(ref_output[:, sl], tt_output_cpu[0, :, sl], 0)
+            logger.info(f"band {name}: {m}")
     _, pcc_message = assert_with_pcc(ref_output.unsqueeze(0), tt_output_cpu, OUTPUT_PCC)
     logger.info(f"Output PCC: {pcc_message}")
 

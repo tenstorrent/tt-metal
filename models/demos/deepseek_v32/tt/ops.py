@@ -85,14 +85,24 @@ def sparse_mla(q: ttnn.Tensor, kvpe: ttnn.Tensor, indices: ttnn.Tensor, scale: f
         out [1, H, Sq, 512] bf16 latent attention output
     CPU FALLBACK (gather+SDPA on host): no ttnn gather over Skv; fused op is follow-up.
     """
-    q_t, kvpe_t, idx = _to_host(q), _to_host(kvpe), _to_host(indices).long()
+    # q is head-sharded across TP; kvpe/indices replicated. Compute per shard so
+    # each chip's output holds its own heads (chip i's out feeds chip i's o_proj).
+    kvpe_t, idx = _to_host(kvpe), _to_host(indices).long()
     sel = kvpe_t[0, 0][idx[0, 0]]  # [Sq, k, 576]
-    scores = torch.einsum("hsd,skd->hsk", q_t[0].float(), sel.float()) * scale
-    attn = scores.softmax(-1)
-    out = torch.einsum("hsk,skc->hsc", attn, sel[..., :512].float())
+    # Causality must be re-imposed here: rows with fewer than k causal keys get
+    # arbitrary (future) indices from topk's -inf band, and scores are recomputed
+    # from latents so the -inf does not carry over. FlashMLA handles this with
+    # per-row topk_length; the fused op must too.
+    sq = idx.shape[2]
+    future = (idx[0, 0] > torch.arange(sq).view(sq, 1)).unsqueeze(0)  # [1, Sq, k]
+    outs = []
+    for q_shard in ttnn.get_device_tensors(q):
+        q_t = ttnn.to_torch(q_shard)
+        scores = (torch.einsum("hsd,skd->hsk", q_t[0].float(), sel.float()) * scale).masked_fill(future, float("-inf"))
+        outs.append(torch.einsum("hsk,skc->hsc", scores.softmax(-1), sel[..., :512].float()).unsqueeze(0))
     return ttnn.from_torch(
-        out.unsqueeze(0).to(torch.bfloat16),
+        torch.cat(outs, dim=1).to(torch.bfloat16),
         device=q.device(),
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(q.device()),
+        mesh_mapper=ttnn.ShardTensor2dMesh(q.device(), mesh_shape=tuple(q.device().shape), dims=(None, 1)),
     )
