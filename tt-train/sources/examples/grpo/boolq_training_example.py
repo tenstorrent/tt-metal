@@ -81,7 +81,7 @@ def parse_args():
         "--seed",
         type=int,
         default=None,
-        help="RNG seed for reproducible runs. If omitted, no seed is set and runs are nondeterministic.",
+        help="RNG seed for reproducible runs. If omitted, seed defaults to 42.",
     )
     # Accept (and ignore) extra flags passed by launch scripts (e.g. --model,
     # --wandb*) so they don't crash argument parsing.
