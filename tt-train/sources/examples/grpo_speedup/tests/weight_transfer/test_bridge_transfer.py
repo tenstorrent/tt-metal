@@ -4,30 +4,36 @@
 """Multi-process ttml -> tt-transformers weight bridge + RPC test.
 
 Launched under tt-run with world_size == 2 (see ``runner.sh``). Rank 0
-(TTML) opens a ``[1, 2]`` sub-mesh from
+(TTML) opens a ``[1, 2]`` mesh from
 ``grpo_boolq_llama_2dev_ddp.yaml``. Rank 1 (TTT) opens a ``[1, 1]``
-sub-mesh.
+sub-mesh of the declared ``[1, 2]`` board.
 
-The TTML rank drives the whole flow via ``TttInferenceClient``:
+The TTML rank drives the whole flow via :class:`TttInferenceClient`:
 
   1. local instruct sanity generate (ttml side)
   2. remote pre-update generate on the TTT rank (RPC)
-  3. ``client.request_transfer()`` + ``bridge.transfer_weights(hf_dict)``
-     to push the ttml weights into the TTT base model
+  3. ``client.transfer_weights(hf_dict)`` to push the ttml weights into
+     the TTT base model in a single call
   4. remote post-update generate on the TTT rank (RPC)
   5. ``client.shutdown()`` to release the server
 
-The TTT rank runs ``TttInferenceServer.serve_forever`` once. Each
-``OP_GENERATE`` request maps to ``LlamaCompleterTtt.generate``; the
-single ``OP_REQUEST_TRANSFER`` message invokes an ``on_transfer``
-callback that calls ``bridge.transfer_weights`` followed by
-``Transformer.update_weights`` and the existing replicated/dtype/layout
-assertions. ``OP_SHUTDOWN`` returns from ``serve_forever``.
+The TTT rank constructs a :class:`TttInferenceServer` with two
+callbacks -- a ``generate_fn`` that wraps ``LlamaCompleterTtt.generate``
+and an ``on_weights_received`` that validates the received HF dict and
+calls ``Transformer.update_weights`` -- and then runs
+``server.serve_forever()`` once.
 
-The asymmetric ``[1, 2] -> [1, 1]`` transfer is handled by
-``WeightBridge`` -- see ``utils/weight_bridge.py`` for the protocol.
-The inference RPC piggybacks on the same MPI distributed context but
-uses disjoint tags (10-13) -- see ``utils/inference_bridge.py``.
+Both :class:`TttInferenceClient` and :class:`TttInferenceServer`
+perform the underlying ``WeightBridge`` handshake inside their own
+``__init__``; returning from the constructor on one rank therefore
+implies the peer has also constructed its counterpart (or, equivalently,
+will eventually do so -- the constructor blocks).
+
+The asymmetric ``[1, 2] -> [1, 1]`` transfer is handled by the
+``WeightBridge`` that each inference object composes internally -- see
+``utils/inference_bridge.py`` for the protocol. The inference RPC
+piggybacks on the same MPI distributed context but uses disjoint tags
+(10..13).
 
 Self-skips when not launched under tt-run (``OMPI_COMM_WORLD_SIZE``
 unset or != 2). Requires ``HF_TOKEN`` set in the environment.
@@ -47,7 +53,7 @@ import pytest
 _WORLD_SIZE = int(os.environ.get("OMPI_COMM_WORLD_SIZE", "0"))
 if _WORLD_SIZE != 2:
     pytest.skip(
-        "test_bridge_transfer must run under tt-run with world_size == 2 " "(use tests/weight_transfer/runner.sh).",
+        "test_bridge_transfer must run under tt-run with world_size == 2 (use tests/weight_transfer/runner.sh).",
         allow_module_level=True,
     )
 
@@ -55,7 +61,7 @@ _MPI_RANK = int(os.environ["OMPI_COMM_WORLD_RANK"])
 
 import ttnn  # noqa: E402
 
-from utils.weight_bridge import TTML_RANK, TTT_RANK, WeightBridge  # noqa: E402
+from utils.inference_bridge import TTML_RANK, TTT_RANK  # noqa: E402
 
 BASE_MODEL_ID = "meta-llama/Llama-3.2-1B"
 INSTRUCT_MODEL_ID = "meta-llama/Llama-3.2-1B-instruct"
@@ -105,7 +111,7 @@ def _ttml_side() -> None:
         completion_ids = [int(t) for t in completer.generate([prompt_ids])[0]]
         completion_text = completer.tokenizer.decode(completion_ids, skip_special_tokens=False)
         print(
-            f"[TTML rank {TTML_RANK}] (local instruct) " f"({len(completion_ids)} tok): {completion_text!r}",
+            f"[TTML rank {TTML_RANK}] (local instruct) ({len(completion_ids)} tok): {completion_text!r}",
             flush=True,
         )
 
@@ -116,7 +122,10 @@ def _ttml_side() -> None:
         base_tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_ID)
         base_prompt_ids = base_tokenizer.encode(PROMPT, add_special_tokens=True)
 
-        client = TttInferenceClient(peer_rank=TTT_RANK)
+        # Construct the client. TttInferenceClient.__init__ runs the
+        # WeightBridge handshake internally, so this blocks until the
+        # TTT rank constructs its TttInferenceServer.
+        client = TttInferenceClient(peer_rank=TTT_RANK, device=mesh_device)
 
         # --- step 2: pre-update generate on TTT, driven via RPC ---
         pre_update_ids = client.remote_generate(
@@ -126,30 +135,20 @@ def _ttml_side() -> None:
         )[0]
         pre_update_text = base_tokenizer.decode(pre_update_ids, skip_special_tokens=False)
         print(
-            f"[TTML rank {TTML_RANK}] (remote TTT pre-update) " f"({len(pre_update_ids)} tok): {pre_update_text!r}",
+            f"[TTML rank {TTML_RANK}] (remote TTT pre-update) ({len(pre_update_ids)} tok): {pre_update_text!r}",
             flush=True,
         )
 
-        # --- step 3: weight transfer ---
-        bridge = WeightBridge(role="ttml", peer_rank=TTT_RANK, device=mesh_device)
-        bridge.connect()
-
+        # --- step 3: weight transfer (single call from user perspective) ---
         hf_dict = completer.model.export_to_hf_dict()
         print(
-            f"[TTML rank {TTML_RANK}] sending {len(hf_dict)} weight tensors via WeightBridge",
+            f"[TTML rank {TTML_RANK}] sending {len(hf_dict)} weight tensors via TttInferenceClient.transfer_weights",
             flush=True,
         )
-        # request_transfer must come immediately before transfer_weights:
-        # the server is sitting on recv_bytes(REQ_HDR_TAG), the request
-        # nudges it into on_transfer, and the two ranks rendezvous inside
-        # bridge.transfer_weights on the WeightBridge tags.
-        client.request_transfer()
-        bridge.transfer_weights(hf_dict)
-        print(f"[TTML rank {TTML_RANK}] send complete", flush=True)
+        client.transfer_weights(hf_dict)
+        print(f"[TTML rank {TTML_RANK}] weight transfer complete", flush=True)
         del hf_dict
         gc.collect()
-
-        bridge.barrier()
 
         # --- step 4: post-update generate on TTT, driven via RPC ---
         post_update_ids = client.remote_generate(
@@ -159,7 +158,7 @@ def _ttml_side() -> None:
         )[0]
         post_update_text = base_tokenizer.decode(post_update_ids, skip_special_tokens=False)
         print(
-            f"[TTML rank {TTML_RANK}] (remote TTT post-update) " f"({len(post_update_ids)} tok): {post_update_text!r}",
+            f"[TTML rank {TTML_RANK}] (remote TTT post-update) ({len(post_update_ids)} tok): {post_update_text!r}",
             flush=True,
         )
 
@@ -196,9 +195,6 @@ def _ttt_side() -> None:
             disable_disk_cache=True,
         )
 
-        bridge = WeightBridge(role="ttt", peer_rank=TTML_RANK, device=mesh_device)
-        bridge.connect()
-
         def _generate_fn(
             prompts: list,
             *,
@@ -215,9 +211,7 @@ def _ttt_side() -> None:
                 seed=seed,
             )
 
-        def _on_transfer() -> None:
-            hf_dict = bridge.transfer_weights()
-            assert hf_dict is not None, "WeightBridge.transfer_weights on ttt rank must return a dict"
+        def _on_weights_received(hf_dict: dict) -> None:
             print(
                 f"[TTT rank {TTT_RANK}] received {len(hf_dict)} weight tensors via WeightBridge",
                 flush=True,
@@ -262,15 +256,16 @@ def _ttt_side() -> None:
                 flush=True,
             )
 
-            # Free the received tensors so the next generate() has DRAM
-            # for KV cache / trace scratch.
-            del hf_dict
-            gc.collect()
-
-            bridge.barrier()
-
-        server = TttInferenceServer(peer_rank=TTML_RANK)
-        server.serve_forever(_generate_fn, on_transfer=_on_transfer)
+        # Construct the server. TttInferenceServer.__init__ runs the
+        # WeightBridge handshake internally, so this blocks until the
+        # TTML rank constructs its TttInferenceClient.
+        server = TttInferenceServer(
+            peer_rank=TTML_RANK,
+            device=mesh_device,
+            generate_fn=_generate_fn,
+            on_weights_received=_on_weights_received,
+        )
+        server.serve_forever()
     finally:
         completer = None
         gc.collect()
