@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T04:31:32Z
+**Updated:** 2026-06-10T04:39:45Z
 
 ## Block Status
 
@@ -66,7 +66,7 @@
 | text_mlp | optimization | pending | — | 0 |  |
 | text_mlp | real_weights | pending | — | 0 |  |
 | decoder_layer | reference | done | 1.000000 | 0 | Qwen2DecoderLayer pre-norm residual x+attn(ln1(x)); h+mlp(ln2(h)), real layers.0 weights |
-| decoder_layer | ttnn | pending | — | 0 |  |
+| decoder_layer | ttnn | done | 0.999936 | 0 | Pre-norm residual composition of done sub-blocks: TtTextRMSNorm(input_layernorm, eps=1e-6) -> TtTextAttention (fused per-chip QKV+bias, 12Q/2KV hd128, kv_replication=2, fp32 HF rope + fp32 explicit causal core, row-parallel o_proj + sync all-reduce) -> ttnn.add residual -> TtTextRMSNorm(post_attention_layernorm) -> TtTextMLP (SwiGLU 1536->8960->1536, column/row-parallel + sync all-reduce) -> ttnn.add residual, mirroring reference_impl models/tt_transformers/tt/decoder.py TransformerBlock. Whole layer fp32 (attention path fp32-mandatory: layer-0 logits +-3122, bf16 core PCC ~0.92; fp32 gammas TILE [1,1,1,dim]); residual stream keeps input dtype for chained-caller precision control. Real model.layers.0 weights re-loaded from checkpoint; replicated all-reduced output compared single-device vs golden. Guard ok (lint 0, kernels ok, no new host ops). No KB entries returned for decoder_layer. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | decoder_layer | debug | n/a | — | 0 |  |
 | decoder_layer | optimization | pending | — | 0 |  |
 | decoder_layer | real_weights | pending | — | 0 |  |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 7 (2026-06-10T02:59:42Z): device[vision_rmsnorm] — ok
 - tick 8 (2026-06-10T03:13:53Z): device[vision_attention] — ok
 - tick 9 (2026-06-10T03:20:47Z): device[vision_mlp] — ok
 - tick 10 (2026-06-10T03:26:43Z): device[vision_block] — ok
@@ -94,6 +93,7 @@
 - tick 14 (2026-06-10T04:05:51Z): device[text_rmsnorm] — ok
 - tick 15 (2026-06-10T04:25:05Z): device[text_attention] — ok
 - tick 16 (2026-06-10T04:31:32Z): device[text_mlp] — ok
+- tick 17 (2026-06-10T04:39:45Z): device[decoder_layer] — ok
 
 ## Host-Resident Exceptions
 

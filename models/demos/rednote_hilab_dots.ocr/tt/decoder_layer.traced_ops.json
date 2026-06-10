@@ -1,0 +1,18 @@
+[
+  "ttnn.add",
+  "ttnn.all_gather",
+  "ttnn.concat",
+  "ttnn.deallocate",
+  "ttnn.experimental.nlp_concat_heads",
+  "ttnn.experimental.nlp_create_qkv_heads",
+  "ttnn.linear",
+  "ttnn.matmul",
+  "ttnn.multiply",
+  "ttnn.neg",
+  "ttnn.rms_norm",
+  "ttnn.silu",
+  "ttnn.slice",
+  "ttnn.softmax",
+  "ttnn.to_string",
+  "ttnn.transpose"
+]

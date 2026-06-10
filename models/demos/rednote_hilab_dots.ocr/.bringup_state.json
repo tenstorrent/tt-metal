@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T04:31:32Z",
+  "updated_at": "2026-06-10T04:39:45Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -546,8 +546,15 @@
         "pcc": 1.0
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/decoder_layer.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_decoder_layer.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/decoder_layer.traced_ops.json"
+        ],
+        "notes": "Pre-norm residual composition of done sub-blocks: TtTextRMSNorm(input_layernorm, eps=1e-6) -> TtTextAttention (fused per-chip QKV+bias, 12Q/2KV hd128, kv_replication=2, fp32 HF rope + fp32 explicit causal core, row-parallel o_proj + sync all-reduce) -> ttnn.add residual -> TtTextRMSNorm(post_attention_layernorm) -> TtTextMLP (SwiGLU 1536->8960->1536, column/row-parallel + sync all-reduce) -> ttnn.add residual, mirroring reference_impl models/tt_transformers/tt/decoder.py TransformerBlock. Whole layer fp32 (attention path fp32-mandatory: layer-0 logits +-3122, bf16 core PCC ~0.92; fp32 gammas TILE [1,1,1,dim]); residual stream keeps input dtype for chained-caller precision control. Real model.layers.0 weights re-loaded from checkpoint; replicated all-reduced output compared single-device vs golden. Guard ok (lint 0, kernels ok, no new host ops). No KB entries returned for decoder_layer. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.999936
       },
       "debug": {
         "status": "n/a",
@@ -741,6 +748,12 @@
       "tick": 16,
       "ts": "2026-06-10T04:31:32Z",
       "action": "device[text_mlp]",
+      "result": "ok"
+    },
+    {
+      "tick": 17,
+      "ts": "2026-06-10T04:39:45Z",
+      "action": "device[decoder_layer]",
       "result": "ok"
     }
   ],
