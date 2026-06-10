@@ -736,7 +736,7 @@ void DramCorePrefetcherManager::queue(
     // If the target command queue is mid trace-capture, capture this request into the trace
     // instead of sending it now; it is (re)sent on every replay of that trace. Otherwise send
     // immediately via the host worker.
-    std::optional<MeshTraceId> recording_trace_id = mesh_device_->mesh_command_queue(cq_id).trace_id();
+    const std::optional<MeshTraceId> recording_trace_id = mesh_device_->mesh_command_queue(cq_id).trace_id();
 
     {
         // Push all pages of this call under one lock so they stay contiguous and ordered
@@ -769,9 +769,7 @@ void DramCorePrefetcherManager::replay_trace(const MeshTraceId& trace_id) {
         }
         // Copy (not move) so the captured requests survive for the next replay. Pushed in
         // capture order so fifo_wr_ptr continuity matches the original Queue calls.
-        for (const auto& req : it->second) {
-            pending_.push_back(req);
-        }
+        pending_.insert(pending_.end(), it->second.begin(), it->second.end());
     }
     queue_cv_.notify_one();
 }

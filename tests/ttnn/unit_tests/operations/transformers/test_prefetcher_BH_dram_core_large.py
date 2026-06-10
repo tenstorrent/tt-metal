@@ -39,13 +39,10 @@ Three scopes:
    (no matmul; the goal is to confirm both ops complete without
    hang/OOM/PCC failure across multiple ``(num_tensors, num_layers)`` combos).
 
-3. ``test_dram_core_prefetcher_trace_replay`` — trace capture/replay.
-   ``queue_dram_core_prefetcher_request`` does not go through the command
-   queue; when called with a ``cq_id`` whose queue is mid trace-capture, the
-   request must be *captured* (not sent) and re-sent on every ``execute_trace``
-   so a captured matmul that consumes the GCB is refilled on each replay. The
-   test captures a (queue request + consuming linear) pair into a trace,
-   replays it ``replay_count`` times, and PCC-checks the matmul on every replay.
+3. ``test_dram_core_prefetcher_trace_replay`` — trace capture/replay. Captures
+   a (queue request + consuming linear) pair into a trace, replays it
+   ``replay_count`` times, and PCC-checks the matmul on every replay. See the
+   comment on the test for the capture-vs-replay semantics it covers.
 """
 
 import math
@@ -690,9 +687,7 @@ def test_dram_core_prefetcher_trace_replay(device, replay_count):
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    tt_act = ttnn.from_torch(
-        pt_act, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=act_mem_config
-    )
+    tt_act = ttnn.from_torch(pt_act, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=act_mem_config)
 
     # ---- Matmul program config (1D-mcast gather_in0) ----
     out_block_h = M // ttnn.TILE_SIZE
@@ -757,7 +752,7 @@ def test_dram_core_prefetcher_trace_replay(device, replay_count):
             cq_id=0,
             memory_config=output_mem_config,
             compute_kernel_config=compute_kernel_config,
-            dtype=ttnn.bfloat16,
+            dtype=dtype,
         )
 
     with dram_core_prefetcher_session(device):
