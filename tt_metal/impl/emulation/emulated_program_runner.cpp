@@ -1178,6 +1178,23 @@ static std::map<std::string, std::string> build_kernel_defines(
         defines["EMULE_TILE_SIZES"] = ts.str();
         defines["EMULE_CB_DATA_FORMATS"] = df.str();
     }
+
+    // Thread the compute kernel's resolved fp32_dest_acc_en / dst_full_sync_en
+    // into its TU, mirroring silicon genfiles.cpp::emit_compute_scalar_descriptors.
+    // dest_helpers.hpp::DEST_AUTO_LIMIT must resolve identically in a program's
+    // reader and compute kernels (e.g. multi-core H-reduce interleaves input
+    // tiles in chunks of DEST_AUTO_LIMIT). The factory already injects
+    // ENABLE_FP32_DEST_ACC/DST_SYNC_FULL into the reader's defines; without this
+    // the compute TU falls back to the jit_kernel_stubs defaults (bf16/SyncFull
+    // → 16) instead of the program's real mode, scrambling the chunked reduce.
+    if (kernel.get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
+        const auto kernel_config = kernel.config();
+        if (const auto* cc = std::get_if<ComputeConfig>(&kernel_config)) {
+            defines["DST_ACCUM_MODE"] = cc->fp32_dest_acc_en ? "1" : "0";
+            defines["ENABLE_FP32_DEST_ACC"] = cc->fp32_dest_acc_en ? "1" : "0";
+            defines["DST_SYNC_FULL"] = cc->dst_full_sync_en ? "1" : "0";
+        }
+    }
     return defines;
 }
 
