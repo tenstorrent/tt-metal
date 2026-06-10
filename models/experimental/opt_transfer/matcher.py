@@ -40,6 +40,33 @@ class _AnthropicTransport:
         return {"content": [{"type": "text", "text": b.text} for b in msg.content if b.type == "text"]}
 
 
+class _ClaudeCodeAgentTransport:
+    """Runs each LLM call as a headless Claude Code sub-agent (`claude -p`), authenticated via
+    the machine's Claude Code login — no ANTHROPIC_API_KEY required. Tools are disabled so the
+    sub-agent is a pure text completion; large system blocks (the KB) ride in the prompt body
+    to stay clear of argv size limits."""
+
+    def __init__(self, model):
+        self._model = model
+
+    def create(self, system, messages):
+        import subprocess
+
+        blocks = [b["text"] for b in system]
+        role, context = blocks[0], blocks[1:]
+        prompt = "\n\n".join(context + [m["content"] for m in messages])
+        out = subprocess.run(
+            ["claude", "-p", "--model", self._model, "--system-prompt", role, "--output-format", "json", "--tools", ""],
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        if out.returncode != 0:
+            raise RuntimeError(f"claude sub-agent failed (rc={out.returncode}): {out.stderr.strip()[:500]}")
+        return {"content": [{"type": "text", "text": json.loads(out.stdout)["result"]}]}
+
+
 EXTRACT_SYSTEM = (
     "Given a ttnn op, its registered golden source (if any), unit-test examples, and model "
     "call sites, emit KBEntry JSON dicts. The torch_pattern MUST be taken from the golden/test "
@@ -58,7 +85,11 @@ class LLMClient:
     sharing prompt-cached context. Transport is injectable for offline tests."""
 
     def __init__(self, transport=None, model=None):
-        self.transport = transport or _AnthropicTransport(model or CONFIG.matcher_model)
+        if transport is None:
+            # API key present -> direct Anthropic API; otherwise run as a Claude Code sub-agent.
+            cls = _AnthropicTransport if os.environ.get("ANTHROPIC_API_KEY") else _ClaudeCodeAgentTransport
+            transport = cls(model or CONFIG.matcher_model)
+        self.transport = transport
 
     def _complete(self, system_blocks, user_text):
         resp = self.transport.create(system=system_blocks, messages=[{"role": "user", "content": user_text}])

@@ -20,7 +20,7 @@ class Config:
     kb_dir: Path = field(default=None)
     cache_dir: Path = field(default=None)
     run_dir: Path = field(default=None)
-    matcher_model: str = "claude-opus-4-8"
+    matcher_model: str = "claude-fable-5"
     models: dict = field(
         default_factory=lambda: {
             "seamless_m4t_v2": {
