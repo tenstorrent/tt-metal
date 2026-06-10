@@ -253,18 +253,27 @@ def _paged_sdpa_decode_golden(
 def _batch_paged_golden(q_heads, k_chip, v_chip, page_row, pos, block, scale):
     """Causal paged attention for ONE batch from device-resident shards.
 
-    q_heads [NQH, D]; k_chip/v_chip [num_blocks, n_kv_heads(=1), block, D] (GQA
-    broadcast over the single KV head); page_row maps logical->physical pages;
-    pos = most-recent cache index (inclusive). Returns [NQH, D].
+    q_heads [NQH, D]; k_chip/v_chip [num_blocks, n_kv_heads, block, D]; page_row
+    maps logical->physical pages; pos = most-recent cache index (inclusive).
+    Returns [NQH, D]. GQA/MQA: q head h attends KV head h // (NQH // n_kv_heads),
+    so the golden must NOT collapse to KV head 0 (that ignores heads 1..n_kv-1
+    and yields a wrong result for multi-KV-head configs).
     """
     d = q_heads.shape[-1]
+    nqh = q_heads.shape[0]
+    nkvh = k_chip.shape[1]
     n_active = int(pos) + 1
     n_blocks = (n_active + block - 1) // block
     pages = page_row[:n_blocks].long().clamp_(0, k_chip.shape[0] - 1)
-    k_seq = k_chip[pages, 0].reshape(-1, d)[:n_active].float()
-    v_seq = v_chip[pages, 0].reshape(-1, d)[:n_active].float()
-    w = torch.softmax((q_heads.float() @ k_seq.t()) * scale, dim=-1)
-    return w @ v_seq
+    rep = max(1, nqh // max(1, nkvh))
+    out = torch.empty((nqh, d), dtype=torch.float32)
+    for h in range(nqh):
+        kvh = min(h // rep, nkvh - 1)
+        k_seq = k_chip[pages, kvh].reshape(-1, d)[:n_active].float()
+        v_seq = v_chip[pages, kvh].reshape(-1, d)[:n_active].float()
+        w = torch.softmax((q_heads[h].float() @ k_seq.t()) * scale, dim=-1)
+        out[h] = w @ v_seq
+    return out
 
 
 def run(
