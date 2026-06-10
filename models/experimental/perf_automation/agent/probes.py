@@ -96,8 +96,16 @@ def _extract_json_object(text: str) -> str:
 def _usage_summary(result_msg) -> dict:
     """Flatten a ResultMessage into {tokens_in, tokens_out, cost_usd, latency_s}."""
     u = getattr(result_msg, "usage", None) or {}
+    # input_tokens counts only the UNCACHED slice; the bulk of the prompt is
+    # in the cache fields. tokens_in = total tokens the model actually saw.
+    tokens_in = (
+        (u.get("input_tokens") or 0)
+        + (u.get("cache_creation_input_tokens") or 0)
+        + (u.get("cache_read_input_tokens") or 0)
+    )
     return {
-        "tokens_in": u.get("input_tokens"),
+        "tokens_in": tokens_in or None,
+        "tokens_cached": u.get("cache_read_input_tokens"),
         "tokens_out": u.get("output_tokens"),
         "cost_usd": getattr(result_msg, "total_cost_usd", None),
         "latency_s": round(getattr(result_msg, "duration_ms", 0) / 1000.0, 2),
