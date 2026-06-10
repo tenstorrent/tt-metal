@@ -35,7 +35,6 @@ jobs:
     needs: build-artifact
     timeout-minutes: 30
     outputs:
-      ranksData: ${{ steps.get-allocation-data.outputs.ranksData }}
       mgd: ${{ steps.mgd.outputs.mgd }}
     runs-on:
       group: exabox
@@ -75,13 +74,6 @@ jobs:
               exabox.tenstorrent.com/purpose: ci-metal
               exabox.tenstorrent.com/superpod: A29
 
-      - name: Get Allocation data
-        uses: ./.github/actions/ttop-get-allocation-data
-        id: get-allocation-data
-        with:
-          allocationName: ci-${{ github.run_id }}-metal
-          namespace: ttop-ci
-
   reset:
     name: Reset cards
     needs: [build-artifact, create-allocation]
@@ -114,6 +106,12 @@ jobs:
           echo "repository=$REPOSITORY" >> $GITHUB_OUTPUT
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
+      - name: Get Allocation data
+        uses: ./.github/actions/ttop-get-allocation-data
+        with:
+          allocationName: ci-${{ github.run_id }}-metal
+          allocationNamespace: ttop-ci
+
       - name: Create environment
         uses: ./.github/actions/ttop-create-environment
         timeout-minutes: 5
@@ -131,9 +129,9 @@ jobs:
         timeout-minutes: 5
         with:
           directory: /ci/ttrun
+          allocationConfigPath: /etc/ttop
           mgdFile: /tmp/dummy/doesnotexist.textproto
           copyToWorkers: false
-          ranksData: ${{ needs.create-allocation.outputs.ranksData }}
 
       - name: Print hostnames
         working-directory: /tmp
@@ -190,6 +188,12 @@ jobs:
           echo "repository=$REPOSITORY" >> $GITHUB_OUTPUT
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
+      - name: Get Allocation data
+        uses: ./.github/actions/ttop-get-allocation-data
+        with:
+          allocationName: ci-${{ github.run_id }}-metal
+          allocationNamespace: ttop-ci
+
       - name: Create environment
         uses: ./.github/actions/ttop-create-environment
         timeout-minutes: 5
@@ -207,9 +211,9 @@ jobs:
         timeout-minutes: 5
         with:
           directory: /ci/ttrun
+          allocationConfigPath: /etc/ttop
           mgd: ${{ needs.create-allocation.outputs.mgd }}
           copyToWorkers: false
-          ranksData: ${{ needs.create-allocation.outputs.ranksData }}
 
       - name: 📦 Download Build Artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

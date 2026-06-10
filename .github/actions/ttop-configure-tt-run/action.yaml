@@ -22,8 +22,12 @@ inputs:
     required: true
     default: 'true'
   ranksData:
-    description: 'Node-to-rank JSON mapping'
-    required: true
+    description: 'Node-to-rank JSON mapping (legacy; ignored when allocationConfigPath contains hostfile)'
+    required: false
+    default: ''
+  allocationConfigPath:
+    description: 'Path to allocation controller configs (hostfile, rankfile, rank_bindings.yaml)'
+    required: false
     default: ''
 
 runs:
@@ -35,19 +39,29 @@ runs:
         echo "Creating directory for TT-Run configuration..."
         sudo mkdir -p ${{ inputs.directory }}
 
-    - name: Create hostfile (parse ranks)
+    - name: Create hostfile and rankfile
       shell: bash
       run: |
-        echo "Creating OpenMPI hostfile from ranks mapping..."
+        ALLOC_PATH="${{ inputs.allocationConfigPath }}"
+        DIR="${{ inputs.directory }}"
 
-        # Parse the JSON and create ordered hostfile
-        echo '${{ inputs.ranksData }}' | jq -r 'to_entries | sort_by(.value | tonumber) | .[].key' | sudo tee ${{ inputs.directory }}/hostfile
+        if [ -n "$ALLOC_PATH" ] && [ -f "$ALLOC_PATH/hostfile" ]; then
+          echo "Using allocation configs from $ALLOC_PATH"
+          sudo cp "$ALLOC_PATH/hostfile" "$DIR/hostfile"
+          if [ -f "$ALLOC_PATH/rankfile" ]; then
+            sudo cp "$ALLOC_PATH/rankfile" "$DIR/rankfile"
+          fi
+        elif [ -n '${{ inputs.ranksData }}' ]; then
+          echo "Creating OpenMPI hostfile from ranks mapping..."
+          echo '${{ inputs.ranksData }}' | jq -r 'to_entries | sort_by(.value | tonumber) | .[].key' | sudo tee "$DIR/hostfile"
+          echo '${{ inputs.ranksData }}' | jq -r 'to_entries | sort_by(.value | tonumber) | .[] | "rank \(.value)=\(.key) slot=0"' | sudo tee "$DIR/rankfile"
+        else
+          echo "ERROR: No hostfile in allocationConfigPath and no ranksData provided"
+          exit 1
+        fi
 
-        # Create rankfile from ranksData object, should be:
-        echo '${{ inputs.ranksData }}' | jq -r 'to_entries | sort_by(.value | tonumber) | .[] | "rank \(.value)=\(.key) slot=0"' | sudo tee ${{ inputs.directory }}/rankfile
-
-        echo "OpenMPI hostfile created:"
-        sudo cat ${{ inputs.directory }}/hostfile
+        echo "OpenMPI hostfile:"
+        sudo cat "$DIR/hostfile"
 
     - name: Create MGD spec file
       shell: bash
@@ -67,35 +81,41 @@ runs:
     - name: Create rank bindings file
       shell: bash
       run: |
-        # Count entries in hostfile to determine number of rank bindings
-        # NOTE: This hardcodes ranks in 1 mesh (assumes we have allocated a big mesh - like quad or half)
-        if [ -f ${{ inputs.directory }}/hostfile ]; then
-          num_hosts=$(sudo cat ${{ inputs.directory }}/hostfile | wc -l)
+        ALLOC_PATH="${{ inputs.allocationConfigPath }}"
+        DIR="${{ inputs.directory }}"
+
+        if [ -n "$ALLOC_PATH" ] && [ -f "$ALLOC_PATH/rank_bindings.yaml" ] && \
+           [ -z '${{ inputs.mgd }}' ] && [ -z '${{ inputs.mgdFile }}' ]; then
+          echo "Using rank_bindings.yaml from $ALLOC_PATH"
+          sudo cp "$ALLOC_PATH/rank_bindings.yaml" "$DIR/rank_bindings.yaml"
+        elif [ -f "$DIR/hostfile" ]; then
+          # Count entries in hostfile to determine number of rank bindings
+          # NOTE: This hardcodes ranks in 1 mesh (assumes we have allocated a big mesh - like quad or half)
+          num_hosts=$(sudo cat "$DIR/hostfile" | wc -l)
           echo "Generating rank bindings for $num_hosts hosts..."
 
-          # Generate rank_bindings.yaml
-          sudo tee ${{ inputs.directory }}/rank_bindings.yaml > /dev/null <<EOF
+          sudo tee "$DIR/rank_bindings.yaml" > /dev/null <<EOF
         rank_bindings:
         EOF
 
-          # Add rank binding entries (0-based indexing)
           for i in $(seq 0 $((num_hosts - 1))); do
-            sudo tee -a ${{ inputs.directory }}/rank_bindings.yaml > /dev/null <<EOF
+            sudo tee -a "$DIR/rank_bindings.yaml" > /dev/null <<EOF
           - rank: $i
             mesh_id: 0
 
         EOF
           done
 
-          # Add mesh graph description path
-          sudo tee -a ${{ inputs.directory }}/rank_bindings.yaml > /dev/null <<EOF
+          sudo tee -a "$DIR/rank_bindings.yaml" > /dev/null <<EOF
         mesh_graph_desc_path: "${{ steps.mgd.outputs.mesh_graph_desc_path }}"
         EOF
-
-          echo "Rank bindings file created:"
-          sudo cat ${{ inputs.directory }}/rank_bindings.yaml
         else
           echo "No hostfile found, skipping rank bindings generation"
+        fi
+
+        if [ -f "$DIR/rank_bindings.yaml" ]; then
+          echo "Rank bindings file:"
+          sudo cat "$DIR/rank_bindings.yaml"
         fi
 
     - name: Print generated files
