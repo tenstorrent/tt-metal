@@ -142,9 +142,17 @@ def create_program_descriptor(
 
     stream_pages = 2 * Wg
 
+    # Scaler precision follows the stat format. For non-tile-aligned shapes the
+    # group element count is not a power of two, so a bf16 scaler quantizes
+    # 1/sqrt(N) at 2^-9 relative — the squared scaler shifts the mean by ~0.4%,
+    # which the fp32 stat path can't absorb (fp32 + bf8b-gamma golden cells sit
+    # at rms 0.0104 vs target 0.01). bf16 stats keep the bf16 scaler unchanged.
+    scaler_dtype = stat_dtype
+    scaler_page = ttnn.tile_size(scaler_dtype)
+
     cbs = [
         cb(CB_INPUT_TILES, stream_pages, in_page, in_dtype),
-        cb(CB_SCALER, 1, bf16_page, ttnn.bfloat16),
+        cb(CB_SCALER, 1, scaler_page, scaler_dtype),
         cb(CB_OUTPUT_TILES, stream_pages, out_page, in_dtype),
         cb(CB_MEAN, 1, stat_page, stat_dtype),
         cb(CB_VAR, 1, stat_page, stat_dtype),
@@ -230,7 +238,13 @@ def create_program_descriptor(
     )
 
     # --- Compute ---
-    compute_ct_args = [Ht, Wt, Wg, G, int(has_gamma), int(has_beta), eps_bits, hw_tail, c_tail]
+    # mask_output: pass-3 zeroing of output padding. Only worth doing for bf8b
+    # outputs (tail tiles share block exponents between valid and padded
+    # positions). For fp32/bf16 the padding is unread garbage, and the mask mul
+    # costs an extra dest rounding of every valid value — measured to push the
+    # fp32 + bf8b-gamma golden cells from rms 0.0075 over the 0.01 target.
+    mask_output = int(output_tensor.dtype == ttnn.bfloat8_b)
+    compute_ct_args = [Ht, Wt, Wg, G, int(has_gamma), int(has_beta), eps_bits, hw_tail, c_tail, mask_output]
     compute_config = ttnn.ComputeConfigDescriptor(
         math_fidelity=math_fidelity,
         fp32_dest_acc_en=fp32_dest_acc_en,

@@ -41,3 +41,12 @@
 {"source":"run_safe_pytest","pid":1802958,"started_at_ms":1781103530289,"wait_ms":1,"run_ms":36575,"test_path":"tests/ttnn/unit_tests/operations/groupnorm_sc_N_1_HW_C/test_groupnorm_sc_N_1_HW_C_refinement2.py","exit_code":0}
 {"source":"run_safe_pytest","pid":1805444,"started_at_ms":1781103578063,"wait_ms":2,"run_ms":32651,"test_path":"tests/ttnn/unit_tests/operations/groupnorm_sc_N_1_HW_C/test_groupnorm_sc_N_1_HW_C_refinement2.py","exit_code":0}
 {"source":"run_safe_pytest","pid":1808014,"started_at_ms":1781103675027,"wait_ms":2,"run_ms":7203,"test_path":"tests/ttnn/unit_tests/operations/groupnorm_sc_N_1_HW_C/test_groupnorm_sc_N_1_HW_C_refinement2_debug.py","exit_code":0}
+{"source":"run_safe_pytest","pid":1809352,"started_at_ms":1781103731411,"wait_ms":1,"run_ms":325558,"test_path":"tests/ttnn/unit_tests/operations/groupnorm_sc_N_1_HW_C/","exit_code":0}
+{"source":"run_safe_pytest","pid":1827455,"started_at_ms":1781104071289,"wait_ms":1,"run_ms":599964,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/","exit_code":143}
+{"source":"run_safe_pytest","pid":1866033,"started_at_ms":1781104738374,"wait_ms":2,"run_ms":266106,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":1883961,"started_at_ms":1781105029961,"wait_ms":1,"run_ms":79730,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":1886953,"started_at_ms":1781105203694,"wait_ms":2,"run_ms":28305,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":1888360,"started_at_ms":1781105248845,"wait_ms":1,"run_ms":11172,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":1889102,"started_at_ms":1781105360153,"wait_ms":1,"run_ms":19986,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":1890294,"started_at_ms":1781105389754,"wait_ms":2,"run_ms":11229,"test_path":"eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py","exit_code":1}
+{"source":"tt-probe","pid":1890829,"started_at_ms":1781105439222,"wait_ms":203,"run_ms":16155,"test_path":"groupnorm_sc_N_1_HW_C","exit_code":0}

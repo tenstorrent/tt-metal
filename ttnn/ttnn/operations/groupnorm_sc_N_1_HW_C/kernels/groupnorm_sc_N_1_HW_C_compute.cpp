@@ -83,6 +83,7 @@ void kernel_main() {
     constexpr uint32_t EPS_BITS = get_compile_time_arg_val(6);
     constexpr uint32_t HW_TAIL = get_compile_time_arg_val(7);  // HW % 32 (0 = aligned)
     constexpr uint32_t C_TAIL = get_compile_time_arg_val(8);   // C % 32 (0 = aligned; > 0 implies G == 1)
+    constexpr bool MASK_OUTPUT = get_compile_time_arg_val(9) != 0;  // pass-3 padding zeroing (bf8b out only)
 
     const uint32_t start_group = get_arg_val<uint32_t>(0);
     const uint32_t num_groups_here = get_arg_val<uint32_t>(1);
@@ -136,10 +137,12 @@ void kernel_main() {
             });
 
             // ---- Pass 3: normalize + optional affine, per tile row ----
-            // Tail handling: masking the centered values keeps the output padding
-            // zero (not test-required, but bf8b tail tiles share block exponents
-            // between valid and padded positions — garbage padding would degrade
-            // the valid mantissas).
+            // Tail handling: only for bf8b outputs (MASK_OUTPUT) — their tail
+            // tiles share block exponents between valid and padded positions, so
+            // garbage padding would degrade the valid mantissas. For fp32/bf16
+            // outputs the padding is unread garbage and the mask mul would cost
+            // an extra dest rounding of every valid value (measured to push the
+            // fp32 + bf8b-gamma golden cells over the rms target).
             for (uint32_t b = 0; b < Ht; ++b) {
                 ckl::sub<
                     cb_input_tiles,
@@ -148,10 +151,12 @@ void kernel_main() {
                     ckl::BroadcastDim::Scalar,
                     ckl::InputLifecycle::Streaming,
                     ckl::InputLifecycle::HeldBulk>(row_shape);
-                if (HW_TAIL > 0 && b + 1 == Ht) {
-                    mask_centered_row<cb_centered, cb_mask_tail>(row_shape);
-                } else if constexpr (C_TAIL > 0) {
-                    mask_centered_row<cb_centered, cb_mask_interior>(row_shape);
+                if constexpr (MASK_OUTPUT) {
+                    if (HW_TAIL > 0 && b + 1 == Ht) {
+                        mask_centered_row<cb_centered, cb_mask_tail>(row_shape);
+                    } else if constexpr (C_TAIL > 0) {
+                        mask_centered_row<cb_centered, cb_mask_interior>(row_shape);
+                    }
                 }
                 ckl::mul<
                     cb_centered,
