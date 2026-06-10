@@ -5,6 +5,7 @@
 import json
 import time
 from collections import defaultdict
+from pathlib import Path
 
 import pandas as pd
 from loguru import logger
@@ -68,6 +69,15 @@ def run_device_perf(
         f"\nPerformance statistics over {num_iterations} iterations"
         f"\n{json.dumps(post_processed_results, indent=4)}"
     )
+    if subdir:
+        try:
+            ops_csv = Path(get_latest_ops_log_filename(subdir)).resolve()
+            logger.info(f"Tracy ops CSV: {ops_csv}")
+            logger.info(
+                "tt-perf-report example: " f"tt-perf-report --start-signpost start --end-signpost stop {ops_csv}"
+            )
+        except (FileNotFoundError, IndexError, OSError) as exc:
+            logger.warning(f"Could not locate Tracy ops CSV under subdir={subdir!r}: {exc}")
     return post_processed_results
 
 
@@ -317,6 +327,8 @@ def prep_device_perf_report(
         csvfile.write(columns)
         csvfile.write("\n")
         csvfile.write(values)
+
+    logger.info(f"Device perf summary CSV: {Path(csv_file).resolve()}")
 
     # Dummy profiler to satisfy BenchmarkData's requirements
     profiler = BenchmarkProfiler()
