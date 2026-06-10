@@ -78,18 +78,22 @@ void kernel_main() {
     }
 
     // Group loop: 3 streaming passes over the Ht x Wg slab per group.
+    // Batched per row chunk (Wg tiles, one barrier) — cb_input_tiles is sized
+    // 2*Wg pages so chunk batching preserves the double-buffered overlap.
     for (uint32_t n = 0; n < N; ++n) {
         for (uint32_t g = 0; g < G; ++g) {
             const uint32_t group_base = n * Ht * Wt + g * Wg;
             for (uint32_t pass = 0; pass < 3; ++pass) {
                 for (uint32_t r = 0; r < Ht; ++r) {
+                    const uint32_t row_base = group_base + r * Wt;
+                    cb_reserve_back(cb_input_tiles, Wg);
+                    uint32_t l1_addr = get_write_ptr(cb_input_tiles);
                     for (uint32_t c = 0; c < Wg; ++c) {
-                        const uint32_t tile_id = group_base + r * Wt + c;
-                        cb_reserve_back(cb_input_tiles, 1);
-                        noc_async_read_tile(tile_id, input, get_write_ptr(cb_input_tiles));
-                        noc_async_read_barrier();
-                        cb_push_back(cb_input_tiles, 1);
+                        noc_async_read_tile(row_base + c, input, l1_addr);
+                        l1_addr += tile_bytes;
                     }
+                    noc_async_read_barrier();
+                    cb_push_back(cb_input_tiles, Wg);
                 }
             }
         }

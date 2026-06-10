@@ -66,7 +66,9 @@ SUPPORTED = {
     "groups_alignment": ["aligned"],
     "affine": ["gamma_beta", "gamma_only", "no_affine"],
     "affine_dtype": [ttnn.bfloat16],
-    "affine_layout": [ttnn.ROW_MAJOR_LAYOUT],
+    # TILE-given gamma/beta flow through the same host-side to_layout path
+    # as ROW_MAJOR (kernel always sees TILE) — both layouts supported.
+    "affine_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
 }
 
 

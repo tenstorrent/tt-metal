@@ -24,17 +24,21 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_output_tiles);
     const auto output = TensorAccessor(output_args, output_addr, tile_bytes);
 
+    // Batched per row chunk (Wg tiles, one barrier) — cb_output_tiles is sized
+    // 2*Wg pages so chunk batching preserves the double-buffered overlap.
     for (uint32_t n = 0; n < N; ++n) {
         for (uint32_t g = 0; g < G; ++g) {
             const uint32_t group_base = n * Ht * Wt + g * Wg;
             for (uint32_t r = 0; r < Ht; ++r) {
+                const uint32_t row_base = group_base + r * Wt;
+                cb_wait_front(cb_output_tiles, Wg);
+                uint32_t l1_addr = get_read_ptr(cb_output_tiles);
                 for (uint32_t c = 0; c < Wg; ++c) {
-                    const uint32_t tile_id = group_base + r * Wt + c;
-                    cb_wait_front(cb_output_tiles, 1);
-                    noc_async_write_tile(tile_id, output, get_read_ptr(cb_output_tiles));
-                    noc_async_write_barrier();
-                    cb_pop_front(cb_output_tiles, 1);
+                    noc_async_write_tile(row_base + c, output, l1_addr);
+                    l1_addr += tile_bytes;
                 }
+                noc_async_write_barrier();
+                cb_pop_front(cb_output_tiles, Wg);
             }
         }
     }
