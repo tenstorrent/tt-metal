@@ -198,6 +198,12 @@ def scaled_dot_product_attention(
             "Wormhole B0 (issue #38306) — use HiFi2/HiFi3, or float32 inputs"
         )
 
+    # fp32 / bf8b inputs through a 16-bit DEST corrupt values (probe_008: fp32
+    # pcc 0.008, bf8b NaN — the unpack/pack format pairing is structurally
+    # unsupported). bfloat16 inputs work fine without fp32 DEST.
+    if not compute_kernel_config.fp32_dest_acc_en and query.dtype != ttnn.bfloat16:
+        raise NotImplementedError(f"sdpa: fp32_dest_acc_en=False requires bfloat16 inputs (got {query.dtype})")
+
     if scale is None:
         scale = 1.0 / math.sqrt(query.shape[-1])
 
