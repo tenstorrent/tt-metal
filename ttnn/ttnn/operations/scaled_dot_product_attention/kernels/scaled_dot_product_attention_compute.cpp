@@ -173,17 +173,21 @@ void kernel_main() {
                 Nkv);
 
             // ---- Phase 5: alpha = exp(m_prev - m); m stays fronted ----
+            // Both operands are CBs, so use BinaryFpu (A - B = m_prev - m) instead of
+            // dest-reuse: DEST_TO_SRCA Sub zeroed rows > 0 (probe_004 DPRINT), and
+            // DEST_TO_SRCB computes m - m_prev (probe_002).
             ckl::eltwise_chain(
                 cur_cq,
-                ckl::CopyTile<cb_prev_max, Dst::D0, InputLifecycle::Streaming>{},
-                ckl::DestReuseBinary<
+                ckl::BinaryFpu<
+                    cb_prev_max,
                     cb_running_max,
                     BinaryFpuOp::Sub,
-                    ckl::DestReuseType::DEST_TO_SRCB,
+                    BroadcastDim::None,
+                    InputLifecycle::Streaming,
                     InputLifecycle::HeldBulk,
-                    ckl::DestReuseReconfig::Input,
+                    ckl::BinaryDataFormatReconfig::Input,
                     Dst::D0,
-                    Dst::D0,
+                    OperandKind::Scalar,
                     OperandKind::Block>{},
                 ckl::Exp<>{},
                 ckl::PackTile<cb_alpha>{});

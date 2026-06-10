@@ -1,3 +1,11 @@
 {"event":"tool_use","tool":"Agent","subagent":"Explore","description":"Find helper usage examples","ts":"2026-06-10T06:53:01+00:00"}
 {"event":"test_run","note":"first run, 1tile case","cmd":"run_safe_pytest --dev -k 1tile-none","ts":"2026-06-10T07:01:59+00:00"}
 {"event":"test_run","status":"collect_error","note":"wrong test id ordering, no tests ran; retry with [1tile-none]","ts":"2026-06-10T07:02:17+00:00"}
+{"event":"test_run","status":"collect_error","note":"param id guess wrong; switch to -k","ts":"2026-06-10T07:03:03+00:00"}
+{"event":"test_run","status":"pass","test":"test_sdpa_self_attention[mask_mode=none-1tile]","ts":"2026-06-10T07:03:23+00:00"}
+{"event":"test_run","status":"fail","summary":"13/18 pass; 5 numerical fails PCC 0.90-0.99, all Nkv>1 cases","hypothesis":"online recurrence bug across blocks","ts":"2026-06-10T07:04:36+00:00"}
+{"event":"dprint_observation","probe":"probe_001 uniform softmax 2 blocks","result":"1.2656 vs 1.275 expected (bf16 rounding) — alpha=1 path correct","ts":"2026-06-10T07:06:24+00:00"}
+{"event":"hypothesis","probe":"probe_002 expected 0.731 got 0.2695=1/(1+e)","diagnosis":"alpha=exp(m_new-m_prev): DEST_TO_SRCB Sub computes CB-DEST","fix":"phase5 ReuseType -> DEST_TO_SRCA","ts":"2026-06-10T07:07:24+00:00"}
+{"event":"test_run","status":"fail","summary":"flip improved probe but worsened suite 12/18; suspect second bug masked by alpha","next":"DPRINT trace m, alpha, l per block","ts":"2026-06-10T07:08:32+00:00"}
+{"event":"dprint_observation","probe":"probe_004","observed":"m and m_prev correct all rows; alpha correct only row0 (0.369), rows>0 = 1.0","diagnosis":"DEST_TO_SRCA Sub zeroes rows>0","fix":"phase5 -> BinaryFpu(prev_max, running_max, Sub)","ts":"2026-06-10T07:11:44+00:00"}
+{"event":"test_run","status":"pass","summary":"18/18 acceptance tests pass after alpha fix (BinaryFpu prev_max - running_max)","ts":"2026-06-10T07:13:29+00:00"}
