@@ -593,8 +593,10 @@ class VoxtralTTAcousticModel:
         masked_logits = self.semantic_logits_tt(llm_sem)
         if llm_sem is not llm_tile and llm_sem.is_allocated():
             ttnn.deallocate(llm_sem)
-        sem_idx = ttnn.argmax(masked_logits, dim=-1)
+        masked_logits_rm = ttnn.to_layout(masked_logits, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(masked_logits)
+        sem_idx = ttnn.argmax(masked_logits_rm, dim=-1, use_multicore=True)
+        ttnn.deallocate(masked_logits_rm)
         semantic_code_tt = ttnn.reshape(sem_idx, (bsz, 1, 1))
         ttnn.deallocate(sem_idx)
         semantic_code_tt = ttnn.typecast(semantic_code_tt, ttnn.uint32)
