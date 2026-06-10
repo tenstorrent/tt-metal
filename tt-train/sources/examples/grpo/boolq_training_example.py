@@ -110,7 +110,7 @@ if __name__ == "__main__":
             "answer": "yes" if example["answer"] else "no",
         }
 
-    dataset = load_dataset("google/boolq", split="train").shuffle(seed=42).map(format_boolq)
+    dataset = load_dataset("google/boolq", split="train").shuffle(seed=args.seed).map(format_boolq)
 
     tt_metal_root = get_tt_metal_runtime_root()
     config_path = args.config if os.path.isabs(args.config) else os.path.join(tt_metal_root, args.config)
