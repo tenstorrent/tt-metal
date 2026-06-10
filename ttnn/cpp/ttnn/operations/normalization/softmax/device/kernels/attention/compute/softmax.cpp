@@ -145,24 +145,24 @@ void kernel_main() {
         // cb_x per-tile reserve+push -> Streaming. reconfig_data_format + add init ->
         // BinaryDataFormatReconfig::Input; plain pack_tile (cb_x/cb_scale_mask share format) ->
         // PackTileReconfig::None. Exp dropped when NUMERIC_STABLE (done later in calc_numeric_stable).
+        // Select broadcast dim and manage wait/pop based on CAUSAL_MASK
 #ifdef CAUSAL_MASK
+        constexpr auto fused_broadcast = compute_kernel_lib::BroadcastDim::None;
         cb_fused_attn_obj.wait_front(Wt);
 #else
+        constexpr auto fused_broadcast = compute_kernel_lib::BroadcastDim::Row;
         if (wait_mask) {
             cb_fused_attn_obj.wait_front(Wt);
         }
 #endif
+
         compute_kernel_lib::eltwise_chain(
             compute_kernel_lib::EltwiseShape::tiles(Wt),
             compute_kernel_lib::BinaryFpu<
                 cb_scale_mask,
                 cb_fused_attn,
                 compute_kernel_lib::BinaryFpuOp::Add,
-#ifdef CAUSAL_MASK
-                compute_kernel_lib::BroadcastDim::None,
-#else
-                compute_kernel_lib::BroadcastDim::Row,
-#endif
+                fused_broadcast,
                 compute_kernel_lib::InputLifecycle::Streaming,
                 compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
@@ -180,12 +180,11 @@ void kernel_main() {
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::None>{});
 
-// add numeric_stable
-// fuse exp with sub tiles
 #ifdef NUMERIC_STABLE
         calc_numeric_stable<cb_x, cb_max_scaler, cb_max, cb_exps>(Wt);
 #endif
 
+        // Manage cb_fused_attn pop based on CAUSAL_MASK
 #ifdef CAUSAL_MASK
         cb_fused_attn_obj.pop_front(Wt);
 #else
@@ -198,7 +197,7 @@ void kernel_main() {
             ht = 0;
             wait_mask = true;
         }
-#endif  // CAUSAL_MASK
+#endif
 
         reconfig_data_format(cb_exps, cb_sum_scaler);
 #else
