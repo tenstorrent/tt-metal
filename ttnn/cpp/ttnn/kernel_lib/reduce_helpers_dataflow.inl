@@ -218,8 +218,12 @@ FORCE_INLINE void fill_tile_col0_partial(
 // Prepare CB tile for reduce using a caller-provided float scaler
 // =============================================================================
 
+namespace detail {
+
+// Fills one scaler tile with the first `valid_reduce_dim_elements_in_tile` reduce-axis
+// positions set (rest zeroed) and pushes it. Use the public prepare_reduce_scaler instead.
 template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim, bool compute_uses_reduce_tile>
-FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_dim_elements_in_tile) {
+FORCE_INLINE void prepare_reduce_scaler_tile(float scaler_f, uint32_t valid_reduce_dim_elements_in_tile) {
     constexpr DataFormat data_format = get_dataformat(dfb_id);
     constexpr uint32_t tile_r_dim = get_tile_r_dim<dfb_id>();
     constexpr uint32_t tile_c_dim = get_tile_c_dim<dfb_id>();
@@ -237,14 +241,14 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_di
         data_format == DataFormat::Float16_b || data_format == DataFormat::Float32,
         "prepare_reduce_scaler only supports Float16_b (bfloat16) and Float32 formats");
 
-    ASSERT(valid_reduce_dim_elements_in_tile > 0);
-
     // Matmul-based reduce uses col-0 fill; reduce LLK uses row-0 fill
     constexpr bool use_matmul = !compute_uses_reduce_tile && reduce_uses_matmul<pool_type, reduce_dim>();
 
     // Full element count along the reduce axis: cols for REDUCE_ROW, rows for REDUCE_COL.
     // Unused for REDUCE_SCALAR (which always fills the full tile).
     constexpr uint32_t full_dim = (reduce_dim == ReduceDim::REDUCE_COL) ? tile_r_dim : tile_c_dim;
+
+    ASSERT(valid_reduce_dim_elements_in_tile > 0 && valid_reduce_dim_elements_in_tile <= full_dim);
 
     DataflowBuffer dfb(dfb_id);
 
@@ -296,11 +300,41 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_di
     // On non-Quasar (or non-DM) builds this is a no-op.
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
     {
-        constexpr uint32_t tile_size_bytes = get_tile_size(cb_id);
+        constexpr uint32_t tile_size_bytes = get_tile_size(dfb_id);
         flush_l2_cache_range(write_addr, tile_size_bytes);
     }
 #endif
     dfb.push_back(1);
+}
+
+}  // namespace detail
+
+template <
+    uint32_t dfb_id,
+    PoolType pool_type,
+    ReduceDim reduce_dim,
+    bool compute_uses_reduce_tile,
+    typename PartialScalerT>
+FORCE_INLINE void prepare_reduce_scaler(float scaler_f, PartialScalerT partial_scaler) {
+    static_assert(
+        is_partial_scaler_v<PartialScalerT>, "PartialScalerT must be NoPartial, PartialOnlyTile or PartialLastTile.");
+    static_assert(
+        !(reduce_dim == ReduceDim::REDUCE_SCALAR && !std::is_same_v<PartialScalerT, NoPartial>),
+        "Partial scaler is not supported for REDUCE_SCALAR (it applies the scaler twice, row then "
+        "col, which a partial tile cannot encode). Use NoPartial.");
+
+    // Full element count along the reduce axis: cols for REDUCE_ROW, rows for REDUCE_COL.
+    constexpr uint32_t full_dim =
+        (reduce_dim == ReduceDim::REDUCE_COL) ? get_tile_r_dim<dfb_id>() : get_tile_c_dim<dfb_id>();
+
+    if constexpr (!std::is_same_v<PartialScalerT, PartialOnlyTile>) {
+        detail::prepare_reduce_scaler_tile<dfb_id, pool_type, reduce_dim, compute_uses_reduce_tile>(
+            scaler_f, full_dim);
+    }
+    if constexpr (!std::is_same_v<PartialScalerT, NoPartial>) {
+        detail::prepare_reduce_scaler_tile<dfb_id, pool_type, reduce_dim, compute_uses_reduce_tile>(
+            scaler_f, partial_scaler.valid_reduce_dim_elements);
+    }
 }
 
 // =============================================================================
@@ -312,8 +346,9 @@ template <
     PoolType pool_type,
     ReduceDim reduce_dim,
     uint32_t reduce_factor,
-    bool compute_uses_reduce_tile>
-FORCE_INLINE void calculate_and_prepare_reduce_scaler(uint32_t valid_reduce_dim_elements_in_tile) {
+    bool compute_uses_reduce_tile,
+    typename PartialScalerT>
+FORCE_INLINE void calculate_and_prepare_reduce_scaler(PartialScalerT partial_scaler) {
     // -------------------------------------------------------------------------
     // 1. Compute scaler value
     //
@@ -337,9 +372,11 @@ FORCE_INLINE void calculate_and_prepare_reduce_scaler(uint32_t valid_reduce_dim_
     }
 
     // -------------------------------------------------------------------------
-    // 2. Fill the DFB with the computed scaler
+    // 2. Fill the DFB with the computed scaler. The partial-scaler descriptor
+    //    selects how many tiles are emitted and which of them is partial
+    //    (NoPartial / PartialOnlyTile / PartialLastTile).
     // -------------------------------------------------------------------------
-    prepare_reduce_scaler<dfb_id, pool_type, reduce_dim, compute_uses_reduce_tile>(scaler_f, valid_reduce_dim_elements_in_tile);
+    prepare_reduce_scaler<dfb_id, pool_type, reduce_dim, compute_uses_reduce_tile>(scaler_f, partial_scaler);
 }
 
 }  // namespace dataflow_kernel_lib

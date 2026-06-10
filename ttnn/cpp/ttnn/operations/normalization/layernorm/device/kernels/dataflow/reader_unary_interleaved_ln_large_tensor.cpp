@@ -121,21 +121,19 @@ void kernel_main() {
         constexpr uint32_t cb_in_2 = get_named_compile_time_arg_val("cb_scaler");
         constexpr uint32_t partial_last_tile_cols = W_logical % tt::constants::TILE_WIDTH;
 
+        constexpr auto partial_scaler = []() {
+            if constexpr (partial_last_tile_cols > 0) {
+                return dataflow_kernel_lib::PartialLastTile::with_valid_reduce_dim_elements(partial_last_tile_cols);
+            } else {
+                return dataflow_kernel_lib::NoPartial{};
+            }
+        }();
         dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
             cb_in_2,
             ckernel::PoolType::SUM,
             ckernel::ReduceDim::REDUCE_ROW,
             dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
-            /*compute_uses_reduce_tile=*/true>();
-
-        if constexpr (partial_last_tile_cols > 0) {
-            dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-                cb_in_2,
-                ckernel::PoolType::SUM,
-                ckernel::ReduceDim::REDUCE_ROW,
-                dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
-                /*compute_uses_reduce_tile=*/true>(partial_last_tile_cols);
-        }
+            /*compute_uses_reduce_tile=*/true>(partial_scaler);
     }
     constexpr uint32_t eps_cb_id = get_named_compile_time_arg_val("cb_eps");
     const uint32_t eps = get_arg_val<uint32_t>(5);

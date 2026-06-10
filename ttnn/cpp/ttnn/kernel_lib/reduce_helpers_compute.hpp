@@ -258,6 +258,39 @@ struct NoOp {
     ALWI void operator()(uint32_t = 0) const {}
 };
 
+/**
+ * @brief Partial-scaler selector for non-tile-aligned reduce dimensions
+ *
+ * When the reduce dimension is not a multiple of TILE_DIM, the reader emits
+ * TWO scaler tiles into scaler_cb: tile 0 has the full scaler (all positions
+ * filled), and tile 1 has the partial scaler (only the valid positions filled,
+ * the rest zeroed). The compute kernel uses tile 1 for the *last* tile along
+ * the reduce dimension and tile 0 for every other tile.
+ *
+ * Passed as a template arg to reduce<>:
+ *   - None     : one scaler tile, used for every reduce-dim tile (legacy).
+ *   - LastTile : two scaler tiles; the partial tile (index 1) is used for the
+ *                last reduce-dim tile, tile 0 for all others. reduce<> waits for
+ *                2 scaler tiles instead of 1.
+ *
+ * Pair with dataflow_kernel_lib::prepare_reduce_scaler /
+ * calculate_and_prepare_reduce_scaler called with PartialLastTile::with_valid_reduce_dim_elements(n)
+ * on the reader side, which emits the full + partial tile pair in one call.
+ *
+ * REDUCE_SCALAR does not support partial scalers — it applies the scaler twice
+ * (row then col), which a single partial tile cannot encode. reduce<>
+ * static_asserts that REDUCE_SCALAR uses None.
+ *
+ * Usage:
+ *   reduce<SUM, REDUCE_ROW, policy, mode,
+ *          has_partial ? ReducePartialScaler::LastTile : ReducePartialScaler::None>(
+ *       cb_in, cb_scaler, cb_out, shape, ...);
+ */
+enum class ReducePartialScaler : uint8_t {
+    None,      // one scaler tile, used for every reduce-dim tile
+    LastTile,  // two scaler tiles; partial tile (index 1) used for the last reduce-dim tile
+};
+
 // =============================================================================
 // Main Reduce Function
 // =============================================================================
@@ -302,6 +335,12 @@ struct NoOp {
  * @param input_memory_layout Tile memory layout specification for NoWaitNoPop/WaitUpfrontNoPop policies (default:
  * contiguous) Use ReduceInputMemoryLayout::with_row_stride(stride) for custom row spacing. Only used when input_policy
  * is NoWaitNoPop or WaitUpfrontNoPop.
+ * @tparam partial_scaler Partial-scaler selector for non-tile-aligned reduce dimensions
+ *         (default: ReducePartialScaler::None). When set to LastTile, reduce<> waits for 2
+ *         scaler tiles and uses scaler tile 1 (the partial tile) for the last reduce-dim
+ *         iteration, tile 0 for all others. Pair with prepare_reduce_scaler /
+ *         calculate_and_prepare_reduce_scaler using PartialLastTile::with_valid_reduce_dim_elements(n)
+ *         on the reader. REDUCE_SCALAR must use None.
  * @param accumulate Accumulation configuration (default: NoAccumulation)
  * @param post_reduce_op Callback after each reduction (default: NoOp)
  *
@@ -374,6 +413,7 @@ template <
     ReduceDim reduce_dim,
     ReduceInputPolicy input_policy = ReduceInputPolicy::WaitAndPopPerTile,
     ReduceDataFormatReconfigMode reconfig_mode = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+    ReducePartialScaler partial_scaler = ReducePartialScaler::None,
     typename AccumulateT = NoAccumulation,
     typename PostReduceOp = NoOp>
 ALWI void reduce(
