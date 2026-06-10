@@ -47,6 +47,12 @@ WEIGHT_NAME_MAP = {
     "kv_norm.weight": "kv_a_layernorm.weight",
     "wkv_b.weight": "kv_b_proj.weight",
     "wo.weight": "o_proj.weight",
+    # v32-only: indexer weights, consumed by the v32 ttMLA (popped before v3 sees them)
+    "indexer.wq_b.weight": "indexer.wq_b.weight",
+    "indexer.wk.weight": "indexer.wk.weight",
+    "indexer.k_norm.weight": "indexer.k_norm.weight",
+    "indexer.k_norm.bias": "indexer.k_norm_bias.weight",
+    "indexer.weights_proj.weight": "indexer.weights_proj.weight",
 }
 
 
@@ -123,9 +129,9 @@ def assert_config_matches(config, args):
     ids=["line"],
     indirect=True,
 )
-# seq <= index_topk keeps the CPU reference dense-equivalent (see module docstring).
-# seq256: smoke run (cheap CPU ref, fast iteration); seq2k: largest dense-equivalent.
-@pytest.mark.parametrize("seq_len", [256, 2048], ids=["seq256", "seq2k"])
+# seq256/seq2k: dense-equivalent (seq <= index_topk, DSA inactive, v32 passthrough).
+# seq4k: sparse path active on both sides (device indexer+sparse_mla vs CPU index mask).
+@pytest.mark.parametrize("seq_len", [256, 2048, 4096], ids=["seq256", "seq2k", "seq4k"])
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
 @pytest.mark.timeout(0)
 def test_v32_mla_vs_cpu_reference(mesh_device, seq_len, device_params, variant, config_only):
