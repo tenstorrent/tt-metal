@@ -25,7 +25,7 @@ You will receive one of:
 - **Generation**: `KERNEL_NAME`, `KERNEL_TYPE` (sfpu/math/pack/unpack), `REFERENCE_ARCH`, `TARGET_ARCH`, `REFERENCE_PATH`.
 - **Issue fix**: `ISSUE_TITLE`, `ISSUE_BODY`, `ISSUE_COMMENTS` (verbatim), `TARGET_ARCH`, suspect file paths.
 
-Plus `WORKTREE_DIR` (`cd` here before any I/O) and `LOG_DIR`.
+Plus `WORKTREE_DIR` (`cd "$WORKTREE_DIR/tt_metal/tt-llk"` before any I/O) and `LOG_DIR`.
 
 If `REFERENCE_PATH` was not passed, fall back to Glob:
 ```
