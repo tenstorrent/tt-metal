@@ -15,6 +15,16 @@ COMPUTE_KERNEL_CONFIG_VOXTRAL_ACOUSTIC = ttnn.WormholeComputeKernelConfig(
     packer_l1_acc=True,
 )
 
+# BFP8_B transformer matmuls (wqkv, wo, ff1/ff2/ff3): HiFi2 is sufficient because
+# BFP8_B weights have 7-bit mantissa (same as BF16); HiFi4's extra mantissa bits are
+# wasted on 8-bit data and cost ~2x compute time for no accuracy benefit.
+COMPUTE_KERNEL_CONFIG_VOXTRAL_ACOUSTIC_BFP8 = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_approx_mode=False,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=True,
+)
+
 # Semantic head only: HiFi4_FP32 (dst_full_sync_en=False) for near-tie argmax logits.
 COMPUTE_KERNEL_CONFIG_VOXTRAL_SEMANTIC = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4,

@@ -115,8 +115,10 @@ class VoxtralTTSemanticCodebookQuantizer:
 
         neg_dist = ttnn.multiply(dist, -1.0)
         ttnn.deallocate(dist)
-        idx_flat = ttnn.argmax(neg_dist, dim=-1)
+        neg_dist_rm = ttnn.to_layout(neg_dist, ttnn.ROW_MAJOR_LAYOUT, memory_config=mem)
         ttnn.deallocate(neg_dist)
+        idx_flat = ttnn.argmax(neg_dist_rm, dim=-1, use_multicore=True)
+        ttnn.deallocate(neg_dist_rm)
         idx_bt = ttnn.reshape(idx_flat, (b, t))
         idx_tile = ttnn.to_layout(idx_bt, ttnn.TILE_LAYOUT, memory_config=mem)
         return ttnn.typecast(idx_tile, ttnn.uint32)
