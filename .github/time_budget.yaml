@@ -209,7 +209,7 @@ models:
     bh_quietbox_2: 251
     bh_galaxy: 78
   unit:
-    wh_llmbox: 175
+    wh_llmbox: 295
     wh_llmbox_perf: 230
     wh_n150: 195
     wh_n300: 125
