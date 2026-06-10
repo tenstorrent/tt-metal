@@ -29,7 +29,7 @@
 - **Golden baseline**: 300 / 7236 cells passing, 3385 xfail_expected, 3551 invalid_skipped,
   0 supported_fail / 0 xpass_drift / 0 xfail_wrong_mode (per `verifier_report.json`)
 
-### [ ] Refinement 1 — Numerical configurability + multi-core distribution
+### [x] Refinement 1 — Numerical configurability + multi-core distribution
 
 **Goal**: add `ttnn.float32`, `ttnn.bfloat8_b` to `SUPPORTED["dtype"]` AND to
 `SUPPORTED["affine_dtype"]` (covers mixed-precision: bf16 activations + f32/bf8b gamma/beta),
