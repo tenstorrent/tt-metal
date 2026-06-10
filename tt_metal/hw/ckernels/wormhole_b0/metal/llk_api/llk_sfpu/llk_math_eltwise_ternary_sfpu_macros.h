@@ -72,7 +72,7 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_and_call_(
 #define _SFPU_TERN_EXPAND(...) __VA_ARGS__
 
 /*
- * Ternary SFPU invocation macros (4 total)
+ * Ternary SFPU invocation macros (3 total)
  *
  * All paths funnel through ckernel::_sfpu_ternary_check_and_call_<DST_SYNC,
  * DST_ACCUM>(...), which performs the dst-bound LLK_ASSERTs and then
@@ -101,23 +101,6 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_and_call_(
         DST_IN2,                                                                                                    \
         DST_OUT,                                                                                                    \
         VECTOR_MODE,                                                                                                \
-        ##__VA_ARGS__)
-
-/*
- * Same as SFPU_TERNARY_CALL but vector_mode is given as a `VectorMode`
- * enumerator token (e.g. RC, C, R).
- *   SFPU_TERNARY_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE,
- *                          _calculate_where_, (APPROXIMATE, df, 8),
- *                          RC, in0, in1, in2, out);
- */
-#define SFPU_TERNARY_CALL_MODE(DST_SYNC, DST_ACCUM, FN, TEMPLATES, MODE, DST_IN0, DST_IN1, DST_IN2, DST_OUT, ...) \
-    ::ckernel::_sfpu_ternary_check_and_call_<DST_SYNC, DST_ACCUM>(                                                \
-        ::ckernel::sfpu::FN<_SFPU_TERN_EXPAND TEMPLATES>,                                                         \
-        DST_IN0,                                                                                                  \
-        DST_IN1,                                                                                                  \
-        DST_IN2,                                                                                                  \
-        DST_OUT,                                                                                                  \
-        ::ckernel::VectorMode::MODE,                                                                              \
         ##__VA_ARGS__)
 
 /*

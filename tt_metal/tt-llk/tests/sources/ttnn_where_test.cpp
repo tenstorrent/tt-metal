@@ -113,16 +113,16 @@ void run_kernel(RUNTIME_PARAMETERS)
 
     // One SFPU replay advances one row of 32 lanes; 8 rows per face (matches llk_math_eltwise_ternary_sfpu_where).
     constexpr int k_where_iterations = 8;
-    SFPU_TERNARY_CALL_MODE(
+    SFPU_TERNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_where_,
         (false /*APPROXIMATE*/, static_cast<DataFormat>(UNPACK_A_IN), k_where_iterations),
-        RC,
         0 /*DST_IN0*/,
         1 /*DST_IN1*/,
         2 /*DST_IN2*/,
-        0 /*DST_OUT*/);
+        0 /*DST_OUT*/,
+        VectorMode::RC);
 
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }

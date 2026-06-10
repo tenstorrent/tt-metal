@@ -26,16 +26,16 @@ namespace ckernel {
 // clang-format on
 template <DataFormat data_format>
 ALWI void snake_beta_tile(uint32_t idst_x, uint32_t idst_alpha, uint32_t idst_beta, uint32_t idst_out) {
-    MATH((SFPU_TERNARY_CALL_MODE(
+    MATH((SFPU_TERNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_snake_beta,
         (APPROX, DST_ACCUM_MODE, data_format, 8 /* ITERATIONS */),
-        RC,
         idst_x,
         idst_alpha,
         idst_beta,
-        idst_out)));
+        idst_out,
+        VectorMode::RC)));
 }
 
 /**
