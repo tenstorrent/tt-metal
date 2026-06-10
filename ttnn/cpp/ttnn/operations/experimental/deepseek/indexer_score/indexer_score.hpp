@@ -7,8 +7,11 @@
 #include "ttnn/operations/core/core.hpp"
 #include <tt-metalium/base_types.hpp>
 #include "ttnn/types.hpp"
+#include "device/indexer_score_device_operation_types.hpp"
 
 namespace ttnn::experimental::deepseek {
+
+using IndexerScoreProgramConfig = ttnn::operations::experimental::deepseek::indexer::IndexerScoreProgramConfig;
 
 // DeepSeek-V3.2 DSA lightning-indexer scorer:
 //   score[b, s, t] = sum_h relu(q[b,h,s,:] . k[b,t,:]) * weights[b,h,s]
@@ -20,6 +23,7 @@ ttnn::Tensor indexer_score(
     const ttnn::Tensor& k,
     const ttnn::Tensor& weights,
     bool is_causal = true,
-    uint32_t chunk_start_idx = 0);
+    uint32_t chunk_start_idx = 0,
+    const IndexerScoreProgramConfig& program_config = {});
 
 }  // namespace ttnn::experimental::deepseek

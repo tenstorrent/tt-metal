@@ -46,9 +46,15 @@ IndexerScoreDeviceOperation::tensor_return_value_t IndexerScoreDeviceOperation::
 
 std::tuple<IndexerScoreDeviceOperation::operation_attributes_t, IndexerScoreDeviceOperation::tensor_args_t>
 IndexerScoreDeviceOperation::invoke(
-    const Tensor& q, const Tensor& k, const Tensor& weights, bool is_causal, uint32_t chunk_start_idx) {
+    const Tensor& q,
+    const Tensor& k,
+    const Tensor& weights,
+    bool is_causal,
+    uint32_t chunk_start_idx,
+    const IndexerScoreProgramConfig& program_config) {
     return {
-        operation_attributes_t{.is_causal = is_causal, .chunk_start_idx = chunk_start_idx},
+        operation_attributes_t{
+            .is_causal = is_causal, .chunk_start_idx = chunk_start_idx, .program_config = program_config},
         tensor_args_t{.q = q, .k = k, .weights = weights}};
 }
 
@@ -61,10 +67,11 @@ ttnn::Tensor indexer_score(
     const ttnn::Tensor& k,
     const ttnn::Tensor& weights,
     bool is_causal,
-    uint32_t chunk_start_idx) {
+    uint32_t chunk_start_idx,
+    const ttnn::operations::experimental::deepseek::indexer::IndexerScoreProgramConfig& program_config) {
     using OperationType = ttnn::operations::experimental::deepseek::indexer::IndexerScoreDeviceOperation;
-    auto operation_attributes =
-        OperationType::operation_attributes_t{.is_causal = is_causal, .chunk_start_idx = chunk_start_idx};
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .is_causal = is_causal, .chunk_start_idx = chunk_start_idx, .program_config = program_config};
     auto tensor_args = OperationType::tensor_args_t{.q = q, .k = k, .weights = weights};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

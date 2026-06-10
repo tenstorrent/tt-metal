@@ -17,11 +17,13 @@ using namespace tt;
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
-// Output-stationary flat deal of causal-valid output tiles (INDEXER_OP.md).
-// valid(s) = min(Tt, chunk_t + s + 1) tiles per q-tile-row; V = sum valid(s)
-// dealt evenly across cores in row-major order. Per-core kernels invert the
-// flat index locally; fully-future tiles are never assigned. Skipped columns
-// are -inf-filled by the writer (zeros are not safe: gates can be negative).
+// Output-stationary flat deal of causal-valid work units (INDEXER_OP.md).
+// One unit = QC q-tile-rows x up-to-KC k-tiles; per q-row-group g,
+// valid_max(g) = min(Tt, chunk_t + (g+1)*QC) and units(g) = ceil(valid_max/KC).
+// Units are dealt evenly across cores in row-major order; kernels invert the
+// flat index locally. Heads stream in HB-head groups; fully-future tiles
+// inside a unit get the full -inf mask, row tails are -inf-filled by the
+// writer (zeros are not safe: gates can be negative).
 IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensors, tensor_return_value_t& out) {
     Program program = CreateProgram();
@@ -38,11 +40,6 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     TT_FATAL(Sq % TILE_HEIGHT == 0 && T % TILE_WIDTH == 0 && D % TILE_WIDTH == 0, "Sq, T, D must be tile-aligned");
     TT_FATAL(args.chunk_start_idx % TILE_WIDTH == 0, "chunk_start_idx must be tile-aligned");
     TT_FATAL(args.chunk_start_idx + Sq <= T, "chunk window [{}+{}) exceeds T={}", args.chunk_start_idx, Sq, T);
-    // qk matmul subblock: heads are output rows, k column is 1 tile wide (SDPA-style)
-    constexpr bool fp32_dest_acc_en = true;
-    constexpr uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;  // half-sync, as in sdpa_program_factory
-    const auto [qk_subblock_h, qk_subblock_w] = ttnn::prim::detail::determine_largest_subblock_size(Hi, 1, dst_size);
-    TT_FATAL(Hi % qk_subblock_h == 0, "Hi={} must be divisible by qk_subblock_h={}", Hi, qk_subblock_h);
     TT_FATAL(q.logical_shape()[0] == 1, "batch 1 only");
     TT_FATAL(args.is_causal, "non-causal not implemented");
 
@@ -51,10 +48,28 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     const uint32_t Dt = D / TILE_WIDTH;
     const uint32_t chunk_t = args.chunk_start_idx / TILE_WIDTH;
 
-    // total valid tiles
+    // work-unit knobs (elements -> tiles / heads)
+    const auto& cfg = args.program_config;
+    TT_FATAL(cfg.q_chunk_size % TILE_HEIGHT == 0 && cfg.k_chunk_size % TILE_WIDTH == 0, "chunk sizes must be tile-aligned");
+    const uint32_t QC = cfg.q_chunk_size / TILE_HEIGHT;
+    const uint32_t KC = cfg.k_chunk_size / TILE_WIDTH;
+    const uint32_t HB = cfg.head_group_size == 0 ? Hi : (uint32_t)cfg.head_group_size;
+    TT_FATAL(QC > 0 && Sqt % QC == 0, "q_chunk_size {} must divide Sq {}", cfg.q_chunk_size, Sq);
+    TT_FATAL(KC > 0 && KC <= Tt, "k_chunk_size {} out of range", cfg.k_chunk_size);
+    TT_FATAL(HB > 0 && Hi % HB == 0, "head_group_size {} must divide Hi {}", HB, Hi);
+
+    // qk matmul subblock: heads are output rows, k column is 1 tile wide (SDPA-style)
+    constexpr bool fp32_dest_acc_en = true;
+    constexpr uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;  // half-sync, as in sdpa_program_factory
+    const auto [qk_subblock_h, qk_subblock_w] = ttnn::prim::detail::determine_largest_subblock_size(HB, 1, dst_size);
+    TT_FATAL(HB % qk_subblock_h == 0, "head group {} must be divisible by qk_subblock_h={}", HB, qk_subblock_h);
+
+    // total valid work units
+    const uint32_t groups = Sqt / QC;
+    auto valid_max = [&](uint32_t g) { return std::min(Tt, chunk_t + (g + 1) * QC); };
     uint64_t V = 0;
-    for (uint32_t s = 0; s < Sqt; ++s) {
-        V += std::min(Tt, chunk_t + s + 1);
+    for (uint32_t g = 0; g < groups; ++g) {
+        V += (valid_max(g) + KC - 1) / KC;
     }
 
     const auto grid = q.device()->compute_with_storage_grid_size();
@@ -75,27 +90,29 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
             CircularBufferConfig(ntiles * tile_bytes, {{idx, fmt}}).set_page_size(idx, tile_bytes));
     };
 
-    constexpr uint32_t cb_q = CBIndex::c_0;       // resident q row: Hi*Dt tiles
-    constexpr uint32_t cb_k = CBIndex::c_1;       // k column, double buffered
-    constexpr uint32_t cb_w = CBIndex::c_2;       // resident w row: Hi tiles
-    constexpr uint32_t cb_mask = CBIndex::c_3;    // diagonal -inf mask, persistent
-    constexpr uint32_t cb_qk = CBIndex::c_24;     // relu(q.kT) per head, fp32
-    constexpr uint32_t cb_mul = CBIndex::c_25;    // relu*w per head, fp32
-    constexpr uint32_t cb_acc = CBIndex::c_26;    // head accumulator, fp32
-    constexpr uint32_t cb_out = CBIndex::c_16;     // untilized bf16 rows
+    const bool stream_heads = HB < Hi;
+
+    constexpr uint32_t cb_q = CBIndex::c_0;       // q head-group block: HB*QC*Dt tiles
+    constexpr uint32_t cb_k = CBIndex::c_1;       // k chunk, double buffered
+    constexpr uint32_t cb_w = CBIndex::c_2;       // resident w group: Hi*QC tiles
+    constexpr uint32_t cb_mask = CBIndex::c_3;    // [diag -inf, full -inf], persistent
+    constexpr uint32_t cb_qk = CBIndex::c_24;     // relu(q.kT) per subblock, fp32
+    constexpr uint32_t cb_mul = CBIndex::c_25;    // relu*w per subblock, fp32
+    constexpr uint32_t cb_acc = CBIndex::c_26;    // unit accumulator ring, fp32
+    constexpr uint32_t cb_out = CBIndex::c_16;    // untilized bf16 tiles
     constexpr uint32_t cb_scratch = CBIndex::c_17;  // writer-only -inf scratch
 
-    make_cb(cb_q, Hi * Dt, DataFormat::Float16_b, bf16_tile);
-    make_cb(cb_k, 2 * Dt, DataFormat::Float16_b, bf16_tile);
-    make_cb(cb_w, Hi, DataFormat::Float16_b, bf16_tile);
-    make_cb(cb_mask, 1, DataFormat::Float16_b, bf16_tile);
-    make_cb(cb_qk, Hi, DataFormat::Float32, fp32_tile);
-    make_cb(cb_mul, 8, DataFormat::Float32, fp32_tile);
-    make_cb(cb_acc, 2, DataFormat::Float32, fp32_tile);
-    make_cb(cb_out, 2, DataFormat::Float16_b, bf16_tile);
+    make_cb(cb_q, (stream_heads ? 2 : 1) * HB * QC * Dt, DataFormat::Float16_b, bf16_tile);
+    make_cb(cb_k, 2 * KC * Dt, DataFormat::Float16_b, bf16_tile);
+    make_cb(cb_w, Hi * QC, DataFormat::Float16_b, bf16_tile);
+    make_cb(cb_mask, 2, DataFormat::Float16_b, bf16_tile);
+    make_cb(cb_qk, 2 * qk_subblock_h, DataFormat::Float32, fp32_tile);
+    make_cb(cb_mul, 2 * qk_subblock_h, DataFormat::Float32, fp32_tile);
+    make_cb(cb_acc, 2 * QC * KC, DataFormat::Float32, fp32_tile);
+    make_cb(cb_out, 2 * KC, DataFormat::Float16_b, bf16_tile);
     make_cb(cb_scratch, 1, DataFormat::Float16_b, bf16_tile);
 
-    const std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, chunk_t};
+    const std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, chunk_t, QC, KC, HB};
 
     std::vector<uint32_t> reader_ct = common_ct;
     TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
@@ -106,13 +123,14 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     writer_ct.push_back(T * 2);  // row-major page bytes
     TensorAccessorArgs(*out.buffer()).append_to(writer_ct);
 
+    std::vector<uint32_t> compute_ct = common_ct;
+    compute_ct.push_back(qk_subblock_h);
+
     const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/deepseek/indexer_score/device/kernels/";
     auto reader_id = CreateKernel(
         program, kdir + "reader_indexer_score.cpp", core_ranges, ReaderDataMovementConfig(reader_ct));
     auto writer_id = CreateKernel(
         program, kdir + "writer_indexer_score.cpp", core_ranges, WriterDataMovementConfig(writer_ct));
-    std::vector<uint32_t> compute_ct = common_ct;
-    compute_ct.push_back(qk_subblock_h);
     auto compute_id = CreateKernel(
         program,
         kdir + "compute_indexer_score.cpp",

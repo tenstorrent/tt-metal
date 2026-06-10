@@ -103,12 +103,15 @@ just `rt/ct` subblock shape.
 
 ## Knobs
 
+Implemented as `IndexerScoreProgramConfig` (`ttnn.IndexerScoreProgramConfig`,
+SDPAProgramConfig analogue), sizes in elements:
+
 | knob | meaning | default | range / notes |
 |---|---|---|---|
-| `q_chunk` | tile rows per work-unit row | 1 | DEST loops dest blocks, so any size; acc/out CBs scale ×Kt fp32; big values reduce parallel rows (Sqt/q_chunk × colgroups ≥ cores) |
-| `k_chunk` (Kt) | k tiles per streamed chunk | 16 bf16 / 32 bfp8 | only acc width + L1; bigger = fewer chunks, less q re-read |
-| `head_block` | heads resident at once | H if fits | floor 1 always fits; <H streams q per chunk (traffic = blocks×chunks×slice; grow Kt to amortize) |
-| grid / fidelity | cores; HiFi2→LoFi with bfp8 k | full, HiFi2 | |
+| `q_chunk_size` (QC) | tile rows per work unit | 32 (1 tile) | must divide Sq; rows above the diagonal masked with the full −inf tile |
+| `k_chunk_size` (KC) | k tiles per unit | 32 (1 tile) | edge units partial (kw < KC); bigger = fewer chunks, less q re-read; perf target 16 bf16 / 32 bfp8 |
+| `head_group_size` (HB) | heads resident at once | 0 = all | must divide Hi; <Hi streams q blocks per tile |
+| grid / fidelity | cores; HiFi2→LoFi with bfp8 k | full, HiFi4 | host-side only for now |
 
 L1 (1464 KB): `2·Dt·Kt (k) + HB·QC·(Dt+1) (q+w) + QC·Kt fp32 acc + 2·QC·Kt out`.
 Defaults: 64h×4 q resident 512K + 128K w + 256K k + 64K acc + 64K out ≈ 1.0 MB.
@@ -138,34 +141,41 @@ factory `indexer_score_program_factory.cpp`, kernels
 ### Program factory
 
 Validates tile alignment (`Sq, T, D, chunk_start % 32 == 0`,
-`chunk_start + Sq ≤ T`, `Hi % HP == 0`, B=1, causal only), computes
-`valid(s) = min(Tt, chunk_t + s + 1)` and `V = Σ valid(s)` on host, and deals V
-flat across the full grid (`min(V, cores)` workers, base = V/N, remainder one
-extra). Per-core runtime args are just `flat_start, count` + buffer addresses
-(replaced in `override_runtime_arguments`); all three kernels invert the flat
-index locally with the same loop, so there are no segment tables. Compile args
-common to all kernels: `Hi, Sqt, Tt, Dt, chunk_t`; TensorAccessor args
-appended for reader (q/k/w) and writer (out, page = T·2 bytes).
+`chunk_start + Sq ≤ T`, knob divisibility, B=1, causal only). The work unit is
+QC q-tile-rows × up-to-KC k-tiles: per q-row-group g,
+`valid_max(g) = min(Tt, chunk_t + (g+1)·QC)` and `units(g) = ceil(valid_max/KC)`;
+`V = Σ units(g)` is dealt flat across the full grid (`min(V, cores)` workers,
+base = V/N, remainder one extra). Per-core runtime args are just
+`flat_start, count` + buffer addresses (replaced in
+`override_runtime_arguments`); all three kernels invert the flat index locally
+with the same loop, so there are no segment tables. Compile args common to all
+kernels: `Hi, Sqt, Tt, Dt, chunk_t, QC, KC, HB`; TensorAccessor args appended
+for reader (q/k/w) and writer (out, page = T·2 bytes).
 
 ComputeConfig: HiFi4, `fp32_dest_acc_en`, half-sync. The qk subblock height
-HP comes from SDPA's `determine_largest_subblock_size(Hi, 1, dst_size)`
+HP comes from SDPA's `determine_largest_subblock_size(HB, 1, dst_size)`
 (`sdpa_subblock_utils.hpp`) with SDPA's `dst_size = fp32 ? 4 : 8` → `{4, 1}`
-at 64 heads, passed to compute as CT arg 5. Half-sync lets pack drain one
+at 64 heads, passed to compute as CT arg 8. Half-sync lets pack drain one
 DEST half while math fills the other; bf16 DEST would auto-yield HP=8.
 
 ### CBs
 
 | CB | what | size |
 |---|---|---|
-| c_0 q | resident q row, `Hi·Dt` tiles bf16 | 512 KB @64h |
-| c_1 k | k column, double buffered | `2·Dt` bf16 |
-| c_2 w | resident w row | `Hi` bf16 |
-| c_3 mask | diag strict-upper −inf tile, persistent | 1 bf16 |
-| c_24 qk | per-head relu(q·kᵀ) | `Hi` fp32 |
-| c_25 mul | relu·w contributions | 8 fp32 |
-| c_26 acc | head accumulator ping-pong | 2 fp32 |
-| c_16 out | untilized output | 2 bf16 |
+| c_0 q | q head-group block `[QC][HB][Dt]` bf16 | ×2 when streaming (HB < Hi) |
+| c_1 k | k chunk, double buffered | `2·KC·Dt` bf16 |
+| c_2 w | resident w group `[QC][Hi]` | `Hi·QC` bf16 |
+| c_3 mask | [diag strict-upper, full] −inf tiles, persistent | 2 bf16 |
+| c_24 qk | per-subblock relu(q·kᵀ) | `2·HP` fp32 |
+| c_25 mul | relu·w contributions | `2·HP` fp32 |
+| c_26 acc | accumulator ping-pong | `2·QC·KC` fp32 |
+| c_16 out | untilized output | `2·KC` bf16 |
 | c_17 scratch | writer-only −inf source | 1 bf16 |
+
+CB pushes must divide capacity: the k ring pushes a full `KC·Dt` even for
+partial edge chunks (kw < KC) — a kw-sized push wraps the ring mid-block and
+later linear writes overflow the CB into neighbor L1 (debugged on GLX, where
+every group ends in a partial chunk; small T never trips it).
 
 ### Kernels (all walk the same flat span)
 
@@ -175,33 +185,34 @@ functions in SDPA style: dataflow uses `Noc`/`CircularBuffer` wrappers; the
 diagonal mask and the writer scratch reuse SDPA's
 `fill_causal_diagonal_tile_bf16` / `fill_neginf_tile`.
 
-**Reader** — on a new q-tile-row pushes the resident q row (`Hi·Dt` tiles,
-id `h·Sqt·Dt + s·Dt + d`) and w row (`h·Sqt + s`); per output tile pushes the
-k column (`t·Dt + d`). Builds the mask tile once at start.
+**Reader** — on a new q-row-group pushes the resident w group (`[QC][Hi]`,
+id `h·Sqt + s`) and, when all heads fit, the q group (`[QC][Hi][Dt]`, heads
+contiguous per row so HP head rows stride Dt for `matmul_block`); per unit
+pushes the k chunk (`(c0+c)·Dt + d`). With HB < Hi the q head-group blocks
+stream per tile instead. Builds both mask tiles once at start.
 
-**Compute** — per output tile: phase 1 is a subblock matmul mirroring SDPA's
-`matmul_blocks` with heads as output rows (M=Hi, N=1, K=Dt): per subblock one
-`matmul_block(rt=HP, ct=1)` per inner-dim step accumulates HP head rows in
-DEST, relu fused before pack → cb_qk. Packs must stay subblock-relative
-(reserve HP / pack / push HP): absolute offsets past a granular push walk off
-the Hi-tile CB and corrupt neighbor CBs. Phase 2 per HP:
-`mul_tiles_bcast_cols(qk, w)`, then ping-pong `add_tiles` into cb_acc (first
-contribution primes via `copy_tile`) — the L1 round-trip per head is the
-known perf TODO. Diagonal (`t == chunk_t + s`): `add_tiles(acc, mask)`. Then
-`pack_untilize<1,1>` → cb_out bf16. Pops q/w on row change. Heads are fully
-core-local; sum order is the same on every device, so SP ranks agree exactly.
+**Compute** — per unit, each tile (r, c) completes all head groups before the
+next so cb_acc holds one in-flight tile. Phase 1 is a subblock matmul
+mirroring SDPA's `matmul_blocks` (heads as rows, M=HB, N=1, K=Dt): one
+`matmul_block(rt=HP, ct=1)` per inner-dim step, relu fused before pack →
+cb_qk; packs stay subblock-relative (reserve HP / pack / push HP). Phase 2 per
+HP: `mul_tiles_bcast_cols(qk, w)`, then ping-pong `add_tiles` into cb_acc
+(first contribution primes via `copy_tile`) — the L1 round-trip per head is
+the known perf TODO. Then the diag mask on `t == chunk_t + s`, full −inf on
+`t > diag` (rows above the diagonal in QC>1 groups), `pack_untilize<1,1>` →
+cb_out. Pops q/w on group change. Heads are fully core-local; sum order is
+the same on every device, so SP ranks agree exactly.
 
-**Writer** — scatters each tile as 32 row fragments of 64 B at
-`page = s·32 + r`, offset `t·64` (64 B aligned, NoC-safe). The owner of a
-row's last valid tile (`t == valid(s) − 1`, `valid(s) < Tt`) fills the tail
-`[valid·64, Tt·64)` of all 32 rows from the −inf scratch — the within-tile
-masked part comes from the compute mask, the tail from the writer; no other
-core touches those rows.
+**Writer** — pops unit tiles in (r, c) order; scatters each as 32 row
+fragments of 64 B at `page = s·32 + rr`, offset `t·64` (64 B aligned,
+NoC-safe). The owner of a group's last unit fills every row tail
+`[valid(s)·64, Tt·64)` from the −inf scratch; in-unit masked tiles come from
+compute, tails from the writer; no other core touches those rows.
 
 Same scheme for every device in the ring; SP rank enters only via
 `chunk_start`. Kernel includes are `api/compute/...` / `api/dataflow/...`;
-compute entrypoint `kernel_main()`. Perf knobs from the design (head_block,
-k_chunk, l1-acc, bfp8 k) are not wired yet.
+compute entrypoint `kernel_main()`. Remaining perf knobs not wired: bfp8 k +
+LoFi, packer l1-acc.
 
 ## Validation
 
@@ -225,7 +236,10 @@ Branch: `skrstic/dsa_indexer_score_op`.
       SDPA dataflow/compute idioms, mask/scratch from SDPA helpers
 - [x] subblock qk matmul: HP from `determine_largest_subblock_size`, half-sync
       pack overlap, relu fused in DEST
+- [x] knobs as `IndexerScoreProgramConfig` (q_chunk/k_chunk/head_group), work
+      units QC×KC with head streaming; knob tests + GLX KC=16 pass
 - [ ] row-major top-k (separate); negative-weights topk-safety test
-- [ ] perf: bfp8 k + LoFi, DEST-resident acc, fused relu·w
+- [ ] perf: bfp8 k + LoFi, DEST-resident acc, fused relu·w, knob sweep for
+      best GLX config
 
 Out of scope: decode/paged variant, fused score+topk.

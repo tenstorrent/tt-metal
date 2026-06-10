@@ -10,6 +10,17 @@
 namespace ttnn::operations::experimental::deepseek::indexer::detail {
 
 void bind_indexer_score(nb::module_& mod) {
+    nb::class_<IndexerScoreProgramConfig>(mod, "IndexerScoreProgramConfig")
+        .def(
+            nb::init<std::size_t, std::size_t, std::size_t>(),
+            nb::kw_only(),
+            nb::arg("q_chunk_size") = 32,
+            nb::arg("k_chunk_size") = 32,
+            nb::arg("head_group_size") = 0)
+        .def_rw("q_chunk_size", &IndexerScoreProgramConfig::q_chunk_size)
+        .def_rw("k_chunk_size", &IndexerScoreProgramConfig::k_chunk_size)
+        .def_rw("head_group_size", &IndexerScoreProgramConfig::head_group_size);
+
     ttnn::bind_function<"indexer_score", "ttnn.experimental.deepseek.">(
         mod,
         R"doc(
@@ -23,6 +34,8 @@ void bind_indexer_score(nb::module_& mod) {
             weights: [B, Hi, Sq, 1] bf16 tiled, scales pre-folded
             is_causal: apply causality from chunk_start_idx
             chunk_start_idx: global position of query row 0
+            program_config: work-unit knobs (q_chunk_size, k_chunk_size,
+                head_group_size; elements, tile-aligned; 0 heads = all resident)
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -32,7 +45,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("weights"),
         nb::kw_only(),
         nb::arg("is_causal") = true,
-        nb::arg("chunk_start_idx") = 0);
+        nb::arg("chunk_start_idx") = 0,
+        nb::arg("program_config") = IndexerScoreProgramConfig{});
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::indexer::detail

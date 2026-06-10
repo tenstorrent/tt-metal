@@ -12,8 +12,9 @@ ttnn::Tensor indexer_score(
     const ttnn::Tensor& k,
     const ttnn::Tensor& weights,
     bool is_causal,
-    uint32_t chunk_start_idx) {
-    return ttnn::prim::indexer_score(q, k, weights, is_causal, chunk_start_idx);
+    uint32_t chunk_start_idx,
+    const IndexerScoreProgramConfig& program_config) {
+    return ttnn::prim::indexer_score(q, k, weights, is_causal, chunk_start_idx, program_config);
 }
 
 }  // namespace ttnn::experimental::deepseek

@@ -26,7 +26,12 @@ struct IndexerScoreDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& q, const Tensor& k, const Tensor& weights, bool is_causal, uint32_t chunk_start_idx);
+        const Tensor& q,
+        const Tensor& k,
+        const Tensor& weights,
+        bool is_causal,
+        uint32_t chunk_start_idx,
+        const IndexerScoreProgramConfig& program_config);
 };
 
 }  // namespace ttnn::operations::experimental::deepseek::indexer
@@ -34,6 +39,11 @@ struct IndexerScoreDeviceOperation {
 namespace ttnn::prim {
 
 ttnn::Tensor indexer_score(
-    const ttnn::Tensor& q, const ttnn::Tensor& k, const ttnn::Tensor& weights, bool is_causal, uint32_t chunk_start_idx);
+    const ttnn::Tensor& q,
+    const ttnn::Tensor& k,
+    const ttnn::Tensor& weights,
+    bool is_causal,
+    uint32_t chunk_start_idx,
+    const ttnn::operations::experimental::deepseek::indexer::IndexerScoreProgramConfig& program_config);
 
 }  // namespace ttnn::prim

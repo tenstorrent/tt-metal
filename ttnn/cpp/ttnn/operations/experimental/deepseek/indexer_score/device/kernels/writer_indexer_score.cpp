@@ -16,7 +16,7 @@
 
 #include "indexer_score_common.hpp"
 
-constexpr uint32_t page_bytes = get_compile_time_arg_val(5);  // T*2
+constexpr uint32_t page_bytes = get_compile_time_arg_val(8);  // T*2
 
 constexpr uint32_t cb_out = tt::CBIndex::c_16;
 constexpr uint32_t cb_scratch = tt::CBIndex::c_17;  // writer-only -inf scratch tile
@@ -76,20 +76,30 @@ void kernel_main() {
     const uint32_t flat_start = get_arg_val<uint32_t>(1);
     const uint32_t flat_count = get_arg_val<uint32_t>(2);
 
-    constexpr auto out_args = TensorAccessorArgs<6>();
+    constexpr auto out_args = TensorAccessorArgs<9>();
     const auto out_acc = TensorAccessor(out_args, out_addr, page_bytes);
 
     Noc noc;
 
     const uint32_t scratch = fill_inf_scratch();
 
-    ValidTileSpan span;
+    WorkUnitSpan span;
     span.start(flat_start);
 
     for (uint32_t i = 0; i < flat_count; ++i) {
-        write_tile(noc, out_acc, span.s, span.t);
-        if (span.last_in_row() && valid(span.s) < Tt) {
-            fill_row_tail(noc, out_acc, scratch, span.s);
+        // compute emits unit tiles in (r, c) row-major order
+        for (uint32_t r = 0; r < QC; ++r) {
+            for (uint32_t c = 0; c < span.kw(); ++c) {
+                write_tile(noc, out_acc, span.s0() + r, span.c0() + c);
+            }
+        }
+        if (span.last_in_group()) {
+            for (uint32_t r = 0; r < QC; ++r) {
+                const uint32_t s = span.s0() + r;
+                if (valid(s) < Tt) {
+                    fill_row_tail(noc, out_acc, scratch, s);
+                }
+            }
         }
         span.advance();
     }
