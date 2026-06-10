@@ -24,6 +24,7 @@ from ttnn.operations.ccl import MoEActivationFunction
 from ttnn.experimental.moe_compute_utils import (
     auto_output_width_shard_dim,
     get_tilize_drain_core,
+    effective_matmul_ring_size,
     _shard_tiles,
     _w2_shard_tiles,
 )
@@ -71,7 +72,7 @@ MOE_DEVICE_PARAMS_LINEAR = {
     "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
     "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
     "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-    "trace_region_size": 500000,
+    "trace_region_size": 750000,
 }
 
 
@@ -104,6 +105,7 @@ class MoEModelConfig:
     num_iterations: int = 3
     tokens_per_device: int = 32
     output_height_shard_dim: int = 4
+    bh_ring_size_values: tuple = (12,)
     marks: tuple = ()
 
 
@@ -161,7 +163,7 @@ def _expand_model_configs(
     test_modes_fn=_test_modes_for_model,
     trace_values_fn=_trace_values_for_case,
 ):
-    """Expand model configs into pytest.param entries (test_mode, has_bias, epd, act, enable_trace)."""
+    """Expand model configs into pytest.param entries (test_mode, has_bias, epd, act, enable_trace, bh_ring_size)."""
     expanded = []
     for cfg in configs:
         for test_mode in test_modes_fn(cfg):
@@ -169,21 +171,24 @@ def _expand_model_configs(
                 for epd in cfg.experts_per_device_values:
                     for act in cfg.activation_types:
                         for enable_trace in trace_values_fn(cfg, test_mode):
-                            bias_tag = "bias" if has_bias else "no_bias"
-                            act_tag = act.name.lower()
-                            trace_tag = "enable_trace" if enable_trace else "disable_trace"
-                            expanded.append(
-                                pytest.param(
-                                    cfg,
-                                    test_mode,
-                                    has_bias,
-                                    epd,
-                                    act,
-                                    enable_trace,
-                                    id=f"{cfg.name}-{test_mode}-{bias_tag}-{epd}experts_per_device-{act_tag}-{trace_tag}",
-                                    marks=cfg.marks,
+                            for bh_ring_size in cfg.bh_ring_size_values:
+                                bias_tag = "bias" if has_bias else "no_bias"
+                                act_tag = act.name.lower()
+                                trace_tag = "enable_trace" if enable_trace else "disable_trace"
+                                ring_tag = f"bh_ring_size{bh_ring_size}"
+                                expanded.append(
+                                    pytest.param(
+                                        cfg,
+                                        test_mode,
+                                        has_bias,
+                                        epd,
+                                        act,
+                                        enable_trace,
+                                        bh_ring_size,
+                                        id=f"{cfg.name}-{test_mode}-{bias_tag}-{epd}experts_per_device-{act_tag}-{trace_tag}-{ring_tag}",
+                                        marks=cfg.marks,
+                                    )
                                 )
-                            )
     return expanded
 
 
@@ -251,8 +256,18 @@ _MODELS_1x8 = [
 ]
 
 _MODELS_BH_LB_1x8 = [
-    MoEModelConfig("gpt_oss",     N=2880, hidden_size=2880, selected_experts_k=4, experts_per_device_values=(4,), has_bias_values=(True,), tokens_per_device=8, num_layers=1, num_iterations=2, activation_types=(MoEActivationFunction.SWIGLU,)),
-    MoEModelConfig("deepseek_v3", N=2048, hidden_size=7168, selected_experts_k=8, has_bias_values=(False, True), tokens_per_device=8, num_layers=1, num_iterations=2),
+    MoEModelConfig("deepseek_ocr",       N=896,  hidden_size=1280, selected_experts_k=6),
+    MoEModelConfig("qwen3_omni_talker",  N=384,  hidden_size=1024, selected_experts_k=6),
+    MoEModelConfig("qwen3_omni_thinker", N=768,  hidden_size=2048, selected_experts_k=8),
+    MoEModelConfig("qwen35_35b",         N=512,  hidden_size=2048, selected_experts_k=8),
+    MoEModelConfig("gemma_4_26b",        N=704,  hidden_size=2816, selected_experts_k=8, activation_types=(MoEActivationFunction.GELU,)),
+    MoEModelConfig("gpt_oss",            N=2880, hidden_size=2880, selected_experts_k=4, experts_per_device_values=(4,), has_bias_values=(True,), test_modes=("perf", "correctness"), activation_types=(MoEActivationFunction.SWIGLU,), bh_ring_size_values=(8, 12, 16)),
+    MoEModelConfig("qwen3_235b",         N=1536, hidden_size=4096, selected_experts_k=8),
+    MoEModelConfig("qwen35_397b",        N=1024, hidden_size=4096, selected_experts_k=10),
+    MoEModelConfig("glm_47",             N=1536, hidden_size=5120, selected_experts_k=8),
+    MoEModelConfig("glm5",               N=2048, hidden_size=6144, selected_experts_k=8),
+    MoEModelConfig("kimi_k25",           N=2048, hidden_size=7168, selected_experts_k=8, experts_per_device_values=(6,), tokens_per_device=8),
+    MoEModelConfig("deepseek_v3",        N=2048, hidden_size=7168, selected_experts_k=8, has_bias_values=(False, True), tokens_per_device=8, test_modes=("perf", "correctness"),),
 ]
 
 _MOE_MESH_CONFIGS = [
@@ -278,6 +293,7 @@ def _run_model_test(
     activation_type,
     num_links,
     topology=None,
+    bh_ring_size=12,
 ):
     if test_mode == "perf":
         selected_experts_k = 1
@@ -300,13 +316,17 @@ def _run_model_test(
         N=model_cfg.N,
         hidden_size=model_cfg.hidden_size,
         output_height_shard_dim=model_cfg.output_height_shard_dim,
-        output_width_shard_dim=auto_output_width_shard_dim(model_cfg.hidden_size),
+        output_width_shard_dim=auto_output_width_shard_dim(
+            model_cfg.hidden_size,
+            matmul_ring_size=effective_matmul_ring_size(mesh_device, bh_ring_size),
+        ),
         dtype=ttnn.bfloat16,
         enable_trace=enable_trace,
         activation_type=activation_type,
         has_bias=has_bias,
         topology=topology,
         num_links=num_links,
+        bh_ring_size=bh_ring_size,
     )
 
 
@@ -1460,6 +1480,7 @@ def _run_moe_compute_impl(
     has_bias,
     num_links,
     topology=None,
+    bh_ring_size=12,
 ):
     """Run MoE compute E2E validation. Called from test_moe_compute via _run_model_test."""
     torch.manual_seed(2003)
@@ -1704,6 +1725,7 @@ def _run_moe_compute_impl(
         hidden_size=hidden_size,
         intermediate_size=N,
         has_bias=has_bias,
+        bh_ring_size=bh_ring_size,
     )
     w0_w1_mem_config = weight_mem_configs.w0_w1
     w2_mem_config = weight_mem_configs.w2
@@ -1741,6 +1763,7 @@ def _run_moe_compute_impl(
             E=experts_per_device,
             K=hidden_size,
             N=N,
+            bh_ring_size=bh_ring_size,
         )
         ttnn.deallocate(tt_b0_raw)
         ttnn.deallocate(tt_b1_raw)
@@ -1752,6 +1775,7 @@ def _run_moe_compute_impl(
             E=experts_per_device,
             K=hidden_size,
             N=N,
+            bh_ring_size=bh_ring_size,
         )
     ttnn.deallocate(tt_w0_raw)
     ttnn.deallocate(tt_w1_raw)
@@ -1771,6 +1795,7 @@ def _run_moe_compute_impl(
             E=experts_per_device,
             N=N,
             K=hidden_size,
+            bh_ring_size=bh_ring_size,
         )
         ttnn.deallocate(tt_b2_raw)
     else:
@@ -1780,6 +1805,7 @@ def _run_moe_compute_impl(
             E=experts_per_device,
             N=N,
             K=hidden_size,
+            bh_ring_size=bh_ring_size,
         )
     ttnn.deallocate(tt_w2_raw)
 
@@ -1876,6 +1902,7 @@ def _run_moe_compute_impl(
             optional_output_tensor=tt_combine_output_tensors[layer_id],
             optional_cross_device_semaphore=combine_barrier_semaphore,
             activation_type=activation_type,
+            bh_ring_size=bh_ring_size,
         )
 
     #########################################
@@ -1950,7 +1977,7 @@ def _run_moe_compute_impl(
         mesh_device, output_height_shard_dim, output_width_shard_dim
     )
     worker_mcast_bbox = ttnn.experimental.get_moe_worker_mcast_bounding_box(
-        mesh_device, output_height_shard_dim, output_width_shard_dim, hidden_size
+        mesh_device, output_height_shard_dim, output_width_shard_dim, hidden_size, bh_ring_size
     )
     per_expert_tokens_all_passed = True
     activation_all_passed = True
@@ -2057,7 +2084,7 @@ def _run_moe_compute_impl(
 #   MOE_COMPUTE_FULL=1             — all models x all meshes (1x8/1x16 x torus/linear); tier rules unchanged.
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
-    "device_params, mesh_cfg, mesh_shape, mesh_device, model_cfg, test_mode, has_bias, experts_per_device, activation_type, enable_trace",
+    "device_params, mesh_cfg, mesh_shape, mesh_device, model_cfg, test_mode, has_bias, experts_per_device, activation_type, enable_trace, bh_ring_size",
     MOE_COMPUTE_MODEL_TEST_CASES,
     indirect=["device_params", "mesh_device"],
 )
@@ -2071,6 +2098,7 @@ def test_moe_compute(
     has_bias,
     experts_per_device,
     activation_type,
+    bh_ring_size,
 ):
     from ttnn.operations.ccl import Topology
 
@@ -2086,6 +2114,7 @@ def test_moe_compute(
         activation_type,
         topology=topology,
         num_links=mesh_cfg.num_links,
+        bh_ring_size=bh_ring_size,
     )
 
 
@@ -2194,6 +2223,10 @@ def test_auto_output_width_shard_dim():
     assert auto_output_width_shard_dim(5120) == 4  # GLM-4.7: Ht=160
     assert auto_output_width_shard_dim(4096) == 4  # DS V4 Flash: Ht=128
     assert auto_output_width_shard_dim(7168) == 4  # Kimi K2.5: same as DS
+    # Ring-aware: GPT-OSS width=3 at N=12, falls back to 2 at N=8/16
+    assert auto_output_width_shard_dim(2880, matmul_ring_size=12) == 3
+    assert auto_output_width_shard_dim(2880, matmul_ring_size=8) == 2
+    assert auto_output_width_shard_dim(2880, matmul_ring_size=16) == 2
 
 
 def test_shard_tiles_total_always_correct():

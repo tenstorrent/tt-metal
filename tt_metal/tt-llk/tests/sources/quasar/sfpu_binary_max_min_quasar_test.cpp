@@ -115,9 +115,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "cfg_defines.h"
 #include "cmath_common.h"
-#include "experimental/ckernel_sfpu_binary_max_min.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_sfpu/ckernel_sfpu_binary_max_min.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 #include "params.h"
 

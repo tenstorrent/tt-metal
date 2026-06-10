@@ -136,26 +136,20 @@ FORCE_INLINE void generate_row0_bcast(const uint32_t cb_id, uint16_t bf16_val) {
 template <bool legacy_compat = true>
 void calculate_sampling_recip_scalar() {
     sfpi::vFloat in = sfpi::dst_reg[0];
+    sfpi::vFloat out;
     if constexpr (legacy_compat) {
-        sfpi::vFloat out = ckernel::sfpu::_reciprocal_compat_<APPROX ? 2 : 3>(in);
-        if constexpr (DST_ACCUM_MODE || APPROX) {
-            sfpi::dst_reg[0] = out;
-        } else {
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(out, sfpi::RoundMode::NearestEven));
-        }
+        out = ckernel::sfpu::_reciprocal_compat_<APPROX ? 2 : 3>(in);
+    } else if constexpr (APPROX) {
+        out = ckernel::sfpu::_sfpu_reciprocal_<0>(in);
+    } else if constexpr (DST_ACCUM_MODE) {
+        out = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
     } else {
-        if constexpr (APPROX) {
-            sfpi::dst_reg[0] = ckernel::sfpu::_sfpu_reciprocal_<0>(in);
-        } else {
-            if constexpr (DST_ACCUM_MODE) {
-                sfpi::dst_reg[0] = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
-            } else {
-                sfpi::vFloat out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
-                sfpi::dst_reg[0] =
-                    sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(out, sfpi::RoundMode::NearestEven));
-            }
-        }
+        out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
     }
+    if constexpr (!(DST_ACCUM_MODE || APPROX)) {
+        out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::NearestEven);
+    }
+    sfpi::dst_reg[0] = out;
 }
 
 template <bool legacy_compat = true>
