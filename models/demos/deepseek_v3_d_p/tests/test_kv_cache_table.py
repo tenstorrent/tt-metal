@@ -20,7 +20,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     BH_NUM_DRAM_BANKS,
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     PREFILL_CHUNK_OUTPUT_TOKENS,
-    create_kv_chunk_address_table,
+    create_kv_chunk_address_table_ds,
     create_kv_chunk_address_table_kimi,
     init_kvpe_cache,
 )
@@ -139,7 +139,7 @@ def test_kv_cache_table(
     lookup_table_config.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     lookup_table_config.chunk_size_bytes = CHUNK_SIZE_BYTES
 
-    lookup_table = create_kv_chunk_address_table(
+    lookup_table = create_kv_chunk_address_table_ds(
         config=lookup_table_config,
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,

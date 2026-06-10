@@ -18,7 +18,9 @@ BH_NUM_DRAM_BANKS = 8
 PREFILL_CHUNK_OUTPUT_TOKENS = 5 * 1024
 
 
-def create_kv_chunk_address_table(config, mesh_device, mesh_shape, seq_len, sp_axis, tt_kvpe_cache, chunk_size_bytes):
+def create_kv_chunk_address_table_ds(
+    config, mesh_device, mesh_shape, seq_len, sp_axis, tt_kvpe_cache, chunk_size_bytes
+):
     """
     Create and populate a KV chunk address table for disaggregation.
 
