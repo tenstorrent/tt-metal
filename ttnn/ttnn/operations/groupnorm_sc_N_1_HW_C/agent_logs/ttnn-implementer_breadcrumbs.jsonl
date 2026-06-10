@@ -21,3 +21,4 @@
 {"event":"test_run","test":"golden -k gamma_only+BFLOAT8_B+FLOAT32","status":"pass","detail":"120 passed (4 prior fails flipped), 148 xfailed, 0 fail — fp32 dtype-driven fp32_dest_acc_en default works","ts":"2026-06-10T14:14:15+00:00"}
 {"event":"test_run","test":"golden -k FLOAT32 (all fp32-touching cells)","status":"pass","detail":"1020 passed, 1258 xfailed, 0 fail — no regressions from dtype-driven fp32 default","ts":"2026-06-10T14:24:25+00:00"}
 {"event":"test_run","test":"unit suite (4 files, excl. precision matrix)","mode":"production","status":"pass","detail":"65/65 after fp32 default change","ts":"2026-06-10T14:25:20+00:00"}
+{"event":"fix_applied","refinement":1,"status":"complete","detail":"checkbox [x]; golden 1650/7236 pass, 0 loud failures; EXCLUSIONS empty","ts":"2026-06-10T14:26:18+00:00"}
