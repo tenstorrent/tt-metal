@@ -158,7 +158,8 @@ inline void _llk_math_sum_top2_tile_init_() {
 }
 
 inline void _llk_math_sum_top2_tile_(uint32_t dst_index) {
-    SFPU_CALL_FN(DST_SYNC_MODE, DST_ACCUM_MODE, _top2_calculate_top2_, dst_index, VectorMode::RC_custom);
+    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
+        DST_SYNC_MODE, DST_ACCUM_MODE, _top2_calculate_top2_, dst_index, VectorMode::RC_custom);
 }
 
 #endif

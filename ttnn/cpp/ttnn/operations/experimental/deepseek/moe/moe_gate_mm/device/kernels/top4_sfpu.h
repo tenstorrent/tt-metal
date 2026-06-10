@@ -171,7 +171,7 @@ inline void _llk_math_top4_tile_init_() {
 }
 
 inline void _llk_math_top4_tile_(uint32_t dst_index) {
-    SFPU_CALL_FN(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_top4_, dst_index, VectorMode::RC_custom);
+    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_top4_, dst_index, VectorMode::RC_custom);
 }
 
 #endif

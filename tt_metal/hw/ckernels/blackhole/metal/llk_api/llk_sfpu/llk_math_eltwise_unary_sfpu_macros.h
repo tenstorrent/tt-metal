@@ -106,14 +106,14 @@ inline __attribute__((always_inline)) void _sfpu_check_and_call_(
 
 /*
  * Non-templated functor in `ckernel::sfpu`, runtime vector_mode expression.
- *   SFPU_CALL_FN(DST_SYNC_MODE, DST_ACCUM_MODE,
+ *   SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE,
  *                _calculate_top4_,       dst, VectorMode::RC_custom);
- *   SFPU_CALL_FN(DST_SYNC_MODE, DST_ACCUM_MODE,
+ *   SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE,
  *                _calculate_top8_tile_,  dst, VectorMode::RC_custom, tile_index);
- *   SFPU_CALL_FN(DST_SYNC_MODE, DST_ACCUM_MODE,
+ *   SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE,
  *                calculate_sigmoid_appx, dst, vmode);
  */
-#define SFPU_CALL_FN(DST_SYNC, DST_ACCUM, FN, DST_IDX, VECTOR_MODE, ...) \
+#define SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, DST_ACCUM, FN, DST_IDX, VECTOR_MODE, ...) \
     ::ckernel::_sfpu_check_and_call_<DST_SYNC, DST_ACCUM>(::ckernel::sfpu::FN, DST_IDX, VECTOR_MODE, ##__VA_ARGS__)
 
 /*

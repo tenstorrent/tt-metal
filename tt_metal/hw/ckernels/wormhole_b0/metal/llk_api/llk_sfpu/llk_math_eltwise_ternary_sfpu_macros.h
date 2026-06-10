@@ -122,11 +122,12 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_and_call_(
 
 /*
  * Non-templated functor in `ckernel::sfpu`.
- *   SFPU_TERNARY_CALL_FN(DST_SYNC_MODE, DST_ACCUM_MODE,
+ *   SFPU_TERNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE,
  *                        _calculate_ternary_, in0, in1, in2, out, vmode);
  */
-#define SFPU_TERNARY_CALL_FN(DST_SYNC, DST_ACCUM, FN, DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE, ...) \
-    ::ckernel::_sfpu_ternary_check_and_call_<DST_SYNC, DST_ACCUM>(                                          \
+#define SFPU_TERNARY_CALL_NO_TEMPLATE_ARGS(                                        \
+    DST_SYNC, DST_ACCUM, FN, DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE, ...) \
+    ::ckernel::_sfpu_ternary_check_and_call_<DST_SYNC, DST_ACCUM>(                 \
         ::ckernel::sfpu::FN, DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE, ##__VA_ARGS__)
 
 /*
