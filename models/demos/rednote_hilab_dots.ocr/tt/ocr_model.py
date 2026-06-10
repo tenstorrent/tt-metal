@@ -32,10 +32,16 @@ copy of its KV head's cache). Per-token device cost is O(1) in sequence
 length (cache reads scan the fixed cache window, never the recompute).
 First sampled token comes from the prefill logits at row prompt_len-1.
 
-Perf phase note: the prior full-seq metal trace was retired with the
-recompute loop; the token step has fixed shapes + persistent caches/pos
-buffers, so the perf redo captures it as a single trace per step. The
-``use_trace`` kwarg is accepted and ignored for now.
+Perf phase (skills/perf, redo over the kv_cache decode): the token step
+is fixed-shape against persistent caches, so ``ocr(use_trace=True)``
+captures the WHOLE step — token embedding (persistent uint32 id buffer)
+-> 28 x forward_decode (persistent rope/mask/slot buffers) -> final norm
+-> lm_head -> on-device greedy argmax (all_gather logits -> untilize ->
+multicore argmax; 4-byte readback) — as ONE cross-call metal trace.
+Capture happens once on the first traced step after an untraced compile
+pass; every later step in every call is four small H2D copies + one
+``execute_trace`` + a 1-int readback. Requires the mesh be opened with
+``trace_region_size`` > 0; the untraced path is unchanged.
 """
 
 import importlib.util
@@ -128,6 +134,10 @@ class TtOCRModel(LightweightModule):
         # Text token embedding (embedding component): bf16 hidden-sharded table.
         self.embedding = TtEmbedding(mesh_device, wl.embedding_weights())
         # Decoder stack: fp32-mandatory attention path (Qwen2 attention sink).
+        # MLP weights bf16 (perf-phase targeted opt): the decode step is
+        # weight-bandwidth bound and gate/up/down are its hottest matmuls
+        # (28 x ~126 us fp32); bf16 matches HF's own bf16 weights, fp32
+        # activations + fp32 accumulate stay (e2e WER gate re-validated).
         self.layers = [
             TtDecoderLayer(
                 mesh_device,
@@ -135,6 +145,7 @@ class TtOCRModel(LightweightModule):
                 num_heads=12,
                 num_kv_heads=2,
                 dtype=ttnn.float32,
+                mlp_dtype=ttnn.bfloat16,
             )
             for i in range(num_text_layers)
         ]
@@ -158,6 +169,18 @@ class TtOCRModel(LightweightModule):
         for kv in self.kv_caches[1:]:
             ttnn.deallocate(kv["pos"])
             kv["pos"] = self.kv_caches[0]["pos"]
+        # Decode-trace state (perf phase): persistent per-step input buffers,
+        # host-tensor caches, captured trace id + output handle. All lazy.
+        self._pt_ids = None  # uint32 [1,1,1,32] RM token-id buffer
+        self._pt_cos = None  # fp32 [1,hpd,1,hd] rope cos buffer
+        self._pt_sin = None  # fp32 [1,hpd,1,hd] rope sin buffer
+        self._pt_mask = None  # fp32 [1,1,1,max_cache_seq] decode mask buffer
+        self._rope_host = {}  # slot -> (cos,sin) host tiles
+        self._mask_host = {}  # slot -> host mask tile
+        self._pos_host = {}  # slot -> host int32 [1]
+        self._decode_trace_id = None
+        self._decode_tok_out = None
+        self._decode_compiled = False
 
     # ------------------------------------------------------------------
     # Host-side preprocessing (hybrid_notes: stays on the HF host path)
@@ -301,6 +324,132 @@ class TtOCRModel(LightweightModule):
         return tok
 
     # ------------------------------------------------------------------
+    # Traced decode step (perf phase, skills/perf sub-pass 1)
+    # ------------------------------------------------------------------
+    def _host_decode_inputs(self, slot: int):
+        """Host-side tiles for ``slot`` (cached): rope cos/sin, decode mask, pos."""
+        attn = self.layers[0].self_attn
+        rep = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        if slot not in self._rope_host:
+            inv_freq = 1.0 / (1e6 ** (torch.arange(0, attn.head_dim, 2, dtype=torch.float) / attn.head_dim))
+            freqs = float(slot) * inv_freq
+            emb = torch.cat((freqs, freqs), dim=-1)
+            self._rope_host[slot] = tuple(
+                ttnn.from_torch(
+                    t.reshape(1, 1, 1, attn.head_dim).expand(1, attn.heads_per_device, 1, attn.head_dim).contiguous(),
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=rep,
+                )
+                for t in (emb.cos(), emb.sin())
+            )
+            mask = torch.full((1, 1, 1, self.max_cache_seq), torch.finfo(torch.float32).min / 2)
+            mask[..., : slot + 1] = 0.0
+            self._mask_host[slot] = ttnn.from_torch(mask, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, mesh_mapper=rep)
+            self._pos_host[slot] = ttnn.from_torch(
+                torch.tensor([slot], dtype=torch.int32), dtype=ttnn.int32, mesh_mapper=rep
+            )
+        return self._rope_host[slot], self._mask_host[slot], self._pos_host[slot]
+
+    def _ensure_decode_buffers(self, hidden: int):
+        """Persistent per-step input buffers (stable addresses for trace replay)."""
+        if self._pt_ids is not None:
+            return
+        attn = self.layers[0].self_attn
+        rep = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        common = dict(device=self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=rep)
+        self._pt_ids = ttnn.from_torch(
+            torch.zeros(1, 1, 1, 32, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, **common
+        )
+        zeros = torch.zeros(1, attn.heads_per_device, 1, attn.head_dim)
+        self._pt_cos = ttnn.from_torch(zeros, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, **common)
+        self._pt_sin = ttnn.from_torch(zeros, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, **common)
+        self._pt_mask = ttnn.from_torch(
+            torch.zeros(1, 1, 1, self.max_cache_seq), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, **common
+        )
+
+    def _write_decode_inputs(self, token: int, slot: int):
+        """Four small H2D copies into the persistent buffers (the per-step host work)."""
+        ids = torch.zeros(1, 1, 1, 32, dtype=torch.int32)
+        ids[0, 0, 0, 0] = token
+        ids_host = ttnn.from_torch(
+            ids,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        ttnn.copy_host_to_device_tensor(ids_host, self._pt_ids)
+        (cos_h, sin_h), mask_h, pos_h = self._host_decode_inputs(slot)
+        ttnn.copy_host_to_device_tensor(cos_h, self._pt_cos)
+        ttnn.copy_host_to_device_tensor(sin_h, self._pt_sin)
+        ttnn.copy_host_to_device_tensor(mask_h, self._pt_mask)
+        ttnn.copy_host_to_device_tensor(pos_h, self.kv_caches[0]["pos"])  # shared by all layers
+
+    def _decode_body_traced(self) -> ttnn.Tensor:
+        """Whole token step from persistent buffers; returns [1,1,1,1] uint32 token.
+
+        Trace-safe: fixed shapes, every input a long-lived device tensor.
+        On-device greedy argmax (all_gather full vocab -> untilize ->
+        multicore argmax) is the tick-47 proven exact recipe.
+        """
+        e = self.embedding.forward(self._pt_ids)  # [1, 1, 32, H] bf16 TILE, replicated
+        x = ttnn.slice(e, [0, 0, 0, 0], [1, 1, 1, e.shape[-1]])
+        ttnn.deallocate(e)
+        h = ttnn.typecast(x, ttnn.float32)
+        ttnn.deallocate(x)
+        for layer, kv in zip(self.layers, self.kv_caches):
+            h_next = layer.forward_decode(h, kv, (self._pt_cos, self._pt_sin), self._pt_mask)
+            ttnn.deallocate(h)
+            h = h_next
+        normed = self.final_norm(h)
+        ttnn.deallocate(h)
+        logits = self.lm_head.forward(normed)  # [1, 1, 1, vocab/N] fp32, vocab-sharded
+        ttnn.deallocate(normed)
+        if self.mesh_device.get_num_devices() > 1:
+            full = ttnn.all_gather(logits, dim=3, num_links=2, topology=ttnn.Topology.Linear)
+            ttnn.deallocate(logits)
+        else:
+            full = logits
+        rm = ttnn.untilize(full)  # multicore argmax needs ROW_MAJOR
+        ttnn.deallocate(full)
+        tok = ttnn.argmax(rm, dim=-1, use_multicore=True, keepdim=True)
+        ttnn.deallocate(rm)
+        return tok
+
+    def _decode_step_traced(self, token: int, slot: int, hidden: int) -> tuple[int, str]:
+        """One traced token step; returns (next_token, kind in {capture, replay})."""
+        self._ensure_decode_buffers(hidden)
+        self._write_decode_inputs(token, slot)
+        if self._decode_trace_id is None:
+            # Untraced compile pass FIRST (program-cache fill allocates device
+            # buffers, unsafe while a trace is alive — the tick-47 lesson),
+            # then capture exactly once. Output handle stays valid for replays.
+            tok_tt = self._decode_body_traced()
+            ttnn.synchronize_device(self.mesh_device)
+            tok = int(ttnn.to_torch(ttnn.get_device_tensors(tok_tt)[0])[0, 0, 0, 0].item())
+            ttnn.deallocate(tok_tt)
+            tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+            try:
+                self._decode_tok_out = self._decode_body_traced()
+            finally:
+                ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
+            ttnn.synchronize_device(self.mesh_device)
+            self._decode_trace_id = tid
+            return tok, "capture"
+        ttnn.execute_trace(self.mesh_device, self._decode_trace_id, cq_id=0, blocking=True)
+        tok = int(ttnn.to_torch(ttnn.get_device_tensors(self._decode_tok_out)[0])[0, 0, 0, 0].item())
+        return tok, "replay"
+
+    def release_decode_trace(self):
+        """Free the captured trace + output handle (e.g. before mesh close)."""
+        if self._decode_trace_id is not None:
+            ttnn.release_trace(self.mesh_device, self._decode_trace_id)
+            self._decode_trace_id = None
+        if self._decode_tok_out is not None:
+            ttnn.deallocate(self._decode_tok_out)
+            self._decode_tok_out = None
+
+    # ------------------------------------------------------------------
     # The use-case verb
     # ------------------------------------------------------------------
     def ocr(
@@ -314,11 +463,13 @@ class TtOCRModel(LightweightModule):
     ):
         """Greedy OCR decode. Returns the generated text (special tokens stripped).
 
-        use_trace: accepted for caller compatibility, currently ignored —
-            the KV-cached token step is fixed-shape with persistent caches
-            and slot buffer; the perf phase owns the metal-trace capture.
-        step_callback: optional ``f(position, ms, kind)`` hook,
-            kind in {"prefill", "decode"}; "decode" is steady state.
+        use_trace: run decode steps via the cross-call metal trace (capture
+            once on the first traced step, replay thereafter — across steps
+            AND across ocr() calls). Mesh must be opened with
+            ``trace_region_size`` > 0. Untraced path unchanged.
+        step_callback: optional ``f(position, ms, kind)`` hook, kind in
+            {"prefill", "decode", "capture", "replay"}; "decode" (untraced)
+            and "replay" (traced) are steady state.
         """
         import time as _time
 
@@ -347,12 +498,17 @@ class TtOCRModel(LightweightModule):
         if step_callback:
             step_callback(prompt_len - 1, (_time.perf_counter() - t0) * 1000.0, "prefill")
         generated = [next_token]
+        hidden = embeds.shape[-1]
         for step in range(1, max_new_tokens):
             if next_token in eos_ids:
                 break
             t0 = _time.perf_counter()
-            next_token = self._decode_step(next_token, prompt_len + step - 1)
+            slot = prompt_len + step - 1
+            if use_trace:
+                next_token, kind = self._decode_step_traced(next_token, slot, hidden)
+            else:
+                next_token, kind = self._decode_step(next_token, slot), "decode"
             if step_callback:
-                step_callback(prompt_len + step - 1, (_time.perf_counter() - t0) * 1000.0, "decode")
+                step_callback(slot, (_time.perf_counter() - t0) * 1000.0, kind)
             generated.append(next_token)
         return self.tokenizer.decode(generated, skip_special_tokens=True).strip()

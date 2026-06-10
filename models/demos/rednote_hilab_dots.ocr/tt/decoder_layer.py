@@ -69,10 +69,17 @@ class TtDecoderLayer(LightweightModule):
         num_kv_heads: KV heads (dots.ocr text: 2, kv_replication=2).
         dtype: on-device weight/activation dtype (fp32 default — the
             attention path is fp32-mandatory, see module docstring).
+        mlp_dtype: MLP weight dtype override (None -> dtype). The MLP is the
+            decode-step weight-bandwidth hotspot (perf-phase tracy: gate/up/
+            down at ~126 us/matmul fp32) and is NOT argmax-tie sensitive like
+            lm_head — bf16 here matches HF's own bf16 weights; activations
+            stay fp32 (fp32 accumulate in the sub-block).
         eps: RMSNorm epsilon (Qwen2 text decoder uses 1e-6).
     """
 
-    def __init__(self, mesh_device, state_dict, num_heads=12, num_kv_heads=2, dtype=ttnn.float32, eps=1e-6):
+    def __init__(
+        self, mesh_device, state_dict, num_heads=12, num_kv_heads=2, dtype=ttnn.float32, mlp_dtype=None, eps=1e-6
+    ):
         super().__init__()
         self.mesh_device = mesh_device
 
@@ -103,7 +110,7 @@ class TtDecoderLayer(LightweightModule):
         self.mlp = TtTextMLP(
             mesh_device,
             {k: state_dict[f"mlp.{k}"] for k in ("gate_proj.weight", "up_proj.weight", "down_proj.weight")},
-            dtype=dtype,
+            dtype=mlp_dtype or dtype,
         )
 
     # Host-side input prep delegates to the attention sub-block (rope tables

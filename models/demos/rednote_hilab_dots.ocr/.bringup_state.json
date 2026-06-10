@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T09:58:25Z",
+  "updated_at": "2026-06-10T10:24:17Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -854,9 +854,18 @@
         "wer": 0.0
       },
       "perf": {
-        "status": "pending",
+        "status": "done",
         "attempts": 0,
-        "notes": "REDO after kv-cache decode: trace token step; steady ms/tok must be O(1) in context; target <= 20 ms/tok at 3k context"
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/ocr_model.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/decoder_layer.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_ocr.py",
+          "models/demos/rednote_hilab_dots.ocr/PERF_NOTES.md",
+          "models/demos/rednote_hilab_dots.ocr/perf/traced/cpp_device_perf_report_kv_traced.csv"
+        ],
+        "notes": "Perf REDO over kv_cache decode complete. Sub-pass 1: whole token step (persistent uint32 id buffer -> embedding -> 28x forward_decode w/ persistent rope/mask/slot buffers + paged_update_cache -> norm -> lm_head -> on-device argmax, 4-byte readback) captured as ONE cross-call metal trace after an untraced compile pass; steady 88.2 -> 18.45 ms/tok (4.8x), total 1023 -> 321 ms; flat in context (18.45 ms/tok at 2240-token prompt). Sub-pass 2: traced tracy 29 replays, kernel 12.17 ms/step, top op MatmulDeviceOperation 55.9% (lm_head 627us; 28x MLP ~126us). ONE optimization: gate/up/down weights fp32->bf16 (HF-native dtype, fp32 act+acc) -> 18.08 ms/tok, kernel 11.92 ms; 126us matmuls are 1-row dispatch-bound not DRAM-bound. e2e WER gate PASS before+after (all samples exact); guard artifact+lint+parity ok. Target <=20 ms/tok at 3k context met. Host floor ~6 ms/step is the next lever.",
+        "steady_step_ms": 18.08,
+        "speedup": 4.88
       },
       "decode_strategy": "kv_cache"
     }
@@ -1154,6 +1163,12 @@
       "tick": 48,
       "ts": "2026-06-10T09:58:25Z",
       "action": "generation[ocr]",
+      "result": "ok"
+    },
+    {
+      "tick": 49,
+      "ts": "2026-06-10T10:24:17Z",
+      "action": "device[ocr]",
       "result": "ok"
     }
   ],
