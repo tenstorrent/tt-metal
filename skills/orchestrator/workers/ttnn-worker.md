@@ -133,3 +133,15 @@ Use the standard JSON last-line contract above. Pre-pend any human-readable
 prose to explain what you did — the orchestrator will parse only the last
 JSON line. The `"pcc"` field is REQUIRED to be a float whenever
 `status="ok"`.
+
+## Dtype discipline
+
+bf16 activations + bf16/bf8 weights with `fp32_dest_acc` is the
+production default — it is what every shipped tt model uses. fp32 is a
+NARROW exception for measured numerical hazards (e.g. attention-sink
+softmax, accumulation over deep stacks), applied per-op, never as a
+blanket dtype. If a composite misses its PCC gate in bf16, escalate
+fidelity surgically (fp32 softmax/residual first) and record the
+evidence; do not flip the whole block to fp32 to pass the gate — that
+trades a perf cliff for a numerics inch and the perf phase will pay it
+back.
