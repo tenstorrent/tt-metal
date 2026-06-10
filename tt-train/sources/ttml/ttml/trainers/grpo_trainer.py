@@ -330,8 +330,20 @@ class GRPOTrainer:
         adv_ttml: ttml.autograd.Tensor,
         completions_batch_len: int,
         eps: float,
+        ddp_world_size: int = 1,
     ) -> ttml.autograd.Tensor:
-        """Compute the clipped GRPO surrogate loss."""
+        """Compute the clipped GRPO surrogate loss.
+
+        ``completions_batch_len`` is the *global* number of completions in the
+        optimizer step. Under DDP, ``ttml.core.distributed.synchronize_gradients``
+        *averages* (not sums) the per-device gradients, so normalising the loss
+        by the global count would leave an extra ``1 / ddp_world_size`` factor
+        after that averaging. To keep gradients invariant to the device count we
+        normalise by the *per-device* completion count instead
+        (``completions_batch_len / ddp_world_size``); the gradient averaging then
+        restores the intended global-mean gradient. ``ddp_world_size`` is 1 when
+        DDP is disabled, leaving the single-device path unchanged.
+        """
         B_local, Tp = nlog_probs_old.shape()
         ratio = ttml.ops.unary.exp(nlog_probs_old - nlog_probs_new)
         clipped_ratio = ttml.ops.unary.clip(ratio, 1.0 - eps, 1.0 + eps)
@@ -347,7 +359,8 @@ class GRPOTrainer:
 
         weighted_surr = surr * weight_tt
         weighted_surr_4d = ttml.ops.reshape.reshape(weighted_surr, [1, 1, B_local, Tp])
-        return ttml.ops.unary.mean(weighted_surr_4d) * (-float(B_local) * float(Tp) / completions_batch_len)
+        per_device_batch_len = completions_batch_len / ddp_world_size
+        return ttml.ops.unary.mean(weighted_surr_4d) * (-float(B_local) * float(Tp) / per_device_batch_len)
 
     def train(self) -> None:
         grpo_cfg = self.config
@@ -460,6 +473,7 @@ class GRPOTrainer:
                         adv_ttml,
                         len(prompts_batch) * grad_accum,
                         grpo_cfg.epsilon,
+                        ddp_world_size=num_devices if ddp_enabled else 1,
                     )
 
                     loss.backward(retain_graph=False)
