@@ -32,7 +32,10 @@ struct DevicePrintBuffer {
 #endif
     } aux;
     static_assert(
-        sizeof(Aux) == 4 + 4 + (ProcessorCount * sizeof(DevicePrintRiscCoreState) + 3) / 4 * 4 + 4,
+        sizeof(Aux) == sizeof(uint32_t) + sizeof(uint32_t) +
+                           (ProcessorCount * sizeof(DevicePrintRiscCoreState) + sizeof(uint32_t) - 1) /
+                               sizeof(uint32_t) * sizeof(uint32_t) +
+                           sizeof(uint32_t),
         "Aux struct size must be correct");
     static_assert(sizeof(Aux) % 4 == 0, "Aux struct must be a multiple of 4 bytes for proper alignment of data");
     uint8_t data[BufferSize - sizeof(Aux)];

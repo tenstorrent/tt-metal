@@ -125,7 +125,7 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscs) {
 
         constexpr CoreCoord core = {0, 0};
         // Quasar prints from many more concurrent RISCs (22 on this test) than WH/BH (5).
-        // 1000 × 22 = 22k contended prints take well over 10 minutes on the RTL simulator,
+        // 1000 × 22 = 22k contended prints take well over 10 minutes on the RTL emulator,
         // so reduce the iteration count on Quasar. The race-detection signal does not require
         // a large count — even a small number of iterations with high concurrency exposes any
         // memory-ordering bugs immediately, and the assertion is per-iteration.
@@ -164,7 +164,8 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscs) {
                 });
 
             risc_count_per_iter = (experimental::quasar::QUASAR_NUM_DM_CORES_PER_CLUSTER - 2) +
-                                  (experimental::quasar::QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER * 4);
+                                  (experimental::quasar::QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER *
+                                   experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE);
         } else {
             // WH/BH: BRISC
             auto kernel_handle = CreateKernel(
@@ -193,7 +194,9 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscs) {
 
             SetRuntimeArgs(program_, kernel_handle, core, runtime_args);
 
-            risc_count_per_iter = 5;  // BRISC + NCRISC + TRISC0/1/2
+            // Every RISC on a WH/BH Tensix core: BRISC + NCRISC + TRISC0/1/2.
+            risc_count_per_iter = static_cast<int>(
+                MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::TENSIX));
         }
 
         DebugToolsMeshFixture::RunProgram(mesh_device, workload);
@@ -301,7 +304,8 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentBabyRiscs) {
         std::vector<uint32_t> compile_args = {iterations_count};
 
         constexpr int kNumTensixEngines = experimental::quasar::QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER;
-        constexpr int kTriscsPerEngine = 4;  // unpack + math + pack + extra
+        // unpack + math + pack + extra
+        constexpr int kTriscsPerEngine = experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE;
         CreateKernel(
             program_,
             "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations_compile_time.cpp",

@@ -372,7 +372,7 @@ void DispatchSKernel::ConfigureCore() {
     for (const auto& core_desc : print_cores) {
         auto virtual_core =
             cluster.get_virtual_coordinate_from_logical_coordinates(device_->id(), core_desc.coord, core_desc.type);
-        for (auto& buffer_info :
+        for (const auto& buffer_info :
              descriptor_.metal_context().dprint_server()->get_core_buffers(device_->id(), core_desc)) {
             device_print_dispatch::NocLocationInputInfo entry{};
             entry.x = virtual_core.x;

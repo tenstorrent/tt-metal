@@ -186,7 +186,7 @@ public:
     // DevicePrintMemoryLayout in device_print_mem.h) — a TRISC/compute buffer followed by a DM
     // buffer — so it returns two entries, in memory order.
     std::vector<DPrintBufferInfo> get_core_buffers(ChipId device_id, const umd::CoreDescriptor& print_core) const {
-        auto& cluster = env_.get_cluster();
+        const auto& cluster = env_.get_cluster();
         const auto& hal = env_.get_hal();
         auto virtual_core =
             cluster.get_virtual_coordinate_from_logical_coordinates(device_id, print_core.coord, print_core.type);
