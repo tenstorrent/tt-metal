@@ -4,6 +4,7 @@
 
 #include "unified_routed_expert_ffn_program_factory.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <map>
 #include <unordered_map>
@@ -289,22 +290,38 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         /*tiles=*/d_in0_block_num_tiles * 2,
         intermed_tile_size);
 
-    // Scratch CBs for the device-side count lookup. One page each, sized to
-    // the corresponding tensor's aligned page size so noc_async_read_page
-    // can land them.
-    const uint32_t counts_page_size = counts_buffer->aligned_page_size();
-    const uint32_t idx_page_size = idx_buffer->aligned_page_size();
+    // Scratch CBs for the device-side count lookup. The reader does a single
+    // noc_async_read_page(page=0, ...) of each tensor and then indexes
+    // counts[global_expert_id] for global_expert_id in
+    // [0, num_global_experts). The scratch must therefore be large enough to
+    // both (a) land the tensor's page and (b) hold up to MAX_GLOBAL_EXPERTS
+    // UINT32 entries so indexing the largest global id stays in-bounds.
+    //
+    // Size to max(aligned_page_size, MAX_GLOBAL_EXPERTS * 4B). For the
+    // supported range (<= MAX_GLOBAL_EXPERTS experts) the page never exceeds
+    // MAX_GLOBAL_EXPERTS * 4B, so this fixes the scratch at 4 KB ("4 tiles" of
+    // 1 KB) — enough for DeepSeek V3 (256), Kimi (384) and up to 1024 routed
+    // experts. Decoupling the capacity from the incidental input page size
+    // (which scales with num_experts) keeps the buffer correct for the design
+    // maximum regardless of how few experts a given call passes. ~4 KB/core of
+    // the ~250 KB L1 headroom — negligible.
+    constexpr uint32_t kScratchMinBytes = MAX_GLOBAL_EXPERTS * static_cast<uint32_t>(sizeof(uint32_t));
+    const uint32_t counts_scratch_bytes =
+        std::max<uint32_t>(static_cast<uint32_t>(counts_buffer->aligned_page_size()), kScratchMinBytes);
+    const uint32_t idx_scratch_bytes =
+        std::max<uint32_t>(static_cast<uint32_t>(idx_buffer->aligned_page_size()), kScratchMinBytes);
     tt::tt_metal::CircularBufferConfig counts_cb_cfg =
-        tt::tt_metal::CircularBufferConfig(counts_page_size, {{CB_COUNTS_SCRATCH, tt::DataFormat::UInt32}})
-            .set_page_size(CB_COUNTS_SCRATCH, counts_page_size);
+        tt::tt_metal::CircularBufferConfig(counts_scratch_bytes, {{CB_COUNTS_SCRATCH, tt::DataFormat::UInt32}})
+            .set_page_size(CB_COUNTS_SCRATCH, counts_scratch_bytes);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, counts_cb_cfg);
     // CB_IDX_SCRATCH holds the device-side global_expert_idx_table page so
     // reader/compute/writer can resolve `global_expert_id =
-    // idx_table[local_expert_id]` without re-reading DRAM. One page sized
-    // to the table's aligned page size.
+    // idx_table[local_expert_id]` without re-reading DRAM. Sized the same way:
+    // a single-chip deployment can place all experts locally, so the idx table
+    // may itself be up to MAX_GLOBAL_EXPERTS entries.
     tt::tt_metal::CircularBufferConfig idx_cb_cfg =
-        tt::tt_metal::CircularBufferConfig(idx_page_size, {{CB_IDX_SCRATCH, tt::DataFormat::UInt32}})
-            .set_page_size(CB_IDX_SCRATCH, idx_page_size);
+        tt::tt_metal::CircularBufferConfig(idx_scratch_bytes, {{CB_IDX_SCRATCH, tt::DataFormat::UInt32}})
+            .set_page_size(CB_IDX_SCRATCH, idx_scratch_bytes);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, idx_cb_cfg);
 
     // -------------------------- kernel build ------------------------------

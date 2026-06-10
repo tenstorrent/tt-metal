@@ -140,6 +140,13 @@ void kernel_main() {
     // Look up active token count for this expert from device-side buffers.
     // Reserve+read+push so the compute kernel (TRISC) and writer kernel
     // (NCRISC) can cb_wait_front on these CBs and read the same L1 data.
+    //
+    // Each scratch CB is a single page sized (host-side) to hold up to
+    // MAX_GLOBAL_EXPERTS UINT32 entries, so `1` here is the whole buffer and a
+    // single noc_async_read_page lands the entire counts / idx vector. The
+    // later counts_ptr[global_expert_id] / idx_ptr[local_expert_id] indexing
+    // therefore stays in-bounds for any model up to MAX_GLOBAL_EXPERTS experts
+    // (DeepSeek V3 256, Kimi 384, ... up to 1024).
     cb_reserve_back(cb_counts_scratch, 1);
     cb_reserve_back(cb_idx_scratch, 1);
     const uint32_t counts_l1 = get_write_ptr(cb_counts_scratch);
