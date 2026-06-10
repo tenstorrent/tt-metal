@@ -25,6 +25,33 @@ Before you finish, take another look over a current tt-perf-report output. Is ev
 
 Sometimes you will encounter a ttnn limitation or a bug. If, for example, you try an optimization and find that L1 buffers overlap (insufficient L1 space) do not take this as an excuse to give up on that optimization entirely. Instead, dive in to the code of the op and its shapes and configs and understand how you can reduce the L1 requirements in this part of the model. Or perhaps your specific shapes is not supported by the op and you need another one. Or the op does not support padding -> change the model contract so the tensors are manually padded in torch before conversion - all these things are in scope. If the failure crosses several ops, kernels, layouts, or planner/runtime boundaries and you are not making progress, use `$autofix`; it will run `$autodebug` if needed, then verify or refute each proposed bug before keeping any fix. Solve problems. Be curious. Be tenacious. Be creative. Be brilliant!
 
+## Performance Accounting
+
+Every optimized decode result must reconcile three numbers from the same run:
+
+1. Theoretical roofline: the bytes the measured path must move per token (weights at their stored dtypes plus KV-cache reads) divided by the aggregate DRAM bandwidth of the chips used.
+2. Device-time decode: per-token device time from your own signposted `tt-perf-report` window.
+3. End-to-end decode: warmed measured ms/token from the host.
+
+Report all three and attribute the gaps: end-to-end = device time + dispatch gap + host work. Every non-device term must be either optimized away or attributed to a named ttnn/runtime/API limitation with evidence. "The device math is fast but the loop is slow" is an unfinished optimization, not a result; a large unexplained gap between device time and end-to-end usually means an untraced path, per-step synchronization, host readback, or input-refresh overhead.
+
+The roofline fraction achieved varies legitimately by architecture - modules built from many small ops sit lower - so the explanation, not a fixed percentage, is the requirement. Name the limitations precisely; they feed the ttnn improvement backlog.
+
+When optimizing a complete model or serving path, also write `doc/<stage>/perf_summary.json` with this shape:
+
+```json
+{
+  "workload": {"prompt_len": 128, "gen_len": 128, "batch": 1},
+  "ttft_ms": 0.0,
+  "decode_ms_per_token_e2e": 0.0,
+  "decode_ms_per_token_device": 0.0,
+  "roofline_ms_per_token_estimate": 0.0,
+  "named_limitations": ["..."]
+}
+```
+
+Report TTFT honestly in `perf_summary.json` even when prefill optimization is deferred by project policy; deferred is a recorded state, not a hidden one.
+
 ## Evidence To Leave
 
 Final optimized evidence checklist - these items MUST be completed:
@@ -49,6 +76,7 @@ Final optimized evidence checklist - these items MUST be completed:
 -[ ] Fused matmul-CCL ops used where possible (or profiled and discarded with evidence).
 -[ ] For MoE models: optimized the routed active-expert path with `ttnn.sparse_matmul` where the model/hardware fits, following the GPT-OSS experts pattern for sparse gate/up/down projections, routing-score weighting, expert reduction, and no dense all-expert runtime path.
 -[ ] Reduced precision/fidelity experiments appropriate to this module-level optimization stage have been carried out and documented using real weights and input activations. For complete full-model top-k tuning, final datatype frontier selection is deferred to `$datatype-sweep`.
+-[ ] Performance accounting reconciled: roofline estimate, device-time decode, and end-to-end decode reported from the same run with every gap attributed or named as a ttnn limitation; `perf_summary.json` written when optimizing a complete model or serving path.
 
 If this checklist is not completed, take this as a sign that you should go back and perform those optimization steps to improve on-device performance. For this stage that is what we are most interested in optimizing; op/host gap will be reduced by tracing.
 
@@ -154,6 +182,13 @@ If Tracy collection fails, use the device-profiler fallback and post-process:
 TT_METAL_DEVICE_PROFILER=1 pytest <test-path> -k "<selector>"
 python tools/tracy/process_ops_logs.py --date
 ```
+
+Known tooling-failure signatures and prescribed actions - do not burn hours rediscovering these:
+
+- Tracy enrichment failing with "too many source locations" or dropped device markers on large models: profile a reduced-layer probe (one layer per kind) instead of the full stack.
+- Device-profiler-enabled serving dying at EngineCore startup with Ethernet-core IO or ARC timeouts: known profiler/serving conflict; `tt-smi -r`, retry once, then record the documented fallback timing.
+- Watcher overflowing the ACTIVE_ETH kernel config buffer: retry with `TT_METAL_WATCHER_DISABLE_ETH=1` and record the scoped limitation.
+- Transient CCL/fabric link errors immediately after a failed multi-device run: reset devices and retry once before treating it as hardware evidence.
 
 Copy the final CSV into the artifact directory and run:
 
