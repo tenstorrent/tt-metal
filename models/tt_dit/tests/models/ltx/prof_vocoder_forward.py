@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 import os
 import time
 
@@ -582,7 +586,11 @@ def test_prof_bwe_per_conv(mesh_device, device_params):
     agg = []
     for (Cin, Cout, K, T_pad, tob), v in rows.items():
         ms = sum(v) / 3
-        tuned = (aligned := None) or ((Cin, _round32(Cout), (K, 1, 1)) in _FP32_BLOCKINGS) or ((Cin, Cout, (K, 1, 1)) in _FP32_BLOCKINGS)
+        tuned = (
+            (aligned := None)
+            or ((Cin, _round32(Cout), (K, 1, 1)) in _FP32_BLOCKINGS)
+            or ((Cin, Cout, (K, 1, 1)) in _FP32_BLOCKINGS)
+        )
         agg.append((ms, Cin, Cout, K, T_pad, tob, tuned))
     for ms, Cin, Cout, K, T_pad, tob, tuned in sorted(agg, reverse=True):
         print(f"{ms:8.2f} {Cin:5} {Cout:5} {K:3} {T_pad:6} {str(tob):>5} {'yes' if tuned else 'NO':>7}", flush=True)
