@@ -72,7 +72,7 @@ All three are committed alongside the port.
 **Reference material** the recipe relies on, loaded on demand:
 
 - [Migration guide — Design Principles](metal2_migration_guide.md#design-principles): why certain legacy plumbing should evaporate during port.
-- [Migration guide — TTNN Framework Integration](metal2_migration_guide.md#ttnn-framework-integration): the `Metal2FactoryConcept` family, factory skeleton, cache lifecycle.
+- [TTNN integration doc](port_op_to_metal2_ttnn_factory.md): the factory concept, the `create_program_spec` entry point, the cache lifecycle, and the device-op-class edits the port forces.
 - [Patterns catalog](metal2_port_patterns.md): recognition signals + decisions for structural patterns and anti-patterns.
 
 ---
@@ -85,8 +85,8 @@ Before starting, confirm you have the following. If any is missing or unclear, a
 
 - **Legacy op source path** — the directory containing the op's legacy program-factory `.cpp`/`.hpp` files and kernel sources.
 - **Tests directory** — the path under `tests/ttnn/unit_tests/operations/<op-family-slug>/` where the op's pytests live. Note that the directory uses the **op-family slug**, not always the literal op name (e.g., reduction's tests live at `tests/ttnn/unit_tests/operations/reduce/`, not `reduction/`). If the invoker didn't supply this, discover it with `find tests/ttnn -path '*operations*' -name 'test_*.py' | grep -i <op>`.
-- **`METAL2_PREPORT_AUDIT.md`** — present in the op directory with overall GREEN status (precondition above). The audit includes a **TTNN ProgramFactory** section recording the Metal 2.0 factory concept the port targets; that decision is inherited, not re-derived. See [`port_op_to_metal2_ttnn_factory.md`](port_op_to_metal2_ttnn_factory.md) for the underlying decision tree.
-- **(Optional) Reference port** — a recently-completed similar op the invoker recommends studying for shape. The invoker may not always have one; absence is not a blocker.
+- **`METAL2_PREPORT_AUDIT.md`** — present in the op directory with overall GREEN status (precondition above). The audit includes a **TTNN ProgramFactory** section recording the Metal 2.0 factory concept the port targets; that decision is inherited, not re-derived. See the [TTNN integration doc](port_op_to_metal2_ttnn_factory.md) for the concept and the device-op-class edits the port forces.
+- **(Optional) Reference port** — a recently-completed similar op the invoker recommends studying for shape. The invoker may not always have one; absence is not a blocker. The first worked end-to-end `create_program_spec` port is **accumulation** (cumsum/cumprod) on branch `akertesz/porting-experiment-accumulation-jun10` — a small single-program op exercising tensor bindings, a self-loop DFB, work-split multiplicity, and the custom-hash deletion. A good shape reference when no closer op exists.
 
 ### Workspace bootstrap
 
@@ -138,7 +138,7 @@ If the build or test hangs (>15 min with no log progress), kill it, return TIMEO
 **Output**: write the **Legacy Inventory** section of `METAL2_PORT_PLAN.md` to the op's directory. Record:
 
 - **Legacy factory shape**: which `ttnn::device_operation` concept the legacy factory currently satisfies (`ProgramFactoryConcept` / `ProgramDescriptorFactoryConcept` / `MeshWorkloadFactoryConcept`). For each variant (if the device-operation is multi-variant), record separately. *(The Metal 2.0 factory concept the port lands on was chosen during the audit — see the audit report's TTNN ProgramFactory section. The recipe inherits that decision; carry it forward to the [TTNN ProgramFactory port-plan section](#ttnn-programfactory) below.)*
-- **Custom `compute_program_hash`**: does the device-operation define a custom `compute_program_hash` (overriding the default reflection-based hash)? If yes, record file:line — **the port deletes it**, reverting to the default hash. This is a sanctioned exception to the device-op-class off-limits rule (see [Host-side: stay in the lane](#host-side-stay-in-the-lane)): no Metal 2.0 concept reads the custom hash, PD-ported custom hashes are frequently incorrect now (omitting `TensorSpec` trips `UpdateTensorArgs` legality failures on fast-path cache hits), and the default is correct-by-construction. Don't patch it to add `TensorSpec`; delete it and record the deletion in the port report. (See also the [migration guide's troubleshooting table](metal2_migration_guide.md#cryptic-error--likely-cause) for the failure signature if a custom hash is ever missed.)
+- **Custom `compute_program_hash`**: does the device-operation define a custom `compute_program_hash` (overriding the default reflection-based hash)? If yes, record file:line — **the port deletes it**, reverting to the default hash. This is one of the two sanctioned device-op-class edits the port forces; the rationale and procedure live in the [TTNN integration doc — Delete a custom `compute_program_hash`](port_op_to_metal2_ttnn_factory.md#1-delete-a-custom-compute_program_hash). Record the deletion in the port report.
 - **Kernels**: every `KernelDescriptor` (one row per descriptor):
   - `kernel_source` (file path; flag any path outside the op's own directory — cross-op kernels are a Caution case).
   - `core_ranges` (verbatim).
@@ -157,6 +157,7 @@ If the build or test hangs (>15 min with no log progress), kill it, return TIMEO
 - **Work split**: which `split_work_to_cores` call (or similar) drives the per-core counts. Record `(num_cores, all_cores, core_group_1, core_group_2, count_per_group_1, count_per_group_2)`.
 - **Cross-op kernels**: explicitly list any kernel source path outside the op's directory; flag for [Caution: Modifying a shared dataflow kernel](metal2_port_patterns.md#caution-modifying-a-shared-dataflow-kernel).
 - **Factory variants**: if the device-operation has multiple variants (e.g., reduce W vs H vs HW; Welford W/H/HW), record each variant's complete inventory.
+- **Runtime kernel-source selection**: if a factory chooses its kernel *source file* at runtime (a switch over kernel paths, rather than one fixed source per `KernelDescriptor`), record it — this sets the true scope of the port. Because the spec's DFB/tensor bindings must match the selected source, the factory and **every** kernel source it can select must convert **atomically**: there is no "port the common path only" sub-target that builds. A factory + all its selectable readers/writers/compute variants is the minimal portable unit. Large multi-source ops (layernorm is the worst case seen so far — two factories selecting among ~13 kernels) can exceed what's feasible in one pass; size the effort against the *atomic unit*, not the common path, and surface it to the invoker if that unit is too large to port faithfully at once. (This is a legitimate [grounded stop](#when-the-discipline-doesnt-fit), not a failure.)
 
 **Stop signals**:
 - An unreferenced kernel file in the op's directory: not a stop, but note in the inventory's "Flags" subsection (so the report makes clear what was *not* audited).
@@ -170,9 +171,9 @@ If the build or test hangs (>15 min with no log progress), kill it, return TIMEO
 
 **Inputs**:
 - The Legacy Inventory written in the previous step.
-- **The audit report's TTNN ProgramFactory section** — the Metal 2.0 factory concept your port targets was chosen during the audit. Plan against it; do not re-walk the decision tree.
+- **The audit report's TTNN ProgramFactory section** — the Metal 2.0 factory concept your port targets was confirmed during the audit. Plan against it; do not re-derive it.
 - The [migration guide — Design Principles](metal2_migration_guide.md#design-principles), especially Principle 2 (named bindings) which drives the "Dropped Plumbing" section below.
-- The [migration guide — TTNN Framework Integration](metal2_migration_guide.md#ttnn-framework-integration) for the factory concept the ported op will satisfy.
+- The [TTNN integration doc](port_op_to_metal2_ttnn_factory.md#the-metal-20-factory-concept) for the factory concept the ported op will satisfy and the entry point that returns the spec.
 - The [patterns catalog](metal2_port_patterns.md).
 - Any yellow-tier items from the audit (apply per the catalog's override guidance for each).
 
@@ -180,12 +181,13 @@ If the build or test hangs (>15 min with no log progress), kill it, return TIMEO
 
 ### TTNN ProgramFactory
 
-Carry forward the audit's factory decision. This section is brief — the audit walked the decision tree and the recipe inherits the result; the recipe is *not* the place to re-derive the choice.
+Carry forward the audit's factory decision. This section is brief — the audit confirmed the concept and the recipe inherits the result; the recipe is *not* the place to re-derive the choice.
 
-- **Concept (inherited from audit)**: copy the concept name + caching strategy from the audit report's TTNN ProgramFactory section.
-- **Implementation notes** (optional): anything specific to how this op will realize the chosen concept that's worth surfacing before construction. Most ports don't need this.
+- **Concept (inherited from audit)**: copy the concept name from the audit report's TTNN ProgramFactory section (`ProgramSpecFactoryConcept` for every portable op today).
+- **Custom `compute_program_hash`**: note whether the audit flagged one for deletion (carried from the Legacy Inventory).
+- **Implementation notes** (optional): anything specific to how this op will realize the concept that's worth surfacing before construction. Most ports don't need this.
 
-If you find yourself disagreeing with the audit's choice, **stop and surface the disagreement to the invoker** — do not unilaterally override. The audit is the source of truth for the chosen concept; an in-port revision is a signal the audit was incomplete and the invoker needs to know. See [`port_op_to_metal2_ttnn_factory.md`](port_op_to_metal2_ttnn_factory.md) for the decision tree the audit walked.
+If you find yourself disagreeing with the audit's choice, **stop and surface the disagreement to the invoker** — do not unilaterally override. The audit is the source of truth for the chosen concept; an in-port revision is a signal the audit was incomplete and the invoker needs to know. See the [TTNN integration doc](port_op_to_metal2_ttnn_factory.md) for the concept and the device-op-class edits the port forces.
 
 ### Planned Spec Shape
 
@@ -229,7 +231,7 @@ For each non-trivial pattern from the [catalog](metal2_port_patterns.md) invoked
 
 - "[Self-loop DFB binding](metal2_port_patterns.md#pattern-self-loop-dfb-binding): ACC_DFB on compute KernelSpec (both PRODUCER and CONSUMER)."
 - "[Conditional optional binding](metal2_port_patterns.md#pattern-conditional--optional-dfb-bindings): SCALED_DFB on compute KernelSpec, gated by `do_scale` CTA."
-- "[Multi-variant factory](metal2_port_patterns.md#pattern-multi-variant-factories): `reduce_dim` variant selection inside `create_program_artifacts`."
+- "[Multi-variant factory](metal2_port_patterns.md#pattern-multi-variant-factories): `reduce_dim` variant selection inside `create_program_spec`."
 
 ### Deferred / Flagged
 
@@ -270,15 +272,16 @@ If at any point during the port you find yourself reaching past the rules below,
 
 The host-side discipline divides cleanly along a line between *the program factory body* and *everything around it*:
 
-- **The program factory body is the port.** The `create_program_artifacts` function (and any helpers it calls) is where Metal 2.0's host API is constructed — this code will be heavily rewritten by the port, and that's the work. Stay inside the Metal 2.0 transformation patterns documented in [§Construct paired spec + run-args](#construct-paired-spec--run-args) and [migration guide](metal2_migration_guide.md). Don't refactor adjacent code in the factory while you're there. Don't tighten or loosen a `TT_FATAL` that lives inside the factory. Don't reorder, rename, or "clean up" variables beyond the API renames documented (e.g., `cb_*` → `dfb_*`). The legacy CB API (`CBDescriptor`, `.cbs`, etc.) is replaced by `DataflowBufferSpec` and its companions — no CB references should survive in the post-port factory code (see also Kernel-side whitelist rule 1 for the symmetric kernel-side statement).
+- **The program factory body is the port.** The `create_program_spec` function (and any helpers it calls) is where Metal 2.0's host API is constructed — this code will be heavily rewritten by the port, and that's the work. Stay inside the Metal 2.0 transformation patterns documented in [§Construct paired spec + run-args](#construct-paired-spec--run-args) and [migration guide](metal2_migration_guide.md). Don't refactor adjacent code in the factory while you're there. Don't tighten or loosen a `TT_FATAL` that lives inside the factory. Don't reorder, rename, or "clean up" variables beyond the API renames documented (e.g., `cb_*` → `dfb_*`). The legacy CB API (`CBDescriptor`, `.cbs`, etc.) is replaced by `DataflowBufferSpec` and its companions — no CB references should survive in the post-port factory code (see also Kernel-side whitelist rule 1 for the symmetric kernel-side statement).
 
 - **The op-level host code outside the factory is off-limits.** The device-operation class itself (`validate`, `invoke`, `compute_output_specs`, attribute parsing, the `OpInputs` / `OpParams` definitions, runtime-arg validation, tensor-dtype checks, etc.) is *not* part of the Metal 2.0 port. Do not edit it. Even if the change seems trivial, even if it seems correct, even if you can see exactly what it should say. If you encounter something here that wants changing — a too-tight validation, a stale comment, a `TT_FATAL` whose message is wrong, a missing check — write it up in the port report under findings. Do not change the file.
 
-There are two *documented* exceptions to the off-limits rule — both deletions the port forces, both recorded prominently in the port report:
+There are exactly two *documented* exceptions to the off-limits rule — both device-op-class deletions the port forces, both recorded prominently in the port report. The full rationale and procedure for each live in the [TTNN integration doc — Device-operation-class edits the port forces](port_op_to_metal2_ttnn_factory.md#device-operation-class-edits-the-port-forces); in brief:
 
-1. **Pybind lines that reference legacy factory entry points the port causes to vanish** (`create_program_descriptor` is the canonical case). Leaving the pybind line in place would break the post-port build, so deletion is mandatory — but it's also a user-visible API surface change that downstream Python consumers may notice. See [Pattern: Removing pybound legacy factory entry points](metal2_port_patterns.md#pattern-removing-pybound-legacy-factory-entry-points) for the full procedure. The exception is narrow: it applies *only* to the disappearing factory entry point, not to other pybind lines on the same op.
+1. **A custom `compute_program_hash`** — delete it, reverting to the default TTNN hash (when the audit flagged one). Don't patch it to add `TensorSpec`; delete it.
+2. **Pybind lines for a legacy factory entry point the port makes vanish** (`create_program_descriptor` is the canonical case) — deletion is mandatory to keep the build green, and it's a user-visible surface change worth a Handoff-points entry.
 
-2. **A custom `compute_program_hash` — delete it and revert to the default TTNN hash.** When the audit flagged a custom `compute_program_hash`, the port removes it. This is sanctioned (not a freelance device-op-class edit) because: no Metal 2.0 factory concept reads the custom hash; PD-ported custom hashes are frequently incorrect now (they silently omit `TensorSpec` and trip `UpdateTensorArgs` legality failures on fast-path cache hits); and the default is correct-by-construction (`MaximizeCacheReuse` hashes the generated `ProgramSpec`, `MinimizeCacheHitCost` hashes the op args). Delete it as part of the port — do **not** patch it to add `TensorSpec` (that path leads to subtle bugs), and do **not** defer it to "see if it bites at verification." This is proactive port work, surfaced by the audit's Custom-program-hash subject.
+Neither extends to any other device-op-class edit. Everything else here stays exactly as it is, routed to the report.
 
 Concrete example of what *not* to do, drawn from a prior porting attempt:
 
@@ -316,6 +319,8 @@ dfb_in.pop_front(1);
 ```
 
 **2. CB id → DFBAccessor at LLK / kernel-lib call sites.** Magic-number CB indices (some older kernels hardcoded these) and `uint32_t cb_*_idx` CTA reads are replaced by the `dfb::<name>` handle. The accessor's implicit conversion to `uint32_t` lets it flow into LLK primitives (`reduce_init`, `pack_tile`, `matmul_init`, etc.) and kernel-library helpers expecting a CB id, without extraction or wrapping.
+
+> A CB index carried by a *named* CTA (`get_named_compile_time_arg_val("cb_in")`) converts the same way — to `dfb::cb_in`, **not** to `get_arg(args::cb_in)`. Whether the legacy CB index arrived positionally or by name, it becomes a DFB binding, never a named argument (rule 4). Named args are for non-CB scalars.
 
 ```cpp
 // Legacy:
@@ -453,20 +458,22 @@ Record in the port report's *Successful failure* section:
 
 **Operating principle**: prefer designated initializers. Metal 2.0 was designed to support them and the spec reads as data, not as procedure.
 
+**`Table`s are maps, not vectors.** Several spec fields that look list-like — `compile_time_args`, `runtime_arg_values` / `common_runtime_arg_values`, `unpack_to_dest_mode`, `defines`, `tensor_args` — are `Table` (a hash-friendly map type), *not* `std::vector`. `Table` has **no `push_back` and no iterator-pair constructor**; building one the way you'd build a vector won't compile. Use brace-init `{{key, value}, …}`, `insert` / `emplace`, `operator[]`, or the single-argument range constructor `Table(existing_map)` (e.g. to convert a legacy `std::map` of defines). When a `Table` must be built conditionally, declare it and `insert`/`emplace` into it — don't reach for `push_back`.
+
 For each resource type, construct the spec entry and its run-args entry as a pair. The order emerges naturally from the op's existing structure (reader / writer / compute order, tensor → DFB → semaphore precedence); the recipe does not prescribe a fixed sequence.
 
 - **`KernelSpec` ↔ `KernelRunArgs`.** For each planned `KernelSpec`, build the schema (`compile_time_args`, `runtime_arg_schema`, `dfb_bindings`, `tensor_bindings`, `semaphore_bindings`, `hw_config`); alongside, build the corresponding `KernelRunArgs` entry (per-node `runtime_arg_values` and `common_runtime_arg_values`). If the kernel has no RTAs, the run-args entry may be omitted entirely.
-- **`DataflowBufferSpec`.** Build with `entry_size`, `num_entries`, `data_format_metadata`, and `tile_format_metadata` **copied from the legacy CB's `format_descriptors[i].tile`** when that field was set (see [migration guide for the rationale](metal2_migration_guide.md#dataflowbufferspec)). No placement field — placement is derived from the kernel bindings. **`entry_size` and `num_entries` are set once at spec construction** — compute them from anything the spec construction has access to (input tensor shapes / shard specs, fields on `operation_attributes`). The `dfb_run_overrides` size-override fields exist in the API but are not supported on the `ProgramSpecFactoryConcept` fast path today; do not use them. (Ops that historically mutated CB sizes between executions are caught at audit time by the [Per-execution CircularBuffer size updates](port_op_to_metal2_audit.md#per-execution-circularbuffer-size-updates-updatecircularbuffertotalsize-updatecircularbufferpagesize-updatedynamiccircularbufferaddressandtotalsize--unsupported) UNSUPPORTED entry.) For borrowed-memory DFBs, set `borrowed_from = <tensor_parameter_name>` naming the `TensorParameter` whose buffer backs the DFB; the backing L1 address resolves at runtime from the corresponding `TensorArgument`, so no `dfb_run_overrides` entry is needed for the backing memory. For aliased DFBs (legacy aliased CBs), set each spec's `advanced_options.alias_with` to mutually name the other members of the alias group — see [Pattern: Aliased DFBs](metal2_port_patterns.md#pattern-aliased-dfbs-legacy-aliased-cbs).
+- **`DataflowBufferSpec`.** Build with `entry_size`, `num_entries`, `data_format_metadata`, and `tile_format_metadata` **copied from the legacy CB's `format_descriptors[i].tile`** when that field was set (see [migration guide for the rationale](metal2_migration_guide.md#dataflowbufferspec)). No placement field — placement is derived from the kernel bindings. **`entry_size` and `num_entries` are set once at spec construction** — compute them from anything the spec construction has access to (input tensor shapes / shard specs, fields on `operation_attributes`). The `dfb_run_overrides` size-override fields exist in the API but are not supported today; do not use them. (Ops that historically mutated CB sizes between executions are caught at audit time by the [Per-execution CircularBuffer size updates](port_op_to_metal2_audit.md#per-execution-circularbuffer-size-updates-updatecircularbuffertotalsize-updatecircularbufferpagesize-updatedynamiccircularbufferaddressandtotalsize--unsupported) UNSUPPORTED entry.) For borrowed-memory DFBs, set `borrowed_from = <tensor_parameter_name>` naming the `TensorParameter` whose buffer backs the DFB; the backing L1 address resolves at runtime from the corresponding `TensorArgument`, so no `dfb_run_overrides` entry is needed for the backing memory. For aliased DFBs (legacy aliased CBs), set each spec's `advanced_options.alias_with` to mutually name the other members of the alias group — see [Pattern: Aliased DFBs](metal2_port_patterns.md#pattern-aliased-dfbs-legacy-aliased-cbs).
 - **`SemaphoreSpec`.** Build with `target_nodes`. (Semaphores have no per-execution counterpart on `ProgramRunArgs`.)
-- **`TensorParameter` ↔ `TensorArgument`.** Declare each tensor as a `TensorParameter` (using `<tensor>.tensor_spec()`); alongside, add the corresponding `TensorArgument` to `ProgramRunArgs::tensor_args`. Here `<tensor>` is the `MeshTensor` extracted from the input `ttnn::Tensor` at the top of the factory — see the [migration guide's tensor-types callout](metal2_migration_guide.md#ttnn-framework-integration) for the extraction convention.
+- **`TensorParameter` ↔ `TensorArgument`.** Declare each tensor as a `TensorParameter` (using `<tensor>.tensor_spec()`); alongside, add the corresponding `TensorArgument` to `ProgramRunArgs::tensor_args`. Here `<tensor>` is the device-resident `ttnn::Tensor` arriving via `tensor_args` / `tensor_return_value`; the `TensorArgument` must reference that same tensor (the framework matches it back by `MeshTensor` identity, so a copy fails) — see the [TTNN integration doc — Extracting the tensor](port_op_to_metal2_ttnn_factory.md#extracting-the-tensor).
 - **`WorkUnitSpec`.** Build with `kernels` (by `unique_id`) and `target_nodes`. No per-execution counterpart.
 
-After all resources are built, assemble the `ProgramSpec` (collecting `kernels`, `dataflow_buffers`, `semaphores`, `tensor_parameters`, `work_units`) and the `ProgramRunArgs` (collecting `kernel_run_args`, `tensor_args`). Return `ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_args = std::move(run_args)}`.
+After all resources are built, assemble the `ProgramSpec` (collecting `kernels`, `dataflow_buffers`, `semaphores`, `tensor_parameters`, `work_units`) and the `ProgramRunArgs` (collecting `kernel_run_args`, `tensor_args`). Return them wrapped as `ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)}` from the factory's `create_program_spec` method — see the [TTNN integration doc](port_op_to_metal2_ttnn_factory.md#the-metal-20-factory-concept) for the method signature and the cache lifecycle the framework wraps around it.
 
 **Hardware-config shortcuts.** Two helpers worth knowing for the `hw_config` field on `KernelSpec`:
 
 - *DM kernels*: prefer `DataMovementHardwareConfig::RoleHint::READER` or `RoleHint::WRITER` over manual `gen1_config` setup. The RoleHint auto-infers the Gen1 processor/NOC pair (and the Gen2 default config), so the construction is one line: `.hw_config = DataMovementHardwareConfig{.role = DataMovementHardwareConfig::RoleHint::READER}`. `UNSPECIFIED` permits a power-user override via explicit `gen1_config`.
-- *Compute kernels*: if the ported op carries a TTNN `ComputeKernelConfig`, use the converter helper (in `tt_metal/api/tt-metalium/experimental/`) to translate it to `ComputeHardwareConfig` rather than rebuilding field-by-field. The helper maps `math_fidelity`, `math_approx_mode`, `fp32_dest_acc_en`, `dst_full_sync_en` 1:1. **`unpack_to_dest_mode` is not part of the helper** — the factory must configure it separately when needed (e.g., for FP32 DFB consumers under `fp32_dest_acc_en`).
+- *Compute kernels*: if the ported op carries a TTNN `ComputeKernelConfig`, use the converter helper `to_compute_hardware_config(const ComputeKernelConfig&)` (declared in `ttnn/cpp/ttnn/operations/core/compute_kernel/compute_kernel_config.hpp`) to translate it to `ComputeHardwareConfig` rather than rebuilding field-by-field. The helper maps `math_fidelity`, `math_approx_mode`, `fp32_dest_acc_en`, `dst_full_sync_en` 1:1. **`unpack_to_dest_mode` is not part of the helper** — the factory must configure it separately when needed (e.g., for FP32 DFB consumers under `fp32_dest_acc_en`).
 
 **Stop signals**: any urge to —
 
@@ -500,7 +507,7 @@ cmake --build build_Release --target ttnncpp unit_tests_ttnn -j 8
 
 The helper returns SUCCESS / FAILURE + key errors. On FAILURE, common causes:
 
-- `AllFactoriesValid` `static_assert` fires → a factory satisfies two concepts (likely a stale `cached_program_t` declaration alongside the new `create_program_artifacts`). Audit for missed deletions in the header.
+- `AllFactoriesValid` `static_assert` fires → a factory satisfies two concepts (likely a stale `cached_program_t` declaration alongside the new `create_program_spec`). Audit for missed deletions in the header.
 - Unresolved symbol for `override_runtime_arguments` → some code path still calls it. Should only happen for the framework adapter, which doesn't for `ProgramSpecFactoryConcept` factories. Re-audit.
 - Error referencing `metal2_artifacts.hpp` (or other framework header) not found → the framework dependency is not on this branch. Stop and report; the framework PR was a precondition for the audit (which should have failed pre-port).
 - `kernel_args_generated.h` mentions a name that doesn't exist → host added a named CTA / RTA without the kernel referencing it (or vice versa). Reconcile.
@@ -526,7 +533,7 @@ If compilation passes but the test fails with a `TT_FATAL` from `program_spec.cp
 
 For symptom-organized lookup (errors whose fix isn't obvious from the message text), see the [migration guide's troubleshooting table](metal2_migration_guide.md#cryptic-error--likely-cause).
 
-**Custom `compute_program_hash` failure mode.** The port should already have deleted any custom `compute_program_hash` (reverting to the default) per [Host-side: stay in the lane](#host-side-stay-in-the-lane) — it's proactive port work, not a wait-and-see. If you nonetheless see `UpdateTensorArgs` `TensorSpec` legality failures on the *second and later* test invocations (program cache hot), that's the signature of a custom hash that survived the port: find it and delete it, reverting to the default TTNN hash. Do not patch the custom hash to include `TensorSpec` — that path leads to subtle bugs. Confirm the deletion is recorded in `METAL2_PORT_REPORT.md`.
+**Custom `compute_program_hash` failure mode.** The port should already have deleted any custom `compute_program_hash` (reverting to the default) per the [TTNN integration doc](port_op_to_metal2_ttnn_factory.md#1-delete-a-custom-compute_program_hash) — it's proactive port work, not a wait-and-see. The signature of one that survived: `UpdateTensorArgs` `TensorSpec` legality failures on the *second and later* test invocations (program cache hot), not the first. If you see that, find the surviving custom hash and delete it; do not patch it to include `TensorSpec`. Confirm the deletion is recorded in `METAL2_PORT_REPORT.md`.
 
 ### Anti-pattern self-audit
 
@@ -557,18 +564,9 @@ Structure the report with the following sections. Each section may be empty (wri
 
 ### TTNN ProgramFactory
 
-Confirms the realized factory shape against the audit's decision. The audit chose; the port reports what actually happened.
+Confirms the realized factory shape against the audit's decision, and records the device-op-class edits the port forced. Filled out per the [TTNN integration doc — Port report deliverable](port_op_to_metal2_ttnn_factory.md#port-report-deliverable-porter-facing): concept realized, custom-hash deletion (file:line or none), pybind entry points removed (or none), and open items (relaxation candidates, capabilities not yet on main the op would benefit from, friction with the concept fit).
 
-- **Concept realized**: confirm it matches the audit's choice. If the realized concept changed, explain why and confirm the discrepancy was surfaced with the invoker before re-deciding (do not silently override).
-- **Escalations applied**: for each non-default axis the realized port reached for:
-  - "Op-owned MeshTensors: <which tensors, why>"
-  - "Op-owned GlobalSemaphores (workload only): <why>"
-  - "Multi-program: <why per-coord program shapes differ>"
-  - "MinimizeCacheHitCost caching strategy: <required because op-owned resources>"
-  - If the port stayed entirely on the default, write "None — default `ProgramSpecFactoryConcept`, no op-owned resources, strict tensor matching, default `MaximizeCacheReuse` caching."
-- **Open items**: relaxation candidates (kernels that would tolerate relaxed tensor matching but were not opted in during port), reasons the port would benefit from an Advanced concept if available, anything the decision tree didn't anticipate, friction with the concept selection process itself.
-
-If the port stayed on the default and the audit's choice held cleanly, this section is short — that's the success case.
+If the port stayed on the default concept with no device-op edits, this section is short — that's the success case.
 
 ### Handoff points
 
@@ -684,9 +682,9 @@ Anything the inventory step noticed but didn't classify — unreferenced kernel 
 
 *Filled in during the planning step. The concept itself was chosen in the audit; this section carries it forward.*
 
-- **Concept (inherited from audit)**: <ProgramSpecFactoryConcept | WorkloadSpecFactoryConcept>
-- **Caching strategy (inherited from audit)**: <MaximizeCacheReuse (default) | MinimizeCacheHitCost>
-- **Implementation notes** (optional): <anything specific to how this op will realize the chosen concept that's worth surfacing before construction>
+- **Concept (inherited from audit)**: <ProgramSpecFactoryConcept>
+- **Custom `compute_program_hash`**: <delete (was at file:line) | none>
+- **Implementation notes** (optional): <anything specific to how this op will realize the concept that's worth surfacing before construction>
 
 (If you find yourself disagreeing with the audit's choice, stop and surface to the invoker — do not override.)
 

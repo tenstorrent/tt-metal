@@ -866,7 +866,7 @@ TTNN ops integrate with the Metal 2.0 host API through the `ttnn::device_operati
 
 Metal 2.0 factories satisfy `Metal2FactoryConcept`, an umbrella over a 2 × 2 design space — *factory shape* {Basic, Advanced} × *workload scope* {single-program, multi-program} — yielding four leaf concepts:
 
-- **`ProgramSpecFactoryConcept`** — Basic, single-program. Single combined method `create_program_artifacts()` returns a `ProgramArtifacts` (the `ProgramSpec` + `ProgramRunArgs` + optional op-owned MeshTensors bundle). **Most ops use this.**
+- **`ProgramSpecFactoryConcept`** — Basic, single-program. Single combined method `create_program_spec()` returns a `ProgramArtifacts` (the `ProgramSpec` + `ProgramRunArgs` + optional op-owned MeshTensors bundle). **Most ops use this.**
 - **`WorkloadSpecFactoryConcept`** — Basic, multi-program. Single combined method `create_workload_artifacts()` returns `MeshWorkloadArtifacts` (per-coord programs + optional op-owned MeshTensors + optional op-owned GlobalSemaphores at the workload level).
 - **`AdvancedProgramSpecFactoryConcept`** / **`AdvancedWorkloadSpecFactoryConcept`** — Advanced variants that split the factory into separate immutable-extraction / spec-construction / run-args-construction methods. **Stubbed in the framework today** — concepts compile but the adapter `static_assert`s "not yet supported." A port that genuinely needs one of these is blocked on framework implementation.
 
@@ -881,14 +881,14 @@ The most common Metal 2.0 factory shape — what porters reach for first — sat
 ```cpp
 // In your factory header:
 struct MyProgramFactory {
-    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+    static ttnn::device_operation::ProgramArtifacts create_program_spec(
         const operation_attributes_t& attributes,
         const tensor_args_t&           tensor_args,
         tensor_return_value_t&         tensor_return_value);
 };
 
 // In your factory implementation:
-ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_artifacts(
+ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_spec(
     const operation_attributes_t& attributes,
     const tensor_args_t&           tensor_args,
     tensor_return_value_t&         tensor_return_value) {
@@ -916,14 +916,14 @@ ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_artifa
 `ProgramArtifacts` has three fields: `spec`, `run_args`, and `op_owned_tensors` (default-empty). Most ports leave `op_owned_tensors` defaulted.
 
 > **Tensor types in a ProgramFactory.** A factory sits between two tensor-type universes; you'll see three names but only two real types:
-> - **`ttnn::Tensor`** — TTNN's PyTorch-like tensor wrapper. Can in general represent either a host-resident or device-resident tensor, but **is always device-resident in a ProgramFactory.** This is what `tensor_args` and `tensor_return_value` carry into `create_program_artifacts`.
+> - **`ttnn::Tensor`** — TTNN's PyTorch-like tensor wrapper. Can in general represent either a host-resident or device-resident tensor, but **is always device-resident in a ProgramFactory.** This is what `tensor_args` and `tensor_return_value` carry into `create_program_spec`.
 > - **`tt::tt_metal::MeshTensor`** — Metalium's native device-tensor type. RAII handle with unique ownership over a (mesh) device allocation. Metal 2.0's `TensorArgument` (the entries you populate in `ProgramRunArgs::tensor_args`) takes a `const MeshTensor&` — this is the type the rest of the Metal 2.0 API speaks.
 > - **`tt::tt_metal::Tensor`** — a deprecated alias for `ttnn::Tensor`, not a third type. The class is declared in the `tt::tt_metal` namespace despite its header living under `ttnn/` — a refactoring artifact. If you encounter `tt_metal::Tensor` in legacy code, mentally substitute `ttnn::Tensor`.
 >
 > **Extract `MeshTensor` from each input at the top of the factory.** `ttnn::Tensor::mesh_tensor()` returns `const MeshTensor&` (the rvalue overload is `= delete`'d to prevent dangling references on temporaries). Recommended style — extract once at factory entry, work with `MeshTensor` references throughout:
 >
 > ```cpp
-> ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_artifacts(
+> ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_spec(
 >     const operation_attributes_t& attributes,
 >     const tensor_args_t&           tensor_args,
 >     tensor_return_value_t&         tensor_return_value) {
@@ -945,8 +945,8 @@ The framework manages two distinct execution paths. The lifecycle depends on the
 
 **Default — `MaximizeCacheReuse`:**
 
-- **Cache miss** (first execution with a given `ProgramSpec`): the framework calls `create_program_artifacts`, then internally calls `MakeProgramFromSpec(*device, spec)` to build the `Program`, then calls `SetProgramRunArgs(program, run_args)` to apply the per-execution values. The cache key is the `ProgramSpec` itself.
-- **Cache hit** (subsequent executions whose factories produce equal specs): the framework calls `create_program_artifacts` again to get fresh artifacts, then internally calls `SetProgramRunArgs(program, run_args)` to re-apply the full `ProgramRunArgs`. The factory pays its full cost every dispatch in exchange for broad cache equivalence — different op-args that produce the same spec share a cache entry, and every mutable field is rebuilt fresh so nothing can carry stale state.
+- **Cache miss** (first execution with a given `ProgramSpec`): the framework calls `create_program_spec`, then internally calls `MakeProgramFromSpec(*device, spec)` to build the `Program`, then calls `SetProgramRunArgs(program, run_args)` to apply the per-execution values. The cache key is the `ProgramSpec` itself.
+- **Cache hit** (subsequent executions whose factories produce equal specs): the framework calls `create_program_spec` again to get fresh artifacts, then internally calls `SetProgramRunArgs(program, run_args)` to re-apply the full `ProgramRunArgs`. The factory pays its full cost every dispatch in exchange for broad cache equivalence — different op-args that produce the same spec share a cache entry, and every mutable field is rebuilt fresh so nothing can carry stale state.
 
 **Opt-in — `MinimizeCacheHitCost`** (factory carries `static constexpr auto caching_strategy = ProgramCachingStrategy::MinimizeCacheHitCost;`):
 
@@ -959,7 +959,7 @@ The framework dispatches based on which concept the factory satisfies — there 
 
 A practical consequence of TTNN's caching: **most parameters that *could* vary between calls are treated as if they were immutable, and the cache is invalidated when they change**. The actually-mutable surface across calls is small — typically just the tensor identities (`tensor_args` in `ProgramRunArgs`).
 
-Under the default `MaximizeCacheReuse` strategy, an op author specifying a Metal 2.0 factory does not directly experience the spec/run-args separation as a per-call distinction. The two are constructed together in `create_program_artifacts`; the framework's cache machinery converts that single construction call into either a full realization (cache miss) or a re-application of the full `ProgramRunArgs` (cache hit). Designing your factory to construct paired resources and values together — `TensorParameter` and its `TensorArgument`, RTA schema and its values — reflects the actual authoring flow.
+Under the default `MaximizeCacheReuse` strategy, an op author specifying a Metal 2.0 factory does not directly experience the spec/run-args separation as a per-call distinction. The two are constructed together in `create_program_spec`; the framework's cache machinery converts that single construction call into either a full realization (cache miss) or a re-application of the full `ProgramRunArgs` (cache hit). Designing your factory to construct paired resources and values together — `TensorParameter` and its `TensorArgument`, RTA schema and its values — reflects the actual authoring flow.
 
 ---
 

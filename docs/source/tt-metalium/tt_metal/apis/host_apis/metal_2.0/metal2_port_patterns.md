@@ -26,6 +26,7 @@ Optional fields, used when the entry's substance requires them:
 - [Self-loop DFB binding (producer == consumer)](#pattern-self-loop-dfb-binding)
 - [Conditional / optional DFB bindings](#pattern-conditional--optional-dfb-bindings)
 - [Aliased DFBs (legacy aliased CBs)](#pattern-aliased-dfbs-legacy-aliased-cbs)
+- [Same-FIFO aliasing (one DFB, multiple kernel-side names)](#pattern-same-fifo-aliasing-one-dfb-multiple-kernel-side-names)
 - [Pass DFB handles directly to LLKs and kernel-lib helpers](#pattern-pass-dfb-handles-directly-to-llks-and-kernel-lib-helpers)
 - [Multi-variant factories](#pattern-multi-variant-factories)
 - [Unity-build hygiene for anonymous-namespace symbols](#pattern-unity-build-hygiene-for-anonymous-namespace-symbols)
@@ -143,7 +144,54 @@ For larger alias groups (three or more), every member names every other member i
 
 **Don't split** the aliased CB into independent, non-aliased DFBs. That changes the L1 footprint and breaks any kernel assumption that the indices shared an address.
 
-**See also**: [migration guide — DataflowBufferSpec: Aliased DFBs](metal2_migration_guide.md#dataflowbufferspec); [audit — Aliased Circular Buffers entry](port_op_to_metal2_audit.md#aliased-circular-buffers-cbs-sharing-backing-memory--landed).
+**See also**: [migration guide — DataflowBufferSpec: Aliased DFBs](metal2_migration_guide.md#dataflowbufferspec); [audit — Aliased Circular Buffers entry](port_op_to_metal2_audit.md#aliased-circular-buffers-cbs-sharing-backing-memory--landed); [Same-FIFO aliasing](#pattern-same-fifo-aliasing-one-dfb-multiple-kernel-side-names) (the *other* kind of "aliasing" — don't confuse them).
+
+---
+
+## Pattern: Same-FIFO aliasing (one DFB, multiple kernel-side names)
+
+**Category**: Pattern
+
+**Recognition signal**: A kernel refers to **one** circular buffer through **multiple names**, via legacy `uint32_t` CB-index aliasing — `constexpr uint32_t cb_x = cb_in;`, or a ternary that resolves one name to a CB index (`constexpr uint32_t cb_x = fuse ? cb_fusion : cb_out;`). Both names are then used for the *same* FIFO: a `push`/`reserve_back` via one name is seen by a `wait_front`/`pop_front` via the other, because they are literally the same buffer with the same read/write pointers.
+
+**This is not [Aliased DFBs](#pattern-aliased-dfbs-legacy-aliased-cbs).** The two are easy to conflate and the distinction is correctness-critical:
+
+| | Aliased DFBs (`alias_with`) | Same-FIFO aliasing (this entry) |
+|---|---|---|
+| Buffers | Two+ **distinct** DFBs | **One** DFB |
+| FIFO pointers | **Independent** per DFB | **Shared** — one FIFO |
+| What's shared | The physical L1 region | The buffer's identity |
+| Legacy form | Two CB *indices* configured at the same L1 address | Two `uint32_t` *variables* holding the same CB index |
+
+Modeling same-FIFO aliasing with `alias_with` is a **bug**: you would get two independent FIFOs at one address, and the producer/consumer pointer coherence the kernel relies on (produce via one name, consume via the other) is lost silently.
+
+**Decision**: Keep **one** `DataflowBufferSpec` and **one** `DFBBinding`. Express the second name as a **kernel-side handle alias** — a `constexpr` alias of the generated token:
+
+```cpp
+// Legacy: cb_x and cb_in are the same CB index.
+constexpr uint32_t cb_x = cb_in;
+// ... uses both cb_x and cb_in for the same FIFO ...
+
+// Metal 2.0: one binding (dfb::cb_in); alias the handle, construct ONE object.
+constexpr auto cb_x = dfb::cb_in;     // cb_x and dfb::cb_in are the same handle
+DataflowBuffer dfb_in(dfb::cb_in);    // a SINGLE object for the FIFO
+```
+
+**Don't**:
+- **Don't add a second `DFBBinding`** to the same DFB under a different `accessor_name` to manufacture a `dfb::cb_x` token. A kernel binds a given DFB under exactly one accessor name (the [self-loop pair](#pattern-self-loop-dfb-binding) — one name, PRODUCER+CONSUMER — is the only "twice" form), and the spec validator rejects a second name for the same DFB.
+- **Don't construct two `DataflowBuffer` objects from the same `DFBAccessor`** (`DataflowBuffer a(dfb::cb_in); DataflowBuffer b(dfb::cb_in);`). It compiles and runs, but two objects aliasing one FIFO break the object↔DFB identity that device-side debug tooling depends on. Alias the *handle*, keep *one* object.
+
+**Path-dependent variant.** When the aliased name resolves to *different* DFBs on different compile-time paths (`cb_x` is `dfb::cb_fusion` when fused, `dfb::cb_out` otherwise), gate the handle alias under the matching `#ifdef` so each path names only DFBs bound on it — the [Conditional / optional DFB bindings](#pattern-conditional--optional-dfb-bindings) pattern applied to the *name→DFB mapping*:
+
+```cpp
+#ifdef FUSE
+constexpr auto cb_x = dfb::cb_fusion;
+#else
+constexpr auto cb_x = dfb::cb_out;
+#endif
+```
+
+**See also**: [Aliased DFBs](#pattern-aliased-dfbs-legacy-aliased-cbs) (the distinct-buffers / shared-memory kind); [Conditional / optional DFB bindings](#pattern-conditional--optional-dfb-bindings); [Self-loop DFB binding](#pattern-self-loop-dfb-binding).
 
 ---
 
@@ -186,12 +234,12 @@ No `.id` extraction, no temporary `DataflowBuffer` constructed just to retrieve 
 
 **Recognition signal**: One program factory builds multiple `ProgramSpec`s depending on a variant attribute — e.g. Welford reduction's `reduce_dim` selecting among W/H/HW variants, each with its own kernels, its own DFB set, and its own RTA schema.
 
-**Decision**: Branch on the variant inside `create_program_artifacts`. No class hierarchy is needed; the variant is a configuration, not a factory subclass. Per-variant DFB unique ids and KernelSpec sources are local to each branch.
+**Decision**: Branch on the variant inside `create_program_spec`. No class hierarchy is needed; the variant is a configuration, not a factory subclass. Per-variant DFB unique ids and KernelSpec sources are local to each branch.
 
 **Correct port**:
 
 ```cpp
-ttnn::device_operation::ProgramArtifacts MyFactory::create_program_artifacts(
+ttnn::device_operation::ProgramArtifacts MyFactory::create_program_spec(
     const operation_attributes_t& attrs,
     const tensor_args_t&           inputs,
     tensor_return_value_t&         output) {
@@ -349,7 +397,7 @@ uint32_t base = in.get_bank_base_address(bank_id) + offset;
 
 **Decision**:
 
-1. **Delete** the pybind line(s) that expose the vanished function. Do not attempt to "update" the binding to point at the new factory's entry point (e.g., `create_program_artifacts`) — the two functions have different signatures and use patterns, and the Python-side callers (if any) need to be addressed separately, not silently retargeted. Make the smallest change that restores compilation: just remove the line(s).
+1. **Delete** the pybind line(s) that expose the vanished function. Do not attempt to "update" the binding to point at the new factory's entry point (e.g., `create_program_spec`) — the two functions have different signatures and use patterns, and the Python-side callers (if any) need to be addressed separately, not silently retargeted. Make the smallest change that restores compilation: just remove the line(s).
 2. **Record the deletion prominently in the port report** under [Handoff points](port_op_to_metal2_recipe.md#handoff-points). Include: the pybind file path, the function name(s) deleted, and a one-line description of what the function was for (if you can tell from the surrounding code). This is a *user-visible API surface change* — downstream Python consumers (tests, notebooks, internal tooling) that called into the legacy entry point need to be findable by the people who maintain them. The prominent report entry is how they get found.
 
 **Constraint**: This exception applies *only* to pybind exposures of factory entry points that the Metal 2.0 port causes to disappear. Other op-level pybind lines — the user-facing op binding itself, attribute conversions, return-value handling — remain off-limits per the host-side scope discipline. If you're uncertain whether a given pybind line falls inside or outside the exception, the safe move is to leave it and write a finding in the report.
