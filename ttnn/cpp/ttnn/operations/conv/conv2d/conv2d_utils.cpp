@@ -457,13 +457,13 @@ Conv2dBlockConfig determine_per_core_conv_block_config(
         } else {
             act_block_h_ntiles =
                 find_closest_largest_divisor(padded_output_height_ntiles_per_core, act_block_h_override_ntiles);
-            log_debug(
+            log_info(
                 tt::LogOp,
                 "act_block_h_override {} is not a valid override for padded_output_height_ntiles_per_core {}, "
                 "instead {} was selected as closest valid option!",
-                act_block_h_override_ntiles,
+                act_block_h_override,
                 padded_output_height_ntiles_per_core,
-                act_block_h_ntiles);
+                act_block_h_ntiles * tt::constants::TILE_HEIGHT);
         }
     }
 
