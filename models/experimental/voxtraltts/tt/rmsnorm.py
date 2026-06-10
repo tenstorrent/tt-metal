@@ -134,7 +134,8 @@ class VoxtralTextRMSNorm:
         output_mem_config = norm_config.get("output_mem_config") if norm_config else None
 
         if self.use_fused:
-            return self._forward_fused(x, mode, sharded_output_config, output_mem_config)
+            sharded_program_config = norm_config.get("sharded_program_config") if norm_config else None
+            return self._forward_fused(x, mode, sharded_output_config, output_mem_config, sharded_program_config)
 
         # Match DistributedNorm: decode activations are width-sharded in L1.
         input_mem_cfg = (
@@ -196,11 +197,14 @@ class VoxtralTextRMSNorm:
             out = ttnn.to_memory_config(out, output_mem_config)
         return out
 
-    def _forward_fused(self, x, mode, sharded_output_config, output_mem_config):
+    def _forward_fused(self, x, mode, sharded_output_config, output_mem_config, sharded_program_config=None):
         """Single fused ``ttnn.rms_norm`` (fp32 square via fp32 input + fp32_dest_acc).
 
-        Same numerics intent as the manual path (fp32 promote → variance → rsqrt → normalize →
-        bf16 weight-multiply) but in one kernel instead of ~8 ops, killing the per-op dispatch gap.
+        Replaces the ~8-op manual fp32 decomposition with one kernel (still fp32-faithful via the
+        fp32 input promote). Runs on the INTERLEAVED tensor: the sharded fp32 ``rms_norm`` was tried
+        (opt7) but the fp32 sharded kernel splits into 2 ops, adding back more ops than the saved
+        layout conversions (net gap up, free-run 0.7707->0.7622) — so it's not used. ``sharded_program_config``
+        is accepted for signature compatibility but intentionally unused.
         """
         input_mem_cfg = (
             sharded_output_config if mode == Mode.DECODE and sharded_output_config else ttnn.DRAM_MEMORY_CONFIG
