@@ -20,18 +20,8 @@ on:
         required: false
         type: boolean
         default: false
-      run_fd_unit_tests:
-        description: "Run Fast Dispatch Unit Tests"
-        required: false
-        type: boolean
-        default: false
-      run_sd_unit_tests:
-        description: "Run Slow Dispatch Unit Tests"
-        required: false
-        type: boolean
-        default: false
-      run_metal_iommu_tests:
-        description: "Run Metal IOMMU Unit Tests"
+      run_llk_unit_tests:
+        description: "Run LLK Unit Tests (slow dispatch)"
         required: false
         type: boolean
         default: false
@@ -356,7 +346,7 @@ jobs:
   llk-unit-tests:
     needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
     if: |
-      (github.event_name == 'schedule' || inputs.run_sd_unit_tests) &&
+      (github.event_name == 'schedule' || inputs.run_llk_unit_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
     secrets: inherit
     uses: ./.github/workflows/llk-unit-tests-impl.yaml
