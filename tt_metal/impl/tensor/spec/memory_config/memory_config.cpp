@@ -33,8 +33,9 @@ void validate_memory_layout_and_shard_spec_consistency(
             break;
         case TensorMemoryLayout::ND_SHARDED:
             TT_FATAL(
-                !has_legacy_shard_spec,
-                "ND_SHARDED MemoryConfig must be constructed from NdShardSpec, not legacy ShardSpec.");
+                false,
+                "ND_SHARDED MemoryConfig must be constructed from NdShardSpec, not the legacy ShardSpec constructor "
+                "path.");
             break;
         default: break;
     }

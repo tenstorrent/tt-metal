@@ -178,6 +178,14 @@ TEST_F(MemoryConfigEqualityTest, NdShardedRejectsLegacyShardSpecConstructor) {
             ::testing::HasSubstr("ND_SHARDED MemoryConfig must be constructed from NdShardSpec")));
 }
 
+TEST_F(MemoryConfigEqualityTest, NdShardedRejectsLegacyConstructorWithoutShardSpec) {
+    EXPECT_THAT(
+        std::function<void()>(
+            []() { [[maybe_unused]] auto config = MemoryConfig(TensorMemoryLayout::ND_SHARDED, BufferType::L1); }),
+        ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("ND_SHARDED MemoryConfig must be constructed from NdShardSpec")));
+}
+
 TEST_F(MemoryConfigEqualityTest, BothLegacyShardSpec_Equal) {
     MemoryConfig a(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec_a_);
     MemoryConfig b(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec_a_);
