@@ -95,3 +95,4 @@
 {"source":"run_safe_pytest","pid":1350699,"started_at_ms":1781087168696,"wait_ms":2,"run_ms":38900,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_regression.py","exit_code":0}
 {"source":"eval_test_runner","pid":1352862,"started_at_ms":1781087293094,"wait_ms":233,"run_ms":535076,"test_path":"eval/golden_tests/scaled_dot_product_attention/","exit_code":0}
 {"source":"tt-probe","pid":1370542,"started_at_ms":1781088339136,"wait_ms":381,"run_ms":22140,"test_path":"scaled_dot_product_attention","exit_code":0}
+{"source":"run_safe_pytest","pid":1372382,"started_at_ms":1781088452944,"wait_ms":2,"run_ms":56351,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_non_aligned.py","exit_code":0}
