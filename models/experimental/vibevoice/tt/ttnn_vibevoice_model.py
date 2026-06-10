@@ -195,6 +195,7 @@ class TTVibeVoiceModel:
         num_diffusion_steps: int = 10,
         prefill_speech_embeds: Optional[torch.Tensor] = None,
         max_new_tokens: Optional[int] = None,
+        forced_token_ids: Optional[torch.Tensor] = None,
         rng: Optional[torch.Generator] = None,
         ref_inference=None,
     ) -> TTVibeVoiceOutput:
@@ -203,6 +204,9 @@ class TTVibeVoiceModel:
         Pass ``ref_inference`` (loaded VibeVoiceForConditionalGenerationInference) to
         drive the AR loop with CPU fp32 reference LM hidden states + ref diffusion/fusion
         for parity with HuggingFace generate().
+
+        Pass ``forced_token_ids`` (post-prefill ids from reference generate) to replay the
+        reference token stream on TT diffusion/decode for matching duration.
         """
         if tokenizer is None:
             raise ValueError("tokenizer is required (VibeVoiceProcessor.tokenizer)")
@@ -218,5 +222,6 @@ class TTVibeVoiceModel:
             speech_input_mask=speech_input_mask,
             prefill_speech_embeds=prefill_speech_embeds,
             max_new_tokens=max_new_tokens,
+            forced_token_ids=forced_token_ids,
             rng=rng,
         )

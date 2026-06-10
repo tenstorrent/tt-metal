@@ -116,7 +116,7 @@ class TTVibeVoiceGenerator:
         cfg_scale: float = 1.3,
         num_diffusion_steps: int = 10,
         max_new_tokens: Optional[int] = None,
-        max_length_times: float = 20.0,
+        max_length_times: float = 2.0,
         speech_scaling_factor: Optional[float] = None,
         speech_bias_factor: Optional[float] = None,
         acoustic_fix_std: float = 0.5,
@@ -461,9 +461,15 @@ class TTVibeVoiceGenerator:
         speech_input_mask: Optional[torch.Tensor] = None,
         prefill_speech_embeds: Optional[torch.Tensor] = None,
         max_new_tokens: Optional[int] = None,
+        forced_token_ids: Optional[torch.Tensor] = None,
         rng: Optional[torch.Generator] = None,
     ) -> TTVibeVoiceOutput:
-        """Run VibeVoice TTS generation aligned with reference generate()."""
+        """Run VibeVoice TTS generation aligned with reference generate().
+
+        Pass ``forced_token_ids`` (1-D post-prefill token ids from reference generate)
+        to replay the reference AR sequence on TT diffusion/decode — same duration and
+        frame count as HuggingFace.
+        """
         device = self.device
         cfg = self.lm.cfg
 
@@ -488,7 +494,13 @@ class TTVibeVoiceGenerator:
 
         initial_length = input_ids.shape[-1]
         initial_len = int(attention_mask.sum(dim=-1)[0].item())
-        if max_new_tokens is not None:
+        forced_tokens: Optional[List[int]] = None
+        if forced_token_ids is not None:
+            forced_tokens = forced_token_ids.reshape(-1).tolist()
+            if not forced_tokens:
+                raise ValueError("forced_token_ids must be non-empty")
+            max_steps = len(forced_tokens)
+        elif max_new_tokens is not None:
             max_steps = max_new_tokens
         else:
             max_steps = min(
@@ -512,7 +524,12 @@ class TTVibeVoiceGenerator:
         # On-device argmax (ttnn.argmax) — numerically identical to host fp32 argmax
         # (bf16→fp32 upcast is monotonic) and avoids copying the full vocab row.
         use_fp32_argmax = False
-        next_token = _greedy_argmax(logits_pos, use_fp32=use_fp32_argmax)
+        forced_idx = 0
+        if forced_tokens is not None:
+            next_token = forced_tokens[0]
+            forced_idx = 1
+        else:
+            next_token = _greedy_argmax(logits_pos, use_fp32=use_fp32_argmax)
         step_hidden = prefill_hidden
 
         for step in range(max_steps):
@@ -565,7 +582,11 @@ class TTVibeVoiceGenerator:
                     self._reset_ref_tokenizer_caches()
 
             logits = _apply_token_constraint(logits, self.valid_token_ids, device)
-            next_token = _greedy_argmax(logits, use_fp32=use_fp32_argmax)
+            if forced_tokens is not None:
+                next_token = forced_tokens[forced_idx] if forced_idx < len(forced_tokens) else self.eos_token_id
+                forced_idx += 1
+            else:
+                next_token = _greedy_argmax(logits, use_fp32=use_fp32_argmax)
 
         # The per-step streaming decode already produced each frame's audio chunk
         # (with full causal context via the decoder cache); concatenate for the
