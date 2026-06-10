@@ -32,6 +32,7 @@ Columns:
 Stop with SIGTERM/SIGINT; it flushes and exits cleanly.
 """
 
+import math
 import signal
 import subprocess
 import sys
@@ -107,7 +108,7 @@ def main():
             row = [f"{mid:.3f}", iso, f"{t1 - t0:.3f}"]
             for s in SENSORS:
                 v = vals.get(s, float("nan"))
-                row.append(f"{v:.1f}" if v == v else "NA")  # v==v is False for NaN
+                row.append("NA" if math.isnan(v) else f"{v:.1f}")
             f.write(",".join(row) + "\n")
 
             # Sleep the remainder of the interval (reads slower than interval -> no sleep)

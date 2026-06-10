@@ -85,7 +85,9 @@ def run_bge_demo_inference(
         state_dict=reference_model.state_dict(),
     )
 
-    encoded_input = model_args.encode_prompts(queries)
+    # attention_mask_4d=False: this path feeds the mask to the HF backbone and to
+    # _mean_pool / _to_ttnn_ids, which all expect the 2D [B, S] keep-mask.
+    encoded_input = model_args.encode_prompts(queries, attention_mask_4d=False)
     input_ids = encoded_input["input_ids"]
     attention_mask = encoded_input["attention_mask"]
     token_type_ids = encoded_input.get("token_type_ids", torch.zeros_like(input_ids))
