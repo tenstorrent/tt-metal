@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T10:31:30Z",
+  "updated_at": "2026-06-10T10:34:27Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -420,7 +420,7 @@
       "optimization": {
         "status": "pending",
         "attempts": 0,
-        "notes": "REDO (dtype): fp32 tower is atypical/slow (3.49s vs 754ms bf16 single-chip). Standard recipe: bf16 activations+weights, fp32-dest-acc, fp32 softmax only where sinks demand; gate = e2e parity (TTNN==HF), not per-block PCC alone."
+        "notes": "REDO (dtype+TP): 1) bf16 activations+weights, fp32_dest_acc, fp32 only per measured hazard (target <=900ms at 11k tokens; old single-chip bf16 = 754ms untraced). 2) After dtype lands, A/B head-parallel TP (12 heads -> 3/chip + col/row MLP w/ reduce_scatter+all_gather) vs replicate at 11k tokens; keep the measured winner; e2e parity gate after each step."
       },
       "real_weights": {
         "status": "done",

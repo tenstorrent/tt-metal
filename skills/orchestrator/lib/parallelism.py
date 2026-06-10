@@ -84,3 +84,10 @@ def plan_parallelism(
         "per_chip_budget_bytes": int(budget),
         "total_param_bytes": total,
     }
+
+
+# Known blind spot (dots.ocr finding): the per_input -> replicate rule has no
+# size term. A run-once encoder that dominates e2e wall time at production
+# input sizes deserves sharding even though its CCLs are unamortized; the
+# perf phase must A/B replicate vs TP at production shapes when encoder time
+# exceeds ~25% of e2e.
