@@ -231,3 +231,8 @@ query the grid (13x10 on full Blackhole), report per-hotspot core
 counts, drive each <70%-occupancy op to a max-core config or measured
 rejection, L1-shard batch-1 decode activations, iterate until at-ceiling
 with evidence. Post-trace "dispatch-bound" is not a valid wave-off.
+
+**Single-pass paths are bf8b candidates:** vision towers/encoders and
+LM prefill run once per input — quantization error cannot accumulate.
+Try bfloat8_b (weights AND activations) there first; reserve higher
+precision for AR loops (drift gate) and recorded hazards.
