@@ -9,7 +9,7 @@ import pytest
 from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 import ttnn
 
-pytestmark = pytest.mark.use_module_device
+pytestmark = pytest.mark.use_module_device({"l1_small_size": 32768})
 
 
 def prepare_conv_weights_func(
@@ -205,7 +205,6 @@ def prepare_conv_weights_func(
     ),
 )
 @pytest.mark.parametrize("is_owned", [True, False], ids=["owned_storage", "borrowed_storage"])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 2**15}], indirect=True)
 def test_prepare_conv_weights(
     batch_size,
     output_channels,
@@ -251,7 +250,6 @@ def test_prepare_conv_weights(
 )
 @pytest.mark.parametrize("weights_dtype", [None, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("torch_weights_dtype", [ttnn.float32])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 2**15}], indirect=True)
 def test_conv_weights_dtype(
     batch_size,
     output_channels,
@@ -303,7 +301,6 @@ def test_conv_weights_dtype(
     ),
 )
 @pytest.mark.parametrize("has_bias", [True], ids=["has_bias"])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 2**15}], indirect=True)
 def test_prepare_bias(
     batch_size,
     output_channels,
@@ -421,7 +418,6 @@ SliceHeight = ttnn.Conv2dDRAMSliceHeight
 SliceWidth = ttnn.Conv2dDRAMSliceWidth
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_channels, output_channels, input_height, input_width, slice_type, num_slices, kernel, stride, padding, dilation, act_block_h_override",
     # fmt: off
@@ -485,7 +481,6 @@ def test_conv_dram(
         (1, 768, 3, 384, 512, 32, 32, 32, 32),
     ),
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 2**15}], indirect=True)
 def test_prepare_conv_weights_with_fold(
     batch_size,
     output_channels,
