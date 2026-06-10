@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-10T03:32:56Z",
+  "updated_at": "2026-06-10T03:50:19Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -313,8 +313,15 @@
         "pcc": 1.0
       },
       "ttnn": {
-        "status": "pending",
-        "attempts": 0
+        "status": "done",
+        "attempts": 0,
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_transformer.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_vision_transformer.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/vision_transformer.traced_ops.json"
+        ],
+        "notes": "Full tower composition of done sub-blocks: TtVisionPatchEmbed -> 42x TtVisionBlock -> TtVisionRMSNorm(post_trunk_norm) -> TtPatchMerger, mirroring reference_impl qwen25_vl/tt/model.py. All real fp32 vision_tower weights, replicated on 1x4 mesh per parallelism plan (placement=replicate); seq padded 784->896, host rope/cu_seqlens per hybrid_notes. Numerics: bf16 end-to-end compounded rounding across 42 blocks (PCC 0.9768) amplified by late-layer outlier channels (h_absmax up to 1604), so the tower runs an fp32 residual stream + fp32 weights/activations with a high-precision attention path (fp32 fused QKV via nlp_create_qkv_heads fp32, explicit fp32 HF-convention rope via slice/neg/concat/mul/add, bf16 only at the bf16-only windowed-SDPA kernel boundary; o_proj fp32). Found+worked around: ttnn.rms_norm fp32 ROW_MAJOR gamma is misread on device (PCC ~0) -> fp32 gammas use TILE [1,1,1,dim]. PCC 0.990121 \u2014 thin margin over 0.99; per-block isolation PCC 0.99999+, deficit is amplified early-layer SDPA-core bf16 noise (bf16-only kernel). bf16 paths of the four modified sub-block files re-verified: patch_embed 0.999957, rmsnorm 0.999982, attention 0.999855, block 0.999958 \u2014 all unchanged. Guard ok (lint 0, kernels ok, no new host ops). KB entries for kind other were generic eltwise/scatter records \u2014 none applicable, none used. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim.",
+        "pcc": 0.990121
       },
       "debug": {
         "status": "n/a",
@@ -676,6 +683,12 @@
       "tick": 11,
       "ts": "2026-06-10T03:32:56Z",
       "action": "device[patch_merger]",
+      "result": "ok"
+    },
+    {
+      "tick": 12,
+      "ts": "2026-06-10T03:50:19Z",
+      "action": "device[vision_transformer]",
       "result": "ok"
     }
   ],

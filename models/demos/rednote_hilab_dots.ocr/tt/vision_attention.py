@@ -58,6 +58,11 @@ class TtVisionAttention(LightweightModule):
         super().__init__()
         self.mesh_device = mesh_device
         self.num_heads = num_heads
+        # fp32 weights select the high-precision path: fp32 fused QKV +
+        # explicit fp32 HF-convention rope, with bf16 only at the (bf16-only)
+        # windowed-SDPA kernel boundary. Used by the 42-layer full tower,
+        # where per-layer bf16 rope/qkv rounding compounds below the PCC bar.
+        self.high_precision = dtype == ttnn.float32
 
         qkv_w = state_dict["qkv.weight"]  # [3*dim, dim], rows = q | k | v
         proj_w = state_dict["proj.weight"]  # [dim, dim]
@@ -70,11 +75,13 @@ class TtVisionAttention(LightweightModule):
         # rotary_embedding_llama computes META (pairwise-interleaved) rope, so
         # reorder the q/k weight rows HF->meta; v is rope-free and QK^T is
         # invariant to the (common) head_dim permutation, so attn output and
-        # o_proj are unchanged.
-        q_w, k_w, v_w = qkv_w[:dim], qkv_w[dim : 2 * dim], qkv_w[2 * dim :]
-        q_w = reverse_permute(q_w, num_heads, dim, dim)
-        k_w = reverse_permute(k_w, num_heads, dim, dim)
-        qkv_w = torch.cat([q_w, k_w, v_w], dim=0)
+        # o_proj are unchanged. The high-precision path applies HF-convention
+        # rope explicitly instead, so it keeps the HF row order.
+        if not self.high_precision:
+            q_w, k_w, v_w = qkv_w[:dim], qkv_w[dim : 2 * dim], qkv_w[2 * dim :]
+            q_w = reverse_permute(q_w, num_heads, dim, dim)
+            k_w = reverse_permute(k_w, num_heads, dim, dim)
+            qkv_w = torch.cat([q_w, k_w, v_w], dim=0)
         # Transpose for x @ W^T; fused columns stay q|k|v with contiguous
         # heads — exactly the nlp_create_qkv_heads input contract.
         self.wqkv = ttnn.from_torch(
@@ -115,24 +122,36 @@ class TtVisionAttention(LightweightModule):
     # ARCHITECTURE.md hybrid_notes). Not part of the device forward path.
     # ------------------------------------------------------------------
     def prepare_rope(self, rotary_pos_emb: torch.Tensor, padded_seq: int):
-        """Build replicated cos/sin [1, 1, padded_seq, head_dim] device tensors.
+        """Build replicated cos/sin device tensors.
 
         rotary_pos_emb: [seq, head_dim//2] table from vision_rot_pos_emb.
         Pad rows use cos=1 / sin=0 (identity rotation).
+
+        Default path: bf16 META-convention tables [1, 1, padded_seq, head_dim]
+        for rotary_embedding_llama. High-precision path: fp32 HF-convention
+        tables pre-expanded to [1, num_heads, padded_seq, head_dim] for the
+        explicit rope in forward.
         """
         seq = rotary_pos_emb.shape[0]
         freqs = torch.cat([rotary_pos_emb, rotary_pos_emb], dim=-1).float()  # [seq, head_dim] HF layout
-        # HF half-dim-duplicated -> meta pairwise-interleaved, matching the
-        # reverse_permute applied to the q/k weights above.
-        cos, sin = convert_rope_style_hf_to_meta(freqs.cos(), freqs.sin())
+        cos, sin = freqs.cos(), freqs.sin()
+        if not self.high_precision:
+            # HF half-dim-duplicated -> meta pairwise-interleaved, matching
+            # the reverse_permute applied to the q/k weights above.
+            cos, sin = convert_rope_style_hf_to_meta(cos, sin)
         if padded_seq > seq:
             cos = torch.cat([cos, torch.ones(padded_seq - seq, cos.shape[-1])], dim=0)
             sin = torch.cat([sin, torch.zeros(padded_seq - seq, sin.shape[-1])], dim=0)
 
+        dtype = ttnn.float32 if self.high_precision else ttnn.bfloat16
+
         def _to_dev(t):
+            t = t.reshape(1, 1, padded_seq, -1)
+            if self.high_precision:
+                t = t.expand(1, self.num_heads, padded_seq, t.shape[-1]).contiguous()
             return ttnn.from_torch(
-                t.reshape(1, 1, padded_seq, -1),
-                dtype=ttnn.bfloat16,
+                t,
+                dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -154,18 +173,40 @@ class TtVisionAttention(LightweightModule):
     # ------------------------------------------------------------------
     # Device forward
     # ------------------------------------------------------------------
+    def _apply_rope_fp32(self, t: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
+        """Explicit fp32 HF-convention rope: t*cos + rotate_half(t)*sin.
+
+        t / cos / sin: [1, num_heads, padded_seq, head_dim] fp32 TILE.
+        rotate_half(t) = concat(-t[..., d/2:], t[..., :d/2]).
+        """
+        shape = t.shape
+        half = self.head_dim // 2
+        t1 = ttnn.slice(t, [0, 0, 0, 0], [shape[0], shape[1], shape[2], half])
+        t2 = ttnn.slice(t, [0, 0, 0, half], [shape[0], shape[1], shape[2], self.head_dim])
+        neg_t2 = ttnn.neg(t2)
+        ttnn.deallocate(t2)
+        rot = ttnn.concat([neg_t2, t1], dim=-1)
+        ttnn.deallocate(neg_t2)
+        ttnn.deallocate(t1)
+        out = ttnn.add(ttnn.multiply(t, cos), ttnn.multiply(rot, sin))
+        ttnn.deallocate(rot)
+        ttnn.deallocate(t)
+        return out
+
     def forward(self, x_11SH: ttnn.Tensor, rot_mats, cu_seqlens: ttnn.Tensor) -> ttnn.Tensor:
         """x_11SH: [1, 1, padded_seq, dim] TILE_LAYOUT, replicated.
 
-        rot_mats: (cos, sin) each [1, 1, padded_seq, head_dim] from prepare_rope.
+        rot_mats: (cos, sin) from prepare_rope (layout depends on precision
+        path — see prepare_rope).
         cu_seqlens: uint32 device tensor of unpadded window boundaries.
         Returns: [1, 1, padded_seq, dim], replicated (rows past the last
         cu_seqlens boundary are padding garbage — caller slices them off).
         """
+        act_dtype = ttnn.float32 if self.high_precision else ttnn.bfloat16
         xqkv = ttnn.linear(
             x_11SH,
             self.wqkv,
-            dtype=ttnn.bfloat16,
+            dtype=act_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
@@ -180,8 +221,15 @@ class TtVisionAttention(LightweightModule):
         ttnn.deallocate(xqkv)
 
         cos, sin = rot_mats
-        q = ttnn.experimental.rotary_embedding_llama(q, cos, sin, self.trans_mat, is_decode_mode=False)
-        k = ttnn.experimental.rotary_embedding_llama(k, cos, sin, self.trans_mat, is_decode_mode=False)
+        if self.high_precision:
+            # fp32 explicit rope, then drop to bf16 only for the bf16-only
+            # windowed-SDPA kernel.
+            q = ttnn.typecast(self._apply_rope_fp32(q, cos, sin), ttnn.bfloat16)
+            k = ttnn.typecast(self._apply_rope_fp32(k, cos, sin), ttnn.bfloat16)
+            v = ttnn.typecast(v, ttnn.bfloat16)
+        else:
+            q = ttnn.experimental.rotary_embedding_llama(q, cos, sin, self.trans_mat, is_decode_mode=False)
+            k = ttnn.experimental.rotary_embedding_llama(k, cos, sin, self.trans_mat, is_decode_mode=False)
 
         attn = ttnn.transformer.windowed_scaled_dot_product_attention(
             q,
@@ -196,10 +244,17 @@ class TtVisionAttention(LightweightModule):
         ttnn.deallocate(v)
 
         attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if self.high_precision:
+            # Match o_proj input dtype to the fp32 weight (the SDPA output is
+            # already bf16-rounded; this costs no precision).
+            attn = ttnn.typecast(attn, ttnn.float32)
+        # o_proj output follows the residual-stream dtype (fp32 callers keep
+        # an fp32 skip connection; bf16 callers are unchanged). The SDPA core
+        # itself stays bf16: the windowed SDPA kernel is bf16-only.
         out = ttnn.linear(
             attn,
             self.wo,
-            dtype=ttnn.bfloat16,
+            dtype=x_11SH.dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )

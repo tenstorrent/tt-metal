@@ -62,11 +62,21 @@ class TtVisionPatchEmbed(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=replicate,
         )
-        # ttnn.rms_norm gamma format: [1, 1, E//32, 32] in ROW_MAJOR.
+        # ttnn.rms_norm gamma format: [1, 1, E//32, 32] in ROW_MAJOR for
+        # bf16. The ROW_MAJOR gamma path is bf16-only (an fp32 ROW_MAJOR
+        # gamma is misread on device, PCC ~0) — fp32 gammas use TILE
+        # [1, 1, 1, E] instead.
+        if dtype == ttnn.float32:
+            gamma, gamma_layout = state_dict["norm.weight"].reshape(1, 1, 1, embed_dim), ttnn.TILE_LAYOUT
+        else:
+            gamma, gamma_layout = (
+                state_dict["norm.weight"].reshape(1, 1, embed_dim // TILE, TILE),
+                ttnn.ROW_MAJOR_LAYOUT,
+            )
         self.norm_weight = ttnn.from_torch(
-            state_dict["norm.weight"].reshape(1, 1, embed_dim // TILE, TILE),
+            gamma,
             dtype=dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=gamma_layout,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=replicate,

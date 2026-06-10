@@ -93,17 +93,23 @@ class TtVisionBlock(LightweightModule):
         cu_seqlens: uint32 device tensor of unpadded window boundaries.
         Returns: [1, 1, padded_seq, dim], replicated (rows past the last
         cu_seqlens boundary are padding garbage — caller slices them off).
+
+        The residual stream keeps the INPUT dtype: a bf16 caller gets the
+        original all-bf16 behaviour, while the 42-layer full tower passes an
+        fp32 residual (branch outputs stay bf16) to stop rounding error from
+        compounding across blocks.
         """
+        res_dtype = x_11SH.dtype
         attn_in = self.norm1(x_11SH)
         attn_out = self.attn(attn_in, rot_mats, cu_seqlens)
         ttnn.deallocate(attn_in)
-        h = ttnn.add(x_11SH, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        h = ttnn.add(x_11SH, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=res_dtype)
         ttnn.deallocate(attn_out)
 
         ff_in = self.norm2(h)
         ff_out = self.mlp(ff_in)
         ttnn.deallocate(ff_in)
-        out = ttnn.add(h, ff_out, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+        out = ttnn.add(h, ff_out, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=res_dtype)
         ttnn.deallocate(h)
         ttnn.deallocate(ff_out)
         return out

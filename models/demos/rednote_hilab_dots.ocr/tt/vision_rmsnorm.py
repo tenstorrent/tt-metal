@@ -39,11 +39,18 @@ class TtVisionRMSNorm(LightweightModule):
 
         weight = state_dict["weight"]
         dim = weight.shape[-1]
-        # ttnn.rms_norm gamma format: [1, 1, dim//32, 32] in ROW_MAJOR.
+        # ttnn.rms_norm gamma format: [1, 1, dim//32, 32] in ROW_MAJOR for
+        # bf16. The ROW_MAJOR gamma path is bf16-only (an fp32 ROW_MAJOR
+        # gamma is misread on device, PCC ~0) — fp32 gammas use TILE
+        # [1, 1, 1, dim] instead.
+        if dtype == ttnn.float32:
+            gamma, gamma_layout = weight.reshape(1, 1, 1, dim), ttnn.TILE_LAYOUT
+        else:
+            gamma, gamma_layout = weight.reshape(1, 1, dim // TILE, TILE), ttnn.ROW_MAJOR_LAYOUT
         self.weight = ttnn.from_torch(
-            weight.reshape(1, 1, dim // TILE, TILE),
+            gamma,
             dtype=dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=gamma_layout,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),

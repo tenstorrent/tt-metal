@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-10T03:32:56Z
+**Updated:** 2026-06-10T03:50:19Z
 
 ## Block Status
 
@@ -41,7 +41,7 @@
 | patch_merger | optimization | pending | — | 0 |  |
 | patch_merger | real_weights | pending | — | 0 |  |
 | vision_transformer | reference | done | 1.000000 | 0 | full tower: patch_embed -> 42x block -> post_trunk_norm -> merger, all real fp32 weights, matches HF DotsVisionTransformer(bf16=False) |
-| vision_transformer | ttnn | pending | — | 0 |  |
+| vision_transformer | ttnn | done | 0.990121 | 0 | Full tower composition of done sub-blocks: TtVisionPatchEmbed -> 42x TtVisionBlock -> TtVisionRMSNorm(post_trunk_norm) -> TtPatchMerger, mirroring reference_impl qwen25_vl/tt/model.py. All real fp32 vision_tower weights, replicated on 1x4 mesh per parallelism plan (placement=replicate); seq padded 784->896, host rope/cu_seqlens per hybrid_notes. Numerics: bf16 end-to-end compounded rounding across 42 blocks (PCC 0.9768) amplified by late-layer outlier channels (h_absmax up to 1604), so the tower runs an fp32 residual stream + fp32 weights/activations with a high-precision attention path (fp32 fused QKV via nlp_create_qkv_heads fp32, explicit fp32 HF-convention rope via slice/neg/concat/mul/add, bf16 only at the bf16-only windowed-SDPA kernel boundary; o_proj fp32). Found+worked around: ttnn.rms_norm fp32 ROW_MAJOR gamma is misread on device (PCC ~0) -> fp32 gammas use TILE [1,1,1,dim]. PCC 0.990121 — thin margin over 0.99; per-block isolation PCC 0.99999+, deficit is amplified early-layer SDPA-core bf16 noise (bf16-only kernel). bf16 paths of the four modified sub-block files re-verified: patch_embed 0.999957, rmsnorm 0.999982, attention 0.999855, block 0.999958 — all unchanged. Guard ok (lint 0, kernels ok, no new host ops). KB entries for kind other were generic eltwise/scatter records — none applicable, none used. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | vision_transformer | debug | n/a | — | 0 |  |
 | vision_transformer | optimization | pending | — | 0 |  |
 | vision_transformer | real_weights | pending | — | 0 |  |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 2 (2026-06-10T02:23:55Z): reference[vision_patch_embed,vision_rmsnorm,vision_attention,vision_mlp] — ok
 - tick 3 (2026-06-10T02:31:43Z): reference[vision_block,patch_merger,vision_transformer,embedding] — ok
 - tick 4 (2026-06-10T02:38:20Z): reference[text_rmsnorm,text_attention,text_mlp,decoder_layer] — ok
 - tick 5 (2026-06-10T02:43:31Z): reference[lm_head] — ok
@@ -94,6 +93,7 @@
 - tick 9 (2026-06-10T03:20:47Z): device[vision_mlp] — ok
 - tick 10 (2026-06-10T03:26:43Z): device[vision_block] — ok
 - tick 11 (2026-06-10T03:32:56Z): device[patch_merger] — ok
+- tick 12 (2026-06-10T03:50:19Z): device[vision_transformer] — ok
 
 ## Host-Resident Exceptions
 
