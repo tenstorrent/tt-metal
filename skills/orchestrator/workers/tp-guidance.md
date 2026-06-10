@@ -14,11 +14,21 @@ never `ttnn.open_device(device_id=...)`.
 
 - **reference worker**: ignore everything below. Goldens are computed
   UNSHARDED on host CPU — never shard or split the torch reference.
-- **architecture worker**: record the parallelism plan in
-  `ARCHITECTURE.md` and per-component inventory `notes`: which components
-  are tensor-parallel (typically the LM decoder stack + LM head), which
-  are replicated (typically the vision tower / small encoders), and any
-  head-count constraint (see "KV heads" below).
+- **architecture worker**: COMPUTE the parallelism plan — do not eyeball it.
+  Extract per-component facts from the HF config (param bytes, cadence:
+  `per_token` for anything in the decode loop, `per_input` for run-once
+  encoders, q/kv head counts), then:
+
+  ```python
+  from skills.orchestrator.lib.parallelism import plan_parallelism
+  from skills.orchestrator.lib.device import device_info
+  out = plan_parallelism(component_facts, spec["num_devices"],
+                         device_info(spec["device"])["dram_bytes"])
+  ```
+
+  Record each component's `placement` + `rationale` in the inventory
+  `notes`, resolve any `judgments` explicitly (state your reasoning), and
+  summarize the plan in `ARCHITECTURE.md`.
 - **ttnn / debug / optimization / real_weights / generation / perf
   workers**: everything below applies.
 
@@ -80,22 +90,20 @@ synchronous `ttnn.all_gather(tensor, dim, topology=ttnn.Topology.Linear)` is
 acceptable for first-pass correctness; switch to the async variants in the
 optimization phase.
 
-## KV heads (GQA models — HARD CONSTRAINT)
+## Follow the recorded parallelism plan
 
-When the LM's `n_kv_heads < num_devices` (e.g. 2 KV heads on a 4-device
-mesh), DO NOT copy tt_transformers' divisibility assert
-(`n_kv_heads % num_devices == 0`). Instead REPLICATE KV heads so each
-device owns a full copy of the KV head(s) its Q-head group attends to —
-equivalently, repeat the K/V weight rows (and KV cache) so every device has
-its own complete KV head. Q heads still shard `num_devices`-ways; the GQA
-group stays local to each device, so SDPA needs no cross-device traffic.
+The architecture phase computed and recorded a per-component placement
+plan (inventory `notes` + `ARCHITECTURE.md`) via
+`skills.orchestrator.lib.parallelism.plan_parallelism`. Implement what it
+says; do not re-derive placement ad hoc. The two recurring outcomes:
 
-## Vision towers / small encoders
-
-Replicate the ENTIRE vision tower (or any encoder of ≲ a few hundred MB)
-on all devices via `ReplicateTensorToMesh` — tensor-parallelism there buys
-little and costs CCLs. Only the LM decoder stack is tensor-parallel. The
-vision→LM embedding handoff then stays replicated: no CCL at the boundary.
+- **`kv_replication: N`** (GQA with `n_kv_heads < num_devices`): DO NOT
+  copy tt_transformers' divisibility assert. Replicate each KV head's
+  weights and cache onto the N devices serving its Q-head group; Q heads
+  still shard `num_devices`-ways, so SDPA stays chip-local.
+- **`placement: replicate`** (run-once encoders): all weights
+  `ReplicateTensorToMesh`; outputs stay replicated, so the handoff into
+  column-parallel TP layers needs no CCL.
 
 ## PCC verification on a mesh
 

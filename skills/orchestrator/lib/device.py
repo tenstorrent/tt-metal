@@ -24,13 +24,18 @@ from typing import Optional, Union
 # 1. Device registry
 # ---------------------------------------------------------------------------
 
+# dram_bytes is per chip: wormhole_b0 = 6 banks x 2 GiB, blackhole = 8 banks x ~4 GiB
+# (soc_descriptors/{wormhole_b0_80,blackhole_140}_arch.yaml dram_bank_size).
+_WH_DRAM = 6 * 2147483648
+_BH_DRAM = 8 * 4278190080
+
 DEVICE_REGISTRY: dict[str, dict] = {
-    "n150": {"arch": "wormhole_b0", "mesh_shape": (1, 1), "num_devices": 1},
-    "n300": {"arch": "wormhole_b0", "mesh_shape": (1, 2), "num_devices": 2},
-    "p150": {"arch": "blackhole", "mesh_shape": (1, 1), "num_devices": 1},
-    "qb": {"arch": "blackhole", "mesh_shape": (1, 4), "num_devices": 4},
-    "t3k": {"arch": "wormhole_b0", "mesh_shape": (1, 8), "num_devices": 8},
-    "tg": {"arch": "wormhole_b0", "mesh_shape": (8, 4), "num_devices": 32},
+    "n150": {"arch": "wormhole_b0", "mesh_shape": (1, 1), "num_devices": 1, "dram_bytes": _WH_DRAM},
+    "n300": {"arch": "wormhole_b0", "mesh_shape": (1, 2), "num_devices": 2, "dram_bytes": _WH_DRAM},
+    "p150": {"arch": "blackhole", "mesh_shape": (1, 1), "num_devices": 1, "dram_bytes": _BH_DRAM},
+    "qb": {"arch": "blackhole", "mesh_shape": (1, 4), "num_devices": 4, "dram_bytes": _BH_DRAM},
+    "t3k": {"arch": "wormhole_b0", "mesh_shape": (1, 8), "num_devices": 8, "dram_bytes": _WH_DRAM},
+    "tg": {"arch": "wormhole_b0", "mesh_shape": (8, 4), "num_devices": 32, "dram_bytes": _WH_DRAM},
 }
 
 
