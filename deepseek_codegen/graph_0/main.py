@@ -3450,19 +3450,15 @@ def _main(activations, weights):
         ),
     )
     ttnn.deallocate(ttnn_reshape_43, False)
-    ttnn_reshape_44 = ttnn.reshape(
-        ttnn_matmul_6,
-        [16, 32, 1, 512],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1, None),
-    )
-    ttnn.deallocate(ttnn_matmul_6, False)
+    # E_attn iter4: collapse reshape_44 -> permute([1,2,0,3]) -> reshape_49 into one
+    # 3D permute on the 3D bmm output. matmul_6 [16,32,512] -> [32,16,512] directly.
     ttnn_permute_30 = ttnn.permute(
-        ttnn_reshape_44,
-        [1, 2, 0, 3],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1, None),
+        ttnn_matmul_6,
+        [1, 0, 2],
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         pad_value=0.0,
     )
-    ttnn.deallocate(ttnn_reshape_44, False)
+    ttnn.deallocate(ttnn_matmul_6, False)
     ttnn_reshape_45 = ttnn.reshape(
         ttnn_slice_68,
         [1, 32, 576],
@@ -3555,12 +3551,6 @@ def _main(activations, weights):
         [32, 128, 512],
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
-    ttnn_reshape_49 = ttnn.reshape(
-        ttnn_permute_30,
-        [32, 16, 512],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_permute_30, False)
     ttnn_slice_88 = ttnn.slice(
         ttnn_reshape_42,
         [0, 0, 0, 128],
@@ -3665,11 +3655,11 @@ def _main(activations, weights):
     import math as _math
 
     _sdpa0_q_concat = ttnn.concat(
-        [ttnn_reshape_49, ttnn_reshape_51],
+        [ttnn_permute_30, ttnn_reshape_51],
         dim=-1,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
-    ttnn.deallocate(ttnn_reshape_49, False)
+    ttnn.deallocate(ttnn_permute_30, False)
     ttnn.deallocate(ttnn_reshape_51, False)
     _sdpa0_q = ttnn.reshape(
         _sdpa0_q_concat,
@@ -4501,19 +4491,15 @@ def _main(activations, weights):
         ),
     )
     ttnn.deallocate(ttnn_reshape_94, False)
-    ttnn_reshape_95 = ttnn.reshape(
-        ttnn_matmul_21,
-        [16, 32, 1, 512],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1, None),
-    )
-    ttnn.deallocate(ttnn_matmul_21, False)
+    # E_attn iter4: collapse reshape_95 -> permute([1,2,0,3]) -> reshape_100 into one
+    # 3D permute on the 3D bmm output. matmul_21 [16,32,512] -> [32,16,512] directly.
     ttnn_permute_39 = ttnn.permute(
-        ttnn_reshape_95,
-        [1, 2, 0, 3],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1, None),
+        ttnn_matmul_21,
+        [1, 0, 2],
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         pad_value=0.0,
     )
-    ttnn.deallocate(ttnn_reshape_95, False)
+    ttnn.deallocate(ttnn_matmul_21, False)
     ttnn_reshape_96 = ttnn.reshape(
         ttnn_slice_161,
         [1, 32, 576],
@@ -4606,12 +4592,6 @@ def _main(activations, weights):
         [32, 128, 512],
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
-    ttnn_reshape_100 = ttnn.reshape(
-        ttnn_permute_39,
-        [32, 16, 512],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_permute_39, False)
     ttnn_slice_179 = ttnn.slice(
         ttnn_reshape_93,
         [0, 0, 0, 128],
@@ -4713,11 +4693,11 @@ def _main(activations, weights):
     import math as _math
 
     _sdpa1_q_concat = ttnn.concat(
-        [ttnn_reshape_100, ttnn_reshape_102],
+        [ttnn_permute_39, ttnn_reshape_102],
         dim=-1,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
-    ttnn.deallocate(ttnn_reshape_100, False)
+    ttnn.deallocate(ttnn_permute_39, False)
     ttnn.deallocate(ttnn_reshape_102, False)
     _sdpa1_q = ttnn.reshape(
         _sdpa1_q_concat,
