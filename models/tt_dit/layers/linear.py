@@ -13,7 +13,8 @@ from ..utils.matmul import get_fused_mmrs_config, get_matmul_config, get_matmul_
 from .module import Module, Parameter
 
 MATH_FIDELITY = {
-    ttnn.bfloat16: ttnn.MathFidelity.HiFi4,
+    ttnn.bfloat16: ttnn.MathFidelity.HiFi2,
+    # ttnn.bfloat16: ttnn.MathFidelity.HiFi4,
     ttnn.float32: ttnn.MathFidelity.HiFi4,
 }
 
