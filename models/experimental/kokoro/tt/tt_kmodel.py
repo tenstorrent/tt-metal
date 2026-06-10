@@ -240,6 +240,7 @@ class TTKModel:
         *,
         use_torch_stft_fallback: bool = False,
         use_torch_phase_fallback: bool = False,
+        disable_complex: bool = False,
     ) -> None:
         self.device = device
         self.vocab = ref.vocab
@@ -248,6 +249,8 @@ class TTKModel:
         self._ref_decoder = ref.decoder  # kept for lazy preprocess_tt_decoder calls
         self._use_stft_fallback = use_torch_stft_fallback
         self._use_phase_fallback = use_torch_phase_fallback
+        # Use the on-device CustomSTFT port (istftnet ``disable_complex=True``); no CPU fallback.
+        self._disable_complex = disable_complex
 
         self._bert = TTCustomAlbert(device, params.bert)
         self._predictor = TTProsodyPredictor(device, params.predictor)
@@ -266,6 +269,7 @@ class TTKModel:
                 self._ref_decoder,
                 self.device,
                 time_len_asr=t_mel,
+                disable_complex=self._disable_complex,
             )
             self._decoder_cache[t_mel] = TTDecoder(
                 self.device,

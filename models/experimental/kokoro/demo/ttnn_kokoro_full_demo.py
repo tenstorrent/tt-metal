@@ -70,6 +70,14 @@ def main() -> int:
         action="store_true",
         help="Deprecated alias: enables both --torch-stft-fallback and --torch-phase-fallback.",
     )
+    parser.add_argument(
+        "--disable-complex",
+        action="store_true",
+        help=(
+            "Use the istftnet disable_complex=True STFT formulation: reference KModel and the TT "
+            "decoder both run the on-device CustomSTFT port (conv2d/conv_transpose2d, no fallback)."
+        ),
+    )
     args = parser.parse_args()
 
     try:
@@ -105,7 +113,7 @@ def main() -> int:
         ref_model = KModel(
             repo_id=KokoroConfig.repo_id,
             model=str(checkpoint) if checkpoint is not None else None,
-            disable_complex=True,
+            disable_complex=args.disable_complex,
         ).eval()
         params = preprocess_tt_kmodel(ref_model, device)
 
@@ -120,8 +128,12 @@ def main() -> int:
             params,
             use_torch_stft_fallback=use_stft_fallback,
             use_torch_phase_fallback=use_phase_fallback,
+            disable_complex=args.disable_complex,
         )
-        logger.info(f"use_torch_stft_fallback={use_stft_fallback} use_torch_phase_fallback={use_phase_fallback}")
+        logger.info(
+            f"use_torch_stft_fallback={use_stft_fallback} use_torch_phase_fallback={use_phase_fallback} "
+            f"disable_complex={args.disable_complex}"
+        )
         wave_chunks: list[torch.Tensor] = []
         torch.manual_seed(0)
         for chunk_idx, result in enumerate(results):
