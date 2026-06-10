@@ -24,7 +24,7 @@ def test_deepseek_v3_mla_perf_loudbox():
     """
     run_mla_perf_with_approximation(
         command_2x4=_CMD_2X4,
-        expected_ns_2x4=8_255_885,
+        expected_ns_2x4=8_244_047,  # Recalibrated 2026-06-10 on BH LoudBox 2x4.
         model_name_2x4="deepseek_v3_mla_lb_2x4",
         subdir="deepseek_v3_mla",
         margin=0.03,
