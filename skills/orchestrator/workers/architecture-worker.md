@@ -96,6 +96,7 @@ Status meanings:
       "components_used": ["<comp_name>", ...],
       "needs_ar": true,
       "needs_audio_out": false,
+      "decode_strategy": "<'kv_cache' for any needs_ar use case — plan the cache up front (paged_update_cache + SDPA-decode); full-seq recompute decode is never acceptable>",
       "hf_class": "<HF class name>",
       "validation_metric": "<bleu|wer|ecapa_cos|perplexity|accuracy|mse|pcc>",
       "validation_threshold": "<expression like 'HF - 1.0' or '≥ 0.95'>",

@@ -113,6 +113,18 @@ and the VALUE is the measured score (e.g. `{"bleu": 42.524}`).
   documents legitimate host-resident operations (e.g. tokenizer-bound
   char prep). Stick to what's documented; don't expand the hybrid
   boundary unilaterally.
+- **AR decode MUST be a KV-cached token step** (`needs_ar=true` use
+  cases). Per-token cost must be O(1) in sequence length: prefill runs
+  ONCE to populate the cache; each decode step processes ONE token row
+  against the cache. Full-sequence recompute per token is an automatic
+  fail regardless of output parity (measured: 28 KV-cached layers on 1
+  chip beat 4-chip full-seq recompute 28x at 3k context). Use the paged
+  idioms from `models/tt_transformers/tt/attention.py`:
+  `ttnn.experimental.paged_update_cache` (or `update_cache`) +
+  `ttnn.transformer.paged_scaled_dot_product_attention_decode` (or
+  non-paged `scaled_dot_product_attention_decode`). On a TP mesh, KV
+  caches shard with their KV heads (`kv_replication` groups hold their
+  own cache copy; chip-local SDPA decode, no CCL in attention).
 
 ## Hang detection
 

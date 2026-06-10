@@ -76,6 +76,14 @@ speedup vs baseline (1.0 = no change, 2.0 = 2× faster).
 
 ## Process
 
+**Complexity gate (before any tracing):** decode steady-state must be
+O(1) in sequence length. If the model's AR step recomputes the full
+sequence, FIX THAT FIRST — implement the KV-cached token step
+(`paged_update_cache` + `scaled_dot_product_attention_decode`, see the
+generation-worker contract) and re-verify e2e parity, then trace. A
+traced full-seq recompute is a polished version of the wrong
+algorithm; do not report it as `ok`.
+
 Two sub-passes (the perf skill documents both). **Both** must be
 attempted — sub-pass 2 is NOT skippable just because sub-pass 1
 delivered a win.
