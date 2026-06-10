@@ -333,3 +333,41 @@ The full ~0.96 ms per-layer RoPE H2D tail is recovered. The on-device gather cos
 `ttnn.embedding` ops/step (~free on the device replay). RoPE is now fully device-resident
 and trace-safe: per step only a 1-element position index is uploaded (the gather index),
 shared by all layers — no per-layer cos/sin H2D.
+
+## Sub-pass 7: multicore decode head-split (nlp_create_qkv_heads_decode)
+
+The sharded decode path reused the PREFILL head-split op
+(`ttnn.experimental.nlp_create_qkv_heads`) on the single-token interleaved
+`[1,1,1,2048]` QKV vector — it runs on **1 core (~0.57 ms/tok)**. Swapped the
+decode branch to the decode-optimized **`ttnn.experimental.nlp_create_qkv_heads_decode`**,
+which spreads the head-split across the head/core grid (`CoreGrid(y=4,x=8)`,
+one padded head-block per core) and emits height-sharded 1BQD q/k/v
+(`[1, batch=1, nh/nkv, hd]`). The 1BQD layout lets q feed
+`scaled_dot_product_attention_decode` directly (it already wants `[1,batch,nh,hd]`)
+— the old `[1,nh,1,hd]` path needed an extra `permute` before SDPA.
+
+**Honest read — the wiring is what made/broke this.** A first attempt restored the
+old `[1,nh,1,hd]` interleaved layout after the decode op (3× `sharded_to_interleaved`
++ 3× `permute`) — those 6 layout-restore ops cost **more** than the 0.57 ms the
+head-split saved, **regressing ~1.0 ms/tok** (A/B: 16.0 → 17.0 ms/tok DecodeGraph).
+The shipped 1BQD path consumes the decode op's output with only 3
+`sharded_to_interleaved` (no permutes, and drops the SDPA-input permute), flipping
+it to a small net win. The decode op's height-sharded output still needs converting
+to interleaved because the custom RoPE (`_rotate_half` concat) runs on interleaved —
+that conversion claws back most of the kernel saving, so the realized win is well
+below the ~0.5 ms estimate.
+
+| metric | single-core prefill split | multicore decode split (1BQD) | delta |
+| --- | --- | --- | --- |
+| DecodeGraph signpost ms/tok (A/B, same harness, 3 iters) | 16.03–16.14 | **15.80–15.92** | **−0.2 to −0.3 ms/tok (~−1.5%)** |
+| decode-step guardrail PCC (vs reference) | 0.999430 | **0.999430** | unchanged |
+| decode-step guardrail PCC (traced vs untraced) | 1.000000 | **1.000000** | exact |
+| OCR text (32 tok vs HF) | exact | **exact (byte-identical)** | `**TABLE II** – ODDS RATIO OF HODGKIN LYMPHOMA…` |
+
+Per-op `NlpCreateHeads*` core count could not be read by name: tracy's
+`process_ops_logs.py` op-name enrichment fails on this decode pattern (the
+`OP NAME` column comes back blank — the same pre-existing tooling failure noted in
+Sub-pass 2), so the multicore spread is confirmed by the op's C++ output-shard grid
+(>1 core by construction) + the reproducible end-to-end DecodeGraph delta rather than
+a per-op-by-name table. On by default under `DOTS_SHARDED_DECODE=1`; set
+`DOTS_HEADSPLIT_DECODE=0` to fall back to the single-core split.
