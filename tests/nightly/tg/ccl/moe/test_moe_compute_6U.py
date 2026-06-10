@@ -16,7 +16,7 @@ import torch
 # Required to keep compute_matmul_golden's fp32-cast fast path actually
 # parallel — without it, the golden compute can take ~30 s/layer on BH-LB
 # shape instead of ~33 ms.
-torch.set_num_threads(os.cpu_count())
+torch.set_num_threads(os.cpu_count() or 1)
 
 import ttnn
 from ttnn.operations.ccl import MoEActivationFunction
@@ -170,8 +170,13 @@ def _expand_model_configs(
             for has_bias in bias_values_fn(cfg, test_mode):
                 for epd in cfg.experts_per_device_values:
                     for act in cfg.activation_types:
-                        for enable_trace in trace_values_fn(cfg, test_mode):
-                            for bh_ring_size in cfg.bh_ring_size_values:
+                        # enable_trace innermost so a shape's trace variants run back-to-back and the
+                        # second hits the _build_moe_host_data lru_cache (maxsize=1, evicted on every
+                        # new shape). bh_ring_size is part of that cache key (it changes the prepped
+                        # weight layout), so it must sit outside enable_trace or the trace pair — which
+                        # shares a ring size — would never be adjacent and every call would evict.
+                        for bh_ring_size in cfg.bh_ring_size_values:
+                            for enable_trace in trace_values_fn(cfg, test_mode):
                                 bias_tag = "bias" if has_bias else "no_bias"
                                 act_tag = act.name.lower()
                                 trace_tag = "enable_trace" if enable_trace else "disable_trace"
@@ -241,12 +246,15 @@ _MODELS_1x16 = [
     MoEModelConfig("deepseek_v3",         N=2048, hidden_size=7168, selected_experts_k=8, has_bias_values=(False, True), test_modes=("perf", "correctness")),
     MoEModelConfig("kimi_k25",            N=2048, hidden_size=7168, selected_experts_k=8, experts_per_device_values=(6,), num_layers=3, num_iterations=2),
     MoEModelConfig("deepseek_v4_flash",   N=2048, hidden_size=4096, selected_experts_k=6),
+
+    # these next few are known failures. xfail(run=False) keeps them tracked as expected
+    # failures (visibility/metrics) without paying their runtime, since they are slow.
     MoEModelConfig("deepseek_v4_pro",     N=3072, hidden_size=7168, selected_experts_k=6, experts_per_device_values=(6,), num_layers=3, num_iterations=2,
-                   marks=(pytest.mark.xfail(reason="Combine AllClose fails for specific output values (hidden=7168, N=3072) — likely selective_reduce_combine kernel bug"),)),
+                   marks=(pytest.mark.xfail(run=False, reason="Combine AllClose fails for specific output values (hidden=7168, N=3072) — likely selective_reduce_combine kernel bug"),)),
     MoEModelConfig("mistral_large_3",     N=4096, hidden_size=7168, selected_experts_k=4, num_layers=3, num_iterations=2,
-                   marks=(pytest.mark.xfail(reason="L1 overflow: N=4096 A2A buffer (12*12*2048=288KB) exceeds Wormhole L1 budget by ~21KB"),)),
+                   marks=(pytest.mark.xfail(run=False, reason="L1 overflow: N=4096 A2A buffer (12*12*2048=288KB) exceeds Wormhole L1 budget by ~21KB"),)),
     MoEModelConfig("ling_1t",             N=2048, hidden_size=8192, selected_experts_k=8, num_layers=3, num_iterations=2,
-                   marks=(pytest.mark.xfail(reason="Wormhole L1 too small for hidden=8192: dim=4 overflows mux L1 by 93KB, dim=2 overflows combine CB (2MB > 1MB bank)"),)),
+                   marks=(pytest.mark.xfail(run=False, reason="Wormhole L1 too small for hidden=8192: dim=4 overflows mux L1 by 93KB, dim=2 overflows combine CB (2MB > 1MB bank)"),)),
 ]
 
 _MODELS_1x8 = [
@@ -1460,112 +1468,107 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     )
 
 
+@dataclasses.dataclass
+class _MoEWeightInputs:
+    """Raw torch weights/biases — consumed once (on a cache miss) to build the golden
+    and the quantized weight host tensors. Returned alongside the cached
+    ``_MoEHostData`` so the device-dependent quantization can run after the (pure)
+    golden build; once the bf4 host tensors land on ``_MoEHostData`` they supersede
+    these for all downstream use."""
+
+    torch_w0: "torch.Tensor"
+    torch_w1: "torch.Tensor"
+    torch_w2: "torch.Tensor"
+    torch_b0: object
+    torch_b1: object
+    torch_b2: object
+
+
+@dataclasses.dataclass
+class _MoEHostData:
+    """Cached, device-independent artifacts for one MoE compute test shape.
+
+    Two kinds of expensive work are cached here, both reusable across pytest
+    parameters that don't change the shape (notably the two ``enable_trace``
+    variants of a model, which run back-to-back):
+
+    1. The torch golden references — ``compute_matmul_golden`` dominates host cost.
+    2. The quantized (``bfloat4_b``) weight tensors as **host** tensors. Producing
+       them (upload → on-device prepare → host round-trip quantize) is expensive
+       and needs a live device, but ``HostStorage`` tensors survive ``mesh_device``
+       teardown, so each invocation only pays the ``to_device`` re-upload.
+    """
+
+    # Per-layer torch inputs (lists indexed by layer_id) — cheap to re-upload via from_torch
+    sparse_buffers: list
+    expert_indices_list: list
+    expert_scores_list: list
+    expert_mapping: "torch.Tensor"
+    # Golden references
+    per_expert_tokens_goldens: list
+    activation_goldens: list
+    e_t_goldens: list
+    matmul_goldens: "torch.Tensor"
+    combine_goldens: tuple
+    # Quantized bfloat4_b weights as host tensors; consumed each run via ttnn.to_device.
+    # Populated after the (device-independent) golden build, since quantization needs a device.
+    w0_w1_host: object = None
+    w2_host: object = None
+
+
+@functools.lru_cache(maxsize=1)
 @torch.no_grad()
-def _run_moe_compute_impl(
-    mesh_device,
+def _build_moe_host_data(
     mesh_shape,
     cluster_axis,
     experts_per_device,
     tokens_per_device,
     selected_experts_k,
     num_layers,
-    num_iterations,
     N,
     hidden_size,
-    output_height_shard_dim,
-    output_width_shard_dim,
     dtype,
-    enable_trace,
     activation_type,
     has_bias,
-    num_links,
-    topology=None,
-    bh_ring_size=12,
+    bh_ring_size,
 ):
-    """Run MoE compute E2E validation. Called from test_moe_compute via _run_model_test."""
+    """Build all device-independent inputs and golden references for the test.
+
+    Deterministic given the fixed seeds below, so the result is safe to memoize
+    (``lru_cache`` above) and reuse across runs that share the same shape. The op-run
+    knobs that don't change the data (enable_trace, num_iterations, topology, num_links,
+    output shard dims) are intentionally NOT parameters, so trace/non-trace runs of the
+    same shape share an entry. ``maxsize=1`` keeps at most one (large) shape's artifacts
+    alive: a new shape evicts the previous one.
+
+    ``bh_ring_size`` is a parameter (the goldens don't use it) purely so it participates
+    in the lru_cache key: the quantized bfloat4_b weight host tensors attached to the
+    returned object in ``_run_moe_compute_impl`` DO depend on it (prepare/interleave
+    layout), so two ring sizes of the same shape must not share a cached object.
+    """
     torch.manual_seed(2003)
     random.seed(2003)
-
-    experts = experts_per_device * mesh_shape[cluster_axis]
-
-    #########################################
-    # TEST SETUP
-    #########################################
 
     num_devices = mesh_shape[0] * mesh_shape[1]
     num_dispatch_devices = mesh_shape[cluster_axis] if cluster_axis is not None else num_devices
     num_replicated_devices = num_devices // num_dispatch_devices
     total_tokens = tokens_per_device * num_dispatch_devices
+    experts = experts_per_device * mesh_shape[cluster_axis]
     experts_per_cluster = experts // num_replicated_devices
     experts_per_device = experts // num_devices
 
-    logger.info(f"Test configuration:")
-    logger.info(f"  mesh_shape: {mesh_shape}")
-    logger.info(f"  cluster_axis: {cluster_axis}")
-    logger.info(f"  num_devices: {num_devices}, num_dispatch_devices: {num_dispatch_devices}")
-    logger.info(f"  tokens_per_device: {tokens_per_device}, total_tokens: {total_tokens}")
-    logger.info(
-        f"  experts: {experts}, selected_experts_k: {selected_experts_k}, experts_per_device: {experts_per_device}"
-    )
-    logger.info(f"  hidden_size: {hidden_size}")
-    logger.info(f"  dtype: {dtype}")
-    logger.info(f"  num_iterations: {num_iterations}")
-    logger.info(f"  enable_trace: {enable_trace}")
-    logger.info(f"  activation_type: {activation_type}")
-
-    #########################################
-    # CREATE TILIZE INPUT TENSORS AND GOLDENS
-    #########################################
-
-    # Drain tilize core: per-arch coordinate where indices/scores are L1-sharded so the
-    # op kernel can read them via NOC. Must match the op's drain tilize core (tilize_cores[0]
-    # in moe_compute_program_factory.cpp's get_layout()), or non-drain tilize cores will
-    # noc_async_read garbage L1 addresses on the drain core (CB overflow caught by watcher).
-    #   WH (max_tilize_cores[0]): (6, 9)
-    #   BH (max_tilize_cores[0]): (10, 9)  — DRAM cols shifted, tilize moved to x=9,10
-    drain_core_coord = get_tilize_drain_core()
-    tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(drain_core_coord, drain_core_coord)})
-
     #### Expert mapping - per-device [num_devices, experts], replicated on every device ###
-    # Each device gets its own row after sharding, but since it's replicated,
-    # we give each device the full tensor and it uses its own row.
-    # Expert mapping is constant across all runs.
     expert_mapping = gen_expert_mapping(
         num_devices, num_replicated_devices, cluster_axis, experts, experts_per_cluster, experts_per_device
     )
-    expert_mapping_mem_config = ttnn.L1_MEMORY_CONFIG
-    tt_expert_mapping = ttnn.from_torch(
-        expert_mapping,
-        device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.uint16,
-        memory_config=expert_mapping_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
 
-    # Sparse memory config
-    sparse_mem_config = ttnn.L1_MEMORY_CONFIG
-
-    # Create L1 sharded memory config for indices on drain tilizer core
-    # expert_indices shape per device: [tokens_per_device, selected_experts_k] (after shard along dispatch axis)
-    # But we need the all-gathered version, so shape is [num_dispatch_devices * tokens_per_device, selected_experts_k]
-    # which is [total_tokens, selected_experts_k]
-    expert_indices_shard_shape = [total_tokens, selected_experts_k]
-    expert_indices_mem_config = create_sharded_memory_config(tilize_drain_core, expert_indices_shard_shape, ttnn.uint16)
-
-    # Create L1 sharded memory config for indices and scores on drain tilizer core
-    expert_scores_shard_shape = [total_tokens, selected_experts_k]
-    expert_scores_mem_config = create_sharded_memory_config(tilize_drain_core, expert_scores_shard_shape, dtype)
-
-    tt_sparse_buffers = []
-    tt_expert_indices_buffers = []
-    tt_expert_scores_buffers = []
-
+    sparse_buffers = []
+    expert_indices_list = []
+    expert_scores_list = []
     per_expert_tokens_goldens = []
     activation_goldens = []
     e_t_goldens = []
-
-    # save the original dense token to create matmul goldens
+    # save the original dense tokens to create matmul goldens
     tilize_golden_layer_outputs = []
 
     logger.info(f"Creating goldens and input tensors")
@@ -1590,7 +1593,7 @@ def _run_moe_compute_impl(
         per_expert_tokens_goldens.append(expert_token_counts)
         tilize_golden_layer_outputs.append(tilize_golden_output)
 
-        golden_activation, experts_per_device_check = compute_expert_activation_golden(
+        golden_activation, _ = compute_expert_activation_golden(
             expert_indices, expert_scores, expert_mapping, mesh_shape, cluster_axis
         )
         for d in range(num_devices):
@@ -1600,62 +1603,16 @@ def _run_moe_compute_impl(
         golden_e_t, _ = compute_e_t_golden(expert_indices, expert_mapping, mesh_shape, cluster_axis)
         e_t_goldens.append(golden_e_t)
 
-        # Create input tensors
-        # NOTE: we're extremely tight on L1 for a single invocation of the op.
-        # When running multiple layers, all inputs go to DRAM and get moved to L1
-        # per-layer via to_memory_config.
-        init_sparse_mem_config = sparse_mem_config if num_layers == 1 else ttnn.DRAM_MEMORY_CONFIG
-        init_expert_indices_mem_config = expert_indices_mem_config if num_layers == 1 else ttnn.DRAM_MEMORY_CONFIG
-        init_expert_scores_mem_config = expert_scores_mem_config if num_layers == 1 else ttnn.DRAM_MEMORY_CONFIG
+        sparse_buffers.append(sparse_buffer)
+        expert_indices_list.append(expert_indices)
+        expert_scores_list.append(expert_scores)
 
-        ### Sparse buffer is sharded across devices (dim 0) ###
-        tt_sparse_buffer = ttnn.from_torch(
-            sparse_buffer,
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=dtype,
-            memory_config=init_sparse_mem_config,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
-        )
-        tt_sparse_buffers.append(tt_sparse_buffer)
-
-        ### Expert indices - all-gathered (replicated on all devices) ###
-        # Shape: [num_dispatch_devices, tokens_per_device, K]
-        # Flatten to [num_dispatch_devices * tokens_per_device, K] = [total_tokens, K] per device
-        # Replicate on all devices
-        expert_indices_flat = expert_indices.reshape(total_tokens, selected_experts_k)
-        expert_indices_replicated = expert_indices_flat.unsqueeze(0).repeat(num_devices, 1, 1)
-        tt_expert_indices = ttnn.from_torch(
-            expert_indices_replicated,
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.uint16,
-            memory_config=init_expert_indices_mem_config,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
-        )
-        tt_expert_indices_buffers.append(tt_expert_indices)
-
-        ### Expert scores - same distribution as indices ###
-        expert_scores_flat = expert_scores.reshape(total_tokens, selected_experts_k)
-        expert_scores_replicated = expert_scores_flat.unsqueeze(0).repeat(num_devices, 1, 1)
-        tt_expert_scores = ttnn.from_torch(
-            expert_scores_replicated,
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=dtype,
-            memory_config=init_expert_scores_mem_config,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
-        )
-        tt_expert_scores_buffers.append(tt_expert_scores)
     # (L, D, E/D, T, H)
     tilize_golden_outputs = torch.stack(tilize_golden_layer_outputs)
     del tilize_golden_layer_outputs
 
-    logger.info(f"Done creating goldens and input tensors")
+    logger.info(f"Done creating tilize goldens and input tensors")
 
-    #########################################
-    # CREATE MATMUL INPUT TENSORS
-    #########################################
     logger.info(f"Creating matmul goldens and input tensors")
 
     torch_w0 = create_torch_w0(num_layers, experts_per_device, hidden_size, N)
@@ -1671,11 +1628,12 @@ def _run_moe_compute_impl(
     #
     # Use a small zero-mean normal distribution (float32 draw, cast to bf16) so each
     # element in the tile varies — closer to real expert biases than a single constant.
-    # test_moe_compute already fixed torch.manual_seed(2003) so draws are reproducible.
+    # The fixed torch.manual_seed(2003) above makes the draws reproducible.
     #
     # Biases are identical per-device (same as weights which use ReplicateTensorToMesh).
     # The golden's .repeat([1, devices, 1, 1]) in compute_matmul_golden is correct
     # under this assumption.
+    torch_b0 = torch_b1 = torch_b2 = None
     if has_bias:
         _bias_std = 0.12
         # True PyTorch bias format: (L, E, N) without tile padding.
@@ -1698,9 +1656,9 @@ def _run_moe_compute_impl(
         num_devices,
         tokens_per_device,
         hidden_size,
-        torch_b0=torch_b0 if has_bias else None,
-        torch_b1=torch_b1 if has_bias else None,
-        torch_b2=torch_b2 if has_bias else None,
+        torch_b0=torch_b0,
+        torch_b1=torch_b1,
+        torch_b2=torch_b2,
         activation_type=activation_type,
     )
 
@@ -1717,24 +1675,42 @@ def _run_moe_compute_impl(
         cluster_axis,
     )
 
-    # Get memory configurations for weights (handles bias padding)
-    weight_mem_configs = ttnn.experimental.get_weight_mem_configs(
-        mesh_device,
-        num_layers=num_layers,
-        experts_per_device=experts_per_device,
-        hidden_size=hidden_size,
-        intermediate_size=N,
-        has_bias=has_bias,
-        bh_ring_size=bh_ring_size,
+    host_data = _MoEHostData(
+        sparse_buffers=sparse_buffers,
+        expert_indices_list=expert_indices_list,
+        expert_scores_list=expert_scores_list,
+        expert_mapping=expert_mapping,
+        per_expert_tokens_goldens=per_expert_tokens_goldens,
+        activation_goldens=activation_goldens,
+        e_t_goldens=e_t_goldens,
+        matmul_goldens=matmul_goldens,
+        combine_goldens=combine_goldens,
     )
-    w0_w1_mem_config = weight_mem_configs.w0_w1
-    w2_mem_config = weight_mem_configs.w2
+    # Raw weights are returned separately: they feed the on-device quantization
+    # (which needs a live device, so it happens in _run_moe_compute_impl) and are
+    # then discarded — only the resulting host tensors are cached.
+    weight_inputs = _MoEWeightInputs(
+        torch_w0=torch_w0,
+        torch_w1=torch_w1,
+        torch_w2=torch_w2,
+        torch_b0=torch_b0,
+        torch_b1=torch_b1,
+        torch_b2=torch_b2,
+    )
+    return host_data, weight_inputs
 
-    # ------------------------------------------------------------------------
-    # Upload raw weights/biases to mesh (replicated, bfloat16, ROW_MAJOR) so the
-    # C++ ttnn.experimental.prepare_* helpers can do the layout transformation on
-    # device, then convert to the DRAM-sharded bfloat4_b TILE layout the kernel
-    # consumes.
+
+def _build_quantized_weight_host_tensors(
+    mesh_device, weight_inputs, num_layers, experts_per_device, hidden_size, N, has_bias, bh_ring_size
+):
+    """Upload raw weights, run the on-device prepare/interleave, then quantize to
+    ``bfloat4_b`` via host — returning the result as **host** tensors (memory_config
+    omitted so quantize_weights_via_host skips the re-upload). These persist across
+    mesh_device teardown and are landed on each invocation's device via to_device.
+    """
+
+    logger.info(f"Building weights for {hidden_size=} {N=} {experts_per_device=} {has_bias=}")
+
     def _upload_raw(t):
         return ttnn.from_torch(
             t,
@@ -1743,13 +1719,13 @@ def _run_moe_compute_impl(
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
-    tt_w0_raw = _upload_raw(torch_w0)
-    tt_w1_raw = _upload_raw(torch_w1)
-    tt_w2_raw = _upload_raw(torch_w2)
+    tt_w0_raw = _upload_raw(weight_inputs.torch_w0)
+    tt_w1_raw = _upload_raw(weight_inputs.torch_w1)
+    tt_w2_raw = _upload_raw(weight_inputs.torch_w2)
     if has_bias:
-        tt_b0_raw = _upload_raw(torch_b0)
-        tt_b1_raw = _upload_raw(torch_b1)
-        tt_b2_raw = _upload_raw(torch_b2)
+        tt_b0_raw = _upload_raw(weight_inputs.torch_b0)
+        tt_b1_raw = _upload_raw(weight_inputs.torch_b1)
+        tt_b2_raw = _upload_raw(weight_inputs.torch_b2)
 
     # ------------------------------------------------------------------------
     # Prepare w0_w1 tensor (interleaved, padded, and reordered) on device.
@@ -1780,9 +1756,8 @@ def _run_moe_compute_impl(
     ttnn.deallocate(tt_w0_raw)
     ttnn.deallocate(tt_w1_raw)
 
-    tt_w0_w1 = ttnn.experimental.quantize_weights_via_host(
-        tt_w0_w1_prepped, dtype=ttnn.bfloat4_b, memory_config=w0_w1_mem_config
-    )
+    # memory_config=None -> quantize_weights_via_host returns a host tensor.
+    w0_w1_host = ttnn.experimental.quantize_weights_via_host(tt_w0_w1_prepped, dtype=ttnn.bfloat4_b, memory_config=None)
     ttnn.deallocate(tt_w0_w1_prepped)
 
     # ------------------------------------------------------------------------
@@ -1809,10 +1784,225 @@ def _run_moe_compute_impl(
         )
     ttnn.deallocate(tt_w2_raw)
 
-    tt_w2 = ttnn.experimental.quantize_weights_via_host(
-        tt_w2_prepped, dtype=ttnn.bfloat4_b, memory_config=w2_mem_config
-    )
+    w2_host = ttnn.experimental.quantize_weights_via_host(tt_w2_prepped, dtype=ttnn.bfloat4_b, memory_config=None)
     ttnn.deallocate(tt_w2_prepped)
+
+    return w0_w1_host, w2_host
+
+
+@torch.no_grad()
+def _run_moe_compute_impl(
+    mesh_device,
+    mesh_shape,
+    cluster_axis,
+    experts_per_device,
+    tokens_per_device,
+    selected_experts_k,
+    num_layers,
+    num_iterations,
+    N,
+    hidden_size,
+    output_height_shard_dim,
+    output_width_shard_dim,
+    dtype,
+    enable_trace,
+    activation_type,
+    has_bias,
+    num_links,
+    topology=None,
+    bh_ring_size=12,
+):
+    """Run MoE compute E2E validation. Called from test_moe_compute via _run_model_test."""
+    experts = experts_per_device * mesh_shape[cluster_axis]
+
+    #########################################
+    # TEST SETUP
+    #########################################
+
+    num_devices = mesh_shape[0] * mesh_shape[1]
+    num_dispatch_devices = mesh_shape[cluster_axis] if cluster_axis is not None else num_devices
+    total_tokens = tokens_per_device * num_dispatch_devices
+    experts_per_device = experts // num_devices
+
+    logger.info(f"Test configuration:")
+    logger.info(f"  mesh_shape: {mesh_shape}")
+    logger.info(f"  cluster_axis: {cluster_axis}")
+    logger.info(f"  num_devices: {num_devices}, num_dispatch_devices: {num_dispatch_devices}")
+    logger.info(f"  tokens_per_device: {tokens_per_device}, total_tokens: {total_tokens}")
+    logger.info(
+        f"  experts: {experts}, selected_experts_k: {selected_experts_k}, experts_per_device: {experts_per_device}"
+    )
+    logger.info(f"  hidden_size: {hidden_size}")
+    logger.info(f"  dtype: {dtype}")
+    logger.info(f"  num_iterations: {num_iterations}")
+    logger.info(f"  enable_trace: {enable_trace}")
+    logger.info(f"  activation_type: {activation_type}")
+
+    #########################################
+    # HOST INPUTS + GOLDENS + QUANTIZED WEIGHTS (cached across shape-preserving params)
+    #########################################
+    # The two expensive, device-independent (or device-detachable) artifacts —
+    # the torch goldens (compute_matmul_golden) and the quantized bfloat4_b weight
+    # host tensors — are reused across pytest parameters that don't change the shape
+    # (notably the two enable_trace variants of a model, which run back-to-back).
+    #
+    # _build_moe_host_data is memoized with functools.lru_cache(maxsize=1): the same
+    # shape returns the same cached (host, weight_inputs), and a new shape evicts the
+    # previous entry so at most one (large) shape's artifacts live at a time. The
+    # quantized weights need a live device, so they can't be built inside that pure
+    # function; instead they're built once on the miss and attached to the cached host
+    # object, so later hits (e.g. the trace variant) reuse them without re-quantizing.
+    _hits_before = _build_moe_host_data.cache_info().hits
+    host, weight_inputs = _build_moe_host_data(
+        tuple(mesh_shape),
+        cluster_axis,
+        experts_per_device,
+        tokens_per_device,
+        selected_experts_k,
+        num_layers,
+        N,
+        hidden_size,
+        dtype,
+        activation_type,
+        has_bias,
+        bh_ring_size,
+    )
+    cache_hit = _build_moe_host_data.cache_info().hits > _hits_before
+    shape_desc = (
+        f"mesh={tuple(mesh_shape)} EP={experts_per_device} T/dev={tokens_per_device} "
+        f"k={selected_experts_k} L={num_layers} N={N} H={hidden_size} act={activation_type} bias={has_bias} "
+        f"bh_ring_size={bh_ring_size}"
+    )
+    if host.w0_w1_host is None:
+        # Quantization needs a live device, so it can't run inside the pure (cached)
+        # _build_moe_host_data; the host tensors it produces survive mesh_device
+        # teardown. lru_cache returns the SAME host object on every hit, so mutating
+        # these fields in place here memoizes the quantized weights alongside the
+        # goldens: a hit (e.g. the trace variant) finds them already set and skips
+        # re-quantizing. w0_w1_host is None only on a genuine miss (fresh or evicted
+        # shape), which is exactly when we want to (re)build them.
+        host.w0_w1_host, host.w2_host = _build_quantized_weight_host_tensors(
+            mesh_device, weight_inputs, num_layers, experts_per_device, hidden_size, N, has_bias, bh_ring_size
+        )
+    # cache_hit (lru_cache) and "w0_w1_host was None" (quantization) always agree: a
+    # goldens hit returns the already-quantized object; a miss rebuilds it with None.
+    if cache_hit:
+        logger.info(f"MoE host-data cache HIT — reusing goldens + quantized weights for {shape_desc}")
+    else:
+        logger.info(f"MoE host-data cache MISS — built goldens + quantized weights for {shape_desc}")
+    logger.info(f"MoE host-data cache stats: {_build_moe_host_data.cache_info()}")
+
+    per_expert_tokens_goldens = host.per_expert_tokens_goldens
+    activation_goldens = host.activation_goldens
+    e_t_goldens = host.e_t_goldens
+    matmul_goldens = host.matmul_goldens
+    combine_goldens = host.combine_goldens
+
+    #########################################
+    # CREATE DEVICE INPUT TENSORS
+    #########################################
+
+    drain_core_coord = get_tilize_drain_core()
+    tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(drain_core_coord, drain_core_coord)})
+
+    #### Expert mapping - per-device [num_devices, experts], replicated on every device ###
+    # Each device gets its own row after sharding, but since it's replicated,
+    # we give each device the full tensor and it uses its own row.
+    expert_mapping_mem_config = ttnn.L1_MEMORY_CONFIG
+    tt_expert_mapping = ttnn.from_torch(
+        host.expert_mapping,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=expert_mapping_mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    # Sparse memory config
+    sparse_mem_config = ttnn.L1_MEMORY_CONFIG
+
+    # Create L1 sharded memory config for indices on drain tilizer core
+    # expert_indices shape per device: [tokens_per_device, selected_experts_k] (after shard along dispatch axis)
+    # But we need the all-gathered version, so shape is [num_dispatch_devices * tokens_per_device, selected_experts_k]
+    # which is [total_tokens, selected_experts_k]
+    expert_indices_shard_shape = [total_tokens, selected_experts_k]
+    expert_indices_mem_config = create_sharded_memory_config(tilize_drain_core, expert_indices_shard_shape, ttnn.uint16)
+
+    # Create L1 sharded memory config for indices and scores on drain tilizer core
+    expert_scores_shard_shape = [total_tokens, selected_experts_k]
+    expert_scores_mem_config = create_sharded_memory_config(tilize_drain_core, expert_scores_shard_shape, dtype)
+
+    tt_sparse_buffers = []
+    tt_expert_indices_buffers = []
+    tt_expert_scores_buffers = []
+
+    # NOTE: we're extremely tight on L1 for a single invocation of the op.
+    # When running multiple layers, all inputs go to DRAM and get moved to L1
+    # per-layer via to_memory_config.
+    init_sparse_mem_config = sparse_mem_config if num_layers == 1 else ttnn.DRAM_MEMORY_CONFIG
+    init_expert_indices_mem_config = expert_indices_mem_config if num_layers == 1 else ttnn.DRAM_MEMORY_CONFIG
+    init_expert_scores_mem_config = expert_scores_mem_config if num_layers == 1 else ttnn.DRAM_MEMORY_CONFIG
+
+    logger.info(f"Uploading device input tensors")
+    for layer_id in range(num_layers):
+        ### Sparse buffer is sharded across devices (dim 0) ###
+        tt_sparse_buffer = ttnn.from_torch(
+            host.sparse_buffers[layer_id],
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=dtype,
+            memory_config=init_sparse_mem_config,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        )
+        tt_sparse_buffers.append(tt_sparse_buffer)
+
+        ### Expert indices - all-gathered (replicated on all devices) ###
+        # Shape: [num_dispatch_devices, tokens_per_device, K]
+        # Flatten to [num_dispatch_devices * tokens_per_device, K] = [total_tokens, K] per device
+        # Replicate on all devices
+        expert_indices_flat = host.expert_indices_list[layer_id].reshape(total_tokens, selected_experts_k)
+        expert_indices_replicated = expert_indices_flat.unsqueeze(0).repeat(num_devices, 1, 1)
+        tt_expert_indices = ttnn.from_torch(
+            expert_indices_replicated,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint16,
+            memory_config=init_expert_indices_mem_config,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        )
+        tt_expert_indices_buffers.append(tt_expert_indices)
+
+        ### Expert scores - same distribution as indices ###
+        expert_scores_flat = host.expert_scores_list[layer_id].reshape(total_tokens, selected_experts_k)
+        expert_scores_replicated = expert_scores_flat.unsqueeze(0).repeat(num_devices, 1, 1)
+        tt_expert_scores = ttnn.from_torch(
+            expert_scores_replicated,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=dtype,
+            memory_config=init_expert_scores_mem_config,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        )
+        tt_expert_scores_buffers.append(tt_expert_scores)
+
+    logger.info(f"Done uploading device input tensors")
+
+    # ------------------------------------------------------------------------
+    # Land the cached bfloat4_b weight host tensors on this invocation's mesh.
+    # The expensive upload → prepare → host-quantize ran once on the cache miss
+    # (in _build_quantized_weight_host_tensors); here we only re-upload under the
+    # DRAM-sharded mem config the kernel consumes. The host tensors stay cached.
+    weight_mem_configs = ttnn.experimental.get_weight_mem_configs(
+        mesh_device,
+        num_layers=num_layers,
+        experts_per_device=experts_per_device,
+        hidden_size=hidden_size,
+        intermediate_size=N,
+        has_bias=has_bias,
+        bh_ring_size=bh_ring_size,
+    )
+    tt_w0_w1 = ttnn.to_device(host.w0_w1_host, mesh_device, memory_config=weight_mem_configs.w0_w1)
+    tt_w2 = ttnn.to_device(host.w2_host, mesh_device, memory_config=weight_mem_configs.w2)
 
     output_shard_cores = ttnn.experimental.get_moe_combine_cores(
         mesh_device, output_height_shard_dim, output_width_shard_dim
@@ -1931,6 +2121,7 @@ def _run_moe_compute_impl(
     logger.info(f"\n========== Running op ==========")
 
     moe_compute_outputs = []
+    trace_id = None
 
     if enable_trace:
         # Compile the op
@@ -2055,6 +2246,39 @@ def _run_moe_compute_impl(
                 base_pcc_threshold,
             ):
                 combine_all_passed = False
+
+    #########################################
+    # DEALLOCATE DEVICE TENSORS
+    #########################################
+    # The mesh_device fixture is function-scoped and frees everything on close, but
+    # validation has now consumed every output, so free the device tensors explicitly
+    # rather than holding them until teardown. In trace mode the trace must be released
+    # first — its captured buffers reference the tensors below.
+    if enable_trace and trace_id is not None:
+        # The trace ran with blocking=False; synchronize before releasing so we don't
+        # tear down trace buffers while execution is still in flight.
+        ttnn.synchronize_device(mesh_device)
+        ttnn.release_trace(mesh_device, trace_id)
+
+    for iter_outputs in moe_compute_outputs:
+        for layer_outputs in iter_outputs:
+            # 5-tuple: (per_expert, activation, e_t, matmul, combine). The combine entry
+            # is the persistent optional_output_tensor freed separately below.
+            dram_per_expert, dram_activation, dram_e_t, dram_matmul, _combine = layer_outputs
+            ttnn.deallocate(dram_per_expert)
+            ttnn.deallocate(dram_activation)
+            ttnn.deallocate(dram_e_t)
+            ttnn.deallocate(dram_matmul)
+
+    for tt_combine_output in tt_combine_output_tensors:
+        ttnn.deallocate(tt_combine_output)
+
+    for tt_input_buffer in tt_sparse_buffers + tt_expert_indices_buffers + tt_expert_scores_buffers:
+        ttnn.deallocate(tt_input_buffer)
+
+    ttnn.deallocate(tt_expert_mapping)
+    ttnn.deallocate(tt_w0_w1)
+    ttnn.deallocate(tt_w2)
 
     # Asserts
     logger.info(f"\n========== Asserts ==========")
