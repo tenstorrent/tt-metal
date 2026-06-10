@@ -19,13 +19,33 @@ import ttnn
 from loguru import logger
 
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
+from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 
 NUM_TOKENS = 3200
 NUM_EXPERTS = 8
-EMB_DIM = DeepSeekV3Config.EMB_SIZE
 EXPERT_DIM = 2
 PCC_THRESHOLD = 0.999
-NUM_ROUTED_EXPERTS = DeepSeekV3Config.NUM_ROUTED_EXPERTS
+
+# Per-model (id, config, extended). Each test reads emb_dim (EMB_SIZE) and the routed-expert
+# count (NUM_ROUTED_EXPERTS) from the config, so every model exercises its own shape:
+#   dsv3 7168/256, glm_51 6144/256, minimax_m27 3072/256,
+#   dsv4_pro 7168/384, dsv4_flash 4096/256, gptoss_120b 2880/128.
+MODELS = [
+    ("dsv3", DeepSeekV3Config, False),
+    ("glm_51", GLM51Config, True),
+    ("minimax_m27", MiniMaxM27Config, True),
+    ("dsv4_pro", DeepSeekV4ProConfig, True),
+    ("dsv4_flash", DeepSeekV4FlashConfig, True),
+    ("gptoss_120b", GptOss120BConfig, True),
+]
+MODEL_PARAMS = [
+    pytest.param(config, id=name, marks=(pytest.mark.extended_model,) if extended else ())
+    for name, config, extended in MODELS
+]
 
 
 def pytorch_reference(combine, weights):
@@ -41,17 +61,17 @@ def old_implementation(combine_tt, weights_tt):
     return ttnn.sum(weighted, dim=EXPERT_DIM)
 
 
-def make_dispatch_table_all_local(device):
+def make_dispatch_table_all_local(device, num_routed_experts):
     """Create dispatch table where all experts are local (single device test)."""
     # All experts map to chip 0 (local)
-    table = torch.zeros(NUM_ROUTED_EXPERTS, dtype=torch.int32)
+    table = torch.zeros(num_routed_experts, dtype=torch.int32)
     return ttnn.from_torch(table, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
-def make_indices(num_tokens, num_experts, device):
+def make_indices(num_tokens, num_experts, device, num_routed_experts):
     """Create indices tensor with random global expert IDs."""
-    # Each token routes to num_experts random experts out of NUM_ROUTED_EXPERTS
-    indices = torch.stack([torch.randperm(NUM_ROUTED_EXPERTS)[:num_experts] for _ in range(num_tokens)])
+    # Each token routes to num_experts random experts out of num_routed_experts
+    indices = torch.stack([torch.randperm(num_routed_experts)[:num_experts] for _ in range(num_tokens)])
     indices = indices.unsqueeze(0).to(torch.uint16)  # [1, num_tokens, num_experts]
     return indices, ttnn.from_torch(
         indices, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint16, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -93,12 +113,14 @@ def assert_pcc(result, expected, threshold=PCC_THRESHOLD, label=""):
 # ============================================================================
 
 
-def test_structured_data(device):
+@pytest.mark.parametrize("config", MODEL_PARAMS)
+def test_structured_data(device, config):
     """Constant-per-tile activations with sequential weights [1..8].
     This pattern is easy to verify manually and catches tile ordering bugs."""
     torch.manual_seed(42)
+    emb_dim = config.EMB_SIZE
     tile_width = 1024
-    num_tiles = EMB_DIM // tile_width
+    num_tiles = emb_dim // tile_width
 
     tile_values = 0.1 * torch.arange(
         1,
@@ -108,7 +130,7 @@ def test_structured_data(device):
     combine = (
         tile_values.view(1, NUM_TOKENS, NUM_EXPERTS, num_tiles, 1)
         .expand(1, NUM_TOKENS, NUM_EXPERTS, num_tiles, tile_width)
-        .reshape(1, NUM_TOKENS, NUM_EXPERTS, EMB_DIM)
+        .reshape(1, NUM_TOKENS, NUM_EXPERTS, emb_dim)
         .to(torch.bfloat16)
     )
 
@@ -119,8 +141,8 @@ def test_structured_data(device):
         .to(torch.bfloat16)
     )
 
-    dispatch_table_tt = make_dispatch_table_all_local(device)
-    _, indices_tt = make_indices(NUM_TOKENS, NUM_EXPERTS, device)
+    dispatch_table_tt = make_dispatch_table_all_local(device, config.NUM_ROUTED_EXPERTS)
+    _, indices_tt = make_indices(NUM_TOKENS, NUM_EXPERTS, device, config.NUM_ROUTED_EXPERTS)
 
     ref = pytorch_reference(combine, weights)
     result = ttnn.to_torch(
@@ -134,14 +156,16 @@ def test_structured_data(device):
 # ============================================================================
 
 
-def test_random_data(device):
+@pytest.mark.parametrize("config", MODEL_PARAMS)
+def test_random_data(device, config):
     """Random activations and weights, compared to PyTorch reference."""
     torch.manual_seed(42)
-    combine = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, EMB_DIM, dtype=torch.bfloat16)
+    emb_dim = config.EMB_SIZE
+    combine = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, emb_dim, dtype=torch.bfloat16)
     weights = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, 1, dtype=torch.bfloat16)
 
-    dispatch_table_tt = make_dispatch_table_all_local(device)
-    _, indices_tt = make_indices(NUM_TOKENS, NUM_EXPERTS, device)
+    dispatch_table_tt = make_dispatch_table_all_local(device, config.NUM_ROUTED_EXPERTS)
+    _, indices_tt = make_indices(NUM_TOKENS, NUM_EXPERTS, device, config.NUM_ROUTED_EXPERTS)
 
     ref = pytorch_reference(combine, weights)
     result = ttnn.to_torch(
@@ -150,14 +174,16 @@ def test_random_data(device):
     assert_pcc(result, ref, label="random")
 
 
-def test_vs_old_implementation(device):
+@pytest.mark.parametrize("config", MODEL_PARAMS)
+def test_vs_old_implementation(device, config):
     """Fused kernel vs old implementation (to_layout + mul + sum) with random data."""
     torch.manual_seed(42)
-    combine = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, EMB_DIM, dtype=torch.bfloat16)
+    emb_dim = config.EMB_SIZE
+    combine = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, emb_dim, dtype=torch.bfloat16)
     weights = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, 1, dtype=torch.bfloat16)
 
-    dispatch_table_tt = make_dispatch_table_all_local(device)
-    _, indices_tt = make_indices(NUM_TOKENS, NUM_EXPERTS, device)
+    dispatch_table_tt = make_dispatch_table_all_local(device, config.NUM_ROUTED_EXPERTS)
+    _, indices_tt = make_indices(NUM_TOKENS, NUM_EXPERTS, device, config.NUM_ROUTED_EXPERTS)
 
     ref = pytorch_reference(combine, weights)
     combine_tt = to_device(combine, device)
@@ -177,17 +203,19 @@ def test_vs_old_implementation(device):
 
 
 @pytest.mark.parametrize("k_active", [6, 4, 2, 1])
-def test_sparse_weights(device, k_active):
+@pytest.mark.parametrize("config", MODEL_PARAMS)
+def test_sparse_weights(device, k_active, config):
     """Fused kernel with sparse weights (k_active out of 8 experts non-zero per token)."""
     torch.manual_seed(42)
-    combine = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, EMB_DIM, dtype=torch.bfloat16)
+    emb_dim = config.EMB_SIZE
+    combine = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, emb_dim, dtype=torch.bfloat16)
     weights = torch.zeros(1, NUM_TOKENS, NUM_EXPERTS, 1, dtype=torch.bfloat16)
     for t in range(NUM_TOKENS):
         active = torch.randperm(NUM_EXPERTS)[:k_active]
         weights[0, t, active, 0] = torch.randn(k_active, dtype=torch.bfloat16)
 
-    dispatch_table_tt = make_dispatch_table_all_local(device)
-    _, indices_tt = make_indices(NUM_TOKENS, NUM_EXPERTS, device)
+    dispatch_table_tt = make_dispatch_table_all_local(device, config.NUM_ROUTED_EXPERTS)
+    _, indices_tt = make_indices(NUM_TOKENS, NUM_EXPERTS, device, config.NUM_ROUTED_EXPERTS)
 
     ref = pytorch_reference(combine, weights)
     result = ttnn.to_torch(
@@ -201,24 +229,30 @@ def test_sparse_weights(device, k_active):
 # ============================================================================
 
 
-def test_skip_nonlocal_experts(device):
+# The routed-expert count (from each model's config) drives how many of a token's picks land
+# outside the local range and get marked non-local. Larger pools (e.g. dsv4_pro's 384) exercise
+# more non-local skips than the 256/128-expert models.
+@pytest.mark.parametrize("config", MODEL_PARAMS)
+def test_skip_nonlocal_experts(device, config):
     """Verify that marking experts as non-local (-1 in dispatch table) produces
     the same result when those experts' combine_output is zero (as in real MoE)."""
     torch.manual_seed(42)
+    emb_dim = config.EMB_SIZE
+    num_routed_experts = config.NUM_ROUTED_EXPERTS
 
     # Create indices: each token routes to 8 random experts
-    indices_torch, indices_tt = make_indices(NUM_TOKENS, NUM_EXPERTS, device)
+    indices_torch, indices_tt = make_indices(NUM_TOKENS, NUM_EXPERTS, device, num_routed_experts=num_routed_experts)
 
     # Build dispatch table where only experts 0-63 are local (column 0 of TP4)
     local_expert_end = 64
-    table = torch.full((NUM_ROUTED_EXPERTS,), -1, dtype=torch.int32)
+    table = torch.full((num_routed_experts,), -1, dtype=torch.int32)
     for i in range(local_expert_end):
         table[i] = i // 8  # map to chip within dispatch group
     dispatch_table_tt = ttnn.from_torch(
         table, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
-    combine = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, EMB_DIM, dtype=torch.bfloat16)
+    combine = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, emb_dim, dtype=torch.bfloat16)
     weights = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, 1, dtype=torch.bfloat16)
 
     # Reference: only sum local experts (non-local should be skipped by kernel)
@@ -242,20 +276,22 @@ def test_skip_nonlocal_experts(device):
 # ============================================================================
 
 
-def test_output_layout(device):
+@pytest.mark.parametrize("config", MODEL_PARAMS)
+def test_output_layout(device, config):
     """Verify output is TILE layout with correct shape."""
     torch.manual_seed(42)
-    combine = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, EMB_DIM, dtype=torch.bfloat16)
+    emb_dim = config.EMB_SIZE
+    combine = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, emb_dim, dtype=torch.bfloat16)
     weights = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, 1, dtype=torch.bfloat16)
 
-    dispatch_table_tt = make_dispatch_table_all_local(device)
-    _, indices_tt = make_indices(NUM_TOKENS, NUM_EXPERTS, device)
+    dispatch_table_tt = make_dispatch_table_all_local(device, config.NUM_ROUTED_EXPERTS)
+    _, indices_tt = make_indices(NUM_TOKENS, NUM_EXPERTS, device, config.NUM_ROUTED_EXPERTS)
 
     result_tt = new_implementation(
         to_device(combine, device), to_device(weights, device), indices_tt, dispatch_table_tt
     )
     assert result_tt.layout == ttnn.TILE_LAYOUT, f"Expected TILE_LAYOUT, got {result_tt.layout}"
-    assert list(result_tt.shape) == [1, NUM_TOKENS, EMB_DIM], f"Wrong shape: {result_tt.shape}"
+    assert list(result_tt.shape) == [1, NUM_TOKENS, emb_dim], f"Wrong shape: {result_tt.shape}"
 
 
 # ============================================================================
@@ -265,10 +301,12 @@ def test_output_layout(device):
 
 
 @pytest.mark.parametrize("num_tokens", [4096, 6400, 8192])
-def test_multi_chunk_structured(device, num_tokens):
+@pytest.mark.parametrize("config", MODEL_PARAMS)
+def test_multi_chunk_structured(device, num_tokens, config):
     """Structured data with >100 chunks so some cores get 2+ chunks each."""
+    emb_dim = config.EMB_SIZE
     tile_width = 1024
-    num_tiles = EMB_DIM // tile_width
+    num_tiles = emb_dim // tile_width
 
     tile_values = 0.1 * torch.arange(
         1,
@@ -278,7 +316,7 @@ def test_multi_chunk_structured(device, num_tokens):
     combine = (
         tile_values.view(1, num_tokens, NUM_EXPERTS, num_tiles, 1)
         .expand(1, num_tokens, NUM_EXPERTS, num_tiles, tile_width)
-        .reshape(1, num_tokens, NUM_EXPERTS, EMB_DIM)
+        .reshape(1, num_tokens, NUM_EXPERTS, emb_dim)
         .to(torch.bfloat16)
     )
 
@@ -295,10 +333,12 @@ def test_multi_chunk_structured(device, num_tokens):
 
 
 @pytest.mark.parametrize("num_tokens", [4096, 6400, 8192])
-def test_multi_chunk_random(device, num_tokens):
+@pytest.mark.parametrize("config", MODEL_PARAMS)
+def test_multi_chunk_random(device, num_tokens, config):
     """Random data with >100 chunks so some cores get 2+ chunks each."""
     torch.manual_seed(42)
-    combine = torch.randn(1, num_tokens, NUM_EXPERTS, EMB_DIM, dtype=torch.bfloat16)
+    emb_dim = config.EMB_SIZE
+    combine = torch.randn(1, num_tokens, NUM_EXPERTS, emb_dim, dtype=torch.bfloat16)
     weights = torch.randn(1, num_tokens, NUM_EXPERTS, 1, dtype=torch.bfloat16)
 
     ref = pytorch_reference(combine, weights)
