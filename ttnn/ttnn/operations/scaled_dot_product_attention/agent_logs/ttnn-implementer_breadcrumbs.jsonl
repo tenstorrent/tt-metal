@@ -21,3 +21,4 @@
 {"event":"test_run","test":"precision_matrix","status":"fail","details":"36 failed after distribution-aware gating; inspecting","ts":"2026-06-10T07:56:48+00:00"}
 {"event":"test_run","test":"precision_matrix","status":"pass","details":"229 passed, 160 skipped (guarded combos); uniform gated on max_abs (HiFi<=0.073, LoFi<=0.14 measured), normal on PCC","ts":"2026-06-10T07:58:43+00:00"}
 {"event":"test_run","test":"eval/golden_tests/scaled_dot_product_attention/test_regression.py","status":"pass","details":"17 failed all pre-existing buckets (R2 gqa/mqa, R3 uniform/negative/long-context), 22 passed — no new regressions from dtype expansion","ts":"2026-06-10T08:00:08+00:00"}
+{"event":"fix_applied","summary":"Refinement 1 shipped partial: dtype axis fully in SUPPORTED, config exposed, intermediates follow fp32_dest_acc_en; 2 bf8b S=8192 precision near-misses left failing with lever filed under Refinement 3","ts":"2026-06-10T08:01:24+00:00"}
