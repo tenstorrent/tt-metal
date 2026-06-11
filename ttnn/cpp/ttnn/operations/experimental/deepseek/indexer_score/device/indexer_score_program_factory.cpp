@@ -113,8 +113,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     constexpr uint32_t cb_k = CBIndex::c_1;         // k chunk, double buffered
     constexpr uint32_t cb_w = CBIndex::c_2;         // resident w group: Hi*QC tiles
     constexpr uint32_t cb_mask = CBIndex::c_3;      // [diag -inf, full -inf], persistent
-    constexpr uint32_t cb_qk = CBIndex::c_24;       // relu(q.kT) per subblock
-    constexpr uint32_t cb_mul = CBIndex::c_25;      // relu*w per subblock
+    constexpr uint32_t cb_qk = CBIndex::c_24;       // relu(q.kT) for a whole head group
     constexpr uint32_t cb_acc = CBIndex::c_26;      // unit accumulator ring
     constexpr uint32_t cb_out = CBIndex::c_16;      // untilized bf16 tiles
     constexpr uint32_t cb_scratch = CBIndex::c_17;  // writer-only -inf scratch
@@ -125,8 +124,14 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     make_cb(cb_mask, 2, DataFormat::Float16_b, bf16_tile);
     const DataFormat acc_fmt = fp32_dest_acc_en ? DataFormat::Float32 : DataFormat::Float16_b;
     const uint32_t acc_tile = fp32_dest_acc_en ? fp32_tile : bf16_tile;
-    make_cb(cb_qk, 2 * qk_subblock_h, acc_fmt, acc_tile);
-    make_cb(cb_mul, 2 * qk_subblock_h, acc_fmt, acc_tile);
+    // cb_qk buffers a batch of the group's relu(q.kT) tiles so compute runs that batch's
+    // matmuls, then its mul+accumulates -- hoisting the matmul<->eltwise reinit out of the
+    // per-head-pass loop. Batch = whole group when it fits a tile budget (QC=1, all heads
+    // resident -> 64 tiles), else capped so QC>1 + resident configs (large cb_q/cb_w) still
+    // fit L1; the kernel sub-batches the group's head passes by qk_batch_heads.
+    constexpr uint32_t QK_BATCH_TILE_CAP = 32;
+    const uint32_t qk_batch_heads = std::min<uint32_t>(HB, QK_BATCH_TILE_CAP);  // multiple of qk_subblock_h
+    make_cb(cb_qk, qk_batch_heads, acc_fmt, acc_tile);
     make_cb(cb_acc, 2 * QC * KC, acc_fmt, acc_tile);
     make_cb(cb_out, 2 * KC, DataFormat::Float16_b, bf16_tile);
     make_cb(cb_scratch, 1, DataFormat::Float16_b, bf16_tile);
@@ -145,6 +150,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
 
     std::vector<uint32_t> compute_ct = common_ct;
     compute_ct.push_back(qk_subblock_h);
+    compute_ct.push_back(qk_batch_heads);  // head tiles per matmul/mul phase chunk (cb_qk capacity)
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/deepseek/indexer_score/device/kernels/";
     auto reader_id =
