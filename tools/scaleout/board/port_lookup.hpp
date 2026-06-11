@@ -33,14 +33,4 @@ inline PortType resolve_port_type(BoardType board_type, uint32_t asic_location, 
     return port.has_value() ? port->port_type : PortType::UNKNOWN;
 }
 
-inline std::optional<PortId> try_get_port_id(const Board& board, uint32_t asic_location, uint8_t src_chan) {
-    auto port = try_get_port(board, asic_location, src_chan);
-    return port.has_value() ? std::optional<PortId>{port->port_id} : std::nullopt;
-}
-
-inline PortId resolve_port_id(const Board& board, uint32_t asic_location, uint8_t src_chan) {
-    auto port_id = try_get_port_id(board, asic_location, src_chan);
-    return port_id.has_value() ? *port_id : PortId{0};
-}
-
 }  // namespace tt::scaleout_tools
