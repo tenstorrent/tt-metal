@@ -66,8 +66,11 @@ fi
 VERSION_NODOT="${VERSION//.}"
 
 # Image names
+CI_BUILD_LIGHT_NAME="${DISTRO}-${VERSION}-ci-build-light-${ARCH}"
 CI_BUILD_NAME="${DISTRO}-${VERSION}-ci-build-${ARCH}"
+CI_TEST_LIGHT_NAME="${DISTRO}-${VERSION}-ci-test-light-${ARCH}"
 CI_TEST_NAME="${DISTRO}-${VERSION}-ci-test-${ARCH}"
+DEV_LIGHT_NAME="${DISTRO}-${VERSION}-dev-light-${ARCH}"
 DEV_NAME="${DISTRO}-${VERSION}-dev-${ARCH}"
 BASIC_DEV_NAME="${DISTRO}-${VERSION}-basic-dev-${ARCH}"
 BASIC_TTNN_NAME="${DISTRO}-${VERSION}-basic-ttnn-runtime-${ARCH}"
@@ -78,8 +81,87 @@ BASIC_DEV_EXTRA_FILES="$EXTRA_FILES"
 MANYLINUX_EXTRA_FILES="$EXTRA_FILES"
 VENV_EXTRA_FILES="dockerfile/docker-bake.hcl"
 
+combine_hashes() {
+    printf '%s\n' "$@" | sha1sum | cut -d' ' -f1
+}
+
+manifest_exists() {
+    docker manifest inspect "$1" > /dev/null 2>&1
+}
+
+TMP_DIR=$(mktemp -d)
+trap 'rm -rf "$TMP_DIR"' EXIT
+
+write_dockerfile_prefix() {
+    local stop_pattern="$1"
+    local output="$2"
+    awk -v stop_pattern="$stop_pattern" '
+        $0 ~ stop_pattern { exit }
+        { print }
+    ' dockerfile/Dockerfile > "$output"
+    if [ ! -s "$output" ]; then
+        echo "ERROR: Dockerfile split produced an empty file for stop pattern: $stop_pattern" >&2
+        exit 1
+    fi
+}
+
+write_dockerfile_stage() {
+    local start_pattern="$1"
+    local stop_pattern="$2"
+    local output="$3"
+    awk -v start_pattern="$start_pattern" -v stop_pattern="$stop_pattern" '
+        $0 ~ start_pattern { in_stage = 1 }
+        in_stage && $0 ~ stop_pattern { exit }
+        in_stage { print }
+    ' dockerfile/Dockerfile > "$output"
+    if [ ! -s "$output" ]; then
+        echo "ERROR: Dockerfile stage extraction produced an empty file for start pattern: $start_pattern" >&2
+        exit 1
+    fi
+}
+
+combine_dockerfile_parts() {
+    local output="$1"
+    shift
+    : > "$output"
+    for part in "$@"; do
+        cat "$part" >> "$output"
+        printf '\n' >> "$output"
+    done
+}
+
+CI_BUILD_LIGHT_DOCKERFILE="$TMP_DIR/Dockerfile.ci-build-light"
+CI_BUILD_DOCKERFILE="$TMP_DIR/Dockerfile.ci-build"
+CI_TEST_LIGHT_DOCKERFILE="$TMP_DIR/Dockerfile.ci-test-light"
+CI_TEST_DOCKERFILE="$TMP_DIR/Dockerfile.ci-test"
+DEV_LIGHT_DOCKERFILE="$TMP_DIR/Dockerfile.dev-light"
+DEV_DOCKERFILE="$TMP_DIR/Dockerfile.dev"
+CI_TEST_LIGHT_STAGE="$TMP_DIR/stage.ci-test-light"
+CI_TEST_STAGE="$TMP_DIR/stage.ci-test"
+DEV_LIGHT_STAGE="$TMP_DIR/stage.dev-light"
+DEV_STAGE="$TMP_DIR/stage.dev"
+
+# Hash only the Dockerfile stages needed to build each target. This keeps
+# unrelated non-light venv stages from changing light image tags.
+write_dockerfile_prefix '^FROM ci-build-light AS ci-build$' "$CI_BUILD_LIGHT_DOCKERFILE"
+write_dockerfile_prefix '^FROM ci-build-light AS ci-test-light$' "$CI_BUILD_DOCKERFILE"
+write_dockerfile_stage '^FROM ci-build-light AS ci-test-light$' '^FROM ci-test-light AS ci-test$' "$CI_TEST_LIGHT_STAGE"
+write_dockerfile_stage '^FROM ci-test-light AS ci-test$' '^FROM ci-test-light AS dev-light$' "$CI_TEST_STAGE"
+write_dockerfile_stage '^FROM ci-test-light AS dev-light$' '^FROM dev-light AS dev$' "$DEV_LIGHT_STAGE"
+write_dockerfile_stage '^FROM dev-light AS dev$' '^FROM base AS release$' "$DEV_STAGE"
+
+combine_dockerfile_parts "$CI_TEST_LIGHT_DOCKERFILE" "$CI_BUILD_LIGHT_DOCKERFILE" "$CI_TEST_LIGHT_STAGE"
+combine_dockerfile_parts "$CI_TEST_DOCKERFILE" "$CI_TEST_LIGHT_DOCKERFILE" "$CI_TEST_STAGE"
+combine_dockerfile_parts "$DEV_LIGHT_DOCKERFILE" "$CI_TEST_LIGHT_DOCKERFILE" "$DEV_LIGHT_STAGE"
+combine_dockerfile_parts "$DEV_DOCKERFILE" "$DEV_LIGHT_DOCKERFILE" "$DEV_STAGE"
+
 # Compute hashes
-HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile $EXTRA_FILES)
+CI_BUILD_LIGHT_DOCKERFILE_HASH=$(.github/scripts/dockerfile-hash.sh "$CI_BUILD_LIGHT_DOCKERFILE" $EXTRA_FILES)
+CI_BUILD_DOCKERFILE_HASH=$(.github/scripts/dockerfile-hash.sh "$CI_BUILD_DOCKERFILE" $EXTRA_FILES)
+CI_TEST_LIGHT_DOCKERFILE_HASH=$(.github/scripts/dockerfile-hash.sh "$CI_TEST_LIGHT_DOCKERFILE" $EXTRA_FILES)
+CI_TEST_DOCKERFILE_HASH=$(.github/scripts/dockerfile-hash.sh "$CI_TEST_DOCKERFILE" $EXTRA_FILES)
+DEV_LIGHT_DOCKERFILE_HASH=$(.github/scripts/dockerfile-hash.sh "$DEV_LIGHT_DOCKERFILE" $EXTRA_FILES)
+DEV_DOCKERFILE_HASH=$(.github/scripts/dockerfile-hash.sh "$DEV_DOCKERFILE" $EXTRA_FILES)
 BASIC_DEV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev $BASIC_DEV_EXTRA_FILES)
 BASIC_TTNN_HASH="$BASIC_DEV_HASH"
 MANYLINUX_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.manylinux $MANYLINUX_EXTRA_FILES)
@@ -87,8 +169,6 @@ MANYLINUX_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.manyli
 # Compute separate hashes for the two venv images so ci-build-venv is reusable
 # across ci-test-only dependency changes. Both hashes still include the shared
 # venv build inputs from docker-bake.hcl.
-TMP_DIR=$(mktemp -d)
-trap 'rm -rf "$TMP_DIR"' EXIT
 
 CI_BUILD_VENV_DOCKERFILE="$TMP_DIR/Dockerfile.python.ci-build"
 # Split Dockerfile.python at the ci-test-venv stage boundary to hash only the
@@ -110,10 +190,32 @@ fi
 CI_BUILD_VENV_HASH=$(.github/scripts/dockerfile-hash.sh "$CI_BUILD_VENV_DOCKERFILE" $VENV_EXTRA_FILES)
 CI_TEST_VENV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.python $VENV_EXTRA_FILES)
 
+# Compute canonical tool tag material without registry access. Final image hashes
+# include this explicitly so a dev-image manifest hit can stand in for the
+# upstream tool/venv chain on the common "everything already exists" path.
+TOOL_TAGS=$(.github/scripts/compute-tool-tags.sh "$REPO")
+TOOL_TAGS_HASH=$(echo "$TOOL_TAGS" | jq -S -c '.' | sha1sum | cut -d' ' -f1)
+
+# Main image tags include the dependency hashes their targets consume. DEV_HASH
+# also includes the prior main image hashes so the dev image can be used as a
+# canary for the main-image dependency chain before issuing more registry calls.
+CI_BUILD_LIGHT_HASH=$(combine_hashes "$CI_BUILD_LIGHT_DOCKERFILE_HASH" "$TOOL_TAGS_HASH")
+CI_BUILD_HASH=$(combine_hashes "$CI_BUILD_DOCKERFILE_HASH" "$CI_BUILD_LIGHT_HASH" "$CI_BUILD_VENV_HASH")
+CI_TEST_LIGHT_HASH=$(combine_hashes "$CI_TEST_LIGHT_DOCKERFILE_HASH" "$CI_BUILD_LIGHT_HASH" "$TOOL_TAGS_HASH")
+CI_TEST_HASH=$(combine_hashes "$CI_TEST_DOCKERFILE_HASH" "$CI_TEST_LIGHT_HASH" "$CI_TEST_VENV_HASH")
+DEV_LIGHT_HASH=$(combine_hashes "$DEV_LIGHT_DOCKERFILE_HASH" "$CI_TEST_LIGHT_HASH" "$TOOL_TAGS_HASH")
+DEV_HASH=$(combine_hashes "$DEV_DOCKERFILE_HASH" "$CI_BUILD_LIGHT_HASH" "$CI_BUILD_HASH" "$CI_TEST_LIGHT_HASH" "$CI_TEST_HASH" "$DEV_LIGHT_HASH" "$CI_BUILD_VENV_HASH" "$CI_TEST_VENV_HASH")
+BASIC_DEV_HASH=$(combine_hashes "$BASIC_DEV_HASH" "$TOOL_TAGS_HASH")
+BASIC_TTNN_HASH="$BASIC_DEV_HASH"
+MANYLINUX_HASH=$(combine_hashes "$MANYLINUX_HASH" "$TOOL_TAGS_HASH")
+
 # Build tags
-CI_BUILD_TAG="ghcr.io/${REPO}/tt-metalium/${CI_BUILD_NAME}:${HASH}"
-CI_TEST_TAG="ghcr.io/${REPO}/tt-metalium/${CI_TEST_NAME}:${HASH}"
-DEV_TAG="ghcr.io/${REPO}/tt-metalium/${DEV_NAME}:${HASH}"
+CI_BUILD_LIGHT_TAG="ghcr.io/${REPO}/tt-metalium/${CI_BUILD_LIGHT_NAME}:${CI_BUILD_LIGHT_HASH}"
+CI_BUILD_TAG="ghcr.io/${REPO}/tt-metalium/${CI_BUILD_NAME}:${CI_BUILD_HASH}"
+CI_TEST_LIGHT_TAG="ghcr.io/${REPO}/tt-metalium/${CI_TEST_LIGHT_NAME}:${CI_TEST_LIGHT_HASH}"
+CI_TEST_TAG="ghcr.io/${REPO}/tt-metalium/${CI_TEST_NAME}:${CI_TEST_HASH}"
+DEV_LIGHT_TAG="ghcr.io/${REPO}/tt-metalium/${DEV_LIGHT_NAME}:${DEV_LIGHT_HASH}"
+DEV_TAG="ghcr.io/${REPO}/tt-metalium/${DEV_NAME}:${DEV_HASH}"
 BASIC_DEV_TAG="ghcr.io/${REPO}/tt-metalium/${BASIC_DEV_NAME}:${BASIC_DEV_HASH}"
 BASIC_TTNN_TAG="ghcr.io/${REPO}/tt-metalium/${BASIC_TTNN_NAME}:${BASIC_TTNN_HASH}"
 MANYLINUX_TAG="ghcr.io/${REPO}/tt-metalium/manylinux-${ARCH}:${MANYLINUX_HASH}"
@@ -124,6 +226,11 @@ CI_TEST_VENV_TAG="${BASE_VENV}/ci-test:${VERSION_NODOT}-${CI_TEST_VENV_HASH}"
 
 # Check existence (or set all to false if force-rebuild)
 if [ "$FORCE_REBUILD" = "true" ]; then
+    CI_BUILD_LIGHT_EXISTS=false
+    CI_BUILD_EXISTS=false
+    CI_TEST_LIGHT_EXISTS=false
+    CI_TEST_EXISTS=false
+    DEV_LIGHT_EXISTS=false
     DEV_EXISTS=false
     BASIC_DEV_EXISTS=false
     BASIC_TTNN_EXISTS=false
@@ -131,30 +238,82 @@ if [ "$FORCE_REBUILD" = "true" ]; then
     CI_BUILD_VENV_EXISTS=false
     CI_TEST_VENV_EXISTS=false
 elif [ "$CHECK_EXISTS" = "true" ]; then
-    # Fire all manifest inspects in parallel; results written to temp files
+    # Check dev first. Its tag includes the main image, tool, and venv hash
+    # chain, so a hit lets us avoid the most expensive fan-out on the common
+    # path where the platform has already been built.
     TMPDIR_CHECK=$(mktemp -d)
-    ( docker manifest inspect "$DEV_TAG" > /dev/null 2>&1 && echo true || echo false ) > "${TMPDIR_CHECK}/dev" &
-    PID_DEV=$!
-    ( docker manifest inspect "$BASIC_DEV_TAG" > /dev/null 2>&1 && echo true || echo false ) > "${TMPDIR_CHECK}/basic_dev" &
-    PID_BASIC_DEV=$!
-    ( docker manifest inspect "$BASIC_TTNN_TAG" > /dev/null 2>&1 && echo true || echo false ) > "${TMPDIR_CHECK}/basic_ttnn" &
-    PID_BASIC_TTNN=$!
-    ( docker manifest inspect "$MANYLINUX_TAG" > /dev/null 2>&1 && echo true || echo false ) > "${TMPDIR_CHECK}/manylinux" &
-    PID_MANYLINUX=$!
-    ( docker manifest inspect "$CI_BUILD_VENV_TAG" > /dev/null 2>&1 && echo true || echo false ) > "${TMPDIR_CHECK}/ci_build_venv" &
-    PID_CI_BUILD_VENV=$!
-    ( docker manifest inspect "$CI_TEST_VENV_TAG" > /dev/null 2>&1 && echo true || echo false ) > "${TMPDIR_CHECK}/ci_test_venv" &
-    PID_CI_TEST_VENV=$!
+    if manifest_exists "$DEV_TAG"; then
+        DEV_EXISTS=true
+        ( manifest_exists "$CI_BUILD_LIGHT_TAG" && echo true || echo false ) > "${TMPDIR_CHECK}/ci_build_light" &
+        PID_CI_BUILD_LIGHT=$!
+        ( manifest_exists "$CI_TEST_LIGHT_TAG" && echo true || echo false ) > "${TMPDIR_CHECK}/ci_test_light" &
+        PID_CI_TEST_LIGHT=$!
+        ( manifest_exists "$DEV_LIGHT_TAG" && echo true || echo false ) > "${TMPDIR_CHECK}/dev_light" &
+        PID_DEV_LIGHT=$!
 
-    # Collect parallel results
-    wait $PID_DEV; DEV_EXISTS=$(cat "${TMPDIR_CHECK}/dev")
+        CI_BUILD_EXISTS=true
+        CI_TEST_EXISTS=true
+        CI_BUILD_VENV_EXISTS=unknown
+        CI_TEST_VENV_EXISTS=unknown
+
+        wait $PID_CI_BUILD_LIGHT; CI_BUILD_LIGHT_EXISTS=$(cat "${TMPDIR_CHECK}/ci_build_light")
+        wait $PID_CI_TEST_LIGHT; CI_TEST_LIGHT_EXISTS=$(cat "${TMPDIR_CHECK}/ci_test_light")
+        wait $PID_DEV_LIGHT; DEV_LIGHT_EXISTS=$(cat "${TMPDIR_CHECK}/dev_light")
+    else
+        DEV_EXISTS=false
+        ( manifest_exists "$CI_BUILD_LIGHT_TAG" && echo true || echo false ) > "${TMPDIR_CHECK}/ci_build_light" &
+        PID_CI_BUILD_LIGHT=$!
+        ( manifest_exists "$CI_BUILD_TAG" && echo true || echo false ) > "${TMPDIR_CHECK}/ci_build" &
+        PID_CI_BUILD=$!
+        ( manifest_exists "$CI_TEST_LIGHT_TAG" && echo true || echo false ) > "${TMPDIR_CHECK}/ci_test_light" &
+        PID_CI_TEST_LIGHT=$!
+        ( manifest_exists "$CI_TEST_TAG" && echo true || echo false ) > "${TMPDIR_CHECK}/ci_test" &
+        PID_CI_TEST=$!
+        ( manifest_exists "$DEV_LIGHT_TAG" && echo true || echo false ) > "${TMPDIR_CHECK}/dev_light" &
+        PID_DEV_LIGHT=$!
+
+        wait $PID_CI_BUILD_LIGHT; CI_BUILD_LIGHT_EXISTS=$(cat "${TMPDIR_CHECK}/ci_build_light")
+        wait $PID_CI_BUILD; CI_BUILD_EXISTS=$(cat "${TMPDIR_CHECK}/ci_build")
+        wait $PID_CI_TEST_LIGHT; CI_TEST_LIGHT_EXISTS=$(cat "${TMPDIR_CHECK}/ci_test_light")
+        wait $PID_CI_TEST; CI_TEST_EXISTS=$(cat "${TMPDIR_CHECK}/ci_test")
+        wait $PID_DEV_LIGHT; DEV_LIGHT_EXISTS=$(cat "${TMPDIR_CHECK}/dev_light")
+
+        CI_BUILD_VENV_EXISTS=unknown
+        CI_TEST_VENV_EXISTS=unknown
+        if [ "$CI_BUILD_EXISTS" != "true" ]; then
+            ( manifest_exists "$CI_BUILD_VENV_TAG" && echo true || echo false ) > "${TMPDIR_CHECK}/ci_build_venv" &
+            PID_CI_BUILD_VENV=$!
+        fi
+        if [ "$CI_TEST_EXISTS" != "true" ] || [ "$DEV_EXISTS" != "true" ]; then
+            ( manifest_exists "$CI_TEST_VENV_TAG" && echo true || echo false ) > "${TMPDIR_CHECK}/ci_test_venv" &
+            PID_CI_TEST_VENV=$!
+        fi
+
+        if [ "${PID_CI_BUILD_VENV:-}" ]; then
+            wait $PID_CI_BUILD_VENV; CI_BUILD_VENV_EXISTS=$(cat "${TMPDIR_CHECK}/ci_build_venv")
+        fi
+        if [ "${PID_CI_TEST_VENV:-}" ]; then
+            wait $PID_CI_TEST_VENV; CI_TEST_VENV_EXISTS=$(cat "${TMPDIR_CHECK}/ci_test_venv")
+        fi
+    fi
+
+    ( manifest_exists "$BASIC_DEV_TAG" && echo true || echo false ) > "${TMPDIR_CHECK}/basic_dev" &
+    PID_BASIC_DEV=$!
+    ( manifest_exists "$BASIC_TTNN_TAG" && echo true || echo false ) > "${TMPDIR_CHECK}/basic_ttnn" &
+    PID_BASIC_TTNN=$!
+    ( manifest_exists "$MANYLINUX_TAG" && echo true || echo false ) > "${TMPDIR_CHECK}/manylinux" &
+    PID_MANYLINUX=$!
+
     wait $PID_BASIC_DEV; BASIC_DEV_EXISTS=$(cat "${TMPDIR_CHECK}/basic_dev")
     wait $PID_BASIC_TTNN; BASIC_TTNN_EXISTS=$(cat "${TMPDIR_CHECK}/basic_ttnn")
     wait $PID_MANYLINUX; MANYLINUX_EXISTS=$(cat "${TMPDIR_CHECK}/manylinux")
-    wait $PID_CI_BUILD_VENV; CI_BUILD_VENV_EXISTS=$(cat "${TMPDIR_CHECK}/ci_build_venv")
-    wait $PID_CI_TEST_VENV; CI_TEST_VENV_EXISTS=$(cat "${TMPDIR_CHECK}/ci_test_venv")
     rm -rf "$TMPDIR_CHECK"
 else
+    CI_BUILD_LIGHT_EXISTS=unknown
+    CI_BUILD_EXISTS=unknown
+    CI_TEST_LIGHT_EXISTS=unknown
+    CI_TEST_EXISTS=unknown
+    DEV_LIGHT_EXISTS=unknown
     DEV_EXISTS=unknown
     BASIC_DEV_EXISTS=unknown
     BASIC_TTNN_EXISTS=unknown
@@ -163,24 +322,31 @@ else
     CI_TEST_VENV_EXISTS=unknown
 fi
 
-# Check ci-build and ci-test existence independently to handle partial push failures
-if [ "$FORCE_REBUILD" = "true" ]; then
-    CI_BUILD_EXISTS=false
-    CI_TEST_EXISTS=false
-elif [ "$CHECK_EXISTS" = "true" ]; then
-    # Fire both manifest inspects in parallel
-    TMPDIR_CI=$(mktemp -d)
-    ( docker manifest inspect "$CI_BUILD_TAG" > /dev/null 2>&1 && echo true || echo false ) > "${TMPDIR_CI}/ci_build" &
-    PID_CI_BUILD=$!
-    ( docker manifest inspect "$CI_TEST_TAG" > /dev/null 2>&1 && echo true || echo false ) > "${TMPDIR_CI}/ci_test" &
-    PID_CI_TEST=$!
+CI_BUILD_VENV_REQUIRED=false
+CI_TEST_VENV_REQUIRED=false
+if [ "$CI_BUILD_EXISTS" != "true" ]; then
+    CI_BUILD_VENV_REQUIRED=true
+fi
+if [ "$CI_TEST_EXISTS" != "true" ] || [ "$DEV_EXISTS" != "true" ]; then
+    CI_TEST_VENV_REQUIRED=true
+fi
 
-    wait $PID_CI_BUILD; CI_BUILD_EXISTS=$(cat "${TMPDIR_CI}/ci_build")
-    wait $PID_CI_TEST; CI_TEST_EXISTS=$(cat "${TMPDIR_CI}/ci_test")
-    rm -rf "$TMPDIR_CI"
-else
-    CI_BUILD_EXISTS=unknown
-    CI_TEST_EXISTS=unknown
+FINAL_IMAGES_MISSING=false
+if [ "$CI_BUILD_LIGHT_EXISTS" != "true" ] ||
+    [ "$CI_BUILD_EXISTS" != "true" ] ||
+    [ "$CI_TEST_LIGHT_EXISTS" != "true" ] ||
+    [ "$CI_TEST_EXISTS" != "true" ] ||
+    [ "$DEV_LIGHT_EXISTS" != "true" ] ||
+    [ "$DEV_EXISTS" != "true" ] ||
+    [ "$BASIC_DEV_EXISTS" != "true" ] ||
+    [ "$BASIC_TTNN_EXISTS" != "true" ] ||
+    [ "$MANYLINUX_EXISTS" != "true" ]; then
+    FINAL_IMAGES_MISSING=true
+fi
+
+VENVS_REQUIRED=false
+if [ "$CI_BUILD_VENV_REQUIRED" = "true" ] || [ "$CI_TEST_VENV_REQUIRED" = "true" ]; then
+    VENVS_REQUIRED=true
 fi
 
 # Output JSON
@@ -189,40 +355,60 @@ jq -cn \
     --arg distro "$DISTRO" \
     --arg version "$VERSION" \
     --arg python_version "$PYTHON_VERSION" \
+    --arg ci_build_light_tag "$CI_BUILD_LIGHT_TAG" \
     --arg ci_build_tag "$CI_BUILD_TAG" \
+    --arg ci_test_light_tag "$CI_TEST_LIGHT_TAG" \
     --arg ci_test_tag "$CI_TEST_TAG" \
+    --arg dev_light_tag "$DEV_LIGHT_TAG" \
     --arg dev_tag "$DEV_TAG" \
     --arg basic_dev_tag "$BASIC_DEV_TAG" \
     --arg basic_ttnn_tag "$BASIC_TTNN_TAG" \
     --arg manylinux_tag "$MANYLINUX_TAG" \
     --arg ci_build_venv_tag "$CI_BUILD_VENV_TAG" \
     --arg ci_test_venv_tag "$CI_TEST_VENV_TAG" \
+    --arg ci_build_venv_required "$CI_BUILD_VENV_REQUIRED" \
+    --arg ci_test_venv_required "$CI_TEST_VENV_REQUIRED" \
+    --arg ci_build_light_exists "$CI_BUILD_LIGHT_EXISTS" \
     --arg ci_build_exists "$CI_BUILD_EXISTS" \
+    --arg ci_test_light_exists "$CI_TEST_LIGHT_EXISTS" \
     --arg ci_test_exists "$CI_TEST_EXISTS" \
+    --arg dev_light_exists "$DEV_LIGHT_EXISTS" \
     --arg dev_exists "$DEV_EXISTS" \
     --arg basic_dev_exists "$BASIC_DEV_EXISTS" \
     --arg basic_ttnn_exists "$BASIC_TTNN_EXISTS" \
     --arg manylinux_exists "$MANYLINUX_EXISTS" \
     --arg ci_build_venv_exists "$CI_BUILD_VENV_EXISTS" \
     --arg ci_test_venv_exists "$CI_TEST_VENV_EXISTS" \
+    --arg final_images_missing "$FINAL_IMAGES_MISSING" \
+    --arg venvs_required "$VENVS_REQUIRED" \
     '{
         distro: $distro,
         version: $version,
         python_version: $python_version,
+        ci_build_light_tag: $ci_build_light_tag,
         ci_build_tag: $ci_build_tag,
+        ci_test_light_tag: $ci_test_light_tag,
         ci_test_tag: $ci_test_tag,
+        dev_light_tag: $dev_light_tag,
         dev_tag: $dev_tag,
         basic_dev_tag: $basic_dev_tag,
         basic_ttnn_tag: $basic_ttnn_tag,
         manylinux_tag: $manylinux_tag,
         ci_build_venv_tag: $ci_build_venv_tag,
         ci_test_venv_tag: $ci_test_venv_tag,
+        ci_build_venv_required: $ci_build_venv_required,
+        ci_test_venv_required: $ci_test_venv_required,
+        ci_build_light_exists: $ci_build_light_exists,
         ci_build_exists: $ci_build_exists,
+        ci_test_light_exists: $ci_test_light_exists,
         ci_test_exists: $ci_test_exists,
+        dev_light_exists: $dev_light_exists,
         dev_exists: $dev_exists,
         basic_dev_exists: $basic_dev_exists,
         basic_ttnn_exists: $basic_ttnn_exists,
         manylinux_exists: $manylinux_exists,
         ci_build_venv_exists: $ci_build_venv_exists,
-        ci_test_venv_exists: $ci_test_venv_exists
+        ci_test_venv_exists: $ci_test_venv_exists,
+        final_images_missing: $final_images_missing,
+        venvs_required: $venvs_required
     }'
