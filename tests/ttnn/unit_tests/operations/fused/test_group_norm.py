@@ -1097,6 +1097,10 @@ def test_group_norm_negative_tests(
         )
 
 
+@pytest.mark.skip(
+    reason="Public input_mask/negative_mask removed in interface fix #45292: input_mask is now "
+    "deprecated/ignored and the mask is created internally, so the old user-mask validation no longer applies."
+)
 def test_group_norm_rejects_host_input_mask(device):
     input_tensor = ttnn.empty((1, 1, 32, 320), device=device)
     input_mask = ttnn.create_group_norm_input_mask(320, 32, 1, ttnn.DataType.BFLOAT16)
@@ -1111,6 +1115,10 @@ def test_group_norm_rejects_host_input_mask(device):
         )
 
 
+@pytest.mark.skip(
+    reason="Public input_mask/negative_mask removed in interface fix #45292: negative_mask is no longer a "
+    "public kwarg and the mask is created internally, so the old user-mask validation no longer applies."
+)
 def test_group_norm_rejects_host_negative_mask(device):
     grid_size = ttnn.CoreGrid(y=1, x=1)
     torch_input_tensor = torch.rand((1, 320, 32, 32), dtype=torch.bfloat16)

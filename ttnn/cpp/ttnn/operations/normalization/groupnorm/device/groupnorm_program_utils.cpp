@@ -232,7 +232,7 @@ uint32_t compute_sharded_gn_l1_footprint(
     // Flags decide which CBs are actually allocated, matching the factory's conditionals.
     const uint32_t tile_width = input.tensor_spec().tile().get_width();
     const bool reader_repack_output = (input.shard_spec().value().shape[1] % tile_width) != 0;
-    const bool untilize_out = output_spec.layout() == ttnn::Layout::ROW_MAJOR;
+    const bool untilize_out = output_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR;
 
     uint32_t footprint = cb.total(
         with_negative_mask,
