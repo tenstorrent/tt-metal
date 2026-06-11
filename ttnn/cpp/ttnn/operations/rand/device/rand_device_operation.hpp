@@ -11,7 +11,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/metal2_artifacts.hpp"
+#include "ttnn/metalv2_artifacts.hpp"
 
 namespace ttnn::operations::rand {
 
@@ -33,15 +33,15 @@ struct RandDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    // Metal 2.0 factory — AdvancedProgramSpecFactoryConcept with the per-enqueue split (Option 3++).
+    // MetalV2 factory — AdvancedProgramSpecFactoryConcept with the per-enqueue split (Option 3++).
     //
     // The method surface IS the documentation of what's what:
-    //   - extract_immutable_info → the cache key AND the sole input to create_program_artifacts. It is
+    //   - extract_immutable_info → the cache key AND the sole input to create_program_spec. It is
     //     the structural projection of the request (output layout + grid). It deliberately EXCLUDES
     //     seed/from/to, so two calls that differ only in those values map to the same cache entry — and
     //     a mutable value cannot leak into the spec, because the builder never sees anything but the
     //     ImmutableInfo.
-    //   - create_program_artifacts → the immutable blueprint (DFBs, kernels, work-units, schemas) PLUS
+    //   - create_program_spec → the immutable blueprint (DFBs, kernels, work-units, schemas) PLUS
     //     the ENQUEUE-INVARIANT run-args (the per-core work split start_id / num_tiles, declared
     //     invariant in the spec), bundled as a ProgramArtifacts. Set once on cache miss and retained.
     //   - create_per_enqueue_args → the PER-ENQUEUE run-args: the per-core RNG seed + from/to range and
@@ -60,8 +60,8 @@ struct RandDeviceOperation {
 
         static immutable_info_t extract_immutable_info(
             const operation_attributes_t& attrs, const tensor_args_t& tensor_args);
-        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(const immutable_info_t& info);
-        static tt::tt_metal::experimental::ProgramRunArgs create_per_enqueue_args(
+        static ttnn::device_operation::ProgramArtifacts create_program_spec(const immutable_info_t& info);
+        static std::optional<tt::tt_metal::experimental::ProgramRunArgs> create_per_enqueue_args(
             const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output,
