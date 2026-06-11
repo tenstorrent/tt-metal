@@ -70,7 +70,7 @@ class VisionModelArgs(ModelArgs):
         S: sequence len
         H: dim
         """
-
+        print("x_bsh", x_bsh.shape)
         x_1BSH = x_bsh.unsqueeze(0)
 
         # input goes to DRAM
@@ -80,11 +80,7 @@ class VisionModelArgs(ModelArgs):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.mesh_device,
-                dims=(None, -1),
-                mesh_shape=self.cluster_shape,
-            ),
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
         )
         return xs_1BSH
 
@@ -93,16 +89,18 @@ class VisionModelArgs(ModelArgs):
         return False
 
     def get_state_dict_prefix(self, module_name, layer_num=None, deepstack_merger_num=None):
-        layer_prefix = f"vision_tower.encoder.layers.{layer_num}." if layer_num is not None else ""
+        layer_prefix = f"visual.encoder.layers.{layer_num}." if layer_num is not None else ""
         module_map = {
             "MLP": "mlp",
             "Gemma4VisionMLP": "mlp",
-            "VisionAttention": "attention",
+            "VisionAttention": "self_attn",
             "VisionBlock": "",
             "VisionTransformer": "visual",
             "PatchMerger": "visual.merger",
-            "norm1": "norm1",
-            "norm2": "norm2",
+            "input_layernorm": "input_layernorm",
+            "post_attention_layernorm": "post_attention_layernorm",
+            "pre_feedforward_layernorm": "pre_feedforward_layernorm",
+            "post_feedforward_layernorm": "post_feedforward_layernorm",
             "DeepstackMerger": f"visual.deepstack_merger_list.{deepstack_merger_num}",
             "": "",  # If no module is given, just get layer prefix
         }
@@ -112,9 +110,9 @@ class VisionModelArgs(ModelArgs):
         # Workaround until Qwen2.5-VL is fully integrated into a HF release
         from transformers.models.gemma4.modeling_gemma4 import Gemma4ForConditionalGeneration as AutoModelForCausalLM
 
-        print("Loading Qwen3-VL model: ", AutoModelForCausalLM)
+        print("Loading Gemma-4 model: ", AutoModelForCausalLM)
         config = AutoModelForCausalLM.config_class.from_pretrained(self.CKPT_DIR)
-        config.vision_config.depth = depth if depth is not None else config.vision_config.num_hidden_layers
+        config.vision_config.num_hidden_layers = depth if depth is not None else config.vision_config.num_hidden_layers
         model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR, config=config)
         return model.model.vision_tower
 
@@ -125,16 +123,25 @@ class VisionModelArgs(ModelArgs):
         return self.reference_vision_block().mlp
 
     def reference_attention(self):
-        return self.reference_vision_block().attn
+        return self.reference_vision_block().self_attn
 
     def reference_rms_norm(self):
         return self.reference_vision_block().norm2
+
+    def reference_pooler(self):
+        return self.reference_vision_model().pooler
+
+    def reference_rotary_emb(self):
+        return self.reference_vision_model().encoder.rotary_emb
 
     def reference_patch_merger(self):
         return self.reference_vision_model().merger
 
     def reference_deepstack_merger(self):
         return self.reference_vision_model().deepstack_merger_list[0]
+
+    def reference_patch_embedder(self):
+        return self.reference_vision_model().patch_embedder
 
     def reference_patch_embed(self):
         return self.reference_vision_model().patch_embed

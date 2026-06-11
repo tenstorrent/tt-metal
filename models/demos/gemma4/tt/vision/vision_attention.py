@@ -24,8 +24,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.rmsnorm import RMSNorm
-from models.tt_transformers.tt.ccl import tt_all_reduce
+from models.demos.gemma4.tt.vision.rms_norm import RMSNorm
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
@@ -35,56 +34,73 @@ def apply_multidimensional_rope(
     cos: "ttnn.Tensor",
     sin: "ttnn.Tensor",
     transformation_mat: "ttnn.Tensor",
+    head_dim: int,
+    padded_head_dim: int,
+    ndim: int = 2,
     is_decode_mode: bool = False,
 ) -> "ttnn.Tensor":
     """Apply multidimensional RoPE (e.g. 2D spatial RoPE for vision tokens).
 
-    Splits x, cos, and sin along the head_dim axis into ndim equal parts,
-    applies ttnn.experimental.rotary_embedding_llama independently to each
-    part using the supplied transformation matrix, then concatenates the
-    results back along head_dim.
+    Splits x, cos, and sin along head_dim into ``ndim`` equal spatial blocks of
+    ``head_dim // ndim`` channels each, applies
+    ``ttnn.experimental.rotary_embedding_llama`` independently to each block, then
+    concatenates the rotated blocks back together and zero-pads the result up to
+    ``padded_head_dim`` for the downstream tile-aligned ops.
 
-    The caller must supply a transformation_mat sized for head_dim // ndim
-    (not the full head_dim), because rotary_embedding_llama receives one
-    tile-aligned split at a time.
+    Splitting at the true per-block boundary (``head_dim // ndim``) keeps each
+    block's cos/sin frequencies aligned with its channels. The trailing channels
+    of ``x`` beyond ``head_dim`` (head-dim tile padding) are dropped by taking only
+    the first ``ndim`` blocks, and the rotated output is re-padded with zeros so
+    SDPA does not pick up garbage in the padding lanes.
 
     Args:
-        x: Input tensor of shape [1, n_heads, S, head_dim].
-        cos: Cosine cache of shape [1, S, head_dim] (already position-indexed).
-        sin: Sine cache of shape [1, S, head_dim] (already position-indexed).
-        transformation_mat: Rotation permutation matrix for the per-dim slice,
-            shape [1, 1, head_dim//ndim, head_dim//ndim].
+        x: Input tensor of shape [1, n_heads, S, padded_head_dim].
+        cos: Cosine cache of shape [1, 1, S, head_dim] (already position-indexed).
+        sin: Sine cache of shape [1, 1, S, head_dim] (already position-indexed).
+        transformation_mat: Per-tile rotation permutation matrix (32x32).
+        head_dim: True (unpadded) head dimension.
+        padded_head_dim: Tile-aligned head dimension to pad the output up to.
         ndim: Number of independent RoPE dimensions (2 for row+column vision RoPE).
         is_decode_mode: Forwarded to rotary_embedding_llama.
 
     Returns:
-        Tensor of the same shape as x with multidimensional RoPE applied.
+        Tensor of shape [1, n_heads, S, padded_head_dim] with multidimensional RoPE applied.
     """
-    num_input_channels = x.shape[-1]
-    num_rotated_channels_per_dim = 2 * (num_input_channels // (4))
+    block = head_dim // ndim
 
-    if num_rotated_channels_per_dim <= 0:
-        raise ValueError(
-            f"num_rotated_channels_per_dim must be > 0, got {num_rotated_channels_per_dim} "
-            f"(num_input_channels={num_input_channels}, ndim={2})"
-        )
+    if block <= 0:
+        raise ValueError(f"head_dim // ndim must be > 0, got {block} (head_dim={head_dim}, ndim={ndim})")
 
-    x_parts = ttnn.split(x, num_rotated_channels_per_dim, dim=-1)
-    cos_parts = ttnn.split(cos, num_rotated_channels_per_dim, dim=-1)
-    sin_parts = ttnn.split(sin, num_rotated_channels_per_dim, dim=-1)
+    # Split at the true per-block boundary; the first ndim blocks are the real
+    # spatial dimensions, any trailing block is head-dim tile padding we drop.
+    x_parts = ttnn.split(x, block, dim=-1)
+    cos_parts = ttnn.split(cos, block, dim=-1)
+    sin_parts = ttnn.split(sin, block, dim=-1)
 
     y_parts = [
         ttnn.experimental.rotary_embedding_llama(
             x_parts[k],
             cos_parts[k],
             sin_parts[k],
-            transformation_mat,
+            transformation_mat["prefill"],
             is_decode_mode=is_decode_mode,
         )
-        for k in range(2)
+        for k in range(ndim)
     ]
 
-    return ttnn.concat(y_parts, dim=-1)
+    y = ttnn.concat(y_parts, dim=-1)
+
+    # Re-pad the rotated output (head_dim wide) back up to the tile-aligned
+    # padded_head_dim with zeros so downstream SDPA padding lanes stay clean.
+    if y.shape[-1] < padded_head_dim:
+        y = ttnn.pad(
+            y,
+            (y.shape[0], y.shape[1], y.shape[2], padded_head_dim),
+            (0, 0, 0, 0),
+            0.0,
+        )
+
+    return y
 
 
 class VisionAttention(LightweightModule):
@@ -128,18 +144,6 @@ class VisionAttention(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
-        self.tt_ccl = tt_ccl
-        self.configuration = configuration
-        self.cluster_shape = configuration.cluster_shape
-        # We TP across cluster axis 1 (e.g. all 8 devices on T3K).
-        self.tp = self.cluster_shape[1]
-        self.num_devices_per_group = self.tp
-        print(self.num_devices_per_group)
-        # `tt_all_reduce` for T3K (1, 8) ignores the supplied cluster_axis and
-        # reduce_scatters across the non-1 axis; keep this at 0 to avoid the
-        # cluster_axis==1 short-circuit.
-        self.ccl_cluster_axis = 0
-
         self.hidden_size = configuration.dim
         self.n_heads = configuration.n_heads
         self.head_dim = configuration.head_dim
@@ -148,17 +152,17 @@ class VisionAttention(LightweightModule):
         self.n_kv_heads = configuration.n_kv_heads
         self.paged_attention_config = paged_attention_config
         self.causal_mask = causal_mask
+        # self.use_kv_cache = use_kv_cache
         self.min_kv_prefill_shard_seqlen = configuration.min_kv_prefill_shard_seqlen
         self.ccl_dtype = configuration.ccl_dtype
         self.MAX_QKV_MM_SEQ_LEN = configuration.MAX_QKV_MM_SEQ_LEN
         self.tile_size = configuration.tile_size
 
-        # Each device holds n_heads / tp heads.
-        self.n_local_heads = self.n_heads // self.tp
-        self.n_local_kv_heads = self.n_kv_heads // self.tp
+        self.num_devices_per_group = 1  # [INFO] each device runs a copy of the vision model
+
+        self.n_local_heads = self.n_heads // self.num_devices_per_group
+        self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
         self.padded_head_dim = math.ceil(self.head_dim / self.tile_size) * self.tile_size
-        # Per-device qkv width = (n_local_heads + 2*n_local_kv_heads) * padded_head_dim
-        self.local_qkv_size = (self.n_local_heads + 2 * self.n_local_kv_heads) * self.padded_head_dim
 
         self.dtype = dtype
 
@@ -171,16 +175,6 @@ class VisionAttention(LightweightModule):
         self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
 
         self.transformation_mats = transformation_mats
-        # Vision RoPE is 2-dimensional (row + column).  Each spatial axis
-        # rotates head_dim/2 channels, so rotary_embedding_llama receives a
-        # tensor whose last dim is padded_head_dim//2.  Slice the prefill
-        # transformation matrix down to that size; the matrix is block-diagonal
-        # with identical 2x2 blocks so any leading square sub-matrix is valid.
-        self._rope_ndim = 2
-        rope_dim = self.padded_head_dim // self._rope_ndim
-        if transformation_mats is not None and "prefill" in transformation_mats:
-            full_mat = transformation_mats["prefill"]
-            self.transformation_mats["prefill_rope_dim"] = full_mat[:, :, :rope_dim, :rope_dim]
         self.configuration = configuration
         self.decoders_optimizations = configuration.decoders_optimizations
         self.model_config = configuration.get_model_config()
@@ -219,10 +213,10 @@ class VisionAttention(LightweightModule):
         else:
             cache_name = lambda name: weight_cache_path / (f"{layer_name}.{name}")
 
-        wq_str = f"{layer_name}.wq"
-        wk_str = f"{layer_name}.wk"
-        wv_str = f"{layer_name}.wv"
-        wo_str = f"{layer_name}.wo"
+        wq_str = f"{layer_name}.wq.linear"
+        wk_str = f"{layer_name}.wk.linear"
+        wv_str = f"{layer_name}.wv.linear"
+        wo_str = f"{layer_name}.wo.linear"
         q_norm_str = f"{layer_name}.q_norm"
         k_norm_str = f"{layer_name}.k_norm"
 
@@ -271,7 +265,7 @@ class VisionAttention(LightweightModule):
             self.wqkv_bias_prefill = ttnn.as_tensor(
                 qkv_bias,
                 device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.cluster_shape),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 dtype=ttnn.bfloat8_b,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
@@ -321,8 +315,6 @@ class VisionAttention(LightweightModule):
             qkv_list.append(qkv)
 
         qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
-        print("torch shape", qkv_cat.shape)
-        # qkv_cat.shape = [1, 1, 1280, 4608])
 
         self.wqkv = ttnn.as_tensor(
             qkv_cat,
@@ -330,11 +322,9 @@ class VisionAttention(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.cluster_shape),
-            cache_file_name=cache_name("wqkv_col"),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            cache_file_name=cache_name("wqkv"),
         )
-        print(cache_name("wqkv_col"))
-        print("important point", self.wqkv.shape)
 
         def norm_reshard(x, norm, mode):
             """Hack until RMSNorm supports height-sharded output config"""
@@ -382,6 +372,8 @@ class VisionAttention(LightweightModule):
         else:
             self.k_norm = lambda x, mode: x
 
+        self.v_norm = ttnn.rms_norm
+
         # For ring topology we can use all gather matmul for wo
         # self.use_fused_all_gather_matmul = self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]
 
@@ -392,14 +384,13 @@ class VisionAttention(LightweightModule):
             # note that torch weights are already transposed to have input in last dim
             pt_wo_t = self.state_dict[f"{wo_str}.weight"]
             # pt_wo_t.shape = [1280, 1280]
-            heads = pt_wo_t.reshape(-1, self.n_heads, self.head_dim)
+            heads = pt_wo_t.reshape(-1, self.n_local_heads, self.head_dim)
             # heads.shape = [-1, 8, 80]
             heads = torch.nn.functional.pad(
                 heads, (0, self.padded_head_dim - self.head_dim)
             )  # tail-pad last dim with 0
-            pt_wo = heads.reshape(1, 1, -1, self.n_heads * self.padded_head_dim).transpose(-1, -2)
+            pt_wo = heads.reshape(1, 1, -1, self.n_local_heads * self.padded_head_dim).transpose(-1, -2)
             # pt_wo.shape = [1, 1, 768, 2560]
-            print("output shape", pt_wo.shape)
 
         else:
             pt_wo = self.state_dict[f"{wo_str}.weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
@@ -414,8 +405,8 @@ class VisionAttention(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -2), mesh_shape=self.cluster_shape),
-            cache_file_name=cache_name("wo_row"),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            cache_file_name=cache_name("wo"),
         )
         # self.wo.shape = [1, 1, 384, 2560] each device of N300 sharded on dim=2
 
@@ -424,16 +415,17 @@ class VisionAttention(LightweightModule):
             self.wo_bias_prefill = ttnn.as_tensor(
                 self.state_dict[f"{wo_str}.bias"],
                 device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.cluster_shape),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 dtype=self.dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
                 cache_file_name=cache_name("wo_bias_prefill_sharded"),
             )
 
-        self.scale = self.head_dim**-0.5
+        self.scale = 1
 
         dram_shard_grid_width = 8
+        target_device_shape = (1, 1)  # each 1x1 device runs a vision model
         self.xqkv_prefill_progcfg = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
@@ -442,7 +434,9 @@ class VisionAttention(LightweightModule):
             per_core_M=max(
                 1, 8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8)  # 8 rows
             ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-            per_core_N=math.ceil(self.local_qkv_size / 32 / dram_shard_grid_width),  # N / TILE_WIDTH / grid width
+            per_core_N=math.ceil(
+                configuration.qkv_size / target_device_shape[1] / 32 / dram_shard_grid_width
+            ),  # N / TILE_WIDTH / grid width
             transpose_mcast=False,
             fused_activation=None,
             fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
@@ -485,7 +479,7 @@ class VisionAttention(LightweightModule):
 
         ttnn.deallocate(x_11SH)
 
-        # Each device owns local_qkv_size columns -> n_local_heads / n_local_kv_heads.
+        # split qkv into heads
         (
             q_heads_1QSD_pre_rot,
             k_heads_1KSD_pre_rot,
@@ -500,6 +494,16 @@ class VisionAttention(LightweightModule):
 
         q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode=Mode.PREFILL)
         k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode=Mode.PREFILL)
+        v_heads_1VSD = self.v_norm(
+            v_heads_1VSD,
+            epsilon=self.configuration.norm_eps,
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            ),
+        )
 
         ttnn.deallocate(xqkv_fused)
 
@@ -510,21 +514,16 @@ class VisionAttention(LightweightModule):
         if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
 
-        # workaround until rotary embeddings support sub-tile head dims
-        if self.head_dim != self.padded_head_dim:
-            pad_head_dim = lambda x, v: ttnn.pad(
-                x, (x.shape[0], x.shape[1], x.shape[2], self.padded_head_dim), (0, 0, 0, 0), v
-            )
-            # pad with cos = 1, sin = 0
-            rot_mats = [pad_head_dim(rot_mats[0], 1.0), pad_head_dim(rot_mats[1], 0.0)]
-            # print(f'{rot_mats[0].shape=}')
-
+        # NOTE: rot_mats (cos/sin) are passed unpadded at the true head_dim. The
+        # multidimensional RoPE splits them per spatial block (head_dim // ndim),
+        # rotates each block, then re-pads the output back up to padded_head_dim.
         q_heads_1QSD = apply_multidimensional_rope(
             q_heads_1QSD_pre_rot,
             rot_mats[0],
             rot_mats[1],
-            self.transformation_mats["prefill_rope_dim"],
-            ndim=self._rope_ndim,
+            self.transformation_mats,
+            head_dim=self.head_dim,
+            padded_head_dim=self.padded_head_dim,
             is_decode_mode=False,
         )
         ttnn.deallocate(q_heads_1QSD_pre_rot)
@@ -536,7 +535,9 @@ class VisionAttention(LightweightModule):
             k_heads_1KSD_pre_rot,
             rot_mats[0],
             rot_mats[1],
-            self.transformation_mats["prefill_rope_dim"],
+            self.transformation_mats,
+            head_dim=self.head_dim,
+            padded_head_dim=self.padded_head_dim,
             is_decode_mode=False,
         )
         ttnn.deallocate(k_heads_1KSD_pre_rot)
@@ -568,7 +569,9 @@ class VisionAttention(LightweightModule):
 
         attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.padded_head_dim])
 
-        # ---- WO matmul (row sharded along contraction) ----------------------------
+        ###
+        # Output matmul
+        ###
         attn_output_11SH = ttnn.experimental.nlp_concat_heads(
             attn_output_1QSD,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -579,8 +582,7 @@ class VisionAttention(LightweightModule):
         if seq_len > 1024:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
 
-        # Each device contributes a partial sum of the full output dim.
-        output_partial = ttnn.linear(
+        output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
             compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
@@ -588,29 +590,12 @@ class VisionAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.model_config["VISION_WO_PREFILL_PROGCFG"](seq_len),
         )
-        ttnn.deallocate(attn_output_11SH)
+        # FIXME: surely ttnn.linear bias should work?
+        if self.wo_bias_prefill is not None:
+            output_11SH = output_11SH + self.wo_bias_prefill
 
         if seq_len > 1024:
-            output_partial = ttnn.reshape(output_partial, [1, 1, seq_len, -1])
+            output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
+        ttnn.deallocate(attn_output_11SH)
 
-        # On T3K (1, 8) `tt_all_reduce(dim=3)` is implemented as a
-        # reduce_scatter, so the result is fractured along dim=3
-        output_frac = tt_all_reduce(
-            output_partial,
-            self.mesh_device,
-            self.tt_ccl,
-            cluster_axis=self.ccl_cluster_axis,
-            dim=3,
-            sharded=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=self.ccl_dtype,
-            topology=self.ccl_topology,
-        )
-        if output_frac is not output_partial:
-            ttnn.deallocate(output_partial)
-
-        # Bias is fractured along dim=3 to match.
-        if self.wo_bias_prefill is not None:
-            output_frac = output_frac + self.wo_bias_prefill
-
-        return output_frac
+        return output_11SH

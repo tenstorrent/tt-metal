@@ -31,6 +31,8 @@ from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta
     "rows",
     (
         2048,  # TODO: fix padding issues
+        4096,
+        2048 * 5
         # 14308, # from 3B test image
     ),
 )
