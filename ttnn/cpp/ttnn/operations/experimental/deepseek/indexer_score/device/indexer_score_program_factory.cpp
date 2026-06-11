@@ -137,7 +137,17 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     // (one matmul/mul mode switch per output tile). QC>1 doubles cb_q/cb_w, so cap the batch.
     const uint32_t qk_batch_cap = (QC == 1) ? HB : 32u;
     const uint32_t qk_batch_heads = std::min<uint32_t>(HB, qk_batch_cap);  // multiple of qk_subblock_h
-    make_cb(cb_qk, qk_batch_heads, acc_fmt, acc_tile);
+    // Full-strip path batches qk_col_batch k-columns per matmul<->mul mode switch (one set_matmul_mode
+    // + set_mul_mode per batch instead of per output tile). The gate w is column-independent and the
+    // unit's whole k chunk is resident, so a row's columns can share one mode switch. Only when the
+    // head group is a single chunk (qk_batch_heads == Hi) and the fast strip is used (KC >= 2); cb_qk
+    // then holds qk_col_batch * qk_batch_heads relu(q.kT) tiles, capped to a fixed L1 tile budget.
+    constexpr uint32_t qk_col_tile_cap = 128;  // cb_qk tile budget for the batched matmul outputs
+    const bool single_chunk = (qk_batch_heads == Hi) && !stream_heads;
+    const uint32_t qk_col_batch = (KC >= 2 && single_chunk)
+                                      ? std::min<uint32_t>(KC, std::max<uint32_t>(1u, qk_col_tile_cap / qk_batch_heads))
+                                      : 1u;
+    make_cb(cb_qk, qk_col_batch * qk_batch_heads, acc_fmt, acc_tile);
     make_cb(cb_acc, 2 * QC * KC, acc_fmt, acc_tile);
     make_cb(cb_out, 2 * KC, DataFormat::Float16_b, bf16_tile);
     make_cb(cb_scratch, 1, DataFormat::Float16_b, bf16_tile);
@@ -170,7 +180,8 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
 
     std::vector<uint32_t> compute_ct = common_ct;
     compute_ct.push_back(qk_subblock_h);
-    compute_ct.push_back(qk_batch_heads);  // head tiles per matmul/mul phase chunk (cb_qk capacity)
+    compute_ct.push_back(qk_batch_heads);  // head tiles per matmul/mul phase chunk
+    compute_ct.push_back(qk_col_batch);    // k-columns batched per mode switch in the full-strip path
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/deepseek/indexer_score/device/kernels/";
     auto reader_id =

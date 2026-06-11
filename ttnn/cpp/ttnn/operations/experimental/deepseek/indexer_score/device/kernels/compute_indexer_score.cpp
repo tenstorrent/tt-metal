@@ -37,8 +37,10 @@ constexpr uint32_t cb_out_strip = tt::CBIndex::c_18;  // full-width strip output
 
 // qk subblock height (head rows per DEST pass); first per-kernel compile-time arg.
 constexpr uint32_t heads_per_dest_pass = get_compile_time_arg_val(num_common_ct_args);
-// heads buffered in cb_qk per matmul/mul phase chunk (cb_qk capacity, multiple of HP).
+// heads buffered in cb_qk per matmul/mul phase chunk (multiple of HP).
 constexpr uint32_t qk_batch_heads = get_compile_time_arg_val(num_common_ct_args + 1);
+// k-columns batched per matmul<->mul mode switch in the full-strip path (1 = per-column, no batching).
+constexpr uint32_t qk_col_batch = get_compile_time_arg_val(num_common_ct_args + 2);
 
 // The per-(r,c) head reduction runs as two phases per head group: matmul_phase fills cb_qk
 // with the group's relu(q.kT) tiles, then mul_accum_phase multiplies by the gates and packs
@@ -200,8 +202,31 @@ inline void untilize_acc_strip(uint32_t n) {
  *  (llk_math_pack_sync_init + llk_pack_dest_init) before the next unit's matmul. */
 inline void produce_full_strip(uint32_t r) {
     cb_reserve_back(cb_acc_strip, k_tiles_per_unit);
-    for (uint32_t c = 0; c < k_tiles_per_unit; ++c) {
-        accumulate_heads<cb_acc_strip>(r, c, c);  // head reduction -> cb_acc_strip slot c
+    if constexpr (qk_col_batch > 1) {
+        // Batched mode-switch path: the gate w is column-independent and the unit's whole head
+        // group is one resident chunk, so a batch of qk_col_batch k-columns runs all its matmuls
+        // (filling cb_qk with cols*qk_batch_heads relu(q.kT) tiles), then all its MAC reductions,
+        // paying set_matmul_mode + set_mul_mode once per batch instead of once per column.
+        const uint32_t w_base = r * num_heads;  // single chunk (group_start = 0); gate per (head, row)
+        for (uint32_t c0 = 0; c0 < k_tiles_per_unit; c0 += qk_col_batch) {
+            const uint32_t cols = (c0 + qk_col_batch <= k_tiles_per_unit) ? qk_col_batch : (k_tiles_per_unit - c0);
+            set_matmul_mode<cb_q, cb_k, cb_qk>();
+            for (uint32_t cc = 0; cc < cols; ++cc) {
+                for (uint32_t head = 0; head < num_heads; head += heads_per_dest_pass) {
+                    matmul_relu_pass<cb_q, cb_k, cb_qk>(head, r, c0 + cc);
+                }
+            }
+            set_mul_mode<cb_qk, cb_w, cb_acc_strip>();
+            for (uint32_t cc = 0; cc < cols; ++cc) {
+                // single chunk -> each column's head sum is one MAC pass that seeds its own slot
+                mul_accum_chunk<cb_qk, cb_w, cb_acc_strip>(w_base, qk_batch_heads, /*first=*/true, c0 + cc);
+            }
+        }
+        pack_reconfig_l1_acc(0);  // done; the untilize below packs overwrite
+    } else {
+        for (uint32_t c = 0; c < k_tiles_per_unit; ++c) {
+            accumulate_heads<cb_acc_strip>(r, c, c);  // head reduction -> cb_acc_strip slot c
+        }
     }
     cb_push_back(cb_acc_strip, k_tiles_per_unit);
     compute_kernel_lib::untilize<k_tiles_per_unit, cb_acc_strip, cb_out_strip>(1);
