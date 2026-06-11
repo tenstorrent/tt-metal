@@ -36,27 +36,26 @@ bool is_typecast(tt::tt_metal::DataType input, tt::tt_metal::DataType output) {
            (input == UINT32 && output == UINT16);
 }
 
-bool is_input_dtype_supported(BinaryOpType op, tt::tt_metal::DataType dtype) {
-    return dtype_policy::is_supported(op, dtype);
-}
-
 bool is_dtype_combination_supported(BinaryOpType op, DataType dtype_a, DataType dtype_b) {
     if (dtype_a == dtype_b) {
-        return is_input_dtype_supported(op, dtype_a);
+        return dtype_policy::is_supported(op, dtype_a);
     }
 
     if (dtype_policy::is_mixed_bfloat_tile_pair(dtype_a, dtype_b) &&
         dtype_policy::supports_mixed_bfloat_tile_inputs(op)) {
-        return is_input_dtype_supported(op, dtype_a) && is_input_dtype_supported(op, dtype_b);
+        return dtype_policy::is_supported(op, dtype_a) && dtype_policy::is_supported(op, dtype_b);
     }
 
-    // special cases:
+    // Asymmetric operand pairs: tensor A from policy, tensor B rules below.
     switch (op) {
+        // Mixed compare is narrower than the same-dtype policy (float_and_int32 includes block floats).
         case BinaryOpType::ISCLOSE:
             return (dtype_a == DataType::FLOAT32 && dtype_b == DataType::BFLOAT16) ||
                    (dtype_a == DataType::BFLOAT16 && dtype_b == DataType::FLOAT32);
+        // Quant ops: float/int32 input (A) × float32 scale (B). See quantization.cpp.
+        case BinaryOpType::QUANT:
         case BinaryOpType::DEQUANT:
-        case BinaryOpType::REQUANT: return dtype_a == DataType::INT32 && dtype_b == DataType::FLOAT32;
+        case BinaryOpType::REQUANT: return dtype_policy::is_supported(op, dtype_a) && dtype_b == DataType::FLOAT32;
         default: return false;
     }
 }

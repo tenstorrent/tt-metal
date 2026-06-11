@@ -5,6 +5,7 @@
 #include "binary_ng_device_operation.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/eltwise/binary/common/binary_op_dtype_policy.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "binary_ng_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -284,7 +285,7 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     }
 
     TT_FATAL(
-        ttnn::operations::binary::utils::is_input_dtype_supported(attributes.binary_op_type, input_tensor_a.dtype()),
+        ttnn::operations::binary::dtype_policy::is_supported(attributes.binary_op_type, input_tensor_a.dtype()),
         "Input tensor A dtype {} is not supported for binary operation {}",
         input_tensor_a.dtype(),
         attributes.binary_op_type);

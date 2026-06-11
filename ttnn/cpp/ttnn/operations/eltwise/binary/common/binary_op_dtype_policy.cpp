@@ -10,7 +10,7 @@ namespace ttnn::operations::binary::dtype_policy {
 
 using tt::tt_metal::DataType;
 
-std::span<const DataType> supported_input_dtypes(BinaryOpType op) {
+std::span<const DataType> supported_tensor_a_dtypes(BinaryOpType op) {
     using namespace dtype_sets;
     switch (op) {
         case BinaryOpType::ADD:
@@ -63,7 +63,7 @@ std::span<const DataType> supported_input_dtypes(BinaryOpType op) {
 }
 
 bool is_supported(BinaryOpType op, DataType dtype) {
-    const auto supported_dtypes = supported_input_dtypes(op);
+    const auto supported_dtypes = supported_tensor_a_dtypes(op);
     return std::ranges::find(supported_dtypes, dtype) != supported_dtypes.end();
 }
 
