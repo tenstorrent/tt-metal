@@ -485,16 +485,18 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         }
     }
 
-    // Large-shape DRAM-contention levers. These were validated to help only at large sizes
-    // (neutral-to-negative on small shapes), so gate on the largest dimension. When any dimension
-    // is >= 4096 elements:
-    //   - IN0_READ_BARRIER_THRESHOLD: cap outstanding in0 (activation) DRAM reads. in0 reads are
-    //     un-staggered bursts that share NOC_1 with output writes; capping in-flight requests
-    //     relieves NOC_1 contention (~+1.7% at 4096^3).
-    //   - OUTPUT_WRITE_NOC0_PCT: route ~40% of output writes onto the otherwise-idle NOC_0, which
-    //     requires DM_DYNAMIC_NOC on all DM kernels (dynamic-NOC mode is performance-neutral here).
+    // Output-contention DRAM levers. Both relieve the same bottleneck — output writes contending with
+    // in0 reads on NOC_1 — so they only pay off when the output is WIDE (large N). Trigger on N, not
+    // max(M,K,N): the latter also fires on skewed shapes where M or K is large but N is small, where
+    // both levers REGRESS (e.g. 4864x2048x1024: both -11%, output-split -6.8%, in0-barrier -3.7%).
+    // Measured by output width: N=4096 helps (+0.6% to +2.6%), N<=3072 hurts. (Verified per-lever via
+    // matched-blocking ablation; both levers track N.)
+    //   - IN0_READ_BARRIER_THRESHOLD: cap outstanding in0 DRAM reads (un-staggered bursts share NOC_1
+    //     with output writes); only worth it when there are heavy output writes to contend with.
+    //   - OUTPUT_WRITE_NOC0_PCT: route ~40% of output writes onto the otherwise-idle NOC_0 (needs
+    //     DM_DYNAMIC_NOC); parallelism gain scales with the per-row write run length, i.e. N.
     auto dm_noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
-    constexpr uint32_t LARGE_SHAPE_DIM = 4096;
+    constexpr uint32_t WIDE_OUTPUT_DIM = 4096;  // N threshold for the output-contention levers
     // The in0-read barrier and prefetch are fundamentally opposed: the barrier caps outstanding in0
     // reads (every IN0_READ_BARRIER_THRESHOLD tiles), while prefetch's whole purpose is to keep the
     // next block's read in flight. Applying both negates prefetch (~+14% slowdown, worst on the
@@ -504,7 +506,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     const bool prefetch_active = prefetch_gate || (force_prefetch != nullptr && std::string(force_prefetch) != "0");
     // TT_MM_NO_LARGE_LEVERS: ablation toggle to isolate the large-shape DRAM-contention levers
     // (in0-read barrier + split-NOC output write) from the rest of the dataflow.
-    if (std::max({M, K, N}) >= LARGE_SHAPE_DIM && std::getenv("TT_MM_NO_LARGE_LEVERS") == nullptr) {
+    if (N >= WIDE_OUTPUT_DIM && std::getenv("TT_MM_NO_LARGE_LEVERS") == nullptr) {
         if (std::getenv("TT_MM_NO_IN0_BARRIER") == nullptr && !prefetch_active) {
             defines["IN0_READ_BARRIER_THRESHOLD"] = "10";
         }
