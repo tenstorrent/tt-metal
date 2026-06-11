@@ -97,6 +97,12 @@ message EthernetFirmwareVersion {
     uint32 patch = 3;
 }
 
+message FirmwareBundleVersion {
+    uint32 major = 1;
+    uint32 minor = 2;
+    uint32 patch = 3;
+}
+
 // PCIe devices per tray for a specific host
 message PcieDevicesPerTray {
     uint32 tray_id = 1;
@@ -130,6 +136,7 @@ message PhysicalSystemDescriptor {
     repeated ExitNodeConnectionTable exit_node_connection_table = 5;
     uint32 target_device_type = 6;
     EthernetFirmwareVersion ethernet_firmware_version = 7;
+    optional FirmwareBundleVersion firmware_bundle_version = 10;
     repeated HostPcieDevicesMap pcie_devices_per_tray = 8;
     repeated HostPcieIdToAsicLocationMap pcie_id_to_asic_location = 9;
 }

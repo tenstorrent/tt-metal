@@ -221,6 +221,42 @@ void validate_eth_fw_versions(
         peer_ethernet_firmware_version.to_string());
 }
 
+void validate_fw_bundle_versions(
+    PhysicalSystemDescriptor& psd,
+    const std::optional<tt::umd::FirmwareBundleVersion>& peer_firmware_bundle_version,
+    const std::string& my_host_name,
+    const std::string& peer_host_name) {
+    // Skip validation if firmware bundle versions are not available (e.g., CPU-only tests, older UMD)
+    if (!psd.get_firmware_bundle_version().has_value() || !peer_firmware_bundle_version.has_value()) {
+        log_warning(
+            tt::LogMetal,
+            "Skipping firmware bundle version validation between {} and {}: firmware bundle versions not available "
+            "(local: {}, peer: {}). This may occur in CPU-only mode or with older UMD versions.",
+            my_host_name,
+            peer_host_name,
+            psd.get_firmware_bundle_version().has_value() ? "available" : "unavailable",
+            peer_firmware_bundle_version.has_value() ? "available" : "unavailable");
+        return;
+    }
+
+    log_debug(
+        tt::LogMetal,
+        "Validating firmware bundle versions: {} has {} vs {} has {}",
+        my_host_name,
+        psd.get_firmware_bundle_version()->to_string(),
+        peer_host_name,
+        peer_firmware_bundle_version->to_string());
+
+    TT_FATAL(
+        peer_firmware_bundle_version.value() == psd.get_firmware_bundle_version().value(),
+        "Firmware Bundle Versions are expected to be consistent across all nodes in the cluster. The following "
+        "hosts have different Firmware Bundle Versions: {} ({}) and {} ({})",
+        my_host_name,
+        psd.get_firmware_bundle_version()->to_string(),
+        peer_host_name,
+        peer_firmware_bundle_version->to_string());
+}
+
 void remove_unresolved_nodes(PhysicalSystemDescriptor& psd) {
     auto& asic_descriptors = psd.get_asic_descriptors();
     auto& system_graph = psd.get_system_graph();
@@ -465,10 +501,12 @@ void exchange_metadata(
     bool issue_gather) {
     using namespace tt::tt_metal::distributed::multihost;
     constexpr uint32_t controller_rank = 0;
-    if (*(distributed_context->size()) == 1) {
+    auto my_rank = *(distributed_context->rank());
+    auto total_size = *(distributed_context->size());
+
+    if (total_size == 1) {
         return;
     }
-    auto my_rank = *(distributed_context->rank());
     std::set<uint32_t> sender_ranks;
     std::set<uint32_t> receiver_ranks;
 
@@ -487,7 +525,6 @@ void exchange_metadata(
             }
         }
     }
-
     if (sender_ranks.contains(my_rank)) {
         auto serialized_desc = serialize_physical_system_descriptor_to_bytes(psd);
         std::size_t desc_size = serialized_desc.size();
@@ -527,6 +564,11 @@ void exchange_metadata(
             validate_eth_fw_versions(
                 psd,
                 peer_desc.get_ethernet_firmware_version(),
+                psd.get_asic_descriptors().begin()->second.host_name,
+                peer_desc.get_asic_descriptors().begin()->second.host_name);
+            validate_fw_bundle_versions(
+                psd,
+                peer_desc.get_firmware_bundle_version(),
                 psd.get_asic_descriptors().begin()->second.host_name,
                 peer_desc.get_asic_descriptors().begin()->second.host_name);
             psd.merge(std::move(peer_desc));
@@ -649,8 +691,9 @@ PhysicalSystemDescriptor run_local_discovery(
 
     psd.get_system_graph().host_connectivity_graph[hostname_key] = {};
     // Get Ethernet Firmware Version from the driver - Initialize to 0 if not available
-    psd.get_ethernet_firmware_version() =
-        cluster_desc.get_cluster_eth_fw_version().value_or(tt::umd::semver_t(0, 0, 0));
+    psd.get_ethernet_firmware_version() = cluster_desc.get_cluster_eth_fw_version().value_or(tt::umd::semver_t(0, 0, 0));
+    // Get Firmware Bundle Version from the driver
+    psd.get_firmware_bundle_version() = cluster_desc.get_cluster_firmware_bundle_version();
 
     return psd;
 }
