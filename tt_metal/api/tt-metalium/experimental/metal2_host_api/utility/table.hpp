@@ -139,6 +139,9 @@ public:
         return const_iterator{std::ranges::find(entries_, key, &Storage::value_type::first)};
     }
 
+    // Returns true if `key` is present in the table, false otherwise.
+    [[nodiscard]] bool contains(const K& key) const { return find(key) != end(); }
+
     // Inserts an entry only if its key is absent. Returns {iterator to the entry,
     // true} when inserted, or {iterator to the existing entry, false} otherwise.
     std::pair<iterator, bool> insert(const value_type& entry) {
