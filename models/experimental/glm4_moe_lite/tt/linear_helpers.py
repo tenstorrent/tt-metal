@@ -65,6 +65,133 @@ _PREFILL_CKC = ttnn.WormholeComputeKernelConfig(
     packer_l1_acc=True,
 )
 
+# MoE router prefill CKC (matches moe_topk_tt).
+_ROUTER_PREFILL_CKC = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.LoFi,
+    math_approx_mode=True,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=False,
+)
+# Fused in router matmul (moe_topk_tt); bias add stays a separate op after scores.
+ROUTER_FUSED_SIGMOID = ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)
+
+
+def prefill_matmul_tuned_enabled() -> bool:
+    return os.environ.get("GLM4_MOE_LITE_PREFILL_MATMUL_TUNED", "").strip() == "1"
+
+
+def _weight_tile_shape(b: ttnn.Tensor) -> tuple[int, int]:
+    k = int(b.shape[-2])
+    n = int(b.shape[-1])
+    return (k + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE, (n + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+
+
+def _tuned_shared_down_1d_prog_and_ws(*, m_total: int) -> tuple:
+    """Sweep winner: 1D 8×4 ibw4 ws — shared expert down (K=384 N=512 TP shard)."""
+    mt = max(1, (m_total + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE)
+    grid_x, grid_y = 8, 4
+    per_core_M = mt
+    per_core_N = 2
+    in0_block_w = 4
+    osh, osw = ensure_min_subblock_area(per_core_M, per_core_N, fp32_dest_acc_en=False, width_sharded_out=True)
+    prog_cfg = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=osh,
+        out_subblock_w=osw,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+    ws_mc = ttnn.create_sharded_memory_config(
+        shape=(1, 1, mt * ttnn.TILE_SIZE, per_core_N * ttnn.TILE_SIZE),
+        core_grid=ttnn.CoreGrid(y=grid_y, x=grid_x),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    return prog_cfg, ws_mc
+
+
+def prefill_linear_2d_bs_out(
+    a: ttnn.Tensor,
+    b: ttnn.Tensor,
+    *,
+    device: Any,
+    grid_x: int,
+    grid_y: int,
+    in0_block_w: int,
+    per_core_M: int,
+    per_core_N: int,
+    compute_kernel_config: Any = None,
+    memory_config: ttnn.MemoryConfig | None = None,
+    fp32_dest_acc: bool = False,
+    fused_activation: ttnn.UnaryWithParam | None = None,
+) -> ttnn.Tensor:
+    """Prefill linear using 2D multicast + BLOCK_SHARDED L1 output, then gather."""
+    m_total = 1
+    for i in range(len(a.shape) - 1):
+        m_total *= int(a.shape[i])
+    m = int(a.shape[-2]) if len(a.shape) >= 1 else m_total
+    n = int(b.shape[-1])
+    osh, osw = ensure_min_subblock_area(
+        per_core_M,
+        per_core_N,
+        fp32_dest_acc_en=fp32_dest_acc,
+        width_sharded_out=False,
+    )
+    prog_cfg = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=osh,
+        out_subblock_w=osw,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        fuse_batch=True,
+        fused_activation=fused_activation,
+        transpose_mcast=False,
+    )
+    bs_mc = ttnn.create_sharded_memory_config(
+        (1, 1, m, n),
+        core_grid=ttnn.CoreGrid(y=grid_y, x=grid_x),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    ckc = compute_kernel_config if compute_kernel_config is not None else _PREFILL_CKC
+    a_l1, copied = _to_l1_if_needed(a)
+    out_bs = ttnn.linear(a_l1, b, program_config=prog_cfg, memory_config=bs_mc, compute_kernel_config=ckc)
+    if copied:
+        ttnn.deallocate(a_l1, force=False)
+    downstream_mc = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+    out = ttnn.to_memory_config(out_bs, downstream_mc)
+    ttnn.deallocate(out_bs, force=False)
+    return out
+
+
+def tuned_moe_router_prefill_linear(
+    a: ttnn.Tensor,
+    b: ttnn.Tensor,
+    *,
+    memory_config: ttnn.MemoryConfig | None = None,
+) -> ttnn.Tensor:
+    """Sweep winner: 2D 2×4 ibw4 bs — MoE router gate prefill (K=2048 N=64)."""
+    return prefill_linear_2d_bs_out(
+        a,
+        b,
+        device=a.device(),
+        grid_x=2,
+        grid_y=4,
+        in0_block_w=4,
+        per_core_M=1,
+        per_core_N=1,
+        compute_kernel_config=_ROUTER_PREFILL_CKC,
+        memory_config=memory_config,
+        fp32_dest_acc=True,
+        fused_activation=ROUTER_FUSED_SIGMOID,
+    )
+
 
 def _auto_in0_block_w(k_tiles: int) -> int:
     for candidate in (4, 3, 2):
@@ -154,6 +281,7 @@ def compute_1d_prog_cfg(
     m_total: int,
     *,
     fp32_dest_acc_en: bool = False,
+    fused_activation: ttnn.UnaryWithParam | None = None,
     overrides: Matmul1dProgOverrides | None = None,
 ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
     """Compute 1D multicast program config for decode-sized matmuls.
@@ -208,7 +336,7 @@ def compute_1d_prog_cfg(
         per_core_M=per_core_M,
         per_core_N=per_core_N,
         fuse_batch=True,
-        fused_activation=None,
+        fused_activation=fused_activation,
         mcast_in0=True,
     )
 
@@ -651,6 +779,39 @@ def prefill_linear_ws_out(
     for i in range(len(a.shape) - 1):
         m_total *= int(a.shape[i])
     ckc = compute_kernel_config if compute_kernel_config is not None else _PREFILL_CKC
+
+    if prefill_matmul_tuned_enabled() and m_total > ttnn.TILE_SIZE:
+        kt, nt = _weight_tile_shape(b)
+        # L1 shared expert fused gate+up: 2D 8×4 ibw4 bs (gather after matmul).
+        if kt == 64 and nt == 24:
+            mt = max(1, (m_total + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE)
+            out = prefill_linear_2d_bs_out(
+                a,
+                b,
+                device=device,
+                grid_x=8,
+                grid_y=4,
+                in0_block_w=4,
+                per_core_M=max(1, mt // 4),
+                per_core_N=3,
+                compute_kernel_config=ckc,
+                memory_config=ttnn.L1_MEMORY_CONFIG if return_sharded else memory_config,
+            )
+            return out
+        # L1 shared expert down: 1D 8×4 ibw4 ws.
+        if kt == 12 and nt == 16:
+            prog_cfg, ws_mc = _tuned_shared_down_1d_prog_and_ws(m_total=m_total)
+            a_l1, copied = _to_l1_if_needed(a)
+            out_sharded = ttnn.linear(a_l1, b, program_config=prog_cfg, memory_config=ws_mc, compute_kernel_config=ckc)
+            if copied:
+                ttnn.deallocate(a_l1, force=False)
+            if return_sharded:
+                return out_sharded
+            downstream_mc = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+            out = ttnn.to_memory_config(out_sharded, downstream_mc)
+            ttnn.deallocate(out_sharded, force=False)
+            return out
+
     # WIDTH_SHARDED activations are gathered L1→L1 interleaved before matmul unless
     # sharded_in0 is enabled (per-call or GLM4_MOE_LITE_PREFILL_SHARDED_MATMUL_IN0=1) and
     # the activation shard grid fits inside the output program grid.

@@ -1206,6 +1206,7 @@ def run_decoder_layer_prefill_update_cache_tt(
 
         dense_prefill = _env_bool("GLM4_MOE_LITE_MOE_DENSE_PREFILL", default=False)
         packed_prefill = _env_bool("GLM4_MOE_LITE_MOE_PACKED_PREFILL", default=False)
+        skip_defensive_clones = _env_bool("GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES")
 
         # Pad tokens to the minimum legal sparse multiple for this mesh.
         # Dense/packed prefill paths use ttnn.linear (no block alignment needed), so skip padding.
@@ -1220,7 +1221,10 @@ def run_decoder_layer_prefill_update_cache_tt(
                 # IMPORTANT: `ttnn.pad` can return a view that aliases the input buffer.
                 # Materialize with `ttnn.clone` before deallocating the original tensor.
                 x_padded_view = ttnn.pad(x, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0.0)
-                x_padded = ttnn.clone(x_padded_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                if skip_defensive_clones:
+                    x_padded = x_padded_view
+                else:
+                    x_padded = ttnn.clone(x_padded_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 # NOTE: x_padded_view may alias `x`; do not deallocate it separately.
                 ttnn.deallocate(x, force=False)
                 x = x_padded
@@ -1286,6 +1290,7 @@ def run_decoder_layer_prefill_update_cache_tt(
                 rt=moe_runtime,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=mlp_compute_kernel_config,
+                skip_defensive_clones=skip_defensive_clones,
             )
         elif dense_prefill:
             routed_out = moe_dense_experts_forward_prefill_tt(
@@ -1298,6 +1303,7 @@ def run_decoder_layer_prefill_update_cache_tt(
                 rt=moe_runtime,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=mlp_compute_kernel_config,
+                skip_defensive_clones=skip_defensive_clones,
             )
         else:
             routed_out = moe_sparse_experts_forward_tt(
@@ -1309,6 +1315,7 @@ def run_decoder_layer_prefill_update_cache_tt(
                 rt=moe_runtime,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 skip_final_reduce=_skip_shared_reduce,
+                skip_defensive_clones=skip_defensive_clones,
             )
         _profile_add(profile, "moe_experts_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
@@ -1336,9 +1343,12 @@ def run_decoder_layer_prefill_update_cache_tt(
             # `slice` may return a view that aliases `mlp_out` (no refcounting).
             # Materialize before freeing the padded tensor to avoid prefill corruption.
             mlp_out_view = ttnn.slice(mlp_out, [0, 0, 0, 0], [1, 1, tokens, int(hparams.hidden_size)])
-            mlp_out_sliced = ttnn.clone(mlp_out_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(mlp_out, force=False)
-            mlp_out = mlp_out_sliced
+            if skip_defensive_clones:
+                mlp_out = mlp_out_view
+            else:
+                mlp_out_sliced = ttnn.clone(mlp_out_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(mlp_out, force=False)
+                mlp_out = mlp_out_sliced
         _profile_add(profile, "moe_merge_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     x_mlp_out = residual + mlp_out

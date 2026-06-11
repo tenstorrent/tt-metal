@@ -14,7 +14,12 @@ import ttnn
 from models.common.modules.tt_ccl import get_tt_ccl
 from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
 from models.experimental.glm4_moe_lite.tt.layer_weights import MoELayerTTWeights
-from models.experimental.glm4_moe_lite.tt.linear_helpers import compute_1d_prog_cfg
+from models.experimental.glm4_moe_lite.tt.linear_helpers import (
+    ROUTER_FUSED_SIGMOID,
+    compute_1d_prog_cfg,
+    prefill_matmul_tuned_enabled,
+    tuned_moe_router_prefill_linear,
+)
 
 _SCATTER_ZERO_CACHE: dict[tuple[int, int, int], ttnn.Tensor] = {}
 
@@ -59,6 +64,15 @@ def _get_scatter_zero_tensor(*, device: Any, tokens_per_device: int, num_experts
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
     _SCATTER_ZERO_CACHE[key] = out
+    return out
+
+
+def _ensure_row_major_topk(tensor: ttnn.Tensor) -> ttnn.Tensor:
+    """Return ROW_MAJOR top-k tensor; no-op if already ROW_MAJOR."""
+    if tensor.layout == ttnn.ROW_MAJOR_LAYOUT:
+        return tensor
+    out = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
+    ttnn.deallocate(tensor, force=False)
     return out
 
 
@@ -150,6 +164,39 @@ def _make_sparse_matmul_program_config(
         out_subblock_w=int(out_subblock_w),
         out_block_h=1,
         out_block_w=1,
+        per_core_M=int(per_core_M),
+        per_core_N=int(per_core_N),
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
+def _tuned_prefill_sparse_matmul_pc(
+    *,
+    grid_x: int,
+    grid_y: int,
+    per_core_M: int,
+    per_core_N: int = 2,
+    in0_block_w: int = 8,
+    out_block_w: int = 2,
+    out_subblock_w: int = 2,
+) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+    """Sweep-tuned prefill sparse_matmul 1D-mcast config (Blackhole 11x10 lab).
+
+    From test_prefill_sparse_matmul_sweep.py winners (seqlen=128, num_blocks=4):
+      gate_up        3x8  pcN=2 ob_w=2 osb_w=2
+      gate_up_fused  8x6  pcN=2 ob_w=2 osb_w=2
+      down           4x8  pcN=2 ob_w=2 osb_w=2
+    Enable with GLM4_MOE_LITE_SPARSE_MATMUL_PREFILL_TUNED=1.
+    """
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(int(grid_x), int(grid_y)),
+        in0_block_w=int(in0_block_w),
+        out_subblock_h=1,
+        out_subblock_w=int(out_subblock_w),
+        out_block_h=1,
+        out_block_w=int(out_block_w),
         per_core_M=int(per_core_M),
         per_core_N=int(per_core_N),
         fuse_batch=False,
@@ -489,8 +536,11 @@ def moe_topk_tt(
     """Return (topk_weights, topk_indices) for routed experts.
 
     Shapes:
-    - topk_weights: [1,1,T,K] TILE bf16
-    - topk_indices: [1,1,T,K] TILE uint16
+    - topk_weights: [1,1,T,K] ROW_MAJOR bf16
+    - topk_indices: [1,1,T,K] ROW_MAJOR uint16
+
+    Routing math runs in TILE; outputs are untilized once here so sparse dispatch
+    (scatter + moe_expert_token_remap) avoids a second TILE→ROW_MAJOR conversion.
     """
     k = int(hparams.num_experts_per_tok)
     routed_scaling_factor = float(getattr(hparams, "routed_scaling_factor", 1.8))
@@ -507,22 +557,31 @@ def moe_topk_tt(
     for i in range(len(x.shape) - 1):
         m_total *= int(x.shape[i])
     if m_total <= 1024:
-        logits = ttnn.linear(
-            x,
-            moe_w.w_gate,
-            program_config=compute_1d_prog_cfg(x.device(), moe_w.w_gate, m_total, fp32_dest_acc_en=False),
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.LoFi,
-                math_approx_mode=True,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=False,
-            ),
-            **({} if mc is None else {"memory_config": mc}),
-        )  # [1,1,T,E]
+        if prefill_matmul_tuned_enabled() and int(x.shape[2]) > 32:
+            scores = tuned_moe_router_prefill_linear(x, moe_w.w_gate, memory_config=mc)
+        else:
+            scores = ttnn.linear(
+                x,
+                moe_w.w_gate,
+                program_config=compute_1d_prog_cfg(
+                    x.device(),
+                    moe_w.w_gate,
+                    m_total,
+                    fp32_dest_acc_en=False,
+                    fused_activation=ROUTER_FUSED_SIGMOID,
+                ),
+                compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                    math_fidelity=ttnn.MathFidelity.LoFi,
+                    math_approx_mode=True,
+                    fp32_dest_acc_en=True,
+                    packer_l1_acc=False,
+                ),
+                **({} if mc is None else {"memory_config": mc}),
+            )  # [1,1,T,E] sigmoid fused in matmul
     else:
         logits = ttnn.linear(x, moe_w.w_gate, memory_config=mc)  # [1,1,T,E]
-    scores = ttnn.sigmoid(logits, memory_config=mc)
-    ttnn.deallocate(logits, force=False)
+        scores = ttnn.sigmoid(logits, memory_config=mc)
+        ttnn.deallocate(logits, force=False)
 
     # scores_for_choice = scores + e_score_correction_bias (broadcast over tokens)
     # Use pre-converted TILE bias [1,1,1,E] when available; ttnn.add broadcasts
@@ -556,6 +615,8 @@ def moe_topk_tt(
     if routed_scaling_factor != 1.0:
         topk_weights = ttnn.mul(topk_weights, routed_scaling_factor, memory_config=mc)
 
+    topk_weights = _ensure_row_major_topk(topk_weights)
+    topk_indices = _ensure_row_major_topk(topk_indices)
     return topk_weights, topk_indices
 
 
@@ -575,8 +636,8 @@ def moe_topk_cpu_reference(
     - weights gathered from unbiased scores (then optional renorm + scaling)
 
     Returns TT tensors:
-    - topk_weights: [1,1,T,K] TILE bf16
-    - topk_indices: [1,1,T,K] TILE uint16
+    - topk_weights: [1,1,T,K] ROW_MAJOR bf16
+    - topk_indices: [1,1,T,K] ROW_MAJOR uint16
     """
     if len(x.shape) != 4:
         raise ValueError(f"expected x rank 4 [1,1,T,H], got shape={tuple(x.shape)}")
@@ -633,19 +694,15 @@ def moe_topk_cpu_reference(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=mapper,
     )
-    idx = ttnn.to_layout(idx_rm, ttnn.TILE_LAYOUT)
-    w = ttnn.to_layout(w_rm, ttnn.TILE_LAYOUT)
-    ttnn.deallocate(idx_rm, force=False)
-    ttnn.deallocate(w_rm, force=False)
-    return w, idx
+    return w_rm, idx_rm
 
 
 def moe_dense_experts_forward_decode_tt(
     *,
     device: Any,
     hidden_states: ttnn.Tensor,  # [1,1,1,H] TILE (consumed)
-    topk_expert_indices: ttnn.Tensor,  # [1,1,1,K] TILE uint16 (consumed)
-    topk_expert_weights: ttnn.Tensor,  # [1,1,1,K] TILE bf16 (consumed)
+    topk_expert_indices: ttnn.Tensor,  # [1,1,1,K] ROW_MAJOR uint16 (consumed)
+    topk_expert_weights: ttnn.Tensor,  # [1,1,1,K] ROW_MAJOR bf16 (consumed)
     moe_w: MoELayerTTWeights,
     hparams: Glm4MoeLiteHParams,
     memory_config: ttnn.MemoryConfig,
@@ -689,11 +746,9 @@ def moe_dense_experts_forward_decode_tt(
             raise ValueError(f"n_routed_experts={num_experts} must be divisible by num_devices={num_devices}")
         experts_per_device = num_experts // max(1, num_devices)
 
-        # Convert routing tensors to ROW_MAJOR and build dense per-expert weights.
-        topk_indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
-        topk_weights_rm = ttnn.to_layout(topk_expert_weights, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(topk_expert_indices, force=False)
-        ttnn.deallocate(topk_expert_weights, force=False)
+        # Build dense per-expert weights from ROW_MAJOR routing tensors.
+        topk_indices_rm = _ensure_row_major_topk(topk_expert_indices)
+        topk_weights_rm = _ensure_row_major_topk(topk_expert_weights)
 
         weights_zero = _get_scatter_zero_tensor(device=device, tokens_per_device=1, num_experts=num_experts)
         topk_weights_dense = ttnn.scatter(
@@ -815,11 +870,8 @@ def moe_dense_experts_forward_decode_tt(
         return out_full
 
     # Pull indices/weights to host.
-    idx_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
-    w_rm = ttnn.to_layout(topk_expert_weights, ttnn.ROW_MAJOR_LAYOUT)
-    # Consume router tensors.
-    ttnn.deallocate(topk_expert_indices, force=False)
-    ttnn.deallocate(topk_expert_weights, force=False)
+    idx_rm = _ensure_row_major_topk(topk_expert_indices)
+    w_rm = _ensure_row_major_topk(topk_expert_weights)
 
     idx_host = _tt_to_torch_device0(idx_rm).reshape(-1).to(dtype=torch.int64).cpu().tolist()
     w_host = _tt_to_torch_device0(w_rm).reshape(-1).to(dtype=torch.float32).cpu().tolist()
@@ -890,8 +942,8 @@ def moe_dense_experts_forward_prefill_tt(
     *,
     device: Any,
     hidden_states: ttnn.Tensor,  # [1,1,T,H] TILE (consumed)
-    topk_expert_indices: ttnn.Tensor,  # [1,1,T,K] TILE uint16 (consumed)
-    topk_expert_weights: ttnn.Tensor,  # [1,1,T,K] TILE bf16 (consumed)
+    topk_expert_indices: ttnn.Tensor,  # [1,1,T,K] ROW_MAJOR uint16 (consumed)
+    topk_expert_weights: ttnn.Tensor,  # [1,1,T,K] ROW_MAJOR bf16 (consumed)
     moe_w: MoELayerTTWeights,
     hparams: Glm4MoeLiteHParams,
     memory_config: ttnn.MemoryConfig,
@@ -1018,10 +1070,8 @@ def moe_dense_experts_forward_prefill_tt(
     # expert_output: [E_local, 1, T, H]
 
     # ---- Build routing weights: [E_local, 1, T, H] ----
-    topk_indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
-    topk_weights_rm = ttnn.to_layout(topk_expert_weights, ttnn.ROW_MAJOR_LAYOUT)
-    ttnn.deallocate(topk_expert_indices, force=False)
-    ttnn.deallocate(topk_expert_weights, force=False)
+    topk_indices_rm = _ensure_row_major_topk(topk_expert_indices)
+    topk_weights_rm = _ensure_row_major_topk(topk_expert_weights)
 
     weights_zero = _get_scatter_zero_tensor(
         device=device,
@@ -1090,8 +1140,8 @@ def moe_packed_experts_forward_prefill_tt(
     *,
     device: Any,
     hidden_states: ttnn.Tensor,  # [1,1,T,H] TILE (consumed)
-    topk_expert_indices: ttnn.Tensor,  # [1,1,T,K] TILE uint16 (consumed)
-    topk_expert_weights: ttnn.Tensor,  # [1,1,T,K] TILE bf16 (consumed)
+    topk_expert_indices: ttnn.Tensor,  # [1,1,T,K] ROW_MAJOR uint16 (consumed)
+    topk_expert_weights: ttnn.Tensor,  # [1,1,T,K] ROW_MAJOR bf16 (consumed)
     moe_w: MoELayerTTWeights,
     hparams: Glm4MoeLiteHParams,
     memory_config: ttnn.MemoryConfig,
@@ -1406,8 +1456,8 @@ def moe_sparse_experts_forward_tt(
     *,
     device: Any,
     hidden_states: ttnn.Tensor,  # [1,1,T,H] TILE
-    topk_expert_indices: ttnn.Tensor,  # [1,1,T,K] TILE uint16
-    topk_expert_weights: ttnn.Tensor,  # [1,1,T,K] TILE bf16
+    topk_expert_indices: ttnn.Tensor,  # [1,1,T,K] ROW_MAJOR uint16
+    topk_expert_weights: ttnn.Tensor,  # [1,1,T,K] ROW_MAJOR bf16
     moe_w: MoELayerTTWeights,
     rt: Glm4MoeLiteMoERuntime,
     memory_config: ttnn.MemoryConfig,
@@ -1582,6 +1632,7 @@ def moe_sparse_experts_forward_tt(
                     rt=rt,
                     memory_config=memory_config,
                     skip_final_reduce=skip_final_reduce,
+                    skip_defensive_clones=skip_defensive_clones,
                 )
             )
 
@@ -1602,8 +1653,7 @@ def moe_sparse_experts_forward_tt(
         hidden_rm = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(hidden_states, force=False)
 
-        topk_indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(topk_expert_indices, force=False)
+        topk_indices_rm = _ensure_row_major_topk(topk_expert_indices)
 
         dispatch_output, dispatch_metadata = ttnn.all_to_all_dispatch(
             hidden_rm,
@@ -1661,10 +1711,8 @@ def moe_sparse_experts_forward_tt(
         # Replicated-token + all-reduce path:
         # - Tokens are replicated across devices, and experts are sharded.
         # - Each device computes its local expert contributions and we sum across the mesh.
-        topk_indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
-        topk_weights_rm = ttnn.to_layout(topk_expert_weights, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(topk_expert_indices, force=False)
-        ttnn.deallocate(topk_expert_weights, force=False)
+        topk_indices_rm = _ensure_row_major_topk(topk_expert_indices)
+        topk_weights_rm = _ensure_row_major_topk(topk_expert_weights)
 
         weights_zero = _get_scatter_zero_tensor(
             device=device, tokens_per_device=tokens_per_device, num_experts=int(rt.num_experts)
@@ -1715,28 +1763,37 @@ def moe_sparse_experts_forward_tt(
     # Decode (num_blocks == 1) uses pre-created configs; prefill creates dynamic ones
     # since prefill is not traced (trace_mode=decode_only) and per_core_M must match.
     if num_blocks > 1:
-        _gate_up_pc = _make_sparse_matmul_program_config(
-            device=device,
-            out_features=int(rt.moe_intermediate_size),
-            in0_block_w=8,
-            per_core_M=num_blocks,
-        )
-        _down_pc = _make_sparse_matmul_program_config(
-            device=device,
-            out_features=int(rt.hidden_size),
-            in0_block_w=8,
-            per_core_M=num_blocks,
-        )
-        _gate_up_fused_pc = (
-            _make_sparse_matmul_program_config(
+        if _env_bool("GLM4_MOE_LITE_SPARSE_MATMUL_PREFILL_TUNED"):
+            _gate_up_pc = _tuned_prefill_sparse_matmul_pc(grid_x=3, grid_y=8, per_core_M=num_blocks)
+            _down_pc = _tuned_prefill_sparse_matmul_pc(grid_x=4, grid_y=8, per_core_M=num_blocks)
+            _gate_up_fused_pc = (
+                _tuned_prefill_sparse_matmul_pc(grid_x=8, grid_y=6, per_core_M=num_blocks)
+                if rt.gate_up_fused_program_config is not None
+                else None
+            )
+        else:
+            _gate_up_pc = _make_sparse_matmul_program_config(
                 device=device,
-                out_features=int(rt.moe_intermediate_size) * 2,
+                out_features=int(rt.moe_intermediate_size),
                 in0_block_w=8,
                 per_core_M=num_blocks,
             )
-            if rt.gate_up_fused_program_config is not None
-            else None
-        )
+            _down_pc = _make_sparse_matmul_program_config(
+                device=device,
+                out_features=int(rt.hidden_size),
+                in0_block_w=8,
+                per_core_M=num_blocks,
+            )
+            _gate_up_fused_pc = (
+                _make_sparse_matmul_program_config(
+                    device=device,
+                    out_features=int(rt.moe_intermediate_size) * 2,
+                    in0_block_w=8,
+                    per_core_M=num_blocks,
+                )
+                if rt.gate_up_fused_program_config is not None
+                else None
+            )
     else:
         _gate_up_pc = rt.gate_up_program_config
         _down_pc = rt.down_program_config
@@ -1911,8 +1968,7 @@ def moe_sparse_experts_forward_tt(
         post_combine = ttnn.to_layout(combine_output, ttnn.TILE_LAYOUT)
         ttnn.deallocate(combine_output, force=False)
 
-        topk_weights_rm = ttnn.to_layout(topk_expert_weights, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(topk_expert_weights, force=False)
+        topk_weights_rm = _ensure_row_major_topk(topk_expert_weights)
         topk_weights_rm = ttnn.permute(topk_weights_rm, (3, 1, 2, 0))  # [K,1,tokens,1]
         topk_weights = ttnn.to_layout(topk_weights_rm, ttnn.TILE_LAYOUT)
         ttnn.deallocate(topk_weights_rm, force=False)
