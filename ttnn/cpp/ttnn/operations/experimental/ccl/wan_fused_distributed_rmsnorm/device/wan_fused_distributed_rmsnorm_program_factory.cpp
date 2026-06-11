@@ -772,9 +772,18 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         // For per-head RoPE, rope_tiles_per_row = num_tile_cols
         // (num_heads_per_device * head_dim_tiles); for the broadcast default
         // it's just head_dim_tiles.
+        //
+        // Size the cos/sin CBs to match the actual cos/sin tensor dtype rather
+        // than assuming fp32. LTX feeds bf16 cos/sin (its standalone RoPE op is
+        // all-bf16); accepting bf16 here halves the rope-table DRAM reads and L1
+        // footprint. The reader derives tile bytes from get_tile_size(rope_cos_cb)
+        // and the compute reconfigs the unpacker via reconfig_data_format(), so
+        // both follow this format automatically.
+        const tt::DataFormat rope_format = datatype_to_dataformat_converter(rope_cos->dtype());
+        const uint32_t rope_tile_size = tt::tile_size(rope_format);
         const uint32_t rope_cb_tiles = chunk_size_rows * rope_tiles_per_row;
-        create_cb(rope_cos_cb_id, program, worker_core_set, fp32_tile_size, rope_cb_tiles, fp32_format);
-        create_cb(rope_sin_cb_id, program, worker_core_set, fp32_tile_size, rope_cb_tiles, fp32_format);
+        create_cb(rope_cos_cb_id, program, worker_core_set, rope_tile_size, rope_cb_tiles, rope_format);
+        create_cb(rope_sin_cb_id, program, worker_core_set, rope_tile_size, rope_cb_tiles, rope_format);
     } else {
         create_cb(rope_cos_cb_id, program, worker_core_set, fp32_tile_size, 1, fp32_format);
         create_cb(rope_sin_cb_id, program, worker_core_set, fp32_tile_size, 1, fp32_format);
