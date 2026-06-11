@@ -26,7 +26,7 @@ from ttnn.device import is_wormhole_b0
 
 
 from models.experimental.tt_symbiote.core.module import TTNNModule
-from models.experimental.tt_symbiote.core.run_config import TracedRun, trace_enabled
+from models.experimental.tt_symbiote.core.run_config import TracedRun, disable_trace, trace_enabled
 from models.experimental.tt_symbiote.modules.attention import (
     PagedAttentionConfig,
     TTNNPagedAttentionKVCache,
@@ -499,8 +499,11 @@ class TTNNDotsOCRPrefillGraph(TTNNModule):
 
         self._ensure_scatter_zero_row(tp_degree, self._hidden_size, H_per_device)
         vision_table = ttnn.concat([self._scatter_zero_row, vision_2d], dim=0, memory_config=scatter_memory_config)
-        ttnn.deallocate(vision_tt)
-        ttnn.deallocate(vision_2d)
+        # Do NOT deallocate vision_tt / vision_2d here: vision_tt is now a
+        # persistent trace-input buffer (vision runs eager outside the trace and
+        # its output is copied into this buffer on every replay), and vision_2d
+        # is a reshape view that shares its storage. Freeing either would corrupt
+        # replay. The eager caller drops its ref so GC frees it after prefill.
 
         full_vision_col_sharded = ttnn.embedding(
             tt_idx,
@@ -531,29 +534,23 @@ class TTNNDotsOCRPrefillGraph(TTNNModule):
         else:
             text_e = h0
 
-        if len(mm_args) in (4, 5):
-            tt_px, tt_grid, tt_idx, tt_mask = mm_args[:4]
-            vision_attention_mask = mm_args[4] if len(mm_args) == 5 else None
-            if self._p_vision is None:
-                raise RuntimeError("Vision tensors passed to prefill graph but vision_tower is not set")
-            x_patch = tt_px
-            if isinstance(x_patch, torch.Tensor):
-                raise TypeError("patch tokens must be a ttnn.Tensor for traced multimodal prefill")
-            grid_torch = mm_grid_thw
-            if grid_torch is None:
-                if hasattr(self.device, "get_num_devices") and int(self.device.get_num_devices()) > 1:
-                    grid_torch = ttnn.to_torch(tt_grid, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
-                else:
-                    grid_torch = ttnn.to_torch(tt_grid)
-                grid_torch = _normalize_image_grid_thw_torch(grid_torch)
-            vision_tt = self._p_vision.forward_post_patch_embed(
-                x_patch,
-                grid_torch,
-                attention_mask=vision_attention_mask,
-            )
+        if len(mm_args) == 3:
+            # The vision trunk already ran EAGER in ``prefill`` (it does host
+            # reads and has large CBs that are illegal / clash inside trace
+            # capture). We receive its precomputed output ``vision_tt`` as a
+            # trace input and only fuse it into the text embeds here -- this
+            # whole forward is then trace-safe. ``vision_tt`` is a persistent
+            # trace-input buffer, so ``_scatter_fuse_text_and_vision`` must NOT
+            # deallocate it (its contents are re-copied on every replay).
+            vision_tt, tt_idx, tt_mask = mm_args
             text_e = self._scatter_fuse_text_and_vision(text_e, vision_tt, tt_idx, tt_mask)
 
         if self._gather_hidden_for_full_body:
+            # No-op when the hidden is already full-width (the multimodal dual path
+            # scatter-fuses + gathers EAGER and passes a full-H hidden, so this only
+            # gathers for the in-graph (non-prefused) paths). The plain-CCL all_gather
+            # does per-device host writes (semaphore setup) that are illegal during
+            # trace capture, which is why the prefused path keeps it out of the trace.
             text_e = _all_gather_hidden_to_full(text_e, self.device, self._hidden_size)
 
         h = self._p_stack.forward(text_e, past_key_value=past_key_value, cache_position=cache_position)
@@ -1252,6 +1249,9 @@ class TTNNDotsOCRPipeline(TTNNModule):
             )
 
         # --- Multimodal vision: patch_embed outside; vision trunk + scatter + decoder in one trace ---
+        # Set when the dual multimodal path scatter-fuses + gathers EAGER and hands
+        # the captured graph a plain full-H hidden (no in-trace scatter/CCL).
+        prefused_multimodal = False
         if pixel_values is not None:
             if image_grid_thw is None:
                 raise ValueError("image_grid_thw is required when pixel_values is set")
@@ -1296,20 +1296,59 @@ class TTNNDotsOCRPipeline(TTNNModule):
             if grid_cpu.dim() == 1:
                 grid_cpu = grid_cpu.unsqueeze(0)
             mm_grid_thw = _normalize_image_grid_thw_torch(grid_cpu)
-            tt_grid = ttnn.from_torch(
-                grid_cpu.to(torch.int32),
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+            # Vision trunk runs EAGER here, OUTSIDE the captured prefill trace. It
+            # does host-side reads (dynamic cu_seqlens / grid) that are illegal
+            # during trace capture and its large attention CBs clash with the
+            # trace buffer's pinned L1. Only its fixed-shape output (vision_tt) is
+            # handed to the trace, which then records just scatter-fuse + decoder
+            # body. Vision is image-dependent and ~90% of prefill, so tracing it
+            # would buy little and force a re-bucket per image anyway.
+            #
+            # ``disable_trace`` pins ``_TRACE_RUNNING`` so the @trace_enabled
+            # ``vision_tower.block_stack`` runs eager instead of capturing its OWN
+            # trace -- preserving the old in-graph behavior (vision was always run
+            # under the prefill graph's _TRACE_RUNNING=True). A separate vision
+            # trace would stay "active" and make the prefill capture's buffer
+            # allocations illegal ("Writes are not supported during trace capture").
+            with _profile_stage(self.device, "prefill.vision_trunk"):
+                vision_tt = disable_trace(self.vision_tower.forward_post_patch_embed)(
+                    x_patch, mm_grid_thw, attention_mask=vision_attention_mask
+                )
+            # Pre-build the scatter zero-row EAGERLY (outside the trace). It is the
+            # only host upload (ttnn.from_torch) on the captured prefill path; if it
+            # were built lazily inside _scatter_fuse_text_and_vision during capture
+            # it triggers "Writes are not supported during trace capture" (one per
+            # mesh device). Building it here (idempotent, cached on the graph) keeps
+            # the captured forward host-transfer-free.
+            self.graph_prefill._ensure_scatter_zero_row(
+                _tp_degree(self.device), self.graph_prefill._hidden_size, int(vision_tt.shape[3])
             )
             if dual:
                 with _profile_stage(self.device, "prefill.text_embedding"):
-                    text_embeds = self.embedding(tt_input_ids)
+                    # Run the @trace_enabled embedding EAGER (disable_trace) so it
+                    # does not capture its own sub-trace. A resident embedding trace
+                    # is "active" while the prefill graph's input buffers are set up
+                    # ("Allocating device buffers is unsafe due to the existence of
+                    # an active trace"), which makes the prefill capture's transfers
+                    # illegal. Folding it into the eager pre-graph region leaves the
+                    # prefill graph as the sole captured trace, fed a plain tensor.
+                    text_embeds = disable_trace(self.embedding)(tt_input_ids)
                 if self._batch_input_mapper is not None and int(text_embeds.shape[0]) > 1:
                     with _profile_stage(self.device, "prefill.dp_repack_hidden"):
                         text_embeds = self._dp_repack_batch_sharded_hidden(text_embeds)
-                hidden_states = text_embeds
+                # Scatter-fuse vision into the text embeds and gather to full width
+                # EAGER, OUTSIDE the captured trace. The scatter's gather/all_gather
+                # are plain CCL ops that do per-device host writes (semaphore setup)
+                # which are illegal during trace capture (bisected: scatter alone
+                # captures clean, +all_gather_hidden FATALs). Producing the full-H
+                # fused hidden here lets the captured graph record ONLY the decoder
+                # body, fed a plain replicated tensor (no mm_args / scatter / CCL).
+                with _profile_stage(self.device, "prefill.scatter_fuse"):
+                    fused = self.graph_prefill._scatter_fuse_text_and_vision(text_embeds, vision_tt, tt_idx, tt_mask)
+                    if self.graph_prefill._gather_hidden_for_full_body:
+                        fused = _all_gather_hidden_to_full(fused, self.device, self.graph_prefill._hidden_size)
+                hidden_states = fused
+                prefused_multimodal = True
             else:
                 hidden_states = tt_input_ids
         elif dual:
@@ -1341,18 +1380,21 @@ class TTNNDotsOCRPipeline(TTNNModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        # Traced prefill graph (text-only: ids+embed inside graph; multimodal: +vision trunk + scatter fuse).
+        # Traced prefill graph. For the prefused multimodal path (and text-only) the
+        # graph records ONLY the decoder body, fed a plain replicated hidden -- vision,
+        # embed, scatter-fuse and the full-H all_gather all ran EAGER above (they do
+        # host reads / plain-CCL host writes that are illegal during trace capture).
+        # The non-prefused multimodal path still passes vision tensors in (in-graph
+        # scatter); that path is not trace-captured.
         with _profile_stage(self.device, "prefill.graph_prefill_sync"):
-            if pixel_values is not None:
-                mm_args = (x_patch, tt_grid, tt_idx, tt_mask)
-                if vision_attention_mask is not None:
-                    mm_args = (*mm_args, vision_attention_mask)
+            if pixel_values is not None and not prefused_multimodal:
                 token_id_tt = self.graph_prefill(
                     hidden_states,
                     tt_cache_position,
-                    *mm_args,
+                    vision_tt,
+                    tt_idx,
+                    tt_mask,
                     past_key_value=self.paged_cache,
-                    mm_grid_thw=mm_grid_thw,
                 )
             else:
                 token_id_tt = self.graph_prefill(hidden_states, tt_cache_position, past_key_value=self.paged_cache)
