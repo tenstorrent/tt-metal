@@ -91,7 +91,7 @@ class TtMoeLayer(LightweightModule):
             mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
 
-    def forward(self, inputs, mode: Mode):
+    def forward(self, inputs, mode: Mode, batch_size: int = 1):
         """
         Tensors are postfixed with 4 characters that represent their 4-D shape:
         B : batch_size (32)

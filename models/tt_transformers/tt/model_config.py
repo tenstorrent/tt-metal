@@ -597,11 +597,19 @@ class ModelArgs:
         # Set the max number of tokens for each prefill chunk based on the model and device
         self.max_prefill_chunk_size = self.get_max_prefill_chunk_size()
 
-        # The Blackhole multi-card batched prefill path can leave high batch slots
-        # with stale/wrong paged KV state for Llama 3.1 8B. Keep async decode
-        # enabled, but use the established per-user prefill path for now.
-        self.disable_batched_prefill = (
-            self.base_model_name == "Llama-3.1-8B" and self.device_name in ("P300", "P150x4", "P150x8")
+        # Batched prefill on Blackhole previously produced non-deterministic
+        # garbage for Llama 3.1 8B because ttnn.experimental.minimal_matmul races
+        # at the batched-prefill shapes (see use_minimal_qkv_prefill_matmul /
+        # get_mlp_ff2_prg_config, which now fall back to the regular matmul for
+        # batched prefill on Blackhole). With that gate, batched prefill on the
+        # 4-chip P300x2 system (reported as device_name "P150x4") is deterministic
+        # and bit-identical to the per-user prefill path, so it is re-enabled
+        # there. P300 (2-chip) and P150x8 (8-chip) stay on the per-user path
+        # until batched prefill is validated on those device counts (different
+        # CCL / fused all-gather-matmul paths).
+        self.disable_batched_prefill = self.base_model_name == "Llama-3.1-8B" and self.device_name in (
+            "P300",
+            "P150x8",
         )
 
         if (
@@ -1283,7 +1291,7 @@ class ModelArgs:
             )
 
     @lru_cache(maxsize=None)
-    def get_mlp_ff2_prg_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
+    def get_mlp_ff2_prg_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None, batched: bool = False):
         if mode == Mode.DECODE:
             if self.dim >= 4096 and self.is_galaxy:
                 return self.matmul_1d_config_from_tensor_shapes(
@@ -1321,7 +1329,9 @@ class ModelArgs:
                         num_cores=self.mlp2_core_grid.num_cores,
                     )
         elif mode == Mode.PREFILL:
-            if seq_len > 128:
+            # minimal_matmul races on Blackhole for batched prefill (see
+            # use_minimal_qkv_prefill_matmul); use the regular matmul there.
+            if seq_len > 128 and not (batched and is_blackhole()):
                 grid = self.mlp2_grid(seq_len)
                 return ttnn.MinimalMatmulConfig(
                     M_block_size=8,
@@ -1598,7 +1608,9 @@ class ModelArgs:
     # QKV, WO, All-Reduce, All-Gather configs
     # =========================================================================
     @lru_cache(maxsize=None)
-    def get_attn_qkv_program_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
+    def get_attn_qkv_program_config(
+        self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None, batched: bool = False
+    ):
         """Get the program config for the QKV matmul in attention."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -1620,7 +1632,7 @@ class ModelArgs:
                 )
         elif mode == Mode.PREFILL:
             self.MAX_QKV_MM_SEQ_LEN = 2048
-            if self.use_minimal_qkv_prefill_matmul(seq_len):
+            if self.use_minimal_qkv_prefill_matmul(seq_len, batched=batched):
                 return ttnn.MinimalMatmulConfig(
                     M_block_size=8,
                     K_block_size=8,
@@ -1653,7 +1665,15 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    def use_minimal_qkv_prefill_matmul(self, seq_len: int) -> bool:
+    def use_minimal_qkv_prefill_matmul(self, seq_len: int, batched: bool = False) -> bool:
+        # ttnn.experimental.minimal_matmul races non-deterministically on Blackhole
+        # at the batched-prefill shapes (concatenated multi-user seq), producing
+        # run-to-run garbage / occasional repetition loops. Fall back to the
+        # regular matmul for batched prefill on Blackhole (proven deterministic
+        # and bit-identical to the per-user prefill path). See tenstorrent/tt-metal#46181
+        # for the analogous gpt-oss fused-op race. Single-user prefill is unaffected.
+        if batched and is_blackhole():
+            return False
         if seq_len > 128:
             return True
 
