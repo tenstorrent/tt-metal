@@ -2,6 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.common.utility_functions import is_blackhole
+
+
+def default_num_links():
+    """Default TP-collective link count for the current arch.
+
+    Blackhole boards expose 2 ethernet links between adjacent mesh devices, so
+    reduce-scatter / all-gather can run at ~2x bandwidth vs a single link — and
+    on Gemma4 prefill the per-layer all-reduces are ~31% of device time, so this
+    is the single highest-ROI CCL knob. Wormhole (T3K) defaults to 1 link here
+    (its multi-link tuning needs a separate sweep).
+    """
+    return 2 if is_blackhole() else 1
 
 
 class CCLManager:
@@ -11,7 +24,9 @@ class CCLManager:
     Semaphores are retained for the experimental async CCL path (see TODO below).
     """
 
-    def __init__(self, mesh_device, num_links=1, topology=ttnn.Topology.Linear):
+    def __init__(self, mesh_device, num_links=None, topology=ttnn.Topology.Linear):
+        if num_links is None:
+            num_links = default_num_links()
         self.mesh_device = mesh_device
         self.num_links = num_links
         self.topology = topology
