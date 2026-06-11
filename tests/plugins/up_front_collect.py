@@ -174,6 +174,7 @@ def _reference_op_patches():
     import torch.nn.functional as F
 
     real_matmul = torch.matmul
+    real_sdpa = getattr(F, "scaled_dot_product_attention", None)
 
     def _fast_randn(*size, **kw):
         if len(size) == 1 and isinstance(size[0], (tuple, list, torch.Size)):
@@ -181,22 +182,23 @@ def _reference_op_patches():
         kw.pop("generator", None)
         return torch.zeros(*size, **kw)
 
-    def _pair(x):
-        return (x, x) if isinstance(x, int) else x
+    def _ntuple(n, x):
+        return tuple(x) if isinstance(x, (tuple, list)) else (x,) * n
+
+    def _fast_conv(input, weight, stride, padding, dilation, n):
+        # n-D conv: out = (in + 2p - d(k-1) - 1)//s + 1 per spatial dim. Output (N, C_out, *spatial).
+        s, p, d = _ntuple(n, stride), _ntuple(n, padding), _ntuple(n, dilation)
+        spatial = [(input.shape[i - n] + 2 * p[i] - d[i] * (weight.shape[i - n] - 1) - 1) // s[i] + 1 for i in range(n)]
+        return input.new_zeros((input.shape[0], weight.shape[0], *spatial))
 
     def _fast_conv2d(input, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
-        sH, sW = _pair(stride)
-        pH, pW = _pair(padding)
-        dH, dW = _pair(dilation)
-        N, C_out = input.shape[0], weight.shape[0]
-        H, W = input.shape[-2], input.shape[-1]
-        kH, kW = weight.shape[-2], weight.shape[-1]
-        H_out = (H + 2 * pH - dH * (kH - 1) - 1) // sH + 1
-        W_out = (W + 2 * pW - dW * (kW - 1) - 1) // sW + 1
-        return input.new_zeros((N, C_out, H_out, W_out))
+        return _fast_conv(input, weight, stride, padding, dilation, 2)
 
-    def _fast_layer_norm(input, *a, **k):
-        return torch.zeros_like(input)  # layer_norm / rms_norm output shape == input shape
+    def _fast_conv3d(input, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
+        return _fast_conv(input, weight, stride, padding, dilation, 3)
+
+    def _fast_norm(input, *a, **k):
+        return torch.zeros_like(input)  # layer_norm / rms_norm / group_norm output shape == input shape
 
     def _fast_matmul(a, b):
         # Shape via meta inference (no data, broadcasting stays exact); no GEMM compute.
@@ -212,16 +214,30 @@ def _reference_op_patches():
     def _fast_tensor_matmul(self, other):
         return _fast_matmul(self, other)
 
-    return [
+    def _fast_sdpa(query, key, value, *a, **k):
+        # Output = (*query.shape[:-1], value.shape[-1]) for EVERY variant — MHA / MQA / GQA, causal,
+        # masked: query's batch/heads/seq are kept, only the head dim becomes value's. mask / scale /
+        # dropout / is_causal don't change shape. Fall back to the real op if the rule ever doesn't fit.
+        try:
+            return torch.zeros((*query.shape[:-1], value.shape[-1]), dtype=query.dtype, device=query.device)
+        except Exception:
+            return real_sdpa(query, key, value, *a, **k)
+
+    patches = [
         _AttrPatch(torch, "randn", lambda _orig: _fast_randn),
         _AttrPatch(torch, "rand", lambda _orig: _fast_randn),
         _AttrPatch(F, "conv2d", lambda _orig: _fast_conv2d),
-        _AttrPatch(F, "layer_norm", lambda _orig: _fast_layer_norm),
+        _AttrPatch(F, "conv3d", lambda _orig: _fast_conv3d),
+        _AttrPatch(F, "layer_norm", lambda _orig: _fast_norm),
+        _AttrPatch(F, "group_norm", lambda _orig: _fast_norm),
         _AttrPatch(torch, "matmul", lambda _orig: _fast_matmul),
         _AttrPatch(torch, "bmm", lambda _orig: _fast_bmm),
         _AttrPatch(torch.Tensor, "matmul", lambda _orig: _fast_tensor_matmul),
         _AttrPatch(torch.Tensor, "__matmul__", lambda _orig: _fast_tensor_matmul),
     ]
+    if real_sdpa is not None:  # added in torch 2.0; guard so loading never fails on older torch
+        patches.append(_AttrPatch(F, "scaled_dot_product_attention", lambda _orig: _fast_sdpa))
+    return patches
 
 
 def _verifier_patches():
