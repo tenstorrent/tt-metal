@@ -30,14 +30,23 @@ COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
 )
 
 
+def largest_divisible_out_subblock_w(per_core_n: int, max_width: int = 8) -> int:
+    """Pick the widest allowed output subblock that still divides the per-core N tile count."""
+    for out_subblock_w in range(min(per_core_n, max_width), 0, -1):
+        if per_core_n % out_subblock_w == 0:
+            return out_subblock_w
+    return 1
+
+
 def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int):
     """Program configs for the gate / up / down matmuls on Blackhole."""
     grid = ttnn.CoreCoord(11, 9)
+    gate_out_subblock_w = largest_divisible_out_subblock_w(gate_n_tiles)
     gate = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=4,
         out_subblock_h=1,
-        out_subblock_w=8,
+        out_subblock_w=gate_out_subblock_w,
         per_core_M=per_core_M,
         per_core_N=gate_n_tiles,
         fuse_batch=False,
@@ -48,7 +57,7 @@ def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int
         compute_with_storage_grid_size=grid,
         in0_block_w=4,
         out_subblock_h=1,
-        out_subblock_w=8,
+        out_subblock_w=gate_out_subblock_w,
         per_core_M=per_core_M,
         per_core_N=gate_n_tiles,
         fuse_batch=False,
@@ -70,11 +79,12 @@ def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int
 def get_wh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int):
     """Program configs for the gate / up / down matmuls on Wormhole."""
     grid = ttnn.CoreCoord(8, 7)
+    gate_out_subblock_w = largest_divisible_out_subblock_w(gate_n_tiles)
     gate = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=4,
         out_subblock_h=1,
-        out_subblock_w=8,
+        out_subblock_w=gate_out_subblock_w,
         per_core_M=per_core_M,
         per_core_N=gate_n_tiles,
         fuse_batch=False,
@@ -85,7 +95,7 @@ def get_wh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int
         compute_with_storage_grid_size=grid,
         in0_block_w=4,
         out_subblock_h=1,
-        out_subblock_w=8,
+        out_subblock_w=gate_out_subblock_w,
         per_core_M=per_core_M,
         per_core_N=gate_n_tiles,
         fuse_batch=False,
