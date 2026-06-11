@@ -86,6 +86,7 @@ For the op in scope, work through the audit in seven subjects, in order: **[Prer
 |---|---|---|
 | Op on ProgramDescriptor API | **GATE** | brief: cleared/blocked · team: detail → ProgramDescriptor team |
 | Device 2.0 compliance (own + donor kernels) | **GATE** | brief: cleared/blocked · team: exact violations → Device 2.0 team |
+| Fake CB (address-only; no producer + consumer) | **GATE** | brief: blocked · team: detail → Device 2.0 team |
 | UNSUPPORTED feature in use (incl. CTA varargs) | **GATE** | brief: cleared/blocked · team: detail → wait-for-feature |
 | Advanced factory concept required | **GATE** | brief: blocked · team: detail |
 | Factory concept to implement | **PORT WORK** | brief (Plan) + team |
@@ -109,12 +110,13 @@ Findings flow to the two output documents by role: the **porter brief** carries 
 
 ### Prerequisites
 
-Metal 2.0 migration sits at the end of a chain of prior modernizations. This subject confirms the two hard prerequisites — the **`ProgramDescriptor` API** and **Device 2.0 data-movement migration** — and **both GATE the port**:
+Metal 2.0 migration sits at the end of a chain of prior modernizations. This subject confirms the three hard prerequisites — the **`ProgramDescriptor` API**, **Device 2.0 data-movement migration**, and **no fake CBs** (address-only CBs that must first migrate to CoreLocalMem) — and **all three GATE the port**:
 
 - **Check 1 — `ProgramDescriptor` API** is the standalone hard prereq. If unmet, it is its own PR — substantial, separate work with TTNN-infrastructure implications that does *not* bundle with the Metal 2.0 port. Record the gap and continue the audit; do not attempt the migration here.
 - **Check 2 — Device 2.0 migration** (the op's own kernels *and* any donor kernels it calls) is also a hard prereq: the Metal 2.0 binding tokens attach to Device 2.0 wrapper objects, so a kernel still on Device 1.0 idioms cannot take the whitelisted swaps.
+- **Check 3 — Fake CBs** (CBs used purely as an address source, with no producer + consumer pair) must migrate to **CoreLocalMem** before the port: a Metal 2.0 DFB requires ≥1 producer and ≥1 consumer, so a fake CB cannot be expressed as a DFB binding at all. This is a kernel-side migration adjacent to Device 2.0, owned by the Device 2.0 team — not port work.
 
-**Complete both checks regardless of individual outcomes, then continue through the remaining subjects.** The audit's job is to gather a complete picture of what porting this op will require, including features the op uses that may be blocked on prereq work, characteristics that shape the port's scope, downstream dependencies on donor migrations, and per-binding correctness hazards. Do not exit early on a RED prereq — surface all findings to the report.
+**Complete all three checks regardless of individual outcomes, then continue through the remaining subjects.** The audit's job is to gather a complete picture of what porting this op will require, including features the op uses that may be blocked on prereq work, characteristics that shape the port's scope, downstream dependencies on donor migrations, and per-binding correctness hazards. Do not exit early on a RED prereq — surface all findings to the report.
 
 **Check 1 (GATE): Op is on the `ProgramDescriptor` API.**
 
@@ -134,6 +136,17 @@ Confirm **every kernel this op exercises** is Device 2.0 compliant — **regardl
 - **Red (GATE)**: any kernel the op uses — own, shared-library, in-family shared, or cross-family donor — broadly uses legacy Device 1.0 idioms (raw `noc_async_read`, manual CB index management, `InterleavedAddrGen` / `ShardedAddrGen` / `InterleavedAddrGenFast` / `InterleavedPow2AddrGen*`, raw sem addresses, etc.). **The port is blocked** until that kernel's Device 2.0 migration lands; route the exact violations to the team that owns Device 2.0 migration, naming the kernel file (and, for a borrowed/donor kernel, its owning family) so the dependency is schedulable.
 
 **Why Device 2.0 gates the port.** Device 2.0 cleanup is *not* on the [kernel-side whitelist](port_op_to_metal2_recipe.md#kernel-side-whitelist) of sanctioned port-time changes, and — more fundamentally — the Metal 2.0 binding tokens (`dfb::name`, `sem::name`, `ta::name`) attach to the Device 2.0 wrapper objects. A kernel still on Device 1.0 idioms has nothing for those tokens to bind to, so it cannot take the whitelisted Metal 2.0 swaps. Device 2.0 is therefore a hard structural prerequisite, on par with the `ProgramDescriptor` migration. (The isolated-holdover YELLOW above is the one carve-out, and only because the wrappers are *already in scope* there — the kernel is structurally Device 2.0 and the tokens attach.)
+
+**Check 3 (GATE): No fake CBs — every CB has a real producer and consumer.**
+
+A *fake CB* is a CircularBuffer used purely as an **address source**: a kernel takes a base pointer from it (`get_read_ptr` / `get_pointer_to_cb_data`) and reads the memory directly, with no FIFO that anyone produces into and waits on. The legacy idiom borrows a CB onto a resident tensor's buffer because, pre–Metal 2.0, a borrowed CB was the only way to hand a kernel a base pointer to a resident tensor — the CB is pure costume.
+
+**The litmus test: does the CB have a producer *and* a consumer?** (The same core may be both.) A real CB is a producer→consumer FIFO — something fills it (`reserve_back` / `push_back`, or a fake-push a waiting consumer honors) *and* something drains it (`wait_front` / `pop_front`, or an LLK tile-read like `mul_tiles`). If the CB has **no producer–consumer pair** — nothing produces into it; it is pre-populated memory read by base pointer — it is a fake CB. A genuine borrowed-memory DFB (a resident shard a sharded reader fake-pushes to satisfy a waiting compute consumer) *passes* this litmus and stays clean — see the [TensorAccessor-handling causal-link gate](#tensoraccessor-handling), which distinguishes the two.
+
+- **Green**: every CB the op uses has a real producer and consumer.
+- **Red (GATE)**: a CB is address-only — no producer + consumer pair. **The port is blocked.** A Metal 2.0 DFB requires ≥1 producer and ≥1 consumer binding (the spec validator rejects a producer-less DFB), so a fake CB **cannot be expressed as a DFB binding** — it must first migrate to **CoreLocalMem** (typed node-local L1 access, usable from both DM and compute kernels). This is a kernel-side migration adjacent to Device 2.0 and **not part of the port**; route it to the **Device 2.0 team**, naming the CB and its `file:line` (and, for a borrowed/donor kernel, its owning family) so the dependency is schedulable. Record each address-only **(CB, endpoint) edge** — the same CB can be a real LLK operand on one binding and address-only on another, so the gate fires per edge, not per CB.
+
+**Why fake CBs gate the port.** The Metal 2.0 binding mechanism *is* the producer/consumer FIFO contract: a `DFBBinding` declares the kernel a PRODUCER or CONSUMER, and the spec validator enforces that every DFB has at least one of each. A CB that was never a real FIFO — only an address handle — has no honest producer to declare, so it cannot be ported as a DFB by construction. The correct Metal 2.0 home for "hand me a base pointer to resident L1" is CoreLocalMem, not a DFB; reaching it is a kernel-side migration, on the Device 2.0 team's track, exactly like the Device 2.0 prereq above.
 
 ### Feature compatibility
 
@@ -169,7 +182,9 @@ Both shapes resolve **at port time** — neither waits for a framework feature.
 
 **Scope.** Audit only kernels that actually touch tensor memory. **Compute kernels that only consume from / produce to circular buffers are out of scope** — they read CB pointers, not tensor memory; the tensor read happens upstream in a dataflow kernel.
 
-**Causal-link gate (run this first, per binding).** Before classifying any binding, check whether the kernel's access is a **borrowed-memory DFB read**: it reads tensor data through `cb_*.wait_front` / `cb_*.get_read_ptr` from a CB that is itself a borrowed-memory CB (see the [Dynamic CircularBuffer entry](#dynamic-circularbuffer-cb-built-on-borrowed-buffer-memory--landed) under Feature compatibility). There the lack of `TensorAccessor` is *intended* — the borrowed-memory DFB **is** the tensor access — and the port handles it via `DataflowBufferSpec::borrowed_from`. Mark such a binding **clean**; do not force it into Case 1 or Case 2. Mis-classifying it as "convert to TensorAccessor" would be a regression. If a kernel involves sharded code paths or reads from a CB rather than via `TensorAccessor`, scan the Dynamic CircularBuffer rule for the same code path before finalizing.
+**Causal-link gate (run this first, per binding).** Before classifying any binding, check whether the kernel's access is a **borrowed-memory DFB read**: it reads tensor data through `cb_*.wait_front` / `cb_*.get_read_ptr` from a CB that is itself a borrowed-memory CB (see the [Dynamic CircularBuffer entry](#dynamic-circularbuffer-cb-built-on-borrowed-buffer-memory--landed) under Feature compatibility). There the lack of `TensorAccessor` is *intended* — the borrowed-memory DFB **is** the tensor access — and the port handles it via `DataflowBufferSpec::borrowed_from`. Mark such a binding **clean**; do not force it into Case 1 or Case 2. Mis-classifying it as "convert to TensorAccessor" would be a regression.
+
+**But "clean" requires a real producer *and* consumer.** A borrowed-memory CB is only a genuine DFB if something produces into it and something consumes it (a sharded reader's fake-push satisfying a waiting compute consumer is the canonical legit case). If nothing produces into the CB and it is merely read by base pointer — no FIFO anyone waits on — it is a **fake CB**, *not* a clean borrowed-memory DFB: it fails [Prerequisites Check 3](#prerequisites) (a DFB needs ≥1 producer + ≥1 consumer, so it cannot be expressed as a DFB at all) and RED-gates the port pending its CoreLocalMem migration. Apply Check 3's producer-and-consumer litmus before marking any pointer-read borrowed CB clean; the recip-LUT shape (resident input, read by raw pointer, no producer) is the trap this catches. If a kernel involves sharded code paths or reads from a CB rather than via `TensorAccessor`, scan the Dynamic CircularBuffer rule for the same code path before finalizing.
 
 **The two cases.** For each `TensorParameter` the op declares (or would declare in the port), classify:
 
@@ -356,12 +371,15 @@ Opens with a **status summary that mirrors the cross-team readiness spreadsheet 
 | *Prereqs* — ProgramDescriptor | Yes / No |
 | *Prereqs* — Device 2.0 (every kernel used) | Yes / Yes-with-holdovers (YELLOW — fix on D2.0 track first) / No |
 | *Prereqs* — Cross-op escapes | Ok / issue |
+| *Prereqs* — Fake CBs (address-only) | None / RED: `<(CB, endpoint) sites>` → D2.0 |
 | *Feature Support* — overall | GREEN / RED |
 | *Feature Support* — Variadic-CTA | Ok / Unsupported |
 | *TTNN Readiness* — Port Type | `<concept>` / `<strategy>` → Option `<N>` |
 | *TTNN Readiness* — TTNN infra++ | op-owned tensors · pybound descriptor · … / none |
 
 Port Type → Option map: **1** = `MinimizeCacheHitCost` (basic or advanced); **2** = `MaximizeCacheReuse` basic; **3** = `MaximizeCacheReuse` advanced.
+
+**Fake CBs** = CBs used purely as an address source. **Litmus ([Prerequisites Check 3](#prerequisites)): does the CB have a producer *and* a consumer?** (Same core may be both.) No producer–consumer pair → fake → a Metal 2.0 DFB needs ≥1 of each, so it can't be a DFB and the port is **RED-blocked** pending the CB's CoreLocalMem migration (Device 2.0 team). Granularity is the **(CB, endpoint) edge** — the same CB can be a real LLK operand on one binding and address-only on another; record each address-only edge.
 
 ## Result
 
@@ -375,6 +393,8 @@ Port Type → Option map: **1** = `MinimizeCacheHitCost` (basic or advanced); **
   | File | Line | Call | Wrapper in scope |
   |---|---|---|---|
   | `<path>` | `<n>` | `<call>` | `<wrapper>` |
+
+- **Fake CBs (address-only):** <None — or — RED: each address-only CB (no producer + consumer pair), with the consuming kernel's `file:line` and the `(CB, endpoint)` edge. State why it gates — a Metal 2.0 DFB needs ≥1 producer + ≥1 consumer, so the binding mechanism can't express it — and route it to the **Device 2.0 team** for CoreLocalMem migration before the port. Name the owning family for a borrowed/donor kernel.>
 
 - **Feature compatibility:** every Appendix A entry, in order. Per-row status: `N/A` when the feature category is absent — *including an UNSUPPORTED feature the op doesn't use* (not a vacuous GREEN); `GREEN` only for a LANDED feature actually in use and clean; `RED` for an UNSUPPORTED feature in use. UNSUPPORTED hits (incl. CTA varargs) get an H4 detail block with signal, `file:line` sites, and expected resolution. For `address_offset`, surface the runtime-team-consultation message verbatim per the entry's Action field.
 
