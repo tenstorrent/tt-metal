@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-11T02:28:00Z",
+  "updated_at": "2026-06-11T02:45:58Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -792,9 +792,16 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
+        "status": "done",
         "attempts": 0,
-        "notes": "OCCUPANCY REDO: per the new occupancy+convergence contract \u2014 query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid"
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/lm_head.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_lm_head.py",
+          "models/demos/rednote_hilab_dots.ocr/tests/test_lm_head.py",
+          "generated/profiler/reports/2026_06_11_02_44_17/ops_perf_results_2026_06_11_02_44_17.csv"
+        ],
+        "notes": "OCCUPANCY REDO at the production TRACED decode point (bf16 [1,1,1,1536] final-norm row, bfp8 vocab-sharded weight 37984 logits/chip, 1x4 BH mesh, queried 11x10=110 grid; tracy --traced metal trace replay x100). Harness re-pointed from the stale seq=128 golden shape (--seq flag, decode default). Single device op: vocab matmul 188.3 us/device at 108/110 cores (98% occupancy), streaming the 62 MB bfp8 weight slice at ~329 GB/s \u2014 weight-BW-bound (HiFi4 compute est ~27 us, 7x under the stream). Levers measured, one per measurement, both REVERTED with evidence: (1) DRAM-WIDTH-SHARDED weight + MatmulMultiCoreReuseMultiCastDRAMSharded (text_mlp/text_attention decode recipe; vocab pad 1187->1200 tiles + slice; 48c the only feasible grid \u2014 hidden=48 K-tiles caps the divisor, 24c TT_THROW 1.72MB static CBs > 1.46MB L1): traced 419.7 us matmul (~148 GB/s) + 24.9 us pad-slice + 16.6 us s2i = 466.7 us/device \u2014 LOSES 2.5x vs the interleaved 108-core reader; (2) bfloat4_b weight (halves streamed bytes): worst logits PCC 0.9884 < 0.99 over 16 production rows, 6/16 greedy argmax flips \u2014 disqualified, bfp8 stays. HiFi2 waved off by arithmetic (bytes-bound 7x; fidelity changes FLOPs not bytes). Verdict: at-ceiling-with-evidence at 98% occupancy \u2014 the plain ttnn.linear IS the optimized form; the 188 us/token (2.8% of the 6.70 ms/token e2e step) has no per-block lever left. Gates: golden PCC 0.999969; NEW 8-row decode drift test (bf16 row, PCC>0.99 AND greedy-argmax exactness per row, the consumer contract) worst 0.999951; traced_ops sideguard regenerated; lint 0. Forward behavior unchanged (docstring-only block diff) so tick-65 e2e parity evidence stands (OCR WER 0.0 == HF, 5/5; 180-token traced==untraced drift gate PASS). KB entries (8, attention/tensor-manipulation) inspected: none applicable to a vocab projection, none used.",
+        "pcc": 0.999951
       },
       "real_weights": {
         "status": "done",
@@ -1252,6 +1259,12 @@
       "tick": 65,
       "ts": "2026-06-11T02:28:00Z",
       "action": "device[decoder_layer]",
+      "result": "ok"
+    },
+    {
+      "tick": 66,
+      "ts": "2026-06-11T02:45:58Z",
+      "action": "device[lm_head]",
       "result": "ok"
     }
   ],

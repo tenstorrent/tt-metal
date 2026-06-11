@@ -93,3 +93,41 @@ def test_lm_head_pcc(mesh_device):
     pcc = _pcc(ref_out.reshape(seq, vocab), out)
     print(f"PCC(lm_head) = {pcc:.6f}")
     assert pcc > 0.99, f"PCC {pcc:.6f} < 0.99"
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_lm_head_decode_pcc(mesh_device):
+    """Decode posture (occupancy REDO, tick-66): bf16 [1,1,1,H] row, bfp8 weight.
+
+    The production traced decode body projects ONE bf16 final-norm row per
+    token. Gates the per-row logits PCC AND greedy-argmax exactness over 8
+    fresh rows (the AR-loop consumer is argmax — a PCC-passing row that flips
+    its argmax would silently derail generation; this is what disqualified
+    the bfloat4_b weight lever: PCC 0.9884, 6/16 flips).
+    """
+    golden = torch.load(GOLDEN)
+    sd = _load_weights("lm_head", ["weight"])
+    block = TtLMHead(mesh_device, sd)
+    w = sd["weight"]
+
+    rows = golden["input"].reshape(-1, golden["input"].shape[-1])
+    worst = 1.0
+    for step in range(8):
+        x = rows[step : step + 1].reshape(1, 1, 1, -1)
+        ref = x.reshape(1, -1) @ w.T
+        x_tt = ttnn.from_torch(
+            x,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        out_tt = block.forward(x_tt)
+        out = ttnn.to_torch(out_tt, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)).float().reshape(1, -1)
+        pcc = _pcc(ref, out)
+        worst = min(worst, pcc)
+        assert pcc > 0.99, f"decode row {step}: PCC {pcc:.6f} < 0.99"
+        assert int(out.argmax()) == int(ref.argmax()), f"decode row {step}: greedy argmax flipped"
+    print(f"PCC(lm_head decode, worst of 8 rows) = {worst:.6f}")

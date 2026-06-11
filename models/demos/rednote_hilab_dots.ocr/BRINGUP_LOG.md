@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-11T02:28:00Z
+**Updated:** 2026-06-11T02:45:58Z
 
 ## Block Status
 
@@ -73,7 +73,7 @@
 | lm_head | reference | done | 1.000000 | 0 | untied Linear 1536->151936 no bias, real lm_head.weight, matches torch.nn.Linear |
 | lm_head | ttnn | done | 1.000000 | 0 | Untied vocab projection Linear 1536->151936 no bias as a single column-parallel ttnn.linear: weight [vocab,hidden] transposed to [hidden,vocab] and vocab-sharded ShardTensorToMesh(dim=-1) on the 1x4 mesh per parallelism plan (placement=shard vocab dim; 151936/4=37984 logits per chip, tile-divisible, no padding); replicated activation in, per-chip logit slices out, recombined on host via ConcatMeshToTensor(dim=-1) per tp-guidance (all_gather left to the generation-phase consumer). reference_impl tt_transformers/tt/lm_head.py DRAM-sharded program configs / column splits deferred to optimization. HiFi4+fp32-acc, bf16; real lm_head.weight re-loaded from checkpoint in the test; PCC 1.000000 vs golden. Guard ok (lint 0, kernels ok, no new host ops). KB entries for kind linear were attention/tensor-manipulation records (nlp_concat_heads_decode, concatenate_heads, flash_mla_prefill, narrow/split/bcast/concat, create_qkv_heads) - none applicable, none used. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | lm_head | debug | n/a | — | 0 |  |
-| lm_head | optimization | pending | — | 0 | OCCUPANCY REDO: per the new occupancy+convergence contract — query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid |
+| lm_head | optimization | done | 0.999951 | 0 | OCCUPANCY REDO at the production TRACED decode point (bf16 [1,1,1,1536] final-norm row, bfp8 vocab-sharded weight 37984 logits/chip, 1x4 BH mesh, queried 11x10=110 grid; tracy --traced metal trace replay x100). Harness re-pointed from the stale seq=128 golden shape (--seq flag, decode default). Single device op: vocab matmul 188.3 us/device at 108/110 cores (98% occupancy), streaming the 62 MB bfp8 weight slice at ~329 GB/s — weight-BW-bound (HiFi4 compute est ~27 us, 7x under the stream). Levers measured, one per measurement, both REVERTED with evidence: (1) DRAM-WIDTH-SHARDED weight + MatmulMultiCoreReuseMultiCastDRAMSharded (text_mlp/text_attention decode recipe; vocab pad 1187->1200 tiles + slice; 48c the only feasible grid — hidden=48 K-tiles caps the divisor, 24c TT_THROW 1.72MB static CBs > 1.46MB L1): traced 419.7 us matmul (~148 GB/s) + 24.9 us pad-slice + 16.6 us s2i = 466.7 us/device — LOSES 2.5x vs the interleaved 108-core reader; (2) bfloat4_b weight (halves streamed bytes): worst logits PCC 0.9884 < 0.99 over 16 production rows, 6/16 greedy argmax flips — disqualified, bfp8 stays. HiFi2 waved off by arithmetic (bytes-bound 7x; fidelity changes FLOPs not bytes). Verdict: at-ceiling-with-evidence at 98% occupancy — the plain ttnn.linear IS the optimized form; the 188 us/token (2.8% of the 6.70 ms/token e2e step) has no per-block lever left. Gates: golden PCC 0.999969; NEW 8-row decode drift test (bf16 row, PCC>0.99 AND greedy-argmax exactness per row, the consumer contract) worst 0.999951; traced_ops sideguard regenerated; lint 0. Forward behavior unchanged (docstring-only block diff) so tick-65 e2e parity evidence stands (OCR WER 0.0 == HF, 5/5; 180-token traced==untraced drift gate PASS). KB entries (8, attention/tensor-manipulation) inspected: none applicable to a vocab projection, none used. |
 | lm_head | real_weights | done | 0.999945 | 0 | lm_head_weights loader added to consolidated tt/weight_loader.py (pure-PyTorch, memoized key-filtered safetensors load of lm_head.weight [151936,1536], no bias, untied from embed_tokens - tie_word_embeddings false; __main__ self-test extended: 233373696 params, shape asserted). Stage-1 parametric tests/test_real_hf_weights.py row runs TtLMHead at the production operating point (bfloat8_b vocab-sharded weight per optimization-phase idiom, bf16 golden real final-hidden-state activation [1,128,1536] replicated 1x4 mesh, HiFi4+fp32-acc, per-chip 37984-logit slices recombined host-side ConcatMeshToTensor(dim=-1)) vs the pure-PyTorch lm_head_forward with the same real weights: PCC 0.999945 (>0.99, matches optimization-phase bfp8 PCC exactly - quantization noise, not loader defect). Block forward untouched; full harness re-run, all 13 rows passing. Guard ok (lint 0, params_loaded 233373696>0). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 
 ## Use cases
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 56 (2026-06-10T21:53:05Z): device[vision_attention] — ok
 - tick 57 (2026-06-10T22:08:54Z): device[vision_mlp] — ok
 - tick 58 (2026-06-10T22:25:08Z): device[vision_block] — ok
 - tick 59 (2026-06-10T22:43:29Z): device[patch_merger] — ok
@@ -94,6 +93,7 @@
 - tick 63 (2026-06-11T01:06:25Z): device[text_attention] — ok
 - tick 64 (2026-06-11T01:48:42Z): device[text_mlp] — ok
 - tick 65 (2026-06-11T02:28:00Z): device[decoder_layer] — ok
+- tick 66 (2026-06-11T02:45:58Z): device[lm_head] — ok
 
 ## Host-Resident Exceptions
 

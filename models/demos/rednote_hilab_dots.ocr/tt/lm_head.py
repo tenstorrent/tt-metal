@@ -20,6 +20,31 @@ the block: per the plan the logits are recombined by host concat
 (``ConcatMeshToTensor(dim=-1)``) or an optional ``all_gather`` left to the
 generation phase, where the consumer (sampling/argmax) decides what it
 needs.
+
+Occupancy redo (optimization phase, tick-66): the production decode call —
+ONE bf16 tile row [1,1,1,1536] -> 37984 fp32 logits/chip per token — was
+profiled under traced replay at the queried 11x10=110 grid. The single
+matmul runs on 108/110 cores (98% occupancy) streaming the 62 MB bfp8
+weight slice at ~329 GB/s: 188.4 us/device, weight-BW-bound (compute est
+~27 us at HiFi4, 7x below the stream time). Levers measured and REVERTED
+with evidence:
+
+- DRAM-WIDTH-SHARDED weight + MatmulMultiCoreReuseMultiCastDRAMSharded
+  (the text_mlp/text_attention decode recipe): 48 cores is the only grid
+  that fits (hidden = 48 K-tiles caps the divisor; 24 cores TT_THROWs at
+  1.72 MB static CBs > 1.46 MB L1 — per_core_N=50 fp32 interm/out CBs).
+  Measured 419.7 us matmul (~148 GB/s, the few-core DRAM-sharded BW
+  plateau scaled to 62 MB) + 25 us pad-slice + 16.6 us s2i = 466.7
+  us/device vs 188.4 baseline. The interleaved 108-core reader is the
+  better streamer at this weight size — LOSES 2.5x, reverted.
+- bfloat4_b weight (halves streamed bytes): worst logits PCC 0.9884 <
+  0.99 over 16 production rows and 6/16 greedy argmax flips vs the fp32
+  reference — disqualified, bfp8 stays.
+- HiFi2 waved off by arithmetic: the op is bytes-bound by 7x margin;
+  fidelity changes FLOP passes, not bytes.
+
+Verdict: at-ceiling-with-evidence at 98% occupancy; the plain
+``ttnn.linear`` below IS the optimized form.
 """
 
 import ttnn

@@ -1,15 +1,19 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Tracy harness for TtLMHead at the PRODUCTION operating point.
+"""Tracy harness for TtLMHead at the PRODUCTION operating points.
 
-Production context: the prefill vocab projection runs ONCE per forward on a
-REPLICATED [1, 1, 128, 1536] bf16 hidden state on the 1x4 mesh; weight
-[1536, 151936] is vocab-sharded (ShardTensorToMesh dim=-1, 37984 logits per
-chip, real lm_head.weight). No CCL in the block — logits leave sharded.
+Production context (tt/ocr_model.py): EVERY lm_head call is a single tile
+row — the traced decode body projects the bf16 [1, 1, 1, 1536] final-norm
+row once per token, and prefill projects one 32-row fp32 window once per
+generation. The dominant shape is the DECODE row, so the default here is
+``--seq 1`` with a bf16 activation and the production bfloat8_b weight
+(vocab-sharded ShardTensorToMesh dim=-1, 37984 logits per chip, real
+lm_head.weight). ``--seq 128`` keeps the legacy golden-shape run.
 
-Run under tracy:
+Run under tracy (decode posture, traced replays):
     python -m tracy -p -v -r --op-support-count 20000 \
-        models/demos/rednote_hilab_dots.ocr/tt/profile_lm_head.py --traced
+        models/demos/rednote_hilab_dots.ocr/tt/profile_lm_head.py \
+        --traced --iters 100
 """
 
 import argparse
@@ -53,12 +57,18 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--traced", action="store_true")
     parser.add_argument("--iters", type=int, default=1, help="profiled replay count")
+    parser.add_argument(
+        "--seq",
+        type=int,
+        default=1,
+        help="logical rows: 1 = production decode row (bf16), >1 = prefill/golden shape",
+    )
     args = parser.parse_args()
 
     golden = torch.load(_MODEL_DIR / "reference" / "golden" / "lm_head.pt")
-    x = golden["input"]
+    x = golden["input"][:, : args.seq, :]
     _, seq, dim = x.shape
-    assert dim == HIDDEN
+    assert seq == args.seq and dim == HIDDEN
 
     sd = _load_weights("lm_head", ["weight"])
 
@@ -71,7 +81,8 @@ def main():
     try:
         block = TtLMHead(mesh_device, sd)
 
-        # Persistent input buffer: stable address for trace replay.
+        # Persistent input buffer: stable address for trace replay. The
+        # production decode row is bf16 (perf REDO 4 residual stream).
         x_tt = ttnn.from_torch(
             x.reshape(1, 1, seq, dim),
             dtype=ttnn.bfloat16,
