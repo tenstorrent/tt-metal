@@ -73,26 +73,6 @@ def _ccl_next_slot():
     return slot
 
 
-def _ag_async(x, dim, cluster_axis, memory_config):
-    # E_ccl EXPERIMENT: async all_gather via the E49 rotating semaphore pool.
-    # Uses 1 gather sem + 1 barrier sem per call; slot rotation avoids reuse-before-reset.
-    slot = _ccl_next_slot()
-    # all_gather_async requires a list of EXACTLY 2 multi-device semaphores (the E49
-    # pool allocates 2 ag-sems per slot for this reason); barrier takes one.
-    ag_sem = ce_cache__main["main_const_eval_all_reduce_pool_ag"][slot]
-    bar_sem = ce_cache__main["main_const_eval_all_reduce_pool_barrier"][slot][0]
-    return ttnn.experimental.all_gather_async(
-        x,
-        dim=dim,
-        multi_device_global_semaphore=ag_sem,
-        num_links=2,
-        memory_config=memory_config,
-        topology=ttnn.Topology.Ring,
-        cluster_axis=cluster_axis,
-        barrier_semaphore=bar_sem,
-    )
-
-
 def main_const_eval_rope_trans_mat(device=None):
     """E47: Build the 32x32 half-rotate transformation matrix for
     `ttnn.experimental.rotary_embedding_llama`. This matrix has -1 on the
@@ -3485,11 +3465,14 @@ def _main(activations, weights):
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
     ttnn.deallocate(ttnn_slice_68, False)
-    ttnn_all_gather_6 = _ag_async(
-        ttnn_reshape_45,
-        0,
-        1,
-        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+    ttnn_all_gather_6 = ttnn.all_gather(
+        input_tensor=ttnn_reshape_45,
+        dim=0,
+        cluster_axis=1,
+        subdevice_id=None,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        num_links=None,
+        topology=ttnn.Topology.Ring,
     )
     ttnn.deallocate(ttnn_reshape_45, False)
     ttnn_sum_5 = ttnn.sum(
@@ -4519,11 +4502,14 @@ def _main(activations, weights):
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
     ttnn.deallocate(ttnn_slice_161, False)
-    ttnn_all_gather_16 = _ag_async(
-        ttnn_reshape_96,
-        0,
-        1,
-        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+    ttnn_all_gather_16 = ttnn.all_gather(
+        input_tensor=ttnn_reshape_96,
+        dim=0,
+        cluster_axis=1,
+        subdevice_id=None,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+        num_links=None,
+        topology=ttnn.Topology.Ring,
     )
     ttnn.deallocate(ttnn_reshape_96, False)
     ttnn_sum_13 = ttnn.sum(
