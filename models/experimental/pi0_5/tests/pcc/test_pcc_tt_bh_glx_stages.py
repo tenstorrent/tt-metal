@@ -133,9 +133,11 @@ def test_prefill_stage_pcc():
     loader = Pi0_5WeightLoader(str(CHECKPOINT_DIR))
     weights = loader.categorized_weights
 
-    # Modest tile-aligned prefix length keeps the 18-chip chain fast.
+    # Production VLM prefill shape: 3 cams * 256 image tokens + 256 lang = 1024.
+    # PI0_VLM_CHUNK_SIZE in _bench_runs/pi05_production.env. Override via env for
+    # faster iteration; default to the production single-pass shape.
     B = 1
-    seq_len = 128
+    seq_len = int(os.environ.get("PI0_VLM_CHUNK_SIZE", "1024"))
     torch.manual_seed(SEED)
     prefix_embs = torch.randn(B, seq_len, cfg.vlm_config.width) * 0.5
 
