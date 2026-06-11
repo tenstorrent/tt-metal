@@ -20,12 +20,9 @@
 #               on hang with full triage + watcher log dump.
 #   --run-all   Run all tests instead of stopping on first failure (-x).
 #               Useful for eval scoring where you need full pass/fail counts.
-#   --precompile  Before the real run, transparently warm the JIT cache on the real
-#               device and in parallel (no env vars, no second command), so kernels
-#               compile up-front in parallel instead of inline & serial. ALWAYS falls
-#               back to a normal cold run if anything goes wrong — it can only make a
-#               run slower, never broken or wrong. Prints a one-line diagnostic. Hardware
-#               only. Tune parallelism with --precompile-workers N (default: nproc).
+#   --precompile  Warm the JIT cache on the real device, in parallel, before the run, so kernels
+#               compile up-front instead of inline & serial. No env vars; always falls back to a
+#               cold run on any failure. Hardware only. --precompile-workers N (default: nproc).
 #
 # Modes:
 #   default  - Dispatch timeout only. Lean, no debug overhead.
@@ -38,11 +35,8 @@
 #   3 - Setup error (missing args, etc.)
 #
 # Total runtime:
-#   Always prints SAFE_PYTEST_TOTAL_RUNTIME as the very last line (on every exit path).
-#   It is the wall-clock time from "device lock acquired" (idle lock-wait queueing is
-#   deliberately excluded) to script exit, so it covers the whole run — device reset,
-#   precompile warm phase, and the pytest run itself — not just pytest. Under simulator
-#   there is no lock, so the clock starts at the equivalent point.
+#   SAFE_PYTEST_TOTAL_RUNTIME is printed last on every exit path — wall time from device-lock
+#   acquired (idle lock-wait excluded) to exit, covering reset + warmup + pytest. Sim: from start.
 
 set -o pipefail
 
@@ -78,10 +72,8 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --precompile)
-            # Opt-in: transparently warm the JIT cache (real-device, parallel) before the
-            # real run, so kernels compile up-front in parallel instead of inline & serial.
-            # Everything is internal — no env vars, no second command. Always falls back to a
-            # normal cold run if anything goes wrong (see precompile_warm). Hardware only.
+            # Warm the JIT cache (real device, parallel) before the real run. Internal only;
+            # always falls back to a cold run on failure (see precompile_warm). Hardware only.
             PRECOMPILE=true
             shift
             ;;
@@ -107,31 +99,21 @@ shift
 # Remaining args are extra pytest args — the precompile collect must use the SAME selection.
 EXTRA_ARGS=("$@")
 
-# Precompile uses WHATEVER cache the user already has (TT_METAL_CACHE if set, else tt-metal's
-# default) — both the warm-collect and the real run inherit the same value (incl. ccache state), so
-# they share it and a pre-warmed cache is transparently reused. We never override it.
+# Both the warmup and the real run inherit whatever TT_METAL_CACHE / ccache the user has (we never
+# override), so they share one cache and a pre-warmed one is reused.
 PRECOMPILE_PLUGIN_DIR="$REPO_DIR"
 
-# ============================================================================
-# Precompile (opt-in --precompile): warm the JIT cache on the REAL device, then
-# let the normal run below hit it. We open the same device the tests use, so the
-# build_key matches by construction — no mock / fingerprint / pre-flight needed.
-# Every failure path degrades to a normal cold run — slower at worst, never wrong.
-# ============================================================================
+# Precompile (--precompile): warm the JIT cache on the SAME device the tests use (so the build_key
+# matches by construction), then let the normal run below hit it. Any failure degrades to a cold run.
 
 precompile_warm() {
     [[ "$SIM_MODE" == false ]] && touch "$DIRTY_FLAG"
     echo "PRECOMPILE: ===== warmup (collect + precompile, real device) =====" >&2
-    # Real-device collect over the SAME selection -> warms the shared cache. We open the same device the
-    # real run uses, so the build_key matches by construction (no mock / fingerprint / pre-flight needed).
-    # SINGLE-PROCESS by design: the heavy kernel COMPILE is parallelized by the plugin's in-process C++
-    # thread pool via ttnn.graph.up_front_compile(device, UP_FRONT_COLLECT_WORKERS=N). xdist (-n) would
-    # only parallelize the cheap COLLECT body-run and, measured, LOSES ~half the cache (concurrent writers
-    # + per-worker dedup: full conv2d 47.6% xdist vs 99.8% single-process). FAST collect (default) keeps
-    # real torch tensors with cheap host stand-ins + a SHAPE-ONLY ttnn.from_torch (skips the weight-prep
-    # tilize/convert) — works on model tests where storage-free collect collapses on weight prep. REAL_ALLOC
-    # gives real buffer addresses so address-baked kernels (pool/move/conv) warm too. ccache state is
-    # INHERITED (untouched) so it matches the real run below — a mismatch would silently miss the warm cache.
+    # Single-process by design: the heavy kernel COMPILE is parallelized in-process by
+    # up_front_compile's thread pool; xdist (-n) would only parallelize the cheap collect and
+    # measurably loses ~half the cache (concurrent writers + per-worker dedup). REAL_ALLOC gives real
+    # addresses so address-baked kernels (pool/move/conv) warm too. ccache state is inherited so it
+    # matches the real run — a mismatch would silently miss the cache.
     local clog="/tmp/precompile_collect_$$.log" t0 t1 cstatus
     echo "PRECOMPILE: warming (single proc x ${PRECOMPILE_WORKERS} compile-threads) over: ${TEST_PATH} ${EXTRA_ARGS[*]}" >&2
     t0=$(date +%s)
@@ -140,9 +122,8 @@ precompile_warm() {
         pytest "${TEST_PATH}" "${EXTRA_ARGS[@]}" -p tests.plugins.up_front_collect > "$clog" 2>&1
     cstatus=$?
     t1=$(date +%s)
-    # Don't pretend it warmed if the collect failed. A non-zero exit (pytest usage/collection error,
-    # plugin failure, OOM, etc.) means we warmed nothing -> say so plainly; the real run still runs COLD
-    # and CORRECT, just without the speedup. (pytest exit 5 = "no tests collected" counts as a failure.)
+    # A non-zero exit (collection error, plugin failure, OOM, pytest-5 "no tests") means nothing
+    # warmed -> say so; the real run still runs cold and correct, just without the speedup.
     if [[ $cstatus -ne 0 ]]; then
         echo "PRECOMPILE: ✗ warmup FAILED (pytest exit $cstatus) after $((t1-t0))s -> warmed NOTHING; running COLD." >&2
         grep -iE "error|unrecognized|no tests ran|no tests collected" "$clog" 2>/dev/null | head -3 | sed 's/^/PRECOMPILE:   /' >&2
@@ -153,10 +134,8 @@ precompile_warm() {
 }
 
 # --- Total-run timer ---
-# Reports wall-clock time from "device lock acquired" to script exit. Registered as an
-# EXIT trap so it ALWAYS prints last, on every exit path (pass, fail, hang, error). The
-# RUN_START guard means nothing is printed for exits that happen before testing begins
-# (e.g. missing args), since no run took place.
+# EXIT trap so it always prints last on every path; the RUN_START guard suppresses it for exits
+# before testing begins (e.g. missing args).
 _print_total_runtime() {
     [[ -z "${RUN_START:-}" ]] && return 0
     local run_end elapsed
@@ -176,8 +155,7 @@ if [[ "$SIM_MODE" == false ]]; then
     flock 9
     echo "SAFE_PYTEST: Device lock acquired" >&2
 
-    # Start the total-run clock the moment we own the device. The lock-wait above is
-    # idle queueing behind other runners and is deliberately excluded.
+    # Start the clock once we own the device; the idle lock-wait above is excluded.
     RUN_START=$(date +%s)
 
     # --- Check if device needs reset from previous hang ---
@@ -191,8 +169,7 @@ if [[ "$SIM_MODE" == false ]]; then
         echo "SAFE_PYTEST: Device reset complete" >&2
     fi
 else
-    # Simulator: no device lock to acquire, so start the total-run clock here (the
-    # equivalent "start of testing" point).
+    # Simulator: no lock, so start the clock here.
     RUN_START=$(date +%s)
 fi
 
