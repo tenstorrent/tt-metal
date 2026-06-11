@@ -11,7 +11,7 @@ from diffusers import DiffusionPipeline
 from loguru import logger
 from transformers import CLIPTextModel, CLIPTextModelWithProjection
 
-from models.common.utility_functions import is_blackhole, is_wormhole_b0, profiler
+from models.common.utility_functions import is_blackhole, profiler
 from models.demos.stable_diffusion_xl_base.conftest import is_galaxy
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
     CONCATENATED_TEXT_EMBEDINGS_SIZE,
@@ -310,9 +310,6 @@ def test_demo(
 ):
     if image_resolution == (512, 512) and is_blackhole():
         pytest.skip("512x512 not supported on Blackhole")
-
-    if capture_trace and encoders_on_device and not use_cfg_parallel and is_wormhole_b0():
-        pytest.skip("Disabled on wormhole_b0 with trace+device_encoders (no cfg_parallel): see #46550")
 
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
