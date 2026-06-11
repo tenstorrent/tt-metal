@@ -8,7 +8,6 @@
 
 // UMD: EthCoord is a UMD type alias used in the private method
 // get_physical_chip_id_from_eth_coord(). No tt-metalium equivalent exists yet.
-#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
@@ -27,6 +26,12 @@
 namespace tt {
 
 class Cluster;
+struct EthCoord;
+
+namespace umd {
+    class Cluster;
+    class ClusterDescriptor;
+}
 
 namespace llrt {
 class RunTimeOptions;
@@ -42,12 +47,6 @@ class PhysicalSystemDescriptor;
 
 }  // namespace tt::tt_metal
 
-namespace tt::umd {
-
-class Cluster;
-
-}  // namespace tt::umd
-
 namespace tt::tt_fabric {
 
 // TODO: remove this once UMD provides API for UBB ID and bus ID
@@ -56,8 +55,8 @@ struct UbbId {
     std::uint32_t asic_id;
 };
 
-uint16_t get_bus_id(tt::umd::Cluster& cluster, ChipId chip_id);
-UbbId get_ubb_id(tt::umd::Cluster& cluster, ChipId chip_id);
+uint16_t get_bus_id(tt::umd::ClusterDescriptor& cluster_desc, ChipId chip_id);
+UbbId get_ubb_id(tt::umd::ClusterDescriptor& cluster_desc, ChipId chip_id);
 
 class FabricContext;
 

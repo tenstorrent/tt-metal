@@ -234,7 +234,8 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions) : rtoptions_(rtoptions) {
     this->initialize_ethernet_cores_router_mode();
 
     TT_FATAL(this->driver_, "UMD cluster object must be initialized and available");
-    this->tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(*this->driver_);
+    auto& cluster_desc = (*(this->driver_->get_cluster_description()));
+    this->tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(cluster_desc);
 
     if (this->target_type_ != tt::TargetDevice::Mock && this->target_type_ != tt::TargetDevice::Emule) {
         this->assert_risc_reset();
@@ -477,7 +478,8 @@ void Cluster::start_driver(umd::DeviceParams& device_params) const {
     // May block waiting for other processes to release the device.
     this->driver_->start_device(device_params);
 
-    if ((this->target_type_ == TargetDevice::Silicon || this->target_type_ == TargetDevice::Simulator) && device_params.init_device) {
+    if ((this->target_type_ == TargetDevice::Silicon || this->target_type_ == TargetDevice::Simulator) &&
+        device_params.init_device) {
         // Configure TLBs on all MMIO devices in parallel
         std::vector<std::shared_future<void>> futures;
         const auto& mmio_device_ids = driver_->get_target_mmio_device_ids();
@@ -1075,7 +1077,8 @@ uint64_t Cluster::get_pcie_base_addr_from_device(ChipId chip_id) const {
 
 const std::unordered_set<ChipId>& Cluster::get_devices_controlled_by_mmio_device(ChipId mmio_device_id) const {
     TT_FATAL(driver_, "UMD cluster object must be initialized and available");
-    return llrt::get_devices_controlled_by_mmio_device(*driver_, mmio_device_id);
+    auto& cluster_desc = (*(driver_->get_cluster_description()));
+    return llrt::get_devices_controlled_by_mmio_device(cluster_desc, mmio_device_id);
 }
 
 std::unordered_map<ChipId, std::vector<CoreCoord>> Cluster::get_ethernet_cores_grouped_by_connected_chips(
