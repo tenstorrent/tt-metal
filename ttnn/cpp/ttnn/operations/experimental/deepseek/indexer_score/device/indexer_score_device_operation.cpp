@@ -33,16 +33,20 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(q_shape[0] == 1, "batch 1 only, got {}", q_shape[0]);
     TT_FATAL(attrs.is_causal, "non-causal not implemented");
 
-    // The kernels read/pack bf16 tiles; mismatched dtype/layout would corrupt or hang.
+    // q/weights are packed and read as bf16 tiles; k is matmul srcA only (never packed),
+    // so it may also be bfp8_b -- halves k DRAM/L1 BW. Mismatched dtype/layout corrupts or hangs.
     const auto& q = tensor_args.q;
     const auto& k = tensor_args.k;
     const auto& w = tensor_args.weights;
     TT_FATAL(
-        q.dtype() == DataType::BFLOAT16 && k.dtype() == DataType::BFLOAT16 && w.dtype() == DataType::BFLOAT16,
-        "q, k, weights must be bfloat16 (got q={}, k={}, weights={})",
+        q.dtype() == DataType::BFLOAT16 && w.dtype() == DataType::BFLOAT16,
+        "q, weights must be bfloat16 (got q={}, weights={})",
         q.dtype(),
-        k.dtype(),
         w.dtype());
+    TT_FATAL(
+        k.dtype() == DataType::BFLOAT16 || k.dtype() == DataType::BFLOAT8_B,
+        "k must be bfloat16 or bfloat8_b (got {})",
+        k.dtype());
     TT_FATAL(
         q.layout() == Layout::TILE && k.layout() == Layout::TILE && w.layout() == Layout::TILE,
         "q, k, weights must be TILE layout");
