@@ -232,27 +232,52 @@ def _run_fused(inp, submesh, ag_sem, cfg, pob):
     return _norm_op(inp, submesh, ag_sem, cfg, use_device_op=True, pob=pob)
 
 
-def _trace_and_time(submesh, run_op, *, num_iters: int = NUM_ITERS) -> float:
-    run_op()
+def _trace_and_time(submesh, run_ops, *, num_iters: int = NUM_ITERS) -> float:
+    """Capture each program in ``run_ops`` as its own trace and replay them
+    round-robin across ``num_iters`` iterations.
+
+    Passing a LIST ping-pongs distinct resource sets (each run_op binds its own
+    persistent_output_buffer + AG global-semaphore). The fused op resets its
+    out_ready_sem to 0 at end-of-op; under a traced replay with no host sync a
+    lagging remote device's atomic-inc can land AFTER the local reset and be
+    clobbered, leaving the next iteration one inc short -> wait_min hangs (the
+    many-chunk selfattn_qk_s2 hang). N alternating sets give each iteration a set
+    that iteration K-N already fully drained, so a <N-iteration device skew can
+    never drop an inc. A single callable keeps the old single-trace behavior.
+    """
+    if callable(run_ops):
+        run_ops = [run_ops]
+    n = len(run_ops)
+    for run_op in run_ops:  # warmup + cold-compile each program
+        run_op()
     ttnn.synchronize_device(submesh)
-    trace_id = ttnn.begin_trace_capture(submesh, cq_id=0)
-    run_op()
-    ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
+    trace_ids = []
+    for run_op in run_ops:
+        trace_id = ttnn.begin_trace_capture(submesh, cq_id=0)
+        run_op()
+        ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
+        trace_ids.append(trace_id)
     ttnn.synchronize_device(submesh)
     t0 = time.perf_counter()
-    for _ in range(num_iters):
-        ttnn.execute_trace(submesh, trace_id, cq_id=0, blocking=False)
+    for i in range(num_iters):
+        ttnn.execute_trace(submesh, trace_ids[i % n], cq_id=0, blocking=False)
     ttnn.synchronize_device(submesh)
     elapsed_us = (time.perf_counter() - t0) * 1e6
-    ttnn.release_trace(submesh, trace_id)
+    for trace_id in trace_ids:
+        ttnn.release_trace(submesh, trace_id)
     return elapsed_us / num_iters
 
 
-def _bench_cfg(submesh, ag_sem, cfg: LtxCfg) -> dict:
-    inp = _build(submesh, cfg)
+# Ping-pong depth for the fused path: number of (pob, AG-sem) sets alternated
+# across trace iterations to absorb inter-device skew (see _trace_and_time).
+_PINGPONG = 2
+
+
+def _make_pob(inp, submesh, cfg: LtxCfg):
     # Pass weight/RoPE so the stats-buffer chunk/window sizing matches the program's
-    # per-head-RoPE / streaming chunk clamp.
-    pob = ttnn.experimental.wan_fused_distributed_rmsnorm_create_stats_buffer(
+    # per-head-RoPE / streaming chunk clamp, and num_links so its num_workers rounding
+    # matches the op (else the buffer geometry mismatches the kernel).
+    return ttnn.experimental.wan_fused_distributed_rmsnorm_create_stats_buffer(
         inp["x"],
         TP_AXIS,
         submesh,
@@ -263,19 +288,29 @@ def _bench_cfg(submesh, ag_sem, cfg: LtxCfg) -> dict:
         rope_cos=inp.get("cos_bf16"),
         rope_sin=inp.get("sin_bf16"),
     )
+
+
+def _bench_cfg(submesh, ccl, cfg: LtxCfg) -> dict:
+    inp = _build(submesh, cfg)
     methods = [m.strip() for m in _os.getenv("LTX_BENCH_METHODS", "baseline,fused").split(",") if m.strip()]
     t = {}
     # A config may exceed L1 (e.g. per-head RoPE at video-self-attn width). Record
     # the failure and keep sweeping so the table shows what fuses vs. what doesn't.
     if "baseline" in methods:
         try:
-            t["baseline"] = _trace_and_time(submesh, lambda: _run_baseline(inp, submesh, ag_sem, cfg))
+            sem = ccl.get_ag_ping_pong_semaphore(TP_AXIS)
+            t["baseline"] = _trace_and_time(submesh, lambda: _run_baseline(inp, submesh, sem, cfg))
         except Exception as e:  # noqa: BLE001
             t["baseline_err"] = type(e).__name__
             logger.warning(f"{cfg.cid} baseline FAILED: {str(e)[:160]}")
     if "fused" in methods:
         try:
-            t["fused"] = _trace_and_time(submesh, lambda: _run_fused(inp, submesh, ag_sem, cfg, pob))
+            # Ping-pong _PINGPONG distinct (pob, AG-sem) sets so a lagging device's
+            # late semaphore inc can't be clobbered by the op's end-of-op reset.
+            pobs = [_make_pob(inp, submesh, cfg) for _ in range(_PINGPONG)]
+            sems = [ccl.get_ag_ping_pong_semaphore(TP_AXIS) for _ in range(_PINGPONG)]
+            run_ops = [(lambda p=p, s=s: _run_fused(inp, submesh, s, cfg, p)) for p, s in zip(pobs, sems)]
+            t["fused"] = _trace_and_time(submesh, run_ops)
         except Exception as e:  # noqa: BLE001
             t["fused_err"] = type(e).__name__
             logger.warning(f"{cfg.cid} fused FAILED: {str(e)[:160]}")
@@ -329,13 +364,12 @@ def test_ltx_rmsnorm_bench_galaxy(mesh_device: ttnn.MeshDevice, tp: int) -> None
         pytest.skip(f"no configs for TP={tp}")
     submesh = mesh_device.create_submesh(ttnn.MeshShape(1, tp))
     ccl = CCLManager(mesh_device=submesh, num_links=GALAXY_NUM_LINKS, topology=ttnn.Topology.Linear)
-    ag_sem = ccl.get_ag_ping_pong_semaphore(TP_AXIS)
     rows: list[dict] = []
     for cfg in cfgs:
         logger.info(
             f"=== [LTX] {cfg.cid}  rows={cfg.rows} feat={cfg.feat_local} heads={cfg.heads} hd={cfg.head_dim} ==="
         )
-        t = _bench_cfg(submesh, ag_sem, cfg)
+        t = _bench_cfg(submesh, ccl, cfg)
         rows.append(
             {
                 "cid": cfg.cid,
