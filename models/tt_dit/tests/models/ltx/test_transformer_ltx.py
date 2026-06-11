@@ -608,7 +608,9 @@ def _make_tt_block(*, mesh_device, ccl_manager, parallel_config, is_fsdp, has_au
     )
 
 
-def _make_tt_model(*, mesh_device, ccl_manager, parallel_config, is_fsdp, has_audio, num_layers):
+def _make_tt_model(
+    *, mesh_device, ccl_manager, parallel_config, is_fsdp, has_audio, num_layers, image_conditioning=False
+):
     return LTXTransformerModel(
         num_attention_heads=NUM_HEADS,
         attention_head_dim=HEAD_DIM,
@@ -628,6 +630,7 @@ def _make_tt_model(*, mesh_device, ccl_manager, parallel_config, is_fsdp, has_au
         has_audio=has_audio,
         apply_gated_attention=has_audio,
         cross_attention_adaln=True,
+        image_conditioning=image_conditioning,
     )
 
 
@@ -1158,3 +1161,107 @@ def test_ltx_transformer_inner_step(
         checkpoint_variant=checkpoint_variant,
         use_forward_alias=False,
     )
+
+
+# ---------------------------------------------------------------------------
+# Per-token video timestep (I2V) — equivalence to the scalar path
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    [pytest.param((2, 4), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="2x4sp1tp0")],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(("F", "H", "W"), [pytest.param(19, 17, 30, id="stage_1")])
+def test_ltx_per_token_timestep_equivalence(
+    mesh_device,
+    sp_axis,
+    tp_axis,
+    num_links,
+    topology,
+    is_fsdp,
+    F,
+    H,
+    W,
+    reset_seeds,
+) -> None:
+    """A uniform per-token video timestep must reproduce the scalar-timestep path.
+
+    This is the weight-agnostic invariant behind I2V: with ``image_conditioning=True`` and a
+    per-token ``video_timestep = sigma`` for every token, the model output must match the
+    ``image_conditioning=False`` scalar path (T2V/AV stays bit-similar). The frame-0 pinning
+    behaviour itself is covered end-to-end by the pipeline; here we isolate the DiT plumbing.
+    """
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    video_N_real = F * H * W
+    video_N = _sp_pad_len(video_N_real, sp_factor)
+
+    # Shared random-scaled weights (1 layer) from the diffusers 3D video model.
+    torch_model = _make_diffusers_video_model(num_layers=1)
+    torch_model.eval()
+    _scale_init_(torch_model)
+    state_dict = _convert_diffusers_video_model_to_tt(torch_model.state_dict(), num_heads=NUM_HEADS, head_dim=HEAD_DIM)
+    state_dict = {k: v.detach().clone() for k, v in state_dict.items()}
+    del torch_model
+
+    torch.manual_seed(INPUT_SEED)
+    video_lat_real = torch.randn(1, video_N_real, IN_CHANNELS, dtype=torch.float32)
+    video_lat = _pad_seq_dim(video_lat_real, video_N, dim=1)
+    video_prompt = torch.randn(1, PROMPT_LEN, CTX_DIM, dtype=torch.float32)
+    sigma_val = TIMESTEP_VAL
+    timestep_torch = torch.tensor([sigma_val])
+
+    ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
+    parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
+
+    # Shared TT-side RoPE / prompt tensors.
+    tt_video_prompt = bf16_tensor(video_prompt.unsqueeze(0), device=mesh_device)
+    tt_vc, tt_vs = _tt_rope(
+        _video_rope_freqs, F, H, W, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis, pad_to=video_N
+    )
+    tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
+    base_kwargs = dict(
+        video_1BNI_torch=video_lat.unsqueeze(0),
+        video_prompt_1BLP=tt_video_prompt,
+        video_rope_cos=tt_vc,
+        video_rope_sin=tt_vs,
+        video_N=video_N_real,
+        trans_mat=tt_trans_mat,
+        timestep_torch=timestep_torch,
+    )
+
+    # Scalar path (image_conditioning=False).
+    scalar_model = _make_tt_model(
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
+        has_audio=False,
+        num_layers=1,
+        image_conditioning=False,
+    )
+    scalar_model.load_torch_state_dict(state_dict, strict=True)
+    out_scalar = LTXTransformerModel.device_to_host(scalar_model.forward(**base_kwargs)).squeeze(0)[:, :video_N_real, :]
+    del scalar_model
+
+    # Per-token path (image_conditioning=True) with a uniform timestep = sigma over the padded grid.
+    pertoken_model = _make_tt_model(
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
+        has_audio=False,
+        num_layers=1,
+        image_conditioning=True,
+    )
+    pertoken_model.load_torch_state_dict(state_dict, strict=True)
+    video_timestep_torch = torch.full((video_N,), sigma_val, dtype=torch.float32)
+    out_pertoken = LTXTransformerModel.device_to_host(
+        pertoken_model.forward(video_timestep_torch=video_timestep_torch, **base_kwargs)
+    ).squeeze(0)[:, :video_N_real, :]
+    del pertoken_model
+
+    assert out_pertoken.shape == out_scalar.shape, f"{out_pertoken.shape} vs {out_scalar.shape}"
+    assert torch.isfinite(out_pertoken).all(), "NaN/Inf in per-token output"
+    # Same weights + uniform sigma: the per-token MLP collapses to the scalar broadcast (bf16-equal).
+    assert_quality(out_scalar, out_pertoken, pcc=0.999, relative_rmse=0.02)
+    logger.info("PASSED: uniform per-token timestep reproduces the scalar path")
