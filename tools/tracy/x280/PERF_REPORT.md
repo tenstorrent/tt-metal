@@ -59,6 +59,32 @@ bandwidth ceiling of the **single NoC0 NIU / tile egress port**. Net gain over t
 naive starting point: **444 µs → 16 µs per 64 B snapshot (~28×)**; full 4 KB L1 of
 all 110 cores snapshotted every **~1.05 ms (~950 Hz)**.
 
+## Export to host (X280 → host)
+
+The poll lands data in X280 DRAM; getting it off-chip uses the X280's own network
+(device DRAM is off-limits under Linux, so the legacy "push to a device DRAM
+profiler buffer, host reads over PCIe" path isn't available here). That network is
+tt-bh-linux's SLIRP user-mode NAT (`10.0.2.x`).
+
+| Stage | Rate |
+|-------|------|
+| Raw TCP X280 → host (`netsrc`/`netsink`, 2 GB) | **13.9 MB/s (111 Mbit/s)** |
+| 3-hart 4 KB poll **with** export bolted on (`pollexport`) | poll **326 MB/s**, export **14.5 MB/s**, **95.5 % dropped** |
+
+Findings:
+- The SLIRP link is a hard **~14.5 MB/s** wall — ~22× below the 430 MB/s poll, and
+  the dominant end-to-end bottleneck.
+- Adding export costs **~24 % poll throughput** (430 → 326 MB/s): pollers now
+  *store* every byte into a DRAM staging ring (vs XOR-and-discard), and that write
+  bandwidth + the exporter draining rings + the kernel TCP copy contend on the
+  X280 memory subsystem.
+- At 326 MB/s produced vs 14.5 exported, **95.5 % of full-4 KB snapshots drop** at
+  the ring. Raw full-buffer streaming is infeasible over this link.
+- **Implication:** export budget ≈ 14.5 MB/s ≈ **1.8M markers/s (8 B) aggregate,
+  ~16k/s/core** — fine for normal zone profiling, but you must ship **deltas/
+  markers only, never full buffers**. High-rate (NoC tracing) needs the
+  DRAM/PCIe fallback.
+
 ## Ruled out
 
 - **NIU command-buffer DMA** — the X280 cannot issue NoC transactions by writing
