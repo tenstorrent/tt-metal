@@ -1436,3 +1436,35 @@ Closed the requested gaps. Final LLK test suite (all GREEN on Blackhole silicon)
 - Validation:
   - `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/experimental/test_topk_xl.py -q`:
     PASS (30 passed, 3 skipped).
+
+### 2026-06-11 — support arbitrary K multiples of 16 up to 2048
+- Relaxed the public op validation from `{512, 1024, 2048}` to any `K` in `[16, 2048]` where
+  `K % 16 == 0`.
+- The device implementation snaps the requested K upward to the smallest LLK-supported K:
+  - requested `K <= 512` uses LLK K=512;
+  - requested `513 <= K <= 1024` uses LLK K=1024;
+  - requested `1025 <= K <= 2048` uses LLK K=2048.
+- Reader/compute now chunk the input row by snapped LLK K, not requested K. This keeps chunk bases,
+  active tail element counts, tile counts, and `topk_xl_*<K>` LLK calls consistent.
+- Compute still produces a full snapped-K candidate/index row in the output CB.
+- Writer now takes both:
+  - source slice count from snapped K, used for the existing tile/face-to-row-major reorder mapping;
+  - output slice count from requested K, used to copy/write only the requested prefix.
+- Output tensor shape remains the requested public K, not the snapped K.
+- Added coverage for non-boundary K values across all snap buckets:
+  - K=16 and K=256 for LLK K=512;
+  - K=768 for LLK K=1024;
+  - K=1536 and K=2032 for LLK K=2048.
+- Validation:
+  - `./build_metal.sh --release`: PASS.
+  - `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/experimental/test_topk_xl.py -q`:
+    PASS (48 passed, 3 skipped).
+
+### 2026-06-11 — add long-row K=1536 regression
+- Added `test_topk_xl_row_major_640_rows_51200_k1536` to cover:
+  - 640 rows;
+  - input row length 51200;
+  - requested K=1536, which snaps internally to LLK K=2048 and clips writer output back to 1536.
+- Validation:
+  - `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/experimental/test_topk_xl.py::test_topk_xl_row_major_640_rows_51200_k1536 -q`:
+    PASS (1 passed).

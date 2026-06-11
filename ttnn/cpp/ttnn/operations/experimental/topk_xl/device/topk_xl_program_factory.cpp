@@ -21,6 +21,16 @@ uint32_t flattened_rows_excluding_last_dim(const ttnn::Shape& shape) {
     return rows;
 }
 
+uint32_t snap_to_llk_k(uint32_t k) {
+    if (k <= 512) {
+        return 512;
+    }
+    if (k <= 1024) {
+        return 1024;
+    }
+    return 2048;
+}
+
 }  // namespace
 
 TopkXLProgramFactory::cached_program_t TopkXLProgramFactory::create(
@@ -34,11 +44,12 @@ TopkXLProgramFactory::cached_program_t TopkXLProgramFactory::create(
 
     const auto shape = input.logical_shape();
     const uint32_t k = operation_attributes.k;
+    const uint32_t llk_k = snap_to_llk_k(k);
     const uint32_t n = shape[shape.rank() - 1];
     const uint32_t num_rows = flattened_rows_excluding_last_dim(shape);
-    const uint32_t num_chunks = tt::div_up(n, k);
-    const uint32_t tail_elements = n - ((num_chunks - 1) * k);
-    const uint32_t tiles_per_sequence = (k + tt::constants::TILE_HW - 1) / tt::constants::TILE_HW;
+    const uint32_t num_chunks = tt::div_up(n, llk_k);
+    const uint32_t tail_elements = n - ((num_chunks - 1) * llk_k);
+    const uint32_t tiles_per_sequence = (llk_k + tt::constants::TILE_HW - 1) / tt::constants::TILE_HW;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(input.device()->compute_with_storage_grid_size(), num_rows, true);
@@ -49,14 +60,16 @@ TopkXLProgramFactory::cached_program_t TopkXLProgramFactory::create(
     constexpr uint32_t cb_indices = tt::CBIndex::c_1;
     constexpr uint32_t cb_indices_scratch = tt::CBIndex::c_2;
 
-    const uint32_t input_chunk_bytes = k * input.element_size();
+    const uint32_t input_chunk_bytes = llk_k * input.element_size();
     const uint32_t input_tail_chunk_bytes = tail_elements * input.element_size();
     const uint32_t input_row_bytes = n * input.element_size();
     const uint32_t input_tile_bytes = tt::constants::TILE_HW * input.element_size();
     constexpr uint32_t row_slice_elements = tt::constants::FACE_WIDTH;
+    const uint32_t source_slices_per_row = llk_k / row_slice_elements;
     const uint32_t output_slices_per_row = k / row_slice_elements;
     const uint32_t indices_slice_bytes = row_slice_elements * indices.element_size();
     const uint32_t indices_row_bytes = k * indices.element_size();
+    const uint32_t indices_cb_row_bytes = llk_k * indices.element_size();
 
     const uint32_t cb_depth = 2;
     const auto input_cb_config =
@@ -66,9 +79,9 @@ TopkXLProgramFactory::cached_program_t TopkXLProgramFactory::create(
     tt::tt_metal::CreateCircularBuffer(program, all_cores, input_cb_config);
 
     auto indices_cb_config =
-        tt::tt_metal::CircularBufferConfig(cb_depth * indices_row_bytes, {{cb_indices, tt::DataFormat::Float32}})
-            .set_page_size(cb_indices, indices_row_bytes);
-    if (k == 512) {
+        tt::tt_metal::CircularBufferConfig(cb_depth * indices_cb_row_bytes, {{cb_indices, tt::DataFormat::Float32}})
+            .set_page_size(cb_indices, indices_cb_row_bytes);
+    if (llk_k == 512) {
         indices_cb_config.set_unpack_face_geometry(cb_indices, tt::constants::FACE_HEIGHT, 2);
     }
     tt::tt_metal::CreateCircularBuffer(program, all_cores, indices_cb_config);
@@ -97,7 +110,7 @@ TopkXLProgramFactory::cached_program_t TopkXLProgramFactory::create(
             .noc = tt::tt_metal::NOC::NOC_0,
             .compile_args = reader_compile_args});
 
-    std::vector<uint32_t> compute_compile_args = {cb_in, cb_indices, num_chunks, tail_elements, k};
+    std::vector<uint32_t> compute_compile_args = {cb_in, cb_indices, num_chunks, tail_elements, llk_k};
     auto compute_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/topk_xl/device/kernels/compute.cpp",
@@ -111,7 +124,12 @@ TopkXLProgramFactory::cached_program_t TopkXLProgramFactory::create(
             .compile_args = compute_compile_args});
 
     std::vector<uint32_t> writer_compile_args = {
-        cb_indices, cb_indices_scratch, indices_row_bytes, output_slices_per_row, indices_slice_bytes};
+        cb_indices,
+        cb_indices_scratch,
+        indices_row_bytes,
+        source_slices_per_row,
+        output_slices_per_row,
+        indices_slice_bytes};
     tt::tt_metal::TensorAccessorArgs(*indices.buffer()).append_to(writer_compile_args);
 
     auto writer_kernel = tt::tt_metal::CreateKernel(

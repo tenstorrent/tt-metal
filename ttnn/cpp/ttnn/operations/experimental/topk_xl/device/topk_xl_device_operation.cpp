@@ -8,6 +8,12 @@
 
 namespace ttnn::operations::experimental::topk_xl {
 
+namespace {
+
+constexpr uint32_t max_supported_k = 2048;
+
+}  // namespace
+
 void TopkXLDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(attrs, tensor_args);
@@ -18,8 +24,9 @@ void TopkXLDeviceOperation::validate_on_program_cache_miss(
     const auto& input = tensor_args.input_tensor;
 
     TT_FATAL(
-        attrs.k == 512 || attrs.k == 1024 || attrs.k == 2048,
-        "topk_xl initial implementation supports k in {{512, 1024, 2048}}, got {}",
+        attrs.k > 0 && attrs.k <= max_supported_k && attrs.k % 16 == 0,
+        "topk_xl supports k in [16, {}] in multiples of 16, got {}",
+        max_supported_k,
         attrs.k);
     TT_FATAL(attrs.largest, "topk_xl initial implementation supports largest=true only");
     TT_FATAL(attrs.sorted, "topk_xl initial implementation supports sorted=true only");

@@ -36,12 +36,17 @@ def _make_large_index_input(num_rows: int, n: int, k: int) -> torch.Tensor:
         (512, 2, 512),
         (512, 1, 1024),
         (512, 2, 1024),
+        (16, 1, 16),
+        (256, 2, 513),
+        (768, 2, 1537),
         (1024, 1, 1024),
         (1024, 2, 1024),
         (1024, 1, 2048),
         (1024, 2, 2048),
+        (1536, 2, 3000),
         (2048, 1, 2048),
         (2048, 2, 2048),
+        (2032, 2, 4095),
         (2048, 1, 4096),
         (2048, 2, 4096),
     ],
@@ -69,9 +74,14 @@ def test_topk_xl_row_major_bfloat16_uint32_indices(device, k, num_rows, n):
     [
         (512, 513),
         (512, 1023),
+        (16, 17),
+        (256, 511),
+        (768, 1025),
         (1024, 1025),
         (1024, 2047),
+        (1536, 2049),
         (2048, 2049),
+        (2032, 4095),
         (2048, 4095),
     ],
 )
@@ -92,10 +102,29 @@ def test_topk_xl_row_major_non_multiple_n(device, k, n):
     assert_equal(indices.to(torch.int64), ref_indices)
 
 
-@pytest.mark.parametrize("k", [512, 1024, 2048])
+@pytest.mark.parametrize("k", [16, 512, 768, 1024, 1536, 2032, 2048])
 def test_topk_xl_row_major_parallelizes_640_rows(device, k):
     num_rows = 640
     n = k
+    torch_input = _make_large_index_input(num_rows=num_rows, n=n, k=k)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    tt_indices = ttnn.experimental.topk_xl(tt_input, k=k)
+
+    _, ref_indices = torch.topk(torch_input.float(), k, dim=-1, largest=True, sorted=True)
+    indices = ttnn.to_torch(tt_indices, dtype=torch.uint32)
+
+    assert list(tt_indices.shape) == [num_rows, k]
+    assert tt_indices.dtype == ttnn.uint32
+    assert tt_indices.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert_equal(indices.to(torch.int64), ref_indices)
+
+
+def test_topk_xl_row_major_640_rows_51200_k1536(device):
+    num_rows = 640
+    n = 51200
+    k = 1536
     torch_input = _make_large_index_input(num_rows=num_rows, n=n, k=k)
 
     tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -131,7 +160,7 @@ def test_topk_xl_row_major_uint32_indices_above_uint16(device, k, num_chunks):
     assert_equal(indices.to(torch.int64), ref_indices)
 
 
-@pytest.mark.parametrize("k", [512, 1024, 2048])
+@pytest.mark.parametrize("k", [16, 512, 768, 1024, 1536, 2032, 2048])
 def test_topk_xl_row_major_non_multiple_n_uint32_indices_above_uint16(device, k):
     n = 65536 + k + 1
     torch_input = _make_large_index_input(num_rows=1, n=n, k=k)

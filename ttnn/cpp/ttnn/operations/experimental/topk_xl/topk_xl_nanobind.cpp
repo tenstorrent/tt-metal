@@ -28,7 +28,7 @@ void bind_topk_xl(nb::module_& mod) {
 
         Args:
             input_tensor: row-major BFLOAT16 tensor. Reduction is over the last dimension.
-            k: number of top elements. Initial implementation supports k=512, 1024, or 2048.
+            k: number of top elements. Must be <= 2048 and a multiple of 16.
             largest: must be true.
             sorted: must be true.
         )doc",
