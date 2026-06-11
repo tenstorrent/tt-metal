@@ -920,7 +920,9 @@ class Attention(LightweightModule):
                 dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
                 memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.PREFILL, None),
                 compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
-                program_config=self.args.get_attn_qkv_program_config(Mode.PREFILL, seq_len, None, batched=batched_prefill),
+                program_config=self.args.get_attn_qkv_program_config(
+                    Mode.PREFILL, seq_len, None, batched=batched_prefill
+                ),
             )
 
         # FIXME: surely ttnn.linear bias should work?
