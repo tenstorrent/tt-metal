@@ -191,9 +191,12 @@ def test_denoise_expert_chain_pcc():
     expert_w = cfg.expert_config.width  # 1024
     head_dim = cfg.expert_config.head_dim  # 256
     num_kv_heads = cfg.expert_config.num_kv_heads  # 1 (MQA)
-    # Suffix shape per pi0.5: action_horizon padded to 64.
+    # Suffix shape per pi0.5: action_horizon tile-aligned (one round to 32 tiles).
+    # action_horizon=10 → 32. Matches Pi0_5ModelTTNN._action_horizon_padded
+    # at ttnn_pi0_5_model.py:102.
     suffix_len = ((cfg.action_horizon + 31) // 32) * 32
-    prefix_len = 128
+    # Production prefix length = PI0_VLM_CHUNK_SIZE (3 cams + 256 lang = 1024).
+    prefix_len = int(os.environ.get("PI0_VLM_CHUNK_SIZE", "1024"))
 
     torch.manual_seed(SEED)
     suffix_hidden = torch.randn(B, suffix_len, expert_w) * 0.5
