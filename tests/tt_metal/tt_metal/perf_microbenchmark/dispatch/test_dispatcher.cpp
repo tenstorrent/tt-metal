@@ -56,6 +56,11 @@ constexpr uint32_t DEFAULT_ITERATIONS_PAGED_WRITE = 1;
 constexpr uint32_t DEFAULT_ITERATIONS_PACKED_WRITE = 1;
 constexpr uint32_t DEFAULT_ITERATIONS_PACKED_WRITE_LARGE = 1;
 
+// Packed writes accumulate into worker L1, which on the Quasar simulator is limited to the same
+// device-data budget the prefetcher tests use. Transfers above this are clamped so they fit and the
+// generated command count stays bounded.
+constexpr uint32_t QUASAR_SIMULATION_PACKED_WRITE_MAX_BYTES = 96 * 1024;
+
 // Params that control the data volume, iteration count, and multicast/unicast
 // for the linear write test
 struct LinearWriteParams {
@@ -532,6 +537,9 @@ class DispatchPackedWriteTestFixture : public BaseDispatchTestFixture,
 protected:
     void init_params(const PackedWriteParams& p) {
         transfer_size_bytes_ = p.transfer_size_bytes;
+        if (Common::is_quasar_sim()) {
+            transfer_size_bytes_ = std::min(transfer_size_bytes_, QUASAR_SIMULATION_PACKED_WRITE_MAX_BYTES);
+        }
         num_iterations_ = p.num_iterations;
         dram_data_size_words_ = p.dram_data_size_words;
     }
