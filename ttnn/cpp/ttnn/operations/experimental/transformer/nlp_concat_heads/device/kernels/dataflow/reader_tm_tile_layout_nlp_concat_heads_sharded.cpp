@@ -12,20 +12,22 @@
 void kernel_main() {
     Noc noc;
 
+    // Metal 2.0: CB ids come from the DFB binding tokens (dfb::), structural scalars from named
+    // compile-time args (args::, constexpr), and the per-core offsets from named runtime args (args::).
     // WRITER RUNTIME ARGS
-    uint32_t nheads = get_arg_val<uint32_t>(0);                    // This is per core per risc
-    uint32_t start_read_offset_bytes = get_arg_val<uint32_t>(1);   // offset by nheads * in0_HtWt
-    uint32_t start_write_offset_bytes = get_arg_val<uint32_t>(2);  // offset by nheads * in0_Wt
+    uint32_t nheads = get_arg(args::nheads);                                      // This is per core per risc
+    uint32_t start_read_offset_bytes = get_arg(args::start_read_offset_bytes);    // offset by nheads * in0_HtWt
+    uint32_t start_write_offset_bytes = get_arg(args::start_write_offset_bytes);  // offset by nheads * in0_Wt
 
     // COMPILE TIME ARGS
     // interleaved accessor args
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
-    constexpr uint32_t in0_h_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t head_dim_size_bytes = get_compile_time_arg_val(3);
+    constexpr uint32_t cb_id_in0 = dfb::cb_id_in0;
+    constexpr uint32_t cb_id_out0 = dfb::cb_id_out0;
+    constexpr uint32_t in0_h_tiles = get_arg(args::in0_h_tiles);
+    constexpr uint32_t head_dim_size_bytes = get_arg(args::head_dim_size_bytes);
     constexpr uint32_t out_row_size_bytes =
-        get_compile_time_arg_val(4);  // total nheads per core * in0_w_tiles * single_tile_size_bytes
-    constexpr uint32_t block_size = get_compile_time_arg_val(5);  // total nheads per core * in0_HtWt
+        get_arg(args::out_row_size_bytes);  // total nheads per core * in0_w_tiles * single_tile_size_bytes
+    constexpr uint32_t block_size = get_arg(args::block_size);  // total nheads per core * in0_HtWt
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_id_in0);
 

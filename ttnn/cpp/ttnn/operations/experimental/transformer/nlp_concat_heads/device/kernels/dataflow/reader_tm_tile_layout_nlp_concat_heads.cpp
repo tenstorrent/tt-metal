@@ -13,22 +13,23 @@
 void kernel_main() {
     Noc noc;
 
+    // Metal 2.0: the input address comes from the TensorAccessor binding (ta::in0_args), the CB id from
+    // the DFB binding token (dfb::), structural scalars from named compile-time args (args::, constexpr),
+    // and the per-core work descriptors from named runtime args (args::).
     // WRITER RUNTIME ARGS
-    uint32_t in0_tensor_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_blocks = get_arg_val<uint32_t>(1);
-    uint32_t in0_h_dim = get_arg_val<uint32_t>(2);
-    uint32_t in0_tensor_tile_id = get_arg_val<uint32_t>(3);
+    uint32_t num_blocks = get_arg(args::num_blocks);
+    uint32_t in0_h_dim = get_arg(args::in0_h_dim);
+    uint32_t in0_tensor_tile_id = get_arg(args::in0_tensor_tile_id);
 
     // COMPILE TIME ARGS
-    constexpr uint32_t in0_h_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t in0_w_tiles = get_compile_time_arg_val(1);
-    constexpr uint32_t in0_c = get_compile_time_arg_val(2);
-    constexpr uint32_t in0_HtWt = get_compile_time_arg_val(3);
-    constexpr auto in0_args = TensorAccessorArgs<4>();
+    constexpr uint32_t in0_h_tiles = get_arg(args::in0_h_tiles);
+    constexpr uint32_t in0_w_tiles = get_arg(args::in0_w_tiles);
+    constexpr uint32_t in0_c = get_arg(args::in0_c);
+    constexpr uint32_t in0_HtWt = get_arg(args::in0_HtWt);
 
-    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t cb_id_in0 = dfb::cb_id_in0;
     const uint32_t single_tile_size_bytes = get_tile_size(cb_id_in0);
-    const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
+    const auto s0 = TensorAccessor(ta::in0_args);
 
     CircularBuffer cb_in0(cb_id_in0);
 
