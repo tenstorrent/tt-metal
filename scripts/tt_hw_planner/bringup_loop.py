@@ -13,7 +13,6 @@ from .bringup import REPO_ROOT
 from .discovery import safe_relative_to_root
 from .family_backends import DEFAULT_TEMPLATE_PYTEST_EXCLUDE_K
 
-
 COMPONENT_SUBMODULE_HINTS: Dict[str, List[str]] = {
     "self_attention": [
         "vision_model.encoder.layers[0].self_attn",
@@ -1251,10 +1250,16 @@ def _refresh_plan(*, model_id: str, repo_root: Path) -> Optional[dict]:
     # we let scaffold subprocess touch it.
     demo_dir_pre = find_demo_dir(model_id, repo_root=repo_root)
     pre_counts: Optional[Dict[str, int]] = None
+    pre_children: List[Dict[str, Any]] = []
     if demo_dir_pre is not None:
         try:
             pre_data = json.loads((demo_dir_pre / "bringup_status.json").read_text())
             pre_counts = pre_data.get("counts") or {}
+            pre_children = [
+                c
+                for c in (pre_data.get("components") or [])
+                if isinstance(c, dict) and c.get("_added_by_decomposition_of")
+            ]
         except Exception:
             pre_counts = None
 
@@ -1280,6 +1285,23 @@ def _refresh_plan(*, model_id: str, repo_root: Path) -> Optional[dict]:
     try:
         post_data = json.loads(status_path.read_text())
         post_counts = post_data.get("counts", {}) or {}
+
+        if pre_children:
+            post_components = post_data.get("components") or []
+            present = {c.get("name") for c in post_components if isinstance(c, dict)}
+            restored = [c for c in pre_children if c.get("name") not in present]
+            if restored:
+                post_components.extend(restored)
+                post_data["components"] = post_components
+                if isinstance(post_data.get("counts"), dict):
+                    post_data["counts"]["NEW"] = int(post_data["counts"].get("NEW", 0) or 0) + len(restored)
+                    post_counts = post_data["counts"]
+                status_path.write_text(json.dumps(post_data, indent=2))
+                print(
+                    f"  [_refresh_plan] preserved {len(restored)} decomposition "
+                    f"child component(s) across scaffold refresh",
+                    file=sys.stderr,
+                )
 
         # 2026-06-04 Fix 4 — corruption guard. If pre had N>0 components
         # and post has 0, scaffold subprocess silently nuked the plan
