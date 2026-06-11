@@ -24,7 +24,7 @@ Owner:
 """
 
 from triage import triage_singleton, ScriptConfig, TTTriageError, log_warning, run_script
-from parse_inspector_logs import get_data as get_log_directory
+from parse_inspector_logs import get_log_directory
 import asyncio
 import atexit
 import capnp
