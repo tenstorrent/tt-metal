@@ -237,7 +237,8 @@ public:
                     }
                     total_work_runtime += static_cast<double>(sub_device_running_work_time);
                 }
-                elapsed_device_time = std::max(elapsed_device_time, dispatch_telemetry.current_timestamp);
+                uint64_t current_timestamp = dispatch_telemetry.current_timestamp;
+                elapsed_device_time = std::max(elapsed_device_time, current_timestamp);
             }
         };
 
