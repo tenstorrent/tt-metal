@@ -23,7 +23,7 @@ struct ZeroPaddedKvCacheDeviceOperation {
         // Zeroes the migration pad window [valid_global, ceil_pad_align(valid_global)) of the KV cache
         // (the garbage tail the full-tile fill/update left after the last real token), so the decode
         // side reads clean zeros. The window is up to pad_align-1 tokens and may straddle a chip
-        // boundary in the block-cyclic layout; each chip zeroes its own share, derived on host from
+        // boundary in the block-cyclic layout; each chip zeroes its own share, derived on-device from
         // valid_global + chunk_size_global + the device's coordinate along cluster_axis.
         //
         // Cache slot is linearized as users-outer, layers-inner: batch_idx = slot_idx*num_layers + layer_idx.
