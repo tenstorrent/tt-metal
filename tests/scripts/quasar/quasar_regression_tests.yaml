@@ -5,6 +5,7 @@
 #     - filter: <glob>  GTest filter pattern
 #       config: <config>   Simulator grid config (maps to emu-quasar-<config>). Supports 1x3 and 2x3 and 2x3_DISPATCH
 #       env:            (optional) Extra environment variables as key: value pairs
+#       gtest_repeat:   (optional) Run each matched test N times (--gtest_repeat=N)
 #
 # Example test entry
 #
@@ -22,7 +23,10 @@ unit_tests_legacy:
     config: 1x3
     env:
       TT_METAL_DPRINT_CORES: all
-      TT_METAL_DEVICE_PRINT: 1
+
+  - filter: "*SingleDmL1Write*"
+    config: 1x3
+    gtest_repeat: 5
 
   - filter: "*DmLoopback*"
     config: 1x3

@@ -146,8 +146,9 @@ is_valid_config() {
 
 SEP=$'\x1f'   # field separator for test entry records (group/filter/config/envvars)
 ENV_SEP='|'  # separator between env KEY=value pairs (yq join() does not interpret \u escapes)
+EMPTY_ENV='-'  # TSV placeholder for empty env (bash read collapses consecutive tab fields)
 declare -a test_entries=()
-while IFS=$'\t' read -r group filter configs envvars; do
+while IFS=$'\t' read -r group filter configs envvars gtest_repeat; do
     [[ -z "$group" ]] && continue
     # Split comma-separated configs and create one entry per config
     IFS=',' read -ra config_list <<< "$configs"
@@ -158,9 +159,9 @@ while IFS=$'\t' read -r group filter configs envvars; do
             echo "       Supported configs: ${VALID_CONFIGS[*]}"
             exit 1
         fi
-        test_entries+=("${group}${SEP}${filter}${SEP}${config}${SEP}${envvars}")
+        test_entries+=("${group}${SEP}${filter}${SEP}${config}${SEP}${envvars}${SEP}${gtest_repeat}")
     done
-done < <(yq -r 'to_entries[] | .key as $group | .value[] | [$group, .filter, .config, (.env // {} | to_entries | map(.key + "=" + (.value | tostring)) | join("|"))] | @tsv' "$TESTS_FILE")
+done < <(yq -r 'to_entries[] | .key as $group | .value[] | [$group, .filter, .config, ((.env // {} | to_entries | map(.key + "=" + (.value | tostring)) | join("|") | sub("^$"; "-"))), (.gtest_repeat // "" | tostring)] | @tsv' "$TESTS_FILE")
 
 total_tests=${#test_entries[@]}
 
@@ -256,7 +257,7 @@ test_num=0
 declare -A log_base_counts=()
 
 for entry in "${test_entries[@]}"; do
-    IFS="$SEP" read -r group filter config envvars <<< "$entry"
+    IFS="$SEP" read -r group filter config envvars gtest_repeat <<< "$entry"
 
     if [[ -n "$FILTER_CONFIG" && "$config" != "$FILTER_CONFIG" ]]; then
         skipped=$((skipped + 1))
@@ -271,6 +272,11 @@ for entry in "${test_entries[@]}"; do
     sim_path="$(simulator_path_for_config "$config")"
     binary="$BUILD_DIR/test/tt_metal/$group"
     label="[$config] $group --gtest_filter=$filter"
+    gtest_repeat_args=()
+    if [[ -n "$gtest_repeat" ]]; then
+        gtest_repeat_args+=("--gtest_repeat=$gtest_repeat")
+        label="$label --gtest_repeat=$gtest_repeat"
+    fi
 
     echo "--- [$test_num] $label ---"
 
@@ -292,6 +298,7 @@ for entry in "${test_entries[@]}"; do
 
     # Apply per-test env vars
     extra_env_keys=()
+    [[ "$envvars" == "$EMPTY_ENV" ]] && envvars=""
     if [[ -n "$envvars" ]]; then
         while IFS= read -r -d "$ENV_SEP" pair || [[ -n "$pair" ]]; do
             [[ -z "$pair" ]] && continue
@@ -308,7 +315,7 @@ for entry in "${test_entries[@]}"; do
     for key in "${extra_env_keys[@]}"; do
         echo "  $key=${!key}"
     done
-    echo "  CMD: $binary --gtest_filter=$filter"
+    echo "  CMD: $binary --gtest_filter=$filter${gtest_repeat_args[*]:+ ${gtest_repeat_args[*]}}"
 
     if [[ "$DRY_RUN" == true ]]; then
         results+=("DRY   $label")
@@ -334,7 +341,7 @@ for entry in "${test_entries[@]}"; do
 
     test_start=$SECONDS
     rc=0
-    "${logger_env[@]}" "$binary" --gtest_filter="$filter" "${gtest_log_args[@]}" || rc=$?
+    "${logger_env[@]}" "$binary" --gtest_filter="$filter" "${gtest_repeat_args[@]}" "${gtest_log_args[@]}" || rc=$?
 
     elapsed=$((SECONDS - test_start))
     record_gtest_result "$label" "$elapsed" "$rc" "${log_base}.json"
