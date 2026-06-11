@@ -193,8 +193,12 @@ def _norm_op(inp, submesh, ag_sem, cfg, *, use_device_op, pob=None):
     else:
         weight = inp["weight"]
         bias = None
-    cos = inp.get("cos") if (cfg.rope and use_device_op) else None
-    sin = inp.get("sin") if (cfg.rope and use_device_op) else None
+    # Feed the fused op bf16 cos/sin to MATCH what LTX actually uses (its standalone
+    # rotary_embedding_llama is all-bf16, so the model's RoPE tables are bf16). The
+    # fused op now sizes its rope CBs from the cos/sin dtype, so this is the
+    # production-faithful path (and halves rope-table DRAM reads vs fp32).
+    cos = inp.get("cos_bf16") if (cfg.rope and use_device_op) else None
+    sin = inp.get("sin_bf16") if (cfg.rope and use_device_op) else None
     trans = inp.get("trans") if (cfg.rope and use_device_op) else None
     return ttnn.experimental.wan_fused_distributed_rmsnorm(
         inp["x"],
@@ -255,8 +259,8 @@ def _bench_cfg(submesh, ag_sem, cfg: LtxCfg) -> dict:
         num_heads_per_device=cfg.heads,
         weight=inp.get("weight"),
         transformation_mat=inp.get("trans"),
-        rope_cos=inp.get("cos"),
-        rope_sin=inp.get("sin"),
+        rope_cos=inp.get("cos_bf16"),
+        rope_sin=inp.get("sin_bf16"),
     )
     methods = [m.strip() for m in _os.getenv("LTX_BENCH_METHODS", "baseline,fused").split(",") if m.strip()]
     t = {}
