@@ -18,6 +18,14 @@ from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import (
     voxtral_audio_tokenizer_default_optimizations,
 )
 
+VOXTRAL_STANDARD_CHAR_TEXT = (
+    "Voxtral TTS is a frontier open weights text to speech model for production voice agents. It produces "
+    "realistic expressive speech with natural prosody across English, French, Spanish, German, Italian, "
+    "Portuguese, Dutch, Arabic, and Hindi. The system supports preset voices, low latency streaming, batch "
+    "inference, and twenty four kilohertz audio output for customer support, real time translation, reading "
+    "applications, call centers, and responsive multilingual assistant workflows. With clear speech."
+)
+
 
 def resolve_voxtral_model_name_or_skip() -> str:
     model_name_or_path = os.getenv("VOXTRAL_TTS_MODEL") or os.getenv("HF_MODEL") or DEFAULT_VOXTRAL_MODEL
