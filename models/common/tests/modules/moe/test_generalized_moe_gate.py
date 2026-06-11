@@ -4,9 +4,8 @@
 
 """Standalone unit test for the C++ op ``ttnn.experimental.deepseek.moe.generalized_moe_gate``.
 
-Exercises the device op directly (via ``GeneralizedMoeGateOp.op``) against the PyTorch
-``golden`` reference, so the op can be validated in isolation without running the full
-``MoEGate`` module. Modeled on
+Exercises the device op directly against the inlined PyTorch ``_generalized_golden`` reference, so the
+op can be validated in isolation without running the full ``MoEGate`` module. Modeled on
 ``models/demos/deepseek_v3_b1/tests/unit_tests/test_deepseek_moe_gate.py``.
 """
 
@@ -15,7 +14,21 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.tt.generalized_moe_gate.op import GeneralizedMoeGateOp
+
+
+def _generalized_golden(
+    input_tensor, bias_tensor, eps=1e-20, scaling_factor=2.5, enable_sigmoid=False, topk=8, output_softmax=False
+):
+    """PyTorch reference for the *ungrouped* generalized MoE gate: rank by the bias-corrected score, take
+    the global top-`topk`, gather the UNBIASED score at those experts, normalize (softmax-over-selected if
+    output_softmax else linear), scale. ``input_tensor``/``bias_tensor``: [batch, n_group, group_size]."""
+    batch = input_tensor.shape[0]
+    scores = torch.sigmoid(input_tensor) if enable_sigmoid else input_tensor
+    bias_scores = scores + bias_tensor
+    _, topk_indices = torch.topk(bias_scores.reshape(batch, -1), topk, dim=-1, sorted=True)
+    topk_scores = torch.gather(scores.reshape(batch, -1), dim=-1, index=topk_indices)
+    weights = torch.exp(topk_scores) if output_softmax else topk_scores
+    return weights / (torch.sum(weights, dim=-1, keepdim=True) + eps) * scaling_factor, topk_indices
 
 
 @pytest.mark.parametrize("batch_size", [1, 2])
@@ -49,7 +62,7 @@ def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed, topk, ou
 
     # Reference output. (Only the golden indices are used — scores are validated tie-robustly below
     # against the device's OWN selection, not the golden's scores, so the golden scores are unused here.)
-    _, top8_indices = GeneralizedMoeGateOp.golden(
+    _, top8_indices = _generalized_golden(
         torch_input, torch_bias, eps, scaling_factor, enable_sigmoid, topk, output_softmax
     )
 
@@ -128,17 +141,17 @@ def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed, topk, ou
     )
 
     logger.info("Running generalized MoE gate operation...")
-    ttnn_result, ttnn_result_indices = GeneralizedMoeGateOp.op(
+    ttnn_result, ttnn_result_indices = ttnn.experimental.deepseek.moe.generalized_moe_gate(
         ttnn_input,
-        ttnn_bias,
-        ttnn_output,
-        ttnn_input_indices,
-        ttnn_output_indices,
-        eps,
-        scaling_factor,
-        enable_sigmoid,
-        topk,
-        output_softmax,
+        bias_tensor=ttnn_bias,
+        input_indices_tensor=ttnn_input_indices,
+        output_tensor=ttnn_output,
+        output_indices_tensor=ttnn_output_indices,
+        eps=eps,
+        scaling_factor=scaling_factor,
+        enable_sigmoid=enable_sigmoid,
+        topk=topk,
+        output_softmax=output_softmax,
     )
 
     # Convert back to torch and keep the top-`topk` slots (ranks 0..topk-1 sit in the first topk cols;
@@ -207,7 +220,7 @@ def test_generalized_moe_gate_512_global(device, enable_sigmoid, seed, topk, out
     torch_bias = (2 * torch.rand((batch_size, num_experts), dtype=torch.bfloat16)) - 1
 
     # Golden: flatten (batch, 512) -> true global top-`topk` (indices 0-511), normalized scores.
-    gold_scores, gold_idx = GeneralizedMoeGateOp.golden(
+    gold_scores, gold_idx = _generalized_golden(
         torch_input, torch_bias, eps, scaling_factor, enable_sigmoid, topk, output_softmax
     )
     scores_all = (torch.sigmoid(torch_input) if enable_sigmoid else torch_input).float()
@@ -260,17 +273,17 @@ def test_generalized_moe_gate_512_global(device, enable_sigmoid, seed, topk, out
         tile=tile,
     )
 
-    res_scores, res_idx = GeneralizedMoeGateOp.op(
+    res_scores, res_idx = ttnn.experimental.deepseek.moe.generalized_moe_gate(
         ttnn_input,
-        ttnn_bias,
-        ttnn_output,
-        ttnn_input_indices,
-        ttnn_output_indices,
-        eps,
-        scaling_factor,
-        enable_sigmoid,
-        topk,
-        output_softmax,
+        bias_tensor=ttnn_bias,
+        input_indices_tensor=ttnn_input_indices,
+        output_tensor=ttnn_output,
+        output_indices_tensor=ttnn_output_indices,
+        eps=eps,
+        scaling_factor=scaling_factor,
+        enable_sigmoid=enable_sigmoid,
+        topk=topk,
+        output_softmax=output_softmax,
     )
 
     dev_idx = ttnn.to_torch(res_idx)[:, 0, :topk].to(torch.int64)

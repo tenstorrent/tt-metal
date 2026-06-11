@@ -38,7 +38,6 @@ import torch
 import ttnn
 from models.common.modules.moe.tt_moe_gate_config import TTMoEGateConfig
 from models.demos.deepseek_v3.tt.deepseek_moe_gate.op import DeepseekMoeGateOp
-from models.demos.deepseek_v3.tt.generalized_moe_gate.op import GeneralizedMoeGateOp
 
 _TOKEN_SHAPE = (16, 16)  # 256 experts laid out as a 16×16 face per token
 _SHARD_SHAPE = (32, 32)  # one 32×32 tile per core (the op's per-token shard)
@@ -372,22 +371,23 @@ class TTMoEGate:
             cur = ttnn.to_memory_config(cur, memory_config=mem_in)  # height-shard: one token/core
 
             if self.n_group == 8:
-                # deepseek grouped top-8 (sigmoid + bias); no top-k / output-softmax knobs.
+                # deepseek grouped top-8 (sigmoid + bias); no top-k / output-softmax knobs. DeepseekMoeGateOp
+                # is deepseek-v3's own op — keep using it (only the generalized/ungrouped op is decoupled).
                 w, idx = DeepseekMoeGateOp.op(
                     cur, bias, out, in_idx, out_idx, self.eps, self.scaling_factor, self.enable_sigmoid
                 )
             else:
-                w, idx = GeneralizedMoeGateOp.op(
+                w, idx = ttnn.experimental.deepseek.moe.generalized_moe_gate(
                     cur,
-                    bias,
-                    out,
-                    in_idx,
-                    out_idx,
-                    self.eps,
-                    self.scaling_factor,
-                    self.enable_sigmoid,
-                    self.k,
-                    self.output_softmax,
+                    bias_tensor=bias,
+                    input_indices_tensor=in_idx,
+                    output_tensor=out,
+                    output_indices_tensor=out_idx,
+                    eps=self.eps,
+                    scaling_factor=self.scaling_factor,
+                    enable_sigmoid=self.enable_sigmoid,
+                    topk=self.k,
+                    output_softmax=self.output_softmax,
                 )
             weights_chunks.append(ttnn.to_memory_config(w, memory_config=ttnn.L1_MEMORY_CONFIG))
             indices_chunks.append(ttnn.to_memory_config(idx, memory_config=ttnn.L1_MEMORY_CONFIG))
@@ -461,9 +461,9 @@ class TTMoEGate:
         n_group: int = 1,
         gate_proj_bias: torch.Tensor | None = None,  # [num_experts] router LINEAR bias (gpt-oss): logits = Wx + b
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """PyTorch reference: hidden → logits → gate → (scores[batch,k], indices[batch,k]),
-        delegating to the matching op golden (``DeepseekMoeGateOp`` for n_group==8 grouped top-8,
-        ``GeneralizedMoeGateOp`` for n_group==1 ungrouped top-k)."""
+        """PyTorch reference: hidden → logits → gate → (scores[batch,k], indices[batch,k]). n_group==8
+        (grouped) delegates to ``DeepseekMoeGateOp.golden`` (deepseek-v3's own op); n_group==1 (ungrouped)
+        is inlined below (no dependency on the generalized op wrapper)."""
         batch = hidden.shape[0]
         logits = hidden.float() @ gate_weight.float()  # [batch, num_experts]
         # router LINEAR bias (gpt-oss) is part of the projection: logits = Wx + b. It flows into BOTH
@@ -492,12 +492,10 @@ class TTMoEGate:
                 scaling_factor,
                 enable_sigmoid,
             )
-        return GeneralizedMoeGateOp.golden(
-            logits,
-            bias.expand_as(logits),
-            eps,
-            scaling_factor,
-            enable_sigmoid,
-            select_experts_k,
-            score_func == "softmax",  # output_softmax
-        )
+        # ungrouped global top-k (inlined — the generalized op is no longer a deepseek-v3 dependency):
+        # rank by (score + bias), gather the UNBIASED score at the selected experts, normalize, scale.
+        scores = torch.sigmoid(logits) if enable_sigmoid else logits  # [batch, num_experts]
+        _, indices = torch.topk(scores + bias, select_experts_k, dim=-1, sorted=True)  # bias broadcasts [num_experts]
+        sel = torch.gather(scores, -1, indices)
+        weights = torch.exp(sel) if score_func == "softmax" else sel  # softmax→exp-over-selected; else linear
+        return weights / (weights.sum(-1, keepdim=True) + eps) * scaling_factor, indices
