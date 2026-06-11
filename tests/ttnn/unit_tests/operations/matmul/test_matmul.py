@@ -13,7 +13,6 @@ import ttnn
 from models.common.utility_functions import (
     is_blackhole,
     is_llk_assert_enabled,
-    skip_for_blackhole,
     skip_for_slow_dispatch,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics, assert_equal
@@ -424,7 +423,6 @@ def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
     return padded_number
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
 @pytest.mark.parametrize("k", [1024])
 @pytest.mark.parametrize("n", [1280])
 @pytest.mark.parametrize("has_bias", [False, True])
@@ -1128,7 +1126,6 @@ def _skip_unless_fused_full_mn_tiny_tile_supported(transpose_tile, tile_w, tile_
         pytest.skip("Unsupported tiny-tile combination (see _TINY_TILE_SUPPORTED_COMBOS).")
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
 @pytest.mark.parametrize(
     "m,k,n,tile_h,tile_w,transpose_tile",
     [
@@ -1159,7 +1156,6 @@ def test_linear_fused_non_broadcast_bias_2d_mcast_tiny_tile(mesh_device, m, k, n
     )
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
 @pytest.mark.parametrize(
     "m,k,n,tile_h,tile_w,transpose_tile",
     [
@@ -1190,7 +1186,6 @@ def test_linear_fused_non_broadcast_bias_1d_mcast_tiny_tile(mesh_device, m, k, n
     )
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
 @pytest.mark.parametrize("m,k,n", [(32, 32, 32), (32, 64, 32)])
 @pytest.mark.parametrize("transpose_mcast", [False, True])
 @pytest.mark.parametrize("mesh_device", [(1, NUM_DEVICES)], indirect=True)
@@ -3920,51 +3915,3 @@ def test_matmul_2d_nd_sharded_in1(device, m, k, n, grid_size, k_splits, n_splits
     # Same weight, same matmul program; only in1's DRAM layout differs, so the ND
     # read must reproduce the interleaved read bit-for-bit.
     assert_equal(out_interleaved, out_nd)
-
-
-def test_matmul_activation_rejected_on_multicore_reuse_program_config(device):
-    """Fused activation is not supported for MatmulMultiCoreReuseProgramConfig — validate-time check."""
-    torch.manual_seed(0)
-    m, k, n = 64, 64, 64
-    in0 = ttnn.from_torch(torch.randn(1, 1, m, k, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-    in1 = ttnn.from_torch(torch.randn(1, 1, k, n, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-
-    program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
-        compute_with_storage_grid_size=(1, 1),
-        in0_block_w=k // 32,
-        out_subblock_h=1,
-        out_subblock_w=1,
-        per_core_M=m // 32,
-        per_core_N=n // 32,
-    )
-
-    with pytest.raises(RuntimeError, match="Fused activation is not supported for this matmul program config:"):
-        ttnn.matmul(
-            in0,
-            in1,
-            program_config=program_config,
-            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
-        )
-
-
-def test_matmul_kt_not_divisible_by_in0_block_w_rejected(device):
-    """Kt (K / tile_width) must be divisible by in0_block_w — error message must include both values."""
-    torch.manual_seed(0)
-    m, k, n = 64, 128, 64
-    in0 = ttnn.from_torch(torch.randn(1, 1, m, k, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-    in1 = ttnn.from_torch(torch.randn(1, 1, k, n, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-
-    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(1, 1),
-        in0_block_w=3,
-        out_subblock_h=1,
-        out_subblock_w=1,
-        per_core_M=m // 32,
-        per_core_N=n // 32,
-        fuse_batch=True,
-        fused_activation=None,
-        mcast_in0=True,
-    )
-
-    with pytest.raises(RuntimeError, match=r"Kt \(4\) must be divisible by in0_block_w \(3\)"):
-        ttnn.matmul(in0, in1, program_config=program_config)

@@ -11,10 +11,8 @@
 #include "lltt.h"
 #include "sfpi.h"
 
-namespace ckernel
-{
-namespace sfpu
-{
+namespace ckernel {
+namespace sfpu {
 
 // imm12 bit 11 = 1: SFPSETCC interprets src_c as two's-complement INT32, not FP32/SMAG32
 constexpr std::uint32_t SFPSETCC_INT32_SIGNBIT = 0x800;
@@ -26,17 +24,15 @@ constexpr std::uint32_t BINARY_MAX_MIN_REPLAY_LEN = 9;
 // DEFAULT lets SFPLOAD resolve the format at runtime via ALU_ACC_CTRL_SFPU_Fp32_enabled
 // and the SrcB format register, which the unpacker already programs from formats.math.
 template <DataFormat FMT>
-inline constexpr std::uint32_t _binary_max_min_sfpmem_mode_()
-{
+inline constexpr std::uint32_t _binary_max_min_sfpmem_mode_() {
     return (FMT == DataFormat::Int32) ? p_sfpu::sfpmem::INT32 : p_sfpu::sfpmem::DEFAULT;
 }
 
 // Programs ADDR_MOD_6 with dest.incr=2 so the SFPSTORE in the replayed body
 // auto-advances the dest counter by one SFP-row pair per iteration. Quasar's
 // shared SFPU init only programs ADDR_MOD_7 (incr=0); this is additive.
-inline void _init_binary_max_min_()
-{
-    addr_mod_t {
+inline void _init_binary_max_min_() {
+    addr_mod_t{
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
         .dest = {.incr = 2},
@@ -69,11 +65,12 @@ inline void _init_binary_max_min_()
 // @param dst_index_in1  Dest tile index of input 1 (in tile units, relative to DST_INDEX).
 // @param dst_index_out  Dest tile index where the result is written (in tile units, relative to DST_INDEX).
 template <DataFormat FMT, bool IS_MAX_OP = true, int ITERATIONS = 8>
-inline void calculate_binary_max_min(const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
-{
+inline void calculate_binary_max_min(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(
-        FMT == DataFormat::Float16 || FMT == DataFormat::Float16_b || FMT == DataFormat::Float32 || FMT == DataFormat::Tf32 || FMT == DataFormat::MxFp8R ||
-            FMT == DataFormat::MxFp8P || FMT == DataFormat::Int32,
+        FMT == DataFormat::Float16 || FMT == DataFormat::Float16_b || FMT == DataFormat::Float32 ||
+            FMT == DataFormat::Tf32 || FMT == DataFormat::MxFp8R || FMT == DataFormat::MxFp8P ||
+            FMT == DataFormat::Int32,
         "Unsupported DataFormat for calculate_binary_max_min().");
 
     constexpr std::uint32_t SFPMEM_MODE = _binary_max_min_sfpmem_mode_<FMT>();
@@ -90,14 +87,15 @@ inline void calculate_binary_max_min(const std::uint32_t dst_index_in0, const st
 
     // Step 1: SM-min/SM-max via SFPSWAP. Correct for any pair where at least one
     // operand is non-negative; inverts ordering for (neg, neg) pairs.
-    TTI_SFPSWAP(0 /* imm12 */, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX); // 2-cycle
-    TTI_SFPNOP(0 /* srcs_wr_done */, 0 /* srcs_rd_done */, 0 /* dest_done */);                // post-SFPSWAP stall avoidance
+    TTI_SFPSWAP(0 /* imm12 */, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // 2-cycle
+    TTI_SFPNOP(0 /* srcs_wr_done */, 0 /* srcs_rd_done */, 0 /* dest_done */);  // post-SFPSWAP stall avoidance
 
     // Step 2: CC-guarded correction swap for (neg, neg) pairs.
     // Successive SFPSETCC calls AND into CC, so after both: CC = (LREG0<0 AND LREG1<0).
     TTI_SFPSETCC(SFPSETCC_INT32_SIGNBIT, p_sfpu::LREG0, sfpi::SFPSETCC_MOD1_LREG_LT0);
     TTI_SFPSETCC(SFPSETCC_INT32_SIGNBIT, p_sfpu::LREG1, sfpi::SFPSETCC_MOD1_LREG_LT0);
-    TTI_SFPSWAP(0 /* imm12 */, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_SWAP); // re-swap rows where both negative
+    TTI_SFPSWAP(
+        0 /* imm12 */, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_SWAP);  // re-swap rows where both negative
     TTI_SFPENCC(0 /* imm12 */, 0 /* mod1: clear CC */);
 
     // After step 2: LREG0 = min, LREG1 = max for all sign combinations.
@@ -105,11 +103,10 @@ inline void calculate_binary_max_min(const std::uint32_t dst_index_in0, const st
     TT_SFPSTORE(IS_MAX_OP ? p_sfpu::LREG1 : p_sfpu::LREG0, SFPMEM_MODE, ADDR_MOD_6, 0 /* done */, offset2);
 
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++)
-    {
+    for (int d = 0; d < ITERATIONS; d++) {
         lltt::replay(0, BINARY_MAX_MIN_REPLAY_LEN);
     }
 }
 
-} // namespace sfpu
-} // namespace ckernel
+}  // namespace sfpu
+}  // namespace ckernel

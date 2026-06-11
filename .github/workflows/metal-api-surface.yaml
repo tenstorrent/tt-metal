@@ -54,11 +54,11 @@ jobs:
           echo "NUM_METHODS=$num_methods" >> $GITHUB_ENV
 
       - name: Send Slack message to a channel
-        uses: slackapi/slack-github-action@v1.26.0
+        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
         with:
+          webhook: ${{ secrets.METAL_API_SURFACE_WEBHOOK }}
+          webhook-type: incoming-webhook
           payload: |
             {
               "text": "date: ${{ env.DATE }} \nnum_files: ${{ env.NUM_FILES }} \nnum_types: ${{ env.NUM_TYPES }} \nnum_methods: ${{ env.NUM_METHODS }}"
             }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.METAL_API_SURFACE_WEBHOOK }}
