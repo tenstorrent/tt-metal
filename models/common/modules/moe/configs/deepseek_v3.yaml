@@ -12,6 +12,9 @@ has_bias: false
 n_group: 8
 score_func: sigmoid
 routed_scaling_factor: 2.5
+# noaux_tc score-correction bias (e_score_correction_bias): added to the sigmoid scores for SELECTION only
+# (output weights stay unbiased). Explicit per-model flag (not inferred from score_func).
+score_correction_bias: true
 
 # router matmul compute config (OPTIONAL, per-model): deepseek's gate matmul is hidden=7168-deep and the
 # grouped 8→4 selection is tie-sensitive, so it needs HiFi2 + fp32 accumulation — the default matmul

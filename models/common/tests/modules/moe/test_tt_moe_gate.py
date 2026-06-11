@@ -80,7 +80,10 @@ def test_tt_moe_gate(device, config_path: Path, seed: int):
     torch.manual_seed(seed)
     hidden_states = (2 * torch.rand((batch, hidden), dtype=torch.bfloat16)) - 1
     gate_weight = ((2 * torch.rand((hidden, num_experts), dtype=torch.bfloat16)) - 1) * 0.1
-    gate_bias = None if gp["score_func"] == "softmax" else (2 * torch.rand((num_experts,)) - 1)
+    # score-correction bias (deepseek/noaux_tc sigmoid+sqrtsoftplus models): present iff the yaml declares
+    # `score_correction_bias: true` — EXPLICIT, not inferred from score_func. Added to scores for SELECTION
+    # only (the output weights stay unbiased). None → TTMoEGate feeds the op a zeros bias (a no-op).
+    gate_bias = (2 * torch.rand((num_experts,)) - 1) if raw.get("score_correction_bias") else None
     # router LINEAR bias (gpt-oss, yaml router_bias: true): logits = Wx + b, flows into selection + weights.
     proj_bias = (2 * torch.rand((num_experts,)) - 1) if raw.get("router_bias") else None
 

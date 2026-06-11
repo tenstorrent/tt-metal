@@ -14,6 +14,8 @@ has_bias: false
 n_group: 8
 score_func: sigmoid
 routed_scaling_factor: 2.5
+# noaux_tc score-correction bias (e_score_correction_bias): added to the sigmoid scores for SELECTION only.
+score_correction_bias: true
 
 # router matmul compute config (OPTIONAL, per-model): ling_1t's gate matmul is hidden=8192-deep and the
 # grouped 8→4 selection is tie-sensitive, so it needs HiFi2 + fp32 accumulation (the default LoFi + bf16
