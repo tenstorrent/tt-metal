@@ -252,26 +252,18 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
                 start_stick_id = i * input_nsticks_per_core;
             }
 
-            reader_desc.runtime_args.emplace_back(
+            reader_desc.emplace_runtime_args(
                 core,
-                KernelDescriptor::CoreRuntimeArgs{
-                    input_tensor.buffer()->address(),
-                    input_nsticks_per_core,
-                    start_stick_id,
-                    static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(cos_angle)),
-                    static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(sin_angle)),
-                    static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_x)),
-                    static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_y)),
-                    static_cast<uint32_t>(fill_value_bf16),
-                });
+                {input_tensor.buffer(),
+                 input_nsticks_per_core,
+                 start_stick_id,
+                 static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(cos_angle)),
+                 static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(sin_angle)),
+                 static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_x)),
+                 static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_y)),
+                 static_cast<uint32_t>(fill_value_bf16)});
 
-            writer_desc.runtime_args.emplace_back(
-                core,
-                KernelDescriptor::CoreRuntimeArgs{
-                    output_tensor.buffer()->address(),
-                    input_nsticks_per_core,
-                    start_stick_id,
-                });
+            writer_desc.emplace_runtime_args(core, {output_tensor.buffer(), input_nsticks_per_core, start_stick_id});
         }
     } else {
         uint32_t sticks_processed = 0;
@@ -280,26 +272,18 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
             const uint32_t num_sticks =
                 core_group_1.contains(core) ? num_sticks_per_core_group_1 : num_sticks_per_core_group_2;
 
-            reader_desc.runtime_args.emplace_back(
+            reader_desc.emplace_runtime_args(
                 core,
-                KernelDescriptor::CoreRuntimeArgs{
-                    input_tensor.buffer()->address(),
-                    num_sticks,
-                    sticks_processed,
-                    static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(cos_angle)),
-                    static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(sin_angle)),
-                    static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_x)),
-                    static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_y)),
-                    static_cast<uint32_t>(fill_value_bf16),
-                });
+                {input_tensor.buffer(),
+                 num_sticks,
+                 sticks_processed,
+                 static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(cos_angle)),
+                 static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(sin_angle)),
+                 static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_x)),
+                 static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_y)),
+                 static_cast<uint32_t>(fill_value_bf16)});
 
-            writer_desc.runtime_args.emplace_back(
-                core,
-                KernelDescriptor::CoreRuntimeArgs{
-                    output_tensor.buffer()->address(),
-                    num_sticks,
-                    sticks_processed,
-                });
+            writer_desc.emplace_runtime_args(core, {output_tensor.buffer(), num_sticks, sticks_processed});
 
             sticks_processed += num_sticks;
         }

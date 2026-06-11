@@ -1111,38 +1111,38 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                         b_num_tiles = b_shard_shape[0] * b_shard_shape[1];
                     }
                 }
-                std::vector<uint32_t> writer_runtime_args;
+                // Output address passed as a Buffer* (arg 0) so the fast cache-hit path patches it in
+                // place via a BufferBinding instead of forcing a descriptor rebuild every dispatch.
+                KernelDescriptor::RTArgList writer_runtime_args;
                 if (row_major_inputs) {
-                    writer_runtime_args = {
-                        c.buffer()->address(),
-                        common_row_width_elements,
-                        c_num_tiles_core,
-                        cD,
-                        cN,
-                        cC,
-                        cHt_r,
-                        cND,
-                        current_block,
-                        num_rows_per_tile,
-                        static_cast<uint32_t>(c.buffer()->aligned_page_size()),
-                        c_alignment,
-                        tiles_per_row_width,
-                        writer_stride_size_bytes};
+                    writer_runtime_args.push_back(c.buffer());
+                    writer_runtime_args.push_back(common_row_width_elements);
+                    writer_runtime_args.push_back(c_num_tiles_core);
+                    writer_runtime_args.push_back(cD);
+                    writer_runtime_args.push_back(cN);
+                    writer_runtime_args.push_back(cC);
+                    writer_runtime_args.push_back(cHt_r);
+                    writer_runtime_args.push_back(cND);
+                    writer_runtime_args.push_back(current_block);
+                    writer_runtime_args.push_back(num_rows_per_tile);
+                    writer_runtime_args.push_back(static_cast<uint32_t>(c.buffer()->aligned_page_size()));
+                    writer_runtime_args.push_back(c_alignment);
+                    writer_runtime_args.push_back(tiles_per_row_width);
+                    writer_runtime_args.push_back(writer_stride_size_bytes);
                 } else {
-                    writer_runtime_args = {
-                        c.buffer()->address(),
-                        c_start_id,
-                        c_num_tiles_core,
-                        c_current_shard_width,
-                        cD,
-                        cN,
-                        cC,
-                        cHt,
-                        cWt,
-                        cND,
-                        0u};
+                    writer_runtime_args.push_back(c.buffer());
+                    writer_runtime_args.push_back(c_start_id);
+                    writer_runtime_args.push_back(c_num_tiles_core);
+                    writer_runtime_args.push_back(c_current_shard_width);
+                    writer_runtime_args.push_back(cD);
+                    writer_runtime_args.push_back(cN);
+                    writer_runtime_args.push_back(cC);
+                    writer_runtime_args.push_back(cHt);
+                    writer_runtime_args.push_back(cWt);
+                    writer_runtime_args.push_back(cND);
+                    writer_runtime_args.push_back(0u);
                 }
-                writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{writer_runtime_args.begin(), writer_runtime_args.end()});
+                writer_desc.emplace_runtime_args(core, writer_runtime_args);
 
                 auto [freq, counter] =
                     CMAKE_UNIQUE_NAMESPACE::calculate_compute_kernel_args(operation_attributes.subtile_broadcast_type, c_start_id, cHt, cWt);
@@ -1177,107 +1177,106 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 const auto scalar = *operation_attributes.scalar;
                 const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.dtype(), rt_is_quant_op);
                 packed_scalar_for_reader = packed_scalar;
-                std::vector<uint32_t> writer_runtime_args;
+                // Output address passed as a Buffer* so the fast cache-hit path patches it in place
+                // (arg 0 for row-major, arg 1 here — after the packed scalar) instead of rebuilding.
+                KernelDescriptor::RTArgList writer_runtime_args;
                 if (row_major_inputs) {
-                    writer_runtime_args = {
-                        c.buffer()->address(),
-                        common_row_width_elements,
-                        c_num_tiles_core,
-                        cD,
-                        cN,
-                        cC,
-                        cHt_r,
-                        cND,
-                        current_block,
-                        num_rows_per_tile,
-                        static_cast<uint32_t>(c.buffer()->aligned_page_size()),
-                        c_alignment,
-                        tiles_per_row_width,
-                        writer_stride_size_bytes};
+                    writer_runtime_args.push_back(c.buffer());
+                    writer_runtime_args.push_back(common_row_width_elements);
+                    writer_runtime_args.push_back(c_num_tiles_core);
+                    writer_runtime_args.push_back(cD);
+                    writer_runtime_args.push_back(cN);
+                    writer_runtime_args.push_back(cC);
+                    writer_runtime_args.push_back(cHt_r);
+                    writer_runtime_args.push_back(cND);
+                    writer_runtime_args.push_back(current_block);
+                    writer_runtime_args.push_back(num_rows_per_tile);
+                    writer_runtime_args.push_back(static_cast<uint32_t>(c.buffer()->aligned_page_size()));
+                    writer_runtime_args.push_back(c_alignment);
+                    writer_runtime_args.push_back(tiles_per_row_width);
+                    writer_runtime_args.push_back(writer_stride_size_bytes);
                 } else {
-                    writer_runtime_args = {
-                        packed_scalar,
-                        c.buffer()->address(),
-                        c_start_id,
-                        c_num_tiles_core,
-                        c_current_shard_width,
-                        cD,
-                        cN,
-                        cC,
-                        cHt,
-                        cWt,
-                        cND,
-                        0u};
+                    writer_runtime_args.push_back(packed_scalar);
+                    writer_runtime_args.push_back(c.buffer());
+                    writer_runtime_args.push_back(c_start_id);
+                    writer_runtime_args.push_back(c_num_tiles_core);
+                    writer_runtime_args.push_back(c_current_shard_width);
+                    writer_runtime_args.push_back(cD);
+                    writer_runtime_args.push_back(cN);
+                    writer_runtime_args.push_back(cC);
+                    writer_runtime_args.push_back(cHt);
+                    writer_runtime_args.push_back(cWt);
+                    writer_runtime_args.push_back(cND);
+                    writer_runtime_args.push_back(0u);
                 }
-                writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{writer_runtime_args.begin(), writer_runtime_args.end()});
+                writer_desc.emplace_runtime_args(core, writer_runtime_args);
 
                 std::array compute_runtime_args = {compute_tiles, 0u, 0u, compute_scalar_value};
                 compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{compute_runtime_args.begin(), compute_runtime_args.end()});
             }
-            std::vector<uint32_t> reader_runtime_args;
+            // Input A address (arg 0) and input B address (arg 7 row-major / arg 15 tiled) passed as
+            // Buffer* so the fast cache-hit path patches them in place instead of rebuilding the
+            // descriptor. A null Buffer* (absent optional B) emits 0u with no binding, preserving the slot.
+            KernelDescriptor::RTArgList reader_runtime_args;
 
             if (row_major_inputs) {
-                const uint32_t b_addr = b.has_value() ? b->buffer()->address() : 0u;
                 const uint32_t b_page_size = b.has_value() ? static_cast<uint32_t>(b->buffer()->aligned_page_size())
                                                            : static_cast<uint32_t>(a.buffer()->aligned_page_size());
                 const uint32_t bD_arg = b.has_value() ? bD : 1u;
                 const uint32_t bN_arg = b.has_value() ? bN : 1u;
                 const uint32_t bC_arg = b.has_value() ? bC : 1u;
                 const uint32_t bHt_r_arg = b.has_value() ? bHt_r : 1u;
-                reader_runtime_args = {
-                    a.buffer()->address(),
-                    c_num_tiles_core,
-                    aD,
-                    aN,
-                    aC,
-                    aHt_r,
-                    aND,
-                    b_addr,
-                    bD_arg,
-                    bN_arg,
-                    bC_arg,
-                    bHt_r_arg,
-                    bND,
-                    cHt_r,
-                    cC,
-                    cND,
-                    current_block,
-                    num_rows_per_tile,
-                    common_row_width_elements,
-                    static_cast<uint32_t>(a.buffer()->aligned_page_size()),
-                    b_page_size,
-                    a_alignment,
-                    b_alignment,
-                    tiles_per_row_width,
-                    reader_stride_size_bytes,
-                    packed_scalar_for_reader};
+                reader_runtime_args.push_back(a.buffer());
+                reader_runtime_args.push_back(c_num_tiles_core);
+                reader_runtime_args.push_back(aD);
+                reader_runtime_args.push_back(aN);
+                reader_runtime_args.push_back(aC);
+                reader_runtime_args.push_back(aHt_r);
+                reader_runtime_args.push_back(aND);
+                reader_runtime_args.push_back(b.has_value() ? b->buffer() : nullptr);
+                reader_runtime_args.push_back(bD_arg);
+                reader_runtime_args.push_back(bN_arg);
+                reader_runtime_args.push_back(bC_arg);
+                reader_runtime_args.push_back(bHt_r_arg);
+                reader_runtime_args.push_back(bND);
+                reader_runtime_args.push_back(cHt_r);
+                reader_runtime_args.push_back(cC);
+                reader_runtime_args.push_back(cND);
+                reader_runtime_args.push_back(current_block);
+                reader_runtime_args.push_back(num_rows_per_tile);
+                reader_runtime_args.push_back(common_row_width_elements);
+                reader_runtime_args.push_back(static_cast<uint32_t>(a.buffer()->aligned_page_size()));
+                reader_runtime_args.push_back(b_page_size);
+                reader_runtime_args.push_back(a_alignment);
+                reader_runtime_args.push_back(b_alignment);
+                reader_runtime_args.push_back(tiles_per_row_width);
+                reader_runtime_args.push_back(reader_stride_size_bytes);
+                reader_runtime_args.push_back(packed_scalar_for_reader);
             } else {
-                reader_runtime_args = {
-                    a.buffer()->address(),
-                    c_start_id,
-                    a_num_tiles,
-                    c_num_tiles_core,
-                    c_current_shard_width,
-                    aHt * aWt * aC * aN * aD * (aND > 1),
-                    aHt * aWt * aC * aN * (aD > 1),
-                    aHt * aWt * aC * (aN > 1),
-                    aHt * aWt * (aC > 1),
-                    cD,
-                    cN,
-                    cC,
-                    cHt,
-                    cWt,
-                    cND,
-                    b.has_value() ? b->buffer()->address() : 0u,
-                    bHt * bWt * bC * bN * bD * (bND > 1),
-                    bHt * bWt * bC * bN * (bD > 1),
-                    bHt * bWt * bC * (bN > 1),
-                    bHt * bWt * (bC > 1),
-                    b_num_tiles,
-                };
+                reader_runtime_args.push_back(a.buffer());
+                reader_runtime_args.push_back(c_start_id);
+                reader_runtime_args.push_back(a_num_tiles);
+                reader_runtime_args.push_back(c_num_tiles_core);
+                reader_runtime_args.push_back(c_current_shard_width);
+                reader_runtime_args.push_back(aHt * aWt * aC * aN * aD * (aND > 1));
+                reader_runtime_args.push_back(aHt * aWt * aC * aN * (aD > 1));
+                reader_runtime_args.push_back(aHt * aWt * aC * (aN > 1));
+                reader_runtime_args.push_back(aHt * aWt * (aC > 1));
+                reader_runtime_args.push_back(cD);
+                reader_runtime_args.push_back(cN);
+                reader_runtime_args.push_back(cC);
+                reader_runtime_args.push_back(cHt);
+                reader_runtime_args.push_back(cWt);
+                reader_runtime_args.push_back(cND);
+                reader_runtime_args.push_back(b.has_value() ? b->buffer() : nullptr);
+                reader_runtime_args.push_back(bHt * bWt * bC * bN * bD * (bND > 1));
+                reader_runtime_args.push_back(bHt * bWt * bC * bN * (bD > 1));
+                reader_runtime_args.push_back(bHt * bWt * bC * (bN > 1));
+                reader_runtime_args.push_back(bHt * bWt * (bC > 1));
+                reader_runtime_args.push_back(b_num_tiles);
             }
 
-            reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{reader_runtime_args.begin(), reader_runtime_args.end()});
+            reader_desc.emplace_runtime_args(core, reader_runtime_args);
 
             start_tile_id += c_num_tiles_core;
             if (row_major_inputs) {

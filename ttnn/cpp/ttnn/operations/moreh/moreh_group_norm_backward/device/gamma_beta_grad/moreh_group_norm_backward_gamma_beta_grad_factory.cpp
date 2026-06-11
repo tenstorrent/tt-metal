@@ -228,8 +228,8 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
     auto* const mean_buf = mean.buffer();
     auto* const rstd_buf = rstd.buffer();
 
-    const auto gamma_grad_addr = gamma_grad_has_value ? gamma_grad.value().buffer()->address() : 0u;
-    const auto beta_grad_addr = beta_grad_has_value ? beta_grad.value().buffer()->address() : 0u;
+    auto* const gamma_grad_buf = gamma_grad_has_value ? gamma_grad.value().buffer() : nullptr;
+    auto* const beta_grad_buf = beta_grad_has_value ? beta_grad.value().buffer() : nullptr;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -243,16 +243,18 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
             TT_THROW("Core not in specified core ranges.");
         }
 
-        // NOTE: do not pass Buffer* here. tile_offset/num_channels_per_core/etc are
-        // per-core shape-derived; using BufferBinding would skip create_descriptor()
-        // on cache hits and leave those scalars stale.
-        reader_desc.runtime_args.emplace_back(
+        // Pass input buffers as Buffer* so the framework records a BufferBinding and
+        // patches only these address slots on cache hits.  The per-core shape-derived
+        // scalars (tile_offset/num_channels_per_core/etc) are folded into
+        // compute_program_hash, so a cache hit guarantees identical values — only the
+        // tensor base addresses legitimately change call-to-call.
+        reader_desc.emplace_runtime_args(
             core,
-            tt::tt_metal::KernelDescriptor::CoreRuntimeArgs{
-                output_grad_buf->address(),
-                input_buf->address(),
-                mean_buf->address(),
-                rstd_buf->address(),
+            {
+                output_grad_buf,
+                input_buf,
+                mean_buf,
+                rstd_buf,
                 tile_offset,
                 num_channels_per_core,
                 num_inner_tiles,
@@ -262,12 +264,12 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
                 origin_w,
             });
 
-        // writer (already address-only, no BufferBinding)
-        writer_desc.runtime_args.emplace_back(
+        // writer: gamma_grad/beta_grad are the optional output tensors; bind them too.
+        writer_desc.emplace_runtime_args(
             core,
-            tt::tt_metal::KernelDescriptor::CoreRuntimeArgs{
-                gamma_grad_addr,
-                beta_grad_addr,
+            {
+                gamma_grad_buf,
+                beta_grad_buf,
                 tile_offset,
                 num_channels_per_core,
                 num_inner_tiles,

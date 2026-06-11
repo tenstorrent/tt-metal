@@ -454,4 +454,52 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_d
     return desc;
 }
 
+std::vector<tt::tt_metal::DynamicRuntimeArg> SoftmaxDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& /*output_tensor*/,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    using namespace tt::tt_metal;
+    std::vector<DynamicRuntimeArg> dynamic_args;
+
+    // Dispatch on the selected program factory. The interleaved attention-optimized factory binds
+    // all per-dispatch addresses as Buffer* rt-args (framework-patched), so it has nothing to
+    // re-apply. Everything else (the general softmax factories) is not yet on the descriptor
+    // fast-path, but those bake no address-derived rt-args here either, so empty is correct for them.
+    const auto factory = select_program_factory(attributes, tensor_args);
+    if (!std::holds_alternative<SoftmaxShardedProgramFactoryAttentionOptimized>(factory)) {
+        return dynamic_args;  // nothing to re-apply
+    }
+
+    // Sharded attention-optimized factory: input/output (and a sharded mask) are CB `.buffer`-bound
+    // and patched by the framework. The only address-derived reader arg is the mask buffer address,
+    // baked at reader arg index 1 and consumed by the TensorAccessor NoC read (FUSED_SCALE_MASK
+    // path). Re-apply it on every cache hit. When there is no mask, no NoC read occurs and arg 1 is
+    // unused, so there is nothing to re-apply.
+    if (!tensor_args.mask.has_value()) {
+        return dynamic_args;
+    }
+
+    const uint32_t mask_addr = tensor_args.mask->buffer()->address();
+
+    // Mirror create_descriptor's core grid (program_config.compute_with_storage_grid_size). The
+    // reader kernel is pushed first, so its index is 0. mask_addr is identical across all cores;
+    // re-apply reader arg index 1 (mask_addr) for every core that received reader runtime args.
+    const SoftmaxShardedMultiCoreProgramConfig& program_config =
+        std::get<SoftmaxShardedMultiCoreProgramConfig>(attributes.program_config);
+    const uint32_t num_cores_c = program_config.compute_with_storage_grid_size.x;
+    const uint32_t num_cores_r = program_config.compute_with_storage_grid_size.y;
+
+    constexpr uint32_t kReaderKernelIdx = 0;
+    constexpr uint32_t kMaskAddrArgIdx = 1;
+    dynamic_args.reserve(static_cast<size_t>(num_cores_c) * num_cores_r);
+    for (uint32_t core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
+        for (uint32_t core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
+            const CoreCoord core = {static_cast<std::size_t>(core_idx_x), static_cast<std::size_t>(core_idx_y)};
+            dynamic_args.push_back({kReaderKernelIdx, core, kMaskAddrArgIdx, mask_addr});
+        }
+    }
+    return dynamic_args;
+}
+
 }  // namespace ttnn::prim

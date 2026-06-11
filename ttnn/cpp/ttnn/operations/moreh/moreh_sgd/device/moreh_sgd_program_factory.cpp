@@ -260,7 +260,7 @@ ProgramDescriptor MorehSgdOperation::create_descriptor(
             core,
             {param_in.buffer(),
              grad.buffer(),
-             momentum_buffer_in.has_value() ? momentum_buffer_in.value().buffer()->address() : 0u,
+             momentum_buffer_in.has_value() ? momentum_buffer_in.value().buffer() : nullptr,
              num_tiles_per_core,
              tile_offset,
              u_lr,
@@ -272,7 +272,7 @@ ProgramDescriptor MorehSgdOperation::create_descriptor(
         writer_desc.emplace_runtime_args(
             core,
             {param_out.buffer(),
-             momentum_buffer_out.has_value() ? momentum_buffer_out.value().buffer()->address() : 0u,
+             momentum_buffer_out.has_value() ? momentum_buffer_out.value().buffer() : nullptr,
              num_tiles_per_core,
              tile_offset});
 

@@ -304,6 +304,13 @@ struct KernelConfig {
     // Controls the Welford-fp32 alias that allows UnpackToDestFp32 to be set on the
     // alias, while keeping the original CB descriptor with default value.
     bool welford_fp32_alias = false;
+
+    // Gamma/beta tensor buffers. These are read by the writer kernel via TensorAccessor using the
+    // baked gamma_dram_addr/beta_dram_addr (writer rt-arg indices 3/4). They are NOT CB-bound (CB 5/6
+    // are staging buffers), so we bind them as patchable Buffer* rt-args so the descriptor fast cache-
+    // hit path re-patches the live addresses. nullptr when the optional tensor is absent.
+    Buffer* gamma_buffer = nullptr;
+    Buffer* beta_buffer = nullptr;
 };
 
 // Struct to hold CB configuration for building CB descriptors

@@ -1235,6 +1235,22 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         writer_mcast_sender_args.push_back(beta_tile_start_id);
         writer_mcast_sender_args.push_back(input_mask_tile_start_id);
         writer_desc.runtime_args.emplace_back(core, std::move(writer_mcast_sender_args));
+        // arg 0 = eps (attribute, in hash → stable); args 5..7 = tile start ids (shape-derived,
+        // stable across hits). args 1..4 = optional gamma / beta / input_mask / negative_mask base
+        // addresses: bind as Buffer* for cache-hit patching (only when present, else the baked 0
+        // stays). Input/output are sharded and bound via their CBs (.buffer = a/output.buffer()).
+        if (gamma.has_value()) {
+            writer_desc.buffer_bindings.push_back({core, 1, gamma.value().buffer()});
+        }
+        if (beta.has_value()) {
+            writer_desc.buffer_bindings.push_back({core, 2, beta.value().buffer()});
+        }
+        if (input_mask.has_value()) {
+            writer_desc.buffer_bindings.push_back({core, 3, input_mask.value().buffer()});
+        }
+        if (negative_mask.has_value()) {
+            writer_desc.buffer_bindings.push_back({core, 4, negative_mask.value().buffer()});
+        }
 
         if (gamma.has_value()) {
             gamma_tile_start_id = (gamma_tile_start_id + gamma_beta_num_cols_tile_per_core) %

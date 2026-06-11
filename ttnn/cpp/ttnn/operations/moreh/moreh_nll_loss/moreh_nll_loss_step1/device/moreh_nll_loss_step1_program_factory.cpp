@@ -181,7 +181,7 @@ tt::tt_metal::ProgramDescriptor MorehNllLossStep1DeviceOperation::Factory::creat
     writer_desc.config = WriterConfigDescriptor{};
 
     auto* const target_buf = target.buffer();
-    const auto weight_addr = weight_has_value ? weight.value().buffer()->address() : 0u;
+    auto* const weight_buf = weight_has_value ? weight.value().buffer() : nullptr;
     auto* const output_buf = output.buffer();
 
     // Set Runtime Args
@@ -202,7 +202,7 @@ tt::tt_metal::ProgramDescriptor MorehNllLossStep1DeviceOperation::Factory::creat
             core,
             {
                 target_buf,
-                weight_addr,
+                weight_buf,
                 static_cast<uint32_t>(ignore_index),
                 num_units_per_core,
                 tile_offset,

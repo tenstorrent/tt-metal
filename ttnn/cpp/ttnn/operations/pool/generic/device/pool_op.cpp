@@ -219,6 +219,18 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Pool2D::tensor_return_value_t
     return result;
 }
 
+std::vector<tt::tt_metal::DynamicRuntimeArg> Pool2D::get_dynamic_runtime_args(
+    const operation_attributes_t& /*op_attr*/,
+    const tensor_args_t& /*tensor*/,
+    tensor_return_value_t& /*outputs*/,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // CB-bound-stable: no runtime arg is address-derived or hash-excluded. Tensor addresses ride on
+    // sharded CBDescriptor.buffer bindings patched by the framework; the auxiliary reader_indices /
+    // scalar_config buffers feed compile-time args and stay alive (and at the same address) for the
+    // cached workload's lifetime. See the contract note on the declaration in pool_op.hpp.
+    return {};
+}
+
 }  // namespace ttnn::operations::pool
 
 namespace ttnn::prim {

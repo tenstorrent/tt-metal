@@ -201,6 +201,10 @@ tt::tt_metal::ProgramDescriptor BcastShardedHOptimisedProgramFactory::create_des
                 w_blk,                  // (5) block size in w
                 batch_b,                // (6) in1 batch size
             });
+        // src1 (b) is read via TensorAccessor using arg 0 (its base address). src0/output are CB
+        // `.buffer`-bound, but src1's CB (c_1) is a staging buffer, so bind its address as a
+        // patchable Buffer* rt-arg so the descriptor fast cache-hit path re-patches it each dispatch.
+        reader_desc.buffer_bindings.push_back({core, 0u, src1_buffer});
 
         compute_desc.runtime_args.emplace_back(
             core,

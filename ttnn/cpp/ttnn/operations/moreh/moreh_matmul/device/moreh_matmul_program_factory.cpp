@@ -487,12 +487,22 @@ tt::tt_metal::ProgramDescriptor MorehMatmulOperation::MultiCoreProgramFactory::c
         reader_rt_args.insert(reader_rt_args.end(), input_not_bcast.begin(), input_not_bcast.end());
         reader_rt_args.insert(reader_rt_args.end(), other_not_bcast.begin(), other_not_bcast.end());
 
+        uint32_t bias_arg_idx = 0;
         if (bias.has_value()) {
+            bias_arg_idx = static_cast<uint32_t>(reader_rt_args.size());
             reader_rt_args.push_back(bias_addr);
         }
 
         reader_desc.runtime_args.emplace_back(
             core, KernelDescriptor::CoreRuntimeArgs(reader_rt_args.begin(), reader_rt_args.end()));
+        // Bind the input/other (and optional bias) buffer base addresses so the descriptor takes
+        // the fast cache-hit path with the addresses re-patched each dispatch.  slot 0 = input,
+        // slot 1 = other; bias (when present) sits at the tail of the arg list.
+        reader_desc.buffer_bindings.push_back({core, 0, input.buffer()});
+        reader_desc.buffer_bindings.push_back({core, 1, other.buffer()});
+        if (bias.has_value()) {
+            reader_desc.buffer_bindings.push_back({core, bias_arg_idx, bias.value().buffer()});
+        }
 
         writer_desc.emplace_runtime_args(core, {output_buf, num_tiles_written, num_output_tiles_per_core});
         num_tiles_written += num_output_tiles_per_core;

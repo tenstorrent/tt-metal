@@ -411,10 +411,9 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
             uint32_t o_tiles = out_shard_pages(core);
             uint32_t out_start_id = ((i / num_shards_per_width) * (out_shard_height * oWt)) +
                                     ((i % num_shards_per_width) * out_shard_width);
-            reader_desc.runtime_args.emplace_back(
-                core, KernelDescriptor::CoreRuntimeArgs{input.buffer()->address(), in_tiles, out_start_id});
-            writer_desc.runtime_args.emplace_back(
-                core, KernelDescriptor::CoreRuntimeArgs{output.buffer()->address(), o_tiles, out_start_id});
+            // Tensor addresses (arg 0) as Buffer* so the fast cache-hit path patches them in place.
+            reader_desc.emplace_runtime_args(core, {input.buffer(), in_tiles, out_start_id});
+            writer_desc.emplace_runtime_args(core, {output.buffer(), o_tiles, out_start_id});
             compute_desc.runtime_args.emplace_back(
                 core, KernelDescriptor::CoreRuntimeArgs{o_tiles, packed_scalar1, packed_scalar2});
         }
@@ -455,39 +454,31 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
             }
 
             if (rm_interleaved) {
-                reader_desc.runtime_args.emplace_back(
+                reader_desc.emplace_runtime_args(
                     core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        input.buffer()->address(),
-                        npc,
-                        start_tile_id,
-                        chunks_per_row,
-                        input_chunk_size,
-                        input_last_chunk_size,
-                        rows_per_tile,
-                        total_rows});
-                writer_desc.runtime_args.emplace_back(
+                    {input.buffer(),
+                     npc,
+                     start_tile_id,
+                     chunks_per_row,
+                     input_chunk_size,
+                     input_last_chunk_size,
+                     rows_per_tile,
+                     total_rows});
+                writer_desc.emplace_runtime_args(
                     core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        output.buffer()->address(),
-                        npc,
-                        start_tile_id,
-                        chunks_per_row,
-                        output_chunk_size,
-                        output_last_chunk_size,
-                        rows_per_tile,
-                        total_rows});
+                    {output.buffer(),
+                     npc,
+                     start_tile_id,
+                     chunks_per_row,
+                     output_chunk_size,
+                     output_last_chunk_size,
+                     rows_per_tile,
+                     total_rows});
                 compute_desc.runtime_args.emplace_back(
                     core, KernelDescriptor::CoreRuntimeArgs{npc * chunks_per_row, packed_scalar1, packed_scalar2});
             } else {
-                reader_desc.runtime_args.emplace_back(
-                    core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        input.buffer()->address(), npc, start_tile_id, 0u, 0u, 0u, 0u, 0u});
-                writer_desc.runtime_args.emplace_back(
-                    core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        output.buffer()->address(), npc, start_tile_id, 0u, 0u, 0u, 0u, 0u});
+                reader_desc.emplace_runtime_args(core, {input.buffer(), npc, start_tile_id, 0u, 0u, 0u, 0u, 0u});
+                writer_desc.emplace_runtime_args(core, {output.buffer(), npc, start_tile_id, 0u, 0u, 0u, 0u, 0u});
                 compute_desc.runtime_args.emplace_back(
                     core, KernelDescriptor::CoreRuntimeArgs{npc, packed_scalar1, packed_scalar2});
             }

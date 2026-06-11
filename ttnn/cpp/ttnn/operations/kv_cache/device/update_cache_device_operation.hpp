@@ -5,11 +5,14 @@
 #pragma once
 
 #include <optional>
+#include <vector>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/distributed/types.hpp"
 #include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include "update_cache_device_operation_types.hpp"
 #include "fill_cache_multi_core_program_factory.hpp"
 #include "update_cache_multi_core_program_factory.hpp"
@@ -31,6 +34,15 @@ struct UpdateKVCacheOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    // compute_program_hash deliberately excludes batch_idx / update_idx / batch_offset from the cache
+    // key, so calls differing only in those reuse one program. The runtime args they feed (cache_start_id,
+    // tile_update_offset, batch_read_offset) plus the raw baked tensor addresses would be STALE on a cache
+    // hit; declaring this opts the op into the fast path and re-applies them every dispatch.
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 Tensor update_cache(

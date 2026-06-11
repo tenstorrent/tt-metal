@@ -557,6 +557,13 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     KernelDescriptor::RuntimeArgs writer_runtime_args;
     KernelDescriptor::RuntimeArgs compute_runtime_args;
 
+    // Per-core BufferBindings recorded so the fast cache-hit path patches tensor addresses in place
+    // instead of rebuilding the descriptor. reader arg[0]=input a, arg[6]=gamma, arg[7]=beta,
+    // arg[8]=b(residual); writer arg[0]=output. Optional inputs are baked as 0 when absent, so they
+    // are only bound when present.
+    KernelDescriptor::BufferBindings reader_buffer_bindings;
+    KernelDescriptor::BufferBindings writer_buffer_bindings;
+
     reader_runtime_args.reserve(num_cores);
     writer_runtime_args.reserve(num_cores);
     compute_runtime_args.reserve(num_cores);
@@ -598,6 +605,17 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         }
 
         reader_runtime_args.emplace_back(core, std::move(reader_args));
+        // Bind input addresses at their fixed reader-arg positions; optional inputs only when present.
+        reader_buffer_bindings.push_back({core, 0u, a.buffer()});
+        if (gamma.has_value()) {
+            reader_buffer_bindings.push_back({core, 6u, gamma.value().buffer()});
+        }
+        if (beta.has_value()) {
+            reader_buffer_bindings.push_back({core, 7u, beta.value().buffer()});
+        }
+        if (b.has_value()) {
+            reader_buffer_bindings.push_back({core, 8u, b.value().buffer()});
+        }
         // For the RM output writer arg[3] is start_tile_row (starting tile-row index for this core),
         // not the flat tile offset, because the RM writer computes row addresses directly.
         const uint32_t writer_start = input_is_row_major ? curr_row : tile_offset;
@@ -606,6 +624,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
             writer_args.push_back(H_logical);  // arg[4]
         }
         writer_runtime_args.emplace_back(core, std::move(writer_args));
+        writer_buffer_bindings.push_back({core, 0u, output.buffer()});
         compute_runtime_args.emplace_back(core, std::vector<uint32_t>{num_tile_rows_per_core});
 
         curr_row += num_tile_rows_per_core;
@@ -625,6 +644,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     reader_kernel_desc.named_compile_time_args = cb_named_args;
     reader_kernel_desc.defines = reader_defines;
     reader_kernel_desc.runtime_args = std::move(reader_runtime_args);
+    reader_kernel_desc.buffer_bindings = std::move(reader_buffer_bindings);
     reader_kernel_desc.config = ReaderConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(reader_kernel_desc));
 
@@ -640,6 +660,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     writer_kernel_desc.compile_time_args = writer_compile_time_args;
     writer_kernel_desc.named_compile_time_args = cb_named_args;
     writer_kernel_desc.runtime_args = std::move(writer_runtime_args);
+    writer_kernel_desc.buffer_bindings = std::move(writer_buffer_bindings);
     writer_kernel_desc.config = WriterConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(writer_kernel_desc));
 

@@ -1400,8 +1400,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             mcast_sender_args.insert(mcast_sender_args.end(), mcast_noc_xy.begin(), mcast_noc_xy.end());
             if (equal_batches_per_core || (virtual_core.y <= last_row_with_extra_batch)) {
                 reader_mcast_sender_desc_g1.runtime_args.emplace_back(core, std::move(mcast_sender_args));
+                // args 0,1 = input/output base addresses: bind as Buffer* for cache-hit patching
+                reader_mcast_sender_desc_g1.buffer_bindings.push_back({core, 0, a.buffer()});
+                reader_mcast_sender_desc_g1.buffer_bindings.push_back({core, 1, output.buffer()});
             } else {
                 reader_mcast_sender_desc_g2.runtime_args.emplace_back(core, std::move(mcast_sender_args));
+                reader_mcast_sender_desc_g2.buffer_bindings.push_back({core, 0, a.buffer()});
+                reader_mcast_sender_desc_g2.buffer_bindings.push_back({core, 1, output.buffer()});
             }
         }
     }
@@ -1449,10 +1454,26 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         writer_mcast_sender_args.push_back(beta_tile_start_id);
         writer_mcast_sender_args.push_back(input_mask_tile_start_id);
         writer_mcast_sender_args.push_back(Wt);
+        // arg 1 = output base; args 2,3,4 = optional gamma/beta/input_mask bases.
+        // Bind as Buffer* for cache-hit patching (optionals only when present, else the baked 0 stays).
+        auto add_writer_bindings = [&](KernelDescriptor& kd) {
+            kd.buffer_bindings.push_back({core, 1, output.buffer()});
+            if (gamma.has_value()) {
+                kd.buffer_bindings.push_back({core, 2, gamma.value().buffer()});
+            }
+            if (beta.has_value()) {
+                kd.buffer_bindings.push_back({core, 3, beta.value().buffer()});
+            }
+            if (input_mask.has_value()) {
+                kd.buffer_bindings.push_back({core, 4, input_mask.value().buffer()});
+            }
+        };
         if (equal_batches_per_core || (virtual_core.y <= last_row_with_extra_batch)) {
             writer_desc_g1.runtime_args.emplace_back(core, std::move(writer_mcast_sender_args));
+            add_writer_bindings(writer_desc_g1);
         } else {
             writer_desc_g2.runtime_args.emplace_back(core, std::move(writer_mcast_sender_args));
+            add_writer_bindings(writer_desc_g2);
         }
     }
 

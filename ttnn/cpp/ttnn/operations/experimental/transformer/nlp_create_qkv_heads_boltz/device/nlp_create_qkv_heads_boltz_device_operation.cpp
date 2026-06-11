@@ -5,6 +5,8 @@
 #include "nlp_create_qkv_heads_boltz_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/device_operation.hpp"
 
@@ -233,6 +235,132 @@ NlpCreateHeadsBoltzDeviceOperation::tensor_return_value_t NlpCreateHeadsBoltzDev
         create_device_tensor(std::get<1>(output_specs), input_tensor.device()),
         create_device_tensor(std::get<2>(output_specs), input_tensor.device()),
     };
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> NlpCreateHeadsBoltzDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    using namespace tt::constants;
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+
+    const auto& input_tensor = tensor_args.input_tensor_q;
+    // The Interleaved factory binds q/k/v input/output addresses as patchable Buffer* rt-args, so the
+    // framework re-patches them automatically. Only the Sharded factory bakes raw address scalars.
+    if (!input_tensor.is_sharded()) {
+        return dynamic_args;
+    }
+
+    const auto& input_tensor_kv = tensor_args.input_tensor_kv;
+    auto& output = tensor_return_value;
+    const auto head_dim = operation_attributes.head_dim;
+    const auto num_q_heads = operation_attributes.num_q_heads;
+    const auto num_kv_heads = operation_attributes.num_kv_heads;
+
+    const tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    const bool read_from_input_tensor_kv = input_tensor_kv.has_value();
+    const uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    const uint32_t head_tiles = head_dim / TILE_WIDTH;
+    const uint32_t head_size = head_tiles * single_tile_size;
+
+    const auto q_shard_spec = std::get<0>(output).shard_spec().value();
+    const auto q_cores = q_shard_spec.grid;
+
+    const uint32_t per_core_out_q_heads = num_q_heads / q_cores.num_cores();
+    const uint32_t per_risc0_out_q_heads = tt::div_up(per_core_out_q_heads, 2);
+    const uint32_t per_risc1_out_q_heads = per_core_out_q_heads / 2;
+    const uint32_t per_core_in_q_heads = num_q_heads / input_tensor.shard_spec().value().num_cores();
+
+    const auto k_shard_spec = std::get<1>(output).shard_spec().value();
+    const auto k_cores = k_shard_spec.grid;
+
+    const uint32_t per_core_out_kv_heads = num_kv_heads / k_cores.num_cores();
+    const uint32_t per_core_in_kv_heads =
+        num_kv_heads / (read_from_input_tensor_kv ? input_tensor_kv.value().shard_spec().value().num_cores()
+                                                  : input_tensor.shard_spec().value().num_cores());
+
+    // Recompute base addresses from the CURRENT buffers (these are what change across dispatches).
+    const uint32_t q_base_addr = input_tensor.buffer()->address();
+    uint32_t k_base_addr = 0;
+    if (read_from_input_tensor_kv) {
+        k_base_addr = input_tensor_kv.value().buffer()->address();
+    } else {
+        k_base_addr = q_base_addr + per_core_in_q_heads * head_tiles * single_tile_size;
+    }
+    const uint32_t v_base_addr = k_base_addr + (per_core_in_kv_heads * head_tiles * single_tile_size);
+
+    const uint32_t num_cores = std::max(q_cores.num_cores(), k_cores.num_cores());
+    const auto core_grid = q_cores.bounding_box();
+    const uint32_t num_cores_x = core_grid.end_coord.x + 1, num_cores_y = core_grid.end_coord.y + 1;
+    const auto& cores = tt::tt_metal::grid_to_cores(num_cores, num_cores_x, num_cores_y, true);
+
+    // Sharded always uses (reader=kernel 0, writer=kernel 1); transpose_k_heads is forbidden for sharded,
+    // so no compute kernels precede them in ProgramDescriptor::kernels.
+    constexpr uint32_t kReaderKernelIdx = 0;
+    constexpr uint32_t kWriterKernelIdx = 1;
+    // Address-derived rt-arg indices, identical for reader and writer arg vectors:
+    //   [6]=q_base_addr, [7]=q_start_addr, [15]=k_base_addr/v_base_addr, [16]=k_start_addr/v_start_addr.
+    constexpr uint32_t kIdxQBase = 6;
+    constexpr uint32_t kIdxQStart = 7;
+    constexpr uint32_t kIdxKBase = 15;
+    constexpr uint32_t kIdxKStart = 16;
+
+    dynamic_args.reserve(num_cores * 8);
+
+    // Mirror the exact per-core address state machine in Sharded::create_descriptor.
+    uint32_t remote_q_head_start_idx = 0;
+    uint32_t remote_kv_head_start_idx = 0;
+    uint32_t q_start_addr = q_base_addr;
+    uint32_t k_start_addr = k_base_addr;
+    uint32_t v_start_addr = v_base_addr;
+    [[maybe_unused]] uint32_t remote_q_read = 0;
+    [[maybe_unused]] uint32_t remote_kv_read = 0;
+
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        const auto& core = cores[i];
+        const bool read_kv_heads = i < k_cores.num_cores();
+
+        // Reader rt-args snapshot taken at the top of the loop (before the writer mutations).
+        const uint32_t reader_q_start_addr = q_start_addr;
+        const uint32_t reader_k_start_addr = k_start_addr;
+        dynamic_args.push_back({kReaderKernelIdx, core, kIdxQBase, q_base_addr});
+        dynamic_args.push_back({kReaderKernelIdx, core, kIdxQStart, reader_q_start_addr});
+        dynamic_args.push_back({kReaderKernelIdx, core, kIdxKBase, k_base_addr});
+        dynamic_args.push_back({kReaderKernelIdx, core, kIdxKStart, reader_k_start_addr});
+
+        // Advance q state for risc0. The factory writes reader_runtime_args[7] exactly once here (the
+        // post-risc0 value), then moves that same vector into the writer; the subsequent risc1 block only
+        // updates local scalars for the NEXT core, so the writer's q_start_addr is the post-risc0 value.
+        remote_q_read += per_risc0_out_q_heads;
+        remote_q_head_start_idx = (remote_q_head_start_idx + per_risc0_out_q_heads) % per_core_in_q_heads;
+        q_start_addr = q_base_addr + remote_q_head_start_idx * head_size;
+        const uint32_t writer_q_start_addr = q_start_addr;
+
+        if (per_risc1_out_q_heads > 0) {
+            remote_q_read += per_risc1_out_q_heads;
+            remote_q_head_start_idx = (per_risc1_out_q_heads + remote_q_head_start_idx) % per_core_in_q_heads;
+            q_start_addr = q_base_addr + remote_q_head_start_idx * head_size;
+        }
+
+        // Writer rt-args: the kv slots carry v_* when this core reads kv heads, otherwise they retain the
+        // reader's k_* snapshot (the factory leaves reader_runtime_args[15]/[16] unmutated in that case).
+        const uint32_t writer_k_base = read_kv_heads ? v_base_addr : k_base_addr;
+        const uint32_t writer_k_start = read_kv_heads ? v_start_addr : reader_k_start_addr;
+        dynamic_args.push_back({kWriterKernelIdx, core, kIdxQBase, q_base_addr});
+        dynamic_args.push_back({kWriterKernelIdx, core, kIdxQStart, writer_q_start_addr});
+        dynamic_args.push_back({kWriterKernelIdx, core, kIdxKBase, writer_k_base});
+        dynamic_args.push_back({kWriterKernelIdx, core, kIdxKStart, writer_k_start});
+
+        if (read_kv_heads) {
+            remote_kv_read += per_core_out_kv_heads;
+            remote_kv_head_start_idx = (remote_kv_head_start_idx + per_core_out_kv_heads) % per_core_in_kv_heads;
+            k_start_addr = k_base_addr + remote_kv_head_start_idx * head_size;
+            v_start_addr = v_base_addr + remote_kv_head_start_idx * head_size;
+        }
+    }
+
+    return dynamic_args;
 }
 
 NlpCreateHeadsBoltzDeviceOperation::program_factory_t NlpCreateHeadsBoltzDeviceOperation::select_program_factory(
