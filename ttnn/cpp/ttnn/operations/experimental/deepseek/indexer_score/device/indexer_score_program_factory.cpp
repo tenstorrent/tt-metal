@@ -129,8 +129,10 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     // per-head-pass loop. Batch = whole group when it fits a tile budget (QC=1, all heads
     // resident -> 64 tiles), else capped so QC>1 + resident configs (large cb_q/cb_w) still
     // fit L1; the kernel sub-batches the group's head passes by qk_batch_heads.
-    constexpr uint32_t QK_BATCH_TILE_CAP = 32;
-    const uint32_t qk_batch_heads = std::min<uint32_t>(HB, QK_BATCH_TILE_CAP);  // multiple of qk_subblock_h
+    // QC==1 (one q-tile-row per unit; the production case) has spare L1 -> batch the whole group
+    // (one matmul/mul mode switch per output tile). QC>1 doubles cb_q/cb_w, so cap the batch.
+    const uint32_t qk_batch_cap = (QC == 1) ? HB : 32u;
+    const uint32_t qk_batch_heads = std::min<uint32_t>(HB, qk_batch_cap);  // multiple of qk_subblock_h
     make_cb(cb_qk, qk_batch_heads, acc_fmt, acc_tile);
     make_cb(cb_acc, 2 * QC * KC, acc_fmt, acc_tile);
     make_cb(cb_out, 2 * KC, DataFormat::Float16_b, bf16_tile);
