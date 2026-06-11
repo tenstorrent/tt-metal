@@ -77,7 +77,7 @@ ProgramDescriptor Conv1dDepthwiseOperation::create_descriptor(
     // Only act_cb is double-buffered (reader/compute overlap); the tilized window and the
     // output accumulator are transient within one block, so 1x keeps large-C inside L1.
     push_cb(act_cb, 2 * block_num_tiles);
-    push_cb(scalar_cb, 2);
+    push_cb(scalar_cb, K);  // K resident tap tiles, filled once
     push_cb(tilized_cb, block_num_tiles);
     push_cb(out_cb, block_num_tiles);
     push_cb(out_rm_cb, block_num_tiles);
