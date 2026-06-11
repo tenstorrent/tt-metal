@@ -74,6 +74,8 @@ on:
         value: ${{ jobs.metadata.outputs.ci_build_tag }}
       ci-test-tag:
         value: ${{ jobs.metadata.outputs.ci_test_tag }}
+      ci-test-light-tag:
+        value: ${{ jobs.metadata.outputs.ci_test_light_tag }}
       dev-tag:
         value: ${{ jobs.metadata.outputs.dev_tag }}
       basic-dev-tag:
@@ -122,6 +124,7 @@ jobs:
       platform_data: ${{ steps.metadata.outputs.platform_data }}
       ci_build_tag: ${{ steps.metadata.outputs.ci_build_tag }}
       ci_test_tag: ${{ steps.metadata.outputs.ci_test_tag }}
+      ci_test_light_tag: ${{ steps.metadata.outputs.ci_test_light_tag }}
       dev_tag: ${{ steps.metadata.outputs.dev_tag }}
       basic_dev_tag: ${{ steps.metadata.outputs.basic_dev_tag }}
       basic_ttnn_tag: ${{ steps.metadata.outputs.basic_ttnn_tag }}
@@ -196,6 +199,7 @@ jobs:
           echo "platform_data=$PLATFORM_DATA" >> "$GITHUB_OUTPUT"
           echo "ci_build_tag=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_tag')" >> "$GITHUB_OUTPUT"
           echo "ci_test_tag=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_tag')" >> "$GITHUB_OUTPUT"
+          echo "ci_test_light_tag=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_light_tag')" >> "$GITHUB_OUTPUT"
           echo "dev_tag=$(echo "$PLATFORM_DATA" | jq -r '.dev_tag')" >> "$GITHUB_OUTPUT"
           echo "basic_dev_tag=$(echo "$PLATFORM_DATA" | jq -r '.basic_dev_tag')" >> "$GITHUB_OUTPUT"
           echo "basic_ttnn_tag=$(echo "$PLATFORM_DATA" | jq -r '.basic_ttnn_tag')" >> "$GITHUB_OUTPUT"
@@ -258,6 +262,7 @@ jobs:
       fromJson(needs.metadata.outputs.platform_data).distro == 'ubuntu' &&
       (fromJson(needs.metadata.outputs.platform_data).ci_build_exists != 'true' ||
        fromJson(needs.metadata.outputs.platform_data).ci_test_exists != 'true' ||
+       fromJson(needs.metadata.outputs.platform_data).ci_test_light_exists != 'true' ||
        fromJson(needs.metadata.outputs.platform_data).dev_exists != 'true' ||
        fromJson(needs.metadata.outputs.platform_data).basic_dev_exists != 'true' ||
        fromJson(needs.metadata.outputs.platform_data).basic_ttnn_exists != 'true')
@@ -306,11 +311,13 @@ jobs:
           CI_TEST_VENV_TAG=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_venv_tag')
           CI_BUILD_EXISTS=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_exists')
           CI_TEST_EXISTS=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_exists')
+          CI_TEST_LIGHT_EXISTS=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_light_exists')
           DEV_EXISTS=$(echo "$PLATFORM_DATA" | jq -r '.dev_exists')
           BASIC_DEV_EXISTS=$(echo "$PLATFORM_DATA" | jq -r '.basic_dev_exists')
           BASIC_TTNN_EXISTS=$(echo "$PLATFORM_DATA" | jq -r '.basic_ttnn_exists')
           CI_BUILD_TAG=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_tag')
           CI_TEST_TAG=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_tag')
+          CI_TEST_LIGHT_TAG=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_light_tag')
           DEV_TAG=$(echo "$PLATFORM_DATA" | jq -r '.dev_tag')
           BASIC_DEV_TAG=$(echo "$PLATFORM_DATA" | jq -r '.basic_dev_tag')
           BASIC_TTNN_TAG=$(echo "$PLATFORM_DATA" | jq -r '.basic_ttnn_tag')
@@ -350,6 +357,7 @@ jobs:
 
           [ "$CI_BUILD_EXISTS" != "true" ] && add_main_target "ci-build" "$CI_BUILD_TAG"
           [ "$CI_TEST_EXISTS" != "true" ] && add_main_target "ci-test" "$CI_TEST_TAG"
+          [ "$CI_TEST_LIGHT_EXISTS" != "true" ] && add_main_target "ci-test-light" "$CI_TEST_LIGHT_TAG"
           [ "$DEV_EXISTS" != "true" ] && add_main_target "dev" "$DEV_TAG"
 
           BASIC_TOOLS=($(.github/scripts/get-target-tools.sh basic-dev))
@@ -516,6 +524,13 @@ jobs:
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ fromJson(needs.metadata.outputs.platform_data).ci_test_tag }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Push latest CI Test Light tag"
+        if: fromJson(needs.metadata.outputs.platform_data).ci_test_light_exists == 'true' || needs.ubuntu.result == 'success'
+        uses: ./.github/actions/push-latest-image-to-ghcr
+        with:
+          docker-image-tag: ${{ fromJson(needs.metadata.outputs.platform_data).ci_test_light_tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest Dev tag"

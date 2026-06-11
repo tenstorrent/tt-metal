@@ -42,6 +42,9 @@ on:
       ubuntu-2204-ci-test-tag:
         description: "Docker tag for Ubuntu 22.04 CI Test image"
         value: ${{ jobs.build-2204.outputs.ci-test-tag }}
+      ubuntu-2204-ci-test-light-tag:
+        description: "Docker tag for Ubuntu 22.04 CI Test Light image"
+        value: ${{ jobs.build-2204.outputs.ci-test-light-tag }}
       ubuntu-2204-dev-tag:
         description: "Docker tag for Ubuntu 22.04 Dev image"
         value: ${{ jobs.build-2204.outputs.dev-tag }}
@@ -64,6 +67,9 @@ on:
       ubuntu-2404-ci-test-tag:
         description: "Docker tag for Ubuntu 24.04 CI Test image"
         value: ${{ jobs.build-2404.outputs.ci-test-tag }}
+      ubuntu-2404-ci-test-light-tag:
+        description: "Docker tag for Ubuntu 24.04 CI Test Light image"
+        value: ${{ jobs.build-2404.outputs.ci-test-light-tag }}
       ubuntu-2404-dev-tag:
         description: "Docker tag for Ubuntu 24.04 Dev image"
         value: ${{ jobs.build-2404.outputs.dev-tag }}

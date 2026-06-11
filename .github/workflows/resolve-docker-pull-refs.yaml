@@ -28,6 +28,10 @@ on:
         required: false
         type: string
         default: ""
+      ci-test-light-docker-image:
+        required: false
+        type: string
+        default: ""
       ci-build-docker-image:
         required: false
         type: string
@@ -61,6 +65,8 @@ on:
         value: ${{ jobs.resolve.outputs.basic-dev-docker-image }}
       ci-test-docker-image:
         value: ${{ jobs.resolve.outputs.ci-test-docker-image }}
+      ci-test-light-docker-image:
+        value: ${{ jobs.resolve.outputs.ci-test-light-docker-image }}
       ci-build-docker-image:
         value: ${{ jobs.resolve.outputs.ci-build-docker-image }}
       manylinux-docker-image:
@@ -83,6 +89,7 @@ jobs:
       dev-docker-image: ${{ steps.prefix.outputs.dev-docker-image }}
       basic-dev-docker-image: ${{ steps.prefix.outputs.basic-dev-docker-image }}
       ci-test-docker-image: ${{ steps.prefix.outputs.ci-test-docker-image }}
+      ci-test-light-docker-image: ${{ steps.prefix.outputs.ci-test-light-docker-image }}
       ci-build-docker-image: ${{ steps.prefix.outputs.ci-build-docker-image }}
       manylinux-docker-image: ${{ steps.prefix.outputs.manylinux-docker-image }}
       basic-ttnn-runtime-docker-image: ${{ steps.prefix.outputs.basic-ttnn-runtime-docker-image }}
@@ -97,6 +104,7 @@ jobs:
           DEV_DOCKER_IMAGE: ${{ inputs.dev-docker-image }}
           BASIC_DEV_DOCKER_IMAGE: ${{ inputs.basic-dev-docker-image }}
           CI_TEST_DOCKER_IMAGE: ${{ inputs.ci-test-docker-image }}
+          CI_TEST_LIGHT_DOCKER_IMAGE: ${{ inputs.ci-test-light-docker-image }}
           CI_BUILD_DOCKER_IMAGE: ${{ inputs.ci-build-docker-image }}
           MANYLINUX_DOCKER_IMAGE: ${{ inputs.manylinux-docker-image }}
           BASIC_TTNN_RUNTIME_DOCKER_IMAGE: ${{ inputs.basic-ttnn-runtime-docker-image }}
@@ -117,6 +125,7 @@ jobs:
             echo "dev-docker-image=$(join_pref "$HARBOR_PREFIX" "$DEV_DOCKER_IMAGE")"
             echo "basic-dev-docker-image=$(join_pref "$HARBOR_PREFIX" "$BASIC_DEV_DOCKER_IMAGE")"
             echo "ci-test-docker-image=$(join_pref "$HARBOR_PREFIX" "$CI_TEST_DOCKER_IMAGE")"
+            echo "ci-test-light-docker-image=$(join_pref "$HARBOR_PREFIX" "$CI_TEST_LIGHT_DOCKER_IMAGE")"
             echo "ci-build-docker-image=$(join_pref "$HARBOR_PREFIX" "$CI_BUILD_DOCKER_IMAGE")"
             echo "manylinux-docker-image=$(join_pref "$HARBOR_PREFIX" "$MANYLINUX_DOCKER_IMAGE")"
             echo "basic-ttnn-runtime-docker-image=$(join_pref "$HARBOR_PREFIX" "$BASIC_TTNN_RUNTIME_DOCKER_IMAGE")"

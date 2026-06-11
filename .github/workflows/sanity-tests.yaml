@@ -237,6 +237,7 @@ jobs:
       dev-docker-image: ${{ steps.resolve.outputs.dev-docker-image }}
       basic-dev-docker-image: ${{ steps.resolve.outputs.basic-dev-docker-image }}
       ci-test-docker-image: ${{ steps.resolve.outputs.ci-test-docker-image }}
+      ci-test-light-docker-image: ${{ steps.resolve.outputs.ci-test-light-docker-image }}
       build-artifact-name: ${{ steps.resolve.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ steps.resolve.outputs.wheel-artifact-name }}
       packages-artifact-name: ${{ steps.resolve.outputs.packages-artifact-name }}
@@ -259,6 +260,8 @@ jobs:
             echo "dev-docker-image=${{ inputs.dev-docker-image }}" >> "$GITHUB_OUTPUT"
             echo "basic-dev-docker-image=${{ inputs.dev-docker-image }}" >> "$GITHUB_OUTPUT"
             echo "ci-test-docker-image=${{ inputs.dev-docker-image }}" >> "$GITHUB_OUTPUT"
+            # ci-test-light falls back to dev-docker-image when pre-built tags are provided
+            echo "ci-test-light-docker-image=${{ inputs.dev-docker-image }}" >> "$GITHUB_OUTPUT"
             echo "build-artifact-name=${{ inputs.build-artifact-name }}" >> "$GITHUB_OUTPUT"
             echo "wheel-artifact-name=${{ inputs.wheel-artifact-name }}" >> "$GITHUB_OUTPUT"
             echo "packages-artifact-name=${{ inputs.packages-artifact-name }}" >> "$GITHUB_OUTPUT"
@@ -266,6 +269,7 @@ jobs:
             echo "dev-docker-image=${{ needs.build-artifact.outputs.dev-docker-image }}" >> "$GITHUB_OUTPUT"
             echo "basic-dev-docker-image=${{ needs.build-artifact.outputs.basic-dev-docker-image }}" >> "$GITHUB_OUTPUT"
             echo "ci-test-docker-image=${{ needs.build-artifact.outputs.ci-test-docker-image }}" >> "$GITHUB_OUTPUT"
+            echo "ci-test-light-docker-image=${{ needs.build-artifact.outputs.ci-test-light-docker-image }}" >> "$GITHUB_OUTPUT"
             echo "build-artifact-name=${{ needs.build-artifact.outputs.build-artifact-name }}" >> "$GITHUB_OUTPUT"
             echo "wheel-artifact-name=${{ needs.build-artifact.outputs.wheel-artifact-name }}" >> "$GITHUB_OUTPUT"
             echo "packages-artifact-name=${{ needs.build-artifact.outputs.packages-artifact-name }}" >> "$GITHUB_OUTPUT"
@@ -280,6 +284,7 @@ jobs:
       dev-docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
       basic-dev-docker-image: ${{ needs.resolve-artifacts.outputs.basic-dev-docker-image }}
       ci-test-docker-image: ${{ needs.resolve-artifacts.outputs.ci-test-docker-image }}
+      ci-test-light-docker-image: ${{ needs.resolve-artifacts.outputs.ci-test-light-docker-image }}
       basic-docker-image: ${{ needs.resolve-artifacts.outputs.basic-dev-docker-image }}
       test-docker-image: ${{ needs.resolve-artifacts.outputs.ci-test-docker-image }}
 
@@ -319,6 +324,8 @@ jobs:
           echo "should-run=${{ github.event_name == 'push' || inputs.run-ttsim-tests }}" >> "$GITHUB_OUTPUT"
 
   # TTNN FD Unit tests
+  # NOTE: Uses ci-test-light image (lighter than dev/ci-test, no C++ tooling).
+  # Coverage jobs (code-coverage.yaml) must continue using dev/ci-test which has llvm-profdata-20.
   ttnn-unit-tests:
     needs: [resolve-docker-pull-refs, resolve-artifacts, tests-to-run]
     secrets: inherit
@@ -326,7 +333,7 @@ jobs:
     uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
       enabled-skus: "wh_n300_civ2"
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-test-light-docker-image }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       timeout-minutes-override: ${{ inputs.enable-watcher && 240 || 0 }}

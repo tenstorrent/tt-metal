@@ -68,6 +68,7 @@ VERSION_NODOT="${VERSION//.}"
 # Image names
 CI_BUILD_NAME="${DISTRO}-${VERSION}-ci-build-${ARCH}"
 CI_TEST_NAME="${DISTRO}-${VERSION}-ci-test-${ARCH}"
+CI_TEST_LIGHT_NAME="${DISTRO}-${VERSION}-ci-test-light-${ARCH}"
 DEV_NAME="${DISTRO}-${VERSION}-dev-${ARCH}"
 BASIC_DEV_NAME="${DISTRO}-${VERSION}-basic-dev-${ARCH}"
 BASIC_TTNN_NAME="${DISTRO}-${VERSION}-basic-ttnn-runtime-${ARCH}"
@@ -113,6 +114,7 @@ CI_TEST_VENV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.pyt
 # Build tags
 CI_BUILD_TAG="ghcr.io/${REPO}/tt-metalium/${CI_BUILD_NAME}:${HASH}"
 CI_TEST_TAG="ghcr.io/${REPO}/tt-metalium/${CI_TEST_NAME}:${HASH}"
+CI_TEST_LIGHT_TAG="ghcr.io/${REPO}/tt-metalium/${CI_TEST_LIGHT_NAME}:${HASH}"
 DEV_TAG="ghcr.io/${REPO}/tt-metalium/${DEV_NAME}:${HASH}"
 BASIC_DEV_TAG="ghcr.io/${REPO}/tt-metalium/${BASIC_DEV_NAME}:${BASIC_DEV_HASH}"
 BASIC_TTNN_TAG="ghcr.io/${REPO}/tt-metalium/${BASIC_TTNN_NAME}:${BASIC_TTNN_HASH}"
@@ -167,20 +169,25 @@ fi
 if [ "$FORCE_REBUILD" = "true" ]; then
     CI_BUILD_EXISTS=false
     CI_TEST_EXISTS=false
+    CI_TEST_LIGHT_EXISTS=false
 elif [ "$CHECK_EXISTS" = "true" ]; then
-    # Fire both manifest inspects in parallel
+    # Fire manifest inspects in parallel
     TMPDIR_CI=$(mktemp -d)
     ( docker manifest inspect "$CI_BUILD_TAG" > /dev/null 2>&1 && echo true || echo false ) > "${TMPDIR_CI}/ci_build" &
     PID_CI_BUILD=$!
     ( docker manifest inspect "$CI_TEST_TAG" > /dev/null 2>&1 && echo true || echo false ) > "${TMPDIR_CI}/ci_test" &
     PID_CI_TEST=$!
+    ( docker manifest inspect "$CI_TEST_LIGHT_TAG" > /dev/null 2>&1 && echo true || echo false ) > "${TMPDIR_CI}/ci_test_light" &
+    PID_CI_TEST_LIGHT=$!
 
     wait $PID_CI_BUILD; CI_BUILD_EXISTS=$(cat "${TMPDIR_CI}/ci_build")
     wait $PID_CI_TEST; CI_TEST_EXISTS=$(cat "${TMPDIR_CI}/ci_test")
+    wait $PID_CI_TEST_LIGHT; CI_TEST_LIGHT_EXISTS=$(cat "${TMPDIR_CI}/ci_test_light")
     rm -rf "$TMPDIR_CI"
 else
     CI_BUILD_EXISTS=unknown
     CI_TEST_EXISTS=unknown
+    CI_TEST_LIGHT_EXISTS=unknown
 fi
 
 # Output JSON
@@ -191,6 +198,7 @@ jq -cn \
     --arg python_version "$PYTHON_VERSION" \
     --arg ci_build_tag "$CI_BUILD_TAG" \
     --arg ci_test_tag "$CI_TEST_TAG" \
+    --arg ci_test_light_tag "$CI_TEST_LIGHT_TAG" \
     --arg dev_tag "$DEV_TAG" \
     --arg basic_dev_tag "$BASIC_DEV_TAG" \
     --arg basic_ttnn_tag "$BASIC_TTNN_TAG" \
@@ -199,6 +207,7 @@ jq -cn \
     --arg ci_test_venv_tag "$CI_TEST_VENV_TAG" \
     --arg ci_build_exists "$CI_BUILD_EXISTS" \
     --arg ci_test_exists "$CI_TEST_EXISTS" \
+    --arg ci_test_light_exists "$CI_TEST_LIGHT_EXISTS" \
     --arg dev_exists "$DEV_EXISTS" \
     --arg basic_dev_exists "$BASIC_DEV_EXISTS" \
     --arg basic_ttnn_exists "$BASIC_TTNN_EXISTS" \
@@ -211,6 +220,7 @@ jq -cn \
         python_version: $python_version,
         ci_build_tag: $ci_build_tag,
         ci_test_tag: $ci_test_tag,
+        ci_test_light_tag: $ci_test_light_tag,
         dev_tag: $dev_tag,
         basic_dev_tag: $basic_dev_tag,
         basic_ttnn_tag: $basic_ttnn_tag,
@@ -219,6 +229,7 @@ jq -cn \
         ci_test_venv_tag: $ci_test_venv_tag,
         ci_build_exists: $ci_build_exists,
         ci_test_exists: $ci_test_exists,
+        ci_test_light_exists: $ci_test_light_exists,
         dev_exists: $dev_exists,
         basic_dev_exists: $basic_dev_exists,
         basic_ttnn_exists: $basic_ttnn_exists,

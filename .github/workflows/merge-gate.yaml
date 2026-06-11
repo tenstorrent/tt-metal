@@ -129,6 +129,7 @@ jobs:
       skip-tt-train: false
       ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-build-tag }}
       ci-test-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-test-tag }}
+      ci-test-light-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-test-light-tag }}
       dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-dev-tag }}
       basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-dev-tag }}
       basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-ttnn-runtime-tag }}
@@ -156,6 +157,7 @@ jobs:
       publish-artifact: false
       ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-tag }}
       ci-test-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-test-tag }}
+      ci-test-light-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-test-light-tag }}
       dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
       basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-dev-tag }}
       basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-ttnn-runtime-tag }}
@@ -259,6 +261,7 @@ jobs:
       publish-artifact: false
       ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-tag }}
       ci-test-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-test-tag }}
+      ci-test-light-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-test-light-tag }}
       dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
       basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-dev-tag }}
       basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-ttnn-runtime-tag }}

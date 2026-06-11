@@ -109,6 +109,11 @@ on:
         type: string
         default: ""
         description: "Pre-built CI Test Docker image tag"
+      ci-test-light-docker-image:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built CI Test Light Docker image tag (lightweight test image without C++ tooling)"
       dev-docker-image:
         required: false
         type: string
@@ -143,6 +148,9 @@ on:
       ci-test-docker-image:
         description: "Docker tag for the CI Test Docker image for testing TT-Metalium et al"
         value: ${{ inputs.ci-test-docker-image || jobs.build-docker-image.outputs.ci-test-tag }}
+      ci-test-light-docker-image:
+        description: "Docker tag for the CI Test Light Docker image (lightweight, no C++ tooling)"
+        value: ${{ inputs.ci-test-light-docker-image || jobs.build-docker-image.outputs.ci-test-light-tag }}
       dev-docker-image:
         description: "Docker tag for the dev Docker image for developing TT-Metalium et al"
         value: ${{ inputs.dev-docker-image || jobs.build-docker-image.outputs.dev-tag }}
