@@ -3117,26 +3117,13 @@ def _main(activations, weights):
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
     ttnn.deallocate(ttnn_typecast_38, False)
-    # E_attn iter14 EXPERIMENT: L1 HEIGHT-SHARDED indexer-K layer_norm on a 32-token grid
-    # (4x8 cores, [1,128]/core) — the reference shards decode norms. Tests whether sharded
-    # parallelism beats the DRAM norm despite the i2s/s2i boundary conversions.
-    _ksh = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))}),
-            [1, 128],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        ),
-    )
-    ttnn_reshape_22 = ttnn.to_memory_config(ttnn_reshape_22, _ksh)
     ttnn_layer_norm_0 = ttnn.layer_norm(
         ttnn_reshape_22,
         epsilon=9.9999999747524271e-07,
         weight=weights["model.transformer.layers.0.attn.indexer.k_norm.weight"],
         bias=weights["model.transformer.layers.0.attn.indexer.k_norm.bias"],
         residual_input_tensor=None,
-        memory_config=_ksh,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
         program_config=None,
     )
     ttnn.deallocate(ttnn_reshape_22, False)
