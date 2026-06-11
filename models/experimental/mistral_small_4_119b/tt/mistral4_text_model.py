@@ -400,7 +400,13 @@ class TtMistral4TextModel:
             xb = ttnn.slice(x, [0, 0, s, 0], [1, 1, e, HIDDEN_SIZE])
             if real < chunk:
                 xb = ttnn.pad(xb, [(0, 0), (0, 0), (0, chunk - real), (0, 0)], value=0.0)
-            xb = _rms_norm(xb, self.final_norm_w, self.compute_kernel_config, ttnn.L1_MEMORY_CONFIG)
+            # Width-sharded final norm (32 cores) rather than the interleaved variant:
+            # the interleaved layernorm needs ~1 MB of *contiguous* L1, which the
+            # moe_compute path's persistent global semaphore fragments (it lands mid-L1,
+            # capping the largest contiguous free block below what the op needs). The
+            # sharded norm spreads across cores so it never needs that contiguous block.
+            # Matches the decode path's final norm; returns L1-interleaved for the lm_head.
+            xb = _rms_norm_sharded_decode(xb, self.final_norm_w, self.compute_kernel_config)
             lb = ttnn.linear(
                 xb,
                 self.lm_head_weight_prefill,

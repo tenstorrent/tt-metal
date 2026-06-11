@@ -226,6 +226,14 @@ class TtMistral4DecoderLayer(LightweightModule):
         # ── MoE sub-layer ───────────────────────────────────────────────
         residual = x
         normed = _rms_norm(x, self.post_attn_norm_w, self.compute_kernel_config, _mem)
+        # moe_compute statically reserves nearly all of L1 for circular buffers;
+        # park the decoder's residual and the MoE input in DRAM so no decoder
+        # activation is L1-resident across the moe_compute call (it clashes otherwise).
+        residual = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(x)
+        normed_d = ttnn.to_memory_config(normed, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(normed)
+        normed = normed_d
         moe_out = self.moe.forward(normed)
         ttnn.deallocate(normed)
 
