@@ -40,7 +40,7 @@ Per-device dims:
 | Tensor | Shape | Tiles | Layout / dtype |
 |---|---|---|---|
 | in `q` | `[1, 64, 640, 128]` | 64 heads × 20×4 | TILE, bf16 |
-| in `k` | `[1, 1, 56320, 128]` | 1760×4 | TILE, bf16 (later bfp8_b) |
+| in `k` | `[1, 1, 56320, 128]` | 1760×4 | TILE, bf16 or bfp8_b |
 | in `weights` | `[1, 64, 640, 1]` | 64 heads × 20×1 | TILE, bf16 |
 | out `score` | `[1, 1, 640, 56320]` | 20×1760 | **ROW_MAJOR**, bf16 (~72 MB) |
 
@@ -121,12 +121,16 @@ resident: 512K q + 128K w + 256K k + 64K acc + 64K out ≈ 1.0 MB.
 
 ## Formats / fidelity
 
-- inputs bf16; `k` as bfp8_b is the biggest lever (halves k BW, Kt→32, LoFi).
+- q/w bf16; `k` accepts bfp8_b (matmul srcA only, never packed). bfp8 k halves
+  k BW and lets the factory select LoFi: measured PCC ≥ 0.9997, ~1.18x faster
+  than the bf16/HiFi2 default and ~1.66x vs the original HiFi4 (rank0/7
+  5.34/5.62 vs 6.32/6.65 vs 8.85/9.31 ms). It is the fastest config.
 - DEST bf16 (default): 8-head subblocks in half-sync, PCC ≥ 0.999 holds for
   the 64-head sum; fp32 DEST (`fp32_dest_acc_en`, 4-head subblocks) kept as a
   compile-time fallback if top-k cuts ever need it.
-- HiFi2 is the default (reference scores fp8, selection-only; measured PCC
-  ≥ 0.9998, ~1.4x faster than HiFi4). HiFi4 was first-PCC bring-up only.
+- Fidelity follows k dtype: bf16 k → HiFi2 (PCC ≥ 0.9998, ~1.4x faster than the
+  HiFi4 bring-up default); bfp8 k → LoFi (the format carries ~fp8 mantissa, so
+  the extra HiFi passes would be wasted). HiFi4 was first-PCC bring-up only.
 - Output bf16; w stays bf16 (scales fp32-side in DEST).
 
 ## −inf invariant
@@ -151,7 +155,7 @@ factory `indexer_score_program_factory.cpp`, kernels
 ### Program factory
 
 Validation lives in `IndexerScoreDeviceOperation::validate_on_program_cache_miss`
-(shapes, bf16 + TILE dtype/layout, tile alignment of `Sq, T, D, chunk_start`,
+(shapes, TILE layout, bf16 q/w and bf16-or-bfp8_b k, tile alignment of `Sq, T, D, chunk_start`,
 `chunk_start + Sq ≤ T`, knob divisibility, B=1, causal only); the factory only
 derives tile dims and the one build-specific subblock constraint. The work unit is
 QC q-tile-rows × up-to-KC k-tiles: per q-row-group g,
@@ -164,9 +168,8 @@ with the same loop, so there are no segment tables. Compile args common to all
 kernels: `Hi, Sqt, Tt, Dt, chunk_t, QC, KC, HB`; TensorAccessor args appended
 for reader (q/k/w) and writer (out, page = T·2 bytes).
 
-ComputeConfig: HiFi2, bf16 DEST, half-sync (HiFi2 holds PCC ≥ 0.9998 for the
-64-head sum and is ~1.4x faster wall-clock than HiFi4; HiFi4 was bring-up
-only). The qk subblock height HP comes
+ComputeConfig: bf16 DEST, half-sync, math fidelity from k dtype (bf16 → HiFi2,
+bfp8_b → LoFi; HiFi4 was bring-up only). The qk subblock height HP comes
 from SDPA's `determine_largest_subblock_size(HB, 1, dst_size)`
 (`sdpa_subblock_utils.hpp`) with SDPA's `dst_size = fp32 ? 4 : 8` → `{8, 1}`
 at 64 heads, passed to compute as CT arg 8. Half-sync lets pack drain one
@@ -178,7 +181,7 @@ DEST half while math fills the other; flipping `fp32_dest_acc_en` back on
 | CB | what | size |
 |---|---|---|
 | c_0 q | q head-group block `[QC][HB][Dt]` bf16 | ×2 when streaming (HB < Hi) |
-| c_1 k | k chunk, double buffered | `2·KC·Dt` bf16 |
+| c_1 k | k chunk, double buffered | `2·KC·Dt` bf16/bfp8_b |
 | c_2 w | resident w group `[QC][Hi]` | `Hi·QC` bf16 |
 | c_3 mask | [diag strict-upper, full] −inf tiles, persistent | 2 bf16 |
 | c_24 qk | per-subblock relu(q·kᵀ) | `2·HP` DEST fmt |
@@ -210,7 +213,10 @@ stream per tile instead. Builds both mask tiles once at start.
 next so cb_acc holds one in-flight tile. Phase 1 is a subblock matmul
 mirroring SDPA's `matmul_blocks` (heads as rows, M=HB, N=1, K=Dt): one
 `matmul_block(rt=HP, ct=1)` per inner-dim step, relu fused before pack →
-cb_qk; packs stay subblock-relative (reserve HP / pack / push HP). Phase 2 per
+cb_qk; packs stay subblock-relative (reserve HP / pack / push HP). The
+pre-matmul `reconfig_data_format(k, q)` follows the matmul's operand→register
+map — `matmul_block(in0=q, in1=k)` sends in1→srcA, in0→srcB — so srcA is set
+from k; the reverse order is invisible for bf16 k but reads bfp8 k as bf16. Phase 2 per
 HP: `mul_tiles_bcast_cols(qk, w)`, then ping-pong `add_tiles` into cb_acc
 (first contribution primes via `copy_tile`) — the L1 round-trip per head is
 the known perf TODO. Then the diag mask on `t == chunk_t + s`, full −inf on
@@ -227,18 +233,19 @@ are disjoint so no byte is written twice even when a group splits across cores.
 
 Same scheme for every device in the ring; SP rank enters only via
 `chunk_start`. Kernel includes are `api/compute/...` / `api/dataflow/...`;
-compute entrypoint `kernel_main()`. Remaining perf knobs not wired: bfp8 k +
-LoFi, packer l1-acc.
+compute entrypoint `kernel_main()`. Remaining perf knob not wired: packer
+l1-acc.
 
 ## Validation
 
 Single-chip, `sp_rank ∈ {0,7}` boundary cases via `chunk_start`; −inf maps
-exact, visible PCC ≥ 0.999 (0.99 with bfp8 k); negative weights so padding
-can't hide. Mini case Sq=64/T=256 first. The test also sweeps the knobs
-(QC/KC/HB, incl. the diagonal-mid-group corner), a multi-core QC=2 shape (so a
-q-row-group splits across cores), head-count/head-dim generality, and the
-host validation paths (bad dtype/layout, unaligned/overflow/non-causal/knob
-rejects).
+exact, visible PCC ≥ 0.999 (measured ≥ 0.9997 even with bfp8 k); negative
+weights so padding can't hide. Mini case Sq=64/T=256 first. The test also
+sweeps the knobs (QC/KC/HB, incl. the diagonal-mid-group corner), a multi-core
+QC=2 shape (so a q-row-group splits across cores), head-count/head-dim
+generality, bfp8 k at the production shape, the production absolute-time perf
+(both k formats), and the host validation paths (bad dtype/layout,
+unaligned/overflow/non-causal/knob rejects).
 
 ## Status
 
@@ -258,8 +265,9 @@ Branch: `skrstic/dsa_indexer_score_op_2` (cleanup) on `skrstic/dsa_indexer_score
       pack overlap, relu fused in DEST
 - [x] knobs as `IndexerScoreProgramConfig` (q_chunk/k_chunk/head_group), work
       units QC×KC with head streaming; knob tests + GLX KC=16 pass
+- [x] perf: HiFi2 default (bf16 k) and bfp8 k + LoFi (fastest, PCC ≥ 0.9997);
+      production perf tests (absolute ms, both k formats) alongside accuracy
 - [ ] row-major top-k (separate); negative-weights topk-safety test
-- [ ] perf: bfp8 k + LoFi, DEST-resident acc, fused relu·w, knob sweep for
-      best GLX config
+- [ ] perf: DEST-resident acc, fused relu·w, knob sweep for best GLX config
 
 Out of scope: decode/paged variant, fused score+topk.

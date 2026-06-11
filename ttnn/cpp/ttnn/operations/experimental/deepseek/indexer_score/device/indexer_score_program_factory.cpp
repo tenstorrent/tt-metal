@@ -92,6 +92,14 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     const uint32_t bf16_tile = tile_size(DataFormat::Float16_b);
     const uint32_t fp32_tile = tile_size(DataFormat::Float32);
 
+    // k is matmul srcA only; bfp8_b halves its DRAM/L1 footprint. q/w stay bf16.
+    // bfp8 k carries ~fp8 mantissa, so LoFi covers it (extra HiFi passes would be wasted)
+    // and is the lever that turns the halved BW into a compute win; bf16 k keeps HiFi2.
+    const bool k_is_bfp8 = k.dtype() == DataType::BFLOAT8_B;
+    const DataFormat k_fmt = k_is_bfp8 ? DataFormat::Bfp8_b : DataFormat::Float16_b;
+    const uint32_t k_tile = tile_size(k_fmt);
+    const MathFidelity math_fidelity = k_is_bfp8 ? MathFidelity::LoFi : MathFidelity::HiFi2;
+
     auto make_cb = [&](uint32_t idx, uint32_t ntiles, DataFormat fmt, uint32_t tile_bytes) {
         CreateCircularBuffer(
             program,
@@ -112,7 +120,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     constexpr uint32_t cb_scratch = CBIndex::c_17;  // writer-only -inf scratch
 
     make_cb(cb_q, (stream_heads ? 2 : 1) * HB * QC * Dt, DataFormat::Float16_b, bf16_tile);
-    make_cb(cb_k, 2 * KC * Dt, DataFormat::Float16_b, bf16_tile);
+    make_cb(cb_k, 2 * KC * Dt, k_fmt, k_tile);
     make_cb(cb_w, Hi * QC, DataFormat::Float16_b, bf16_tile);
     make_cb(cb_mask, 2, DataFormat::Float16_b, bf16_tile);
     const DataFormat acc_fmt = fp32_dest_acc_en ? DataFormat::Float32 : DataFormat::Float16_b;
@@ -148,7 +156,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
         kdir + "compute_indexer_score.cpp",
         core_ranges,
         ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi2,
+            .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = false,
             .compile_args = compute_ct});

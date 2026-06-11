@@ -61,11 +61,18 @@ def to_device(t, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
     return ttnn.from_torch(t, device=device, layout=layout, dtype=dtype)
 
 
-def run_indexer(q, k, w, chunk_start, device, program_config=None):
-    """Run the device op and return the row-major bf16 score as a torch tensor."""
+def run_indexer(q, k, w, chunk_start, device, program_config=None, k_dtype=ttnn.bfloat16):
+    """Run the device op and return the row-major bf16 score as a torch tensor.
+
+    k may be bfp8_b (matmul srcA only); q/weights stay bf16.
+    """
     kwargs = {} if program_config is None else {"program_config": program_config}
     out = ttnn.experimental.deepseek.indexer_score(
-        to_device(q, device), to_device(k, device), to_device(w, device), chunk_start_idx=chunk_start, **kwargs
+        to_device(q, device),
+        to_device(k, device, dtype=k_dtype),
+        to_device(w, device),
+        chunk_start_idx=chunk_start,
+        **kwargs,
     )
     return ttnn.to_torch(out)
 
@@ -127,7 +134,22 @@ def test_indexer_score_production(device, sp_rank):
 
 
 @pytest.mark.parametrize("sp_rank", [0, 7], ids=["rank0", "rank7"])
-def test_indexer_score_production_perf(device, sp_rank):
+def test_indexer_score_bfp8_k(device, sp_rank):
+    """k as bfp8_b (matmul srcA): halves k BW and selects LoFi in the factory.
+
+    PCC stays >= 0.999 (the bfp8 quantization of well-conditioned k is well below the
+    bf16 sum's noise); negative gates keep -inf padding distinguishable from low scores.
+    """
+    chunk_start = GLX_HISTORY + sp_rank * GLX_SQ
+    q, k, w = make_inputs(GLX_HEADS, GLX_DIM, GLX_SQ, GLX_T)
+    out = run_indexer(q, k, w, chunk_start, device, program_config=production_config(), k_dtype=ttnn.bfloat8_b)
+    ref = indexer_score_ref(q, k, w, chunk_start)
+    assert_indexer_match(out, ref, GLX_SQ, GLX_T, check_neg=True)
+
+
+@pytest.mark.parametrize("k_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["k_bf16", "k_bfp8"])
+@pytest.mark.parametrize("sp_rank", [0, 7], ids=["rank0", "rank7"])
+def test_indexer_score_production_perf(device, sp_rank, k_dtype):
     """Absolute wall-clock latency per op for the production GLX shape (boundary SP ranks).
 
     Inputs are placed on device once (host transfer excluded) and the op is run program-
@@ -140,7 +162,9 @@ def test_indexer_score_production_perf(device, sp_rank):
     chunk_start = GLX_HISTORY + sp_rank * GLX_SQ
     cfg = production_config()
     q, k, w = make_inputs(GLX_HEADS, GLX_DIM, GLX_SQ, GLX_T)
-    q_dev, k_dev, w_dev = to_device(q, device), to_device(k, device), to_device(w, device)
+    q_dev = to_device(q, device)
+    k_dev = to_device(k, device, dtype=k_dtype)  # bfp8_b k selects LoFi in the factory
+    w_dev = to_device(w, device)
 
     def run_once():
         return ttnn.experimental.deepseek.indexer_score(
@@ -157,8 +181,11 @@ def test_indexer_score_production_perf(device, sp_rank):
     ttnn.synchronize_device(device)
     ms_per_op = (time.perf_counter() - start) / measured_iters * 1e3
 
-    logger.info(f"indexer_score production rank{sp_rank}: {ms_per_op:.3f} ms/op (mean of {measured_iters} iters)")
-    assert ms_per_op < 50.0, f"rank{sp_rank}: {ms_per_op:.3f} ms/op exceeds 50 ms guard (regression or hang)"
+    k_tag = "bf16" if k_dtype == ttnn.bfloat16 else "bfp8"
+    logger.info(
+        f"indexer_score production rank{sp_rank} k={k_tag}: {ms_per_op:.3f} ms/op (mean of {measured_iters} iters)"
+    )
+    assert ms_per_op < 50.0, f"rank{sp_rank} k={k_tag}: {ms_per_op:.3f} ms/op exceeds 50 ms guard (regression or hang)"
 
 
 @pytest.mark.parametrize(

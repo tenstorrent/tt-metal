@@ -22,7 +22,8 @@ constexpr uint32_t cb_k = tt::CBIndex::c_1;
 constexpr uint32_t cb_w = tt::CBIndex::c_2;
 constexpr uint32_t cb_mask = tt::CBIndex::c_3;
 
-constexpr uint32_t tile_bytes = get_tile_size(cb_q);
+constexpr uint32_t tile_bytes = get_tile_size(cb_q);    // q/w: bf16
+constexpr uint32_t k_tile_bytes = get_tile_size(cb_k);  // k: bf16 or bfp8_b (smaller tile)
 
 /**
  * Stamp the diag (strict-upper) and full -inf mask tiles (chunk_start is
@@ -88,10 +89,10 @@ inline void read_k_chunk(Noc noc, const KAcc& k_acc, uint32_t k_tile_start, uint
             noc.async_read(
                 k_acc,
                 CoreLocalMem<uint32_t>(ptr),
-                tile_bytes,
+                k_tile_bytes,
                 {.page_id = (k_tile_start + c) * head_dim_tiles + d},
                 {});
-            ptr += tile_bytes;
+            ptr += k_tile_bytes;
         }
     }
     noc.async_read_barrier();
@@ -109,7 +110,7 @@ void kernel_main() {
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto w_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     const auto q_acc = TensorAccessor(q_args, q_addr, tile_bytes);
-    const auto k_acc = TensorAccessor(k_args, k_addr, tile_bytes);
+    const auto k_acc = TensorAccessor(k_args, k_addr, k_tile_bytes);
     const auto w_acc = TensorAccessor(w_args, w_addr, tile_bytes);
 
     Noc noc;

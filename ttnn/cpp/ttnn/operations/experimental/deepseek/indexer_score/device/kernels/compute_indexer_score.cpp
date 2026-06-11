@@ -48,7 +48,10 @@ template <uint32_t q_cb, uint32_t k_cb, uint32_t qk_cb>
 void relu_qk_subblock(uint32_t head_in_group, uint32_t r, uint32_t c) {
     // Precondition: q_cb has a q group produced (resident), k_cb has the k chunk produced (resident)
     // Postcondition: qk_cb has heads_per_dest_pass produced
-    reconfig_data_format(q_cb, k_cb);
+    // matmul maps in1 -> srcA, in0 -> srcB (matmul.h hw_configure(in1, in0)), so reconfig
+    // srcA from k and srcB from q -- swapping these misreads k when its format differs from q
+    // (invisible for bf16 k, corrupts bfp8 k: its exponent bytes are read as bf16).
+    reconfig_data_format(k_cb, q_cb);
     pack_reconfig_data_format(qk_cb);
     mm_block_init_short(
         q_cb, k_cb, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass /*rt_dim*/, head_dim_tiles /*kt_dim*/);
