@@ -548,7 +548,7 @@ inline void _llk_unpack_tilizeA_B_(
  * @param unpack_dst_format: Destination data format to restore in the unpack config.
  * @note Call @ref _llk_unpack_tilizeA_B_init_ before this function.
  */
-inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim)
+inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format)
 {
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
 
@@ -570,6 +570,6 @@ inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format,
     // value (SCALE_DATUM_SIZE(unpack_dst_format, FACE_C_DIM)); restoring the baseline
     // programmed by configure_unpack_AB keeps this op from leaking Y-stride to the next op.
     cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT, UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(
-        canonical_unpA_y_stride(unpack_dst_format, face_r_dim));
+        canonical_unpA_y_stride(unpack_dst_format));
     TTI_NOP;
 }

@@ -228,14 +228,15 @@ inline constexpr std::uint32_t canonical_unpA_x_stride(const std::uint32_t unpac
     return (unpack_dst_format & 0x3) == to_underlying(DataFormat::Float32) ? 4 : (unpack_dst_format & 0x3) == to_underlying(DataFormat::Float16) ? 2 : 1;
 }
 
-// Canonical srcA channel-1 Y stride: full-tile sequential row step.
+// Canonical srcA channel-1 Y stride: face row step (one face row = FACE_R_DIM datums).
 //
 // This is the value programmed by configure_unpack_AB and the srca data-format reconfig,
 // so it serves as the documented baseline that operations which mutate Y-stride
-// (e.g. bcastA_B) must restore on uninit.
-inline constexpr std::uint32_t canonical_unpA_y_stride(const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim)
+// (e.g. bcastA_B) must restore on uninit. It does not depend on the operand's face_r_dim;
+// FACE_R_DIM is the constant face row count (matches set_packer_strides and unpack_untilize).
+inline constexpr std::uint32_t canonical_unpA_y_stride(const std::uint32_t unpack_dst_format)
 {
-    return FACE_C_DIM * face_r_dim * canonical_unpA_x_stride(unpack_dst_format);
+    return FACE_R_DIM * canonical_unpA_x_stride(unpack_dst_format);
 }
 
 /*
@@ -813,7 +814,7 @@ inline void configure_unpack_AB(
     // mutate Y-stride (e.g. bcastA_B) can deterministically restore this baseline on uninit
     // rather than snapshotting the previous register value into a GPR.
     cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT, UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(
-        canonical_unpA_y_stride(unpA_dst_format, unpA_face_r_dim));
+        canonical_unpA_y_stride(unpA_dst_format));
 
     // Math ALU_FORMAT_REG
     t6_mutex_acquire(mutex::REG_RMW);
