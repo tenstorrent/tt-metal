@@ -237,13 +237,17 @@ class VocoderWithBWE(Module):
         ), "output_sampling_rate must be an integer multiple of input_sampling_rate"
         self.resampler = UpSample1d(ratio=ratio, window="hann", mesh_device=mesh_device, dtype=dtype)
 
-        # When set, the main vocoder runs via capture-once/replay (forward_traced); ~3x on
-        # its device graph. BWE stays eager (single-axis, known channel-TP divergence).
+        # When set, each generator runs via capture-once/replay (forward_traced), removing
+        # per-op host dispatch (~5x on its device graph). use_trace_bwe is separate so the
+        # BWE generator (historically eager over a suspected channel-TP divergence) can be
+        # gated independently of the main vocoder and validated against eager.
         self.use_trace = False
+        self.use_trace_bwe = False
 
     def release_trace(self) -> None:
-        """Free the main vocoder's captured trace; safe to call when none is active."""
+        """Free both generators' captured traces; safe to call when none is active."""
         self.vocoder.release_trace()
+        self.bwe_generator.release_trace()
 
     @property
     def conv_pre(self):
@@ -313,7 +317,9 @@ class VocoderWithBWE(Module):
 
         # bwe_generator expects (B, C, T_frames, n_mels).
         mel_for_bwe = mel.transpose(2, 3).contiguous()
-        residual = self.bwe_generator(mel_for_bwe)
+        residual = (
+            self.bwe_generator.forward_traced(mel_for_bwe) if self.use_trace_bwe else self.bwe_generator(mel_for_bwe)
+        )
 
         skip = self._resample_device(x)
         assert residual.shape == skip.shape, f"residual {tuple(residual.shape)} != skip {tuple(skip.shape)}"
