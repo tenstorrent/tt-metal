@@ -2,23 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Metal 2.0 port (op-private kernel; used only by the migrated TypecastRowMajorChunkedProgramFactory).
+// Only the binding mechanism changed: the source address comes from the TensorAccessor binding (ta::),
+// the CB id and structural chunk scalars from the DFB/compile-time tokens (dfb:: / args::), and the
+// per-core row range from named runtime args (args::). The chunked read loop is preserved.
+
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_rows = get_arg_val<uint32_t>(1);
-    const uint32_t start_row_id = get_arg_val<uint32_t>(2);
+    const uint32_t num_rows = get_arg(args::num_rows);
+    const uint32_t start_row_id = get_arg(args::start_row_id);
 
-    constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
-    constexpr uint32_t full_chunks_per_row = get_compile_time_arg_val(1);
-    constexpr uint32_t partial_chunks_per_row = get_compile_time_arg_val(2);  // 0 or 1
-    constexpr uint32_t full_chunk_size_bytes = get_compile_time_arg_val(3);
-    constexpr uint32_t partial_chunk_size_bytes = get_compile_time_arg_val(4);
-    constexpr auto src_args = TensorAccessorArgs<5>();
+    constexpr uint32_t cb_id_in = dfb::input_cb;
+    constexpr uint32_t full_chunks_per_row = get_arg(args::full_chunks_per_row);
+    constexpr uint32_t partial_chunks_per_row = get_arg(args::partial_chunks_per_row);  // 0 or 1
+    constexpr uint32_t full_chunk_size_bytes = get_arg(args::full_chunk_size_bytes);
+    constexpr uint32_t partial_chunk_size_bytes = get_arg(args::partial_chunk_size_bytes);
 
     constexpr uint32_t onepage = 1;
 
-    const auto s = TensorAccessor(src_args, src_addr);
+    const auto s = TensorAccessor(ta::src_args);
 
     const uint32_t end_row_id = start_row_id + num_rows;
 
