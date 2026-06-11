@@ -19,7 +19,11 @@
 
 ---
 
-## STATUS & CHECKLIST — updated 2026-06-10
+## STATUS & CHECKLIST — updated 2026-06-11
+
+> **Active branch `gtobarTT/perf_automation_loop`** carries the Agent Loop build below.
+> The loop now runs ROUTE → SELECT → **PLAN** → APPLY → VERIFY → GATE_PCC → REMEASURE → DECIDE
+> end-to-end; suite 170 passed. See "Loop branch build log" for what's real vs injected.
 
 ### ✅ Done (all verified on cust-models-02, real hardware; suite: 99 passed)
 
@@ -49,15 +53,30 @@ default metric = `**device_ms**` (profiled kernel time; wall kept as reference)
 
 ### ⬜ Remaining (build order)
 
-- **M4 engine** — ✅ walking SKELETON built & green (`engine.py`, `states.py`, `loop_context.py`,
-`handlers/` with ROUTE + LOG/CHECK_EXIT real, `loop.py` entry; `test_engine.py` walks to DONE
-with mocks, resume-from-midstate covered). Telemetry already wired in the Before Loop
-(`agent_calls.jsonl` + cumulative `cost_usd`/tokens in state) and carried into the loop via
-`ctx.record_agent_call`. Remaining M4: real ROUTE bucket-select-policy tuning.
-- **M5 agent edge** — SELECT (closed candidate list), edit sub-agent, VERIFY + REPAIR self-heal
-      loop (code ≤5 / pcc ≤2 attempts)
-- **M6 gates** — single-stage e2e PCC (→ verdict), median-of-N remeasure + noise floor, DECIDE
-(keep/discard), COMMIT/REVERT (**path-scoped**, never tree-wide)
+- **M4 engine** — ✅ DONE. `engine.py` (dumb dispatcher, `stop_after`/`--until`, cycle+unknown
+guards), `states.py` (names + `TRANSITIONS` + repair budgets), `loop_context.py` (the `ctx`
+seam: state/manifest/ledger + `record_agent_call` + `current_profile`/`model_root`), `loop.py`
+entry, `looplog.py` (one terse line per stage). Resume-from-midstate covered.
+- **M5 agent edge** — ✅ DONE (real handlers, injectable agent/hardware leaves):
+  - **ROUTE** real — top bucket → `route()` → writes `route_brief_<N>.md` (table + playbook text
+    + **op-class-filtered model map**, the ast skeleton from `model_map.py`). Routes on the
+    **current** profile, not the frozen baseline.
+  - **SELECT** real — lead picks one untried lever from the brief; enum-constrained; fallback to
+    `untried[0]`.
+  - **PLAN** real (NEW stage, §8.4.5) — lead reads brief+map, reads the target file (Read/Grep),
+    emits a localized edit spec `{file, location, change}`; **NOOP** skips already-applied levers.
+  - **APPLY** real — records clean SHA, editor applies the **spec**; git-diff ground truth
+    (scoped to the model dir) so editor mis-reports/errors never crash or misattribute.
+  - **VERIFY** real — **syntax-only** (`ast.parse`); the standalone import check was dropped
+    (false-positive on package imports — GATE_PCC catches runtime errors).
+  - **REPAIR_CODE / REPAIR_PCC** — ⬜ still MOCK (registry uses `mocks.*`); real self-heal
+    (re-edit with the error, ≤5/≤2) is the next build.
+  - editor on a dedicated **`edit` model role** (inherits lead/sonnet, never the cheap sub tier);
+    **prompt logging** persists every agentic call's prompt+response to `runs/<id>/prompts/`.
+- **M6 gates** — partial: **GATE_PCC** real (single-stage e2e verdict ok/pcc_low/crash; `parse_pcc`
+verified live = 0.9999), **REMEASURE** real (median device_ms + run spread + iter profile;
+tracy injectable), **DECIDE** real (keep/discard; noise floor still the deferred placeholder).
+⬜ remaining: COMMIT/REVERT real git (**path-scoped**), and the REPAIR handlers above.
 - **M7 memory** — ledger `hypothesis` rows, dashboard, resume brief, lever-eval over the
 ledger (per-tag win rate: did `lever -> Δdevice_ms` match the hypothesis?)
 - **M8 go-real residue** — fps / tok_s metric sources; multi-chip (`--devices all`) once
@@ -130,7 +149,7 @@ can resume after a break or crash.
                                    │
 ╔══════════════════ STAGE 2 · AGENT LOOP (state machine) ═══════════════╗
                                    ▼
-   ROUTE ─▶ SELECT ─▶ APPLY ─▶ VERIFY ─▶ GATE_PCC ─▶ REMEASURE ─▶ DECIDE ─┐
+   ROUTE ─▶ SELECT ─▶ PLAN ─▶ APPLY ─▶ VERIFY ─▶ GATE_PCC ─▶ REMEASURE ─▶ DECIDE ─┐
    (route   (agent    (one      (e2e PCC     (Tracy       (keep/  │
     code)    picks)    edit)     vs thr)      median-3)    discard/│
      ▲                                                             │
@@ -601,8 +620,9 @@ bucket (🔴 `TBD(bucket-select-policy)` — top-by-ms? agent-assisted?), call `
 untried id; harness validates against the closed list; fallback to `untried[0]` on
 limit/invalid pick.
 - 🔴 `test_select_records_lever_for_resume` (resume skips re-asking).
-- 🟢 `query()` with `read_section` + `commit_choice` tools (enum-constrained to candidate ids),
-`max_turns`, `max_budget_usd`, graceful `except` → fallback. (Port hardened `poc/loop.py`.)
+- 🟢 **BUILT** (`select_agent.py`, `handlers/select.py`): the LEAD model reads ROUTE's brief
+(no tools — the brief already carries the candidate text + model map), commits one id from the
+closed `candidates` list (validated ∉ tried), graceful `except` → `untried[0]`. → PLAN.
 
 ### 8.4 ~~lever-type branch~~ — REMOVED (decision 2026-06-11)
 
@@ -611,19 +631,41 @@ APPLY (§8.5). A multi-step idea (e.g. a fidelity walk HiFi2→3→4) is simply 
 iterations, each picking the next untried step. `lever_type` stays in the route metadata as an
 informational tag only — nothing branches on it; `TBD(sweep-space)` is dropped.
 
+### 8.4.5 `PLAN` (agent — localize the edit)  ✅ BUILT (loop branch)
+
+- **In:** `state.json.selected_lever` + the lever's playbook section + the op-class-filtered
+**model map** (`model_map.py` ast skeleton: classes/fns/`ttnn.*` ops with line+scope+var). **Out:**
+`state.json.edit_spec` = `{file, location, change}`. → APPLY (or → REVERT if NOOP).
+- The LEAD reads the map and the target file (Read/Grep, **no Edit**) and emits a *localized*
+instruction so the editor's job is mechanical (fixes the 24-turn "editor wanders the whole model"
+failure). If the lever is already applied, `change="NOOP: ..."` → discard `already_applied`
+cheaply (no edit/gate/measure) — the redundant-lever guard.
+- 🟢 `plan_agent.py` (`build_plan_prompt`/`_validate_spec`/`make_plan_runner`, lead model),
+`handlers/plan.py`; planner injectable (`ctx.deps["plan_runner"]`); planning failure → APPLY
+(improvise). Rationale + references (aider repo-map, just-in-time retrieval): see §8.12.
+
 ### 8.5 `APPLY` (sub-agent `edit_file`)
 
 - **In:** `state.json.selected_lever` + `manifest.json` (`pathmap.model_files`) + a clean git tree. **Out:** `state.json.git_sha_clean` recorded, then the target file(s) edited in place — exactly one edit per lever.
 - 🔴 `test_apply_records_clean_sha_before_edit`.
 - 🔴 `test_apply_resume_resets_then_reapplies` (idempotent from clean SHA).
-- 🟢 record `git_sha_clean`; `edit_file` sub-agent (narrow tools: read, edit, the target file
-paths from manifest) applies the single lever. No sweep — one edit per iteration (§8.4). → VERIFY.
+- 🟢 **BUILT** (`edit_agent.py`, `handlers/apply.py`): record `git_sha_clean`, then the
+`edit` sub-agent applies the **PLAN spec** (`build_spec_prompt`) — or improvises from the lever
+if no spec. Ground truth = `git diff <clean>` **scoped to the model dir** (the editor's
+self-report is advisory; mis-reports/errors never crash or misattribute). No real edit landed
+→ REPAIR_CODE. → VERIFY.
 
-### 8.5.1 `VERIFY` (deterministic — no device, no agent)
+### 8.5.1 `VERIFY` (deterministic — no device, no agent)  ✅ BUILT (loop branch)
 
-- **In:** the edited files (`manifest.pathmap.model_files`). **Out:** verdict `ok` | `parse_error` | `import_error` + the captured error text (for REPAIR).
-- 🔴 `test_verify_passes_clean_edit`.
-- 🔴 `test_verify_catches_syntax_error` (`ast.parse` on each edited file).
+- **In:** the edited files (resolved from `state.last_edit.files`). **Out:** verdict `ok` |
+`parse_error` (+ error text). **SYNTAX-ONLY** (`ast.parse`): the standalone import check was
+**dropped** — model files use absolute package imports (`from models.common…`), so loading one
+out of its package context gives a FALSE `import_error` on even a perfect edit. Real
+import/runtime errors are caught downstream by GATE_PCC (which runs the test in the correct
+environment → `crash` verdict → REPAIR_CODE).
+- 🟢 BUILT (`handlers/verify.py`): `ast.parse` each edited file → ok / parse_error;
+parse_error → REPAIR_CODE (or REVERT once code-fix budget spent).
+- 🔴 (superseded) `test_verify_catches_syntax_error` (`ast.parse` on each edited file).
 - 🔴 `test_verify_catches_import_error` (import in a subprocess so a crash can't kill the loop).
 - 🟢 `ast.parse` every edited file, then import the module(s) in a child process; capture stderr.
 The cheapest rung of the ladder — most agent typos die here with zero device time.
@@ -820,6 +862,51 @@ no-op → abandon immediately (lazy-fix guard, `test_repair_noop_edit_is_abandon
 
 These fixtures + the pure-function calls let both members reach green tests with **zero hardware
 and zero API spend**; the real wiring is swapped in only at integration.
+
+---
+
+### 8.12 Loop branch build log — decisions, bugs-found-on-hardware, references
+
+**New files (`gtobarTT/perf_automation_loop`):** `engine.py`, `states.py`, `loop_context.py`,
+`loop.py`, `looplog.py`, `gitio.py`, `model_map.py`, `plan_agent.py`, `select_agent.py`,
+`edit_agent.py`, and `handlers/{route,select,plan,apply,verify,gate_pcc,remeasure,decide,log_exit}.py`
+(+ `mocks.py`). Demos: `demo_walk.py`, `demo_route.py`, `demo_model_map.py`,
+`experiments/walk_to_decide.py`. Suite 170 passed.
+
+**Architecture decisions made while building:**
+- **Editor model** = dedicated `edit` role, inherits LEAD (sonnet), never the cheap `sub` tier.
+  Editing a model to apply a lever is design+coding, not transcription — haiku produced edits
+  that didn't import. (`sub`/haiku stays for discovery only.)
+- **PLAN stage** (§8.4.5) + **model map** (§3 of the localization design): the lead emits a
+  localized `{file, location, change}` spec so the editor's job is mechanical. Bounds editor
+  context: the map is a budgeted, op-class-filtered ast skeleton (signatures + op lines, never
+  bodies) + just-in-time `read_region`. Makes a cheaper editor viable later.
+- **NOOP guard:** PLAN returns `NOOP` when a lever is already applied (e.g. BGE-M3 already fuses
+  QKV) → discard `already_applied` with no edit/gate/measure spent.
+- **VERIFY = syntax-only** (§8.5.1). **Prompt logging:** every agentic call's full prompt+response
+  persists to `runs/<id>/prompts/<NNN>_<stage>.txt`; `agent_calls.jsonl` carries `prompt_file` +
+  `prompt_sha`.
+
+**Bugs found by running on real hardware (and fixed):**
+- VERIFY standalone-import check → false `import_error` on package-import files → dropped (syntax-only).
+- APPLY git-diff ground truth was repo-wide → attributed unrelated uncommitted repo edits to the
+  model edit → **scoped to the model dir**.
+- Editor hit the 24-turn cap wandering the whole model with only a lever name → the PLAN spec fixes it.
+- APPLY now never crashes the loop on an editor error (git-diff truth → REPAIR_CODE/REVERT).
+- `GATE_PCC.parse_pcc` verified live on the real e2e test (read 0.9999 correctly).
+
+**Still MOCK (next builds):** `REPAIR_CODE` / `REPAIR_PCC` (real self-heal: re-edit with the
+error, ≤5/≤2) and `COMMIT` / `REVERT` (real path-scoped git). DECIDE noise floor stays the
+deferred placeholder (reads `last_decision.spread` when wired).
+
+**New state.json fields:** `current_profile`, `current_bucket`, `candidates`, `tried`,
+`selected_lever`, `select_reasoning`, `edit_spec`, `last_edit`, `last_verdict`, `last_decision`,
+`code_fix_attempts`, `pcc_fix_attempts`. **New run-dir artifacts:** `route_brief_<N>.md`,
+`profiles/iter_<N>_profile.json`, `prompts/`.
+
+**References (localization design):** aider repo-map (tree-sitter symbol skeleton + PageRank +
+token budget) https://aider.chat/docs/repomap.html ; 2026 just-in-time-retrieval-beats-stuffing +
+graph-nav-beats-retrieval-for-architecture-heavy-code https://sourcegraph.com/blog/agentic-coding .
 
 ---
 
