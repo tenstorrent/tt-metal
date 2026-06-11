@@ -18,17 +18,27 @@ from models.tt_dit.utils import tensor
 class CFGCombiner:
     """Classifier-free guidance combiner.
 
-    Operates either on a single device or on two devices using mesh sockets for communication.
-    Assumes that the unconditional prediction comes first - either in the first half of the batch
-    dimension (single-device case) or on the first device (multi-device case).
+    Operates either on a single device or on two devices. Assumes that the unconditional prediction
+    comes first - either in the first half of the batch dimension (single-device case) or on the
+    first device (multi-device case).
+
     """
 
-    def __init__(self, /, devices: tuple[ttnn.MeshDevice] | tuple[ttnn.MeshDevice, ttnn.MeshDevice]) -> None:
+    def __init__(
+        self,
+        /,
+        devices: tuple[ttnn.MeshDevice] | tuple[ttnn.MeshDevice, ttnn.MeshDevice],
+        *,
+        via_host: bool = True,
+    ) -> None:
         match devices:
             case (_,):
-                self._inner = _CombinerSingle()
+                self._inner = _SingleCombiner()
             case (uncond_device, cond_device):
-                self._inner = _CombinerParallel(uncond_device, cond_device)
+                if via_host:
+                    self._inner = _HostCombiner(uncond_device, cond_device)
+                else:
+                    self._inner = _SocketCombiner(uncond_device, cond_device)
             case _:
                 msg = "devices must be a tuple of one or two MeshDevices"
                 raise ValueError(msg)
@@ -38,7 +48,7 @@ class CFGCombiner:
         return self._inner.combine(predictions, cfg_scale)
 
 
-class _CombinerSingle:
+class _SingleCombiner:
     def combine(self, predictions: Sequence[ttnn.Tensor], cfg_scale: float) -> tuple[ttnn.Tensor]:
         if len(predictions) != 1:
             msg = f"expected 1 prediction tensor for single-device combiner, got {len(predictions)}"
@@ -59,7 +69,33 @@ class _CombinerSingle:
         return (combined,)
 
 
-class _CombinerParallel:
+class _HostCombiner:
+    def __init__(self, uncond_device: ttnn.MeshDevice, cond_device: ttnn.MeshDevice) -> None:
+        self._devices = (uncond_device, cond_device)
+
+    def combine(self, predictions: Sequence[ttnn.Tensor], cfg_scale: float) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        if len(predictions) != 2:
+            msg = f"expected 2 prediction tensors for host-based combiner, got {len(predictions)}"
+            raise ValueError(msg)
+
+        uncond, cond = predictions
+
+        received_uncond = uncond.cpu(blocking=False)
+        received_cond = cond.cpu(blocking=False)
+
+        ttnn.synchronize_device(self._devices[0])
+        ttnn.synchronize_device(self._devices[1])
+
+        received_uncond = received_uncond.to(self._devices[1])
+        received_cond = received_cond.to(self._devices[0])
+
+        combined0 = uncond + cfg_scale * (received_cond - uncond)
+        combined1 = received_uncond + cfg_scale * (cond - received_uncond)
+
+        return combined0, combined1
+
+
+class _SocketCombiner:
     def __init__(self, uncond_device: ttnn.MeshDevice, cond_device: ttnn.MeshDevice) -> None:
         self._devices = (uncond_device, cond_device)
         self._sockets = _create_sockets(uncond_device, cond_device)
