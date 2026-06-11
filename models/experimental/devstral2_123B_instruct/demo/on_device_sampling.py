@@ -251,7 +251,6 @@ def build_sampler(
             args=_SamplingArgs(args, mesh_device),
             mesh_device=mesh_device,
             tt_ccl=tt_ccl,
-            enable_internal_trace=False,  # sampling ops are captured in the demo's decode trace
         )
 
     _wrap_generator_sample(generator)
