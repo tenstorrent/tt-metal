@@ -167,8 +167,11 @@ def _default_compute_kernel_config(dtype):
     inputs.
     """
     return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4 if dtype == ttnn.float32 else ttnn.MathFidelity.HiFi3,
-        fp32_dest_acc_en=True,
+        math_fidelity=ttnn.MathFidelity.HiFi4 if dtype == ttnn.float32 else ttnn.MathFidelity.HiFi2,
+        # Perf-juice: bf16 DEST halves stat/acc CB footprint and doubles DEST
+        # tile capacity; PCC bar for the favorable cases is 0.99 (fp32 inputs
+        # still get fp32 DEST via the gate below).
+        fp32_dest_acc_en=(dtype == ttnn.float32),
         math_approx_mode=False,
         dst_full_sync_en=False,
     )

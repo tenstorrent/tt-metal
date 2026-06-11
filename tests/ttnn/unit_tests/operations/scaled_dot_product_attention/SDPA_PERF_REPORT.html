@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SDPA Perf-Juicing Report — generic scaled_dot_product_attention</title>
+<style>
+  :root {
+    --bg: #11141a; --panel: #1a1f29; --panel2: #20283a; --text: #d7dde8;
+    --dim: #8b96a8; --acc: #5ec8f0; --green: #6fdc8c; --red: #ff7b72;
+    --gold: #e3b341; --line: #2c3650;
+  }
+  body { background: var(--bg); color: var(--text); font: 15px/1.55 -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 36px 24px 80px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 44px 0 12px; color: var(--acc); border-bottom: 1px solid var(--line); padding-bottom: 6px;}
+  h3 { font-size: 16px; margin: 26px 0 8px; color: var(--gold); }
+  .sub { color: var(--dim); margin-bottom: 28px; }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 13.5px; }
+  th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; }
+  th { background: var(--panel2); color: var(--acc); font-weight: 600; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .keep { color: var(--green); font-weight: 600; }
+  .revert { color: var(--red); font-weight: 600; }
+  .pill { display: inline-block; background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 1px 10px; font-size: 12px; color: var(--dim); margin-right: 6px;}
+  .big { font-size: 30px; font-weight: 700; color: var(--green); }
+  .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 18px 0; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .card .name { color: var(--dim); font-size: 12.5px; }
+  .card .delta { color: var(--dim); font-size: 12.5px; margin-top: 2px;}
+  code, pre { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 13px; }
+  pre { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; overflow-x: auto; }
+  .flow { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 4px; }
+  .stage { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; font-size: 13px; }
+  .stage b { color: var(--acc); }
+  .note { color: var(--dim); font-size: 13px; }
+  .bar { height: 18px; border-radius: 4px; background: linear-gradient(90deg, var(--acc), var(--green)); }
+  .barrow { display: grid; grid-template-columns: 230px 1fr 90px; align-items: center; gap: 10px; margin: 5px 0; font-size: 13px;}
+  svg text { fill: var(--dim); font-size: 11px; }
+</style>
+</head>
+<body><div class="wrap">
+
+<h1>SDPA perf-juicing — final report</h1>
+<div class="sub">Generic <code>scaled_dot_product_attention</code> · Wormhole 8×8 grid · bf16 · mask=none · utilization vs <b>HiFi2 peak ≈ 129&nbsp;TFLOPs</b> · correctness bar PCC ≥ 0.99 · 24 journaled attempts</div>
+
+<div class="cards">
+  <div class="card"><div class="name">h8 · S4096 · d64</div><div class="big">30.1%</div><div class="delta">12.2 ms → 885 µs (13.8×) · pcc 0.99972</div></div>
+  <div class="card"><div class="name">h8 · S8192 · d128</div><div class="big">44.1%</div><div class="delta">54.6 ms → 4.83 ms (11.3×) · pcc 0.99969</div></div>
+  <div class="card"><div class="name">h16 · S8192 · d128</div><div class="big">44.7%</div><div class="delta">109 ms → 9.53 ms (11.4×) · pcc 0.99969</div></div>
+  <div class="card"><div class="name">h8 · S16384 · d512</div><div class="big">60.0%</div><div class="delta">1.02 s → 56.8 ms (17.9×) · pcc 0.99946</div></div>
+</div>
+
+<h2>Utilization journey (case 4, % of HiFi2 peak)</h2>
+<svg viewBox="0 0 1000 230" width="100%" height="230">
+  <line x1="60" y1="200" x2="980" y2="200" stroke="#2c3650"/>
+  <line x1="60" y1="10"  x2="60"  y2="200" stroke="#2c3650"/>
+  <text x="20" y="205">0%</text><text x="20" y="115">30%</text><text x="20" y="25">60%</text>
+  <polyline fill="none" stroke="#5ec8f0" stroke-width="2.5"
+    points="60,190 140,190 220,189 300,188 380,116 460,108 540,107 620,30 700,29 780,26 860,22 940,18"/>
+  <g fill="#6fdc8c">
+    <circle cx="380" cy="116" r="4"/><circle cx="620" cy="30" r="4"/><circle cx="940" cy="18" r="4"/>
+  </g>
+  <text x="330" y="100">c_q 1→4 (12.3%)</text>
+  <text x="560" y="55">dual-NoC mcast (52%)</text>
+  <text x="850" y="40">2×4 pinned PV (60%)</text>
+  <text x="70" y="180">baseline 3.4%</text>
+</svg>
+
+<h2>What changed (kept) — chronological</h2>
+<table>
+<tr><th>#</th><th>Change</th><th>Mechanism</th><th>Biggest mover</th></tr>
+<tr><td>1</td><td>HiFi3 → HiFi2 fidelity</td><td>1.5× faster matmuls — device time flat, proving FPU wasn't binding</td><td class="num">(diagnostic)</td></tr>
+<tr><td>2</td><td><code>fp32_dest_acc_en=False</code> (bf16 DEST)</td><td>Halved stat-CB footprint + DEST capacity 4→8 tiles</td><td class="num">cases 1–3 ≈2×</td></tr>
+<tr><td>3</td><td>c_q floor → 4 (KV traffic ∝ 1/c_q)</td><td>4× less KV DRAM reload for d=512</td><td class="num">case4 1.02 s→277 ms</td></tr>
+<tr><td>4</td><td><b>No-max softmax fast path</b></td><td>P=exp(scale·S), l+=rowsum, O+=P·V — rowmax/α/O-rescale deleted (PCC budget)</td><td class="num">all ≈2×</td></tr>
+<tr><td>5</td><td>c_q=8 / per-Dt c_kv tuning</td><td>DRAM reload halved again at d≤128</td><td class="num">cases 2/3 → ~20%</td></tr>
+<tr><td>6</td><td><b>KV row-mcast</b> (head group of g=64/H cores)</td><td>Leader reads KV once per block, mcasts to group → DRAM ÷g</td><td class="num">case4 292→115 ms</td></tr>
+<tr><td>7</td><td>P·V = one K-blocked matmul, <b>packer-L1-acc</b> into 1-block interm</td><td>O accumulation by packer, SFPU pass deleted</td><td class="num">all +2–8 pt</td></tr>
+<tr><td>8</td><td>Q pre-scaled once per unit</td><td>MulUnary out of the per-block exp pass</td><td class="num">cases 2/3 +8 pt</td></tr>
+<tr><td>9</td><td><b>V mcast moved to writer (NoC1)</b></td><td>K on NoC0 + V on NoC1 — halves reader bytes/block</td><td class="num">case4 119→65 ms</td></tr>
+<tr><td>10</td><td>Rowsum via packer-L1-acc into 1-block CB</td><td>SFPU l-update chain deleted</td><td class="num">all +2 pt</td></tr>
+<tr><td>11</td><td><b>exp fused into QKᵀ PostCompute</b></td><td>exp on DEST tiles before pack — scores CB round-trip deleted</td><td class="num">all +1.5–2 pt</td></tr>
+<tr><td>12</td><td>Ones-column V (Dt 3–4): l from P·V column 0</td><td>Rowsum reduce deleted where +1 col is cheap</td><td class="num">cases 2/3 +1.7 pt</td></tr>
+<tr><td>13</td><td><code>pin_interm_to_captured_base</code> + SubblockMajor</td><td>One-shot interm reserve — per-K FIFO churn deleted</td><td class="num">all +1–2 pt</td></tr>
+<tr><td>14</td><td>DEST-filling subblocks (4×2 d64, 2×4 d512, 2×c_kv QKᵀ d≤128)</td><td>8 DEST tiles per acquire — pack rounds ÷2–4</td><td class="num">case4 +2.3 pt, case1 +1.6</td></tr>
+<tr><td>15</td><td><b>Leaders on diagonal</b> (x = row mod g)</td><td>DRAM/NoC load not piled on one column</td><td class="num">case4 +0.75, case1 → 30%</td></tr>
+</table>
+
+<h3>Reverted (journaled dead ends)</h3>
+<table>
+<tr><th>Tried</th><th>Why it failed</th></tr>
+<tr><td>LoFi matmuls</td><td class="revert">flat — FPU not the bind</td></tr>
+<tr><td>FPU O+=PV (<code>ckl::add</code>, same-CB bulk)</td><td class="revert">deadlock</td></tr>
+<tr><td><code>InputClamping::None</code> exp</td><td class="revert">hangs — replay buffer conflict with matmul</td></tr>
+<tr><td>Rowsum as P @ ones matmul</td><td class="revert">helper-call overhead beats reduce</td></tr>
+<tr><td>Full-sync DEST (16 tiles)</td><td class="revert">slower everywhere, PCC broke</td></tr>
+<tr><td>c_kv=2 / c_kv=32 / c_q=16</td><td class="revert">bf16 error compounding / L1 overflow</td></tr>
+<tr><td>3-deep KV buffers</td><td class="revert">flat — handshake already hidden</td></tr>
+<tr><td><b>V mcast on reader</b> (single NoC0)</td><td class="revert">case4 60→46%: 1.06 MB/block saturates NoC0 — dual-NoC split is load-bearing</td></tr>
+</table>
+
+<h2>Final case-4 setup (h8 · S16384 · d512 · 60% HiFi2)</h2>
+<p class="note">Work unit = (head, 4-tile-row Q-chunk); 1024 units, 16/core, all 64 cores. Per head, g=8 cores share the KV stream. c_q=4, c_kv=4, Dt=16, Nkv=128 blocks/unit. Compute config: HiFi2, bf16 DEST, half-sync.</p>
+
+<div class="flow">
+  <div class="stage"><b>Reader (NoC0)</b><br>Q chunk ⇒ pre-scaled by compute · Kᵀ: <b>diagonal leader</b> reads 266 KB, row-mcasts; sems 0/1</div>
+  <div class="stage"><b>Writer (NoC1)</b><br>V: leader reads 266 KB, mcasts; sems 2/3 · drains output chunk</div>
+  <div class="stage"><b>Compute</b> per KV block<br>QKᵀ (1×4 sub) + <b>exp on DEST</b> → probs · rowsum L1-acc · P·V <b>2×4 pinned L1-acc</b></div>
+  <div class="stage"><b>Unit end</b><br>recip(l)+Newton · O′·inv (subblock-major offset chains) → out</div>
+</div>
+
+<h3>Per-block cycle budget (~28k cycles)</h3>
+<div class="barrow"><span>QKᵀ + P·V matmul (ideal, HiFi2)</span><div class="bar" style="width:59%"></div><span class="num">16.4k · 59%</span></div>
+<div class="barrow"><span>exp (16 DEST tiles, fast approx)</span><div class="bar" style="width:9%; opacity:.7"></div><span class="num">~2.6k</span></div>
+<div class="barrow"><span>rowsum L1-acc reduce</span><div class="bar" style="width:5%; opacity:.6"></div><span class="num">~1.4k</span></div>
+<div class="barrow"><span>restore / handshake / drains</span><div class="bar" style="width:27%; opacity:.45"></div><span class="num">~7.6k</span></div>
+<p class="note">NoC0 ≈ NoC1 ≈ 16 µs of a 28 µs block (~55% loaded) — compute-bound; both NoCs would saturate combined (proved by attempt #24).</p>
+
+<pre>// P = exp(scale·Q·Kᵀ): exp fused into matmul PostCompute (no scores CB)
+matmul_block&lt;transpose=true, …, WaitAndRetainOnLastBlock, WaitAndPopPerKBlock, ExpPost&gt;(
+    qs_buf, kt_buf, probs_buf, …, of(c_q, 1, 1, c_kv, Dt, 1));
+
+// rowsum L1-acc: cb_cur_sum = 1 block ⇒ blocks accumulate at same offsets
+PACK(llk_pack_reconfig_l1_acc(kb ? 1 : 0));
+reduce&lt;SUM, REDUCE_ROW, WaitUpfrontNoPop, ReconfigMode::NONE&gt;(probs, scaler, cur_sum, of(c_q, c_kv));
+
+// O = Σ P·V — one 128-K-block matmul; pinned interm (no per-K FIFO churn)
+matmul_block&lt;…, packer_l1_acc=true, LastBlockTarget::Interm, SubblockMajor,
+             ShortAfterPreKBlock, …, decltype(probs_pre_k), pin_interm=true&gt;(
+    probs_buf, v_buf, pv_buf /*placeholder*/, o_acc_buf,
+    of(c_q/2, n_sub_w, /*h=*/2, /*w=*/4, c_kv, Nkv), …, probs_pre_k);</pre>
+
+<h2>Reproduce</h2>
+<pre>scripts/run_safe_pytest.sh --run-all -s \
+  tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_sdpa_perf_juice.py</pre>
+<p class="note">Per-attempt evidence: <code>agent_logs/perf_journal.jsonl</code> (24 entries, keep/revert + numbers). Profiling: Tracy + <code>DeviceZoneScopedN</code> zones in the compute kernel (SDPA-QKT / SDPA-ROWSUM).</p>
+
+</div></body>
+</html>
