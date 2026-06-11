@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from .. import router, states
+from .. import model_map, router, states
 
 
 def _select_bucket(buckets: list[dict[str, Any]], exhausted: set[str]) -> dict[str, Any]:
@@ -27,7 +27,9 @@ def _bucket_query(tags: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in tags.items() if k in router.DIMENSIONS}
 
 
-def build_route_brief(bucket: dict[str, Any], hits: list[dict[str, Any]], read_section: Callable[[str], str]) -> str:
+def build_route_brief(
+    bucket: dict[str, Any], hits: list[dict[str, Any]], read_section: Callable[[str], str], skeleton: str = ""
+) -> str:
     """Assemble the human/agent-readable decision brief: bottleneck + table + section texts."""
     t = bucket.get("tags", {})
     out: list[str] = [
@@ -43,6 +45,8 @@ def build_route_brief(bucket: dict[str, Any], hits: list[dict[str, Any]], read_s
     ]
     for h in hits:
         out.append(f"| {h['id']} | {h.get('lever_type', '')} | {h['file']} | {h['title']} |")
+    if skeleton:
+        out += ["", "## Model map — where the bottleneck's ops live (file:line:scope)", "", "```", skeleton, "```"]
     out += ["", "## Playbook sections — the full text to decide from", ""]
     for h in hits:
         out += [f"### {h['id']}  ({h['file']})", ""]
@@ -63,9 +67,18 @@ def route(ctx) -> str:
     ctx.state["current_bucket"] = bucket["id"]
     ctx.state["candidates"] = [h["id"] for h in hits]
 
+    # deterministic model map, filtered to this bucket's op_class — where its ops live
+    op_class = bucket.get("tags", {}).get("op_class")
+    subs = model_map.OP_CLASS_SUBSTRINGS.get(op_class)
+    try:
+        mm = model_map.build_model_map(ctx.model_files(), root=ctx.model_root())
+        skeleton = model_map.render_skeleton(mm, op_substrings=subs)
+    except Exception:
+        skeleton = ""
+
     # persist the decision material for SELECT (and for a human to inspect)
     rel = f"route_brief_{ctx.state.get('iteration', 0):02d}.md"
-    (ctx.run.dir / rel).write_text(build_route_brief(bucket, hits, router.read_section))
+    (ctx.run.dir / rel).write_text(build_route_brief(bucket, hits, router.read_section, skeleton))
     ctx.state["route_brief"] = rel
 
     ctx.log_event(states.ROUTE, "info", f"bucket={bucket['id']} candidates={len(hits)} brief={rel}")

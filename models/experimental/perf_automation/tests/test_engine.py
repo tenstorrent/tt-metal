@@ -182,6 +182,7 @@ def test_route_writes_decision_brief(tmp_path):
     assert "candidate levers" in brief
     assert "| id | lever_type | file | title |" in brief  # the table header
     assert "mlp-fidelity-walk" in brief  # a candidate id in the table
+    assert "Model map" in brief  # the filtered ast skeleton is included
 
 
 def test_engine_stop_after_route_parks_before_select(tmp_path):
