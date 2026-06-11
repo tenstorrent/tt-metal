@@ -590,6 +590,15 @@ public:
         return ncrisc_noc_read_with_transaction_id_flushed(noc_id_, trid);
     }
 
+    /**
+     * @brief Sets the sticky NOC_PACKET_TAG register so subsequent reads on this Noc inherit `trid`.
+     *
+     * Pair with async_read_barrier<NocOptions::TXN_ID> to wait on just this batch.
+     *
+     * @param trid Transaction ID to set; 0 clears the tag.
+     */
+    void set_read_trid(uint32_t trid) const { noc_async_read_set_trid(trid, noc_id_); }
+
     /** @brief Waits for all outstanding read transactions to complete.
      *
      * This blocking call waits for all the outstanding enqueued read transactions

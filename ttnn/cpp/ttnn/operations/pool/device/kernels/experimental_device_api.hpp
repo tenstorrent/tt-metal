@@ -78,7 +78,7 @@ FORCE_INLINE void read_with_state(Noc noc, const Dst& dst, uint32_t src_addr) {
 // Noc's read cmd_buf.  Trid persists across set_read_state / read_with_state (those write
 // different cmd_buf registers).  Pair with async_read_barrier_with_trid to wait on just
 // this batch of reads.  Pass trid=0 to clear (untagged reads = no per-trid accounting).
-FORCE_INLINE void set_read_trid(Noc noc, uint32_t trid) { noc_async_read_set_trid(trid, noc.get_noc_id()); }
+FORCE_INLINE void set_read_trid(Noc noc, uint32_t trid) { noc.set_read_trid(trid); }
 
 // Block until reads tagged `trid` on this noc are flushed.  Other in-flight reads with
 // different trids continue independently.

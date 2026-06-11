@@ -9,11 +9,9 @@
 //
 // NOTE: This kernel intentionally stays on the legacy NOC free functions
 // because the new Noc/UnicastEndpoint API does not yet expose a combined
-// "with_state + with_trid" form. The new API provides:
-//   - stateful only:        set_async_write_state + async_write_with_state
-//   - transaction-id only:  async_write<TxnIdMode::ENABLED>
-// but not the union of the two that this test exercises. Once the new API
-// surface adds a stateful+trid combined call, migrate this kernel to it.
+// "with_state + with_trid" form on the write side: async_write_with_state
+// static_asserts against NocOptions::TXN_ID. Once the new API surface adds
+// a stateful+trid write, migrate this kernel to it.
 void kernel_main() {
     constexpr uint32_t l1_local_addr = get_arg(args::l1_addr);
     constexpr uint32_t test_id = get_arg(args::test_id);
