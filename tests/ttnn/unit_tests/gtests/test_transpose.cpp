@@ -39,7 +39,7 @@ TEST_F(TestTranspose, PreservesColMajorShardOrientationOnFallbackGeneratedSpec) 
     ASSERT_TRUE(output_memory_config.shard_spec().has_value());
     EXPECT_EQ(output_memory_config.memory_layout(), input_memory_config.memory_layout());
     EXPECT_EQ(output_memory_config.buffer_type(), input_memory_config.buffer_type());
-    EXPECT_EQ(output_memory_config.shard_spec()->orientation, ShardOrientation::COL_MAJOR);
+    EXPECT_EQ(output_memory_config.shard_spec()->orientation, input_memory_config.shard_spec()->orientation);
 }
 
 }  // namespace
