@@ -16,6 +16,7 @@
 
 #include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/per_token_cast_to_fp8.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include "per_token_cast_back_common.hpp"
 
 // Masked per_token_cast_back: decompress only this device's valid expert-region rows of a dispatch
 // buffer, using scale row = metadata[row][1] (token_idx). Built as a per-mesh-coordinate
@@ -32,14 +33,6 @@ namespace {
 
 using namespace tt;
 using namespace tt::tt_metal;
-
-std::pair<uint32_t, uint32_t> fold_M_H(const ttnn::Shape& shape) {
-    uint64_t M = 1;
-    for (size_t i = 0; i + 1 < shape.size(); ++i) {
-        M *= static_cast<uint64_t>(shape[i]);
-    }
-    return {static_cast<uint32_t>(M), static_cast<uint32_t>(shape[shape.size() - 1])};
-}
 
 uint32_t aligned_page_bytes(const Tensor& t) { return static_cast<uint32_t>(t.buffer()->aligned_page_size()); }
 uint32_t num_pages(const Tensor& t) { return static_cast<uint32_t>(t.buffer()->num_pages()); }
@@ -230,10 +223,21 @@ ProgramDescriptor build_program_for_coord(
     desc.kernels.push_back(std::move(reader_kd));
 
     // ---- Compute ----
+    // Shared compute kernel with the plain path; DYNAMIC_NUM_BLOCKS=1 makes it read the per-core
+    // block count from cb_nblocks (published by the masked reader) instead of a runtime arg.
     std::vector<uint32_t> compute_ct = {
-        cb_input_e4m3, cb_in_rm, cb_in_tile, cb_scale_bcast, cb_out_tile, cb_out, cb_nblocks, tile_h, tile_w};
+        cb_input_e4m3,
+        cb_in_rm,
+        cb_in_tile,
+        cb_scale_bcast,
+        cb_out_tile,
+        cb_out,
+        tile_h,
+        tile_w,
+        /*DYNAMIC_NUM_BLOCKS=*/1,
+        cb_nblocks};
     KernelDescriptor compute_kd;
-    compute_kd.kernel_source = kdir + "compute/compute_per_token_cast_back_masked.cpp";
+    compute_kd.kernel_source = kdir + "compute/compute_per_token_cast_back.cpp";
     compute_kd.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kd.core_ranges = all_cores;
     compute_kd.compile_time_args = std::move(compute_ct);
