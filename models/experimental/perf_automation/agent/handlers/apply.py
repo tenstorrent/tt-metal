@@ -37,8 +37,13 @@ def apply(ctx) -> str:
         err = str(exc)[-500:]
     ctx.record_agent_call(states.APPLY, "edit", model, usage)
 
-    # ground truth: what actually changed on disk since the clean checkpoint
-    changed = reported or gitio.changed_files(repo, clean)
+    # ground truth: what actually changed on disk since the clean checkpoint,
+    # SCOPED to the model dir so unrelated repo edits aren't mistaken for the edit
+    try:
+        pathspec = ctx.model_root().relative_to(repo)
+    except ValueError:
+        pathspec = None
+    changed = reported or gitio.changed_files(repo, clean, pathspec)
     if not changed:
         ctx.state["last_verdict"] = {"status": "edit_failed", "error": err or "edit produced no file changes"}
         ctx.log_event(states.APPLY, "warn", f"no edit landed: {err or 'empty report'}")

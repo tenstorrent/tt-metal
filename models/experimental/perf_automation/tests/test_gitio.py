@@ -57,3 +57,17 @@ def test_changed_files_lists_worktree_edits(tmp_path):
     assert gitio.changed_files(repo, sha) == []
     (repo / "model.py").write_text("x = 2\n")
     assert gitio.changed_files(repo, sha) == ["model.py"]
+
+
+def test_changed_files_pathspec_scopes_the_diff(tmp_path):
+    repo = _init_repo(tmp_path)
+    sub = repo / "models"
+    sub.mkdir()
+    (sub / "m.py").write_text("a = 1\n")
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "add sub"], check=True)
+    sha = gitio.head_sha(repo)
+    (repo / "model.py").write_text("x = 2\n")  # unrelated change at root
+    (sub / "m.py").write_text("a = 2\n")  # change in the scoped dir
+    assert gitio.changed_files(repo, sha) == sorted(["model.py", "models/m.py"])
+    assert gitio.changed_files(repo, sha, pathspec="models") == ["models/m.py"]  # scoped

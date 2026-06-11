@@ -47,10 +47,13 @@ def reset_hard(repo, sha: str) -> None:
         raise GitError(f"git reset --hard {sha} failed: {r.stderr.strip()}")
 
 
-def changed_files(repo, sha: str) -> list[str]:
+def changed_files(repo, sha: str, pathspec=None) -> list[str]:
     """Repo-relative paths changed in the working tree since `sha` (ground truth
-    for what an edit actually touched, independent of the agent's self-report)."""
-    r = _git(["diff", "--name-only", sha], repo)
+    for what an edit actually touched, independent of the agent's self-report).
+    `pathspec` scopes the diff (e.g. the model dir) so UNRELATED repo changes are
+    never attributed to the edit."""
+    args = ["diff", "--name-only", sha] + (["--", str(pathspec)] if pathspec else [])
+    r = _git(args, repo)
     if r.returncode != 0:
         raise GitError(f"git diff failed at {repo}: {r.stderr.strip()}")
     return [ln for ln in r.stdout.splitlines() if ln.strip()]
