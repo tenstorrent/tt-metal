@@ -5,13 +5,17 @@
 """
 Regression test for NOC VC state leak in reader_bmm_tile_layout_in1_sender_dram_sharded.cpp.
 
-The DRAM-sharded matmul kernel calls noc.set_async_read_state<VcSelection::CUSTOM> to write
+The DRAM-sharded matmul kernel calls set_async_read_state<NocOptions::CUSTOM_VC, ...> to write
 a per-bank virtual channel into NCRISC_RD_CMD_BUF NOC_CTRL without restoring it at kernel end.
 Subsequent kernels that rely on NOC_CTRL being at the firmware default (VC=1, set in noc_init)
 -- such as reader_bmm_tile_layout_in1_sender_writer_padding.cpp in DM_DEDICATED_NOC mode --
 inherit the stale VC and achieve ~20% lower DRAM read bandwidth.
 
 Fix: reset NOC_CTRL to VC=1 at the end of reader_bmm_tile_layout_in1_sender_dram_sharded.cpp.
+
+This test intentionally does not use OpTestBase: the assertion requires comparing execution
+time of lm_head across two separate phases (solo vs. after DS), which cannot be expressed
+within OpTestBase's single-operation-per-iteration loop model.
 
 This test measures lm_head execution time solo vs immediately after a DRAM-sharded matmul
 and asserts the ratio does not exceed DEGRADATION_THRESHOLD.
@@ -27,6 +31,7 @@ already be corrupted when we measure solo, masking the degradation.
 import math
 import time
 
+import pytest
 import torch
 from loguru import logger
 
@@ -117,11 +122,18 @@ def _make_ds_tensors(device):
     in0  (1,1,32,4096)   BF16  L1 width-sharded on 32 compute cores (4x8)
     in1  (1,1,4096,4096) BFP8  DRAM width-sharded across DRAM banks
     """
-    dram_num_banks = device.dram_grid_size().x
-    assert device.dram_grid_size().y == 1
+    dram_grid_size = device.dram_grid_size()
+    dram_num_banks = dram_grid_size.x * dram_grid_size.y
 
     n_padded = math.ceil(DS_N / (32 * dram_num_banks)) * (32 * dram_num_banks)
-    dram_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_num_banks - 1, 0))})
+    dram_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1),
+            )
+        }
+    )
     in1_mem = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.DRAM,
@@ -156,6 +168,8 @@ def _make_lm_head_tensors(device):
     """
     in0  (1,1,32,4096)     BF16  L1 interleaved
     in1  (1,1,4096,131072) BFP8  DRAM interleaved  (~537 MB)
+
+    torch_ref covers only the first _PCC_COLS columns to avoid a 4096x131072 CPU matmul.
     """
     torch_in0 = torch.randn(1, 1, SEQ, DIM, dtype=torch.bfloat16)
     torch_in1 = torch.randn(1, 1, DIM, LM_HEAD_N, dtype=torch.bfloat16)
@@ -174,8 +188,10 @@ def _make_lm_head_tensors(device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     out_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
-    torch_ref = (torch_in0.float() @ torch_in1.float()).to(torch.bfloat16)
-    return in0, in1, out_mem, torch_ref
+    # Reference only over a small slice — the full 4096x131072 matmul is too expensive on CPU.
+    _PCC_COLS = 1024
+    torch_ref = (torch_in0.float() @ torch_in1[..., :_PCC_COLS].float()).to(torch.bfloat16)
+    return in0, in1, out_mem, torch_ref, _PCC_COLS
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +203,7 @@ def test_noc_vc_state_not_leaked_after_dram_sharded_matmul(device):
     """Assert lm_head is not slowed down by residual NOC VC state from a DRAM-sharded matmul.
 
     reader_bmm_tile_layout_in1_sender_dram_sharded.cpp calls
-    noc.set_async_read_state<VcSelection::CUSTOM> and must reset NOC_CTRL to the firmware
+    set_async_read_state<NocOptions::CUSTOM_VC, ...> and must reset NOC_CTRL to the firmware
     default (VC=1) before returning.  Without the reset, the subsequent lm_head reader
     (reader_bmm_tile_layout_in1_sender_writer_padding.cpp) inherits a stale custom VC and
     reads the ~537 MB weight at ~149 GB/s instead of ~178 GB/s -- a persistent 20% slowdown.
@@ -202,12 +218,16 @@ def test_noc_vc_state_not_leaked_after_dram_sharded_matmul(device):
     Fails if:  median(phase2_lm_times) / median(phase1_lm_times) >= DEGRADATION_THRESHOLD
     Passes if: the ratio is below the threshold (NOC_CTRL correctly reset by the fix).
     """
+    grid = device.compute_with_storage_grid_size()
+    if grid.x < _LM_GRID_X or grid.y < _LM_GRID_Y:
+        pytest.skip(f"Device compute grid {grid.x}x{grid.y} smaller than required {_LM_GRID_X}x{_LM_GRID_Y}")
+
     ds_cfg = _ds_program_config()
     lm_cfg = _lm_head_program_config()
     compute_cfg = _compute_config()
 
     ds_in0, ds_in1, ds_out_mem = _make_ds_tensors(device)
-    lm_in0, lm_in1, lm_out_mem, lm_ref = _make_lm_head_tensors(device)
+    lm_in0, lm_in1, lm_out_mem, lm_ref, pcc_cols = _make_lm_head_tensors(device)
 
     def run_ds():
         out = ttnn.matmul(
@@ -230,9 +250,9 @@ def test_noc_vc_state_not_leaked_after_dram_sharded_matmul(device):
             compute_kernel_config=compute_cfg,
         )
 
-    # PCC check
+    # PCC check against the first pcc_cols columns only (full-width reference is too expensive)
     out_tt = run_lm_head()
-    out_torch = ttnn.to_torch(out_tt)
+    out_torch = ttnn.to_torch(out_tt)[..., :pcc_cols]
     out_tt.deallocate(True)
     pcc = torch.corrcoef(torch.stack([lm_ref.flatten().float(), out_torch.flatten().float()]))[0, 1].item()
     logger.info(f"lm_head PCC: {pcc:.6f}")

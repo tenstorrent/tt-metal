@@ -212,7 +212,7 @@ void kernel_main() {
 #endif
 
     // Restore NCRISC_RD_CMD_BUF NOC_CTRL to the firmware default (VC=1, set in
-    // noc_init). set_async_read_state<CUSTOM> writes a per-bank VC into NOC_CTRL
+    // noc_init). set_async_read_state<NocOptions::CUSTOM_VC> writes a per-bank VC into NOC_CTRL
     // and this hardware register persists across kernel launches. Kernels that
     // follow (e.g. 1d-multicast matmul readers running in DM_DEDICATED_NOC mode)
     // rely on NOC_CTRL being at its initialized value and do not re-set it, so
