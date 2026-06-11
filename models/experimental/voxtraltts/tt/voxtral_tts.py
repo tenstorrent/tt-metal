@@ -627,7 +627,6 @@ class VoxtralTTSPipeline:
                     acoustic_tt = _ac_trace.out_dev
                 else:
                     acoustic_tt = _ac_trace.execute(blocking=False)
-                ttnn.synchronize_device(self.mesh_device)
                 # Copy the FM trace output out of the (persistent, trace-region) buffer BEFORE the
                 # finalize runs — codes_from_fm's semantic matmul allocates, and with an active trace
                 # that would clobber the trace output (TT_THROW "Tensor is not allocated" at concat).
@@ -698,9 +697,10 @@ class VoxtralTTSPipeline:
                     next_hidden_tt = _trace.hidden_dev
                 else:
                     next_hidden_tt = _trace.execute(blocking=False)
-                # Per-step sync: without it the non-blocking execute_trace + CQ1 staging events
-                # queue unbounded and stall ~1s/step under 2CQ.
-                ttnn.synchronize_device(self.mesh_device)
+                # 2CQ needs a per-step sync/event handoff so CQ1 cannot overwrite trace inputs early.
+                # In 1CQ, command ordering plus the next code readback/final sync is sufficient.
+                if _dec2cq is not None:
+                    ttnn.synchronize_device(self.mesh_device)
                 signal_decode_step_done(_dec2cq)
                 # Free the previous hidden only if it is NOT the persistent trace output (the prefill
                 # hidden on the first traced step is a one-off and must be freed; hidden_dev is reused).
