@@ -671,23 +671,21 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
     // Set packer strides
     set_packer_strides(pack_src_format);
 
-    // Program the packer X (datum) counter for the standard tiled (PackMode::Default) layout.
-    // This is one of the two packer states (along with set_packer_l1_offset above) that used to be
-    // owned by _llk_pack_init_; ownership now lives solely in configure_pack and this reconfig path.
-    const std::uint32_t face_dim = face_r_dim * FACE_C_DIM;
-    TT_SETADCXX(p_setadc::PAC, face_dim - 1, 0x0);
+    // NOTE: the packer X (datum) counter (SETADCXX PAC) is intentionally NOT programmed here. Its value
+    // is pack_mode-dependent (Untilize vs Default) and is owned by _llk_pack_init_, which runs after this
+    // reconfig for the specific op/mode.
 }
 
 template <bool is_fp32_dest_acc_en, PackMode pack_mode>
 inline void configure_pack(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
-    const std::uint32_t tile_size   = 0,
-    const std::uint32_t face_r_dim  = FACE_R_DIM,
-    const std::uint32_t num_faces   = 4,
-    const bool partial_face         = false,
-    const bool narrow_tile          = false,
-    const std::uint32_t relu_config = 0)
+    const std::uint32_t tile_size           = 0,
+    const std::uint32_t face_r_dim          = FACE_R_DIM,
+    const std::uint32_t num_faces           = 4,
+    const bool partial_face                 = false,
+    [[maybe_unused]] const bool narrow_tile = false,
+    const std::uint32_t relu_config         = 0)
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize,
@@ -727,12 +725,10 @@ inline void configure_pack(
 
     set_packer_l1_offset(pack_dst_format, face_r_dim);
 
-    // Program the packer X (datum) counter. Along with set_packer_l1_offset / set_packer_strides above,
-    // this is packer state owned exclusively by configure_pack and reconfig_packer_data_format;
-    // _llk_pack_init_ no longer touches it, so the hw-configure path must establish it here.
-    const std::uint32_t face_dim   = face_r_dim * FACE_C_DIM;
-    const std::uint32_t pack_x_dim = (narrow_tile || pack_mode != PackMode::Untilize) ? face_dim : FACE_R_DIM;
-    TT_SETADCXX(p_setadc::PAC, pack_x_dim - 1, 0x0);
+    // NOTE: the packer X (datum) counter (SETADCXX PAC) is intentionally NOT programmed here. Its value
+    // is pack_mode-dependent (Untilize packs a single face row, Default a full face) and hw-configure
+    // always runs in PackMode::Default, so it cannot establish the Untilize value. _llk_pack_init_ owns
+    // this counter and runs after hw-configure for the specific op/mode.
 
     // PACK_COUNTERS_SEC0_pack_per_xy_plane = cfg_reg_array[3][0 +: 8];
     // PACK_COUNTERS_SEC0_pack_reads_per_xy_plane = cfg_reg_array[3][8 +: 8];
