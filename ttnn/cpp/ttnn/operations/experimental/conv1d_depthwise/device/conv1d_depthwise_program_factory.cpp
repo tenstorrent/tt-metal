@@ -58,10 +58,10 @@ ProgramDescriptor Conv1dDepthwiseOperation::create_descriptor(
     constexpr uint32_t out_cb = tt::CBIndex::c_16;
     constexpr uint32_t out_rm_cb = tt::CBIndex::c_17;
 
-    // stride==1 + B==1: the reader reads the per-block input-page union once into scratch_cb and
-    // serves the K tap windows by L1->L1 copy (cuts the K× DRAM re-read; the op is read-bound).
-    const bool coalesce = (stride == 1 && B == 1);
-    const uint32_t scratch_num_tiles = tt::div_up(BLOCK_T + K - 1, TILE) * block_w_tiles;
+    // B==1: the reader reads the per-block input-page union once into scratch_cb and gathers the
+    // K tap windows from L1 (cuts the ~K× DRAM re-read; the op is read-bound). Any stride.
+    const bool coalesce = (B == 1);
+    const uint32_t scratch_num_tiles = tt::div_up((BLOCK_T - 1) * stride + K, TILE) * block_w_tiles;
 
     auto push_cb = [&](uint32_t cb_id, uint32_t num_tiles) {
         desc.cbs.push_back(CBDescriptor{
