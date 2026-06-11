@@ -62,20 +62,27 @@ def test_tt_moe_gate(device, config_path: Path, seed: int):
     k = config.select_experts_k
     hidden = config.hidden_size
 
-    if num_experts not in (64, 128, 256) or (gp["n_group"] == 8 and num_experts != 256):
+    if num_experts > 512 or (gp["n_group"] == 8 and num_experts != 256):
         pytest.skip(
-            f"supports num_experts in (64,128,256), <256 padded to the 256-face; n_group=8 (deepseek) needs 256. "
-            f"got N={num_experts}, n_group={gp['n_group']}, k={k}"
+            f"supports ≤512 experts; n_group=8 (deepseek grouped) needs 256. n_group=1 with k∈(4,6,8) uses "
+            f"the kernel op, other k (e.g. 10) uses the ttnn fallback. got N={num_experts}, "
+            f"n_group={gp['n_group']}, k={k}"
         )
 
     batch = 32  # decode: one token per core, tile-aligned. (forward() pads/loops for other batch sizes.)
     logger.info(f"[{config_path.stem}] gate: N={num_experts} k={k} hidden={hidden} batch={batch} {gp}")
+    # per-model caveats about steps TTMoEGate does NOT cover (e.g. gemma4's RMSNorm + per-dim input scale
+    # and per-expert output scale) — the caller must apply these around TTMoEGate.
+    if raw.get("gate_notes"):
+        logger.warning(f"[{config_path.stem}] gate_notes: {raw['gate_notes']}")
 
     # --- torch inputs ---
     torch.manual_seed(seed)
     hidden_states = (2 * torch.rand((batch, hidden), dtype=torch.bfloat16)) - 1
     gate_weight = ((2 * torch.rand((hidden, num_experts), dtype=torch.bfloat16)) - 1) * 0.1
     gate_bias = None if gp["score_func"] == "softmax" else (2 * torch.rand((num_experts,)) - 1)
+    # router LINEAR bias (gpt-oss, yaml router_bias: true): logits = Wx + b, flows into selection + weights.
+    proj_bias = (2 * torch.rand((num_experts,)) - 1) if raw.get("router_bias") else None
 
     # --- device module + inputs ---
     gate = TTMoEGate(
@@ -85,6 +92,7 @@ def test_tt_moe_gate(device, config_path: Path, seed: int):
         hidden_size=hidden,
         torch_gate_weight=gate_weight,
         torch_gate_bias=gate_bias,
+        torch_gate_proj_bias=proj_bias,
         matmul_compute_config=matmul_cc,
         **gp,
     )
@@ -97,7 +105,9 @@ def test_tt_moe_gate(device, config_path: Path, seed: int):
     )
 
     # --- golden (hidden -> logits -> gate -> (scores[batch,k], indices[batch,k])) ---
-    gold_scores, gold_idx = TTMoEGate.golden(hidden_states, gate_weight, gate_bias, select_experts_k=k, **gp)
+    gold_scores, gold_idx = TTMoEGate.golden(
+        hidden_states, gate_weight, gate_bias, select_experts_k=k, gate_proj_bias=proj_bias, **gp
+    )
 
     tt_scores, tt_indices = gate.forward(tt_x)
     dev_scores = ttnn.to_torch(tt_scores).reshape(batch, k).float()
@@ -106,6 +116,8 @@ def test_tt_moe_gate(device, config_path: Path, seed: int):
     # --- verify (torch fp32 golden; the device matmul runs HiFi2 + fp32 accumulation, so its residual
     #     bf16 noise only nudges rank-boundary experts — the checks below tolerate that) ---
     logits = hidden_states.float() @ gate_weight.float()
+    if proj_bias is not None:  # gpt-oss router linear bias: logits = Wx + b (into selection AND weights)
+        logits = logits + proj_bias.float()
     bias = gate_bias.float() if gate_bias is not None else torch.zeros(num_experts)
     # the per-expert score the op ranks/weights with, per score_func (softmax ranks by the raw logit):
     if gp["score_func"] == "sigmoid":
