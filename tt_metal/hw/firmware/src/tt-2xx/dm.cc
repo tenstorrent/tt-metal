@@ -46,9 +46,6 @@ thread_local uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 thread_local uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 thread_local uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
-volatile uint32_t cache_invalidation_seq = 0;
-thread_local uint32_t last_cache_invalidation_seq = 0;
-
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
 thread_local uint32_t rta_count __attribute__((used));
 thread_local uint32_t crta_count __attribute__((used));
@@ -63,6 +60,14 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(UNCACHED_MEM_MAILBOX_BASE);
 tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
+
+inline void invalidate_kernel_binary_l2_cache(uintptr_t kernel_lma, launch_msg_t* launch_msg, uint32_t processor_index) {
+    uint32_t kernel_size = launch_msg->kernel_config.kernel_text_size[processor_index];
+    if (kernel_size == 0) {
+        return;
+    }
+    invalidate_l2_cache_range(kernel_lma, kernel_size);
+}
 
 void set_deassert_addresses() {
     WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC0_RESET_PC_REG_ADDR, MEM_TRISC0_FIRMWARE_BASE);
@@ -277,20 +282,6 @@ extern "C" uint32_t _start1() {
                 // Copies from L1 to IRAM on chips where NCRISC has IRAM
                 uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
 
-                // Tell all other DMs to invalidate their portion of the l2 cache
-                // by swapping between 0 and 1
-                cache_invalidation_seq = 1 - cache_invalidation_seq;
-                flush_l2_cache_line((uintptr_t)&cache_invalidation_seq);
-                // Flush and save DM0's stack to SRAM
-                extern thread_local uint32_t __stack_base_lwm[];
-                uintptr_t stack_bottom = reinterpret_cast<uintptr_t>(__stack_base_lwm);
-                uintptr_t stack_top = reinterpret_cast<uintptr_t>(__builtin_thread_pointer()) + MEM_DM_LOCAL_SIZE;
-                uint32_t stack_size_bytes = stack_top - stack_bottom;
-                flush_l2_cache_range(stack_bottom, stack_size_bytes);
-                // Trigger the invalidation of the DM cache. This call will wait until all DMs
-                // invalidate their portion of the l2 cache.
-                invalidate_cache_all(hartid);
-
                 run_triscs(enables);
 
                 // noc_index = launch_msg_address->kernel_config.brisc_noc_id;
@@ -334,6 +325,7 @@ extern "C" uint32_t _start1() {
                         (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index] +
                          MEM_L1_UNCACHED_BASE);
                     // Invalidate the i$ now the kernels have loaded and before running
+                    invalidate_kernel_binary_l2_cache(kernel_lma, launch_msg_address, index);
                     invalidate_l1_icache();
                     uint32_t* kernel_ptr = reinterpret_cast<uint32_t*>(kernel_lma);
                     auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
@@ -397,21 +389,6 @@ extern "C" uint32_t _start1() {
         // WAYPOINT("GW");
         WAYPOINT("W1");
         while (true) {
-            // If DM0 triggers the cache invalidation before the next kernel is run.
-            // This will occur before DM0 sends the GO message to the subordinate.
-            uint32_t seq = cache_invalidation_seq;
-            if (seq != last_cache_invalidation_seq) {
-                // Flush and save the subordinate's stack to SRAM
-                extern thread_local uint32_t __stack_base_lwm[];
-                uintptr_t stack_bottom = reinterpret_cast<uintptr_t>(__stack_base_lwm);
-                uintptr_t stack_top = reinterpret_cast<uintptr_t>(__builtin_thread_pointer()) + MEM_DM_LOCAL_SIZE;
-                uint32_t stack_size_bytes = stack_top - stack_bottom;
-                flush_l2_cache_range(stack_bottom, stack_size_bytes);
-                // Trigger the invalidation of the subordinate's cache. This call will wait until all DMs
-                // invalidate their portion of the l2 cache.
-                invalidate_cache_all(hartid);
-                last_cache_invalidation_seq = seq;
-            }
             if (*((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) == RUN_SYNC_MSG_GO ||
                 *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) == RUN_SYNC_MSG_LOAD) {
                 break;
@@ -441,6 +418,7 @@ extern "C" uint32_t _start1() {
             asm("nop; nop; nop; nop; nop");
         }
         // Invalidate the i$ now the kernels have loaded and before running
+        invalidate_kernel_binary_l2_cache(kernel_lma, launch_msg, index);
         invalidate_l1_icache();
         auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
 
