@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-11T01:48:42Z
+**Updated:** 2026-06-11T02:28:00Z
 
 ## Block Status
 
@@ -68,7 +68,7 @@
 | decoder_layer | reference | done | 1.000000 | 0 | Qwen2DecoderLayer pre-norm residual x+attn(ln1(x)); h+mlp(ln2(h)), real layers.0 weights |
 | decoder_layer | ttnn | done | 0.999936 | 0 | Pre-norm residual composition of done sub-blocks: TtTextRMSNorm(input_layernorm, eps=1e-6) -> TtTextAttention (fused per-chip QKV+bias, 12Q/2KV hd128, kv_replication=2, fp32 HF rope + fp32 explicit causal core, row-parallel o_proj + sync all-reduce) -> ttnn.add residual -> TtTextRMSNorm(post_attention_layernorm) -> TtTextMLP (SwiGLU 1536->8960->1536, column/row-parallel + sync all-reduce) -> ttnn.add residual, mirroring reference_impl models/tt_transformers/tt/decoder.py TransformerBlock. Whole layer fp32 (attention path fp32-mandatory: layer-0 logits +-3122, bf16 core PCC ~0.92; fp32 gammas TILE [1,1,1,dim]); residual stream keeps input dtype for chained-caller precision control. Real model.layers.0 weights re-loaded from checkpoint; replicated all-reduced output compared single-device vs golden. Guard ok (lint 0, kernels ok, no new host ops). No KB entries returned for decoder_layer. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | decoder_layer | debug | n/a | — | 0 |  |
-| decoder_layer | optimization | pending | — | 0 | OCCUPANCY REDO: per the new occupancy+convergence contract — query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid |
+| decoder_layer | optimization | done | 0.999944 | 0 | OCCUPANCY REDO at production traced decode point (bf16 [1,1,1,1536] row, bf8b weights, slot 1500, queried 11x10=110 grid): layer traced decode kernel 214.4-218.0 -> 188.7-194.9 us/device (-11%), e2e steady decode 9.40 (last recorded) -> 6.70 ms/token median over 200 traced replays (<=8 ms/tok target met). Levers, one per measurement: (1) tick-62 layer-scope WIDTH-SHARDED residual on a canonical 12-core 4x3 rectangle shard (norms pass-through sharded, attention in/out sharded, MLP AG lands in shard, shard-to-shard residual adds; 10 reshard ops -> 4; -11.6 us) - silu-mul also dropped 11.3->5.0 us on the rectangle grid; (2) HiFi2+fp32-acc on the 3 attention decode DRAM-sharded matmuls (FLOP-bound at HiFi4; o_proj 18.9->12.3 us; -9.2 us); (3) QKV/rope chain kept 8-core via 0.73 us reshard (12c worse: 11.1/11.3 vs 8.5/8.7 us; -3.7 us). Reverted with evidence: bf8b rope matrix (latency-bound, no change), SDPA k_chunk 64 (22.1 vs 18.8) / 256 (invalid divisor of 3200 cache), paged_fused_update_cache (B=1 k/v same-core TT_FATAL). Ceilings: gate/up/down at 220 GB/s DRAM plateau (recorded 12c A/B), CCL at 2-eth-link HW ceiling, SDPA at 64-core kernel cap with losing chunk A/Bs, LN at recorded 12c sharded ceiling; sub-70% occupancy waved only via losing max-core A/Bs. Gates: block PCC 0.999944, sub-blocks 0.999048-0.999994, e2e OCR WER 0.0==HF 0.0 (5/5), 180-token traced==untraced AR drift gate PASS (eos disabled, token-exact), lint 0 on all touched files, traced_ops sideguards regenerated. No KB entries cited (none supplied for decoder_layer). Code committed mid-task: 963765994dd. |
 | decoder_layer | real_weights | done | 0.999533 | 0 | decoder_layer_weights(layer_idx) composed loader added to consolidated tt/weight_loader.py (pure-PyTorch; composes text_rmsnorm/text_attention/text_mlp per-kind loaders so layer indexing never leaks past them; 12 keys input_layernorm/self_attn.q,k,v_proj(+bias)/o_proj/post_attention_layernorm/mlp.gate,up,down_proj, 46797824 params/layer; __main__ self-test extended layers.0/layers.27). Stage-1 parametric tests/test_real_hf_weights.py row runs TtDecoderLayer at the production operating point (whole layer fp32 - attention path fp32-mandatory: layer-0 logits +-3122, bf16 core ~0.92 - TP-sharded sub-blocks on the 1x4 mesh with kv_replication=2 and reduce_scatter/all_gather all-reduce, replicated residual stream; golden real residual-stream input [1,128,1536] + golden rope tables theta=1e6) vs the pure-PyTorch decoder_layer_forward reference with the same real weights at TWO sites: layers.0 PCC 0.999945, layers.27 0.999533 (min 0.999533 > 0.99 reported). Block forward untouched; full harness re-run, all 12 rows passing (11 prior rows unchanged). Guard ok (lint 0, params_loaded 93595648>0). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | lm_head | reference | done | 1.000000 | 0 | untied Linear 1536->151936 no bias, real lm_head.weight, matches torch.nn.Linear |
 | lm_head | ttnn | done | 1.000000 | 0 | Untied vocab projection Linear 1536->151936 no bias as a single column-parallel ttnn.linear: weight [vocab,hidden] transposed to [hidden,vocab] and vocab-sharded ShardTensorToMesh(dim=-1) on the 1x4 mesh per parallelism plan (placement=shard vocab dim; 151936/4=37984 logits per chip, tile-divisible, no padding); replicated activation in, per-chip logit slices out, recombined on host via ConcatMeshToTensor(dim=-1) per tp-guidance (all_gather left to the generation-phase consumer). reference_impl tt_transformers/tt/lm_head.py DRAM-sharded program configs / column splits deferred to optimization. HiFi4+fp32-acc, bf16; real lm_head.weight re-loaded from checkpoint in the test; PCC 1.000000 vs golden. Guard ok (lint 0, kernels ok, no new host ops). KB entries for kind linear were attention/tensor-manipulation records (nlp_concat_heads_decode, concatenate_heads, flash_mla_prefill, narrow/split/bcast/concat, create_qkv_heads) - none applicable, none used. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 55 (2026-06-10T21:37:18Z): device[vision_rmsnorm] — ok
 - tick 56 (2026-06-10T21:53:05Z): device[vision_attention] — ok
 - tick 57 (2026-06-10T22:08:54Z): device[vision_mlp] — ok
 - tick 58 (2026-06-10T22:25:08Z): device[vision_block] — ok
@@ -94,6 +93,7 @@
 - tick 62 (2026-06-11T00:09:22Z): device[text_rmsnorm] — ok
 - tick 63 (2026-06-11T01:06:25Z): device[text_attention] — ok
 - tick 64 (2026-06-11T01:48:42Z): device[text_mlp] — ok
+- tick 65 (2026-06-11T02:28:00Z): device[decoder_layer] — ok
 
 ## Host-Resident Exceptions
 

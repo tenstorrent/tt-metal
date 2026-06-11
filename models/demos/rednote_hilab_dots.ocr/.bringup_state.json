@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-11T01:48:42Z",
+  "updated_at": "2026-06-11T02:28:00Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -728,9 +728,18 @@
         "attempts": 0
       },
       "optimization": {
-        "status": "pending",
+        "status": "done",
         "attempts": 0,
-        "notes": "OCCUPANCY REDO: per the new occupancy+convergence contract \u2014 query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid"
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/tt/decoder_layer.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/text_attention.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/text_mlp.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/text_rmsnorm.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/profile_decoder_layer.py",
+          "models/demos/rednote_hilab_dots.ocr/tt/decoder_layer.traced_ops.json"
+        ],
+        "notes": "OCCUPANCY REDO at production traced decode point (bf16 [1,1,1,1536] row, bf8b weights, slot 1500, queried 11x10=110 grid): layer traced decode kernel 214.4-218.0 -> 188.7-194.9 us/device (-11%), e2e steady decode 9.40 (last recorded) -> 6.70 ms/token median over 200 traced replays (<=8 ms/tok target met). Levers, one per measurement: (1) tick-62 layer-scope WIDTH-SHARDED residual on a canonical 12-core 4x3 rectangle shard (norms pass-through sharded, attention in/out sharded, MLP AG lands in shard, shard-to-shard residual adds; 10 reshard ops -> 4; -11.6 us) - silu-mul also dropped 11.3->5.0 us on the rectangle grid; (2) HiFi2+fp32-acc on the 3 attention decode DRAM-sharded matmuls (FLOP-bound at HiFi4; o_proj 18.9->12.3 us; -9.2 us); (3) QKV/rope chain kept 8-core via 0.73 us reshard (12c worse: 11.1/11.3 vs 8.5/8.7 us; -3.7 us). Reverted with evidence: bf8b rope matrix (latency-bound, no change), SDPA k_chunk 64 (22.1 vs 18.8) / 256 (invalid divisor of 3200 cache), paged_fused_update_cache (B=1 k/v same-core TT_FATAL). Ceilings: gate/up/down at 220 GB/s DRAM plateau (recorded 12c A/B), CCL at 2-eth-link HW ceiling, SDPA at 64-core kernel cap with losing chunk A/Bs, LN at recorded 12c sharded ceiling; sub-70% occupancy waved only via losing max-core A/Bs. Gates: block PCC 0.999944, sub-blocks 0.999048-0.999994, e2e OCR WER 0.0==HF 0.0 (5/5), 180-token traced==untraced AR drift gate PASS (eos disabled, token-exact), lint 0 on all touched files, traced_ops sideguards regenerated. No KB entries cited (none supplied for decoder_layer). Code committed mid-task: 963765994dd.",
+        "pcc": 0.999944
       },
       "real_weights": {
         "status": "done",
@@ -1237,6 +1246,12 @@
       "tick": 64,
       "ts": "2026-06-11T01:48:42Z",
       "action": "device[text_mlp]",
+      "result": "ok"
+    },
+    {
+      "tick": 65,
+      "ts": "2026-06-11T02:28:00Z",
+      "action": "device[decoder_layer]",
       "result": "ok"
     }
   ],
