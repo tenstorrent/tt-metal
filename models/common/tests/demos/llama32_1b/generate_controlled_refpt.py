@@ -21,7 +21,7 @@ Usage::
         models/common/tests/demos/llama32_1b/generate_controlled_refpt.py \\
         --hf-model meta-llama/Llama-3.2-1B-Instruct
 
-See ``dev-tools/agentic-bringup/skills/reference-sanity.md``.
+See the reference-sanity guide.
 """
 
 from __future__ import annotations
