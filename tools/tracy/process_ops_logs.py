@@ -573,9 +573,15 @@ def _enrich_ops_from_perf_csv(
     trace_replays: Optional[TraceReplayDict],
 ) -> DeviceOpsDict:
     for device_id in host_ops_by_device:
-        assert (
-            device_id in device_perf_by_device
-        ), f"Device {device_id} present in host logs but missing from {PROFILER_CPP_DEVICE_PERF_REPORT}"
+        if device_id not in device_perf_by_device:
+            # No device-perf rows for this chip (e.g. its profiler buffer was not
+            # captured). Leave its host ops without device metrics rather than
+            # discarding every other device's data.
+            logger.warning(
+                f"Device {device_id} present in host logs but missing from "
+                f"{PROFILER_CPP_DEVICE_PERF_REPORT}; reported without device metrics"
+            )
+            continue
 
         # Build a lookup that matches the C++ ProgramExecutionUID structure:
         # (GLOBAL CALL COUNT, METAL TRACE ID) -> list of perf rows (one per replay session, or one for non-trace)
@@ -584,6 +590,7 @@ def _enrich_ops_from_perf_csv(
             perf_rows_by_key.setdefault((op_id, trace_id), []).append(row)
 
         enriched_ops = []
+        unmatched_op_ids = []
         for host_op in host_ops_by_device[device_id]:
             op_id = int(host_op["global_call_count"])
             host_trace_id = host_op.get("metal_trace_id")
@@ -603,10 +610,17 @@ def _enrich_ops_from_perf_csv(
                     if cand_op_id == op_id:
                         candidates.extend(rows)
 
-            assert candidates, (
-                f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
-                f"for device {device_id} (trace_id={host_trace_id})"
-            )
+            if not candidates:
+                # The op ran on device but its timing was not captured. The usual
+                # cause is on-device profiler buffer overflow: each device holds a
+                # bounded number of program-timing slots (PROFILER_PROGRAM_SUPPORT_COUNT,
+                # default 1000), so a long run without periodic ReadDeviceProfiler drops
+                # the timing for most ops. Keep the op without device metrics so the
+                # report still builds, and surface the coverage gap below — one missing
+                # op (of potentially most of them) must not discard the whole profile.
+                unmatched_op_ids.append(op_id)
+                enriched_ops.append(copy.deepcopy(host_op))
+                continue
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
             for perf_row in candidates:
@@ -630,6 +644,20 @@ def _enrich_ops_from_perf_csv(
 
                 enriched_op["_device_perf_row"] = perf_row
                 enriched_ops.append(enriched_op)
+
+        if unmatched_op_ids:
+            n_missing = len(unmatched_op_ids)
+            n_total = len(host_ops_by_device[device_id])
+            pct = 100.0 * n_missing / n_total if n_total else 0.0
+            sample = ", ".join(str(i) for i in unmatched_op_ids[:10])
+            logger.warning(
+                f"Device {device_id}: {n_missing}/{n_total} ops ({pct:.0f}%) missing from "
+                f"{PROFILER_CPP_DEVICE_PERF_REPORT}; reported without device metrics. "
+                f"A large fraction means the on-device profiler buffer overflowed "
+                f"(PROFILER_PROGRAM_SUPPORT_COUNT, default 1000/device) — enable periodic "
+                f"ReadDeviceProfiler or raise the buffer for full device-time coverage "
+                f"(missing op ids: {sample}{', ...' if n_missing > 10 else ''})"
+            )
 
         host_ops_by_device[device_id] = enriched_ops
     return host_ops_by_device

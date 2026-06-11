@@ -40,6 +40,30 @@ class _FakeNpeStats:
         return _FakeNpeDatapoint(result)
 
 
+def test_enrich_ops_from_perf_csv_keeps_unmatched_ops():
+    """When the on-device profiler buffer overflows, most ops have no device-perf
+    row; that (or a whole missing device) must not abort the merge — unmatched ops
+    are kept without device metrics so the rest of the report still builds."""
+    host_ops = {
+        0: [{"global_call_count": 1}, {"global_call_count": 2}],  # op 2 has no perf row
+        7: [{"global_call_count": 99}],  # entire device missing from perf report
+    }
+    device_perf = {
+        0: {
+            (1, None, None): {"GLOBAL CALL COUNT": 1, "CORE COUNT": 64},
+        },
+        # device 7 deliberately absent
+    }
+
+    enriched = process_ops_logs._enrich_ops_from_perf_csv(host_ops, device_perf, None)
+
+    by_id = {op["global_call_count"]: op for op in enriched[0]}
+    assert set(by_id) == {1, 2}  # neither dropped
+    assert "_device_perf_row" in by_id[1]  # matched op enriched
+    assert "_device_perf_row" not in by_id[2]  # unmatched op kept, no fabricated metrics
+    assert [op["global_call_count"] for op in enriched[7]] == [99]  # missing device survives
+
+
 @pytest.mark.skip(reason="Missing mock for device log file; needs fix to properly stub _enrich_ops_from_device_logs")
 def test_append_device_data_populates_multicast_noc_util(monkeypatch, tmp_path):
     ops = {
