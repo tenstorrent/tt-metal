@@ -691,6 +691,15 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
 
     // Compute kernel on untilize cores
     {
+        // Largest divisor of (hidden_size / 32) that is <= 8.  Mirrors the combine program factory.
+        // Avoids the static_assert in llk_pack_untilize when full_ct_dim is not divisible by 8
+        // (e.g. gptoss-120b: hidden_size=2880, full_ct_dim=90, block_ct_dim=6).
+        const uint32_t full_ct_dim_dispatch = static_cast<uint32_t>(hidden_size) / 32u;
+        uint32_t block_ct_dim_dispatch = 8;
+        while (full_ct_dim_dispatch % block_ct_dim_dispatch != 0) {
+            --block_ct_dim_dispatch;
+        }
+
         tt::tt_metal::KernelDescriptor untilize_compute_kd;
         untilize_compute_kd.kernel_source =
             "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/compute/"
@@ -703,6 +712,7 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
             static_cast<uint32_t>(tt::CBIndex::c_0),   // cb_in_id
             (uint32_t)hidden_size,
             read_batch_size,
+            block_ct_dim_dispatch,  // block_ct_dim
         };
         untilize_compute_kd.config = tt::tt_metal::ComputeConfigDescriptor{
             .math_fidelity = MathFidelity::HiFi4,
@@ -711,8 +721,8 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
             // Fp8_e4m3, so fp32_dest_acc_en must be enabled there.
             .fp32_dest_acc_en = operation_attributes.use_fp8_dispatch,
             // 32-bit DEST halves pack_untilize block capacity: half-sync 32-bit allows only 4
-            // tiles, but pack_untilize_block uses block_ct_dim=8. Full-sync 32-bit restores the
-            // 8-tile budget so the block still fits. Only needed on the FP8 (32-bit) path.
+            // tiles, but pack_untilize_block uses block_ct_dim. Full-sync 32-bit restores the
+            // full tile budget so the block still fits. Only needed on the FP8 (32-bit) path.
             .dst_full_sync_en = operation_attributes.use_fp8_dispatch,
         };
         desc.kernels.push_back(std::move(untilize_compute_kd));
