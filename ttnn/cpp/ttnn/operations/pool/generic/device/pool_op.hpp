@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <variant>
+#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
@@ -19,6 +20,7 @@
 #include "ttnn/distributed/types.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include <utility>
 
 namespace ttnn::operations::pool {
@@ -68,6 +70,29 @@ struct Pool2D {
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
+
+    // Pool2D is fully CB-bound-stable, so this returns an empty vector; declaring it simply opts the
+    // op into the descriptor fast-path (no create_workload_descriptor() rebuild on a program-cache hit).
+    //
+    // Rationale (verified against pool_multi_core_program_factory.cpp):
+    //   * Every per-dispatch tensor address rides on a sharded CBDescriptor.buffer binding that the
+    //     framework patches automatically on a cache hit: input via raw_in_cb (input.buffer()),
+    //     output via out_cb (outputs[0].buffer()), and the optional index output via out_idx_cb
+    //     (outputs[1].buffer()).
+    //   * The only kernel RUNTIME args (reader0/reader1/compute) are {out_nhw_this_core,
+    //     core_nhw_index} plus, when return_indices, {start_row, start_col}. All are derived purely
+    //     from the SlidingWindowConfig / sharding (shape-stable), and every attribute they depend on
+    //     is covered by compute_program_hash -- none is address-derived or hash-excluded.
+    //   * The auxiliary reader_indices and scalar_config buffer addresses/page_sizes are baked into
+    //     COMPILE-TIME args (not runtime args). Those buffers are allocated once in
+    //     create_workload_descriptor and parked in WorkloadDescriptor::buffers, so they stay alive and
+    //     keep the same address for the cached workload's lifetime (not re-created on a hit) -- the
+    //     baked compile-time values remain valid.
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t&,
+        const tensor_args_t&,
+        tensor_return_value_t&,
+        const std::optional<ttnn::MeshCoordinate>& = std::nullopt);
 };
 
 }  // namespace ttnn::operations::pool

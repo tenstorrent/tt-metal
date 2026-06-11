@@ -144,12 +144,12 @@ ProgramDescriptor FillCacheMultiCoreProgramFactory::create_descriptor(
 
     const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
-    // Per-core runtime args. We push raw buffer addresses (uint32_t) rather than Buffer*
-    // because the per-core cache_start_id derives from operation_attributes (batch_idx,
+    // Per-core runtime args. We push raw buffer addresses (uint32_t) rather than Buffer*,
+    // and the per-core cache_start_id derives from operation_attributes (batch_idx,
     // update_idx) which UpdateKVCacheOperation::compute_program_hash deliberately excludes
-    // from the program-cache key. With buffer_bindings empty the framework uses the
-    // descriptor-rebuild slow path on cache hits, which correctly re-derives
-    // cache_start_id every dispatch.
+    // from the program-cache key. UpdateKVCacheOperation::get_dynamic_runtime_args re-applies
+    // the address- and batch_idx/update_idx-derived slots on every cache hit (fast path), so
+    // they stay correct without a descriptor rebuild. Keep arg ORDER/INDICES in sync with it.
     for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
         const CoreCoord& core = cores.at(i);
         uint32_t num_blocks_per_core = 0;

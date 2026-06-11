@@ -245,6 +245,18 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> BcastDeviceOperation:
         {input_tensor0, input_tensor1}, tensor_return_value, ideal_dev_clock_cycles);
     return result;
 }
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> BcastDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& /*operation_attributes*/,
+    const tensor_args_t& /*tensor_args*/,
+    tensor_return_value_t& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Every factory binds all per-dispatch tensor addresses as CB `.buffer` or Buffer* rt-args, and
+    // all remaining runtime args are shape/geometry-derived and covered by the program hash. Nothing
+    // needs re-applying. Declaring this opts the op into the descriptor fast-path (no
+    // create_descriptor() rebuild on a cache hit).
+    return {};
+}
 }  // namespace ttnn::prim
 
 namespace ttnn::prim {

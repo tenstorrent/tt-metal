@@ -1141,11 +1141,15 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
                 }
                 mcast_sender_args.insert(mcast_sender_args.end(), mcast_noc_xy.begin(), mcast_noc_xy.end());
                 reader_mcast_sender_desc.runtime_args.emplace_back(core, std::move(mcast_sender_args));
+                // args 0,1 = input/output base addresses: bind as Buffer* so the framework patches
+                // them on every cache hit. The remaining args (start ids / Wt / mcast coords) are
+                // per-core but shape/grid-derived, hence stable across hits on the same cache entry.
+                reader_mcast_sender_desc.buffer_bindings.push_back({core, 0, a.buffer()});
+                reader_mcast_sender_desc.buffer_bindings.push_back({core, 1, output.buffer()});
             } else {  // mcast receiver
-                // NOTE: do not pass Buffer* here. in0_start_id/out_tile_start_id/Wt/mcast
-                // coords are per-core and shape-derived; using BufferBinding would skip
-                // create_descriptor() on cache hits and leave those scalars stale when a
-                // later call collides on the same cache entry with different shape/grid.
+                // args 0,1 = input/output base addresses: bind as Buffer* for cache-hit patching.
+                // in0_start_id/out_tile_start_id/Wt/mcast coords are per-core and shape-derived, so
+                // they stay valid on every hit on this same cache entry.
                 reader_mcast_receiver_desc.runtime_args.emplace_back(
                     core,
                     tt::tt_metal::KernelDescriptor::CoreRuntimeArgs{
@@ -1156,6 +1160,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
                         Wt,
                         static_cast<uint32_t>(device->worker_core_from_logical_core(group.front()).x),
                         static_cast<uint32_t>(device->worker_core_from_logical_core(group.front()).y)});
+                reader_mcast_receiver_desc.buffer_bindings.push_back({core, 0, a.buffer()});
+                reader_mcast_receiver_desc.buffer_bindings.push_back({core, 1, output.buffer()});
             }
         }
     }
@@ -1199,6 +1205,19 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         writer_mcast_sender_args.push_back(input_mask_tile_start_id);
         writer_mcast_sender_args.push_back(Wt);
         writer_desc.runtime_args.emplace_back(core, std::move(writer_mcast_sender_args));
+        // arg 0 = eps (attribute, in hash → stable). args 1..4 = output / optional
+        // gamma / beta / input_mask base addresses: bind as Buffer* for cache-hit patching
+        // (optionals only when present, else the baked 0 stays).
+        writer_desc.buffer_bindings.push_back({core, 1, output.buffer()});
+        if (gamma.has_value()) {
+            writer_desc.buffer_bindings.push_back({core, 2, gamma.value().buffer()});
+        }
+        if (beta.has_value()) {
+            writer_desc.buffer_bindings.push_back({core, 3, beta.value().buffer()});
+        }
+        if (input_mask.has_value()) {
+            writer_desc.buffer_bindings.push_back({core, 4, input_mask.value().buffer()});
+        }
     }
 
     desc.kernels.push_back(std::move(reader_mcast_sender_desc));

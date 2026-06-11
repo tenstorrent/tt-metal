@@ -494,17 +494,19 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
 
     // Configure runtime arguments for each local processing core
     for (auto core : local_cores) {
-        // Local reader
-        reader_local_desc.emplace_runtime_args(
-            core,
-            {
-                input_tensor,                          // DRAM address of input values tensor
-                0u,                                    // Height offset (no height parallelism currently)
-                core_id * Wt_local,                    // Width offset for this core's chunk
-                static_cast<uint32_t>(is32_bit_data),  // Flag indicating if data is 32-bit
-                input_indices_tensor.has_value() ? static_cast<uint32_t>(input_indices_tensor->address())
-                                                 : 0u,  // DRAM address of input indices tensor (if provided)
-            });
+        // Local reader. Build via RTArgList so the input values tensor and (when present) the
+        // optional input indices tensor register as buffer bindings for the fast cache-hit path.
+        KernelDescriptor::RTArgList reader_local_args;
+        reader_local_args.push_back(input_tensor);                          // DRAM address of input values tensor
+        reader_local_args.push_back(0u);                                    // Height offset (no height parallelism)
+        reader_local_args.push_back(core_id * Wt_local);                    // Width offset for this core's chunk
+        reader_local_args.push_back(static_cast<uint32_t>(is32_bit_data));  // Flag indicating if data is 32-bit
+        if (input_indices_tensor.has_value()) {
+            reader_local_args.push_back(*input_indices_tensor);  // DRAM address of input indices tensor (if provided)
+        } else {
+            reader_local_args.push_back(0u);
+        }
+        reader_local_desc.emplace_runtime_args(core, reader_local_args);
 
         // Local writer
         writer_local_desc.runtime_args.emplace_back(

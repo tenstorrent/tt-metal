@@ -242,6 +242,10 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreTileInvariant::
 
         reader_desc.runtime_args.emplace_back(core, reader_runtime_args);
         writer_desc.runtime_args.emplace_back(core, writer_runtime_args);
+        // Tensor addresses live at arg 0; register per-core BufferBindings so the fast cache-hit path
+        // patches them in place instead of rebuilding the descriptor every dispatch.
+        reader_desc.buffer_bindings.push_back({core, 0u, src_buffer});
+        writer_desc.buffer_bindings.push_back({core, 0u, dst_buffer});
         if (swap_hw) {
             compute_runtime_args[0] = num_tiles_per_core;  // number of tiles transposed
             compute_desc.runtime_args.emplace_back(core, compute_runtime_args);
@@ -538,6 +542,9 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreTileRowInvarian
 
         reader_desc.runtime_args.emplace_back(core, reader_runtime_args);
         writer_desc.runtime_args.emplace_back(core, writer_runtime_args);
+        // Tensor addresses at arg 0 -> per-core BufferBindings for in-place cache-hit patching.
+        reader_desc.buffer_bindings.push_back({core, 0u, src_buffer});
+        writer_desc.buffer_bindings.push_back({core, 0u, dst_buffer});
 
         start_tile = end_tile;
         start_tile_padding = end_tile_padding;
@@ -916,6 +923,9 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreTiledGeneric::c
         reader_desc.runtime_args.emplace_back(core, reader_runtime_args);
         writer_desc.runtime_args.emplace_back(core, writer_runtime_args);
         compute_desc.runtime_args.emplace_back(core, compute_runtime_args);
+        // Tensor addresses at arg 0 -> per-core BufferBindings for in-place cache-hit patching.
+        reader_desc.buffer_bindings.push_back({core, 0u, src_buffer});
+        writer_desc.buffer_bindings.push_back({core, 0u, dst_buffer});
 
         start_block = end_block;
     }

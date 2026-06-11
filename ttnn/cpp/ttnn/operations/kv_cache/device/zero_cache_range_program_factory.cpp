@@ -130,11 +130,10 @@ ProgramDescriptor ZeroCacheRangeOperation::create_descriptor(
     };
 
     // Set runtime args per core. page_starts/page_ends derive from operation_attributes
-    // (start_page, end_page) which are excluded from compute_program_hash, so the slow
-    // path will rebuild and reapply runtime args correctly on every cache hit. Pushing
-    // dst_buffer->address() as a uint32_t (rather than Buffer*) keeps buffer_bindings
-    // empty so the framework uses the descriptor-rebuild slow path -- needed because
-    // page_starts / page_ends also vary across dispatches.
+    // (start_page, end_page) which are excluded from compute_program_hash, and
+    // dst_buffer->address() is pushed as a raw uint32_t. ZeroCacheRangeOperation::
+    // get_dynamic_runtime_args re-applies all three slots on every cache hit (fast path),
+    // so they stay correct without a descriptor rebuild. Keep arg ORDER/INDICES in sync.
     for (uint32_t i = 0; i < cores.size(); i++) {
         writer_desc.emplace_runtime_args(
             cores[i],
@@ -148,6 +147,43 @@ ProgramDescriptor ZeroCacheRangeOperation::create_descriptor(
     desc.kernels.push_back(std::move(writer_desc));
 
     return desc;
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> ZeroCacheRangeOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // MIRROR create_descriptor's per-core loop. Re-apply on every cache hit: writer arg 0 = dst
+    // address (raw-baked, not a Buffer* binding) and arg 1/2 = page_start/page_end (derive from the
+    // hash-excluded start_page/end_page). The single writer kernel is index 0.
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+
+    const auto& cache_tensor = tensor_args.cache;
+    const auto start_page = operation_attributes.start_page;
+    const auto end_page = operation_attributes.end_page;
+
+    auto* device = cache_tensor.device();
+    auto* dst_buffer = cache_tensor.buffer();
+    const uint32_t dst_addr = dst_buffer->address();
+    const auto arch = device->arch();
+
+    const auto noc = tt::tt_metal::detail::preferred_noc_for_dram_write(arch);
+    const auto num_dram_banks = static_cast<uint32_t>(device->num_dram_channels());
+    const auto optimal_cores = device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    const uint32_t pages_per_shard = cache_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+
+    auto bank_ranges = compute_bank_page_ranges(start_page, end_page, pages_per_shard, num_dram_banks);
+
+    constexpr uint32_t kWriterKernelIdx = 0;
+    dynamic_args.reserve(num_dram_banks * 3);
+    for (uint32_t bank_id = 0; bank_id < num_dram_banks; bank_id++) {
+        const auto& core = optimal_cores[bank_id];
+        dynamic_args.push_back({kWriterKernelIdx, core, 0, dst_addr});
+        dynamic_args.push_back({kWriterKernelIdx, core, 1, bank_ranges[bank_id].first});
+        dynamic_args.push_back({kWriterKernelIdx, core, 2, bank_ranges[bank_id].second});
+    }
+    return dynamic_args;
 }
 
 }  // namespace ttnn::prim

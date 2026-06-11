@@ -244,17 +244,17 @@ ProgramDescriptor UpsampleMultiCoreInterleavedProgramFactory::create_descriptor(
         const uint32_t reader_units = blocks_per_core * input_cb_required_pages;
         const uint32_t reader_start = blocks_processed * input_cb_required_pages;
 
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                src_buffer->address(),
+            {
+                src_buffer,
                 reader_units,
                 reader_start,
             });
-        writer_desc.runtime_args.emplace_back(
+        writer_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                dst_buffer->address(),
+            {
+                dst_buffer,
                 blocks_per_core,
                 blocks_processed,
             });

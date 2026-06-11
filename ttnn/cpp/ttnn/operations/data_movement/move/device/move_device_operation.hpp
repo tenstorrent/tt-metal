@@ -4,13 +4,17 @@
 
 #pragma once
 
+#include <optional>
 #include <variant>
+#include <vector>
 #include "ttnn/tensor/tensor.hpp"
 #include "move_device_operation_types.hpp"
 #include "move_program_factory.hpp"
 #include "move_overlap_program_factory.hpp"
 #include "move_sharded_program_factory.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/distributed/types.hpp"
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::prim {
 
@@ -42,6 +46,18 @@ struct MoveDeviceOperation {
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
+
+    // Sharded in-place move bakes address-DERIVED reader args (chunk size = output_addr - input_addr,
+    // and num_chunks/remainder from it) that change whenever the buffers are re-allocated. They cannot
+    // be expressed as a Buffer* binding, so we re-derive and re-apply them on every cache hit here;
+    // the src/dst CB `.buffer` bindings are patched by the framework. Declaring this opts the op into
+    // the descriptor fast-path (no create_descriptor() rebuild). Returns empty for the non-sharded
+    // strategies (they already fast-path via Buffer* rt-arg bindings).
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::prim

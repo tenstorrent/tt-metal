@@ -82,42 +82,43 @@ void populate_runtime_arguments(
         const auto scalar = momentum;
         const auto packed_scalar_momentum =
             any_float32 ? std::bit_cast<uint32_t>(scalar) : pack_two_bfloat16_into_uint32({scalar, scalar});
-        // NOTE: do not pass Buffer* here. packed_scalar_momentum depends on the
-        // momentum operation_attribute and changes between calls; using
-        // BufferBinding would skip create_descriptor() on cache hits and leave
-        // momentum stale.
-        reader_desc.runtime_args.emplace_back(
+        // packed_scalar_momentum depends on the momentum operation_attribute, but momentum is part
+        // of compute_program_hash() (it lives in operation_attributes), so any change forces a cache
+        // miss and re-bakes this value. On a cache HIT momentum is identical, so binding the tensor
+        // addresses as Buffer* (so the fast path patches them) cannot leave momentum stale.
+        reader_desc.emplace_runtime_args(
             core,
-            tt::tt_metal::KernelDescriptor::CoreRuntimeArgs{
-                packed_scalar_momentum,
-                batch_mean_tensor.buffer()->address(),
-                start_tile_id,
-                num_tiles_per_core,
-                cHtWt,
-                aHt * aWt * aC * static_cast<uint32_t>(aN > 1),
-                aHt * aWt * static_cast<uint32_t>(aC > 1),
-                cN,
-                cC,
-                cHt,
-                cWt});
+            {packed_scalar_momentum,
+             batch_mean_tensor.buffer(),  // batch_mean (input tensor_arg)
+             start_tile_id,
+             num_tiles_per_core,
+             cHtWt,
+             aHt * aWt * aC * static_cast<uint32_t>(aN > 1),
+             aHt * aWt * static_cast<uint32_t>(aC > 1),
+             cN,
+             cC,
+             cHt,
+             cWt});
 
-        const auto running_mean_addr = running_mean_has_value ? running_mean_tensor->buffer()->address() : 0;
-        const auto running_var_addr = running_var_has_value ? running_var_tensor->buffer()->address() : 0;
-        tt::tt_metal::KernelDescriptor::CoreRuntimeArgs writer_runtime_args = {
-            batch_var_tensor.buffer()->address(),  //  batch var
-            running_mean_addr,                     // old running mean
-            running_var_addr,                      // old running var
-            c.buffer()->address(),                 // output
-            start_tile_id,
-            num_tiles_per_core,
-            cHtWt,
-            bHt * bWt * bC * static_cast<uint32_t>(bN > 1),
-            bHt * bWt * static_cast<uint32_t>(bC > 1),
-            cN,
-            cC,
-            cHt,
-            cWt};
-        writer_desc.runtime_args.emplace_back(core, std::move(writer_runtime_args));
+        // running_mean/running_var are optional input tensor_args; pass Buffer* (nullptr -> 0) so the
+        // fast path patches them. c is the output tensor.
+        Buffer* running_mean_buf = running_mean_has_value ? running_mean_tensor->buffer() : nullptr;
+        Buffer* running_var_buf = running_var_has_value ? running_var_tensor->buffer() : nullptr;
+        tt::tt_metal::KernelDescriptor::RTArgList writer_runtime_args;
+        writer_runtime_args.push_back(batch_var_tensor.buffer());  // batch var (input tensor_arg)
+        writer_runtime_args.push_back(running_mean_buf);           // old running mean (optional tensor_arg)
+        writer_runtime_args.push_back(running_var_buf);            // old running var (optional tensor_arg)
+        writer_runtime_args.push_back(c.buffer());                 // output
+        writer_runtime_args.push_back(start_tile_id);
+        writer_runtime_args.push_back(num_tiles_per_core);
+        writer_runtime_args.push_back(cHtWt);
+        writer_runtime_args.push_back(bHt * bWt * bC * static_cast<uint32_t>(bN > 1));
+        writer_runtime_args.push_back(bHt * bWt * static_cast<uint32_t>(bC > 1));
+        writer_runtime_args.push_back(cN);
+        writer_runtime_args.push_back(cC);
+        writer_runtime_args.push_back(cHt);
+        writer_runtime_args.push_back(cWt);
+        writer_desc.emplace_runtime_args(core, writer_runtime_args);
 
         auto counter = start_tile_id % cHtWt;
         auto freq = cHtWt;

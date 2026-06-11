@@ -192,16 +192,16 @@ tt::tt_metal::ProgramDescriptor BcastMultiCoreHWProgramFactory::create_descripto
             continue;
         }
 
-        reader_desc.runtime_args.emplace_back(
+        // Input addresses at args 0,1 as Buffer* for in-place cache-hit patching.
+        reader_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                src0_buffer->address(),  // 0
-                src1_buffer->address(),
-                num_tensor_tiles_per_core,
-                HtWt,
-                num_tiles_read / HtWt * HtWt,
-                num_tiles_read % HtWt,
-                bnc1 ? 0 : num_tiles_read / HtWt});
+            {src0_buffer,  // 0
+             src1_buffer,
+             num_tensor_tiles_per_core,
+             HtWt,
+             num_tiles_read / HtWt * HtWt,
+             num_tiles_read % HtWt,
+             bnc1 ? 0u : num_tiles_read / HtWt});
 
         compute_desc.runtime_args.emplace_back(
             core,
@@ -211,13 +211,8 @@ tt::tt_metal::ProgramDescriptor BcastMultiCoreHWProgramFactory::create_descripto
                 num_tensor_tiles_per_core  // Wt
             });
 
-        writer_desc.runtime_args.emplace_back(
-            core,
-            KernelDescriptor::CoreRuntimeArgs{
-                dst_buffer->address(),
-                num_tensor_tiles_per_core,
-                num_tiles_read,
-            });
+        // Output address at arg 0 as Buffer*.
+        writer_desc.emplace_runtime_args(core, {dst_buffer, num_tensor_tiles_per_core, num_tiles_read});
         num_tiles_read += num_tensor_tiles_per_core;
     }
 

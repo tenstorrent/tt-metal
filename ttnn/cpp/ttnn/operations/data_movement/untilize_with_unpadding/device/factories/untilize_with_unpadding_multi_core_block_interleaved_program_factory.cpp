@@ -301,12 +301,12 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedPr
             TILE_WIDTH * el_size * single_sub_block_size_row_arg,
             single_sub_block_size_row_arg};
 
-        // reader runtime args
-        reader_desc.runtime_args.emplace_back(
-            core,
-            std::vector<uint32_t>{
-                src0_buffer->address(), tile_start_id, single_block_size_row_arg, single_block_size_col_arg});
+        // reader runtime args — tensor addresses at arg 0 as Buffer* so the fast cache-hit path
+        // patches them in place instead of rebuilding the descriptor every dispatch.
+        reader_desc.emplace_runtime_args(
+            core, {src0_buffer, tile_start_id, single_block_size_row_arg, single_block_size_col_arg});
         writer_desc.runtime_args.emplace_back(core, std::move(writer_rt_args));
+        writer_desc.buffer_bindings.push_back({core, 0u, dst_buffer});
 
         uint32_t end_column_id = start_column_id + (single_block_size_row_arg * TILE_WIDTH * el_size);
         start_column_id = end_column_id % padded_row_size_bytes;

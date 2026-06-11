@@ -276,12 +276,13 @@ ProgramDescriptor UpdateCacheMultiCoreProgramFactory::create_descriptor(
 
     const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
-    // Per-core runtime args. We push raw buffer addresses (uint32_t) rather than Buffer*
-    // because cache_start_id and tile_update_offset depend on operation_attributes
-    // (update_idx) which UpdateKVCacheOperation::compute_program_hash deliberately
-    // excludes from the program-cache key. With buffer_bindings empty, the framework
-    // uses the descriptor-rebuild slow path on cache hits, which correctly re-derives
-    // the per-core ids from the new update_idx every dispatch.
+    // Per-core runtime args. We push raw buffer addresses (uint32_t) rather than Buffer*,
+    // and cache_start_id / tile_update_offset / batch_read_offset depend on
+    // operation_attributes (update_idx / batch_offset) which
+    // UpdateKVCacheOperation::compute_program_hash deliberately excludes from the
+    // program-cache key. UpdateKVCacheOperation::get_dynamic_runtime_args re-applies these
+    // address- and update_idx/batch_offset-derived slots on every cache hit (fast path), so
+    // they stay correct without a descriptor rebuild. Keep arg ORDER/INDICES in sync with it.
     uint32_t cache_tile_idx = update_idx / tt::constants::TILE_HEIGHT * Wt;
     uint32_t cache_start_id = 0;
     uint32_t input_start_id = 0;

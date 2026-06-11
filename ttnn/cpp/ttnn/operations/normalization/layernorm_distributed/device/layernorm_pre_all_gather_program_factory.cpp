@@ -157,6 +157,9 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherProgramFactory::create_desc
     writer_runtime_args.reserve(num_cores);
     compute_runtime_args.reserve(num_cores);
 
+    KernelDescriptor::BufferBindings reader_buffer_bindings;
+    KernelDescriptor::BufferBindings writer_buffer_bindings;
+
     uint32_t curr_row = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
@@ -182,6 +185,15 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherProgramFactory::create_desc
         writer_runtime_args.emplace_back(
             core, std::vector<uint32_t>{dst_addr, num_tile_rows_per_core * out0_tiles, out_tile_offset});
 
+        // arg 0 is input a base address; if fuse_pre_add, arg 4 is residual b base address.
+        // Bind as Buffer* so the framework patches addresses on cache hits.
+        reader_buffer_bindings.push_back({core, 0, a.buffer()});
+        if (fuse_pre_add) {
+            reader_buffer_bindings.push_back({core, 4, b->buffer()});
+        }
+        // writer arg 0 is output base address.
+        writer_buffer_bindings.push_back({core, 0, output.buffer()});
+
         curr_row += num_tile_rows_per_core;
     }
 
@@ -200,6 +212,7 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherProgramFactory::create_desc
     reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_kernel_desc.defines = KernelDescriptor::Defines(reader_defines.begin(), reader_defines.end());
     reader_kernel_desc.runtime_args = std::move(reader_runtime_args);
+    reader_kernel_desc.buffer_bindings = std::move(reader_buffer_bindings);
     reader_kernel_desc.config = ReaderConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(reader_kernel_desc));
 
@@ -212,6 +225,7 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherProgramFactory::create_desc
     writer_kernel_desc.core_ranges = all_cores;
     writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_kernel_desc.runtime_args = std::move(writer_runtime_args);
+    writer_kernel_desc.buffer_bindings = std::move(writer_buffer_bindings);
     writer_kernel_desc.config = WriterConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(writer_kernel_desc));
 
@@ -421,6 +435,8 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGather2DProgramFactory::create_de
     KernelDescriptor::RuntimeArgs reader_runtime_args;
     KernelDescriptor::RuntimeArgs writer_runtime_args;
     KernelDescriptor::RuntimeArgs compute_runtime_args;
+    KernelDescriptor::BufferBindings reader_buffer_bindings;
+    KernelDescriptor::BufferBindings writer_buffer_bindings;
 
     for (uint32_t x = 0; x < cores_x; ++x) {
         for (uint32_t y = 0; y < cores_y; ++y) {
@@ -447,9 +463,17 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGather2DProgramFactory::create_de
             }
             reader_runtime_args.emplace_back(core, std::move(reader_args));
             compute_runtime_args.emplace_back(core, std::vector<uint32_t>{static_cast<uint32_t>(is_merge_core)});
+
+            // arg 0 is input a base address; if fuse_pre_add, arg 8 is residual b base address.
+            reader_buffer_bindings.push_back({core, 0, a.buffer()});
+            if (fuse_pre_add) {
+                reader_buffer_bindings.push_back({core, 8, b->buffer()});
+            }
             if (is_merge_core) {
                 writer_runtime_args.emplace_back(
                     core, std::vector<uint32_t>{dst_addr, num_tile_rows_per_core * out0_tiles, out_tile_offset});
+                // writer arg 0 is output base address.
+                writer_buffer_bindings.push_back({core, 0, output.buffer()});
             }
         }
     }
@@ -473,6 +497,7 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGather2DProgramFactory::create_de
     reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_kernel_desc.defines = KernelDescriptor::Defines(reader_defines.begin(), reader_defines.end());
     reader_kernel_desc.runtime_args = std::move(reader_runtime_args);
+    reader_kernel_desc.buffer_bindings = std::move(reader_buffer_bindings);
     reader_kernel_desc.config = ReaderConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(reader_kernel_desc));
 
@@ -485,6 +510,7 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGather2DProgramFactory::create_de
     writer_kernel_desc.core_ranges = merge_cores;
     writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_kernel_desc.runtime_args = std::move(writer_runtime_args);
+    writer_kernel_desc.buffer_bindings = std::move(writer_buffer_bindings);
     writer_kernel_desc.config = WriterConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(writer_kernel_desc));
 

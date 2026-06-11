@@ -169,25 +169,24 @@ tt::tt_metal::ProgramDescriptor BcastMultiCoreHProgramFactory::create_descriptor
         }
         const uint32_t num_tensor_tiles_per_core = NC * Ht_per_core * Wt;
 
-        reader_desc.runtime_args.emplace_back(
+        // Input addresses at args 0 (src0) and 4 (src1) as Buffer* for in-place cache-hit patching.
+        reader_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                src0_buffer->address(),     // 0
-                0,                          // 1
-                0,                          // 2
-                num_tensor_tiles_per_core,  // 3
-                src1_buffer->address(),     // 4
-                0,                          // 5
-                0,                          // 6
-                num_btensor_tiles,          // 7
-                num_tensor_tiles_per_core,  // 8
-                NC,                         // 9
-                Ht_per_core,                // 10
-                Wt,                         // 11
-                bnc1,                       // 12
-                num_Wtiles_read,            // 13
-                Ht * Wt,                    // 14
-            });
+            {src0_buffer,                // 0
+             0u,                         // 1
+             0u,                         // 2
+             num_tensor_tiles_per_core,  // 3
+             src1_buffer,                // 4
+             0u,                         // 5
+             0u,                         // 6
+             num_btensor_tiles,          // 7
+             num_tensor_tiles_per_core,  // 8
+             NC,                         // 9
+             Ht_per_core,                // 10
+             Wt,                         // 11
+             bnc1,                       // 12
+             num_Wtiles_read,            // 13
+             Ht * Wt});                  // 14
 
         compute_desc.runtime_args.emplace_back(
             core,
@@ -197,19 +196,8 @@ tt::tt_metal::ProgramDescriptor BcastMultiCoreHProgramFactory::create_descriptor
                 Wt            // Wt
             });
 
-        writer_desc.runtime_args.emplace_back(
-            core,
-            KernelDescriptor::CoreRuntimeArgs{
-                dst_buffer->address(),
-                0,
-                0,
-                Ht_per_core,
-                Wt,
-                num_Wtiles_read,
-                0,
-                NC,
-                Ht * Wt,
-            });
+        // Output address at arg 0 as Buffer*.
+        writer_desc.emplace_runtime_args(core, {dst_buffer, 0u, 0u, Ht_per_core, Wt, num_Wtiles_read, 0u, NC, Ht * Wt});
 
         num_Wtiles_read += Ht_per_core * Wt;
     }

@@ -8,8 +8,11 @@
 
 #include <optional>
 #include <variant>
+#include <vector>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include "ttnn/types.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/operation.hpp"
 
 namespace ttnn::prim {
@@ -75,6 +78,20 @@ struct SoftmaxDeviceOperation {
     static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, const Tensor&);
+
+    // Opts the op into the descriptor fast-path (no create_descriptor() rebuild on a cache hit).
+    // The interleaved SoftmaxProgramFactoryAttentionOptimized factory binds every per-dispatch
+    // address as a Buffer* rt-arg, so it has nothing to re-apply (returns empty). The sharded
+    // SoftmaxShardedProgramFactoryAttentionOptimized factory binds input/output (and sharded mask)
+    // as CB `.buffer`, but bakes the mask buffer ADDRESS into reader arg index 1 (used by the
+    // TensorAccessor NoC read for non-sharded masks); that address changes per dispatch and must be
+    // re-applied here. All other reader args (scale, mask_start_tile_id, num_tiles_in_attn_mask) are
+    // shape/attr-derived and covered by compute_program_hash.
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t&,
+        const tensor_args_t&,
+        tensor_return_value_t&,
+        const std::optional<ttnn::MeshCoordinate>& = std::nullopt);
 };
 
 Tensor softmax(

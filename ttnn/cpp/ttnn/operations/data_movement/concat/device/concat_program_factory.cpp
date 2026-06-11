@@ -288,6 +288,13 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
 
         reader_desc.runtime_args.emplace_back(core, std::move(reader_kernel_args));
         writer_desc.runtime_args.emplace_back(core, std::move(writer_kernel_args));
+        // Input addresses sit at reader args [3 .. 3+N), output address at writer arg 0. Register them
+        // as per-core BufferBindings so the fast cache-hit path patches them in place instead of
+        // rebuilding the descriptor every dispatch.
+        for (uint32_t j = 0; j < num_input_tensors; ++j) {
+            reader_desc.buffer_bindings.push_back({core, 3u + j, input_tensors[j].buffer()});
+        }
+        writer_desc.buffer_bindings.push_back({core, 0u, dst_buffer});
         num_pages_written += num_pages_per_core;
     }
 

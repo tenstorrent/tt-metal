@@ -194,8 +194,8 @@ tt::tt_metal::ProgramDescriptor moreh_nll_loss_backward_impl_2d(
     }
 
     auto* const target_buf = target.buffer();
-    const auto weight_addr = weight_has_value ? weight.value().buffer()->address() : 0u;
-    const auto divisor_addr = divisor_has_value ? divisor.value().buffer()->address() : 0u;
+    auto* const weight_buf = weight_has_value ? weight.value().buffer() : nullptr;
+    auto* const divisor_buf = divisor_has_value ? divisor.value().buffer() : nullptr;
     auto* const output_grad_buf = output_grad.buffer();
     auto* const input_grad_buf = input_grad.buffer();
 
@@ -218,8 +218,8 @@ tt::tt_metal::ProgramDescriptor moreh_nll_loss_backward_impl_2d(
             {
                 target_buf,
                 output_grad_buf,
-                weight_addr,
-                divisor_addr,
+                weight_buf,
+                divisor_buf,
                 ignore_index,
                 units_per_core,
                 tile_offset,
@@ -406,8 +406,8 @@ tt::tt_metal::ProgramDescriptor moreh_nll_loss_backward_impl_3d(
     }
 
     auto* const target_buf = target.buffer();
-    const auto weight_addr = weight_has_value ? weight.value().buffer()->address() : 0u;
-    const auto divisor_addr = divisor_has_value ? divisor.value().buffer()->address() : 0u;
+    auto* const weight_buf = weight_has_value ? weight.value().buffer() : nullptr;
+    auto* const divisor_buf = divisor_has_value ? divisor.value().buffer() : nullptr;
     auto* const output_grad_buf = output_grad.buffer();
     auto* const input_grad_buf = input_grad.buffer();
 
@@ -430,8 +430,8 @@ tt::tt_metal::ProgramDescriptor moreh_nll_loss_backward_impl_3d(
             {
                 target_buf,
                 output_grad_buf,
-                weight_addr,
-                divisor_addr,
+                weight_buf,
+                divisor_buf,
                 ignore_index,
                 units_per_core,
                 tile_offset,
@@ -621,8 +621,8 @@ tt::tt_metal::ProgramDescriptor moreh_nll_loss_backward_impl_4d(
     }
 
     auto* const target_buf = target.buffer();
-    const auto weight_addr = weight_has_value ? weight.value().buffer()->address() : 0u;
-    const auto divisor_addr = divisor_has_value ? divisor.value().buffer()->address() : 0u;
+    auto* const weight_buf = weight_has_value ? weight.value().buffer() : nullptr;
+    auto* const divisor_buf = divisor_has_value ? divisor.value().buffer() : nullptr;
     auto* const output_grad_buf = output_grad.buffer();
     auto* const input_grad_buf = input_grad.buffer();
 
@@ -645,8 +645,8 @@ tt::tt_metal::ProgramDescriptor moreh_nll_loss_backward_impl_4d(
             {
                 target_buf,
                 output_grad_buf,
-                weight_addr,
-                divisor_addr,
+                weight_buf,
+                divisor_buf,
                 ignore_index,
                 units_per_core,
                 tile_offset,

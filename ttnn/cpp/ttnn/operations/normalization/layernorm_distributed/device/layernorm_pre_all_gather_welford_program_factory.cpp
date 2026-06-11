@@ -84,9 +84,9 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
     log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
     log_debug(tt::LogOp, "out_data_format: {}", out_data_format);
 
-    auto a_addr = a.buffer()->address();
-    auto dst_addr = output.buffer()->address();
-    auto b_addr = fuse_pre_add ? b->buffer()->address() : 0;
+    auto* a_buf = a.buffer();
+    auto* dst_buf = output.buffer();
+    auto* b_buf = fuse_pre_add ? b->buffer() : nullptr;
 
     // Sized for double-buffered block-sized chunks: the welford compute kernel waits on
     // block_size tiles at a time, so the reader must be able to fill that many while the
@@ -175,6 +175,12 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
     writer_runtime_args.reserve(num_cores);
     compute_runtime_args.reserve(num_cores);
 
+    // Record per-core buffer bindings alongside the (locally built) uint32 runtime-arg vectors.
+    // The input/residual/output addresses sit at fixed arg positions; binding them lets the
+    // framework patch them on the cache-hit fast path instead of rebuilding the descriptor.
+    KernelDescriptor::BufferBindings reader_buffer_bindings;
+    KernelDescriptor::BufferBindings writer_buffer_bindings;
+
     uint32_t curr_row = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
@@ -191,14 +197,21 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
         uint32_t in_tile_offset = curr_row * Wt;
         uint32_t out_tile_offset = curr_row * out0_tiles;
 
-        std::vector<uint32_t> reader_args = {a_addr, num_tile_rows_per_core, Wt, in_tile_offset};
+        // Input addresses kept inline in the uint32 vector; bound below via BufferBindings so the
+        // framework patches them on the cache-hit fast path instead of rebuilding the descriptor.
+        // arg 0 = a (input); arg 4 = b (residual, when fused).
+        std::vector<uint32_t> reader_args = {a_buf->address(), num_tile_rows_per_core, Wt, in_tile_offset};
+        reader_buffer_bindings.push_back({core, 0, a_buf});
         if (fuse_pre_add) {
-            reader_args.push_back(b_addr);
+            reader_args.push_back(b_buf->address());
+            reader_buffer_bindings.push_back({core, 4, b_buf});
         }
         reader_runtime_args.emplace_back(core, std::move(reader_args));
         compute_runtime_args.emplace_back(core, std::vector<uint32_t>{num_tile_rows_per_core});
+        // arg 0 = output address.
         writer_runtime_args.emplace_back(
-            core, std::vector<uint32_t>{dst_addr, num_tile_rows_per_core * out0_tiles, out_tile_offset});
+            core, std::vector<uint32_t>{dst_buf->address(), num_tile_rows_per_core * out0_tiles, out_tile_offset});
+        writer_buffer_bindings.push_back({core, 0, dst_buf});
 
         curr_row += num_tile_rows_per_core;
     }
@@ -218,6 +231,7 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
     reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_kernel_desc.defines = KernelDescriptor::Defines(reader_defines.begin(), reader_defines.end());
     reader_kernel_desc.runtime_args = std::move(reader_runtime_args);
+    reader_kernel_desc.buffer_bindings = std::move(reader_buffer_bindings);
     reader_kernel_desc.config = ReaderConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(reader_kernel_desc));
 
@@ -230,6 +244,7 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
     writer_kernel_desc.core_ranges = all_cores;
     writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_kernel_desc.runtime_args = std::move(writer_runtime_args);
+    writer_kernel_desc.buffer_bindings = std::move(writer_buffer_bindings);
     writer_kernel_desc.config = WriterConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(writer_kernel_desc));
 

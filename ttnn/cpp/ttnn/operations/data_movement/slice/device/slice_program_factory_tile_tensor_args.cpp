@@ -127,6 +127,7 @@ tt::tt_metal::ProgramDescriptor SliceTileTensorArgsProgramFactory::create_descri
     constexpr uint32_t start_offset = 0;
     KernelDescriptor::RuntimeArgs reader_runtime_args;
     KernelDescriptor::RuntimeArgs writer_runtime_args;
+    KernelDescriptor::BufferBindings writer_desc_buffer_bindings;
     uint32_t num_tiles_written = 0;
     for (const auto& core : corerange_to_cores(all_cores)) {
         uint32_t num_tiles_per_core;
@@ -157,6 +158,9 @@ tt::tt_metal::ProgramDescriptor SliceTileTensorArgsProgramFactory::create_descri
         reader_runtime_args.emplace_back(core, std::move(reader_args));
         writer_runtime_args.emplace_back(
             core, std::vector<uint32_t>{dst_buffer->address(), num_tiles_per_core, num_tiles_written});
+        // Output address sits at writer arg 0; register a per-core BufferBinding so the fast
+        // cache-hit path patches it in place instead of rebuilding the descriptor.
+        writer_desc_buffer_bindings.push_back({core, 0u, dst_buffer});
         num_tiles_written += num_tiles_per_core;
     }
 
@@ -169,6 +173,11 @@ tt::tt_metal::ProgramDescriptor SliceTileTensorArgsProgramFactory::create_descri
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.runtime_args = std::move(reader_runtime_args);
     reader_desc.common_runtime_args = std::move(reader_common_args);
+    // src/start/end buffer addresses sit at common runtime args [0],[1],[2]; register them as
+    // CommonBufferBindings so the fast cache-hit path patches them in place.
+    reader_desc.common_buffer_bindings.push_back({0u, src_buffer});
+    reader_desc.common_buffer_bindings.push_back({1u, start_buffer});
+    reader_desc.common_buffer_bindings.push_back({2u, end_buffer});
     reader_desc.config = ReaderConfigDescriptor{};
     desc.kernels.push_back(std::move(reader_desc));
 
@@ -179,6 +188,7 @@ tt::tt_metal::ProgramDescriptor SliceTileTensorArgsProgramFactory::create_descri
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.runtime_args = std::move(writer_runtime_args);
+    writer_desc.buffer_bindings = std::move(writer_desc_buffer_bindings);
     writer_desc.config = WriterConfigDescriptor{};
     desc.kernels.push_back(std::move(writer_desc));
 

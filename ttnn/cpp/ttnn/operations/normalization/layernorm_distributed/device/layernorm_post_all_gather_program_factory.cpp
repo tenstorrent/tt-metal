@@ -290,6 +290,27 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherProgramFactory::create_des
     KernelDescriptor::RuntimeArgs reader_runtime_args;
     KernelDescriptor::RuntimeArgs writer_runtime_args;
     KernelDescriptor::RuntimeArgs compute_runtime_args;
+    // Buffer-address slots: reader has a(0), gamma(6), beta(7), stats(8); writer has output(0).
+    // Register them as per-core BufferBindings so the fast cache-hit path patches the addresses
+    // in place instead of rebuilding the descriptor. gamma/beta are only bound when present
+    // (absent => the arg holds 0, no buffer to bind).
+    KernelDescriptor::BufferBindings reader_buffer_bindings;
+    KernelDescriptor::BufferBindings writer_buffer_bindings;
+    Buffer* a_buffer = a.buffer();
+    Buffer* stats_buffer = stats.buffer();
+    Buffer* gamma_buffer = gamma.has_value() ? gamma.value().buffer() : nullptr;
+    Buffer* beta_buffer = beta.has_value() ? beta.value().buffer() : nullptr;
+    Buffer* output_buffer = output.buffer();
+    auto bind_reader_addrs = [&](const CoreCoord& core) {
+        reader_buffer_bindings.push_back({core, 0u, a_buffer});
+        reader_buffer_bindings.push_back({core, 8u, stats_buffer});
+        if (gamma_buffer != nullptr) {
+            reader_buffer_bindings.push_back({core, 6u, gamma_buffer});
+        }
+        if (beta_buffer != nullptr) {
+            reader_buffer_bindings.push_back({core, 7u, beta_buffer});
+        }
+    };
 
     if (use_2d_kernel) {
         for (uint32_t x = 0; x < cores_x; ++x) {
@@ -321,6 +342,8 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherProgramFactory::create_des
                 compute_runtime_args.emplace_back(core, std::vector<uint32_t>{tiles_per_core_x});
                 writer_runtime_args.emplace_back(
                     core, std::vector<uint32_t>{dst_addr, tiles_per_core_x * tiles_per_core_y, tile_offset});
+                bind_reader_addrs(core);
+                writer_buffer_bindings.push_back({core, 0u, output_buffer});
             }
         }
     } else {
@@ -357,6 +380,8 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherProgramFactory::create_des
             compute_runtime_args.emplace_back(core, std::vector<uint32_t>{num_tile_rows_per_core});
             writer_runtime_args.emplace_back(
                 core, std::vector<uint32_t>{dst_addr, num_tile_rows_per_core * Wt, tile_offset});
+            bind_reader_addrs(core);
+            writer_buffer_bindings.push_back({core, 0u, output_buffer});
             curr_row += num_tile_rows_per_core;
         }
     }
@@ -376,6 +401,7 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherProgramFactory::create_des
     reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_kernel_desc.defines = KernelDescriptor::Defines(reader_defines.begin(), reader_defines.end());
     reader_kernel_desc.runtime_args = std::move(reader_runtime_args);
+    reader_kernel_desc.buffer_bindings = std::move(reader_buffer_bindings);
     reader_kernel_desc.config = ReaderConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(reader_kernel_desc));
 
@@ -388,6 +414,7 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherProgramFactory::create_des
     writer_kernel_desc.core_ranges = all_cores;
     writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_kernel_desc.runtime_args = std::move(writer_runtime_args);
+    writer_kernel_desc.buffer_bindings = std::move(writer_buffer_bindings);
     writer_kernel_desc.config = WriterConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(writer_kernel_desc));
 

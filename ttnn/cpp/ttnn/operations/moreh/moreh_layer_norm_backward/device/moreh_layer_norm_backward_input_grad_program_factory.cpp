@@ -284,7 +284,9 @@ MorehLayerNormBackwardInputGradOperation::MorehLayerNormBackwardInputGradFactory
     auto* const mean_buf = mean.buffer();
     auto* const rstd_buf = rstd.buffer();
 
-    const auto gamma_addr = gamma_has_value ? gamma.value().buffer()->address() : 0u;
+    // gamma is an optional input tensor_arg; pass Buffer* (nullptr -> 0) so the fast cache-hit
+    // path patches it instead of leaving a baked raw address.
+    Buffer* const gamma_buf = gamma_has_value ? gamma.value().buffer() : nullptr;
 
     auto* const input_grad_buf = input_grad.buffer();
 
@@ -309,7 +311,7 @@ MorehLayerNormBackwardInputGradOperation::MorehLayerNormBackwardInputGradFactory
              input_buf,
              mean_buf,
              rstd_buf,
-             gamma_addr,
+             gamma_buf,
              num_rows_per_core,
              num_inner,
              tile_offset,

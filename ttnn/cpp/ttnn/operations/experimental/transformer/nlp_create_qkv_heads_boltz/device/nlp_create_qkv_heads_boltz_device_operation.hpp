@@ -5,13 +5,16 @@
 #pragma once
 
 #include <optional>
+#include <vector>
 #include "ttnn/operation.hpp"
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"  // exposes ttnn::MemoryConfig alias used in member/signature declarations
+#include "ttnn/distributed/types.hpp"
 
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -65,6 +68,15 @@ struct NlpCreateHeadsBoltzDeviceOperation {
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+
+    // Re-apply the address-derived runtime args on every cache hit. The Sharded factory bakes raw
+    // q/k/v base + per-core start addresses into the reader/writer rt-args; these change whenever the
+    // input (or optional kv) buffer is re-allocated, so they must be recomputed and re-applied.
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t&,
+        const tensor_args_t&,
+        tensor_return_value_t&,
+        const std::optional<ttnn::MeshCoordinate>& = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::transformer

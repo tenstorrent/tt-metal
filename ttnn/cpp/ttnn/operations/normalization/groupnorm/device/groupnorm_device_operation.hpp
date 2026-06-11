@@ -6,12 +6,15 @@
 
 #include <optional>
 #include <variant>
+#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 
 #include "groupnorm_device_operation_types.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/distributed/types.hpp"
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::prim {
 
@@ -52,6 +55,19 @@ struct GroupNormDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
+
+    // Opts every groupnorm factory into the descriptor cache-hit fast path. All three factories
+    // bind every per-dispatch (address-derived) runtime arg as either a CB `.buffer` binding
+    // (sharded input/output, reciprocals everywhere) or a patchable Buffer* runtime-arg binding
+    // (DRAM input/output/gamma/beta/masks). Every remaining runtime arg is derived from an
+    // attribute that is part of the program hash (eps, num_groups) or from the tensor shape/grid,
+    // so it is stable across cache hits on the same hash entry. Hence nothing needs re-applying and
+    // this returns {} for all factories (the empty result still enables the CB/Buffer* patch path).
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t&,
+        const tensor_args_t&,
+        tensor_return_value_t&,
+        const std::optional<ttnn::MeshCoordinate>& = std::nullopt);
 };
 
 Tensor group_norm(

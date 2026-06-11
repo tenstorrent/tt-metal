@@ -135,6 +135,9 @@ tt::tt_metal::ProgramDescriptor SliceTileProgramFactory::create_descriptor(
     reader_kernel_desc.named_compile_time_args = {{"cb_in", src0_cb_index}};
     reader_kernel_desc.runtime_args = std::move(reader_runtime_args);
     reader_kernel_desc.common_runtime_args = std::move(reader_common_args);
+    // Input address lives in common arg 0; register it as a CommonBufferBinding so the fast cache-hit
+    // path patches it in place instead of rebuilding the descriptor every dispatch.
+    reader_kernel_desc.common_buffer_bindings.push_back({0u, src0_buffer});
     reader_kernel_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(reader_kernel_desc));
 
@@ -145,6 +148,9 @@ tt::tt_metal::ProgramDescriptor SliceTileProgramFactory::create_descriptor(
 
     // Writer per-core runtime args: [dst_addr, num_tiles, start_id]
     tt::tt_metal::KernelDescriptor::RuntimeArgs writer_runtime_args;
+    // Output address is per-core arg 0; record a BufferBinding per active core so the fast cache-hit
+    // path patches it in place instead of rebuilding the descriptor every dispatch.
+    tt::tt_metal::KernelDescriptor::BufferBindings writer_buffer_bindings;
     num_tiles_written = 0;
     for (const auto& core : corerange_to_cores(all_cores)) {
         uint32_t num_tiles_per_core;
@@ -160,6 +166,7 @@ tt::tt_metal::ProgramDescriptor SliceTileProgramFactory::create_descriptor(
 
         writer_runtime_args.emplace_back(
             core, std::vector<uint32_t>{dst_buffer->address(), num_tiles_per_core, num_tiles_written});
+        writer_buffer_bindings.push_back({core, 0u, dst_buffer});
         num_tiles_written += num_tiles_per_core;
     }
 
@@ -172,6 +179,7 @@ tt::tt_metal::ProgramDescriptor SliceTileProgramFactory::create_descriptor(
     writer_kernel_desc.compile_time_args = writer_compile_time_args;
     writer_kernel_desc.named_compile_time_args = {{"cb_out", src0_cb_index}};
     writer_kernel_desc.runtime_args = std::move(writer_runtime_args);
+    writer_kernel_desc.buffer_bindings = std::move(writer_buffer_bindings);
     writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(writer_kernel_desc));
 

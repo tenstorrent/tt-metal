@@ -248,7 +248,7 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
 
     auto* const input_grad_buf = input_grad.buffer();
 
-    const auto gamma_addr = gamma_has_value ? gamma.value().buffer()->address() : 0u;
+    Buffer* const gamma_buf = gamma_has_value ? gamma.value().buffer() : nullptr;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -262,17 +262,19 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
             TT_THROW("Core not in specified core ranges.");
         }
 
-        // NOTE: do not pass Buffer* here. gamma_addr is an optional-tensor address
-        // and tile_offset/etc are per-core shape-derived; using BufferBinding would
-        // skip create_descriptor() on cache hits and leave those scalars stale.
-        reader_desc.runtime_args.emplace_back(
+        // args 0-3 are input tensor base addresses (output_grad, input, mean, rstd);
+        // arg 4 is the optional gamma tensor address (nullptr -> 0u when absent).
+        // Bind as Buffer* so the framework patches the addresses on cache hits without
+        // rebuilding the descriptor; the remaining scalars are identical across hits of
+        // the same cached program (shape variation changes the program hash).
+        reader_desc.emplace_runtime_args(
             core,
-            tt::tt_metal::KernelDescriptor::CoreRuntimeArgs{
-                output_grad_buf->address(),
-                input_buf->address(),
-                mean_buf->address(),
-                rstd_buf->address(),
-                gamma_addr,
+            std::vector<std::variant<uint32_t, Buffer*>>{
+                output_grad_buf,
+                input_buf,
+                mean_buf,
+                rstd_buf,
+                gamma_buf,
                 tile_offset,
                 num_rows_per_core,
                 num_inner_tiles,
@@ -282,11 +284,11 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
                 origin_w,
             });
 
-        // writer
-        writer_desc.runtime_args.emplace_back(
+        // writer arg 0 is the output (input_grad) base address.
+        writer_desc.emplace_runtime_args(
             core,
-            tt::tt_metal::KernelDescriptor::CoreRuntimeArgs{
-                input_grad_buf->address(),
+            std::vector<std::variant<uint32_t, Buffer*>>{
+                input_grad_buf,
                 tile_offset,
                 num_rows_per_core,
                 num_inner_tiles,
