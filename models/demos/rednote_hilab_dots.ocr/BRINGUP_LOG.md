@@ -4,7 +4,7 @@
 **Slug:** `rednote_hilab_dots.ocr`
 **Target Device:** qb (blackhole)
 **Started:** 2026-06-10T00:12:02Z
-**Updated:** 2026-06-11T00:09:22Z
+**Updated:** 2026-06-11T01:06:25Z
 
 ## Block Status
 
@@ -58,7 +58,7 @@
 | text_attention | reference | done | 1.000000 | 0 | eager causal GQA 12Q/2KV hd128 qkv-bias o_proj-no-bias, rope theta=1e6, real layers.0 weights |
 | text_attention | ttnn | done | 0.999047 | 0 | Fused per-chip QKV ttnn.linear(+bias) -> nlp_create_qkv_heads (3 Q + KV replicated to 3, MHA core) -> explicit fp32 HF-convention rope (slice/neg/concat/mul/add, vision-tower recipe) -> explicit fp32 causal core matmul QK^T * scale + additive triu mask -> ttnn.softmax(numeric_stable) -> matmul PV -> nlp_concat_heads -> row-parallel o_proj + sync all_gather all-reduce. bf16 SDPA rejected by measurement: layer-0 logits reach +-3122 (std 664, Qwen2 attention sink); per-stage isolation showed q/k/v+rope 0.9999+ but bf16 SDPA core 0.9265 (0.92-0.97 across program configs), so the whole path runs fp32 (HiFi4 + fp32 acc; SDPA kernel is bf16-only) -- guard satisfied via softmax alternative. kv_replication=2 per parallelism plan via per-chip KV row repeat; 1x4 mesh; replicated all-reduced output vs golden. Guard ok (lint 0, kernels ok, no new host ops). KB entries reviewed (nlp_create_qkv_heads idiom applied); decode/KV-cache deferred to generation phase. Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | text_attention | debug | n/a | — | 0 |  |
-| text_attention | optimization | pending | — | 0 | OCCUPANCY REDO: per the new occupancy+convergence contract — query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid |
+| text_attention | optimization | done | 0.999048 | 0 | OCCUPANCY REDO complete at the PRODUCTION posture (bfp8 attn weights, 1x4 BH mesh, queried grid 11x10=110; tracy under --traced metal trace replay). Decode [1,1,1,1536]@KV-slot-1500: 111.2->97.4us/device (-12.4%) via DRAM-bank-width-sharded weights + L1 width-sharded activation rows for the three M=1 matmuls (QKV 21.6->10.7us, rope 9.7->8.2, o_proj 26.0->19.9; core sweep 4/8/12/16/24/48 -> 8c ibw=6 best, 48c/ibw=1 loses 34.6 vs 24.5), whole rope chain held in the 768-wide 8-core L1 shard (one s2i+slice instead of three reshards), all_gather gathers straight into o_proj shard. BUG FOUND: DRAM-sharded matmul kernel silently corrupts with fused bias (PCC->0.01, garbage pad lanes) -> per-layer fp32 width-sharded bias add (roped row PCC 0.9999997); first attempt folded bias into shared cos/sin rows, broke layers 1-27 (per-layer bias vs shared rot_step), caught by e2e, fixed, re-gated. Prefill [1,1,128,1536] fp32: 206.8->149.0us/device (-28%) via 2D-mcast program configs (QKV 41.7->12.2us@40c, o_proj 47.5->22.8@32c) + fp32 CB-budget guard (S=96..1184 swept; odd-M overflow falls back). Ceiling evidence: matmuls bank-BW bound (~206 GB/s), SDPA 18.8% at 64-core kernel cap (k_chunk 64/128/256 swept), all_gather at 2-eth-link fabric floor (4 links TT_FATAL), BinaryNg full grid. Gates: block PCC 0.999048 (>0.99), real-weights layers.0/27 0.999048/0.999917, e2e OCR WER 0.0 == HF, 180-token traced AR drift gate traced==untraced, lint clean, 15 neighboring tests pass. KB applied: nlp_create_qkv_heads_decode/nlp_concat_heads_decode L1 patterns. Guard ok (lint 0, traced tracy artifact verified). Worker dispatched via Agent tool; worker committed code mid-tick (24c1ea9beea), orchestrator canonical state row written this commit. |
 | text_attention | real_weights | done | 0.999049 | 0 | text_attention_weights loader added to consolidated tt/weight_loader.py (pure-PyTorch, memoized key-filtered safetensors load of model.layers.{i}.self_attn.*: q_proj [1536,1536]+bias, k/v_proj [256,1536]+bias (2 KV heads x hd128), o_proj [1536,1536] bias-free; raw HF per-projection tensors handed over exactly as TtTextAttention.__init__ expects - the module does its own fused-QKV repack and kv_replication; 5507072 params/layer; __main__ self-test extended layers.0/layers.27, all 7 shapes asserted). Stage-1 parametric tests/test_real_hf_weights.py row runs TtTextAttention at the production operating point (fp32 explicit-attention path - layer-0 logits +-3122, bf16 SDPA ~0.92 - TP-sharded 1x4 mesh: 3 Q heads/chip, kv_replication=2, row-parallel o_proj + reduce_scatter/all_gather all-reduce; golden real post-input_layernorm activation [1,128,1536] + golden rope tables theta=1e6) vs the pure-PyTorch reference with the same real weights at TWO sites: layers.0 PCC 0.999049, layers.27 0.999918 (min 0.999049 > 0.99 reported). Block forward untouched; full harness re-run, all 10 rows passing (9 prior rows unchanged). Guard ok (lint 0, params_loaded 11014144>0). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
 | text_mlp | reference | done | 1.000000 | 0 | Qwen2 SwiGLU 1536->8960->1536 no bias, real layers.0 weights |
 | text_mlp | ttnn | done | 0.999991 | 0 | Qwen2 SwiGLU down(silu(gate(x))*up(x)) 1536->8960->1536 no bias: two sibling ttnn.linear branches + explicit ttnn.silu + ttnn.mul + row-parallel down ttnn.linear, mirroring reference_impl models/tt_transformers/tt/mlp.py (KB ttnn_silu_2 cited; KB ttnn_mul_1 fused input_tensor_a_activations=[SILU] variant deferred to optimization since the mlp guard requires a traced silu/gelu kernel). Parallelism plan placement=shard implemented: gate/up column-parallel ShardTensorToMesh(dim=-1) (per-chip intermediate 8960/4=2240), down row-parallel (dim=-2) with per-chip PARTIAL sums combined by sync all_gather(dim=3, Topology.Linear) + local adds (same all-reduce idiom as text_attention o_proj; async CCL deferred to optimization per tp-guidance). HiFi4+fp32-acc, bf16; real model.layers.0.mlp weights re-loaded from checkpoint in the test; all-reduced replicated output compared single-device vs golden. Guard ok (lint 0, kernels ok, no new host ops). Dispatched inline (no Agent tool in tick context); worker contract followed verbatim. |
@@ -84,7 +84,6 @@
 
 ## Recent Ticks
 
-- tick 53 (2026-06-10T21:05:20Z): perf[ocr] — ok
 - tick 54 (2026-06-10T21:29:25Z): device[vision_patch_embed] — ok
 - tick 55 (2026-06-10T21:37:18Z): device[vision_rmsnorm] — ok
 - tick 56 (2026-06-10T21:53:05Z): device[vision_attention] — ok
@@ -94,6 +93,7 @@
 - tick 60 (2026-06-10T23:08:15Z): device[vision_transformer] — ok
 - tick 61 (2026-06-10T23:20:37Z): device[embedding] — ok
 - tick 62 (2026-06-11T00:09:22Z): device[text_rmsnorm] — ok
+- tick 63 (2026-06-11T01:06:25Z): device[text_attention] — ok
 
 ## Host-Resident Exceptions
 
