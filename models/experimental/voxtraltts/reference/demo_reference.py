@@ -120,9 +120,8 @@ def run_cpu(args: argparse.Namespace) -> None:
         _write_audio(output_path, audio_array.numpy(), args.sample_rate)
         print(f"Audio saved to {output_path}")
 
-    print(
-        f"CPU Reference: Generation={elapsed:.4f}s | Audio={output_audio_dur:.2f}s | RTF={output_audio_dur / elapsed:.4f}"
-    )
+    rtf = elapsed / output_audio_dur if output_audio_dur > 0 else float("inf")
+    print(f"CPU Reference: Generation={elapsed:.4f}s | Audio={output_audio_dur:.2f}s | RTF={rtf:.4f}")
 
 
 def run_non_streaming(inputs: dict[str, Any] | list[dict[str, Any]], args: argparse.Namespace) -> None:
@@ -148,7 +147,8 @@ def run_non_streaming(inputs: dict[str, Any] | list[dict[str, Any]], args: argpa
             _write_audio(output_path, audio_array, args.sample_rate)
             print(f"Audio saved to {output_path}")
 
-    print(f"Generation={elapsed:.4f}s | TotalAudio={output_audio_dur:.2f}s | RTF={output_audio_dur / elapsed:.4f}")
+    rtf = elapsed / output_audio_dur if output_audio_dur > 0 else float("inf")
+    print(f"Generation={elapsed:.4f}s | TotalAudio={output_audio_dur:.2f}s | RTF={rtf:.4f}")
 
     del llm
     torch.cuda.empty_cache()
@@ -221,7 +221,7 @@ async def run_streaming(inputs: dict[str, Any] | list[dict[str, Any]], args: arg
 
         print(
             f"Request {batch_idx}: TTFA={ttfa:.4f}s | Generation={gen_elapsed:.4f}s | "
-            f"Audio={output_audio_dur:.2f}s | RTF={output_audio_dur / gen_elapsed:.4f}"
+            f"Audio={output_audio_dur:.2f}s | RTF={gen_elapsed / output_audio_dur:.4f}"
         )
 
         async with results_lock:
@@ -240,8 +240,8 @@ async def run_streaming(inputs: dict[str, Any] | list[dict[str, Any]], args: arg
     avg_ttfa = total_ttfa / ttfa_count if ttfa_count else float("nan")
     print(
         f"All requests: Generation={elapsed_all:.4f}s | TotalAudio={total_audio_dur:.2f}s | "
-        f"AvgTTFA={avg_ttfa:.4f}s | RTF(total)={total_audio_dur / elapsed_all:.4f} | "
-        f"RTF(per-request)={total_audio_dur / total_gen_time:.4f}"
+        f"AvgTTFA={avg_ttfa:.4f}s | RTF(total)={elapsed_all / total_audio_dur:.4f} | "
+        f"RTF(per-request)={total_gen_time / total_audio_dur:.4f}"
     )
 
     async_omni.shutdown()
