@@ -4152,36 +4152,15 @@ def _main(activations, weights):
         ),
     )
     ttnn.deallocate(ttnn_typecast_63, False)
-    ttnn_slice_161 = ttnn.slice(
+    # E_shard: fuse matmul_15's 3 qkv-down reductions into ONE all_gather+sum (layer 1).
+    ttnn_mm15_4d = ttnn.reshape(
         ttnn_matmul_15,
-        [0, 0],
-        [32, 576],
-        [1, 1],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn_slice_163 = ttnn.slice(
-        ttnn_matmul_15,
-        [0, 640],
-        [32, 2176],
-        [1, 1],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn_slice_164 = ttnn.slice(
-        ttnn_matmul_15,
-        [0, 2176],
-        [32, 2304],
-        [1, 1],
+        [1, 32, 2304],
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
     ttnn.deallocate(ttnn_matmul_15, False)
-    ttnn_reshape_74 = ttnn.reshape(
-        ttnn_slice_164,
-        [1, 32, 128],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_slice_164, False)
-    ttnn_all_gather_13 = ttnn.all_gather(
-        input_tensor=ttnn_reshape_74,
+    ttnn_mm15_ag = ttnn.all_gather(
+        input_tensor=ttnn_mm15_4d,
         dim=0,
         cluster_axis=1,
         subdevice_id=None,
@@ -4189,9 +4168,9 @@ def _main(activations, weights):
         num_links=None,
         topology=ttnn.Topology.Ring,
     )
-    ttnn.deallocate(ttnn_reshape_74, False)
-    ttnn_sum_10 = ttnn.sum(
-        ttnn_all_gather_13,
+    ttnn.deallocate(ttnn_mm15_4d, False)
+    ttnn_mm15_red = ttnn.sum(
+        ttnn_mm15_ag,
         [0],
         False,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
@@ -4199,13 +4178,36 @@ def _main(activations, weights):
             math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
         ),
     )
-    ttnn.deallocate(ttnn_all_gather_13, False)
+    ttnn.deallocate(ttnn_mm15_ag, False)
+    ttnn_slice_161 = ttnn.slice(
+        ttnn_mm15_red,
+        [0, 0],
+        [32, 576],
+        [1, 1],
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+    )
+    ttnn_slice_163 = ttnn.slice(
+        ttnn_mm15_red,
+        [0, 640],
+        [32, 2176],
+        [1, 1],
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+    )
+    ttnn_slice_164 = ttnn.slice(
+        ttnn_mm15_red,
+        [0, 2176],
+        [32, 2304],
+        [1, 1],
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+    )
+    ttnn.deallocate(ttnn_mm15_red, False)
+    # E_shard: indexer already reduced by the fused all_gather -> typecast slice directly.
     ttnn_typecast_64 = ttnn.typecast(
-        ttnn_sum_10,
+        ttnn_slice_164,
         ttnn.DataType.FLOAT32,
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
-    ttnn.deallocate(ttnn_sum_10, False)
+    ttnn.deallocate(ttnn_slice_164, False)
     ttnn_reshape_75 = ttnn.reshape(
         ttnn_typecast_64,
         [32, 1, 128],
@@ -4355,44 +4357,10 @@ def _main(activations, weights):
         page_table=None,
     )
     ttnn.deallocate(ttnn_to_memory_config_3, False)
-    ttnn_reshape_81 = ttnn.reshape(
-        ttnn_slice_163,
-        [1, 1, 32, 1536],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_slice_163, False)
-    ttnn_reduce_scatter_6 = ttnn.reduce_scatter(
-        input_tensor=ttnn_reshape_81,
-        dim=3,
-        cluster_axis=1,
-        subdevice_id=None,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
-        topology=ttnn.Topology.Ring,
-        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        ),
-    )
-    ttnn.deallocate(ttnn_reshape_81, False)
-    ttnn_reshape_82 = ttnn.reshape(
-        ttnn_reduce_scatter_6,
-        [32, 192],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_reduce_scatter_6, False)
-    ttnn_all_gather_14 = ttnn.all_gather(
-        input_tensor=ttnn_reshape_82,
-        dim=1,
-        cluster_axis=1,
-        subdevice_id=None,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
-        topology=ttnn.Topology.Ring,
-    )
-    ttnn.deallocate(ttnn_reshape_82, False)
+    # E_shard: q_a already fully reduced by the fused all_gather (= the old
+    # reduce_scatter_6 + all_gather_14 result, [32,1536]) -> feed q_norm directly,
+    # eliminating BOTH those CCLs. Alias so rms_norm_2's input is unchanged.
+    ttnn_all_gather_14 = ttnn_slice_163
     ttnn_rms_norm_2 = ttnn.rms_norm(
         ttnn_all_gather_14,
         epsilon=9.9999999747524271e-07,
@@ -4472,32 +4440,8 @@ def _main(activations, weights):
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
     ttnn.deallocate(ttnn_matmul_21, False)
-    ttnn_reshape_96 = ttnn.reshape(
-        ttnn_slice_161,
-        [1, 32, 576],
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-    )
-    ttnn.deallocate(ttnn_slice_161, False)
-    ttnn_all_gather_16 = ttnn.all_gather(
-        input_tensor=ttnn_reshape_96,
-        dim=0,
-        cluster_axis=1,
-        subdevice_id=None,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        num_links=None,
-        topology=ttnn.Topology.Ring,
-    )
-    ttnn.deallocate(ttnn_reshape_96, False)
-    ttnn_sum_13 = ttnn.sum(
-        ttnn_all_gather_16,
-        [0],
-        False,
-        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
-        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
-        ),
-    )
-    ttnn.deallocate(ttnn_all_gather_16, False)
+    # E_shard: kv_a already reduced by the fused all_gather -> slice_161 IS sum_13.
+    ttnn_sum_13 = ttnn_slice_161
     ttnn_slice_178 = ttnn.slice(
         ttnn_sum_13,
         [0, 0],
