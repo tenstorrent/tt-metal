@@ -304,7 +304,7 @@ inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t
  * @note @ref _llk_unpack_unary_operand_ is the matching execute call on this thread.
  */
 template <std::uint32_t UNP_SEL, bool TRANSPOSE_EN, bool IS_32b_DEST_EN, EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, TensorShape& tensor_shape, const std::uint32_t num_tiles)
+inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, const TensorShape& tensor_shape, const std::uint32_t num_tiles)
 {
     static_assert(!(TRANSPOSE_EN && reuse_dest != EltwiseBinaryReuseDestType::NONE), "Transpose is not supported with reuse_dest");
 

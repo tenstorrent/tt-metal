@@ -9,6 +9,7 @@
 #include "ckernel.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
+#include "quasar_test_common.h"
 #include "sfpu_stub.h"
 
 #ifdef LLK_TRISC_UNPACK
@@ -54,11 +55,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     buffer_descriptor_u bd_val = {0};
 
-    ckernel::TensorShape tensor_shape_A = {
-        .face_r_dim      = static_cast<std::uint8_t>(params.TEST_FACE_R_DIM),
-        .face_c_dim      = static_cast<std::uint8_t>(params.TEST_FACE_C_DIM),
-        .num_faces_r_dim = static_cast<std::uint8_t>(params.num_faces_r_dim_A),
-        .num_faces_c_dim = static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
+    const auto tensor_shape_A = tensor_shape_from_params(params);
 
     bd_val.f.l1_addr_16B = L1_ADDRESS(params.buffer_A[0]);
     bd_val.f.format      = static_cast<std::uint8_t>(formats.unpack_A_src);
@@ -158,11 +155,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
     }
 
-    ckernel::TensorShape tensor_shape_A = {
-        .face_r_dim      = static_cast<std::uint8_t>(params.TEST_FACE_R_DIM),
-        .face_c_dim      = static_cast<std::uint8_t>(params.TEST_FACE_C_DIM),
-        .num_faces_r_dim = static_cast<std::uint8_t>(params.num_faces_r_dim_A),
-        .num_faces_c_dim = static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
+    const auto tensor_shape_A = tensor_shape_from_params(params);
 
     buffer_descriptor_u bd_val = {0};
     tdma_descriptor_t tdma_desc;
