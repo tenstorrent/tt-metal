@@ -74,7 +74,7 @@ ALWI void sfpu_mul_bcast_col_init() { sfpu_bcast_col_init(); }
 // per-face loop and invoke the full-tile bcast helper exactly once, with the same
 // `_llk_math_eltwise_sfpu_start_(0)` / `_llk_math_eltwise_sfpu_done_()` brackets
 // the standalone helper used to set up by hand, plus the dst-bound LLK_ASSERTs in
-// `_sfpu_binary_check_and_call_`.
+// `_sfpu_binary_check_`.
 ALWI void sfpu_sub_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,

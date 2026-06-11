@@ -130,16 +130,17 @@ void call_unary_sfpu_operation_init()
  * Calls only the calculate portion of a unary SFPU operation.
  * Must be preceded by a call to call_unary_sfpu_operation_init() for the same operation.
  * Delegates to SFPU_UNARY_CALL from llk_math_eltwise_unary_sfpu_macros.h,
- * which funnel through ckernel::_sfpu_check_and_call_<DST_SYNC_MODE, DST_ACCUM_MODE>
- * (dst-bound LLK_ASSERT, then _llk_math_eltwise_unary_sfpu_params_). Face-looping
- * versus single-call behavior is selected by the explicit vector_mode parameter;
+ * which runs the ckernel::_sfpu_check_<DST_SYNC_MODE, DST_ACCUM_MODE>
+ * dst-bound LLK_ASSERT and then dispatches directly to
+ * _llk_math_eltwise_unary_sfpu_params_. Face-looping versus single-call
+ * behavior is selected by the explicit vector_mode parameter;
  * the default/non-face mode preserves the existing single-call full-tile behavior.
  *
  * DST_SYNC_MODE and DST_ACCUM_MODE are the first two template parameters, mirroring
  * the convention of the underlying SFPU macros and helpers (SFPU_UNARY_CALL,
- * _sfpu_check_and_call_, etc.) where the dst-sync/accum pair always leads. They
- * are forwarded to _sfpu_check_and_call_ so the dst-bound LLK_ASSERT is computed
- * against the kernel's actual sync/accumulation mode.
+ * _sfpu_check_, etc.) where the dst-sync/accum pair always leads. They are
+ * forwarded to _sfpu_check_ so the dst-bound LLK_ASSERT is computed against
+ * the kernel's actual sync/accumulation mode.
  *
  * @tparam DST_SYNC_MODE Kernel's DstSync mode (drives the dst-bound assert)
  * @tparam DST_ACCUM_MODE Kernel's dest-accumulation flag (drives the dst-bound assert)
@@ -492,14 +493,15 @@ constexpr SfpuType get_binary_comp_sfpu_type()
 /**
  * Calls only the calculate portion of a binary SFPU operation.
  * Must be preceded by a call to call_binary_sfpu_operation_init() for the same operation.
- * Uses SFPU_BINARY_CALL from llk_math_eltwise_binary_sfpu_macros.h, which funnels
- * through ckernel::_sfpu_binary_check_and_call_<DST_SYNC_MODE, DST_ACCUM_MODE>
- * (dst-bound LLK_ASSERTs, then _llk_math_eltwise_binary_sfpu_params_). The callable
- * receives (dst_index_in0, dst_index_in1, dst_index_out) forwarded from the params
+ * Uses SFPU_BINARY_CALL from llk_math_eltwise_binary_sfpu_macros.h, which
+ * runs the ckernel::_sfpu_binary_check_<DST_SYNC_MODE, DST_ACCUM_MODE>
+ * dst-bound LLK_ASSERTs and then dispatches directly to
+ * _llk_math_eltwise_binary_sfpu_params_. The callable receives
+ * (dst_index_in0, dst_index_in1, dst_index_out) forwarded from the params
  * wrapper.
  *
  * DST_SYNC_MODE and DST_ACCUM_MODE are the first two template parameters (matching
- * the SFPU_BINARY_CALL / _sfpu_binary_check_and_call_ convention) so the dst-bound
+ * the SFPU_BINARY_CALL / _sfpu_binary_check_ convention) so the dst-bound
  * LLK_ASSERTs run against the kernel's actual sync/accumulation mode.
  */
 template <DstSync DST_SYNC_MODE, bool DST_ACCUM_MODE, bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 32, std::uint32_t MATH_FORMAT = 0>

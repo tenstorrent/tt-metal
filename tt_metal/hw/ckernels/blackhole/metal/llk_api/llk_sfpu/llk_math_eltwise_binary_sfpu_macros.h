@@ -5,36 +5,25 @@
 #pragma once
 
 #include <cstdint>
-#include <utility>
 
 #include "llk_assert.h"
 #include "llk_math_eltwise_binary_sfpu_init.h"
 #include "llk_math_eltwise_binary_sfpu_params.h"
 
 /*
- * Binary SFPU invocation helper
- *
- * Validates the three destination tile indices (two inputs, one output) and
- * then dispatches to the LLK binary-SFPU params function. The dst-bound check
- * used to live inside _llk_math_eltwise_binary_sfpu_params_ itself; placing
- * it here keeps the LLK kernel free of host/firmware-side preconditions and
- * ensures the assertions are defined exactly once instead of being duplicated
- * in every macro.
- *
- * DST_SYNC_MODE and DST_ACCUM_MODE are propagated as template parameters so
- * the bound is computed for the kernel's actual sync/accumulation mode.
+ * Keep macro preconditions outside the tt-llk params wrapper. DST_SYNC and
+ * DST_ACCUM are explicit so tests and non-standard kernel preludes can supply
+ * their own modes instead of relying on ambient defines.
  */
 
 namespace ckernel {
 
-template <DstSync DST_SYNC, bool DST_ACCUM, typename Callable, typename... Args>
-inline __attribute__((always_inline)) void _sfpu_binary_check_and_call_(
-    Callable&& sfpu_func,
+template <DstSync DST_SYNC, bool DST_ACCUM>
+inline __attribute__((always_inline)) void _sfpu_binary_check_(
     std::uint32_t dst_index_in0,
     std::uint32_t dst_index_in1,
     std::uint32_t dst_index_out,
-    VectorMode vector_mode,
-    Args&&... args) {
+    [[maybe_unused]] VectorMode vector_mode) {
     LLK_ASSERT(
         (dst_index_in0 < get_dest_max_tiles<DST_SYNC, DST_ACCUM, DstTileShape::Tile32x32>()),
         "dst_index_in0 exceeds max dest tiles");
@@ -44,62 +33,29 @@ inline __attribute__((always_inline)) void _sfpu_binary_check_and_call_(
     LLK_ASSERT(
         (dst_index_out < get_dest_max_tiles<DST_SYNC, DST_ACCUM, DstTileShape::Tile32x32>()),
         "dst_index_out exceeds max dest tiles");
-    _llk_math_eltwise_binary_sfpu_params_(
-        std::forward<Callable>(sfpu_func),
-        dst_index_in0,
-        dst_index_in1,
-        dst_index_out,
-        vector_mode,
-        std::forward<Args>(args)...);
 }
 
 }  // namespace ckernel
 
-/*
- * Helper for variadic-template macros
- *
- * Wrap a comma-separated template-argument list in `(...)` at the call site
- * and strip the outer parens with _SFPU_BIN_EXPAND inside the macro body.
- * The macro is namespaced with the `_BIN_` infix so it cannot collide with
- * the unary-macros header if both are included in the same translation unit.
- */
+// Strip the parentheses around the template-argument tuple passed to SFPU_BINARY_CALL.
 
 #define _SFPU_BIN_EXPAND(...) __VA_ARGS__
 
 /*
- * Binary SFPU invocation macros (2 total)
- *
- * All paths funnel through ckernel::_sfpu_binary_check_and_call_<DST_SYNC,
- * DST_ACCUM>(...), which performs the dst-bound LLK_ASSERTs and then
- * dispatches to _llk_math_eltwise_binary_sfpu_params_.
- *
- * Argument order for every call macro is:
- *      (DST_SYNC, DST_ACCUM, FN, TEMPLATES,
- *       DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ... rest ...)
- *
- * NOTE on variadics: kernel code is compiled with -std=c++17, where
- * `__VA_OPT__` is unavailable. We use the GCC `, ##__VA_ARGS__` extension to
- * swallow the preceding comma when no extra args are supplied.
- */
-
-/*
- * Templated functor in `ckernel::sfpu`, runtime vector_mode expression.
- *   SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE,
- *                    calculate_add_fp32, (APPROXIMATE),
- *                    dst_in0, dst_in1, dst_out, vmode);
+ * Macro hygiene: DST_IN0/DST_IN1/DST_OUT/VECTOR_MODE are evaluated by both
+ * the check and params call. Keep call sites to identifiers/literals, not
+ * side effects.
  */
 #define SFPU_BINARY_CALL(DST_SYNC, DST_ACCUM, FN, TEMPLATES, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ...) \
-    ::ckernel::_sfpu_binary_check_and_call_<DST_SYNC, DST_ACCUM>(                                         \
-        ::ckernel::sfpu::FN<_SFPU_BIN_EXPAND TEMPLATES>, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ##__VA_ARGS__)
+    (::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE),         \
+     _llk_math_eltwise_binary_sfpu_params_(                                                               \
+         ::ckernel::sfpu::FN<_SFPU_BIN_EXPAND TEMPLATES>, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ##__VA_ARGS__))
 
-/*
- * Non-templated functor in `ckernel::sfpu`.
- *   SFPU_BINARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE,
- *                       _calculate_binary_, in0, in1, out, vmode);
- */
+// Non-templated functor in `ckernel::sfpu`.
 #define SFPU_BINARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, DST_ACCUM, FN, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ...) \
-    ::ckernel::_sfpu_binary_check_and_call_<DST_SYNC, DST_ACCUM>(                                               \
-        ::ckernel::sfpu::FN, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ##__VA_ARGS__)
+    (::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE),               \
+     _llk_math_eltwise_binary_sfpu_params_(                                                                     \
+         ::ckernel::sfpu::FN, DST_IN0, DST_IN1, DST_OUT, VECTOR_MODE, ##__VA_ARGS__))
 
 /*
  * Binary SFPU init macros (4 total)
