@@ -16,8 +16,10 @@ from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
 from models.experimental.glm4_moe_lite.tt.layer_weights import MoELayerTTWeights
 from models.experimental.glm4_moe_lite.tt.linear_helpers import (
     ROUTER_FUSED_SIGMOID,
+    _ROUTER_PREFILL_CKC,
     compute_1d_prog_cfg,
     prefill_matmul_tuned_enabled,
+    prepare_sparse_moe_matmul_in0,
     tuned_moe_router_prefill_linear,
 )
 
@@ -579,7 +581,12 @@ def moe_topk_tt(
                 **({} if mc is None else {"memory_config": mc}),
             )  # [1,1,T,E] sigmoid fused in matmul
     else:
-        logits = ttnn.linear(x, moe_w.w_gate, memory_config=mc)  # [1,1,T,E]
+        logits = ttnn.linear(
+            x,
+            moe_w.w_gate,
+            compute_kernel_config=_ROUTER_PREFILL_CKC,
+            memory_config=mc,
+        )  # [1,1,T,E]
         scores = ttnn.sigmoid(logits, memory_config=mc)
         ttnn.deallocate(logits, force=False)
 
@@ -1483,11 +1490,11 @@ def moe_sparse_experts_forward_tt(
     # is completed and the build is fixed.
 
     packer_l1_acc = _env_bool("GLM4_MOE_LITE_PACKER_L1_ACC", default=False)
-    # Default to BF16-speed settings for sparse MoE. Users can opt back into
-    # higher-precision accumulation via env overrides if needed for debugging.
+    # Default to LoFi for sparse MoE throughput (BFP8 in0 via prepare_sparse_moe_matmul_in0).
+    # Override via GLM4_MOE_LITE_MOE_SPARSE_FIDELITY / _FP32_ACC / _APPROX if needed.
     sparse_fidelity = _parse_math_fidelity(
         os.environ.get("GLM4_MOE_LITE_MOE_SPARSE_FIDELITY", ""),
-        default=ttnn.MathFidelity.HiFi2,
+        default=ttnn.MathFidelity.LoFi,
     )
     sparse_fp32_acc = os.environ.get("GLM4_MOE_LITE_MOE_SPARSE_FP32_ACC", "").strip() == "1"
     sparse_approx = os.environ.get("GLM4_MOE_LITE_MOE_SPARSE_APPROX", "1").strip() != "0"
@@ -1804,6 +1811,7 @@ def moe_sparse_experts_forward_tt(
     sparse_mc = rt.decode_memory_config if total_tokens <= block else memory_config
     if sparse_mc is not ttnn.DRAM_MEMORY_CONFIG:
         expert_input = ttnn.to_memory_config(expert_input, sparse_mc)
+    expert_input, _ = prepare_sparse_moe_matmul_in0(expert_input, memory_config=sparse_mc, consume_input=True)
 
     if debug:
         print(
@@ -1900,6 +1908,7 @@ def moe_sparse_experts_forward_tt(
         print(f"[moe_sparse] x_ff shape: {tuple(x_ff.shape)} -> {_x_ff_target}", flush=True)
     if tuple(x_ff.shape) != _x_ff_target:
         x_ff = ttnn.reshape(x_ff, _x_ff_target)
+    x_ff, _ = prepare_sparse_moe_matmul_in0(x_ff, memory_config=sparse_mc, consume_input=True)
 
     expert_output_sparse = ttnn.sparse_matmul(
         x_ff,
