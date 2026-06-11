@@ -11,6 +11,7 @@ Hardware-swept winners and L1-aware search for the dots.ocr vision tower on
 from __future__ import annotations
 
 import ttnn
+from ttnn.operations.transformer import SDPAProgramConfig
 
 _DTYPE_TILE_BYTES = {
     ttnn.bfloat16: 2048,
@@ -20,8 +21,11 @@ _DTYPE_TILE_BYTES = {
 
 # Wormhole usable L1 per Tensix (matches program.cpp clash budget on N150).
 _L1_PER_CORE_BYTES = 1395 * 1024
+_VISION_TP4_SEQ_LEN = 11264
+_VISION_TP4_HIDDEN = 1536
 _VISION_TP4_MERGED_SEQ = 2816  # 11264 // spatial_merge_size^2
 _VISION_TP4_MLP_SIZE = 6144  # HIDDEN * spatial_merge_size^2
+_VISION_TP4_PATCH_K = 608  # 588 patch features padded to tile multiple (32)
 
 
 def _largest_divisor_le(value: int, limit: int) -> int:
@@ -387,21 +391,12 @@ def wh_tp4_qkv_pc(device):
     return wh_tp4_matmul_pc(device, 11264, 1536, 1152, in0_dtype=ttnn.bfloat16, out_dtype=ttnn.bfloat8_b)
 
 
-def wh_tp4_mlp_gate_up_pc(device):
-    """Gate/up ``11264×1536×1056``, BF16×BFP8→BFP8(gate)/BFP4(up) L1, on WH 8×8.
-
-    Silicon 2026-06-10: grid=(8,7) tm=True M=44 N=5 obh=11 ibw=8 sub=(1,5), ~38.9%
-    TFLOPs. This matmul's in0 is **BF16** (replicated hidden) with ibw=8, so the
-    activation CB grows ~2.7× per out_block_h vs the BFP8-input o_proj/down; obh=11
-    is the largest that fits L1 with the BF16 input co-resident (obh=22 needs a
-    720 KB in0 CB, obh=44 a 1.44 MB one). The generic ``wh_tp4_matmul_pc`` search
-    ties on dst_area and picks obh=1 (44 outer-M passes) — far slower — so pin the
-    swept winner here. Matches the proven ``bh_tp4_vision_mlp_pc`` result on WH.
-    """
+def _wh_tp4_mlp_gate_up_pc_impl(device):
+    """Shared gate/up PC for ``11264×1536×1056`` on WH 8×8 (LoFi, norm2 BF16 L1-resident)."""
     grid = device.compute_with_storage_grid_size()
     if int(grid.x) >= 8 and int(grid.y) >= 8:
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 7),
+            compute_with_storage_grid_size=(7, 8),
             in0_block_w=8,
             out_subblock_h=1,
             out_subblock_w=5,
@@ -409,8 +404,68 @@ def wh_tp4_mlp_gate_up_pc(device):
             out_block_w=5,
             per_core_M=44,
             per_core_N=5,
-            transpose_mcast=True,
+            transpose_mcast=False,
             fused_activation=None,
             fuse_batch=False,
         )
+    return None
+
+
+def wh_tp4_mlp_gate_up_pc(device):
+    """Gate ``11264×1536×1056``, BF16×BFP8→BFP8, on WH 8×8.
+
+    Silicon sweep 2026-06-11 (LoFi, norm2 L1-resident): grid=(7,8) tm=False
+    M=44 N=5 obh=11 ibw=8 sub=(1,5) ~0.61 ms. obh=11 reuses the resident in0
+    shard; the generic search double-counts in0 CB + resident and falls back to
+    obh=4 at ~1.3 ms.
+    """
+    pc = _wh_tp4_mlp_gate_up_pc_impl(device)
+    if pc is not None:
+        return pc
     return wh_tp4_matmul_pc(device, 11264, 1536, 1056, in0_dtype=ttnn.bfloat16, out_dtype=ttnn.bfloat8_b)
+
+
+def wh_tp4_mlp_up_pc(device):
+    """Up ``11264×1536×1056``, BF16×BFP8→BFP4, on WH 8×8.
+
+    Same program config as gate (out dtype only changes the packer). Silicon
+    sweep 2026-06-11 (LoFi, norm2 L1-resident): ~0.55 ms vs ~1.25 ms for the
+    obh=4 fallback that Tracy flagged as SLOW.
+    """
+    pc = _wh_tp4_mlp_gate_up_pc_impl(device)
+    if pc is not None:
+        return pc
+    return wh_tp4_matmul_pc(device, 11264, 1536, 1056, in0_dtype=ttnn.bfloat16, out_dtype=ttnn.bfloat4_b)
+
+
+def wh_tp4_patch_embed_pc(device):
+    """Patch-embed projection ``11264×608×1536`` on WH 8×8 (BFP8 L1 in0/out).
+
+    Uses the L1-aware generic search (no hand-swept winner needed -- the small
+    K=608 contraction is not the bottleneck).
+    """
+    return wh_tp4_matmul_pc(
+        device,
+        _VISION_TP4_SEQ_LEN,
+        _VISION_TP4_PATCH_K,
+        _VISION_TP4_HIDDEN,
+        in0_dtype=ttnn.bfloat8_b,
+        out_dtype=ttnn.bfloat8_b,
+        l1_resident_bytes_per_core=0,
+    )
+
+
+def wh_tp4_sdpa_pc(device) -> SDPAProgramConfig:
+    """SDPA program config for TP4 vision attention on WH 8×8.
+
+    q_chunk=256, k_chunk=1024 keeps the per-core scores CB within the WH L1
+    budget for the 3-heads/device TP4 layout; ``exp_approx_mode`` matches the
+    LoFi vision math fidelity.
+    """
+    grid = device.compute_with_storage_grid_size()
+    return SDPAProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
+        q_chunk_size=256,
+        k_chunk_size=1024,
+        exp_approx_mode=True,
+    )

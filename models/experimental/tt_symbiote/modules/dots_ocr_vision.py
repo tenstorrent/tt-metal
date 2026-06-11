@@ -26,7 +26,6 @@ from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_w
 from models.experimental.tt_symbiote.core.module import TTNNModule, TTNNLayerStack
 from models.experimental.tt_symbiote.modules.linear import (
     _ccl_num_links,
-    _linear_mesh_num_devices,
     _tp_mesh_mapper,
     _tp_requires_ccl,
 )
@@ -130,6 +129,82 @@ _VISION_MERGER_FC1_BS_PC_CACHE: dict = {}
 _VISION_MERGER_FC2_BS_PC_CACHE: dict = {}
 
 
+def _vision_l1_interleaved_bytes_per_core(tensor: ttnn.Tensor, device) -> int:
+    """Per-core L1 bytes of an interleaved activation (norm2 output co-resident with gate)."""
+    mem = tensor.memory_config()
+    if mem.buffer_type != ttnn.BufferType.L1 or mem.is_sharded():
+        return 0
+    from models.experimental.tt_symbiote.modules.vision_tp4_wh import _l1_shard_bytes_per_core
+
+    m_dim = 1
+    for i in range(len(tensor.shape) - 1):
+        m_dim *= int(tensor.shape[i])
+    k_dim = int(tensor.shape[-1])
+    if m_dim % 32 or k_dim % 32:
+        return 0
+    return int(_l1_shard_bytes_per_core(device, m_dim, k_dim, tensor.dtype))
+
+
+def _vision_tp_gate_up_program_config(
+    device,
+    m_dim: int,
+    k_dim: int,
+    n_dim: int,
+    in0_dtype: ttnn.DataType,
+    l1_resident_bytes_per_core: int,
+):
+    """Gate/up matmul PC for TP vision MLP with optional L1-resident norm2 in0.
+
+    Pin the hand-swept ``wh_tp4_mlp_gate_up_pc`` (obh=11, ibw=8, sub 1x5) for the
+    standard prefill shape even when norm2 is L1-resident: silicon sweep shows
+    ~0.59 ms vs ~1.3 ms for the conservative ``wh_tp4_matmul_pc`` fallback (obh=4).
+    The generic search double-counts the in0 CB on top of the resident shard and
+    never considers obh=11.
+    """
+    from models.experimental.tt_symbiote.modules.vision_tp4_wh import wh_tp4_matmul_pc, wh_tp4_mlp_gate_up_pc
+
+    if m_dim == 11264 and k_dim == 1536 and n_dim == 1056:
+        pinned = wh_tp4_mlp_gate_up_pc(device)
+        if pinned is not None:
+            return pinned
+
+    if _tp4_prefill_vision_enabled(device):
+        from models.experimental.tt_symbiote.modules.vision_tp4 import tp4_mlp_gate_up_pc
+
+        pinned = tp4_mlp_gate_up_pc(device)
+        if int(l1_resident_bytes_per_core) <= 0:
+            return pinned
+        pc = wh_tp4_matmul_pc(
+            device,
+            m_dim,
+            k_dim,
+            n_dim,
+            in0_dtype=in0_dtype,
+            out_dtype=ttnn.bfloat8_b,
+            l1_resident_bytes_per_core=int(l1_resident_bytes_per_core),
+        )
+        if pc is not None:
+            return pc
+
+    pc = _vision_matmul_program_config(
+        device, m_dim, k_dim, n_dim, l1_resident_bytes_per_core=int(l1_resident_bytes_per_core)
+    )
+    if pc is not None:
+        return pc
+
+    if int(l1_resident_bytes_per_core) > 0:
+        return wh_tp4_matmul_pc(
+            device,
+            m_dim,
+            k_dim,
+            n_dim,
+            in0_dtype=in0_dtype,
+            out_dtype=ttnn.bfloat8_b,
+            l1_resident_bytes_per_core=int(l1_resident_bytes_per_core),
+        )
+    return None
+
+
 def _vision_mlp_dram_width_sharded_mem_config(device, k: int, n: int) -> ttnn.MemoryConfig:
     """DRAM WIDTH_SHARDED weight with N split across the matmul compute grid (8 cols).
 
@@ -187,7 +262,7 @@ def _vision_mlp_to_dram_width_sharded_weight(
     return tt_weight, tt_bias
 
 
-def _vision_matmul_program_config(device, m_dim: int, k_dim: int, n_dim: int):
+def _vision_matmul_program_config(device, m_dim: int, k_dim: int, n_dim: int, *, l1_resident_bytes_per_core: int = 0):
     """2D-mcast prefill matmul config for vision-tower DRAM-interleaved matmuls.
 
     Tracy reports every vision matmul as ``SLOW`` because none of the vision
@@ -217,10 +292,12 @@ def _vision_matmul_program_config(device, m_dim: int, k_dim: int, n_dim: int):
     grid_x, grid_y = int(grid.x), int(grid.y)
     tile = 32
 
-    cache_key = (grid_x, grid_y, m_dim, k_dim, n_dim)
+    l1_resident = int(l1_resident_bytes_per_core)
+    cache_key = (grid_x, grid_y, m_dim, k_dim, n_dim, l1_resident)
     cached = _VISION_MATMUL_PC_CACHE.get(cache_key)
     if cached is not None or cache_key in _VISION_MATMUL_PC_CACHE:
         return cached
+    l1_cb_budget_kb = max(256, 1024 - (l1_resident // 1024))
 
     if m_dim % tile != 0 or k_dim % tile != 0 or n_dim % tile != 0:
         _VISION_MATMUL_PC_CACHE[cache_key] = None
@@ -303,7 +380,7 @@ def _vision_matmul_program_config(device, m_dim: int, k_dim: int, n_dim: int):
         # large-N (per_core_n>=17) vision matmuls.
         approx_interm_kb = (ob_h * per_core_n * 2048) // 1024
         approx_in0_kb = (ob_h * in0_block_w * 2 * 2048) // 1024
-        if approx_interm_kb + approx_in0_kb > 1024:
+        if approx_interm_kb + approx_in0_kb > l1_cb_budget_kb:
             continue
 
         # Best DST area achievable with this out_block_h
@@ -329,6 +406,10 @@ def _vision_matmul_program_config(device, m_dim: int, k_dim: int, n_dim: int):
             best_out_block_h = ob_h
             best_subblock_h = cand_h
             best_subblock_w = cand_w
+
+    if best_area <= 0:
+        _VISION_MATMUL_PC_CACHE[cache_key] = None
+        return None
 
     out_block_h = best_out_block_h
     out_block_w = per_core_n
@@ -458,6 +539,57 @@ def _vision_mlp_down_l1_pc(device):
         fuse_batch=False,
     )
     _VISION_MLP_DOWN_L1_PC_CACHE[cache_key] = pc
+    return pc
+
+
+_VISION_MERGER_FC1_FAST_PC_CACHE: dict = {}
+
+
+def _vision_merger_fc1_fast_pc(device, m_dim: int):
+    """2D-mcast fc1 for patch-merger ``M×6144×6144`` (BFP8 in0 × BFP8 w → BFP4, GELU fused).
+
+    The block-sharded fc1 (``_vision_merger_fc1_bs_program_config``) runs at
+    in0_block_w=2 → ~96 K-iterations and ~5.7 ms / 16% TFLOPs (the "SLOW" merger
+    matmul in the perf report). This matmul is weight-DRAM-bound (75 MB BFP8
+    weight), so the lever is out_block_h = #weight-DRAM passes. With per_core_M=11
+    (M=2816 → 88 m-tiles / 8 rows) the only obh>1 divisor is 11 = a single weight
+    pass. obh=11 only fits L1 at in0_block_w<=4 (ibw=6 OOMs the CBs); silicon
+    sweep 2026-06-11 picks ibw=4 → ~2.1 ms (2.5x). N=6144 → per_core_N=24 over
+    8 columns. Returns None off the production WH 8×8 / M=2816 shape so callers
+    fall back to the block-sharded path.
+    """
+    if device is None:
+        return None
+    grid = device.compute_with_storage_grid_size()
+    grid_x, grid_y = int(grid.x), int(grid.y)
+    tile = 32
+    cache_key = (grid_x, grid_y, m_dim)
+    if cache_key in _VISION_MERGER_FC1_FAST_PC_CACHE:
+        return _VISION_MERGER_FC1_FAST_PC_CACHE[cache_key]
+    m_tiles = m_dim // tile
+    # Needs the 8×8 grid, M tiling cleanly over 8 rows with per_core_M==out_block_h
+    # (one weight pass), and the production mlp_size=6144 (n_tiles=192 → N=24).
+    if grid_x < 8 or grid_y < 8 or m_dim % tile != 0 or m_tiles % 8 != 0:
+        _VISION_MERGER_FC1_FAST_PC_CACHE[cache_key] = None
+        return None
+    per_core_m = m_tiles // 8
+    if per_core_m > 64:
+        _VISION_MERGER_FC1_FAST_PC_CACHE[cache_key] = None
+        return None
+    pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=4,
+        out_subblock_h=1,
+        out_subblock_w=8,
+        out_block_h=per_core_m,
+        out_block_w=24,
+        per_core_M=per_core_m,
+        per_core_N=24,
+        transpose_mcast=False,
+        fused_activation=(ttnn.UnaryOpType.GELU, False),
+        fuse_batch=False,
+    )
+    _VISION_MERGER_FC1_FAST_PC_CACHE[cache_key] = pc
     return pc
 
 
@@ -944,16 +1076,6 @@ class TTNNDotsVisionRMSNorm(TTNNModule):
         return out
 
 
-class TTNNDotsVisionRMSNormTP4BH(TTNNDotsVisionRMSNorm):
-    """RMSNorm/LayerNorm with L1 interleaved input and output (BH TP4 vision block)."""
-
-    def forward(self, x: ttnn.Tensor, *, output_l1: bool = False) -> ttnn.Tensor:
-        from models.experimental.tt_symbiote.modules.vision_tp4_bh import ensure_l1_tensor
-
-        x = ensure_l1_tensor(x)
-        return super().forward(x, output_l1=True)
-
-
 # ---------------------------------------------------------------------------
 # Vision SwiGLU MLP
 # ---------------------------------------------------------------------------
@@ -1136,11 +1258,14 @@ class TTNNDotsVisionMLP(TTNNModule):
         self._tp_down_pc = None
         self._tp_down_k = None
         if _tp4_prefill_vision_enabled(self.device):
-            from models.experimental.tt_symbiote.modules.vision_tp4_bh import bh_tp4_mlp_down_pc
+            # tp4_mlp_down_pc -> wh_tp4_mlp_down_pc (swept obh=11 ibw=3 sub1x8,
+            # ~525 us in-model). The earlier generic obh=1 search ran ~1449 us /
+            # 14% TFLOPs (the "SLOW" down matmul in the perf report).
+            from models.experimental.tt_symbiote.modules.vision_tp4 import tp4_mlp_down_pc
 
             num_tp = self._mlp_tp_num_devices()
             itp = int(self._fc1_weight.shape[0]) // num_tp
-            self._tp_down_pc = bh_tp4_mlp_down_pc(self.device, itp=itp)
+            self._tp_down_pc = tp4_mlp_down_pc(self.device, itp=itp)
             self._tp_down_k = itp
 
     def _tp_mlp_down_program_config(self, m_dim: int, k_dim: int, n_dim: int):
@@ -1149,19 +1274,19 @@ class TTNNDotsVisionMLP(TTNNModule):
         ``_vision_matmul_program_config`` returns ``None`` on BH 11×10 for
         M=11264 (352 m-tiles does not divide grid_y=10), which leaves the
         auto-config path at ~3.6 ms / 6% TFLOPs.  Prefer the hardware-swept
-        BH TP4 config (``bh_tp4_mlp_down_pc``) with BFP8 output.
+        TP4 config (``tp4_mlp_down_pc``, arch-dispatched WH/BH) with BFP8 output.
         """
         if not _tp4_prefill_vision_enabled(self.device):
             return _vision_matmul_program_config(self.device, m_dim, k_dim, n_dim)
         cached = getattr(self, "_tp_down_pc", None)
         if cached is not None and m_dim == 11264 and k_dim == int(getattr(self, "_tp_down_k", k_dim)):
             return cached
-        from models.experimental.tt_symbiote.modules.vision_tp4_bh import bh_tp4_mlp_down_pc, bh_tp4_matmul_pc
+        from models.experimental.tt_symbiote.modules.vision_tp4 import tp4_mlp_down_pc, tp4_matmul_pc
 
-        pc = bh_tp4_mlp_down_pc(self.device, seq_len=m_dim, itp=k_dim)
+        pc = tp4_mlp_down_pc(self.device, seq_len=m_dim, itp=k_dim)
         if pc is not None:
             return pc
-        return bh_tp4_matmul_pc(
+        return tp4_matmul_pc(
             self.device,
             m_dim,
             k_dim,
@@ -1204,7 +1329,10 @@ class TTNNDotsVisionMLP(TTNNModule):
         # the activation L1 win is more than wiped out by the weight DRAM
         # cost. Stay on the DRAM-interleaved path.
         # in0 is L1 interleaved from norm2 (``output_l1=True`` in the block).
-        gate_up_pc = _vision_matmul_program_config(self.device, m_dim, k_dim, n_dim)
+        l1_resident = _vision_l1_interleaved_bytes_per_core(hidden_states, self.device)
+        gate_up_pc = _vision_tp_gate_up_program_config(
+            self.device, m_dim, k_dim, n_dim, hidden_states.dtype, l1_resident
+        ) or _vision_matmul_program_config(self.device, m_dim, k_dim, n_dim, l1_resident_bytes_per_core=l1_resident)
         _vision_debug_mem("gate input", hidden_states)
         gate = ttnn.linear(
             hidden_states,
@@ -1296,7 +1424,8 @@ class TTNNDotsVisionMLP(TTNNModule):
         m_dim = int(hidden_states.shape[0]) * int(hidden_states.shape[1]) * int(hidden_states.shape[2])
         k_dim = int(self.tt_fc1_weight.shape[-2])  # full hidden (replicated input)
         n_dim = int(self.tt_fc1_weight.shape[-1])  # intermediate / num_tp (column shard)
-        gate_up_pc = _vision_matmul_program_config(dev, m_dim, k_dim, n_dim)
+        l1_resident = _vision_l1_interleaved_bytes_per_core(hidden_states, dev)
+        gate_up_pc = _vision_tp_gate_up_program_config(dev, m_dim, k_dim, n_dim, hidden_states.dtype, l1_resident)
 
         gate = ttnn.linear(
             hidden_states,
@@ -1614,21 +1743,6 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
         return out
 
 
-class TTNNDotsVisionPatchEmbedTP4BH(TTNNDotsVisionPatchEmbed):
-    """Patch embed with BFP8 L1 activations and swept projection matmul PC."""
-
-    def move_weights_to_device_impl(self):
-        super().move_weights_to_device_impl()
-        from models.experimental.tt_symbiote.modules.vision_tp4_bh import init_patch_embed_tp4_bh_configs
-
-        init_patch_embed_tp4_bh_configs(self)
-
-    def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor = None) -> ttnn.Tensor:
-        from models.experimental.tt_symbiote.modules.vision_tp4_bh import vision_patch_embed_tp4_bh_forward
-
-        return vision_patch_embed_tp4_bh_forward(self, pixel_values, grid_thw)
-
-
 # ---------------------------------------------------------------------------
 # Vision Attention
 # ---------------------------------------------------------------------------
@@ -1834,11 +1948,11 @@ class TTNNDotsVisionAttention(TTNNModule):
             self._tp_o_ctx_dim = None
             self._tp_o_proj_pc = None
             if _tp4_prefill_vision_enabled(self.device):
-                from models.experimental.tt_symbiote.modules.vision_tp4_bh import bh_tp4_o_proj_pc
+                from models.experimental.tt_symbiote.modules.vision_tp4 import tp4_o_proj_pc
 
                 heads_per_tp = self.num_heads // self._tp_ndev
                 self._tp_o_ctx_dim = heads_per_tp * self.head_dim
-                self._tp_o_proj_pc = bh_tp4_o_proj_pc(self.device, ctx_dim=self._tp_o_ctx_dim)
+                self._tp_o_proj_pc = tp4_o_proj_pc(self.device, ctx_dim=self._tp_o_ctx_dim)
         else:
             self.tt_qkv_weight = _to_dev(self.tt_qkv_weight)
             self.tt_qkv_bias = _to_dev(self.tt_qkv_bias)
@@ -1861,12 +1975,12 @@ class TTNNDotsVisionAttention(TTNNModule):
         cached_k = getattr(self, "_tp_o_ctx_dim", None)
         if cached is not None and m_dim == 11264 and k_dim == cached_k:
             return cached
-        from models.experimental.tt_symbiote.modules.vision_tp4_bh import bh_tp4_matmul_pc, bh_tp4_o_proj_pc
+        from models.experimental.tt_symbiote.modules.vision_tp4 import tp4_matmul_pc, tp4_o_proj_pc
 
-        pc = bh_tp4_o_proj_pc(self.device, seq_len=m_dim, ctx_dim=k_dim)
+        pc = tp4_o_proj_pc(self.device, seq_len=m_dim, ctx_dim=k_dim)
         if pc is not None:
             return pc
-        return bh_tp4_matmul_pc(
+        return tp4_matmul_pc(
             self.device,
             m_dim,
             k_dim,
@@ -2021,6 +2135,13 @@ class TTNNDotsVisionAttention(TTNNModule):
         h = self.num_heads // ndev
         hd = self.head_dim
 
+        # TP4 prefill: qkv matmul output -> L1. It is consumed by
+        # nlp_create_qkv_heads and ``hidden_states`` (the norm1 output) is
+        # deallocated right after this matmul, so both are freed before SDPA and
+        # neither competes with SDPA's per-core scores CB.
+        use_tp4_prefill_vision = ndev > 1 and _tp4_prefill_vision_enabled(self.device)
+        attn_mem = ttnn.L1_MEMORY_CONFIG if use_tp4_prefill_vision else mem
+
         # Output the fused QKV in BFP8 directly. At S=12288 this halves bandwidth on:
         #   1. the qkv matmul writeback ([1,1,S,4608]: 113 MB BF16 -> 56 MB BFP8)
         #   2. nlp_create_qkv_heads, which becomes "BFP8 => BFP8" (~221 MB IO -> ~110 MB)
@@ -2047,10 +2168,14 @@ class TTNNDotsVisionAttention(TTNNModule):
             self.tt_qkv_weight,
             bias=self.tt_qkv_bias,
             dtype=ttnn.bfloat8_b,
-            memory_config=mem,
+            memory_config=attn_mem,
             compute_kernel_config=self.compute_kernel_config,
             program_config=qkv_pc,
         )
+        # norm1 output (this rank's in0) is unused for the rest of attention;
+        # free it now so an L1 norm1 output does not survive into SDPA. The block
+        # no longer deallocates it.
+        ttnn.deallocate(hidden_states)
 
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv,
@@ -2280,11 +2405,16 @@ class TTNNDotsVisionBlock(TTNNModule):
             )
         _vision_debug_mem("in", hidden_states)
 
+        # TP4 prefill: norm1 output -> L1 (qkv reads in0 from L1). attn() frees
+        # ``normed`` right after the qkv matmul, so it is gone before SDPA -- no
+        # clash with SDPA's scores CB. (DRAM keeps the prior single-device path.)
+        use_tp4 = _tp4_prefill_vision_enabled(self.device)
         residual = hidden_states
         _vision_debug_mem("residual_pre_attn", residual)
         print("norm1 vision before attnhidden_states.shape:", hidden_states.shape)
-        normed = self.norm1(hidden_states, output_l1=False)
+        normed = self.norm1(hidden_states, output_l1=use_tp4)
         _vision_debug_mem("after norm1", normed)
+        # attn() consumes and deallocates ``normed`` internally (after the qkv matmul).
         attn_out = self.attn(
             normed,
             rot_mats=rot_mats,
@@ -2293,11 +2423,10 @@ class TTNNDotsVisionBlock(TTNNModule):
             attention_logical_seq_len=attention_logical_seq_len,
         )
         _vision_debug_mem("after attn", attn_out)
-        ttnn.deallocate(normed)
         # Keep Wormhole's attention residual in BF16 for OCR heading stability;
         # non-Wormhole keeps the faster BFP8 residual stream.
-        residual_dtype = ttnn.bfloat16 if is_wormhole_b0(self.device) else ttnn.bfloat8_b
-        hidden_states = ttnn.add(residual, attn_out, dtype=residual_dtype)
+        # residual_dtype = ttnn.bfloat16 if is_wormhole_b0(self.device) else ttnn.bfloat8_b
+        hidden_states = ttnn.add(residual, attn_out, dtype=ttnn.bfloat8_b)
         _vision_debug_mem("after attn residual add", hidden_states)
         ttnn.deallocate(attn_out)
         ttnn.deallocate(residual)
@@ -2315,192 +2444,6 @@ class TTNNDotsVisionBlock(TTNNModule):
         ttnn.deallocate(residual)
 
         return hidden_states
-
-
-class TTNNDotsVisionAttentionTP4BH(TTNNDotsVisionAttention):
-    """Blackhole TP4 vision attention: L1 activations + hardware-swept program configs."""
-
-    def move_weights_to_device_impl(self):
-        super().move_weights_to_device_impl()
-        if int(getattr(self, "_tp_ndev", 1)) <= 1:
-            return
-        from models.experimental.tt_symbiote.modules.vision_tp4_bh import init_attn_tp4_bh_configs
-
-        init_attn_tp4_bh_configs(self)
-
-    def forward(
-        self,
-        hidden_states: ttnn.Tensor,
-        rot_mats: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
-        cu_seqlens=None,
-        attention_mask: ttnn.Tensor | None = None,
-        attention_logical_seq_len: int | None = None,
-    ) -> ttnn.Tensor:
-        if int(getattr(self, "_tp_ndev", 1)) <= 1:
-            return super().forward(
-                hidden_states,
-                rot_mats=rot_mats,
-                cu_seqlens=cu_seqlens,
-                attention_mask=attention_mask,
-                attention_logical_seq_len=attention_logical_seq_len,
-            )
-        from models.experimental.tt_symbiote.modules.vision_tp4_bh import vision_attn_tp4_bh_forward
-
-        return vision_attn_tp4_bh_forward(
-            self,
-            hidden_states,
-            rot_mats=rot_mats,
-            cu_seqlens=cu_seqlens,
-            attention_mask=attention_mask,
-            attention_logical_seq_len=attention_logical_seq_len,
-        )
-
-
-class TTNNDotsVisionMLPTP4BH(TTNNDotsVisionMLP):
-    """Blackhole TP4 vision SwiGLU: N-shard fc1/fc3, K-shard fc2 + all_reduce."""
-
-    def _mlp_tp_ndev(self) -> int:
-        dev = getattr(self, "device", None)
-        n = _linear_mesh_num_devices(dev)
-        is_tp_mesh = hasattr(dev, "shape") and len(list(dev.shape)) >= 1 and int(list(dev.shape)[-1]) > 1
-        if n > 1 and is_tp_mesh:
-            return n
-        return 1
-
-    def preprocess_weights_impl(self):
-        ndev = self._mlp_tp_ndev()
-        if ndev <= 1:
-            return super().preprocess_weights_impl()
-
-        self._intermediate_size = int(self._fc1_weight.shape[0])
-        self._fc1_weight_t = self._fc1_weight.t().contiguous()
-        self._fc3_weight_t = self._fc3_weight.t().contiguous()
-        self._fc2_weight_t = self._fc2_weight.t().contiguous()
-        self._fc1_bias_tp = self._fc1_bias.reshape(1, -1).contiguous() if self._fc1_bias is not None else None
-        self._fc3_bias_tp = self._fc3_bias.reshape(1, -1).contiguous() if self._fc3_bias is not None else None
-        self.tt_fused_gate_up_weight = None
-        self.tt_fused_gate_up_bias = None
-        self.tt_fc1_weight = None
-        self.tt_fc1_bias = None
-        self.tt_fc2_weight = None
-        self.tt_fc2_bias = None
-        self.tt_fc3_weight = None
-        self.tt_fc3_bias = None
-
-    def move_weights_to_device_impl(self):
-        ndev = self._mlp_tp_ndev()
-        if ndev <= 1:
-            return super().move_weights_to_device_impl()
-
-        mem = ttnn.DRAM_MEMORY_CONFIG
-        self._tp_ndev = ndev
-        self.compute_kernel_config = _vision_matmul_compute_config(self.device, math_fidelity=ttnn.MathFidelity.LoFi)
-
-        self.tt_fc1_weight = ttnn.as_tensor(
-            self._fc1_weight_t,
-            device=self.device,
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=-1),
-            memory_config=mem,
-        )
-        self.tt_fc3_weight = ttnn.as_tensor(
-            self._fc3_weight_t,
-            device=self.device,
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=-1),
-            memory_config=mem,
-        )
-        self.tt_fc2_weight = ttnn.as_tensor(
-            self._fc2_weight_t,
-            device=self.device,
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=-2),
-            memory_config=mem,
-        )
-        self.tt_fc1_bias = (
-            ttnn.as_tensor(
-                self._fc1_bias_tp,
-                device=self.device,
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=-1),
-                memory_config=mem,
-            )
-            if self._fc1_bias_tp is not None
-            else None
-        )
-        self.tt_fc3_bias = (
-            ttnn.as_tensor(
-                self._fc3_bias_tp,
-                device=self.device,
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=-1),
-                memory_config=mem,
-            )
-            if self._fc3_bias_tp is not None
-            else None
-        )
-        self.tt_fc2_bias = None
-
-        from models.experimental.tt_symbiote.modules.vision_tp4_bh import init_mlp_tp4_bh_configs
-
-        init_mlp_tp4_bh_configs(self)
-
-    def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
-        if int(getattr(self, "_tp_ndev", 1)) <= 1:
-            return super().forward(hidden_states)
-        from models.experimental.tt_symbiote.modules.vision_tp4_bh import vision_mlp_tp4_bh_forward
-
-        return vision_mlp_tp4_bh_forward(self, hidden_states)
-
-
-class TTNNDotsVisionBlockTP4BH(TTNNDotsVisionBlock):
-    """Vision block using Blackhole TP4 L1 paths for attention and MLP."""
-
-    @classmethod
-    def from_torch(cls, hf_block, hidden_size=1536, num_heads=12):
-        new_block = cls()
-        new_block._fallback_torch_layer = hf_block
-
-        new_block.norm1 = TTNNDotsVisionRMSNormTP4BH.from_torch(hf_block.norm1)
-        new_block.norm2 = TTNNDotsVisionRMSNormTP4BH.from_torch(hf_block.norm2)
-
-        attn_module = getattr(hf_block, "attn", getattr(hf_block, "attention", getattr(hf_block, "self_attn", None)))
-        if attn_module is None:
-            raise ValueError("Could not find attention sub-module in HF block")
-        new_block.attn = TTNNDotsVisionAttentionTP4BH.from_torch(
-            attn_module, hidden_size=hidden_size, num_heads=num_heads
-        )
-
-        mlp_module = getattr(hf_block, "mlp", getattr(hf_block, "feed_forward", None))
-        if mlp_module is None:
-            raise ValueError("Could not find MLP sub-module in HF block")
-        new_block.mlp = TTNNDotsVisionMLPTP4BH.from_torch(mlp_module)
-
-        return new_block
-
-    def forward(
-        self,
-        hidden_states: ttnn.Tensor,
-        rot_mats: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
-        cu_seqlens=None,
-        attention_mask: ttnn.Tensor | None = None,
-        attention_logical_seq_len: int | None = None,
-    ) -> ttnn.Tensor:
-        from models.experimental.tt_symbiote.modules.vision_tp4_bh import vision_block_tp4_bh_forward
-
-        return vision_block_tp4_bh_forward(
-            self,
-            hidden_states,
-            rot_mats=rot_mats,
-            cu_seqlens=cu_seqlens,
-            attention_mask=attention_mask,
-            attention_logical_seq_len=attention_logical_seq_len,
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -2697,6 +2640,12 @@ class TTNNDotsPatchMerger(TTNNModule):
         # BLOCK_SHARDED over the 8x8 grid ([M/8, N/8] = [384, 768] shards); fc2
         # consumes the fc1 output shard with no reshard. Requires the production
         # 8x8 grid with M (= folded S/4) divisible by the shard grid.
+        # 2D-mcast fc1 (obh=11 ibw=4, GELU fused, ~2.1 ms) beats the block-sharded
+        # fc1 (~5.7 ms / 16% TFLOPs) on the production WH 8x8 / M=2816 shape -- this
+        # matmul is weight-DRAM-bound and obh=11 is a single weight pass. When the
+        # fast PC is available it supersedes the block-sharded path (its BFP4
+        # interleaved output feeds the interleaved fc2).
+        fast_fc1_pc = _vision_merger_fc1_fast_pc(self.device, new_r)
         fc1_bs_pc = _vision_merger_fc1_bs_program_config(self.device, new_r)
         fc2_bs_pc = _vision_merger_fc2_bs_program_config(self.device, new_r)
         bs_mem = _vision_block_sharded_mem(self.device, new_r, int(self.mlp_size))
@@ -2708,7 +2657,7 @@ class TTNNDotsPatchMerger(TTNNModule):
         # generic 2D-mcast config also can't tile the shape), mirroring the
         # o_proj fallback in the vision block. GELU is applied explicitly since
         # it can no longer be fused into the fc1 program config.
-        use_bs = fc1_bs_pc is not None and fc2_bs_pc is not None and bs_mem is not None
+        use_bs = fast_fc1_pc is None and fc1_bs_pc is not None and fc2_bs_pc is not None and bs_mem is not None
 
         if self._use_layer_norm:
             print("Using LayerNorm")
@@ -2726,6 +2675,31 @@ class TTNNDotsPatchMerger(TTNNModule):
         )
 
         compute_kc = getattr(self, "compute_kernel_config", None)
+
+        if fast_fc1_pc is not None:
+            # fc1: 2D-mcast BFP8 in0 (DRAM) -> BFP4 interleaved out, GELU fused.
+            hidden_states = ttnn.linear(
+                hidden_states,
+                self.tt_w1,
+                bias=self.tt_w1_bias,
+                dtype=ttnn.bfloat4_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=fast_fc1_pc,
+                compute_kernel_config=compute_kc,
+            )
+            # fc2: BFP4 interleaved in0 -> col-sharded BFP8 L1 out (matches text embeds).
+            fc2_k = int(self.tt_w2.shape[-2])
+            fc2_n = int(self.tt_w2.shape[-1])
+            fc2_pc = _vision_matmul_program_config(self.device, new_r, fc2_k, fc2_n)
+            return ttnn.linear(
+                hidden_states,
+                self.tt_w2,
+                bias=self.tt_w2_bias,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                program_config=fc2_pc,
+                compute_kernel_config=compute_kc,
+            )
 
         if use_bs:
             # fc1: L1-interleaved BF8 in0 -> BLOCK_SHARDED out, GELU fused via program config.
@@ -2777,21 +2751,6 @@ class TTNNDotsPatchMerger(TTNNModule):
         )
 
         return hidden_states
-
-
-class TTNNDotsPatchMergerTP4BH(TTNNDotsPatchMerger):
-    """Patch merger with L1 interleaved activations (BH 11×10 DRAM-matmul fallback)."""
-
-    def move_weights_to_device_impl(self):
-        super().move_weights_to_device_impl()
-        from models.experimental.tt_symbiote.modules.vision_tp4_bh import init_merger_tp4_bh_configs
-
-        init_merger_tp4_bh_configs(self)
-
-    def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
-        from models.experimental.tt_symbiote.modules.vision_tp4_bh import vision_patch_merger_tp4_bh_forward
-
-        return vision_patch_merger_tp4_bh_forward(self, hidden_states)
 
 
 class TTNNDotsVisionBlockStack(TTNNLayerStack):
@@ -3187,31 +3146,3 @@ class TTNNDotsOCRVisionTower(TTNNModule):
 
         x = self.patch_embed(pixel_values, grid_thw)
         return self.forward_post_patch_embed(x, grid_thw)
-
-
-class TTNNDotsOCRVisionTowerTP4BH(TTNNDotsOCRVisionTower):
-    """Full dots.ocr vision tower on Blackhole TP4 with L1 activation paths.
-
-    Same pipeline as ``TTNNDotsOCRVisionTower`` (patch_embed → N vision blocks →
-    post_trunk_norm → patch_merger) but every block uses ``TTNNDotsVisionBlockTP4BH``
-    and ``from_torch`` builds all ``num_hidden_layers`` blocks (42 for dots.ocr).
-    """
-
-    _patch_embed_cls = TTNNDotsVisionPatchEmbedTP4BH
-    _block_cls = TTNNDotsVisionBlockTP4BH
-    _norm_cls = TTNNDotsVisionRMSNormTP4BH
-    _merger_cls = TTNNDotsPatchMergerTP4BH
-
-    def __init__(self):
-        super().__init__()
-        self._trace_enabled = False
-
-    def forward_post_patch_embed(
-        self,
-        x: ttnn.Tensor,
-        grid_thw: torch.Tensor,
-        attention_mask: ttnn.Tensor | None = None,
-    ) -> ttnn.Tensor:
-        from models.experimental.tt_symbiote.modules.vision_tp4_bh import vision_tower_post_patch_embed_tp4_bh
-
-        return vision_tower_post_patch_embed_tp4_bh(self, x, grid_thw)

@@ -1,10 +1,12 @@
 # SPDX-FileCopyrightText: (C) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Blackhole TP4 vision attention / MLP helpers (L1 activations, swept program configs).
+"""TP4 vision attention / MLP forwards (L1 activations) for the ``TTNNDotsVision*TP4BH``
+subclasses on Wormhole N150×4 (DP2×TP4).
 
-Used by ``TTNNDotsVision*TP4BH`` subclasses and the TP4 block unit tests on P150x4 /
-P300x2 meshes.  Hardware-swept winners target the BH 11×10 grid at S=11264.
+Program configs come from ``vision_tp4.py`` (which routes to the swept ``wh_tp4_*``
+tables). The ``*_tp4_bh`` names are retained for import compatibility; the Blackhole
+config tables were removed (Wormhole TP4 is the only target).
 """
 
 from __future__ import annotations
@@ -13,7 +15,6 @@ from typing import TYPE_CHECKING
 
 import torch
 import ttnn
-from ttnn.operations.transformer import SDPAProgramConfig
 
 if TYPE_CHECKING:
     from models.experimental.tt_symbiote.modules.dots_ocr_vision import (
@@ -28,18 +29,8 @@ _DTYPE_TILE_BYTES = {
     ttnn.bfloat4_b: 544,
 }
 
-_L1_PER_CORE_BYTES = 1500 * 1024
 _VISION_TP4_SEQ_LEN = 11264
 _VISION_TP4_HIDDEN = 1536
-_VISION_TP4_MERGED_SEQ = 2816  # SEQ_LEN // spatial_merge_size^2
-_VISION_TP4_MLP_SIZE = 6144  # HIDDEN * spatial_merge_size^2
-
-
-def _largest_divisor_le(value: int, limit: int) -> int:
-    for c in range(min(value, limit), 0, -1):
-        if value % c == 0:
-            return c
-    return 1
 
 
 def _tensor_in_l1(t: ttnn.Tensor) -> bool:
@@ -70,234 +61,6 @@ def rot_mats_l1(rot_mats: tuple[ttnn.Tensor, ttnn.Tensor]) -> tuple[ttnn.Tensor,
     return ensure_l1_tensor(cos), ensure_l1_tensor(sin)
 
 
-def _best_dst_subblock(ob_h: int, per_core_n: int, *, dst_budget: int = 8) -> tuple[int, int, int]:
-    """Return (out_subblock_h, out_subblock_w, dst_area) maximising DST register use."""
-    best_area = 0
-    best_h = best_w = 1
-    for h in range(min(ob_h, dst_budget), 0, -1):
-        if ob_h % h != 0:
-            continue
-        for w in range(min(per_core_n, dst_budget // h), 0, -1):
-            if per_core_n % w != 0:
-                continue
-            area = h * w
-            if area > best_area:
-                best_area = area
-                best_h = h
-                best_w = w
-    return best_h, best_w, best_area
-
-
-def bh_tp4_matmul_pc(
-    device,
-    m_dim: int,
-    k_dim: int,
-    n_dim: int,
-    *,
-    in0_dtype: ttnn.DataType = ttnn.bfloat8_b,
-    out_dtype: ttnn.DataType = ttnn.bfloat8_b,
-    l1_resident_bytes_per_core: int = 0,
-):
-    """L1-aware 2D-mcast program config search for BH TP4 vision matmuls.
-
-    CB model uses ``in0_tile_bytes`` / ``out_tile_bytes`` so BFP8 in0/out paths
-    get tighter budgets than the legacy BF16-only estimator.
-    """
-    grid = device.compute_with_storage_grid_size()
-    grid_x, grid_y = int(grid.x), int(grid.y)
-    tile = 32
-
-    if m_dim % tile or k_dim % tile or n_dim % tile:
-        return None
-
-    m_tiles = m_dim // tile
-    k_tiles = k_dim // tile
-    n_tiles = n_dim // tile
-
-    in0_tile_b = _DTYPE_TILE_BYTES[in0_dtype]
-    out_tile_b = _DTYPE_TILE_BYTES[out_dtype]
-    in0_block_w = _largest_divisor_le(k_tiles, 8)
-    cb_budget_bytes = max(256 * 1024, _L1_PER_CORE_BYTES - l1_resident_bytes_per_core)
-
-    def _per_core_n_candidates(n_max: int) -> list[int]:
-        cands = {n for n in range(1, min(n_tiles, 24) + 1) if n_tiles % n == 0}
-        cands.add((n_tiles + n_max - 1) // n_max)
-        return sorted(cands)
-
-    best_pc = None
-    best_score = (-1, -1, -(2**31), -(2**31))
-
-    for transpose_mcast in (True, False):
-        m_grid_max = grid_x if transpose_mcast else grid_y
-        n_grid_max = grid_y if transpose_mcast else grid_x
-
-        for eff_mg in range(min(m_tiles, m_grid_max), 0, -1):
-            if m_tiles % eff_mg != 0:
-                continue
-            per_core_m = m_tiles // eff_mg
-            if per_core_m > 64:
-                continue
-
-            for per_core_n in _per_core_n_candidates(n_grid_max):
-                if per_core_n > 24:
-                    continue
-                actual_ng = (n_tiles + per_core_n - 1) // per_core_n
-                if actual_ng > n_grid_max:
-                    continue
-
-                in1_fixed = 2 * in0_block_w * per_core_n * 1088
-                partial_fixed = per_core_m * per_core_n * 2048
-                fixed_cb_bytes = in1_fixed + partial_fixed
-                if fixed_cb_bytes >= cb_budget_bytes:
-                    continue
-
-                remaining_bytes = cb_budget_bytes - fixed_cb_bytes
-                best_ob_h = 0
-                best_sub = (1, 1, 0)
-
-                for ob_h in range(per_core_m, 0, -1):
-                    if per_core_m % ob_h != 0:
-                        continue
-                    in0_bytes = 2 * ob_h * in0_block_w * in0_tile_b
-                    interm_bytes = ob_h * per_core_n * 2048
-                    out_bytes = 2 * ob_h * per_core_n * out_tile_b
-                    if in0_bytes + interm_bytes + out_bytes > remaining_bytes:
-                        continue
-                    sub = _best_dst_subblock(ob_h, per_core_n)
-                    if sub[2] > best_sub[2] or (sub[2] == best_sub[2] and ob_h < best_ob_h):
-                        best_ob_h = ob_h
-                        best_sub = sub
-
-                if best_ob_h == 0:
-                    continue
-
-                sub_h, sub_w, dst_area = best_sub
-                total_cores = eff_mg * actual_ng
-                score = (dst_area, int(not transpose_mcast), -best_ob_h, -total_cores)
-
-                if score > best_score:
-                    best_score = score
-                    gx = eff_mg if transpose_mcast else actual_ng
-                    gy = actual_ng if transpose_mcast else eff_mg
-                    best_pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                        compute_with_storage_grid_size=(gx, gy),
-                        in0_block_w=in0_block_w,
-                        out_subblock_h=sub_h,
-                        out_subblock_w=sub_w,
-                        out_block_h=best_ob_h,
-                        out_block_w=per_core_n,
-                        per_core_M=per_core_m,
-                        per_core_N=per_core_n,
-                        transpose_mcast=transpose_mcast,
-                        fused_activation=None,
-                        fuse_batch=False,
-                    )
-
-    return best_pc
-
-
-def enumerate_bh_tp4_matmul_pc_candidates(
-    device,
-    m_dim: int,
-    k_dim: int,
-    n_dim: int,
-    *,
-    in0_dtype: ttnn.DataType = ttnn.bfloat8_b,
-    out_dtype: ttnn.DataType = ttnn.bfloat8_b,
-    l1_resident_bytes_per_core: int = 0,
-):
-    """Yield ``(label, program_config, score)`` for hardware matmul sweeps."""
-    grid = device.compute_with_storage_grid_size()
-    grid_x, grid_y = int(grid.x), int(grid.y)
-    tile = 32
-
-    if m_dim % tile or k_dim % tile or n_dim % tile:
-        return
-
-    m_tiles = m_dim // tile
-    k_tiles = k_dim // tile
-    n_tiles = n_dim // tile
-
-    in0_tile_b = _DTYPE_TILE_BYTES[in0_dtype]
-    out_tile_b = _DTYPE_TILE_BYTES[out_dtype]
-    in0_block_w = _largest_divisor_le(k_tiles, 8)
-    cb_budget_bytes = max(256 * 1024, _L1_PER_CORE_BYTES - l1_resident_bytes_per_core)
-
-    def _per_core_n_candidates(n_max: int) -> list[int]:
-        cands = {n for n in range(1, min(n_tiles, 24) + 1) if n_tiles % n == 0}
-        cands.add((n_tiles + n_max - 1) // n_max)
-        return sorted(cands)
-
-    for transpose_mcast in (True, False):
-        m_grid_max = grid_x if transpose_mcast else grid_y
-        n_grid_max = grid_y if transpose_mcast else grid_x
-        tm = "T" if transpose_mcast else "F"
-
-        for eff_mg in range(min(m_tiles, m_grid_max), 0, -1):
-            if m_tiles % eff_mg != 0:
-                continue
-            per_core_m = m_tiles // eff_mg
-            if per_core_m > 64:
-                continue
-
-            for per_core_n in _per_core_n_candidates(n_grid_max):
-                if per_core_n > 24:
-                    continue
-                actual_ng = (n_tiles + per_core_n - 1) // per_core_n
-                if actual_ng > n_grid_max:
-                    continue
-
-                in1_fixed = 2 * in0_block_w * per_core_n * 1088
-                partial_fixed = per_core_m * per_core_n * 2048
-                fixed_cb_bytes = in1_fixed + partial_fixed
-                if fixed_cb_bytes >= cb_budget_bytes:
-                    continue
-
-                remaining_bytes = cb_budget_bytes - fixed_cb_bytes
-                best_ob_h = 0
-                best_sub = (1, 1, 0)
-
-                for ob_h in range(per_core_m, 0, -1):
-                    if per_core_m % ob_h != 0:
-                        continue
-                    in0_bytes = 2 * ob_h * in0_block_w * in0_tile_b
-                    interm_bytes = ob_h * per_core_n * 2048
-                    out_bytes = 2 * ob_h * per_core_n * out_tile_b
-                    if in0_bytes + interm_bytes + out_bytes > remaining_bytes:
-                        continue
-                    sub = _best_dst_subblock(ob_h, per_core_n)
-                    if sub[2] > best_sub[2] or (sub[2] == best_sub[2] and ob_h < best_ob_h):
-                        best_ob_h = ob_h
-                        best_sub = sub
-
-                if best_ob_h == 0:
-                    continue
-
-                sub_h, sub_w, dst_area = best_sub
-                total_cores = eff_mg * actual_ng
-                score = (dst_area, int(not transpose_mcast), -best_ob_h, -total_cores)
-                gx = eff_mg if transpose_mcast else actual_ng
-                gy = actual_ng if transpose_mcast else eff_mg
-                label = (
-                    f"search_tm{tm}_g{gx}x{gy}_M{per_core_m}_N{per_core_n}"
-                    f"_obh{best_ob_h}_ibw{in0_block_w}_sub{sub_h}x{sub_w}"
-                )
-                pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(gx, gy),
-                    in0_block_w=in0_block_w,
-                    out_subblock_h=sub_h,
-                    out_subblock_w=sub_w,
-                    out_block_h=best_ob_h,
-                    out_block_w=per_core_n,
-                    per_core_M=per_core_m,
-                    per_core_N=per_core_n,
-                    transpose_mcast=transpose_mcast,
-                    fused_activation=None,
-                    fuse_batch=False,
-                )
-                yield label, pc, score
-
-
 def _l1_shard_bytes_per_core(device, m_dim: int, n_dim: int, dtype: ttnn.DataType) -> int:
     grid = device.compute_with_storage_grid_size()
     nc = int(grid.x) * int(grid.y)
@@ -305,311 +68,6 @@ def _l1_shard_bytes_per_core(device, m_dim: int, n_dim: int, dtype: ttnn.DataTyp
     mt = m_dim // tile
     nt = n_dim // tile
     return ((mt * nt + nc - 1) // nc) * _DTYPE_TILE_BYTES[dtype]
-
-
-def bh_tp4_qkv_pc(device):
-    """Hardware-swept QKV matmul for 11264×1536×1152 on BH P150 11×10 (~148 μs).
-
-    Silicon sweep 2026-06-07 (bf8 in0/out, norm output L1 resident):
-    grid=(9,8) tm=False M=44 N=4 obh=22 ibw=8 sub=(2,4).
-    """
-    grid = device.compute_with_storage_grid_size()
-    if int(grid.x) == 11 and int(grid.y) == 10:
-        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(9, 8),
-            in0_block_w=8,
-            out_subblock_h=2,
-            out_subblock_w=4,
-            out_block_h=22,
-            out_block_w=4,
-            per_core_M=44,
-            per_core_N=4,
-            transpose_mcast=False,
-            fused_activation=None,
-            fuse_batch=False,
-        )
-    return None
-
-
-def bh_tp4_o_proj_pc(device, *, seq_len: int = _VISION_TP4_SEQ_LEN, ctx_dim: int = 384):
-    """Hardware-swept o_proj for 11264×384×1536, BFP8×BFP8→BFP8 L1 (~77 μs).
-
-    Silicon sweep 2026-06-09: grid=(8,8) tm=False M=44 N=6 obh=22 ibw=6 sub=(2,3); ~77 μs (11264x384x1536).
-    BFP8 matmul out removes the TypecastDeviceOperation before the bf8 residual add.
-    """
-    grid = device.compute_with_storage_grid_size()
-    ctx_resident = _l1_shard_bytes_per_core(device, seq_len, ctx_dim, ttnn.bfloat8_b)
-    if int(grid.x) == 11 and int(grid.y) == 10:
-        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            in0_block_w=6,
-            out_subblock_h=2,
-            out_subblock_w=3,
-            out_block_h=22,
-            out_block_w=6,
-            per_core_M=44,
-            per_core_N=6,
-            transpose_mcast=False,
-            fused_activation=None,
-            fuse_batch=False,
-        )
-    return bh_tp4_matmul_pc(
-        device,
-        seq_len,
-        ctx_dim,
-        _VISION_TP4_HIDDEN,
-        in0_dtype=ttnn.bfloat8_b,
-        out_dtype=ttnn.bfloat8_b,
-        l1_resident_bytes_per_core=ctx_resident,
-    )
-
-
-def bh_tp4_mlp_gate_up_pc(device):
-    """Gate / up matmul for 11264×1536×1056 on BH P150 11×10 (~134–138 μs).
-
-    Silicon sweep 2026-06-07: grid=(11,8) tm=False M=44 N=3 obh=22 ibw=8 sub=(2,3).
-    Shared by fc1 and fc3 (bf8 / bf4 out differ only in packer path).
-    """
-    grid = device.compute_with_storage_grid_size()
-    if int(grid.x) == 11 and int(grid.y) == 10:
-        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(11, 8),
-            in0_block_w=8,
-            out_subblock_h=2,
-            out_subblock_w=3,
-            out_block_h=22,
-            out_block_w=3,
-            per_core_M=44,
-            per_core_N=3,
-            transpose_mcast=False,
-            fused_activation=None,
-            fuse_batch=False,
-        )
-    return None
-
-
-def bh_tp4_mlp_down_pc(device, *, seq_len: int = _VISION_TP4_SEQ_LEN, itp: int = 1056):
-    """Down matmul for 11264×1056×1536 on BH P150 11×10 (~159 μs).
-
-    Silicon sweep 2026-06-09: grid=(8,8) tm=False M=44 N=6 obh=22 ibw=3 sub=(2,3); ~159 μs (11264x1056x1536).
-    """
-    grid = device.compute_with_storage_grid_size()
-    gum_resident = _l1_shard_bytes_per_core(device, seq_len, itp, ttnn.bfloat8_b)
-    if int(grid.x) == 11 and int(grid.y) == 10:
-        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            in0_block_w=3,
-            out_subblock_h=2,
-            out_subblock_w=3,
-            out_block_h=22,
-            out_block_w=6,
-            per_core_M=44,
-            per_core_N=6,
-            transpose_mcast=False,
-            fused_activation=None,
-            fuse_batch=False,
-        )
-    return bh_tp4_matmul_pc(
-        device,
-        seq_len,
-        itp,
-        _VISION_TP4_HIDDEN,
-        in0_dtype=ttnn.bfloat8_b,
-        out_dtype=ttnn.bfloat8_b,
-        l1_resident_bytes_per_core=gum_resident,
-    )
-
-
-_VISION_TP4_PATCH_K = 608  # 588 patch features padded to tile multiple (32)
-
-
-def bh_tp4_patch_embed_pc(device):
-    """Patch-embed projection ``11264×608×1536`` on BH P150 11×10 (~131 μs).
-
-    Silicon sweep 2026-06-07 (BFP8 L1 in0/out): auto ~2145 μs → swept ~131 μs.
-    ``perf_tp1vt.txt`` baseline was ~2198 μs with HiFi4 BF16 in0 and no PC.
-
-    Winner: grid=(11,8) tm=True M=32 N=6 obh=32 ibw=1 sub=(8,1).
-    """
-    grid = device.compute_with_storage_grid_size()
-    if int(grid.x) == 11 and int(grid.y) == 10:
-        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(11, 8),
-            in0_block_w=1,
-            out_subblock_h=8,
-            out_subblock_w=1,
-            out_block_h=32,
-            out_block_w=6,
-            per_core_M=32,
-            per_core_N=6,
-            transpose_mcast=True,
-            fused_activation=None,
-            fuse_batch=False,
-        )
-    return bh_tp4_matmul_pc(
-        device,
-        _VISION_TP4_SEQ_LEN,
-        _VISION_TP4_PATCH_K,
-        _VISION_TP4_HIDDEN,
-        in0_dtype=ttnn.bfloat8_b,
-        out_dtype=ttnn.bfloat8_b,
-        l1_resident_bytes_per_core=0,
-    )
-
-
-def bh_tp4_merger_fc2_pc(device):
-    """Patch-merger fc2 ``2816×6144×384`` (col-sharded out) on BH P150 11×10.
-
-    Microbench with BFP8 L1 in0/out and LoFi: auto-config ~140 μs beats
-    every ``bh_tp4_matmul_pc`` candidate (~900 μs).  Return ``None`` so the
-    forward path keeps auto-config.  (``perf_tp1vt.txt``'s ~1383 μs was HiFi4
-    without an explicit PC in an older trace.)
-    """
-    _ = device
-    return None
-
-
-def bh_tp4_merger_fc1_pc(device):
-    """Patch merger fc1 for 2816×6144×6144 on BH P150 11×10 (~566 μs).
-
-    Silicon sweep 2026-06-07: grid=(11,8) tm=True M=8 N=24 obh=8 ibw=4 sub=(2,4).
-    Auto-config was ~17.8 ms on the same shape (L1 in0, DRAM weights).
-    """
-    grid = device.compute_with_storage_grid_size()
-    if int(grid.x) == 11 and int(grid.y) == 10:
-        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(11, 8),
-            in0_block_w=4,
-            out_subblock_h=2,
-            out_subblock_w=4,
-            out_block_h=8,
-            out_block_w=24,
-            per_core_M=8,
-            per_core_N=24,
-            transpose_mcast=True,
-            fused_activation=None,
-            fuse_batch=False,
-        )
-    return bh_tp4_matmul_pc(
-        device,
-        _VISION_TP4_MERGED_SEQ,
-        _VISION_TP4_MLP_SIZE,
-        _VISION_TP4_MLP_SIZE,
-        in0_dtype=ttnn.bfloat8_b,
-        out_dtype=ttnn.bfloat8_b,
-        l1_resident_bytes_per_core=0,
-    )
-
-
-def bh_tp4_sdpa_pc(device) -> SDPAProgramConfig:
-    """Hardware-swept SDPA for TP4 vision attn on BH P150 11×10."""
-    grid = device.compute_with_storage_grid_size()
-    q_chunk, k_chunk = (128, 1024) if int(grid.x) == 11 and int(grid.y) == 10 else (256, 1024)
-    return SDPAProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
-        q_chunk_size=q_chunk,
-        k_chunk_size=k_chunk,
-        exp_approx_mode=True,
-    )
-
-
-def bh_tp4_vision_mlp_pc(
-    device,
-    m_dim: int,
-    k_dim: int,
-    n_dim: int,
-    *,
-    l1_resident_bytes_per_core: int = 0,
-):
-    """Optimal 2D-mcast program config for BH TP4 vision MLP matmuls."""
-    grid = device.compute_with_storage_grid_size()
-    grid_x, grid_y = int(grid.x), int(grid.y)
-    tile = 32
-
-    if m_dim % tile or k_dim % tile or n_dim % tile:
-        return None
-
-    m_tiles = m_dim // tile
-    k_tiles = k_dim // tile
-    n_tiles = n_dim // tile
-
-    in0_block_w = _largest_divisor_le(k_tiles, 8)
-    cb_budget_bytes = max(256 * 1024, _L1_PER_CORE_BYTES - l1_resident_bytes_per_core)
-
-    best_pc = None
-    best_score = (-(2**31), -1, -1)
-
-    for transpose_mcast in (True, False):
-        m_grid_max = grid_x if transpose_mcast else grid_y
-        n_grid_max = grid_y if transpose_mcast else grid_x
-
-        eff_mg = m_grid_max
-        while eff_mg > 1 and m_tiles % eff_mg != 0:
-            eff_mg -= 1
-
-        per_core_m = m_tiles // eff_mg
-        per_core_n = (n_tiles + n_grid_max - 1) // n_grid_max
-        actual_ng = (n_tiles + per_core_n - 1) // per_core_n
-
-        if per_core_n > 24 or per_core_m > 64:
-            continue
-
-        in1_fixed = 2 * in0_block_w * per_core_n * 1088
-        partial_fixed = per_core_m * per_core_n * 2048
-        fixed_cb_bytes = in1_fixed + partial_fixed
-
-        if fixed_cb_bytes >= cb_budget_bytes:
-            continue
-
-        remaining_bytes = cb_budget_bytes - fixed_cb_bytes
-        divisors = sorted([h for h in range(1, per_core_m + 1) if per_core_m % h == 0], reverse=True)
-
-        for ob_h in divisors:
-            in0_bytes = 2 * ob_h * in0_block_w * 2048
-            interm_bytes = ob_h * per_core_n * 2048
-            out_bytes = ob_h * per_core_n * 2048
-            if in0_bytes + interm_bytes + out_bytes > remaining_bytes:
-                continue
-
-            cand_area = 0
-            cand_h = cand_w = 1
-            dst = 8
-            for h in range(min(ob_h, dst), 0, -1):
-                if ob_h % h != 0:
-                    continue
-                for w in range(min(per_core_n, dst // h), 0, -1):
-                    if per_core_n % w != 0:
-                        continue
-                    if h * w > cand_area:
-                        cand_area = h * w
-                        cand_h = h
-                        cand_w = w
-                    break
-
-            outer_m_iters = per_core_m // ob_h
-            total_cores = eff_mg * actual_ng
-            score = (-outer_m_iters, cand_area, total_cores)
-
-            if score > best_score:
-                best_score = score
-                gx = eff_mg if transpose_mcast else actual_ng
-                gy = actual_ng if transpose_mcast else eff_mg
-                best_pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(gx, gy),
-                    in0_block_w=in0_block_w,
-                    out_subblock_h=cand_h,
-                    out_subblock_w=cand_w,
-                    out_block_h=ob_h,
-                    out_block_w=per_core_n,
-                    per_core_M=per_core_m,
-                    per_core_N=per_core_n,
-                    transpose_mcast=transpose_mcast,
-                    fused_activation=None,
-                    fuse_batch=False,
-                )
-            break
-
-    return best_pc
 
 
 def init_attn_tp4_bh_configs(
@@ -628,7 +86,14 @@ def init_attn_tp4_bh_configs(
     x_resident = _l1_shard_bytes_per_core(device, seq_len, hidden, ttnn.bfloat8_b)
     qkv_resident = _l1_shard_bytes_per_core(device, seq_len, qkv_out // ndev, ttnn.bfloat8_b)
 
-    attn._bh_tp4_qkv_pc = bh_tp4_qkv_pc(device) or bh_tp4_matmul_pc(
+    from models.experimental.tt_symbiote.modules.vision_tp4 import (
+        tp4_matmul_pc,
+        tp4_o_proj_pc,
+        tp4_qkv_pc,
+        tp4_sdpa_pc,
+    )
+
+    attn._bh_tp4_qkv_pc = tp4_qkv_pc(device) or tp4_matmul_pc(
         device,
         seq_len,
         hidden,
@@ -637,28 +102,24 @@ def init_attn_tp4_bh_configs(
         out_dtype=ttnn.bfloat8_b,
         l1_resident_bytes_per_core=x_resident + qkv_resident,
     )
-    # Arch dispatch: WH (N150×4) uses the hardware-swept ``wh_tp4_o_proj_pc``
-    # (obh=11); BH keeps ``bh_tp4_o_proj_pc``. Direct ``bh_tp4_o_proj_pc`` on WH
-    # falls through to the generic search (out_block_h=1, 44 outer-M passes,
-    # ~4× slower).
-    from models.experimental.tt_symbiote.modules.vision_tp4 import tp4_o_proj_pc
-
     attn._bh_tp4_o_pc = tp4_o_proj_pc(device, seq_len=seq_len, ctx_dim=ctx_dim)
-    attn._bh_tp4_sdpa_pc = bh_tp4_sdpa_pc(device)
+    attn._bh_tp4_sdpa_pc = tp4_sdpa_pc(device)
     attn._bh_tp4_seq_len = seq_len
 
 
 def init_patch_embed_tp4_bh_configs(patch_embed) -> None:
     """Attach swept program config for the patch-embed projection matmul."""
-    device = patch_embed.device
-    patch_embed._bh_tp4_proj_pc = bh_tp4_patch_embed_pc(device)
+    from models.experimental.tt_symbiote.modules.vision_tp4 import tp4_patch_embed_pc
+
+    patch_embed._bh_tp4_proj_pc = tp4_patch_embed_pc(patch_embed.device)
 
 
 def init_merger_tp4_bh_configs(merger) -> None:
     """Attach swept program configs for patch-merger fc1/fc2 matmuls."""
-    device = merger.device
-    merger._bh_tp4_merger_fc1_pc = bh_tp4_merger_fc1_pc(device)
-    merger._bh_tp4_merger_fc2_pc = bh_tp4_merger_fc2_pc(device)
+    from models.experimental.tt_symbiote.modules.vision_tp4 import tp4_merger_fc1_pc, tp4_merger_fc2_pc
+
+    merger._bh_tp4_merger_fc1_pc = tp4_merger_fc1_pc(merger.device)
+    merger._bh_tp4_merger_fc2_pc = tp4_merger_fc2_pc(merger.device)
 
 
 def init_mlp_tp4_bh_configs(
@@ -670,18 +131,12 @@ def init_mlp_tp4_bh_configs(
     """Attach hardware-swept matmul program configs to a TP4 MLP module."""
     device = mlp.device
     itp = int(mlp._intermediate_size) // int(mlp._tp_ndev)
-    # Arch dispatch: WH (N150×4) uses the hardware-swept ``wh_tp4_*`` configs,
-    # BH (P150×4) keeps the ``bh_tp4_*`` ones. Direct ``bh_tp4_mlp_down_pc`` on
-    # WH falls through to the generic search (out_block_h=1, ~3.4× slower than
-    # the swept obh=11). gate/up are already at the swept obh=11 either way.
     from models.experimental.tt_symbiote.modules.vision_tp4 import tp4_mlp_down_pc, tp4_mlp_gate_up_pc
 
     gate_up = tp4_mlp_gate_up_pc(device)
-    mlp._bh_tp4_gate_pc = gate_up or bh_tp4_vision_mlp_pc(device, seq_len, hidden, itp)
-    mlp._bh_tp4_up_pc = gate_up or bh_tp4_vision_mlp_pc(device, seq_len, hidden, itp)
-    mlp._bh_tp4_down_pc = tp4_mlp_down_pc(device, seq_len=seq_len, itp=itp) or bh_tp4_vision_mlp_pc(
-        device, seq_len, itp, hidden
-    )
+    mlp._bh_tp4_gate_pc = gate_up
+    mlp._bh_tp4_up_pc = gate_up
+    mlp._bh_tp4_down_pc = tp4_mlp_down_pc(device, seq_len=seq_len, itp=itp)
 
 
 def vision_attn_tp4_bh_forward(
@@ -995,9 +450,13 @@ def vision_patch_merger_tp4_bh_forward(merger, hidden_states: ttnn.Tensor) -> tt
     """Patch merger with L1 interleaved activations (BH 11×10 DRAM-matmul fallback)."""
     l1 = ttnn.L1_MEMORY_CONFIG
     if not hasattr(merger, "_bh_tp4_merger_fc1_pc"):
-        merger._bh_tp4_merger_fc1_pc = bh_tp4_merger_fc1_pc(merger.device)
+        from models.experimental.tt_symbiote.modules.vision_tp4 import tp4_merger_fc1_pc
+
+        merger._bh_tp4_merger_fc1_pc = tp4_merger_fc1_pc(merger.device)
     if not hasattr(merger, "_bh_tp4_merger_fc2_pc"):
-        merger._bh_tp4_merger_fc2_pc = bh_tp4_merger_fc2_pc(merger.device)
+        from models.experimental.tt_symbiote.modules.vision_tp4 import tp4_merger_fc2_pc
+
+        merger._bh_tp4_merger_fc2_pc = tp4_merger_fc2_pc(merger.device)
     fc1_pc = merger._bh_tp4_merger_fc1_pc
     fc2_pc = merger._bh_tp4_merger_fc2_pc
     hidden_states = ensure_l1_tensor(hidden_states)
