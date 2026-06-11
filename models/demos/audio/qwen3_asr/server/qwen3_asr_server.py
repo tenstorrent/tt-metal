@@ -126,9 +126,9 @@ def _infer(wav, force, max_new_tokens=200):
         pad = torch.zeros(n_mask - audio_embeds.shape[0], audio_embeds.shape[1])
         audio_embeds = torch.cat([audio_embeds, pad], 0)
     inp[mask] = audio_embeds
-    # use_trace=False in the long-lived server: per-request trace capture/release is
-    # not yet robust across many calls (TODO: capture the decode trace once and reuse).
-    # Decode is still ~30 tok/s -> RTF well under the 0.30 target.
+    # use_trace=False: the persistent decode trace gives ~2x but HANGS the long-lived server
+    # after a few mixed-shape requests (tt-metal trace-stability issue; see qwen3_asr_decoder).
+    # Decode speed instead comes from on-device argmax (no 151936-vocab host transfer/token).
     ids = STATE["model"].generate(inp.unsqueeze(0), max_new_tokens=max_new_tokens, use_trace=False)
     lang, text = _parse(STATE["tok"].decode(ids, skip_special_tokens=False))
     return text, lang, time.time() - t0
@@ -137,7 +137,10 @@ def _infer(wav, force, max_new_tokens=200):
 # --- Tier-2 long-form: silence-aware chunking + hallucination/non-speech gating ---
 SR = 16000
 SINGLE_CAP = 45.0          # <= this -> single-shot; longer -> chunk
-SEG_TARGET, SEG_MAX, SEG_SEARCH = 38.0, 45.0, 6.0   # window (s); ~45s -> ~1024 prefill (needs Tier-1)
+# Wide silence search [start+SEG_MIN, start+SEG_MAX]: prefer the longest pause anywhere in
+# the window (not just near TARGET) so cuts land at natural boundaries instead of hard-capping
+# mid-word at SEG_MAX. SEG_MAX stays <=45s (~1024 prefill).
+SEG_TARGET, SEG_MAX, SEG_MIN = 38.0, 45.0, 18.0
 SIL_RMS = 0.005
 
 
@@ -160,7 +163,7 @@ def _segment(w):
         ideal = start + int(SEG_TARGET * SR)
         if ideal >= N:
             segs.append((start, N)); break
-        lo = max(start + int((SEG_TARGET - SEG_SEARCH) * SR), start + int(8 * SR))
+        lo = start + int(SEG_MIN * SR)
         hi = min(start + int(SEG_MAX * SR), N)
         f_lo, f_hi = lo // fl, min(hi // fl, len(sil))
         best_len, cut, run_s = 0, None, None
