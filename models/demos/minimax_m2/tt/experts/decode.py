@@ -75,7 +75,7 @@ def decode_forward(
         # routing weights (softmax over top-k, scattered) frequently have <k non-zeros
         # on Blackhole (small weights flush to 0), so a static nnz != actual count and
         # the receivers deadlock in noc_semaphore_wait. Inferring the count is robust.
-        # See tenstorrent/tt-metal#45943 (op deadlock) / #45052 (gpt-oss hang).
+        # See tenstorrent/tt-metal#45943 (op deadlock) / #45052 (sparse_matmul hang).
         nnz=None,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
@@ -101,7 +101,7 @@ def decode_forward(
         # routing weights (softmax over top-k, scattered) frequently have <k non-zeros
         # on Blackhole (small weights flush to 0), so a static nnz != actual count and
         # the receivers deadlock in noc_semaphore_wait. Inferring the count is robust.
-        # See tenstorrent/tt-metal#45943 (op deadlock) / #45052 (gpt-oss hang).
+        # See tenstorrent/tt-metal#45943 (op deadlock) / #45052 (sparse_matmul hang).
         nnz=None,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
@@ -133,7 +133,7 @@ def decode_forward(
         # routing weights (softmax over top-k, scattered) frequently have <k non-zeros
         # on Blackhole (small weights flush to 0), so a static nnz != actual count and
         # the receivers deadlock in noc_semaphore_wait. Inferring the count is robust.
-        # See tenstorrent/tt-metal#45943 (op deadlock) / #45052 (gpt-oss hang).
+        # See tenstorrent/tt-metal#45943 (op deadlock) / #45052 (sparse_matmul hang).
         nnz=None,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,

@@ -18,8 +18,8 @@ attention block 0.9991 · router (decomposed) · experts 0.9990 · **full decode
 0.99993** vs HF. The M2 architecture deltas (partial RoPE, distributed QK-norm,
 sigmoid+bias router, SiLU-SwiGLU experts, no biases/sinks/sliding-window) are done.
 
-**Done:** gpt-oss naming/dead-reference cleanup (program-config classes renamed, stale
-docstrings fixed; delta "vs gpt-oss" comments kept as documentation).
+**Done:** code + docs are MiniMax-only (no external-model references); program-config
+classes + identifiers all MiniMax-named.
 
 **In progress — serving skeleton (scaffold, see §4/§8):** prefill runner + pipeline +
 per-layer KV migration seam + chunked prefill. Tiering:
@@ -28,8 +28,8 @@ per-layer KV migration seam + chunked prefill. Tiering:
   write-only KV fill), standalone runner.
 - *Tier 2 (seam/stub, cross-team / multi-card):* per-layer migration, P/D disaggregation.
 - *Tier 3 (defer, undefined):* EP=8 (`experts_throughput/` is the future home, untouched).
-  Note: DeepSeek prefill does EP+SP+TP; our current EP=1 is a functional-first choice
-  (gpt-oss origin), NOT the DeepSeek end-state — EP-in-prefill is the scaling target.
+  Note: our current EP=1 is a functional-first choice, NOT the end-state —
+  DeepSeek prefill does EP+SP+TP, and EP-in-prefill is the scaling target.
 
 **Not validated anywhere yet:** TP>1 / EP / SP collectives, paged KV read-back, full
 model logits, real weights, bfp4 accuracy, decode path, long context. All need the
@@ -145,8 +145,8 @@ With SP=4 and 5 120-token chunks, each row processes **1 280 tokens per chunk**.
                                   long-generation accuracy. (attention/decode.py)
 
 ❌ No prefill runner / server connection
-                              →  text_demo.py is a standalone script,
-                                  no SHM or request loop
+                              →  prefill_runner.py is scaffold (stubs);
+                                  no standalone loop, SHM, or request loop yet
 
 ❌ No chunked prefill at generator level
                               →  max_prefill_chunk_size = 128K (the whole sequence)
@@ -346,7 +346,15 @@ After all 62 layers:
 
 ## 8. prefill_runner.py Design for MiniMax-M2
 
-Modelled directly on `deepseek_v3_d_p/tt/runners/prefill_runner.py`:
+Reference: `deepseek_v3_d_p/tt/runners/prefill_runner.py`.
+
+> *Open idea (not a decision):* the prefill scheduler/runner/migration loop looks
+> largely model-agnostic, so it might be shareable across models rather than forked
+> per model — worth exploring with the team. If we go that way, we'd note where it
+> isn't general yet (e.g. assumes MLA / DeepSeek dims). For now this is just a
+> reference; our `tt/runners/` is placeholder scaffold.
+
+Shape (mirrors the reference):
 
 ```python
 # Key env vars (mirrors DeepSeek pattern):

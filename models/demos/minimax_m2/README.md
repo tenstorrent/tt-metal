@@ -1,56 +1,39 @@
-# GPT-OSS: Mixture of Experts Language Model
+# MiniMax-M2 — Prefill bring-up
 
-Inference implementation for GPT-OSS models on Tenstorrent Wormhole accelerators.
+TTNN implementation of **MiniMax-M2** prefill inference for Tenstorrent.
+Target: one Blackhole Galaxy (4×8). Model: 62-layer MoE decoder, 256 experts /
+top-8 sigmoid routing, GQA (48 q / 8 kv heads, head_dim 128, partial RoPE 64),
+QK-norm, SiLU-SwiGLU experts. Config: [`configs/MiniMax-M2/config.json`](configs/MiniMax-M2/config.json).
 
-**Model Source**: [GPT-OSS on HuggingFace](https://huggingface.co/gpt-oss) (custom MoE architecture)
+## Read these first
+- **[PREFILL_PROPOSAL.md](PREFILL_PROPOSAL.md)** — architecture + work breakdown (living doc;
+  always reflects current status: validated vs scaffold).
+- **[SKELETON.md](SKELETON.md)** — the serving-skeleton work split (who owns which seam).
 
-**Target Hardware**:
-- **LoudBox**: Single Wormhole device (1×8 configuration)
-- **Galaxy**: Multi-device Wormhole mesh (4×8 configuration)
+## Status (single Wormhole, TP=1, random weights, seq=128)
+Model math validated vs the HuggingFace reference (`MiniMaxM2*`, loaded via
+`trust_remote_code` from the vendored modeling files in `configs/MiniMax-M2/`):
 
-**Current Status**: This model is under active development.
-- ✅ Supported: Prefill up to sequence length 128, batch size 1, total sequence length 4096
-- 🚧 In Progress: Extended sequence lengths, larger batch sizes
+| Component | PCC vs HF |
+|---|---|
+| attention block | 0.9991 |
+| MoE router (decomposed) | sigmoid 0.99999 / weights 0.9993 |
+| experts (SiLU SwiGLU) | 0.9990 |
+| full decoder layer | 0.99993 |
 
-## Quick Start
+Not yet validated (need the multi-card Blackhole box): TP/EP/SP collectives, paged
+KV read-back, full-model logits, real weights, bfp4 accuracy, decode, long context.
 
-```bash
-# Bump up transformers version
-pip install -r models/demos/minimax_m2/requirements.txt
-
-# Set model path using HF_MODEL environment variable
-export HF_MODEL="/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b"
-
-# Run text generation demo on Galaxy (4×8 mesh)
-cd tt-metal/models/demos/minimax_m2/demo
-pytest text_demo.py -k "4x8 and prefill_128"
+## Tests
+```
+pip install -r requirements.txt          # transformers==4.57.1 (M2 is a trust_remote_code model)
+pytest models/demos/minimax_m2/tests/unit/
 ```
 
-## Configuration
-
-### Model Selection
-```bash
-# GPT-OSS-20B (faster, recommended for development)
-export HF_MODEL="/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b"
-
-# GPT-OSS-120B (higher quality, requires more memory)
-export HF_MODEL="/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b"
+## Layout
 ```
-
-## Testing
-
-```bash
-# Run all tests
-pytest models/demos/minimax_m2/tests/unit/ -v
-
-# Run specific test files
-pytest models/demos/minimax_m2/tests/unit/test_modules.py -v     # Core components
-pytest models/demos/minimax_m2/tests/unit/test_model.py -v       # Full model accuracy
+tt/              model: attention/ experts/ topk.py mlp.py layer.py model.py
+tt/runners/      prefill serving skeleton (scaffold) — see SKELETON.md
+configs/MiniMax-M2/   config.json + vendored HF reference (modeling_minimax_m2.py)
+tests/unit/      module-by-module PCC tests vs the HF reference
 ```
-
-### Test Files Overview
-
-| File | Purpose | Tests |
-|------|---------|-------|
-| **`test_modules.py`** | Core MoE components | • Attention component<br>• RMSNorm<br>• TopK router<br>• Experts<br>• Full MLP pipeline<br>• Complete decoder layer |
-| **`test_model.py`** | Full model integration | • End-to-end accuracy<br>• Teacher forcing<br>• Reference model comparison |

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-General utilities for the GPT-OSS demo.
+General utilities for MiniMax-M2.
 """
 
 from models.common.utility_functions import is_blackhole

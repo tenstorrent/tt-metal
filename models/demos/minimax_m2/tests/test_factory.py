@@ -113,7 +113,7 @@ class TestFactory:
 
 
 def parametrize_mesh_with_fabric(mesh_shapes=None):
-    """Universal mesh + fabric parametrization for gpt_oss tests.
+    """Universal mesh + fabric parametrization for minimax_m2 tests.
 
     Generates a paired ``(mesh_device, device_params)`` parametrize. Each
     case opens a mesh of the requested shape directly (no submesh carving
@@ -128,7 +128,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
     to override (useful for tests that only make sense at one TP factor).
 
     Fabric: ``(1,1)`` disables fabric (no inter-chip topology to ring
-    around). Multi-device shapes use ``FABRIC_1D_RING`` — gpt_oss's CCL
+    around). Multi-device shapes use ``FABRIC_1D_RING`` — minimax_m2's CCL
     operations (reduce_scatter, all_gather, all_reduce) all use the ring
     topology.
 
@@ -169,7 +169,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
                 (1, 1),
                 {"fabric_config": None, "trace_region_size": 100000000},
                 id="1x1",
-                marks=pytest.mark.skip(reason="No supported gpt_oss mesh shape fits on this system"),
+                marks=pytest.mark.skip(reason="No supported minimax_m2 mesh shape fits on this system"),
             )
         ]
     else:

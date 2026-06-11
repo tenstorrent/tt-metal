@@ -877,7 +877,7 @@ def create_fused_moe_gpt_config(
     # and the torch_w0_w1 / torch_w2 inputs are discarded. Skip the
     # expensive state_dict prep (bfloat16→float32 expansion + per-device
     # permute/cat across 32 chips × 128 experts) in that case — for
-    # gpt-oss-120b this saves ~15-20s per layer on a warm cache.
+    # this saves ~15-20s per layer on a warm cache.
     def _tensor_cache_file_path(cache_base, dtype, layout):
         return f"{cache_base}_dtype_{dtype.name}_layout_{layout.name}.tensorbin"
 

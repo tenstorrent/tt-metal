@@ -18,7 +18,7 @@ def _grid_dividing(nt: int, fallback: tuple[int, int], max_dim: int = 8) -> tupl
 
     The sparse_matmul in0-mcast requires num_blocks_x == num_cores (rectangular):
     per_core_N = ceil(nt / cores) and num_blocks_x = ceil(nt / per_core_N), which
-    only equals `cores` when cores | nt. gpt-oss's fixed grids assume TP-sharded
+    only equals `cores` when cores | nt. the configured fixed grids assume TP-sharded
     dims; under different TP (e.g. TP=1, nt=96) a fixed grid like (5,6)=30 does NOT
     divide nt and the kernel asserts. Auto-selecting a dividing grid makes the
     experts run correctly at any TP (perf tuning is separate).
@@ -34,10 +34,9 @@ def _grid_dividing(nt: int, fallback: tuple[int, int], max_dim: int = 8) -> tupl
 
 @dataclass
 class ExpertConfig:
-    """Core expert configuration - model agnostic.
+    """Core expert configuration.
 
-    MiniMax-M2 uses plain SiLU SwiGLU (no clamp limit, no alpha scaling), so the
-    gpt-oss swiglu_limit/alpha fields are gone.
+    MiniMax-M2 uses plain SiLU SwiGLU (no clamp limit, no alpha scaling).
     """
 
     intermediate_size: int
@@ -180,7 +179,7 @@ class ProgramConfig:
         # is 1, which collapses the matmul to a tile-by-tile inner loop and
         # roughly halves prefill throughput. In that case fall back to Kt
         # itself — always a divisor, and small enough to fit in L1 for the
-        # Kt range produced by realistic gpt-oss TP shardings (Kt ≤ ~90).
+        # Kt range produced by realistic TP shardings (Kt ≤ ~90).
         if k is not None:
             Kt = int(math.ceil(k / 32))
             if Kt % in0_block_w != 0:

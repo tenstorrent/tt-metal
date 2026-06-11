@@ -121,7 +121,7 @@ class ModelArgs:
         DEFAULT_VALUE = self.capped_warmup_seq_len
         # This dictionary is used to override the default ceil warmup prefill value
         model_specific_ceil_warmup_lengths = {
-            # e.g. "gpt-oss-120b": 4096
+            # e.g. "MiniMax-M2": 4096
         }
 
         max_seq_len_to_warmup = model_specific_ceil_warmup_lengths.get(self.base_model_name, DEFAULT_VALUE)
@@ -141,7 +141,7 @@ class ModelArgs:
         # This filtering is based on the current PR's (https://github.com/tenstorrent/tt-metal/pull/33143) sequence lengths that are used for warmup
 
         # TODO: https://github.com/tenstorrent/tt-metal/issues/33722
-        # (gpt-oss-120b had a 6144 warmup-length carve-out here; not needed for MiniMax-M2)
+        # (no model-specific warmup carve-out needed)
 
         for seq_len in to_warmup_seq_lens:
             if seq_len >= 64 * 1024:

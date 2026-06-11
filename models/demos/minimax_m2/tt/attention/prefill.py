@@ -154,7 +154,7 @@ def prefill_forward(
 
     # Scaled dot-product attention.
     # MiniMax-M2 uses plain causal attention every layer: no sliding window, no
-    # attention sinks (unlike gpt-oss).
+    # attention sinks.
     tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
         tt_q,
         tt_k,
