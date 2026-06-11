@@ -32,12 +32,18 @@ void advance_h2d_simulator_socket_device(MeshDevice* mesh_device, const MeshCoor
         return;
     }
 
-    const auto& cluster = MetalContext::instance().get_cluster();
+    const auto context_id = tt::tt_metal::extract_context_id(mesh_device);
+    const auto& cluster = MetalContext::instance(context_id).get_cluster();
     if (cluster.get_target_device_type() != tt::TargetDevice::Simulator) {
         return;
     }
 
-    cluster.advance_device_execution(mesh_device->get_device(device_coord)->id());
+    IDevice* device = mesh_device->get_device(device_coord);
+    if (device == nullptr) {
+        return;
+    }
+
+    cluster.advance_device_execution(device->id());
 }
 
 }  // namespace
