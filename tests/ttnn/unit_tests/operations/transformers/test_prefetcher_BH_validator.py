@@ -409,7 +409,7 @@ def test_validator_dram_sender_recv_contig(device, K, N, dtype, recv_per_bank, n
     )
     with tensor_prefetcher_session(device, dual_senders_per_bank=dual_senders):
         ttnn.experimental.queue_tensor_prefetcher_request(
-            device, [(tt_weight, ring_size)] * num_layers, global_cb=gcb, streaming=streaming
+            device, [(tt_weight, ring_size, streaming)] * num_layers, global_cb=gcb
         )
         ttnn.experimental.test_dram_prefetcher_validator(
             device,

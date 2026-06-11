@@ -425,7 +425,7 @@ def test_bw_dram_core_prefetcher_streaming(device, op_name, shape):
 
     ttnn.experimental.start_dram_core_prefetcher(device, dual_senders_per_bank=dual_senders)
     ttnn.experimental.queue_dram_core_prefetcher_request(
-        device, [(tt_weight, num_receivers)] * num_prefetch_layers, global_cb=gcb, streaming=True
+        device, [(tt_weight, num_receivers, True)] * num_prefetch_layers, global_cb=gcb
     )
 
     ttnn.experimental.test_dram_prefetcher_consumer(

@@ -287,10 +287,6 @@ void kernel_main() {
         // DRAM_PREFETCHER_CMD_PREFETCH
         const uint32_t req_num_entries = req->prefetch.num_entries;
         const uint32_t gcb_state_addr = req->prefetch.gcb_state_addr;
-        // Streaming (receiver-contiguous only): deliver each receiver's blocks in
-        // ring-rotated order so the matmul can consume them FIFO. Applies to every
-        // entry in this request.
-        const bool streaming = req->prefetch.streaming != 0;
         volatile tt_l1_ptr DramSenderStateBlock* state =
             reinterpret_cast<volatile tt_l1_ptr DramSenderStateBlock*>(gcb_state_addr);
 
@@ -345,6 +341,9 @@ void kernel_main() {
             const uint32_t t_target_per_visit = g->target_per_visit_pages;
             const uint32_t t_recv_stride = g->recv_stride_bytes;
             const uint32_t t_block_count = g->block_count;
+            // Streaming (receiver-contiguous only) is a per-tensor layout attribute: deliver
+            // this tensor's blocks in ring-rotated order so the matmul can consume them FIFO.
+            const bool streaming = g->streaming != 0;
 
             // Set the sender fifo page size to one full per-receiver page. When resize skips
             // padding to reach the next aligned page (e.g. a larger page after a smaller one in a

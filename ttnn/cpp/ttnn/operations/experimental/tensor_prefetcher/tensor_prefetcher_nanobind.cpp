@@ -67,21 +67,23 @@ void bind_tensor_prefetcher(nb::module_& mod) {
 
             Args:
                 mesh_device (ttnn.MeshDevice): the mesh device whose prefetcher to queue on.
-                tensors (List[Tuple[ttnn.Tensor, int]]): the full, flattened list of
-                    (weight tensor, block_count) pairs to prefetch (at least one), streamed
-                    in list order. block_count is the number of K-blocks to divide that
-                    tensor's K dimension into (the consumer matmul waits on block_count
-                    pages per layer). Pass distinct tensors for distinct layers, or repeat
-                    a tensor to replay it.
+                tensors (List[Tuple[ttnn.Tensor, int] | Tuple[ttnn.Tensor, int, bool]]): the
+                    full, flattened list of weights to prefetch (at least one), streamed in
+                    list order. Each item is (weight, block_count) or, to set per-tensor
+                    streaming, (weight, block_count, streaming). block_count is the number of
+                    K-blocks to divide that tensor's K dimension into (the consumer matmul
+                    waits on block_count pages per layer). Pass distinct tensors for distinct
+                    layers, or repeat a tensor to replay it.
+
+                    streaming (receiver-contiguous layout only, default False) makes the kernel
+                    deliver that tensor's K-blocks in ring-rotated order so the consuming matmul
+                    can stream them FIFO (and start before the whole tensor lands, allowing a
+                    shallow GCB). The matmul must be built with the matching streaming flag,
+                    else it deadlocks.
                 global_cb (GlobalCircularBuffer): a DRAM-sender GCB (created via
                     ttnn.experimental.create_global_circular_buffer_with_dram_senders).
                 device_subset (Optional[MeshCoordinateRangeSet]): subset of the mesh that
                     processes this request. Defaults to the full mesh.
-                streaming (bool): receiver-contiguous layout only. When True, deliver each
-                    receiver's K-blocks in ring-rotated order so the consuming matmul can
-                    stream them FIFO (and start before the whole tensor lands, allowing a
-                    shallow GCB). The matmul must be built with the matching streaming flag,
-                    else it deadlocks. Defaults to False (batched whole-tensor delivery).
                 cq_id (Optional[int]): command queue that may be recording a trace. When that
                     CQ is mid trace-capture, the request is captured into the trace instead of
                     being sent immediately, and is re-sent on every execute_trace of that trace.
@@ -96,7 +98,6 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         nb::arg("global_cb"),
         nb::kw_only(),
         nb::arg("device_subset") = std::nullopt,
-        nb::arg("streaming") = false,
         nb::arg("cq_id") = std::nullopt);
 
     ttnn::bind_function<"wait_for_cq_on_tensor_prefetcher", "ttnn.experimental.">(
