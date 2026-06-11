@@ -120,6 +120,7 @@ class TTVibeVoiceGenerator:
         speech_scaling_factor: Optional[float] = None,
         speech_bias_factor: Optional[float] = None,
         acoustic_fix_std: float = 0.5,
+        acoustic_encode_chunk_samples: int = 3200,
         ref_inference=None,
     ):
         self.lm = lm_tt
@@ -150,6 +151,7 @@ class TTVibeVoiceGenerator:
         self.speech_scaling_factor = speech_scaling_factor
         self.speech_bias_factor = speech_bias_factor
         self.acoustic_fix_std = acoustic_fix_std
+        self.acoustic_encode_chunk_samples = acoustic_encode_chunk_samples
 
         self.valid_token_ids = [
             speech_start_id,
@@ -186,11 +188,66 @@ class TTVibeVoiceGenerator:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    @staticmethod
+    def _trim_trailing_zeros(wav_1d: torch.Tensor) -> torch.Tensor:
+        """Drop processor padding so padded voice rows are not fully encoded on device."""
+        if wav_1d.numel() == 0:
+            return wav_1d
+        nz = wav_1d != 0
+        if not nz.any():
+            return wav_1d[:0]
+        last = int(nz.nonzero(as_tuple=True)[0][-1].item()) + 1
+        return wav_1d[:last]
+
+    def _latents_from_encode_output(self, lat_tt: ttnn.Tensor) -> torch.Tensor:
+        """Device encode output → [T_enc, vae_dim] float32 on host."""
+        out = ttnn.to_torch(lat_tt).to(torch.float32).squeeze(0).squeeze(0)
+        if out.dim() == 1:
+            return out.unsqueeze(0)
+        return out
+
     def _encode_acoustic_latents(self, wav_1d: torch.Tensor) -> torch.Tensor:
-        """Encode audio → [T_enc, vae_dim] float32 on host (with fix-std sampling)."""
-        audio_tt = self._audio_row_to_tt(wav_1d)
-        lat_tt = self.acoustic_tok.encode(audio_tt)
-        lat = ttnn.to_torch(lat_tt).to(torch.float32).squeeze(0).squeeze(0)  # [T_enc, D]
+        """Encode audio → [T_enc, vae_dim] float32 on host (with fix-std sampling).
+
+        Long voice prompts are encoded in streaming chunks (one latent frame per chunk)
+        so conv L1 circular buffers stay within device limits.
+        """
+        wav = self._trim_trailing_zeros(wav_1d)
+        total_samples = wav.numel()
+        chunk = self.acoustic_encode_chunk_samples
+
+        if total_samples == 0:
+            return torch.zeros(0, 0)
+
+        if total_samples <= chunk:
+            self.acoustic_tok._encoder_tt.reset_cache()
+            lat_tt = self.acoustic_tok.encode(
+                self._audio_row_to_tt(wav),
+                use_cache=False,
+                is_final_chunk=True,
+            )
+            lat = self._latents_from_encode_output(lat_tt)
+        else:
+            self.acoustic_tok._encoder_tt.reset_cache()
+            frames: List[torch.Tensor] = []
+            pos = 0
+            while pos < total_samples:
+                n = min(chunk, total_samples - pos)
+                chunk_wav = wav[pos : pos + n]
+                is_final = pos + n >= total_samples
+                if chunk_wav.numel() < chunk:
+                    # conv2d caches prepared weights per input width; keep chunks fixed-size.
+                    chunk_wav = torch.nn.functional.pad(chunk_wav, (0, chunk - chunk_wav.numel()))
+                lat_tt = self.acoustic_tok.encode(
+                    self._audio_row_to_tt(chunk_wav),
+                    use_cache=True,
+                    is_final_chunk=is_final,
+                )
+                out = self._latents_from_encode_output(lat_tt)
+                frames.append(out[-1:])
+                pos += n
+            lat = torch.cat(frames, dim=0)
+
         if self.acoustic_fix_std:
             lat = lat + self.acoustic_fix_std * torch.randn_like(lat)
         return lat
@@ -239,9 +296,9 @@ class TTVibeVoiceGenerator:
             conn_torch = ttnn.to_torch(conn_out).to(torch.float32)
             if conn_torch.dim() == 4:
                 conn_torch = conn_torch.squeeze(0).squeeze(0)
-            else:
+            elif conn_torch.dim() == 3:
                 conn_torch = conn_torch.squeeze(0)
-            conn_torch = conn_torch[:, :n, :]
+            conn_torch = conn_torch[:n]
             speech_embeds_parts.append(conn_torch)
 
         return torch.cat(speech_embeds_parts, dim=0)
