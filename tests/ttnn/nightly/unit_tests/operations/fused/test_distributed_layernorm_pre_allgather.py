@@ -12,6 +12,12 @@ import ttnn
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc
 from tests.ttnn.utils_for_testing import assert_equal, assert_numeric_metrics, tt_dtype_to_torch_dtype
+from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import (
+    ttnn_layer_norm_pre_all_gather,
+    ttnn_rms_norm_pre_all_gather,
+    ttnn_layer_norm_post_all_gather,
+)
+
 
 TEST_PADDING_VALUE = -42
 
@@ -73,9 +79,9 @@ def ln_pre_allgather_op(xs, n_devices, is_rmsnorm, out_dtpe, kernel_config):
     tt_out = []
     for d in range(n_devices):
         if is_rmsnorm:
-            tt_out.append(ttnn.rms_norm_pre_all_gather(xs[d], compute_kernel_config=kernel_config, dtype=out_dtpe))
+            tt_out.append(ttnn_rms_norm_pre_all_gather(xs[d], compute_kernel_config=kernel_config, dtype=out_dtpe))
         else:
-            tt_out.append(ttnn.layer_norm_pre_all_gather(xs[d], compute_kernel_config=kernel_config, dtype=out_dtpe))
+            tt_out.append(ttnn_layer_norm_pre_all_gather(xs[d], compute_kernel_config=kernel_config, dtype=out_dtpe))
     return tt_out
 
 
@@ -252,7 +258,7 @@ def run_layernorm_pre_post_gamma_only_pcc(device, use_pre_all_gather: bool):
         tt_memory_config=dram_memcfg,
     )
 
-    tt_out = ttnn.layer_norm_post_all_gather(
+    tt_out = ttnn_layer_norm_post_all_gather(
         tt_inp,
         tt_stats,
         epsilon=epsilon,
@@ -532,7 +538,7 @@ def test_layernorm_pre_all_gather_residual_padding_zeroed(device, inp_shape):
     # Poison residual's implicit tile padding. A correct op must ignore these values.
     tt_res = ttnn.fill_implicit_tile_padding(tt_res, POISON)
 
-    tt_stats = ttnn.layer_norm_pre_all_gather(
+    tt_stats = ttnn_layer_norm_pre_all_gather(
         tt_inp,
         residual_input_tensor=tt_res,
         dtype=ttnn.bfloat16,
@@ -611,7 +617,7 @@ def test_layernorm_pre_all_gather_residual_mismatched_dtype(device, inp_dtype, r
         torch_res, tt_dtype=res_dtype, tt_device=device, tt_layout=ttnn.TILE_LAYOUT, tt_memory_config=dram_memcfg
     )
 
-    tt_stats = ttnn.layer_norm_pre_all_gather(
+    tt_stats = ttnn_layer_norm_pre_all_gather(
         tt_inp,
         residual_input_tensor=tt_res,
         dtype=ttnn.bfloat16,
@@ -775,7 +781,7 @@ def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype,
     # Passing residual_input_tensor causes the program factory to set the FUSE_PRE_ADD
     # compile-time define, so the kernel is compiled with the in-kernel add path: it reads
     # tt_inp and tt_res into separate CBs and adds them via add_tiles before the welford pass.
-    stats_fused = ttnn.layer_norm_pre_all_gather(
+    stats_fused = ttnn_layer_norm_pre_all_gather(
         tt_inp,
         residual_input_tensor=tt_res,
         dtype=stats_dtype,
@@ -787,7 +793,7 @@ def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype,
     # No residual_input_tensor is passed, so the program factory does not set FUSE_PRE_ADD
     # and the kernel is compiled without the in-kernel add path entirely. The kernel sees
     # a single, already-summed input. Mathematically equivalent to stats_fused.
-    stats_combined = ttnn.layer_norm_pre_all_gather(
+    stats_combined = ttnn_layer_norm_pre_all_gather(
         tt_combined,
         dtype=stats_dtype,
         compute_kernel_config=kernel_config,
@@ -900,11 +906,11 @@ def test_pre_allgather_ignores_implicit_tile_padding(device, inp_shape):
         device=device,
     )
 
-    stats_from_torch = ttnn.layer_norm_pre_all_gather(
+    stats_from_torch = ttnn_layer_norm_pre_all_gather(
         tt_from_torch,
         dtype=ttnn.bfloat16,
     )
-    stats_from_ones = ttnn.layer_norm_pre_all_gather(
+    stats_from_ones = ttnn_layer_norm_pre_all_gather(
         tt_ones,
         dtype=ttnn.bfloat16,
     )
@@ -980,7 +986,7 @@ def test_layernorm_pre_all_gather_welford_fp32_precision(device, inp_shape, offs
         )
         residual_kwargs["residual_input_tensor"] = tt_res
 
-    tt_stats = ttnn.layer_norm_pre_all_gather(
+    tt_stats = ttnn_layer_norm_pre_all_gather(
         tt_inp,
         dtype=ttnn.float32,
         compute_kernel_config=kernel_config,

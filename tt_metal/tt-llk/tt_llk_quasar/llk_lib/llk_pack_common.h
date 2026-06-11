@@ -326,3 +326,17 @@ inline void _llk_pack_dest_semaphore_section_done_()
         _set_packer_dest_registers_<PACK_SEL, DST>();
     }
 }
+
+/**
+ * @brief Reset the pack thread's dest-bank tracking to bank 0 at the start of a program.
+ *
+ * @tparam PACK_SEL: Packer to configure, values = <p_pacr::PACK0/PACK1>
+ * @tparam DST: Destination register buffering mode, values = <DstSync::SyncHalf/DstSync::SyncFull>
+ * @note Pair with @ref _llk_math_pack_sync_init_ (T1); call once per program before the first pack.
+ */
+template <std::uint32_t PACK_SEL, DstSync DST>
+inline void _llk_pack_dest_init_()
+{
+    _reset_dest_register_offset_();
+    _set_packer_dest_registers_<PACK_SEL, DST>();
+}
