@@ -7,31 +7,46 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
-#include "api/compute/untilize.h"
+#include "api/compute/pack_untilize.h"
 
 constexpr uint32_t NUM_TILES_IN_TILIZED_CHUNK = 32;
+
+// pack_untilize pulls block_ct_dim tiles into DEST before packing, so block_ct_dim is bounded by
+// DEST capacity (16-bit half-sync = 8 tiles; this op runs with fp32_dest_acc_en = false). The
+// 32-tile-wide chunk is therefore untilized in DEST-sized sub-blocks, with block_c_index placing
+// each sub-block in the correct output columns (full_ct_dim = 32) so tile ordering matches the
+// legacy unpack-untilize reorg.
+constexpr uint32_t UNTILIZE_SUBBLOCK_CT = 8;
+constexpr uint32_t UNTILIZE_FULL_CT = NUM_TILES_IN_TILIZED_CHUNK;
+constexpr uint32_t UNTILIZE_NUM_SUBBLOCKS = UNTILIZE_FULL_CT / UNTILIZE_SUBBLOCK_CT;
+static_assert(UNTILIZE_FULL_CT % UNTILIZE_SUBBLOCK_CT == 0);
 
 // Staging CB always has NUM_TILES_IN_TILIZED_CHUNK tiles; pop the full chunk to keep it clean.
 FORCE_INLINE void pack_block_rows_into_tiles(uint32_t cb_in, uint32_t cb_out) {
     reconfig_data_format_srca(cb_in);
     pack_reconfig_data_format(cb_out);
 
-    untilize_init(cb_in);
+    pack_untilize_init<UNTILIZE_SUBBLOCK_CT, UNTILIZE_FULL_CT>(cb_in, cb_out);
 
     cb_wait_front(cb_in, NUM_TILES_IN_TILIZED_CHUNK);
     cb_reserve_back(cb_out, NUM_TILES_IN_TILIZED_CHUNK);
 
-    untilize_block(cb_in, NUM_TILES_IN_TILIZED_CHUNK, cb_out);
+    // pack_untilize_block does not offset its input read by block_c_index, so pop the input
+    // incrementally; each sub-block reads the next UNTILIZE_SUBBLOCK_CT tiles (32 popped total).
+    for (uint32_t b = 0; b < UNTILIZE_NUM_SUBBLOCKS; ++b) {
+        pack_untilize_block<UNTILIZE_SUBBLOCK_CT, UNTILIZE_FULL_CT>(
+            cb_in, /*block_rt_dim=*/1, cb_out, /*block_c_index=*/b);
+        cb_pop_front(cb_in, UNTILIZE_SUBBLOCK_CT);
+    }
 
     cb_push_back(cb_out, NUM_TILES_IN_TILIZED_CHUNK);
-    cb_pop_front(cb_in, NUM_TILES_IN_TILIZED_CHUNK);
 
-    untilize_uninit(cb_in);
+    pack_untilize_uninit(cb_out);
 }
 
 // Tilize the full 32-tile block from cb_in to cb_out, but only push num_valid_tiles.
 // The tilize must always process the full NUM_TILES_IN_TILIZED_CHUNK block to correctly
-// reconstruct the tile layout from row-major format (inverse of untilize_block(32)).
+// reconstruct the tile layout from row-major format (inverse of pack_block_rows_into_tiles, i.e. the 32-tile untilize).
 FORCE_INLINE void pack_block_tiles_into_rows(uint32_t cb_in, uint32_t cb_out, uint32_t num_valid_tiles) {
     reconfig_data_format_srca(cb_in);
     pack_reconfig_data_format(cb_out);

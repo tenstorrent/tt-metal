@@ -413,7 +413,8 @@ def test_tg_llama_sharded_embedding(
     sentence_size = 1 + token_padding
     torch_input_tensor = torch.randint(0, vocabulary_size - 1, (batch_size, sentence_size))
     torch_weights = torch.randn(vocabulary_size, hidden_embedding_dim)
-    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
+    torch_weights_bfloat16 = torch_weights.to(torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights_bfloat16)
 
     start_core = ttnn.CoreCoord(1, 0)
     core_grid = ttnn.CoreRangeSet(
@@ -439,7 +440,7 @@ def test_tg_llama_sharded_embedding(
         torch_input_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     weights = ttnn.as_tensor(
-        torch_weights,
+        torch_weights_bfloat16,
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -473,7 +474,8 @@ def test_tg_llama_sharded_rm_embedding(device):
     hidden_embedding_dim = 128
     torch_input_tensor = torch.randint(0, vocabulary_size - 1, (batch_size, num_heads))
     torch_weights = torch.randn(vocabulary_size, hidden_embedding_dim)
-    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
+    torch_weights_bfloat16 = torch_weights.to(torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights_bfloat16)
 
     start_core = ttnn.CoreCoord(1, 0)
     core_grid = ttnn.CoreRangeSet(
@@ -499,7 +501,7 @@ def test_tg_llama_sharded_rm_embedding(device):
         torch_input_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     weights = ttnn.as_tensor(
-        torch_weights,
+        torch_weights_bfloat16,
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,

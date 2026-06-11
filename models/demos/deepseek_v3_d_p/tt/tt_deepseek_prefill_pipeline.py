@@ -2,35 +2,20 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import math
-import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-import torch
 from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reorder_tensor_chunks
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
-
-
-class BoundMigrationEndpoint:
-    def __init__(self, endpoint, remote_endpoint_id: int):
-        self._endpoint = endpoint
-        self._remote_id = remote_endpoint_id
-
-    def migrate_layer(self, layer: int, pos_start: int, pos_end: int, src_slot: int, dst_slot: int):
-        return self._endpoint.migrate_layer(self._remote_id, layer, pos_start, pos_end, src_slot, dst_slot)
-
-    def wait(self, uuid) -> None:
-        """Block until the migration with the given uuid is fully sent + acked."""
-        self._endpoint.wait_migration_send_completion(uuid)
 
 
 @dataclass
@@ -50,6 +35,10 @@ class TtPrefillPipelineConfig:
     shared_expert_activations_dtype: ttnn.DataType = ttnn.bfloat16
     shared_expert_weights_dtype: ttnn.DataType = ttnn.bfloat8_b
     weight_cache_path: Optional[Path] = None
+    # Static model-dimension constants for the variant being built
+    # (DeepSeekV3Config | KimiK26Config). Drives expert counts, dense-layer
+    # count, route groups, etc. in the TT layer code.
+    model_cfg: type = DeepSeekV3Config
 
     @property
     def sp_factor(self) -> int:
@@ -67,12 +56,12 @@ class TtDeepSeekPrefillPipeline:
         hf_config: PretrainedConfig,
         state_dict: dict,
         config: TtPrefillPipelineConfig,
-        migration_layer=None,
     ):
         self.mesh_device = mesh_device
         self.hf_config = hf_config
         self.config = config
-        self.migration_layer = migration_layer
+        # Per-layer LayerAck callback, built once in set_layer_ack_channel() after compile.
+        self._on_layer_complete = None
 
         self.model_built = False
         self.kv_cache_allocated = False
@@ -87,11 +76,15 @@ class TtDeepSeekPrefillPipeline:
             f"num_layers={self.config.num_layers}, max_seq_len={self.config.max_seq_len}, "
             f"mesh_shape={self.config.mesh_shape}, is_balanced={self.config.is_balanced}"
         )
+        model_cfg = self.config.model_cfg
         if self.config.weight_cache_path:
             num_devices = self.config.mesh_shape[0] * self.config.mesh_shape[1]
-            experts_per_chip = 256 // num_devices
+            experts_per_chip = model_cfg.NUM_ROUTED_EXPERTS // num_devices
             if TtPrefillTransformer.check_cache_complete(
-                self.config.weight_cache_path, self.config.num_layers, experts_per_chip
+                self.config.weight_cache_path,
+                self.config.num_layers,
+                experts_per_chip,
+                first_k_dense=model_cfg.NUM_DENSE_LAYERS,
             ):
                 logger.info(f"TTNN weight cache complete at {self.config.weight_cache_path}; loading from disk")
             else:
@@ -103,6 +96,7 @@ class TtDeepSeekPrefillPipeline:
         self.model = TtPrefillTransformer(
             mesh_device=self.mesh_device,
             config=self.hf_config,
+            model_cfg=model_cfg,
             state_dict=state_dict,
             num_layers=self.config.num_layers,
             seq_len=self.config.max_seq_len,
@@ -143,7 +137,14 @@ class TtDeepSeekPrefillPipeline:
         )
         logger.info(f"TtDeepSeekPrefillPipeline.compile() — warming up with {max_seq_len} tokens")
         t0 = time.perf_counter()
-        tt_token_ids = self._prepare_input_tensor([0] * max_seq_len)
+        tt_token_ids = prepare_prefill_input_tensor(
+            [0] * max_seq_len,
+            self.mesh_device,
+            self.config.sp_factor,
+            self.config.is_balanced,
+            self.config.mesh_shape,
+            self.config.sp_axis,
+        )
         self.model.forward(
             tt_token_ids,
             self.kvpe_cache,
@@ -156,94 +157,43 @@ class TtDeepSeekPrefillPipeline:
 
     def prefill(
         self,
-        token_ids: list[int],
-        slot_id: int,
-        actual_isl: Optional[int] = None,
-        dst_slot: Optional[int] = None,
+        input_tensor: ttnn.Tensor,
+        actual_isl: int,
+        slot_id: int = 0,
     ) -> int:
-        assert self.compiled, "Call compile() before prefill()"
-        if actual_isl is None:
-            actual_isl = len(token_ids)
-        if dst_slot is None:
-            dst_slot = slot_id
+        """Run one prefill pass and return the first generated token.
 
-        tt_token_ids = self._prepare_input_tensor(token_ids)
-        on_layer_complete = self._build_migration_callback(slot_id, actual_isl, dst_slot)
+        `input_tensor` must be an SP-sharded uint32 ROW_MAJOR DRAM tensor as
+        produced by `prepare_prefill_input_tensor`. `actual_isl` is the number
+        of real (non-pad) tokens in the chunk. If a LayerAck channel is
+        registered (set_layer_ack_channel), the model bumps it once per layer.
+        """
+        assert self.compiled, "Call compile() before prefill()"
 
         first_token_id, _first_token_prob, _ = self.model.forward(
-            tt_token_ids,
+            input_tensor,
             self.kvpe_cache,
             number_of_non_padded_tokens=actual_isl,
-            on_layer_complete=on_layer_complete,
+            on_layer_complete=self._on_layer_complete,
             temperature=0.0,
         )
         return int(first_token_id)
 
-    def _prepare_input_tensor(self, token_ids: list[int]) -> ttnn.Tensor:
-        sp_factor = self.config.sp_factor
-        isl_per_chip = len(token_ids) // sp_factor
+    def set_layer_ack_channel(self, layer_ack_channel) -> None:
+        """Register the per-layer-ack channel (docs/scheduler/prefill.md §3.11).
 
-        if self.config.is_balanced:
-            chunk_order = create_balanced_chunk_order(sp_factor)
-            t = torch.tensor(token_ids, dtype=torch.int64).unsqueeze(0).unsqueeze(0).unsqueeze(-1)
-            t = reorder_tensor_chunks(t, chunk_order, seq_dim=2)
-            token_ids_sharded = t.squeeze(0).squeeze(-1).reshape(sp_factor, 1, isl_per_chip)
-        else:
-            token_ids_sharded = torch.tensor(token_ids, dtype=torch.int64).reshape(sp_factor, 1, isl_per_chip)
+        `layer_ack_channel` is a `ttnn.InterProcessCounterChannel` on
+        `/tt_prefill_layer_acks_<service_id>`. The runner bumps it once per
+        layer (`inject(1)`); the scheduler reads the delta and drives the
+        migration worker. The ack carries no payload — the scheduler correlates
+        acks with the chunk it pushed (its InFlightChunkFIFO).
 
-        return ttnn.from_torch(
-            token_ids_sharded,
-            device=self.mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.mesh_device,
-                mesh_shape=self.config.mesh_shape,
-                dims=(self.config.sp_axis, None),
-            ),
-        )
-
-    def setup_migration(self, endpoint, remote_endpoint_id: int) -> None:
-        assert self.compiled, "Call compile() before setup_migration()"
-        self.migration_layer = BoundMigrationEndpoint(endpoint, remote_endpoint_id)
-
-    def _build_migration_callback(self, slot_id: int, actual_isl: int, dst_slot: int):
-        from models.demos.deepseek_v3_d_p.tt.runners.migration_setup import INVALID_SLOT_ID
-
-        if self.migration_layer is None or dst_slot == INVALID_SLOT_ID:
-            return None
-
-        mesh_device = self.mesh_device
-        migration_layer = self.migration_layer
-        last_layer_idx = self.config.num_layers - 1
-
-        kvpe_cache = self.kvpe_cache
+        Per-layer cadence means NUM_LAYERS acks per chunk, so the scheduler must
+        be configured with layers_per_chunk == NUM_LAYERS.
+        """
+        assert self.compiled, "Call compile() before set_layer_ack_channel()"
 
         def on_layer_complete(layer_idx: int) -> None:
-            ttnn.synchronize_device(mesh_device)
-            end_pos = math.ceil(actual_isl / 128) * 128
-            logger.info(
-                f"[migration][prefill] on_layer_complete, migrating layer {layer_idx} from src_slot={slot_id} to dst_slot={dst_slot}. Start_pos={0}, End_pos={end_pos}"
-            )
-            if layer_idx == 0 and os.environ.get("PREFILL_DEBUG", "0") == "1":
-                # Metal-side: dump KV cache bytes via the ttnn shard-spec path.
-                from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import dump_kv_cache_shard_readback
+            layer_ack_channel.inject(1)
 
-                dump_kv_cache_shard_readback(layer_idx, kvpe_cache)
-                # Blaze-side: dump the migration table for the same layer. Optional —
-                # only fires when blaze's prefill_runner_util is on PYTHONPATH.
-                try:
-                    from prefill_runner_util import dump_migration_table_at_layer
-
-                    dump_migration_table_at_layer(mesh_device, migration_layer, tag="3-pre-migrate")
-                except ImportError:
-                    pass
-            uuid = migration_layer.migrate_layer(layer_idx, 0, end_pos, slot_id, dst_slot)
-            ## Wait for each one for initial bringup
-            # if layer_idx == last_layer_idx:
-            logger.info(f"[migration][prefill] wait for migrate layer completion")
-            migration_layer.wait(uuid)
-            logger.info(f"[migration][prefill] done migrate layer")
-
-        return on_layer_complete
+        self._on_layer_complete = on_layer_complete

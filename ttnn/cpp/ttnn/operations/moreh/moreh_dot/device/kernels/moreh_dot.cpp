@@ -8,8 +8,14 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "api/dataflow/circular_buffer.h"
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
+ALWI void ACQ() {
+    tile_regs_acquire();
+    tile_regs_wait();
+}
+ALWI void REL() {
+    tile_regs_commit();
+    tile_regs_release();
+}
 
 void kernel_main() {
     constexpr int onetile = 1;
@@ -38,16 +44,30 @@ void kernel_main() {
         REL();
 
         // reduce-w
-        compute_kernel_lib::reduce<
-            REDUCE_OP,
-            REDUCE_DIM,
-            compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-            compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-            tt::CBIndex::c_24,
-            tt::CBIndex::c_2,
-            last_out ? tt::CBIndex::c_16 : tt::CBIndex::c_25,
-            compute_kernel_lib::ReduceInputBlockShape::single(),
-            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::Accumulate::at(tt::CBIndex::c_25, block));
+        if (last_out) {
+            compute_kernel_lib::reduce<
+                REDUCE_OP,
+                REDUCE_DIM,
+                tt::CBIndex::c_24,
+                tt::CBIndex::c_2,
+                tt::CBIndex::c_16,
+                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                compute_kernel_lib::ReduceInputBlockShape::single(),
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                compute_kernel_lib::Accumulate::at(tt::CBIndex::c_25, block));
+        } else {
+            compute_kernel_lib::reduce<
+                REDUCE_OP,
+                REDUCE_DIM,
+                tt::CBIndex::c_24,
+                tt::CBIndex::c_2,
+                tt::CBIndex::c_25,
+                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                compute_kernel_lib::ReduceInputBlockShape::single(),
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                compute_kernel_lib::Accumulate::at(tt::CBIndex::c_25, block));
+        }
     }
 }

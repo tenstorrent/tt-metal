@@ -22,6 +22,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_wh_dest.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
+#include "tt-train/sources/ttml/metal/common/sdpa_compute_utils_common.hpp"
 
 // now we have to multiply result by scaler factor and then apply mask
 // we need to transform the attention mask for use in softmax:
@@ -85,8 +86,8 @@ void apply_statistics_inplace(const uint32_t cb_attention_weights, const uint32_
     sub_bcast_cols_init_short(cb_attention_weights, cb_intermediates);
     sub_tiles_bcast_cols(cb_attention_weights, cb_intermediates, /* tile_idx */ 0, /* tile_idx */ 0, working_reg);
 
-    exp_tile_init</* approx */ false>();
-    exp_tile</* approx */ false>(working_reg);
+    sdpa_exp_tile_init();
+    sdpa_exp_tile(working_reg);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -122,8 +123,8 @@ void apply_softmax_statistics_on_dst(const uint32_t scores_reg, const uint32_t c
     sub_binary_tile_init();
     sub_binary_tile(scores_reg, lse_reg, scores_reg);
 
-    exp_tile_init</* approx */ false>();
-    exp_tile</* approx */ false>(scores_reg);
+    sdpa_exp_tile_init();
+    sdpa_exp_tile(scores_reg);
 }
 
 // Transposes a single tile using the FPU transpose_wh path (reads via SrcA).

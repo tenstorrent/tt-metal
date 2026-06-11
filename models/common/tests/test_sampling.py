@@ -1,12 +1,20 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 import torch.nn.functional as F
 
 import ttnn
-from models.common.sampling import LogProbsCalculator
+from models.common.sampling import (
+    LogProbsCalculator,
+    SamplingParams,
+    SeedManager,
+    broadcast_sampling_params,
+    format_sampling_params,
+)
 from models.common.sampling.tt_log_probs import MAX_TOP_LOGPROBS, LogProbsResult
 from models.common.utility_functions import comp_pcc
 
@@ -59,6 +67,46 @@ TG_SUB_CORE_GRIDS = ttnn.CoreRangeSet(
     ]
 )
 TG_NUM_TP_DEVICES = 8  # TP dimension for Galaxy
+
+
+def _make_host_only_seed_manager(max_batch_size=4):
+    return SeedManager(SimpleNamespace(_sampling_dp=1), max_batch_size=max_batch_size)
+
+
+def test_seed_manager_seed_params_do_not_fallback_to_slot_zero():
+    seed_manager = _make_host_only_seed_manager()
+
+    assert seed_manager._seed_from_slot_params([11], 0) == 11
+    assert seed_manager._seed_from_slot_params([11], 1) is None
+    assert seed_manager._seed_from_slot_params(torch.tensor([22]), 1) is None
+    assert seed_manager._seed_from_slot_params(33, 3) == 33
+
+
+def test_seed_counter_position_alignment_skips_out_of_bounds_slots():
+    seed_manager = _make_host_only_seed_manager()
+
+    seed_manager.align_seed_counters_to_positions([101, None, 303], [0, 2], [5], offset=1)
+
+    assert seed_manager.seed_counters == [6, 0, 0, 0]
+
+
+def test_broadcast_sampling_params_preserves_none_list_fields():
+    params = SamplingParams(temperature=[1.0, 1.0], top_k=[1, 1], top_p=[1.0, 1.0], seed=[None, 42])
+
+    broadcast = broadcast_sampling_params(params, 0, slot_len=4)
+
+    assert broadcast.seed == [None, None, None, None]
+
+
+def test_format_sampling_params_uses_device_argmax_sentinel_for_greedy_rows():
+    params = format_sampling_params(
+        SamplingParams(temperature=0.0, top_k=32, top_p=0.95),
+        max_batch_size=32,
+    )
+
+    assert params.temperature[0] == 1.0
+    assert params.top_k[0] == 1
+    assert params.top_p[0] == 0.0
 
 
 def _skip_if_not_galaxy(mesh_device):

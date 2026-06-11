@@ -18,10 +18,6 @@ on:
       docker-image:
         required: true
         type: string
-      harbor-prefix:
-        required: false
-        type: string
-        default: ""
       build-artifact-name:
         required: true
         type: string
@@ -77,12 +73,10 @@ jobs:
     name: TTNN tutorials ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (inputs.runner-label == 'P100') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
-        || (inputs.runner-label == 'P150b' && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
-        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
+        format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     container:
-      image: ${{ ((inputs.runner-label != 'P100') && format('{0}{1}', inputs.harbor-prefix, inputs.docker-image)) || inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
@@ -98,6 +92,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job

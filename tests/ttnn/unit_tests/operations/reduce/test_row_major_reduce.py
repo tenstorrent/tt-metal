@@ -4,7 +4,16 @@
 
 import pytest
 
-pytestmark = pytest.mark.use_module_device
+# The dense ROW_MAJOR reduce fast path these tests exercise is gated off by default
+# (use_row_major_support=false in reduce_op.cpp) pending fixes to a perf regression and a
+# multi-H-tile hang. With it off, ttnn.mean/sum on ROW_MAJOR input falls back to tilize +
+# tile-reduce, which both changes output layout (TILE, not ROW_MAJOR) and re-introduces the
+# excessive padded-tilize allocation (#32546) for narrow-last-dim shapes like (512, 1024, 1, 2).
+# Skip the whole module until the fast path is re-enabled. See Issue #46110.
+pytestmark = [
+    pytest.mark.use_module_device,
+    pytest.mark.skip(reason="dense ROW_MAJOR reduce path gated off (use_row_major_support=false)"),
+]
 
 import torch
 import ttnn

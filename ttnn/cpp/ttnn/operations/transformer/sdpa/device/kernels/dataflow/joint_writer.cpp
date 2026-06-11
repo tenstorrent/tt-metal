@@ -3,11 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
 
 void kernel_main() {
+    Noc noc;
+
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
     constexpr uint32_t DHt = get_compile_time_arg_val(2);
@@ -69,6 +72,7 @@ void kernel_main() {
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
             for (uint32_t q_chunk = local_q_start; q_chunk < local_q_end; ++q_chunk) {
                 generate_mask<false, 0, use_joint_mask, cb_mask_in>(
+                    noc,
                     Sq_chunk_t,
                     Sk_chunk_t,
                     q_chunk,
@@ -82,7 +86,7 @@ void kernel_main() {
                 const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
                 const auto dst_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
                 const auto out_row_end_tile = out_row_start_tile + Sq_chunk_t;
-                write_block(cat_out_generator, dst_slice, out_row_end_tile, cb_out, tile_bytes);
+                write_block(noc, cat_out_generator, dst_slice, out_row_end_tile, cb_out, tile_bytes);
             }
         }
     }

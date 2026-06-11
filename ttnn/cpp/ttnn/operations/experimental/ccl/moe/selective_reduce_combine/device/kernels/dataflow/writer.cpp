@@ -113,6 +113,7 @@ void kernel_main() {
     constexpr uint32_t packet_header_cb_id = get_named_compile_time_arg_val("packet_header_cb_id");
     constexpr uint32_t num_token_parallel_cores = get_named_compile_time_arg_val("num_token_parallel_cores");
     constexpr uint32_t num_data_parallel_cores = get_named_compile_time_arg_val("num_data_parallel_cores");
+    constexpr uint32_t num_workers_per_link = get_named_compile_time_arg_val("num_workers_per_link");
     constexpr bool use_init_semaphore = get_named_compile_time_arg_val("use_init_semaphore") == 1;
     constexpr uint32_t noc_x_start = get_named_compile_time_arg_val("noc_x_start");
     constexpr uint32_t noc_y_start = get_named_compile_time_arg_val("noc_y_start");
@@ -326,7 +327,7 @@ void kernel_main() {
         auto termination_sync_semaphore_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_args.termination_sync_address);
 
-        noc_semaphore_wait(termination_sync_semaphore_ptr, num_data_parallel_cores - 1);
+        noc_semaphore_wait(termination_sync_semaphore_ptr, num_workers_per_link - 1);
         noc_semaphore_set(termination_sync_semaphore_ptr, 0);
 
         const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore_addr, /*noc=*/1);
@@ -359,9 +360,9 @@ void kernel_main() {
         //   (the antipodal device is incremented from both directions, summing to N senders).
         // Linear: each device receives `replicate_group_devices - 1` inc's (no antipodal doubling;
         //   each sender on the line sends to exactly N-1 other devices).
-        constexpr uint32_t expected_inc_count =
+        constexpr uint32_t expected_dispatch_device_inc =
             (topology == tt::tt_fabric::Topology::Linear) ? (replicate_group_devices - 1) : replicate_group_devices;
-        noc_semaphore_wait(semaphore_ptr, expected_inc_count);
+        noc_semaphore_wait(semaphore_ptr, expected_dispatch_device_inc);
         noc_semaphore_set(semaphore_ptr, 0);
     } else {
         // get sync core semaphore noc address

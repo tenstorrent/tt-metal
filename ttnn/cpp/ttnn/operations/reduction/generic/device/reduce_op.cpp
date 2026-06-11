@@ -83,7 +83,8 @@ Tensor reduce(
     const std::optional<tt::tt_metal::DataType>& output_dtype,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
-    bool negate) {
+    bool negate,
+    bool use_row_major_support) {
     if (reduce_math == tt::tt_metal::ReduceOpMath::MIN) {
         return reduce_min(input_tensor, reduce_dim, scaler, output_mem_config, compute_kernel_config, sub_core_grids);
     }
@@ -117,12 +118,17 @@ Tensor reduce(
     // MAX/MIN are excluded because the RM compute kernel accumulates partial reductions via
     // Accumulate::at across chunks, and the cross-chunk fold uses SUM semantics. Wiring MAX
     // accumulation through that pipeline is doable but not yet done; for now they tilize.
+    //
+    // The path is opt-in via use_row_major_support: when false (the default), eligibility is forced
+    // off and the op always tilizes through the classic tile-reduce kernels. Default-off because the
+    // dense RM path currently regresses perf and can hang on tall (multi-H-tile) reduces; flip on
+    // only once those are fixed.
     const bool both_interleaved =
         input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
         output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
     const bool rm_base_eligible =
-        input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR && input_tensor.logical_shape().rank() == 4 &&
-        both_interleaved &&
+        use_row_major_support && input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
+        input_tensor.logical_shape().rank() == 4 && both_interleaved &&
         (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
          input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) &&
         (reduce_math == tt::tt_metal::ReduceOpMath::AVG || reduce_math == tt::tt_metal::ReduceOpMath::SUM);
@@ -186,7 +192,16 @@ Tensor reduce(
     // sqrt(scaler) in ReduceSingleCoreHwProgramFactory::create.
     // However, sqrt of a negative number is NaN, so negative scalers
     // must take the two-step W-then-H path where the scaler is applied once.
-    if (is_multicore_hw || (reduce_dim == tt::tt_metal::ReduceOpDim::HW && reduce_scaler < 0)) {
+    //
+    // INT32 SFPU max/min has no REDUCE_SCALAR primitive (ROW/COL only), so Int32 HW always uses
+    // W-then-H. Float32 max HW can use single-core REDUCE_SCALAR (FPU) when num_tiles == 1;
+    // multi-tile HW still uses W-then-H via is_multicore_hw. Applies to MAX and MIN (MIN via negate).
+    const bool use_two_step_hw_sfpu_reduce = (reduce_dim == tt::tt_metal::ReduceOpDim::HW) &&
+                                             (tilized_input.dtype() == tt::tt_metal::DataType::INT32) &&
+                                             (reduce_math == tt::tt_metal::ReduceOpMath::MAX);
+
+    if (is_multicore_hw || use_two_step_hw_sfpu_reduce ||
+        (reduce_dim == tt::tt_metal::ReduceOpDim::HW && reduce_scaler < 0)) {
         // Multi-core HW reduction: first reduce W, then reduce H on the result.
         // For the Sum chain's terminal fp32->bf16 stage, keep W in fp32 so only H packs to bf16.
         const auto out_final_dtype = output_dtype.value_or(input_tensor.dtype());
