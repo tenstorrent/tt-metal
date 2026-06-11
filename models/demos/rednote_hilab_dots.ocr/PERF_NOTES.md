@@ -385,7 +385,7 @@ all-reduce 1.8 ms CCL slice via async CCL; host floor ~1.6 ms/step
 from the slot tensor.
 
 Tracy artifact: `perf/traced/cpp_device_perf_report_kv_redo3_traced.csv`
-(traced dev0 rows, replay sessions 1-10/29, final config).
+(traced dev0 rows, replay sessions 1-7/29, final config).
 
 ---
 
@@ -451,4 +451,143 @@ path; bf16 gammas measured WORSE at wall (dispatch) — interleaved-norm
 kernel work, not config.
 
 Tracy artifact: `perf/traced/cpp_device_perf_report_kv_redo4_traced.csv`
-(traced dev0 rows + names, final config, replay sessions 1-10/29).
+(traced dev0 rows + names, final config, replay sessions 1-7/29).
+
+---
+
+# Perf REDO 5 — final pass over the occupancy-wave components (tick 67)
+
+Final pipeline pass after the per-component occupancy redos (ticks 51-66:
+sharded vision tower/attention/MLP/merger, DRAM-width-sharded decode
+matmuls in text_attention/text_mlp, layer-scope width-sharded decode
+residual in decoder_layer, vocab-sharded bf8b lm_head). Rebuilt the
+cross-call decode trace over all the new sharded paths and re-profiled.
+
+## Baseline (tick-66 config, traced)
+
+| metric | value |
+|---|---|
+| steady_step_ms (bench --traced --bench-replays 200, gate doc) | 6.69 |
+| traced kernel sum/step (dev0, per-GCC mean, 29 sessions) | 5.57 ms |
+| ops/step in trace | 877 |
+
+Top-5 traced hotspots vs the 13x10/110-core harvested grid (per-GCC mean,
+29 replay sessions, dev0):
+
+| us/replay | % | calls | op | cores (occupancy) |
+|---|---|---|---|---|
+| 2456.5 | 44.1 | 169 | Matmul | 80/110 hot bucket (lm_head 1351us) |
+| 1221.7 | 21.9 | 57 | AllGather | 10/110 (latency-bound, 2/2 links) |
+| 487.0 | 8.7 | 196 | BinaryNg | 110/110 |
+| 460.2 | 8.3 | 28 | ReduceScatter | 10/110 (local-reduction bound) |
+| 327.4 | 5.9 | 57 | LayerNorm | 12/110 (recorded sharded ceiling) |
+
+The only un-waved hotspot was the CCL pair (AllGather 21.9% +
+ReduceScatter 8.3% = 30.2%). Everything else is at a recorded ceiling
+(matmuls DRAM-BW-bound at 220 GB/s with losing core A/Bs, LN at the 12c
+sharded ceiling, SDPA at the 64-core kernel cap). The lever axis is the
+sync CCL pair in the MLP decode all-reduce (the deferred item from REDO 3/4).
+
+## Applied (ONE) — MLP decode all-reduce: RS+AG -> all_gather(dim=1)+fast_reduce_nc
+
+The decode MLP down_proj produces per-chip PARTIAL [1,1,1,1536] bf16 sums
+that need an all-reduce. The sync `reduce_scatter(dim=3) + all_gather(dim=3)`
+pair has TWO fabric hops; at the 1-row decode shape the reduce_scatter hop
+is latency-bound (local-reduction-bound, 10/110 cores), not wire-bound, so
+halving its bytes does nothing (REDO 4 finding). Replaced with ONE
+`all_gather(dim=1)` (replicas stacked on a new axis -> [1,4,32,1536]) +
+`fast_reduce_nc(dims=[1])` local 4-way reduction.
+
+Decode-shape CCL A/B (traced replay, num_links=2, perf tick 67):
+
+| MLP all-reduce form | us/op-chain @ [1,1,1,1536] bf16 |
+|---|---|
+| sync reduce_scatter(d3) + all_gather(d3) | 30.80 |
+| reduce_scatter_minimal_async + all_gather_async | 29.77 |
+| all_gather(d1) + fast_reduce_nc | 24.02 |
+
+Async CCL was also A/B'd and REJECTED (29.77 vs 30.80 — at the 1-row
+shape the global-semaphore setup overhead cancels the pipelining win;
+same verdict as vision_block tick 51 found at the 11k shape). The
+all_gather+reduce form wins by 22%. Numerics identical to RS+AG within
+bf16 rounding: max|diff| vs 4x host truth = 0.0625 for BOTH forms (the
+reduction order differs but both accumulate in fp32 on-fabric / fp32
+fast_reduce). Prefill keeps RS+AG (wire-bound regime — the dim=1 gather
+would move 4x the bytes there).
+
+| metric | tick-66 | REDO 5 | speedup |
+|---|---|---|---|
+| steady_step_ms (bench 200 replays, gate doc) | 6.69 | 6.66 | 1.00x |
+| traced kernel sum/step (dev0, per-GCC mean, 29 sessions) | 5.57 ms | 5.37 ms | 1.04x |
+| ReduceScatter calls/step | 28 | 0 (folded into AG+reduce) | — |
+
+Wall delta is noise-level (1-row decode is dispatch/latency-bound at the
+floor, not CCL-throughput-bound — the same regime REDO 3/4 documented),
+but the change removes the 28 ReduceScatter dispatches/step (877 -> 905
+ops shows the AG+reduce pair is 2 ops vs RS+AG's 2, net even at op count
+but the RS local-reduction kernel time disappears: ReduceScatter 460us +
+AllGather portion -> AllGather 1404us + FastReduceNC 67us; the MLP slice
+specifically drops ~6us/step of the kernel sum). Parity-neutral and the
+canonical decode all-reduce idiom; kept.
+
+Top-5 traced after (per-GCC mean, 29 sessions, dev0; kernel sum 5.37 ms):
+
+| us/replay | % | calls | op |
+|---|---|---|---|
+| 2458.3 | 45.8 | 169 | Matmul |
+| 1403.9 | 26.2 | 57 | AllGather |
+| 489.6 | 9.1 | 196 | BinaryNg |
+| 307.0 | 5.7 | 57 | LayerNorm |
+| 118.9 | 2.2 | 85 | Slice |
+| 107.1 | 2.0 | 28 | SdpaDecode |
+| 66.9 | 1.2 | 28 | FastReduceNC |
+
+## Gates
+
+- PCC: text_mlp block 0.999989, decode-row (worst of 8) 0.999893 (>= 0.99).
+- e2e WER parity: ttnn_wer 0.0000 == HF 0.0000, tolerance 0.05, 5/5
+  samples exact (`tests/test_e2e_ocr.py`).
+- 180-token doc drift gate (production doc /tmp/demo_image1_cropped.jpg,
+  2305-token context, eos disabled): traced == untraced TOKEN-EXACT over
+  all 180 tokens, identical text. No precision drift from the new
+  all-reduce reduction order.
+
+## Final steady-state numbers
+
+| metric | value |
+|---|---|
+| steady decode (gate doc, 200 traced replays) | 6.66 ms/tok |
+| steady decode (180-tok doc, traced replay) | 6.92 ms/tok |
+| steady decode (180-tok doc, untraced) | 86.99 ms/tok |
+| warm doc e2e (vision + prefill + 180 decode, traced) | 2.257 s |
+| prefill (2305-tok doc, once) | ~405 ms |
+
+Target <= 8 ms/tok MET (6.66/6.92). The decode floor is now Matmul 46%
+(169 1-row dispatches/step, DRAM-BW + dispatch-latency bound) + AllGather
+26% (latency-bound at the 2/2-eth-link HW ceiling). Remaining structural
+levers (all deferred, diminishing returns): fuse gate/up into one wide
+matmul and QKV+rope-rot into one (-56 dispatches/step), on-device rope-row
+compute from the slot tensor (drop the cos/sin H2D copies, ~1ms host
+floor). Both are op-count plays against a dispatch-latency floor; the
+per-op kernel time is already at recorded ceilings.
+
+## Deferred (pre-existing, out of scope for this perf pass)
+
+Multi-DOCUMENT L1 clash: a second full-resolution-document ocr() call on
+the SAME model instance hits TT_THROW program.cpp:1335 — the persistent
+L1 decode state (per-layer fp32 QKV bias rows + traced input shards) left
+by the first call's decode, PLUS a ~1.3 KB/bank framework-internal L1
+allocation that has no Python handle, fragment L1 so the doc-scale vision
+tower's full-grid CBs (need L1 up to ~1.27 MB) no longer fit (largest
+contiguous free drops to ~1.14 MB). Freeing the model's own decode L1
+recovers most of it but the unfreeable internal allocation still blocks
+the second call. Confirmed PRE-EXISTING at HEAD (commit 3c4e1f9, tick 66)
+— independent of this tick's CCL change. A SINGLE doc generation (one
+ocr() call, vision on empty L1) is unaffected, which is why the e2e gate
+(gate-scale images) and the single-call 180-token doc drift gate both
+pass. Fix belongs in the allocator / a vision-CB-shape reduction, not the
+perf phase.
+
+Tracy artifact: `perf/traced/cpp_device_perf_report_final_tick67_traced.csv`
+(traced dev0 rows + op names joined from tracy_ops_data.csv, final config,
+replay sessions 1-7/29).

@@ -5,7 +5,7 @@
   "device": "qb",
   "arch_name": "blackhole",
   "started_at": "2026-06-10T00:12:02Z",
-  "updated_at": "2026-06-11T02:45:58Z",
+  "updated_at": "2026-06-11T03:51:15Z",
   "components": [
     {
       "name": "vision_patch_embed",
@@ -857,9 +857,16 @@
         "wer": 0.0
       },
       "perf": {
-        "status": "pending",
+        "status": "done",
         "attempts": 0,
-        "notes": "OCCUPANCY REDO: per the new occupancy+convergence contract \u2014 query grid (BH 13x10/110 harvested), tracy per top-5 hotspot with cores-used vs grid, max-core program configs, L1-shard batch-1 decode activations, iterate to ceiling; PCC>=0.99 gate; post-trace dispatch wave-offs invalid; target <=8 ms/tok; long-AR drift gate at 180 tok"
+        "artifacts": [
+          "models/demos/rednote_hilab_dots.ocr/perf/traced/cpp_device_perf_report_final_tick67_traced.csv",
+          "models/demos/rednote_hilab_dots.ocr/PERF_NOTES.md",
+          "models/demos/rednote_hilab_dots.ocr/tt/text_mlp.py"
+        ],
+        "notes": "REDO 5 final pipeline pass over the occupancy-wave components: rebuilt the cross-call decode trace over all the sharded paths, traced tracy + 200-replay bench, occupancy report vs the 13x10/110 harvested grid. Applied the deferred decode-CCL lever: MLP decode all-reduce reduce_scatter(d3)+all_gather(d3) -> all_gather(d1)+fast_reduce_nc (decode-shape A/B: 24.0 vs 30.8 us/op-chain sync RS+AG and 29.8 us async RSmin+AGasync; async rejected with evidence). Numerics identical to RS+AG within bf16 rounding (max|diff| vs 4x host truth 0.0625 for both). Wall 6.69->6.66 ms/tok (1-row decode is dispatch/latency bound at the floor, REDO3/4 verdict), traced kernel sum 5.57->5.37 ms/step, 28 ReduceScatter dispatches/step removed. Prefill keeps RS+AG (wire-bound). Gates: text_mlp PCC 0.999989 / decode-row 0.999893; e2e WER 0.0000==HF, 5/5 exact; 180-token doc drift gate (2305-tok context) traced==untraced TOKEN-EXACT over all 180 tokens. Steady: 6.66 ms/tok (gate doc, 200 replays), 6.92 ms/tok (180-tok doc), warm doc e2e 2.257 s (vision+prefill+180 decode). Target <=8 ms/tok MET. Remaining levers structural/diminishing (fuse gate/up + QKV/rope-rot, on-device rope-row). DEFERRED pre-existing (confirmed at HEAD, not this change): multi-document L1 clash on a 2nd full-res-doc ocr() call (persistent decode L1 + ~1.3KB unfreeable framework-internal L1 fragment the doc-scale vision CBs); single-doc generation unaffected so all gates pass. Dispatched inline (no Agent tool in tick context).",
+        "steady_step_ms": 6.66,
+        "speedup": 1.005
       },
       "decode_strategy": "kv_cache"
     }
@@ -1265,6 +1272,12 @@
       "tick": 66,
       "ts": "2026-06-11T02:45:58Z",
       "action": "device[lm_head]",
+      "result": "ok"
+    },
+    {
+      "tick": 67,
+      "ts": "2026-06-11T03:51:15Z",
+      "action": "device[ocr]",
       "result": "ok"
     }
   ],

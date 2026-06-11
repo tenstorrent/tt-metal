@@ -21,10 +21,11 @@ gate/up are COLUMN-parallel (output-feature dim sharded 4-way,
 ``ShardTensorToMesh(dim=-1)``; per-chip intermediate slice 8960/4 = 2240),
 the elementwise silu/mul stay chip-local on the matching slices, and down is
 ROW-parallel (input-feature dim sharded, ``dim=-2``), producing per-chip
-PARTIAL [.., hidden] sums combined with an all-reduce
-(``ttnn.reduce_scatter`` + ``ttnn.all_gather``, fp32 fabric accumulation;
-swapped from all_gather + local adds in the optimization phase per
-tp-guidance), the same idiom as this model's text_attention o_proj. On a
+PARTIAL [.., hidden] sums combined with an all-reduce. Prefill uses
+``ttnn.reduce_scatter`` + ``ttnn.all_gather`` (wire-bound regime, same
+idiom as this model's text_attention o_proj); the decode row uses
+``ttnn.all_gather(dim=1)`` + ``fast_reduce_nc`` (latency-bound regime —
+24.0 vs 30.8 us/pair measured at [1,1,1,1536] bf16, perf tick 67). On a
 single device the sharding degenerates to the replicated full computation
 and the CCL is skipped.
 """
@@ -278,19 +279,30 @@ class TtTextMLP(LightweightModule):
         ):
             out = self._forward_decode(x)
             if self.num_devices > 1:
-                # Same RS+AG all-reduce as prefill. A/B'd single
-                # ttnn.all_reduce: it decomposes into the identical
-                # ReduceScatter+AllGather pair (377.3 vs 377.2 us total) —
-                # no fused decode CCL win available on the sync path.
-                reduced = ttnn.reduce_scatter(out, dim=3, num_links=2, topology=ttnn.Topology.Linear)
+                # Decode all-reduce: all_gather(dim=1) + fast_reduce_nc
+                # (perf tick-67 A/B at the [1,1,1,1536] bf16 row, traced
+                # replay, num_links=2): 24.0 us vs 30.8 us for the sync
+                # RS+AG pair and 29.8 us for reduce_scatter_minimal_async +
+                # all_gather_async — at the 1-row shape the RS hop is
+                # latency-bound, while one dim=1 gather + a local 4-slice
+                # reduction is cheaper. Numerics: identical to RS+AG within
+                # bf16 rounding (max|diff| vs 4x host truth 0.0625 for BOTH
+                # forms). Prefill below keeps the RS+AG pair (wire-bound
+                # regime; the dim=1 gather would move 4x the bytes).
+                g = ttnn.all_gather(out, dim=1, num_links=2, topology=ttnn.Topology.Linear)
                 ttnn.deallocate(out)
+                red = ttnn.experimental.fast_reduce_nc(
+                    g, dims=[1], output=None, compute_kernel_config=None, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+                ttnn.deallocate(g)
+                # fast_reduce_nc keeps the 32-row padded face as its logical
+                # shape; slice row 0 back to [1, 1, 1, hidden] (straight into
+                # the caller's residual shard when out_mc is given).
                 if out_mc is not None:
-                    out = ttnn.all_gather(
-                        reduced, dim=3, num_links=2, topology=ttnn.Topology.Linear, memory_config=out_mc
-                    )
+                    out = ttnn.slice(red, [0, 0, 0, 0], [1, 1, 1, red.shape[-1]], memory_config=out_mc)
                 else:
-                    out = ttnn.all_gather(reduced, dim=3, num_links=2, topology=ttnn.Topology.Linear)
-                ttnn.deallocate(reduced)
+                    out = ttnn.slice(red, [0, 0, 0, 0], [1, 1, 1, red.shape[-1]])
+                ttnn.deallocate(red)
             elif out_mc is not None:
                 out_sh = ttnn.interleaved_to_sharded(out, out_mc)
                 ttnn.deallocate(out)
