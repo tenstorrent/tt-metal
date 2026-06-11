@@ -811,3 +811,17 @@ Investigated CCL minimization (CCL is now attention's #1 op: AllGather 194us + R
 CONCLUSION: safe/tractable attention + CCL levers are largely tapped at **205 ms** (attn 1.10 ms/layer).
 Remaining headroom is in the MoE (132.9 ms = 65% of e2e: MoECompute fused 40.6ms + MoE CCL 27.8ms), which
 needs moe_compute-internal config tuning and/or the #46208 L1-overlap fix (any attention L1 shift trips it).
+
+### CCL round update (2026-06-11): tried async CCL ops + sync all_reduce — all NO-OP/blocked on device-busy
+- **sync ttnn.all_reduce** (replace all_gather+sum, 6 attn sites): PCC clean BUT crashes the tracy
+  profiler ("Start/end marker IDs do not match", profiler.cpp:2104 — all_reduce's program has a
+  sentinel UID + unbalanced FW/KERNEL markers). Device-time unmeasurable. Reverted.
+- **async ttnn.experimental.all_gather_async** (2 kv_a sites, via E49 pool; needs 2 ag-sems + 1
+  barrier-sem): PCC clean, NO hang, **profiles cleanly** (TRACY_EXIT=0), but **NO speedup** —
+  AllGatherAsync 48us == sync all_gather 48us. Reverted.
+- **KEY INSIGHT**: async CCL's benefit is dispatch OVERLAP / wall-clock, NOT device-busy kernel time.
+  Our optimization metric is device-busy (sum of per-op durations); async cannot reduce it. To exploit
+  async (and num_links), we'd need to optimize WALL-CLOCK (enable metal-trace to kill host dispatch +
+  let CCLs overlap) — but trace HANGS on CCL replay (journal note) and changes the metric.
+- => CCL is at the device-busy floor for this latency-bound decode. The remaining device-busy lever is
+  the MoE (132.9ms = 65%: MoECompute fused 40.6ms + MoE CCL ~28ms), gated by the #46208 L1 fragility.
