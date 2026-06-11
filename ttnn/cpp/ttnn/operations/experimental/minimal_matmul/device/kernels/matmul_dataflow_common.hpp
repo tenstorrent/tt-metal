@@ -9,6 +9,7 @@
 #include <tuple>
 #include <utility>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 
 namespace detail {
 template <typename... Args, uint32_t... Indexes>
@@ -34,20 +35,8 @@ auto make_tensor_accessor_tuple_uniform_page_size(
     return detail::make_tensor_accessor_tuple_impl(
         args_tuple, address_rt_arg_index_start, page_size, std::make_integer_sequence<uint32_t, sizeof...(Args)>());
 }
-void fill_zeros_async(uint32_t write_addr, uint32_t tile_bytes) {
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    // Fill tile with zeros
-    uint32_t bytes_left = tile_bytes;
-    for (;;) {
-        uint32_t read_size = bytes_left > MEM_ZEROS_SIZE ? MEM_ZEROS_SIZE : bytes_left;
-        noc_async_read(zeros_noc_addr, write_addr, read_size);
-        write_addr += read_size;
-        bytes_left -= read_size;
-        if (bytes_left == 0) {
-            break;
-        }
-    }
+inline void fill_zeros_async(const Noc& noc, const CircularBuffer& cb, uint32_t bytes, uint32_t offset_bytes = 0) {
+    noc.async_write_zeros(cb, bytes, {.offset_bytes = offset_bytes});
 }
 
 struct TensorShape2D {
@@ -82,7 +71,7 @@ template <
 void read_in0_block_sync(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
-    uint32_t write_ptr,
+    uint32_t cb_id,
     uint32_t tile_size_bytes,
 #ifdef READ_FROM_LOCAL_INPUT
     const LocalTensorAccessorType& in3_accessor,
@@ -97,6 +86,10 @@ void read_in0_block_sync(
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
+    Noc noc;
+    CircularBuffer cb(cb_id);
+    const uint32_t cb_base_write_ptr = cb.get_write_ptr();
+    uint32_t write_ptr = cb_base_write_ptr;
     for (uint32_t i = d0_start; i < d0_end; i++) {
         if (i >= shape.logical_d0) {
             break;
@@ -116,7 +109,7 @@ void read_in0_block_sync(
                 }
 #endif
             } else {
-                fill_zeros_async(write_ptr, tile_size_bytes);
+                fill_zeros_async(noc, cb, tile_size_bytes, write_ptr - cb_base_write_ptr);
             }
             write_ptr += tile_size_bytes;
         }
@@ -124,6 +117,7 @@ void read_in0_block_sync(
         write_ptr += (K_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
     noc_async_read_barrier();
+    noc.write_zeros_l1_barrier();
 }
 
 /**
@@ -135,7 +129,7 @@ template <uint32_t K_block_tiles, uint32_t N_block_tiles, typename TensorAccesso
 void read_in1_block_sync(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
-    uint32_t write_ptr,
+    uint32_t cb_id,
     uint32_t tile_size_bytes,
     uint32_t d0_start,
     uint32_t d0_end,
@@ -143,6 +137,10 @@ void read_in1_block_sync(
     uint32_t d1_end) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
+    Noc noc;
+    CircularBuffer cb(cb_id);
+    const uint32_t cb_base_write_ptr = cb.get_write_ptr();
+    uint32_t write_ptr = cb_base_write_ptr;
     for (uint32_t i = d0_start; i < d0_end; i++) {
         for (uint32_t j = d1_start; j < d1_end; j++) {
             if (j >= shape.logical_d1) {
@@ -153,7 +151,7 @@ void read_in1_block_sync(
                 uint32_t tile_id = i * shape.logical_d1 + j;
                 noc_async_read_page(tile_id, tensor_accessor, write_ptr);
             } else {
-                fill_zeros_async(write_ptr, tile_size_bytes);
+                fill_zeros_async(noc, cb, tile_size_bytes, write_ptr - cb_base_write_ptr);
             }
             write_ptr += tile_size_bytes;
         }
@@ -161,6 +159,7 @@ void read_in1_block_sync(
         write_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
     noc_async_read_barrier();
+    noc.write_zeros_l1_barrier();
 }
 
 /**

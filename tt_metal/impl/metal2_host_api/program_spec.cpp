@@ -59,11 +59,11 @@ struct CollectedSpecData {
     std::unordered_map<DFBSpecName, const DataflowBufferSpec*> dfb_by_name;
     std::unordered_map<DFBSpecName, const RemoteDataflowBufferSpec*> remote_dfb_by_name;
     std::unordered_map<SemaphoreSpecName, const SemaphoreSpec*> semaphore_by_name;
-    std::unordered_map<TensorParameterName, const TensorParameter*> tensor_parameter_by_name;
+    std::unordered_map<TensorParamName, const TensorParameter*> tensor_parameter_by_name;
 
     // Tensor parameter usage (derived from kernel tensor bindings).
     // Tracks which kernels bind a given tensor parameter.
-    std::unordered_map<TensorParameterName, std::vector<const KernelSpec*>> tensor_parameter_users;
+    std::unordered_map<TensorParamName, std::vector<const KernelSpec*>> tensor_parameter_users;
 
     // DFB endpoint info (derived from kernel bindings).
     // Populated for both local and remote DFBs.
@@ -207,8 +207,8 @@ const std::vector<DFBSpecName>& dfb_alias_with(const DataflowBufferSpec& dfb) {
     return dfb.advanced_options.alias_with;
 }
 
-// Helper: return a kernel's dfb-compute-self-loop-scopes list.
-const std::vector<DFBSelfLoopConnectivity>& kernel_self_loop_scopes(const KernelSpec& kernel) {
+// Helper: return a kernel's dfb-compute-self-loop-scopes map.
+const Table<DFBSpecName, DFBSelfLoopConnectivity>& kernel_self_loop_scopes(const KernelSpec& kernel) {
     return kernel.advanced_options.dfb_self_loop_connectivities;
 }
 
@@ -320,6 +320,18 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
             bool has_consumer = false;
         };
         std::unordered_map<std::string, AccessorBindingInfo> accessor_bindings;
+        // Track, per DFB, which endpoint roles this kernel has already bound. Within a kernel a DFB
+        // may be bound at most once per role; the only multi-binding form is the self-loop pair (one
+        // PRODUCER + one CONSUMER, whose accessor names may differ). A second binding of the same
+        // role under a different accessor name is the forbidden "one buffer, two names" aliasing
+        // (see the check below). Scoped to the kernel so it resets per iteration — a DFB legitimately
+        // carries different accessor names on different kernels (producer 'out', consumer 'in'), so
+        // this must not be global.
+        struct DFBBoundRoles {
+            bool has_producer = false;
+            bool has_consumer = false;
+        };
+        std::unordered_map<DFBSpecName, DFBBoundRoles> dfb_bound_roles;
         for (const auto& dfb_binding : kernel.dfb_bindings) {
             auto [it, inserted] = accessor_bindings.try_emplace(
                 dfb_binding.accessor_name, AccessorBindingInfo{dfb_binding.dfb_spec_name});
@@ -349,6 +361,28 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 is_producer ? "PRODUCER" : "CONSUMER",
                 dfb_binding.accessor_name);
             seen_this_type = true;
+
+            // Forbid binding the same DFB twice in the same role within this kernel (e.g. two CONSUMER
+            // bindings under different accessor names). The legitimate multi-binding form is the
+            // self-loop pair — one PRODUCER + one CONSUMER — which this allows regardless of whether
+            // the two bindings share an accessor name. The same-role same-name case is already caught
+            // above (duplicate {PRODUCER,CONSUMER} binding for accessor_name); this closes the
+            // different-name gap. "One buffer, two names" in kernel code must be a handle alias
+            // (constexpr auto x = dfb::y) over a single binding, not a second binding — two accessors /
+            // DataflowBuffer objects for one FIFO break the object<->DFB identity that device-side
+            // debug tooling relies on.
+            DFBBoundRoles& bound_roles = dfb_bound_roles[dfb_binding.dfb_spec_name];
+            bool& role_already_bound = is_producer ? bound_roles.has_producer : bound_roles.has_consumer;
+            TT_FATAL(
+                !role_already_bound,
+                "Kernel '{}' has two {} bindings to DFB '{}' under different accessor names. Within a "
+                "kernel a DFB may be bound at most once per role (the only multi-binding form is the "
+                "self-loop pair: one PRODUCER + one CONSUMER). To refer to one buffer by multiple names "
+                "in kernel code, alias the handle (constexpr auto x = dfb::y) instead of adding a second binding.",
+                kernel.unique_id,
+                is_producer ? "PRODUCER" : "CONSUMER",
+                dfb_binding.dfb_spec_name);
+            role_already_bound = true;
 
             // Referential integrity: the DFB must exist
             TT_FATAL(
@@ -453,8 +487,21 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
         }
     }
 
-    // Referential integrity: every declared TensorParameter must be referenced by some kernel.
-    // (Same usage requirement as DFBs; an unused tensor parameter is a user error.)
+    // A borrowed-memory DFB uses its backing TensorParameter via DataflowBufferSpec::borrowed_from
+    // (the DFB resolves its L1 address from that parameter's TensorArgument at runtime) even when no
+    // kernel binds the parameter directly. Count that as a use so the completeness check below doesn't
+    // reject a borrowed-only parameter. Existence of the referent is validated separately in the
+    // borrowed-DFB checks. Only local DFBs are walked here: borrowed memory is a local-L1 feature,
+    // so spec.dataflow_buffers is the relevant set (remote DFBs are runtime-unsupported).
+    for (const auto& dfb : spec.dataflow_buffers) {
+        if (dfb.borrowed_from.has_value()) {
+            collected.tensor_parameter_users[*dfb.borrowed_from];  // register as used (no kernel user)
+        }
+    }
+
+    // Referential integrity: every declared TensorParameter must be referenced by some kernel
+    // binding or a DFB borrowed_from. (Same usage requirement as DFBs; an unused tensor parameter
+    // is a user error.)
     for (const auto& tensor_parameter : spec.tensor_parameters) {
         TT_FATAL(
             collected.tensor_parameter_users.contains(tensor_parameter.unique_id),
@@ -576,7 +623,7 @@ void ValidateNodeBounds(const ProgramSpec& spec) {
         check_target_nodes(work_unit.target_nodes, "WorkUnitSpec", work_unit.name);
     }
     for (const auto& sem : spec.semaphores) {
-        check_target_nodes(sem.target_nodes, "SemaphoreSpec", sem.unique_id);
+        check_target_nodes(sem.target_nodes, "SemaphoreSpec", sem.unique_id.get());
     }
 }
 
@@ -646,6 +693,35 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         for (const auto& [name, value] : kernel.compile_time_args) {
             (void)value;
             check_name(name, "named CTA");
+        }
+    }
+
+    // Validate enqueue-loop-invariant named-arg declarations: each invariant name must reference a
+    // declared named RTA / CRTA. Invariance requires naming the argument, so positional varargs
+    // cannot be marked invariant.
+    for (const auto& kernel : spec.kernels) {
+        const std::unordered_set<std::string> declared_rtas(
+            kernel.runtime_arg_schema.runtime_arg_names.begin(), kernel.runtime_arg_schema.runtime_arg_names.end());
+        for (const auto& name : kernel.advanced_options.enqueue_invariant_runtime_args) {
+            TT_FATAL(
+                declared_rtas.contains(name),
+                "KernelSpec '{}' marks runtime arg '{}' enqueue-loop invariant, but it is not a declared named runtime "
+                "arg (runtime_arg_schema.runtime_arg_names). Only named runtime args can be marked invariant; "
+                "positional varargs cannot.",
+                kernel.unique_id,
+                name);
+        }
+        const std::unordered_set<std::string> declared_crtas(
+            kernel.runtime_arg_schema.common_runtime_arg_names.begin(),
+            kernel.runtime_arg_schema.common_runtime_arg_names.end());
+        for (const auto& name : kernel.advanced_options.enqueue_invariant_common_runtime_args) {
+            TT_FATAL(
+                declared_crtas.contains(name),
+                "KernelSpec '{}' marks common runtime arg '{}' enqueue-loop invariant, but it is not a declared named "
+                "common runtime arg (runtime_arg_schema.common_runtime_arg_names). Only named common runtime args can "
+                "be marked invariant; positional varargs cannot.",
+                kernel.unique_id,
+                name);
         }
     }
 
@@ -764,8 +840,12 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // Rules enforced:
     //   - Every entry references a DFB the kernel binds.
     //   - No duplicate entries for the same DFB.
-    //   - UnpackToDestFp32 is allowed only when the (CONSUMER + FP32 + fp32_dest_acc_en)
-    //     triple holds for that DFB binding.
+    //   - UnpackToDestFp32 is rejected only when it is INCOHERENT (fp32_dest_acc_en=false —
+    //     Dest is 16-bit and can't hold full FP32). Setting it where it is merely INERT (a
+    //     non-CONSUMER binding or a non-Float32 DFB) is tolerated: the LLK ignores the mode
+    //     there, and legacy ops commonly set it unconditionally across dtypes. (Failing to set
+    //     it where it IS meaningful is the harmful direction — caught by the require-an-entry
+    //     rule below, not here.)
     //   - When the triple holds for a DFB, an explicit entry is REQUIRED — the two
     //     values have very different runtime semantics, so we surface the choice in source.
     //   - Default is silently assumed everywhere else (no entry required, no busywork).
@@ -775,55 +855,32 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
         const auto& compute_config = std::get<ComputeHardwareConfig>(kernel.hw_config);
 
-        // Index the kernel's DFB bindings: which are bound, which are consumed.
+        // Index the kernel's DFB bindings: which DFBs it binds.
         std::unordered_set<DFBSpecName> bound_dfbs;
-        std::unordered_set<DFBSpecName> consumed_dfbs;
         for (const auto& binding : kernel.dfb_bindings) {
             bound_dfbs.insert(binding.dfb_spec_name);
-            if (binding.endpoint_type == DFBEndpointType::CONSUMER) {
-                consumed_dfbs.insert(binding.dfb_spec_name);
-            }
         }
 
-        // Validate each user-supplied entry.
+        // Validate each user-supplied entry, tracking which DFBs got an explicit
+        // entry (used below to require one where the FP32 choice is real).
+        // Duplicate DFB entries are impossible now that unpack_to_dest_mode is a
+        // Table with unique keys: a repeated DFB overwrites the prior value.
         std::unordered_set<DFBSpecName> entries_seen;
         for (const auto& [dfb_name, mode] : compute_config.unpack_to_dest_mode) {
+            entries_seen.insert(dfb_name);
             TT_FATAL(
                 bound_dfbs.contains(dfb_name),
                 "Kernel '{}' unpack_to_dest_mode entry references DFB '{}', which the kernel does not bind",
-                kernel.unique_id,
-                dfb_name);
-            TT_FATAL(
-                entries_seen.insert(dfb_name).second,
-                "Kernel '{}' has duplicate unpack_to_dest_mode entries for DFB '{}'",
                 kernel.unique_id,
                 dfb_name);
 
             if (mode == UnpackToDestMode::Default) {
                 continue;  // Default is always allowed.
             }
-            // mode == UnpackToDestFp32 — require the meaningfulness triple.
-            TT_FATAL(
-                consumed_dfbs.contains(dfb_name),
-                "Kernel '{}' unpack_to_dest_mode entry for DFB '{}' specifies UnpackToDestFp32, "
-                "but the kernel does not have a CONSUMER endpoint on this DFB. UnpackToDestFp32 "
-                "configures the unpack path, which is only exercised by consumer bindings. "
-                "Use Default or omit the entry.",
-                kernel.unique_id,
-                dfb_name);
-            // If data_format_metadata isn't set, the separate "compute endpoint requires
-            // data_format_metadata" check (below) will fail. Defer to that check.
-            const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(dfb_name);
-            if (!dfb_spec->data_format_metadata.has_value()) {
-                continue;
-            }
-            TT_FATAL(
-                dfb_spec->data_format_metadata.value() == tt::DataFormat::Float32,
-                "Kernel '{}' unpack_to_dest_mode entry for DFB '{}' specifies UnpackToDestFp32, "
-                "but the DFB data format is not Float32. UnpackToDestFp32 is only meaningful for "
-                "FP32 data. Use Default or omit the entry.",
-                kernel.unique_id,
-                dfb_name);
+            // mode == UnpackToDestFp32. Inert where the kernel doesn't consume the DFB or the DFB
+            // isn't Float32 — the LLK ignores the mode there, so we don't reject (legacy ops set it
+            // unconditionally). Reject only the incoherent case: full-precision FP32 in Dest is
+            // impossible without fp32_dest_acc_en (otherwise Dest is 16-bit).
             TT_FATAL(
                 compute_config.fp32_dest_acc_en,
                 "Kernel '{}' unpack_to_dest_mode entry for DFB '{}' specifies UnpackToDestFp32, "
@@ -1146,12 +1203,8 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             // unordered_set), so iteration order — and any resulting error message — is
             // deterministic across runs.
             auto scope_for_kernel = [&](const KernelSpec* k) {
-                for (const auto& entry : kernel_self_loop_scopes(*k)) {
-                    if (entry.dfb_spec_name == dfb.unique_id) {
-                        return entry.scope;
-                    }
-                }
-                return DFBSelfLoopScope::INTRA;
+                auto conn = kernel_self_loop_scopes(*k).get(dfb.unique_id);
+                return conn ? *conn : DFBSelfLoopConnectivity::INTRA;
             };
             const KernelSpec* first_kernel = endpoints.producers.front().kernel;
             const auto first_scope = scope_for_kernel(first_kernel);
@@ -1163,7 +1216,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 TT_FATAL(
                     scope_for_kernel(rec.kernel) == first_scope,
                     "DFB '{}' is self-looped; all self-loop participants must agree on "
-                    "DFBSelfLoopScope, but kernel '{}' specifies a different scope "
+                    "DFBSelfLoopConnectivity, but kernel '{}' specifies a different scope "
                     "than kernel '{}'.",
                     dfb.unique_id,
                     rec.kernel->unique_id,
@@ -1199,7 +1252,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         if (!dfb.borrowed_from.has_value()) {
             continue;
         }
-        const TensorParameterName& tp_name = *dfb.borrowed_from;
+        const TensorParamName& tp_name = *dfb.borrowed_from;
         auto it = collected.tensor_parameter_by_name.find(tp_name);
         TT_FATAL(
             it != collected.tensor_parameter_by_name.end(),
@@ -1350,24 +1403,17 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             "This option applies only to compute kernels.",
             kernel.unique_id);
 
-        std::unordered_set<DFBSpecName> seen_dfb_names;
-        for (const auto& entry : kernel_self_loop_scopes(kernel)) {
+        for (const auto& [dfb_spec_name, scope] : kernel_self_loop_scopes(kernel)) {
             TT_FATAL(
-                seen_dfb_names.insert(entry.dfb_spec_name).second,
-                "KernelSpec '{}' has duplicate dfb_self_loop_connectivities entries for DFB '{}'.",
-                kernel.unique_id,
-                entry.dfb_spec_name);
-
-            TT_FATAL(
-                collected.dfb_by_name.contains(entry.dfb_spec_name),
+                collected.dfb_by_name.contains(dfb_spec_name),
                 "KernelSpec '{}' has a dfb_self_loop_connectivities entry referencing unknown DFB '{}'.",
                 kernel.unique_id,
-                entry.dfb_spec_name);
+                dfb_spec_name);
 
             bool has_producer_binding = false;
             bool has_consumer_binding = false;
             for (const auto& binding : kernel.dfb_bindings) {
-                if (binding.dfb_spec_name != entry.dfb_spec_name) {
+                if (binding.dfb_spec_name != dfb_spec_name) {
                     continue;
                 }
                 if (binding.endpoint_type == DFBEndpointType::PRODUCER) {
@@ -1382,14 +1428,14 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 "kernel does not self-loop this DFB (does not bind it as BOTH producer and "
                 "consumer). This option applies only to self-looped DFBs.",
                 kernel.unique_id,
-                entry.dfb_spec_name);
+                dfb_spec_name);
 
             TT_FATAL(
-                entry.scope != DFBSelfLoopScope::INTER,
+                scope != DFBSelfLoopConnectivity::INTER,
                 "KernelSpec '{}' specifies INTER scope for self-looped DFB '{}'. INTER scope is "
                 "not yet supported by the runtime.",
                 kernel.unique_id,
-                entry.dfb_spec_name);
+                dfb_spec_name);
         }
     }
 
@@ -1548,7 +1594,7 @@ std::pair<DMProcessorMask, DMProcessorMask> ReserveDMProcessors(
     const KernelSpec* kernel_spec,
     std::optional<DMProcessorMask> existing_mask,
     DMProcessorMask cumulative_mask,
-    const WorkUnitSpecName& work_unit_id) {
+    const std::string& work_unit_id) {
     // Was this kernel already assigned a mask from a previous WorkUnitSpec?
     if (existing_mask.has_value()) {
         DMProcessorMask existing = existing_mask.value();
@@ -1690,7 +1736,7 @@ int ConstraintScore(const KernelCouplingGroup* g) {
 
 // Deterministic tiebreaker: sort by the lexicographically-smallest member unique_id.
 // Group::members is canonicalized at construction time so members.front() is the sort key.
-const std::string& group_sort_key(const KernelCouplingGroup* g) { return g->members.front()->unique_id; }
+const std::string& group_sort_key(const KernelCouplingGroup* g) { return g->members.front()->unique_id.get(); }
 
 void SortByConstraint(std::vector<const KernelCouplingGroup*>& groups) {
     std::sort(groups.begin(), groups.end(), [](const KernelCouplingGroup* a, const KernelCouplingGroup* b) {
@@ -2090,7 +2136,7 @@ struct TensorBindingsForKernel {
 // time, extracting info from the TensorArgs.)
 TensorBindingsForKernel ResolveTensorBindingsForKernel(
     const KernelSpec& kernel,
-    const std::unordered_map<TensorParameterName, ResolvedTensorParameter>& resolved_tensor_parameters,
+    const std::unordered_map<TensorParamName, ResolvedTensorParameter>& resolved_tensor_parameters,
     size_t base_named_crta_count) {
     TensorBindingsForKernel out;
     out.handles.reserve(kernel.tensor_bindings.size());
@@ -2104,7 +2150,7 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
 
         TensorBindingHandle handle;
         handle.accessor_name = binding.accessor_name;
-        handle.tensor_parameter_name = binding.tensor_parameter_name;
+        handle.tensor_parameter_name = binding.tensor_parameter_name.get();
         handle.cta_offset = cta_word_offset;
         handle.addr_crta_offset = static_cast<uint32_t>(crta_word_index * sizeof(uint32_t));
         handle.num_runtime_field_crta_words = resolved.extra_crta_words;
@@ -2215,14 +2261,9 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     }();
     std::optional<experimental::dfb::TensixScope> tensix_scope;
     if (is_self_loop && producer->is_compute_kernel()) {
-        auto user_scope = DFBSelfLoopScope::INTRA;
-        for (const auto& entry : kernel_self_loop_scopes(*producer)) {
-            if (entry.dfb_spec_name == dfb_spec->unique_id) {
-                user_scope = entry.scope;
-                break;
-            }
-        }
-        tensix_scope = (user_scope == DFBSelfLoopScope::INTRA)
+        auto user_conn = kernel_self_loop_scopes(*producer).get(dfb_spec->unique_id);
+        const auto user_scope = user_conn ? *user_conn : DFBSelfLoopConnectivity::INTRA;
+        tensix_scope = (user_scope == DFBSelfLoopConnectivity::INTRA)
                            ? experimental::dfb::TensixScope::INTRA
                            : experimental::dfb::TensixScope::INTER;  // currently blocked in validation
     }
@@ -2347,7 +2388,7 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
 // ----------------------------------------------------------------------------
 
 std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
-    const std::vector<ComputeHardwareConfig::DFBUnpackToDestMode>& user_modes, const DFBNameToIdMap& dfb_name_to_id) {
+    const ComputeHardwareConfig::UnpackToDestModes& user_modes, const DFBNameToIdMap& dfb_name_to_id) {
     const uint32_t max_cbs = tt::tt_metal::hal::get_arch_num_circular_buffers();
     std::vector<UnpackToDestMode> unpack_modes(max_cbs, UnpackToDestMode::Default);
     for (const auto& [dfb_name, mode] : user_modes) {
@@ -2569,7 +2610,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
     //     corresponding TensorArgument entry. TensorParameters that opt into a dynamic accessor
     //     field (currently: dynamic_tensor_shape, sharded only) carry additional CRTA words
     //     immediately after the address slot, also filled at enqueue time.
-    std::unordered_map<TensorParameterName, ResolvedTensorParameter> resolved_tensor_parameters;
+    std::unordered_map<TensorParamName, ResolvedTensorParameter> resolved_tensor_parameters;
     resolved_tensor_parameters.reserve(spec.tensor_parameters.size());
     for (const auto& tensor_parameter : spec.tensor_parameters) {
         resolved_tensor_parameters.emplace(
@@ -2583,8 +2624,9 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
     for (const auto& tensor_parameter : spec.tensor_parameters) {
         const bool dyn_shape = tensor_parameter.advanced_options.dynamic_tensor_shape;
         const bool match_padded_only = tensor_parameter.advanced_options.match_padded_shape_only;
+        const bool enqueue_invariant = tensor_parameter.advanced_options.enqueue_invariant;
         program_impl->register_tensor_parameter(
-            tensor_parameter.unique_id, tensor_parameter.spec, dyn_shape, match_padded_only);
+            tensor_parameter.unique_id.get(), tensor_parameter.spec, dyn_shape, match_padded_only, enqueue_invariant);
     }
 
     // Create DataflowBuffers and build name -> ID map.
@@ -2602,14 +2644,14 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         // (For borrowed-memory DFBs, config.borrows_memory was set in MakeDataflowBufferConfig;
         // the device-side runtime uses that to skip regular L1 allocation.)
         uint32_t dfb_id = program_impl->add_dataflow_buffer(collected.dfb_node_set.at(dfb_name), config);
-        program_impl->register_dfb_spec_name(dfb_name, dfb_id);
+        program_impl->register_dfb_spec_name(dfb_name.get(), dfb_id);
         dfb_name_to_id[dfb_name] = dfb_id;
 
-        // Borrowed-memory DFB: record the dfb_id ↔ TensorParameterName binding so that
+        // Borrowed-memory DFB: record the dfb_id ↔ TensorParamName binding so that
         // SetProgramRunArgs / UpdateTensorArgs can resolve and attach the actual L1 Buffer
         // at runtime (analog of dynamic CB's UpdateDynamicCircularBufferAddress).
         if (dfb_spec.borrowed_from.has_value()) {
-            program_impl->register_dfb_borrowed_binding(dfb_id, *dfb_spec.borrowed_from);
+            program_impl->register_dfb_borrowed_binding(dfb_id, dfb_spec.borrowed_from->get());
         }
     }
 
@@ -2648,7 +2690,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         const uint32_t init_value = semaphore_spec.advanced_options.initial_value;
         uint32_t sem_id = program_impl->create_semaphore(
             to_node_range_set(semaphore_spec.target_nodes), init_value, CoreType::WORKER);
-        program_impl->register_semaphore_spec_name(semaphore_name, sem_id);
+        program_impl->register_semaphore_spec_name(semaphore_name.get(), sem_id);
         semaphore_name_to_id[semaphore_name] = sem_id;
     }
 
@@ -2754,7 +2796,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
 
         // Add the kernel to the ProgramImpl and register the name -> handle mapping
         KernelHandle handle = program_impl->add_kernel(kernel, HalProgrammableCoreType::TENSIX);
-        program_impl->register_kernel_spec_name(kernel_spec.unique_id, handle);
+        program_impl->register_kernel_spec_name(kernel_spec.unique_id.get(), handle);
 
         // Register the RTA+CRTA schema (named lists + vararg counts) with the ProgramImpl.
         // Used by ValidateProgramRunArgs and SetProgramRunArgs to validate and serialize
@@ -2778,6 +2820,25 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         // (via tensor_binding_handles) and its slot offsets are baked into each binding handle's
         // addr_crta_offset; SetProgramRunArgs uses BOTH to assemble the per-enqueue CRTA buffer.
         runtime_schema.common_runtime_arg_names = user_named_crtas;
+
+        // Precompute the name -> slot-index maps so the hot UpdateProgramRunArgs path does O(1)
+        // lookups rather than rebuilding a map per call.
+        for (size_t i = 0; i < runtime_schema.runtime_arg_names.size(); ++i) {
+            runtime_schema.runtime_arg_name_to_slot.emplace(runtime_schema.runtime_arg_names[i], i);
+        }
+        for (size_t i = 0; i < runtime_schema.common_runtime_arg_names.size(); ++i) {
+            runtime_schema.common_runtime_arg_name_to_slot.emplace(runtime_schema.common_runtime_arg_names[i], i);
+        }
+
+        // Enqueue-loop-invariant named args. Each is a subset of the declared named RTAs/CRTAs and
+        // may be omitted from a partial UpdateProgramRunArgs call (retaining its value). Legality
+        // (each invariant name actually names a declared arg) is checked in ValidateProgramSpec.
+        for (const auto& name : kernel_spec.advanced_options.enqueue_invariant_runtime_args) {
+            runtime_schema.enqueue_invariant_runtime_arg_names.insert(name);
+        }
+        for (const auto& name : kernel_spec.advanced_options.enqueue_invariant_common_runtime_args) {
+            runtime_schema.enqueue_invariant_common_runtime_arg_names.insert(name);
+        }
 
         // Varargs schema now lives on KernelAdvancedOptions.
         const uint32_t num_runtime_varargs = kernel_spec.advanced_options.num_runtime_varargs;
@@ -2816,7 +2877,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
             }
         }
         runtime_schema.num_common_runtime_varargs = num_common_runtime_varargs;
-        program_impl->register_kernel_rta_schema(kernel_spec.unique_id, runtime_schema);
+        program_impl->register_kernel_rta_schema(kernel_spec.unique_id.get(), runtime_schema);
     }
 
     return Program(std::move(program_impl));

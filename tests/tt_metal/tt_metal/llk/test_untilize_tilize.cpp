@@ -58,7 +58,7 @@ using namespace tt::test_utils;
 
 namespace unit_tests::compute::tilize {
 
-enum UntilizeType : uint8_t { UNPACK = 0, PACK = 1, DST = 2 };
+enum UntilizeType : uint8_t { PACK = 1, DST = 2 };
 
 enum TilizeType : uint8_t {
     UNPACK_A = 0,
@@ -185,7 +185,7 @@ static void validate_result(
 }
 
 // Metal 2.0 single-core helper covering all migrated tilize/untilize kernels:
-//   - UntilizeType::UNPACK / PACK / DST (compute kernels: unpack_untilize / pack_untilize / dst_untilize)
+//   - UntilizeType::PACK / DST (compute kernels: pack_untilize / dst_untilize)
 //   - TilizeType::UNPACK_A (compute kernel: tilize.cpp, optionally with FAST_TILIZE)
 void run_single_core_tilize_program(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TestConfig& test_config) {
@@ -223,11 +223,11 @@ void run_single_core_tilize_program(
     const tt::DataFormat output_buf_format =
         (test_config.fp32_dest_acc_en && !is_8bit_format) ? tt::DataFormat::Float32 : test_config.output_fmt;
 
-    constexpr const char* INPUT_DFB = "input_dfb";
-    constexpr const char* OUTPUT_DFB = "output_dfb";
-    constexpr const char* READER = "reader";
-    constexpr const char* WRITER = "writer";
-    constexpr const char* COMPUTE = "compute";
+    const experimental::DFBSpecName INPUT_DFB{"input_dfb"};
+    const experimental::DFBSpecName OUTPUT_DFB{"output_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
 
     experimental::DataflowBufferSpec input_dfb_spec{
         .unique_id = INPUT_DFB,
@@ -315,10 +315,10 @@ void run_single_core_tilize_program(
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
     if (test_config.fp32_dest_acc_en) {
-        compute_defines.emplace_back("DST_ACCUM_MODE", "1");
+        compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
     if (test_config.fast_tilize) {
-        compute_defines.emplace_back("FAST_TILIZE", "1");
+        compute_defines.emplace("FAST_TILIZE", "1");
     }
 
     experimental::KernelSpec compute_spec{
@@ -376,32 +376,27 @@ void run_single_core_tilize_program(
     experimental::ProgramRunArgs params;
     if (is_unpack_a_tilize) {
         params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = READER,
+            .kernel = READER,
             .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"src_addr", dram_buffer_src0_addr},
-                       {"src_dram_bank_id", 0u},
-                       {"num_tiles", num_tiles},
-                       {"ublock_size_tiles", test_config.num_tiles_c},
-                       {"reader_only", 0u}}}},
+                {{node,
+                  {{"src_addr", dram_buffer_src0_addr},
+                   {"src_dram_bank_id", 0u},
+                   {"num_tiles", num_tiles},
+                   {"ublock_size_tiles", test_config.num_tiles_c},
+                   {"reader_only", 0u}}}},
         });
     } else {
         params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = READER,
+            .kernel = READER,
             .runtime_arg_values =
-                {{.node = node,
-                  .args = {{"src_addr", dram_buffer_src0_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}}}},
+                {{node, {{"src_addr", dram_buffer_src0_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}}}},
         });
     }
     params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
-        .kernel_spec_name = WRITER,
-        .runtime_arg_values =
-            {{.node = node, .args = {{"dst_addr", dram_buffer_dst_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}}}},
+        .kernel = WRITER,
+        .runtime_arg_values = {{node, {{"dst_addr", dram_buffer_dst_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}}}},
     });
-    params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
-        .kernel_spec_name = COMPUTE,
-    });
+    params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE});
     experimental::SetProgramRunArgs(program_, params);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -671,30 +666,6 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeUnpackTilizeA_B) {
     }
 }
 
-/**************************************
-Following tests are for Unpack Untilize
-***************************************/
-
-TEST_F(LLKMeshDeviceFixture, TensixComputeUnpackUntilize) {
-    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
-    for (auto num_tile : num_tiles) {
-        for (bool fp32_dest_acc_en : {true, false}) {
-            for (bool dst_full_sync_en : {true, false}) {
-                unit_tests::compute::tilize::TestConfig test_config = {
-                    .dst_full_sync_en = dst_full_sync_en,
-                    .fp32_dest_acc_en = fp32_dest_acc_en,
-                    .input_single_tile_size = 2 * 1024,
-                    .output_single_tile_size = 1024 * (fp32_dest_acc_en ? 4 : 2),
-                    .num_tiles_r = num_tile[0],
-                    .num_tiles_c = num_tile[1],
-                    .untilize_type = unit_tests::compute::tilize::UntilizeType::UNPACK,
-                    .golden_function = ::unit_tests::compute::gold_standard_untilize};
-                unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
-            }
-        }
-    }
-}
-
 /******************************
 Following tests are for Quasar
 *******************************/
@@ -751,11 +722,11 @@ static void run_quasar_tilize_untilize_test(
         output_data_format = tt::DataFormat::Float32;
     }
 
-    constexpr const char* INPUT_DFB = "input_dfb";
-    constexpr const char* OUTPUT_DFB = "output_dfb";
-    constexpr const char* READER = "reader";
-    constexpr const char* WRITER = "writer";
-    constexpr const char* COMPUTE = "compute";
+    const experimental::DFBSpecName INPUT_DFB{"input_dfb"};
+    const experimental::DFBSpecName OUTPUT_DFB{"output_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
 
     experimental::DataflowBufferSpec input_dfb_spec{
         .unique_id = INPUT_DFB,
@@ -898,28 +869,24 @@ static void run_quasar_tilize_untilize_test(
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = READER,
+            .kernel = READER,
             .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"src_addr", dram_buffer_src_addr},
-                       {"src_bank_id", 0u},
-                       {"num_tiles", num_tiles},
-                       {"dram_page_stride", src_tile_stride_bytes}}}},
+                {{node,
+                  {{"src_addr", dram_buffer_src_addr},
+                   {"src_bank_id", 0u},
+                   {"num_tiles", num_tiles},
+                   {"dram_page_stride", src_tile_stride_bytes}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = WRITER,
+            .kernel = WRITER,
             .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"dst_addr", dram_buffer_dst_addr},
-                       {"dst_bank_id", 0u},
-                       {"num_tiles", num_tiles},
-                       {"dram_page_stride", dst_tile_stride_bytes}}}},
+                {{node,
+                  {{"dst_addr", dram_buffer_dst_addr},
+                   {"dst_bank_id", 0u},
+                   {"num_tiles", num_tiles},
+                   {"dram_page_stride", dst_tile_stride_bytes}}}},
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = COMPUTE,
-        },
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     experimental::SetProgramRunArgs(program_run, params);
 

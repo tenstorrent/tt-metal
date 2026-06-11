@@ -6,7 +6,11 @@ from typing import List
 import pytest
 import torch
 from helpers.format_config import DataFormat, FormatConfig
-from helpers.golden_generators import PackGolden, get_golden_generator
+from helpers.golden_generators import (
+    PackGolden,
+    get_golden_generator,
+    quantize_mx_tensor_chunked,
+)
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
@@ -39,7 +43,9 @@ from helpers.utils import passed_test
 
 INPUT_DIMENSIONS = [[512, 64], [192, 512]]
 TILE_DIMENSIONS = [32, 32]
-# Complete list of formats that are supported with L1 accumulation
+# Complete list of formats that are supported with L1 accumulation as the
+# OUTPUT format. MX formats (MxInt8) are allowed only as INPUT — accumulation
+# happens on the packed output in L1, and MX formats do not support L1 acc.
 PACK_L1_ACC_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
@@ -48,6 +54,9 @@ PACK_L1_ACC_FORMATS = input_output_formats(
         DataFormat.Int32,
         DataFormat.Int8,
         DataFormat.UInt8,
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
     ]
 )
 
@@ -69,6 +78,10 @@ def generate_qsr_pack_l1_acc_combinations(
         """Check if the format conversion is supported by packer. These format conversions are NOT dependent on the dest register mode."""
         # Skip if mixing integer and non-integer formats
         if in_fmt.is_integer() ^ out_fmt.is_integer():
+            return False
+        # MX formats are not L1-accumulation-capable as the output; allow them
+        # only on the input side.
+        if out_fmt.is_mx_format():
             return False
         return True
 
@@ -114,7 +127,12 @@ def generate_qsr_pack_l1_acc_combinations(
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc=generate_qsr_pack_l1_acc_combinations(PACK_L1_ACC_FORMATS),
-    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
+    # don't generate the No variant for them. formats_dest_acc[0] is the InputOutputFormat (input/output pair).
+    implied_math_format=lambda formats_dest_acc: (
+        [ImpliedMathFormat.Yes]
+        if formats_dest_acc[0].input_format.is_mx_format()
+        else [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+    ),
     dest_sync_mode=[DestSync.Half, DestSync.Full],
     input_dimensions=INPUT_DIMENSIONS,
 )
@@ -153,9 +171,19 @@ def test_pack_l1_acc_quasar(
         tile_dimensions=TILE_DIMENSIONS,
     )
 
+    # Quantize MX input through the source lattice so the golden sees what HW
+    # sees after unpacking from L1. Without this, raw bfloat16 stimuli flow
+    # into PackGolden while HW reads MxInt4-quantized values; per-block
+    # accumulation then amplifies the per-element drift.
+    src_A_golden = (
+        quantize_mx_tensor_chunked(src_A, formats.input_format)
+        if formats.input_format.is_mx_format()
+        else src_A
+    )
+
     generate_golden = get_golden_generator(PackGolden)
     full_golden = generate_golden(
-        src_A,
+        src_A_golden,
         formats.output_format,
         num_faces=num_faces,
         input_dimensions=input_dimensions,
@@ -218,6 +246,9 @@ def test_pack_l1_acc_quasar(
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
         boot_mode=boot_mode,
+        # MX inputs need format inference disabled so the C++ side's
+        # IMPLIED_MATH_FORMAT setting drives the math format.
+        disable_format_inference=formats.input_format.is_mx_format(),
     )
 
     res_from_L1 = configuration.run().result
@@ -230,7 +261,9 @@ def test_pack_l1_acc_quasar(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     test_passed = passed_test(
-        golden_tensor, res_tensor, formats.output_format, print_errors=True
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
     )
 
     assert test_passed, "Assert against golden failed"

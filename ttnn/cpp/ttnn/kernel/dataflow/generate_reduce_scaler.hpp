@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
 
 template <bool needs_zeroing = true>
@@ -16,17 +17,11 @@ FORCE_INLINE void wh_generate_reduce_scaler(const uint32_t cb_id, const uint32_t
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr_base);
 
     // Fill tile with zeros
-    // TODO: src addr does not need to be rewritten. Update/add api for this
     if constexpr (needs_zeroing) {
-        uint32_t write_addr = write_addr_base;
-        constexpr uint32_t num_zeros_reads = 2048 / MEM_ZEROS_SIZE;
-        uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-        noc_async_read_one_packet_set_state(zeros_noc_addr, MEM_ZEROS_SIZE);
-        for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-            noc_async_read_one_packet_with_state(zeros_noc_addr, write_addr);
-            write_addr += MEM_ZEROS_SIZE;
-        }
-        noc_async_read_barrier();
+        Noc noc;
+        CircularBuffer cb(cb_id);
+        noc.async_write_zeros(cb, 2048);
+        noc.write_zeros_l1_barrier();
     }
 
     if (scaler != 0 || !needs_zeroing) {

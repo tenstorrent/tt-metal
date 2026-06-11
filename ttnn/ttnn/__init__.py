@@ -205,6 +205,14 @@ from ttnn._ttnn.hd_socket import (
     H2DMode,
 )
 
+from ttnn._ttnn.h2d_stream_service import (
+    H2DStreamService,
+)
+
+from ttnn._ttnn.counter_channel import (
+    InterProcessCounterChannel,
+)
+
 from ttnn.types import (
     TILE_SIZE,
     DataType,

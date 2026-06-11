@@ -13,24 +13,6 @@
 
 /**
  *
- * @brief Initialize selected unpacker to unpack a single tile
- *
- * @tparam TRANSPOSE_EN: Enables transpose of a tile, supported for SrcA and SrcB
- * @tparam IS_32b_DEST_EN: Enable using Math destination Register in 32-bit mode
- * @param operand: The input operand circular buffer
- *
- * This function initializes unpacker0 to unpack a single tile
- * from the input circular buffer to srcA/dest register.
- */
-template <bool TRANSPOSE_EN, bool IS_32b_DEST_EN>
-inline void llk_unpack_A_init(const std::uint32_t operand) {
-    const std::uint32_t operand_id = get_operand_id(operand);
-    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
-    _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, TRANSPOSE_EN, IS_32b_DEST_EN>(operand_id, NUM_TILES, num_faces);
-}
-
-/**
- *
  * @brief Initialize unpacker for unary / unary-broadcast / binary-dest-reuse paths.
  *
  * Overload matching Blackhole/Wormhole API signature `(transpose_of_faces, within_face_16x16_transpose, operand)`.
@@ -157,4 +139,4 @@ inline void llk_unpack_A_block(
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
-inline void llk_unpack_A_uninit(const std::uint32_t operand) {}
+inline void llk_unpack_A_uninit() {}
