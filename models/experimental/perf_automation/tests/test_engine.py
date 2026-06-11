@@ -72,11 +72,25 @@ def _mk_run(tmp_path, state_overrides=None):
     return run
 
 
+def _fake_measure(ctx):
+    # re-bucketed profile of the "edited" model: shrink the attacked bucket, drive toward target
+    prof = json.loads(json.dumps(ctx.current_profile()))
+    before = ctx.state["metric"]["current"]
+    target = ctx.state["metric"].get("target") or (before - 1.0)
+    newdev = round(max(target, before - 1.0), 4)
+    for b in prof["buckets"]:
+        if b["id"] == ctx.state.get("current_bucket"):
+            b["device_ms"] = round(b["device_ms"] * 0.5, 4)
+    prof["device_ms"] = newdev
+    return [prof]
+
+
 def _ctx(run):
     ctx = LoopContext.from_run(run, index=MOCK_INDEX)
     ctx.deps["edit_runner"] = _fake_editor  # APPLY is real; editor injected
     ctx.deps["select_runner"] = _fake_select  # SELECT is real; picker injected
     ctx.deps["pcc_runner"] = lambda c: {"status": "ok", "pcc": 0.999}  # GATE_PCC real; measure injected
+    ctx.deps["measure_runner"] = _fake_measure  # REMEASURE real; tracy injected
     return ctx
 
 
