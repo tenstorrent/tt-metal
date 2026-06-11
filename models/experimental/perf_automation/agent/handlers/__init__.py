@@ -15,6 +15,7 @@ from .. import states
 from . import apply as _apply
 from . import log_exit, mocks, route
 from . import select as _select
+from . import gate_pcc as _gate_pcc
 from . import verify as _verify
 
 
@@ -29,7 +30,7 @@ def build_handlers() -> dict:
         states.REPAIR_CODE: mocks.repair_code,
         states.REPAIR_PCC: mocks.repair_pcc,
         # --- Member 2: evaluate & record ---
-        states.GATE_PCC: mocks.gate_pcc,
+        states.GATE_PCC: _gate_pcc.gate_pcc,  # REAL
         states.REMEASURE: mocks.remeasure,
         states.DECIDE: mocks.decide,
         states.COMMIT: mocks.commit,

@@ -76,6 +76,7 @@ def _ctx(run):
     ctx = LoopContext.from_run(run, index=MOCK_INDEX)
     ctx.deps["edit_runner"] = _fake_editor  # APPLY is real; editor injected
     ctx.deps["select_runner"] = _fake_select  # SELECT is real; picker injected
+    ctx.deps["pcc_runner"] = lambda c: {"status": "ok", "pcc": 0.999}  # GATE_PCC real; measure injected
     return ctx
 
 
