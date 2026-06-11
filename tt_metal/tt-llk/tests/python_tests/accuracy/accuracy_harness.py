@@ -1,14 +1,5 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""
-SFPU accuracy harness: deterministic per-op sweeps -> per-variant shard CSVs
--> merged per-op CSVs.
-
-This module owns the canonical output paths so shard and final paths can
-never drift. The pure helpers (variant_name, build_sweep_spec, write_shard,
-merge_shards) are off-device testable; run_case orchestrates a hardware run.
-"""
-
 from __future__ import annotations
 
 import math
@@ -35,7 +26,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import get_num_blocks_and_num_tiles_in_block
-from helpers.sfpu_domains import Operand, exclude_undefined, for_op
+from helpers.sfpu_domains import for_op
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -51,19 +42,11 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 
-# ── Canonical paths (single source of truth) ────────────────────────────────
 _THIS_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = _THIS_DIR / "_csv_output"
 SHARD_DIR = OUTPUT_DIR / "_shards"
 
-# ── CSV schema (column order is the on-disk order) ──────────────────────────
-# Compact schema: redundant columns are omitted to keep files small.
-#   - variant_name : reconstructable from op + formats + approx/fast/dest
-#   - abs_error / abs_ulp_error : = abs() of their signed counterparts
-# seed and distribution are kept (constant for the deterministic ramp sweep,
-# but they disambiguate rows once random / multi-distribution sweeps are added).
-# Categorical labels are abbreviated (see _ARCH_ABBR/_FMT_ABBR) and floats are
-# written rounded (FLOAT_FORMAT) since the values are bf16/fp16-precision.
+# ── CSV schema ──────────────────────────
 CSV_COLUMNS: List[str] = [
     "op",
     "input_format",
@@ -90,8 +73,6 @@ CSV_COLUMNS: List[str] = [
 # significant digits is lossless-enough and far shorter than full float64 repr.
 FLOAT_FORMAT = "%.7g"
 
-# Short labels to shrink repeated categorical columns (.get falls back to the
-# full name for anything not listed, so new formats still serialize sanely).
 _ARCH_ABBR = {"wormhole": "wh", "blackhole": "bh", "quasar": "qsr"}
 _FMT_ABBR = {
     "Float32": "fp32",
@@ -103,7 +84,7 @@ _FMT_ABBR = {
     "Tf32": "tf32",
 }
 
-# Deterministic merge sort key -> byte-stable per-op CSVs across reruns.
+# How rows are ordered inside each final per-op CSV.
 MERGE_SORT_COLS = [
     "op",
     "input_format",
@@ -114,7 +95,7 @@ MERGE_SORT_COLS = [
     "x",
 ]
 
-# Default sweep density: number of points per curve (-> input_dimensions).
+# How many input points each op's curve is sampled at.
 DEFAULT_SWEEP_POINTS = 2048
 
 
@@ -138,19 +119,31 @@ def variant_name(
 def build_sweep_spec(
     op: MathOperation,
     in_fmt: DataFormat,
+    distribution: DistributionKind = DistributionKind.RAMP,
+    seed: int = None,
 ) -> StimuliSpec:
-    """Deterministic RAMP sweep over the op's defined input domain.
+    """Build the input sweep over the op's defined domain.
 
-    Starts from the op's safe per-format domain (sfpu_domains.for_op),
-    overrides the distribution to RAMP, then clips undefined regions
-    (exclude_undefined) so the ramp only covers where the op is defined.
+    for_op already returns the op's safe per-format domain (within the region
+    where the op is defined); this just applies the chosen *distribution*.
+
+    *distribution* defaults to RAMP (deterministic, sorted — clean curves).
+    Pass *seed* for reproducible random distributions.
     """
-    specs = for_op(op, in_fmt, distribution_a=DistributionKind.RAMP)
-    return exclude_undefined(op, specs.spec_A, Operand.A)
+    spec = for_op(op, in_fmt, distribution_a=distribution).spec_A
+    if seed is not None:
+        spec.seed = seed
+    return spec
 
 
 def sweep_input_dimensions(points: int = DEFAULT_SWEEP_POINTS) -> List[int]:
-    """[32, 32*K] layout holding at least *points* elements (1024 per K)."""
+    """Tensor shape [32, 32*K] that holds at least *points* sweep values.
+
+    A Tensix tile is 32x32 = 1024 elements, and test inputs must be whole tiles
+    (each dim a multiple of 32). The sweep is just a flat list of values, so we
+    keep the height at one tile (32 rows) and grow only the width in tile-sized
+    steps: K = ceil(points / 1024) tiles laid in a row -> [32, 32*K].
+    """
     k = max(1, math.ceil(points / (32 * 32)))
     return [32, 32 * k]
 
@@ -172,16 +165,11 @@ def rows_dataframe(
     hw,
     out_fmt_enum_name: str,
 ) -> "pd.DataFrame":
-    """Assemble one variant's rows (sorted ascending by x) into a DataFrame.
+    """Build the CSV rows for one variant (one op + format + config).
 
-    Computes per-element metrics via the shared accuracy_metrics module and
-    assigns a stable 0-based sample_index along the sorted sweep. Emits the
-    compact CSV_COLUMNS schema: categorical labels are abbreviated, boolean
-    finite flags are written as T/F, and the redundant abs_*/variant_name/
-    seed/distribution columns are omitted.
-
-    *out_fmt_enum_name* must be the FULL DataFormat name (e.g. "Float16_b") —
-    it drives the ULP metric lookup — even though *out_fmt* may be abbreviated.
+    Takes the raw sweep arrays (x, golden, hw), sorts them by x, computes the
+    error columns (via accuracy_metrics), and returns a DataFrame in CSV_COLUMNS
+    order — ready to hand to write_shard.
     """
     x = np.asarray(x, dtype=np.float64)
     golden = np.asarray(golden, dtype=np.float64)
@@ -271,16 +259,23 @@ def run_case(
     dest_acc: DestAccumulation,
     *,
     points: int = DEFAULT_SWEEP_POINTS,
+    distribution: DistributionKind = DistributionKind.RAMP,
+    seed: int = None,
 ) -> Path:
-    """Run one (op, formats, config) accuracy case on device, write its shard.
+    """Measure one (op, format, config) on hardware and write its shard CSV.
 
-    Returns the shard path. Raises AssertionError only on real breakage
-    (length mismatch, all-non-finite output, or a no-op all-zero result while
-    golden is non-zero). Never asserts ULP/error thresholds.
+    The full pipeline for one variant:
+      1. build the input sweep for this op (deterministic RAMP by default;
+         pass *distribution* for another, and *seed* for reproducible random ones),
+      2. compute the torch "golden" output,
+      3. compile + run the op on the device to get the "hw" output,
+      4. compute per-element errors and write a shard via rows_dataframe/write_shard.
+
+    Returns the shard path.
     """
     torch.manual_seed(0)
 
-    spec = build_sweep_spec(op, formats.input_format)
+    spec = build_sweep_spec(op, formats.input_format, distribution, seed)
     input_dimensions = sweep_input_dimensions(points)
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -375,9 +370,13 @@ def run_case(
         in_fmt=formats.input_format.name,
         out_fmt=formats.output_format.name,
         chip_arch=str(TestConfig.CHIP_ARCH.name).lower(),
-        distribution="ramp",
+        distribution=(
+            distribution.value
+            if isinstance(distribution, DistributionKind)
+            else "custom"
+        ),
         intervals=intervals_str,
-        seed="",
+        seed="" if seed is None else str(seed),
         approx=str(int(approx_mode == ApproximationMode.Yes)),
         fast=str(int(fast_mode == FastMode.Yes)),
         dest=str(int(dest_acc == DestAccumulation.Yes)),

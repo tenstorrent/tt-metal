@@ -1,13 +1,15 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Accuracy-suite collection hooks.
+pytest hooks for the accuracy suite (auto-loaded by pytest; nothing imports it).
 
-Controller-only lifecycle so the per-op CSVs reflect exactly the current run:
-  - pytest_configure  : clear SHARD_DIR before workers spawn (no stale shards)
-  - pytest_sessionfinish : merge current-run shards into per-op CSVs
+They bracket the whole run so each per-op CSV reflects only this run:
+  - before the run: delete leftover shard files (clear_shards)
+  - after the run: merge this run's shards into one CSV per op (merge_shards)
 
-Under xdist, only the controller process lacks `config.workerinput`.
+When tests run in parallel (pytest -n) there are many worker processes plus one
+controller. We run clear/merge only on the controller (the single process
+without `config.workerinput`) so it happens once, not once per worker.
 """
 
 from accuracy.accuracy_harness import OUTPUT_DIR, clear_shards, merge_shards

@@ -35,12 +35,11 @@ def test_variant_name_encodes_op_formats_and_config():
 
 
 def test_build_sweep_spec_is_ramp_within_defined_domain():
-    # Log is undefined for x <= 0; the sweep spec must be a RAMP whose
-    # intervals stay strictly positive after exclude_undefined.
+    # Log is undefined for x <= 0; the swept domain must stay strictly positive.
     spec = build_sweep_spec(MathOperation.Log, DataFormat.Float16_b)
     assert spec.distribution == DistributionKind.RAMP
-    assert spec.intervals is not None
-    for lo, hi in spec.intervals:
+    domain = spec.intervals if spec.intervals is not None else [(spec.low, spec.high)]
+    for lo, hi in domain:
         assert lo > 0 and hi > 0
 
 
