@@ -548,15 +548,15 @@ class Conv2dViaConv3d(Module):
         if self.padding_mode == "causal_height" and self.pad_h > 0:
             B_, H_, W_, C_ = x_BHWC.shape
             pad_tensor_shape = (B_, self.pad_h, W_, C_)
-            zero_pad = ttnn.zeros(
-                pad_tensor_shape, dtype=x_BHWC.get_dtype(), layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh_device
+            zero_pad = _persistent_zeros(
+                pad_tensor_shape, dtype=x_BHWC.get_dtype(), layout=ttnn.ROW_MAJOR_LAYOUT, mesh_device=self.mesh_device
             )
             x_BHWC = ttnn.concat([zero_pad, x_BHWC], dim=1)
         elif self.padding_mode == "causal_width" and self.pad_w > 0:
             B_, H_, W_, C_ = x_BHWC.shape
             pad_tensor_shape = (B_, H_, self.pad_w, C_)
-            zero_pad = ttnn.zeros(
-                pad_tensor_shape, dtype=x_BHWC.get_dtype(), layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh_device
+            zero_pad = _persistent_zeros(
+                pad_tensor_shape, dtype=x_BHWC.get_dtype(), layout=ttnn.ROW_MAJOR_LAYOUT, mesh_device=self.mesh_device
             )
             x_BHWC = ttnn.concat([zero_pad, x_BHWC], dim=2)
 
