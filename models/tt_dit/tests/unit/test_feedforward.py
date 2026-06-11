@@ -99,7 +99,13 @@ def test_feedforward(
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [
-        (shape, {"fabric_config": None if shape == (1, 1) else ttnn.FabricConfig.FABRIC_1D})
+        (
+            shape,
+            {
+                "fabric_config": None if shape == (1, 1) else ttnn.FabricConfig.FABRIC_1D,
+                "require_exact_physical_num_devices": False if shape == (1, 1) else True,
+            },
+        )
         for shape in [(1, 1), (1, 2), (2, 1), (2, 2), (2, 4), (4, 2)]
     ],
     ids=mesh_device_config_to_string,
