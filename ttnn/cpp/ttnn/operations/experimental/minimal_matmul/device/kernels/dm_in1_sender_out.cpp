@@ -158,6 +158,50 @@ void kernel_main() {
 
     constexpr uint32_t full_N_tiles_bytes = N_block_tiles * in1_tile_size;
 
+#ifdef CREDIT_FORWARD
+    // See dm_in0_sender.cpp for the credit-forwarding protocol (in1 forwards along columns).
+    uint32_t cf_blocks_received = 0;
+    uint32_t cf_blocks_sent = 0;
+    if constexpr (!is_injector_core) {
+        noc_semaphore_inc(in1_sender_semaphore_noc_addr, CREDIT_FORWARD);
+    }
+#endif
+
+#ifdef MCAST_BROADCAST
+    const uint32_t mc_base = out_addr_rt_arg_idx + N_chunks;
+    const uint32_t in1_mc_start_x = get_arg_val<uint32_t>(mc_base + 0);
+    const uint32_t in1_mc_start_y = get_arg_val<uint32_t>(mc_base + 1);
+    const uint32_t in1_mc_end_x = get_arg_val<uint32_t>(mc_base + 2);
+    const uint32_t in1_mc_end_y = get_arg_val<uint32_t>(mc_base + 3);
+    const uint32_t in1_num_recv = get_arg_val<uint32_t>(mc_base + 4);
+    const uint32_t in1_inj_noc_x = get_arg_val<uint32_t>(mc_base + 5);
+    const uint32_t in1_inj_noc_y = get_arg_val<uint32_t>(mc_base + 6);
+    const uint64_t in1_injector_sender_sem_noc_addr =
+        get_noc_addr(in1_inj_noc_x, in1_inj_noc_y, in1_sender_semaphore_addr);
+    // Mcast the whole contiguous block slot (valid + N-pad); compute reads only valid positions.
+    constexpr uint32_t in1_block_bytes = in1_block_num_tiles * in1_tile_size;
+#ifdef MCAST_PIPELINED
+    constexpr uint32_t cb_id_in1_credit = tt::CBIndex::c_6;
+    const uint32_t in1_credit_base = get_write_ptr(cb_id_in1_credit);
+    const uint32_t in1_my_group_idx = get_arg_val<uint32_t>(mc_base + 7);
+    const uint64_t in1_my_credit_noc_addr =
+        get_noc_addr(in1_inj_noc_x, in1_inj_noc_y, in1_credit_base + in1_my_group_idx * MCAST_CREDIT_STRIDE);
+    uint32_t mc_blocks_received = 0;
+    uint32_t mc_blocks_sent = 0;
+    if constexpr (is_injector_core) {
+        for (uint32_t i = 0; i <= in1_num_recv; i++) {
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_credit_base + i * MCAST_CREDIT_STRIDE) = 0;
+        }
+        uint64_t go_mcast = get_noc_multicast_addr(
+            in1_mc_start_x, in1_mc_start_y, in1_mc_end_x, in1_mc_end_y, in1_sender_semaphore_addr);
+        noc_semaphore_set_multicast(in1_valid_semaphore_addr, go_mcast, in1_num_recv);
+    } else {
+        noc_semaphore_wait(in1_sender_semaphore_addr_ptr, VALID);
+        noc_semaphore_inc(in1_my_credit_noc_addr, MCAST_PIPELINED);
+    }
+#endif
+#endif
+
     bool k_forward = true;
 
     uint32_t defer_write_m_tile = 0;
@@ -184,44 +228,107 @@ void kernel_main() {
             uint32_t current_N_tiles_bytes = current_N_block_tiles * in1_tile_size;
             bool is_last_block = (m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1));
             bool not_first_block = (n_block_iter > 0 || m_block_iter > 0);
-            for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
-                if (defer_write && k_block_iter == defer_write_k_block) {
-                    if constexpr (is_output_writer) {
-                        cb_wait_front(cb_id_out, out_block_num_tiles);
-                        uint32_t out_read_ptr = get_read_ptr(cb_id_out);
+#ifdef MCAST_PREFETCH
+            // Software-pipelined injector k-loop: issue block (k+1)'s DRAM read BEFORE block k's
+            // multicast, overlapping read latency with the mcast handshake+transit on the single DM
+            // RISC. Receivers unchanged. in1 has no reuse (reads every k of every n block).
+            if constexpr (is_injector_core) {
+                if (K_num_blocks > 0) {
+                    // Prologue: reserve a slot and ISSUE the first block's read (no barrier yet).
+                    cb_reserve_back(cb_id_in1, in1_block_num_tiles);
+                    uint32_t wp = get_write_ptr(cb_id_in1);
+                    {
+                        uint32_t kb = k_forward ? 0 : (K_num_blocks - 1);
+                        read_in1_block_sync<K_block_tiles, N_block_tiles, /*issue_only=*/true>(
+                            in1_reader,
+                            in1_shape,
+                            wp,
+                            in1_tile_size,
+                            kb * K_block_tiles,
+                            (kb + 1) * K_block_tiles,
+                            n_tile,
+                            n_tile_end);
+                    }
+                    for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
+                        noc_async_read_barrier();                      // current block's read completes
+                        uint32_t mcast_wp = get_write_ptr(cb_id_in1);  // slot of current block (pre-push)
+                        cb_push_back(cb_id_in1, in1_block_num_tiles);  // hand current block to compute
 
-                        // write_block_sync_split is more generic (support multiple output tensors)
-                        // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync should be faster
-                        if constexpr (N_chunks == 1) {
-                            write_block_sync<M_block_tiles, N_block_tiles>(
-                                std::get<0>(outputs_tuple),
-                                out_shape,
-                                out_read_ptr,
-                                out_tile_size,
-                                defer_write_m_tile,
-                                defer_write_m_tile_end,
-                                defer_write_n_tile,
-                                defer_write_n_tile_end);
-                        } else {
-                            write_block_sync_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
-                                outputs_tuple,
-                                out0_shape,
-                                out_read_ptr,
-                                out_tile_size,
-                                defer_write_m_tile,
-                                defer_write_m_tile_end,
-                                defer_write_n_tile,
-                                defer_write_n_tile_end);
+                        // Prefetch: reserve next slot and ISSUE next block's read so it flies during mcast.
+                        if (k_block_iter + 1 < K_num_blocks) {
+                            cb_reserve_back(cb_id_in1, in1_block_num_tiles);
+                            wp = get_write_ptr(cb_id_in1);
+                            uint32_t kn = k_block_iter + 1;
+                            uint32_t kb = k_forward ? kn : (K_num_blocks - 1) - kn;
+                            read_in1_block_sync<K_block_tiles, N_block_tiles, /*issue_only=*/true>(
+                                in1_reader,
+                                in1_shape,
+                                wp,
+                                in1_tile_size,
+                                kb * K_block_tiles,
+                                (kb + 1) * K_block_tiles,
+                                n_tile,
+                                n_tile_end);
                         }
-                        cb_pop_front(cb_id_out, out_block_num_tiles);
+
+                        // Multicast the current block (non-pipelined broadcast handshake). The flush
+                        // guarantees the source slot is read before reuse (block k+2 = same slot).
+                        noc_semaphore_wait(in1_sender_semaphore_addr_ptr, in1_num_recv);
+                        noc_semaphore_set(in1_sender_semaphore_addr_ptr, 0);
+                        uint64_t mcast_data_addr = get_noc_multicast_addr(
+                            in1_mc_start_x, in1_mc_start_y, in1_mc_end_x, in1_mc_end_y, mcast_wp);
+                        noc_async_write_multicast(mcast_wp, mcast_data_addr, in1_block_bytes, in1_num_recv);
+                        noc_async_writes_flushed();
+                        uint64_t mcast_valid_addr = get_noc_multicast_addr(
+                            in1_mc_start_x, in1_mc_start_y, in1_mc_end_x, in1_mc_end_y, in1_receiver_semaphore_addr);
+                        noc_semaphore_set_multicast(in1_valid_semaphore_addr, mcast_valid_addr, in1_num_recv);
                     }
                 }
+            } else
+#endif
+                for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
+                    if (defer_write && k_block_iter == defer_write_k_block) {
+                        if constexpr (is_output_writer) {
+                            cb_wait_front(cb_id_out, out_block_num_tiles);
+                            uint32_t out_read_ptr = get_read_ptr(cb_id_out);
 
-                uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
-                cb_reserve_back(cb_id_in1, in1_block_num_tiles);
+                            // write_block_sync_split is more generic (support multiple output tensors)
+                            // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync should be faster
+                            if constexpr (N_chunks == 1) {
+                                write_block_sync<M_block_tiles, N_block_tiles>(
+                                    std::get<0>(outputs_tuple),
+                                    out_shape,
+                                    out_read_ptr,
+                                    out_tile_size,
+                                    defer_write_m_tile,
+                                    defer_write_m_tile_end,
+                                    defer_write_n_tile,
+                                    defer_write_n_tile_end);
+                            } else {
+                                write_block_sync_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
+                                    outputs_tuple,
+                                    out0_shape,
+                                    out_read_ptr,
+                                    out_tile_size,
+                                    defer_write_m_tile,
+                                    defer_write_m_tile_end,
+                                    defer_write_n_tile,
+                                    defer_write_n_tile_end);
+                            }
+                            cb_pop_front(cb_id_out, out_block_num_tiles);
+                        }
+                    }
 
-                uint32_t in1_start_address = get_write_ptr(cb_id_in1);
+                    uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
+                    cb_reserve_back(cb_id_in1, in1_block_num_tiles);
+
+                    uint32_t in1_start_address = get_write_ptr(cb_id_in1);
+                // DIRECT_DRAM_READ (experiment): every core reads its own in1 block from DRAM; no forward.
+#ifdef DIRECT_DRAM_READ
+                    if constexpr (true) {
+#else
                 if constexpr (is_injector_core) {
+#endif
 #ifdef FUSE_AG
                     if (is_injector_core) {
                         k_block =
@@ -238,36 +345,107 @@ void kernel_main() {
                         n_tile,
                         n_tile_end);
                 } else {
+                // ABLATE_INTERCORE (perf analysis only): skip the inter-core receive handshake.
+#ifndef ABLATE_INTERCORE
+#ifdef MCAST_BROADCAST
+#ifdef MCAST_PIPELINED
+                    if (mc_blocks_received >= MCAST_PIPELINED) {
+                        noc_semaphore_inc(in1_my_credit_noc_addr, 1);
+                    }
+                    noc_semaphore_wait_min(in1_receiver_semaphore_addr_ptr, mc_blocks_received + 1);
+                    mc_blocks_received++;
+#else
+                    noc_semaphore_set(in1_receiver_semaphore_addr_ptr, INVALID);
+                    noc_semaphore_inc(in1_injector_sender_sem_noc_addr, 1);
+                    noc_semaphore_wait(in1_receiver_semaphore_addr_ptr, VALID);
+#endif
+#elif defined(CREDIT_FORWARD)
+                    if (cf_blocks_received >= CREDIT_FORWARD) {
+                        noc_semaphore_inc(in1_sender_semaphore_noc_addr, 1);
+                    }
+                    noc_semaphore_wait_min(in1_receiver_semaphore_addr_ptr, cf_blocks_received + 1);
+                    cf_blocks_received++;
+#else
                     noc_semaphore_set(in1_receiver_semaphore_addr_ptr, INVALID);
                     noc_semaphore_inc(in1_sender_semaphore_noc_addr, 1);
                     noc_semaphore_wait(in1_receiver_semaphore_addr_ptr, VALID);
+#endif
+#endif
                 }
 
                 // Critical to performance for sender to push data to compute before mcasting
                 // This frees sender to start next read earlier
                 cb_push_back(cb_id_in1, in1_block_num_tiles);
 
-                if (!is_sink_core) {
-                    noc_semaphore_wait(in1_sender_semaphore_addr_ptr, 1);
-                    noc_semaphore_set(in1_sender_semaphore_addr_ptr, 0);
+                // ABLATE_INTERCORE / DIRECT_DRAM_READ: skip the L1->L1 unicast forward + handshake.
+#if !defined(ABLATE_INTERCORE) && !defined(DIRECT_DRAM_READ)
+#ifdef MCAST_BROADCAST
+                    // Injector broadcasts the whole block slot (valid + N-pad) in one multicast, then
+                    // multicasts the receivers' valid semaphores.
+                    if constexpr (is_injector_core) {
+#ifdef MCAST_PIPELINED
+                        for (uint32_t i = 1; i <= in1_num_recv; i++) {
+                            volatile tt_l1_ptr uint32_t* credit_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                in1_credit_base + i * MCAST_CREDIT_STRIDE);
+                            noc_semaphore_wait_min(credit_ptr, mc_blocks_sent + 1);
+                        }
+                        uint64_t mcast_data_addr = get_noc_multicast_addr(
+                            in1_mc_start_x, in1_mc_start_y, in1_mc_end_x, in1_mc_end_y, in1_start_address);
+                        noc_async_write_multicast(in1_start_address, mcast_data_addr, in1_block_bytes, in1_num_recv);
+                        noc_async_writes_flushed();
 
-                    /**
-                     * in1 is K_block_tiles x N_block_tiles. When N block is partial, we don't need to write the
-                     * padded tiles. For each tile in the K block, write only the non-padded N tiles. Use
-                     * `current_N_tiles_bytes`.
-                     */
-                    for (uint32_t i = 0; i < K_block_tiles; i++) {
-                        uint64_t in1_unicast_data_addr = in1_unicast_data_base_addr | in1_start_address;
-                        noc_async_write(in1_start_address, in1_unicast_data_addr, current_N_tiles_bytes);
-                        in1_start_address += full_N_tiles_bytes;
+                        noc_semaphore_set(in1_valid_semaphore_addr_ptr, mc_blocks_sent + 1);
+                        uint64_t mcast_valid_addr = get_noc_multicast_addr(
+                            in1_mc_start_x, in1_mc_start_y, in1_mc_end_x, in1_mc_end_y, in1_receiver_semaphore_addr);
+                        noc_semaphore_set_multicast(in1_valid_semaphore_addr, mcast_valid_addr, in1_num_recv);
+                        mc_blocks_sent++;
+#else
+                        noc_semaphore_wait(in1_sender_semaphore_addr_ptr, in1_num_recv);
+                        noc_semaphore_set(in1_sender_semaphore_addr_ptr, 0);
+
+                        uint64_t mcast_data_addr = get_noc_multicast_addr(
+                            in1_mc_start_x, in1_mc_start_y, in1_mc_end_x, in1_mc_end_y, in1_start_address);
+                        noc_async_write_multicast(in1_start_address, mcast_data_addr, in1_block_bytes, in1_num_recv);
+                        noc_async_writes_flushed();
+
+                        uint64_t mcast_valid_addr = get_noc_multicast_addr(
+                            in1_mc_start_x, in1_mc_start_y, in1_mc_end_x, in1_mc_end_y, in1_receiver_semaphore_addr);
+                        noc_semaphore_set_multicast(in1_valid_semaphore_addr, mcast_valid_addr, in1_num_recv);
+#endif
                     }
+#else
+                    if (!is_sink_core) {
+#ifdef CREDIT_FORWARD
+                        noc_semaphore_wait_min(in1_sender_semaphore_addr_ptr, cf_blocks_sent + 1);
+#else
+                        noc_semaphore_wait(in1_sender_semaphore_addr_ptr, 1);
+                        noc_semaphore_set(in1_sender_semaphore_addr_ptr, 0);
+#endif
+
+                        /**
+                         * in1 is K_block_tiles x N_block_tiles. When N block is partial, we don't need to write the
+                         * padded tiles. For each tile in the K block, write only the non-padded N tiles. Use
+                         * `current_N_tiles_bytes`.
+                         */
+                        for (uint32_t i = 0; i < K_block_tiles; i++) {
+                            uint64_t in1_unicast_data_addr = in1_unicast_data_base_addr | in1_start_address;
+                            noc_async_write(in1_start_address, in1_unicast_data_addr, current_N_tiles_bytes);
+                            in1_start_address += full_N_tiles_bytes;
+                        }
 
 #ifdef ARCH_BLACKHOLE
                     noc_async_writes_flushed();
 #endif
 
-                    noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_receiver_semaphore_noc_addr);
-                }
+#ifdef CREDIT_FORWARD
+                    noc_semaphore_inc(in1_receiver_semaphore_noc_addr, 1);
+                    cf_blocks_sent++;
+#else
+                        noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_receiver_semaphore_noc_addr);
+#endif
+                    }
+#endif
+#endif
 #ifdef SRS_FUSE_OP_SIGNALER
                 if constexpr (is_output_writer) {
                     // Synchronize and signal strided reduce scatter readers after
@@ -279,7 +457,7 @@ void kernel_main() {
                     }
                 }
 #endif
-            }
+                }
 #ifdef FUSE_BIAS
             if constexpr (!is_output_writer) {
                 cb_reserve_back(cb_id_in2, N_block_tiles);

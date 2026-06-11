@@ -66,6 +66,33 @@ struct TensorShape2D {
 };
 
 /**
+ * Output-write NOC selection. When OUTPUT_WRITE_NOC0_PCT is defined (set by the program factory on
+ * large shapes, which also enables DM_DYNAMIC_NOC), route ~that percentage of output tiles onto
+ * NOC 0 (otherwise-idle) and the rest on the default NOC, to balance write traffic across both
+ * NOCs. Otherwise all writes go on the kernel's default NOC (dedicated-NOC baseline, NOC_1).
+ */
+FORCE_INLINE uint8_t output_write_noc(uint32_t tile_counter) {
+#if defined(OUTPUT_WRITE_NOC0_PCT)
+    // Route ~OUTPUT_WRITE_NOC0_PCT% of tiles to NOC 0, evenly interleaved (Bresenham step test).
+    return (((tile_counter + 1u) * (OUTPUT_WRITE_NOC0_PCT)) / 100u > (tile_counter * (OUTPUT_WRITE_NOC0_PCT)) / 100u)
+               ? 0
+               : 1;
+#else
+    (void)tile_counter;
+    return (uint8_t)noc_index;
+#endif
+}
+
+FORCE_INLINE void output_write_flush_all() {
+#if defined(OUTPUT_WRITE_NOC0_PCT)
+    noc_async_writes_flushed(0);
+    noc_async_writes_flushed(1);
+#else
+    noc_async_writes_flushed();
+#endif
+}
+
+/**
  * Read a block of in0 from a potentially padded tensor.
  * Since this is for matmul, no need to read when M >= logical_M
  * Otherwise, if K >= logical_K, fill with zeros.
@@ -73,6 +100,7 @@ struct TensorShape2D {
 template <
     uint32_t M_block_tiles,
     uint32_t K_block_tiles,
+    bool issue_only = false,  // prefetch: issue the async reads but DON'T barrier; caller barriers later
     typename TensorAccessorType
 #ifdef READ_FROM_LOCAL_INPUT
     ,
@@ -97,6 +125,15 @@ void read_in0_block_sync(
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
+// ABLATION (perf analysis only): skip in0 DRAM reads; CB reserve/push (in caller) preserved.
+#ifndef ABLATE_IN0_READ
+// BARRIER-THRESHOLD: barrier on outstanding reads every IN0_READ_BARRIER_THRESHOLD tiles to cap the
+// number of in-flight read requests per injector core and reduce NoC contention. Unlike the
+// output-write path, in0 reads are NOT staggered across cores, so they burst a full block at once.
+// The factory enables this on large shapes (>= 4096 in some dim).
+#ifdef IN0_READ_BARRIER_THRESHOLD
+    uint32_t pending_reads = 0;
+#endif
     for (uint32_t i = d0_start; i < d0_end; i++) {
         if (i >= shape.logical_d0) {
             break;
@@ -119,11 +156,22 @@ void read_in0_block_sync(
                 fill_zeros_async(write_ptr, tile_size_bytes);
             }
             write_ptr += tile_size_bytes;
+#ifdef IN0_READ_BARRIER_THRESHOLD
+            if (++pending_reads >= IN0_READ_BARRIER_THRESHOLD) {
+                noc_async_read_barrier();
+                pending_reads = 0;
+            }
+#endif
         }
         // finish up incrementing write_ptr if (d1_end - d1_start) < K_block_tiles
         write_ptr += (K_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
-    noc_async_read_barrier();
+    // Prefetch (issue_only): the caller issues the barrier later, after work that can overlap the
+    // DRAM read latency (e.g. multicasting the previous block).
+    if constexpr (!issue_only) {
+        noc_async_read_barrier();
+    }
+#endif
 }
 
 /**
@@ -131,7 +179,11 @@ void read_in0_block_sync(
  * Since this is for matmul, no need to read when N >= logical_N
  * Otherwise, if K >= logical_K, fill with zeros.
  */
-template <uint32_t K_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
+template <
+    uint32_t K_block_tiles,
+    uint32_t N_block_tiles,
+    bool issue_only = false,  // prefetch: issue the async reads but DON'T barrier; caller barriers later
+    typename TensorAccessorType>
 void read_in1_block_sync(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
@@ -143,6 +195,8 @@ void read_in1_block_sync(
     uint32_t d1_end) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
+// ABLATION (perf analysis only): skip in1 DRAM reads; CB reserve/push (in caller) preserved.
+#ifndef ABLATE_IN1_READ
     for (uint32_t i = d0_start; i < d0_end; i++) {
         for (uint32_t j = d1_start; j < d1_end; j++) {
             if (j >= shape.logical_d1) {
@@ -160,7 +214,11 @@ void read_in1_block_sync(
         // finish up incrementing write_ptr if (d1_end - d1_start) < K_block_tiles
         write_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
-    noc_async_read_barrier();
+    // Prefetch (issue_only): caller barriers later, after overlapping work (e.g. mcasting prev block).
+    if constexpr (!issue_only) {
+        noc_async_read_barrier();
+    }
+#endif
 }
 
 /**
@@ -180,6 +238,9 @@ void write_block_sync(
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
+// ABLATION (perf analysis only): skip output DRAM writes (deferred-write path).
+#ifndef ABLATE_OUT_WRITE
+    uint32_t wnoc_idx = 0;  // counts actual writes, drives output_write_noc() NOC selection
     for (uint32_t i = d0_start; i < d0_end; i++) {
         if (i >= shape.logical_d0) {
             break;
@@ -190,13 +251,14 @@ void write_block_sync(
                 continue;
             }
             uint32_t tile_id = i * shape.logical_d1 + j;
-            noc_async_write_page(tile_id, tensor_accessor, read_ptr);
+            noc_async_write_page(tile_id, tensor_accessor, read_ptr, 0, 0, output_write_noc(wnoc_idx++));
             read_ptr += tile_size_bytes;
         }
         // finish up incrementing read_ptr if (d1_end - d1_start) < N_block_tiles
         read_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
-    noc_async_writes_flushed();
+    output_write_flush_all();
+#endif
 }
 
 /**
@@ -311,9 +373,12 @@ void write_block_sync_granular(
     uint32_t d0_end,
     uint32_t d1_start,
     uint32_t d1_end) {
+    uint32_t wnoc_idx = 0;  // counts actual writes, drives output_write_noc() NOC selection
     for (uint32_t m_id = 0; m_id < M_block_tiles; m_id++) {
         cb_wait_front(cb_id_out, N_block_tiles);
         uint32_t m_tile = d0_start + m_id;
+        // ABLATION (perf analysis only): skip output DRAM writes; CB wait/pop preserved.
+#ifndef ABLATE_OUT_WRITE
         if (m_tile < d0_end && m_tile < shape.logical_d0) {
             uint32_t out_read_ptr = get_read_ptr(cb_id_out);
             for (uint32_t n_tile_id = d1_start; n_tile_id < d1_end; n_tile_id++) {
@@ -321,13 +386,16 @@ void write_block_sync_granular(
                     break;
                 }
                 uint32_t tile_id = m_tile * shape.logical_d1 + n_tile_id;
-                noc_async_write_page(tile_id, tensor_accessor, out_read_ptr);
+                noc_async_write_page(tile_id, tensor_accessor, out_read_ptr, 0, 0, output_write_noc(wnoc_idx++));
                 out_read_ptr += tile_size_bytes;
             }
         }
+#endif
         cb_pop_front(cb_id_out, N_block_tiles);
     }
-    noc_async_writes_flushed();
+#ifndef ABLATE_OUT_WRITE
+    output_write_flush_all();
+#endif
 }
 
 /**

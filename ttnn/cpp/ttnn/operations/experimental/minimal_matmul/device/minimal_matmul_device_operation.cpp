@@ -203,6 +203,10 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
                 cfg.compute_with_storage_grid_size.y <= device_grid.y,
             "compute_with_storage_grid_size must be <= device grid size");
 
+        // The kernel runs half-sync (the factory does not enable dst_full_sync_en on ComputeConfig),
+        // so the subblock must fit the configured half-sync DST depth: 8 tiles bf16, 4 tiles fp32.
+        // A subblock larger than this overflows DST and silently corrupts the output (verified PCC
+        // 0.28-0.79 for fp32 2x4/4x2), so validate against the real (half-sync) depth.
         const uint32_t max_dest_volume = get_dest_reg_count(operation_attributes.compute_kernel_config);
         TT_FATAL(
             cfg.subblock_h * cfg.subblock_w <= max_dest_volume, "subblock_h * subblock_w must be <= max_dest_volume");
