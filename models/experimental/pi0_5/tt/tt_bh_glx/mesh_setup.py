@@ -3,8 +3,14 @@
 
 """Open the 8x4 BH Galaxy parent mesh and carve into vision/prefill/denoise submeshes.
 
-Host-bounce only — no fabric, no P2P, no sockets. Just submesh creation and
-per-chip materialization for layer-paired execution.
+v2: FABRIC_1D enabled at mesh open so sockets (ttnn.create_socket_pair +
+ttnn.experimental.send_direct_async / recv_direct_async) can route between
+the 1x1 per-chip submeshes. trace_region_size defaults to 128 MiB so the
+parent mesh has room for the Phase B sample_actions trace capture.
+
+Setting fabric requires re-disabling it on context exit; otherwise a
+subsequent ttnn.open_mesh_device call in the same process gets a stale
+fabric config and the underlying mesh fails to initialize.
 """
 
 from __future__ import annotations
@@ -40,14 +46,36 @@ def _carve_per_chip(parent_mesh, submesh_shape, submesh_offset, num_chips):
     return per_chip
 
 
+_DEFAULT_TRACE_REGION_SIZE = 134_217_728  # 128 MiB — matches single-chip trace tests
+
+
 @contextmanager
-def open_galaxy_mesh(l1_small_size: Optional[int] = None, trace_region_size: Optional[int] = None):
-    """Open parent (8,4) mesh and carve 4/18/6 submeshes + per-chip 1x1s.
+def open_galaxy_mesh(
+    l1_small_size: Optional[int] = None,
+    trace_region_size: Optional[int] = _DEFAULT_TRACE_REGION_SIZE,
+    enable_fabric: bool = True,
+):
+    """Open parent (8,4) mesh + FABRIC_1D and carve 4/18/6 submeshes + per-chip 1x1s.
 
     Yields MeshHandles. On exit, every submesh is closed before the parent
     (parent-last close avoids the wedged-device firmware-init hang we hit
-    when closing out of order — see option_c/mesh_setup.py).
+    when closing out of order — see option_c/mesh_setup.py). Fabric is
+    disabled on the same exit path so subsequent mesh opens start clean.
+
+    Args:
+        l1_small_size: bytes per core reserved for static circular buffers.
+        trace_region_size: bytes per chip for trace capture (Phase B). 128 MiB
+            is enough for the full sample_actions trace on the parent mesh.
+        enable_fabric: set False to revert to v1 host-bounce-only behavior.
+            Default True (required for socket-based transport).
     """
+    if enable_fabric:
+        # FABRIC_2D so sockets can route between chips that don't share a row
+        # OR column (the cross-stage hops vision[3]→prefill[0] and
+        # prefill[k]→denoise[k//3] cross both axes). FABRIC_1D fails with
+        # "sender_global_coord[0] == recv_global_coord[0] || ..." on those.
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
+
     parent_shape = ttnn.MeshShape(*stages.PARENT_MESH_SHAPE)
     open_kwargs = {"mesh_shape": parent_shape}
     if l1_small_size is not None:
@@ -111,3 +139,5 @@ def open_galaxy_mesh(l1_small_size: Optional[int] = None, trace_region_size: Opt
             except Exception:
                 pass
         ttnn.close_mesh_device(parent)
+        if enable_fabric:
+            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)

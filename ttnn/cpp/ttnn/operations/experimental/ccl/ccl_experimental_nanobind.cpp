@@ -25,6 +25,8 @@
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/ring_attention_all_gather_async_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_async/send_async_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async_nanobind.hpp"
+#include "ttnn/operations/experimental/ccl/send_recv_async/send_direct_async/send_direct_async_nanobind.hpp"
+#include "ttnn/operations/experimental/ccl/send_recv_async/recv_direct_async/recv_direct_async_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/neighbor_pad_async/neighbor_pad_async_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/slice_reshard_async/slice_reshard_async_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/strided_all_gather_async_nanobind.hpp"
@@ -58,6 +60,8 @@ void py_module(nb::module_& mod) {
     ccl::bind_ring_attention_all_gather_async(mod);
     ccl::bind_send_async(mod);
     ccl::bind_recv_async(mod);
+    ccl::bind_send_direct_async(mod);
+    ccl::bind_recv_direct_async(mod);
     ccl::bind_neighbor_pad_async(mod);
     ccl::bind_slice_reshard_async(mod);
     ccl::bind_deepseek_moe_reduce_scatter(mod);
