@@ -11,11 +11,11 @@ Quasar-only benchmark that measures L1-to-L1 NOC **write** bandwidth from a send
 ## Test Flow
 
 1. Host writes a golden data pattern to sender L1.
-2. Sender kernel issues `num_of_transactions` NOC `async_write` calls to receiver L1, then `async_write_barrier`.
-3. Elapsed cycles are measured in-kernel with `get_timestamp()` from `risc_common.h` (Quasar wall clock; not the device profiler).
-4. Sender writes the 64-bit cycle count to a dedicated L1 slot; host reads it back.
+2. Sender kernel issues `num_of_transactions` non-posted NOC `async_write` calls to receiver L1, then `async_write_barrier` (the barrier waits for all acks, i.e. data committed at the receiver).
+3. Elapsed cycles are measured in-kernel with the RISC-V `rdcycle` CSR, bracketing the write loop + barrier. (The wall-clock debug register read via `get_timestamp()` crashes the simulator, so it is not used.)
+4. Sender writes the cycle count to a dedicated L1 slot via the uncached L1 alias (`MEM_L1_UNCACHED_BASE`) so the CPU store bypasses the data cache and is visible to the host read-back; host reads it back.
 5. Host reads receiver L1 and verifies data matches golden.
-6. Bandwidth = `(num_of_transactions × bytes_per_transaction) / cycles` (bytes/cycle).
+6. Bandwidth = `(num_of_transactions × bytes_per_transaction) / cycles` (bytes/cycle, column `bandwidth_Bpc`).
 
 Only the **sender** runs a kernel; the receiver is a passive L1 target (same model as `one_to_one`).
 
@@ -43,7 +43,7 @@ If a neighbor is out of grid bounds, that position is skipped with a warning.
 | `sender` | CoreCoord | Logical coordinates of the sending core |
 | `receiver_baseline` | CoreCoord | Baseline receiver; L/R/U/D neighbors are derived automatically |
 | `num_of_transactions` | uint32_t | Number of NOC writes per measurement (default 256) |
-| `bytes_per_transaction` | uint32_t | Payload size per write (swept: 64 B … 32 KB, ×2) |
+| `bytes_per_transaction` | uint32_t | Payload size per write (swept: 64 B, 1 KB, 8 KB) |
 | NOC VC | — | Fixed to `NOC_UNICAST_WRITE_VC` (2 on Quasar); do not use VC 0 |
 
 ## Test Cases
@@ -52,8 +52,11 @@ If a neighbor is out of grid bounds, that position is skipped with a warning.
 |------------|---------|-----------------|----------------------------|
 | `QuasarCoreShiftCorner0` | 920 | (0, 0) | (2, 6) |
 | `QuasarCoreShiftCorner1` | 921 | (3, 6) | (1, 1) |
+| `QuasarCoreShiftNearBaseline` | 922 | (0, 0) | (1, 1) |
 
-Each case runs **5 receiver positions** × **10 transaction sizes** = 50 measurements per test ID.
+Each case runs **5 receiver positions** × **3 transaction sizes** = 15 measurements per test ID.
+The size sweep is intentionally small: the simulator/emulator accumulates state across
+sequential program launches and becomes unstable after ~50 in one process.
 
 ## Running the Tests
 

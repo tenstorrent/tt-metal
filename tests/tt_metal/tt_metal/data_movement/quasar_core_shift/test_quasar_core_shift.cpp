@@ -55,9 +55,6 @@ bool should_skip_test() {
     return !MetalContext::instance().rtoptions().is_simulator_or_emulated();
 }
 
-// User (row, col) -> CoreCoord{x=col, y=row}
-CoreCoord user_to_logical(uint32_t row, uint32_t col) { return CoreCoord{col, row}; }
-
 struct ShiftReceiverCase {
     ShiftPosition position;
     CoreCoord receiver;
@@ -262,29 +259,6 @@ void write_csv(uint32_t test_id, CoreCoord sender, CoreCoord baseline, const std
     log_info(tt::LogTest, "Wrote results to {}", out_path.string());
 }
 
-bool run_l1_smoke_one_to_one(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    CoreCoord sender,
-    CoreCoord receiver,
-    uint32_t num_bytes = 64) {
-    CoreShiftConfig cfg{
-        .test_id = 0,
-        .sender = sender,
-        .receiver = receiver,
-        .num_of_transactions = 1,
-        .bytes_per_transaction = num_bytes,
-    };
-    log_info(
-        tt::LogTest,
-        "L1 smoke: sender=({},{}) receiver=({},{}) bytes={}",
-        sender.x,
-        sender.y,
-        receiver.x,
-        receiver.y,
-        num_bytes);
-    return run_one(mesh_device, cfg).pass;
-}
-
 void run_shift_sweep(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_id,
@@ -380,14 +354,6 @@ void run_shift_sweep(
 }
 
 }  // namespace unit_tests::dm::quasar_core_shift
-
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCoreShiftSmokeL1OneToOne) {
-    if (unit_tests::dm::quasar_core_shift::should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator or emulator";
-    }
-    EXPECT_TRUE(
-        unit_tests::dm::quasar_core_shift::run_l1_smoke_one_to_one(devices_[0], CoreCoord{0, 0}, CoreCoord{1, 0}));
-}
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCoreShiftCorner0) {
     if (unit_tests::dm::quasar_core_shift::should_skip_test()) {
