@@ -242,10 +242,17 @@ class TestConfig:
         PERF_COUNTERS_ZONES_BASE + _PERF_COUNTERS_ZONE_DATA_BYTES
     )
 
-    # Total L1 reservation: shared config + per-zone blocks
+    # Trailing metadata written by PerfCounterManager (must match counters.h):
+    # enabled_flag (4 B) + bank_mask (4 B) + valid_count[MAX_ZONES] (4 B each).
+    _PERF_COUNTERS_TRAILING_METADATA_BYTES: ClassVar[int] = (
+        4 + 4 + PERF_COUNTERS_MAX_ZONES * 4
+    )
+
+    # Total L1 reservation: shared config + per-zone blocks + trailing metadata.
     PERF_COUNTERS_SIZE: ClassVar[int] = (
         _PERF_COUNTERS_CONFIG_WORDS * 4
         + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE
+        + _PERF_COUNTERS_TRAILING_METADATA_BYTES
     )
 
     # Legacy alias — sums per-zone bytes for back-compat with old callers

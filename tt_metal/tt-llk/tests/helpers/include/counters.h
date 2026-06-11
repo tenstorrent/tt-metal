@@ -58,9 +58,16 @@ constexpr std::uint32_t perf_counters_exit_atomic_addr(std::uint32_t zone)
     return perf_counters_sync_ctrl_addr(zone) + 32;
 }
 
-static_assert(PERF_COUNTERS_ZONES_BASE + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE <= 0x16AFF4u, "Perf counter L1 layout overflows profiler region");
-
 constexpr std::uint32_t PERF_COUNTERS_ENABLED_FLAG_ADDR = PERF_COUNTERS_ZONES_BASE + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE;
+constexpr std::uint32_t PERF_COUNTERS_BANK_MASK_ADDR    = PERF_COUNTERS_ENABLED_FLAG_ADDR + 4;
+constexpr std::uint32_t PERF_COUNTERS_VALID_COUNT_ADDR  = PERF_COUNTERS_BANK_MASK_ADDR + 4;
+
+// Total L1 footprint covers shared config + per-zone blocks + the trailing
+// metadata (enabled flag, bank mask, per-zone valid_count[]) written by
+// PerfCounterManager::validate_and_set_enabled().
+constexpr std::uint32_t PERF_COUNTERS_LAYOUT_END = PERF_COUNTERS_VALID_COUNT_ADDR + PERF_COUNTERS_MAX_ZONES * 4;
+
+static_assert(PERF_COUNTERS_LAYOUT_END <= 0x16AFF4u, "Perf counter L1 layout overflows profiler region");
 
 } // namespace llk_perf
 
@@ -68,9 +75,6 @@ constexpr std::uint32_t PERF_COUNTERS_ENABLED_FLAG_ADDR = PERF_COUNTERS_ZONES_BA
 
 namespace llk_perf
 {
-
-constexpr std::uint32_t PERF_COUNTERS_BANK_MASK_ADDR   = PERF_COUNTERS_ENABLED_FLAG_ADDR + 4;
-constexpr std::uint32_t PERF_COUNTERS_VALID_COUNT_ADDR = PERF_COUNTERS_BANK_MASK_ADDR + 4;
 
 enum class counter_bank : std::uint8_t
 {
@@ -417,23 +421,26 @@ __attribute__((always_inline)) inline std::uint32_t get_zone_id(std::uint32_t ha
 #ifndef _LLK_PERF_COUNTER_SCOPED_DEFINED_
 #define _LLK_PERF_COUNTER_SCOPED_DEFINED_
 
+// PERF_CNT_ALL is a broadcast command register shared by INSTRN+FPU; TDMA_UNPACK,
+// L1 and TDMA_PACK each have their own command register at the *2 alias. Writing
+// 1 arms (rising-edge start), 2 freezes (rising-edge stop).
 inline __attribute__((always_inline)) void arm_all_counters()
 {
     ckernel::fence_compiler();
-    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB1203Cu) = 1u; // PERF_CNT_ALL (INSTRN+FPU)
-    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12014u) = 1u; // TDMA_UNPACK
-    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12038u) = 1u; // L1
-    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB120F8u) = 1u; // TDMA_PACK
+    hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_ALL, 1u);
+    hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK2, 1u);
+    hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_L1_2, 1u);
+    hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK2, 1u);
     ckernel::fence_compiler();
 }
 
 inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uint32_t zone_id)
 {
     ckernel::fence_compiler();
-    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB1203Cu) = 2u;
-    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12014u) = 2u;
-    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB12038u) = 2u;
-    *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(0xFFB120F8u) = 2u;
+    hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_ALL, 2u);
+    hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK2, 2u);
+    hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_L1_2, 2u);
+    hw_access::write_reg(RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK2, 2u);
 
     struct bank_regs
     {
@@ -441,12 +448,14 @@ inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uin
         std::uint32_t out_l;
     };
 
+    // Per-bank readout pair: mode_reg drives counter_sel; out_l is the bank's
+    // OUT_L (shared cycles); OUT_H sits at out_l + 4 and is sampled per slot.
     static constexpr bank_regs banks[5] = {
-        {0xFFB12004u, 0xFFB12100u},
-        {0xFFB1201Cu, 0xFFB12120u},
-        {0xFFB12010u, 0xFFB12108u},
-        {0xFFB12034u, 0xFFB12118u},
-        {0xFFB120F4u, 0xFFB12110u},
+        {RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD1, RISCV_DEBUG_REG_PERF_CNT_OUT_L_INSTRN_THREAD},
+        {RISCV_DEBUG_REG_PERF_CNT_FPU1, RISCV_DEBUG_REG_PERF_CNT_OUT_L_FPU},
+        {RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK1, RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_UNPACK},
+        {RISCV_DEBUG_REG_PERF_CNT_L1_1, RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1},
+        {RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK1, RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_PACK},
     };
 
     std::uint32_t cycles_base              = PERF_COUNTERS_ZONES_BASE + zone_id * PERF_COUNTERS_ZONE_SIZE;
