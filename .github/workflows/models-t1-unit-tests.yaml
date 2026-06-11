@@ -18,6 +18,7 @@ on:
           - gpt-oss-120b
           - whisper
           # llama3.3-70b-galaxy: disabled — see #42139
+          - flux.1-schnell
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false

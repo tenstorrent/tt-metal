@@ -595,7 +595,7 @@
   model: flux.1-schnell
   skus:
     bh_quietbox_2:
-      timeout: 30
+      timeout: 45
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
