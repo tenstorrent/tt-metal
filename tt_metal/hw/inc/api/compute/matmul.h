@@ -125,6 +125,7 @@ ALWI void mm_init(
 
     PACK((llk_pack_hw_configure(out_cb_id)));
     PACK((llk_pack_init(out_cb_id)));
+    PACK((llk_pack_dest_init()));
 #endif
 }
 
@@ -282,6 +283,7 @@ ALWI void mm_block_init(
 
     PACK((llk_pack_hw_configure(out_cb_id)));
     PACK((llk_pack_init(out_cb_id)));
+    PACK((llk_pack_dest_init()));
 #endif
 }
 
