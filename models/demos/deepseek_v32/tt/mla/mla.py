@@ -23,6 +23,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.mla import ttMLA as _ttMLAv3
+from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v32.reference_cpu.model import ModelArgs
 from models.demos.deepseek_v32.reference_cpu.utils import apply_rotary_emb, precompute_freqs_cis
 from models.demos.deepseek_v32.tt import ops
@@ -193,10 +194,6 @@ class ttMLA(_ttMLAv3):
             if self._has_indexer and kv_isl is not None:
                 self._indexer_write_k(hidden_states, seq_len_local, kv_isl)
             return super().forward(hidden_states, rope_tensors, kvpe_cache, **kwargs)
-        if self.sp_factor > 1 and kv_isl is not None:
-            # chunked+SP: kv_cache_to_host prefix read order under SP-sharded
-            # update_padded_kv_cache writes is wrong (DSA chunks ~0.73). Debugging (status 5.5).
-            raise NotImplementedError("DSA chunked+SP not yet correct (status.md 5.5)")
 
         indices = self._indexer_topk(hidden_states, seq_len_local, start_pos=kv_isl or 0)
         return self._dsa_forward(hidden_states, rope_tensors, kvpe_cache, indices, **kwargs)
@@ -315,9 +312,24 @@ class ttMLA(_ttMLAv3):
                 kv_actual_global=kv_actual_isl,
                 cluster_axis=self.sp_axis,
             )
+            # The chunked cache is stored BLOCK-CYCLIC across SP (update_padded_kv_cache
+            # distributes slabs over chips). Read TP-replica 0, then un-rotate to natural
+            # order with v3's blockcyclic_positions so it matches the natural-order indices.
             slot = cache_user_id * self.layer_num + cache_layer_idx
-            full = _ttMLAv3.kv_cache_to_host(kvpe_cache, self.mesh_device, self.sp_axis)
-            kvpe_host = full[slot, 0, :end_pos].to(torch.bfloat16)  # [end_pos, 576]
+            cache_sr = ttnn.to_torch(
+                kvpe_cache,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    self.mesh_device, dims=(2, 1), mesh_shape=tuple(self.mesh_device.shape)
+                ),
+            ).to(torch.bfloat16)[
+                :, :1
+            ]  # [slots, 1, seq_len_cache, kvpe]
+            seq_len_cache = cache_sr.shape[2]
+            chunk_size_global = seq_len_local * self.sp_factor
+            p = blockcyclic_positions(self.sp_factor, chunk_size_global, seq_len_cache)
+            nat = torch.empty(seq_len_cache, cache_sr.shape[-1], dtype=torch.bfloat16)
+            nat[p] = cache_sr[slot, 0]
+            kvpe_host = nat[:end_pos]  # natural order [end_pos, 576]
 
         # Sparse attention over selected latents (replaces ring SDPA); latent out [1,H,S,512].
         # q SP×TP-sharded, kvpe full-T on host, indices full (replicated).

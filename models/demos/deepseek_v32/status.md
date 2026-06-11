@@ -99,7 +99,7 @@ MLA layer.
 - [x] 5.2 indexer: SP all-gather of the stem outputs (k/q/wts) to full-S (device `all_gather_async` over sp_axis) → existing global-contiguous logic runs unchanged on full seq; index cache replicated, full indices replicated. (Simpler than per-shard global-pos: gather makes positions contiguous.)
 - [x] 5.3 sparse_mla SP×TP-aware: KVPE SP-gathered full-T in `_dsa_forward`; per (sp_i,tp_j) shard attends local queries (global-pos causality) → reassembled via ShardTensor2dMesh (heads on tp, seq on sp). sp=1 collapses to prior behavior (regression-safe).
 - [x] **5.4 e2e PCC vs CPU reference on 2x2 single-shot: seq4k 0.9974 (sparse rows 0.9925, dense 0.9987), KVPE 0.9999 — matches 1x4.** Same cached truth (distribution-agnostic).
-- [~] 5.5 **chunked 2x2** — IN PROGRESS, bug found. Switched chunked prefix read to v3 `kv_cache_to_host` (SP-aware composer) + KVPE consumed as host (backlog 9 done). chunked-1x4 green (0.9974), but **chunked-2x2 DSA chunks degrade (chunk@2048 0.73, chunk@3072 0.67)** while dense chunks (0.998) + single-shot-2x2 (0.9974) pass. Cause: under SP the `update_padded_kv_cache` write order isn't plain global-contiguous, so `kv_cache_to_host[slot,:end_pos]` feeds `sparse_mla` the wrong latents. Re-guarded; chunked test back to 1x4.
+- [x] 5.5 **chunked 2x2** — DONE (fix below). chunked 4k+1k 2x2 PCC 0.9970, DSA chunks 0.99. Switched chunked prefix read to v3 `kv_cache_to_host` (SP-aware composer) + KVPE consumed as host (backlog 9 done). chunked-1x4 green (0.9974), but **chunked-2x2 DSA chunks degrade (chunk@2048 0.73, chunk@3072 0.67)** while dense chunks (0.998) + single-shot-2x2 (0.9974) pass. Cause: under SP the `update_padded_kv_cache` write order isn't plain global-contiguous, so `kv_cache_to_host[slot,:end_pos]` feeds `sparse_mla` the wrong latents. Re-guarded; chunked test back to 1x4.
   **ROOT CAUSE (2026-06-11): the chunked KVPE cache is stored BLOCK-CYCLIC across SP** (update_padded_kv_cache distributes slabs over chips), not natural order. v3 handles it: ring_mla reads it in-op (native layout), and the v3 chunked test un-rotates with `blockcyclic_positions` (test_mla.py:741-748, `nat[p]=cache_sr`). My read fed block-cyclic latents to sparse_mla against natural-order indices → wrong selection (DSA chunks 0.73). **Does NOT repro in v3** — purely a v32 omission. Dense chunks passed because they use ring_mla.
   **FIX:** chunked `_dsa_forward` reads cache via `ConcatMesh2dToTensor(dims=(2,1))[:, :1]`, un-rotates with `blockcyclic_positions(sp, chunk_size_global, seq_len_cache)` (`deepseek_v3_d_p/tt/mla/utils.py:118`) → natural-order `kvpe_host[:end_pos]`. Indexer K-cache + single-shot unaffected (natural order already). Test kvpe diagnostic must also un-rotate when 2x2 chunked is re-enabled.
 
@@ -142,7 +142,7 @@ Legend: `[x]` done · `[~]` partial · `[ ]` open · ⏸️ postponed · 📌 re
 - [ ] ⏸️ **(3)** scale gate 50k cache + 1k chunks overnight (cached truth); 5k once fused kernels land (agreement 15)
 
 **Functional gaps (blocking production)**
-- [~] **(4)** 2x2 SP×TP mesh — **single-shot DONE** (5.1–5.4, seq4k 2x2 PCC 0.9974; full 1x4+2x2 matrix green). Indexer stems SP-all-gathered, index cache replicated, MLA KVPE SP-sharded + gathered, sparse_mla SP×TP-aware. **Remaining: 5.5 chunked+SP** (cache-slot prefix read must SP-gather; guarded with NotImplementedError now)
+- [x] **(4)** 2x2 SP×TP mesh — **DONE** (single-shot + chunked, 1x4 + 2x2). Indexer stems SP-all-gathered, index cache replicated, MLA KVPE SP-sharded; sparse_mla SP×TP-aware. 5.5 chunked+SP fixed via block-cyclic un-rotation (`blockcyclic_positions`) of the cache read. seq4k single-shot 2x2 0.9974; chunked 4k+1k 2x2 0.9970 (DSA chunks 0.99).
 - [x] **(5)** pretrained weights — test knobs (conftest `--ds-layer` / `--ds-checkpoint` / `--ds-repo` / `--ds-input`); `build_cpu_reference(layer, checkpoint_path, repo)` loads a specific MLA+indexer layer via reference_cpu `initialize_weights`; `make_hidden(--ds-input)` injects file-driven input (chunked + indexer tests; single-shot uses v3 harness input). ref-cache keyed by weight source. **Validated on real layer-0 weights: seq256 (dense) output PCC 0.9997; seq4k (DSA active) output 0.9996, sparse rows 0.9994, KVPE 0.9999** — full path HF download → fp8 dequant → weight map → PCC. DSA on trained weights ≈ random or slightly better (sharper top-k selection).
 - [x] **(6)** device-side indexer stems — wq_b/wk/weights_proj GEMMs + k_norm (LayerNorm) + TP all-reduce on device, replicated across TP; wk/weights_proj sharded on the `dim` contraction axis (per-chip partials → `_tp_rs_ag`); qr reuses the v3 q_a stem. Only non-interleaved RoPE stays on host (F1, pe slices read back per chunk). Eliminates the per-chunk full-hidden readback + host GEMMs. Validated 1x4: indexer chunked==single-shot selection green; seq4k e2e PCC 0.9966 (was 0.9975 host — `weights_proj` fp32→bf16 cost, within 0.98 threshold). Test needs FABRIC_1D now (device CCL). Follow-ups → backlog 9/10 (device K-cache, drop pe readback), 4 (2x2)
 - [x] 📌 **(7)** fp8/Hadamard parity — follow v3 cache format (kvpe bfloat8_b); ttnn has no matching fp8, so the functional path is the contract; truth stays use_fp8_path=False/simulate_fp8=False
@@ -200,6 +200,23 @@ When no op exist try to **0. define an API (inputs/outputs)** and
 2. fallback to CPU implementation
 3. implement stub op that emits a warning and returns random/zeroes/ones tensor in the expected format.
 4. Proper implementation of c++ ops is out of scope. That's follow-up that should be documented.
+
+## Dev loop
+The inner cycle = edit → run **one targeted test** → read PCC. Measured this session (QuietBox 1x4/2x2). Optimize this, not the suite.
+
+| Stage | Time | Lever |
+|---|---|---|
+| mesh open + fabric init + teardown | ~5–9 s / case | fixed per parametrized case; session-scoped device would amortize but v3 conftest opens/closes per case |
+| weight upload + ttMLA build | ~2–6 s | reuses v3 build; small |
+| cached CPU truth load | <1 s | disk cache — the key enabler |
+| **cold CPU truth (first time only)** | **seq2k ~7 min, seq4k ~48 min (quadratic in seq)** | **dominates a cold run; cache once then reuse. 50k+ infeasible cold → pre-cache on a big box** |
+| device forward (truth cached) | seq256 ~15s · seq2k ~30s · seq4k ~12–55s · chunked 4k+1k ~35s | real per-iter cost once cached |
+| **targeted single case** | **~1–2 min** | **the dev-loop unit — iterate here** |
+| full suite (both meshes, all seqs) | ~10–15 min | commit gate, not per-edit |
+| pre-commit hooks (black/isort/EOF) | ~20–40 s, often 2× (reformat → re-commit) | keep index clean; expect one reformat re-run |
+| ttnn rebuild (after rebase/pull) | ~3 min | `ninja -C build ttnn`; copy `build/ttnn/_ttnn.so` |
+
+**Levers, in priority:** (1) cache CPU truth aggressively [done] + pre-cache 50k once; (2) iterate on ONE case (~1–2 min), suite only as gate; (3) keep the band/per-chunk PCC diagnostics — they cost ~nothing and localize bugs fast (they caught the head-shard + block-cyclic bugs); (4) untapped: session-scoped mesh to amortize the ~5–9s × N setup (couples to v3 conftest — defer).
 
 ## Long-running tasks
 Track every step that takes minutes — each is either a bug risk (silent hangs, stale state) or a caching/optimization opportunity. Add measured times as we collect them.

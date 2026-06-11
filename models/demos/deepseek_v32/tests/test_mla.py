@@ -255,9 +255,8 @@ def run_cpu_reference_chunked(args, mla_cpu, hidden_states, seq_len, chunk, src_
     return ref_output, ref_kvpe
 
 
-# Chunked prefill e2e (step 4): chunk size is a parameter — 1k dev default (agreement 15).
-# 2x2 chunked deferred to slice 5.5 (cache-prefix read order under SP).
-@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
+# Chunked prefill e2e (step 4 + 5.5): chunk size is a parameter — 1k dev default (agreement 15).
+@pytest.mark.parametrize("mesh_device", [(1, 4), (2, 2)], ids=["1x4", "2x2"], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -340,9 +339,20 @@ def test_v32_mla_chunked_vs_cpu_reference(
     for s in range(0, seq_len, chunk):
         _, m = comp_pcc(ref_output[:, s : s + chunk], tt_output[0, :, s : s + chunk], 0)
         logger.info(f"chunk@{s}: {m}")
-    # KVPE prefix diagnostic: separates stems/rope (cache content) from selection.
-    tt_kvpe = ttnn.to_torch(ttnn.get_device_tensors(tt_kvpe_cache)[0])[:1, 0, :seq_len].to(torch.bfloat16)
-    _, m = comp_pcc(ref_kvpe, tt_kvpe, 0)
+    # KVPE prefix diagnostic (SP-aware): read TP replica 0, un-rotate the block-cyclic
+    # chunked cache to natural order with blockcyclic_positions, compare to reference.
+    from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
+
+    sp = mesh_device.shape[0]
+    cache_sr = ttnn.to_torch(
+        tt_kvpe_cache, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
+    ).to(torch.bfloat16)[
+        :, :1
+    ]  # [slots, 1, seq_cache, kvpe]
+    p = blockcyclic_positions(sp, chunk, cache_sr.shape[2])
+    nat = torch.empty(cache_sr.shape[2], cache_sr.shape[-1], dtype=torch.bfloat16)
+    nat[p] = cache_sr[0, 0]
+    _, m = comp_pcc(ref_kvpe, nat[:seq_len].unsqueeze(0), 0)
     logger.info(f"kvpe prefix: {m}")
     _, pcc_message = assert_with_pcc(ref_output.unsqueeze(0), tt_output, OUTPUT_PCC)
     logger.info(f"Chunked output PCC: {pcc_message}")
