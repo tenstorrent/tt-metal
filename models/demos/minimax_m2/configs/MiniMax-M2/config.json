@@ -8,10 +8,6 @@
     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
   ],
-  "auto_map": {
-    "AutoConfig": "configuration_minimax_m2.MiniMaxM2Config",
-    "AutoModelForCausalLM": "modeling_minimax_m2.MiniMaxM2ForCausalLM"
-  },
   "bos_token_id": null,
   "eos_token_id": null,
   "head_dim": 128,

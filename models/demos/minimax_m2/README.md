@@ -12,7 +12,7 @@ QK-norm, SiLU-SwiGLU experts. Config: [`configs/MiniMax-M2/config.json`](configs
 
 ## Status (single Wormhole, TP=1, random weights, seq=128)
 Model math validated vs the HuggingFace reference (`MiniMaxM2*`, loaded via
-`trust_remote_code` from the vendored modeling files in `configs/MiniMax-M2/`):
+loaded from a downloaded checkpoint via `HF_MODEL`):
 
 | Component | PCC vs HF |
 |---|---|
@@ -34,6 +34,7 @@ pytest models/demos/minimax_m2/tests/unit/
 ```
 tt/              model: attention/ experts/ topk.py mlp.py layer.py model.py
 tt/runners/      prefill serving skeleton (scaffold) — see SKELETON.md
-configs/MiniMax-M2/   config.json + vendored HF reference (modeling_minimax_m2.py)
+configs/MiniMax-M2/   config.json (dims only; modeling code is NOT vendored —
+                      HF-reference tests load it from a checkpoint via HF_MODEL)
 tests/unit/      module-by-module PCC tests vs the HF reference
 ```
