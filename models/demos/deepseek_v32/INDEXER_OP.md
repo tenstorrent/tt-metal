@@ -125,7 +125,8 @@ resident: 512K q + 128K w + 256K k + 64K acc + 64K out ≈ 1.0 MB.
 - DEST bf16 (default): 8-head subblocks in half-sync, PCC ≥ 0.999 holds for
   the 64-head sum; fp32 DEST (`fp32_dest_acc_en`, 4-head subblocks) kept as a
   compile-time fallback if top-k cuts ever need it.
-- HiFi2 (reference scores fp8; selection-only). HiFi4 first PCC bring-up only.
+- HiFi2 is the default (reference scores fp8, selection-only; measured PCC
+  ≥ 0.9998, ~1.4x faster than HiFi4). HiFi4 was first-PCC bring-up only.
 - Output bf16; w stays bf16 (scales fp32-side in DEST).
 
 ## −inf invariant
@@ -163,7 +164,9 @@ with the same loop, so there are no segment tables. Compile args common to all
 kernels: `Hi, Sqt, Tt, Dt, chunk_t, QC, KC, HB`; TensorAccessor args appended
 for reader (q/k/w) and writer (out, page = T·2 bytes).
 
-ComputeConfig: HiFi4, bf16 DEST, half-sync. The qk subblock height HP comes
+ComputeConfig: HiFi2, bf16 DEST, half-sync (HiFi2 holds PCC ≥ 0.9998 for the
+64-head sum and is ~1.4x faster wall-clock than HiFi4; HiFi4 was bring-up
+only). The qk subblock height HP comes
 from SDPA's `determine_largest_subblock_size(HB, 1, dst_size)`
 (`sdpa_subblock_utils.hpp`) with SDPA's `dst_size = fp32 ? 4 : 8` → `{8, 1}`
 at 64 heads, passed to compute as CT arg 8. Half-sync lets pack drain one

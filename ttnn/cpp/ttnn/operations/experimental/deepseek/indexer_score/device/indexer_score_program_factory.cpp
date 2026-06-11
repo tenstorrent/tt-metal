@@ -148,7 +148,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
         kdir + "compute_indexer_score.cpp",
         core_ranges,
         ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
+            .math_fidelity = MathFidelity::HiFi2,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = false,
             .compile_args = compute_ct});
