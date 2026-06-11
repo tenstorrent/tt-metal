@@ -209,6 +209,22 @@ def build_sub_device_id_lookup_from_device_csv(
     if not device_log_path.is_file():
         return lookup
 
+    # profile_log_device.csv is tens of GB of per-core timeseries; the sub_device_id
+    # meta is sparse and absent in the common (no sub-device) case, where a full
+    # pd.read_csv + row scan costs minutes to build an empty lookup. Cheaply byte-scan
+    # for the marker first and skip the parse entirely when it never appears.
+    with open(device_log_path, "rb") as fh:
+        marker = b"sub_device_id"
+        tail = b""
+        present = False
+        while chunk := fh.read(1 << 24):  # 16 MiB
+            if marker in tail + chunk:
+                present = True
+                break
+            tail = chunk[-(len(marker) - 1) :]
+        if not present:
+            return lookup
+
     df = pd.read_csv(device_log_path, skiprows=1, header=0, na_filter=False)
     for row in df.itertuples():
         meta_data = parse_device_csv_meta_data(row[15])
@@ -444,10 +460,30 @@ def import_tracy_op_logs(
     for opData in opsData:
         ops[opData["global_call_count"]] = opData
 
+    # tracy_ops_times.csv is dominated by per-call zone rows this import discards: only rows
+    # whose `name` is a TT_DNN/TT_METAL op (host_time) or whose `special_parent_text` carries
+    # an "id:" parent tag (child_calls) are used — ~1% on a big-mesh capture; the other ~99%
+    # (e.g. SetRuntimeArgs zones) are parsed then thrown away (a 25GB / ~200M-row capture takes
+    # minutes). Pre-filter with a streaming grep so pandas parses only the rows that matter; the
+    # exact column filtering below still runs, so the grep is a safe (superset) pre-pass.
+    import subprocess
+    import tempfile
+
+    with open(tracyOpTimesLog) as _f:
+        _header = _f.readline()
+    _tmp = tempfile.NamedTemporaryFile("w", suffix=".csv", dir=os.path.dirname(tracyOpTimesLog), delete=False)
     try:
-        df = pd.read_csv(tracyOpTimesLog, engine="pyarrow")
-    except (ImportError, ValueError):
-        df = pd.read_csv(tracyOpTimesLog)
+        _tmp.write(_header)
+        _tmp.flush()
+        # grep exits 1 when there are no matches — not an error here.
+        subprocess.run(["grep", "-E", "TT_DNN|TT_METAL|id:", tracyOpTimesLog], stdout=_tmp, check=False)
+        _tmp.close()
+        try:
+            df = pd.read_csv(_tmp.name, engine="pyarrow")
+        except (ImportError, ValueError):
+            df = pd.read_csv(_tmp.name)
+    finally:
+        os.remove(_tmp.name)
 
     # Filter and update host_time for TT_DNN/TT_METAL ops
     # Ensure name is string type before using .str accessor
@@ -609,9 +645,14 @@ def _enrich_ops_from_perf_csv(
             )
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
+            # Only top-level keys are added below, and host_op is consumed here (its list
+            # is replaced by enriched_ops), so the single-row case — the vast majority —
+            # reuses host_op in place: no per-op deepcopy (the merge's dominant cost at
+            # ~100k+ ops). Multiple rows (trace replays) still need independent copies.
+            single = len(candidates) == 1
             for perf_row in candidates:
                 perf_row = perf_row.copy()
-                enriched_op = copy.deepcopy(host_op)
+                enriched_op = host_op if single else copy.deepcopy(host_op)
 
                 core_count = perf_row.get("CORE COUNT")
                 if core_count is not None:
