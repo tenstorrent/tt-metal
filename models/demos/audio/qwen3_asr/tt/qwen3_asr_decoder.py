@@ -1,0 +1,116 @@
+"""ttnn Qwen3-1.7B decoder for Qwen3-ASR, built on tt_transformers.
+
+The text decoder is a standard Qwen3 (validated: extracted checkpoint reproduces
+golden logits PCC=1.0). We reuse `tt_transformers.tt.model.Transformer` verbatim and
+only override prefill input prep so the prompt enters as pre-merged embeddings
+(audio embeds spliced at audio-token positions) instead of token ids — the qwen3_vl
+pattern, minus vision MRoPE (Qwen3-ASR uses plain 1D RoPE).
+
+prefill (embeds) -> greedy decode loop (token ids) -> text.
+"""
+import torch
+import ttnn
+from models.tt_transformers.tt.model import Transformer
+from models.tt_transformers.tt.common import Mode, copy_host_to_device
+
+
+class Qwen3ASRDecoder(Transformer):
+    def prepare_inputs_prefill_embeds(self, inputs_embeds, **kwargs):
+        """inputs_embeds: torch (1, S, dim). Returns the same tuple as the base
+        prepare_inputs_prefill but with the embedding step replaced by our embeds."""
+        S = inputs_embeds.shape[-2]
+        dummy = torch.zeros(1, S, dtype=torch.long)
+        out = list(super().prepare_inputs_prefill(dummy, **kwargs))
+        emb = ttnn.from_torch(
+            inputs_embeds.reshape(1, 1, S, -1),
+            device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        out[0] = emb
+        return tuple(out)
+
+    @torch.no_grad()
+    def prefill_logits(self, inputs_embeds):
+        """Run prefill on merged embeddings; return last-token logits (torch, vocab) and
+        populate the internal KV cache for decoding. Pads the sequence to a multiple of
+        128 (attention prefill requirement); causal masking makes the trailing pad
+        positions invisible to the last real token."""
+        S = inputs_embeds.shape[-2]
+        last = S - 1
+        # Prefill padding must satisfy BOTH:
+        #   - attention: S_pad % 256 == 0 (seqlen sharded over 8 cores, tile(32)-aligned)
+        #   - MLP: when S_pad >= prefill_len_cutoff (512 on Blackhole), the MLP reshapes
+        #     x to [1, S_pad//512, 512, -1], so S_pad must be a multiple of 512
+        #     (else the matmul contraction dim breaks: a_shape[-1] != b_shape[-2]).
+        # => valid pads are 256, or any multiple of 512 (512, 1024, 1536, 2048). This lifts
+        # the single-shot prefill cap from ~512 tokens (~20s audio) to max_seq_len
+        # (2048 -> ~150s audio), memory permitting. Trailing pad is causal-masked.
+        S_pad = 256 if S <= 256 else ((S + 511) // 512) * 512
+        if S_pad != S:
+            inputs_embeds = torch.nn.functional.pad(inputs_embeds, (0, 0, 0, S_pad - S))
+        prefill_input, rot_g, rot_l, pt, _ = self.prepare_inputs_prefill_embeds(
+            inputs_embeds, page_table=None, batch_size=1, user_id=0
+        )
+        get_last = (last // 32) * 32
+        tt_logits = self.ttnn_prefill_forward(
+            prefill_input, rot_mats_global=rot_g, rot_mats_local=rot_l, user_id=0,
+            page_table=None, get_last_token=get_last, kv_cache=None, batch_size=1,
+        )
+        tt_logits = ttnn.from_device(tt_logits)
+        full = self.process_output_prefill(tt_logits, last_token_idx=(last - get_last))
+        return full.float(), S
+
+    @torch.no_grad()
+    def decode_token(self, token_id, pos):
+        """One greedy decode step. token_id: int, pos: int (0-based position of this token).
+        Returns next-token logits (torch, vocab)."""
+        tokens = torch.tensor([token_id], dtype=torch.long)        # (B=1,)
+        current_pos = torch.tensor([pos], dtype=torch.int64)       # (B=1,)
+        tt_tokens, tt_pos, rope_idxs, tt_pt = self.prepare_inputs_decode(tokens, current_pos, None)
+        tt_out, _ = self.ttnn_decode_forward(tt_tokens, tt_pos, rot_mat_idxs=rope_idxs,
+                                             page_table=tt_pt, kv_cache=None)
+        tt_out = ttnn.from_device(tt_out)
+        logits = self.process_output_decode(tt_out, B=1, S=1)
+        return logits.float().reshape(-1)
+
+    def _logits_to_host(self, tt_out):
+        return self.process_output_decode(ttnn.from_device(tt_out), B=1, S=1).float().reshape(-1)
+
+    @torch.no_grad()
+    def generate(self, inputs_embeds, max_new_tokens=64, eos_id=151645, use_trace=True):
+        logits, S = self.prefill_logits(inputs_embeds)
+        nxt = int(logits.argmax())
+        out = [nxt]
+        pos = S
+        if not use_trace:
+            for _ in range(max_new_tokens - 1):
+                if nxt == eos_id:
+                    break
+                nxt = int(self.decode_token(nxt, pos).argmax())
+                out.append(nxt)
+                pos += 1
+        else:
+            # 1) one untraced decode step to compile the decode kernels
+            if nxt != eos_id and len(out) < max_new_tokens:
+                nxt = int(self.decode_token(nxt, pos).argmax())
+                out.append(nxt); pos += 1
+            # 2) capture the decode graph once with persistent device inputs
+            host = self.prepare_decode_inputs_host(torch.tensor([nxt], dtype=torch.long),
+                                                   torch.tensor([pos], dtype=torch.int64), None)
+            dev = copy_host_to_device(host, mesh_device=self.mesh_device)
+            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+            tt_out, _ = self.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2],
+                                                 page_table=dev[3], kv_cache=None)
+            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+            # 3) replay: update inputs in place -> execute_trace -> read logits
+            while len(out) < max_new_tokens and nxt != eos_id:
+                host = self.prepare_decode_inputs_host(torch.tensor([nxt], dtype=torch.long),
+                                                       torch.tensor([pos], dtype=torch.int64), None)
+                copy_host_to_device(host_tensors=host, device_tensors=dev)
+                ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
+                nxt = int(self._logits_to_host(tt_out).argmax())
+                out.append(nxt); pos += 1
+            ttnn.release_trace(self.mesh_device, trace_id)
+        if out and out[-1] == eos_id:
+            out = out[:-1]
+        return out
