@@ -108,18 +108,18 @@ inline void _calculate_{op}_(const int iterations [, runtime_args]) {
 ```
 
 Record the universal conventions:
-- **NO SFPI DSL.** Quasar does **not** use the SFPI C++ DSL types. Do not use `sfpi::vFloat`, `sfpi::vUInt`, `sfpi::vInt`, `sfpi::dst_reg[...]`, `sfpi::l_reg[...]`, `v_if` / `v_elseif` / `v_endif`, `v_and`, `lut` / `lut2` / `lut2_sign`, `sfpi::sFloat16b`. These are Blackhole-only DSL constructs. Quasar kernels are written in **raw `TTI_` / `TT_` macros** operating on `p_sfpu::LREG*` / `p_sfpu::LCONST_*` symbols directly. If the reference uses SFPI, treat every SFPI construct as a semantic description to translate, not code to copy.
-  **Exception — `sfpi::SFPLOADI_MOD0_*` constants ARE available on Quasar**: `sfpi_constants.h` (in `namespace sfpi`) is always reachable via `ckernel_sfpu.h` → `sfpi.h` → `sfpi_constants.h`. The writer MUST use these named constants for `TTI_SFPLOADI` / `TT_SFPLOADI` mode operands — never raw hex. "No SFPI on Quasar" means no C++ DSL types, not no sfpi-namespace constants.
-- Includes: `ckernel_trisc_common.h`, `cmath_common.h`, optional `ckernel_ops.h`; sibling kernels for composition (e.g., silu includes `ckernel_sfpu_sigmoid.h`). **Never** `#include "sfpi.h"`.
+- **SFPI is available.** Quasar supports both the SFPI C++ DSL (`sfpi::vFloat`, `sfpi::dst_reg[...]`, `v_if` / `v_endif`, etc.) and raw `TTI_` / `TT_` macros operating on `p_sfpu::LREG*` / `p_sfpu::LCONST_*` symbols. Existing Quasar SFPU kernels are written in raw intrinsics — when extending or composing with them, match the sibling kernel's style; for new kernels either style is acceptable. If the reference uses SFPI, its constructs may be carried over directly instead of translated.
+  `sfpi::SFPLOADI_MOD0_*` constants from `sfpi_constants.h` (in `namespace sfpi`, reachable via `ckernel_sfpu.h` → `sfpi.h` → `sfpi_constants.h`) MUST be used for `TTI_SFPLOADI` / `TT_SFPLOADI` mode operands — never raw hex.
+- Includes: `ckernel_trisc_common.h`, `cmath_common.h`, optional `ckernel_ops.h`; sibling kernels for composition (e.g., silu includes `ckernel_sfpu_sigmoid.h`). Include `sfpi.h` directly when SFPI types or `sfpi::` constants are used.
 - Namespace: `namespace ckernel { namespace sfpu { ... } }` (Blackhole uses `ckernel::sfpu` — do **not** copy that form).
 - Address mode: `ADDR_MOD_7`, pre-configured by `_eltwise_unary_sfpu_configure_addrmod_()`. Never invent a new addrmod.
 - Default load/store: `TTI_SFPLOAD(reg, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0)` — format-agnostic (see Step 7). Exceptions: typecast / `*_int` kernels that set an explicit `sfpmem::` mode.
 - LREG convention: LREG0 = primary load/store register; LREG1–LREG2 = work; higher LREGs = constants/LUT entries.
 - Unroll: `#pragma GCC unroll 8` on the iterations loop.
-- Conditional execution: `TTI_SFPSETCC` + `TTI_SFPENCC` (hardware CC register), **not** `v_if / v_endif`.
-- LUT access: `TTI_SFPLUTFP32(dst, mode)` with values pre-loaded via `_sfpu_load_config32_(...)` or `TTI_SFPLOADI`, **not** `lut` / `lut2` helpers.
+- Conditional execution: `TTI_SFPSETCC` + `TTI_SFPENCC` (hardware CC register) in raw-intrinsic kernels; `v_if / v_endif` in SFPI kernels.
+- LUT access: `TTI_SFPLUTFP32(dst, mode)` with values pre-loaded via `_sfpu_load_config32_(...)` or `TTI_SFPLOADI`; SFPI `lut` / `lut2` helpers are also available.
 
-**Math / pack / unpack** — read 2–3 closest sibling kernels in `tt_llk_{target_arch}/llk_lib/`. Extract the equivalent conventions for that kernel family and document them. The same "no SFPI" rule applies — Quasar math/pack/unpack code is raw Tensix intrinsics, never SFPI.
+**Math / pack / unpack** — read 2–3 closest sibling kernels in `tt_llk_{target_arch}/llk_lib/`. Extract the equivalent conventions for that kernel family and document them. Quasar math/pack/unpack code is raw Tensix intrinsics.
 
 ### 2b: Read the target test harness
 
@@ -253,9 +253,9 @@ For each function signature you propose, walk through the instruction sequence. 
 
 Put it all together. This is the section the writer will use as its primary spec.
 
-### Hard rule: raw intrinsics only, no SFPI
+### Implementation style: SFPI or raw intrinsics
 
-Quasar has no SFPI compiler. Every pseudocode sequence and every proposed function body must be expressed in raw `TTI_` / `TT_` intrinsics operating on `p_sfpu::LREG*` / `p_sfpu::LCONST_*` directly. If the reference uses SFPI (`sfpi::vFloat`, `sfpi::dst_reg[...]`, `v_if`, `lut2`, `sFloat16b`, etc.), translate each SFPI construct to its Tensix-intrinsic equivalent below before writing the pseudocode:
+Quasar supports the SFPI compiler. Pseudocode and proposed function bodies may use either the SFPI C++ DSL or raw `TTI_` / `TT_` intrinsics operating on `p_sfpu::LREG*` / `p_sfpu::LCONST_*`. State the chosen style explicitly in §6a so the writer doesn't mix them within one kernel. If the reference uses SFPI, its constructs can be carried over as-is; when you instead choose the raw-intrinsic style, translate each SFPI construct to its Tensix-intrinsic equivalent below before writing the pseudocode:
 
 | SFPI construct (reference) | Quasar equivalent (target) |
 |----------------------------|----------------------------|
@@ -271,7 +271,7 @@ Quasar has no SFPI compiler. Every pseudocode sequence and every proposed functi
 | `dst_reg++` | `ckernel::math::_incr_counters_<0,0,SFP_ROWS,0>()` (once per iteration, outside row body) |
 | `template <int ITERATIONS>` compile-time loop | `const int iterations` runtime parameter |
 
-If you cannot translate a specific SFPI construct with an entry in this table, flag it in Step 6e risks — do not emit SFPI-shaped pseudocode.
+If you chose the raw-intrinsic style and cannot translate a specific SFPI construct with an entry in this table, either keep that construct in SFPI form or flag it in Step 6e risks.
 
 
 ### 6a: Function shape
