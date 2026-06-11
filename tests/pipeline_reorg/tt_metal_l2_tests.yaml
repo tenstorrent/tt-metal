@@ -383,7 +383,9 @@
 
 - name: tt-train cpp nightly unit tests
   # ENABLE_NIGHTLY_TT_TRAIN_TESTS is inlined in cmd.
-  cmd: 'ENABLE_NIGHTLY_TT_TRAIN_TESTS=1 build/tt-train/tests/ttml_tests --gtest_filter=*NIGHTLY_*'
+  cmd: |
+    mkdir -p generated/test_reports
+    ENABLE_NIGHTLY_TT_TRAIN_TESTS=1 build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter=*NIGHTLY_*
   skus:
     wh_n150_civ2:
       timeout: 40
@@ -399,7 +401,9 @@
 
 # Non-nightly unit tests
 - name: tt-train cpp non-nightly unit tests
-  cmd: build/tt-train/tests/ttml_tests --gtest_filter="-*NIGHTLY*"
+  cmd: |
+    mkdir -p generated/test_reports
+    build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="-*NIGHTLY*"
   skus:
     # wh_n150_civ2 is used for smoke test
     wh_n300_civ2:
