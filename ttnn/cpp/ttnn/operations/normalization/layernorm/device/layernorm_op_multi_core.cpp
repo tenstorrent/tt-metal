@@ -14,11 +14,16 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include "ttnn/metal2_artifacts.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+
+#include <filesystem>
 #include <optional>
 #include <bit>
+#include <vector>
 
 using uint32_t = std::uint32_t;
 using namespace tt::constants;
@@ -69,15 +74,52 @@ bool CB_can_fit_in_L1(
     return sum < l1_size * 0.95;
 }
 
+using namespace tt::tt_metal::experimental;
+
+// Metal 2.0 named resource handles for the interleaved layernorm ProgramSpec.
+// One DFBSpecName per distinct legacy CB index. The accessor_name used at each binding
+// site equals the unique_id string, so the kernel-side handle is dfb::<same name> — matching
+// the variable names the legacy kernels already used (cb_in, cb_out, ...).
+const DFBSpecName DFB_IN{"cb_in"};                    // c_0
+const DFBSpecName DFB_INB{"cb_inb"};                  // c_1
+const DFBSpecName DFB_SCALER{"cb_scaler"};            // c_2
+const DFBSpecName DFB_EPS{"cb_eps"};                  // c_3
+const DFBSpecName DFB_GAMMA{"cb_gamma"};              // c_5
+const DFBSpecName DFB_BETA{"cb_beta"};                // c_6
+const DFBSpecName DFB_OUT{"cb_out"};                  // c_16
+const DFBSpecName DFB_EX{"cb_ex"};                    // c_18
+const DFBSpecName DFB_EX2{"cb_ex2"};                  // c_19
+const DFBSpecName DFB_XMM2{"cb_xmm2"};                // c_20
+const DFBSpecName DFB_EX2PE{"cb_ex2pe"};              // c_21
+const DFBSpecName DFB_FUSION{"cb_fusion"};            // c_22
+const DFBSpecName DFB_X{"cb_x"};                      // c_23
+const DFBSpecName DFB_XMM{"cb_xmm"};                  // c_24
+const DFBSpecName DFB_RECIPROCALS{"cb_reciprocals"};  // c_25 (borrowed from recip tensor)
+const DFBSpecName DFB_ACCUMULATE{"cb_accumulate"};    // c_26
+const DFBSpecName DFB_IN_RM{"cb_in_rm"};              // c_27
+const DFBSpecName DFB_OUT_RM{"cb_out_rm"};            // c_28
+const DFBSpecName DFB_X_WELFORD{"cb_x_welford"};      // c_29 (alias of cb_in / cb_x)
+const DFBSpecName DFB_EX_WELFORD{"cb_ex_welford"};    // c_30 (alias of cb_ex)
+const DFBSpecName DFB_EX2_WELFORD{"cb_ex2_welford"};  // c_31 (alias of cb_ex2)
+
+const TensorParamName PARAM_INPUT{"input"};
+const TensorParamName PARAM_RESIDUAL{"residual"};
+const TensorParamName PARAM_GAMMA{"gamma"};
+const TensorParamName PARAM_BETA{"beta"};
+const TensorParamName PARAM_OUTPUT{"output"};
+const TensorParamName PARAM_RECIP{"recip"};
+
+const KernelSpecName READER_KERNEL{"reader"};
+const KernelSpecName WRITER_KERNEL{"writer"};
+const KernelSpecName COMPUTE_KERNEL{"compute"};
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descriptor(
-    const LayerNormParams& operation_attributes,
-    const LayerNormInputs& tensor_args,
-    Tensor& tensor_return_value,
-    const std::optional<CoreRangeSet>& core_range_set) {
+ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::create_program_spec(
+    const LayerNormParams& operation_attributes, const LayerNormInputs& tensor_args, Tensor& tensor_return_value) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
+    using namespace tt::tt_metal::experimental;
 
     // Extract from operation_attributes and tensor_args
     const auto& a = tensor_args.input;
@@ -128,7 +170,6 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     //////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
     IDevice* device = a.device();
-    auto dst_addr = output.buffer()->address();
 
     ////////////////////////////////////////////////////////////////////////////
     //                Circular Buffer Data Format Setup
@@ -184,14 +225,14 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         inb_single_tile_size = tt::tile_size(inb_data_format);
     }
 
-    auto a_addr = a.buffer()->address();
-    auto b_dram_addr = b ? b.value().buffer()->address() : 0;
-    auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
-    auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
+    // (Legacy buffer-address extractions for a / b / gamma / beta / output removed: those addresses
+    //  now flow through TensorBindings, not runtime args.)
 
     uint32_t num_tile_rows = NC * Ht;
 
-    CoreRangeSet requested_cores = core_range_set.has_value() ? core_range_set.value() : default_core_range(device);
+    // Production always used the default core range; the core_range_set parameter existed only
+    // for the (now-removed) create_descriptor pybind hook. Inline the production default.
+    CoreRangeSet requested_cores = default_core_range(device);
 
     // Use split_work_to_cores to properly distribute tile rows across available cores
     auto
@@ -349,219 +390,493 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     const auto use_welford_and_not_rms_norm = use_welford && !rms_norm;
     const auto fuse_pre_add = b.has_value();
 
-    // Build compile time args for reader kernel
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)block_size};
-    if (!large_tensor_needed) {
-        reader_compile_time_args.push_back((std::uint32_t)use_welford);
-    }
-    reader_compile_time_args.push_back(W);
-    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(b ? b->buffer() : nullptr).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(beta ? beta->buffer() : nullptr).append_to(reader_compile_time_args);
+    // ========================================================================
+    //  Metal 2.0 ProgramSpec construction
+    //
+    //  The legacy `cb_named_args` table (one NamedCompileTimeArgs map handed verbatim to all three
+    //  KernelDescriptors) dissolves here into per-KernelSpec DFB bindings: each kernel declares only
+    //  the DFBs it actually uses, with its PRODUCER/CONSUMER role. Conditionally-used DFBs are bound
+    //  only when their condition holds; the kernels #ifdef-gate the matching dfb::<name> reference
+    //  (Conditional / optional DFB bindings pattern). Buffer-address RTAs and the TensorAccessorArgs
+    //  CTA plumbing are replaced by TensorParameter / TensorBinding.
+    // ========================================================================
+    const bool do_gamma = gamma.has_value();
+    const bool do_beta = beta.has_value();
 
-    if (input_is_row_major) {
-        // For rm_input readers: element size of input tensor for address stride calculations
-        reader_compile_time_args.push_back(static_cast<uint32_t>(a.element_size()));
-    } else if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
-        auto gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
-        reader_compile_time_args.push_back(gamma_stick_size);
-    } else if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
-        auto beta_stick_size = beta.value().padded_shape()[-1] * beta.value().element_size();
-        reader_compile_time_args.push_back(beta_stick_size);
+    // Welford-fp32 aliasing classification (unchanged from legacy; see the long-form rationale
+    // preserved in the kernels). cb_x keeps the default unpack format so post-welford FPU binary
+    // ops read via SrcA; the welford-alias index gets UnpackToDestFp32. Deliberately disabled for
+    // fused-pre-add + large_tensor (cb_x there already lost precision through the FPU add).
+    const bool welford_fp32_alias = use_welford_and_not_rms_norm && in_data_format == tt::DataFormat::Float32 &&
+                                    !(fuse_pre_add && large_tensor_needed);
+    // Separate alias on cb_ex (c_18) / cb_ex2 (c_19) for the mean / M2 sliding-window accumulators
+    // spilled between blocks in layernorm_large_tensor_welford.cpp::welford_fuse_pre_add.
+    const bool welford_state_fp32_alias = use_welford_and_not_rms_norm && fuse_pre_add && large_tensor_needed &&
+                                          cb_data_format == tt::DataFormat::Float32;
+
+    const bool float32_reduction = fp32_dest_acc_en && !legacy_reduction;
+
+    // ---- Kernel source selection (runtime-selected per attributes; logic unchanged) ----
+    const std::string kDataflowDir = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/";
+    const std::string kComputeDir = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/";
+
+    std::filesystem::path reader_kernel_path;
+    if (large_tensor_needed) {
+        reader_kernel_path = use_welford_and_not_rms_norm
+                                 ? kDataflowDir + "reader_unary_interleaved_ln_large_tensor_welford.cpp"
+                                 : kDataflowDir + "reader_unary_interleaved_ln_large_tensor.cpp";
     } else {
-        reader_compile_time_args.push_back(tile_size(datatype_to_dataformat_converter(a.dtype())));
+        reader_kernel_path = use_row_major_kernel ? kDataflowDir + "reader_unary_interleaved_ln_rm_gb.cpp"
+                                                  : kDataflowDir + "reader_unary_interleaved_ln.cpp";
     }
 
-    // Build compile time args for writer kernel
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)block_size};
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
-    if (input_is_row_major) {
-        // RM writer needs elem_size to compute per-row NOC write sizes
-        writer_compile_time_args.push_back(static_cast<uint32_t>(output.element_size()));
-    }
+    std::filesystem::path writer_kernel_path =
+        input_is_row_major ? kDataflowDir + "writer_unary_interleaved_start_id_blocked_rm_output.cpp"
+                           : kDataflowDir + "writer_unary_interleaved_start_id_blocked.cpp";
 
-    // Build defines for reader and compute kernels
-    KernelDescriptor::Defines reader_defines;
-    KernelDescriptor::Defines compute_defines;
+    std::filesystem::path compute_kernel_path =
+        (large_tensor_needed && (!use_row_major_kernel || input_is_row_major))
+            ? (use_welford_and_not_rms_norm ? kComputeDir + "layernorm_large_tensor_welford.cpp"
+                                            : kComputeDir + "layernorm_large_tensor.cpp")
+            : (use_welford_and_not_rms_norm ? kComputeDir + "layernorm_welford.cpp" : kComputeDir + "layernorm.cpp");
 
+    // ---- Defines (FUSE_*/RMSNORM/TILIZE_IN/UNTILIZE_OUT/ACTIVATION + conditional-binding gates) ----
+    using Defines = KernelSpec::CompilerOptions::Defines;
+    Defines reader_defines;
+    Defines compute_defines;
     if (fuse_pre_add) {
-        reader_defines.emplace_back("FUSE_PRE_ADD", "1");
-        if (!use_welford) {
-            compute_defines.emplace_back("FUSE_PRE_ADD", "1");
-        }
+        reader_defines.insert({"FUSE_PRE_ADD", "1"});
+        // The welford compute also gets FUSE_PRE_ADD as a define (legacy only set it for the
+        // non-welford compute): the conditional DFBs cb_x / cb_inb / cb_x_welford(fused) must be
+        // #ifdef-gated kernel-side, which requires a preprocessor flag, not just the CTA.
+        compute_defines.insert({"FUSE_PRE_ADD", "1"});
     }
-
-    if (gamma.has_value()) {
-        reader_defines.emplace_back("FUSE_GAMMA", "1");
+    if (do_gamma) {
+        reader_defines.insert({"FUSE_GAMMA", "1"});
+        // The compute kernel also needs FUSE_GAMMA/FUSE_BETA as preprocessor gates (legacy used the
+        // do_gamma/do_beta CTAs only): cb_gamma/cb_beta/cb_fusion are conditionally bound DFBs, so
+        // their dfb::<name> references must be #ifdef-gated, not just if-constexpr'd.
+        compute_defines.insert({"FUSE_GAMMA", "1"});
     }
-
-    if (beta.has_value()) {
-        reader_defines.emplace_back("FUSE_BETA", "1");
+    if (do_beta) {
+        reader_defines.insert({"FUSE_BETA", "1"});
+        compute_defines.insert({"FUSE_BETA", "1"});
     }
-
     if (rms_norm) {
-        reader_defines.emplace_back("RMSNORM", "1");
-        compute_defines.emplace_back("RMSNORM", "1");
+        reader_defines.insert({"RMSNORM", "1"});
+        compute_defines.insert({"RMSNORM", "1"});
     }
-
     if (input_is_row_major) {
-        reader_defines.emplace_back("TILIZE_IN", "1");
-        compute_defines.emplace_back("TILIZE_IN", "1");
-        compute_defines.emplace_back("UNTILIZE_OUT", "1");
+        reader_defines.insert({"TILIZE_IN", "1"});
+        compute_defines.insert({"TILIZE_IN", "1"});
+        compute_defines.insert({"UNTILIZE_OUT", "1"});
     }
-
     if (operation_attributes.fused_activation.has_value()) {
         const auto& act = operation_attributes.fused_activation.value();
         auto act_defines =
             ttnn::operations::unary::utils::get_defines(act.op_type, act.params, "ACTIVATION", "i", output.dtype());
         for (auto& [key, val] : act_defines) {
-            compute_defines.emplace_back(key, val);
+            compute_defines.insert({key, val});
         }
     }
+    // Conditional-binding preprocessor gates for the welford-fp32 aliased DFBs. The kernels
+    // #ifdef-gate the dfb::cb_x_welford / cb_ex_welford / cb_ex2_welford references, which only
+    // exist when the host binds them (below).
+    if (welford_fp32_alias) {
+        reader_defines.insert({"WELFORD_FP32_ALIAS", "1"});
+        compute_defines.insert({"WELFORD_FP32_ALIAS", "1"});
+    }
+    if (welford_state_fp32_alias) {
+        compute_defines.insert({"WELFORD_STATE_FP32_ALIAS", "1"});
+    }
 
-    // For Float32 input on the Welford path: expose the input tile data under two CB indices
-    // backed by the same SRAM (multi-buffer-index CB pattern). cb_x retains the
-    // default unpack_dst_format so post-welford FPU binary ops keep reading via SrcA; the
-    // welford-alias index gets unpack_to_dest_mode=UnpackToDestFp32 so welford's
-    // transpose_wh_tile reads full fp32 into DEST.
-    //
-    // We deliberately disable the alias for the fused-pre-add + large_tensor combination:
-    // cb_x = c_23 there holds the post-add result, which already lost precision through the
-    // FPU add (SrcA Tf32), so an fp32-preserving unpack on the welford side would not recover
-    // any real information, but would require the SFPU replay buffer recovery
-    // (welford_init<WelfordInitMode::PreserveStats>()) after every transpose_wh_tile.
-    const bool welford_fp32_alias = use_welford_and_not_rms_norm && in_data_format == tt::DataFormat::Float32 &&
-                                    !(fuse_pre_add && large_tensor_needed);
-
-    // Separate alias on cb_ex (c_18) and cb_ex2 (c_19) for the mean / M2 sliding-window
-    // accumulators in layernorm_large_tensor_welford.cpp::welford_fuse_pre_add. That function
-    // spills LREG4/5 to cb_ex / cb_ex2 between blocks and restores them via copy_tile at the
-    // top of the next block. With cb_ex / cb_ex2 in Default unpack mode, copy_tile would take
-    // the SrcA path and silently truncate FP32 to TF32 on every restore. Exposing the same
-    // under an alias with UnpackToDestFp32 lets copy_tile take the FP32 path, while the original
-    // c_18 / c_19 indices stay in Default mode for the SrcA/SrcB consumers.
-    const bool welford_state_fp32_alias = use_welford_and_not_rms_norm && fuse_pre_add && large_tensor_needed &&
-                                          cb_data_format == tt::DataFormat::Float32;
-
-    // Named compile-time args for CB indices - enables kernel chaining/fusion
-    KernelDescriptor::NamedCompileTimeArgs cb_named_args = {
-        {"cb_in", tt::CBIndex::c_0},
-        {"cb_inb", tt::CBIndex::c_1},
-        {"cb_scaler", tt::CBIndex::c_2},
-        {"cb_eps", tt::CBIndex::c_3},
-        {"cb_gamma", tt::CBIndex::c_5},
-        {"cb_beta", tt::CBIndex::c_6},
-        {"cb_out", tt::CBIndex::c_16},
-        {"cb_ex", tt::CBIndex::c_18},
-        {"cb_ex2", tt::CBIndex::c_19},
-        {"cb_xmm2", tt::CBIndex::c_20},
-        {"cb_ex2pe", tt::CBIndex::c_21},
-        {"cb_fusion", tt::CBIndex::c_22},
-        {"cb_x", tt::CBIndex::c_23},
-        {"cb_xmm", tt::CBIndex::c_24},
-        {"cb_reciprocals", tt::CBIndex::c_25},
-        {"cb_accumulate", tt::CBIndex::c_26},
-        {"cb_in_rm", tt::CBIndex::c_27},
-        {"cb_out_rm", tt::CBIndex::c_28},
-        // cb_x_welford: alias of cb_x backed by the same SRAM. When the alias is active,
-        // it has its own buffer index (c_29) with UnpackToDestFp32. Otherwise it falls back
-        // to whatever cb_x is on this path: c_0 for non-fused (cb_x=cb_in),
-        // c_23 for fused pre-add (cb_x is the post-add intermediate).
-        {"cb_x_welford",
-         welford_fp32_alias ? tt::CBIndex::c_29 : (fuse_pre_add ? tt::CBIndex::c_23 : tt::CBIndex::c_0)},
-        {"welford_fp32_alias", static_cast<uint8_t>(welford_fp32_alias ? 1 : 0)},
-        // Mean / M2 spill aliases. When welford_state_fp32_alias is active these point to
-        // c_30 / c_31 (separate buffer indices, same SRAM as c_18 / c_19) configured
-        // for UnpackToDestFp32. When inactive, cb_ex_welford == c_18 and cb_ex2_welford == c_19
-        // so the kernel's copy_tile calls fall through the SrcA TF32 path.
-        {"cb_ex_welford", welford_state_fp32_alias ? tt::CBIndex::c_30 : tt::CBIndex::c_18},
-        {"cb_ex2_welford", welford_state_fp32_alias ? tt::CBIndex::c_31 : tt::CBIndex::c_19},
-        {"welford_state_fp32_alias", static_cast<uint8_t>(welford_state_fp32_alias ? 1 : 0)},
+    // ---- DataflowBufferSpecs (one per active legacy CB; conditional construction mirrors legacy) ----
+    Group<DataflowBufferSpec> dfbs;
+    auto add_dfb = [&](const DFBSpecName& id,
+                       uint32_t entry_size,
+                       uint32_t num_entries,
+                       tt::DataFormat fmt,
+                       Group<DFBSpecName> alias_with = {},
+                       std::optional<TensorParamName> borrowed = std::nullopt) {
+        DataflowBufferSpec spec{
+            .unique_id = id,
+            .entry_size = entry_size,
+            .num_entries = num_entries,
+            .data_format_metadata = fmt,
+        };
+        spec.borrowed_from = borrowed;
+        spec.advanced_options.alias_with = std::move(alias_with);
+        dfbs.push_back(std::move(spec));
     };
 
-    // Select reader kernel path
-    const char* reader_kernel_path = nullptr;
-    if (large_tensor_needed) {
-        reader_kernel_path = use_welford_and_not_rms_norm
-                                 ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                   "reader_unary_interleaved_ln_large_tensor_welford.cpp"
-                                 : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                   "reader_unary_interleaved_ln_large_tensor.cpp";
-    } else {
-        reader_kernel_path = use_row_major_kernel
-                                 ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                   "reader_unary_interleaved_ln_rm_gb.cpp"
-                                 : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                   "reader_unary_interleaved_ln.cpp";
+    // c_0 cb_in (+ c_29 alias when non-fused welford-fp32)
+    add_dfb(
+        DFB_IN,
+        in_single_tile_size,
+        in0_t,
+        in_data_format,
+        (welford_fp32_alias && !fuse_pre_add) ? Group<DFBSpecName>{DFB_X_WELFORD} : Group<DFBSpecName>{});
+    // c_16 cb_out
+    add_dfb(DFB_OUT, out_single_tile_size, out0_t, out_data_format);
+    // c_18 cb_ex (+ c_30 alias) — if !rms_norm
+    if (!rms_norm) {
+        add_dfb(
+            DFB_EX,
+            single_tile_size,
+            im1_t,
+            cb_data_format,
+            welford_state_fp32_alias ? Group<DFBSpecName>{DFB_EX_WELFORD} : Group<DFBSpecName>{});
     }
-
-    // Build compute args
-    bool float32_reduction = fp32_dest_acc_en && !legacy_reduction;
-    std::vector<uint32_t> compute_args = {Wt, block_size, gamma.has_value(), beta.has_value(), fp32_dest_acc_en};
-    if (use_welford_and_not_rms_norm) {
-        compute_args.push_back(W);
-        compute_args.push_back(ttnn::types::TILE_SIZE);
-        compute_args.push_back(static_cast<uint32_t>(rms_norm));
-        compute_args.push_back(static_cast<uint32_t>(fuse_pre_add));
-    } else {
-        compute_args.push_back(float32_reduction);
-        compute_args.push_back(legacy_rsqrt);
-        compute_args.push_back(W);
-        compute_args.push_back(tile_width);
+    // c_2 cb_scaler — if !use_welford
+    if (!use_welford) {
+        add_dfb(DFB_SCALER, scaler_tile_size, in2_t, scaler_cb_data_format);
     }
-
-    // The large-tensor non-Welford reduce kernel needs
-    // an intermediate Float32 CB that can be unpacked directly to dest (if doing a Float32 reduction)
-    constexpr auto large_tensor_acc_cb = tt::CBIndex::c_26;
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    if (float32_reduction) {
-        unpack_to_dest_mode[large_tensor_acc_cb] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    // c_3 cb_eps
+    add_dfb(DFB_EPS, bfloat16_tile_size, in3_t, tt::DataFormat::Float16_b);
+    // c_19 cb_ex2 (+ c_31 alias) — always
+    add_dfb(
+        DFB_EX2,
+        single_tile_size,
+        im2_t,
+        cb_data_format,
+        welford_state_fp32_alias ? Group<DFBSpecName>{DFB_EX2_WELFORD} : Group<DFBSpecName>{});
+    // c_24 cb_xmm — if !rms_norm || fuse || large
+    if (!rms_norm || fuse_pre_add || large_tensor_needed) {
+        add_dfb(DFB_XMM, single_tile_size, im0_t, cb_data_format);
     }
-    // Welford mean / M2 spill aliases (c_30 / c_31) configured as UnpackToDestFp32 so the
-    // per-block copy_tile reload of LREG4/5 in
-    // layernorm_large_tensor_welford.cpp::welford_fuse_pre_add preserves FP32 precision across
-    // the spill/restore cycle.
-    if (welford_state_fp32_alias) {
-        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_30)] =
-            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_31)] =
-            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    // c_20 cb_xmm2 — if !use_welford
+    if (!use_welford) {
+        add_dfb(DFB_XMM2, single_tile_size, im3_t, cb_data_format);
     }
-    // Welford input alias index (c_29): shares SRAM with cb_x but has UnpackToDestFp32 mode so
-    // the welford section's transpose_wh_tile reads full FP32 into DEST.
+    // c_21 cb_ex2pe — always
+    add_dfb(DFB_EX2PE, single_tile_size, im4_t, cb_data_format);
+    // c_26 cb_accumulate — if large && !welford
+    if (large_tensor_needed && !use_welford) {
+        const auto acc_fmt = float32_reduction ? tt::DataFormat::Float32 : cb_data_format;
+        add_dfb(DFB_ACCUMULATE, tt::tile_size(acc_fmt), 1, acc_fmt);
+    }
+    // c_27 cb_in_rm — if input is ROW_MAJOR
+    if (input_is_row_major) {
+        add_dfb(DFB_IN_RM, in_single_tile_size, in_rm_tiles, in_data_format);
+    }
+    // c_28 cb_out_rm — if input is ROW_MAJOR
+    if (input_is_row_major) {
+        add_dfb(DFB_OUT_RM, out_single_tile_size, out_rm_tiles, out_data_format);
+    }
+    // c_22 cb_fusion — if gamma || beta
+    if (do_gamma || do_beta) {
+        add_dfb(DFB_FUSION, single_tile_size, im5_t, cb_data_format);
+    }
+    // c_5 cb_gamma — if gamma
+    if (do_gamma) {
+        add_dfb(DFB_GAMMA, gamma_single_tile_size, in5_t, gamma_cb_data_format);
+    }
+    // c_6 cb_beta — if beta
+    if (do_beta) {
+        add_dfb(DFB_BETA, beta_single_tile_size, in6_t, beta_cb_data_format);
+    }
+    // c_23 cb_x (+ c_29 alias when fused welford-fp32) — if b && !rms_norm
+    if (fuse_pre_add && !rms_norm) {
+        add_dfb(
+            DFB_X,
+            single_tile_size,
+            im6_t,
+            cb_data_format,
+            welford_fp32_alias ? Group<DFBSpecName>{DFB_X_WELFORD} : Group<DFBSpecName>{});
+    }
+    // c_1 cb_inb — if b
+    if (fuse_pre_add) {
+        add_dfb(DFB_INB, inb_single_tile_size, in1_t, inb_data_format);
+    }
+    // c_29 cb_x_welford — aliased DFB (only when welford_fp32_alias). Mirrors the primary's total
+    // size: cb_x (fused) or cb_in (non-fused). Configured UnpackToDestFp32 below.
     if (welford_fp32_alias) {
-        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_29)] =
-            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        if (fuse_pre_add) {
+            add_dfb(DFB_X_WELFORD, single_tile_size, im6_t, cb_data_format, Group<DFBSpecName>{DFB_X});
+        } else {
+            add_dfb(DFB_X_WELFORD, in_single_tile_size, in0_t, in_data_format, Group<DFBSpecName>{DFB_IN});
+        }
+    }
+    // c_30 / c_31 cb_ex_welford / cb_ex2_welford — aliased DFBs (only when welford_state_fp32_alias)
+    if (welford_state_fp32_alias) {
+        add_dfb(DFB_EX_WELFORD, single_tile_size, im1_t, cb_data_format, Group<DFBSpecName>{DFB_EX});
+        add_dfb(DFB_EX2_WELFORD, single_tile_size, im2_t, cb_data_format, Group<DFBSpecName>{DFB_EX2});
+    }
+    // c_25 cb_reciprocals — borrowed from the caller-passed reciprocal LUT tensor (welford only)
+    if (use_welford) {
+        add_dfb(DFB_RECIPROCALS, reciprocal_CB_size_bytes, 1, reciprocal_cb_data_format, {}, PARAM_RECIP);
     }
 
-    // Select compute kernel path.
-    // For input_is_row_major: TILIZE_IN define handles in-flight tilization; large_tensor kernel allowed.
-    // use_row_major_kernel (row-major gamma/beta only) still prevents large_tensor as before.
-    const auto* compute_kernel_path =
-        (large_tensor_needed && (!use_row_major_kernel || input_is_row_major))
-            ? (use_welford_and_not_rms_norm ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
-                                              "layernorm_large_tensor_welford.cpp"
-                                            : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
-                                              "layernorm_large_tensor.cpp")
-            : (use_welford_and_not_rms_norm
-                   ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_welford.cpp"
-                   : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp");
+    auto bind_self_loop = [](Group<DFBBinding>& g, const DFBSpecName& id, const std::string& name) {
+        g.push_back(ProducerOf(id, name));
+        g.push_back(ConsumerOf(id, name));
+    };
 
-    // Build per-core runtime args
+    // ---- Reader KernelSpec ----
+    Group<DFBBinding> reader_dfb;
+    // TILE input: the reader fills cb_in directly. ROW_MAJOR input: the reader instead fills
+    // cb_in_rm (below) and the compute kernel tilizes cb_in_rm -> cb_in, so cb_in is a compute
+    // self-loop in that path (see compute bindings).
+    if (!input_is_row_major) {
+        reader_dfb.push_back(ProducerOf(DFB_IN, "cb_in"));
+    }
+    reader_dfb.push_back(ProducerOf(DFB_EPS, "cb_eps"));
+    if (!use_welford) {
+        reader_dfb.push_back(ProducerOf(DFB_SCALER, "cb_scaler"));
+    }
+    if (fuse_pre_add) {
+        reader_dfb.push_back(ProducerOf(DFB_INB, "cb_inb"));
+    }
+    if (do_gamma) {
+        reader_dfb.push_back(ProducerOf(DFB_GAMMA, "cb_gamma"));
+    }
+    if (do_beta) {
+        reader_dfb.push_back(ProducerOf(DFB_BETA, "cb_beta"));
+    }
+    if (input_is_row_major) {
+        reader_dfb.push_back(ProducerOf(DFB_IN_RM, "cb_in_rm"));
+    }
+    // Non-fused TILE welford-fp32: the reader produces the alias (it pushes cb_x_welford alongside
+    // cb_in). In the fused case (or ROW_MAJOR, where compute tilizes cb_in) the alias is produced by
+    // compute, not the reader.
+    if (welford_fp32_alias && !fuse_pre_add && !input_is_row_major) {
+        reader_dfb.push_back(ProducerOf(DFB_X_WELFORD, "cb_x_welford"));
+    }
+
+    Group<TensorBinding> reader_tensors;
+    reader_tensors.push_back({.tensor_parameter_name = PARAM_INPUT, .accessor_name = "input"});
+    if (fuse_pre_add) {
+        reader_tensors.push_back({.tensor_parameter_name = PARAM_RESIDUAL, .accessor_name = "residual"});
+    }
+    if (do_gamma) {
+        reader_tensors.push_back({.tensor_parameter_name = PARAM_GAMMA, .accessor_name = "gamma"});
+    }
+    if (do_beta) {
+        reader_tensors.push_back({.tensor_parameter_name = PARAM_BETA, .accessor_name = "beta"});
+    }
+
+    KernelSpec::CompileTimeArgs reader_cta;
+    reader_cta.insert({"block_size", block_size});
+    if (!large_tensor_needed) {
+        reader_cta.insert({"use_welford", static_cast<uint32_t>(use_welford)});
+    }
+    reader_cta.insert({"W", W});
+    // Trailing per-path scalar (legacy reader_compile_time_args tail). The legacy else-branch
+    // pushed tile_size(a), which the TILE-path reader never read (it uses get_tile_size(cb_in));
+    // dropped here as dead plumbing.
+    if (input_is_row_major) {
+        reader_cta.insert({"elem_size_bytes", static_cast<uint32_t>(a.element_size())});
+    } else if (do_gamma && gamma.value().layout() == Layout::ROW_MAJOR) {
+        reader_cta.insert(
+            {"stick_size", static_cast<uint32_t>(gamma.value().padded_shape()[-1] * gamma.value().element_size())});
+    } else if (do_beta && beta.value().layout() == Layout::ROW_MAJOR) {
+        reader_cta.insert(
+            {"stick_size", static_cast<uint32_t>(beta.value().padded_shape()[-1] * beta.value().element_size())});
+    }
+
+    KernelSpec::RuntimeArgSchema reader_rta_schema;
+    reader_rta_schema.runtime_arg_names = {"NCHt", "Wt", "start_tile_row", "eps"};
+    if (input_is_row_major) {
+        reader_rta_schema.runtime_arg_names.push_back("H_logical");
+    }
+
+    KernelSpec reader_spec{
+        .unique_id = READER_KERNEL,
+        .source = reader_kernel_path,
+        .compiler_options = {.defines = reader_defines},
+        .dfb_bindings = std::move(reader_dfb),
+        .tensor_bindings = std::move(reader_tensors),
+        .compile_time_args = std::move(reader_cta),
+        .runtime_arg_schema = std::move(reader_rta_schema),
+        .hw_config = DataMovementHardwareConfig{.role = DataMovementHardwareConfig::RoleHint::READER},
+    };
+
+    // ---- Writer KernelSpec ----
+    Group<DFBBinding> writer_dfb;
+    if (input_is_row_major) {
+        writer_dfb.push_back(ConsumerOf(DFB_OUT_RM, "cb_out_rm"));
+    } else {
+        writer_dfb.push_back(ConsumerOf(DFB_OUT, "cb_out"));
+    }
+
+    KernelSpec::CompileTimeArgs writer_cta;
+    writer_cta.insert({"block_size", block_size});
+    if (input_is_row_major) {
+        writer_cta.insert({"elem_size_bytes", static_cast<uint32_t>(output.element_size())});
+    }
+
+    KernelSpec::RuntimeArgSchema writer_rta_schema;
+    writer_rta_schema.runtime_arg_names = {"Wt", "num_tile_rows", "start_tile_row"};
+    if (input_is_row_major) {
+        writer_rta_schema.runtime_arg_names.push_back("H_logical");
+    }
+
+    KernelSpec writer_spec{
+        .unique_id = WRITER_KERNEL,
+        .source = writer_kernel_path,
+        .dfb_bindings = std::move(writer_dfb),
+        .tensor_bindings = {{.tensor_parameter_name = PARAM_OUTPUT, .accessor_name = "output"}},
+        .compile_time_args = std::move(writer_cta),
+        .runtime_arg_schema = std::move(writer_rta_schema),
+        .hw_config = DataMovementHardwareConfig{.role = DataMovementHardwareConfig::RoleHint::WRITER},
+    };
+
+    // ---- Compute KernelSpec ----
+    // Reader→compute inputs are consumed; the normalized output is produced; every intermediate CB
+    // is a compute-internal self-loop (produced and consumed within the compute kernel).
+    Group<DFBBinding> compute_dfb;
+    compute_dfb.push_back(ConsumerOf(DFB_IN, "cb_in"));
+    compute_dfb.push_back(ConsumerOf(DFB_EPS, "cb_eps"));
+    if (!use_welford) {
+        compute_dfb.push_back(ConsumerOf(DFB_SCALER, "cb_scaler"));
+    }
+    if (fuse_pre_add) {
+        compute_dfb.push_back(ConsumerOf(DFB_INB, "cb_inb"));
+    }
+    if (do_gamma) {
+        compute_dfb.push_back(ConsumerOf(DFB_GAMMA, "cb_gamma"));
+    }
+    if (do_beta) {
+        compute_dfb.push_back(ConsumerOf(DFB_BETA, "cb_beta"));
+    }
+    compute_dfb.push_back(ProducerOf(DFB_OUT, "cb_out"));
+    if (input_is_row_major) {
+        // ROW_MAJOR: compute tilizes cb_in_rm (produced by the reader) into cb_in — so it *produces*
+        // cb_in here (the reader does not, in this path) — and untilizes cb_out into cb_out_rm (so it
+        // self-consumes cb_out).
+        compute_dfb.push_back(ProducerOf(DFB_IN, "cb_in"));
+        compute_dfb.push_back(ConsumerOf(DFB_OUT, "cb_out"));
+        compute_dfb.push_back(ProducerOf(DFB_OUT_RM, "cb_out_rm"));
+        compute_dfb.push_back(ConsumerOf(DFB_IN_RM, "cb_in_rm"));
+    }
+    if (!rms_norm) {
+        bind_self_loop(compute_dfb, DFB_EX, "cb_ex");
+    }
+    bind_self_loop(compute_dfb, DFB_EX2, "cb_ex2");
+    if (!use_welford) {
+        bind_self_loop(compute_dfb, DFB_XMM2, "cb_xmm2");
+    }
+    bind_self_loop(compute_dfb, DFB_EX2PE, "cb_ex2pe");
+    if (!rms_norm || fuse_pre_add || large_tensor_needed) {
+        bind_self_loop(compute_dfb, DFB_XMM, "cb_xmm");
+    }
+    if (do_gamma || do_beta) {
+        bind_self_loop(compute_dfb, DFB_FUSION, "cb_fusion");
+    }
+    if (fuse_pre_add && !rms_norm) {
+        bind_self_loop(compute_dfb, DFB_X, "cb_x");
+    }
+    if (large_tensor_needed && !use_welford) {
+        bind_self_loop(compute_dfb, DFB_ACCUMULATE, "cb_accumulate");
+    }
+    if (welford_fp32_alias) {
+        if (fuse_pre_add || input_is_row_major) {
+            // Fused: compute produces the post-add result into the alias and consumes it for welford.
+            // ROW_MAJOR non-fused: compute produces cb_in (tilize) and thus the alias too, then
+            // consumes it — a self-loop in both cases. (TILE non-fused: the reader produces it.)
+            bind_self_loop(compute_dfb, DFB_X_WELFORD, "cb_x_welford");
+        } else {
+            compute_dfb.push_back(ConsumerOf(DFB_X_WELFORD, "cb_x_welford"));
+        }
+    }
+    if (welford_state_fp32_alias) {
+        bind_self_loop(compute_dfb, DFB_EX_WELFORD, "cb_ex_welford");
+        bind_self_loop(compute_dfb, DFB_EX2_WELFORD, "cb_ex2_welford");
+    }
+    if (use_welford) {
+        compute_dfb.push_back(ConsumerOf(DFB_RECIPROCALS, "cb_reciprocals"));
+    }
+
+    // ---- Per-DFB unpack_to_dest_mode ----
+    // Under fp32_dest_acc_en, Metal 2.0 requires an explicit unpack mode for EVERY Float32 DFB this
+    // compute kernel consumes (legacy defaulted the whole NUM_CIRCULAR_BUFFERS array to Default;
+    // the Metal 2.0 map must name each one). Derive Default for each consumed Float32 DFB, then
+    // override the precision-preserving DFBs to UnpackToDestFp32.
+    ComputeHardwareConfig::UnpackToDestModes unpack_modes;
+    if (fp32_dest_acc_en) {
+        for (const auto& binding : compute_dfb) {
+            if (binding.endpoint_type != DFBEndpointType::CONSUMER) {
+                continue;
+            }
+            for (const auto& d : dfbs) {
+                if (d.unique_id == binding.dfb_spec_name && d.data_format_metadata == tt::DataFormat::Float32) {
+                    unpack_modes[d.unique_id] = tt::tt_metal::UnpackToDestMode::Default;
+                }
+            }
+        }
+    }
+    // Precision-preserving overrides (the large-tensor reduce accumulator and the welford fp32 aliases).
+    if (float32_reduction && large_tensor_needed && !use_welford) {
+        unpack_modes[DFB_ACCUMULATE] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    if (welford_state_fp32_alias) {
+        unpack_modes[DFB_EX_WELFORD] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_modes[DFB_EX2_WELFORD] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    if (welford_fp32_alias) {
+        unpack_modes[DFB_X_WELFORD] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
+    KernelSpec::CompileTimeArgs compute_cta;
+    compute_cta.insert({"Wt", Wt});
+    compute_cta.insert({"block_size", block_size});
+    compute_cta.insert({"do_gamma", static_cast<uint32_t>(do_gamma)});
+    compute_cta.insert({"do_beta", static_cast<uint32_t>(do_beta)});
+    compute_cta.insert({"fp32_dest_acc_en", static_cast<uint32_t>(fp32_dest_acc_en)});
+    if (use_welford_and_not_rms_norm) {
+        compute_cta.insert({"W", W});
+        compute_cta.insert({"tile_size", static_cast<uint32_t>(ttnn::types::TILE_SIZE)});
+        compute_cta.insert({"rms_norm", static_cast<uint32_t>(rms_norm)});
+        compute_cta.insert({"fuse_pre_add", static_cast<uint32_t>(fuse_pre_add)});
+    } else {
+        compute_cta.insert({"float32_reduction", static_cast<uint32_t>(float32_reduction)});
+        compute_cta.insert({"legacy_rsqrt", static_cast<uint32_t>(legacy_rsqrt)});
+        compute_cta.insert({"W", W});
+        compute_cta.insert({"tile_width", tile_width});
+    }
+
+    ComputeHardwareConfig compute_hw{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode,
+        .unpack_to_dest_mode = std::move(unpack_modes),
+    };
+
+    KernelSpec compute_spec{
+        .unique_id = COMPUTE_KERNEL,
+        .source = compute_kernel_path,
+        .compiler_options = {.defines = compute_defines},
+        .dfb_bindings = std::move(compute_dfb),
+        .compile_time_args = std::move(compute_cta),
+        .runtime_arg_schema = {.runtime_arg_names = {"NCHt"}},
+        .hw_config = compute_hw,
+    };
+
+    // ---- Tensor parameters (one per distinct originating tensor; conditionally present) ----
+    Group<TensorParameter> tensor_params;
+    tensor_params.push_back({.unique_id = PARAM_INPUT, .spec = a.mesh_tensor().tensor_spec()});
+    tensor_params.push_back({.unique_id = PARAM_OUTPUT, .spec = output.mesh_tensor().tensor_spec()});
+    if (fuse_pre_add) {
+        tensor_params.push_back({.unique_id = PARAM_RESIDUAL, .spec = b.value().mesh_tensor().tensor_spec()});
+    }
+    if (do_gamma) {
+        tensor_params.push_back({.unique_id = PARAM_GAMMA, .spec = gamma.value().mesh_tensor().tensor_spec()});
+    }
+    if (do_beta) {
+        tensor_params.push_back({.unique_id = PARAM_BETA, .spec = beta.value().mesh_tensor().tensor_spec()});
+    }
+    if (use_welford) {
+        tensor_params.push_back({.unique_id = PARAM_RECIP, .spec = recip_tensor.value().mesh_tensor().tensor_spec()});
+    }
+
+    // ---- Per-node runtime arg values (paired with the schemas above) ----
+    KernelRunArgs reader_run{.kernel = READER_KERNEL};
+    KernelRunArgs writer_run{.kernel = WRITER_KERNEL};
+    KernelRunArgs compute_run{.kernel = COMPUTE_KERNEL};
+
+    const uint32_t eps_bits = std::bit_cast<uint32_t>(eps);
     uint32_t curr_row = 0;
-    auto bfloat_one_value = bfloat16(1);
-    uint32_t packed_one_value = pack_two_bfloat16_into_uint32({bfloat_one_value, bfloat_one_value});
-
-    KernelDescriptor::RuntimeArgs reader_runtime_args;
-    KernelDescriptor::RuntimeArgs writer_runtime_args;
-    KernelDescriptor::RuntimeArgs compute_runtime_args;
-
-    reader_runtime_args.reserve(num_cores);
-    writer_runtime_args.reserve(num_cores);
-    compute_runtime_args.reserve(num_cores);
-
-    // Iterate over active cores
     auto all_core_coords = corerange_to_cores(all_cores, num_cores, true);
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = all_core_coords[i];
@@ -575,264 +890,68 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
             TT_THROW("Core not in specified core ranges");
         }
 
-        uint32_t tile_offset = curr_row * Wt;
-
-        // Merged readers (rm_and_tile, large_tensor_rm_and_tile) use a unified arg[3] = start_tile_row = curr_row.
+        const uint32_t tile_offset = curr_row * Wt;
+        // Merged readers (rm_and_tile, large_tensor_rm_and_tile) use a unified start_tile_row = curr_row.
         // Legacy kernels (welford large-tensor, rm_gb) still expect tile_offset = curr_row * Wt.
         const bool using_legacy_tile_reader =
             (use_welford_and_not_rms_norm && large_tensor_needed) || (use_row_major_kernel && !input_is_row_major);
         const uint32_t reader_start = using_legacy_tile_reader ? tile_offset : curr_row;
-
-        std::vector<uint32_t> reader_args = {
-            a_addr,
-            num_tile_rows_per_core,
-            Wt,
-            reader_start,
-            packed_one_value,
-            std::bit_cast<uint32_t>(eps),
-            gamma_dram_addr,
-            beta_dram_addr,
-            b_dram_addr};
-        if (input_is_row_major) {
-            reader_args.push_back(H_logical);
-        }
-
-        reader_runtime_args.emplace_back(core, std::move(reader_args));
-        // For the RM output writer arg[3] is start_tile_row (starting tile-row index for this core),
-        // not the flat tile offset, because the RM writer computes row addresses directly.
+        // For the RM output writer start_tile_row is the tile-row index; the tile writer wants the
+        // flat tile offset.
         const uint32_t writer_start = input_is_row_major ? curr_row : tile_offset;
-        std::vector<uint32_t> writer_args = {dst_addr, Wt, num_tile_rows_per_core, writer_start};
+
+        KernelRunArgs::RuntimeArgValues reader_args{
+            {"NCHt", num_tile_rows_per_core}, {"Wt", Wt}, {"start_tile_row", reader_start}, {"eps", eps_bits}};
         if (input_is_row_major) {
-            writer_args.push_back(H_logical);  // arg[4]
+            reader_args.insert({"H_logical", H_logical});
         }
-        writer_runtime_args.emplace_back(core, std::move(writer_args));
-        compute_runtime_args.emplace_back(core, std::vector<uint32_t>{num_tile_rows_per_core});
+        reader_run.runtime_arg_values.push_back({core, reader_args});
+
+        KernelRunArgs::RuntimeArgValues writer_args{
+            {"Wt", Wt}, {"num_tile_rows", num_tile_rows_per_core}, {"start_tile_row", writer_start}};
+        if (input_is_row_major) {
+            writer_args.insert({"H_logical", H_logical});
+        }
+        writer_run.runtime_arg_values.push_back({core, writer_args});
+
+        compute_run.runtime_arg_values.push_back({core, {{"NCHt", num_tile_rows_per_core}}});
 
         curr_row += num_tile_rows_per_core;
     }
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Build ProgramDescriptor
-    ////////////////////////////////////////////////////////////////////////////
-    ProgramDescriptor program_descriptor;
-
-    // Build KernelDescriptor for reader kernel
-    KernelDescriptor reader_kernel_desc;
-    reader_kernel_desc.kernel_source = reader_kernel_path;
-    reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_kernel_desc.core_ranges = all_cores;
-    reader_kernel_desc.compile_time_args = reader_compile_time_args;
-    reader_kernel_desc.named_compile_time_args = cb_named_args;
-    reader_kernel_desc.defines = reader_defines;
-    reader_kernel_desc.runtime_args = std::move(reader_runtime_args);
-    reader_kernel_desc.config = ReaderConfigDescriptor{};
-    program_descriptor.kernels.push_back(std::move(reader_kernel_desc));
-
-    // Build KernelDescriptor for writer kernel
-    KernelDescriptor writer_kernel_desc;
-    writer_kernel_desc.kernel_source = input_is_row_major
-                                           ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                             "writer_unary_interleaved_start_id_blocked_rm_output.cpp"
-                                           : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                             "writer_unary_interleaved_start_id_blocked.cpp";
-    writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_kernel_desc.core_ranges = all_cores;
-    writer_kernel_desc.compile_time_args = writer_compile_time_args;
-    writer_kernel_desc.named_compile_time_args = cb_named_args;
-    writer_kernel_desc.runtime_args = std::move(writer_runtime_args);
-    writer_kernel_desc.config = WriterConfigDescriptor{};
-    program_descriptor.kernels.push_back(std::move(writer_kernel_desc));
-
-    // Build KernelDescriptor for compute kernel
-    KernelDescriptor compute_kernel_desc;
-    compute_kernel_desc.kernel_source = compute_kernel_path;
-    compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_kernel_desc.core_ranges = all_cores;
-    compute_kernel_desc.compile_time_args = compute_args;
-    compute_kernel_desc.named_compile_time_args = cb_named_args;
-    compute_kernel_desc.defines = compute_defines;
-    compute_kernel_desc.runtime_args = std::move(compute_runtime_args);
-    compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .dst_full_sync_en = dst_full_sync_en,
-        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
-        .math_approx_mode = math_approx_mode};
-    program_descriptor.kernels.push_back(std::move(compute_kernel_desc));
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Build CBDescriptors
-    ////////////////////////////////////////////////////////////////////////////
-    // Helper lambda to create a CBDescriptor
-    auto make_cb_descriptor = [&all_cores](
-                                  uint32_t total_size,
-                                  uint8_t buffer_index,
-                                  tt::DataFormat data_format,
-                                  uint32_t page_size,
-                                  Buffer* buffer = nullptr) {
-        CBDescriptor cb_desc;
-        cb_desc.total_size = total_size;
-        cb_desc.core_ranges = all_cores;
-        cb_desc.format_descriptors.push_back(
-            CBFormatDescriptor{.buffer_index = buffer_index, .data_format = data_format, .page_size = page_size});
-        cb_desc.buffer = buffer;
-        return cb_desc;
+    // ---- Assemble the ProgramSpec + ProgramRunArgs ----
+    WorkUnitSpec work_unit{
+        .name = "layernorm_interleaved",
+        .kernels = {READER_KERNEL, WRITER_KERNEL, COMPUTE_KERNEL},
+        .target_nodes = all_cores,
     };
 
-    // CB 0: Input buffer (non-fused: also serves as cb_x for welford and post-welford eltwise)
-    {
-        auto cb0_desc =
-            make_cb_descriptor(in0_t * in_single_tile_size, tt::CBIndex::c_0, in_data_format, in_single_tile_size);
-        // Non-fused welford-fp32: register c_29 as a second buffer index backed by the same
-        // SRAM so Welford can read via UnpackToDestFp32 while eltwise reads via SrcA.
-        if (welford_fp32_alias && !fuse_pre_add) {
-            cb0_desc.format_descriptors.push_back(CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_29),
-                .data_format = in_data_format,
-                .page_size = in_single_tile_size});
-        }
-        program_descriptor.cbs.push_back(std::move(cb0_desc));
+    ProgramSpec spec{
+        .name = "layernorm_interleaved",
+        .kernels = {std::move(reader_spec), std::move(writer_spec), std::move(compute_spec)},
+        .dataflow_buffers = std::move(dfbs),
+        .tensor_parameters = std::move(tensor_params),
+        .work_units = {std::move(work_unit)},
+    };
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run), std::move(writer_run), std::move(compute_run)};
+    run_args.tensor_args.insert({PARAM_INPUT, TensorArgument{std::cref(a.mesh_tensor())}});
+    run_args.tensor_args.insert({PARAM_OUTPUT, TensorArgument{std::cref(output.mesh_tensor())}});
+    if (fuse_pre_add) {
+        run_args.tensor_args.insert({PARAM_RESIDUAL, TensorArgument{std::cref(b.value().mesh_tensor())}});
     }
-
-    // CB 16: Output buffer
-    program_descriptor.cbs.push_back(
-        make_cb_descriptor(out0_t * out_single_tile_size, tt::CBIndex::c_16, out_data_format, out_single_tile_size));
-
-    // CB 18: Intermediate 1 (if not rms_norm). c_18 holds the running E[x] (mean) spilled
-    // between blocks in layernorm_large_tensor_welford.cpp's fused welford path. When
-    // welford_state_fp32_alias is active, register c_30 as a second buffer index on the same
-    // SRAM with UnpackToDestFp32 mode so copy_tile preserves FP32 precision across the
-    // spill/restore cycle.
-    if (!rms_norm) {
-        auto cb18_desc =
-            make_cb_descriptor(im1_t * single_tile_size, tt::CBIndex::c_18, cb_data_format, single_tile_size);
-        if (welford_state_fp32_alias) {
-            cb18_desc.format_descriptors.push_back(CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_30),
-                .data_format = cb_data_format,
-                .page_size = single_tile_size});
-        }
-        program_descriptor.cbs.push_back(std::move(cb18_desc));
+    if (do_gamma) {
+        run_args.tensor_args.insert({PARAM_GAMMA, TensorArgument{std::cref(gamma.value().mesh_tensor())}});
     }
-
-    // CB 2: Scaler for reduce (if not use_welford)
-    if (!use_welford) {
-        program_descriptor.cbs.push_back(
-            make_cb_descriptor(in2_t * scaler_tile_size, tt::CBIndex::c_2, scaler_cb_data_format, scaler_tile_size));
+    if (do_beta) {
+        run_args.tensor_args.insert({PARAM_BETA, TensorArgument{std::cref(beta.value().mesh_tensor())}});
     }
-
-    // CB 3: Epsilon
-    program_descriptor.cbs.push_back(make_cb_descriptor(
-        in3_t * bfloat16_tile_size, tt::CBIndex::c_3, tt::DataFormat::Float16_b, bfloat16_tile_size));
-
-    // CB 19: Intermediate 2. c_19 holds the running M2 (sum of squared deviations) spilled
-    // between blocks in layernorm_large_tensor_welford.cpp's fused welford path. Same
-    // aliasing rationale as CB 18 above.
-    {
-        auto cb19_desc =
-            make_cb_descriptor(im2_t * single_tile_size, tt::CBIndex::c_19, cb_data_format, single_tile_size);
-        if (welford_state_fp32_alias) {
-            cb19_desc.format_descriptors.push_back(CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_31),
-                .data_format = cb_data_format,
-                .page_size = single_tile_size});
-        }
-        program_descriptor.cbs.push_back(std::move(cb19_desc));
-    }
-
-    // CB 24: Intermediate 0
-    if (!rms_norm || fuse_pre_add || large_tensor_needed) {
-        program_descriptor.cbs.push_back(
-            make_cb_descriptor(im0_t * single_tile_size, tt::CBIndex::c_24, cb_data_format, single_tile_size));
-    }
-
-    // CB 20: Intermediate 3 (if not use_welford)
-    if (!use_welford) {
-        program_descriptor.cbs.push_back(
-            make_cb_descriptor(im3_t * single_tile_size, tt::CBIndex::c_20, cb_data_format, single_tile_size));
-    }
-
-    // CB 21: Intermediate 4
-    program_descriptor.cbs.push_back(
-        make_cb_descriptor(im4_t * single_tile_size, tt::CBIndex::c_21, cb_data_format, single_tile_size));
-
-    // CB 26: Large tensor accumulator (if large_tensor_needed and not use_welford)
-    if (large_tensor_needed && !use_welford) {
-        const auto large_tensor_acc_data_format = float32_reduction ? tt::DataFormat::Float32 : cb_data_format;
-        const auto large_tensor_acc_tile_size = tt::tile_size(large_tensor_acc_data_format);
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            large_tensor_acc_tile_size, large_tensor_acc_cb, large_tensor_acc_data_format, large_tensor_acc_tile_size));
-    }
-
-    // CB 27: Row-major input staging buffer (only when input is ROW_MAJOR).
-    // Holds block_size tiles worth of row-major data for in-flight tilization via tilize_block().
-    if (input_is_row_major) {
-        program_descriptor.cbs.push_back(
-            make_cb_descriptor(in_rm_size, tt::CBIndex::c_27, in_data_format, in_single_tile_size));
-    }
-
-    // CB 28: Row-major output staging buffer (only when input is ROW_MAJOR → output also ROW_MAJOR).
-    // The compute kernel untilizes completed tiles from cb_out (CB 16) into this CB block-by-block;
-    // the RM writer kernel drains it and writes row-by-row to DRAM.
-    if (input_is_row_major) {
-        program_descriptor.cbs.push_back(
-            make_cb_descriptor(out_rm_size, tt::CBIndex::c_28, out_data_format, out_single_tile_size));
-    }
-
-    // CB 22: Intermediate 5 (if gamma or beta)
-    if (gamma.has_value() || beta.has_value()) {
-        program_descriptor.cbs.push_back(
-            make_cb_descriptor(im5_t * single_tile_size, tt::CBIndex::c_22, cb_data_format, single_tile_size));
-    }
-
-    // CB 5: Gamma input (if gamma)
-    if (gamma.has_value()) {
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            in5_t * gamma_single_tile_size, tt::CBIndex::c_5, gamma_cb_data_format, gamma_single_tile_size));
-    }
-
-    // CB 6: Beta input (if beta)
-    if (beta.has_value()) {
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            in6_t * beta_single_tile_size, tt::CBIndex::c_6, beta_cb_data_format, beta_single_tile_size));
-    }
-
-    // CB 23 and CB 1 (if b - fused pre-add)
-    if (b) {
-        // CB 23: Intermediate 6 (if not rms_norm). Fused: x = a + b. Compute writes the
-        // post-add result here, then the welford intake reads it via transpose_wh_tile.
-        // When welford_fp32_alias is active, register c_29 as a second buffer index on the
-        // same SRAM with UnpackToDestFp32 mode so transpose_wh_tile preserves full FP32 into
-        // DEST.
-        if (!rms_norm) {
-            auto cb23_desc =
-                make_cb_descriptor(im6_t * single_tile_size, tt::CBIndex::c_23, cb_data_format, single_tile_size);
-            if (welford_fp32_alias) {
-                cb23_desc.format_descriptors.push_back(CBFormatDescriptor{
-                    .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_29),
-                    .data_format = cb_data_format,
-                    .page_size = single_tile_size});
-            }
-            program_descriptor.cbs.push_back(std::move(cb23_desc));
-        }
-        // CB 1: Input buffer for b
-        program_descriptor.cbs.push_back(
-            make_cb_descriptor(in1_t * inb_single_tile_size, tt::CBIndex::c_1, inb_data_format, inb_single_tile_size));
-    }
-
-    // CB 25: Reciprocal LUT (if use_welford)
     if (use_welford) {
-        CBDescriptor recip_cb_desc;
-        recip_cb_desc.total_size = reciprocal_CB_size_bytes;
-        recip_cb_desc.core_ranges = all_cores;
-        recip_cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_25,
-            .data_format = reciprocal_cb_data_format,
-            .page_size = reciprocal_CB_size_bytes});
-        recip_cb_desc.buffer = recip_tensor.value().buffer();
-        program_descriptor.cbs.push_back(std::move(recip_cb_desc));
+        run_args.tensor_args.insert({PARAM_RECIP, TensorArgument{std::cref(recip_tensor.value().mesh_tensor())}});
     }
-    return program_descriptor;
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 CoreRangeSet LayerNormMultiCoreProgramFactory::default_core_range(IDevice* device) {

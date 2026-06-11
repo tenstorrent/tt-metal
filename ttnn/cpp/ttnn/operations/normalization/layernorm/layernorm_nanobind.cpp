@@ -317,33 +317,12 @@ void bind_normalization_layernorm_device_operation(nb::module_& mod) {
 }
 
 void bind_normalization_layernorm_program_factory(nb::module_& mod) {
+    // NOTE (Metal 2.0 port): the multi-core factory's legacy `create_descriptor` pybind hook was
+    // removed — the factory now satisfies ProgramSpecFactoryConcept (create_program_spec), which has
+    // no ProgramDescriptor to return. Downstream Python callers of
+    // LayerNormMultiCoreProgramFactory.create_descriptor must migrate (see METAL2_PORT_REPORT.md
+    // Handoff points). The sharded factory's hook below is unchanged (still legacy).
     nb::class_<ttnn::prim::LayerNormMultiCoreProgramFactory>(mod, "LayerNormMultiCoreProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::LayerNormParams& operation_attributes,
-               const ttnn::prim::LayerNormInputs& tensor_args,
-               Tensor& tensor_return_value,
-               const std::optional<CoreRangeSet>& core_range_set) {
-                return ttnn::prim::LayerNormMultiCoreProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"),
-            nb::arg("core_range_set") = nb::none(),
-            R"doc(
-            Creates a program descriptor for layer norm multi-core operation.
-
-            Args:
-                operation_attributes (LayerNormParams): Operation parameters including norm type, epsilon, memory config, etc.
-                tensor_args (LayerNormInputs): Input tensors including input, residual, weight, bias, and stats.
-                tensor_return_value (ttnn.Tensor): Output tensor reference.
-                core_range_set (ttnn.CoreRangeSet, optional): Optional core range set to restrict the program to specific cores.
-                    If not provided, uses device's compute grid.
-
-            Returns:
-                ttnn.ProgramDescriptor: The program descriptor for the layer norm operation.
-            )doc")
         .def_static(
             "default_core_range",
             &ttnn::prim::LayerNormMultiCoreProgramFactory::default_core_range,
