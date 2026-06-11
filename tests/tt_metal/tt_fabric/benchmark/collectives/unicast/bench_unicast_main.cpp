@@ -236,7 +236,7 @@ void append_csv_if_requested(const RunOptions& run, const PerfParams& p, const P
 // that trips the run_unicast_sweep.py bandwidth check with low run-to-run variance, looking like a
 // bandwidth regression when it is really a hardware link fault. On T3K this state is otherwise
 // undetected: Cluster::disable_ethernet_cores_with_retrain() only inspects retrain counts on UBB
-// (galaxy) boards. This gate mirrors validate_fabric_link_health_for_performance_tests() in the
+// (galaxy) boards. This gate mirrors validate_fabric_link_health() in the
 // sibling "Fabric BW & Latency" ubench (tt_fabric_test_common.hpp) and surfaces the degraded link
 // with an actionable diagnostic instead of a misleading bandwidth failure.
 //

@@ -134,22 +134,26 @@ public:
         return true;
     }
 
-    // Validate fabric ethernet link health before running performance benchmarks.
+    // Validate fabric ethernet link health before running any fabric test (bandwidth or functional).
     //
     // Bandwidth microbenchmarks measure cycles-to-move-bytes at a clock that is already gated to
     // 1000MHz +/- 10 by validate_device_frequencies_for_performance_tests(). A degraded ethernet
     // link (one that has retrained, or is accumulating CRC / uncorrected-codeword errors) adds
     // backpressure on the fabric and inflates the measured cycle count for the same payload --
     // producing the bimodal run-to-run "slow mode" that fails golden comparison without any clock
-    // change. On T3K this state is otherwise undetected: Cluster::disable_ethernet_cores_with_retrain()
-    // only inspects retrain counts on UBB (galaxy) boards. This gate surfaces the degraded link with
-    // an actionable diagnostic instead of a misleading golden-comparison failure.
+    // change. The same degraded link also stalls FUNCTIONAL/stability tests: a dropped or
+    // undelivered packet leaves a receiver kernel waiting forever, which surfaces much later as an
+    // opaque dispatch completion-queue timeout ("device timeout, potential hang detected, the device
+    // is unrecoverable") whose tt-triage reports no broken component. On T3K this state is otherwise
+    // undetected: Cluster::disable_ethernet_cores_with_retrain() only inspects retrain counts on UBB
+    // (galaxy) boards. This gate surfaces the degraded link with an actionable per-link diagnostic
+    // instead of either a misleading golden-comparison failure or an opaque mid-run hang.
     //
     // Only counts that indicate an actual fault are checked (retrain, CRC errors, uncorrected
     // codewords). Corrected codewords are expected to be non-zero under normal FEC operation and are
     // NOT treated as a fault. Links that are down/unconnected (e.g. unused QSFP expansion ports) are
     // skipped. Validation runs once and is cached for the fixture's lifetime, like the frequency gate.
-    bool validate_fabric_link_health_for_performance_tests() {
+    bool validate_fabric_link_health() {
         if (link_health_validated_) {
             return true;
         }

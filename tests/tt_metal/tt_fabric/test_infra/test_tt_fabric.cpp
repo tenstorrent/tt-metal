@@ -207,19 +207,26 @@ int main(int argc, char** argv) {
             continue;
         }
 
-        // Validate device frequencies for performance tests. Validation runs only once
-        // since device frequencies are cached in TestFixture for its lifetime.
+        // Validate device frequencies for performance tests only. Frequency only affects
+        // cycle-based bandwidth measurement; a healthy node running slightly off 1000MHz must
+        // not be rejected for functional/stability tests. Validation runs once (cached).
         if (test_config.performance_test_mode != PerformanceTestMode::NONE) {
             if (!fixture->validate_device_frequencies_for_performance_tests()) {
                 test_context.close_devices();
                 return 1;  // Hard exit - cannot run performance benchmarks with invalid frequencies
             }
-            // Gate on ethernet link health: a degraded/retraining link inflates measured cycles and
-            // produces bimodal bandwidth variance that fails golden comparison without any clock change.
-            if (!fixture->validate_fabric_link_health_for_performance_tests()) {
-                test_context.close_devices();
-                return 1;  // Hard exit - cannot run performance benchmarks on degraded ethernet links
-            }
+        }
+        // Gate ALL tests (including functional/stability) on ethernet link health. A degraded or
+        // retraining link not only inflates measured cycles for bandwidth tests, it can stall fabric
+        // traffic for functional tests: a dropped/undelivered packet leaves a receiver kernel waiting
+        // forever, which surfaces much later as an opaque dispatch completion-queue timeout
+        // ("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable",
+        // system_memory_manager.cpp) whose tt-triage reports no broken component. Surfacing the
+        // degraded link here, up front, with a per-link diagnostic converts that confusing hang into
+        // an actionable hardware signal. Cached, so this runs once for the fixture's lifetime.
+        if (!fixture->validate_fabric_link_health()) {
+            test_context.close_devices();
+            return 1;  // Hard exit - cannot run fabric tests on degraded ethernet links
         }
 
         // Check topology-based skip conditions after devices are opened
