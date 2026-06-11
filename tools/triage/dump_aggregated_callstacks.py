@@ -8,8 +8,7 @@ Usage:
     dump_aggregated_callstacks [--all-cores] [--device-visualization]
 
 Options:
-    --all-cores                      Show all cores including ones with Go Message = DONE or riscs disabled by
-                                     kernel config. By default, both are filtered out.
+    --all-cores                      Show all cores, including those with Go Message = DONE and RISCs not enabled by the running program. By default, both are filtered out.
     --device-visualization           Show device visualizations instead of plain coordinate lists in the Locations column.
 
 Description:

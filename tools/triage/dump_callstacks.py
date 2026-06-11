@@ -8,13 +8,13 @@ Usage:
     dump_callstacks [--all-cores]
 
 Options:
-    --all-cores        Show all cores including ones with Go Message = DONE or riscs disabled by
-                       kernel config By default, both are filtered out.
+    --all-cores        Show all cores, including those with Go Message = DONE and RISCs not enabled
+                       by the running program. By default, both are filtered out.
 
 Description:
-    Dumps callstacks for all devices in the system and for every supported risc processor.
-    By default, filters out cores with DONE status and riscs not enabled by the running program
-    and shows essential fields.
+    Dumps callstacks for all devices in the system and for every supported RISC processor.
+    By default, shows essential fields and filters out cores with Go Message = DONE and RISCs not
+    enabled by the running program (kernel_config.enables).
     Use --all-cores to see all cores, and -v/-vv to show more columns.
 
     Color output is automatically enabled when stdout is a TTY (terminal) and can be overridden
