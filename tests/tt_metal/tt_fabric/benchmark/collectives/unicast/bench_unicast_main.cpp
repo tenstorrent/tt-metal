@@ -10,9 +10,13 @@
 #include <vector>
 #include <filesystem>
 
+#include <cstdint>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include "tt_metal/tt_fabric/benchmark/collectives/common/perf_helpers.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "impl/context/metal_context.hpp"
+#include "tt_metal/llrt/tt_cluster.hpp"
 
 // Single MeshDevice-based fixture with Fabric set to 2D.
 struct Fixture : public ::tt::tt_metal::MeshDeviceFixtureBase {
@@ -224,6 +228,113 @@ void append_csv_if_requested(const RunOptions& run, const PerfParams& p, const P
     log_info(tt::LogTest, "Appended CSV row to {}", run.csv_path);
 }
 
+// Validate fabric ethernet link health before measuring unicast bandwidth.
+//
+// This benchmark reports GB/s = bytes / wall-time for a fixed payload. A degraded ethernet link
+// (one that has retrained, or is accumulating CRC / uncorrected-codeword errors) adds backpressure
+// on the fabric and inflates the measured time for the same bytes -- producing a stable "slow mode"
+// that trips the run_unicast_sweep.py bandwidth check with low run-to-run variance, looking like a
+// bandwidth regression when it is really a hardware link fault. On T3K this state is otherwise
+// undetected: Cluster::disable_ethernet_cores_with_retrain() only inspects retrain counts on UBB
+// (galaxy) boards. This gate mirrors validate_fabric_link_health_for_performance_tests() in the
+// sibling "Fabric BW & Latency" ubench (tt_fabric_test_common.hpp) and surfaces the degraded link
+// with an actionable diagnostic instead of a misleading bandwidth failure.
+//
+// Only counts that indicate an actual fault are checked (retrain, CRC errors, uncorrected
+// codewords). Corrected codewords are expected to be non-zero under normal FEC operation and are
+// NOT treated as a fault. Links that are down/unconnected (e.g. unused QSFP expansion ports) are
+// skipped.
+bool validate_fabric_link_health() {
+    auto& metal_context = tt::tt_metal::MetalContext::instance();
+    const auto& cluster = metal_context.get_cluster();
+    const auto& hal = metal_context.hal();
+    const bool is_wormhole_b0 = cluster.arch() == tt::ARCH::WORMHOLE_B0;
+
+    auto retrain_count_addr = hal.get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::RETRAIN_COUNT);
+    // CRC / uncorrected-codeword registers are only reliably readable on Wormhole today
+    // (mirrors the WORMHOLE_B0 guard in the ReportSystemHealth report).
+    auto crc_addr =
+        hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CRC_ERR);
+    auto uncorr_addr =
+        hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNCORR_CW);
+
+    struct DegradedLink {
+        tt::ChipId chip_id;
+        CoreCoord eth_core;
+        uint32_t retrain_count;
+        uint32_t crc_error_count;
+        uint64_t uncorrected_codeword_count;
+    };
+    std::vector<DegradedLink> degraded_links;
+    uint32_t links_checked = 0;
+
+    std::vector<uint32_t> read_vec;
+    for (const auto& chip_id : cluster.all_chip_ids()) {
+        const auto& soc_desc = cluster.get_soc_desc(chip_id);
+        for (const auto& [eth_core, chan] : soc_desc.logical_eth_core_to_chan_map) {
+            // Only check links that are actually up (carrying fabric traffic); skip
+            // down/unconnected ports such as unused QSFP expansion channels.
+            if (!cluster.is_ethernet_link_up(chip_id, eth_core)) {
+                continue;
+            }
+            links_checked++;
+
+            tt_cxy_pair virtual_eth_core(
+                chip_id,
+                cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, tt::CoreType::ETH));
+
+            uint32_t retrain_count_val = 0;
+            cluster.read_core(read_vec, sizeof(uint32_t), virtual_eth_core, retrain_count_addr);
+            retrain_count_val = read_vec[0];
+
+            uint32_t crc_error_val = 0, uncorr_val_lo = 0, uncorr_val_hi = 0;
+            if (is_wormhole_b0) {
+                cluster.read_core(&crc_error_val, sizeof(uint32_t), virtual_eth_core, crc_addr);
+                cluster.read_core(&uncorr_val_hi, sizeof(uint32_t), virtual_eth_core, uncorr_addr);
+                cluster.read_core(&uncorr_val_lo, sizeof(uint32_t), virtual_eth_core, uncorr_addr + sizeof(uint32_t));
+            }
+            uint64_t uncorrected_codeword_count =
+                (static_cast<uint64_t>(uncorr_val_hi) << 32) | static_cast<uint64_t>(uncorr_val_lo);
+
+            if (retrain_count_val != 0 || crc_error_val != 0 || uncorrected_codeword_count != 0) {
+                degraded_links.push_back(
+                    {chip_id, eth_core, retrain_count_val, crc_error_val, uncorrected_codeword_count});
+            }
+        }
+    }
+
+    if (!degraded_links.empty()) {
+        log_error(tt::LogTest, "=== FABRIC ETHERNET LINK HEALTH CHECK FAILED ===");
+        log_error(
+            tt::LogTest,
+            "Cannot run unicast bandwidth benchmark - {} of {} active ethernet link(s) are degraded.",
+            degraded_links.size(),
+            links_checked);
+        log_error(
+            tt::LogTest,
+            "A retraining or error-accumulating link inflates measured time and causes a stable low-bandwidth "
+            "mode. This is a hardware/link-health issue, not a test-config issue.");
+        for (const auto& link : degraded_links) {
+            log_error(
+                tt::LogTest,
+                "  chip {} eth core {}: retrain_count={} crc_errors={} uncorrected_codewords={}",
+                link.chip_id,
+                link.eth_core.str(),
+                link.retrain_count,
+                link.crc_error_count,
+                link.uncorrected_codeword_count);
+        }
+        return false;
+    }
+
+    log_info(
+        tt::LogTest,
+        "Fabric ethernet link health check passed: {} active links, 0 retrains / CRC errors / uncorrected codewords",
+        links_checked);
+    return true;
+}
+
 }  // anonymous namespace
 
 int main(int argc, char** argv) {
@@ -253,6 +364,13 @@ int main(int argc, char** argv) {
     // Bring up the fixture env and run
     Fixture fixture;
     fixture.setup();
+
+    // Gate on ethernet link health: a degraded/retraining link inflates measured time and produces a
+    // stable low-bandwidth mode that fails the sweep's bandwidth check without being a real regression.
+    if (!validate_fabric_link_health()) {
+        fixture.teardown();
+        return 1;  // Hard exit - cannot run bandwidth benchmark on degraded ethernet links
+    }
 
     warmup_once(&fixture, p, run.warmup);
     auto stats = run_repeated(&fixture, p, /*warmup_iters=*/0, /*iters=*/run.iters);
