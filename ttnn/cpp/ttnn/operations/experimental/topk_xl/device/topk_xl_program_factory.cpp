@@ -124,9 +124,15 @@ TopkXLProgramFactory::cached_program_t TopkXLProgramFactory::create(
             .compile_args = writer_compile_args});
 
     uint32_t start_row = 0;
+    const uint32_t max_rows_per_core = tt::div_up(num_rows, num_cores);
     for (const auto& core : cores) {
         const bool core_is_in_group_1 = core_group_1.contains(core);
         const uint32_t rows_for_core = core_is_in_group_1 ? num_rows_per_core_group_1 : num_rows_per_core_group_2;
+        TT_FATAL(
+            rows_for_core <= max_rows_per_core,
+            "topk_xl assigned {} rows to a core, expected at most {}",
+            rows_for_core,
+            max_rows_per_core);
         tt::tt_metal::SetRuntimeArgs(
             program, reader_kernel, core, {input.buffer()->address(), start_row, rows_for_core});
         tt::tt_metal::SetRuntimeArgs(program, compute_kernel, core, {rows_for_core});
@@ -134,6 +140,7 @@ TopkXLProgramFactory::cached_program_t TopkXLProgramFactory::create(
             program, writer_kernel, core, {indices.buffer()->address(), start_row, rows_for_core});
         start_row += rows_for_core;
     }
+    TT_FATAL(start_row == num_rows, "topk_xl assigned {} rows, expected {}", start_row, num_rows);
 
     return cached_program_t{
         std::move(program),

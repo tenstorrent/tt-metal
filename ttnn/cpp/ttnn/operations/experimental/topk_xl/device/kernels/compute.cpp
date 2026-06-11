@@ -109,6 +109,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(input_cb, indices_cb);
     MATH((llk_math_reconfig_remap(true)));
+    pack_untilize_dest_init<tiles_per_sequence, tiles_per_sequence, false, TILE_C_DIM, false, false>(indices_cb);
 
     CircularBuffer input_cb_obj(input_cb);
     CircularBuffer indices_cb_obj(indices_cb);
@@ -140,9 +141,7 @@ void kernel_main() {
         tile_regs_wait();
 
         indices_cb_obj.reserve_back(1);
-        pack_untilize_dest_init<tiles_per_sequence, tiles_per_sequence, false, TILE_C_DIM, false, false>(indices_cb);
         pack_untilize_dest<tiles_per_sequence, tiles_per_sequence>(indices_cb, 1, 0, slot0 + tiles_per_sequence);
-        pack_untilize_uninit(indices_cb);
         indices_cb_obj.push_back(1);
 
         tile_regs_release();

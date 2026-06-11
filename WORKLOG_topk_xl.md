@@ -1256,3 +1256,183 @@ Closed the requested gaps. Final LLK test suite (all GREEN on Blackhole silicon)
   - `./build_metal.sh --release`: PASS.
   - `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/experimental/test_topk_xl.py -q`:
     PASS (30 passed).
+
+### 2026-06-10 — add coarse device profiling zones
+- Added temporary device-side Tracy instrumentation to the TopK XL device kernels:
+  - reader: whole reader kernel and per-row work;
+  - compute: whole compute kernel, per-row work, first chunk, merge-chunk loop, materialize,
+    copy-tile MOP reinit, tile-register commit/wait/release, output reserve/pack/push;
+  - writer: whole writer kernel, per-row work, wait for indices, scratch reserve/reorder/pop,
+    scratch push/wait/pop, DRAM write issue, per-row write flush, final write barrier.
+- Initial fine-grained probe pass included per-tile/per-slice/per-chunk scopes, but the 640-row,
+  51200-wide, K=2048 case produced ~141k zones and overflowed useful detail buffers. Trimmed the
+  source to coarse phase scopes so the final trace has complete row coverage.
+- Tracy profile command used for the target case:
+  `python_env/bin/python -m tracy -p -r -v -m pytest tests/ttnn/unit_tests/operations/experimental/test_topk_xl_perf_tmp.py::test_topk_xl_perf_640_rows_51200_k2048 -q`
+- Final instrumented report:
+  `generated/profiler/reports/2026_06_10_16_29_30/ops_perf_results_2026_06_10_16_29_30.csv`
+- Target shape/profile result:
+  - input: 640 x 51200 BFLOAT16 row-major;
+  - output: 640 x 2048 UINT32 row-major;
+  - K=2048, 25 chunks per row;
+  - core count: 110 available worker cores;
+  - `Device Kernel Duration [ns]`: 1,689,820.
+- Main timing signal from `profile_log_device.csv`, using max accumulated time on any one core:
+  - writer top-level: ~1.6896 ms, but `topk_xl_writer_wait_indices` is ~1.6685 ms, so writer is
+    mostly waiting for compute output rather than doing local reorder/DRAM work;
+  - compute TRISC1/TRISC2 top-level: ~1.684 ms;
+  - reader top-level: ~1.6506 ms, close but not the critical path;
+  - compute merge loop dominates math-side work: `topk_xl_compute_merge_chunks` is ~1.627 ms on
+    TRISC1 and ~1.546 ms on TRISC0;
+  - first chunk setup/sort is much smaller: ~113 us on TRISC0 and ~53 us on TRISC1;
+  - materialization is small: ~1 us max-core on TRISC1;
+  - writer scratch reorder is small: ~14.8 us max-core;
+  - writer DRAM write issue is tiny in the zone log: ~0.31 us max-core, with per-row flush around
+    ~17 us max-core.
+- Current interpretation:
+  - the op is compute-bound on the chunk merge/rebuild path for this shape;
+  - writer top-level duration follows compute because it waits on the indices CB;
+  - scratch reorder and contiguous output write are not primary bottlenecks for K=2048.
+- Validation:
+  - `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/experimental/test_topk_xl.py::test_topk_xl_row_major_parallelizes_640_rows -q`:
+    PASS (3 passed).
+  - Target Tracy pytest above: PASS.
+
+### 2026-06-10 — profile pack-untilize init/uninit hoisting
+- Tested the hypothesis that per-row `pack_untilize_dest_init` / `pack_untilize_uninit` was the
+  main output-pack cost.
+- Changed compute to initialize pack-untilize once after `compute_kernel_hw_startup` and before the
+  row loop:
+  `pack_untilize_dest_init<tiles_per_sequence, tiles_per_sequence, false, TILE_C_DIM, false, false>(indices_cb)`.
+- First variant kept a single final `pack_untilize_uninit(indices_cb)` after the row loop:
+  - target Tracy report:
+    `generated/profiler/reports/2026_06_10_16_36_04/ops_perf_results_2026_06_10_16_36_04.csv`;
+  - `Device Kernel Duration [ns]`: 1,689,225;
+  - `topk_xl_compute_output_pack` on TRISC2 dropped to ~1.391 ms max-core, but the final
+    `topk_xl_compute_pack_untilize_uninit` consumed ~280 us max-core, so total TRISC2 time stayed
+    roughly unchanged.
+- Second variant omitted the final `pack_untilize_uninit` because the kernel has no later pack op
+  and ends immediately after this output path:
+  - target Tracy report:
+    `generated/profiler/reports/2026_06_10_16_37_25/ops_perf_results_2026_06_10_16_37_25.csv`;
+  - `Device Kernel Duration [ns]`: 1,690,104;
+  - TRISC2 top-level dropped to ~1.404 ms, but total op time did not improve because TRISC1
+    merge/rebuild and writer wait are still the critical path.
+- Moved the reader `topk_xl_reader_row` zone to start after `input_cb.reserve_back(1)` and close
+  before `input_cb.push_back(1)`, per the requested profiling window. In the final profile this
+  records 13,640 tile-level reader events, max-core ~66.9 us.
+- Current interpretation:
+  - pack-untilize init/uninit was not the main end-to-end issue for the target shape;
+  - per-row init/uninit hoisting is still fine and keeps packer setup out of the row loop;
+  - omitting final uninit is correctness-clean in the current tests and removes the TRISC2 tail
+    drain, but does not improve overall duration yet because compute merge/rebuild dominates.
+- Validation:
+  - `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/experimental/test_topk_xl.py::test_topk_xl_row_major_parallelizes_640_rows -q`:
+    PASS (3 passed).
+  - `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/experimental/test_topk_xl.py -q`:
+    PASS (30 passed, 3 skipped).
+  - Target Tracy pytest above: PASS.
+
+### 2026-06-10 — compare against Blaze issue #558 baseline
+- Checked the last comment on `https://github.com/tenstorrent/tt-blaze/issues/558`.
+- Reported optimized Blaze `distributed_topk` compute numbers on branch `ldjurovic/topk_optimization1`:
+  - K=2048:
+    - N=4096: 8,211 ns;
+    - N=8192: 10,291 ns;
+    - N=16384: 12,485 ns;
+    - N=32768: 14,581 ns;
+    - N=65536: 16,839 ns.
+  - K=1024:
+    - N=2048: 3,904 ns;
+    - N=4096: 4,954 ns;
+    - N=8192: 6,122 ns;
+    - N=16384: 7,215 ns;
+    - N=32768: 8,456 ns.
+  - K=512:
+    - N=1024: 2,199 ns;
+    - N=2048: 2,864 ns;
+    - N=4096: 3,641 ns;
+    - N=8192: 4,366 ns;
+    - N=16384: 5,179 ns.
+- For our target K=2048, N=51200:
+  - Blaze expectation is roughly 16 us per row by interpolation/log-stage reasoning between
+    N=32768 and N=65536.
+  - Current TTNN op profile is ~1.69 ms total for 640 rows over 110 worker cores. The hot cores
+    process 6 rows, so effective per-row time on the critical path is ~281 us.
+  - This is about 17x slower than the Blaze optimized K=2048/N~51200 expectation.
+- Main algorithmic gap:
+  - current TTNN compute processes 25 chunks as one initial local sort plus 24 sequential
+    chunk-into-accumulator merge/rebuild steps;
+  - the Blaze baseline scales like a fixed local sort plus ~log-stage cost, not one full merge per
+    input chunk;
+  - pack-untilize and writer reorder are not the first-order issue at this scale.
+- Direction implied by this baseline:
+  - the next meaningful optimization is to replace the sequential chunk folding with a staged/tree
+    merge strategy closer to Blaze `distributed_topk`;
+  - after that, pack-untilize can become relevant again, but it is not the current 17x gap.
+
+### 2026-06-10 — enforce row sharding bound
+- Verified `TopkXLProgramFactory` uses `split_work_to_cores(input.device()->compute_with_storage_grid_size(), num_rows, true)`.
+- For the profiled Blackhole system:
+  - available worker cores: 110;
+  - rows: 640;
+  - `640 / 110 = 5 remainder 90`;
+  - expected assignment: 90 Tensix cores run 6 rows/topks, 20 Tensix cores run 5 rows/topks;
+  - no active Tensix should run more than 6 rows/topks for this case.
+- Added host-side invariants in the program factory:
+  - `rows_for_core <= ceil(num_rows / num_cores)`;
+  - final assigned `start_row == num_rows`.
+- Validation:
+  - `./build_metal.sh --release`: PASS.
+  - `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/experimental/test_topk_xl.py::test_topk_xl_row_major_parallelizes_640_rows -q`:
+    PASS (3 passed).
+
+### 2026-06-10 — Blaze distributed_topk comparison
+- Inspected the Blaze implementation in `/localdev/pjosipovic/refs/tt-blaze/blaze/ops/distributed_topk`.
+  The branch named in the issue comment, `ldjurovic/topk_optimization1`, is no longer advertised by
+  the remote, but current Blaze `main` contains the distributed implementation matching the described
+  optimized path.
+- Blaze host-side contract:
+  - input is already sharded over `maxN / elements_per_core` Tensix cores;
+  - `elements_per_core` is the per-core local run length and tests use `elements_per_core == K`;
+  - for K=2048, N=51200 this means 25 Tensix cores cooperate on one logical row/query;
+  - host computes a binary reduction tree and bakes partner NOC coords plus send/receive stage flags
+    into per-core compile-time args.
+- Blaze compute-side structure:
+  - every active core local-sorts one K-sized shard using `topk_xl_copy_tile`, `topk_xl_add_lsb_indices`,
+    `topk_xl_local_sort`;
+  - sender cores pack their sorted candidate list into a `reduce` CB and return;
+  - receiver cores wait for partner data in a per-stage `recv` CB, generic-copy that already-sorted
+    candidate list into DST, then call `topk_xl_merge` and conditionally `topk_xl_rebuild`;
+  - the final core packs the reduced result.
+- Blaze data movement structure:
+  - BRISC owns the reduction-tree NOC movement;
+  - sender cores write one contiguous reduce packet into the receiver's stage slot and signal a semaphore;
+  - receiver cores push that stage slot into the compute-visible `recv` CB.
+- Key difference from our current TTNN op:
+  - current TTNN assigns one full row to one Tensix and folds all input chunks serially;
+  - for K=2048, N=51200, each row has 25 chunks, so each row performs one first local sort plus 24
+    sequential `process_chunk + topk_xl_merge + topk_xl_rebuild` steps on the same core;
+  - on 640 rows / 110 worker cores, the hottest cores process 6 rows, which is 144 sequential merge
+    steps per hot core.
+- Why this explains the perf gap:
+  - the latest Tracy data shows `topk_xl_compute_merge_chunks` dominates the wall time;
+  - pack-untilize and writer reorder are not first-order bottlenecks for the profiled shape;
+  - Blaze scales per row like local-sort plus approximately `ceil(log2(num_chunks))` reduction stages,
+    while our current implementation scales per row like `num_chunks - 1` full merge/rebuild steps.
+- Important throughput caveat:
+  - directly copying Blaze's one-chunk-per-core mapping would improve single-row latency, but for
+    640 rows on 110 cores it would run only `floor(110 / 25) == 4` rows concurrently;
+  - the best TTNN strategy for this workload may be a hybrid group size, for example several cores per
+    row where each core handles a few chunks locally and then the group runs a smaller tree reduction;
+  - that would reduce the critical path substantially while preserving much more row-level concurrency
+    than the pure Blaze single-row-distributed mapping.
+
+### 2026-06-11 — remove temporary device profiling instrumentation
+- Removed the temporary device-side Tracy scopes and profiler header includes from the TopK XL reader,
+  compute, and writer kernels.
+- Verified no profiler scope or profiler-header references remain under
+  `ttnn/cpp/ttnn/operations/experimental/topk_xl`.
+- Validation:
+  - `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/experimental/test_topk_xl.py -q`:
+    PASS (30 passed, 3 skipped).
