@@ -1114,16 +1114,12 @@ void configure_pgd_psd_host_alignment_constraints(
 
     const auto [single_group_fits, preferred_globals] =
         ::tt::tt_fabric::PhysicalGroupingDescriptor::find_minimum_coverage_group(all_targets, global_groups);
-    if (single_group_fits) {
-        std::vector<std::set<uint32_t>> target_groups;
-        target_groups.push_back(all_targets);
-        if (constraints.set_same_rank_groups_constraint(target_groups, global_groups)) {
-            return;
-        }
-        log_warning(
-            tt::LogFabric,
-            "PGD host alignment: failed to set same-rank groups constraint; falling back to preferred globals");
-    }
+    // Same-host is a PREFERENCE, not a hard requirement. We prefer keeping the whole mesh on one host when it
+    // fits, but must allow cross-host placement when that is the only valid embedding of the requested topology
+    // -- e.g. a 4x4 RING/RING torus that physically spans two galaxies through inter-host links. A required
+    // same-rank constraint here wrongly forbids such legitimate cross-host meshes (it pins all nodes to one
+    // host purely because the node count fits), so a torus that only closes across hosts can never be placed.
+    // Using a preferred constraint keeps single-host meshes on one host while letting cross-host meshes embed.
     if (!preferred_globals.empty()) {
         if (!single_group_fits) {
             log_debug(
