@@ -14,4 +14,5 @@ void kernel_main() {
     CircularBuffer cb_out(cb_id_out);
 
     cb_out.wait_front(num_units);
+    cb_out.pop_front(num_units);
 }
