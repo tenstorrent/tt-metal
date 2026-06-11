@@ -38,6 +38,7 @@ using test_helpers::MakeMinimalComputeKernel;
 using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalWorkUnit;
+using test_helpers::MakeShardedTensorParameter;
 
 // ============================================================================
 // Test Fixture
@@ -433,6 +434,59 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
 
     ASSERT_EQ(output_data.size(), expected.size());
     EXPECT_EQ(output_data, expected);
+}
+
+// ============================================================================
+// NodeLocalMem (LOCAL TensorBinding) compute compile-proof
+// ============================================================================
+//
+// Proves the LOCAL (NodeLocalMem) binding path compiles on a *compute* kernel — the first
+// end-to-end exercise of the lm:: codegen (genfiles emits `#include "api/core_local_mem.h"` + the
+// lm:: token alias) and the first compute/TRISC compile of CoreLocalMem. Unlike TensorAccessor,
+// which hauls NoC address-generation that doesn't build on TRISC, NodeLocalMem carries no NoC
+// machinery, so a compute kernel can build against it; this pins that claim across all three TRISCs
+// (UNPACK / MATH / PACK). CTAD can't deduce T from the token (it carries no element type), so the
+// type is spelled: NodeLocalMem<uint32_t>(lm::input_tensor).
+//
+// Why this lives under the device-gated HW fixture, not the mock ProgramSpec suite: it is the first
+// compute JIT compile in this binary, and the process-wide BuildEnvManager is seeded once with the
+// first arch's HAL (MetalContext::create_* → seed_if_unseeded_with_hal). The mock Quasar ProgramSpec
+// fixture, which runs earlier in the same process, seeds Quasar; a later WH compute JIT build then
+// reads a mismatched, corrupted JitBuildState (srcs_.size() returns garbage) → SIGSEGV. The
+// pre-existing DM smoke (TensorAccessorBindingJITSmokeDMKernel) tolerates the stale seed; the
+// compute build path does not. Gating here (skipped without a real WH/BH device) keeps it clear of
+// the Quasar seed, matching NamedArgsLoopbackCompute above. See the BuildEnvManager seed-once issue
+// for the harness-side fix.
+TEST_F(ProgramSpecHWTest, NodeLocalMemBindingCompileComputeKernel) {
+    auto mesh_device = devices_.at(0);
+    IDevice* device = mesh_device->get_devices()[0];
+
+    const NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "lm_compile_compute";
+
+    auto compute_kernel = MakeMinimalComputeKernel("compute_kernel");
+    compute_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    NodeLocalMem<uint32_t> local(lm::input_tensor);
+    auto addr = local.get_address();
+    auto val = local[0];
+    (void)addr;
+    (void)val;
+}
+)"};
+
+    // Sharded L1 over origin cores (0,0),(1,0); the kernel runs on {0,0}, so the LOCAL binding is
+    // legal (L1 + sharded) and reaches codegen.
+    spec.kernels = {compute_kernel};
+    spec.tensor_parameters = {
+        MakeShardedTensorParameter("input_tensor", tt::tt_metal::Shape{1, 1, 64, 32}, {32, 32}, /*num_cores=*/2)};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_tensor", TensorAccessType::LOCAL);
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device, spec);
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
 }
 
 // ============================================================================
