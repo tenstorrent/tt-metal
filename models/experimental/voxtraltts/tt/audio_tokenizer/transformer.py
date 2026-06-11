@@ -200,12 +200,7 @@ class VoxtralTTAudioTokenizerDecoderTransformerBlock:
 
         residual = ttnn.clone(h, dtype=self.output_dtype, memory_config=act_mem)
         normed = self.ffn_norm(h, mode=Mode.DECODE)
-        ff = self.mlp(
-            normed,
-            activation_memory_config=act_mem,
-            ff1_3_program_config=matmul_prog["ff1_3"] if matmul_prog else None,
-            ff2_program_config=matmul_prog["ff2"] if matmul_prog else None,
-        )
+        ff = self.mlp(normed, activation_memory_config=act_mem)
         ttnn.deallocate(normed)
         ff = self._slice_like(ff, h)
         if self.layer_scale:
