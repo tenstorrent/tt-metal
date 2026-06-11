@@ -118,6 +118,50 @@ void kernel_main() {
         return;
     }
 
+    // The op is read-bound: compute sits ~92% idle waiting on the per-tap activation windows.
+    // For stride==1 the K tap windows are the SAME input sticks shifted by one row, so the
+    // per-tap reader re-reads every element K times from DRAM. When B==1 the block's input
+    // pages are contiguous [base .. base+BLOCK_T+K-2]: read that union ONCE, then serve each
+    // tap window by an L1->L1 copy (NOC DMA, offset by the tap). Cuts DRAM traffic ~K×.
+    // (B>1 or stride>1 would break the contiguous-union assumption — keep the per-tap path.)
+    constexpr bool coalesce = (stride == 1 && B == 1);
+
+    if constexpr (coalesce) {
+        constexpr uint32_t union_sticks = BLOCK_T + K - 1;
+        const uint32_t scratch_ptr = get_write_ptr(scratch_cb_id);
+        for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+            const uint32_t base_row = row_start + blk * BLOCK_T;
+            // Read the union once. Pages past T_pad (tail of the last partial block) stay zero;
+            // their output rows are beyond num_rows and the writer discards them.
+            zero_region_u32(scratch_ptr, union_sticks * padded_stick_bytes);
+            for (uint32_t u = 0; u < union_sticks; ++u) {
+                const uint32_t in_page = base_row + u;
+                if (in_page >= T_pad) {
+                    break;
+                }
+                noc_async_read(src.get_noc_addr(in_page), scratch_ptr + u * padded_stick_bytes, stick_bytes);
+            }
+            noc_async_read_barrier();
+
+            for (uint32_t j = 0; j < K; ++j) {
+                cb_reserve_back(scalar_cb_id, 1);
+                const uint32_t tap_bits = get_common_arg_val<uint32_t>(j);
+                float tap;
+                __builtin_memcpy(&tap, &tap_bits, sizeof(float));
+                fill_tile_fp32(scalar_cb_id, tap);
+                cb_push_back(scalar_cb_id, 1);
+
+                // Tap j window = union sticks [j .. j+BLOCK_T-1], one contiguous L1->L1 copy.
+                cb_reserve_back(act_cb_id, block_num_tiles);
+                const uint32_t wptr = get_write_ptr(act_cb_id);
+                noc_async_read(get_noc_addr(scratch_ptr + j * padded_stick_bytes), wptr, BLOCK_T * padded_stick_bytes);
+                noc_async_read_barrier();
+                cb_push_back(act_cb_id, block_num_tiles);
+            }
+        }
+        return;
+    }
+
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         const uint32_t base_row = row_start + blk * BLOCK_T;
         for (uint32_t j = 0; j < K; ++j) {
