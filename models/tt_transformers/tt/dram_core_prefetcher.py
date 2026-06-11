@@ -232,28 +232,17 @@ class DramCorePrefetcher(LightweightModule):
         )
 
     def init(self, mode: Mode = Mode.DECODE) -> None:
-        # Called for BOTH modes via model.switch_mode(): prefill then decode. Actual prefetching is
-        # decode-only (prefetch()/run() are gated to decode), but the consumer sub-device must exist
-        # in both modes so worker ops have a valid sub-device to run on. Mirrors Prefetcher.init.
+        # Called for BOTH modes via model.switch_mode() (prefill then decode); prefetching itself is
+        # decode-only. Unlike the worker-core Prefetcher, the DRAM-core path creates NO consumer
+        # sub-device: the DRISC senders live on a separate programmable core type, so there are no
+        # worker-grid sender columns to fence off, and consumer ops run on the device's default
+        # (whole-grid) sub-device. worker_sub_device_id stays None, so every op the model places
+        # with `sub_device_id=prefetcher.worker_sub_device_id` runs on the default sub-device —
+        # exactly like the no-prefetcher path.
         if mode == Mode.DECODE and self.init_decode_done or mode == Mode.PREFILL and self.init_prefill_done:
             return
         self.mode = mode
-        # Lazy import to avoid hard dep order at module load.
-        from models.tt_transformers.tt.prefetcher import PrefetcherSubDevice
-
-        # Single consumer sub-device covering the whole worker grid, in both modes — DRAM senders
-        # live on a separate programmable core type, so there are no worker-grid sender columns to
-        # carve out (unlike the worker-core Prefetcher).
-        self.prefetcher_sub_device = PrefetcherSubDevice(self.mesh_device)
-        self.prefetcher_sub_device.add_sub_device(self.all_worker_cores_range_set)
-        self.prefetcher_sub_device.init_sub_device_manager()
-        self.worker_sub_device_id = self.prefetcher_sub_device.sub_devices_id[-1]
-
-        logger.info(
-            f"[DramCorePrefetcher.init] mode={mode} ring={self.ring_size} "
-            f"receivers={self.num_senders}x{self.num_receiver_cores} "
-            f"workers={self.all_worker_cores_range_set.num_cores()} cores"
-        )
+        logger.info(f"[DramCorePrefetcher.init] mode={mode} ring={self.ring_size} (no consumer sub-device)")
         self.init_decode_done = mode == Mode.DECODE
         self.init_prefill_done = mode == Mode.PREFILL
 
@@ -301,8 +290,6 @@ class DramCorePrefetcher(LightweightModule):
             self._queue_payload,
             global_cb=self.global_cb,
         )
-        # Stall worker consumer ops on the worker sub-device; the DRAM sender lives outside.
-        self.mesh_device.set_sub_device_stall_group([self.worker_sub_device_id])
 
     def stop(self) -> None:
         """Per-forward stop. NO-OP for the DRAM-core path — DRISC daemon stays up.
@@ -315,10 +302,6 @@ class DramCorePrefetcher(LightweightModule):
         if self._started and not self._stopped:
             ttnn.experimental.stop_dram_core_prefetcher(self.mesh_device)
             self._stopped = True
-            # run() narrowed the stall group to the worker sub-device every forward; restore the
-            # default so any op submitted on this mesh after teardown doesn't stall waiting on a
-            # sub-device whose prefetcher producer is gone.
-            self.mesh_device.reset_sub_device_stall_group()
 
     def __del__(self):
         # Best-effort cleanup. MeshDevice close has its own graceful fallback if we miss it.
