@@ -30,6 +30,8 @@
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/types.hpp"
+#define HAS_TTNN 1
+#include "/home/maxim-artemov/workspace/debug_include.hpp"
 
 namespace ttnn::operations::conv {
 using sliding_window::ParallelConfig;
@@ -95,6 +97,9 @@ uint32_t get_input_channels_alignment(
     bool sliced_op,
     bool is_mm_conv,
     const std::optional<MemoryConfig>& input_memory_config) {
+    // Physical width alignment (in elements) that a Row Major sharded tensor's per-core shard width must be a
+    // multiple of, as enforced by RowMajorPageConfig::validate_alignment.
+    constexpr uint32_t kRowMajorChannelShardAlignment = 128;
     if (!is_mm_conv && input_tensor_memory_layout != TensorMemoryLayout::WIDTH_SHARDED &&
         (input_tensor_layout == Layout::ROW_MAJOR || sliced_op)) {
         if (input_memory_config.has_value() && input_memory_config->is_sharded()) {
@@ -111,13 +116,16 @@ uint32_t get_input_channels_alignment(
             }
             return tt::constants::TILE_WIDTH;
         }
-        // The minimum valid value for input channels alignment is 8.
-        // This requirement comes from the L1 alignment, which is 16 bytes.
-        // Since the Halo operation outputs data in row-major layout and the smallest data format used is bfloat16
-        // (2 bytes per element), we need at least 8 elements (8 * 2 bytes = 16 bytes) in the input channel
-        // dimension. This ensures that one channel (or "stick") can be efficiently transferred over the NoC
-        // (Network on Chip) in a single, aligned operation.
-        return tt::tt_metal::hal::get_l1_alignment() / 2;
+        // For Row Major sharded tensors, RowMajorPageConfig::validate_alignment requires the per-core physical shard
+        // width (in elements) to be a multiple of the tensor's width alignment. When a Row Major tensor is sharded
+        // across multiple cores in the channel dimension, the resulting channel shard width
+        // (channels / num_cores_channels) must satisfy this physical Row Major width-alignment requirement, otherwise
+        // tensor creation fails with an "Alignment mismatch for sharded tensor" error.
+        //
+        // Because the channel dimension is snapped to round_up(channels, num_cores_channels * channels_alignment), the
+        // per-core channel shard width is always a multiple of the value returned here. Returning the Row Major shard
+        // width alignment therefore guarantees each per-core shard width is physically aligned.
+        return kRowMajorChannelShardAlignment;
     }
     return tt::constants::TILE_WIDTH;
 }
@@ -374,6 +382,8 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
     TT_FATAL(channels % num_cores_channels == 0, "Channels: {}, num core channels: {}", channels, num_cores_channels);
     uint32_t channel_shard = channels / num_cores_channels;
     auto shard_spec = tt::tt_metal::ShardSpec{parallel_config.grid, {nhw_shard, channel_shard}, shard_orientation};
+    py_log1_cout(nhw_shard);
+    py_log1_cout(channel_shard);
     return MemoryConfig{shard_scheme, BufferType::L1, shard_spec};
 }
 
@@ -612,9 +622,11 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     bool enable_channels_padding,
     bool is_shard_height_tile_multiple,
     bool is_shard_width_tile_multiple) {
+    py_log_here();
     const uint32_t input_channels_alignment = get_input_channels_alignment(
         shard_layout, input_tensor_layout, input_tensor_buffer_type == BufferType::DRAM, is_mm_conv, std::nullopt);
     ParallelConfig parallel_config;
+    py_log_here();
     if (input_tensor_parallel_config.has_value()) {
         parallel_config = input_tensor_parallel_config.value();
     } else {
@@ -649,9 +661,12 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     auto input_padded_shape =
         ttnn::Shape({1, 1, input_tensor_height_snapped_to_tile, input_tensor_width_snapped_to_channels_alignment});
 
+    py_log1_cout(input_padded_shape);
+    py_log1_cout(round_up_size);
     MemoryConfig input_tensor_sharded_memory_config =
         create_sharded_memory_config_from_parallel_config(input_padded_shape, parallel_config, round_up_size);
 
+    py_log1_cout(input_tensor_sharded_memory_config);
     return {input_padded_shape, input_tensor_sharded_memory_config};
 };
 
@@ -690,11 +705,14 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
 
     ParallelConfig input_tensor_parallel_config;
     if (!input_tensor_on_device) {
+        py_log_here();
         needs_shard_or_reshard = true;
     } else {
         if (!input_memory_config.is_sharded()) {
+            py_log_here();
             needs_shard_or_reshard = true;
         } else {
+            py_log_here();
             const tt::tt_metal::ShardSpec& input_shard_spec = input_memory_config.shard_spec().value();
             const tt::tt_metal::ShardOrientation input_shard_orientation = input_shard_spec.orientation;
             const CoreRangeSet input_shard_grid = input_shard_spec.grid;
@@ -703,6 +721,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
                 .shard_scheme = input_shard_scheme,
                 .shard_orientation = input_shard_orientation};
             input_tensor_parallel_config = pconfig;
+            py_log_here();
             if (input_shard_scheme != TensorMemoryLayout::BLOCK_SHARDED &&
                 input_shard_orientation != ShardOrientation::ROW_MAJOR) {
                 needs_shard_or_reshard = true;
@@ -713,6 +732,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
                 needs_shard_or_reshard = true;
             }
 
+            py_log_here();
             if (is_mm_conv && input_shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
                 uint32_t num_cores_c = input_shard_orientation == ShardOrientation::ROW_MAJOR
                                            ? input_shard_grid.bounding_box().grid_size().x
@@ -725,9 +745,11 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
 
             // Additional check for mm convs to ensure shard height is multiple of TILE_HEIGHT since tiling requires
             // that
+            py_log_here();
             if (is_mm_conv && (input_shard_spec.shape[0] % tt::constants::TILE_HEIGHT != 0)) {
                 needs_shard_or_reshard = true;
             }
+            py_log_here();
             if (conv_config.override_sharding_config) {
                 TT_FATAL(
                     conv_config.core_grid.has_value(),
@@ -754,6 +776,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
         conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
     ParallelConfig parallel_config = input_tensor_parallel_config;
     if (conv_config.reshard_if_not_optimal || needs_shard_or_reshard) {
+        py_log_here();
         ParallelConfig optimal_parallel_config = determine_parallel_config(
             shard_layout,
             batch_size,
@@ -769,6 +792,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
             true,
             conv_config.act_block_h_override);
 
+        py_log_here();
         if (conv_config.override_sharding_config) {
             TT_FATAL(conv_config.core_grid.has_value(), "Core grid must be provided when overriding sharding config");
             // override parallel config
@@ -786,6 +810,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
         }
     }
     if (needs_shard_or_reshard) {
+        py_log_here();
         auto [input_padded_shape, input_tensor_sharded_memory_config] = determine_input_memory_config(
             shard_layout,
             block_shard_orientation,
@@ -798,6 +823,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
             BufferType::L1,
             parallel_config,
             conv_config.act_block_h_override);
+        py_log_here();
         return {input_padded_shape, input_tensor_sharded_memory_config, needs_shard_or_reshard};
     }
     return {input_tensor.logical_shape(), input_tensor.memory_config(), needs_shard_or_reshard};
@@ -828,6 +854,8 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
     auto [input_padded_shape, input_tensor_sharded_memory_config, needs_shard_or_reshard] =
         get_conv_padded_input_shape_and_mem_config(
             device, input_tensor_, conv_config, batch_size, height, width, in_channels, out_channels, is_mm_conv);
+    py_log_tensor(input_tensor);
+    py_log1_cout(input_tensor_sharded_memory_config);
     ParallelConfig parallel_config = {
         .grid = input_tensor_sharded_memory_config.shard_spec().value().grid,
         .shard_scheme = input_tensor_sharded_memory_config.memory_layout(),
