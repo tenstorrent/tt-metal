@@ -42,6 +42,23 @@ void zero_buffer_async(uint32_t write_addr, int bytes) {
 
 void zero_buffer_barrier() { noc_async_read_barrier(); }
 
+// Zero a DRAM-interleaved output buffer page-by-page by writing zeros (from the
+// L1 zeros region) to each page. Unwritten dispatch slots otherwise retain
+// uninitialized DRAM garbage that feeds sparse_matmul as spurious tokens.
+template <typename AddrGen>
+void zero_dram_pages_async(const AddrGen& addr_gen, uint32_t num_pages, uint32_t page_size) {
+    for (uint32_t p = 0; p < num_pages; p++) {
+        uint64_t dst = addr_gen.get_noc_addr(p);
+        int bytes = (int)page_size;
+        while (bytes > 0) {
+            uint32_t curr = std::min(bytes, MEM_ZEROS_SIZE);
+            noc_async_write(MEM_ZEROS_BASE, dst, curr);
+            dst += curr;
+            bytes -= curr;
+        }
+    }
+}
+
 }  // namespace detail
 
 using namespace ttnn::operations::ccl::common;
@@ -160,6 +177,14 @@ void kernel_main() {
 
     detail::zero_buffer_barrier();
     open_direction_connections_barrier(directions, fabric_connections);
+
+    // Zero this device's local output + metadata buffers so unwritten dispatch
+    // slots hold clean zeros instead of uninitialized DRAM garbage. Done BEFORE
+    // signalling readiness (init semaphore) so remote token/metadata writes,
+    // which wait on that semaphore, land on zeroed memory.
+    detail::zero_dram_pages_async(output_addr_gen, output_pages, output_page_size);
+    detail::zero_dram_pages_async(metadata_addr_gen, metadata_pages, metadata_page_size);
+    noc_async_write_barrier();
 
     // Send initialization semaphore to configured targets for synchronization
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);

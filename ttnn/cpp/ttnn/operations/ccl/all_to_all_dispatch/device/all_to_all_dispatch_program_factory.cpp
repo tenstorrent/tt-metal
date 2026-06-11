@@ -290,6 +290,24 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         subdevice_cores.at(0), num_cores, worker_core_range_set, true);
     std::vector<CoreCoord> sender_cores = corerange_to_cores(sender_core_grid);
 
+    fprintf(
+        stderr,
+        "[A2AD_DBG] coord=(%u,%u) lin=%u in0=%d dispatch_devices=%u tokens_per_device=%u "
+        "num_links=%u tokens_per_core=%u num_cores=%u sender_cores=%zu batch_size=%u write_ppage=%u\n",
+        (unsigned)mesh_coordinate[0],
+        (unsigned)mesh_coordinate[1],
+        (unsigned)linearized_mesh_coord,
+        (int)input_shape[0],
+        (unsigned)dispatch_devices,
+        (unsigned)tokens_per_device,
+        (unsigned)num_links,
+        (unsigned)tokens_per_core,
+        (unsigned)num_cores,
+        (size_t)sender_cores.size(),
+        (unsigned)batch_size,
+        (unsigned)0);
+    fflush(stderr);
+
     // create circular buffers
     tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_input_tensor_config);
     tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_indices_tensor_config);
@@ -434,6 +452,16 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         reader_runtime_args[7] = std::min(tokens_per_core_start + tokens_per_core, tokens_per_device);
         writer_runtime_args[7] = tokens_per_core_start;
         writer_runtime_args[8] = reader_runtime_args[7];
+        fprintf(
+            stderr,
+            "[A2AD_DBG] coord=(%u,%u) core=(%u,%u) token_range=[%u,%u)\n",
+            (unsigned)mesh_coordinate[0],
+            (unsigned)mesh_coordinate[1],
+            (unsigned)sender_core.x,
+            (unsigned)sender_core.y,
+            (unsigned)reader_runtime_args[6],
+            (unsigned)reader_runtime_args[7]);
+        fflush(stderr);
         tokens_per_core_start = reader_runtime_args[7];
         for (const auto& neighbor_coordinate : neighbors) {
             log_debug(

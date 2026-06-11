@@ -31,6 +31,14 @@ std::array<ttnn::Tensor, 2> all_to_all_dispatch(
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
     uint32_t num_links_ = num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device, axis));
+    {
+        const char* _ovr = std::getenv("A2A_NUM_LINKS");
+        if (_ovr != nullptr) {
+            num_links_ = (uint32_t)atoi(_ovr);
+            fprintf(stderr, "[A2AD_DBG] num_links OVERRIDE -> %u\n", num_links_);
+            fflush(stderr);
+        }
+    }
     log_debug(tt::LogOp, "num_links: {}", num_links_);
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, axis);
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
