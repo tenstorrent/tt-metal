@@ -22,6 +22,23 @@
 
 namespace tt::tt_metal::distributed {
 
+namespace {
+
+void advance_h2d_simulator_socket_device(MeshDevice* mesh_device, const MeshCoordinate& device_coord) {
+    if (mesh_device == nullptr) {
+        return;
+    }
+
+    const auto& cluster = MetalContext::instance().get_cluster();
+    if (cluster.get_target_device_type() != tt::TargetDevice::Simulator) {
+        return;
+    }
+
+    cluster.advance_device_execution(mesh_device->get_device(device_coord)->id());
+}
+
+}  // namespace
+
 H2DSocket::PinnedBufferInfo H2DSocket::init_bytes_acked_buffer(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const MeshCoordinateRangeSet& device_range,
@@ -298,6 +315,7 @@ H2DSocket::~H2DSocket() noexcept {
 void H2DSocket::reserve_bytes(uint32_t num_bytes) {
     uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
     while (bytes_free < num_bytes) {
+        advance_h2d_simulator_socket_device(mesh_device_, recv_core_.device_coord);
         tt_driver_atomics::mfence();
         volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
         bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_value);
@@ -383,6 +401,7 @@ void H2DSocket::barrier(std::optional<uint32_t> timeout_ms) {
     volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
     auto start_time = std::chrono::high_resolution_clock::now();
     while (bytes_sent_ - bytes_acked_value != 0) {
+        advance_h2d_simulator_socket_device(mesh_device_, recv_core_.device_coord);
         tt_driver_atomics::mfence();
         bytes_acked_value = bytes_acked_ptr_[0];
         if (timeout_ms.has_value()) {

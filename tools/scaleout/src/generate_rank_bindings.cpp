@@ -55,7 +55,7 @@ PhysicalSystemDescriptor run_psd_discovery() {
     const auto& rtoptions = context.rtoptions();
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
 
-    return tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
+    return tt::tt_metal::run_physical_system_discovery(*driver_ref.get_cluster_description(), distributed_context, rtoptions.get_target_device());
 }
 
 /**
