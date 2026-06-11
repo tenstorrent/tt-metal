@@ -392,7 +392,7 @@ These rules apply across all kernel types:
    ```
    Available constants: `SFPLOADI_MOD0_FLOATB` (0), `SFPLOADI_MOD0_FLOATA` (1), `SFPLOADI_MOD0_USHORT` (2), `SFPLOADI_MOD0_SHORT` (4), `SFPLOADI_MOD0_UPPER` (8), `SFPLOADI_MOD0_LOWER` (10).
 
-   **The "no SFPI on Quasar" rule refers to the C++ DSL types only** (`sfpi::vFloat`, `sfpi::dst_reg`, `v_if`, `lut2`, etc.) — NOT the `sfpi::SFPLOADI_MOD0_*` mode constants. If a tester or refiner agent claims these constants are unavailable on Quasar and proposes replacing them with raw hex, that diagnosis is wrong — reject it and re-examine the actual compile error.
+   **SFPI is available on Quasar** — both the C++ DSL types (`sfpi::vFloat`, `sfpi::dst_reg`, `v_if`, `lut2`, etc.) and the `sfpi::` mode constants. If a tester or refiner agent claims these constants are unavailable on Quasar and proposes replacing them with raw hex, that diagnosis is wrong — reject it and re-examine the actual compile error.
 
 4. **SFPLOAD / SFPSTORE: use `p_sfpu::sfpmem::*` named constants for `instr_mod0`**: The second argument of `TTI_SFPLOAD` / `TT_SFPLOAD` / `TTI_SFPSTORE` / `TT_SFPSTORE` selects the memory-format mode. It MUST be written as a `p_sfpu::sfpmem::*` named constant, never as a bare integer — `DEFAULT` (= 0) expresses "use the ALU_FORMAT_SPEC_REG default" which is a *choice*, not a "no value":
    ```cpp
@@ -536,9 +536,9 @@ One bullet per assumption not derivable from the analysis. Shape:
 `- [Claim] — [Why I believed it] — [How/when it could be wrong]`.
 
 Examples:
-- Treated `sfpi::SFPLOADI_MOD0_*` constants as available on Quasar despite the
-  "no SFPI on Quasar" rule — the analysis noted these specific constants are
-  arch-agnostic — wrong if a future Quasar SFPI header scope-limits them.
+- Used `sfpi::SFPLOADI_MOD0_*` constants from `sfpi_constants.h` — they are
+  arch-agnostic and always on the include path — wrong if a future Quasar SFPI
+  header scope-limits them.
 - Added `SfpuType::fill` to `tt_llk_quasar/llk_lib/llk_defs.h` — the analysis
   did not list this as a prerequisite but the compile failed without it —
   would be wrong if a dedicated enum-maintenance step is added to the pipeline.
