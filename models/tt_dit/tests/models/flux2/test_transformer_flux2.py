@@ -207,10 +207,14 @@ def test_transformer(
     tt_timestep = tensor.from_torch(timestep.unsqueeze(-1), dtype=ttnn.float32, device=mesh_device)
     tt_guidance = tensor.from_torch(guidance.unsqueeze(-1), device=mesh_device)
 
-    tt_spatial_rope_cos = tensor.from_torch(spatial_rope_cos, device=mesh_device, mesh_axes=[sp_axis, None])
-    tt_spatial_rope_sin = tensor.from_torch(spatial_rope_sin, device=mesh_device, mesh_axes=[sp_axis, None])
-    tt_prompt_rope_cos = tensor.from_torch(prompt_rope_cos, device=mesh_device)
-    tt_prompt_rope_sin = tensor.from_torch(prompt_rope_sin, device=mesh_device)
+    tt_spatial_rope_cos = tensor.from_torch(
+        spatial_rope_cos.unsqueeze(0).unsqueeze(0), device=mesh_device, mesh_axes=[None, None, sp_axis, None]
+    )
+    tt_spatial_rope_sin = tensor.from_torch(
+        spatial_rope_sin.unsqueeze(0).unsqueeze(0), device=mesh_device, mesh_axes=[None, None, sp_axis, None]
+    )
+    tt_prompt_rope_cos = tensor.from_torch(prompt_rope_cos.unsqueeze(0).unsqueeze(0), device=mesh_device)
+    tt_prompt_rope_sin = tensor.from_torch(prompt_rope_sin.unsqueeze(0).unsqueeze(0), device=mesh_device)
 
     logger.info("running Torch model...")
     with torch.no_grad():
@@ -245,10 +249,12 @@ def test_transformer(
     "mesh_device, sp_axis, tp_axis, topology, num_links, fsdp, device_params",
     [
         [(4, 8), 0, 1, ttnn.Topology.Ring, 2, False, ring_params_8k_flux2],
+        [(4, 8), 1, 0, ttnn.Topology.Ring, 2, False, ring_params_8k_flux2],
         [(4, 8), 0, 1, ttnn.Topology.Ring, 2, True, ring_params_8k_flux2],
     ],
     ids=[
         "bh_4x8_ring_nofsdp",
+        "bh_4x8_ring_nofsdp_sp1tp0",
         "bh_4x8_ring_fsdp",
     ],
     indirect=["mesh_device", "device_params"],
@@ -267,6 +273,7 @@ def test_transformer(
     ],
 )
 @pytest.mark.parametrize("xformer_idx", [0, 1, 3, 4], ids=["x_single", "x_double", "x_both", "x_all"])
+@pytest.mark.parametrize("shard_prompt", [False, True], ids=["no_shard_prompt", "yes_shard_prompt"])
 def test_transformer_profile(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
@@ -279,6 +286,7 @@ def test_transformer_profile(
     width: int,
     prompt_seq_len: int,
     xformer_idx: int,
+    shard_prompt: bool,
 ) -> None:
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     tp_factor = tuple(mesh_device.shape)[tp_axis]
@@ -293,6 +301,8 @@ def test_transformer_profile(
         model_name, subfolder="transformer", torch_dtype=torch.bfloat16
     )
     torch_model.eval()
+    logger.info(f"single transformer blocks: {len(torch_model.single_transformer_blocks)}")
+    logger.info(f"transformer blocks: {len(torch_model.transformer_blocks)}")
     if xformer_idx != 4:
         torch_model.transformer_blocks = torch.nn.ModuleList(
             [torch_model.transformer_blocks[0]] if xformer_idx > 0 else []
@@ -341,6 +351,7 @@ def test_transformer_profile(
         parallel_config=parallel_config,
         padding_config=padding_config,
         is_fsdp=fsdp,
+        shard_prompt=shard_prompt,
     )
 
     cache.load_model(
@@ -367,15 +378,26 @@ def test_transformer_profile(
     prompt_rope_cos, prompt_rope_sin = pos_embed.forward(text_ids)
     spatial_rope_cos, spatial_rope_sin = pos_embed.forward(image_ids)
 
+    prompt_mesh_axes = [None, sp_axis, None] if shard_prompt else None
+    prompt_rope_mesh_axes = [None, None, sp_axis, None] if shard_prompt else None
+
     tt_spatial = tensor.from_torch(spatial, device=mesh_device, mesh_axes=[None, sp_axis, None])
-    tt_prompt = tensor.from_torch(prompt, device=mesh_device)
+    tt_prompt = tensor.from_torch(prompt, device=mesh_device, mesh_axes=prompt_mesh_axes)
     tt_timestep = tensor.from_torch(timestep.unsqueeze(-1), dtype=ttnn.float32, device=mesh_device)
     tt_guidance = tensor.from_torch(guidance.unsqueeze(-1), device=mesh_device)
 
-    tt_spatial_rope_cos = tensor.from_torch(spatial_rope_cos, device=mesh_device, mesh_axes=[sp_axis, None])
-    tt_spatial_rope_sin = tensor.from_torch(spatial_rope_sin, device=mesh_device, mesh_axes=[sp_axis, None])
-    tt_prompt_rope_cos = tensor.from_torch(prompt_rope_cos, device=mesh_device)
-    tt_prompt_rope_sin = tensor.from_torch(prompt_rope_sin, device=mesh_device)
+    tt_spatial_rope_cos = tensor.from_torch(
+        spatial_rope_cos.unsqueeze(0).unsqueeze(0), device=mesh_device, mesh_axes=[None, None, sp_axis, None]
+    )
+    tt_spatial_rope_sin = tensor.from_torch(
+        spatial_rope_sin.unsqueeze(0).unsqueeze(0), device=mesh_device, mesh_axes=[None, None, sp_axis, None]
+    )
+    tt_prompt_rope_cos = tensor.from_torch(
+        prompt_rope_cos.unsqueeze(0).unsqueeze(0), device=mesh_device, mesh_axes=prompt_rope_mesh_axes
+    )
+    tt_prompt_rope_sin = tensor.from_torch(
+        prompt_rope_sin.unsqueeze(0).unsqueeze(0), device=mesh_device, mesh_axes=prompt_rope_mesh_axes
+    )
 
     # warmup
     tt_model.forward(
@@ -388,9 +410,10 @@ def test_transformer_profile(
         spatial_sequence_length=spatial_seq_len,
         prompt_sequence_length=prompt_seq_len,
         compute_prompt_output=(xformer_idx in [0, 3]),  # force computing eveything
+        traced=True,
     )
     ttnn.synchronize_device(mesh_device)
-    signpost("transformer_start")
+    signpost("t_start")
     tt_output = tt_model.forward(
         spatial=tt_spatial,
         prompt=tt_prompt,
@@ -401,9 +424,10 @@ def test_transformer_profile(
         spatial_sequence_length=spatial_seq_len,
         prompt_sequence_length=prompt_seq_len,
         compute_prompt_output=(xformer_idx in [0, 3]),  # force computing eveything
+        traced=True,
     )
     ttnn.synchronize_device(mesh_device)
-    signpost("transformer_end")
+    signpost("t_end")
 
 
 def _prepare_ids(*, height: int = 1, width: int = 1, text_sequence_length: int = 1) -> torch.Tensor:
