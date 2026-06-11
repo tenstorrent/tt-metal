@@ -494,6 +494,7 @@ class LTXTransformerModel(Module):
         has_audio: bool = False,
         apply_gated_attention: bool = False,
         cross_attention_adaln: bool = True,
+        image_conditioning: bool = False,
     ) -> None:
         super().__init__()
 
@@ -503,6 +504,9 @@ class LTXTransformerModel(Module):
         self.num_layers = num_layers
         self.has_audio = has_audio
         self.cross_attention_adaln = cross_attention_adaln
+        # I2V: video AdaLN modulation is per-token (denoise_mask * sigma) instead of batch-scalar.
+        # Audio / prompt / A<->V cross AdaLN stay batch-scalar regardless.
+        self.image_conditioning = image_conditioning
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
@@ -683,6 +687,8 @@ class LTXTransformerModel(Module):
         # Shared
         trans_mat: ttnn.Tensor | None,
         timestep_torch: torch.Tensor,
+        # I2V per-token video timestep (B, N); required when image_conditioning=True.
+        video_timestep_torch: torch.Tensor | None = None,
         # Audio (only used when has_audio=True)
         audio_1BNI_torch: torch.Tensor | None = None,
         audio_prompt_1BLP: ttnn.Tensor | None = None,
@@ -709,7 +715,18 @@ class LTXTransformerModel(Module):
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
         video_1BNI = bf16_tensor(video_1BNI_torch, device=self.mesh_device, mesh_axis=sp_axis, shard_dim=-2)
         B_size = video_1BNI_torch.shape[1]
+        # Scalar timestep (1,1,B,1) drives audio / prompt / A<->V cross modulation.
         timestep = bf16_tensor(timestep_torch.reshape(1, 1, B_size, 1) * 1000.0, device=self.mesh_device)
+        # Per-token video timestep (1,1,B*N,1), SP-sharded on dim 2 to match video_1BNI (shard_dim=-2).
+        video_timestep = None
+        if self.image_conditioning:
+            assert video_timestep_torch is not None, "video_timestep_torch required when image_conditioning=True"
+            video_timestep = bf16_tensor(
+                video_timestep_torch.reshape(1, 1, -1, 1) * 1000.0,
+                device=self.mesh_device,
+                mesh_axis=sp_axis,
+                shard_dim=-2,
+            )
         audio_1BNI = (
             bf16_tensor(audio_1BNI_torch, device=self.mesh_device, mesh_axis=sp_axis, shard_dim=-2)
             if self.has_audio
@@ -718,6 +735,7 @@ class LTXTransformerModel(Module):
         return self.inner_step(
             video_1BNI=video_1BNI,
             timestep=timestep,
+            video_timestep=video_timestep,
             audio_1BNI=audio_1BNI,
             video_prompt_1BLP=video_prompt_1BLP,
             video_rope_cos=video_rope_cos,
@@ -750,6 +768,7 @@ class LTXTransformerModel(Module):
         *,
         video_1BNI: ttnn.Tensor,
         timestep: ttnn.Tensor,
+        video_timestep: ttnn.Tensor | None = None,
         audio_1BNI: ttnn.Tensor | None = None,
         video_prompt_1BLP: ttnn.Tensor = None,
         video_rope_cos: ttnn.Tensor = None,
@@ -783,17 +802,25 @@ class LTXTransformerModel(Module):
         ``gather_output`` SP-gathers the velocity outputs to full sequence length (default,
         for the host-Euler path). Pass ``False`` to keep them SP-sharded so an on-device
         solver can step the latent without leaving the device (the traced WAN pattern)."""
-        # Video modulation (6 or 9 params depending on cross_attention_adaln)
+        # Video modulation (6 or 9 params depending on cross_attention_adaln).
+        # I2V: feed the per-token timestep so each token gets its own AdaLN modulation.
         adaln_coeff = 9 if self.cross_attention_adaln else 6
-        video_modulation, video_emb_ts = self.adaln_single(timestep)
-        B = video_modulation.shape[2]
-        video_mod_CB1D = ttnn.reshape(video_modulation, (1, B, adaln_coeff, self.inner_dim))
+        video_ts = video_timestep if self.image_conditioning else timestep
+        video_modulation, video_emb_ts = self.adaln_single(video_ts)
+        # dim 2 is B (scalar) or B*N (per-token, B=1 -> N_local on the SP shard).
+        X = video_modulation.shape[2]
+        video_mod_CB1D = ttnn.reshape(video_modulation, (1, X, adaln_coeff, self.inner_dim))
         if self.parallel_config.tensor_parallel.factor > 1:
             video_mod_CB1D = ttnn.mesh_partition(
                 video_mod_CB1D, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
         # Move the coeff axis to dim 0 once per step so each block's chunk(dim=0) is free.
-        video_mod_CB1D = ttnn.permute(video_mod_CB1D, (2, 1, 0, 3))
+        # Scalar: (1,B,coeff,D) -> (coeff,B,1,D). Per-token: (1,N,coeff,D) -> (coeff,1,N,D).
+        if self.image_conditioning:
+            video_mod_CB1D = ttnn.permute(video_mod_CB1D, (2, 0, 1, 3))
+        else:
+            video_mod_CB1D = ttnn.permute(video_mod_CB1D, (2, 1, 0, 3))
+        B = 1 if self.image_conditioning else X
 
         # Video prompt modulation (2 params, only for 9-output mode)
         video_prompt_2B1D = None
@@ -891,17 +918,42 @@ class LTXTransformerModel(Module):
                 video_1BND = result
 
         v_inner_local = video_emb_ts.shape[-1]
-        v_emb_1B1D = ttnn.reshape(video_emb_ts, (1, B, 1, v_inner_local))
-        if self.parallel_config.tensor_parallel.factor > 1:
-            v_emb_1B1D = ttnn.mesh_partition(
-                v_emb_1B1D, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis
+        if self.image_conditioning:
+            # Per-token: video_emb_ts is (1,1,N,D). Split the (shift, scale) table on its param
+            # axis and broadcast-add onto the per-token embedding so norm_out modulates per token.
+            v_emb_1B1D = video_emb_ts
+            if self.parallel_config.tensor_parallel.factor > 1:
+                v_emb_1B1D = ttnn.mesh_partition(
+                    v_emb_1B1D, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis
+                )
+            sst_shift, sst_scale_p1 = ttnn.chunk(self.scale_shift_table.data, 2, dim=2)  # each (1,1,1,Dloc)
+            v_shift_out = ttnn.add(sst_shift, v_emb_1B1D)  # (1,1,N,Dloc)
+            v_scale_out_p1 = ttnn.add(sst_scale_p1, v_emb_1B1D)
+        else:
+            v_emb_1B1D = ttnn.reshape(video_emb_ts, (1, B, 1, v_inner_local))
+            if self.parallel_config.tensor_parallel.factor > 1:
+                v_emb_1B1D = ttnn.mesh_partition(
+                    v_emb_1B1D, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis
+                )
+            shifted_v = self.scale_shift_table.data + v_emb_1B1D
+            v_shift_out, v_scale_out_p1 = ttnn.chunk(shifted_v, 2, dim=2)
+        if self.image_conditioning:
+            # Per-token modulation: the fused dit_layernorm gamma/beta must be a single
+            # per-channel vector (height == 1 tile), so it cannot carry per-token scale/shift.
+            # Apply a plain layernorm, then modulate manually: shift + normed * scale_p1
+            # (+1 baked into the scale slot at load — same math/convention as the fused op
+            # and the per-block AdaLN addcmul path). Compute in fp32 to match the T2V branch
+            # (which upcasts weight*normed+bias internally via dtype=float32); addcmul needs
+            # all three operands at the same dtype, so the shift/scale are upcast too.
+            video_1BND = self.norm_out(video_1BND, dtype=ttnn.float32)
+            v_shift_out = ttnn.typecast(v_shift_out, ttnn.float32)
+            v_scale_out_p1 = ttnn.typecast(v_scale_out_p1, ttnn.float32)
+            video_1BND = ttnn.addcmul(v_shift_out, video_1BND, v_scale_out_p1)
+        else:
+            # Fuse the AdaLN (1 + scale) * normed + shift modulation into norm_out (WAN pattern).
+            video_1BND = self.norm_out(
+                video_1BND, dynamic_weight=v_scale_out_p1, dynamic_bias=v_shift_out, dtype=ttnn.float32
             )
-        shifted_v = self.scale_shift_table.data + v_emb_1B1D
-        v_shift_out, v_scale_out_p1 = ttnn.chunk(shifted_v, 2, dim=2)
-        # Fuse the AdaLN (1 + scale) * normed + shift modulation into norm_out (WAN pattern).
-        video_1BND = self.norm_out(
-            video_1BND, dynamic_weight=v_scale_out_p1, dynamic_bias=v_shift_out, dtype=ttnn.float32
-        )
         if self.parallel_config.tensor_parallel.factor > 1:
             video_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 video_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
