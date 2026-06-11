@@ -837,3 +837,13 @@ KEY: the FP32 weighted-k-sum was the hidden cost — BF16 (fp32-accumulated) sum
 m1+m2 = -467us/layer = -27ms e2e across 58 MoE layers. MoE phase now: MoECompute 712 (fused) | ReduceScatter
 293 (CCL, latency-bound) | AllGather 184 (CCL) | BinaryNg 116 | Tilize 108 | dispatch/gate. Remaining tail
 TM = Tilize 108 (to_layout TILE on combine-out) + BinaryNg.
+
+## MILESTONE (2026-06-11): EST full e2e = 177.8 ms = 5.96x vs original 1059 ms (PCC held: argmax 100%)
+Confirmed by full per-phase profile (iter12, all phases windowed):
+  prologue 0.019 | attn 1.107/layer | dense 0.664 | moe 1.824 | lm_head 2.484
+  EST = 0.019 + 1.107*61 + 0.664*3 + 1.824*58 + 2.484 = 177.8 ms
+Balance now: MoE 59.5% (MoECompute fused 712us=23% of e2e is the single biggest op) | attn 38% | lm_head 1.4%.
+Journey: 1059 (orig sparse) -> 256 (MoE round) -> 205 (attn TM round) -> 178 (MoE-tail bf16 sum round).
+SAFE device-busy levers now exhausted: attn TM done, CCL latency-bound (closed), MoE tail done. MoECompute
+is bf4 (min precision) + fused = compute floor; its only graph knobs (output_height_shard_dim/topology) are
+the #46208-sensitive combine config. Next attempts target those (bounded risk: hang -> glx_reset_auto recovers).
