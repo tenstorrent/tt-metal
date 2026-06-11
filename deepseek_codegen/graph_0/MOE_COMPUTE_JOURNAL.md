@@ -860,3 +860,17 @@ Remaining levers all blocked/out-of-scope for safe device-busy iteration:
 - attention reshapes/matmul-fidelity: any attn L1/precision change risks #46208 (iter7) or PCC floor.
 - wall-clock (the real decode latency, ~99.8% dispatch-idle): needs metal-trace, which HANGS on CCL replay
   — a different metric + a known blocker.
+
+### L1 SHARDING attempt (2026-06-11) — blocked by tile-alignment for small padded decode tensors
+User Q: tried L1 SHARDING (not just L1-interleaved) to make chains? Tested it:
+- **iter13** L1-INTERLEAVED the 52.9us indexer-K retile (reshape_22): NO-OP (attn0 -12us noise). L1-interleaved
+  helps permutes (4-5x in the attn round) but NOT reshapes/retiles. Reverted.
+- **iter14** L1 HEIGHT-SHARDED the indexer-K layer_norm (32-token grid, [1,128]/core, reference's norm pattern):
+  **TT_FATAL "Physical shard shape (1,128) must be tile {32,32} sized"**. The [32,1,128] TILE decode tensor pads
+  each of 32 tokens into a 32x128 tile, so sub-tile HEIGHT-sharding (1 token/core) is NOT tile-aligned. Reverted.
+- **FINDING**: decode tensors here are 32 tokens with [.,1,.] padding -> they DON'T sub-tile-shard (32 < tile
+  granularity; padding makes each token a full 32x32-padded tile). The reference MLA achieves sharding via an
+  END-TO-END sharded design (ROW_MAJOR dispatch inputs, purpose-built grids) — not retrofittable piecemeal here
+  without a full attention rewrite. The expensive reshapes (reshape_22 etc.) are structural per-token padding
+  retiles for rope/cache/SDPA layout — neither L1-interleaved nor piecemeal-sharding removes them.
+=> Confirmed floor: 177.8 ms (5.96x). Both retile-elimination paths (interleave, shard) exhausted for decode.
