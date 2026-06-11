@@ -64,6 +64,42 @@ SelectiveReduceCombineWorkerLayout compute_worker_layout(
     };
 }
 
+
+tt::tt_fabric::FabricMuxConfig get_fabric_mux_config(
+    const uint32_t num_full_size_channels,
+    const uint32_t num_header_only_channels,
+    uint8_t num_buffers_full_size_channels,
+    uint8_t num_buffers_header_only_channels,
+    const size_t buffer_size_bytes_full_size_channel,
+    const uint32_t l1_unreserved_base_address,
+    const std::optional<uint32_t>& occupied_l1_tensor_addr) {
+    TT_FATAL(
+        num_buffers_full_size_channels > 0 && num_buffers_header_only_channels > 0,
+        "Not enough L1 space for mux core memory requirements given current occupancy. Likely too many experts per "
+        "device");
+
+    const auto config = tt::tt_fabric::FabricMuxConfig(
+        num_full_size_channels,
+        num_header_only_channels,
+        num_buffers_full_size_channels,
+        num_buffers_header_only_channels,
+        buffer_size_bytes_full_size_channel,
+        l1_unreserved_base_address);
+
+    if (occupied_l1_tensor_addr.has_value() && config.get_memory_map_end_address() > *occupied_l1_tensor_addr) {
+        return get_fabric_mux_config(
+            num_full_size_channels,
+            num_header_only_channels,
+            --num_buffers_full_size_channels,
+            --num_buffers_header_only_channels,
+            buffer_size_bytes_full_size_channel,
+            l1_unreserved_base_address,
+            occupied_l1_tensor_addr);
+    }
+
+    return config;
+}
+
 auto launch_mux_workers(
     const MeshDevice& mesh_device,
     const CoreRangeSet& mux_core_range_set,
@@ -74,46 +110,24 @@ auto launch_mux_workers(
     Program& program) {
     const auto num_header_only_channels = tt::div_up(num_workers, num_links);
     const auto num_full_size_channels = tt::div_up(num_workers, num_links);
-    // BH single-LB has 2 ethernet channels per inter-chip link (vs 4 on WH 6U), so its mux
-    // cores host 2x the channels per link at the same num_workers. At full-size num_buffers=15
-    // the resulting per-mux-core L1 (~520 KB at DeepSeek hidden=7168) collides with the
-    // tilize_output shared shard by ~11 KB. Trimming by 1 buffer on BH only (1/15 = 6.7%
-    // burst-tolerance reduction) recovers ~32 KB per mux core — ~3x the overflow — with zero
-    // impact on WH.
-    //
-    // Calibration: BH=14 was sized against deepseek_v3 (hidden=7168), the LARGEST MoE shape
-    // currently fitting on WH at epd=2. Per-core mux+tilize_output sums:
-    //   hidden=2880 (GPT-OSS):   448 + 360 = 808 KB    (~590 KB headroom)
-    //   hidden=7168 (DeepSeek):  448 + 896 = 1344 KB   (~ 21 KB headroom)  ← binding
-    //   hidden=8192 (Ling):      448 + 1024 = 1472 KB  (~ 75 KB overflow — future fix needed)
-    // tilize_output scales 1:1 with hidden, mux is shape-independent. Any future MoE shape
-    // with hidden ≤ 7168 fits with equal or wider margin. If hidden > 7168 (or some new
-    // shape variant pushes per-core L1 differently), the TT_FATAL just below will fire with
-    // a clear "mux L1 overlaps tensor" message — at that point either drop the buffer count
-    // further (e.g. 13) or revisit the L1 layout to free more headroom for tilize_output.
-    const uint8_t num_buffers_full_size_channels = (mesh_device.arch() == tt::ARCH::BLACKHOLE) ? 14 : 15;
-    const uint8_t num_buffers_header_only_channels = (mesh_device.arch() == tt::ARCH::BLACKHOLE) ? 14 : 15;
+
+    constexpr uint8_t num_buffers_full_size_channels = 15;
+    constexpr uint8_t num_buffers_header_only_channels = 15;
 
     const size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     const auto l1_unreserved_base_address =
         mesh_device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+
+    const auto occupied_l1_tensor_addr = mesh_device.lowest_occupied_compute_l1_address();
+
+    auto mux_kernel_config = get_fabric_mux_config(
         num_full_size_channels,
         num_header_only_channels,
         num_buffers_full_size_channels,
         num_buffers_header_only_channels,
         buffer_size_bytes_full_size_channel,
-        l1_unreserved_base_address);
-
-    const auto occupied_l1_tensor_addr = mesh_device.lowest_occupied_compute_l1_address();
-    if (occupied_l1_tensor_addr.has_value()) {
-        TT_FATAL(
-            mux_kernel_config.get_memory_map_end_address() <= *occupied_l1_tensor_addr,
-            "Mux L1 memory [base={:#x}, end={:#x}] overlaps with L1 tensor {:#x} and is in danger of being clobbered.",
-            l1_unreserved_base_address,
-            mux_kernel_config.get_memory_map_end_address(),
-            *occupied_l1_tensor_addr);
-    }
+        l1_unreserved_base_address,
+        occupied_l1_tensor_addr);
 
     // Calculate required vs available mux cores for fabric communication (one core per link per neighbor)
     const uint32_t needed_cores = num_links * neighbors.size();
