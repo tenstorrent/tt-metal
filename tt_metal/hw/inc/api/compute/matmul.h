@@ -81,12 +81,17 @@ ALWI void matmul_block_math_dynamic_throttle(
  * Matmul maps in0 -> SrcB and in1 -> SrcA (the reverse of other ops), which is why
  * compute_kernel_hw_startup must use SrcOrder::Reverse.
  *
+ * NOTE (known gap, #46769): if a preceding op left SrcA/SrcB with asymmetric tile sizes (i.e. different
+ * data formats per source) and the following matmul uses the same formats, matmul_init cannot fix the
+ * per-source tile sizes on its own. It does not re-program the tile descriptor, and a reconfig_data_format
+ * is inappropriate when the data formats did not change. No current kernel hits this; tracked in #46769.
+ *
  * Return value: None
  *
  * | Argument       | Description                                                   | Type     | Valid Range                                       | Required |
  * |----------------|---------------------------------------------------------------|----------|---------------------------------------------------|----------|
- * | in0_cb_id      | The identifier of the first input circular buffer (CB)        | uint32_t | 0 to 31                                           | False    |
- * | in1_cb_id      | The identifier of the second input circular buffer (CB)       | uint32_t | 0 to 31                                           | False    |
+ * | in0_cb_id      | The identifier of the first input circular buffer (CB)        | uint32_t | 0 to 31                                           | True     |
+ * | in1_cb_id      | The identifier of the second input circular buffer (CB)       | uint32_t | 0 to 31                                           | True     |
  * | transpose      | The transpose flag for performing transpose operation on B    | uint32_t | Any positive value will indicate transpose is set | False    |
  */
 // clang-format on
@@ -140,12 +145,18 @@ ALWI void matmul_tiles(
  * Matmul maps in0 -> SrcB and in1 -> SrcA (the reverse of other ops), which is why
  * compute_kernel_hw_startup must use SrcOrder::Reverse.
  *
+ * NOTE (known gap, #46769): if a preceding op left SrcA/SrcB with asymmetric tile sizes (i.e. different
+ * data formats per source) and the following matmul uses the same formats, matmul_block_init cannot fix
+ * the per-source tile sizes on its own. It does not re-program the tile descriptor, and a
+ * reconfig_data_format is inappropriate when the data formats did not change. No current kernel hits this;
+ * tracked in #46769.
+ *
  * Return value: None
  *
  * | Argument       | Description                                                   | Type     | Valid Range                                         | Required |
  * |----------------|---------------------------------------------------------------|----------|-----------------------------------------------------|----------|
- * | in0_cb_id      | The identifier of the first input circular buffer (CB)        | uint32_t | 0 to 31                                             | False    |
- * | in1_cb_id      | The identifier of the second input circular buffer (CB)       | uint32_t | 0 to 31                                             | False    |
+ * | in0_cb_id      | The identifier of the first input circular buffer (CB)        | uint32_t | 0 to 31                                             | True     |
+ * | in1_cb_id      | The identifier of the second input circular buffer (CB)       | uint32_t | 0 to 31                                             | True     |
  * | transpose      | The transpose flag for performing transpose operation on B    | uint32_t | Any positive value will indicate transpose is set   | False    |
  * | ct_dim         | The column dimension for the output block.                    | uint32_t | Must be equal to block B column dimension           | False    |
  * | rt_dim         | The row dimension for the output block.                       | uint32_t | Must be equal to block A row dimension              | False    |
