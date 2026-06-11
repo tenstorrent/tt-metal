@@ -1,0 +1,8 @@
+# Dependencies specific to tt-train tests and examples.
+# tt-train uses transformers, datasets, safetensors, huggingface-hub (already in
+# requirements-ttnn.txt), plus:
+
+datasets>=2.20,<3
+ml-dtypes
+streamlit
+sklearn

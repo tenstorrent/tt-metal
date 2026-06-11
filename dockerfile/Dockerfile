@@ -211,6 +211,10 @@ RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/ && \
 # Copy requirements files (needed for fallback install if no pre-built venv)
 COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/.
 COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/.
+COPY /tt_metal/python_env/requirements-tt-metal.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
+COPY /tt_metal/python_env/requirements-ttnn.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
+COPY /tt_metal/python_env/requirements-tt-train.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
+COPY /tt_metal/python_env/requirements-models.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
 COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
 COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
 
@@ -305,7 +309,8 @@ RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/ && \
 
 COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/.
 COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/.
-COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
+COPY /tt_metal/python_env/requirements-tt-metal.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
+COPY /tt_metal/python_env/requirements-ttnn.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
 COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
 
 COPY /scripts/install_debugger.sh ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh

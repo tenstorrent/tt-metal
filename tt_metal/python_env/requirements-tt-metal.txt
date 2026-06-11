@@ -1,0 +1,57 @@
+# Core CI infrastructure dependencies
+# Used by tt-metal build/test jobs and as the base for all other requirement sets.
+
+loguru==0.6.0
+
+tt-smi==5.2.0; platform_machine == "x86_64"
+
+# Build & packaging
+build==0.10.0
+twine==4.0.2
+
+# Linting / formatting / type checking
+pre-commit==3.5.0
+black==26.3.1
+clang-format==19.1.4
+mypy==1.9.0
+
+# Testing framework
+pytest==9.0.3
+pytest-cov==7.0.0
+pytest-timeout==2.4.0
+pytest-split==0.11.0
+pytest-benchmark==5.2.3
+jsbeautifier==1.14.7
+
+# Core scientific / data
+numpy>=1.24.4,<2
+pyyaml>=5.4
+networkx==3.1
+pandas==2.3.3
+tabulate==0.9.0
+pydantic==2.9.2
+toolz==0.12.0
+xlsxwriter==3.0.8
+tqdm==4.66.3
+enlighten==1.12.4
+click==8.1.7
+gitpython==3.1.50
+
+# Visualization / reporting
+matplotlib
+Pillow==12.2.0
+seaborn==0.13.2
+plotly==5.18.0
+bokeh==3.8.2
+dash==2.15.0
+
+# Notebooks
+jupyterlab==4.5.7
+ipywidgets==8.1.1
+
+# PyTorch CPU (needed for ttnn golden comparisons)
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.11.0 ; platform_machine == 'x86_64'
+torchvision==0.26.0 ; platform_machine == 'x86_64'
+torch==2.11.0 ; platform_machine == 'aarch64'
+torchvision==0.26.0 ; platform_machine == 'aarch64'

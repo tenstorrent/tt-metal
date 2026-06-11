@@ -1,0 +1,22 @@
+# Extra dependencies for ttnn tests beyond requirements-tt-metal.txt
+# Includes packages used by tests/ttnn/, ttnn/ tutorials, and sweep framework.
+
+# For github workflow unit test failure annotations
+pytest-github-actions-annotate-failures==0.3.0
+
+platformdirs<4.0.0
+yamllint==1.32.0
+
+# For docs (referenced by ttnn tutorials and CI doc builds)
+-r ../../docs/requirements-docs.txt
+
+# For sweep testing
+-r ../../tests/sweep_framework/requirements-sweeps.txt
+
+# Used by ttnn tracer tests and distributed examples
+transformers == 4.53.0
+huggingface-hub >= 0.30.0
+
+# Used by ttnn tests (safetensors weight loading, scipy comparisons)
+safetensors
+scipy
