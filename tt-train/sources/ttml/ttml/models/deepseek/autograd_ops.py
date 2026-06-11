@@ -123,13 +123,17 @@ class Split(ttml.autograd.Function):
         rank = len(val.shape)
         if dim < 0:
             dim += rank
+        if dim < 0 or dim >= rank:
+            raise ValueError(f"autograd_split dim {dim} out of range for rank-{rank} tensor")
         ctx.dim = dim
 
-        # Chunks must tile the split dim exactly: otherwise the forward would drop
-        # or overrun data and the backward concat would not reconstruct the input.
-        assert (
-            sum(sizes) == val.shape[dim]
-        ), f"autograd_split sizes {list(sizes)} must sum to dim {dim} length {val.shape[dim]}"
+        # Chunks must be positive and tile the split dim exactly: otherwise the forward
+        # would drop/overrun data and the backward concat would not reconstruct the input.
+        axis_size = val.shape[dim]
+        if any(s <= 0 for s in sizes):
+            raise ValueError(f"autograd_split sizes must be positive, got {list(sizes)}")
+        if sum(sizes) != axis_size:
+            raise ValueError(f"autograd_split sizes {list(sizes)} must tile dim {dim} (size {axis_size})")
 
         outputs = []
         offset = 0
