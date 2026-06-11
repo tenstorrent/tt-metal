@@ -212,9 +212,7 @@ def _gather_kv_topology(devices: list[tuple[int, int, int]], layer_id, kv_addr: 
     geom_tpt = list(ag(int(geom_local.tokens_per_kv_tile)))
     geom_tile = list(ag(int(geom_local.k_tile_size)))
     geom_cols = list(ag(int(geom_local.mesh_cols)))
-    all_geom = [
-        KvGeometry(geom_seq[r], geom_dim[r], geom_tpt[r], geom_tile[r], geom_cols[r]) for r in range(size)
-    ]
+    all_geom = [KvGeometry(geom_seq[r], geom_dim[r], geom_tpt[r], geom_tile[r], geom_cols[r]) for r in range(size)]
 
     return all_rank_devices, all_layers, all_addrs, all_host_tags, all_geom
 
@@ -269,9 +267,7 @@ def _build_table_gathered(
             return rank_row_groups[rank]
         devs = all_rank_devices[rank]
         if len(devs) % mesh_cols != 0:
-            raise RuntimeError(
-                f"rank {rank} gathered {len(devs)} devices, not divisible by mesh_cols={mesh_cols}"
-            )
+            raise RuntimeError(f"rank {rank} gathered {len(devs)} devices, not divisible by mesh_cols={mesh_cols}")
         # Host tag must match the worker grouping's "host-<crc32 hex>" — the
         # join key for hostname->rank chunk routing.
         host = f"host-{all_host_tags[rank]:08x}"
@@ -304,7 +300,15 @@ def _build_table_gathered(
                 if chunk_idx in (0, num_chunks - 1):
                     logger.info(
                         "[migration-hook] table[{},{},{}]: bank={} off=0x{:x} size={} sp_row={} (owner r{} base 0x{:x})",
-                        layer_id, pos, slot_id, bank, offset, size, sp_idx, owner_rank, base_addr,
+                        layer_id,
+                        pos,
+                        slot_id,
+                        bank,
+                        offset,
+                        size,
+                        sp_idx,
+                        owner_rank,
+                        base_addr,
                     )
 
     logger.info(
@@ -349,7 +353,7 @@ def _attach_migration_client(cmd_q: str, table_q: str, resp_q: str, timeout_s: f
         raise ModuleNotFoundError(
             "[migration-hook] cannot import _migration_client. Tried sys.path entries "
             f"{candidates}. Set TT_MIGRATION_PYTHON_DIR (and ensure tt-run forwards it to "
-            "every rank via --mpi-args \"-x TT_MIGRATION_PYTHON_DIR\"), or add this rank's "
+            'every rank via --mpi-args "-x TT_MIGRATION_PYTHON_DIR"), or add this rank\'s '
             "build path to _DEFAULT_MIGRATION_PYTHON_DIRS."
         ) from e
 
