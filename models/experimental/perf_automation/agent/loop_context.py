@@ -63,7 +63,18 @@ class LoopContext:
 
     # --- reads ---------------------------------------------------------------
     def baseline_profile(self) -> dict[str, Any]:
+        """The immutable stage-1 baseline — the fixed reference, NOT what ROUTE reads."""
         return json.loads((self.run.profiles_dir / "baseline_profile.json").read_text())
+
+    def current_profile(self) -> dict[str, Any]:
+        """Profile of the latest COMMITTED model — what ROUTE routes on.
+
+        Falls back to the baseline on iteration 0 (nothing committed yet).
+        `state['current_profile']` is a run-relative path set by COMMIT.
+        """
+        rel = self.state.get("current_profile")
+        path = (self.run.dir / rel) if rel else (self.run.profiles_dir / "baseline_profile.json")
+        return json.loads(Path(path).read_text())
 
     # --- telemetry (PLAN section 10.1) --------------------------------------
     def record_agent_call(self, stage: str, role: str, model: str, usage: dict | None) -> None:

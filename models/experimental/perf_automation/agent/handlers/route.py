@@ -26,7 +26,7 @@ def _bucket_query(tags: dict[str, Any]) -> dict[str, Any]:
 
 
 def route(ctx) -> str:
-    profile = ctx.baseline_profile()
+    profile = ctx.current_profile()  # latest committed model, NOT the frozen baseline
     bucket = _select_bucket(profile["buckets"], set(ctx.state.get("exhausted_buckets", [])))
     query = _bucket_query(bucket.get("tags", {}))
     sections = router.route(ctx.index, query)

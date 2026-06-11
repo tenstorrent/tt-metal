@@ -11,6 +11,8 @@ graph correct-by-construction while you fill in the actual work.
 
 from __future__ import annotations
 
+import json
+
 from .. import states
 
 _MOCK_USAGE = {"tokens_in": 1, "tokens_out": 1, "cost_usd": 0.0, "latency_s": 0.0}
@@ -97,12 +99,27 @@ def remeasure(ctx) -> str:
     # infra (post-PCC) -> retry once, else discard reason="measure_failed".
     before = ctx.state["metric"]["current"]
     after = _measure_after(ctx, before)  # leaf
+    profile_rel = _write_iter_profile(ctx)  # re-bucketed profile of the edited model
     ctx.state["last_decision"] = {
         "before": before,
         "after": after,
         "pcc": (ctx.state.get("last_verdict") or {}).get("pcc"),
+        "profile": profile_rel,  # promoted to current_profile only on keep (COMMIT)
     }
     return states.DECIDE
+
+
+def _write_iter_profile(ctx) -> str:
+    # MOCK leaf: real REMEASURE gets full buckets from tracy_tool. Here we copy the
+    # current profile and shrink the bucket we just attacked, so the bottleneck moves
+    # and the NEXT ROUTE sees it (proving ROUTE reads current, not the frozen baseline).
+    prof = json.loads(json.dumps(ctx.current_profile()))
+    for b in prof.get("buckets", []):
+        if b["id"] == ctx.state.get("current_bucket"):
+            b["device_ms"] = round(b.get("device_ms", 0.0) * 0.5, 4)
+    rel = f"profiles/iter_{ctx.state.get('iteration', 0):02d}_profile.json"
+    (ctx.run.dir / rel).write_text(json.dumps(prof, indent=2, sort_keys=True))
+    return rel
 
 
 def _measure_after(ctx, before) -> float:
@@ -133,6 +150,10 @@ def decide(ctx) -> str:
 
 def commit(ctx) -> str:
     # TODO(member2): git commit the kept edit; set git_sha_clean = new HEAD.
+    # Promote this iteration's profile so the NEXT ROUTE routes on the new bottleneck.
+    prof = (ctx.state.get("last_decision") or {}).get("profile")
+    if prof:
+        ctx.state["current_profile"] = prof
     return states.LOG
 
 

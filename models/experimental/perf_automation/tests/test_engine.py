@@ -107,3 +107,20 @@ def test_handlers_only_return_declared_transitions(tmp_path):
     handlers = build_handlers()
     for state in handlers:
         assert state in states.TRANSITIONS, f"{state} missing from states.TRANSITIONS"
+
+
+def test_current_profile_promoted_on_keep(tmp_path):
+    """ROUTE must route on the LATEST committed profile, not the frozen baseline.
+    After a kept change, state['current_profile'] points at an iter profile whose
+    attacked bucket shrank."""
+    run = _mk_run(tmp_path)
+    ctx = LoopContext.from_run(run, index=MOCK_INDEX)
+    engine.run(ctx, build_handlers())
+    assert ctx.state.get("current_profile", "").startswith("profiles/iter_")
+    import json as _j
+
+    cur = _j.loads((run.dir / ctx.state["current_profile"]).read_text())
+    base = _j.loads((run.profiles_dir / "baseline_profile.json").read_text())
+    matmul_now = next(b["device_ms"] for b in cur["buckets"] if b["id"] == "matmul")
+    matmul_base = next(b["device_ms"] for b in base["buckets"] if b["id"] == "matmul")
+    assert matmul_now < matmul_base  # the committed change moved the profile
