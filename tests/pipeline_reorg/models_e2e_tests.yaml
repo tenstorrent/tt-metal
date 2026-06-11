@@ -441,6 +441,9 @@
     wh_galaxy_perf:
       timeout: 30
       tier: 1
+    wh_galaxy_merge_gate:
+      timeout: 5
+      tier: 1
     bh_quietbox_2:
       timeout: 25
       tier: 1
