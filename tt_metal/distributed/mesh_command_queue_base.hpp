@@ -64,10 +64,6 @@ protected:
     tt::TargetDevice get_target_device_type() const;
 
 private:
-    // Helper functions for read and write entire Sharded-MeshBuffers
-    void write_sharded_buffer(const MeshBuffer& buffer, const void* src);
-    void read_sharded_buffer(MeshBuffer& buffer, void* dst);
-
     // Must be called with lock_api_function_() held.
     void enqueue_read_shards_nolock(
         const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,

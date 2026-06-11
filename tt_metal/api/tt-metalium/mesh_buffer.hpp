@@ -43,34 +43,7 @@ struct ReplicatedBufferConfig {
     DeviceAddr size = 0;
 };
 
-// Specifies sharded MeshBuffer.
-// Write APIs for sharded buffers will split the data so that each device in the virtual mesh will only get a fraction
-// of the data.
-struct ShardedBufferConfig {
-    // Note: Only 2D sharding and replication is supported by the APIs exposed through this struct.
-    // This interface will likely change over time depending on the status of native ND sharding.
-    // Global buffer size. Each device will get a fraction of this size.
-    DeviceAddr global_size = 0;
-
-    // Global shape of the buffer; at metal-level, we expect the shape to be aligned with the mesh shape.
-    Shape2D global_buffer_shape = {0, 0};
-
-    // Shard shape, sent to each device.
-    Shape2D shard_shape = {0, 0};
-
-    // Orientation of the shards in a mesh.
-    ShardOrientation shard_orientation = ShardOrientation::ROW_MAJOR;
-
-    // Computes the number of bytes per datum in the sharded buffer.
-    uint32_t compute_datum_size_bytes() const;
-
-    std::pair<bool, bool> replicated_dims() const;
-
-    Shape2D physical_shard_shape() const;
-};
-
-enum class MeshBufferLayout : uint8_t { REPLICATED, SHARDED };
-using MeshBufferConfig = std::variant<ReplicatedBufferConfig, ShardedBufferConfig>;
+using MeshBufferConfig = ReplicatedBufferConfig;
 
 class MeshBuffer;
 
@@ -120,10 +93,7 @@ public:
     DeviceAddr device_local_size() const { return device_local_size_; }
     DeviceAddr address() const { return address_; };
 
-    MeshBufferLayout global_layout() const;
     const MeshBufferConfig& global_config() const { return config_; }
-
-    const ShardedBufferConfig& global_shard_spec() const;
     const DeviceLocalBufferConfig& device_local_config() const { return device_local_config_; }
 
     Buffer* get_device_buffer(const MeshCoordinate& device_coord) const;
@@ -138,9 +108,6 @@ public:
     // into the creation API.
     Buffer* get_backing_buffer() const;
 
-    uint32_t datum_size_bytes() const;
-    Shape2D physical_shard_shape() const;
-    std::pair<bool, bool> replicated_dims() const;
     uint32_t page_size() const { return device_local_config_.page_size; }
     uint32_t num_pages() const { return page_size() == 0 ? 0 : device_local_size_ / page_size(); }
 

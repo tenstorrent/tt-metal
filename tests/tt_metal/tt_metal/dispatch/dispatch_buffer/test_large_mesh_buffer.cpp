@@ -180,7 +180,6 @@ TEST_P(InterleavedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     auto mesh_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
     // Verify buffer properties
     EXPECT_EQ(mesh_buffer->size(), tensor_size);
-    EXPECT_EQ(mesh_buffer->global_layout(), MeshBufferLayout::REPLICATED);
     EXPECT_EQ(mesh_buffer->device_local_size(), tensor_size);
     EXPECT_TRUE(mesh_buffer->is_allocated());
 
