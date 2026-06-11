@@ -78,14 +78,10 @@ void kernel_main() {
                     }
 
                     tile_regs_commit();
+
                     if (last_out) {
                         // Pack out to output buffer
                         out_cb.reserve_back(out_subblock_num_tiles);
-                        tile_regs_wait();
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            pack_tile(i, cb_out);
-                        }
-                        out_cb.push_back(out_subblock_num_tiles);
                     } else {
                         // Wait for tiles in output buffer to be written out since interm and output share memory
                         if (block == 0) {
@@ -94,14 +90,25 @@ void kernel_main() {
                         }
                         // Move partial result to interm buffer
                         intermed0_cb.reserve_back(out_subblock_num_tiles);
-                        tile_regs_wait();
+                    }
+
+                    tile_regs_wait();
+                    if (last_out) {
+                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                            pack_tile(i, cb_out);
+                        }
+                    } else {
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             pack_tile(i, cb_intermed0);
                         }
+                    }
+                    tile_regs_release();
+
+                    if (last_out) {
+                        out_cb.push_back(out_subblock_num_tiles);
+                    } else {
                         intermed0_cb.push_back(out_subblock_num_tiles);
                     }
-
-                    tile_regs_release();
                     in1_index_subblock_offset += out_subblock_w;
                 }
                 in0_index_subblock_offset += in0_subblock_num_tiles;
