@@ -125,7 +125,10 @@ def test_pi0_5_ttnn_full_e2e_fps(device):
     print(f"✅ Model loaded")
 
     images_ttnn, img_masks, lang_tokens_ttnn, lang_masks_ttnn = _build_inputs(cfg, device)
-    print(f"   num_cameras={len(images_ttnn)} (SigLIP runs bs={len(images_ttnn)} via concat)")
+    siglip_bs = int(images_ttnn[0].shape[0]) if len(images_ttnn) == 1 else len(images_ttnn)
+    print(
+        f"   num_cameras={NUM_CAMERAS} (SigLIP runs bs={siglip_bs}{' via host fold' if len(images_ttnn) == 1 and NUM_CAMERAS > 1 else ' via concat'})"
+    )
 
     # Set NUM_WARMUP=0 to skip the cold-start call entirely (useful when
     # profiling — the per-op CSV will then contain exactly NUM_ITERS

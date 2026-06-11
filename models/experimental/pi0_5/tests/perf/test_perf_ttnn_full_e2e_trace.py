@@ -153,7 +153,10 @@ def test_pi0_5_ttnn_full_e2e_trace(device):
     print(f"✅ Model loaded")
 
     images_ttnn, img_masks_ttnn, lang_tokens_ttnn, lang_masks_ttnn = _build_inputs(device)
-    print(f"   num_cameras={len(images_ttnn)} (SigLIP runs bs={len(images_ttnn)} via concat)")
+    siglip_bs = int(images_ttnn[0].shape[0]) if len(images_ttnn) == 1 else len(images_ttnn)
+    print(
+        f"   num_cameras={NUM_CAMERAS} (SigLIP runs bs={siglip_bs}{' via host fold' if len(images_ttnn) == 1 and NUM_CAMERAS > 1 else ' via concat'})"
+    )
 
     print(f"\n🔥 Warmup ({NUM_WARMUP} calls) — JIT compile of full sample_actions")
     for i in range(NUM_WARMUP):
@@ -224,7 +227,7 @@ def test_pi0_5_ttnn_full_e2e_trace(device):
     print(f"  PI0.5 TTNN FULL END-TO-END WITH TRACE ({CHECKPOINT_DIR.name})")
     print("=" * 72)
     print(
-        f"   Includes:            SigLIP (bs={len(images_ttnn)}) + VLM prefill + {num_denoising_steps}-step denoise + project"
+        f"   Includes:            SigLIP (bs={siglip_bs}) + VLM prefill + {num_denoising_steps}-step denoise + project"
     )
     print(f"   Trace capture:       {capture_ms:7.2f} ms (one-time)")
     print(f"   Iterations:          {NUM_ITERS} traced replays")
