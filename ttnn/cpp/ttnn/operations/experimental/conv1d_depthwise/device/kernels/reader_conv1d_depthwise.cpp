@@ -7,11 +7,25 @@
 
 // Fill one fp32 tile (1024 elements) in a CB with a constant. Layout-agnostic: every
 // element gets the same value, so face order is irrelevant.
-FORCE_INLINE void fill_tile_fp32(uint32_t cb_id, float value) {
-    auto* ptr = reinterpret_cast<volatile tt_l1_ptr float*>(get_write_ptr(cb_id));
+FORCE_INLINE void fill_tile_fp32_at(uint32_t l1_addr, float value) {
+    auto* ptr = reinterpret_cast<volatile tt_l1_ptr float*>(l1_addr);
     for (uint32_t i = 0; i < 1024; ++i) {
         ptr[i] = value;
     }
+}
+
+// Fill the K scalar tap tiles once into scalar_cb (resident, depth K). The taps are constant
+// for the whole op, so filling them per-block (the old path) burned ~44% of reader time.
+FORCE_INLINE void fill_scalar_tiles(uint32_t scalar_cb_id, uint32_t K, uint32_t tile_bytes) {
+    cb_reserve_back(scalar_cb_id, K);
+    const uint32_t base = get_write_ptr(scalar_cb_id);
+    for (uint32_t j = 0; j < K; ++j) {
+        const uint32_t tap_bits = get_common_arg_val<uint32_t>(j);
+        float tap;
+        __builtin_memcpy(&tap, &tap_bits, sizeof(float));
+        fill_tile_fp32_at(base + j * tile_bytes, tap);
+    }
+    cb_push_back(scalar_cb_id, K);
 }
 
 FORCE_INLINE void zero_region_u32(uint32_t l1_addr, uint32_t num_bytes) {
@@ -50,6 +64,11 @@ void kernel_main() {
     constexpr uint32_t padded_stick_bytes = C_pad * 4;
 
     const uint32_t num_blocks = (num_rows + BLOCK_T - 1) / BLOCK_T;
+    constexpr uint32_t scalar_tile_bytes = 1024 * 4;  // fp32 32x32 tile
+
+    // Taps are constant for the whole op — fill the K scalar tiles once (resident, depth K).
+    // Compute reads them by tap index without popping.
+    fill_scalar_tiles(scalar_cb_id, K, scalar_tile_bytes);
 
     // The op is read-bound: compute sits ~92% idle waiting on the per-tap activation windows.
     // For stride==1 the K tap windows are the SAME input sticks shifted by one row, so the
@@ -76,15 +95,8 @@ void kernel_main() {
             }
             noc_async_read_barrier();
 
+            // Each tap window = union sticks [j .. j+BLOCK_T-1], one contiguous L1->L1 copy.
             for (uint32_t j = 0; j < K; ++j) {
-                cb_reserve_back(scalar_cb_id, 1);
-                const uint32_t tap_bits = get_common_arg_val<uint32_t>(j);
-                float tap;
-                __builtin_memcpy(&tap, &tap_bits, sizeof(float));
-                fill_tile_fp32(scalar_cb_id, tap);
-                cb_push_back(scalar_cb_id, 1);
-
-                // Tap j window = union sticks [j .. j+BLOCK_T-1], one contiguous L1->L1 copy.
                 cb_reserve_back(act_cb_id, block_num_tiles);
                 const uint32_t wptr = get_write_ptr(act_cb_id);
                 noc_async_read(get_noc_addr(scratch_ptr + j * padded_stick_bytes), wptr, BLOCK_T * padded_stick_bytes);
@@ -98,14 +110,6 @@ void kernel_main() {
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         const uint32_t base_row = row_start + blk * BLOCK_T;
         for (uint32_t j = 0; j < K; ++j) {
-            // Scalar tile = taps[j], shared across the whole window.
-            cb_reserve_back(scalar_cb_id, 1);
-            const uint32_t tap_bits = get_common_arg_val<uint32_t>(j);
-            float tap;
-            __builtin_memcpy(&tap, &tap_bits, sizeof(float));
-            fill_tile_fp32(scalar_cb_id, tap);
-            cb_push_back(scalar_cb_id, 1);
-
             // Activation window for tap j: BLOCK_T sticks gathered from absolute input pages.
             cb_reserve_back(act_cb_id, block_num_tiles);
             const uint32_t wptr = get_write_ptr(act_cb_id);
