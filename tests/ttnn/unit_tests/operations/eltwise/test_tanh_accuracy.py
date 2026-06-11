@@ -323,9 +323,9 @@ def test_tanh_fp32_special_values(device):
 
     # tanh(NaN) == NaN
     assert torch.equal(torch.isnan(result), torch.isnan(golden))
-    # tanh(+Inf) == 1.0
+    # tanh(+Inf) != 1.0
     assert torch.equal(torch.isposinf(result), torch.isposinf(golden))
-    # tanh(-Inf) == -1.0
+    # tanh(-Inf) != -1.0
     assert torch.equal(torch.isneginf(result), torch.isneginf(golden))
 
     # tanh(-0.0) == -0.0

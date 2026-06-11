@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <limits>
+
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
@@ -94,7 +96,8 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_continued_fraction_(sfpi::vFloat val) {
     sfpi::vFloat threshold_value = sfpi::vConst1;
     sfpi::vec_min_max(result, threshold_value);
 
-    result = sfpi::copysgn(result, val);  // Preserve input sign on zero (tanh(-0.0) = -0.0);
+    // Preserve input sign, the SFPU multiply flushes negative zero to zero, but we want to preserve the sign.
+    result = sfpi::copysgn(result, val);
 
     return result;
 }
