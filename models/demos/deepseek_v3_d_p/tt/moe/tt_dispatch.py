@@ -68,6 +68,7 @@ class TtDispatchModule(LightweightModule):
         fp8_output: bool = False,
         subdevice_id=None,
         num_untilizers_per_sender: int = 2,
+        core_layout: ttnn.experimental.deepseek_prefill.DispatchCoreLayout = ttnn.experimental.deepseek_prefill.DispatchCoreLayout.RowFirst,
     ):
         """
         Initialize dispatch module with configuration parameters.
@@ -90,6 +91,8 @@ class TtDispatchModule(LightweightModule):
             topology: Fabric topology for remote token writes.
             fp8_output: Output dtype for the dispatched buffer.
             num_untilizers_per_sender: Number of untilizer cores per sender (any N >= 1).
+            core_layout: Which row/column of the subdevice worker grid the dispatch lane is
+                placed on (RowFirst, RowLast, ColumnFirst, ColumnLast). Tile-layout path only.
         """
         if fp8_output and "blackhole" not in ttnn.get_arch_name():
             raise ValueError("fp8_output requires Blackhole hardware")
@@ -110,6 +113,7 @@ class TtDispatchModule(LightweightModule):
         # num_untilizers_per_sender >= 1 is validated on the device op side
         # (DispatchDeviceOperation::validate_on_program_cache_miss).
         self.num_untilizers_per_sender = num_untilizers_per_sender
+        self.core_layout = core_layout
 
     @staticmethod
     def shard_expert_offsets(
@@ -274,6 +278,7 @@ class TtDispatchModule(LightweightModule):
             use_fp8_dispatch=self.fp8_output,
             subdevice_id=self.subdevice_id,
             num_untilizers_per_sender=self.num_untilizers_per_sender,
+            core_layout=self.core_layout,
         )
 
         if tt_dispatched_buffer.dtype == ttnn.uint8:

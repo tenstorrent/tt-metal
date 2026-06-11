@@ -20,6 +20,12 @@
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch::detail {
 
 void bind_dispatch(nb::module_& mod) {
+    nb::enum_<DispatchCoreLayout>(mod, "DispatchCoreLayout")
+        .value("RowFirst", DispatchCoreLayout::RowFirst)
+        .value("RowLast", DispatchCoreLayout::RowLast)
+        .value("ColumnFirst", DispatchCoreLayout::ColumnFirst)
+        .value("ColumnLast", DispatchCoreLayout::ColumnLast);
+
     ttnn::bind_function<"dispatch", "ttnn.experimental.deepseek_prefill.">(
         mod,
         R"doc(
@@ -76,6 +82,10 @@ void bind_dispatch(nb::module_& mod) {
                 Wormhole_B0. Defaults to False.
             num_untilizers_per_sender (int, optional): Number of untilize cores per
                 sender on the tile-layout path.
+            core_layout (ttnn.experimental.deepseek_prefill.DispatchCoreLayout, optional):
+                Which row or column of the subdevice worker grid the dispatch lane (sender +
+                untilize cores) is placed on: RowFirst, RowLast, ColumnFirst, or ColumnLast.
+                Only honored on the tile-layout path. Defaults to RowFirst.
 
         Returns:
             Tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -106,7 +116,8 @@ void bind_dispatch(nb::module_& mod) {
         nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear),
         nb::arg("use_l1_small_for_semaphores") = false,
         nb::arg("use_fp8_dispatch") = false,
-        nb::arg("num_untilizers_per_sender") = 2);
+        nb::arg("num_untilizers_per_sender") = 2,
+        nb::arg("core_layout") = DispatchCoreLayout::RowFirst);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch::detail

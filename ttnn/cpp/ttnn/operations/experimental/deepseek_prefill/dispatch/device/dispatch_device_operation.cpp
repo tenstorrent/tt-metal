@@ -155,7 +155,8 @@ prefill_dispatch(
     const CoreRangeSet& worker_core_range_set,
     bool use_l1_small_for_semaphores,
     bool use_fp8_dispatch,
-    uint32_t num_untilizers_per_sender) {
+    uint32_t num_untilizers_per_sender,
+    ttnn::operations::experimental::deepseek_prefill::dispatch::DispatchCoreLayout core_layout) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::dispatch::DispatchDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -172,7 +173,8 @@ prefill_dispatch(
             .worker_core_range_set = worker_core_range_set,
             .use_l1_small_for_semaphores = use_l1_small_for_semaphores,
             .use_fp8_dispatch = use_fp8_dispatch,
-            .num_untilizers_per_sender = num_untilizers_per_sender},
+            .num_untilizers_per_sender = num_untilizers_per_sender,
+            .core_layout = core_layout},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .weights_tensor = weights_tensor,

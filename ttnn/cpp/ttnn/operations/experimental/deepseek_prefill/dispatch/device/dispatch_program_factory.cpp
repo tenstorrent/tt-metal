@@ -88,6 +88,33 @@ void create_tensor_cb(
 
 namespace {
 
+// Returns the ordered "lane" of cores (a full row or column of the subdevice worker grid)
+// selected by `layout`, sorted along the lane direction. Row variants fix y (first = min y,
+// last = max y) and sort by x; column variants fix x (first = min x, last = max x) and sort by y.
+std::vector<CoreCoord> select_dispatch_lane(const std::vector<CoreCoord>& subdevice_cores, DispatchCoreLayout layout) {
+    TT_FATAL(!subdevice_cores.empty(), "subdevice_cores must not be empty");
+    const bool is_row = layout == DispatchCoreLayout::RowFirst || layout == DispatchCoreLayout::RowLast;
+    const bool is_last = layout == DispatchCoreLayout::RowLast || layout == DispatchCoreLayout::ColumnLast;
+
+    // Pick the fixed coordinate value (min for first, max for last) along the perpendicular axis.
+    uint32_t fixed = is_last ? 0 : std::numeric_limits<uint32_t>::max();
+    for (const auto& core : subdevice_cores) {
+        uint32_t perp = is_row ? core.y : core.x;  // rows fix y, columns fix x
+        fixed = is_last ? std::max(fixed, perp) : std::min(fixed, perp);
+    }
+
+    std::vector<CoreCoord> lane;
+    for (const auto& core : subdevice_cores) {
+        if ((is_row ? core.y : core.x) == fixed) {
+            lane.push_back(core);
+        }
+    }
+    std::sort(lane.begin(), lane.end(), [is_row](const CoreCoord& a, const CoreCoord& b) {
+        return is_row ? a.x < b.x : a.y < b.y;  // sort along the lane direction
+    });
+    return lane;
+}
+
 // Tile-layout path: TILE inputs, fused untilize across N untilize cores per sender
 // (num_untilizers_per_sender, u1..uN); sender is fabric-only.
 tt::tt_metal::ProgramDescriptor create_at_tile_layout(
@@ -157,18 +184,10 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     uint32_t num_cores = effective_num_links;
 
     // ==================== Core layout: senders + untilize cores ====================
-    // Collect all cores in the first row (y == subdevice_cores[0].y), sorted by x.
-    // Each sender owns num_untilizers consecutive untilize cores (u1..uN): cores are
-    // laid out [sender, u1, ..., uN] consecutively along x per sender group.
-    uint32_t sender_row_y = subdevice_cores.at(0).y;
-    std::vector<CoreCoord> all_row_cores;
-    for (const auto& core : subdevice_cores) {
-        if (core.y == sender_row_y) {
-            all_row_cores.push_back(core);
-        }
-    }
-    std::sort(
-        all_row_cores.begin(), all_row_cores.end(), [](const CoreCoord& a, const CoreCoord& b) { return a.x < b.x; });
+    // Select the lane (row or column of the subdevice grid) chosen by core_layout, ordered
+    // along the lane direction. Each sender owns num_untilizers consecutive untilize cores
+    // (u1..uN): cores are laid out [sender, u1, ..., uN] consecutively along the lane per group.
+    std::vector<CoreCoord> all_row_cores = select_dispatch_lane(subdevice_cores, operation_attributes.core_layout);
 
     uint32_t total_row_cores = static_cast<uint32_t>(all_row_cores.size());
     uint32_t cores_per_sender = 1 + num_untilizers;  // 1 sender + N untilize cores (u1..uN)

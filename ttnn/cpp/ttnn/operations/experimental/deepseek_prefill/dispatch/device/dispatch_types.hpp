@@ -12,6 +12,10 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
 
+// Selects which row or column of the subdevice worker grid the dispatch lane (sender +
+// untilize cores) is placed on. Only honored by the tile-layout path.
+enum class DispatchCoreLayout { RowFirst = 0, RowLast = 1, ColumnFirst = 2, ColumnLast = 3 };
+
 struct DispatchParams {
     uint32_t dispatch_group_size;
     uint32_t experts_per_chip;
@@ -30,6 +34,7 @@ struct DispatchParams {
     bool use_l1_small_for_semaphores = false;
     bool use_fp8_dispatch = false;
     uint32_t num_untilizers_per_sender = 2;
+    DispatchCoreLayout core_layout = DispatchCoreLayout::RowFirst;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dispatch_group_size",
@@ -45,7 +50,8 @@ struct DispatchParams {
         "worker_core_range_set",
         "use_l1_small_for_semaphores",
         "use_fp8_dispatch",
-        "num_untilizers_per_sender");
+        "num_untilizers_per_sender",
+        "core_layout");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -62,7 +68,8 @@ struct DispatchParams {
             worker_core_range_set,
             use_l1_small_for_semaphores,
             use_fp8_dispatch,
-            num_untilizers_per_sender);
+            num_untilizers_per_sender,
+            core_layout);
     };
 };
 
