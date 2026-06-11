@@ -682,10 +682,16 @@ def test_qwen36_64L_decode_intrace_perf(bh_glx_mesh):
     # coherent row-0 next token (248068=<think>) at the 32-row convention on the
     # DRAM path — same gate as batch-1. This confirms the 32-row primitives RUN
     # end-to-end with row-0 coherent.
-    assert _compile_next_tok == 248068, (
-        f"row-0 next token = {_compile_next_tok}, expected 248068 (<think>) "
-        f"at QWEN36_PERF_DECODE_ROWS={_PERF_DECODE_ROWS}"
-    )
+    # Coherency gate only holds for the full 64-layer model. When profiling a
+    # reduced layer count (QWEN36_N_LAYERS<64) the output token is meaningless,
+    # so skip the assertion (the whole-decode op structure is still valid).
+    if _N_LAYERS == 64:
+        assert _compile_next_tok == 248068, (
+            f"row-0 next token = {_compile_next_tok}, expected 248068 (<think>) "
+            f"at QWEN36_PERF_DECODE_ROWS={_PERF_DECODE_ROWS}"
+        )
+    else:
+        print(f"[perf] N_LAYERS={_N_LAYERS} (<64): skipping coherency assertion (profiling-only run)")
 
     # The compile pass incremented cur_pos / rot_idxs / tt_out_tok beyond what we want.
     # Reset them before trace capture.

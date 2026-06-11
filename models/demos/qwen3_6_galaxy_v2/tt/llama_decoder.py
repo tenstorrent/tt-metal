@@ -268,6 +268,57 @@ class TtTransformerBlock(LightweightModule):
         )
         ff.deallocate(True)
         # 5. down_proj (w2): [B, 1, T, hidden_per_tp] × [hidden_per_tp, dim_per_tp]
+        # 6. All-reduce on rows (cluster_axis=0) so each col holds a full
+        #    sum partial -> col-sharded dim_per_tp output.
+        #
+        # Opt-in (QWEN36_MLP_W2_LAR=1): width-sharded L1 w2 + all_reduce_async on
+        # decode-mode tt_ccl — NOT auto-enabled via DELTA_OP_TUNED (auto-wire
+        # corrupted 64L coherency in session).  Validate with
+        # tests/test_mlp_w2_lar_micro.py before promoting to server defaults.
+        import os as _os
+
+        _use_w2_lar = (
+            _os.environ.get("QWEN36_MLP_W2_LAR", "0") == "1"
+            and getattr(mlp.tt_ccl, "qwen36_residual_buffers", [None, None])[0] is not None
+        )
+        try:
+            _w2_num_links = int(
+                _os.environ.get(
+                    "QWEN36_CCL_NUM_LINKS_MLP_W2",
+                    _os.environ.get("QWEN36_CCL_NUM_LINKS", "1"),
+                )
+            )
+        except ValueError:
+            _w2_num_links = 1
+        _w2_links = min(3, _w2_num_links)
+
+        if _use_w2_lar:
+            sharded_memcfg = mlp.tt_ccl.qwen36_residual_output_memcfgs[0]
+            ff_sharded = ttnn.to_memory_config(ff_gathered, sharded_memcfg)
+            ff_gathered.deallocate(True)
+            w2_out = ttnn.linear(
+                ff_sharded,
+                mlp.w2_interleaved,
+                compute_kernel_config=compute_kernel,
+                dtype=ttnn.bfloat16,
+                memory_config=sharded_memcfg,
+            )
+            ff_sharded.deallocate(True)
+            w2_sharded = mlp.tt_ccl.line_all_reduce(
+                w2_out,
+                cluster_axis=0,
+                num_links=_w2_links,
+                memory_config=sharded_memcfg,
+                buffer_key="FF2",
+                batch_size=batch_size,
+                use_optimal_ccl_for_llama=True,
+                use_qwen36_residual_buffer=True,
+            )
+            w2_out.deallocate(True)
+            w2_red = ttnn.to_memory_config(w2_sharded, ttnn.DRAM_MEMORY_CONFIG)
+            w2_sharded.deallocate(True)
+            return w2_red
+
         w2_out = ttnn.linear(
             ff_gathered,
             mlp.w2_interleaved,
@@ -276,12 +327,10 @@ class TtTransformerBlock(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ff_gathered.deallocate(True)
-        # 6. All-reduce on rows (cluster_axis=0) so each col holds a full
-        #    sum partial -> col-sharded dim_per_tp output.
         w2_red = mlp.tt_ccl.line_all_reduce(
             w2_out,
             cluster_axis=0,
-            num_links=min(3, self.model_config["GALAXY_NUM_LINKS"]),
+            num_links=_w2_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             buffer_key="FF2",
             batch_size=batch_size,

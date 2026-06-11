@@ -172,6 +172,17 @@ class Generator(WarmupForwardMixin):
         self._disable_prefill_tracing = False  # Whether to disable prefill traces
         self._disable_decode_tracing = False  # Whether to disable decode traces
 
+    def set_decode_rope_offset(self, offset: int):
+        """Multimodal: decouple the decode RoPE position from the KV/sequence index.
+
+        After a multimodal prefill, decode RoPE position = current_pos + offset, where
+        offset = (max(pos_3d)+1) - S_unpadded (<= 0, since vision tokens compress
+        positions). Set 0 (default) to restore the text contract (rope == cur_pos).
+        The in-trace plus_one increments rope_idxs and current_pos in lockstep, so a
+        single set before the first decode_forward holds for the whole sequence.
+        """
+        self.model._qwen36_decode_rope_offset = int(offset)
+
     def _set_prefill_column_mask(self, tt_column_mask):
         # Keep mask available on whichever TT_CCL instance attention currently uses.
         # Model-level CCL references may differ from layer-level ones (e.g. after the

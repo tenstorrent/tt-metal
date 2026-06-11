@@ -3,6 +3,24 @@
 Live tracker. Append-only. Mirrors the format in
 `models/demos/olmo_galaxy/BRINGUP_LOG.md`.
 
+## Current Status (2026-06-09)
+
+**Decode perf (correct path):** `demo/text_demo_qwen36.py::test_qwen36_demo_generator_batch1`
+(Generator + `switch_mode("decode")`) = **27.72 tok/s/user** (36.08 ms/tok steady-state).
+Do NOT use `tests/test_decode_perf_intrace.py` for perf — it never switches decode CCL
+(~24 tok/s, prefill CCL).
+
+**Generator 4L Tracy (decode CCL):** GDN out_proj already `AllReduceAsync` ~15 µs;
+MLP w2 still RS+AG ~58 µs/layer (optimization target). Prefetcher/matmul+CCL fusion
+**NO-GO** on BH (`dram_prefetcher` hits bank x=8 vs 8-bank grid).
+
+**Artifacts:** `tests/test_decode_generator_profile.py` (Tracy harness, `QWEN36_N_LAYERS`),
+`tests/test_decode_ccl_fusion_micro.py` (async LAR 32 vs RS+AG 58 µs at ring-8),
+`tests/test_prefetcher_bh_spike.py` (prefetcher NO-GO evidence).
+
+**WIP:** `QWEN36_MLP_W2_LAR=1` opt-in in `_mlp_decode_qwen36` (NOT auto via
+`DELTA_OP_TUNED` — auto-wire broke 64L coherency). Needs PCC unit test before promote.
+
 ## 2026-06-05 (cont.4) — SERVER DECODE COHERENT (batch-1) ✅
 
 The vLLM server now produces coherent, advancing decode AND survives across requests.
@@ -539,3 +557,69 @@ After V2-decode lands and eager decode is PCC-verified vs HF reference:
     (e.g. bf4 weights / fewer DRAM reads), not ring width.
   - Status: DONE_WITH_CONCERNS (correct + coherent, perf-neutral).
     PCC: identical math, token 248068 at both sizes. Block hash: n/a.
+
+## 2026-06-11 — Decode perf: MLP-w2-LAR validated = NO-GO (coherence break, ~7% only)
+Tracy decode profile (4L traced, on-device sample, sampling/LM-head excluded): per-layer decode is
+MLP-bound — MatmulDeviceOperation 17us/call + ReduceScatter 26.5us/call (top CCL) + AllGather 15us +
+AllReduceAsync 18.6us + RMSAllGather 13.6us. Attention is NOT the bottleneck in either layer type
+(FA SdpaDecode 7.7us; GDN recurrent = cheap BinaryNg/matmul). GDN and FA decode layers cost ~the same
+(MLP+CCL dominates both). Decode is dispatch/many-small-op bound (~30 op types/layer).
+qwen3-32b L1 mimicry = no portable target: base qwen_model_config.py byte-identical; decode-CCL memcfgs
+same RING width-shard; MLP CCL identical on BH (prefetcher global_cb NO-GO on BH for both). qwen3.6's only
+extra L1 = GDN layers (qwen3-32b has none), handled by QWEN36_SEQ_CORES_PER_HEAD=4.
+MLP-w2-LAR (QWEN36_MLP_W2_LAR=1) A/B at 64L, identical config: LAR=0 coherent 26.36 tok/s; LAR=1 GARBAGE
+28.29 tok/s. => breaks coherence (async all_reduce integration bug; RS+AG micro-PCC was 0.99999, so the
+reduce math is fine — the async-LAR residual-buffer/in-place path corrupts). Perf gain only ~7% (+2.6ms/tok,
+matches ~40us/layer x64 w2-CCL saving) because decode is dispatch-bound. NOT promotable; needs an
+async-LAR correctness fix to even unlock the modest 7%. Decode is broadly op-count/dispatch bound, not
+single-CCL bound — bigger wins need op fusion / fewer ops, not the w2-CCL swap.
+
+## 2026-06-11 (cont) — Decode perf: async reduce-scatter VALIDATED (+1.9%, promotable)
+User async-CCL audit: decode line_all_reduce + line_all_gather already async; line_reduce_scatter's
+decode-MLP (interleaved-DRAM) branch was SYNC ttnn.reduce_scatter (the #1 decode CCL op, 27.6us/call).
+RMSAllGather already = fused rms_norm+all_gather (decode uses it; split LayerNormPre/Post = prefill).
+UNIT TEST (tests/test_mlp_rs_async_kernel.py): sync ttnn.reduce_scatter PCC 0.99999 @27.6us vs async
+reduce_scatter_minimal_async PCC 0.99999 @21.89us = 1.26x, numerically identical. (gotcha: multi_device_
+global_semaphore is a LIST of 3; run sync full-grid before loading the worker sub-device.)
+WIRED behind QWEN36_DECODE_RS_ASYNC (default OFF): llama_ccl __init__ allocates 3 ring semaphores/cb in
+decode; line_reduce_scatter interleaved-DRAM branch routes to reduce_scatter_minimal_async (ring) when on.
+64L A/B (ISL-128, identical config): RS_ASYNC=0 26.36 tok/s COHERENT; RS_ASYNC=1 26.87 tok/s COHERENT.
++1.9% (-0.73ms/tok), EXACTLY the predicted 2 RS/layer x64 x5.7us. Correct + coherent (unlike the w2-LAR which
+broke coherence). PROMOTABLE — recommend broader validation (longer ISL, cross-request, server) before
+default-on. Methodology win: unit-test-first caught LAR (no-go) vs RS-async (go) cheaply.
+
+## 2026-06-11 (cont) — BH core-grid retune: configs are WH-sized (cap 7x10=70); BH=120
+User insight: qwen3.6 inherited llama70b (WH/TG) program-config grids, all capped at x=7 (WH 8-wide minus
+dispatch col); BH is 12-wide = 12x10 = 120 cores. Every matmul under-grids BH by ~40-60%.
+PROOF (test_lm_head_grid_micro, LM-head decode minimal_matmul [32,1280]x[1280,62208]): grid 7x7=49 700.8us ->
+8x8=64 620us(1.13x) -> 10x10=100 565us(1.24x) -> 12x10=120 450us(1.56x), PCC 0.99994 UNCHANGED at every grid.
+=> BH grid retune is correct (DRAM output, grid only affects compute distribution) + 1.56x. Banked via
+QWEN36_LM_HEAD_GRID (default "7,7", set "12,10"); config env-gated in qwen36_model_config.py LM_HEAD_PREFILL_PROGCFG.
+BIGGER: decode MatmulDeviceOperation core-count histogram (avail=120) shows severe under-gridding:
+cores=1 @180us x5664 calls (GDN recurrent matmuls, 48/64 layers — prime suspect for the 36ms token),
+cores=16 @627us x192, cores=4 @352us x96. These dwarf the LM head. NEXT: identify + re-grid the cores=1 (GDN
+recurrent) and cores=16 matmuls (PCC-validate each; GDN recurrent is correctness-fragile fp32). The per-layer
+matmuls x64 are where the token time is, not the LM head (~0.4%).
+
+## 2026-06-11 (cont) — BH grid retune scope CORRECTED: only LARGE matmuls benefit
+MLP decode matmul core_grid sweep (test_mlp_matmul_grid_micro): w2 [32,2176]x[2176,1280] auto=44us(1.0x),
+10x10/12x10=74us (0.60x SLOWER); w1/w3 [32,1280]x[1280,2176] auto=35.8us, 12x10=57.7us (0.62x SLOWER). PCC
+unchanged. => ttnn AUTO-grid (40/68 cores) is ALREADY OPTIMAL for the small M=32 decode matmuls; forcing more
+cores HURTS (N too small, <1 tile/core, comms-bound). The cores=40/68 was NOT under-gridding — it was correct.
+So the BH grid-retune lever ONLY helps LARGE matmuls: LM head won 1.56x because N=62208 (1944 tiles) has work to
+spread; per-layer decode matmuls (small) are auto-optimal. The "WH-undergridded everywhere" concern does NOT
+apply to decode small matmuls. Remaining grid lever = GDN batched matmuls (cores=1, batch=192 -> batch-parallel
+across cores, unlike single-batch MLP) but that's the fragile fp32 recurrent path. Net decode wins this session:
+RS-async +1.9% (validated, promotable), LM-head grid +1.56x-on-op (~0.4% token, banked). MLP grid = NO-GO.
+
+## 2026-06-11 (cont) — GDN grid: decode auto-optimal; the 5x is PREFILL. Grid retune = TTFT lever
+GDN n_v_heads=48 -> 6/chip (mesh_rows=8), head_dim=128. DECODE recurrent (B=1) batches over 6 heads ->
+batch=6 [128,128] fp32. test_gdn_recur_grid_micro batch=6: auto 32.96us, 12x10=120 33.15us = 1.0x FLAT (no
+win, PCC 0.99999997) -> decode GDN matmul AUTO-OPTIMAL like MLP. The batch=192 [128,128] fp32 matmul (5.08x
+at 12x10 vs auto) is PREFILL (B=32 x 6 heads, or chunks), NOT decode (decode slices GDN to B=1). So:
+DECODE grid retune is EXHAUSTED — every per-layer decode matmul is small (M=32 / batch=6), ttnn auto-grids
+optimally; only the LM head (huge N=62208) benefits (1.56x, ~0.4% token). The WH-vs-BH undergridding is a
+PREFILL/TTFT lever: large prefill matmuls (GDN chunk batch=192 -> 5x, likely prefill MLP/QKV too) ARE
+WH-under-gridded on BH. NET: decode perf levers done (RS-async +1.9% promotable, LM-head +1.56x-on-op banked,
+decode is small-op bound). NEXT if perf focus = TTFT: retune the PREFILL matmul grids (256k=270s, VL=2150ms;
+5x on prefill GDN/matmuls could cut TTFT substantially).

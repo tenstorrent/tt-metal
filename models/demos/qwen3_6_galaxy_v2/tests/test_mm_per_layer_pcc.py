@@ -196,11 +196,21 @@ def test_mm_per_layer_pcc(mesh_device, reset_seeds, ensure_gc):
     )
 
     img = Image.open("models/demos/multimodal/gemma3/dog.jpg").convert("RGB").resize((224, 224))
-    prompt = "<|vision_start|><|image_pad|><|vision_end|>What is in this image?"
+    # V4_USE_IMAGE=0: text-only (no vision confound). QWEN36_NO_PAD=1: run at the 128 bucket.
+    if os.environ.get("V4_USE_IMAGE", "1") == "1":
+        prompt = "<|vision_start|><|image_pad|><|vision_end|>What is in this image?"
+        images_arg = [img]
+    else:
+        prompt = "The capital of France is"
+        images_arg = None
     logger.info("Running vision pipeline...")
-    inputs, fused_embeddings_unpadded = gen.prepare_inputs(prompt, images=[img])
+    inputs, fused_embeddings_unpadded = gen.prepare_inputs(prompt, images=images_arg)
     S_unpadded = fused_embeddings_unpadded.shape[1]
-    S = get_padded_prefill_len(S_unpadded)
+    if os.environ.get("QWEN36_NO_PAD", "0") == "1" and S_unpadded <= 128:
+        S = 128
+    else:
+        S = get_padded_prefill_len(S_unpadded)
+    logger.info(f"[mm-perlayer] S_unpadded={S_unpadded} -> bucket S={S}")
     T_prompt = int(inputs.attention_mask.sum().item())
 
     # Pad

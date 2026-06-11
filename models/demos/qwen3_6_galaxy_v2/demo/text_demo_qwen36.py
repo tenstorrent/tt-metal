@@ -61,7 +61,7 @@ _CONTEXT_CACHE_DIR = pathlib.Path("models/tt_transformers/demo/context_cache")
 _B = 1
 _T_PREFILL = int(os.environ.get("QWEN36_PERF_T_PREFILL", "128"))
 _H = 5120
-_N_LAYERS = 64
+_N_LAYERS = int(os.environ.get("QWEN36_N_LAYERS", "64"))
 # Match the llama3_70b_galaxy demo's max_generated_tokens (128).
 _DECODE_STEPS = int(os.environ.get("QWEN36_DECODE_STEPS", "128"))
 _PATTERN = (["linear_attention"] * 3 + ["full_attention"]) * 16

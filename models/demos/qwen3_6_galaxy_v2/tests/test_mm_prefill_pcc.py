@@ -226,7 +226,7 @@ def test_mm_prefill_pcc(mesh_device, reset_seeds, ensure_gc):
         prompt = "<|vision_start|><|image_pad|><|vision_end|>What is in this image?"
         images_arg = [img]
     else:
-        prompt = "The capital of France is"
+        prompt = os.environ.get("QWEN36_TEXT_PROMPT", "The capital of France is")
         images_arg = None
 
     # --- Run vision pipeline once to peek at the inputs (used by CPU ref) ---
@@ -259,7 +259,13 @@ def test_mm_prefill_pcc(mesh_device, reset_seeds, ensure_gc):
             f"refused embeddings shape: {tuple(fused_embeddings_unpadded.shape)}"
         )
     S_unpadded = fused_embeddings_unpadded.shape[1]
-    S = get_padded_prefill_len(S_unpadded)
+    # QWEN36_NO_PAD=1: run at the 128 bucket (not the pad-everything 4096) when the prompt
+    # fits, to characterize whether the prefill PCC degrades with sequence length (128 vs 4096).
+    if os.environ.get("QWEN36_NO_PAD", "0") == "1" and S_unpadded <= 128:
+        S = 128
+    else:
+        S = get_padded_prefill_len(S_unpadded)
+    logger.info(f"[mm-pcc] S_unpadded={S_unpadded} -> prefill bucket S={S}")
     T_prompt = int(inputs.attention_mask.sum().item())
     # Optional: scale vision-position rows of fused_embeddings down by V4_VISION_SCALE
     # (default 1.0). Set to e.g. 0.01 to test whether outlier-magnitude vision features

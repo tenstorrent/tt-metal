@@ -843,7 +843,13 @@ class TtTransformer(LightweightModule):
             # path (get_rm_rot_idxs asserts shape==[32]). Mirrors the working demo
             # (text_demo_qwen36: get_qwen36_rm_rot_idxs). Single-user decode.
             cur_pos_int = int(rot_current_pos.reshape(-1)[0].item())
-            rope_idxs = self.rope_setup.get_qwen36_rm_rot_idxs(cur_pos_int, on_host=True)
+            # Multimodal: the decode RoPE position is decoupled from the KV/sequence index.
+            # Vision tokens compress positions, so rope_pos = cur_pos + offset where offset =
+            # (max(pos_3d)+1) - S_unpadded (<= 0), set after multimodal prefill. Default 0 for
+            # text (rope_pos == cur_pos). The in-trace plus_one increments both in lockstep,
+            # preserving the offset across decode steps.
+            rope_pos_int = cur_pos_int + getattr(self, "_qwen36_decode_rope_offset", 0)
+            rope_idxs = self.rope_setup.get_qwen36_rm_rot_idxs(rope_pos_int, on_host=True)
         else:
             rope_idxs = self.rope_setup.get_rm_rot_idxs(rot_current_pos, on_host=True)
         cur_pos_shard_dim = 0

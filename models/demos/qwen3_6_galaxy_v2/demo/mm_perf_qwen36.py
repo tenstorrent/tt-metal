@@ -12,12 +12,11 @@ path tt-inference-server/vLLM uses):
     traced decode. tok/s is valid timing (same kernels regardless of position).
   - VISION: the seq-parallel 27-layer encoder, timed warm.
 
-NOTE: decode-via-Generator OUTPUT is not coherent here — decode_forward derives the
-RoPE position from current_pos (the KV index), but multimodal needs it decoupled
-(rope = max(pos_3d)+1 << KV index, since vision tokens compress positions). The
-standalone demo/mm_demo_qwen36.py handles that decoupling and produces correct text;
-wiring a rope-position override into decode_forward is the remaining follow-up. The
-tok/s measured here is unaffected (identical kernels), and equals text decode.
+Decode coherence: generator.set_decode_rope_offset() decouples the decode RoPE
+position from the KV index (rope = cur_pos + offset, offset = (max(pos_3d)+1) -
+S_unpadded <= 0, since vision tokens compress positions), so the Generator-path decode
+is COHERENT — the benchmark reads back and prints the generated text. tok/s is
+unaffected by the offset (identical kernels) and equals text decode.
 
 Run:
     export TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd) HF_MODEL=Qwen/Qwen3.6-27B MESH_DEVICE=BH_GLX
@@ -103,10 +102,17 @@ def test_mm_perf_qwen36(bh_glx_mesh):  # noqa: F811
     tok = mmgen.tokenizer
 
     img = Image.open(_IMAGE_PATH).convert("RGB").resize((224, 224))
-    mmgen.prepare_inputs(_PROMPT, images=[img])  # warmup (compile vision kernels)
+    prompt = _PROMPT
+    # Optional chat-template wrapping (instruct-model assistant-turn priming + vision markers).
+    if os.environ.get("QWEN36_MM_CHAT_TEMPLATE", "0") == "1":
+        _question = os.environ.get("QWEN36_MM_QUESTION", "What is in this image?")
+        messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": _question}]}]
+        prompt = mmgen.pipeline.preprocessor.apply_chat_template(messages)
+        logger.info(f"[mm-perf] chat-templated prompt: {prompt!r}")
+    mmgen.prepare_inputs(prompt, images=[img])  # warmup (compile vision kernels)
     ttnn.synchronize_device(bh_glx_mesh)
     _t = time.perf_counter()
-    inputs, fused_unpadded = mmgen.prepare_inputs(_PROMPT, images=[img])
+    inputs, fused_unpadded = mmgen.prepare_inputs(prompt, images=[img])
     ttnn.synchronize_device(bh_glx_mesh)
     t_vision = time.perf_counter() - _t
 
@@ -165,12 +171,56 @@ def test_mm_perf_qwen36(bh_glx_mesh):  # noqa: F811
         f"[mm-perf] first token = {first_tok} ({tok.decode([first_tok])!r}); prefill(cold)={t_prefill_cold*1e3:.1f} ms"
     )
 
-    # --- DECODE via the server traced path (tok/s timing; see module docstring re: coherence) ---
-    sampling_params = SamplingParams(temperature=1.0, top_k=20, top_p=0.95)
+    # --- DECODE via the server traced path ---
+    # Decouple decode RoPE position from the KV index: rope_pos = cur_pos + offset,
+    # offset = (max(pos_3d)+1) - S_unpadded (<= 0). Makes generator decode COHERENT.
+    rope_pos_next = int(inputs.position_ids_3d[:, :, :S_unpadded].max().item()) + 1
+    decode_rope_offset = rope_pos_next - S_unpadded
+    generator.set_decode_rope_offset(decode_rope_offset)
+    logger.info(
+        f"[mm-perf] decode rope offset = {decode_rope_offset} (rope_pos0={rope_pos_next}, kv_pos0={S_unpadded})"
+    )
+
+    # DIAGNOSTIC (QWEN36_MM_HOST_SAMPLE=1): decode with host-argmax (sampling_params=None)
+    # instead of the on-device sampler — isolates sampler-bug vs decode-forward/CCL-bug.
+    if os.environ.get("QWEN36_MM_HOST_SAMPLE", "0") == "1":
+        gen_ids = [first_tok]
+        cur_in = first_tok
+        current_pos = torch.tensor([S_unpadded], dtype=torch.long)
+        for it in range(_DECODE_STEPS):
+            out = generator.decode_forward(
+                torch.tensor([cur_in], dtype=torch.long).reshape(1, 1),
+                current_pos,
+                enable_trace=False,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                read_from_device=True,
+                sampling_params=None,
+                reset_inputs=True,
+            )
+            _logits = out[0] if isinstance(out, (tuple, list)) else out
+            cur_in = int(torch.as_tensor(_logits).float().reshape(-1)[: args.vocab_size].argmax().item())
+            gen_ids.append(cur_in)
+            current_pos = current_pos + 1
+        logger.info(f"[mm-perf][HOST-ARGMAX] OUTPUT: {tok.decode(gen_ids, skip_special_tokens=True)!r}")
+        return
+
+    # Model-config sampling params (tt-inference-server llm.yaml override_generation_config):
+    # temperature=0.5, top_k=50, top_p=0.95. These are the params the qwen3.6 on-device
+    # sampler is validated against (text decode is coherent with them).
+    sampling_params = SamplingParams(
+        temperature=float(os.environ.get("QWEN36_TEMP", "0.5")),
+        top_k=int(os.environ.get("QWEN36_TOP_K", "50")),
+        top_p=float(os.environ.get("QWEN36_TOP_P", "0.95")),
+    )
     out_tok = torch.tensor([first_tok], dtype=torch.long).reshape(1, 1)
     current_pos = torch.tensor([S_unpadded], dtype=torch.long)
+    gen_ids = [first_tok]
     read_events, tt_out_toks = [], []
     _loop_t0 = None
+    # Interleaved one-deep readback (mirrors text_demo_qwen36's fast path): issue step N,
+    # then read step N-1. Batch-reading all tt_out_toks after the loop reads the reused
+    # persistent buffer at the wrong cadence (caused token doubling).
     for it in range(_DECODE_STEPS):
         if it == 1:
             ttnn.synchronize_device(bh_glx_mesh)
@@ -189,10 +239,20 @@ def test_mm_perf_qwen36(bh_glx_mesh):  # noqa: F811
         read_events.append(read_event)
         tt_out_toks.append(tt_tok)
         current_pos = current_pos + 1
+        if it > 0:
+            ttnn.event_synchronize(read_events.pop(0)[0])
+            _tt_tok, _ = generator.process_decode_output_host(tt_out_toks.pop(0))
+            gen_ids.append(int(torch.as_tensor(_tt_tok).reshape(-1)[0].item()))
     ttnn.synchronize_device(bh_glx_mesh)
     t_decode_steady = time.perf_counter() - _loop_t0
     n_steady = _DECODE_STEPS - 1
     decode_tok_s = n_steady / t_decode_steady
+    # Drain the final in-flight step.
+    ttnn.event_synchronize(read_events.pop(0)[0])
+    _tt_tok, _ = generator.process_decode_output_host(tt_out_toks.pop(0))
+    gen_ids.append(int(torch.as_tensor(_tt_tok).reshape(-1)[0].item()))
+    decoded_text = tok.decode(gen_ids, skip_special_tokens=True)
+    logger.info(f"[mm-perf] generator-decode OUTPUT: {decoded_text!r}")
 
     # --- Warm prefill (re-run AFTER decode; output discarded — kernels now warm) ---
     ttnn.synchronize_device(bh_glx_mesh)

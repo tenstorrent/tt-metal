@@ -24,6 +24,7 @@ Run:
 from __future__ import annotations
 
 import os
+import time
 
 import pytest
 import torch
@@ -108,7 +109,15 @@ def test_mm_demo_qwen36(bh_glx_mesh):  # noqa: F811  (direct-open mesh fixture f
     tok = gen.tokenizer
 
     img = Image.open(_IMAGE_PATH).convert("RGB").resize((224, 224))
+    # --- TIMING: vision encoder + preprocessing (HF processor + 27-layer seq-parallel
+    # vision encoder on device + CPU splice). Run twice; report the 2nd (warm, kernels
+    # compiled) so the number reflects steady-state vision-feature extraction.
+    gen.prepare_inputs(_PROMPT, images=[img])  # warmup (compile vision kernels)
+    ttnn.synchronize_device(bh_glx_mesh)
+    _t = time.perf_counter()
     inputs, fused_unpadded = gen.prepare_inputs(_PROMPT, images=[img])  # fused: [1, S_unpadded, 5120]
+    ttnn.synchronize_device(bh_glx_mesh)
+    t_vision = time.perf_counter() - _t
     S_unpadded = fused_unpadded.shape[1]
     S = get_padded_prefill_len(S_unpadded)
     logger.info(f"[mm-demo] prompt tokens (incl. vision)={S_unpadded} -> padded prefill bucket={S}")
@@ -145,6 +154,8 @@ def test_mm_demo_qwen36(bh_glx_mesh):  # noqa: F811  (direct-open mesh fixture f
         layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=ttnn.ReplicateTensorToMesh(bh_glx_mesh),
     )
+    ttnn.synchronize_device(bh_glx_mesh)
+    _t = time.perf_counter()
     prefill_hidden = model.forward(
         x_tt,
         current_pos=None,
@@ -159,6 +170,11 @@ def test_mm_demo_qwen36(bh_glx_mesh):  # noqa: F811  (direct-open mesh fixture f
         kv_cache=None,
         batch_size=1,
     )
+    ttnn.synchronize_device(bh_glx_mesh)
+    # NOTE: single-pass prefill -> COLD (includes one-time kernel compilation), same
+    # caveat as text_demo_qwen36. The warm/served prefill routes through the generator's
+    # warmup-compiled + traced path.
+    t_prefill = time.perf_counter() - _t
     last_logits = _gather_prefill_logits_to_cpu(prefill_hidden, bh_glx_mesh, args, model, last_token_idx=S_unpadded - 1)
     first_tok = int(last_logits.reshape(-1)[: args.vocab_size].float().argmax().item())
     logger.info(f"[mm-demo] first decode token = {first_tok} ({tok.decode([first_tok])!r})")
@@ -264,15 +280,164 @@ def test_mm_demo_qwen36(bh_glx_mesh):  # noqa: F811  (direct-open mesh fixture f
         )
         return tok_id
 
-    for _ in range(_DECODE_STEPS):
-        nxt = _decode_step()
-        generated.append(nxt)
-        if nxt in eos_ids:
-            break
+    # --- DECODE timing. Default = TRACED (capture the decode step once, replay it):
+    # VL decode == text decode after the image (axes-equal positions -> 1D partial-RoPE),
+    # so the proven text-demo traced path is exact here. QWEN36_MM_EAGER=1 keeps the old
+    # per-step-dispatch loop (slower, for debugging). Mirrors text_demo_qwen36's
+    # _run_decode_intrace; the ONLY difference is the rope-idx reset uses rope_pos_next
+    # (the VL path's separate rope counter), not cur_pos_int.
+    # Default = EAGER (correct, coherent). The inline single-buffer traced path below doubles/
+    # degenerates on readback cadence (a single reused tt_out_tok buffer can't be pipelined safely);
+    # the PROVEN traced VL decode is the generator async one-deep path in mm_perf_qwen36.py. Opt into
+    # the inline traced path with QWEN36_MM_EAGER=0 only for experimentation.
+    step_times = []
+    if os.environ.get("QWEN36_MM_EAGER", "1") == "1":
+        for i in range(_DECODE_STEPS):
+            ttnn.synchronize_device(bh_glx_mesh)
+            _t = time.perf_counter()
+            nxt = _decode_step()
+            ttnn.synchronize_device(bh_glx_mesh)
+            step_times.append(time.perf_counter() - _t)
+            generated.append(nxt)
+            if nxt in eos_ids:
+                break
+    else:
+
+        def _run_decode_intrace():
+            # Same ops as _decode_step but NO host read (traces can't capture to_torch);
+            # the sampler/argmax writes the next token in-place into tt_out_tok.
+            cos, sin = model.rope_setup.get_qwen36_rm_rot_mats(rot_idxs_tt)
+            x_emb_flat = ttnn.embedding(
+                tt_out_tok,
+                model.embd.weights,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+            )
+            if os.environ.get("QWEN36_DECODE_L1_RESIDUAL", "1") == "1":
+                x_emb = ttnn.reshape(x_emb_flat, ttnn.Shape([1, 1, x_emb_flat.shape[-2], x_emb_flat.shape[-1]]))
+            else:
+                x_emb_3d = ttnn.slice(
+                    x_emb_flat, [0, 0, 0], [1, 1, x_emb_flat.shape[-1]], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+                x_emb_flat.deallocate(True)
+                x_emb = ttnn.unsqueeze_to_4D(x_emb_3d)
+            lm_out = model.forward(
+                x_emb,
+                current_pos=cur_pos_tt,
+                rot_mats=(cos, sin),
+                user_id=0,
+                mode="decode",
+                page_table=page_table_tt,
+                chunk_page_table=None,
+                chunk_start_idx=None,
+                start_pos=0,
+                get_last_token=-1,
+                kv_cache=None,
+                batch_size=1,
+            )
+            logits = lm_out[0] if isinstance(lm_out, list) else lm_out
+            if tt_sampling is not None:
+                tt_sampling(logits, tt_out_tok=tt_out_tok)
+            else:
+                num_links = min(3, model.model_config["GALAXY_NUM_LINKS"])
+                logits_bf16 = ttnn.typecast(logits, dtype=ttnn.bfloat16)
+                logits_full = model.tt_ccl.line_all_gather(
+                    logits_bf16, dim=3, num_links=num_links, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+                logits_bf16.deallocate(True)
+                logits_unt = ttnn.untilize(logits_full, use_multicore=True)
+                logits_full.deallocate(True)
+                Vg = logits_unt.shape[-1]
+                row0 = ttnn.slice(logits_unt, [0, 0, 0, 0], [1, 1, 1, Vg], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                logits_unt.deallocate(True)
+                tok_1x1 = ttnn.argmax(row0, dim=3, keepdim=True, use_multicore=True)
+                row0.deallocate(True)
+                if isinstance(tok_1x1, list):
+                    tok_1x1 = tok_1x1[0]
+                tok_b = ttnn.repeat(tok_1x1, ttnn.Shape((1, 1, 1, 32)))
+                tok_1x1.deallocate(True)
+                ttnn.copy(input_a=tok_b, input_b=tt_out_tok)
+                tok_b.deallocate(True)
+            ttnn.plus_one(
+                cur_pos_tt,
+                sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+                skip_negative_entries=True,
+            )
+            ttnn.plus_one(
+                rot_idxs_tt,
+                sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+            )
+
+        # compile pass, then reset the decode input buffers to the first-token state.
+        _run_decode_intrace()
+        ttnn.synchronize_device(bh_glx_mesh)
+        cur_pos_reset = ttnn.from_torch(
+            torch.tensor([cur_pos_int] * args.max_batch_size, dtype=torch.int32),
+            dtype=ttnn.int32,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(bh_glx_mesh),
+        )
+        ttnn.copy_host_to_device_tensor(cur_pos_reset, cur_pos_tt)
+        rot_idxs_reset = model.rope_setup.get_qwen36_rm_rot_idxs(rope_pos_next, on_host=True)  # VL: rope counter
+        ttnn.copy_host_to_device_tensor(rot_idxs_reset, rot_idxs_tt)
+        tt_out_tok_reset = ttnn.from_torch(
+            torch.full((1, 1, 1, 32), first_tok, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(bh_glx_mesh),
+        )
+        ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
+        if hasattr(model, "tt_ccl") and hasattr(model.tt_ccl, "reset_gather_and_buffer_idx"):
+            model.tt_ccl.reset_gather_and_buffer_idx()
+        ttnn.synchronize_device(bh_glx_mesh)
+        # capture
+        trace_id = ttnn.begin_trace_capture(bh_glx_mesh, cq_id=0)
+        _run_decode_intrace()
+        ttnn.end_trace_capture(bh_glx_mesh, trace_id, cq_id=0)
+        ttnn.synchronize_device(bh_glx_mesh)
+        ttnn.copy_host_to_device_tensor(cur_pos_reset, cur_pos_tt)
+        ttnn.copy_host_to_device_tensor(rot_idxs_reset, rot_idxs_tt)
+        ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
+        ttnn.synchronize_device(bh_glx_mesh)
+        # replay — match text_demo_qwen36's exact pattern (NO per-step sync; the reused
+        # tt_out_tok buffer must be read right after each blocking execute_trace, else the
+        # readback cadence is off and tokens double). Time the whole loop, not per-step.
+        ttnn.synchronize_device(bh_glx_mesh)
+        _loop_t0 = time.perf_counter()
+        n_steps = 0
+        for step in range(_DECODE_STEPS):
+            ttnn.execute_trace(bh_glx_mesh, trace_id, cq_id=0, blocking=True)
+            tok_t = ttnn.to_torch(ttnn.get_device_tensors(tt_out_tok)[0])
+            nxt = int(tok_t.reshape(-1)[0].item())
+            generated.append(nxt)
+            n_steps += 1
+            if nxt in eos_ids:
+                break
+        ttnn.synchronize_device(bh_glx_mesh)
+        _avg = (time.perf_counter() - _loop_t0) / max(n_steps, 1)
+        step_times = [_avg] * max(n_steps, 1)  # uniform per-step for the perf summary
+        try:
+            ttnn.release_trace(bh_glx_mesh, trace_id)
+        except Exception:
+            pass
 
     text = tok.decode(generated, skip_special_tokens=True)
     logger.info(f"[mm-demo] generated {len(generated)} tokens")
     logger.info(f"[mm-demo] OUTPUT: {text!r}")
+
+    # --- Perf summary (VL) ---
+    steady = step_times[1:] if len(step_times) > 1 else step_times
+    avg_decode_s = sum(steady) / max(len(steady), 1)
+    logger.info("=" * 70)
+    logger.info("[mm-demo] VL PERF SUMMARY (BH_GLX, batch=1)")
+    logger.info(f"  vision encoder + preprocess (warm) : {t_vision * 1e3:8.1f} ms  ({S_unpadded} tokens incl. vision)")
+    logger.info(f"  prefill (COLD, S={S} bucket)        : {t_prefill * 1e3:8.1f} ms  (incl. 1-time compile)")
+    logger.info(f"  decode step 0 (compile)            : {step_times[0] * 1e3:8.1f} ms")
+    logger.info(
+        f"  decode steady-state (eager)        : {avg_decode_s * 1e3:8.1f} ms/tok  = {1.0 / avg_decode_s:6.2f} tok/s"
+    )
+    logger.info("  (eager loop; production traced decode is faster — VL decode == text decode post-prefill)")
+    logger.info("=" * 70)
     # Coherence gate: non-empty, not a single repeated token.
     assert len(text.strip()) > 0, "empty generation"
     assert len(set(generated)) > 2, f"degenerate generation (repeated token): {generated}"
