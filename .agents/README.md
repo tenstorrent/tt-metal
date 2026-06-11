@@ -22,6 +22,7 @@ and authenticated, and the agent dependencies installed
 ```bash
 python .agents/scripts/multigoal \
   --replace HF_MODEL=org/Your-Model-Here \
+  --replace MODEL_DIR=models/autoports/org_your_model_here \
   .agents/prompts/model_bringup_multigoal/0*.txt
 ```
 
@@ -86,17 +87,27 @@ runner's exit code tells you why it stopped: `0` all stages green, `3`/`5` a
 goal ended blocked or failed, `6` a stage failed verification critically, `7`
 the verification harness itself is broken (fix it and resume).
 
-Check scripts find the model under test via the `MODEL_DIR` environment
-variable when provided (`--replace MODEL_DIR=models/autoports/<model>`), or by
-matching `HF_MODEL` against autoport directory names otherwise.
+Multigoal launches that include runner-side check scripts require
+`MODEL_DIR`; pass it as `--replace MODEL_DIR=models/autoports/<model>`. The
+runner records that exact path in `manifest.txt` and exports it to every check
+script so verification is scoped to the intended autoport directory. The
+checker still has an `HF_MODEL` fuzzy-match fallback for manual one-off use,
+but unattended experiments should not rely on it.
 
 ## Useful Flags
 
-- `--replace OLD=NEW` — substitute text in every prompt (always used for
-  `HF_MODEL`); replacements with identifier-like names are also exported into
-  check-script environments.
+- `--replace OLD=NEW` — substitute text in every prompt. Model bringup runs
+  should always pass both `HF_MODEL` and `MODEL_DIR`; replacements with
+  identifier-like names are also exported into check-script environments.
 - `--start-index N` — resume a run from stage N without repeating earlier
-  stages (after a fix, a machine move, or a harness stop).
+  stages (after a fix, a machine move, or a harness stop). This starts a fresh
+  thread for stage N.
+- `--resume-stage N --log-dir DIR` — recover an existing terminal stage from
+  `DIR/manifest.txt` by resuming its recorded `stage_N_thread_id`, sending a
+  continuation turn in that same thread, running the stage check if it
+  completes, and then continuing later stages. Use this for `usageLimited`,
+  `budgetLimited`, or auth-account recovery where `--start-index` would lose
+  the stopped thread's context.
 - `--dry-run` — validate the prompt sequence and show what would run.
 - `--check-retries N` / `--no-checks` / `--check-error-policy stop|continue`
   — gate behavior knobs; the defaults are the recommended ones.
