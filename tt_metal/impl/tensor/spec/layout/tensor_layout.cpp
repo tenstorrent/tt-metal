@@ -149,20 +149,6 @@ bool can_shard_align(const MemoryConfig& memory_config, const Layout& layout, co
     return !CMAKE_UNIQUE_NAMESPACE::get_shard_align_error(memory_config, layout, tile).has_value();
 }
 
-Alignment compute_alignment_for_memory_config(const Alignment& source_alignment, const MemoryConfig& memory_config) {
-    if (const auto& shard_spec = memory_config.shard_spec()) {
-        return Alignment({shard_spec->shape[0], shard_spec->shape[1]});
-    }
-    if (const auto& nd_shard_spec = memory_config.nd_shard_spec()) {
-        const auto& shard_shape = nd_shard_spec->shard_shape;
-        if (shard_shape.rank() >= 2) {
-            return Alignment({shard_shape[-2], shard_shape[-1]});
-        }
-        return Alignment({shard_shape[-1]});
-    }
-    return source_alignment;
-}
-
 TensorLayout::TensorLayout(
     DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment) :
     dtype_(dtype), page_config_(page_config), memory_config_(memory_config), alignment_(alignment) {

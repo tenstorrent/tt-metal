@@ -46,11 +46,13 @@ inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryCo
     }
 
     if (mem_config) {
-        const auto alignment =
-            compute_alignment_for_memory_config(output_tensor_spec.tensor_layout().get_alignment(), *mem_config);
         output_tensor_spec = TensorSpec(
             output_tensor_spec.logical_shape(),
-            TensorLayout(output_tensor_spec.data_type(), output_tensor_spec.page_config(), *mem_config, alignment));
+            TensorLayout(
+                output_tensor_spec.data_type(),
+                output_tensor_spec.page_config(),
+                *mem_config,
+                output_tensor_spec.tensor_layout().get_alignment()));
     }
 
     auto output_tensor = create_device_tensor(output_tensor_spec, ghost_input_tensor.device());
@@ -137,12 +139,13 @@ inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<Memor
     if (mem_config) {
         TT_FATAL(mem_config->is_sharded(), "Expected output tensor memory config to be sharded");
         auto output_mem_config = MemoryConfig(mem_config->memory_layout(), mem_config->buffer_type(), shard_spec);
-        const auto alignment =
-            compute_alignment_for_memory_config(output_tensor_spec.tensor_layout().get_alignment(), output_mem_config);
         output_tensor_spec = TensorSpec(
             output_tensor_spec.logical_shape(),
             TensorLayout(
-                output_tensor_spec.data_type(), output_tensor_spec.page_config(), output_mem_config, alignment));
+                output_tensor_spec.data_type(),
+                output_tensor_spec.page_config(),
+                output_mem_config,
+                output_tensor_spec.tensor_layout().get_alignment()));
     }
 
     auto output_tensor = create_device_tensor(output_tensor_spec, ghost_input_tensor.device());
