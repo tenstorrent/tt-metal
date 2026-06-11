@@ -12,6 +12,20 @@
 
 namespace ttnn {
 
+namespace {
+
+ttnn::SmallVector<int64_t> get_reduce_dims(const Tensor& tensor) {
+    ttnn::SmallVector<int64_t> reduce_dims;
+    const auto rank = tensor.logical_shape().rank();
+    reduce_dims.reserve(rank);
+    for (uint32_t i = 0; i < rank; ++i) {
+        reduce_dims.push_back(i);
+    }
+    return reduce_dims;
+}
+
+}  // namespace
+
 Tensor moreh_nll_loss(
     const Tensor& input_tensor,
     const Tensor& target_tensor,
@@ -39,7 +53,13 @@ Tensor moreh_nll_loss(
             memory_config,
             compute_kernel_config_val);
 
-        moreh_sum(step1_result, std::nullopt, false, divisor_tensor, memory_config, compute_kernel_config_val);
+        moreh_sum(
+            step1_result,
+            get_reduce_dims(step1_result),
+            false,
+            divisor_tensor,
+            memory_config,
+            compute_kernel_config_val);
 
         const Tensor& step2_result = prim::moreh_nll_loss_step2(
             input_tensor,
@@ -51,7 +71,13 @@ Tensor moreh_nll_loss(
             ignore_index,
             memory_config,
             compute_kernel_config_val);
-        return moreh_sum(step2_result, std::nullopt, false, output_tensor, memory_config, compute_kernel_config_val);
+        return moreh_sum(
+            step2_result,
+            get_reduce_dims(step2_result),
+            false,
+            output_tensor,
+            memory_config,
+            compute_kernel_config_val);
     }
     if (reduction == SUM) {
         const Tensor& step2_result = prim::moreh_nll_loss_step2(
@@ -64,7 +90,13 @@ Tensor moreh_nll_loss(
             ignore_index,
             memory_config,
             compute_kernel_config_val);
-        return moreh_sum(step2_result, std::nullopt, false, output_tensor, memory_config, compute_kernel_config_val);
+        return moreh_sum(
+            step2_result,
+            get_reduce_dims(step2_result),
+            false,
+            output_tensor,
+            memory_config,
+            compute_kernel_config_val);
     }
 
     return prim::moreh_nll_loss_step2(
