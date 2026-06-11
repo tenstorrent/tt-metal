@@ -17,6 +17,8 @@ from models.demos.deepseek_v32.tests.test_mla import build_cpu_reference, make_h
 from models.demos.deepseek_v32.tt import ops
 from models.demos.deepseek_v32.tt.mla import ttMLA
 
+pytestmark = pytest.mark.dev  # indexer self-consistency, no CPU truth — inner loop
+
 
 def _shard(t, mesh_device):
     return ttnn.from_torch(

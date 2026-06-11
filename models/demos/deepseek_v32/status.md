@@ -211,6 +211,12 @@ When no op exist try to **0. define an API (inputs/outputs)** and
 ## Dev loop
 The inner cycle = edit → run **one targeted test** → read PCC. Measured this session (QuietBox 1x4/2x2). Optimize this, not the suite.
 
+**Test groups (pytest markers, registered in tests/conftest.py):**
+- `-m dev` (13 tests, ~1 min, no cold CPU truth): ops shapes+numerics, indexer self-consistency, seq256 e2e (both meshes). **Per-edit.**
+- `-m gate` (10 tests, ~10–15 min, CPU truths must be cached): full `vs_cpu_reference` matrix (3 seq × 2 mesh) + chunked (2 mesh) + determinism. **Pre-commit / CI.** (seq256 carries both `dev` and `gate`.)
+- `-m nightly` (none yet): cold-truth builds + 50k scale gate (backlog 3) — big-box only.
+- CI = `-m "dev or gate"` after a truth-prime step; the test asserts no cold CPU-truth compute under CI (→ backlog 14). Sets up most of (14).
+
 | Stage | Time | Lever |
 |---|---|---|
 | mesh open + fabric init + teardown | ~5–9 s / case | fixed per parametrized case; session-scoped device would amortize but v3 conftest opens/closes per case |
