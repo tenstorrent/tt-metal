@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 from dataclasses import dataclass
@@ -372,6 +373,8 @@ def _run_chunked_text_mode(
     chunks = _split_into_chunks(text)
     logger.info(f"[chunked] {len(text.split())} words → {len(chunks)} chunks " f"(max {_CHUNK_MAX_WORDS} words each)")
     all_wavs: list[torch.Tensor] = []
+    n_frames_total = 0
+    first_frame_s: float | None = None  # TTFA = first audible frame of the whole run (first chunk)
     t_start = perf_counter()
 
     for i, chunk in enumerate(chunks):
@@ -387,6 +390,9 @@ def _run_chunked_text_mode(
             max_tokens=chunk_max_tokens,
             seed=seed,
         )
+        if first_frame_s is None and out.first_frame_s is not None:
+            first_frame_s = out.first_frame_s
+        n_frames_total += int(out.codes_b37t.shape[2])
         if out.waveform.numel() > 0:
             all_wavs.append(out.waveform.reshape(-1))
         if not out.hit_end_audio:
@@ -403,6 +409,9 @@ def _run_chunked_text_mode(
         total_s=total_s,
         audio_s=audio_s,
         n_chars=len(text),
+        n_frames=n_frames_total,
+        first_frame_s=first_frame_s,
+        bitrate_bps=_codec_bitrate_bps(pipe),
     )
 
     if not all_wavs:
@@ -417,20 +426,50 @@ def _run_chunked_text_mode(
     )
 
 
+def _codec_bitrate_bps(pipe: "VoxtralTTSPipeline") -> float | None:
+    """Discrete-codec bitrate (bits/s): bits-per-frame × frame-rate.
+
+    ``bits/frame = log2(semantic_codebook_size) + n_acoustic_codebook · log2(acoustic_codebook_size)``;
+    ``frame-rate = sampling_rate / downsample_factor``. This is a model constant (independent of the
+    utterance — it assumes full codebook usage), reported for parity with neural-codec model cards.
+    """
+    try:
+        am = pipe.config.audio_model_args
+        sr = int(am.audio_encoding_args.sampling_rate)
+        ds = int(pipe._downsample_factor)
+        if sr <= 0 or ds <= 0:
+            return None
+        frame_rate = sr / ds
+        bits_per_frame = math.log2(am.semantic_codebook_size) + am.n_acoustic_codebook * math.log2(
+            am.acoustic_codebook_size
+        )
+        return bits_per_frame * frame_rate
+    except Exception:
+        return None
+
+
 def _log_perf(
     label: str,
     *,
     total_s: float,
     audio_s: float | None = None,
     n_chars: int | None = None,
+    n_frames: int | None = None,
+    first_frame_s: float | None = None,
+    bitrate_bps: float | None = None,
 ) -> None:
     """Log non-streaming perf metrics.
 
     Latency matches vLLM-Omni ``vllm_elapsed`` (end-to-end generation wall time).
     RTF uses the model-card convention: ``generation_time / audio_duration`` (lower = better;
     RTF < 1 means faster than realtime). vLLM end2end.py inverts this (audio/gen); we do not.
+    First-audio latency (TTFA) is the wall time until the first acoustic frame is produced.
+    Frame rate is generation throughput (acoustic frames decoded per wall-second).
+    Bitrate is the discrete-codec rate (a model constant; see :func:`_codec_bitrate_bps`).
     """
     logger.info(f"[{label}] Latency: {total_s * 1000:.2f} ms  ({total_s:.3f} s)")
+    if first_frame_s is not None and first_frame_s > 0:
+        logger.info(f"[{label}] First-audio latency (TTFA): {first_frame_s * 1000:.2f} ms")
     if audio_s is not None and audio_s > 0 and total_s > 0:
         rtf = total_s / audio_s
         logger.info(
@@ -439,6 +478,10 @@ def _log_perf(
         )
     if n_chars is not None and n_chars > 0 and total_s > 0:
         logger.info(f"[{label}] Throughput: {n_chars / total_s:.2f} char/s  ({n_chars} chars in {total_s:.3f} s)")
+    if n_frames is not None and n_frames > 0 and total_s > 0:
+        logger.info(f"[{label}] Frame rate: {n_frames / total_s:.2f} frame/s  ({n_frames} frames in {total_s:.3f} s)")
+    if bitrate_bps is not None and bitrate_bps > 0:
+        logger.info(f"[{label}] Bitrate: {bitrate_bps / 1000.0:.2f} kbps  (discrete codec; {bitrate_bps:.0f} bit/s)")
 
 
 def run_text_mode(
@@ -485,7 +528,16 @@ def run_text_mode(
 
     n_samples = int(wav.numel())
     audio_s = n_samples / sample_rate if sample_rate > 0 else None
-    _log_perf("tt_generate", total_s=total_s, audio_s=audio_s, n_chars=len(text))
+    n_frames = int(out.codes_b37t.shape[2])
+    _log_perf(
+        "tt_generate",
+        total_s=total_s,
+        audio_s=audio_s,
+        n_chars=len(text),
+        n_frames=n_frames,
+        first_frame_s=out.first_frame_s,
+        bitrate_bps=_codec_bitrate_bps(pipe),
+    )
     if out.shifted_codes_t37.numel() > 0:
         semantic = out.shifted_codes_t37[:, 0]
         logger.info(

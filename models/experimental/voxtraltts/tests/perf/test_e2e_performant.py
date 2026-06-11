@@ -11,12 +11,14 @@ with ``num_command_queues_for_decode()`` + a trace region, and reports through `
 Unlike a plain LLM, Voxtral decode is a discrete-feedback loop (text-decode -> acoustic FM ->
 code -> embedding -> text-decode). Trace replay lives inside
 ``VoxtralTTSPipeline.forward_device_resident`` (text-decode trace + acoustic-FM trace);
-this test drives one full traced generation and reports the steady-state per-frame decode
-time, RTF, and throughput.
+this test drives one full traced generation over a fixed synthetic workload and reports the
+steady-state per-frame decode time + throughput (frames/s). RTF is intentionally NOT reported: the
+fixed short text + ``fixed_step_count`` make it a throughput regression benchmark, not a real-input RTF
+(use the demo for a meaningful RTF on real text).
 
   1. Build the TT pipeline (untimed).
   2. Warm-up generation (compile + trace capture; untimed).
-  3. Timed generation: full traced AR loop -> per-frame decode time + RTF + frames/s.
+  3. Timed generation: full traced AR loop -> per-frame decode time + frames/s.
 
 Decode trace is on by default; 2CQ is opt-in because this loop is faster with one CQ
 (``VOXTRAL_DECODE_TRACE=1`` / ``VOXTRAL_DECODE_TRACE_2CQ=0``; set 2CQ to ``1`` for comparison).
@@ -71,16 +73,10 @@ def _e2e_perf_device_params():
     }
 
 
-def _audio_seconds(pipe: VoxtralTTSPipeline, out) -> float:
-    sr = int(pipe.config.audio_model_args.audio_encoding_args.sampling_rate)
-    n = int(out.waveform.numel())
-    return n / sr if sr > 0 else 0.0
-
-
 @torch.no_grad()
 @pytest.mark.timeout(3600)
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("decode_iters", [128], ids=["F128"])
+@pytest.mark.parametrize("decode_iters", [128, 589], ids=["F128", "F589"])
 @pytest.mark.parametrize("expected_compile_time, expected_inference_time", [(120.0, 0.10)])
 @pytest.mark.parametrize("device_params", [_e2e_perf_device_params()], indirect=True)
 def test_voxtral_tts_e2e_performant(
@@ -123,27 +119,33 @@ def test_voxtral_tts_e2e_performant(
         gen_time = time.time() - t
 
         assert torch.isfinite(out.waveform).all(), "TT forward produced non-finite waveform"
-        n_frames = int(out.codes_b37t.shape[2])
-        audio_s = _audio_seconds(pipe, out)
-        per_frame_s = gen_time / max(n_frames, 1)
-        rtf = gen_time / audio_s if audio_s > 0 else float("inf")
-        frames_per_s = n_frames / gen_time if gen_time > 0 else 0.0
+        # ``fixed_step_count=True`` forces exactly ``decode_iters`` decode steps; the output trims at the
+        # first END_AUDIO, so ``codes_b37t`` may hold fewer frames than steps run. Each decode step does
+        # the same text-decode + acoustic-FM work whether or not its frame is kept, so throughput is
+        # measured on the executed step count (matches the demo's per-frame decode rate). The trimmed
+        # audio-frame count is reported separately.
+        n_steps = int(decode_iters)
+        frames_produced = int(out.codes_b37t.shape[2])
+        per_frame_s = gen_time / max(n_steps, 1)
+        frames_per_s = n_steps / gen_time if gen_time > 0 else 0.0
 
         logger.info(
-            f"Voxtral decode ({cq_note}): {n_frames} frames in {gen_time:.2f}s "
+            f"Voxtral decode ({cq_note}): {n_steps} decode steps in {gen_time:.2f}s "
             f"({per_frame_s*1000:.1f} ms/frame, {frames_per_s:.2f} frames/s); "
-            f"audio {audio_s:.2f}s -> RTF {rtf:.3f}"
+            f"audio frames kept (pre-END_AUDIO)={frames_produced}"
         )
+        if out.first_frame_s is not None:
+            logger.info(f"Voxtral first-audio latency (TTFA): {out.first_frame_s*1000:.1f} ms")
 
         results = {
             "build_time_s": build_time,
             "warmup_time_s": warmup_time,
             "gen_time_s": gen_time,
-            "n_frames": float(n_frames),
-            "audio_s": audio_s,
+            "n_steps": float(n_steps),
+            "frames_produced": float(frames_produced),
             "per_frame_decode_s": per_frame_s,
             "frames_per_s": frames_per_s,
-            "rtf": rtf,
+            "first_frame_s": float(out.first_frame_s) if out.first_frame_s is not None else 0.0,
             "decode_trace_2cq": float(decode_trace_2cq_enabled()),
             "num_command_queues": float(num_command_queues_for_decode()),
         }
@@ -156,7 +158,7 @@ def test_voxtral_tts_e2e_performant(
             inference_time=per_frame_s,
             expected_compile_time=expected_compile_time,
             expected_inference_time=expected_inference_time,
-            comments=f"decode{n_frames}_{cq_note}",
+            comments=f"decode{n_steps}_{cq_note}",
         )
 
         profiler = BenchmarkProfiler()
@@ -176,8 +178,8 @@ def test_voxtral_tts_e2e_performant(
         )
 
         logger.info(
-            f"{model_name}: per-frame={per_frame_s*1000:.1f}ms, frames/s={frames_per_s:.2f}, "
-            f"RTF={rtf:.3f} ({cq_note}) over {n_frames} frames"
+            f"{model_name}: per-frame={per_frame_s*1000:.1f}ms, frames/s={frames_per_s:.2f} "
+            f"({cq_note}) over {n_steps} decode steps"
         )
     finally:
         pipe.cleanup_all()
